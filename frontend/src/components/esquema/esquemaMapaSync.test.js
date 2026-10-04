@@ -2,14 +2,18 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { PX_PER_METER, metersToWorld } from './esquemaGeometry.js'
 import { haversineMeters } from './esquemaMapaCapture.js'
+import { gkBogotaToWgs84 } from '../../utils/epsg3116.js'
 import {
   canvasPanFromMapOrigin,
   canvasZoomFromMapPpm,
   entityScreenPxForMeters,
+  gkToCanvasWorld,
+  lngLatToCanvasWorld,
   mapCenterAsGeoOrigin,
   mapRelativeZoomPercent,
   mapScreenPixelsPerMeter,
   mapZoomAfterVisualFactor,
+  reprojectSceneObjectsToMap,
   syncCanvasTransformToMap,
   visualZoomStillResponsive,
 } from './esquemaMapaSync.js'
@@ -220,5 +224,82 @@ describe('zoom visual independiente de la escala real', () => {
     const broken = worldW * 2.5
     const correct = worldW * sync.zoom
     assert.ok(broken / correct > 30)
+  })
+})
+
+describe('reprojectSceneObjectsToMap / gkToCanvasWorld', () => {
+  it('coloca el nodo donde project(WGS84) — corrige desfase planar a ~2 km', () => {
+    const este0 = 959000
+    const norte0 = 970800
+    const este = 959000
+    const norte = 972840 // ~2040 m al norte en Gauss
+    const ll0 = gkBogotaToWgs84(este0, norte0)
+    const ll = gkBogotaToWgs84(este, norte)
+    assert.ok(ll0 && ll)
+    const map = makeLinearMap({ ppm: 2, lng0: ll0.lng, lat0: ll0.lat })
+    const sync = syncCanvasTransformToMap(map, ll0)
+    assert.ok(sync)
+
+    const planar = { x: 0, y: -(norte - norte0) * PX_PER_METER }
+    const planarScreen = {
+      x: planar.x * sync.zoom + sync.pan.x,
+      y: planar.y * sync.zoom + sync.pan.y,
+    }
+    const expected = map.project([ll.lng, ll.lat])
+    const planarErrM = Math.hypot(planarScreen.x - expected.x, planarScreen.y - expected.y)
+      / sync.pixelsPerMeter
+    // En mock lineal el residual GK↔geo es menor que en Mercator real (~11 m),
+    // pero sigue siendo notable a 2 km.
+    assert.ok(planarErrM > 1.5, `planar err should be noticeable, got ${planarErrM.toFixed(2)} m`)
+
+    const [nodo] = reprojectSceneObjectsToMap(
+      [{ type: 'nodo', id: 'n45', x: planar.x, y: planar.y, este, norte, nodeNum: '45' }],
+      map,
+      sync.pan,
+      sync.zoom,
+      { este0, norte0 },
+    )
+    const screen = {
+      x: nodo.x * sync.zoom + sync.pan.x,
+      y: nodo.y * sync.zoom + sync.pan.y,
+    }
+    assert.ok(Math.abs(screen.x - expected.x) < 0.08, `dx=${screen.x - expected.x}`)
+    assert.ok(Math.abs(screen.y - expected.y) < 0.08, `dy=${screen.y - expected.y}`)
+    // Tras reproyectar, el error respecto al mapa debe ser ≈ 0 (≪ residual planar).
+    const fixedErrM = Math.hypot(screen.x - expected.x, screen.y - expected.y) / sync.pixelsPerMeter
+    assert.ok(fixedErrM < 0.05, `fixed err ${fixedErrM}`)
+    assert.ok(fixedErrM < planarErrM / 10)
+
+    const via = gkToCanvasWorld(map, este, norte, sync.pan, sync.zoom)
+    assert.ok(via)
+    assert.ok(Math.abs(via.x - nodo.x) < 1e-9)
+    assert.ok(Math.abs(via.y - nodo.y) < 1e-9)
+  })
+
+  it('no mueve trazos libres sin ancla geo', () => {
+    const map = makeLinearMap({ ppm: 2 })
+    const sync = syncCanvasTransformToMap(map, { lng: -74.1, lat: 4.6 })
+    const free = { type: 'polilinea', id: 'f', points: [{ x: 10, y: 20 }, { x: 30, y: 40 }] }
+    const [out] = reprojectSceneObjectsToMap(
+      [free],
+      map,
+      sync.pan,
+      sync.zoom,
+      { este0: 1, norte0: 2 },
+    )
+    assert.equal(out.points[0].x, 10)
+    assert.equal(out.points[1].y, 40)
+  })
+
+  it('lngLatToCanvasWorld es inverso de project con pan/zoom', () => {
+    const map = makeLinearMap({ ppm: 3, lng0: -74.2, lat0: 4.5 })
+    const origin = { lng: -74.2, lat: 4.5 }
+    const sync = syncCanvasTransformToMap(map, origin)
+    const target = { lng: -74.201, lat: 4.502 }
+    const w = lngLatToCanvasWorld(map, target.lng, target.lat, sync.pan, sync.zoom)
+    const screen = { x: w.x * sync.zoom + sync.pan.x, y: w.y * sync.zoom + sync.pan.y }
+    const p = map.project([target.lng, target.lat])
+    assert.ok(Math.abs(screen.x - p.x) < 1e-6)
+    assert.ok(Math.abs(screen.y - p.y) < 1e-6)
   })
 })

@@ -144,9 +144,11 @@ import {
   printAreaToWorldRect,
 } from './esquemaMapaCapture'
 import {
+  lngLatToCanvasWorld,
   mapCenterAsGeoOrigin,
   mapRelativeZoomPercent,
   mapZoomAfterVisualFactor,
+  reprojectSceneObjectsToMap,
   syncCanvasTransformToMap,
   visualZoomStillResponsive,
 } from './esquemaMapaSync'
@@ -1218,6 +1220,23 @@ export default function EsquemaEditorModal({
     if (!synced) return false
     panRef.current = synced.pan
     zoomRef.current = synced.zoom
+    // Alinear mundo con la proyección del mapa (Gauss de tabla = lectura del cursor).
+    const gkOrigin = coordOriginRef.current
+    if (
+      gkOrigin
+      && Number.isFinite(gkOrigin.este0)
+      && Number.isFinite(gkOrigin.norte0)
+      && Array.isArray(objectsRef.current)
+      && objectsRef.current.length
+    ) {
+      objectsRef.current = reprojectSceneObjectsToMap(
+        objectsRef.current,
+        map,
+        synced.pan,
+        synced.zoom,
+        gkOrigin,
+      )
+    }
     // Redibujar sin setState en cada frame de pan (el mapa dispara move muy seguido).
     try { redrawRef.current?.(draftRef.current) } catch { /* ignore */ }
     if (mapZoomBaselineRef.current == null) {
@@ -2380,6 +2399,14 @@ export default function EsquemaEditorModal({
     }
     pushHistory()
     if (isPoligono) {
+      // Alinear nodos al mapa antes de densificar (evita desfase y quiebres).
+      try { syncCanvasToMapRef.current() } catch { /* ignore */ }
+      const map = mapRef.current
+      const pan = panRef.current
+      const zoom = zoomRef.current
+      const lngLatToWorld = (map && typeof map.project === 'function')
+        ? (lng, lat) => lngLatToCanvasWorld(map, lng, lat, pan, zoom)
+        : null
       const wantEje = poligonoSentidoEjeRef.current === true
       const result = materializeJoinAsClosedPolygon(objectsRef.current, nums, {
         color: colorRef.current,
@@ -2389,10 +2416,12 @@ export default function EsquemaEditorModal({
         sentidoEje: wantEje,
         planoFc: mapPlanoFcRef.current,
         origin: coordOriginRef.current,
+        lngLatToWorld,
         returnMeta: true,
       })
       if (result && Array.isArray(result.objects)) {
         objectsRef.current = result.objects
+        try { syncCanvasToMapRef.current() } catch { /* ignore */ }
         if (wantEje) {
           if (!result.usedEje) {
             setToolHint('Sin eje de abscisado usable: se dibujó el polígono con caras rectas.')
@@ -2427,51 +2456,15 @@ export default function EsquemaEditorModal({
     coordOriginRef.current = origin
     pushHistory()
     const keep = objectsRef.current.filter((o) => o.type !== 'nodo' && !o.joinSeq && !o.fromCoordTable)
-    let extras = []
     const tipo = (huellaMode && !opts.skipTipoActions)
       ? (huellaTipoRef.current || 'nodo')
       : 'nodo'
     const accion = opts.skipTipoActions
       ? { unirEnOrden: false, abrirUnirPorNumero: false, preguntarSentidoEje: false }
       : accionDibujarNodosPorTipo(tipo)
-    if (accion.unirEnOrden) {
-      if (opts.sentidoEje === true) {
-        const built = buildLineasSentidoEje(nodes, mapPlanoFcRef.current, {
-          color: colorRef.current,
-          width: widthRef.current,
-          lineStyle: lineStyleRef.current,
-          uid,
-          origin,
-        })
-        extras = built.objects
-        if (!built.usedEje) {
-          setToolHint('Sin eje de abscisado usable: se dibujó la línea recta.')
-        } else if (built.failedSegments) {
-          setToolHint('Algunos tramos sin eje cercano se dibujaron rectos.')
-        } else {
-          setToolHint('Línea en sentido del eje.')
-        }
-      } else {
-        extras = buildLineasUniendoNodos(nodes, {
-          color: colorRef.current,
-          width: widthRef.current,
-          lineStyle: lineStyleRef.current,
-          uid,
-        })
-      }
-    }
-    objectsRef.current = [...keep, ...nodes, ...extras]
-    setCoordRows(parsed.map((r) => ({
-      num: r.num,
-      norte: r.norte,
-      este: r.este,
-      cota: r.cota ?? '',
-      desc: r.desc,
-    })))
-    setCoordPanelOpen(true)
-    selectOne(null)
-    setDirty(true)
-    // Anclar origen geo al primer punto Gauss (EPSG:3116) para ubicación fiel en el plano.
+
+    // Primero nodos + ancla geo; sync reproyecta a la proyección del mapa.
+    objectsRef.current = [...keep, ...nodes]
     if (mapActiveRef.current && origin && Number.isFinite(origin.este0) && Number.isFinite(origin.norte0)) {
       const ll = gkBogotaToWgs84(origin.este0, origin.norte0)
       if (ll) {
@@ -2523,7 +2516,57 @@ export default function EsquemaEditorModal({
         setZoomPct(Math.round(z * 100))
       }
     }
-    if (!opts.skipTipoActions && huellaMode && tipo === 'nodo' && nodes.length) {
+
+    // Nodos ya alineados al mapa (si aplica).
+    const liveNodes = objectsRef.current.filter((o) => o?.type === 'nodo')
+    let extras = []
+    const map = mapRef.current
+    const lngLatToWorld = (mapActiveRef.current && map && typeof map.project === 'function')
+      ? (lng, lat) => lngLatToCanvasWorld(map, lng, lat, panRef.current, zoomRef.current)
+      : null
+
+    if (accion.unirEnOrden) {
+      if (opts.sentidoEje === true) {
+        const built = buildLineasSentidoEje(liveNodes, mapPlanoFcRef.current, {
+          color: colorRef.current,
+          width: widthRef.current,
+          lineStyle: lineStyleRef.current,
+          uid,
+          origin,
+          lngLatToWorld,
+        })
+        extras = built.objects
+        if (!built.usedEje) {
+          setToolHint('Sin eje de abscisado usable: se dibujó la línea recta.')
+        } else if (built.failedSegments) {
+          setToolHint('Algunos tramos sin eje cercano se dibujaron rectos.')
+        } else {
+          setToolHint('Línea en sentido del eje.')
+        }
+      } else {
+        extras = buildLineasUniendoNodos(liveNodes, {
+          color: colorRef.current,
+          width: widthRef.current,
+          lineStyle: lineStyleRef.current,
+          uid,
+        })
+      }
+    }
+    objectsRef.current = [...objectsRef.current.filter((o) => o?.type !== 'nodo' && !o?.joinSeq && !o?.fromCoordTable), ...liveNodes, ...extras]
+    if (mapActiveRef.current) {
+      try { syncCanvasToMapRef.current() } catch { /* ignore */ }
+    }
+    setCoordRows(parsed.map((r) => ({
+      num: r.num,
+      norte: r.norte,
+      este: r.este,
+      cota: r.cota ?? '',
+      desc: r.desc,
+    })))
+    setCoordPanelOpen(true)
+    selectOne(null)
+    setDirty(true)
+    if (!opts.skipTipoActions && huellaMode && tipo === 'nodo' && liveNodes.length) {
       refreshLibrary()
       setLibOpen(true)
       setLibNotice('Seleccione una entidad para insertarla sobre el nodo (punto medio). Si no elige ninguna, se guarda el marcador legible.')
@@ -2534,21 +2577,21 @@ export default function EsquemaEditorModal({
       setLibNotice('')
       setInsertHint('')
     }
-    if (!opts.skipTipoActions && accion.abrirUnirPorNumero && nodes.length) {
+    if (!opts.skipTipoActions && accion.abrirUnirPorNumero && liveNodes.length) {
       setLibOpen(false)
       setLibNotice('')
       setInsertHint('')
       setTool('unir-nodos')
       setToolHint('Digite el número de nodo en el panel o pulse nodos en el plano.')
     }
-    if (!opts.skipTipoActions && accion.unirEnOrden && nodes.length >= 2 && opts.sentidoEje !== true) {
+    if (!opts.skipTipoActions && accion.unirEnOrden && liveNodes.length >= 2 && opts.sentidoEje !== true) {
       setLibOpen(false)
       setLibNotice('')
       setInsertHint('')
-      setToolHint(`Línea: ${nodes.length} nodos unidos en orden (1→${nodes.length}).`)
+      setToolHint(`Línea: ${liveNodes.length} nodos unidos en orden (1→${liveNodes.length}).`)
     }
     setPanTick((n) => n + 1)
-    return nodes
+    return liveNodes
   }
 
   /** Botón Dibujar del panel compacto (y atajos): pregunta sentido del eje si tipo Línea o Polígono. */
@@ -3923,7 +3966,12 @@ export default function EsquemaEditorModal({
               fromLibraryOnNode: true,
               scaleLocked: true,
             }))
-          )
+          ).map((b) => ({
+            ...b,
+            este: Number.isFinite(Number(n.este)) ? Number(n.este) : b.este,
+            norte: Number.isFinite(Number(n.norte)) ? Number(n.norte) : b.norte,
+            fromCoordTable: true,
+          }))
           placed.push(...inst)
         }
         objectsRef.current = [...withoutPrev, ...placed]

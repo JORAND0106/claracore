@@ -8,6 +8,7 @@
  */
 import { PX_PER_METER } from './esquemaGeometry.js'
 import { haversineMeters } from './esquemaMapaCapture.js'
+import { gkBogotaToWgs84 } from '../../utils/epsg3116.js'
 
 /** Muestra de píxeles en pantalla para estimar m/px (más estable que 1 px). */
 const SAMPLE_PX = 100
@@ -142,6 +143,194 @@ export function mapCenterAsGeoOrigin(map) {
   } catch {
     return null
   }
+}
+
+/**
+ * Mundo del lienzo para que `project(lng,lat)` caiga exactamente en pantalla
+ * con el pan/zoom actuales: world = (project − pan) / zoom.
+ * Corrige el desfase GK-planar vs haversine/Mercator a kilómetros del origen.
+ */
+export function lngLatToCanvasWorld(map, lng, lat, pan, zoom) {
+  if (!map || typeof map.project !== 'function') return null
+  const z = Number(zoom)
+  if (!(z > 0) || !pan) return null
+  const Lng = Number(lng)
+  const Lat = Number(lat)
+  if (![Lng, Lat].every(Number.isFinite)) return null
+  try {
+    const p = map.project([Lng, Lat])
+    const sx = Number(p?.x)
+    const sy = Number(p?.y)
+    if (![sx, sy].every(Number.isFinite)) return null
+    return {
+      x: (sx - Number(pan.x)) / z,
+      y: (sy - Number(pan.y)) / z,
+    }
+  } catch {
+    return null
+  }
+}
+
+export function gkToCanvasWorld(map, este, norte, pan, zoom) {
+  const ll = gkBogotaToWgs84(Number(este), Number(norte))
+  if (!ll) return null
+  return lngLatToCanvasWorld(map, ll.lng, ll.lat, pan, zoom)
+}
+
+/** Invierte topoToWorld: mundo planar → Gauss del ancla de tabla. */
+export function canvasWorldToGkIntent(wx, wy, gkOrigin, pxPerMeter = PX_PER_METER) {
+  const o = gkOrigin || { este0: 0, norte0: 0 }
+  const ppm = Number(pxPerMeter) || PX_PER_METER
+  return {
+    este: Number(o.este0) + Number(wx) / ppm,
+    norte: Number(o.norte0) - Number(wy) / ppm,
+  }
+}
+
+function reprojectXy(x, y, map, pan, zoom, gkOrigin) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  const intent = canvasWorldToGkIntent(x, y, gkOrigin)
+  return gkToCanvasWorld(map, intent.este, intent.norte, pan, zoom)
+}
+
+/**
+ * Reubica objetos anclados a Gauss/geo para que coincidan con project() del mapa.
+ * No toca trazos libres (sin sentidoEje / fromCoordTable / fromJoinSequence / nodo GK).
+ *
+ * @param {object[]} objects
+ * @param {object} map
+ * @param {{x:number,y:number}} pan
+ * @param {number} zoom
+ * @param {{este0:number,norte0:number}} gkOrigin
+ * @returns {object[]}
+ */
+export function reprojectSceneObjectsToMap(objects, map, pan, zoom, gkOrigin) {
+  if (!map || !gkOrigin || !Array.isArray(objects)) return objects
+  const z = Number(zoom)
+  if (!(z > 0) || !pan) return objects
+
+  const isGeoAnchored = (obj) => (
+    obj?.type === 'nodo'
+    || obj?.sentidoEje === true
+    || obj?.fromCoordTable === true
+    || obj?.fromJoinSequence === true
+    || obj?.fromLibraryOnNode === true
+    || (Number.isFinite(Number(obj?.este)) && Number.isFinite(Number(obj?.norte)))
+  )
+
+  const mapPoint = (x, y, este, norte) => {
+    if (Number.isFinite(Number(este)) && Number.isFinite(Number(norte))) {
+      return gkToCanvasWorld(map, Number(este), Number(norte), pan, z)
+    }
+    return reprojectXy(x, y, map, pan, z, gkOrigin)
+  }
+
+  return objects.map((obj) => {
+    if (!obj || typeof obj !== 'object' || !isGeoAnchored(obj)) return obj
+    if (obj.type === 'nodo') {
+      const w = mapPoint(obj.x, obj.y, obj.este, obj.norte)
+      if (!w) return obj
+      return { ...obj, x: w.x, y: w.y }
+    }
+    if (obj.type === 'linea' || obj.type === 'flecha') {
+      const a = mapPoint(obj.x1, obj.y1, obj.este1, obj.norte1)
+      const b = mapPoint(obj.x2, obj.y2, obj.este2, obj.norte2)
+      if (!a || !b) return obj
+      return { ...obj, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    }
+    if (obj.type === 'polilinea' || obj.type === 'stroke') {
+      const pts = Array.isArray(obj.points) ? obj.points : []
+      const next = pts.map((p) => {
+        if (!p) return p
+        if (Number.isFinite(Number(p.lng)) && Number.isFinite(Number(p.lat))) {
+          const w = lngLatToCanvasWorld(map, p.lng, p.lat, pan, z)
+          return w ? { ...p, x: w.x, y: w.y } : p
+        }
+        if (Number.isFinite(Number(p.este)) && Number.isFinite(Number(p.norte))) {
+          const w = gkToCanvasWorld(map, p.este, p.norte, pan, z)
+          return w ? { ...p, x: w.x, y: w.y } : p
+        }
+        // Primera pasada (mundo aún planar): sellar lng/lat desde Gauss implícito.
+        const intent = canvasWorldToGkIntent(p.x, p.y, gkOrigin)
+        const ll = gkBogotaToWgs84(intent.este, intent.norte)
+        const w = ll
+          ? lngLatToCanvasWorld(map, ll.lng, ll.lat, pan, z)
+          : reprojectXy(p.x, p.y, map, pan, z, gkOrigin)
+        if (!w) return p
+        return {
+          ...p,
+          x: w.x,
+          y: w.y,
+          ...(ll ? { lng: ll.lng, lat: ll.lat, este: intent.este, norte: intent.norte } : {}),
+        }
+      })
+      return { ...obj, points: next }
+    }
+    if (obj.type === 'bloque') {
+      const cx = (Number(obj.x) || 0) + (Number(obj.w) || 0) / 2
+      const cy = (Number(obj.y) || 0) + (Number(obj.h) || 0) / 2
+      const c1 = mapPoint(cx, cy, obj.este, obj.norte)
+      const corner = reprojectXy(obj.x, obj.y, map, pan, z, gkOrigin)
+      if (!c1 || !corner) return obj
+      const oldDx = cx - (Number(obj.x) || 0)
+      const oldDy = cy - (Number(obj.y) || 0)
+      const oldR = Math.hypot(oldDx, oldDy) || 1
+      const newR = Math.hypot(c1.x - corner.x, c1.y - corner.y) || oldR
+      const s = newR / oldR
+      const w = Math.max(1, (Number(obj.w) || 0) * s)
+      const h = Math.max(1, (Number(obj.h) || 0) * s)
+      const children = Array.isArray(obj.children)
+        ? obj.children.map((ch) => scaleLocalChild(ch, s))
+        : obj.children
+      return {
+        ...obj,
+        x: c1.x - w / 2,
+        y: c1.y - h / 2,
+        w,
+        h,
+        children,
+      }
+    }
+    return obj
+  })
+}
+
+function scaleLocalChild(ch, s) {
+  if (!ch || !(s > 0) || Math.abs(s - 1) < 1e-9) return ch
+  if (ch.type === 'linea' || ch.type === 'flecha') {
+    return {
+      ...ch,
+      x1: Number(ch.x1) * s,
+      y1: Number(ch.y1) * s,
+      x2: Number(ch.x2) * s,
+      y2: Number(ch.y2) * s,
+    }
+  }
+  if (ch.type === 'polilinea' || ch.type === 'stroke') {
+    return {
+      ...ch,
+      points: (ch.points || []).map((p) => (p ? { ...p, x: Number(p.x) * s, y: Number(p.y) * s } : p)),
+    }
+  }
+  if (ch.type === 'rect' || ch.type === 'elipse' || ch.type === 'triangulo') {
+    return {
+      ...ch,
+      x1: Number(ch.x1) * s,
+      y1: Number(ch.y1) * s,
+      x2: Number(ch.x2) * s,
+      y2: Number(ch.y2) * s,
+    }
+  }
+  if (ch.x != null || ch.y != null) {
+    return {
+      ...ch,
+      x: Number(ch.x || 0) * s,
+      y: Number(ch.y || 0) * s,
+      w: ch.w != null ? Number(ch.w) * s : ch.w,
+      h: ch.h != null ? Number(ch.h) * s : ch.h,
+    }
+  }
+  return ch
 }
 
 /**

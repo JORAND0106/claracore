@@ -338,6 +338,7 @@ export function materializeJoinAsClosedPolygon(objects, nodeNums, opts = {}) {
       origin: opts.origin,
       ejes: opts.ejes,
       stepM: opts.stepM,
+      lngLatToWorld: opts.lngLatToWorld,
     })
     if (Array.isArray(densified.points) && densified.points.length >= 3) {
       points = densified.points
