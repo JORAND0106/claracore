@@ -1,12 +1,15 @@
 -- Dibujo por reporte (huella compartida de todos sus registros).
--- Depende de so_huellas_nodo_poligono.sql (perimetro_geojson ya existe).
+-- Incluye perimetro_geojson por si so_huellas_nodo_poligono.sql aún no se aplicó.
 
 ALTER TABLE public.so_reportes
+  ADD COLUMN IF NOT EXISTS perimetro_geojson jsonb,
   ADD COLUMN IF NOT EXISTS dibujo_geojson jsonb,
   ADD COLUMN IF NOT EXISTS dibujo_escena jsonb,
   ADD COLUMN IF NOT EXISTS dibujo_actualizado_en timestamptz,
   ADD COLUMN IF NOT EXISTS dibujo_por bigint;
 
+COMMENT ON COLUMN public.so_reportes.perimetro_geojson IS
+  'Perímetro externo opcional del reporte (Polygon). Huella compartida de sus registros de área.';
 COMMENT ON COLUMN public.so_reportes.dibujo_geojson IS
   'FeatureCollection GeoJSON del dibujo del reporte. Se propaga como huella a todos sus registros.';
 COMMENT ON COLUMN public.so_reportes.dibujo_escena IS

@@ -1503,6 +1503,7 @@ from sicoe_registros_schema import (  # noqa: E402
     so_registros_pgrst_unknown_column as _so_registros_pgrst_unknown_column,
     so_registros_strip_omitted as _so_registros_strip_omitted,
     so_registros_write_omit_missing as _so_registros_write_omit_missing,
+    so_reportes_write_omit_missing as _so_reportes_write_omit_missing,
 )
 
 
@@ -26593,39 +26594,36 @@ def sicoe_guardar_dibujo_reporte(
     }
     if perimetro is not None:
         patch["perimetro_geojson"] = perimetro
+    last_written: dict = {}
     try:
-        def _u():
+        # Prod puede no tener aún perimetro_geojson y/o dibujo_* (PGRST204).
+        # Omite columnas ausentes y persiste las que sí existan.
+        def _write(data):
+            last_written.clear()
+            last_written.update(data)
             return (
                 supabase.table("so_reportes")
-                .update(patch)
+                .update(data)
                 .eq("id", reporte_id)
                 .eq("contrato_id", contrato_id)
                 .execute()
                 .data
             )
-        updated = supabase_execute(_u) or []
+
+        updated = _so_reportes_write_omit_missing(_write, patch, operacion="guardar_dibujo") or []
     except Exception as exc:
-        # Columnas dibujo_* aún no migradas → al menos perimetro
-        msg = str(exc).lower()
-        if "dibujo_" in msg:
-            try:
-                def _u2():
-                    return (
-                        supabase.table("so_reportes")
-                        .update({
-                            "perimetro_geojson": perimetro or feat,
-                            "updated_at": "now()",
-                        })
-                        .eq("id", reporte_id)
-                        .eq("contrato_id", contrato_id)
-                        .execute()
-                        .data
-                    )
-                updated = supabase_execute(_u2) or []
-            except Exception as exc2:
-                raise HTTPException(500, f"No se pudo guardar el dibujo (¿migración so_reportes_dibujo.sql?): {exc2}") from exc2
-        else:
-            raise HTTPException(500, f"No se pudo guardar el dibujo: {exc}") from exc
+        raise HTTPException(
+            500,
+            f"No se pudo guardar el dibujo (¿migración so_reportes_dibujo.sql / "
+            f"so_huellas_nodo_poligono.sql?): {exc}",
+        ) from exc
+
+    if not any(k in last_written for k in ("dibujo_geojson", "dibujo_escena", "perimetro_geojson")):
+        raise HTTPException(
+            500,
+            "No se pudo guardar el dibujo: faltan columnas dibujo_* y perimetro_geojson "
+            "en so_reportes. Aplique so_huellas_nodo_poligono.sql y so_reportes_dibujo.sql.",
+        )
 
     n = _sicoe_propagar_dibujo_a_registros(contrato_id, reporte_id, fc)
     out = updated[0] if updated else {"id": reporte_id}
@@ -26657,23 +26655,28 @@ def sicoe_borrar_dibujo_reporte(
     if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
         raise HTTPException(403, "Se requiere permiso «Editar» para quitar el dibujo del reporte.")
     try:
-        def _u():
+        def _write(data):
             return (
                 supabase.table("so_reportes")
-                .update({
-                    "dibujo_geojson": None,
-                    "dibujo_escena": None,
-                    "dibujo_actualizado_en": None,
-                    "dibujo_por": None,
-                    "perimetro_geojson": None,
-                    "updated_at": "now()",
-                })
+                .update(data)
                 .eq("id", reporte_id)
                 .eq("contrato_id", contrato_id)
                 .execute()
                 .data
             )
-        supabase_execute(_u)
+
+        _so_reportes_write_omit_missing(
+            _write,
+            {
+                "dibujo_geojson": None,
+                "dibujo_escena": None,
+                "dibujo_actualizado_en": None,
+                "dibujo_por": None,
+                "perimetro_geojson": None,
+                "updated_at": "now()",
+            },
+            operacion="borrar_dibujo",
+        )
     except Exception as exc:
         raise HTTPException(500, f"No se pudo borrar el dibujo: {exc}") from exc
     return {"ok": True, "tiene_dibujo": False}
