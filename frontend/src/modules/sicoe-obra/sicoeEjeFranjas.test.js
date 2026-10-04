@@ -400,6 +400,38 @@ describe('sicoeEjeFranjas', () => {
     assert.ok(path > chord * 1.08, `path=${path.toFixed(1)} chord=${chord.toFixed(1)}`)
   })
 
+  it('construirAnilloCorredorSentidoEje: lados densificados + tapas rectas; mismo margen del eje', () => {
+    // Franja SOLO a la izquierda del eje (caso real de rocería / un margen).
+    const pts = []
+    for (let m = 0; m <= 80; m += 5) {
+      pts.push({ m, lng: -74.5, lat: 4.6 + m * 0.000009 })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const br = bearingDeg(pts[0], pts[1])
+    const near = (i, d) => destinationPoint(pts[i].lng, pts[i].lat, (br + 270) % 360, d)
+    // Ambos lados del polígono con offset + (mismo signo respecto al eje)
+    const corners = [
+      { ...near(2, 3), key: '1' },
+      { ...near(14, 3), key: '2' },
+      { ...near(14, 9), key: '3' },
+      { ...near(2, 9), key: '4' },
+    ]
+    const ring = construirAnilloCorredorSentidoEje({ ejes, corners, stepM: 5 })
+    assert.ok(ring, 'debe aceptar franja en un solo margen')
+    assert.ok(ring.edgeKinds.includes('along'))
+    assert.ok(ring.edgeKinds.includes('crossing'))
+    assert.equal(ring.edgeKinds.filter((k) => k === 'crossing').length, 2, 'exactamente 2 tapas')
+    assert.equal(ring.edgeKinds.filter((k) => k === 'along').length, 2, 'exactamente 2 lados')
+    // Tapas: entre 2→3 y 4→1 no hay puntos intermedios densificados de esa arista;
+    // los corners 1..4 aparecen; hay interiores solo en lados along.
+    for (const k of ['1', '2', '3', '4']) {
+      assert.ok(ring.points.some((p) => p.corner && p.key === k))
+    }
+    assert.ok(ring.points.length > 4)
+    const closed = [...ring.points, ring.points[0]]
+    assert.equal(polylineSelfIntersects(closed), false)
+  })
+
   it('construirAnilloCorredorSentidoEje: curva cerrada sin picos ni auto-cruce; tapas en levantados', () => {
     // Eje en cuarto de círculo (tipo 9+940–9+970)
     const R = 40

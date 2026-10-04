@@ -333,10 +333,9 @@ export function accionDibujarNodosPorTipo(tipo) {
 /**
  * Densifica un anillo de nodos en sentido del eje.
  *
- * Estrategia principal (corredor): particiona izq/der, densifica cada costado
- * siguiendo el eje y cierra con tapas rectas. Evita picos en extremos y
- * cruces por densificar arista-a-arista.
- * Respaldo: densificación por arista (along vs transversal).
+ * Regla fija (orden de unión):
+ * - Caras longitudinales → siguen el eje
+ * - Tapas transversales → unión recta entre levantados (sin densificar)
  *
  * @param {object[]} nodes nodos en orden de unión (sin repetir el cierre)
  * @param {object|null} planoFc
@@ -360,136 +359,90 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
     ? opts.ejes
     : reconstruirEjesDesdePlano(planoFc)
 
-  // --- Corredor (preferido) ---
-  if (ejes.length) {
-    const corners = []
-    const byKey = new Map()
-    for (let i = 0; i < list.length; i += 1) {
-      const n = list[i]
-      const key = n.nodeNum != null ? String(n.nodeNum) : `i${i}`
-      const ll = nodoToLngLat(n, opts)
-      if (!ll) continue
-      corners.push({ lng: ll.lng, lat: ll.lat, key })
-      byKey.set(key, n)
-    }
-    const corridor = construirAnilloCorredorSentidoEje({
-      ejes,
-      corners,
-      stepM: opts.stepM || 2,
-    })
-    if (corridor?.points?.length >= 4) {
-      const ring = []
-      let ok = true
-      for (const p of corridor.points) {
-        if (p.corner && p.key != null && byKey.has(String(p.key))) {
-          const n = byKey.get(String(p.key))
-          ring.push({
-            x: Number(n.x),
-            y: Number(n.y),
-            lng: p.lng,
-            lat: p.lat,
-            este: n.este,
-            norte: n.norte,
-            _cornerKey: String(p.key),
-          })
-          continue
-        }
-        if (typeof opts.lngLatToWorld === 'function') {
-          const w = opts.lngLatToWorld(p.lng, p.lat)
-          if (w && Number.isFinite(w.x) && Number.isFinite(w.y)) {
-            ring.push({ x: w.x, y: w.y, lng: p.lng, lat: p.lat })
-            continue
-          }
-        }
-        const gk = wgs84ToGkBogota(p.lng, p.lat)
-        if (!gk) {
-          ok = false
-          break
-        }
-        const tw = topoToWorld(gk.este, gk.norte, origin)
-        ring.push({ ...tw, lng: p.lng, lat: p.lat, este: gk.este, norte: gk.norte })
-      }
-      if (ok && ring.length >= 4) {
-        const firstKey = list[0]?.nodeNum != null ? String(list[0].nodeNum) : null
-        if (firstKey) {
-          const idx = ring.findIndex((p) => p._cornerKey === firstKey)
-          if (idx > 0) {
-            const rotated = [...ring.slice(idx), ...ring.slice(0, idx)]
-            ring.length = 0
-            ring.push(...rotated)
-          }
-        }
-        if (list.length >= 2 && list[1]?.nodeNum != null) {
-          const secondKey = String(list[1].nodeNum)
-          const i1 = ring.findIndex((p) => p._cornerKey === secondKey)
-          // Si el 2.º nodo está en la mitad lejana del anillo, invertir sentido.
-          if (i1 > 1 && i1 > ring.filter((p) => p._cornerKey).length / 2) {
-            const head = ring[0]
-            const rest = ring.slice(1).reverse()
-            ring.length = 0
-            ring.push(head, ...rest)
-          }
-        }
-        return {
-          points: ring.map(({ _cornerKey, ...rest }) => rest),
-          usedEje: true,
-          failedEdges: 0,
-          edgeKinds: ['along', 'crossing'],
-        }
-      }
+  if (!ejes.length) {
+    return {
+      points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
+      usedEje: false,
+      failedEdges: list.length,
+      edgeKinds: list.map(() => 'crossing'),
     }
   }
 
-  // --- Respaldo: arista a arista ---
-  const edgeKinds = []
-  const ring = []
-  let usedEje = false
-  let failedEdges = 0
-
-  const appendEdge = (a, b) => {
-    const llA = nodoToLngLat(a, opts)
-    const llB = nodoToLngLat(b, opts)
-    let curved = null
-    if (llA && llB && ejes.length) {
-      curved = construirLineaSentidoEje({
-        ejes,
-        inicio: llA,
-        fin: llB,
-        stepM: opts.stepM || 2,
-      })
-    }
-    const along = !!(curved?.points && curved.points.length > 2)
-    if (along) {
-      const worldPts = curvedEdgeToWorldPts(curved, a, b, {
-        origin,
-        lngLatToWorld: opts.lngLatToWorld,
-        stepM: opts.stepM || 2,
-        capM: opts.capM,
-        maxJumpM: opts.maxJumpM,
-      })
-      if (worldPts && worldPts.length >= 3) {
-        usedEje = true
-        edgeKinds.push('along')
-        for (let i = 0; i < worldPts.length - 1; i += 1) {
-          ring.push(worldPts[i])
-        }
-        return
-      }
-      failedEdges += 1
-    } else if (!(curved?.points && curved.points.length === 2)) {
-      failedEdges += 1
-    }
-    edgeKinds.push('crossing')
-    ring.push({ x: Number(a.x), y: Number(a.y) })
-  }
-
+  const corners = []
+  const byKey = new Map()
   for (let i = 0; i < list.length; i += 1) {
-    const a = list[i]
-    const b = list[(i + 1) % list.length]
-    appendEdge(a, b)
+    const n = list[i]
+    const key = n.nodeNum != null ? String(n.nodeNum) : `i${i}`
+    const ll = nodoToLngLat(n, opts)
+    if (!ll) {
+      return {
+        points: list.map((node) => ({ x: Number(node.x), y: Number(node.y) })),
+        usedEje: false,
+        failedEdges: 1,
+        edgeKinds: list.map(() => 'crossing'),
+      }
+    }
+    corners.push({ lng: ll.lng, lat: ll.lat, key })
+    byKey.set(key, n)
   }
 
-  return { points: ring, usedEje, failedEdges, edgeKinds }
+  const corridor = construirAnilloCorredorSentidoEje({
+    ejes,
+    corners,
+    stepM: opts.stepM || 2,
+  })
+
+  if (!corridor?.points?.length) {
+    // Sin caras longitudinales detectables: anillo recto (no inventar densify).
+    return {
+      points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
+      usedEje: false,
+      failedEdges: 0,
+      edgeKinds: list.map(() => 'crossing'),
+    }
+  }
+
+  const ring = []
+  for (const p of corridor.points) {
+    if (p.corner && p.key != null && byKey.has(String(p.key))) {
+      const n = byKey.get(String(p.key))
+      ring.push({
+        x: Number(n.x),
+        y: Number(n.y),
+        lng: p.lng,
+        lat: p.lat,
+        este: n.este,
+        norte: n.norte,
+      })
+      continue
+    }
+    if (typeof opts.lngLatToWorld === 'function') {
+      const w = opts.lngLatToWorld(p.lng, p.lat)
+      if (w && Number.isFinite(w.x) && Number.isFinite(w.y)) {
+        ring.push({ x: w.x, y: w.y, lng: p.lng, lat: p.lat })
+        continue
+      }
+    }
+    const gk = wgs84ToGkBogota(p.lng, p.lat)
+    if (!gk) {
+      return {
+        points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
+        usedEje: false,
+        failedEdges: 1,
+        edgeKinds: list.map(() => 'crossing'),
+      }
+    }
+    const tw = topoToWorld(gk.este, gk.norte, origin)
+    ring.push({ ...tw, lng: p.lng, lat: p.lat, este: gk.este, norte: gk.norte })
+  }
+
+  const usedEje = (corridor.edgeKinds || []).includes('along')
+  return {
+    points: ring,
+    usedEje,
+    failedEdges: 0,
+    edgeKinds: Array.isArray(corridor.edgeKinds) ? corridor.edgeKinds : ['along', 'crossing'],
+  }
 }
 
 /**
