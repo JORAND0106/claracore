@@ -356,6 +356,7 @@ export function materializeJoinAsClosedPolygon(objects, nodeNums, opts = {}) {
     fromJoinSequence: true,
     sentidoEje,
     points,
+    cornerNodeNums: nodes.map((n) => n.nodeNum).filter((n) => n != null),
     color: opts.color || nodes[0].color || '#0f172a',
     width: opts.width || 3,
     lineStyle: opts.lineStyle || 'continua',

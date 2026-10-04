@@ -66,6 +66,7 @@ import {
   buildNodosFromParsedCoords,
   mensajeNodoInexistente,
   parseCoordRowsForCanvas,
+  redensifySentidoEjeObjects,
   resolveNodoPorNumero,
 } from './esquemaApplyCoordRows.js'
 import { DIBUJO_TIPOS } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
@@ -565,6 +566,7 @@ export default function EsquemaEditorModal({
   const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
   const [printAreaTick, setPrintAreaTick] = useState(0)
   const mapPlanoFcRef = useRef(null)
+  const sentidoEjeSanitizedRef = useRef(false)
   const mapContratoMetaRef = useRef({})
   const mapClickBoundRef = useRef(false)
   const refsClickUnbindRef = useRef(null)
@@ -876,8 +878,10 @@ export default function EsquemaEditorModal({
         scene = synced.objects
       }
       objectsRef.current = scene
+      sentidoEjeSanitizedRef.current = false
     } else if (!initialDataUri) {
       objectsRef.current = []
+      sentidoEjeSanitizedRef.current = false
     } else {
       objectsRef.current = [{
         id: uid(),
@@ -889,6 +893,7 @@ export default function EsquemaEditorModal({
         h: 0,
         fit: true,
       }]
+      sentidoEjeSanitizedRef.current = false
     }
     historyRef.current = []
     setCanUndo(false)
@@ -1689,6 +1694,25 @@ export default function EsquemaEditorModal({
         applyHuellaOrMapOrigin()
         try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
         syncCanvasToMapRef.current()
+        // Sanear polígonos/líneas sentidoEje ya guardados (picos/cruces antiguos).
+        if (!sentidoEjeSanitizedRef.current && mapPlanoFcRef.current && objectsRef.current?.length) {
+          sentidoEjeSanitizedRef.current = true
+          try {
+            const mapNow = mapRef.current
+            const lngLatToWorld = (mapNow && typeof mapNow.project === 'function')
+              ? (lng, lat) => lngLatToCanvasWorld(mapNow, lng, lat, panRef.current, zoomRef.current)
+              : null
+            const sanitized = redensifySentidoEjeObjects(objectsRef.current, mapPlanoFcRef.current, {
+              origin: coordOriginRef.current,
+              lngLatToWorld,
+            })
+            if (sanitized.changed) {
+              objectsRef.current = sanitized.objects
+              try { syncCanvasToMapRef.current() } catch { /* ignore */ }
+              try { redrawRef.current?.(draftRef.current) } catch { /* ignore */ }
+            }
+          } catch { /* ignore */ }
+        }
         if (ctx.hasPk) applyEsquemaPkSelectionStyle(map, ctx.pkId)
       } catch {
         if (!cancelled) {
@@ -2426,7 +2450,7 @@ export default function EsquemaEditorModal({
           if (!result.usedEje) {
             setToolHint('Sin eje de abscisado usable: se dibujó el polígono con caras rectas.')
           } else if (result.failedEdges) {
-            setToolHint('Polígono en sentido del eje. Algunas caras sin eje cercano quedaron rectas.')
+            setToolHint('Polígono en sentido del eje. Algunos tramos no confiables se dibujaron rectos.')
           } else {
             setToolHint('Polígono en sentido del eje. Ya puede guardar.')
           }
@@ -2539,7 +2563,7 @@ export default function EsquemaEditorModal({
         if (!built.usedEje) {
           setToolHint('Sin eje de abscisado usable: se dibujó la línea recta.')
         } else if (built.failedSegments) {
-          setToolHint('Algunos tramos sin eje cercano se dibujaron rectos.')
+          setToolHint('Algunos tramos no confiables se dibujaron rectos.')
         } else {
           setToolHint('Línea en sentido del eje.')
         }
