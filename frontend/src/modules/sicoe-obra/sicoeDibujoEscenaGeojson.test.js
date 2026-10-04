@@ -7,6 +7,7 @@ import { metersToWorld } from '../../components/esquema/esquemaGeometry.js'
 import {
   esquemaSceneToGeojson,
   featureHuellaDesdeDibujo,
+  originLngLatPreferGauss,
   worldPointToLngLat,
 } from './sicoeDibujoEscenaGeojson.js'
 
@@ -80,5 +81,21 @@ describe('sicoeDibujoEscenaGeojson', () => {
     const feat = featureHuellaDesdeDibujo(fc, { reporte_id: 62, dibujo_tipo: 'poligono' })
     assert.equal(feat.geometry.type, 'Polygon')
     assert.equal(feat.properties.huella_tipo, 'poligono')
+  })
+
+  it('originLngLatPreferGauss usa nodos aunque origin_lnglat esté desplazado', () => {
+    const norte = 970815.977
+    const este = 957380.723
+    const wrong = { lng: -74.1, lat: 4.6 }
+    const got = originLngLatPreferGauss({
+      origin_lnglat: wrong,
+      objects: [{ type: 'nodo', x: 0, y: 0, norte, este }],
+    })
+    assert.ok(got)
+    assert.notEqual(got.lng, wrong.lng)
+    // Debe coincidir con world(0,0) → GK del nodo
+    const atNode = worldPointToLngLat(0, 0, got)
+    assert.ok(Math.abs(atNode[0] - got.lng) < 1e-12)
+    assert.ok(Math.abs(atNode[1] - got.lat) < 1e-12)
   })
 })

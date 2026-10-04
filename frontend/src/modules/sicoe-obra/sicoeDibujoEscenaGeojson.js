@@ -6,9 +6,10 @@
  * Soporta tipos de dibujo: nodo | linea | poligono.
  * Nodo + entidad de biblioteca: Point (marcador LOD) + Polygon del bloque insertado.
  */
-import { worldToMeters } from '../../components/esquema/esquemaGeometry.js'
+import { worldToMeters, PX_PER_METER } from '../../components/esquema/esquemaGeometry.js'
 import { packLibraryBlock } from '../../components/esquema/esquemaLibrary.js'
 import { normalizarTipoDibujo, contarPuntosEscena } from './sicoeDibujoTipos.js'
+import { gkBogotaToWgs84 } from '../../utils/epsg3116.js'
 
 const METERS_PER_DEG_LAT = 111320
 
@@ -464,6 +465,41 @@ export function originFromDibujoEscena(escena) {
   return { lng, lat }
 }
 
+/**
+ * Origen WGS84 preferido para una escena: Gauss de nodos (corrige origin_lnglat
+ * desplazado) o, en su defecto, origin_lnglat guardado.
+ */
+export function originLngLatPreferGauss(escena, objects = null) {
+  const list = Array.isArray(objects) ? objects
+    : (Array.isArray(escena?.objects) ? escena.objects : [])
+  const nodos = list.filter((o) => (
+    o
+    && o.type === 'nodo'
+    && Number.isFinite(Number(o.norte))
+    && Number.isFinite(Number(o.este))
+  ))
+  if (nodos.length) {
+    let best = nodos[0]
+    let bestD = Infinity
+    for (const n of nodos) {
+      const d = Math.hypot(Number(n.x) || 0, Number(n.y) || 0)
+      if (d < bestD) {
+        bestD = d
+        best = n
+      }
+    }
+    const x = Number(best.x) || 0
+    const y = Number(best.y) || 0
+    const este0 = Number(best.este) - x / PX_PER_METER
+    const norte0 = Number(best.norte) + y / PX_PER_METER
+    const ll = gkBogotaToWgs84(este0, norte0)
+    if (ll && Number.isFinite(ll.lng) && Number.isFinite(ll.lat)) {
+      return { lng: ll.lng, lat: ll.lat }
+    }
+  }
+  return originFromDibujoEscena(escena)
+}
+
 function rotateAround(p, cx, cy, rot) {
   if (!rot) return { x: p.x, y: p.y }
   const cos = Math.cos(rot)
@@ -654,10 +690,10 @@ function partsToFeatures(parts, origin, baseProps) {
  * @param {{ reporteId?: number|string }} [meta]
  */
 export function esquemaEscenaToDetalleGeojson(escena, meta = {}) {
-  const origin = originFromDibujoEscena(escena)
+  let objects = Array.isArray(escena?.objects) ? escena.objects : []
+  const origin = originLngLatPreferGauss(escena, objects)
   if (!origin) return { type: 'FeatureCollection', features: [] }
 
-  let objects = Array.isArray(escena?.objects) ? escena.objects : []
   // Recuperar entidad solo-snapshot si no hay bloque en objects
   if (!objects.some((o) => o?.type === 'bloque') && escena?.entidad_biblioteca) {
     const ent = escena.entidad_biblioteca

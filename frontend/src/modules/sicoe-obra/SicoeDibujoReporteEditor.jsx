@@ -8,8 +8,10 @@ import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import {
   esquemaSceneToGeojson,
   featureHuellaDesdeDibujo,
+  originFromDibujoEscena,
   snapshotEntidadDesdeEscena,
 } from './sicoeDibujoEscenaGeojson'
+import { resolveHuellaMapOrigin } from './sicoeDibujoHuellaOrigin'
 import { fetchDibujoReferencias, guardarDibujoReporte } from './sicoeDibujoReporteApi'
 import { coordRowsDesdePuntosPortada } from './sicoeDibujoCoordsPortada'
 import {
@@ -98,7 +100,14 @@ export default function SicoeDibujoReporteEditor({
 
   const onSaveHuella = async ({ objects, originLngLat }) => {
     setError('')
-    if (!originLngLat) {
+    // Preferir ancla Gauss de nodos (idempotente al reabrir/guardar sin cambios).
+    const resolved = resolveHuellaMapOrigin({
+      objects,
+      escena: escenaPrev,
+      fallbackLngLat: originLngLat,
+    })
+    const originFijo = resolved?.lngLat || originLngLat
+    if (!originFijo) {
       setError('Active el mapa y dibuje sobre el plano de la obra antes de guardar.')
       throw new Error('Sin origen geográfico')
     }
@@ -110,7 +119,7 @@ export default function SicoeDibujoReporteEditor({
     const entidadSnap = dibujoTipo === 'nodo'
       ? (snapshotEntidadDesdeEscena(objects) || escenaPrev?.entidad_biblioteca || null)
       : null
-    const fc = esquemaSceneToGeojson(objects, originLngLat, {
+    const fc = esquemaSceneToGeojson(objects, originFijo, {
       reporteId: reporte?.id,
       dibujoTipo,
       entidad: entidadSnap,
@@ -146,9 +155,9 @@ export default function SicoeDibujoReporteEditor({
           entidad_id: entidadSnap?.id ?? null,
           entidad_nombre: entidadSnap?.nombre ?? null,
           objects,
-          origin_lnglat: originLngLat,
+          origin_lnglat: originFijo,
         },
-        origenLngLat: originLngLat,
+        origenLngLat: originFijo,
       })
       onGuardado?.(data)
       onClose?.()
@@ -174,6 +183,8 @@ export default function SicoeDibujoReporteEditor({
         referenciasCount={referencias.length}
         initialSceneObjects={initialScene}
         initialCoordRows={initialCoordRows}
+        initialOriginLngLat={originFromDibujoEscena(escenaPrev)}
+        initialDibujoEscena={escenaPrev && typeof escenaPrev === 'object' ? escenaPrev : null}
         referenciaDibujos={referencias}
         referenciaPanelInfo={refSeleccionada}
         onReferenciaPanelClose={() => setRefSeleccionada(null)}
