@@ -118,6 +118,35 @@ export function sectoresSeparan(a, b) {
   return !!(sa && sb && sa !== sb)
 }
 
+/** True si ambos registros pertenecen al mismo reporte (ids presentes e iguales). */
+export function mismoReporte(a, b) {
+  if (!a || !b) return false
+  const ra = a.reporte_id
+  const rb = b.reporte_id
+  if (ra == null || rb == null) return false
+  const sa = String(ra).trim()
+  const sb = String(rb).trim()
+  if (!sa || !sb) return false
+  return sa === sb
+}
+
+/**
+ * Traslapo cuyos involucrados son todos del mismo reporte.
+ * No es hallazgo válido: dentro de un reporte es normal reportar varios ítems en el mismo sitio.
+ */
+export function esTraslapoMismoReporte(hallazgo) {
+  if (!hallazgo) return false
+  if (txt(hallazgo.tipo).toLowerCase() !== 'traslapo') return false
+  const regs = hallazgo.registros_involucrados || []
+  if (regs.length < 2) return false
+  const ids = []
+  for (const r of regs) {
+    if (!r || r.reporte_id == null || String(r.reporte_id).trim() === '') return false
+    ids.push(String(r.reporte_id).trim())
+  }
+  return ids.length > 0 && new Set(ids).size === 1
+}
+
 export function costoDirectoParcial(cantidadTotal, vlrUnitario, fraccion) {
   const q = Number(cantidadTotal) || 0
   const vu = Number(vlrUnitario) || 0
@@ -235,7 +264,9 @@ export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SIC
   if (modo === 'puntual') {
     const pk = candidato.pk_id_id
     const mismos = peers.filter(
-      (p) => String(p.pk_id_id) === String(pk) && modoComparacion(p) === 'puntual',
+      (p) => String(p.pk_id_id) === String(pk)
+        && modoComparacion(p) === 'puntual'
+        && !mismoReporte(candidato, p),
     )
     for (const p of mismos) {
       const valor = costoDirectoParcial(candidato.cantidad_total, candidato.vlr_unitario, 1)
@@ -260,6 +291,8 @@ export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SIC
       if (b0 == null || b1 == null) continue
       delGrupo.push(p)
 
+      // Traslapo solo entre reportes distintos.
+      if (mismoReporte(candidato, p)) continue
       const ov = medidaTraslapo(a0, a1, b0, b1)
       if (ov >= tol) {
         const frac = longC > 1e-9 ? ov / longC : 1
@@ -407,6 +440,7 @@ export function resumenAmbienteDesdeFilas(filas) {
     justificados: { cantidad: 0, valor: 0 },
   }
   for (const f of filas || []) {
+    if (esTraslapoMismoReporte(f)) continue
     const estado = txt(f?.estado).toLowerCase() || 'pendiente'
     if (estado === 'corregido') continue
     const tipo = txt(f?.tipo).toLowerCase()

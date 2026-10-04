@@ -4,6 +4,7 @@ import {
   analizarCandidatoContraPares,
   analizarVarios,
   coloresMapaDesdeHallazgos,
+  esTraslapoMismoReporte,
   fmtAbscisaK,
   justificacionesParaTipo,
   medidaTraslapo,
@@ -123,6 +124,26 @@ describe('sicoeAuditoriaTraslapos', () => {
     assert.equal(r.semaforo, 'rojo')
     assert.match(r.hallazgos[0].texto, /puntual/)
     assert.equal(r.hallazgos[0].valor_en_juego, 10000)
+  })
+
+  it('mismo reporte no genera traslapo; reportes distintos sí', () => {
+    const base = {
+      item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', calzada: 'Derecha',
+      abs_inicio: 100, abs_final: 200, cantidad_total: 100, vlr_unitario: 1000,
+    }
+    const cand = { ...base, id: 10, reporte_id: 7 }
+    const peerMismo = { ...base, id: 11, reporte_id: 7, abs_inicio: 150, abs_final: 250 }
+    const peerOtro = { ...base, id: 12, reporte_id: 8, abs_inicio: 150, abs_final: 250 }
+    assert.equal(analizarCandidatoContraPares(cand, [peerMismo], 0.5).semaforo, 'verde')
+    assert.equal(analizarCandidatoContraPares(cand, [peerOtro], 0.5).semaforo, 'rojo')
+    assert.equal(esTraslapoMismoReporte({
+      tipo: 'traslapo',
+      registros_involucrados: [{ id: 1, reporte_id: 5 }, { id: 2, reporte_id: 5 }],
+    }), true)
+    assert.equal(esTraslapoMismoReporte({
+      tipo: 'traslapo',
+      registros_involucrados: [{ id: 1, reporte_id: 5 }, { id: 2, reporte_id: 9 }],
+    }), false)
   })
 
   it('lote: resumen por semáforo', () => {

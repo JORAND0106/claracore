@@ -97,6 +97,72 @@ def test_vacio_y_no_auditable():
     assert r2["hallazgos"][0]["tipo"] == "no_auditable"
 
 
+def test_mismo_reporte_no_traslapa_distinto_si():
+    """Traslapo solo entre reportes distintos; mismo reporte no alerta."""
+    base = {
+        "item_numero": "1.1",
+        "tramo": "T1",
+        "infraestructura": "Calzada",
+        "calzada": "Derecha",
+        "abs_inicio": 100,
+        "abs_final": 200,
+        "cantidad_total": 100,
+        "vlr_unitario": 1000,
+    }
+    cand = {**base, "id": 10, "numero_registro": 100, "reporte_id": 7}
+    peer_mismo = {**base, "id": 11, "numero_registro": 101, "reporte_id": 7, "abs_inicio": 150, "abs_final": 250}
+    peer_otro = {**base, "id": 12, "numero_registro": 102, "reporte_id": 8, "abs_inicio": 150, "abs_final": 250}
+
+    r_mismo = analizar_candidato_contra_pares(cand, [peer_mismo], tolerancia_m=0.5)
+    assert r_mismo["semaforo"] == "verde"
+    assert not any(h["tipo"] == "traslapo" for h in r_mismo["hallazgos"])
+
+    r_otro = analizar_candidato_contra_pares(cand, [peer_otro], tolerancia_m=0.5)
+    assert r_otro["semaforo"] == "rojo"
+    assert r_otro["hallazgos"][0]["tipo"] == "traslapo"
+
+
+def test_es_traslapo_mismo_reporte_helper():
+    from sicoe_auditoria_traslapos import es_traslapo_mismo_reporte
+
+    assert es_traslapo_mismo_reporte({
+        "tipo": "traslapo",
+        "registros_involucrados": [
+            {"id": 1, "reporte_id": 5},
+            {"id": 2, "reporte_id": 5},
+        ],
+    })
+    assert not es_traslapo_mismo_reporte({
+        "tipo": "traslapo",
+        "registros_involucrados": [
+            {"id": 1, "reporte_id": 5},
+            {"id": 2, "reporte_id": 9},
+        ],
+    })
+    assert not es_traslapo_mismo_reporte({
+        "tipo": "vacio",
+        "registros_involucrados": [
+            {"id": 1, "reporte_id": 5},
+            {"id": 2, "reporte_id": 5},
+        ],
+    })
+
+
+def test_puntual_mismo_reporte_no_traslapa():
+    cand = {
+        "id": 1,
+        "numero_registro": 9,
+        "item_numero": "5",
+        "pk_id_id": 44,
+        "reporte_id": 3,
+        "cantidad_total": 2,
+        "vlr_unitario": 5000,
+    }
+    peer = {"id": 2, "numero_registro": 8, "item_numero": "5", "pk_id_id": 44, "reporte_id": 3}
+    r = analizar_candidato_contra_pares(cand, [peer], tolerancia_m=0.5)
+    assert r["semaforo"] == "verde"
+
+
 def test_puntual_y_interventoria():
     cand = {
         "id": 1,

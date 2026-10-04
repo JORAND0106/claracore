@@ -8,6 +8,7 @@ import {
   fmtValorCop,
   justificacionesParaTipo,
   coloresMapaDesdeHallazgos,
+  esTraslapoMismoReporte,
   resumenAmbienteDesdeFilas,
   usuarioVeAuditoriaTraslapos,
 } from './sicoeAuditoriaTraslapos'
@@ -62,6 +63,23 @@ const ESTADO_LABEL = {
   pendiente: 'Pendiente',
   justificado: 'Justificado',
   corregido: 'Corregido',
+}
+
+/** Ayuda breve por columna (tooltip / toque en ?). */
+const COLUMNA_AYUDA = {
+  tipo: 'Clase del hallazgo: traslapo (se pisa lo ya reportado), vacío (hueco entre tramos), no auditable o inconsistencia.',
+  item_numero: 'Número del ítem del presupuesto involucrado en el hallazgo.',
+  tramo: 'Tramo de la obra donde se ubican los registros comparados.',
+  infraestructura: 'Infraestructura o elemento (calzada, andén, etc.) del grupo comparado.',
+  costado: 'Costado o margen (izquierda/derecha) usado para alinear los registros lineales.',
+  ubicacion: 'Abscisas o PK-ID donde ocurre el traslapo, el vacío o la inconsistencia.',
+  medida_m: 'Longitud del traslapo o del vacío, en metros. Vacío si el hallazgo es puntual.',
+  registros: 'Números de registro involucrados. Clic abre el primero en el reporte.',
+  valor_en_juego: 'Valor económico estimado asociado al hallazgo (costo directo del tramo afectado).',
+  estado: 'Pendiente (sin justificar), justificado (con razón) o corregido (ya no aparece en el análisis).',
+  justificacion: 'Razón elegida al justificar el hallazgo, si aplica.',
+  usuario: 'Quién justificó el hallazgo (si ya está justificado).',
+  fecha: 'Cuándo se justificó el hallazgo (si aplica).',
 }
 
 function txt(v) {
@@ -162,9 +180,11 @@ export default function SicoeAmbienteAuditoria({
   const [panelCantidades, setPanelCantidades] = useState(true)
   const [exportando, setExportando] = useState(false)
   const [mostrarCorregidos, setMostrarCorregidos] = useState(false)
+  const [colAyudaAbierta, setColAyudaAbierta] = useState(null)
 
   const aplicarDatos = useCallback((data) => {
-    const list = Array.isArray(data?.hallazgos) ? data.hallazgos : []
+    const list = (Array.isArray(data?.hallazgos) ? data.hallazgos : [])
+      .filter((h) => !esTraslapoMismoReporte(h))
     setHallazgos(list)
     setResumen(data?.resumen || resumenAmbienteDesdeFilas(list))
     setCargaOk(true)
@@ -426,17 +446,92 @@ export default function SicoeAmbienteAuditoria({
     })
   }
 
-  const thBtn = (col, label, width) => (
-    <th
-      key={col}
-      style={{ ...sheet.th, width, cursor: 'pointer', userSelect: 'none' }}
-      onClick={() => toggleOrden(col)}
-      title="Ordenar"
-    >
-      {label}
-      {orden.col === col ? (orden.dir === 'asc' ? ' ↑' : ' ↓') : ''}
-    </th>
-  )
+  const thBtn = (col, label, width) => {
+    const ayuda = COLUMNA_AYUDA[col] || ''
+    const open = colAyudaAbierta === col
+    return (
+      <th
+        key={col}
+        style={{ ...sheet.th, width, position: 'relative', userSelect: 'none' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
+          <button
+            type="button"
+            onClick={() => toggleOrden(col)}
+            title={`Ordenar por ${label}`}
+            aria-label={`Ordenar por ${label}`}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'inherit',
+              font: 'inherit',
+              fontWeight: 'inherit',
+              cursor: 'pointer',
+              padding: 0,
+              textAlign: 'left',
+            }}
+          >
+            {label}
+            {orden.col === col ? (orden.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+          </button>
+          {ayuda && (
+            <button
+              type="button"
+              title={ayuda}
+              aria-label={`Ayuda: ${label}`}
+              aria-expanded={open}
+              onClick={(e) => {
+                e.stopPropagation()
+                setColAyudaAbierta((cur) => (cur === col ? null : col))
+              }}
+              style={{
+                width: 16,
+                height: 16,
+                borderRadius: '50%',
+                border: `1px solid currentColor`,
+                background: 'transparent',
+                color: 'inherit',
+                fontSize: 10,
+                fontWeight: 800,
+                lineHeight: '14px',
+                padding: 0,
+                cursor: 'pointer',
+                opacity: 0.85,
+                flexShrink: 0,
+              }}
+            >
+              ?
+            </button>
+          )}
+        </div>
+        {open && ayuda && (
+          <div
+            role="tooltip"
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              zIndex: 20,
+              marginTop: 4,
+              minWidth: 180,
+              maxWidth: 260,
+              background: t.bgCard || '#fff',
+              color: t.text,
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              padding: '8px 10px',
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 500,
+              boxShadow: '0 8px 20px rgba(15,23,42,0.18)',
+              whiteSpace: 'normal',
+            }}
+          >
+            {ayuda}
+          </div>
+        )}
+      </th>
+    )
+  }
 
   const renderFila = (h) => {
     const sel = String(h.id) === String(seleccionadoId)
@@ -939,10 +1034,15 @@ export default function SicoeAmbienteAuditoria({
         <SicoeHallazgoDetalle
           t={t}
           hallazgo={seleccionado}
+          hallazgosLista={filtrados}
           API_URL={API_URL}
           contratoId={contratoId}
           token={token}
+          isNarrow={isNarrow}
           onCerrar={() => setSeleccionadoId(null)}
+          onSeleccionarHallazgo={(h) => {
+            if (h?.id != null) setSeleccionadoId(h.id)
+          }}
           onAbrirRegistro={(r) => {
             if (!onAbrirRegistro || !r) return
             onAbrirRegistro({

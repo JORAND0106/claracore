@@ -29902,6 +29902,14 @@ def sicoe_auditoria_traslapos_registrar_decision(
 
 class AuditoriaHallazgoJustificarBody(BaseModel):
     justificacion: str
+    observacion: Optional[str] = None
+
+
+def _sicoe_filtrar_hallazgos_tabla(filas: List[dict]) -> List[dict]:
+    """Oculta traslapos entre registros del mismo reporte (no son hallazgos válidos)."""
+    from sicoe_auditoria_traslapos import es_traslapo_mismo_reporte
+
+    return [f for f in (filas or []) if not es_traslapo_mismo_reporte(f)]
 
 
 def _sicoe_auditoria_regs_contrato(contrato_id: int) -> List[dict]:
@@ -30032,6 +30040,7 @@ def sicoe_auditoria_hallazgos_sincronizar(
     """
     from sicoe_auditoria_traslapos import (
         analizar_contrato,
+        es_traslapo_mismo_reporte,
         resumen_ambiente_desde_filas,
         usuario_ve_auditoria_traslapos,
     )
@@ -30049,7 +30058,11 @@ def sicoe_auditoria_hallazgos_sincronizar(
     except Exception as exc:
         _log_api.exception("analizar_contrato contrato=%s", contrato_id)
         raise HTTPException(500, f"No se pudo analizar el contrato: {exc}") from exc
-    vivos = {h["fingerprint"]: h for h in (analisis.get("hallazgos") or []) if h.get("fingerprint")}
+    vivos = {
+        h["fingerprint"]: h
+        for h in (analisis.get("hallazgos") or [])
+        if h.get("fingerprint") and not es_traslapo_mismo_reporte(h)
+    }
 
     # Unificar nodos encimados + hallazgos alimentados por dibujos (siempre, liviano).
     try:
@@ -30059,7 +30072,7 @@ def sicoe_auditoria_hallazgos_sincronizar(
     try:
         for h in (_sicoe_auditoria_desde_dibujos(contrato_id, current_user=current_user) or []):
             fp = h.get("fingerprint")
-            if fp and fp not in vivos:
+            if fp and fp not in vivos and not es_traslapo_mismo_reporte(h):
                 vivos[fp] = h
     except Exception as exc:
         _log_api.warning("auditoria dibujos en sync: %s", exc)
@@ -30086,7 +30099,7 @@ def sicoe_auditoria_hallazgos_sincronizar(
                     huellas_features.append(fr["huella"])
             for h in fr.get("hallazgos") or []:
                 fp = h.get("fingerprint")
-                if fp and fp not in vivos:
+                if fp and fp not in vivos and not es_traslapo_mismo_reporte(h):
                     vivos[fp] = h
 
     existentes = _sicoe_hallazgos_tabla_lista(contrato_id)
@@ -30105,7 +30118,9 @@ def sicoe_auditoria_hallazgos_sincronizar(
 
     corregidos = 0
     for fp, prev in by_fp.items():
-        if fp in vivos:
+        # Desaparece del análisis vivo, o es traslapo inválido del mismo reporte.
+        debe_corregir = fp not in vivos or es_traslapo_mismo_reporte(prev)
+        if not debe_corregir:
             continue
         if str(prev.get("estado") or "").lower() == "corregido":
             continue
@@ -30140,7 +30155,7 @@ def sicoe_auditoria_hallazgos_sincronizar(
                 f"No se pudieron guardar hallazgos (¿migración SQL?): {exc}",
             ) from exc
 
-    filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+    filas = _sicoe_filtrar_hallazgos_tabla(_sicoe_hallazgos_tabla_lista(contrato_id))
     eje_fc = {"type": "FeatureCollection", "features": []}
     try:
         if not ejes and incluir_huellas is False:
@@ -30619,7 +30634,7 @@ def sicoe_auditoria_hallazgos_listar(
     if sincronizar:
         return sicoe_auditoria_hallazgos_sincronizar(contrato_id, current_user)
 
-    filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+    filas = _sicoe_filtrar_hallazgos_tabla(_sicoe_hallazgos_tabla_lista(contrato_id))
     return {
         "ok": True,
         "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
@@ -30674,6 +30689,7 @@ def sicoe_auditoria_hallazgos_justificar(
     if just not in permitidas:
         raise HTTPException(422, "Justificación no permitida para este tipo de hallazgo.")
 
+    obs = (body.observacion or "").strip() if getattr(body, "observacion", None) else ""
     now = datetime.now(timezone.utc).isoformat()
     uid = _sicoe_uid_from_user(current_user)
     nombre = (
@@ -30681,6 +30697,13 @@ def sicoe_auditoria_hallazgos_justificar(
         or (current_user.get("email") or "")
         or str(uid or "")
     ).strip()
+
+    prev_payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    payload = dict(prev_payload or {})
+    if obs:
+        payload["observacion"] = obs
+    else:
+        payload.pop("observacion", None)
 
     try:
         def _u():
@@ -30694,6 +30717,7 @@ def sicoe_auditoria_hallazgos_justificar(
                         "justificado_por_nombre": nombre,
                         "justificado_en": now,
                         "actualizado_en": now,
+                        "payload": payload,
                     }
                 )
                 .eq("id", hallazgo_id)
@@ -30718,6 +30742,7 @@ def sicoe_auditoria_hallazgos_justificar(
                 "fingerprint": row.get("fingerprint"),
                 "tipo_hallazgo": row.get("tipo"),
                 "justificacion": just,
+                "observacion": obs or None,
                 "item_numero": row.get("item_numero"),
             },
             resultado="ok",
@@ -30854,7 +30879,7 @@ class AsignarItemBody(BaseModel):
 
 
 def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[dict]) -> List[dict]:
-    """Rellena reporte/fecha/usuario/cantidades de registros involucrados para el detalle."""
+    """Rellena reporte/fecha/usuario/cantidades/foto/dibujo de registros involucrados para el detalle."""
     from sicoe_auditoria_traslapos import _snapshot_involucrado
 
     ids = []
@@ -30875,7 +30900,8 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                 supabase.table("so_registros")
                 .select(
                     _SICOE_AUDITORIA_PEER_SELECT
-                    + ", creado_por_reg, created_at, updated_at"
+                    + ", creado_por_reg, created_at, updated_at, "
+                    "foto_url, grafico_url, item_descripcion"
                 )
                 .eq("contrato_id", contrato_id)
                 .in_("id", ids)
@@ -30892,8 +30918,10 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                 return (
                     supabase.table("so_registros")
                     .select(
-                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
-                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario, "
+                        "id, numero_registro, reporte_id, item_numero, item_descripcion, tramo, "
+                        "infraestructura, calzada, margen, abs_inicio, abs_final, pk_id_id, "
+                        "cantidad_total, vlr_unitario, foto_url, grafico_url, "
+                        "coord_lat, coord_lng, huella_geojson, "
                         "creado_por_reg, created_at"
                     )
                     .eq("contrato_id", contrato_id)
@@ -30929,7 +30957,10 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
             def _qr():
                 return (
                     supabase.table("so_reportes")
-                    .select("id, numero_reporte, created_at, creado_por")
+                    .select(
+                        "id, numero_reporte, created_at, creado_por, "
+                        "dibujo_geojson, perimetro_geojson, coord_lat, coord_lng"
+                    )
                     .eq("contrato_id", contrato_id)
                     .in_("id", rep_ids)
                     .execute()
@@ -30945,6 +30976,21 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                         pass
         except Exception as exc:
             _log_api.warning("enrich involucrados reportes: %s", exc)
+            try:
+                def _qr2():
+                    return (
+                        supabase.table("so_reportes")
+                        .select("id, numero_reporte, created_at, creado_por, coord_lat, coord_lng")
+                        .eq("contrato_id", contrato_id)
+                        .in_("id", rep_ids)
+                        .execute()
+                        .data
+                    )
+                for rep in supabase_execute(_qr2) or []:
+                    rep_map[rep.get("id")] = rep
+                    rep_map[str(rep.get("id"))] = rep
+            except Exception as exc2:
+                _log_api.warning("enrich involucrados reportes fallback: %s", exc2)
 
     user_ids = list(dict.fromkeys(user_ids))
     user_map: Dict[Any, str] = {}
@@ -30985,6 +31031,14 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                 merged["usuario_nombre"] = user_map.get(rep.get("creado_por")) or user_map.get(
                     str(rep.get("creado_por"))
                 )
+            if not merged.get("dibujo_geojson") and rep.get("dibujo_geojson"):
+                merged["dibujo_geojson"] = rep.get("dibujo_geojson")
+            if not merged.get("perimetro_geojson") and rep.get("perimetro_geojson"):
+                merged["perimetro_geojson"] = rep.get("perimetro_geojson")
+            if merged.get("coord_lat") is None and rep.get("coord_lat") is not None:
+                merged["coord_lat"] = rep.get("coord_lat")
+            if merged.get("coord_lng") is None and rep.get("coord_lng") is not None:
+                merged["coord_lng"] = rep.get("coord_lng")
         if not merged.get("usuario_nombre") and merged.get("creado_por_reg") is not None:
             merged["usuario_nombre"] = user_map.get(merged.get("creado_por_reg")) or user_map.get(
                 str(merged.get("creado_por_reg"))
