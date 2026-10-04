@@ -64,6 +64,11 @@ import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegist
 import SicoeOfertaDibujoReporteModal from './modules/sicoe-obra/SicoeOfertaDibujoReporteModal'
 import SicoeDibujoReporteEditor from './modules/sicoe-obra/SicoeDibujoReporteEditor'
 import { reporteTieneDibujo, reporteSinDibujo } from './modules/sicoe-obra/sicoeDibujoReporteApi'
+import {
+  mensajeErrorGuardarTopografiaPortada,
+  mensajeErrorRespuestaTopo,
+  normalizarPuntosTopoPortada,
+} from './modules/sicoe-obra/sicoePortadaTopografia'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -6424,30 +6429,60 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   const guardarTopografia = async () => {
-    const puntosValidos = puntosEdit.filter(p => String(p.norte).trim() || String(p.este).trim())
-    if (puntosValidos.length === 0) {
-      alert('Debes ingresar al menos un punto con Norte o Este para guardar.')
+    const puntosValidos = normalizarPuntosTopoPortada(puntosEdit)
+    const teniaPuntos = Array.isArray(reporte?.puntos) && reporte.puntos.length > 0
+    // Permitir guardar vacío solo si se están eliminando todos los puntos existentes.
+    if (puntosValidos.length === 0 && !teniaPuntos && !(puntosEdit || []).some((p) => (
+      String(p?.norte ?? '').trim() || String(p?.este ?? '').trim()
+    ))) {
+      alert('Agregue al menos un punto con Norte o Este, o cancele la edición.')
+      return
+    }
+    // Filas con texto en Norte/Este que no son número
+    const filasInvalidas = (puntosEdit || []).filter((p) => {
+      const nRaw = String(p?.norte ?? '').trim()
+      const eRaw = String(p?.este ?? '').trim()
+      if (!nRaw && !eRaw) return false
+      const nOk = !nRaw || Number.isFinite(Number(String(nRaw).replace(',', '.')))
+      const eOk = !eRaw || Number.isFinite(Number(String(eRaw).replace(',', '.')))
+      return !(nOk && eOk)
+    })
+    if (filasInvalidas.length) {
+      alert('Revise Norte y Este: deben ser números válidos en todas las filas con coordenadas.')
       return
     }
     setGuardandoTopo(true)
     try {
       const delRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/puntos-topograficos`, {
-        method: 'DELETE', headers: hdrs
+        method: 'DELETE', headers: hdrs,
       })
-      if (!delRes.ok) throw new Error(`Error eliminando puntos: ${delRes.status}`)
-      const postRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
-        method: 'POST', headers: hdrs,
-        body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos })
-      })
-      if (!postRes.ok) {
-        const err = await postRes.json().catch(() => ({}))
-        throw new Error(err.detail || `Error guardando puntos: ${postRes.status}`)
+      if (!delRes.ok) {
+        throw new Error(await mensajeErrorRespuestaTopo(
+          delRes,
+          'No se pudieron actualizar las coordenadas del reporte.',
+        ))
       }
-      setReporte((r) => ({ ...r, puntos: puntosValidos }))
+      let guardados = puntosValidos
+      if (puntosValidos.length > 0) {
+        const postRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
+          method: 'POST', headers: hdrs,
+          body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos }),
+        })
+        if (!postRes.ok) {
+          throw new Error(await mensajeErrorRespuestaTopo(
+            postRes,
+            'No se pudieron guardar las coordenadas del reporte.',
+          ))
+        }
+        const body = await postRes.json().catch(() => null)
+        if (Array.isArray(body) && body.length) guardados = body
+      }
+      setReporte((r) => ({ ...r, puntos: guardados }))
+      setPuntosEdit(guardados.map((p) => ({ ...p })))
       await recargar()
       setEditandoTopo(false)
-    } catch(e) {
-      alert(`No se pudo guardar la topografía: ${e.message}`)
+    } catch (e) {
+      alert(mensajeErrorGuardarTopografiaPortada(e))
     }
     setGuardandoTopo(false)
   }
