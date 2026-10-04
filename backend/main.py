@@ -26769,10 +26769,12 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
         return empty
 
     peer_list = sorted(peer_ids)
+    desc_por_peer_item: Dict[int, Dict[str, str]] = {}
     for chunk in _sicoe_chunks_int(peer_list, 200):
         ch = list(chunk)
         batch = []
         for cols in (
+            "reporte_id, numero_registro, item_numero, item_descripcion, costo_directo",
             "reporte_id, numero_registro, item_numero, costo_directo",
             "reporte_id, item_numero, costo_directo",
         ):
@@ -26799,6 +26801,11 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
             it = str(r.get("item_numero") or "").strip()
             if it:
                 items_por_peer.setdefault(rid_i, set()).add(it)
+                desc = str(r.get("item_descripcion") or "").strip()
+                if desc:
+                    bucket = desc_por_peer_item.setdefault(rid_i, {})
+                    if not bucket.get(it):
+                        bucket[it] = desc
             try:
                 cd = float(r.get("costo_directo") or 0)
             except (TypeError, ValueError):
@@ -26809,9 +26816,13 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
                 num_reg_i = int(num_reg) if num_reg is not None else None
             except (TypeError, ValueError):
                 num_reg_i = None
+            desc_reg = str(r.get("item_descripcion") or "").strip() or None
+            if not desc_reg and it:
+                desc_reg = (desc_por_peer_item.get(rid_i) or {}).get(it) or None
             registros_por_peer.setdefault(rid_i, []).append({
                 "numero_registro": num_reg_i,
                 "item_numero": it or None,
+                "item_descripcion": desc_reg,
             })
 
     # Cabeceras con dibujo (+ escena para forma real en el editor)
@@ -26866,13 +26877,23 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
                     str(x.get("item_numero") or ""),
                 ),
             )
+            items_sorted = sorted(items_por_peer.get(int(rid)) or [])
+            desc_map = desc_por_peer_item.get(int(rid)) or {}
+            items_detalle = [
+                {
+                    "item_numero": it,
+                    "item_descripcion": desc_map.get(it) or None,
+                }
+                for it in items_sorted
+            ]
             escena = rep.get("dibujo_escena")
             if escena is not None and not isinstance(escena, dict):
                 escena = None
             reportes_map[int(rid)] = {
                 "reporte_id": int(rid),
                 "numero_reporte": rep.get("numero_reporte"),
-                "items": sorted(items_por_peer.get(int(rid)) or []),
+                "items": items_sorted,
+                "items_detalle": items_detalle,
                 "costo_directo": round(float(costo_por_peer.get(int(rid)) or 0), 2),
                 "dibujo_geojson": dg,
                 "dibujo_escena": escena,

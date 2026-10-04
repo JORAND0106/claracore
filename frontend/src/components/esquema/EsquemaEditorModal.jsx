@@ -170,6 +170,8 @@ import {
 } from './esquemaDibujoReferencias'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
+import { formatCOP } from '../../utils/formatCOP'
+import { descByItemFromRef } from '../../modules/sicoe-obra/sicoeDibujoRefItemDesc.js'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -379,6 +381,10 @@ export default function EsquemaEditorModal({
   referenciaDibujos = null,
   /** (info) => void — clic en un dibujo de referencia. */
   onReferenciaClick = null,
+  /** Datos del panel de referencia (otro reporte) — solo huellaMode / barra lateral. */
+  referenciaPanelInfo = null,
+  /** Cierra el panel de referencia embebido. */
+  onReferenciaPanelClose = null,
   onSave,
   onClose,
 }) {
@@ -529,6 +535,19 @@ export default function EsquemaEditorModal({
   const [cursorCoords, setCursorCoords] = useState({
     norte: null, este: null, lat: null, lng: null,
   })
+  /** Ancho de la barra lateral (huellaMode). Persistido en localStorage. */
+  const [sidebarW, setSidebarW] = useState(() => {
+    if (typeof window === 'undefined') return 280
+    try {
+      const raw = Number(localStorage.getItem('cc_sicoe_dibujo_sidebar_w'))
+      if (Number.isFinite(raw) && raw >= 180 && raw <= 480) return raw
+    } catch { /* ignore */ }
+    return window.innerWidth < 768 ? 200 : 280
+  })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => (
+    typeof window !== 'undefined' && window.innerWidth < 640
+  ))
+  const sidebarDragRef = useRef(null)
   const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
   const [printAreaTick, setPrintAreaTick] = useState(0)
   const mapPlanoFcRef = useRef(null)
@@ -1384,6 +1403,7 @@ export default function EsquemaEditorModal({
     ensureEsquemaDibujoReferenciasLayers(map, fc)
     if ((referenciaDibujosRef.current || []).length && typeof onReferenciaClickRef.current === 'function') {
       refsClickUnbindRef.current = bindEsquemaDibujoReferenciasClick(map, (info) => {
+        try { setSidebarCollapsed(false) } catch { /* ignore */ }
         try { onReferenciaClickRef.current?.(info) } catch { /* ignore */ }
       })
     }
@@ -2474,23 +2494,23 @@ export default function EsquemaEditorModal({
     }
     if (pinchRef.current) return
 
-    // Consulta de dibujos de referencia: cualquier herramienta, sin alterar el dibujo en curso.
-    if (
-      mapActiveRef.current
-      && mapRef.current
-      && typeof onReferenciaClickRef.current === 'function'
-      && !pendingInsertRef.current
-    ) {
-      const info = queryDibujoReferenciaAtPoint(mapRef.current, screen)
-      if (info) {
-        try { onReferenciaClickRef.current(info) } catch { /* ignore */ }
-        drawing.current = false
-        return
-      }
-    }
-
     let p = posFromEvent(e)
     const currentTool = toolRef.current
+    // Referencias: solo si no hay entidad propia bajo el clic.
+    // Herramientas de dibujo/edición (girar, mover, trazar…) consumen el clic;
+    // la consulta de otros reportes aplica en Selección (clic vacío) y Paneo.
+    const tryOpenReferenciaSiAplica = () => {
+      if (!mapActiveRef.current || !mapRef.current) return false
+      if (typeof onReferenciaClickRef.current !== 'function') return false
+      if (pendingInsertRef.current) return false
+      if (currentTool !== 'seleccion' && currentTool !== 'paneo') return false
+      if (hitTest(p)) return false
+      const info = queryDibujoReferenciaAtPoint(mapRef.current, screen)
+      if (!info) return false
+      try { setSidebarCollapsed(false) } catch { /* ignore */ }
+      try { onReferenciaClickRef.current(info) } catch { /* ignore */ }
+      return true
+    }
     if (pendingInsertRef.current) {
       const pending = pendingInsertRef.current
       const item = pending?.item || pending
@@ -2803,14 +2823,10 @@ export default function EsquemaEditorModal({
         redraw()
         return
       }
-      // Clic vacío sobre mapa: consultar dibujo de referencia (otros reportes)
-      if (mapActiveRef.current && mapRef.current && typeof onReferenciaClickRef.current === 'function') {
-        const info = queryDibujoReferenciaAtPoint(mapRef.current, screen)
-        if (info) {
-          try { onReferenciaClickRef.current(info) } catch { /* ignore */ }
-          drawing.current = false
-          return
-        }
+      // Clic vacío: consultar dibujo de referencia (otros reportes), sin entidad propia.
+      if (tryOpenReferenciaSiAplica()) {
+        drawing.current = false
+        return
       }
       const snapKeep = findSnap(p, objectsRef.current, { threshold: snapThreshold(), allowNear: false })
       if (snapClickKeepsSelection({
@@ -4769,7 +4785,378 @@ export default function EsquemaEditorModal({
           </div>
         </div>
 
-        <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: huellaMode ? 'row' : 'column',
+            background: ui.wrap,
+          }}
+        >
+          {huellaMode ? (
+            sidebarCollapsed ? (
+              <div
+                data-testid="esquema-huella-sidebar-collapsed"
+                style={{
+                  flexShrink: 0,
+                  width: 36,
+                  borderRight: `1px solid ${t.border}`,
+                  background: t.bgCard || '#fff',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  paddingTop: 8,
+                  gap: 6,
+                }}
+              >
+                <button
+                  type="button"
+                  title="Mostrar paneles"
+                  aria-label="Mostrar barra lateral"
+                  data-testid="esquema-huella-sidebar-expand"
+                  onClick={() => setSidebarCollapsed(false)}
+                  style={{
+                    ...ghost(t),
+                    width: 28,
+                    height: 28,
+                    minWidth: 28,
+                    padding: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 800,
+                  }}
+                >
+                  »
+                </button>
+              </div>
+            ) : (
+              <aside
+                data-testid="esquema-huella-sidebar"
+                style={{
+                  flexShrink: 0,
+                  width: sidebarW,
+                  maxWidth: 'min(48vw, 480px)',
+                  height: '100%',
+                  borderRight: `1px solid ${t.border}`,
+                  background: t.bgCard || '#fff',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  position: 'relative',
+                  zIndex: 4,
+                }}
+              >
+                <div
+                  style={{
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 6,
+                    padding: '8px 10px',
+                    borderBottom: `1px solid ${t.border}`,
+                  }}
+                >
+                  <strong style={{ fontSize: 11, color: t.text, letterSpacing: '0.04em' }}>PANELES</strong>
+                  <button
+                    type="button"
+                    title="Ocultar barra lateral"
+                    aria-label="Ocultar barra lateral"
+                    data-testid="esquema-huella-sidebar-collapse"
+                    onClick={() => setSidebarCollapsed(true)}
+                    style={{
+                      ...ghost(t),
+                      width: 28,
+                      height: 28,
+                      minWidth: 28,
+                      padding: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 800,
+                    }}
+                  >
+                    «
+                  </button>
+                </div>
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: 'auto',
+                    overflowX: 'hidden',
+                    padding: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                  }}
+                >
+                  <CursorCoordsPanel t={t} coords={cursorCoords} embedded />
+                  {typeof onHuellaDibujoTipoChange === 'function' ? (
+                    <DibujoTipoCompactPanel
+                      t={t}
+                      tipo={huellaDibujoTipo}
+                      referenciasCount={referenciasCount}
+                      embedded
+                      onTipoChange={(next) => {
+                        setSentidoEjePrompt(false)
+                        pendingDrawRowsRef.current = null
+                        onHuellaDibujoTipoChange(next)
+                      }}
+                      onDibujar={() => requestDrawFromCoords(coordRows)}
+                    />
+                  ) : null}
+                  {coordPanelOpen ? (
+                    <CoordsPanel
+                      t={t}
+                      rows={coordRows}
+                      fileRef={coordFileRef}
+                      embedded
+                      onClose={() => setCoordPanelOpen(false)}
+                      onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
+                      onImport={async (file) => {
+                        try {
+                          const parsed = await parseCoordFile(file)
+                          const numbered = renumberCoordRows(parsed)
+                          setCoordRows(numbered)
+                          requestDrawFromCoords(numbered)
+                        } catch (err) {
+                          window.alert(err?.message || 'No se pudo leer el archivo')
+                        }
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid="esquema-coords-open-sidebar"
+                      onClick={() => setCoordPanelOpen(true)}
+                      style={{
+                        ...ghost(t),
+                        fontSize: 11,
+                        fontWeight: 700,
+                        justifyContent: 'flex-start',
+                        padding: '8px 10px',
+                      }}
+                    >
+                      Abrir coordenadas
+                    </button>
+                  )}
+                  {sentidoEjePrompt ? (
+                    <div
+                      data-testid="esquema-sentido-eje-prompt"
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: `1px solid ${t.border}`,
+                        background: t.bg || '#fff',
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 10 }}>
+                        ¿En sentido del eje?
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          data-testid="esquema-sentido-eje-si"
+                          onClick={() => confirmSentidoEje(true)}
+                          style={{
+                            flex: 1,
+                            height: 34,
+                            borderRadius: 8,
+                            border: 'none',
+                            background: t.primary,
+                            color: '#fff',
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Sí
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="esquema-sentido-eje-no"
+                          onClick={() => confirmSentidoEje(false)}
+                          style={{
+                            flex: 1,
+                            height: 34,
+                            borderRadius: 8,
+                            border: `1px solid ${t.border}`,
+                            background: t.bg || '#fff',
+                            color: t.text,
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          No
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {mapActive ? (
+                    mapPropsOpen ? (
+                      <MapaPropiedadesPanel
+                        t={t}
+                        basemap={mapBasemap}
+                        opacity={mapOpacity}
+                        error={mapError}
+                        pickInfo={mapPickInfo}
+                        printAreaSelecting={printAreaSelecting}
+                        embedded
+                        contextHint={mapCtx.hasPk
+                          ? `PK ${mapCtx.pkId} resaltado`
+                          : mapCtx.hasPoint
+                            ? 'Centrado en ubicación del reporte'
+                            : 'Vista general del contrato'}
+                        onBasemap={applyMapBasemap}
+                        onOpacity={setMapOpacity}
+                        onClose={() => setMapPropsOpen(false)}
+                        onRemove={deactivateMap}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid="esquema-mapa-props-toggle"
+                        title="Propiedades del mapa"
+                        aria-label="Abrir propiedades del mapa"
+                        onClick={() => setMapPropsOpen(true)}
+                        style={{
+                          ...ghost(t),
+                          fontSize: 11,
+                          fontWeight: 700,
+                          justifyContent: 'flex-start',
+                          gap: 8,
+                          padding: '8px 10px',
+                        }}
+                      >
+                        <IconMapaProps /> Propiedades del mapa
+                      </button>
+                    )
+                  ) : null}
+                  {(tool === 'unir-nodos' || joinSeq.length > 0) ? (
+                    <JoinSeqPanel
+                      t={t}
+                      seq={joinSeq}
+                      embedded
+                      onChange={setJoinSequence}
+                      onFinish={finishJoinCircuit}
+                      onAppendNum={tryAppendJoinNum}
+                    />
+                  ) : null}
+                  {libOpen && huellaTipoRef.current === 'nodo' ? (
+                    <BibliotecaPanel
+                      t={t}
+                      ui={ui}
+                      contratoId={contratoId}
+                      items={libItems}
+                      notice={libNotice}
+                      embedded
+                      canSaveSelection={selectedIds.some((id) => {
+                        const o = objectsRef.current.find((x) => x.id === id)
+                        return o && o.type !== 'image'
+                      })}
+                      onClose={() => setLibOpen(false)}
+                      onSaveSelection={saveSelectionToLibrary}
+                      onInsert={beginInsertLibraryItem}
+                      onDelete={(id) => {
+                        setLibItems(deleteLibraryItem(contratoId, id))
+                      }}
+                    />
+                  ) : null}
+                  {selectedObj && selectedObj.type !== 'image' ? (
+                    <PropiedadesPanel
+                      t={t}
+                      ui={ui}
+                      obj={selectedObj}
+                      selectMode={tool === 'seleccion' ? selectMode : null}
+                      onSelectMode={setSelectMode}
+                      scaleLocked={isScaleLockedBloque(selectedObj) && (huellaMode || mapActive)}
+                      measureW={measureW}
+                      measureH={measureH}
+                      onMeasureW={setMeasureW}
+                      onMeasureH={setMeasureH}
+                      onApplyDims={(w, h) => applyMeasureToSelected(w, h)}
+                      onColor={applySelectedColor}
+                      onWidth={applySelectedWidth}
+                      onLineStyle={applySelectedLineStyle}
+                      onFontSize={applyFontSize}
+                      onRotationDeg={applyRotationDeg}
+                      embedded
+                    />
+                  ) : null}
+                  {selectedIds.length > 1 ? (
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: `1px solid ${t.border}`,
+                        background: t.bg || '#fff',
+                        fontSize: 12,
+                        color: t.text,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {selectedIds.length} entidades seleccionadas
+                      <div style={{ fontSize: 11, fontWeight: 600, color: t.textMuted, marginTop: 4 }}>
+                        Puede guardarlas juntas en la biblioteca del contrato.
+                      </div>
+                    </div>
+                  ) : null}
+                  {referenciaPanelInfo ? (
+                    <ReferenciaPanel
+                      t={t}
+                      refInfo={referenciaPanelInfo}
+                      embedded
+                      onClose={() => onReferenciaPanelClose?.()}
+                    />
+                  ) : null}
+                </div>
+                <div
+                  data-testid="esquema-huella-sidebar-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Ajustar ancho de la barra lateral"
+                  onPointerDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    const startX = e.clientX
+                    const startW = sidebarW
+                    sidebarDragRef.current = { startX, startW }
+                    const onMove = (ev) => {
+                      const drag = sidebarDragRef.current
+                      if (!drag) return
+                      const next = Math.max(180, Math.min(480, drag.startW + (ev.clientX - drag.startX)))
+                      setSidebarW(next)
+                    }
+                    const onUpPersist = () => {
+                      sidebarDragRef.current = null
+                      window.removeEventListener('pointermove', onMove)
+                      window.removeEventListener('pointerup', onUpPersist)
+                      setSidebarW((w) => {
+                        try { localStorage.setItem('cc_sicoe_dibujo_sidebar_w', String(w)) } catch { /* ignore */ }
+                        return w
+                      })
+                    }
+                    window.addEventListener('pointermove', onMove)
+                    window.addEventListener('pointerup', onUpPersist)
+                  }}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: -3,
+                    width: 6,
+                    height: '100%',
+                    cursor: 'col-resize',
+                    zIndex: 5,
+                  }}
+                />
+              </aside>
+            )
+          ) : null}
+
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
           {mapActive ? (
             <div
               ref={mapHostRef}
@@ -4941,7 +5328,8 @@ export default function EsquemaEditorModal({
               {dynHud.typing ? `${dynHud.text}| m` : dynHud.text}
             </div>
           ) : null}
-          {selectedIds.length > 1 && (
+
+          {!huellaMode && selectedIds.length > 1 && (
             <div
               style={{
                 position: 'absolute',
@@ -4965,7 +5353,7 @@ export default function EsquemaEditorModal({
               </div>
             </div>
           )}
-          {mapActive && mapPropsOpen ? (
+          {!huellaMode && mapActive && mapPropsOpen ? (
             <MapaPropiedadesPanel
               t={t}
               basemap={mapBasemap}
@@ -4974,7 +5362,7 @@ export default function EsquemaEditorModal({
               pickInfo={mapPickInfo}
               printAreaSelecting={printAreaSelecting}
               dodgeCoords={false}
-              besideCoords={coordPanelOpen || (huellaMode && typeof onHuellaDibujoTipoChange === 'function')}
+              besideCoords={coordPanelOpen}
               besideWidth={coordPanelOpen ? 460 : 220}
               contextHint={mapCtx.hasPk
                 ? `PK ${mapCtx.pkId} resaltado`
@@ -4987,7 +5375,7 @@ export default function EsquemaEditorModal({
               onRemove={deactivateMap}
             />
           ) : null}
-          {mapActive && !mapPropsOpen ? (
+          {!huellaMode && mapActive && !mapPropsOpen ? (
             <button
               type="button"
               data-testid="esquema-mapa-props-toggle"
@@ -5017,57 +5405,58 @@ export default function EsquemaEditorModal({
             </button>
           ) : null}
 
-          <div
-            data-testid="esquema-cursor-coords"
-            style={{
-              position: 'absolute',
-              // Evitar solape: join (izq-abajo), biblioteca (der-abajo).
-              ...((tool === 'unir-nodos' || joinSeq.length > 0)
-                ? (libOpen
-                  ? { left: '50%', right: 'auto', bottom: 18, transform: 'translateX(-50%)' }
-                  : { right: 18, left: 'auto', bottom: 18 })
-                : (libOpen
-                  ? { left: 18, right: 'auto', bottom: 18 }
-                  : { right: 18, left: 'auto', bottom: 18 })),
-              zIndex: 6,
-              maxWidth: 'min(280px, calc(100% - 36px))',
-              padding: '7px 10px',
-              borderRadius: 10,
-              border: `1px solid ${t.border}`,
-              background: t.bgCard || 'rgba(255,255,255,0.96)',
-              boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
-              fontSize: 11,
-              fontWeight: 700,
-              color: t.text,
-              lineHeight: 1.35,
-              pointerEvents: 'none',
-              fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
-              COORDENADAS
+          {!huellaMode ? (
+            <div
+              data-testid="esquema-cursor-coords"
+              style={{
+                position: 'absolute',
+                ...((tool === 'unir-nodos' || joinSeq.length > 0)
+                  ? (libOpen
+                    ? { left: '50%', right: 'auto', bottom: 18, transform: 'translateX(-50%)' }
+                    : { right: 18, left: 'auto', bottom: 18 })
+                  : (libOpen
+                    ? { left: 18, right: 'auto', bottom: 18 }
+                    : { right: 18, left: 'auto', bottom: 18 })),
+                zIndex: 6,
+                maxWidth: 'min(280px, calc(100% - 36px))',
+                padding: '7px 10px',
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: t.bgCard || 'rgba(255,255,255,0.96)',
+                boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
+                fontSize: 11,
+                fontWeight: 700,
+                color: t.text,
+                lineHeight: 1.35,
+                pointerEvents: 'none',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
+                COORDENADAS
+              </div>
+              <div>
+                N {cursorCoords?.norte != null && Number.isFinite(cursorCoords.norte)
+                  ? cursorCoords.norte.toFixed(3)
+                  : '—'}
+                {' · '}
+                E {cursorCoords?.este != null && Number.isFinite(cursorCoords.este)
+                  ? cursorCoords.este.toFixed(3)
+                  : '—'}
+              </div>
+              <div style={{ fontWeight: 600, color: t.textMuted }}>
+                Lat {cursorCoords?.lat != null && Number.isFinite(cursorCoords.lat)
+                  ? cursorCoords.lat.toFixed(6)
+                  : '—'}
+                {' · '}
+                Lng {cursorCoords?.lng != null && Number.isFinite(cursorCoords.lng)
+                  ? cursorCoords.lng.toFixed(6)
+                  : '—'}
+              </div>
             </div>
-            <div>
-              N {cursorCoords?.norte != null && Number.isFinite(cursorCoords.norte)
-                ? cursorCoords.norte.toFixed(3)
-                : '—'}
-              {' · '}
-              E {cursorCoords?.este != null && Number.isFinite(cursorCoords.este)
-                ? cursorCoords.este.toFixed(3)
-                : '—'}
-            </div>
-            <div style={{ fontWeight: 600, color: t.textMuted }}>
-              Lat {cursorCoords?.lat != null && Number.isFinite(cursorCoords.lat)
-                ? cursorCoords.lat.toFixed(6)
-                : '—'}
-              {' · '}
-              Lng {cursorCoords?.lng != null && Number.isFinite(cursorCoords.lng)
-                ? cursorCoords.lng.toFixed(6)
-                : '—'}
-            </div>
-          </div>
+          ) : null}
 
-          {selectedObj && selectedObj.type !== 'image' && (
+          {!huellaMode && selectedObj && selectedObj.type !== 'image' && (
             <PropiedadesPanel
               t={t}
               ui={ui}
@@ -5087,25 +5476,12 @@ export default function EsquemaEditorModal({
               onRotationDeg={applyRotationDeg}
             />
           )}
-          {huellaMode && typeof onHuellaDibujoTipoChange === 'function' ? (
-            <DibujoTipoCompactPanel
-              t={t}
-              tipo={huellaDibujoTipo}
-              referenciasCount={referenciasCount}
-              onTipoChange={(next) => {
-                setSentidoEjePrompt(false)
-                pendingDrawRowsRef.current = null
-                onHuellaDibujoTipoChange(next)
-              }}
-              onDibujar={() => requestDrawFromCoords(coordRows)}
-            />
-          ) : null}
-          {coordPanelOpen && (
+          {!huellaMode && coordPanelOpen && (
             <CoordsPanel
               t={t}
               rows={coordRows}
               fileRef={coordFileRef}
-              topOffset={huellaMode && typeof onHuellaDibujoTipoChange === 'function' ? 58 : 18}
+              topOffset={18}
               onClose={() => setCoordPanelOpen(false)}
               onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
               onImport={async (file) => {
@@ -5120,7 +5496,7 @@ export default function EsquemaEditorModal({
               }}
             />
           )}
-          {sentidoEjePrompt ? (
+          {!huellaMode && sentidoEjePrompt ? (
             <div
               data-testid="esquema-sentido-eje-prompt"
               style={{
@@ -5178,7 +5554,7 @@ export default function EsquemaEditorModal({
               </div>
             </div>
           ) : null}
-          {(tool === 'unir-nodos' || joinSeq.length > 0) ? (
+          {!huellaMode && (tool === 'unir-nodos' || joinSeq.length > 0) ? (
             <JoinSeqPanel
               t={t}
               seq={joinSeq}
@@ -5187,7 +5563,7 @@ export default function EsquemaEditorModal({
               onAppendNum={tryAppendJoinNum}
             />
           ) : null}
-          {libOpen && (!huellaMode || huellaTipoRef.current === 'nodo') ? (
+          {!huellaMode && libOpen ? (
             <BibliotecaPanel
               t={t}
               ui={ui}
@@ -5206,7 +5582,7 @@ export default function EsquemaEditorModal({
               }}
             />
           ) : null}
-          {canvasHint ? (
+          {!huellaMode && canvasHint ? (
             <div
               data-testid="esquema-canvas-hint"
               style={{
@@ -5230,6 +5606,80 @@ export default function EsquemaEditorModal({
               {canvasHint}
             </div>
           ) : null}
+            </div>
+            {huellaMode ? (
+              <div
+                data-testid="esquema-command-bar"
+                style={{
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  minHeight: 34,
+                  padding: '4px 12px 4px 52px',
+                  borderTop: `1px solid ${t.border}`,
+                  background: t.bgCard || '#fff',
+                  color: t.text,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: '0.06em',
+                    color: t.textMuted,
+                    flexShrink: 0,
+                  }}
+                >
+                  CMD
+                </span>
+                <div
+                  data-testid="esquema-canvas-hint"
+                  style={{
+                    flex: 1,
+                    minWidth: 120,
+                    fontSize: 12,
+                    fontWeight: 800,
+                    color: canvasHint ? (t.primary || '#0077B6') : t.textMuted,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                  title={canvasHint || ''}
+                >
+                  {canvasHint || 'Listo'}
+                </div>
+                {sidebarCollapsed ? (
+                  <div
+                    data-testid="esquema-cursor-coords"
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: t.text,
+                      fontVariantNumeric: 'tabular-nums',
+                      lineHeight: 1.25,
+                      maxWidth: '100%',
+                    }}
+                  >
+                    N {cursorCoords?.norte != null && Number.isFinite(cursorCoords.norte)
+                      ? cursorCoords.norte.toFixed(3) : '—'}
+                    {' · '}
+                    E {cursorCoords?.este != null && Number.isFinite(cursorCoords.este)
+                      ? cursorCoords.este.toFixed(3) : '—'}
+                    <span style={{ color: t.textMuted, marginLeft: 8 }}>
+                      Lat {cursorCoords?.lat != null && Number.isFinite(cursorCoords.lat)
+                        ? cursorCoords.lat.toFixed(5) : '—'}
+                      {' · '}
+                      Lng {cursorCoords?.lng != null && Number.isFinite(cursorCoords.lng)
+                        ? cursorCoords.lng.toFixed(5) : '—'}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
         {libNamePrompt && (
           <div
@@ -5733,6 +6183,276 @@ function SelectModeRadios({
   )
 }
 
+function CursorCoordsPanel({ t, coords, embedded = false }) {
+  const body = (
+    <>
+      <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
+        COORDENADAS
+      </div>
+      <div>
+        N {coords?.norte != null && Number.isFinite(coords.norte)
+          ? coords.norte.toFixed(3)
+          : '—'}
+        {' · '}
+        E {coords?.este != null && Number.isFinite(coords.este)
+          ? coords.este.toFixed(3)
+          : '—'}
+      </div>
+      <div style={{ fontWeight: 600, color: t.textMuted }}>
+        Lat {coords?.lat != null && Number.isFinite(coords.lat)
+          ? coords.lat.toFixed(6)
+          : '—'}
+        {' · '}
+        Lng {coords?.lng != null && Number.isFinite(coords.lng)
+          ? coords.lng.toFixed(6)
+          : '—'}
+      </div>
+    </>
+  )
+  if (embedded) {
+    return (
+      <div
+        data-testid="esquema-cursor-coords"
+        style={{
+          padding: '8px 10px',
+          borderRadius: 10,
+          border: `1px solid ${t.border}`,
+          background: t.bg || '#fff',
+          fontSize: 11,
+          fontWeight: 700,
+          color: t.text,
+          lineHeight: 1.35,
+          fontVariantNumeric: 'tabular-nums',
+          boxSizing: 'border-box',
+        }}
+      >
+        {body}
+      </div>
+    )
+  }
+  return (
+    <div
+      data-testid="esquema-cursor-coords"
+      style={{
+        position: 'absolute',
+        right: 18,
+        bottom: 18,
+        zIndex: 6,
+        maxWidth: 'min(280px, calc(100% - 36px))',
+        padding: '7px 10px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bgCard || 'rgba(255,255,255,0.96)',
+        boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
+        fontSize: 11,
+        fontWeight: 700,
+        color: t.text,
+        lineHeight: 1.35,
+        pointerEvents: 'none',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {body}
+    </div>
+  )
+}
+
+function ItemDescChip({ t, label, descripcion }) {
+  const [open, setOpen] = useState(false)
+  const desc = String(descripcion || '').trim()
+  return (
+    <span
+      data-testid="sicoe-dibujo-ref-item-chip"
+      title={desc || undefined}
+      onMouseEnter={() => { if (desc) setOpen(true) }}
+      onMouseLeave={() => setOpen(false)}
+      onClick={(e) => {
+        if (!desc) return
+        e.preventDefault()
+        e.stopPropagation()
+        setOpen((v) => !v)
+      }}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '2px 7px',
+        borderRadius: 6,
+        border: `1px solid ${t.border}`,
+        background: t.bgMuted || 'rgba(100,116,139,0.08)',
+        fontWeight: 700,
+        cursor: desc ? 'help' : 'default',
+        userSelect: 'none',
+      }}
+    >
+      {label}
+      {open && desc ? (
+        <span
+          role="tooltip"
+          data-testid="sicoe-dibujo-ref-item-tooltip"
+          style={{
+            position: 'absolute',
+            left: 0,
+            bottom: 'calc(100% + 6px)',
+            zIndex: 20,
+            minWidth: 140,
+            maxWidth: 240,
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: `1px solid ${t.border}`,
+            background: t.bgCard || '#fff',
+            boxShadow: '0 8px 20px rgba(15,23,42,0.18)',
+            color: t.text,
+            fontSize: 11,
+            fontWeight: 600,
+            lineHeight: 1.35,
+            whiteSpace: 'normal',
+            pointerEvents: 'none',
+          }}
+        >
+          {desc}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+function ReferenciaPanel({ t, refInfo, onClose, embedded = false }) {
+  if (!refInfo) return null
+  const items = Array.isArray(refInfo.items) ? refInfo.items : []
+  const descByItem = descByItemFromRef(refInfo)
+  const registros = Array.isArray(refInfo.registros) ? refInfo.registros : []
+  return (
+    <div
+      data-testid="sicoe-dibujo-ref-panel"
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        color: t.text,
+        boxSizing: 'border-box',
+      } : {
+        position: 'fixed',
+        top: 64,
+        right: 12,
+        zIndex: 14080,
+        width: 'min(300px, calc(100vw - 24px))',
+        maxHeight: 'min(70vh, 420px)',
+        overflow: 'auto',
+        background: t.bgCard || 'rgba(255,255,255,0.97)',
+        border: `1px solid ${t.border}`,
+        borderRadius: 12,
+        boxShadow: '0 12px 32px rgba(15,23,42,0.22)',
+        padding: '12px 14px',
+        color: t.text,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: t.textMuted, letterSpacing: '0.04em' }}>
+            REFERENCIA
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 800, marginTop: 2 }}>
+            Reporte #{refInfo.numero_reporte ?? refInfo.reporte_id ?? '—'}
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-label="Cerrar propiedades"
+          onClick={onClose}
+          style={{
+            background: 'transparent',
+            border: `1px solid ${t.border}`,
+            borderRadius: 8,
+            width: 32,
+            height: 32,
+            cursor: 'pointer',
+            color: t.text,
+            fontWeight: 800,
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12 }}>
+        <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>Ítems</div>
+        {items.length ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {items.map((it) => {
+              const num = String(it)
+              return (
+                <ItemDescChip
+                  key={num}
+                  t={t}
+                  label={num}
+                  descripcion={descByItem[num]}
+                />
+              )
+            })}
+          </div>
+        ) : (
+          <div style={{ fontWeight: 600 }}>—</div>
+        )}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12 }}>
+        <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>Valor del reporte</div>
+        <div style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+          {formatCOP(Number(refInfo.costo_directo) || 0)}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12 }} data-testid="sicoe-dibujo-ref-registros">
+        <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>Registros</div>
+        {registros.length ? (
+          <ul style={{
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+          }}
+          >
+            {registros.map((reg, idx) => {
+              const num = reg?.numero_registro ?? '—'
+              const item = reg?.item_numero || '—'
+              const desc = reg?.item_descripcion || descByItem[String(item)] || ''
+              return (
+                <li
+                  key={`${num}-${item}-${idx}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '5px 8px',
+                    borderRadius: 8,
+                    background: t.bgMuted || 'rgba(100,116,139,0.08)',
+                    border: `1px solid ${t.border}`,
+                    fontWeight: 600,
+                    lineHeight: 1.3,
+                  }}
+                >
+                  <span>Reg. #{num}</span>
+                  <ItemDescChip t={t} label={item} descripcion={desc} />
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <div style={{ fontWeight: 600, color: t.textMuted }}>—</div>
+        )}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 10, color: t.textMuted, lineHeight: 1.35 }}>
+        Solo lectura · no modifica su dibujo en curso
+      </div>
+    </div>
+  )
+}
+
 function MapaPropiedadesPanel({
   t,
   basemap,
@@ -5744,6 +6464,7 @@ function MapaPropiedadesPanel({
   dodgeCoords = false,
   besideCoords = false,
   besideWidth = 460,
+  embedded = false,
   onBasemap,
   onOpacity,
   onClose,
@@ -5758,7 +6479,9 @@ function MapaPropiedadesPanel({
   const viewportW = typeof window !== 'undefined' ? (window.innerWidth || 1200) : 1200
   const fitsBeside = besideCoords && (besideLeft + mapPanelWidth + 18) <= viewportW
   let anchor
-  if (dodgeCoords) {
+  if (embedded) {
+    anchor = null
+  } else if (dodgeCoords) {
     anchor = { left: 18, bottom: 18, top: 'auto', right: 'auto' }
   } else if (besideCoords && fitsBeside) {
     anchor = { left: besideLeft, top: 18, bottom: 'auto', right: 'auto' }
@@ -5771,7 +6494,18 @@ function MapaPropiedadesPanel({
   return (
     <div
       data-testid="esquema-mapa-props"
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        boxSizing: 'border-box',
+      } : {
         position: 'absolute',
         ...anchor,
         zIndex: 6,
@@ -5888,6 +6622,7 @@ function MapaPropiedadesPanel({
 function PropiedadesPanel({
   t, ui, obj, measureW, measureH, onMeasureW, onMeasureH, onApplyDims, onColor, onWidth,
   onLineStyle, onFontSize, onRotationDeg, selectMode, onSelectMode, scaleLocked = false,
+  embedded = false,
 }) {
   const isShape = SHAPE_TOOLS.has(obj.type)
   const isBox = BOX_TOOLS.has(obj.type)
@@ -5896,7 +6631,18 @@ function PropiedadesPanel({
 
   return (
     <div
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        boxSizing: 'border-box',
+      } : {
         position: 'absolute',
         top: 18,
         right: 18,
@@ -6644,7 +7390,7 @@ function coordSheetStyles(t) {
   }
 }
 
-function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOffset = 18 }) {
+function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOffset = 18, embedded = false }) {
   const list = rows?.length ? renumberCoordRows(rows) : [{ num: '1', norte: '', este: '', cota: '', desc: '' }]
   const sheet = coordSheetStyles(t)
   const setCell = (i, key, value) => {
@@ -6662,7 +7408,17 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOff
   return (
     <div
       data-testid="esquema-coords-panel"
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        maxHeight: 280,
+        overflow: 'auto',
+        padding: 10,
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        boxSizing: 'border-box',
+      } : {
         position: 'absolute',
         left: 18,
         top: topOffset,
@@ -6773,7 +7529,7 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOff
 
 const DIBUJO_TIPO_LABELS = { nodo: 'Nodo', linea: 'Línea', poligono: 'Polígono' }
 
-function DibujoTipoCompactPanel({ t, tipo, referenciasCount = 0, onTipoChange, onDibujar }) {
+function DibujoTipoCompactPanel({ t, tipo, referenciasCount = 0, onTipoChange, onDibujar, embedded = false }) {
   const iconBtn = (active) => ({
     ...ghost(t),
     width: 32,
@@ -6791,7 +7547,19 @@ function DibujoTipoCompactPanel({ t, tipo, referenciasCount = 0, onTipoChange, o
   return (
     <div
       data-testid="sicoe-dibujo-tipo-bar"
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '8px 10px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        boxSizing: 'border-box',
+        flexWrap: 'wrap',
+      } : {
         position: 'absolute',
         left: 18,
         top: 18,
@@ -6861,7 +7629,7 @@ function DibujoTipoCompactPanel({ t, tipo, referenciasCount = 0, onTipoChange, o
   )
 }
 
-function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum }) {
+function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = false }) {
   const list = seq || []
   const sheet = coordSheetStyles(t)
   const inputRef = useRef(null)
@@ -6929,7 +7697,17 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum }) {
   return (
     <div
       data-testid="esquema-join-seq-panel"
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        maxHeight: 320,
+        overflow: 'auto',
+        padding: 10,
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        boxSizing: 'border-box',
+      } : {
         position: 'absolute',
         left: 18,
         bottom: 18,
@@ -7145,6 +7923,7 @@ function libraryPreviewDataUri(objects, size = 88, ui) {
 
 function BibliotecaPanel({
   t, ui, contratoId, items, notice, canSaveSelection, onClose, onSaveSelection, onInsert, onDelete,
+  embedded = false,
 }) {
   const sheet = coordSheetStyles(t)
   const iconAction = {
@@ -7157,7 +7936,17 @@ function BibliotecaPanel({
   }
   return (
     <div
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        maxHeight: 280,
+        overflow: 'auto',
+        padding: 10,
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        boxSizing: 'border-box',
+      } : {
         position: 'absolute',
         right: 18,
         bottom: 18,
