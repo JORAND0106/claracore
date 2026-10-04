@@ -26551,9 +26551,11 @@ def sicoe_guardar_dibujo_reporte(
     from datetime import datetime, timezone
 
     def _rep():
+        # so_reportes no tiene columna `bloqueado` (esa vive en so_registros).
+        # Seleccionarla provoca APIError 42703 y aborta el guardado del dibujo.
         return (
             supabase.table("so_reportes")
-            .select("id, estado, bloqueado")
+            .select("id, estado")
             .eq("id", reporte_id)
             .eq("contrato_id", contrato_id)
             .limit(1)
@@ -26563,9 +26565,6 @@ def sicoe_guardar_dibujo_reporte(
     rows = supabase_execute(_rep) or []
     if not rows:
         raise HTTPException(404, "Reporte no encontrado")
-    # Respetar bloqueo de cabecera si existe
-    if rows[0].get("bloqueado") is True:
-        raise HTTPException(422, "El reporte está bloqueado; no se puede editar el dibujo.")
 
     fc = body.dibujo_geojson or {}
     feats = fc.get("features") if isinstance(fc, dict) else None
