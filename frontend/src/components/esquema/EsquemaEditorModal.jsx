@@ -172,6 +172,7 @@ import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 import { formatCOP } from '../../utils/formatCOP'
 import { descByItemFromRef } from '../../modules/sicoe-obra/sicoeDibujoRefItemDesc.js'
+import { resolveHuellaMapOrigin } from '../../modules/sicoe-obra/sicoeDibujoHuellaOrigin.js'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -372,6 +373,13 @@ export default function EsquemaEditorModal({
    * Se recargan al abrir; si la portada no tiene puntos, la tabla queda vacía.
    */
   initialCoordRows = null,
+  /**
+   * Origen geográfico guardado (dibujo_escena.origin_lnglat) al reabrir Editar dibujo.
+   * Si hay nodos con N/E, el ancla Gauss de la escena tiene prioridad.
+   */
+  initialOriginLngLat = null,
+  /** Escena completa previa (para recuperar origen / metadatos en huellaMode). */
+  initialDibujoEscena = null,
   /** ({ objects, originLngLat }) => Promise — solo en huellaMode. */
   onSaveHuella = null,
   /**
@@ -485,6 +493,8 @@ export default function EsquemaEditorModal({
     visible: false,
   })
   const [coordRows, setCoordRows] = useState([])
+  const coordRowsRef = useRef([])
+  coordRowsRef.current = coordRows
   const [coordPanelOpen, setCoordPanelOpen] = useState(false)
   /** Pendiente confirmar «En sentido del eje» al dibujar tipo Línea. */
   const [sentidoEjePrompt, setSentidoEjePrompt] = useState(false)
@@ -900,7 +910,30 @@ export default function EsquemaEditorModal({
       .filter((r) => r.norte !== '' || r.este !== '')
     setCoordRows(normalized)
     if (normalized.length) setCoordPanelOpen(true)
-  }, [initialCoordRows])
+    // Ancla Gauss de la tabla (mismo criterio que «Dibujar nodos») para cursor/edición.
+    if (huellaMode && normalized.length) {
+      const first = normalized.find((r) => Number.isFinite(Number(r.norte)) && Number.isFinite(Number(r.este)))
+      if (first) {
+        coordOriginRef.current = {
+          este0: Number(first.este),
+          norte0: Number(first.norte),
+        }
+      }
+    }
+  }, [initialCoordRows, huellaMode])
+
+  // Al cargar escena previa: restaurar ancla Gauss desde nodos (prioridad) o origin_lnglat.
+  useEffect(() => {
+    if (!huellaMode) return
+    const resolved = resolveHuellaMapOrigin({
+      objects: Array.isArray(initialSceneObjects) ? initialSceneObjects : objectsRef.current,
+      coordRows: Array.isArray(initialCoordRows) ? initialCoordRows : null,
+      escena: initialDibujoEscena || (initialOriginLngLat ? { origin_lnglat: initialOriginLngLat } : null),
+    })
+    if (resolved?.gk) {
+      coordOriginRef.current = resolved.gk
+    }
+  }, [huellaMode, initialSceneObjects, initialCoordRows, initialDibujoEscena, initialOriginLngLat])
 
   // Semilla de tramo (planilla tubería): nodos Inicio/Fin + flecha en canvas.
   useEffect(() => {
@@ -1546,13 +1579,66 @@ export default function EsquemaEditorModal({
     const loadPlanoYCapas = async () => {
       try { applySicoeBasemapTerrain(map, mapBasemap) } catch { /* ignore */ }
       try { map.resize() } catch { /* ignore */ }
+
+      const applyHuellaOrMapOrigin = () => {
+        const mapCenter = mapCenterAsGeoOrigin(map)
+        if (!huellaMode) {
+          mapGeoOriginRef.current = mapCenter
+          return
+        }
+        const escenaHint = initialDibujoEscena
+          || (initialOriginLngLat ? { origin_lnglat: initialOriginLngLat } : null)
+        const resolved = resolveHuellaMapOrigin({
+          objects: objectsRef.current,
+          coordRows: coordRowsRef.current || initialCoordRows,
+          escena: escenaHint,
+          fallbackLngLat: mapCenter,
+        })
+        if (resolved?.lngLat) {
+          mapGeoOriginRef.current = resolved.lngLat
+          if (resolved.gk) coordOriginRef.current = resolved.gk
+        } else {
+          mapGeoOriginRef.current = mapCenter
+        }
+        // Encuadrar nodos Gauss si existen, para que el zoom no quede anclado al PK ajeno.
+        try {
+          const nodos = (objectsRef.current || []).filter((o) => (
+            o?.type === 'nodo'
+            && Number.isFinite(Number(o.norte))
+            && Number.isFinite(Number(o.este))
+          ))
+          if (nodos.length && map) {
+            const pts = nodos
+              .map((n) => gkBogotaToWgs84(Number(n.este), Number(n.norte)))
+              .filter(Boolean)
+            if (pts.length) {
+              const lngs = pts.map((p) => p.lng)
+              const lats = pts.map((p) => p.lat)
+              map.fitBounds(
+                [
+                  [Math.min(...lngs), Math.min(...lats)],
+                  [Math.max(...lngs), Math.max(...lats)],
+                ],
+                {
+                  padding: 72,
+                  maxZoom: 20,
+                  duration: 0,
+                  bearing: mapBearing,
+                  pitch: 0,
+                },
+              )
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
       if (!contratoId) {
         if (!cancelled && mapRef.current === map) {
           ensureEsquemaTramoLayers(map, ctx)
           if (ctx.hasTramo) {
             fitEsquemaMapCamera(map, { type: 'FeatureCollection', features: [] }, ctx, { bearing: mapBearing })
           }
-          mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+          applyHuellaOrMapOrigin()
           try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
           syncCanvasToMapRef.current()
         }
@@ -1578,15 +1664,15 @@ export default function EsquemaEditorModal({
           centro_lng: row?.centro_lng,
           bearing: mapBearing,
         })
-        // Origen geo fijo tras el encuadre inicial (no re-fijar en pans posteriores).
-        mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+        // Huella: anclar al Gauss de la escena (no al centro del PK tras el fit).
+        applyHuellaOrMapOrigin()
         try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
         syncCanvasToMapRef.current()
         if (ctx.hasPk) applyEsquemaPkSelectionStyle(map, ctx.pkId)
       } catch {
         if (!cancelled) {
           setMapError('No se pudo cargar el plano PK del contrato')
-          mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+          applyHuellaOrMapOrigin()
           try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
           syncCanvasToMapRef.current()
         }
