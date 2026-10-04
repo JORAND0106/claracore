@@ -30901,7 +30901,7 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                 .select(
                     _SICOE_AUDITORIA_PEER_SELECT
                     + ", creado_por_reg, created_at, updated_at, "
-                    "foto_url, grafico_url, item_descripcion"
+                    "foto_url, grafico_url, item_descripcion, observacion"
                 )
                 .eq("contrato_id", contrato_id)
                 .in_("id", ids)
@@ -30920,7 +30920,7 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                     .select(
                         "id, numero_registro, reporte_id, item_numero, item_descripcion, tramo, "
                         "infraestructura, calzada, margen, abs_inicio, abs_final, pk_id_id, "
-                        "cantidad_total, vlr_unitario, foto_url, grafico_url, "
+                        "cantidad_total, vlr_unitario, foto_url, grafico_url, observacion, "
                         "coord_lat, coord_lng, huella_geojson, "
                         "creado_por_reg, created_at"
                     )
@@ -30958,7 +30958,7 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                 return (
                     supabase.table("so_reportes")
                     .select(
-                        "id, numero_reporte, created_at, creado_por, "
+                        "id, numero_reporte, created_at, creado_por, descripcion_actividad, "
                         "dibujo_geojson, perimetro_geojson, coord_lat, coord_lng"
                     )
                     .eq("contrato_id", contrato_id)
@@ -30980,7 +30980,10 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                 def _qr2():
                     return (
                         supabase.table("so_reportes")
-                        .select("id, numero_reporte, created_at, creado_por, coord_lat, coord_lng")
+                        .select(
+                            "id, numero_reporte, created_at, creado_por, "
+                            "descripcion_actividad, coord_lat, coord_lng"
+                        )
                         .eq("contrato_id", contrato_id)
                         .in_("id", rep_ids)
                         .execute()
@@ -31025,6 +31028,11 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
         if rep:
             if merged.get("numero_reporte") is None:
                 merged["numero_reporte"] = rep.get("numero_reporte")
+            if not merged.get("nombre_reporte") and not merged.get("descripcion_actividad"):
+                merged["nombre_reporte"] = rep.get("descripcion_actividad")
+                merged["descripcion_actividad"] = rep.get("descripcion_actividad")
+            elif not merged.get("nombre_reporte"):
+                merged["nombre_reporte"] = merged.get("descripcion_actividad") or rep.get("descripcion_actividad")
             if not merged.get("fecha"):
                 merged["fecha"] = rep.get("created_at")
             if not merged.get("usuario_nombre") and rep.get("creado_por") is not None:

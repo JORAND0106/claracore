@@ -210,6 +210,20 @@ function filterHuellasByItems(features, filterItemNumeros) {
   return (features || []).filter((f) => set.has(String(f?.properties?.item_numero || '')))
 }
 
+/**
+ * null/undefined = sin restricción por registro.
+ * Array (vacío o no) = mostrar solo esos registro_id (vacío → ninguna huella).
+ */
+function filterHuellasByRegistroIds(features, filterRegistroIds) {
+  if (!Array.isArray(filterRegistroIds)) return null
+  const set = new Set(filterRegistroIds.map(String).filter(Boolean))
+  if (!set.size) return []
+  return (features || []).filter((f) => {
+    const rid = f?.properties?.registro_id ?? f?.properties?.id
+    return rid != null && set.has(String(rid))
+  })
+}
+
 function mensajeErrorMapa(err) {
   const raw = String(err?.message || err || '').trim()
   if (/load failed|failed to fetch|networkerror|abort/i.test(raw)) {
@@ -229,6 +243,7 @@ export default function SicoeMapaHuellas({
   highlightRegistroIds = [],
   highlightPkIds = [],
   filterItemNumeros = null,
+  filterRegistroIds = null,
 }) {
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
@@ -237,9 +252,11 @@ export default function SicoeMapaHuellas({
   const rawNodosRef = useRef(EMPTY_FC)
   const planoBoundsRef = useRef(null)
   const filterKeyRef = useRef('')
+  const filterRegKeyRef = useRef('')
   const [listo, setListo] = useState(false)
   const [error, setError] = useState('')
   const [reloadNonce, setReloadNonce] = useState(0)
+  const [mostrarNodosPk, setMostrarNodosPk] = useState(false)
   const highlightRef = useRef({ highlightRegistroIds, highlightPkIds })
   highlightRef.current = { highlightRegistroIds, highlightPkIds }
 
@@ -248,12 +265,23 @@ export default function SicoeMapaHuellas({
     : ''
   filterKeyRef.current = filterKey
 
+  // null = sin filtro por registro; string (posiblemente vacía) = restricción activa
+  const filterRegKey = Array.isArray(filterRegistroIds)
+    ? [...filterRegistroIds].map(String).filter(Boolean).sort().join('|')
+    : null
+  filterRegKeyRef.current = filterRegKey
+
   const aplicarFiltroHuellas = useCallback(() => {
     const map = mapInstance.current
-    const items = filterKeyRef.current
-      ? filterKeyRef.current.split('|')
-      : []
-    const filtered = filterHuellasByItems(allHuellasRef.current, items)
+    const regKey = filterRegKeyRef.current
+    const byReg = filterHuellasByRegistroIds(
+      allHuellasRef.current,
+      regKey == null ? null : (regKey ? regKey.split('|') : []),
+    )
+    const items = filterKeyRef.current ? filterKeyRef.current.split('|') : []
+    const filtered = byReg != null
+      ? byReg
+      : filterHuellasByItems(allHuellasRef.current, items)
     rawHuellasRef.current = filtered
     if (!map || !listo) return
     const { highlightRegistroIds: hrs, highlightPkIds: hps } = highlightRef.current
@@ -289,8 +317,15 @@ export default function SicoeMapaHuellas({
         const plano = planoPack?.plano_geojson || EMPTY_FC
         const allHuellas = Array.isArray(huellasRes?.features) ? huellasRes.features : []
         allHuellasRef.current = allHuellas
+        const regKey = filterRegKeyRef.current
+        const byReg = filterHuellasByRegistroIds(
+          allHuellas,
+          regKey == null ? null : (regKey ? regKey.split('|') : []),
+        )
         const items = filterKeyRef.current ? filterKeyRef.current.split('|') : []
-        const huellasFeats = filterHuellasByItems(allHuellas, items)
+        const huellasFeats = byReg != null
+          ? byReg
+          : filterHuellasByItems(allHuellas, items)
         rawHuellasRef.current = huellasFeats
         rawNodosRef.current = huellasRes?.nodos || EMPTY_FC
         const eje = huellasRes?.eje || EMPTY_FC
@@ -441,6 +476,7 @@ export default function SicoeMapaHuellas({
             type: 'fill',
             source: 'huellas-nodos',
             filter: ['==', ['geometry-type'], 'Polygon'],
+            layout: { visibility: 'none' },
             paint: {
               'fill-color': ['get', 'color'],
               'fill-opacity': ['get', 'opacity'],
@@ -451,6 +487,7 @@ export default function SicoeMapaHuellas({
             type: 'line',
             source: 'huellas-nodos',
             filter: ['==', ['geometry-type'], 'Polygon'],
+            layout: { visibility: 'none' },
             paint: {
               'line-color': ['get', 'color'],
               'line-width': ['get', 'stroke_w'],
@@ -461,6 +498,7 @@ export default function SicoeMapaHuellas({
             type: 'circle',
             source: 'huellas-nodos',
             filter: ['==', ['geometry-type'], 'Point'],
+            layout: { visibility: 'none' },
             paint: {
               'circle-color': ['get', 'color'],
               'circle-radius': ['get', 'radius'],
@@ -496,10 +534,19 @@ export default function SicoeMapaHuellas({
     // filterItemNumeros NO remonta: se aplica en efecto aparte
   }, [contratoId, token, t?.bg, reloadNonce])
 
-  // Filtrar huellas por ítem sin destruir el mapa / plano de fondo
+  // Filtrar huellas por registro/ítem sin destruir el mapa / plano de fondo
   useEffect(() => {
     aplicarFiltroHuellas()
-  }, [filterKey, aplicarFiltroHuellas])
+  }, [filterKey, filterRegKey, aplicarFiltroHuellas])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !listo) return
+    const vis = mostrarNodosPk ? 'visible' : 'none'
+    for (const id of ['nodos-poly-fill', 'nodos-poly-line', 'nodos-point']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis)
+    }
+  }, [mostrarNodosPk, listo])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -526,6 +573,31 @@ export default function SicoeMapaHuellas({
   return (
     <div style={{ position: 'relative', width: '100%', height, borderRadius: 8, overflow: 'hidden' }}>
       <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+      <label
+        style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          zIndex: 5,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          background: `${t.bgCard || '#fff'}EE`,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          padding: '4px 8px',
+          fontSize: 'var(--cc-caption)',
+          color: t.text,
+          cursor: 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={mostrarNodosPk}
+          onChange={(e) => setMostrarNodosPk(e.target.checked)}
+        />
+        Nodos PK
+      </label>
       {!listo && !error && (
         <div
           style={{

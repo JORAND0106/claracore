@@ -349,6 +349,18 @@ export default function SicoeAmbienteAuditoria({
     [filterItemKey],
   )
 
+  /** Registros de hallazgos filtrados (o del seleccionado) para el plano. */
+  const filterRegistroIds = useMemo(() => {
+    const fuente = seleccionado ? [seleccionado] : filtrados
+    const ids = []
+    for (const h of fuente) {
+      for (const r of h?.registros_involucrados || []) {
+        if (r?.id != null) ids.push(r.id)
+      }
+    }
+    return [...new Set(ids.map(String))]
+  }, [filtrados, seleccionado])
+
   const toggleOrden = (col) => {
     setOrden((prev) => {
       if (prev.col === col) {
@@ -1017,6 +1029,7 @@ export default function SicoeAmbienteAuditoria({
                 ),
               ],
               filterItemNumeros,
+              filterRegistroIds,
             })
           ) : (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', padding: 12 }}>
@@ -1024,8 +1037,8 @@ export default function SicoeAmbienteAuditoria({
             </div>
           )}
           <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-            Cada ítem actúa como capa. Seleccione un hallazgo para centrar y resaltar sus registros
-            (PK / abscisas).
+            Cada hallazgo actúa como capa. El plano muestra solo los dibujos de los
+            hallazgos filtrados (o del seleccionado) sobre el eje y abscisado.
           </div>
         </div>
       </div>

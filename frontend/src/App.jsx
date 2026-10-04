@@ -7349,7 +7349,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   return (
-    <div className="cc-sicoe-carpeta-overlay" style={{ position:'fixed', inset:0, zIndex:9000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
+    <div className="cc-sicoe-carpeta-overlay" style={{ position:'fixed', inset:0, zIndex:15000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
       <div className="cc-sicoe-carpeta-shell" style={{ width:'100%', maxWidth:'min(1480px, 98vw)', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
 
         {/* ─ Header tipo carpeta ─ */}
@@ -12752,7 +12752,7 @@ function ModuloSicoeObra({
             refreshNonce={cpiRefreshNonce}
             filtrosVersion={cpiFiltrosVersion}
             exportMeta={exportMetaContrato || {}}
-            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros, seleccionado }) => (
+            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros, filterRegistroIds, seleccionado }) => (
               <SicoeMapaHuellas
                 t={t}
                 contratoId={contrato_id}
@@ -12761,6 +12761,7 @@ function ModuloSicoeObra({
                 highlightRegistroIds={seleccionado ? (highlightRegistroIds || []) : []}
                 highlightPkIds={seleccionado ? (highlightPkIds || []) : []}
                 filterItemNumeros={filterItemNumeros || null}
+                filterRegistroIds={Array.isArray(filterRegistroIds) ? filterRegistroIds : []}
               />
             )}
           />
