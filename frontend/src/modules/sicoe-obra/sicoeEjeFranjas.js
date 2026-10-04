@@ -574,6 +574,24 @@ export function suavizarPlieguesOffset(pointsWithM, { minCos = -0.55 } = {}) {
 }
 
 /**
+ * Radio de curvatura local aprox. del eje (m). Infinity si es recto.
+ */
+function radioCurvaturaLocalM(eje, absM, deltaM = 5) {
+  const a = interpAbsEnEje(eje, Number(absM) - deltaM)
+  const b = interpAbsEnEje(eje, Number(absM))
+  const c = interpAbsEnEje(eje, Number(absM) + deltaM)
+  if (!a || !b || !c) return Infinity
+  const br1 = bearingDeg(a, b)
+  const br2 = bearingDeg(b, c)
+  let dbr = br2 - br1
+  if (dbr > 180) dbr -= 360
+  if (dbr < -180) dbr += 360
+  const dbrRad = Math.abs(dbr) * (Math.PI / 180)
+  if (!(dbrRad > 1e-6)) return Infinity
+  return (2 * deltaM) / dbrRad
+}
+
+/**
  * Línea paralela al eje entre dos puntos (inicio→fin), con transición gradual
  * de distancia si el offset al eje difiere en los extremos.
  * El primer y último vértice coinciden exactamente con inicio y fin.
@@ -709,7 +727,12 @@ export function construirLineaSentidoEje({
     // t según abscisa real entre absA y absB (extremos = puntos levantados).
     const tAbs = absA === absB ? 0 : (Number(s.m) - absA) / (absB - absA)
     const t = Math.max(0, Math.min(1, tAbs))
-    const dist = d0 + t * (d1 - d0)
+    let dist = d0 + t * (d1 - d0)
+    // Evitar caústica en intradós: no offsetear más que ~0.85·R local.
+    const R = radioCurvaturaLocalM(ejeUsar, s.m, Math.max(Number(stepM) || 2, 3))
+    if (Number.isFinite(R) && R > 1 && Math.abs(dist) > 0.85 * R) {
+      dist = Math.sign(dist) * (0.85 * R)
+    }
     let pt
     if (Math.abs(dist) < 1e-9) {
       pt = { lng: s.lng, lat: s.lat, m: s.m }
@@ -771,14 +794,40 @@ export function construirLineaSentidoEje({
 }
 
 /**
- * Anillo tipo corredor/franja a lo largo del eje.
+ * ¿Arista transversal (tapa)? Poco avance de abscisa vs cuerda, o casi ⊥ al eje.
+ */
+export function esAristaTransversalSentidoEje(proyA, proyB, lngLatA, lngLatB, eje = null) {
+  if (!proyA || !proyB || !lngLatA || !lngLatB) return true
+  const absSpan = Math.abs(Number(proyA.abs_m) - Number(proyB.abs_m))
+  const chord = haversineM(lngLatA, lngLatB)
+  if (!(absSpan > 2)) return true
+  if (chord > 1e-6 && absSpan < chord * 0.5) return true
+  if (eje && chord > 1e-6 && absSpan < chord * 1.15) {
+    const midAbs = (Number(proyA.abs_m) + Number(proyB.abs_m)) / 2
+    const midEje = interpAbsEnEje(eje, midAbs)
+    if (midEje) {
+      const axisBr = Number(midEje.bearing)
+      const chordBr = bearingDeg(lngLatA, lngLatB)
+      let dBr = Math.abs(chordBr - axisBr)
+      if (dBr > 180) dBr = 360 - dBr
+      if (dBr > 55 && dBr < 125) return true
+    }
+  }
+  return false
+}
+
+
+/**
+ * Anillo «lados + tapas» en el orden de unión.
  *
- * En vez de densificar arista-a-arista (que crea picos en tapas y caústicas),
- * particiona los vértices en dos costados (izq/der), densifica cada costado
- * siguiendo el eje y cierra con tapas rectas entre extremos.
+ * 1) Clasifica cada arista del anillo: longitudinal vs tapa.
+ * 2) Densifica SOLO las longitudinales (siguen el eje).
+ * 3) Las tapas quedan como unión recta entre levantados (sin densificar).
+ *
+ * No exige costados a lados opuestos del eje (válido en franjas de un solo margen).
  *
  * @param {{ ejes: object[], corners: Array<{lng:number,lat:number,key?:any}>, stepM?: number, maxDistM?: number }} args
- * @returns {null|{ points: Array<{lng:number,lat:number,key?:any,corner?:boolean}>, leftKeys: any[], rightKeys: any[] }}
+ * @returns {null|{ points: Array<{lng:number,lat:number,key?:any,corner?:boolean}>, edgeKinds: string[] }}
  */
 export function construirAnilloCorredorSentidoEje({
   ejes,
@@ -795,85 +844,70 @@ export function construirAnilloCorredorSentidoEje({
     const lat = Number(c.lat)
     if (![lng, lat].every(Number.isFinite)) continue
     const proy = proyectarSobreEje(ejes, lng, lat, { maxDistM })
-    if (!proy?.sobre_eje) continue
+    const eje = proy
+      ? ((ejes || []).find((e) => e.id === proy.eje_id) || ejes[0])
+      : ejes[0]
     items.push({
       key: c.key,
       lng,
       lat,
-      abs: Number(proy.abs_m),
-      dist: distConSignoSobreEje(proy),
+      abs: proy?.sobre_eje ? Number(proy.abs_m) : null,
+      dist: proy?.sobre_eje ? distConSignoSobreEje(proy) : 0,
+      proy: proy?.sobre_eje ? proy : null,
+      eje,
     })
   }
   if (items.length < 3) return null
 
-  const dists = items.map((it) => it.dist)
-  const hasLeft = dists.some((d) => d >= 0.35)
-  const hasRight = dists.some((d) => d <= -0.35)
-  if (!hasLeft || !hasRight) return null
+  const n = items.length
+  const edgeIsTapa = []
+  let alongCount = 0
+  for (let i = 0; i < n; i += 1) {
+    const a = items[i]
+    const b = items[(i + 1) % n]
+    // Sin proyección usable → tapa (recta entre levantados).
+    const tapa = !a.proy || !b.proy || esAristaTransversalSentidoEje(
+      a.proy,
+      b.proy,
+      { lng: a.lng, lat: a.lat },
+      { lng: b.lng, lat: b.lat },
+      a.eje || b.eje,
+    )
+    edgeIsTapa.push(tapa)
+    if (!tapa) alongCount += 1
+  }
+  // Sin ninguna cara longitudinal no hay «sentido del eje».
+  if (alongCount < 1) return null
 
-  const absSpan = Math.max(...items.map((it) => it.abs)) - Math.min(...items.map((it) => it.abs))
-  if (!(absSpan > 2)) return null
-
-  // Costado +: izquierda (o eje). Costado −: derecha.
-  const left = items.filter((it) => it.dist >= 0).sort((a, b) => (a.abs - b.abs) || (a.dist - b.dist))
-  const right = items.filter((it) => it.dist < 0).sort((a, b) => (a.abs - b.abs) || (b.dist - a.dist))
-  if (left.length < 1 || right.length < 1) return null
-
-  const densifySide = (side) => {
-    const out = []
-    for (let i = 0; i < side.length; i += 1) {
-      const cur = side[i]
-      if (i === 0) {
-        out.push({ lng: cur.lng, lat: cur.lat, key: cur.key, corner: true })
-        continue
-      }
-      const prev = side[i - 1]
-      // Mismo PK (cluster de remate): tapa/tramo corto → recta entre levantados.
-      if (Math.abs(cur.abs - prev.abs) <= 2.5) {
-        out.push({ lng: cur.lng, lat: cur.lat, key: cur.key, corner: true })
-        continue
-      }
-      const line = construirLineaSentidoEje({
-        ejes,
-        inicio: { lng: prev.lng, lat: prev.lat },
-        fin: { lng: cur.lng, lat: cur.lat },
-        stepM,
-        maxDistM,
-      })
-      if (line?.along && Array.isArray(line.points) && line.points.length > 2) {
-        for (let j = 1; j < line.points.length - 1; j += 1) {
-          const p = line.points[j]
-          out.push({ lng: Number(p.lng), lat: Number(p.lat), corner: false })
-        }
-      }
-      out.push({ lng: cur.lng, lat: cur.lat, key: cur.key, corner: true })
+  const ring = []
+  const edgeKinds = []
+  for (let i = 0; i < n; i += 1) {
+    const a = items[i]
+    const b = items[(i + 1) % n]
+    if (edgeIsTapa[i]) {
+      edgeKinds.push('crossing')
+      ring.push({ lng: a.lng, lat: a.lat, key: a.key, corner: true })
+      continue
     }
-    return out
+    edgeKinds.push('along')
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio: { lng: a.lng, lat: a.lat },
+      fin: { lng: b.lng, lat: b.lat },
+      stepM,
+      maxDistM,
+    })
+    ring.push({ lng: a.lng, lat: a.lat, key: a.key, corner: true })
+    if (line?.along && Array.isArray(line.points) && line.points.length > 2) {
+      for (let j = 1; j < line.points.length - 1; j += 1) {
+        const p = line.points[j]
+        ring.push({ lng: Number(p.lng), lat: Number(p.lat), corner: false })
+      }
+    }
   }
 
-  const leftPath = densifySide(left)
-  const rightPath = densifySide(right)
-  if (leftPath.length < 1 || rightPath.length < 1) return null
-
-  // left abs↑ + right abs↓ ⇒ tapas = un solo segmento entre extremos (sin densificar).
-  let ring = [...leftPath, ...[...rightPath].reverse()]
-
-  // Evitar anillos auto-cruzados: probar la orientación alternativa.
-  const closedForTest = (pts) => {
-    if (pts.length < 4) return false
-    const c = [...pts, pts[0]]
-    return polylineSelfIntersects(c)
-  }
-  if (closedForTest(ring)) {
-    const alt = [...rightPath, ...[...leftPath].reverse()]
-    if (!closedForTest(alt)) ring = alt
-  }
-
-  return {
-    points: ring,
-    leftKeys: left.map((it) => it.key),
-    rightKeys: right.map((it) => it.key),
-  }
+  if (ring.length < 3) return null
+  return { points: ring, edgeKinds }
 }
 
 /**
