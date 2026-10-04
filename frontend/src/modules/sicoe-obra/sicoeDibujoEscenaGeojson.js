@@ -449,4 +449,257 @@ export function featureHuellaDesdeDibujo(dibujoFc, extraProps = {}) {
   return null
 }
 
+/**
+ * Origen geográfico guardado en dibujo_escena (origin_lnglat | origen_lnglat).
+ * @param {object|null} escena
+ * @returns {{ lng: number, lat: number }|null}
+ */
+export function originFromDibujoEscena(escena) {
+  if (!escena || typeof escena !== 'object') return null
+  const raw = escena.origin_lnglat || escena.origen_lnglat || escena.originLngLat || null
+  if (!raw || typeof raw !== 'object') return null
+  const lng = Number(raw.lng ?? raw.lon ?? raw.longitude)
+  const lat = Number(raw.lat ?? raw.latitude)
+  if (![lng, lat].every(Number.isFinite)) return null
+  return { lng, lat }
+}
+
+function rotateAround(p, cx, cy, rot) {
+  if (!rot) return { x: p.x, y: p.y }
+  const cos = Math.cos(rot)
+  const sin = Math.sin(rot)
+  const dx = p.x - cx
+  const dy = p.y - cy
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+}
+
+/** Punto local de hijo de bloque → mundo (posición + rotación del bloque). */
+export function bloqueChildToWorld(bloque, localPt) {
+  const bx = Number(bloque?.x) || 0
+  const by = Number(bloque?.y) || 0
+  const w = Number(bloque?.w) || 0
+  const h = Number(bloque?.h) || 0
+  const rot = Number(bloque?.rotation) || 0
+  const p = {
+    x: bx + Number(localPt?.x || 0),
+    y: by + Number(localPt?.y || 0),
+  }
+  return rotateAround(p, bx + w / 2, by + h / 2, rot)
+}
+
+function mapPtsThroughBloque(bloque, pts) {
+  return (pts || []).map((p) => bloqueChildToWorld(bloque, p))
+}
+
+function ellipseRingLocal(obj, steps = 24) {
+  const x1 = Number(obj?.x1)
+  const y1 = Number(obj?.y1)
+  const x2 = Number(obj?.x2)
+  const y2 = Number(obj?.y2)
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return null
+  const cx = (x1 + x2) / 2
+  const cy = (y1 + y2) / 2
+  const rx = Math.abs(x2 - x1) / 2
+  const ry = Math.abs(y2 - y1) / 2
+  if (rx < 1e-6 && ry < 1e-6) return null
+  const ring = []
+  for (let i = 0; i < steps; i += 1) {
+    const a = (i / steps) * Math.PI * 2
+    ring.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) })
+  }
+  return ring
+}
+
+/**
+ * Geometría detallada de un objeto de escena (mundo), sin convertir a lng/lat.
+ * Incluye hijos de bloque (forma real de la entidad).
+ * @returns {Array<{kind:'point'|'line'|'polygon', points: Array<{x:number,y:number}>, meta?: object}>}
+ */
+export function objectDetalleWorldParts(obj, { parentBloque = null } = {}) {
+  if (!obj || typeof obj !== 'object') return []
+  const type = String(obj.type || '')
+  const xf = (pts) => (parentBloque ? mapPtsThroughBloque(parentBloque, pts) : pts)
+
+  if (type === 'bloque') {
+    const children = Array.isArray(obj.children) ? obj.children : []
+    const parts = []
+    for (const ch of children) {
+      parts.push(...objectDetalleWorldParts(ch, { parentBloque: obj }))
+    }
+    return parts
+  }
+
+  if (type === 'nodo') {
+    if (!Number.isFinite(obj.x) || !Number.isFinite(obj.y)) return []
+    return [{
+      kind: 'point',
+      points: xf([{ x: Number(obj.x), y: Number(obj.y) }]),
+      meta: { escena_tipo: 'nodo', node_num: obj.nodeNum ?? null },
+    }]
+  }
+
+  if (type === 'linea' || type === 'flecha') {
+    if (![obj.x1, obj.y1, obj.x2, obj.y2].every(Number.isFinite)) return []
+    return [{
+      kind: 'line',
+      points: xf([
+        { x: Number(obj.x1), y: Number(obj.y1) },
+        { x: Number(obj.x2), y: Number(obj.y2) },
+      ]),
+      meta: { escena_tipo: type },
+    }]
+  }
+
+  if (type === 'polilinea' || type === 'stroke') {
+    const pts = (Array.isArray(obj.points) ? obj.points : [])
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+      .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+    if (pts.length < 2) return []
+    const closed = isClosedPolyline(obj)
+    if (closed && pts.length >= 3) {
+      return [{ kind: 'polygon', points: xf(pts), meta: { escena_tipo: type } }]
+    }
+    return [{ kind: 'line', points: xf(pts), meta: { escena_tipo: type } }]
+  }
+
+  if (type === 'rect') {
+    const x1 = Number(obj.x1)
+    const y1 = Number(obj.y1)
+    const x2 = Number(obj.x2)
+    const y2 = Number(obj.y2)
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return []
+    return [{
+      kind: 'polygon',
+      points: xf([
+        { x: x1, y: y1 },
+        { x: x2, y: y1 },
+        { x: x2, y: y2 },
+        { x: x1, y: y2 },
+      ]),
+      meta: { escena_tipo: 'rect' },
+    }]
+  }
+
+  if (type === 'triangulo') {
+    const pts = (Array.isArray(obj.points) ? obj.points : [])
+      .slice(0, 3)
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+      .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+    if (pts.length < 3) return []
+    return [{ kind: 'polygon', points: xf(pts), meta: { escena_tipo: 'triangulo' } }]
+  }
+
+  if (type === 'elipse') {
+    const ring = ellipseRingLocal(obj)
+    if (!ring) return []
+    return [{ kind: 'polygon', points: xf(ring), meta: { escena_tipo: 'elipse' } }]
+  }
+
+  if (type === 'hatch' && Array.isArray(obj.outer) && obj.outer.length >= 3) {
+    const pts = obj.outer
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+      .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+    if (pts.length < 3) return []
+    return [{ kind: 'polygon', points: xf(pts), meta: { escena_tipo: 'hatch' } }]
+  }
+
+  return []
+}
+
+function partsToFeatures(parts, origin, baseProps) {
+  const features = []
+  for (const part of parts || []) {
+    if (!part?.points?.length) continue
+    const lnglat = ptsToLngLat(part.points, origin)
+    if (!lnglat) continue
+    if (part.kind === 'point') {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: lnglat[0] },
+        properties: { ...baseProps, ...(part.meta || {}), detalle: true },
+      })
+      continue
+    }
+    if (part.kind === 'line') {
+      if (lnglat.length < 2) continue
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: lnglat },
+        properties: { ...baseProps, ...(part.meta || {}), detalle: true },
+      })
+      continue
+    }
+    if (part.kind === 'polygon') {
+      const ring = closeRing(lnglat)
+      if (!ring) continue
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [ring] },
+        properties: {
+          ...baseProps,
+          ...(part.meta || {}),
+          detalle: true,
+          es_entidad: part.meta?.escena_tipo ? true : undefined,
+        },
+      })
+    }
+  }
+  return features
+}
+
+/**
+ * Convierte dibujo_escena completo a GeoJSON detallado (forma real de entidades,
+ * nodos, líneas y polígonos) para capas de referencia en el plano.
+ * @param {object} escena
+ * @param {{ reporteId?: number|string }} [meta]
+ */
+export function esquemaEscenaToDetalleGeojson(escena, meta = {}) {
+  const origin = originFromDibujoEscena(escena)
+  if (!origin) return { type: 'FeatureCollection', features: [] }
+
+  let objects = Array.isArray(escena?.objects) ? escena.objects : []
+  // Recuperar entidad solo-snapshot si no hay bloque en objects
+  if (!objects.some((o) => o?.type === 'bloque') && escena?.entidad_biblioteca) {
+    const ent = escena.entidad_biblioteca
+    const kids = Array.isArray(ent.objects) ? ent.objects
+      : (Array.isArray(ent.children) ? ent.children : [])
+    if (kids.length) {
+      const w = Math.max(1, Number(ent.w) || 1)
+      const h = Math.max(1, Number(ent.h) || 1)
+      const sx = Number.isFinite(ent.scene_x) ? Number(ent.scene_x) : (-w / 2)
+      const sy = Number.isFinite(ent.scene_y) ? Number(ent.scene_y) : (-h / 2)
+      objects = [
+        ...objects,
+        {
+          type: 'bloque',
+          x: sx,
+          y: sy,
+          w,
+          h,
+          rotation: Number(ent.rotation) || 0,
+          children: kids,
+          libraryId: ent.id,
+          libraryNombre: ent.nombre,
+        },
+      ]
+    }
+  }
+
+  const tipo = normalizarTipoDibujo(
+    escena?.dibujo_tipo || meta.dibujoTipo || 'poligono',
+  )
+  const baseProps = {
+    origen: 'reporte_dibujo_ref',
+    reporte_id: meta.reporteId ?? null,
+    dibujo_tipo: tipo,
+  }
+
+  const parts = []
+  for (const obj of objects) {
+    parts.push(...objectDetalleWorldParts(obj))
+  }
+  const features = partsToFeatures(parts, origin, baseProps)
+  return { type: 'FeatureCollection', features }
+}
+
 export { contarPuntosEscena }

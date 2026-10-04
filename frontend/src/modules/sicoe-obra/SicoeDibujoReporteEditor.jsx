@@ -25,6 +25,7 @@ const LABELS = { nodo: 'Nodo', linea: 'Línea', poligono: 'Polígono' }
 function PanelPropiedadesReferencia({ t, refInfo, onClose }) {
   if (!refInfo) return null
   const items = Array.isArray(refInfo.items) ? refInfo.items : []
+  const registros = Array.isArray(refInfo.registros) ? refInfo.registros : []
   return (
     <div
       data-testid="sicoe-dibujo-ref-panel"
@@ -82,6 +83,46 @@ function PanelPropiedadesReferencia({ t, refInfo, onClose }) {
         <div style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
           {formatCOP(Number(refInfo.costo_directo) || 0)}
         </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-sm)' }} data-testid="sicoe-dibujo-ref-registros">
+        <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>Registros</div>
+        {registros.length ? (
+          <ul style={{
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+          }}
+          >
+            {registros.map((reg, idx) => {
+              const num = reg?.numero_registro ?? '—'
+              const item = reg?.item_numero || '—'
+              return (
+                <li
+                  key={`${num}-${item}-${idx}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    padding: '5px 8px',
+                    borderRadius: 8,
+                    background: t.bgMuted || 'rgba(100,116,139,0.08)',
+                    border: `1px solid ${t.border}`,
+                    fontWeight: 600,
+                    lineHeight: 1.3,
+                  }}
+                >
+                  <span>Reg. #{num}</span>
+                  <span style={{ color: t.textMuted, fontWeight: 700 }}>{item}</span>
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <div style={{ fontWeight: 600, color: t.textMuted }}>—</div>
+        )}
       </div>
       <div style={{ marginTop: 12, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
         Solo lectura · no modifica su dibujo en curso
@@ -311,7 +352,18 @@ export default function SicoeDibujoReporteEditor({
         initialSceneObjects={initialScene}
         initialCoordRows={initialCoordRows}
         referenciaDibujos={referencias}
-        onReferenciaClick={(info) => setRefSeleccionada(info)}
+        onReferenciaClick={(info) => {
+          const rid = Number(info?.reporte_id)
+          const full = referencias.find((r) => Number(r?.reporte_id) === rid)
+          setRefSeleccionada({
+            ...(info || {}),
+            ...(full || {}),
+            items: full?.items || info?.items || [],
+            registros: full?.registros || info?.registros || [],
+            costo_directo: full?.costo_directo ?? info?.costo_directo ?? 0,
+            numero_reporte: full?.numero_reporte ?? info?.numero_reporte,
+          })
+        }}
         onSaveHuella={onSaveHuella}
         onClose={onClose}
         onSave={async () => { /* PNG no aplica en huellaMode */ }}
