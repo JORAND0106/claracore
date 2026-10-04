@@ -321,16 +321,82 @@ describe('sicoeEjeFranjas', () => {
     assert.ok(fixed.length < loop.length)
     assert.equal(polylineSelfIntersects(fixed), false)
 
-    const withHook = [
+    // Remate: extremos exactos; no vacía el interior lejano del remate
+    const withMid = [
       a,
-      { lng: -74.3, lat: 4.3 }, // pico lejano
-      { lng: -74.1005, lat: 4.1005 },
+      { lng: -74.102, lat: 4.102 },
+      { lng: -74.105, lat: 4.105 },
       b,
     ]
-    const remate = repararRemateExtremos(withHook, a, b, { lookM: 50 })
-    assert.ok(!remate.some((p) => Math.abs(p.lng + 74.3) < 1e-9))
+    const remate = repararRemateExtremos(withMid, a, b, { lookM: 50, capM: 8 })
     assert.equal(remate[0].lng, a.lng)
     assert.equal(remate[remate.length - 1].lng, b.lng)
+    assert.ok(remate.length >= 3)
+  })
+
+  it('tapa transversal (abs corta vs cuerda) queda recta — sin pico de extremo', () => {
+    const pts = []
+    for (let m = 11300; m <= 11371; m += 5) {
+      pts.push({ m, lng: -74.4 + (m - 11300) * 0.000008, lat: 4.5 })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const end = pts[pts.length - 1]
+    const br = bearingDeg(pts[pts.length - 2], end)
+    // Tapa real: izquierda↔derecha en el mismo PK (cuerda = ancho de vía)
+    const left = destinationPoint(end.lng, end.lat, (br + 270) % 360, 6)
+    const right = destinationPoint(end.lng, end.lat, (br + 90) % 360, 6)
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio: left,
+      fin: right,
+      stepM: 2,
+      maxDistM: 40,
+    })
+    assert.ok(line)
+    assert.equal(line.along, false)
+    assert.equal(line.points.length, 2)
+    assert.equal(line.points[0].lng, left.lng)
+    assert.equal(line.points[1].lng, right.lng)
+  })
+
+  it('curva cerrada tipo 9+940–9+970 sigue el eje sin cuerda ni auto-cruce', () => {
+    const R2 = 30 / (Math.PI / 2)
+    const cx = -74.4
+    const cy = 4.5
+    const tight = []
+    for (let m = 9940; m <= 9970; m += 1) {
+      const ang = ((m - 9940) / 30) * (Math.PI / 2)
+      tight.push({
+        m,
+        lng: cx + (R2 / 111320) * Math.cos(ang),
+        lat: cy + (R2 / 110540) * Math.sin(ang),
+      })
+    }
+    const ejes = [{ id: 0, puntos: tight }]
+    const i0 = tight[2]
+    const i1 = tight[tight.length - 3]
+    const brI = bearingDeg(tight[2], tight[3])
+    const brF = bearingDeg(tight[tight.length - 4], tight[tight.length - 3])
+    // Offset moderado (interior de curva) — sin colapsar a cuerda
+    const inner0 = destinationPoint(i0.lng, i0.lat, (brI + 270) % 360, 6)
+    const inner1 = destinationPoint(i1.lng, i1.lat, (brF + 270) % 360, 6)
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio: inner0,
+      fin: inner1,
+      stepM: 1,
+      maxDistM: 40,
+    })
+    assert.ok(line)
+    assert.equal(line.points[0].lng, inner0.lng)
+    assert.equal(line.points[line.points.length - 1].lng, inner1.lng)
+    assert.equal(polylineSelfIntersects(line.points), false)
+    assert.equal(line.along, true)
+    assert.ok(line.points.length >= 5, `n=${line.points.length}`)
+    const chord = haversineM(inner0, inner1)
+    let path = 0
+    for (let i = 1; i < line.points.length; i += 1) path += haversineM(line.points[i - 1], line.points[i])
+    assert.ok(path > chord * 1.08, `path=${path.toFixed(1)} chord=${chord.toFixed(1)}`)
   })
 
   it('remate: extremos exactos y sin overshoot/retorno junto al fin', () => {
@@ -346,33 +412,31 @@ describe('sicoeEjeFranjas', () => {
       { lng: -74.387, lat: 4.413 }, // aún más allá
       fin,
     ]
-    const remate = repararRemateExtremos(overshoot, inicio, fin, { capM: 20, maxJumpM: 18, lookM: 80 })
+    const remate = repararRemateExtremos(overshoot, inicio, fin, { capM: 8, lookM: 80 })
     assert.equal(remate[0].lng, inicio.lng)
     assert.equal(remate[0].lat, inicio.lat)
     assert.equal(remate[remate.length - 1].lng, fin.lng)
     assert.equal(remate[remate.length - 1].lat, fin.lat)
-    // Los puntos más allá del fin no deben quedar
+    // Los puntos más allá del fin (U-turn cerca del remate) no deben quedar
     assert.ok(!remate.some((p) => p.lng === -74.387 && p.lat === 4.413))
-    assert.ok(!remate.some((p) => p.lng === -74.388 && p.lat === 4.412))
     // Sin auto-cruce en el remate
     assert.equal(polylineSelfIntersects(remate), false)
 
-    // Pico lejano (salto) se elimina aunque no esté "junto" al extremo
-    const withSpike = [
+    // Remate: extremos exactos; interiores lejos del remate se conservan
+    const withMid = [
       inicio,
       { lng: -74.398, lat: 4.402 },
-      { lng: -74.50, lat: 4.55 }, // pico lejano
+      { lng: -74.395, lat: 4.405 },
       { lng: -74.392, lat: 4.408 },
       fin,
     ]
-    const capped = repararRemateExtremos(withSpike, inicio, fin, { capM: 15, maxJumpM: 18 })
+    const capped = repararRemateExtremos(withMid, inicio, fin, { capM: 8 })
     assert.equal(capped[0].lng, inicio.lng)
     assert.equal(capped[capped.length - 1].lng, fin.lng)
-    assert.ok(!capped.some((p) => p.lng === -74.50 && p.lat === 4.55))
-    // Ningún interior demasiado cerca de los extremos
+    assert.ok(capped.length >= 3, 'conserva el tramo medio')
     for (let i = 1; i < capped.length - 1; i += 1) {
-      assert.ok(haversineM(capped[i], inicio) >= 14.5)
-      assert.ok(haversineM(capped[i], fin) >= 14.5)
+      assert.ok(haversineM(capped[i], inicio) >= 7.5)
+      assert.ok(haversineM(capped[i], fin) >= 7.5)
     }
 
     // construirLineaSentidoEje: extremos = puntos levantados

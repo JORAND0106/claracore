@@ -356,22 +356,21 @@ export function repararBuclesLocales(points, { maxPasses = 8 } = {}) {
 }
 
 /**
- * Remate genérico: fija extremos exactamente y limpia la zona de remate.
+ * Remate simple: fija extremos exactamente y limpia solo la zona inmediata.
  *
- * 1) Cap duro: ningún vértice interior a menos de `capM` de inicio/fin
- *    (el tramo final es recto al punto levantado — sin overshoot ni retorno).
- * 2) Elimina saltos largos (picos): las muestras densificadas no pueden
- *    saltar más de `maxJumpM` entre sí.
- * 3) El recorrido intermedio (lejos de los extremos) se conserva.
+ * - Extremos = puntos levantados (inicio/fin).
+ * - Quita interiores demasiado cerca de un extremo (evita gancho/retorno).
+ * - Quita vértices en U-turn justo junto al remate.
+ * NO colapsa el tramo medio ni recorta por "saltos" (eso deformaba curvas).
  */
 export function rematarCaraEnExtremos(points, inicio, fin, {
   coord = (p) => ({ x: Number(p.lng), y: Number(p.lat) }),
   dist = (p, q) => haversineM(p, q),
   applyEnd = (p, end) => ({ lng: Number(end.lng), lat: Number(end.lat) }),
-  lookM = 45,
+  lookM = 25,
   minSepM = 1.5,
-  capM = 20,
-  maxJumpM = 18,
+  capM = 8,
+  maxJumpM = 25,
 } = {}) {
   if (!Array.isArray(points) || points.length < 2 || !inicio || !fin) {
     return Array.isArray(points) ? points : []
@@ -381,14 +380,11 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
   pts[0] = applyEnd(pts[0], inicio)
   pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
 
-  // Cap adaptativo: en caras cortas no vaciar el interior; en caras largas ~20 m.
   let pathLen = 0
   for (let i = 1; i < pts.length; i += 1) pathLen += d(pts[i - 1], pts[i])
-  const wantCap = Math.max(Number(capM) || 20, Number(minSepM) || 1.5)
-  const cap = Math.min(wantCap, Math.max(5, pathLen * 0.06))
-  const maxJump = Math.max(Number(maxJumpM) || 18, 10)
+  const wantCap = Math.max(Number(minSepM) || 1.5, Math.min(Number(capM) || 8, 12))
+  const cap = Math.min(wantCap, Math.max(Number(minSepM) || 1.5, pathLen * 0.04))
 
-  // Cap duro en zona de remate: solo queda el punto levantado + interior lejano.
   if (pts.length > 2) {
     const start = pts[0]
     const end = pts[pts.length - 1]
@@ -396,21 +392,20 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
     pts = [applyEnd({}, inicio), ...interior, applyEnd({}, fin)]
   }
 
-  // Quitar picos: saltos entre vértices consecutivos mayores a maxJump
-  // (el segmento que toca un extremo puede llegar hasta `cap`).
+  // Picos aislados: desvío grande respecto al segmento de vecinos (no curvas suaves).
+  const spikeLimit = Math.max(Number(maxJumpM) || 25, 15)
   let guard = 0
-  while (pts.length > 2 && guard < 800) {
+  while (pts.length > 2 && guard < 400) {
     guard += 1
     let cut = -1
-    for (let i = 0; i < pts.length - 1; i += 1) {
-      const jump = d(pts[i], pts[i + 1])
-      const touchesEnd = i === 0 || i + 1 === pts.length - 1
-      const limit = touchesEnd ? Math.max(cap * 1.35, maxJump) : maxJump
-      if (jump <= limit) continue
-      // Quitar el extremo interior del salto.
-      if (i + 1 < pts.length - 1) cut = i + 1
-      else if (i > 0) cut = i
-      break
+    for (let i = 1; i < pts.length - 1; i += 1) {
+      const direct = d(pts[i - 1], pts[i + 1])
+      const via = d(pts[i - 1], pts[i]) + d(pts[i], pts[i + 1])
+      const leg = Math.min(d(pts[i - 1], pts[i]), d(pts[i], pts[i + 1]))
+      if (direct > 1e-6 && via > direct * 2.2 && leg > Math.max(spikeLimit * 0.45, direct * 0.9)) {
+        cut = i
+        break
+      }
     }
     if (cut < 0) break
     pts.splice(cut, 1)
@@ -418,15 +413,7 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
     pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
   }
 
-  // Segunda pasada de cap por si el recorte dejó interiores demasiado cerca.
-  if (pts.length > 2) {
-    const start = pts[0]
-    const end = pts[pts.length - 1]
-    const interior = pts.slice(1, -1).filter((p) => d(p, start) >= cap && d(p, end) >= cap)
-    pts = [applyEnd({}, inicio), ...interior, applyEnd({}, fin)]
-  }
-
-  // lookM: compat — si quedó un gancho justo fuera del cap, recortar giro en U.
+  // U-turn solo en la zona de remate.
   const xy = (p) => coord(p)
   const cosTurn = (a, b, c) => {
     const A = xy(a)
@@ -441,16 +428,20 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
     if (!(len1 > 1e-12) || !(len2 > 1e-12)) return 1
     return (vx1 * vx2 + vy1 * vy2) / (len1 * len2)
   }
+  const look = Math.max(Number(lookM) || 25, cap * 2)
   guard = 0
-  while (pts.length > 2 && guard < 200) {
+  while (pts.length > 2 && guard < 80) {
     guard += 1
     const n = pts.length
     const prev = pts[n - 3]
     const mid = pts[n - 2]
     const end = pts[n - 1]
     if (!prev) break
-    if (d(mid, end) > (Number(lookM) || 45) * 1.5 && cosTurn(prev, mid, end) >= -0.05) break
-    if (cosTurn(prev, mid, end) < -0.05) {
+    // También cortar overshoot: si mid está más lejos del inicio que el fin
+    // y hace U hacia el fin, quitarlo aunque d(mid,end) > look.
+    const overshoot = d(mid, pts[0]) > d(end, pts[0]) + 1
+    if (!overshoot && d(mid, end) > look) break
+    if (cosTurn(prev, mid, end) < -0.05 || overshoot) {
       pts.splice(n - 2, 1)
       pts[0] = applyEnd(pts[0], inicio)
       pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
@@ -459,14 +450,15 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
     break
   }
   guard = 0
-  while (pts.length > 2 && guard < 200) {
+  while (pts.length > 2 && guard < 80) {
     guard += 1
     const start = pts[0]
     const mid = pts[1]
     const next = pts[2]
     if (!next) break
-    if (d(mid, start) > (Number(lookM) || 45) * 1.5 && cosTurn(start, mid, next) >= -0.05) break
-    if (cosTurn(start, mid, next) < -0.05) {
+    const overshoot = d(mid, pts[pts.length - 1]) > d(start, pts[pts.length - 1]) + 1
+    if (!overshoot && d(mid, start) > look) break
+    if (cosTurn(start, mid, next) < -0.05 || overshoot) {
       pts.splice(1, 1)
       pts[0] = applyEnd(pts[0], inicio)
       pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
@@ -491,9 +483,9 @@ export function repararRemateExtremos(points, inicio, fin, opts = {}) {
       { lng: q.x, lat: q.y },
     ),
     applyEnd: (_p, end) => ({ lng: Number(end.lng), lat: Number(end.lat) }),
-    lookM: opts.lookM ?? opts.maxHookM ?? 45,
+    lookM: opts.lookM ?? opts.maxHookM ?? 25,
     minSepM: opts.minSepM ?? 1.5,
-    capM: opts.capM ?? 20,
+    capM: opts.capM ?? 8,
     maxJumpM: opts.maxJumpM ?? 18,
   })
 }
@@ -503,9 +495,9 @@ export function repararRemateExtremos(points, inicio, fin, opts = {}) {
  */
 export function repararRemateExtremosWorld(points, inicio, fin, {
   pxPerMeter = 50,
-  lookM = 45,
+  lookM = 25,
   minSepM = 1.5,
-  capM = 20,
+  capM = 8,
   maxJumpM = 18,
 } = {}) {
   const ppm = Math.max(1e-6, Number(pxPerMeter) || 50)
@@ -545,12 +537,49 @@ export function repararRetrocesosAbs(pointsWithM) {
 }
 
 /**
+ * Quita vértices con pliegue agudo (caústica de offset paralelo en curva cerrada)
+ * sin abandonar el seguimiento del eje ni crear cuerdas largas.
+ */
+export function suavizarPlieguesOffset(pointsWithM, { minCos = -0.55 } = {}) {
+  let pts = Array.isArray(pointsWithM) ? pointsWithM.map((p) => ({ ...p })) : []
+  if (pts.length < 3) return pts
+  let guard = 0
+  while (pts.length > 2 && guard < 400) {
+    guard += 1
+    let cut = -1
+    for (let i = 1; i < pts.length - 1; i += 1) {
+      const a = pts[i - 1]
+      const b = pts[i]
+      const c = pts[i + 1]
+      const vx1 = Number(b.lng) - Number(a.lng)
+      const vy1 = Number(b.lat) - Number(a.lat)
+      const vx2 = Number(c.lng) - Number(b.lng)
+      const vy2 = Number(c.lat) - Number(b.lat)
+      const len1 = Math.hypot(vx1, vy1)
+      const len2 = Math.hypot(vx2, vy2)
+      if (!(len1 > 1e-15) || !(len2 > 1e-15)) {
+        cut = i
+        break
+      }
+      const cos = (vx1 * vx2 + vy1 * vy2) / (len1 * len2)
+      if (cos < minCos) {
+        cut = i
+        break
+      }
+    }
+    if (cut < 0) break
+    pts.splice(cut, 1)
+  }
+  return pts
+}
+
+/**
  * Línea paralela al eje entre dos puntos (inicio→fin), con transición gradual
  * de distancia si el offset al eje difiere en los extremos.
  * El primer y último vértice coinciden exactamente con inicio y fin.
  *
- * Defectos locales (extremos / bucles en curva) se reparan en el tramo
- * afectado; nunca se abandona el seguimiento del eje en toda la cara.
+ * Remate solo en extremos (puntos levantados). Pliegues locales de offset se
+ * suavizan sin colapsar bucles a cuerdas ni abandonar el eje.
  *
  * @returns {null|{ points: Array<{lng:number,lat:number}>, absIni:number, absFin:number, distIni:number, distFin:number, eje_id:any, along?: boolean, degraded?: boolean }}
  */
@@ -603,9 +632,23 @@ export function construirLineaSentidoEje({
     eje_id: ejeUsar.id,
   }
 
-  // Solo transversales casi puntuales (misma abscisa): recta. Caras largas
-  // siempre siguen el eje aunque la cuerda geográfica sea más corta (vía curva).
-  if (!(absSpan > 0.5)) {
+  const chord = haversineM({ lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+  // Transversal (tapa / cruce de vía): poco avance de abscisa respecto a la cuerda,
+  // o cuerda casi perpendicular al eje. Evita densificar remates → picos.
+  let esTransversal = !(absSpan > 2) || (chord > 1e-6 && absSpan < chord * 0.5)
+  if (!esTransversal && chord > 1e-6 && absSpan < chord * 1.15) {
+    const midAbs = (Number(p0.abs_m) + Number(p1.abs_m)) / 2
+    const midEje = interpAbsEnEje(ejeUsar, midAbs)
+    if (midEje) {
+      const axisBr = Number(midEje.bearing)
+      const chordBr = bearingDeg({ lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+      let dBr = Math.abs(chordBr - axisBr)
+      if (dBr > 180) dBr = 360 - dBr
+      // ~perpendicular al eje (±35° de 90°)
+      if (dBr > 55 && dBr < 125) esTransversal = true
+    }
+  }
+  if (esTransversal) {
     return {
       points: [
         { lng: lng0, lat: lat0 },
@@ -625,7 +668,7 @@ export function construirLineaSentidoEje({
     absA = Math.max(range.min, Math.min(range.max, absA))
     absB = Math.max(range.min, Math.min(range.max, absB))
   }
-  if (!(Math.abs(absB - absA) > 0.5)) {
+  if (!(Math.abs(absB - absA) > 2) || (chord > 1e-6 && Math.abs(absB - absA) < chord * 0.5)) {
     return {
       points: [
         { lng: lng0, lat: lat0 },
@@ -679,40 +722,33 @@ export function construirLineaSentidoEje({
     raw.push(pt)
   }
 
-  // Reparaciones locales (no abandonar el eje). Interior intacto; remate en extremos.
+  // Solo avance monótono en abscisa. NO colapsar "bucles": en curvas cerradas
+  // eso creaba cuerdas que deformaban el trazo (9+940–9+970).
   let repaired = repararRetrocesosAbs(raw.length ? raw : [
     { lng: lng0, lat: lat0, m: absA },
     { lng: lng1, lat: lat1, m: absB },
   ])
+  // Suavizar pliegues locales (caústicas de offset): quitar vértice con giro en U.
+  repaired = suavizarPlieguesOffset(repaired)
+
   let points = repaired.map((p) => ({ lng: p.lng, lat: p.lat }))
-  // Forzar extremos = puntos levantados ANTES del remate/bucles.
+  // Forzar extremos = puntos levantados.
+  const minSep = Math.max(1.5, (Number(stepM) || 2) * 0.75)
   points = [
     { lng: lng0, lat: lat0 },
     ...points.filter((p) => (
-      haversineM(p, { lng: lng0, lat: lat0 }) >= 1.5
-      && haversineM(p, { lng: lng1, lat: lat1 }) >= 1.5
+      haversineM(p, { lng: lng0, lat: lat0 }) >= minSep
+      && haversineM(p, { lng: lng1, lat: lat1 }) >= minSep
     )),
     { lng: lng1, lat: lat1 },
   ]
-  points = repararBuclesLocales(points)
   points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 }, {
-    capM: 20,
-    maxJumpM: 18,
-    lookM: 50,
+    capM: 8,
+    lookM: 25,
+    minSepM: minSep,
   })
   points[0] = { lng: lng0, lat: lat0 }
   points[points.length - 1] = { lng: lng1, lat: lat1 }
-
-  if (points.length > 3) {
-    points = repararBuclesLocales(points)
-    points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 }, {
-      capM: 20,
-      maxJumpM: 18,
-      lookM: 50,
-    })
-    points[0] = { lng: lng0, lat: lat0 }
-    points[points.length - 1] = { lng: lng1, lat: lat1 }
-  }
 
   if (points.length < 2) {
     points = [

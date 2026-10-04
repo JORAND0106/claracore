@@ -7,17 +7,18 @@ import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
   construirLineaSentidoEje,
   reconstruirEjesDesdePlano,
-  repararRemateExtremosWorld,
 } from '../../modules/sicoe-obra/sicoeEjeFranjas.js'
 
 /**
  * Convierte una cara densificada (lng/lat) a mundo, fijando extremos en los
- * nodos levantados y limpiando la zona de remate (cap + sin picos/saltos).
+ * nodos levantados. El remate geométrico ya ocurrió en WGS84 (haversine);
+ * aquí NO se vuelve a rematar en coords de mapa (escala distinta a PX_PER_METER
+ * y deformaba curvas / creaba picos).
  */
 function curvedEdgeToWorldPts(curved, a, b, opts = {}) {
   if (!curved?.points?.length) return null
   const origin = opts.origin
-  let worldPts = curved.points.map((p, idx) => {
+  const worldPts = curved.points.map((p, idx) => {
     if (idx === 0) {
       return {
         x: Number(a.x),
@@ -50,19 +51,7 @@ function curvedEdgeToWorldPts(curved, a, b, opts = {}) {
 
   if (worldPts.length < 2) return null
 
-  // Remate duro: extremos = nodos; cap ~20 m; sin saltos/picos.
-  worldPts = repararRemateExtremosWorld(
-    worldPts,
-    { x: Number(a.x), y: Number(a.y) },
-    { x: Number(b.x), y: Number(b.y) },
-    {
-      pxPerMeter: PX_PER_METER,
-      lookM: 50,
-      minSepM: Math.max(1.5, (Number(opts.stepM) || 2) * 0.75),
-      capM: Number(opts.capM) || 20,
-      maxJumpM: Number(opts.maxJumpM) || 18,
-    },
-  )
+  // Solo fijar extremos exactos (sin remate en mundo / mapa).
   worldPts[0] = {
     ...worldPts[0],
     x: Number(a.x),
