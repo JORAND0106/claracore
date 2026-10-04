@@ -519,12 +519,16 @@ export default function EsquemaEditorModal({
   const [arrayAngle, setArrayAngle] = useState('360')
   const [cotaMode, setCotaMode] = useState('linear')
   const [mapActive, setMapActive] = useState(false)
-  const [mapOpacity, setMapOpacity] = useState(0.72)
+  const [mapOpacity, setMapOpacity] = useState(huellaMode ? 0.3 : 0.72)
   const [mapBasemap, setMapBasemap] = useState('calle')
   const [mapError, setMapError] = useState('')
   const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
-  const [mapPropsOpen, setMapPropsOpen] = useState(true)
-  const [cursorCoords, setCursorCoords] = useState(null)
+  /** En Dibujar (huella) el panel de mapa abre contraído (solo icono). */
+  const [mapPropsOpen, setMapPropsOpen] = useState(!huellaMode)
+  /** Lectura permanente: siempre hay objeto (valores null → "—"). */
+  const [cursorCoords, setCursorCoords] = useState({
+    norte: null, este: null, lat: null, lng: null,
+  })
   const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
   const [printAreaTick, setPrintAreaTick] = useState(0)
   const mapPlanoFcRef = useRef(null)
@@ -1011,10 +1015,7 @@ export default function EsquemaEditorModal({
 
 
   const updateCursorCoordsFromScreen = (screen) => {
-    if (!screen) {
-      setCursorCoords(null)
-      return
-    }
+    if (!screen) return
     const map = mapRef.current
     if (mapActiveRef.current && map && typeof map.unproject === 'function') {
       try {
@@ -1048,9 +1049,7 @@ export default function EsquemaEditorModal({
         lng: ll?.lng ?? null,
         lat: ll?.lat ?? null,
       })
-      return
     }
-    setCursorCoords(null)
   }
 
   const posFromEvent = (e) => {
@@ -1269,7 +1268,8 @@ export default function EsquemaEditorModal({
     setMapActive(false)
     setMapError('')
     setMapPickInfo(null)
-    setMapPropsOpen(true)
+    setMapPropsOpen(huellaMode ? false : true)
+    setMapOpacity(huellaMode ? 0.3 : 0.72)
     mapPlanoFcRef.current = null
     mapClickBoundRef.current = false
     try { refsClickUnbindRef.current?.() } catch { /* ignore */ }
@@ -1302,11 +1302,11 @@ export default function EsquemaEditorModal({
       setZoomPct(100)
     }
     setPanTick((n) => n + 1)
-  }, [destroyMap])
+  }, [destroyMap, huellaMode])
 
   const activateMap = useCallback(() => {
     if (mapActiveRef.current) {
-      setMapPropsOpen(true)
+      if (!huellaMode) setMapPropsOpen(true)
       setToolHint('Mapa ya activo. Use Paneo para mover/consultar PK; al Guardar capture el área de impresión.')
       return
     }
@@ -1319,9 +1319,10 @@ export default function EsquemaEditorModal({
     mapSyncZoomLabelRef.current = null
     setMapError('')
     setMapBasemap('calle')
-    setMapOpacity(0.72)
+    // Dibujar reporte: plano tenue (30 %) y panel contraído. Otras vistas mantienen el flujo previo.
+    setMapOpacity(huellaMode ? 0.3 : 0.72)
     setMapPickInfo(null)
-    setMapPropsOpen(true)
+    setMapPropsOpen(!huellaMode)
     mapActiveRef.current = true
     setMapActive(true)
     setTool('paneo')
@@ -1334,7 +1335,7 @@ export default function EsquemaEditorModal({
         ? 'Mapa centrado en la ubicación del reporte. Escala del lienzo = escala del mapa. Paneo para mover; capas en Propiedades.'
         : 'Vista general del contrato. Escala del lienzo = escala del mapa. Paneo para explorar; capas en Propiedades.')
     setPanTick((n) => n + 1)
-  }, [mapCtx])
+  }, [mapCtx, huellaMode])
 
   useEffect(() => {
     if (!autoActivateMap) return undefined
@@ -2450,9 +2451,6 @@ export default function EsquemaEditorModal({
     pointersRef.current.set(e.pointerId, screen)
     updateCursorCoordsFromScreen(screen)
 
-    // Clic sobre el lienzo con mapa activo → reabrir panel de propiedades del mapa
-    if (mapActiveRef.current) setMapPropsOpen(true)
-
     // Área de impresión del mapa: marquee en píxeles de pantalla
     if (printAreaSelectingRef.current) {
       printAreaDraftRef.current = { from: { ...screen }, to: { ...screen } }
@@ -2475,6 +2473,21 @@ export default function EsquemaEditorModal({
       return
     }
     if (pinchRef.current) return
+
+    // Consulta de dibujos de referencia: cualquier herramienta, sin alterar el dibujo en curso.
+    if (
+      mapActiveRef.current
+      && mapRef.current
+      && typeof onReferenciaClickRef.current === 'function'
+      && !pendingInsertRef.current
+    ) {
+      const info = queryDibujoReferenciaAtPoint(mapRef.current, screen)
+      if (info) {
+        try { onReferenciaClickRef.current(info) } catch { /* ignore */ }
+        drawing.current = false
+        return
+      }
+    }
 
     let p = posFromEvent(e)
     const currentTool = toolRef.current
@@ -4761,7 +4774,12 @@ export default function EsquemaEditorModal({
             <div
               ref={mapHostRef}
               data-testid="esquema-mapa-host"
-              onPointerDown={() => setMapPropsOpen(true)}
+              onPointerDown={() => {
+                if (!huellaMode) setMapPropsOpen(true)
+              }}
+              onPointerMove={(e) => {
+                updateCursorCoordsFromScreen(screenPosFromEvent(e))
+              }}
               style={{
                 position: 'absolute',
                 left: 10,
@@ -4969,60 +4987,85 @@ export default function EsquemaEditorModal({
               onRemove={deactivateMap}
             />
           ) : null}
-
-          {cursorCoords ? (
-            <div
-              data-testid="esquema-cursor-coords"
+          {mapActive && !mapPropsOpen ? (
+            <button
+              type="button"
+              data-testid="esquema-mapa-props-toggle"
+              title="Propiedades del mapa"
+              aria-label="Abrir propiedades del mapa"
+              onClick={() => setMapPropsOpen(true)}
               style={{
                 position: 'absolute',
-                // Espacio libre: join (izq-abajo), biblioteca (der-abajo), mapa props (arriba).
-                ...((tool === 'unir-nodos' || joinSeq.length > 0)
-                  ? (libOpen
-                    ? { left: '50%', right: 'auto', bottom: 18, transform: 'translateX(-50%)' }
-                    : { right: 18, left: 'auto', bottom: 18 })
-                  : (libOpen
-                    ? { left: 18, right: 'auto', bottom: 18 }
-                    : (mapActive && mapPropsOpen
-                      ? { right: 18, left: 'auto', bottom: 18 }
-                      : { left: 18, right: 'auto', bottom: 18 }))),
-                zIndex: 6,
-                maxWidth: 'min(280px, calc(100% - 36px))',
-                padding: '7px 10px',
+                right: 18,
+                top: 18,
+                zIndex: 7,
+                width: 36,
+                height: 36,
+                padding: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 borderRadius: 10,
                 border: `1px solid ${t.border}`,
                 background: t.bgCard || 'rgba(255,255,255,0.96)',
                 boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
-                fontSize: 11,
-                fontWeight: 700,
                 color: t.text,
-                lineHeight: 1.35,
-                pointerEvents: 'none',
-                fontVariantNumeric: 'tabular-nums',
+                cursor: 'pointer',
               }}
             >
-              <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
-                COORDENADAS
-              </div>
-              <div>
-                N {cursorCoords.norte != null && Number.isFinite(cursorCoords.norte)
-                  ? cursorCoords.norte.toFixed(3)
-                  : '—'}
-                {' · '}
-                E {cursorCoords.este != null && Number.isFinite(cursorCoords.este)
-                  ? cursorCoords.este.toFixed(3)
-                  : '—'}
-              </div>
-              <div style={{ fontWeight: 600, color: t.textMuted }}>
-                Lat {cursorCoords.lat != null && Number.isFinite(cursorCoords.lat)
-                  ? cursorCoords.lat.toFixed(6)
-                  : '—'}
-                {' · '}
-                Lng {cursorCoords.lng != null && Number.isFinite(cursorCoords.lng)
-                  ? cursorCoords.lng.toFixed(6)
-                  : '—'}
-              </div>
-            </div>
+              <IconMapaProps />
+            </button>
           ) : null}
+
+          <div
+            data-testid="esquema-cursor-coords"
+            style={{
+              position: 'absolute',
+              // Evitar solape: join (izq-abajo), biblioteca (der-abajo).
+              ...((tool === 'unir-nodos' || joinSeq.length > 0)
+                ? (libOpen
+                  ? { left: '50%', right: 'auto', bottom: 18, transform: 'translateX(-50%)' }
+                  : { right: 18, left: 'auto', bottom: 18 })
+                : (libOpen
+                  ? { left: 18, right: 'auto', bottom: 18 }
+                  : { right: 18, left: 'auto', bottom: 18 })),
+              zIndex: 6,
+              maxWidth: 'min(280px, calc(100% - 36px))',
+              padding: '7px 10px',
+              borderRadius: 10,
+              border: `1px solid ${t.border}`,
+              background: t.bgCard || 'rgba(255,255,255,0.96)',
+              boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
+              fontSize: 11,
+              fontWeight: 700,
+              color: t.text,
+              lineHeight: 1.35,
+              pointerEvents: 'none',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
+              COORDENADAS
+            </div>
+            <div>
+              N {cursorCoords?.norte != null && Number.isFinite(cursorCoords.norte)
+                ? cursorCoords.norte.toFixed(3)
+                : '—'}
+              {' · '}
+              E {cursorCoords?.este != null && Number.isFinite(cursorCoords.este)
+                ? cursorCoords.este.toFixed(3)
+                : '—'}
+            </div>
+            <div style={{ fontWeight: 600, color: t.textMuted }}>
+              Lat {cursorCoords?.lat != null && Number.isFinite(cursorCoords.lat)
+                ? cursorCoords.lat.toFixed(6)
+                : '—'}
+              {' · '}
+              Lng {cursorCoords?.lng != null && Number.isFinite(cursorCoords.lng)
+                ? cursorCoords.lng.toFixed(6)
+                : '—'}
+            </div>
+          </div>
 
           {selectedObj && selectedObj.type !== 'image' && (
             <PropiedadesPanel
@@ -7657,6 +7700,17 @@ function IconTipoPoligono() {
   return (
     <svg {...iconProps()}>
       <path d="M12 4 20 9.5 17 19H7L4 9.5Z" />
+    </svg>
+  )
+}
+function IconMapaProps() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 7h16" />
+      <path d="M4 12h10" />
+      <path d="M4 17h13" />
+      <circle cx="18" cy="12" r="2.2" />
+      <path d="M9 4.5 5.5 12 9 19.5 12.5 12Z" />
     </svg>
   )
 }

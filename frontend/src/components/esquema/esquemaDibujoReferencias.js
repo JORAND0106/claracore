@@ -217,12 +217,22 @@ const REF_LAYER_IDS = [
  */
 export function bindEsquemaDibujoReferenciasClick(map, onSelect) {
   if (!map || typeof onSelect !== 'function') return () => {}
-  const pick = (e) => {
+  const pickAt = (point) => {
+    const info = queryDibujoReferenciaAtPoint(map, point, { pad: 10 })
+    if (info) onSelect(info)
+  }
+  const onClick = (e) => {
+    // Preferir features del evento (capa) y, si no, consulta con tolerancia.
     const f = e?.features?.[0]
-    if (!f) return
-    const info = infoFromReferenciaFeatureProps(f.properties || {})
-    if (!info) return
-    onSelect(info)
+    if (f) {
+      const info = infoFromReferenciaFeatureProps(f.properties || {})
+      if (info) {
+        onSelect(info)
+        return
+      }
+    }
+    const pt = e?.point
+    if (pt) pickAt({ x: pt.x, y: pt.y })
   }
   const enter = () => {
     try { map.getCanvas().style.cursor = 'pointer' } catch { /* ignore */ }
@@ -230,18 +240,19 @@ export function bindEsquemaDibujoReferenciasClick(map, onSelect) {
   const leave = () => {
     try { map.getCanvas().style.cursor = '' } catch { /* ignore */ }
   }
+  // Clic general del mapa (cubre líneas finas vía query con pad).
+  try { map.on('click', onClick) } catch { /* ignore */ }
   for (const id of REF_LAYER_IDS) {
     try {
       if (map.getLayer(id)) {
-        map.on('click', id, pick)
         map.on('mouseenter', id, enter)
         map.on('mouseleave', id, leave)
       }
     } catch { /* ignore */ }
   }
   return () => {
+    try { map.off('click', onClick) } catch { /* ignore */ }
     for (const id of REF_LAYER_IDS) {
-      try { map.off('click', id, pick) } catch { /* ignore */ }
       try { map.off('mouseenter', id, enter) } catch { /* ignore */ }
       try { map.off('mouseleave', id, leave) } catch { /* ignore */ }
     }
@@ -253,14 +264,24 @@ export function bindEsquemaDibujoReferenciasClick(map, onSelect) {
  * @param {import('mapbox-gl').Map} map
  * @param {{x:number,y:number}} point
  */
-export function queryDibujoReferenciaAtPoint(map, point) {
+export function queryDibujoReferenciaAtPoint(map, point, { pad = 8 } = {}) {
   if (!map || !point) return null
   try {
     const layers = REF_LAYER_IDS.filter((id) => {
       try { return !!map.getLayer(id) } catch { return false }
     })
     if (!layers.length) return null
-    const feats = map.queryRenderedFeatures([point.x, point.y], { layers })
+    const x = Number(point.x)
+    const y = Number(point.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+    const p = Math.max(0, Number(pad) || 0)
+    const geometry = p > 0
+      ? [
+        [x - p, y - p],
+        [x + p, y + p],
+      ]
+      : [x, y]
+    const feats = map.queryRenderedFeatures(geometry, { layers })
     const f = feats?.[0]
     if (!f) return null
     return infoFromReferenciaFeatureProps(f.properties || {})
