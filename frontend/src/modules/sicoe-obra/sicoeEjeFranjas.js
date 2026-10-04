@@ -356,55 +356,137 @@ export function repararBuclesLocales(points, { maxPasses = 8 } = {}) {
 }
 
 /**
- * Remate en extremos: quita ganchos/picos cerca de los puntos levantados
- * (muestras colapsadas en el pie del eje con offset errático).
+ * Remate genérico: fija extremos y elimina overshoot/retorno junto a ellos.
+ * `coord` extrae {x,y} (lng/lat o mundo). No altera el tramo intermedio lejos de los extremos.
  */
-export function repararRemateExtremos(points, inicio, fin, { maxHookM = 35, look = 8 } = {}) {
-  const pts = Array.isArray(points) ? points.map((p) => ({ lng: Number(p.lng), lat: Number(p.lat) })) : []
-  if (pts.length < 3 || !inicio || !fin) return pts
-  const a = { lng: Number(inicio.lng), lat: Number(inicio.lat) }
-  const b = { lng: Number(fin.lng), lat: Number(fin.lat) }
-  pts[0] = { ...a }
-  pts[pts.length - 1] = { ...b }
+export function rematarCaraEnExtremos(points, inicio, fin, {
+  coord = (p) => ({ x: Number(p.lng), y: Number(p.lat) }),
+  dist = (p, q) => haversineM(p, q),
+  applyEnd = (p, end) => ({ lng: Number(end.lng), lat: Number(end.lat) }),
+  lookM = 45,
+  minSepM = 1.5,
+} = {}) {
+  if (!Array.isArray(points) || points.length < 2 || !inicio || !fin) {
+    return Array.isArray(points) ? points : []
+  }
+  let pts = points.map((p) => ({ ...p }))
+  pts[0] = applyEnd(pts[0], inicio)
+  pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
 
-  const keep = pts.map(() => true)
-  // Cerca del inicio: si un punto interior está lejos del inicio y del siguiente
-  // tramo razonable, o forma un pico (más lejos del extremo que sus vecinos), descartar.
-  const nLook = Math.min(look, Math.max(1, Math.floor(pts.length / 3)))
-  for (let i = 1; i <= nLook && i < pts.length - 1; i += 1) {
-    const dEnd = haversineM(pts[i], a)
-    const dNext = haversineM(pts[i], pts[i + 1])
-    const dPrev = haversineM(pts[i], pts[i - 1])
-    // Pico: salto grande hacia un punto lejano y vuelta (dPrev o dNext grandes vs progresión)
-    if (dEnd > maxHookM && (dPrev > maxHookM * 0.6 || dNext > maxHookM * 0.6)) {
-      keep[i] = false
+  const d = (p, q) => dist(coord(p), coord(q))
+  const xy = (p) => coord(p)
+
+  // Quitar interiores demasiado cerca de los extremos (evita micro-ganchos).
+  if (pts.length > 2) {
+    pts = pts.filter((p, i) => {
+      if (i === 0 || i === pts.length - 1) return true
+      return d(p, pts[0]) >= minSepM && d(p, pts[pts.length - 1]) >= minSepM
+    })
+  }
+  if (pts.length < 2) return [applyEnd({}, inicio), applyEnd({}, fin)]
+  pts[0] = applyEnd(pts[0], inicio)
+  pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
+
+  const cosTurn = (a, b, c) => {
+    const A = xy(a), B = xy(b), C = xy(c)
+    const vx1 = B.x - A.x
+    const vy1 = B.y - A.y
+    const vx2 = C.x - B.x
+    const vy2 = C.y - B.y
+    const len1 = Math.hypot(vx1, vy1)
+    const len2 = Math.hypot(vx2, vy2)
+    if (!(len1 > 1e-12) || !(len2 > 1e-12)) return 1
+    return (vx1 * vx2 + vy1 * vy2) / (len1 * len2)
+  }
+
+  // Desde el fin: quitar vértices que se pasan de largo y se devuelven hacia el
+  // punto levantado (giro en U). No usar umbral de distancia: el overshoot suele
+  // quedar lejos del extremo y hay que recortarlo igual.
+  let guard = 0
+  while (pts.length > 2 && guard < 500) {
+    guard += 1
+    const n = pts.length
+    const prev = pts[n - 3]
+    const mid = pts[n - 2]
+    const end = pts[n - 1]
+    if (!prev) break
+    const reverses = cosTurn(prev, mid, end) < -0.05
+    // Segmento final muy largo tras un interior cercano ⇒ gancho típico del remate.
+    const dMid = d(mid, end)
+    const dPrev = d(prev, end)
+    const longHook = dMid > Math.max(8, lookM * 0.25) && dMid > dPrev * 0.9 && cosTurn(prev, mid, end) < 0.35
+    if (reverses || longHook) {
+      pts.splice(n - 2, 1)
+      pts[0] = applyEnd(pts[0], inicio)
+      pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
       continue
     }
-    // Gancho: el punto se aleja más del extremo que el siguiente (retroceso geográfico)
-    const dNextEnd = haversineM(pts[i + 1], a)
-    if (dEnd > dNextEnd + 8 && dEnd > 12 && dPrev > 10) {
-      keep[i] = false
-    }
-  }
-  for (let i = pts.length - 2; i >= pts.length - 1 - nLook && i > 0; i -= 1) {
-    const dEnd = haversineM(pts[i], b)
-    const dNext = haversineM(pts[i], pts[i + 1])
-    const dPrev = haversineM(pts[i], pts[i - 1])
-    if (dEnd > maxHookM && (dPrev > maxHookM * 0.6 || dNext > maxHookM * 0.6)) {
-      keep[i] = false
-      continue
-    }
-    const dPrevEnd = haversineM(pts[i - 1], b)
-    if (dEnd > dPrevEnd + 8 && dEnd > 12 && dNext > 10) {
-      keep[i] = false
-    }
+    break
   }
 
-  const out = pts.filter((_, i) => keep[i])
-  if (out.length < 2) return [a, b]
-  out[0] = { ...a }
-  out[out.length - 1] = { ...b }
-  return out
+  // Desde el inicio: simétrico (giro en U al salir del punto levantado).
+  guard = 0
+  while (pts.length > 2 && guard < 500) {
+    guard += 1
+    const start = pts[0]
+    const mid = pts[1]
+    const next = pts[2]
+    if (!next) break
+    const reverses = cosTurn(start, mid, next) < -0.05
+    const dMid = d(mid, start)
+    const dNext = d(next, start)
+    const longHook = dMid > Math.max(8, lookM * 0.25) && dMid > dNext * 0.9 && cosTurn(start, mid, next) < 0.35
+    if (reverses || longHook) {
+      pts.splice(1, 1)
+      pts[0] = applyEnd(pts[0], inicio)
+      pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
+      continue
+    }
+    break
+  }
+
+  pts[0] = applyEnd(pts[0], inicio)
+  pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
+  return pts
+}
+
+/**
+ * Remate WGS84 (lng/lat) de una cara en sentido del eje.
+ */
+export function repararRemateExtremos(points, inicio, fin, opts = {}) {
+  return rematarCaraEnExtremos(points, inicio, fin, {
+    coord: (p) => ({ x: Number(p.lng), y: Number(p.lat) }),
+    dist: (p, q) => haversineM(
+      { lng: p.x, lat: p.y },
+      { lng: q.x, lat: q.y },
+    ),
+    applyEnd: (_p, end) => ({ lng: Number(end.lng), lat: Number(end.lat) }),
+    lookM: opts.lookM ?? opts.maxHookM ?? 45,
+    minSepM: opts.minSepM ?? 1.5,
+  })
+}
+
+/**
+ * Remate en coordenadas de lienzo (x/y mundo). `lookM`/`minSepM` en metros de mundo
+ * (se convierten con pxPerMeter).
+ */
+export function repararRemateExtremosWorld(points, inicio, fin, {
+  pxPerMeter = 50,
+  lookM = 45,
+  minSepM = 1.5,
+} = {}) {
+  const ppm = Math.max(1e-6, Number(pxPerMeter) || 50)
+  return rematarCaraEnExtremos(points, inicio, fin, {
+    coord: (p) => ({ x: Number(p.x), y: Number(p.y) }),
+    dist: (p, q) => Math.hypot(p.x - q.x, p.y - q.y) / ppm,
+    applyEnd: (p, end) => ({
+      ...p,
+      x: Number(end.x),
+      y: Number(end.y),
+    }),
+    lookM,
+    minSepM,
+  })
 }
 
 /**
@@ -520,28 +602,35 @@ export function construirLineaSentidoEje({
     }
   }
 
-  let samples = sampleAbsRange(ejeUsar, absA, absB, stepM)
-  if (samples.length < 2) return null
+  // Interior del tramo: no muestrear exactamente en absA/absB (los extremos
+  // son los puntos levantados). Evita el overshoot + retorno en el remate.
+  const span = Math.abs(absB - absA)
+  const inset = Math.min(Math.max(Number(stepM) || 2, 1), span * 0.08, 4)
+  let absLo = Math.min(absA, absB) + inset
+  let absHi = Math.max(absA, absB) - inset
+  if (!(absHi > absLo)) {
+    absLo = Math.min(absA, absB)
+    absHi = Math.max(absA, absB)
+  }
+  let samples = sampleAbsRange(ejeUsar, absLo, absHi, stepM)
+  if (samples.length < 1) samples = sampleAbsRange(ejeUsar, absA, absB, stepM)
   if (absB < absA) samples = [...samples].reverse()
 
   // Dedup geográfico (colapso en extremos del abscisado).
   const dedup = []
   for (const s of samples) {
     const prev = dedup[dedup.length - 1]
-    if (prev && haversineM(prev, s) < 0.35) {
-      // Conservar la abscisa más extrema del par colapsado.
-      dedup[dedup.length - 1] = s
-      continue
-    }
+    if (prev && haversineM(prev, s) < 0.35) continue
     dedup.push(s)
   }
   samples = dedup
-  if (samples.length < 2) return null
 
   const raw = []
   for (let i = 0; i < samples.length; i += 1) {
     const s = samples[i]
-    const t = samples.length === 1 ? 0 : i / (samples.length - 1)
+    // t según abscisa real entre absA y absB (extremos = puntos levantados).
+    const tAbs = absA === absB ? 0 : (Number(s.m) - absA) / (absB - absA)
+    const t = Math.max(0, Math.min(1, tAbs))
     const dist = d0 + t * (d1 - d0)
     let pt
     if (Math.abs(dist) < 1e-9) {
@@ -555,28 +644,38 @@ export function construirLineaSentidoEje({
     raw.push(pt)
   }
 
-  // Reparaciones locales (no abandonar el eje).
-  let repaired = repararRetrocesosAbs(raw)
+  // Reparaciones locales (no abandonar el eje). Interior intacto; remate en extremos.
+  let repaired = repararRetrocesosAbs(raw.length ? raw : [
+    { lng: lng0, lat: lat0, m: absA },
+    { lng: lng1, lat: lat1, m: absB },
+  ])
   let points = repaired.map((p) => ({ lng: p.lng, lat: p.lat }))
+  // Forzar extremos = puntos levantados ANTES del remate/bucles.
+  points = [
+    { lng: lng0, lat: lat0 },
+    ...points.filter((p) => (
+      haversineM(p, { lng: lng0, lat: lat0 }) >= 1.5
+      && haversineM(p, { lng: lng1, lat: lat1 }) >= 1.5
+    )),
+    { lng: lng1, lat: lat1 },
+  ]
   points = repararBuclesLocales(points)
   points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+  points[0] = { lng: lng0, lat: lat0 }
+  points[points.length - 1] = { lng: lng1, lat: lat1 }
 
-  // Exactitud: pasar por inicio y fin
+  if (points.length > 3) {
+    points = repararBuclesLocales(points)
+    points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+    points[0] = { lng: lng0, lat: lat0 }
+    points[points.length - 1] = { lng: lng1, lat: lat1 }
+  }
+
   if (points.length < 2) {
     points = [
       { lng: lng0, lat: lat0 },
       { lng: lng1, lat: lat1 },
     ]
-  } else {
-    points[0] = { lng: lng0, lat: lat0 }
-    points[points.length - 1] = { lng: lng1, lat: lat1 }
-  }
-
-  // Segunda pasada de bucles tras fijar extremos.
-  if (points.length > 3) {
-    points = repararBuclesLocales(points)
-    points[0] = { lng: lng0, lat: lat0 }
-    points[points.length - 1] = { lng: lng1, lat: lat1 }
   }
 
   const along = points.length > 2
