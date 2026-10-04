@@ -72,13 +72,39 @@ def test_write_omite_coords_geojson_y_reintenta():
     assert "geometria_tipo" in cache
 
 
-def test_strip_omitted_respeta_cache():
-    so_registros_remember_omit("coords_geojson")
-    cleaned = so_registros_strip_omitted(
-        {"nombre": "X", "coords_geojson": {"type": "Point"}, "margen": "Izquierda"}
+def test_write_omite_perimetro_geojson_en_reportes():
+    from sicoe_registros_schema import (
+        so_reportes_clear_omit_cache,
+        so_reportes_omit_cache_snapshot,
+        so_reportes_write_omit_missing,
     )
-    assert "coords_geojson" not in cleaned
-    assert cleaned["margen"] == "Izquierda"
+
+    so_reportes_clear_omit_cache()
+    calls = []
+
+    def write_fn(data):
+        calls.append(dict(data))
+        if "perimetro_geojson" in data:
+            raise _FakeAPIError(
+                "Could not find the 'perimetro_geojson' column of 'so_reportes' in the schema cache"
+            )
+        return [{"id": 66, **data}]
+
+    out = so_reportes_write_omit_missing(
+        write_fn,
+        {
+            "dibujo_geojson": {"type": "FeatureCollection", "features": []},
+            "perimetro_geojson": {"type": "Feature"},
+            "updated_at": "now()",
+        },
+        operacion="test",
+    )
+    assert out and out[0]["id"] == 66
+    assert "perimetro_geojson" not in out[0]
+    assert "dibujo_geojson" in out[0]
+    assert "perimetro_geojson" in so_reportes_omit_cache_snapshot()
+    so_reportes_clear_omit_cache()
+
 
 
 def test_insert_batch_omite_coords_geojson():
