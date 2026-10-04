@@ -881,22 +881,26 @@ export default function EsquemaEditorModal({
     setCoordPanelOpen(true)
     setDirty(true)
     if (nodes.length) {
-      const xs = nodes.map((n) => n.x)
-      const ys = nodes.map((n) => n.y)
-      const minX = Math.min(...xs)
-      const maxX = Math.max(...xs)
-      const minY = Math.min(...ys)
-      const maxY = Math.max(...ys)
-      const { w, h } = cssSize()
-      const bw = Math.max(40, maxX - minX)
-      const bh = Math.max(40, maxY - minY)
-      const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bw, (h - 80) / bh)))
-      zoomRef.current = z
-      panRef.current = {
-        x: w / 2 - ((minX + maxX) / 2) * z,
-        y: h / 2 - ((minY + maxY) / 2) * z,
+      if (mapActiveRef.current) {
+        syncCanvasToMapRef.current()
+      } else {
+        const xs = nodes.map((n) => n.x)
+        const ys = nodes.map((n) => n.y)
+        const minX = Math.min(...xs)
+        const maxX = Math.max(...xs)
+        const minY = Math.min(...ys)
+        const maxY = Math.max(...ys)
+        const { w, h } = cssSize()
+        const bw = Math.max(40, maxX - minX)
+        const bh = Math.max(40, maxY - minY)
+        const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bw, (h - 80) / bh)))
+        zoomRef.current = z
+        panRef.current = {
+          x: w / 2 - ((minX + maxX) / 2) * z,
+          y: h / 2 - ((minY + maxY) / 2) * z,
+        }
+        setZoomPct(Math.round(z * 100))
       }
-      setZoomPct(Math.round(z * 100))
     }
     setPanTick((n) => n + 1)
     requestAnimationFrame(() => redrawRef.current())
@@ -2146,22 +2150,27 @@ export default function EsquemaEditorModal({
     selectOne(null)
     setDirty(true)
     if (nodes.length) {
-      const xs = nodes.map((n) => n.x)
-      const ys = nodes.map((n) => n.y)
-      const minX = Math.min(...xs)
-      const maxX = Math.max(...xs)
-      const minY = Math.min(...ys)
-      const maxY = Math.max(...ys)
-      const { w, h } = cssSize()
-      const bw = Math.max(40, maxX - minX)
-      const bh = Math.max(40, maxY - minY)
-      const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bw, (h - 80) / bh)))
-      zoomRef.current = z
-      panRef.current = {
-        x: w / 2 - ((minX + maxX) / 2) * z,
-        y: h / 2 - ((minY + maxY) / 2) * z,
+      if (mapActiveRef.current) {
+        // Mantener escala 1:1 con el mapa: no forzar zoom del lienzo.
+        syncCanvasToMapRef.current()
+      } else {
+        const xs = nodes.map((n) => n.x)
+        const ys = nodes.map((n) => n.y)
+        const minX = Math.min(...xs)
+        const maxX = Math.max(...xs)
+        const minY = Math.min(...ys)
+        const maxY = Math.max(...ys)
+        const { w, h } = cssSize()
+        const bw = Math.max(40, maxX - minX)
+        const bh = Math.max(40, maxY - minY)
+        const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bw, (h - 80) / bh)))
+        zoomRef.current = z
+        panRef.current = {
+          x: w / 2 - ((minX + maxX) / 2) * z,
+          y: h / 2 - ((minY + maxY) / 2) * z,
+        }
+        setZoomPct(Math.round(z * 100))
       }
-      setZoomPct(Math.round(z * 100))
     }
     // En modo nodo del reporte: abrir biblioteca de entidades para insertar sobre los nodos.
     if (huellaMode && huellaTipoRef.current === 'nodo' && nodes.length) {
@@ -2224,6 +2233,7 @@ export default function EsquemaEditorModal({
       selectIds(placed.map((o) => o.id))
       setDirty(true)
       drawing.current = false
+      if (onPlane) syncCanvasToMapRef.current()
       redraw()
       return
     }
@@ -3507,6 +3517,7 @@ export default function EsquemaEditorModal({
         selectIds(placed.map((o) => o.id))
         setDirty(true)
         setTool('seleccion')
+        if (onPlane) syncCanvasToMapRef.current()
         redraw()
         return
       }
@@ -3905,6 +3916,13 @@ export default function EsquemaEditorModal({
   }, [tool])
 
   const fitViewToObjects = (objs) => {
+    // Con mapa activo la escala la dicta Mapbox: no encuadrar el lienzo a mano
+    // (rompería el 1:1 geo ↔ world). Solo re-sincronizar.
+    if (mapActiveRef.current) {
+      syncCanvasToMapRef.current()
+      setPanTick((n) => n + 1)
+      return
+    }
     const bb = sceneExportBounds(objs)
     const { w, h } = cssSize()
     if (w < 40 || h < 40) return
