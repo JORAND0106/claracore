@@ -26546,6 +26546,396 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
     return out
 
 
+
+def _sicoe_persistir_hallazgos_lista(contrato_id: int, hallazgos: list, current_user=None) -> list:
+    """Upsert hallazgos canónicos en so_auditoria_hallazgos. Retorna los persistidos."""
+    from datetime import datetime, timezone
+    from sicoe_auditoria_traslapos import usuario_ve_auditoria_traslapos
+
+    if current_user is not None and not usuario_ve_auditoria_traslapos(current_user):
+        return []
+    out = []
+    now = datetime.now(timezone.utc).isoformat()
+    for canon in hallazgos or []:
+        if not canon or not canon.get("fingerprint"):
+            continue
+        prev = None
+        try:
+            def _qp(fp=canon["fingerprint"]):
+                return (
+                    supabase.table("so_auditoria_hallazgos")
+                    .select("*")
+                    .eq("contrato_id", contrato_id)
+                    .eq("fingerprint", fp)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            prev_rows = supabase_execute(_qp) or []
+            prev = prev_rows[0] if prev_rows else None
+        except Exception:
+            prev = None
+        row = _sicoe_hallazgo_row_from_analisis(contrato_id, canon, prev)
+        row["creado_en"] = (prev or {}).get("creado_en") or now
+        try:
+            def _up(r=row):
+                return (
+                    supabase.table("so_auditoria_hallazgos")
+                    .upsert(r, on_conflict="contrato_id,fingerprint")
+                    .execute()
+                    .data
+                )
+            supabase_execute(_up)
+            out.append(canon)
+        except Exception as exc:
+            _log_api.warning("upsert hallazgo dibujo: %s", exc)
+    return out
+
+
+def _sicoe_nodo_contenedor_list(contrato_id: int) -> list:
+    try:
+        def _q():
+            return (
+                supabase.table("so_nodos_contenedor")
+                .select("id, contrato_id, coord_lat, coord_lng, label")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        return supabase_execute(_q) or []
+    except Exception as exc:
+        _log_api.warning("list nodos contenedor: %s", exc)
+        return []
+
+
+def _sicoe_nodo_contenedor_crear(contrato_id: int, lat: float, lng: float, label=None) -> Optional[dict]:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "contrato_id": contrato_id,
+        "coord_lat": lat,
+        "coord_lng": lng,
+        "label": label,
+        "creado_en": now,
+        "actualizado_en": now,
+    }
+    try:
+        def _ins():
+            return supabase.table("so_nodos_contenedor").insert(payload).execute().data
+        rows = supabase_execute(_ins) or []
+        return rows[0] if rows else None
+    except Exception as exc:
+        _log_api.warning("crear nodo contenedor: %s", exc)
+        return None
+
+
+def _sicoe_reporte_set_nodo_contenedor(contrato_id: int, reporte_id: int, contenedor_id) -> None:
+    try:
+        def _u():
+            return (
+                supabase.table("so_reportes")
+                .update({"nodo_contenedor_id": contenedor_id, "updated_at": "now()"})
+                .eq("id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        supabase_execute(_u)
+    except Exception as exc:
+        # Columna puede no existir aún
+        _log_api.warning("set nodo_contenedor_id: %s", exc)
+
+
+def _sicoe_alojar_nodo_contenedor(contrato_id: int, reporte_id: int, feat: dict) -> dict:
+    """
+    Si el dibujo es nodo, busca contenedor ≤ radio o crea uno nuevo.
+    Retorna { alojado, creado, nodo_contenedor_id, mensaje, centro }.
+    """
+    from sicoe_dibujo_auditoria import (
+        centro_desde_feature,
+        dibujo_tipo_desde_feature,
+        elegir_contenedor_cercano,
+        mensaje_nodo_alojado,
+    )
+
+    if dibujo_tipo_desde_feature(feat) != "nodo":
+        return {"alojado": False, "creado": False, "nodo_contenedor_id": None, "mensaje": None}
+    centro = centro_desde_feature(feat)
+    if not centro:
+        return {"alojado": False, "creado": False, "nodo_contenedor_id": None, "mensaje": None}
+
+    radio = _sicoe_radio_nodo_contrato(contrato_id)
+    existentes = _sicoe_nodo_contenedor_list(contrato_id)
+    hit = elegir_contenedor_cercano(centro, existentes, radio_m=radio)
+    if hit:
+        _sicoe_reporte_set_nodo_contenedor(contrato_id, reporte_id, hit.get("id"))
+        # Buscar un reporte ya alojado para el mensaje
+        num_otro = None
+        try:
+            def _qo():
+                return (
+                    supabase.table("so_reportes")
+                    .select("id, numero_reporte")
+                    .eq("contrato_id", contrato_id)
+                    .eq("nodo_contenedor_id", hit.get("id"))
+                    .neq("id", reporte_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            otros = supabase_execute(_qo) or []
+            if otros:
+                num_otro = otros[0].get("numero_reporte")
+        except Exception:
+            pass
+        return {
+            "alojado": True,
+            "creado": False,
+            "nodo_contenedor_id": hit.get("id"),
+            "mensaje": mensaje_nodo_alojado(num_otro),
+            "centro": centro,
+            "radio_m": radio,
+        }
+
+    nuevo = _sicoe_nodo_contenedor_crear(
+        contrato_id, float(centro["lat"]), float(centro["lng"]), label=f"R{reporte_id}"
+    )
+    if nuevo:
+        _sicoe_reporte_set_nodo_contenedor(contrato_id, reporte_id, nuevo.get("id"))
+        return {
+            "alojado": False,
+            "creado": True,
+            "nodo_contenedor_id": nuevo.get("id"),
+            "mensaje": None,
+            "centro": centro,
+            "radio_m": radio,
+        }
+    return {"alojado": False, "creado": False, "nodo_contenedor_id": None, "mensaje": None, "centro": centro}
+
+
+def _sicoe_items_compartidos(regs_a: list, regs_b: list) -> list:
+    sa = {str(r.get("item_numero") or "").strip() for r in (regs_a or []) if str(r.get("item_numero") or "").strip()}
+    sb = {str(r.get("item_numero") or "").strip() for r in (regs_b or []) if str(r.get("item_numero") or "").strip()}
+    return sorted(sa & sb)
+
+
+def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, current_user=None) -> list:
+    """
+    Genera y persiste hallazgos alimentados por dibujos:
+    - traslapo en nodo contenedor (mismo ítem)
+    - traslapo geométrico línea/polígono (mismo ítem)
+    - cantidad > área del polígono dibujado
+    - abscisa / costado / PK inconsistente vs dibujo
+    """
+    from sicoe_dibujo_auditoria import (
+        centro_desde_feature,
+        dibujo_tipo_desde_feature,
+        hallazgos_cantidad_mayor_area_dibujo,
+        hallazgos_consistencia_dibujo_registro,
+        hallazgos_traslapo_dibujos_mismo_item,
+        hallazgos_traslapo_nodo_contenedor,
+    )
+
+    try:
+        def _qr():
+            return (
+                supabase.table("so_reportes")
+                .select(
+                    "id, numero_reporte, dibujo_geojson, perimetro_geojson, nodo_contenedor_id, creado_por"
+                )
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        reportes = supabase_execute(_qr) or []
+    except Exception:
+        try:
+            def _qr2():
+                return (
+                    supabase.table("so_reportes")
+                    .select("id, numero_reporte, dibujo_geojson, perimetro_geojson, creado_por")
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                    .data
+                )
+            reportes = supabase_execute(_qr2) or []
+        except Exception as exc:
+            _log_api.warning("auditoria dibujos list reportes: %s", exc)
+            return []
+
+    # Registros del contrato (mínimo)
+    try:
+        def _qg():
+            return (
+                supabase.table("so_registros")
+                .select(
+                    "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                    "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, unidad, "
+                    "coord_lat, coord_lng"
+                )
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        registros = supabase_execute(_qg) or []
+    except Exception as exc:
+        _log_api.warning("auditoria dibujos list regs: %s", exc)
+        return []
+
+    regs_by_rep = {}
+    for r in registros:
+        rid = r.get("reporte_id")
+        regs_by_rep.setdefault(rid, []).append(r)
+
+    # Features por reporte
+    feats = {}
+    for rep in reportes:
+        dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+        feat = _sicoe_feature_huella_desde_dibujo_reporte(dg, rep.get("id"))
+        if feat:
+            feats[rep.get("id")] = feat
+
+    hallazgos = []
+
+    # 1) Nodo contenedor: traslapo mismo ítem
+    by_cont = {}
+    for rep in reportes:
+        cid = rep.get("nodo_contenedor_id")
+        if cid is None:
+            continue
+        by_cont.setdefault(cid, []).append(rep)
+    for _cid, reps in by_cont.items():
+        if len(reps) < 2:
+            continue
+        hallazgos.extend(
+            hallazgos_traslapo_nodo_contenedor(reps, regs_by_rep)
+        )
+
+    # 2) Traslapo geométrico línea/polígono entre reportes con ítem en común
+    ids = [r.get("id") for r in reportes if r.get("id") in feats]
+    pares = []
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a_id, b_id = ids[i], ids[j]
+            fa, fb = feats[a_id], feats[b_id]
+            ta, tb = dibujo_tipo_desde_feature(fa), dibujo_tipo_desde_feature(fb)
+            if ta == "nodo" or tb == "nodo":
+                continue
+            if ta != tb:
+                continue
+            ra = next((x for x in reportes if x.get("id") == a_id), {})
+            rb = next((x for x in reportes if x.get("id") == b_id), {})
+            shared = _sicoe_items_compartidos(regs_by_rep.get(a_id) or [], regs_by_rep.get(b_id) or [])
+            for item in shared:
+                regs = [
+                    r for r in (regs_by_rep.get(a_id) or []) + (regs_by_rep.get(b_id) or [])
+                    if str(r.get("item_numero") or "").strip() == item
+                ]
+                pares.append((ra, fa, rb, fb, item, regs))
+    hallazgos.extend(hallazgos_traslapo_dibujos_mismo_item(pares))
+
+    # 3-4) Por reporte con dibujo: cantidad>área + consistencia abscisa/costado/PK
+    ejes = _sicoe_ejes_contrato(contrato_id)
+    tol_ubic = _sicoe_tolerancia_ubicacion_contrato(contrato_id)
+    target_ids = [reporte_id] if reporte_id else list(feats.keys())
+    for rid in target_ids:
+        if rid not in feats:
+            continue
+        rep = next((x for x in reportes if x.get("id") == rid), {"id": rid})
+        feat = feats[rid]
+        regs = regs_by_rep.get(rid) or []
+        hallazgos.extend(hallazgos_cantidad_mayor_area_dibujo(rep, feat, regs))
+        for reg in regs:
+            pk_poly = None
+            pk = reg.get("pk_id_id")
+            if pk is not None:
+                nodo = _sicoe_nodo_pk_get(contrato_id, pk)
+                if nodo and isinstance(nodo.get("poligono_geojson"), dict):
+                    pk_poly = nodo["poligono_geojson"]
+            hallazgos.extend(
+                hallazgos_consistencia_dibujo_registro(
+                    reg,
+                    feat,
+                    ejes=ejes,
+                    tolerancia_ubicacion_m=tol_ubic,
+                    pk_poligono=pk_poly,
+                )
+            )
+
+    return _sicoe_persistir_hallazgos_lista(contrato_id, hallazgos, current_user)
+
+
+def _sicoe_unificar_nodos_contenedor(contrato_id: int) -> dict:
+    """Unifica dibujos nodo encimados (≤ radio) en un solo contenedor."""
+    from sicoe_dibujo_auditoria import (
+        centro_desde_feature,
+        cluster_puntos_por_radio,
+        dibujo_tipo_desde_feature,
+    )
+
+    radio = _sicoe_radio_nodo_contrato(contrato_id)
+    try:
+        def _qr():
+            return (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte, dibujo_geojson, perimetro_geojson, nodo_contenedor_id")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        reportes = supabase_execute(_qr) or []
+    except Exception:
+        def _qr2():
+            return (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte, dibujo_geojson, perimetro_geojson")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        reportes = supabase_execute(_qr2) or []
+
+    puntos = []
+    for rep in reportes or []:
+        feat = _sicoe_feature_huella_desde_dibujo_reporte(
+            rep.get("dibujo_geojson") or rep.get("perimetro_geojson"),
+            rep.get("id"),
+        )
+        if not feat or dibujo_tipo_desde_feature(feat) != "nodo":
+            continue
+        c = centro_desde_feature(feat)
+        if not c:
+            continue
+        puntos.append({
+            "reporte_id": rep.get("id"),
+            "lat": c["lat"],
+            "lng": c["lng"],
+            "nodo_contenedor_id": rep.get("nodo_contenedor_id"),
+        })
+
+    clusters = cluster_puntos_por_radio(puntos, radio_m=radio)
+    unidos = 0
+    creados = 0
+    for group in clusters:
+        if len(group) < 1:
+            continue
+        # Preferir contenedor existente del grupo
+        cont_id = next((g.get("nodo_contenedor_id") for g in group if g.get("nodo_contenedor_id")), None)
+        if cont_id is None:
+            # Centroide
+            lat = sum(float(g["lat"]) for g in group) / len(group)
+            lng = sum(float(g["lng"]) for g in group) / len(group)
+            nuevo = _sicoe_nodo_contenedor_crear(contrato_id, lat, lng)
+            if not nuevo:
+                continue
+            cont_id = nuevo.get("id")
+            creados += 1
+        for g in group:
+            _sicoe_reporte_set_nodo_contenedor(contrato_id, g["reporte_id"], cont_id)
+            unidos += 1
+    return {"ok": True, "clusters": len(clusters), "reportes_unidos": unidos, "contenedores_creados": creados, "radio_m": radio}
+
+
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dibujo")
 def sicoe_guardar_dibujo_reporte(
     contrato_id: int,
@@ -26639,6 +27029,25 @@ def sicoe_guardar_dibujo_reporte(
     out = updated[0] if updated else {"id": reporte_id}
     out["registros_actualizados"] = n
     out["tiene_dibujo"] = True
+
+    # Nodo contenedor: alojar en entidad existente ≤ radio (configurable).
+    alojamiento = {"alojado": False, "creado": False, "nodo_contenedor_id": None, "mensaje": None}
+    try:
+        alojamiento = _sicoe_alojar_nodo_contenedor(contrato_id, reporte_id, feat) or alojamiento
+        if alojamiento.get("nodo_contenedor_id") is not None:
+            out["nodo_contenedor_id"] = alojamiento["nodo_contenedor_id"]
+    except Exception as exc:
+        _log_api.warning("alojar nodo contenedor: %s", exc)
+
+    # Auditoría alimentada por dibujos (no bloquea el guardado).
+    hallazgos_dibujo = []
+    try:
+        hallazgos_dibujo = _sicoe_auditoria_desde_dibujos(
+            contrato_id, reporte_id=reporte_id, current_user=current_user
+        ) or []
+    except Exception as exc:
+        _log_api.warning("auditoria desde dibujos: %s", exc)
+
     try:
         registrar_log(
             _audit_user_contrato(current_user, contrato_id),
@@ -26646,14 +27055,29 @@ def sicoe_guardar_dibujo_reporte(
             "SICOE",
             "reporte",
             str(reporte_id),
-            {"tipo": "dibujo_reporte", "features": len(feats or [feat]), "registros": n},
+            {
+                "tipo": "dibujo_reporte",
+                "features": len(feats or [feat]),
+                "registros": n,
+                "nodo_contenedor_id": alojamiento.get("nodo_contenedor_id"),
+                "alojado": bool(alojamiento.get("alojado")),
+                "hallazgos": len(hallazgos_dibujo),
+            },
             resultado="ok",
             categoria="auditoria",
             severidad="INFO",
         )
     except Exception:
         pass
-    return {"ok": True, "reporte": out, "registros_actualizados": n}
+    return {
+        "ok": True,
+        "reporte": out,
+        "registros_actualizados": n,
+        "nodo_contenedor": alojamiento,
+        "mensaje_cmd": alojamiento.get("mensaje"),
+        "hallazgos": hallazgos_dibujo,
+        "hallazgos_count": len(hallazgos_dibujo),
+    }
 
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dibujo")
@@ -26675,21 +27099,182 @@ def sicoe_borrar_dibujo_reporte(
                 .data
             )
 
-        _so_reportes_write_omit_missing(
-            _write,
-            {
-                "dibujo_geojson": None,
-                "dibujo_escena": None,
-                "dibujo_actualizado_en": None,
-                "dibujo_por": None,
-                "perimetro_geojson": None,
-                "updated_at": "now()",
-            },
-            operacion="borrar_dibujo",
-        )
+        # Conservar nodo_contenedor_id si otros reportes lo usan; si no, liberar.
+        cont_id = None
+        try:
+            def _qc():
+                return (
+                    supabase.table("so_reportes")
+                    .select("nodo_contenedor_id")
+                    .eq("id", reporte_id)
+                    .eq("contrato_id", contrato_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            crow = (supabase_execute(_qc) or [{}])[0]
+            cont_id = crow.get("nodo_contenedor_id")
+        except Exception:
+            cont_id = None
+
+        patch_del = {
+            "dibujo_geojson": None,
+            "dibujo_escena": None,
+            "dibujo_actualizado_en": None,
+            "dibujo_por": None,
+            "perimetro_geojson": None,
+            "nodo_contenedor_id": None,
+            "updated_at": "now()",
+        }
+        _so_reportes_write_omit_missing(_write, patch_del, operacion="borrar_dibujo")
+
+        # Si el contenedor aún aloja otros reportes, no borrarlo.
+        if cont_id is not None:
+            try:
+                def _qo():
+                    return (
+                        supabase.table("so_reportes")
+                        .select("id")
+                        .eq("contrato_id", contrato_id)
+                        .eq("nodo_contenedor_id", cont_id)
+                        .neq("id", reporte_id)
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+                queda = supabase_execute(_qo) or []
+                if not queda:
+                    def _dc():
+                        return (
+                            supabase.table("so_nodos_contenedor")
+                            .delete()
+                            .eq("id", cont_id)
+                            .eq("contrato_id", contrato_id)
+                            .execute()
+                            .data
+                        )
+                    try:
+                        supabase_execute(_dc)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                _log_api.warning("cleanup nodo contenedor: %s", exc)
     except Exception as exc:
         raise HTTPException(500, f"No se pudo borrar el dibujo: {exc}") from exc
+
+    try:
+        _sicoe_auditoria_desde_dibujos(contrato_id, current_user=current_user)
+    except Exception as exc:
+        _log_api.warning("re-audit tras borrar dibujo: %s", exc)
     return {"ok": True, "tiene_dibujo": False}
+
+
+
+
+@app.post("/sicoe-obra/{contrato_id}/nodos-contenedor/unificar")
+def sicoe_unificar_nodos_contenedor(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Unifica nodos dibujados encimados (≤ radio) en una sola entidad contenedora."""
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(403, "Se requiere permiso «Editar».")
+    out = _sicoe_unificar_nodos_contenedor(contrato_id)
+    try:
+        _sicoe_auditoria_desde_dibujos(contrato_id, current_user=current_user)
+    except Exception as exc:
+        _log_api.warning("audit tras unificar nodos: %s", exc)
+    return out
+
+
+@app.get("/sicoe-obra/{contrato_id}/nodos-contenedor/{contenedor_id}")
+def sicoe_nodo_contenedor_detalle(
+    contrato_id: int,
+    contenedor_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Panel: reportes alojados en el nodo (número, ítems, valor, registros)."""
+    try:
+        def _qc():
+            return (
+                supabase.table("so_nodos_contenedor")
+                .select("*")
+                .eq("id", contenedor_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        cont = (supabase_execute(_qc) or [None])[0]
+    except Exception as exc:
+        raise HTTPException(404, f"Contenedor no disponible: {exc}") from exc
+    if not cont:
+        raise HTTPException(404, "Nodo contenedor no encontrado.")
+    try:
+        def _qr():
+            return (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte, valor_total, dibujo_geojson, creado_por, estado")
+                .eq("contrato_id", contrato_id)
+                .eq("nodo_contenedor_id", contenedor_id)
+                .execute()
+                .data
+            )
+        reps = supabase_execute(_qr) or []
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+    out_reps = []
+    for rep in reps:
+        try:
+            def _qg(rid=rep["id"]):
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, item_numero, cantidad_total, unidad, "
+                        "vlr_unitario, vlr_total, descripcion"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .eq("reporte_id", rid)
+                    .execute()
+                    .data
+                )
+            regs = supabase_execute(_qg) or []
+        except Exception:
+            regs = []
+        items = sorted({str(r.get("item_numero") or "").strip() for r in regs if str(r.get("item_numero") or "").strip()})
+        out_reps.append({
+            **rep,
+            "tiene_dibujo": bool(rep.get("dibujo_geojson")),
+            "items": items,
+            "registros": regs,
+        })
+    return {"ok": True, "contenedor": cont, "reportes": out_reps}
+
+
+@app.get("/sicoe-obra/{contrato_id}/dibujos/resumen")
+def sicoe_dibujos_resumen(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Indicador: reportes con/sin dibujo (contrato y usuario actual)."""
+    from sicoe_dibujo_auditoria import resumen_dibujos_contrato
+
+    uid = _sicoe_uid_from_user(current_user)
+    try:
+        def _q():
+            return (
+                supabase.table("so_reportes")
+                .select("id, dibujo_geojson, perimetro_geojson, creado_por, dibujo_por")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+    for r in rows:
+        r["tiene_dibujo"] = bool(r.get("dibujo_geojson") or r.get("perimetro_geojson"))
+    return {"ok": True, **resumen_dibujos_contrato(rows, usuario_id=uid)}
 
 
 def _sicoe_items_de_reporte(contrato_id: int, reporte_id: int) -> List[str]:
@@ -29693,17 +30278,27 @@ def sicoe_sincronizar_huella_registro(
             dibujo = (dr[0].get("dibujo_geojson") or dr[0].get("perimetro_geojson")) if dr else None
             feat = _sicoe_feature_huella_desde_dibujo_reporte(dibujo, rid_rep)
             if feat:
+                ht = (feat.get("properties") or {}).get("huella_tipo") or "poligono"
                 _sicoe_persistir_huella_registro(
                     contrato_id,
                     registro_id,
-                    {"huella": feat, "precision": "precisa", "huella_tipo": "poligono"},
+                    {"huella": feat, "precision": "precisa", "huella_tipo": ht},
                 )
+                hallazgos_dibujo = []
+                try:
+                    hallazgos_dibujo = _sicoe_auditoria_desde_dibujos(
+                        contrato_id,
+                        reporte_id=rid_rep,
+                        current_user=current_user,
+                    ) or []
+                except Exception as exc:
+                    _log_api.warning("sync huella audit dibujo: %s", exc)
                 return {
                     "ok": True,
                     "omitido": False,
                     "origen": "reporte_dibujo",
                     "huella": feat,
-                    "hallazgos": [],
+                    "hallazgos": hallazgos_dibujo,
                 }
     except Exception as exc:
         _log_api.warning("sync huella desde dibujo reporte: %s", exc)

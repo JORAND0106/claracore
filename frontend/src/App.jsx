@@ -8681,6 +8681,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               ...patch,
               dibujo_geojson: patch.dibujo_geojson ?? prev.dibujo_geojson,
               dibujo_escena: patch.dibujo_escena ?? prev.dibujo_escena,
+              nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id ?? prev.nodo_contenedor_id,
               tiene_dibujo: true,
             }))
             try {
@@ -8688,6 +8689,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 id: reporte?.id,
                 dibujo_geojson: patch.dibujo_geojson,
                 tiene_dibujo: true,
+                nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id,
               })
             } catch { /* noop */ }
             void recargar({ forzarSinFiltros: true })
@@ -12789,6 +12791,13 @@ function ModuloSicoeObra({
               background: t.bgCard,
             }}
           >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700, color: t.text }}>
+              {(() => {
+                const con = reportesMostrados.filter((r) => reporteTieneDibujo(r)).length
+                const sin = reportesMostrados.length - con
+                return `Dibujo: ${con} con · ${sin} sin`
+              })()}
+            </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span
                 aria-hidden

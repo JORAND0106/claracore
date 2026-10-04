@@ -40,6 +40,7 @@ export default function SicoeDibujoReporteEditor({
 
   const [dibujoTipo, setDibujoTipo] = useState(tipoInicial)
   const [error, setError] = useState('')
+  const [cmdInfo, setCmdInfo] = useState('')
   const [guardando, setGuardando] = useState(false)
   const [referencias, setReferencias] = useState([])
   const [refSeleccionada, setRefSeleccionada] = useState(null)
@@ -165,7 +166,18 @@ export default function SicoeDibujoReporteEditor({
         },
         origenLngLat: originFijo,
       })
-      onGuardado?.(data)
+      const msg = data?.mensaje_cmd
+        || (data?.nodo_contenedor?.alojado
+          ? 'Ya existe un nodo en ese punto. Este reporte quedó alojado en esa entidad.'
+          : '')
+      if (msg) {
+        setCmdInfo(msg)
+        onGuardado?.(data)
+        // Dejar leer el CMD antes de cerrar
+        await new Promise((r) => setTimeout(r, 1600))
+      } else {
+        onGuardado?.(data)
+      }
       onClose?.()
     } catch (e) {
       setError(e?.message || 'No se pudo guardar el dibujo')
@@ -212,7 +224,7 @@ export default function SicoeDibujoReporteEditor({
         onSave={async () => { /* PNG no aplica en huellaMode */ }}
       />
 
-      {(error || guardando) && (
+      {(error || guardando || cmdInfo) && (
         <div
           style={{
             position: 'fixed',
@@ -220,9 +232,9 @@ export default function SicoeDibujoReporteEditor({
             right: 16,
             bottom: 16,
             zIndex: 14000,
-            maxWidth: 520,
+            maxWidth: 560,
             margin: '0 auto',
-            background: error ? '#dc2626' : t.primary,
+            background: error ? '#dc2626' : (cmdInfo ? '#0369a1' : t.primary),
             color: '#fff',
             borderRadius: 10,
             padding: '10px 14px',
@@ -231,7 +243,9 @@ export default function SicoeDibujoReporteEditor({
             boxShadow: '0 8px 24px rgba(15,23,42,0.35)',
           }}
         >
-          {guardando ? 'Guardando dibujo del reporte…' : error}
+          {error
+            || (guardando && !cmdInfo ? 'Guardando dibujo del reporte…' : null)
+            || (cmdInfo ? `CMD ${cmdInfo}` : null)}
         </div>
       )}
     </>
