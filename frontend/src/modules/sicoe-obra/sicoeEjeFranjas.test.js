@@ -10,10 +10,12 @@ import {
   distConSignoSobreEje,
   haversineM,
   normalizarCostadoDigitado,
-  pathSentidoEjeEsValido,
+  polylineSelfIntersects,
   proyectarSobreEje,
   proyeccionMasAllaDelEje,
   reconstruirEjesDesdeIndice,
+  repararBuclesLocales,
+  repararRemateExtremos,
 } from './sicoeEjeFranjas.js'
 
 /** Eje recto ~ norte-sur cerca de Bogotá, abscisas 0..100 cada 10 m. */
@@ -164,7 +166,47 @@ describe('sicoeEjeFranjas', () => {
     assert.equal(distConSignoSobreEje({ dist_m: 2, lado: 'derecha' }), -2)
   })
 
-  it('en extremo / más allá del abscisado no genera pico: cae a recta', () => {
+  it('cara larga curva (tipo 9+130→9+970) sigue el eje, no la cuerda', () => {
+    // Eje con gran curva: cuerda geográfica corta, abscisa larga.
+    const pts = []
+    for (let m = 9130; m <= 9970; m += 10) {
+      const t = (m - 9130) / 840
+      const ang = t * Math.PI // semicírculo → cuerda corta vs abs larga
+      const R = 840 / Math.PI
+      pts.push({
+        m,
+        lng: -74.5 + (R / 111320) * Math.sin(ang),
+        lat: 4.4 + (R / 110540) * (1 - Math.cos(ang)),
+      })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const br0 = bearingDeg(pts[0], pts[1])
+    const br1 = bearingDeg(pts[pts.length - 2], pts[pts.length - 1])
+    const inicio = destinationPoint(pts[1].lng, pts[1].lat, (br0 + 270) % 360, 6)
+    const fin = destinationPoint(pts[pts.length - 2].lng, pts[pts.length - 2].lat, (br1 + 270) % 360, 6)
+    const chord = haversineM(inicio, fin)
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio,
+      fin,
+      stepM: 10,
+      maxDistM: 40,
+    })
+    assert.ok(line)
+    assert.equal(line.along, true)
+    assert.ok(line.points.length > 10, `n=${line.points.length}`)
+    // La trayectoria debe ser mucho más larga que la cuerda (sigue la vía).
+    let path = 0
+    for (let i = 1; i < line.points.length; i += 1) {
+      path += haversineM(line.points[i - 1], line.points[i])
+    }
+    assert.ok(path > chord * 1.5, `path=${path.toFixed(1)} chord=${chord.toFixed(1)}`)
+    assert.equal(line.points[0].lng, inicio.lng)
+    assert.equal(line.points[line.points.length - 1].lng, fin.lng)
+    assert.equal(polylineSelfIntersects(line.points), false)
+  })
+
+  it('en extremo / más allá del abscisado sigue el eje y remata en el punto sin pico', () => {
     const pts = []
     for (let m = 9130; m <= 9180; m += 5) {
       pts.push({ m, lng: -74.4 + (m - 9130) * 0.000008, lat: 4.4 })
@@ -186,11 +228,20 @@ describe('sicoeEjeFranjas', () => {
       maxDistM: 40,
     })
     assert.ok(line)
-    assert.equal(line.points.length, 2)
-    assert.equal(line.along, false)
-    assert.equal(line.degraded, true)
     assert.equal(line.points[0].lng, leftMid.lng)
+    assert.equal(line.points[0].lat, leftMid.lat)
     assert.equal(line.points[line.points.length - 1].lng, leftBeyond.lng)
+    assert.equal(line.points[line.points.length - 1].lat, leftBeyond.lat)
+    // Debe densificar a lo largo (no recta que abandona el eje).
+    assert.ok(line.points.length >= 3, `n=${line.points.length}`)
+    assert.equal(line.along, true)
+    // Sin picos: ningún interior muy lejos de ambos extremos a la vez de forma desproporcionada
+    const chord = haversineM(leftMid, leftBeyond)
+    for (let i = 1; i < line.points.length - 1; i += 1) {
+      const d0 = haversineM(line.points[i], leftMid)
+      const d1 = haversineM(line.points[i], leftBeyond)
+      assert.ok(Math.min(d0, d1) < chord + 25, `spike at ${i}: d0=${d0} d1=${d1}`)
+    }
   })
 
   it('transversal cerca del extremo queda recta (sin densificar)', () => {
@@ -215,8 +266,7 @@ describe('sicoeEjeFranjas', () => {
     assert.equal(line.points.length, 2)
   })
 
-  it('curva cerrada con offset interno excesivo no auto-cruza: degrada a recta', () => {
-    // Arco ~90° con R≈19 m; offset 14 m interior tiende a caústica.
+  it('curva cerrada: sigue el eje y repara bucles locales sin abandonar la vía', () => {
     const R2 = 30 / (Math.PI / 2)
     const cx = -74.4
     const cy = 4.5
@@ -244,28 +294,38 @@ describe('sicoeEjeFranjas', () => {
       maxDistM: 40,
     })
     assert.ok(line)
-    // Debe ser válido: o bien along limpio, o recta degradada — nunca auto-cruzado.
-    if (line.along) {
-      assert.equal(pathSentidoEjeEsValido(line.points, {
-        chordM: haversineM(inner0, inner1),
-        absSpan: Math.abs(line.absFin - line.absIni),
-        distIni: line.distIni,
-        distFin: line.distFin,
-      }), true)
-    } else {
-      assert.equal(line.points.length, 2)
-    }
+    assert.equal(line.along, true)
+    assert.ok(line.points.length >= 3)
+    assert.equal(polylineSelfIntersects(line.points), false)
+    assert.equal(line.points[0].lng, inner0.lng)
+    assert.equal(line.points[line.points.length - 1].lng, inner1.lng)
   })
 
-  it('pathSentidoEjeEsValido rechaza picos evidentes', () => {
+  it('repararBuclesLocales y repararRemateExtremos corrigen solo la zona afectada', () => {
     const a = { lng: -74.1, lat: 4.1 }
-    const spike = { lng: -74.2, lat: 4.3 }
-    const b = { lng: -74.1001, lat: 4.1001 }
-    assert.equal(pathSentidoEjeEsValido([a, spike, b], {
-      chordM: haversineM(a, b),
-      absSpan: 5,
-      distIni: 5,
-      distFin: 5,
-    }), false)
+    const b = { lng: -74.11, lat: 4.11 }
+    // Cruce tipo lazo
+    const loop = [
+      a,
+      { lng: -74.105, lat: 4.102 },
+      { lng: -74.108, lat: 4.108 },
+      { lng: -74.102, lat: 4.108 },
+      { lng: -74.105, lat: 4.104 },
+      b,
+    ]
+    const fixed = repararBuclesLocales(loop)
+    assert.ok(fixed.length < loop.length)
+    assert.equal(polylineSelfIntersects(fixed), false)
+
+    const withHook = [
+      a,
+      { lng: -74.3, lat: 4.3 }, // pico lejano
+      { lng: -74.1005, lat: 4.1005 },
+      b,
+    ]
+    const remate = repararRemateExtremos(withHook, a, b, { maxHookM: 20, look: 3 })
+    assert.ok(!remate.some((p) => Math.abs(p.lng + 74.3) < 1e-9))
+    assert.equal(remate[0].lng, a.lng)
+    assert.equal(remate[remate.length - 1].lng, b.lng)
   })
 })
