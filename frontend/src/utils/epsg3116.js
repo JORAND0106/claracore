@@ -1,6 +1,6 @@
 /**
  * MAGNA-SIRGAS / Origen Nacional Bogotá — EPSG:3116 (Transverse Mercator)
- * → WGS84 geográficas (lon, lat).
+ * ↔ WGS84 geográficas (lon, lat).
  *
  * Misma parametrización que el backend (`topo_crs.py`) para Mapbox / PDF.
  */
@@ -71,6 +71,45 @@ export function gkBogotaToWgs84(este, norte) {
       Math.cos(phi1)
 
   return { lng: (lon * 180) / Math.PI, lat: (lat * 180) / Math.PI }
+}
+
+/**
+ * WGS84 (lon, lat) → EPSG:3116 (este, norte).
+ * @param {number} lng
+ * @param {number} lat
+ * @returns {{ este: number, norte: number } | null}
+ */
+export function wgs84ToGkBogota(lng, lat) {
+  const lon = Number(lng)
+  const phiDeg = Number(lat)
+  if (!Number.isFinite(lon) || !Number.isFinite(phiDeg)) return null
+  if (phiDeg < -90 || phiDeg > 90 || lon < -180 || lon > 180) return null
+
+  const phi = (phiDeg * Math.PI) / 180
+  const lam = (lon * Math.PI) / 180
+  const N = A / Math.sqrt(1 - E2 * Math.sin(phi) ** 2)
+  const T = Math.tan(phi) ** 2
+  const C = EP2 * Math.cos(phi) ** 2
+  const A1 = (lam - LON0) * Math.cos(phi)
+  const M = meridionalArc(phi)
+  const este =
+    FE +
+    K0 *
+      N *
+      (A1 +
+        ((1 - T + C) * A1 ** 3) / 6 +
+        ((5 - 18 * T + T ** 2 + 72 * C - 58 * EP2) * A1 ** 5) / 120)
+  const norte =
+    FN +
+    K0 *
+      (M -
+        M0 +
+        N *
+          Math.tan(phi) *
+          (A1 ** 2 / 2 +
+            ((5 - T + 9 * C + 4 * C ** 2) * A1 ** 4) / 24 +
+            ((61 - 58 * T + T ** 2 + 600 * C - 330 * EP2) * A1 ** 6) / 720))
+  return { este, norte }
 }
 
 /**

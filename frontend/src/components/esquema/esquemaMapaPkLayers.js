@@ -380,7 +380,9 @@ export function applyEsquemaPkSelectionStyle(map, selectedPk) {
  */
 export function fitEsquemaMapCamera(map, planoFc, ctx, contrato = {}) {
   if (!map) return
-  const bearing = ESQUEMA_MAPA_NORTH_BEARING
+  const bearing = Number.isFinite(Number(contrato?.bearing))
+    ? Number(contrato.bearing)
+    : ESQUEMA_MAPA_NORTH_BEARING
   try {
     if (ctx?.hasTramo) {
       const ini = ctx.tramoInicio
