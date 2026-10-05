@@ -299,19 +299,31 @@ export default function SicoeMapaHuellas({
           throw new Error('Falta la configuración del mapa (Mapbox). Contacte al administrador.')
         }
 
-        const [planoPack, huellasRes] = await Promise.all([
-          getContratoPlanoGeojson(API_BASE, contratoId, token).catch((e) => {
-            throw new Error(mensajeErrorMapa(e))
-          }),
-          fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`, {
-            headers: { Authorization: `Bearer ${token}` },
-          })
-            .then((r) => (r.ok ? r.json() : EMPTY_FC))
-            .catch(() => EMPTY_FC),
-        ])
+        // Plano primero (no bloquear por /huellas, que en contratos grandes puede tardar mucho).
+        const planoPack = await getContratoPlanoGeojson(API_BASE, contratoId, token).catch((e) => {
+          throw new Error(mensajeErrorMapa(e))
+        })
         if (cancelled) return
 
         const plano = planoPack?.plano_geojson || EMPTY_FC
+        let huellasRes = EMPTY_FC
+        try {
+          const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+          const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null
+          const r = await fetch(
+            `${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: ctrl?.signal,
+            },
+          )
+          if (timer) clearTimeout(timer)
+          huellasRes = r.ok ? await r.json() : EMPTY_FC
+        } catch {
+          huellasRes = EMPTY_FC
+        }
+        if (cancelled) return
+
         const allHuellas = Array.isArray(huellasRes?.features) ? huellasRes.features : []
         allHuellasRef.current = allHuellas
         const regKey = filterRegKeyRef.current
