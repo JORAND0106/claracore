@@ -10065,7 +10065,7 @@ function ModuloSicoeObra({
     } finally {
       sicoeRestaurandoVistaRef.current = false
     }
-  }, [aplicarSicoeFiltroBundle])
+  }, [aplicarSicoeFiltroBundle, setReportesConPlanillaTopo])
 
   const guardarSicoeVistaTrasBusqueda = useCallback((f, repResult, analResult) => {
     if (!contrato_id || sicoeRestaurandoVistaRef.current || efectivoOfflineRef.current) return
