@@ -40,6 +40,7 @@ import {
   incongruenciaNumeroEntrePares,
   ladoHasImpuesto,
   pickGanadora,
+  aplicarRendimientoEnCotizaciones,
   resolveProveedorFieldsForSave,
   sanitizeRendimientoInput,
   setGanadoraPar,
@@ -1626,7 +1627,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
   const buildFormData = (forceUpdateId, formOverride = null) => {
     const src = formOverride || form
-    const pares = src.cotizaciones_detalle || []
+    const pares = aplicarRendimientoEnCotizaciones(
+      src.cotizaciones_detalle || [],
+      src.rendimiento,
+    )
     const gan = pickGanadora(pares)
     const costo = gan?.valor != null && gan.valor !== '' ? gan.valor : src.costo_base
     const impuestoSrc = impuestoGanadoraDesdePares(pares)
@@ -1637,7 +1641,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fd.append('descripcion', toUpperTrim(src.descripcion))
     fd.append('unidad', src.unidad || 'UND')
     fd.append('costo_base', String(costo))
-    if (src.rendimiento !== '') fd.append('rendimiento', sanitizeRendimientoInput(src.rendimiento))
+    const rendimiento = sanitizeRendimientoInput(src.rendimiento ?? '')
+    if (rendimiento !== '') fd.append('rendimiento', rendimiento)
     fd.append('tributos', JSON.stringify(tributosPayloadDesdeForm(impuestoSrc)))
     // Proveedor del insumo = siempre el de la cotización ganadora (nunca el de una oferta adicional).
     const prov = resolveProveedorFieldsForSave(pares, src)
@@ -2406,7 +2411,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <SheetSectionTitle t={t} ui={ui}>2. Insumo (captura de cotización)</SheetSectionTitle>
             {((form.cotizaciones_detalle || []).length > 0) && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-                Descripción, unidad y rendimiento quedan fijos según la primera cotización enviada. Cambie de proveedor y valores, luego pulse <strong>Enviar</strong>.
+                Descripción y unidad quedan fijas según la primera cotización enviada. El rendimiento y la cantidad negociada se pueden editar: el rendimiento queda igual en todas las cotizaciones del insumo.
               </div>
             )}
             <div style={{
@@ -2488,10 +2493,20 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         style={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
                         inputMode="decimal"
                         value={form.rendimiento}
-                        readOnly={(form.cotizaciones_detalle || []).length > 0}
                         placeholder="0"
-                        title="Solo numérico"
-                        onChange={(e) => setForm({ ...form, rendimiento: sanitizeRendimientoInput(e.target.value) })}
+                        title="Solo numérico. Es del insumo: al guardarlo se actualiza en todas sus cotizaciones."
+                        data-testid="insumo-rendimiento"
+                        onChange={(e) => {
+                          const rendimiento = sanitizeRendimientoInput(e.target.value)
+                          setForm((f) => ({
+                            ...f,
+                            rendimiento,
+                            cotizaciones_detalle: aplicarRendimientoEnCotizaciones(
+                              f.cotizaciones_detalle,
+                              rendimiento,
+                            ),
+                          }))
+                        }}
                       />
                     </td>
                     <td style={{ ...td, overflow: 'visible', minWidth: 200 }}>
@@ -2517,7 +2532,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         step="any"
                         value={form.cantidad_negociada}
                         placeholder="0"
-                        title="Editable en cualquier momento; el valor negociado se recalcula con la ganadora vigente"
+                        title="Editable en cualquier momento; el valor negociado se recalcula con el precio de la cotización ganadora vigente"
+                        data-testid="insumo-cantidad-negociada"
                         onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })}
                       />
                     </td>
