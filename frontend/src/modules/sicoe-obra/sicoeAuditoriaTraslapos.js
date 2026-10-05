@@ -345,7 +345,8 @@ export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SIC
       } else {
         const gap = s.lo - prev.hi
         if (gap >= tol) {
-          hallazgos.push(hallazgo('vacio', gap, prev.hi, s.lo, candidato, [prev.reg, s.reg], 0))
+          // Solo vecinos del hueco (no el candidato): evita N filas del mismo vacío.
+          hallazgos.push(hallazgo('vacio', gap, prev.hi, s.lo, prev.reg, [s.reg], 0))
         }
         covered.push({ lo: s.lo, hi: s.hi, reg: s.reg })
       }
@@ -422,21 +423,32 @@ function absKey(v) {
 /** Huella estable (misma semántica que backend fingerprint_hallazgo). */
 export function fingerprintHallazgo(h) {
   const tipo = txt(h?.tipo).toLowerCase()
-  const ids = [
-    ...new Set(
-      (h?.registros_involucrados || [])
-        .filter((r) => r && r.id != null && String(r.id).trim() !== '')
-        .map((r) => String(r.id)),
-    ),
-  ].sort()
-  const raw = [
-    tipo,
-    ids.join(','),
-    absKey(h?.abs_desde),
-    absKey(h?.abs_hasta),
-    txt(h?.item_numero),
-    txt(h?.pk_id_id),
-  ].join('|')
+  let raw
+  if (tipo === 'vacio') {
+    raw = [
+      tipo,
+      absKey(h?.abs_desde),
+      absKey(h?.abs_hasta),
+      txt(h?.item_numero),
+      txt(h?.costado || h?.tramo),
+    ].join('|')
+  } else {
+    const ids = [
+      ...new Set(
+        (h?.registros_involucrados || [])
+          .filter((r) => r && r.id != null && String(r.id).trim() !== '')
+          .map((r) => String(r.id)),
+      ),
+    ].sort()
+    raw = [
+      tipo,
+      ids.join(','),
+      absKey(h?.abs_desde),
+      absKey(h?.abs_hasta),
+      txt(h?.item_numero),
+      txt(h?.pk_id_id),
+    ].join('|')
+  }
   // Simple FNV-1a 32-bit + hex stretch (browser-safe; backend usa sha256[:40])
   let hash = 2166136261
   for (let i = 0; i < raw.length; i += 1) {
@@ -444,7 +456,57 @@ export function fingerprintHallazgo(h) {
     hash = Math.imul(hash, 16777619)
   }
   const hex = (hash >>> 0).toString(16).padStart(8, '0')
-  return `${hex}${ids.length}${tipo.slice(0, 2)}${absKey(h?.abs_desde)}`.slice(0, 40)
+  return `${hex}${tipo.slice(0, 2)}${absKey(h?.abs_desde)}`.slice(0, 40)
+}
+
+/**
+ * Deduplica hallazgos en cliente (p. ej. vacíos repetidos en datos guardados).
+ * Misma clave semántica que fingerprint backend para vacíos.
+ */
+export function dedupeHallazgosAmbiente(filas) {
+  const map = new Map()
+  for (const h of filas || []) {
+    if (!h) continue
+    const tipo = txt(h.tipo).toLowerCase()
+    let key
+    if (tipo === 'vacio') {
+      key = [
+        'vacio',
+        absKey(h.abs_desde),
+        absKey(h.abs_hasta),
+        txt(h.item_numero),
+        txt(h.costado || h.tramo),
+      ].join('|')
+    } else if (h.fingerprint) {
+      key = `fp:${h.fingerprint}`
+    } else {
+      key = `id:${h.id != null ? h.id : `${tipo}|${txt(h.item_numero)}|${absKey(h.abs_desde)}`}`
+    }
+    const prev = map.get(key)
+    if (!prev) {
+      map.set(key, { ...h })
+      continue
+    }
+    // Conserva mayor valor; une involucrados únicos.
+    if (Number(h.valor_en_juego || 0) > Number(prev.valor_en_juego || 0)) {
+      prev.valor_en_juego = h.valor_en_juego
+      if (h.texto) prev.texto = h.texto
+    }
+    const seen = new Set(
+      (prev.registros_involucrados || [])
+        .map((r) => (r?.id != null ? String(r.id) : ''))
+        .filter(Boolean),
+    )
+    const merged = [...(prev.registros_involucrados || [])]
+    for (const r of h.registros_involucrados || []) {
+      const id = r?.id != null ? String(r.id) : ''
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      merged.push(r)
+    }
+    prev.registros_involucrados = merged
+  }
+  return [...map.values()]
 }
 
 export function resumenAmbienteDesdeFilas(filas) {

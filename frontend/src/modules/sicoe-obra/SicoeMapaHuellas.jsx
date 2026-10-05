@@ -299,19 +299,38 @@ export default function SicoeMapaHuellas({
           throw new Error('Falta la configuración del mapa (Mapbox). Contacte al administrador.')
         }
 
-        const [planoPack, huellasRes] = await Promise.all([
-          getContratoPlanoGeojson(API_BASE, contratoId, token).catch((e) => {
-            throw new Error(mensajeErrorMapa(e))
-          }),
-          fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`, {
-            headers: { Authorization: `Bearer ${token}` },
-          })
-            .then((r) => (r.ok ? r.json() : EMPTY_FC))
-            .catch(() => EMPTY_FC),
-        ])
+        // Plano primero (timeout: un GeoJSON grande no debe dejar el spinner infinito).
+        // Si falla/tarda, se intenta abrir solo con eje/huellas.
+        let planoPack = null
+        let planoErrMsg = ''
+        try {
+          planoPack = await getContratoPlanoGeojson(API_BASE, contratoId, token, { timeoutMs: 20000 })
+        } catch (e) {
+          if (cancelled) return
+          planoPack = null
+          planoErrMsg = mensajeErrorMapa(e)
+        }
         if (cancelled) return
 
         const plano = planoPack?.plano_geojson || EMPTY_FC
+        let huellasRes = EMPTY_FC
+        try {
+          const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+          const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null
+          const r = await fetch(
+            `${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: ctrl?.signal,
+            },
+          )
+          if (timer) clearTimeout(timer)
+          huellasRes = r.ok ? await r.json() : EMPTY_FC
+        } catch {
+          huellasRes = EMPTY_FC
+        }
+        if (cancelled) return
+
         const allHuellas = Array.isArray(huellasRes?.features) ? huellasRes.features : []
         allHuellasRef.current = allHuellas
         const regKey = filterRegKeyRef.current
@@ -335,7 +354,8 @@ export default function SicoeMapaHuellas({
         })
         if (!planoBoundsRef.current) {
           throw new Error(
-            'No se pudo abrir el plano de obra: el contrato no tiene GeoJSON de proyecto ni eje cargado.',
+            planoErrMsg
+              || 'No se pudo abrir el plano de obra: el contrato no tiene GeoJSON de proyecto ni eje cargado.',
           )
         }
 
@@ -355,8 +375,10 @@ export default function SicoeMapaHuellas({
         map.addControl(new mapboxgl.NavigationControl(), 'top-right')
         addMapboxGeolocateControl(map, 'top-right', { autoTrigger: false })
 
+        let loadDone = false
         const onLoad = () => {
-          if (cancelled) return
+          if (cancelled || loadDone) return
+          loadDone = true
           map.addSource('plano-base', { type: 'geojson', data: plano })
           map.addLayer({
             id: 'plano-base-fill',
@@ -515,6 +537,16 @@ export default function SicoeMapaHuellas({
         if (map.loaded()) onLoad()
         else map.once('load', onLoad)
 
+        // Si Mapbox no dispara 'load' (WebGL / contenedor 0), no dejar spinner eterno.
+        setTimeout(() => {
+          if (cancelled || loadDone) return
+          if (map.loaded()) {
+            onLoad()
+            return
+          }
+          setError('El mapa no terminó de inicializar. Use Reintentar.')
+        }, 15000)
+
         map.once('error', (ev) => {
           if (cancelled) return
           setError(mensajeErrorMapa(ev?.error || 'Error del mapa'))
@@ -523,6 +555,7 @@ export default function SicoeMapaHuellas({
         if (!cancelled) setError(mensajeErrorMapa(e))
       }
     }
+
     void boot()
     return () => {
       cancelled = true

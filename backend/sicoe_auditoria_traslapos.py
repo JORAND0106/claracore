@@ -316,9 +316,7 @@ def _snapshot_involucrado(r: dict) -> dict:
         "grafico_url": r.get("grafico_url"),
         "coord_lat": r.get("coord_lat"),
         "coord_lng": r.get("coord_lng"),
-        "huella_geojson": r.get("huella_geojson"),
-        "dibujo_geojson": r.get("dibujo_geojson"),
-        "perimetro_geojson": r.get("perimetro_geojson"),
+        # No embeber GeoJSON: tumba el upsert de sync en contratos con muchos dibujos.
     }
 
 
@@ -461,15 +459,16 @@ def analizar_candidato_contra_pares(
             else:
                 gap = s["lo"] - phi
                 if gap >= tol:
-                    # vacío entre phi y s["lo"]; involucra el seg anterior y el actual
+                    # Solo los vecinos del hueco (no el candidato analizado):
+                    # si se incluye al candidato, el mismo vacío se repite N veces.
                     hallazgos.append(
                         _hallazgo(
                             "vacio",
                             gap,
                             phi,
                             s["lo"],
-                            candidato,
-                            [preg, s["reg"]],
+                            preg,
+                            [s["reg"]],
                             0.0,
                         )
                     )
@@ -572,25 +571,41 @@ def _abs_key(v: Any) -> str:
 
 
 def fingerprint_hallazgo(h: dict) -> str:
-    """Huella estable para persistir / sincronizar hallazgos del contrato."""
+    """Huella estable para persistir / sincronizar hallazgos del contrato.
+
+    Vacíos: se deduplican por geometría del hueco + ítem (+ costado), no por la
+    combinación de registros vecinos vista desde cada candidato (evita N filas
+    para el mismo K_a–K_b).
+    """
     tipo = _txt(h.get("tipo")).casefold()
-    ids = sorted(
-        {
-            str(r.get("id"))
-            for r in (h.get("registros_involucrados") or [])
-            if r is not None and r.get("id") is not None and str(r.get("id")).strip() != ""
-        }
-    )
-    raw = "|".join(
-        [
-            tipo,
-            ",".join(ids),
-            _abs_key(h.get("abs_desde")),
-            _abs_key(h.get("abs_hasta")),
-            _txt(h.get("item_numero")),
-            _txt(h.get("pk_id_id")),
-        ]
-    )
+    if tipo == "vacio":
+        raw = "|".join(
+            [
+                tipo,
+                _abs_key(h.get("abs_desde")),
+                _abs_key(h.get("abs_hasta")),
+                _txt(h.get("item_numero")),
+                _txt(h.get("costado") or h.get("tramo")),
+            ]
+        )
+    else:
+        ids = sorted(
+            {
+                str(r.get("id"))
+                for r in (h.get("registros_involucrados") or [])
+                if r is not None and r.get("id") is not None and str(r.get("id")).strip() != ""
+            }
+        )
+        raw = "|".join(
+            [
+                tipo,
+                ",".join(ids),
+                _abs_key(h.get("abs_desde")),
+                _abs_key(h.get("abs_hasta")),
+                _txt(h.get("item_numero")),
+                _txt(h.get("pk_id_id")),
+            ]
+        )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 

@@ -8,6 +8,7 @@ import {
   fmtValorCop,
   justificacionesParaTipo,
   coloresMapaDesdeHallazgos,
+  dedupeHallazgosAmbiente,
   esTraslapoMismoReporte,
   resumenAmbienteDesdeFilas,
   usuarioVeAuditoriaTraslapos,
@@ -156,12 +157,20 @@ export default function SicoeAmbienteAuditoria({
   const [hallazgosActualizadoEn, setHallazgosActualizadoEn] = useState(null)
   /** true si la UI muestra datos de GET porque el sync falló. */
   const [mostrandoGuardados, setMostrandoGuardados] = useState(false)
+  /**
+   * Ámbito de filtros del módulo (Acta RPO / capítulo / ítem / …).
+   * null = sin filtro de módulo (muestra todo).
+   * Set vacío = filtros activos pero 0 registros.
+   */
+  const [ambitoRegIds, setAmbitoRegIds] = useState(null)
 
   const aplicarDatos = useCallback((data, { desdeSync = false } = {}) => {
-    const list = (Array.isArray(data?.hallazgos) ? data.hallazgos : [])
-      .filter((h) => !esTraslapoMismoReporte(h))
+    const list = dedupeHallazgosAmbiente(
+      (Array.isArray(data?.hallazgos) ? data.hallazgos : [])
+        .filter((h) => !esTraslapoMismoReporte(h)),
+    )
     setHallazgos(list)
-    setResumen(data?.resumen || resumenAmbienteDesdeFilas(list))
+    setResumen(resumenAmbienteDesdeFilas(list))
     const act =
       data?.sincronizado_en
       || data?.actualizado_en
@@ -262,11 +271,52 @@ export default function SicoeAmbienteAuditoria({
     void cargar({ sincronizar: true })
   }, [contratoId, refreshNonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtrados = useMemo(() => {
-    let list = hallazgos.filter((h) => {
+  // Filtros del módulo (Acta RPO, capítulo, ítem, …) → IDs de registro del ámbito.
+  useEffect(() => {
+    let cancelled = false
+    const loadAmbito = async () => {
+      if (!busquedaActiva || typeof buildFiltrosParams !== 'function') {
+        if (!cancelled) setAmbitoRegIds(null)
+        return
+      }
+      try {
+        const params = buildFiltrosParams()
+        if (!params || ![...params.keys()].length) {
+          if (!cancelled) setAmbitoRegIds(new Set())
+          return
+        }
+        const res = await fetch(
+          `${API_URL}/sicoe-obra/${contratoId}/cantidades-por-item?${params}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data?.detail || `Error ${res.status}`)
+        const ids = new Set(
+          (Array.isArray(data?.registros) ? data.registros : [])
+            .map((r) => (r?.id != null ? String(r.id) : ''))
+            .filter(Boolean),
+        )
+        if (!cancelled) setAmbitoRegIds(ids)
+      } catch {
+        // Si falla el ámbito, no bloquear: mostrar hallazgos sin filtro de módulo.
+        if (!cancelled) setAmbitoRegIds(null)
+      }
+    }
+    void loadAmbito()
+    return () => { cancelled = true }
+  }, [API_URL, busquedaActiva, buildFiltrosParams, contratoId, filtrosVersion, token])
+
+  const filtradosAmbito = useMemo(() => {
+    return hallazgos.filter((h) => {
       const estado = txt(h?.estado).toLowerCase()
       if (!mostrarCorregidos && estado === 'corregido') return false
-      if (!matchResumenFiltro(h, resumenFiltro)) return false
+      // Filtros del módulo: el hallazgo entra si algún involucrado está en el ámbito.
+      if (ambitoRegIds != null) {
+        if (!ambitoRegIds.size) return false
+        const inv = Array.isArray(h?.registros_involucrados) ? h.registros_involucrados : []
+        const hit = inv.some((r) => r?.id != null && ambitoRegIds.has(String(r.id)))
+        if (!hit) return false
+      }
       for (const [col, raw] of Object.entries(colFiltros || {})) {
         const q = txt(raw).toLowerCase()
         if (!q) continue
@@ -279,6 +329,16 @@ export default function SicoeAmbienteAuditoria({
       }
       return true
     })
+  }, [hallazgos, colFiltros, mostrarCorregidos, ambitoRegIds])
+
+  // Contadores = hallazgos del ámbito (filtros de módulo), sin el click de tarjeta.
+  const resumenVista = useMemo(
+    () => resumenAmbienteDesdeFilas(filtradosAmbito),
+    [filtradosAmbito],
+  )
+
+  const filtrados = useMemo(() => {
+    let list = filtradosAmbito.filter((h) => matchResumenFiltro(h, resumenFiltro))
     const { col, dir } = orden || {}
     list = [...list].sort((a, b) => {
       let va
@@ -302,7 +362,7 @@ export default function SicoeAmbienteAuditoria({
       return compareVal(va, vb, dir)
     })
     return list
-  }, [hallazgos, resumenFiltro, colFiltros, orden, mostrarCorregidos])
+  }, [filtradosAmbito, resumenFiltro, orden])
 
   const grupos = useMemo(() => {
     if (!agruparPor) return null
@@ -359,15 +419,18 @@ export default function SicoeAmbienteAuditoria({
     [filterItemKey],
   )
 
-  /** Solo el hallazgo seleccionado en la tabla (vacío = solo eje/abscisado). */
+  /** Solo el hallazgo seleccionado; si no, el ámbito de filtros; si no, ninguna huella (solo eje). */
   const filterRegistroIds = useMemo(() => {
-    if (!seleccionado) return []
-    const ids = []
-    for (const r of seleccionado?.registros_involucrados || []) {
-      if (r?.id != null) ids.push(r.id)
+    if (seleccionado) {
+      const ids = []
+      for (const r of seleccionado?.registros_involucrados || []) {
+        if (r?.id != null) ids.push(r.id)
+      }
+      return [...new Set(ids.map(String))]
     }
-    return [...new Set(ids.map(String))]
-  }, [seleccionado])
+    if (ambitoRegIds != null) return [...ambitoRegIds]
+    return []
+  }, [seleccionado, ambitoRegIds])
 
   const toggleOrden = (col) => {
     setOrden((prev) => {
@@ -750,7 +813,7 @@ export default function SicoeAmbienteAuditoria({
         }}
       >
         {RESUMEN_KEYS.map(({ key, label, color }) => {
-          const block = cargaOk ? (resumen?.[key] || { cantidad: 0, valor: 0 }) : null
+          const block = cargaOk ? (resumenVista?.[key] || { cantidad: 0, valor: 0 }) : null
           const active = resumenFiltro === key
           return (
             <button
@@ -1059,7 +1122,7 @@ export default function SicoeAmbienteAuditoria({
                   ].filter((id) => id != null).map(String),
                 ),
               ],
-              filterItemNumeros: null,
+              filterItemNumeros: filterItemNumeros.length ? filterItemNumeros : null,
               filterRegistroIds,
             })
           ) : (

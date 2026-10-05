@@ -4,6 +4,7 @@ import {
   analizarCandidatoContraPares,
   analizarVarios,
   coloresMapaDesdeHallazgos,
+  dedupeHallazgosAmbiente,
   esTraslapoMismoReporte,
   fmtAbscisaK,
   justificacionesParaTipo,
@@ -185,6 +186,35 @@ describe('sicoeAuditoriaTraslapos', () => {
     assert.equal(res.inconsistencias.cantidad, 1)
     assert.equal(res.justificados.cantidad, 1)
     assert.equal(res.justificados.valor, 200)
+  })
+
+  it('dedupeHallazgosAmbiente colapsa vacíos repetidos del mismo hueco', () => {
+    const list = dedupeHallazgosAmbiente([
+      {
+        id: 1, tipo: 'vacio', item_numero: '1.1.', abs_desde: 1265, abs_hasta: 10675,
+        medida_m: 9410, valor_en_juego: 0,
+        registros_involucrados: [{ id: 55 }, { id: 67 }, { id: 152 }],
+      },
+      {
+        id: 2, tipo: 'vacio', item_numero: '1.1.', abs_desde: 1265, abs_hasta: 10675,
+        medida_m: 9410, valor_en_juego: 0,
+        registros_involucrados: [{ id: 55 }, { id: 67 }],
+      },
+      {
+        id: 3, tipo: 'vacio', item_numero: '1.1.', abs_desde: 1265, abs_hasta: 10675,
+        medida_m: 9410, valor_en_juego: 0,
+        registros_involucrados: [{ id: 55 }, { id: 63 }, { id: 67 }],
+      },
+      {
+        id: 4, tipo: 'traslapo', item_numero: '1.1.', fingerprint: 'abc',
+        registros_involucrados: [{ id: 1 }, { id: 2 }],
+      },
+    ])
+    const vacios = list.filter((h) => h.tipo === 'vacio')
+    assert.equal(vacios.length, 1)
+    const ids = new Set(vacios[0].registros_involucrados.map((r) => r.id))
+    assert.deepEqual([...ids].sort((a, b) => a - b), [55, 63, 67, 152])
+    assert.equal(list.filter((h) => h.tipo === 'traslapo').length, 1)
   })
 
   it('colores mapa desde hallazgos (capa por PK / selección)', () => {

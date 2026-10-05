@@ -29401,7 +29401,7 @@ _SICOE_AUDITORIA_PEER_SELECT = (
     "cantidad_total, vlr_unitario, ancho, longitud, espesor, cantidad, "
     "es_varilla, diametro_varilla, peso_kg_m, unidad, "
     "coord_lat, coord_lng, coord_lat_fin, coord_lng_fin, "
-    "huella_geojson, huella_precision"
+    "huella_precision"
 )
 
 
@@ -30076,6 +30076,21 @@ def _sicoe_hallazgo_row_from_analisis(contrato_id: int, h: dict, prev: Optional[
     else:
         estado = "pendiente"
     pk = h.get("pk_id_id")
+    # Snapshots livianos: sin GeoJSON ni campos pesados (evita tumbar PostgREST/proxy).
+    inv = []
+    for r in (h.get("registros_involucrados") or []):
+        if not isinstance(r, dict):
+            continue
+        inv.append({
+            k: r.get(k)
+            for k in (
+                "id", "numero_registro", "reporte_id", "numero_reporte", "item_numero",
+                "item_descripcion", "tramo", "infraestructura", "costado", "pk_id_id",
+                "abs_inicio", "abs_final", "cantidad_total", "vlr_unitario", "valor",
+                "unidad", "usuario_nombre", "fecha", "nombre_reporte",
+            )
+            if r.get(k) is not None
+        })
     return {
         "contrato_id": contrato_id,
         "fingerprint": h.get("fingerprint"),
@@ -30091,7 +30106,7 @@ def _sicoe_hallazgo_row_from_analisis(contrato_id: int, h: dict, prev: Optional[
         "abs_hasta": h.get("abs_hasta"),
         "pk_id_id": None if pk is None else str(pk),
         "valor_en_juego": float(h.get("valor_en_juego") or 0),
-        "registros_involucrados": h.get("registros_involucrados") or [],
+        "registros_involucrados": inv,
         "texto": h.get("texto") or None,
         "payload": {
             "modo": "contrato",
@@ -30137,6 +30152,16 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
     )
     from datetime import datetime, timezone
 
+    # Tipos persistibles (CHECK de so_auditoria_hallazgos + migración so_huellas_nodo_poligono).
+    _TIPOS_OK = {
+        "traslapo",
+        "vacio",
+        "no_auditable",
+        "ubicacion_inconsistente",
+        "costado_inconsistente",
+        "cantidad_mayor_area",
+    }
+
     if not usuario_ve_auditoria_traslapos(current_user):
         return {"ok": True, "oculto_por_rol": True, "hallazgos": [], "resumen": {}}
 
@@ -30151,17 +30176,26 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
     vivos = {
         h["fingerprint"]: h
         for h in (analisis.get("hallazgos") or [])
-        if h.get("fingerprint") and not es_traslapo_mismo_reporte(h)
+        if h.get("fingerprint")
+        and h.get("tipo") in _TIPOS_OK
+        and not es_traslapo_mismo_reporte(h)
     }
 
-    # Unificar nodos encimados + hallazgos alimentados por dibujos (siempre, liviano).
+    _TIPOS_DIBUJO = {
+        "ubicacion_inconsistente",
+        "costado_inconsistente",
+        "cantidad_mayor_area",
+    }
+
+    # Unificar nodos + hallazgos de dibujos (persist=False; upsert por lotes más abajo).
+    # Snapshots sin GeoJSON: el upsert ya no tumba el proxy en contratos grandes.
     try:
         _sicoe_unificar_nodos_contenedor(contrato_id)
     except Exception as exc:
         _log_api.warning("unificar nodos en sync: %s", exc)
+
+    dibujos_ok = False
     try:
-        # persist=False: evita N upserts individuales (cada hallazgo = 2 roundtrips a Supabase).
-        # El sync hace un upsert por lotes más abajo.
         for h in (
             _sicoe_auditoria_desde_dibujos(
                 contrato_id,
@@ -30171,10 +30205,47 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
             or []
         ):
             fp = h.get("fingerprint")
-            if fp and fp not in vivos and not es_traslapo_mismo_reporte(h):
+            tipo = str(h.get("tipo") or "").strip().lower()
+            if (
+                fp
+                and tipo in _TIPOS_OK
+                and fp not in vivos
+                and not es_traslapo_mismo_reporte(h)
+            ):
                 vivos[fp] = h
+        dibujos_ok = True
     except Exception as exc:
         _log_api.warning("auditoria dibujos en sync: %s", exc)
+
+    existentes = _sicoe_hallazgos_tabla_lista(contrato_id)
+    by_fp = {str(r.get("fingerprint")): r for r in existentes if r.get("fingerprint")}
+
+    # Si falló el análisis de dibujos, conservar inconsistencias ya persistidas.
+    if not dibujos_ok:
+        for fp, prev in by_fp.items():
+            tipo = str(prev.get("tipo") or "").strip().lower()
+            if tipo not in _TIPOS_DIBUJO:
+                continue
+            if str(prev.get("estado") or "").lower() == "corregido":
+                continue
+            if fp in vivos:
+                continue
+            vivos[fp] = {
+                "fingerprint": fp,
+                "tipo": prev.get("tipo"),
+                "item_numero": prev.get("item_numero"),
+                "tramo": prev.get("tramo"),
+                "infraestructura": prev.get("infraestructura"),
+                "costado": prev.get("costado"),
+                "ubicacion": prev.get("ubicacion"),
+                "medida_m": prev.get("medida_m"),
+                "abs_desde": prev.get("abs_desde"),
+                "abs_hasta": prev.get("abs_hasta"),
+                "pk_id_id": prev.get("pk_id_id"),
+                "valor_en_juego": prev.get("valor_en_juego") or 0,
+                "registros_involucrados": prev.get("registros_involucrados") or [],
+                "texto": prev.get("texto"),
+            }
 
     ejes = []
     huellas_features = []
@@ -30198,11 +30269,14 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
                     huellas_features.append(fr["huella"])
             for h in fr.get("hallazgos") or []:
                 fp = h.get("fingerprint")
-                if fp and fp not in vivos and not es_traslapo_mismo_reporte(h):
+                tipo = str(h.get("tipo") or "").strip().lower()
+                if (
+                    fp
+                    and tipo in _TIPOS_OK
+                    and fp not in vivos
+                    and not es_traslapo_mismo_reporte(h)
+                ):
                     vivos[fp] = h
-
-    existentes = _sicoe_hallazgos_tabla_lista(contrato_id)
-    by_fp = {str(r.get("fingerprint")): r for r in existentes if r.get("fingerprint")}
 
     now = datetime.now(timezone.utc).isoformat()
     upserts = []
@@ -30261,21 +30335,73 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
                 except Exception as exc2:
                     _log_api.warning("corregir hallazgo %s: %s", hid, exc2)
 
+    def _upsert_chunk(rows: list) -> None:
+        def _up(payload=rows):
+            return (
+                supabase.table("so_auditoria_hallazgos")
+                .upsert(payload, on_conflict="contrato_id,fingerprint")
+                .execute()
+                .data
+            )
+        supabase_execute(_up)
+
     # Upsert por lotes: un solo payload gigante con 200+ JSON suele tumbar PostgREST / el proxy.
-    _UPSERT_CHUNK = 40
+    _UPSERT_CHUNK = 25
     if upserts:
         for i in range(0, len(upserts), _UPSERT_CHUNK):
             chunk = upserts[i : i + _UPSERT_CHUNK]
             try:
-                def _up(rows=chunk):
-                    return (
-                        supabase.table("so_auditoria_hallazgos")
-                        .upsert(rows, on_conflict="contrato_id,fingerprint")
-                        .execute()
-                        .data
-                    )
-                supabase_execute(_up)
+                _upsert_chunk(chunk)
             except Exception as exc:
+                msg = str(exc).lower()
+                # Si falta migración de tipo cantidad_mayor_area, reintenta sin ese tipo.
+                if "tipo" in msg or "check" in msg or "constraint" in msg:
+                    slim = [r for r in chunk if str(r.get("tipo") or "").lower() != "cantidad_mayor_area"]
+                    if slim and len(slim) < len(chunk):
+                        try:
+                            _upsert_chunk(slim)
+                            _log_api.warning(
+                                "sync hallazgos contrato=%s: omitido cantidad_mayor_area (¿migración?): %s",
+                                contrato_id,
+                                exc,
+                            )
+                            continue
+                        except Exception as exc2:
+                            exc = exc2
+                # Payload grande: reintenta de a 5 y luego uno a uno.
+                try:
+                    for j in range(0, len(chunk), 5):
+                        _upsert_chunk(chunk[j : j + 5])
+                    _log_api.warning(
+                        "sync hallazgos contrato=%s: lote %s guardado en sublotes tras error: %s",
+                        contrato_id,
+                        i // _UPSERT_CHUNK + 1,
+                        exc,
+                    )
+                    continue
+                except Exception as exc3:
+                    ok_rows = 0
+                    for row in chunk:
+                        try:
+                            _upsert_chunk([row])
+                            ok_rows += 1
+                        except Exception as exc4:
+                            _log_api.warning(
+                                "sync hallazgos contrato=%s: fila fp=%s falló: %s",
+                                contrato_id,
+                                (row or {}).get("fingerprint"),
+                                exc4,
+                            )
+                    if ok_rows:
+                        _log_api.warning(
+                            "sync hallazgos contrato=%s: lote %s parcial (%s/%s) tras error: %s",
+                            contrato_id,
+                            i // _UPSERT_CHUNK + 1,
+                            ok_rows,
+                            len(chunk),
+                            exc3,
+                        )
+                        continue
                 raise HTTPException(
                     500,
                     f"No se pudieron guardar los hallazgos del análisis (lote {i // _UPSERT_CHUNK + 1}). "
