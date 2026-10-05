@@ -18,7 +18,7 @@ import {
   syncAuditoriaHallazgos,
   fetchAuditoriaHallazgosExport,
 } from './sicoeAuditoriaHallazgosApi'
-import { mensajeErrorCarga } from './sicoeAuditoriaMensajes'
+import { mensajeErrorCarga, fmtFechaHallazgosGuardados } from './sicoeAuditoriaMensajes'
 import { downloadSicoeRegistrosExcel } from './sicoeExportExcel'
 import SicoeCantidadesPorItemVista from './SicoeCantidadesPorItemVista'
 import SicoeHallazgoDetalle from './SicoeHallazgoDetalle'
@@ -152,12 +152,27 @@ export default function SicoeAmbienteAuditoria({
   const [exportando, setExportando] = useState(false)
   const [mostrarCorregidos, setMostrarCorregidos] = useState(false)
   const [colAyudaAbierta, setColAyudaAbierta] = useState(null)
+  /** ISO de la última actualización de hallazgos (servidor). */
+  const [hallazgosActualizadoEn, setHallazgosActualizadoEn] = useState(null)
+  /** true si la UI muestra datos de GET porque el sync falló. */
+  const [mostrandoGuardados, setMostrandoGuardados] = useState(false)
 
-  const aplicarDatos = useCallback((data) => {
+  const aplicarDatos = useCallback((data, { desdeSync = false } = {}) => {
     const list = (Array.isArray(data?.hallazgos) ? data.hallazgos : [])
       .filter((h) => !esTraslapoMismoReporte(h))
     setHallazgos(list)
     setResumen(data?.resumen || resumenAmbienteDesdeFilas(list))
+    const act =
+      data?.sincronizado_en
+      || data?.actualizado_en
+      || list.reduce((best, h) => {
+        const v = h?.actualizado_en || h?.creado_en
+        if (!v) return best
+        const s = String(v)
+        return !best || s > best ? s : best
+      }, null)
+    if (act) setHallazgosActualizadoEn(act)
+    if (desdeSync) setMostrandoGuardados(false)
     setCargaOk(true)
   }, [])
 
@@ -167,17 +182,29 @@ export default function SicoeAmbienteAuditoria({
       setError('')
       setLoading(true)
       let gotList = false
+      let fechaLista = null
       try {
         // 1) GET rápido: muestra hallazgos persistidos sin esperar el análisis completo
         const data = await fetchAuditoriaHallazgos({ API_URL, contratoId, token, usuario })
-        aplicarDatos(data)
+        aplicarDatos(data, { desdeSync: false })
         gotList = true
+        fechaLista =
+          data?.actualizado_en
+          || (Array.isArray(data?.hallazgos)
+            ? data.hallazgos.reduce((best, h) => {
+              const v = h?.actualizado_en || h?.creado_en
+              if (!v) return best
+              const s = String(v)
+              return !best || s > best ? s : best
+            }, null)
+            : null)
       } catch (e) {
         setCargaOk(false)
         setError(
           mensajeErrorCarga(
             e,
-            'No se pudieron cargar los hallazgos. Compruebe la conexión e intente de nuevo.',
+            'No se pudieron cargar los hallazgos.',
+            { status: e?.status, context: 'carga' },
           ),
         )
       } finally {
@@ -186,7 +213,7 @@ export default function SicoeAmbienteAuditoria({
 
       if (!sincronizar) return
 
-      // 2) Sync ligero (sin regenerar todas las huellas) en segundo plano
+      // 2) Sync completo (análisis + dibujos + persistencia por lotes)
       setSyncing(true)
       try {
         const sync = await syncAuditoriaHallazgos({
@@ -196,16 +223,22 @@ export default function SicoeAmbienteAuditoria({
           usuario,
           incluirHuellas: false,
         })
-        aplicarDatos(sync)
+        aplicarDatos(sync, { desdeSync: true })
         setError('')
+        setMostrandoGuardados(false)
       } catch (e) {
         const msg = mensajeErrorCarga(
           e,
           'No se pudo sincronizar el análisis de hallazgos.',
+          { status: e?.status, context: 'sync' },
         )
         if (gotList) {
+          setMostrandoGuardados(true)
+          const cuando = fmtFechaHallazgosGuardados(fechaLista)
           setError(
-            `${msg} Se muestran los hallazgos guardados. Use Reintentar para volver a sincronizar.`,
+            cuando
+              ? `${msg} Se muestran los hallazgos guardados del ${cuando}. Use Reintentar para volver a sincronizar.`
+              : `${msg} Se muestran los hallazgos guardados. Use Reintentar para volver a sincronizar.`,
           )
         } else {
           setCargaOk(false)
@@ -223,6 +256,9 @@ export default function SicoeAmbienteAuditoria({
     setHallazgos([])
     setResumen(resumenAmbienteDesdeFilas([]))
     setSeleccionadoId(null)
+    setError('')
+    setMostrandoGuardados(false)
+    setHallazgosActualizadoEn(null)
     void cargar({ sincronizar: true })
   }, [contratoId, refreshNonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -765,6 +801,21 @@ export default function SicoeAmbienteAuditoria({
           {(loading || syncing) && (
             <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
               {syncing ? 'Sincronizando análisis…' : 'Cargando hallazgos…'}
+            </span>
+          )}
+          {!loading && !syncing && mostrandoGuardados && (
+            <span style={{ color: '#b45309', fontSize: 'var(--cc-caption)' }}>
+              {(() => {
+                const cuando = fmtFechaHallazgosGuardados(hallazgosActualizadoEn)
+                return cuando
+                  ? `Mostrando hallazgos guardados del ${cuando}`
+                  : 'Mostrando hallazgos guardados (sin sincronizar)'
+              })()}
+            </span>
+          )}
+          {!loading && !syncing && !mostrandoGuardados && hallazgosActualizadoEn && (
+            <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+              Actualizados {fmtFechaHallazgosGuardados(hallazgosActualizadoEn)}
             </span>
           )}
         </div>
