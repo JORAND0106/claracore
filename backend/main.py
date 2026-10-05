@@ -31121,7 +31121,11 @@ def sicoe_auditoria_hallazgos_export(
     if not usuario_ve_auditoria_traslapos(current_user):
         raise HTTPException(403, "Exportación de hallazgos exclusiva del contratista.")
 
-    filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+    vacio_max = _sicoe_vacio_max_contrato(contrato_id)
+    filas = _sicoe_filtrar_hallazgos_tabla(
+        _sicoe_hallazgos_tabla_lista(contrato_id),
+        vacio_max_m=vacio_max,
+    )
 
     def _ok(f: dict) -> bool:
         if tipo and str(f.get("tipo") or "").lower() != str(tipo).lower():
