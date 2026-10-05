@@ -792,9 +792,9 @@ def route_mapear_item_gerencial(
     body: MapearItemGerencialBody,
     current_user=Depends(get_current_user),
 ):
-    """Contratista Gerencial: selecciona insumo, ajusta cantidad/costo/cobro."""
+    """Asigna el insumo del catálogo. Requiere Almacén · editar; no exige rol gerencial."""
     _check_contrato(current_user, contrato_id)
-    require_contratista_gerencial_almacen(current_user)
+    require_permiso_almacen(current_user, "editar")
     try:
         payload = body.model_dump(exclude_none=True)
         result = mapear_item_solicitud_gerencial(

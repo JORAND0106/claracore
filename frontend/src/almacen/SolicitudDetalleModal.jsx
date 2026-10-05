@@ -492,7 +492,7 @@ export default function SolicitudDetalleModal({
               >
                 <span style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
                   📦 Materiales solicitados ({items.length})
-                  {puedeValidar && (
+                  {esRolRevision && (
                     <span style={{ fontWeight: 500, color: ui.textMuted, marginLeft: 8 }}>
                       — clic en una fila para revisar
                     </span>
@@ -508,6 +508,7 @@ export default function SolicitudDetalleModal({
                   items={items}
                   sol={sol}
                   puedeValidar={puedeValidar}
+                  destacarSinInsumo={Boolean(permisos?.editar)}
                   onRowClick={(it) => {
                     if (it?.id != null) setRevisionItemId(it.id)
                   }}
