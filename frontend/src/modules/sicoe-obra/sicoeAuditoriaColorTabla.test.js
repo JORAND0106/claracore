@@ -84,7 +84,7 @@ describe('tooltips auditoría', () => {
     assert.equal(unidadMedidaHallazgo('traslapo'), 'm')
     assert.equal(unidadMedidaHallazgo('cantidad_mayor_area'), 'm²')
     assert.match(ayudaMedidaPorTipo('traslapo'), /pisa/i)
-    assert.match(ayudaMedidaPorTipo('vacio'), /hueco/i)
+    assert.match(ayudaMedidaPorTipo('vacio'), /50/i)
   })
 
   it('tooltip de tipo incluye datos reales', () => {

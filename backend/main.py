@@ -29392,7 +29392,8 @@ class AuditoriaTraslaposDecisionBody(BaseModel):
 
 
 class AuditoriaTraslaposConfigBody(BaseModel):
-    tolerancia_m: float
+    tolerancia_m: Optional[float] = None
+    vacio_max_m: Optional[float] = None
 
 
 _SICOE_AUDITORIA_PEER_SELECT = (
@@ -29427,6 +29428,30 @@ def _sicoe_tolerancia_traslapo_contrato(contrato_id: int) -> float:
         # Columna aún no migrada → default
         _log_api.warning("tolerancia traslapo contrato=%s: %s", contrato_id, exc)
     return SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M
+
+
+def _sicoe_vacio_max_contrato(contrato_id: int) -> float:
+    from sicoe_auditoria_traslapos import (
+        SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M,
+        normalizar_vacio_max_m,
+    )
+    try:
+        def _q():
+            return (
+                supabase.table("contratos")
+                .select("sicoe_vacio_max_m")
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+        if rows:
+            return normalizar_vacio_max_m(rows[0].get("sicoe_vacio_max_m"))
+    except Exception as exc:
+        # Columna aún no migrada → default 50 m
+        _log_api.warning("vacio_max contrato=%s: %s", contrato_id, exc)
+    return SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M
 
 
 def _sicoe_tolerancia_ubicacion_contrato(contrato_id: int) -> float:
@@ -29793,6 +29818,7 @@ def sicoe_auditoria_traslapos_config(contrato_id: int, current_user=Depends(get_
         SICOE_AUDITORIA_JUSTIFICACIONES,
         SICOE_AUDITORIA_JUSTIFICACIONES_VACIO,
         SICOE_AUDITORIA_TOLERANCIA_MIN_M,
+        SICOE_AUDITORIA_VACIO_MAX_MIN_M,
         usuario_ve_auditoria_traslapos,
     )
     from sicoe_eje_franjas import (
@@ -29804,6 +29830,8 @@ def sicoe_auditoria_traslapos_config(contrato_id: int, current_user=Depends(get_
     return {
         "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
         "tolerancia_min_m": SICOE_AUDITORIA_TOLERANCIA_MIN_M,
+        "vacio_max_m": _sicoe_vacio_max_contrato(contrato_id),
+        "vacio_max_min_m": SICOE_AUDITORIA_VACIO_MAX_MIN_M,
         "tolerancia_ubicacion_m": _sicoe_tolerancia_ubicacion_contrato(contrato_id),
         "tolerancia_ubicacion_min_m": SICOE_TOLERANCIA_UBICACION_MIN_M,
         "justificaciones": list(SICOE_AUDITORIA_JUSTIFICACIONES),
@@ -29820,15 +29848,26 @@ def sicoe_auditoria_traslapos_config_put(
     body: AuditoriaTraslaposConfigBody,
     current_user=Depends(get_current_user),
 ):
-    from sicoe_auditoria_traslapos import normalizar_tolerancia_m
+    from sicoe_auditoria_traslapos import normalizar_tolerancia_m, normalizar_vacio_max_m
     if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
         raise HTTPException(403, "Configurar tolerancia requiere permiso «Editar».")
-    tol = normalizar_tolerancia_m(body.tolerancia_m)
+    patch = {}
+    out = {}
+    if body.tolerancia_m is not None:
+        tol = normalizar_tolerancia_m(body.tolerancia_m)
+        patch["sicoe_tolerancia_traslapo_m"] = tol
+        out["tolerancia_m"] = tol
+    if body.vacio_max_m is not None:
+        vmax = normalizar_vacio_max_m(body.vacio_max_m)
+        patch["sicoe_vacio_max_m"] = vmax
+        out["vacio_max_m"] = vmax
+    if not patch:
+        raise HTTPException(422, "Indique tolerancia_m y/o vacio_max_m.")
     try:
         def _u():
             return (
                 supabase.table("contratos")
-                .update({"sicoe_tolerancia_traslapo_m": tol})
+                .update(patch)
                 .eq("id", contrato_id)
                 .execute()
                 .data
@@ -29837,9 +29876,13 @@ def sicoe_auditoria_traslapos_config_put(
     except Exception as exc:
         raise HTTPException(
             500,
-            f"No se pudo guardar tolerancia (¿migración SQL aplicada?): {exc}",
+            f"No se pudo guardar la configuración de auditoría (¿migración SQL aplicada?): {exc}",
         ) from exc
-    return {"tolerancia_m": tol}
+    if "tolerancia_m" not in out:
+        out["tolerancia_m"] = _sicoe_tolerancia_traslapo_contrato(contrato_id)
+    if "vacio_max_m" not in out:
+        out["vacio_max_m"] = _sicoe_vacio_max_contrato(contrato_id)
+    return out
 
 
 @app.post("/sicoe-obra/{contrato_id}/auditoria-traslapos/analizar")
@@ -29865,8 +29908,9 @@ def sicoe_auditoria_traslapos_analizar(
     if not cands:
         return {"semaforo": "verde", "resumen": {}, "resultados": [], "tolerancia_m": 0.5}
     tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
+    vacio_max = _sicoe_vacio_max_contrato(contrato_id)
     pares = _sicoe_pares_mismo_item(contrato_id, [c.get("item_numero") for c in cands])
-    out = analizar_varios(cands, pares, tolerancia_m=tol)
+    out = analizar_varios(cands, pares, tolerancia_m=tol, vacio_max_m=vacio_max)
 
     # Enriquecer con alertas de franja / nodo / polígono / ubicación
     resumen = dict(out.get("resumen") or {})
@@ -29983,11 +30027,27 @@ class AuditoriaHallazgoJustificarBody(BaseModel):
     observacion: Optional[str] = None
 
 
-def _sicoe_filtrar_hallazgos_tabla(filas: List[dict]) -> List[dict]:
-    """Oculta traslapos entre registros del mismo reporte (no son hallazgos válidos)."""
-    from sicoe_auditoria_traslapos import es_traslapo_mismo_reporte
+def _sicoe_filtrar_hallazgos_tabla(
+    filas: List[dict],
+    *,
+    vacio_max_m: Optional[float] = None,
+) -> List[dict]:
+    """Oculta traslapos mismo-reporte y vacíos ≥ tope máximo."""
+    from sicoe_auditoria_traslapos import (
+        es_traslapo_mismo_reporte,
+        es_vacio_fuera_de_limite,
+        normalizar_vacio_max_m,
+    )
 
-    return [f for f in (filas or []) if not es_traslapo_mismo_reporte(f)]
+    vmax = normalizar_vacio_max_m(vacio_max_m)
+    out = []
+    for f in filas or []:
+        if es_traslapo_mismo_reporte(f):
+            continue
+        if es_vacio_fuera_de_limite(f, vmax):
+            continue
+        out.append(f)
+    return out
 
 
 def _sicoe_auditoria_regs_contrato(contrato_id: int) -> List[dict]:
@@ -30167,9 +30227,10 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
 
     tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
     tol_ubic = _sicoe_tolerancia_ubicacion_contrato(contrato_id)
+    vacio_max = _sicoe_vacio_max_contrato(contrato_id)
     regs = _sicoe_auditoria_regs_contrato(contrato_id)
     try:
-        analisis = analizar_contrato(regs, tolerancia_m=tol)
+        analisis = analizar_contrato(regs, tolerancia_m=tol, vacio_max_m=vacio_max)
     except Exception as exc:
         _log_api.exception("analizar_contrato contrato=%s", contrato_id)
         raise HTTPException(500, f"No se pudo analizar el contrato: {exc}") from exc
@@ -30408,7 +30469,10 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
                     f"Detalle: {exc}",
                 ) from exc
 
-    filas = _sicoe_filtrar_hallazgos_tabla(_sicoe_hallazgos_tabla_lista(contrato_id))
+    filas = _sicoe_filtrar_hallazgos_tabla(
+        _sicoe_hallazgos_tabla_lista(contrato_id),
+        vacio_max_m=vacio_max,
+    )
     eje_fc = {"type": "FeatureCollection", "features": []}
     if incluir_huellas:
         try:
@@ -30423,6 +30487,7 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
     return {
         "ok": True,
         "tolerancia_m": tol,
+        "vacio_max_m": vacio_max,
         "tolerancia_ubicacion_m": tol_ubic,
         "sincronizados": len(upserts),
         "corregidos": corregidos,
@@ -30912,10 +30977,15 @@ def sicoe_auditoria_hallazgos_listar(
             incluir_huellas=False,
         )
 
-    filas = _sicoe_filtrar_hallazgos_tabla(_sicoe_hallazgos_tabla_lista(contrato_id))
+    vacio_max = _sicoe_vacio_max_contrato(contrato_id)
+    filas = _sicoe_filtrar_hallazgos_tabla(
+        _sicoe_hallazgos_tabla_lista(contrato_id),
+        vacio_max_m=vacio_max,
+    )
     return {
         "ok": True,
         "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
+        "vacio_max_m": vacio_max,
         "resumen": resumen_ambiente_desde_filas(filas),
         "hallazgos": filas,
         "actualizado_en": _sicoe_hallazgos_max_actualizado_en(filas),

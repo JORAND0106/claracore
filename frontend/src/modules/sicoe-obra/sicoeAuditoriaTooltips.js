@@ -22,7 +22,7 @@ export function ayudaMedidaPorTipo(tipo) {
     return 'Longitud o área que se pisa entre registros de reportes distintos (unidad en la celda).'
   }
   if (t === 'vacio') {
-    return 'Tamaño del hueco entre tramos reportados del mismo ítem (metros de abscisa).'
+    return 'Tamaño del hueco entre tramos reportados del mismo ítem (metros). Solo cuentan huecos cortos (menores a 50 m por defecto); los tramos largos sin trabajo no se alertan.'
   }
   if (t === 'ubicacion_inconsistente' || t === 'costado_inconsistente') {
     return 'Diferencia entre lo digitado y lo real (metros de desviación o tramo afectado).'
@@ -84,7 +84,9 @@ export function tooltipTipoHallazgo(h) {
   }
   if (tipo === 'vacio') {
     return [
-      'Vacío: hay un hueco entre tramos reportados del mismo ítem/grupo.',
+      'Vacío: hay un hueco corto entre tramos reportados del mismo ítem/grupo.',
+      'Solo se alerta si el hueco es menor a 50 m (configurable por contrato) y mayor a la tolerancia mínima.',
+      'Huecos de 50 m o más no se consideran hallazgo: son tramos donde aún no se ha trabajado.',
       medida != null ? `Tamaño del hueco: ${fmtMedida(medida, 'm')}.` : null,
       ubi ? `Entre: ${ubi}.` : null,
       regs.length ? `Registros limítrofes: ${regsLabel(regs)}.` : null,

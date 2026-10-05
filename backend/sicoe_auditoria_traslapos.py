@@ -5,7 +5,8 @@ Misma semántica que el frontend (`sicoeAuditoriaTraslapos.js`):
 - Lineal: mismo ítem + tramo + infraestructura + costado; abscisas.
   Si ambos tienen sector y difiere → no se considera traslapo entre ellos.
 - Puntual: mismo ítem + mismo pk_id_id.
-- Tolerancia (m) para traslapos y vacíos lineales; default 0,50; mínimo 0,10.
+- Tolerancia mínima (m) para traslapos y vacíos lineales; default 0,50; mínimo 0,10.
+- Tope máximo de vacío (m): solo huecos < este valor son hallazgo; default 50,00.
 - No bloquea: solo produce hallazgos + semáforo.
 - Ambiente de Auditoría: `analizar_contrato` deduplica por fingerprint.
 """
@@ -17,6 +18,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M = 0.50
 SICOE_AUDITORIA_TOLERANCIA_MIN_M = 0.10
+# Huecos ≥ este tope no son hallazgo (tramo sin trabajar); configurable por contrato.
+SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M = 50.0
+SICOE_AUDITORIA_VACIO_MAX_MIN_M = 0.10
 
 SICOE_AUDITORIA_JUSTIFICACIONES = (
     "Sector diferente",
@@ -49,6 +53,35 @@ def normalizar_tolerancia_m(raw: Any) -> float:
     if not math.isfinite(v):
         return SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M
     return max(SICOE_AUDITORIA_TOLERANCIA_MIN_M, v)
+
+
+def normalizar_vacio_max_m(raw: Any) -> float:
+    """Tope máximo (m) para considerar un hueco como vacío. Default 50; mínimo 0,10."""
+    if raw is None or raw == "":
+        return SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M
+    if not math.isfinite(v):
+        return SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M
+    return max(SICOE_AUDITORIA_VACIO_MAX_MIN_M, v)
+
+
+def es_vacio_fuera_de_limite(hallazgo: Optional[dict], vacio_max_m: Any = None) -> bool:
+    """True si el hallazgo es un vacío con medida ≥ tope (no debe mostrarse ni contarse)."""
+    if not hallazgo:
+        return False
+    if _txt(hallazgo.get("tipo")).casefold() != "vacio":
+        return False
+    vmax = normalizar_vacio_max_m(vacio_max_m)
+    try:
+        medida = float(hallazgo.get("medida_m"))
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(medida):
+        return False
+    return medida >= vmax
 
 
 def parse_abs_num(v: Any) -> Optional[float]:
@@ -325,12 +358,14 @@ def analizar_candidato_contra_pares(
     pares: List[dict],
     *,
     tolerancia_m: float = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M,
+    vacio_max_m: float = SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M,
 ) -> dict:
     """
     Analiza un registro (candidato, con el ítem que se está asignando)
     contra pares del mismo ítem en el contrato.
     """
     tol = normalizar_tolerancia_m(tolerancia_m)
+    vacio_max = normalizar_vacio_max_m(vacio_max_m)
     cand_id = candidato.get("id")
     item = _txt(candidato.get("item_numero"))
     if not item:
@@ -458,7 +493,8 @@ def analizar_candidato_contra_pares(
                     covered[-1] = (plo, s["hi"], s["reg"])
             else:
                 gap = s["lo"] - phi
-                if gap >= tol:
+                # Hueco corto: ≥ tolerancia mínima y < tope máximo (default 50 m).
+                if gap >= tol and gap < vacio_max:
                     # Solo los vecinos del hueco (no el candidato analizado):
                     # si se incluye al candidato, el mismo vacío se repite N veces.
                     hallazgos.append(
@@ -488,6 +524,7 @@ def analizar_candidato_contra_pares(
         "hallazgos": hallazgos,
         "modo": modo,
         "tolerancia_m": tol,
+        "vacio_max_m": vacio_max,
         "item_numero": item,
         "registro_id": cand_id,
         "numero_registro": candidato.get("numero_registro"),
@@ -499,6 +536,7 @@ def analizar_varios(
     pares_por_item: Dict[str, List[dict]],
     *,
     tolerancia_m: float = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M,
+    vacio_max_m: float = SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M,
 ) -> dict:
     resultados = []
     cont = {"verde": 0, "amarillo": 0, "rojo": 0, "traslapo": 0, "vacio": 0, "no_auditable": 0}
@@ -512,7 +550,10 @@ def analizar_varios(
             if x is not c and _txt(x.get("item_numero")) == item
         ]
         r = analizar_candidato_contra_pares(
-            c, list(pares) + otros_cand, tolerancia_m=tolerancia_m
+            c,
+            list(pares) + otros_cand,
+            tolerancia_m=tolerancia_m,
+            vacio_max_m=vacio_max_m,
         )
         resultados.append(r)
         cont[r["semaforo"]] = cont.get(r["semaforo"], 0) + 1
@@ -531,6 +572,7 @@ def analizar_varios(
         "resumen": cont,
         "resultados": resultados,
         "tolerancia_m": normalizar_tolerancia_m(tolerancia_m),
+        "vacio_max_m": normalizar_vacio_max_m(vacio_max_m),
     }
 
 
@@ -686,12 +728,14 @@ def analizar_contrato(
     registros: List[dict],
     *,
     tolerancia_m: float = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M,
+    vacio_max_m: float = SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M,
 ) -> dict:
     """
     Análisis de todos los registros del contrato con el mismo motor de asignación.
     Deduplica hallazgos por fingerprint (evita contar A↔B dos veces).
     """
     tol = normalizar_tolerancia_m(tolerancia_m)
+    vacio_max = normalizar_vacio_max_m(vacio_max_m)
     by_item: Dict[str, List[dict]] = {}
     regs_by_id: Dict[Any, dict] = {}
     for r in registros or []:
@@ -709,7 +753,9 @@ def analizar_contrato(
     hall_map: Dict[str, dict] = {}
     for item, regs in by_item.items():
         for cand in regs:
-            res = analizar_candidato_contra_pares(cand, regs, tolerancia_m=tol)
+            res = analizar_candidato_contra_pares(
+                cand, regs, tolerancia_m=tol, vacio_max_m=vacio_max
+            )
             for h in res.get("hallazgos") or []:
                 canon = canonizar_hallazgo(h, regs_by_id)
                 # Asegura item_numero del candidato
@@ -769,14 +815,15 @@ def analizar_contrato(
         "hallazgos": hallazgos,
         "resumen": resumen,
         "tolerancia_m": tol,
+        "vacio_max_m": vacio_max,
     }
 
 
-def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
+def resumen_ambiente_desde_filas(filas: List[dict], vacio_max_m: Any = None) -> dict:
     """
     Resumen del ambiente: traslapos/vacíos sin justificar, no auditables,
     inconsistencias de ubicación/costado y justificados.
-    Ignora corregidos y traslapos entre registros del mismo reporte.
+    Ignora corregidos, traslapos entre registros del mismo reporte y vacíos ≥ tope.
     """
     out = {
         "traslapos_sin_justificar": {"cantidad": 0, "valor": 0.0},
@@ -787,6 +834,8 @@ def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
     }
     for f in filas or []:
         if es_traslapo_mismo_reporte(f):
+            continue
+        if es_vacio_fuera_de_limite(f, vacio_max_m):
             continue
         estado = _txt(f.get("estado")).casefold() or "pendiente"
         if estado == "corregido":
