@@ -22,8 +22,10 @@ function normRol(txt) {
 }
 
 function esValidadorAlmacenPorCargo(usuario) {
+  // Solo Director de obra retiene validación por cargo (regla operativa).
+  // Cargo Administrador ya no bypassea: debe tener validar en la matriz.
   const cargo = normRol(usuario?.cargo_nombre || usuario?.cargo)
-  return cargo === 'director de obra' || cargo === 'administrador'
+  return cargo === 'director de obra'
 }
 
 const TODOS_PERMISOS = {

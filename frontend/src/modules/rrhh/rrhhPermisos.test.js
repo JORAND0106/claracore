@@ -71,14 +71,38 @@ describe('rrhhPermisos', () => {
     assert.equal(permisoRrhh(u, 'editar', 10), false)
   })
 
-  it('ROL Administrativo ve salario y entra al módulo', () => {
+  it('ROL Administrativo sin matriz no entra ni ve salario', () => {
     const a = accesoRrhh({ rol_nombre: 'Administrativo', cargo_nombre: 'Residente', permisos: [] }, 1)
+    assert.equal(a.ver, false)
+    assert.equal(a.crear, false)
+    assert.equal(a.editar, false)
+    assert.equal(a.eliminar, false)
+    assert.equal(a.validar, false)
+    assert.equal(a.exportar, false)
+    assert.equal(a.verSalario, false)
+    assert.equal(a.esAdministrativo, true)
+  })
+
+  it('ROL Administrativo con RRHH·ver solo ve salario (sin CRUD extra)', () => {
+    const u = {
+      rol_nombre: 'Administrativo',
+      cargo_nombre: 'Residente',
+      contrato_id: 10,
+      permisos: [{
+        funcion_nombre: 'Recursos Humanos',
+        contrato_id: 10,
+        ver: true,
+        crear: false,
+        editar: false,
+        eliminar: false,
+        validar: false,
+        exportar: false,
+      }],
+    }
+    const a = accesoRrhh(u, 10)
     assert.equal(a.ver, true)
-    assert.equal(a.crear, true)
-    assert.equal(a.editar, true)
-    assert.equal(a.eliminar, true)
-    assert.equal(a.validar, true)
-    assert.equal(a.exportar, true)
+    assert.equal(a.crear, false)
+    assert.equal(a.editar, false)
     assert.equal(a.verSalario, true)
     assert.equal(a.esAdministrativo, true)
   })
@@ -88,6 +112,25 @@ describe('rrhhPermisos', () => {
     assert.equal(a.ver, false)
     assert.equal(a.verSalario, false)
     assert.equal(a.esAdministrativo, false)
+  })
+
+  it('cargo Administrador con RRHH·ver ve salario; sin matriz no', () => {
+    const con = {
+      cargo_nombre: 'Administrador',
+      contrato_id: 10,
+      permisos: [{
+        funcion_nombre: 'Recursos Humanos',
+        contrato_id: 10,
+        ver: true,
+        crear: false,
+        editar: false,
+        eliminar: false,
+        validar: false,
+        exportar: false,
+      }],
+    }
+    assert.equal(accesoRrhh(con, 10).verSalario, true)
+    assert.equal(accesoRrhh({ cargo_nombre: 'Administrador', permisos: [], contrato_id: 10 }, 10).verSalario, false)
   })
 
   it('Residente con Ver no ve salario', () => {

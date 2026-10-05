@@ -1215,31 +1215,28 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
           </span>
         </div>
         <div style={{ fontSize: 13, color: col.textSecondary, marginBottom: 10, lineHeight: 1.45 }}>
-          Fila fija en Recursos Humanos: Ver, Crear, Editar, Eliminar, Validar y Exportar.
-          También ve información salarial, Nómina y Liquidación. No se configura por cargo.
+          No abre módulos por sí solo. Solo permite ver valores económicos (salarios, nómina y liquidación)
+          dentro de Recursos Humanos cuando el cargo del usuario tiene RRHH habilitado en esta matriz.
+          El acceso a cada módulo (incl. RRHH) se define exclusivamente por cargo.
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: isDarkMode(theme) ? '#8acdd8' : col.textPrimary, fontWeight: 600, minWidth: 120 }}>
             Recursos Humanos
           </span>
-          {ACCIONES.map(a => (
-            <span
-              key={`admin-rol-${a}`}
-              style={{
-                fontSize: 11,
-                padding: '3px 10px',
-                borderRadius: 6,
-                background: `${accionColor[a]}18`,
-                border: `1px solid ${accionColor[a]}44`,
-                color: accionColor[a],
-                fontWeight: 600,
-                textTransform: 'capitalize',
-              }}
-              title={`${a}: activo`}
-            >
-              {a} ✓
-            </span>
-          ))}
+          <span
+            style={{
+              fontSize: 11,
+              padding: '3px 10px',
+              borderRadius: 6,
+              background: `${accionColor.ver}18`,
+              border: `1px solid ${accionColor.ver}44`,
+              color: accionColor.ver,
+              fontWeight: 600,
+            }}
+            title="Ver valores económicos si el cargo tiene RRHH·ver"
+          >
+            Ver valores económicos ✓
+          </span>
         </div>
       </div>
       <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
@@ -7926,15 +7923,15 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
   const adminCompact = vpMobile || isLandscapeMobile;
 
   const isDeveloper = esDesarrolladorUsuario(user);
-  const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
-  const permsDevOAdmin = isDeveloper || isAdmin ? PERMISOS_ADMIN_TODOS : null;
+  // Solo Desarrollador obtiene todas las acciones de admin por defecto.
+  // Cargo Administrador usa la matriz (Control de accesos) como el resto.
+  const permsDevOAdmin = isDeveloper ? PERMISOS_ADMIN_TODOS : null;
 
   const TABS = useMemo(() => {
     const filtered = ADMIN_PANEL_TABS.filter((tabItem) => {
       if (isDeveloper) return true;
       if (tabItem.soloDeveloper) return false;
       const funciones = TAB_FUNCIONES[tabItem.id] || [];
-      if (isAdmin) return true;
       if (
         funciones.some((fname) =>
           (user?.permisos || []).some(
@@ -7950,7 +7947,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
     return filtered.sort((a, b) =>
       _adminTabLabelOrden(a.label).localeCompare(_adminTabLabelOrden(b.label), "es", { sensitivity: "base" }),
     );
-  }, [user?.permisos, user?.cargo_nombre, isDeveloper, isAdmin]);
+  }, [user?.permisos, user?.cargo_nombre, isDeveloper]);
 
   const [tab, setTab] = useState(() => ADMIN_PANEL_TABS[0]?.id || "usuarios");
   const [openContratoRequest, setOpenContratoRequest] = useState(null);
@@ -8001,14 +7998,17 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
     }
   }, [TABS]);
 
-  /** Contratos visibles en el panel: no privilegiados solo el asignado en su perfil. */
+  /** Contratos visibles: Desarrollador o quien tenga función «contratos» ve todos; resto solo el suyo. */
   const contratosVisibles = useMemo(() => {
-    if (isDeveloper || isAdmin) return contratos;
+    const tieneContratos = (user?.permisos || []).some(
+      (p) => (p.funcion_nombre || "").toLowerCase() === "contratos" && _permisoTabVisible(p),
+    );
+    if (isDeveloper || tieneContratos) return contratos;
     const cid = user?.contrato_id;
     if (cid == null || cid === "") return [];
     const n = Number(cid);
     return contratos.filter((c) => Number(c.id) === n);
-  }, [contratos, isDeveloper, isAdmin, user?.contrato_id]);
+  }, [contratos, isDeveloper, user?.permisos, user?.contrato_id]);
 
   const TITULOS = {
     usuarios:  { title: "Gestión de usuarios",    sub: "Pendientes y aprobados; rechazar los archiva fuera del sistema" },

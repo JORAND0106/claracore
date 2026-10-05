@@ -339,7 +339,7 @@ def _perm_informes_ccd(
 ) -> None:
     """
     Módulo Informes CCD / funciones: matriz «informes ccd» (ver, editar, validar, exportar).
-    Desarrollador y administrador: acceso completo.
+    Desarrollador: acceso completo. Cargo Administrador ya no bypassea la matriz.
     """
     if user is None:
         raise HTTPException(401, "No autenticado")
@@ -356,7 +356,7 @@ def _perm_informes_ccd(
         cid = _contrato_id_para_permisos_informes(u, contrato_id)
         u = {**u, "permisos": _cargar_permisos_cargo_por_sub(uid, cid)}
     cn = (u.get("cargo_nombre") or "").strip().lower()
-    if cn in ("desarrollador", "administrador"):
+    if cn == "desarrollador":
         return
     for p in (u.get("permisos") or []):
         if (p.get("funcion_nombre") or "").strip().lower() != "informes ccd":

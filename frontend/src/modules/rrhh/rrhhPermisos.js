@@ -1,8 +1,10 @@
 /**
  * Permisos Recursos Humanos — fila «Recursos Humanos» (legado «RRHH») en Control de accesos.
  *
- * El ROL «Administrativo» (tabla roles) ve salarios, nómina y liquidación, y tiene
- * acceso amplio a módulos (inyectado en login/me). No confundir con un cargo.
+ * El ROL «Administrativo» (tabla roles) solo habilita ver valores económicos
+ * (salarios / nómina / liquidación) cuando el cargo del usuario tiene RRHH·ver
+ * en Gestión de Cargos / Control de accesos. No otorga acceso a otros módulos
+ * ni CRUD de RRHH por sí solo.
  */
 import { esDesarrolladorUsuario, permisoFuncionContrato } from '../../utils/permisosContrato.js'
 
@@ -50,17 +52,20 @@ export function esAdministradorUsuario(usuario) {
   return _norm(usuario?.cargo_nombre || usuario?.cargo) === 'administrador'
 }
 
-export function puedeVerSalarioRrhh(usuario) {
-  return (
-    esDesarrolladorUsuario(usuario)
-    || esRolAdministrativoUsuario(usuario)
-    || esAdministradorUsuario(usuario)
-  )
+/**
+ * Ver salarios / nómina: requiere RRHH·ver en la matriz del cargo, más
+ * ROL Administrativo, cargo Administrador o Desarrollador.
+ */
+export function puedeVerSalarioRrhh(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const cid = contratoId ?? usuario?.contrato_id
+  const p = permisoFila(usuario, cid)
+  if (!(p && p.ver)) return false
+  return esRolAdministrativoUsuario(usuario) || esAdministradorUsuario(usuario)
 }
 
 export function permisoRrhh(usuario, accion, contratoId) {
   if (esDesarrolladorUsuario(usuario)) return true
-  if (esRolAdministrativoUsuario(usuario)) return true
   const cid = contratoId ?? usuario?.contrato_id
   const p = permisoFila(usuario, cid)
   return !!(p && p[accion])
@@ -69,7 +74,6 @@ export function permisoRrhh(usuario, accion, contratoId) {
 export function accesoRrhh(usuario, contratoId) {
   const esDev = esDesarrolladorUsuario(usuario)
   const cid = contratoId ?? usuario?.contrato_id
-  const verSalario = puedeVerSalarioRrhh(usuario)
   const esAdminRol = esRolAdministrativoUsuario(usuario)
   if (esDev) {
     return {
@@ -93,6 +97,6 @@ export function accesoRrhh(usuario, contratoId) {
     esDesarrollador: false,
     esAdministrativo: esAdminRol,
     puedeAdminCatalogo: esAdminCargo || permisoRrhh(usuario, 'editar', cid),
-    verSalario,
+    verSalario: puedeVerSalarioRrhh(usuario, cid),
   }
 }
