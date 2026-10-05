@@ -509,10 +509,8 @@ def calcular_fila_cartera(
     vacio = all(v is None for v in (abscisa, tn, cfe, nivel, term, sub))
 
     h_exc = None
-    if abscisa is not None and abscisa != 0 and tn is not None and cfe is not None:
-        h_exc = tn - cfe
-    elif tn is not None and cfe is not None and abscisa is None:
-        # fila parcial: aún así TN−CFE si hay cotas
+    # Abscisa 0 es válida (PK inicial); solo se exige TN y CFE para H.Exc.
+    if tn is not None and cfe is not None:
         h_exc = tn - cfe
 
     h_trit = None
