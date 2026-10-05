@@ -71,6 +71,7 @@ import {
 } from './planillaTuberiaUtils'
 import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
+import { notifyPlanillaTopoGrillaChanged } from '../../../modules/sicoe-obra/sicoeGrillaReportesIndicadores'
 
 
 const CARTERA_MIN_WIDTH = 720
@@ -736,8 +737,22 @@ export default function PlanillaTuberiaForm({
     if (!planilla?.id) return
     setBusy(true); setErr(''); setMsg('')
     const teniaDatos = conDatos
+    const metaLinks = linksSicoeDesdeMeta(planilla?.meta_cabecera)
+    const listaLinks = Array.isArray(detalle?.planilla?.reportes_sicoe)
+      ? detalle.planilla.reportes_sicoe
+      : (Array.isArray(detalle?.reportes_sicoe) ? detalle.reportes_sicoe : [])
+    const linksPrev = [...metaLinks, ...listaLinks]
+      .map((l) => l?.reporte_id)
+      .filter((id) => id != null)
     try {
       await api(`/planillas-tuberia/${planilla.id}`, { method: 'DELETE' })
+      if (linksPrev.length) {
+        notifyPlanillaTopoGrillaChanged({
+          contratoId,
+          reporteIds: linksPrev,
+          tiene: false,
+        })
+      }
       setConfirmEliminar(null)
       volverAlListado(teniaDatos
         ? 'Planilla eliminada (incluía datos de cartera).'
@@ -2417,6 +2432,13 @@ export default function PlanillaTuberiaForm({
           setMsg(num != null
             ? `Reporte SICOE #${num} creado con ${res?.n_registros || 0} registro(s) en Sin Asignar Ítem.`
             : 'Reporte SICOE creado.')
+          if (res?.reporte_id != null) {
+            notifyPlanillaTopoGrillaChanged({
+              contratoId,
+              reporteIds: [res.reporte_id],
+              tiene: true,
+            })
+          }
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }
@@ -2477,6 +2499,13 @@ export default function PlanillaTuberiaForm({
           setMsg(num != null
             ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados${extra}).`
             : 'Planilla asociada al reporte SICOE.')
+          if (res?.reporte_id != null) {
+            notifyPlanillaTopoGrillaChanged({
+              contratoId,
+              reporteIds: [res.reporte_id],
+              tiene: true,
+            })
+          }
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }

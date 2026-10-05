@@ -542,6 +542,7 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
       acta_rpo: actaById[r.acta_rpo_id]?.numero_rpo ?? null,
       acta_consecutivo: actaById[r.acta_rpo_id]?.consecutivo ?? null,
       tiene_enlace_soporte: tieneCabecera || tieneReg,
+      tiene_planilla_topografia: r.tiene_planilla_topografia === true,
     }
   })
 

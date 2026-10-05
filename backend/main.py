@@ -3204,12 +3204,66 @@ def _sicoe_batch_reportes_con_dibujo(ids: List[int]) -> set:
     return con_dibujo
 
 
-def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
+def _sicoe_reporte_ids_desde_meta_planilla_topo(meta) -> set:
+    """IDs de so_reportes vinculados en meta_cabecera.sicoe_reportes de una planilla topo."""
+    if not isinstance(meta, dict):
+        return set()
+    raw = meta.get("sicoe_reportes")
+    if not isinstance(raw, list):
+        return set()
+    out: set = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            rid = item.get("reporte_id")
+            if rid is not None:
+                out.add(int(rid))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _sicoe_batch_reportes_con_planilla_topografia(
+    contrato_id: int, reporte_ids: List[int]
+) -> set:
+    """Reportes de la página que tienen planilla de topografía (tubería) asociada."""
+    wanted = {int(x) for x in reporte_ids if x is not None}
+    if not wanted:
+        return set()
+    found: set = set()
+    try:
+        def _q():
+            return (
+                supabase.table("topo_planillas_tuberia")
+                .select("meta_cabecera")
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_q) or []
+    except Exception:
+        return set()
+    for row in rows:
+        ids = _sicoe_reporte_ids_desde_meta_planilla_topo(row.get("meta_cabecera"))
+        for rid in ids:
+            if rid in wanted:
+                found.add(rid)
+        if len(found) >= len(wanted):
+            break
+    return found
+
+
+def _sicoe_enriquecer_tiene_enlace_soporte(
+    rows: List[dict], contrato_id: Optional[int] = None
+) -> None:
     """
     Marca `tiene_enlace_soporte` en cada fila de grilla (in-place).
     Usa la cabecera ya cargada y un batch liviano a so_registros solo para la página
     (típicamente ≤50–100 IDs), sin ampliar filtros ni el universo de búsqueda.
-    También marca `tiene_dibujo` (dibujo_geojson / perimetro_geojson del reporte).
+    También marca `tiene_dibujo` (dibujo_geojson / perimetro_geojson del reporte)
+    y `tiene_planilla_topografia` (vínculo en planilla de tubería).
     """
     if not rows:
         return
@@ -3220,6 +3274,8 @@ def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
             r["tiene_dibujo"] = True
         elif "tiene_dibujo" not in r:
             r["tiene_dibujo"] = False
+        if "tiene_planilla_topografia" not in r:
+            r["tiene_planilla_topografia"] = False
 
     # Batch dibujo: reconsultar filas sin dibujo (aunque el listado traiga dibujo_geojson=null).
     # Antes se saltaba si la clave existía → nunca se detectaba un dibujo recién guardado.
@@ -3233,6 +3289,17 @@ def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
         for r in rows:
             if r.get("id") is not None and int(r["id"]) in con_dibujo:
                 r["tiene_dibujo"] = True
+
+    if contrato_id is not None:
+        page_ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+        if page_ids:
+            con_planilla = _sicoe_batch_reportes_con_planilla_topografia(
+                int(contrato_id), page_ids
+            )
+            for r in rows:
+                rid = r.get("id")
+                if rid is not None:
+                    r["tiene_planilla_topografia"] = int(rid) in con_planilla
 
     faltan = [int(r["id"]) for r in rows if r.get("id") is not None and not r.get("tiene_enlace_soporte")]
     if not faltan:
@@ -20724,7 +20791,7 @@ def buscar_reportes_obra(
     if _nivel_l and _ev_l:
         rows = [r for r in rows if (r.get("num_registros") or 0) > 0]
 
-    _sicoe_enriquecer_tiene_enlace_soporte(rows)
+    _sicoe_enriquecer_tiene_enlace_soporte(rows, contrato_id=contrato_id)
 
     return {"reportes": rows, "total": len(rows), "offset": offset, "limit": limit, "hay_mas": hay_mas}
 

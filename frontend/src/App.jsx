@@ -65,6 +65,14 @@ import SicoeOfertaDibujoReporteModal from './modules/sicoe-obra/SicoeOfertaDibuj
 import SicoeDibujoReporteEditor from './modules/sicoe-obra/SicoeDibujoReporteEditor'
 import { reporteTieneDibujo, reporteSinDibujo } from './modules/sicoe-obra/sicoeDibujoReporteApi'
 import {
+  aplicarPlanillaTopoEnReportes,
+  aplicarPendingPlanillaTopoEnReportes,
+  coloresSinDibujoGrilla,
+  colorIconoPlanillaTopo,
+  reporteTienePlanillaTopografia,
+  SICOE_PLANILLA_TOPO_GRILLA_EVENT,
+} from './modules/sicoe-obra/sicoeGrillaReportesIndicadores'
+import {
   mensajeErrorGuardarTopografiaPortada,
   mensajeErrorRespuestaTopo,
   normalizarPuntosTopoPortada,
@@ -404,6 +412,52 @@ function SicoeIconoSoporteAdjunto({ tiene, t, size = 'var(--cc-sm)' }) {
         strokeLinejoin="round"
       >
         <path d="M21.44 11.05l-8.49 8.49a5.25 5.25 0 01-7.42-7.42l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a1.75 1.75 0 01-2.47-2.47l8.49-8.48" />
+      </svg>
+    </span>
+  )
+}
+
+/**
+ * Ícono de planilla de topografía vinculada (escuadra / tabla) — distinto del clip.
+ * Solo renderiza cuando `tiene` es true.
+ */
+function SicoeIconoPlanillaTopografia({ tiene, t, size = 'var(--cc-sm)' }) {
+  if (!tiene) return null
+  const color = colorIconoPlanillaTopo(t)
+  return (
+    <span
+      role="img"
+      aria-label="Planilla de topografía asociada"
+      title="Planilla de topografía asociada"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        width: '1.15em',
+        height: '1.15em',
+        fontSize: size,
+        lineHeight: 1,
+        color,
+        cursor: 'default',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+      }}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="1em"
+        height="1em"
+        aria-hidden="true"
+        focusable="false"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 20 L20 20 L4 4 Z" />
+        <path d="M4 14h5M4 17h8" />
       </svg>
     </span>
   )
@@ -6224,10 +6278,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       headers: tok ? { Authorization: `Bearer ${tok}` } : {},
     })
       .then((r) => {
-        if (!cancelled) setTienePlanillaTuberiaOrigen(r.ok)
+        if (cancelled) return
+        const ok = r.ok
+        setTienePlanillaTuberiaOrigen(ok)
+        try {
+          propagarReporteGuardado({
+            id: rid,
+            tiene_planilla_topografia: ok,
+          })
+        } catch { /* noop */ }
       })
       .catch(() => {
-        if (!cancelled) setTienePlanillaTuberiaOrigen(false)
+        if (cancelled) return
+        setTienePlanillaTuberiaOrigen(false)
+        try {
+          propagarReporteGuardado({
+            id: rid,
+            tiene_planilla_topografia: false,
+          })
+        } catch { /* noop */ }
       })
     return () => { cancelled = true }
   }, [reporte?.id, repoProp?.id, contrato_id, API_URL])
@@ -8953,6 +9022,27 @@ function ModuloSicoeObra({
 
   const [reportes, setReportes] = useState([])
   const [cargando, setCargando] = useState(false)
+
+  const setReportesConPlanillaTopo = useCallback((listaOUpdater) => {
+    if (typeof listaOUpdater === 'function') {
+      setReportes((prev) => {
+        const next = listaOUpdater(prev)
+        return aplicarPendingPlanillaTopoEnReportes(next, contrato_id)
+      })
+      return
+    }
+    setReportes(aplicarPendingPlanillaTopoEnReportes(listaOUpdater, contrato_id))
+  }, [contrato_id])
+
+  // Icono planilla topografía: actualizar grilla al crear/asociar/eliminar sin recargar.
+  useEffect(() => {
+    const onPlanillaTopo = (ev) => {
+      const detail = ev?.detail
+      setReportes((prev) => aplicarPlanillaTopoEnReportes(prev, detail, contrato_id))
+    }
+    window.addEventListener(SICOE_PLANILLA_TOPO_GRILLA_EVENT, onPlanillaTopo)
+    return () => window.removeEventListener(SICOE_PLANILLA_TOPO_GRILLA_EVENT, onPlanillaTopo)
+  }, [contrato_id])
   const [hayMas, setHayMas] = useState(false)
   const [offsetActual, setOffsetActual] = useState(0)
   const [modalMoverActasDev, setModalMoverActasDev] = useState(false)
@@ -9550,8 +9640,8 @@ function ModuloSicoeObra({
       const { reportes: lista, hay_mas } = await buscarReportesOffline(
         contrato_id, filtrosOff, nuevoOffset, 50, capas, capasOpEff
       )
-      if (nuevoOffset === 0) setReportes(lista)
-      else setReportes(prev => [...prev, ...lista])
+      if (nuevoOffset === 0) setReportesConPlanillaTopo(lista)
+      else setReportesConPlanillaTopo(prev => [...prev, ...lista])
       setHayMas(hay_mas)
       setOffsetActual(nuevoOffset + 50)
       setBusquedaRealizada(true)
@@ -9608,9 +9698,9 @@ function ModuloSicoeObra({
       // El análisis KPI sigue yendo a /sicoe-obra/.../analisis (mismo criterio). La grilla pagina con «Cargar 50 más».
       if (!seqVigente) return null
       if (nuevoOffset === 0) {
-        setReportes(lista)
+        setReportesConPlanillaTopo(lista)
       } else {
-        setReportes((prev) => [...prev, ...lista])
+        setReportesConPlanillaTopo((prev) => [...prev, ...lista])
       }
       setHayMas(!!data.hay_mas)
       setOffsetActual(nuevoOffset + PAGE_SIZE)
@@ -9963,7 +10053,7 @@ function ModuloSicoeObra({
     sicoeRestaurandoVistaRef.current = true
     try {
       aplicarSicoeFiltroBundle(entrada.bundle, false)
-      setReportes(Array.isArray(entrada.reportes) ? entrada.reportes : [])
+      setReportesConPlanillaTopo(Array.isArray(entrada.reportes) ? entrada.reportes : [])
       setAnalisis(entrada.analisis ?? null)
       setHayMas(!!entrada.hayMas)
       setOffsetActual(entrada.offsetActual ?? 0)
@@ -9975,7 +10065,7 @@ function ModuloSicoeObra({
     } finally {
       sicoeRestaurandoVistaRef.current = false
     }
-  }, [aplicarSicoeFiltroBundle])
+  }, [aplicarSicoeFiltroBundle, setReportesConPlanillaTopo])
 
   const guardarSicoeVistaTrasBusqueda = useCallback((f, repResult, analResult) => {
     if (!contrato_id || sicoeRestaurandoVistaRef.current || efectivoOfflineRef.current) return
@@ -12838,18 +12928,25 @@ function ModuloSicoeObra({
                   width: 14,
                   height: 10,
                   borderRadius: 2,
-                  background: '#f59e0b33',
-                  borderLeft: '3px solid #d97706',
+                  background: coloresSinDibujoGrilla(t).swatchBg,
+                  borderLeft: `3px solid ${coloresSinDibujoGrilla(t).border}`,
                   flexShrink: 0,
                 }}
               />
-              Ámbar = sin dibujo
+              Gris = sin dibujo
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-8.49 8.49a5.25 5.25 0 01-7.42-7.42l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a1.75 1.75 0 01-2.47-2.47l8.49-8.48" />
               </svg>
               Clip = enlace adjunto
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: colorIconoPlanillaTopo(t) }}>
+              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 20 L20 20 L4 4 Z" />
+                <path d="M4 14h5M4 17h8" />
+              </svg>
+              Escuadra = planilla topografía
             </span>
           </div>
         )}
@@ -12902,6 +12999,7 @@ function ModuloSicoeObra({
           <div className="cc-sicoe-reportes-grid cc-sicoe-table-scroll" style={{ overflowX: sicoeCompact ? undefined : undefined }}>
           {reportesMostrados.map(rep => {
           const sinDibujo = reporteSinDibujo(rep)
+          const sinDibujoCols = coloresSinDibujoGrilla(t)
           return (
           <div key={rep.id} style={{
             display:'grid',
@@ -12909,8 +13007,8 @@ function ModuloSicoeObra({
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'var(--cc-sm)', color:t.text, cursor:'pointer',
             transition:'background 0.15s', minWidth: 820,
-            background: sinDibujo ? '#f59e0b14' : 'transparent',
-            borderLeft: sinDibujo ? '3px solid #d97706' : '3px solid transparent',
+            background: sinDibujo ? sinDibujoCols.background : 'transparent',
+            borderLeft: sinDibujo ? `3px solid ${sinDibujoCols.border}` : '3px solid transparent',
             boxSizing: 'border-box',
           }}
             title={sinDibujo ? 'Sin dibujo' : undefined}
@@ -12991,12 +13089,16 @@ function ModuloSicoeObra({
                 })()
               }
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = sinDibujo ? '#f59e0b22' : t.bg }}
-            onMouseLeave={e => { e.currentTarget.style.background = sinDibujo ? '#f59e0b14' : 'transparent' }}>
+            onMouseEnter={e => { e.currentTarget.style.background = sinDibujo ? sinDibujoCols.backgroundHover : t.bg }}
+            onMouseLeave={e => { e.currentTarget.style.background = sinDibujo ? sinDibujoCols.background : 'transparent' }}>
             <div style={{ fontWeight:'700', color:t.primary, display:'flex', alignItems:'center', gap:4, minWidth:0 }}>
               <span>#{rep.numero_reporte}</span>
               <SicoeIconoSoporteAdjunto
                 tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
+                t={t}
+              />
+              <SicoeIconoPlanillaTopografia
+                tiene={reporteTienePlanillaTopografia(rep)}
                 t={t}
               />
             </div>
@@ -13042,6 +13144,7 @@ function ModuloSicoeObra({
           <div className="cc-sicoe-reportes-cards">
             {reportesMostrados.map(rep => {
               const sinDibujo = reporteSinDibujo(rep)
+              const sinDibujoCols = coloresSinDibujoGrilla(t)
               return (
               <div
                 key={`card-rep-${rep.id}`}
@@ -13049,9 +13152,9 @@ function ModuloSicoeObra({
                 role="button"
                 tabIndex={0}
                 style={{
-                  background: sinDibujo ? '#f59e0b14' : t.bg,
+                  background: sinDibujo ? sinDibujoCols.background : t.bg,
                   border: `1px solid ${t.border}`,
-                  borderLeft: sinDibujo ? '3px solid #d97706' : `1px solid ${t.border}`,
+                  borderLeft: sinDibujo ? `3px solid ${sinDibujoCols.border}` : `1px solid ${t.border}`,
                   boxShadow: t.shadow,
                 }}
                 title={sinDibujo ? 'Sin dibujo' : undefined}
@@ -13138,6 +13241,11 @@ function ModuloSicoeObra({
                       <span>#{rep.numero_reporte}</span>
                       <SicoeIconoSoporteAdjunto
                         tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
+                        t={t}
+                        size="var(--cc-body)"
+                      />
+                      <SicoeIconoPlanillaTopografia
+                        tiene={reporteTienePlanillaTopografia(rep)}
                         t={t}
                         size="var(--cc-body)"
                       />
