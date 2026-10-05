@@ -215,19 +215,19 @@ def test_analizar_varios_rojo():
 
 
 def test_analizar_contrato_vacio_unico_por_hueco():
-    """El mismo hueco no debe repetirse N veces con distintas combinaciones de registros."""
+    """El mismo hueco corto no debe repetirse N veces con distintas combinaciones de registros."""
     from sicoe_auditoria_traslapos import analizar_contrato
 
     regs = [
         {
             "id": 55, "numero_registro": 55, "reporte_id": 1, "item_numero": "1.1.",
             "tramo": "T1", "infraestructura": "Calzada", "calzada": "Derecha",
-            "abs_inicio": 1000, "abs_final": 1265, "cantidad_total": 10, "vlr_unitario": 1000,
+            "abs_inicio": 1000, "abs_final": 1100, "cantidad_total": 10, "vlr_unitario": 1000,
         },
         {
             "id": 67, "numero_registro": 67, "reporte_id": 2, "item_numero": "1.1.",
             "tramo": "T1", "infraestructura": "Calzada", "calzada": "Derecha",
-            "abs_inicio": 10675, "abs_final": 11000, "cantidad_total": 10, "vlr_unitario": 1000,
+            "abs_inicio": 1120, "abs_final": 1200, "cantidad_total": 10, "vlr_unitario": 1000,
         },
         {
             "id": 152, "numero_registro": 152, "reporte_id": 3, "item_numero": "1.1.",
@@ -237,21 +237,56 @@ def test_analizar_contrato_vacio_unico_por_hueco():
         {
             "id": 63, "numero_registro": 63, "reporte_id": 4, "item_numero": "1.1.",
             "tramo": "T1", "infraestructura": "Calzada", "calzada": "Derecha",
-            "abs_inicio": 900, "abs_final": 1100, "cantidad_total": 10, "vlr_unitario": 1000,
+            "abs_inicio": 820, "abs_final": 900, "cantidad_total": 10, "vlr_unitario": 1000,
         },
     ]
-    out = analizar_contrato(regs, tolerancia_m=0.5)
+    out = analizar_contrato(regs, tolerancia_m=0.5, vacio_max_m=50)
     vacios = [h for h in out["hallazgos"] if h["tipo"] == "vacio"]
-    # Tres huecos reales (800–900, 1265–10675, and none between 1100–1265 if covered)
     keys = sorted({
         (round(float(h["abs_desde"]), 3), round(float(h["abs_hasta"]), 3))
         for h in vacios
     })
     assert len(vacios) == len(keys), f"vacíos duplicados: {[(h.get('ubicacion'), [r['id'] for r in h['registros_involucrados']]) for h in vacios]}"
-    big = [h for h in vacios if abs(float(h["medida_m"]) - 9410) < 0.1]
-    assert len(big) == 1
-    ids = {r["id"] for r in big[0]["registros_involucrados"]}
-    assert ids == {55, 67}
+    # Huecos cortos: 800–820 (20 m) y 1100–1120 (20 m). El tramo 900–1000 (100 m) ≥ 50 no cuenta.
+    assert len(vacios) == 2
+    medidas = sorted(float(h["medida_m"]) for h in vacios)
+    assert medidas == [20.0, 20.0]
+
+
+def test_vacio_max_50_no_alerta_huecos_grandes():
+    from sicoe_auditoria_traslapos import (
+        analizar_candidato_contra_pares,
+        es_vacio_fuera_de_limite,
+        normalizar_vacio_max_m,
+    )
+
+    assert normalizar_vacio_max_m(None) == 50.0
+    assert normalizar_vacio_max_m(0.01) == 0.1
+
+    cand = {
+        "id": 2, "numero_registro": 2, "item_numero": "3",
+        "tramo": "T", "infraestructura": "I", "margen": "Der",
+        "abs_inicio": 200, "abs_final": 250, "cantidad_total": 1, "vlr_unitario": 1,
+    }
+    peer = {
+        "id": 1, "numero_registro": 1, "item_numero": "3",
+        "tramo": "T", "infraestructura": "I", "margen": "Der",
+        "abs_inicio": 0, "abs_final": 50,
+    }
+    # Hueco 150 m ≥ 50 → no vacío
+    r = analizar_candidato_contra_pares(cand, [peer], tolerancia_m=0.5, vacio_max_m=50)
+    assert not any(h["tipo"] == "vacio" for h in r["hallazgos"])
+
+    # Hueco 20 m < 50 → sí vacío
+    peer2 = {**peer, "abs_final": 180}
+    r2 = analizar_candidato_contra_pares(cand, [peer2], tolerancia_m=0.5, vacio_max_m=50)
+    vac = [h for h in r2["hallazgos"] if h["tipo"] == "vacio"]
+    assert len(vac) == 1
+    assert abs(float(vac[0]["medida_m"]) - 20) < 0.01
+
+    assert es_vacio_fuera_de_limite({"tipo": "vacio", "medida_m": 50}, 50)
+    assert es_vacio_fuera_de_limite({"tipo": "vacio", "medida_m": 9410}, 50)
+    assert not es_vacio_fuera_de_limite({"tipo": "vacio", "medida_m": 49.99}, 50)
 
 
 def test_analizar_contrato_dedupe_y_fingerprint():
@@ -297,8 +332,8 @@ def test_analizar_contrato_dedupe_y_fingerprint():
             "tramo": "T",
             "infraestructura": "I",
             "calzada": "C",
-            "abs_inicio": 200,
-            "abs_final": 250,
+            "abs_inicio": 170,
+            "abs_final": 220,
             "cantidad_total": 50,
             "vlr_unitario": 1000,
         },

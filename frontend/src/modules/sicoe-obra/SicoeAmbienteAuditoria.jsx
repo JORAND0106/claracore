@@ -10,6 +10,7 @@ import {
   coloresMapaDesdeHallazgos,
   dedupeHallazgosAmbiente,
   esTraslapoMismoReporte,
+  esVacioFueraDeLimite,
   resumenAmbienteDesdeFilas,
   usuarioVeAuditoriaTraslapos,
 } from './sicoeAuditoriaTraslapos'
@@ -74,7 +75,7 @@ const COLUMNA_AYUDA = {
   tramo: 'Tramo de la obra donde se ubican los registros comparados.',
   infraestructura: 'Infraestructura o elemento (calzada, andén, etc.) del grupo comparado.',
   ubicacion: 'Abscisas o PK-ID donde ocurre el traslapo, el vacío o la inconsistencia.',
-  medida_m: 'Medida del hallazgo con su unidad. El tooltip de cada celda explica qué representa según el tipo.',
+  medida_m: 'Medida del hallazgo. En vacíos solo se alertan huecos cortos (menores a 50 m por defecto); los tramos largos sin trabajo no cuentan.',
   registros: 'Registros involucrados con el número de su reporte. Clic abre el primero.',
   valor_en_juego: 'Valor económico estimado asociado al hallazgo (costo directo del tramo afectado).',
   justificacion: 'Razón elegida al justificar el hallazgo, si aplica.',
@@ -165,12 +166,14 @@ export default function SicoeAmbienteAuditoria({
   const [ambitoRegIds, setAmbitoRegIds] = useState(null)
 
   const aplicarDatos = useCallback((data, { desdeSync = false } = {}) => {
+    const vmax = data?.vacio_max_m
     const list = dedupeHallazgosAmbiente(
       (Array.isArray(data?.hallazgos) ? data.hallazgos : [])
-        .filter((h) => !esTraslapoMismoReporte(h)),
+        .filter((h) => !esTraslapoMismoReporte(h))
+        .filter((h) => !esVacioFueraDeLimite(h, vmax)),
     )
     setHallazgos(list)
-    setResumen(resumenAmbienteDesdeFilas(list))
+    setResumen(resumenAmbienteDesdeFilas(list, vmax))
     const act =
       data?.sincronizado_en
       || data?.actualizado_en
