@@ -4,6 +4,24 @@
 import { usuarioVeAuditoriaTraslapos } from './sicoeAuditoriaTraslapos'
 import { mensajeErrorCarga } from './sicoeAuditoriaMensajes'
 
+async function fetchJsonOrThrow(url, opts, fallbackEs) {
+  let res
+  try {
+    res = await fetch(url, opts)
+  } catch (e) {
+    throw new Error(mensajeErrorCarga(e, fallbackEs))
+  }
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(mensajeErrorCarga({ message: txt || `Error ${res.status}` }, fallbackEs))
+  }
+  try {
+    return await res.json()
+  } catch (e) {
+    throw new Error(mensajeErrorCarga(e, fallbackEs))
+  }
+}
+
 export async function fetchAuditoriaHallazgos({
   API_URL,
   contratoId,
@@ -15,14 +33,11 @@ export async function fetchAuditoriaHallazgos({
     return { ok: true, oculto_por_rol: true, hallazgos: [], resumen: {} }
   }
   const q = sincronizar ? '?sincronizar=true' : ''
-  const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos${q}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(mensajeErrorCarga({ message: txt || `Error ${res.status}` }, 'No se pudieron cargar los hallazgos.'))
-  }
-  return res.json()
+  return fetchJsonOrThrow(
+    `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos${q}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+    'No se pudieron cargar los hallazgos. Compruebe la conexión e intente de nuevo.',
+  )
 }
 
 /**
@@ -40,20 +55,14 @@ export async function syncAuditoriaHallazgos({
     return { ok: true, oculto_por_rol: true, hallazgos: [], resumen: {} }
   }
   const q = incluirHuellas ? '?incluir_huellas=true' : '?incluir_huellas=false'
-  const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/sincronizar${q}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(
-      mensajeErrorCarga(
-        { message: txt || `Error ${res.status}` },
-        'No se pudo sincronizar el análisis de hallazgos.',
-      ),
-    )
-  }
-  return res.json()
+  return fetchJsonOrThrow(
+    `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/sincronizar${q}`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    },
+    'No se pudo sincronizar el análisis de hallazgos. Compruebe la conexión e intente de nuevo.',
+  )
 }
 
 export async function fetchAuditoriaHallazgoDetalle({
@@ -62,20 +71,11 @@ export async function fetchAuditoriaHallazgoDetalle({
   token,
   hallazgoId,
 }) {
-  const res = await fetch(
+  return fetchJsonOrThrow(
     `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/${hallazgoId}`,
     { headers: { Authorization: `Bearer ${token}` } },
+    'No se pudo cargar el detalle del hallazgo.',
   )
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(
-      mensajeErrorCarga(
-        { message: txt || `Error ${res.status}` },
-        'No se pudo cargar el detalle del hallazgo.',
-      ),
-    )
-  }
-  return res.json()
 }
 
 export async function justificarAuditoriaHallazgo({
@@ -90,7 +90,7 @@ export async function justificarAuditoriaHallazgo({
   if (observacion != null && String(observacion).trim()) {
     body.observacion = String(observacion).trim()
   }
-  const res = await fetch(
+  return fetchJsonOrThrow(
     `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/${hallazgoId}/justificar`,
     {
       method: 'POST',
@@ -100,12 +100,8 @@ export async function justificarAuditoriaHallazgo({
       },
       body: JSON.stringify(body),
     },
+    'No se pudo guardar la justificación.',
   )
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(txt || `Error ${res.status}`)
-  }
-  return res.json()
 }
 
 export async function fetchAuditoriaHallazgosExport({
@@ -119,14 +115,11 @@ export async function fetchAuditoriaHallazgosExport({
     if (v != null && String(v).trim() !== '') params.set(k, String(v))
   })
   const q = params.toString() ? `?${params}` : ''
-  const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/export${q}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(txt || `Error ${res.status}`)
-  }
-  return res.json()
+  return fetchJsonOrThrow(
+    `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/export${q}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+    'No se pudo exportar los hallazgos.',
+  )
 }
 
 export { mensajeErrorCarga } from './sicoeAuditoriaMensajes'

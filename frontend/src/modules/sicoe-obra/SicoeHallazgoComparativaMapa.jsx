@@ -2,6 +2,7 @@
  * Plano SVG de dos dibujos/ubicaciones superpuestos con zona pisada o hueco resaltado.
  */
 import { useMemo } from 'react'
+import { colorDibujoPorItems } from './sicoeItemColores'
 
 function txt(v) {
   return String(v ?? '').trim()
@@ -197,6 +198,9 @@ export function SicoeHallazgoComparativaMapa({
     />
   ) : null
 
+  const colorLeft = colorDibujoPorItems(left?.item_numero)
+  const colorRight = colorDibujoPorItems(right?.item_numero)
+
   return (
     <div style={{ width: '100%', background: t.inputBg || t.bg }}>
       <svg
@@ -209,8 +213,8 @@ export function SicoeHallazgoComparativaMapa({
       >
         <rect x={0} y={0} width={drawn.w} height={drawn.h} fill={t.bgCard || '#f8fafc'} />
         {overlay}
-        {renderShape(drawn.left, '#0ea5e9', drawn.leftApprox)}
-        {renderShape(drawn.right, '#8b5cf6', drawn.rightApprox)}
+        {renderShape(drawn.left, colorLeft, drawn.leftApprox)}
+        {renderShape(drawn.right, colorRight, drawn.rightApprox)}
       </svg>
       <div
         style={{
@@ -223,13 +227,17 @@ export function SicoeHallazgoComparativaMapa({
         }}
       >
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ width: 10, height: 10, borderRadius: 2, background: '#0ea5e9' }} />
-          Reporte izquierdo{drawn.leftApprox ? ' (ubicación aprox.)' : ''}
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: colorLeft }} />
+          {left?.item_numero ? `Ítem ${left.item_numero}` : 'Reporte izquierdo'}
+          {drawn.leftApprox ? ' (ubicación aprox.)' : ''}
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ width: 10, height: 10, borderRadius: 2, background: '#8b5cf6' }} />
-          Reporte derecho{drawn.rightApprox ? ' (ubicación aprox.)' : ''}
-        </span>
+        {right ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: colorRight }} />
+            {right?.item_numero ? `Ítem ${right.item_numero}` : 'Reporte derecho'}
+            {drawn.rightApprox ? ' (ubicación aprox.)' : ''}
+          </span>
+        ) : null}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: highlight }} />
           {tipo === 'vacio' ? 'Hueco' : 'Zona pisada'}

@@ -18,9 +18,16 @@ import {
   syncAuditoriaHallazgos,
   fetchAuditoriaHallazgosExport,
 } from './sicoeAuditoriaHallazgosApi'
+import { mensajeErrorCarga } from './sicoeAuditoriaMensajes'
 import { downloadSicoeRegistrosExcel } from './sicoeExportExcel'
 import SicoeCantidadesPorItemVista from './SicoeCantidadesPorItemVista'
 import SicoeHallazgoDetalle from './SicoeHallazgoDetalle'
+import {
+  ayudaMedidaPorTipo,
+  fmtRegistrosHallazgo,
+  tooltipTipoHallazgo,
+  unidadMedidaHallazgo,
+} from './sicoeAuditoriaTooltips'
 
 const RESUMEN_KEYS = [
   {
@@ -59,57 +66,21 @@ const TIPO_LABEL = {
   cantidad_mayor_area: 'Cantidad > área',
 }
 
-const ESTADO_LABEL = {
-  pendiente: 'Pendiente',
-  justificado: 'Justificado',
-  corregido: 'Corregido',
-}
-
 /** Ayuda breve por columna (tooltip / toque en ?). */
 const COLUMNA_AYUDA = {
-  tipo: 'Clase del hallazgo: traslapo (se pisa lo ya reportado), vacío (hueco entre tramos), no auditable o inconsistencia.',
+  tipo: 'Pase el cursor sobre cada tipo para ver qué detectó el sistema y qué revisar, con los datos de ese hallazgo.',
   item_numero: 'Número del ítem del presupuesto involucrado en el hallazgo.',
   tramo: 'Tramo de la obra donde se ubican los registros comparados.',
   infraestructura: 'Infraestructura o elemento (calzada, andén, etc.) del grupo comparado.',
-  costado: 'Costado o margen (izquierda/derecha) usado para alinear los registros lineales.',
   ubicacion: 'Abscisas o PK-ID donde ocurre el traslapo, el vacío o la inconsistencia.',
-  medida_m: 'Longitud del traslapo o del vacío, en metros. Vacío si el hallazgo es puntual.',
-  registros: 'Números de registro involucrados. Clic abre el primero en el reporte.',
+  medida_m: 'Medida del hallazgo con su unidad. El tooltip de cada celda explica qué representa según el tipo.',
+  registros: 'Registros involucrados con el número de su reporte. Clic abre el primero.',
   valor_en_juego: 'Valor económico estimado asociado al hallazgo (costo directo del tramo afectado).',
-  estado: 'Pendiente (sin justificar), justificado (con razón) o corregido (ya no aparece en el análisis).',
   justificacion: 'Razón elegida al justificar el hallazgo, si aplica.',
-  usuario: 'Quién justificó el hallazgo (si ya está justificado).',
-  fecha: 'Cuándo se justificó el hallazgo (si aplica).',
 }
 
 function txt(v) {
   return String(v || '').trim()
-}
-
-function fmtFecha(iso) {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return String(iso)
-    return d.toLocaleString('es-CO', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return String(iso)
-  }
-}
-
-function regsNums(h) {
-  const nums = []
-  for (const r of h?.registros_involucrados || []) {
-    const n = r?.numero_registro != null ? r.numero_registro : r?.id
-    if (n != null && n !== '') nums.push(String(n))
-  }
-  return nums
 }
 
 function matchResumenFiltro(h, key) {
@@ -204,8 +175,10 @@ export default function SicoeAmbienteAuditoria({
       } catch (e) {
         setCargaOk(false)
         setError(
-          e?.message
-          || 'No se pudieron cargar los hallazgos. Compruebe la conexión e intente de nuevo.',
+          mensajeErrorCarga(
+            e,
+            'No se pudieron cargar los hallazgos. Compruebe la conexión e intente de nuevo.',
+          ),
         )
       } finally {
         setLoading(false)
@@ -226,9 +199,10 @@ export default function SicoeAmbienteAuditoria({
         aplicarDatos(sync)
         setError('')
       } catch (e) {
-        const msg =
-          e?.message
-          || 'No se pudo actualizar el análisis de hallazgos.'
+        const msg = mensajeErrorCarga(
+          e,
+          'No se pudo sincronizar el análisis de hallazgos.',
+        )
         if (gotList) {
           setError(
             `${msg} Se muestran los hallazgos guardados. Use Reintentar para volver a sincronizar.`,
@@ -261,7 +235,7 @@ export default function SicoeAmbienteAuditoria({
         const q = txt(raw).toLowerCase()
         if (!q) continue
         let val = ''
-        if (col === 'registros') val = regsNums(h).join(', ')
+        if (col === 'registros') val = fmtRegistrosHallazgo(h)
         else if (col === 'usuario') val = h?.justificado_por_nombre || ''
         else if (col === 'fecha') val = h?.justificado_en || ''
         else val = h?.[col] ?? ''
@@ -274,8 +248,8 @@ export default function SicoeAmbienteAuditoria({
       let va
       let vb
       if (col === 'registros') {
-        va = regsNums(a).join(',')
-        vb = regsNums(b).join(',')
+        va = fmtRegistrosHallazgo(a)
+        vb = fmtRegistrosHallazgo(b)
       } else if (col === 'usuario') {
         va = a?.justificado_por_nombre
         vb = b?.justificado_por_nombre
@@ -349,17 +323,15 @@ export default function SicoeAmbienteAuditoria({
     [filterItemKey],
   )
 
-  /** Registros de hallazgos filtrados (o del seleccionado) para el plano. */
+  /** Solo el hallazgo seleccionado en la tabla (vacío = solo eje/abscisado). */
   const filterRegistroIds = useMemo(() => {
-    const fuente = seleccionado ? [seleccionado] : filtrados
+    if (!seleccionado) return []
     const ids = []
-    for (const h of fuente) {
-      for (const r of h?.registros_involucrados || []) {
-        if (r?.id != null) ids.push(r.id)
-      }
+    for (const r of seleccionado?.registros_involucrados || []) {
+      if (r?.id != null) ids.push(r.id)
     }
     return [...new Set(ids.map(String))]
-  }, [filtrados, seleccionado])
+  }, [seleccionado])
 
   const toggleOrden = (col) => {
     setOrden((prev) => {
@@ -419,28 +391,36 @@ export default function SicoeAmbienteAuditoria({
           f.item_numero || '',
           f.tramo || '',
           f.infraestructura || '',
-          f.costado || '',
           f.ubicacion || '',
-          f.medida_m ?? '',
-          regsNums(f).join(', '),
+          f.medida_m != null
+            ? `${f.medida_m}${unidadMedidaHallazgo(f.tipo) ? ` ${unidadMedidaHallazgo(f.tipo)}` : ''}`
+            : '',
+          fmtRegistrosHallazgo(f),
           f.valor_en_juego || 0,
-          f.estado || '',
           f.justificacion || '',
-          f.justificado_por_nombre || '',
-          f.justificado_en || '',
         ])
+        await downloadSicoeRegistrosExcel({
+          meta: exportMeta || {},
+          headers: [
+            'Tipo', 'Ítem', 'Tramo', 'Infraestructura', 'Ubicación',
+            'Medida', 'Registros', 'Valor en juego', 'Justificación',
+          ],
+          bodyRows: rows,
+          filename: `sicoe_auditoria_hallazgos_${contratoId || 'NA'}.xlsx`,
+        })
+        return
       }
       await downloadSicoeRegistrosExcel({
         meta: exportMeta || {},
         headers: headers.length ? headers : [
-          'Tipo', 'Ítem', 'Tramo', 'Infraestructura', 'Costado', 'Ubicación',
-          'Medida (m)', 'Registros', 'Valor en juego', 'Estado', 'Justificación', 'Usuario', 'Fecha',
+          'Tipo', 'Ítem', 'Tramo', 'Infraestructura', 'Ubicación',
+          'Medida', 'Registros', 'Valor en juego', 'Justificación',
         ],
         bodyRows: rows,
         filename: `sicoe_auditoria_hallazgos_${contratoId || 'NA'}.xlsx`,
       })
     } catch (e) {
-      setError(e?.message || 'No se pudo exportar')
+      setError(mensajeErrorCarga(e, 'No se pudo exportar'))
     } finally {
       setExportando(false)
     }
@@ -567,16 +547,20 @@ export default function SicoeAmbienteAuditoria({
           cursor: 'pointer',
         }}
       >
-        <td style={{ ...sheet.td, color: tipoColor, fontWeight: 700 }}>
+        <td style={{ ...sheet.td, color: tipoColor, fontWeight: 700 }} title={tooltipTipoHallazgo(h)}>
           {TIPO_LABEL[h.tipo] || h.tipo}
         </td>
         <td style={sheet.td}>{h.item_numero || '—'}</td>
         <td style={sheet.td}>{h.tramo || '—'}</td>
         <td style={sheet.td}>{h.infraestructura || '—'}</td>
-        <td style={sheet.td}>{h.costado || '—'}</td>
         <td style={sheet.td}>{h.ubicacion || '—'}</td>
-        <td style={{ ...sheet.td, textAlign: 'right' }}>
-          {h.medida_m != null ? h.medida_m : '—'}
+        <td
+          style={{ ...sheet.td, textAlign: 'right' }}
+          title={ayudaMedidaPorTipo(h.tipo)}
+        >
+          {h.medida_m != null
+            ? `${h.medida_m}${unidadMedidaHallazgo(h.tipo) ? ` ${unidadMedidaHallazgo(h.tipo)}` : ''}`
+            : '—'}
         </td>
         <td style={sheet.td}>
           <button
@@ -593,16 +577,18 @@ export default function SicoeAmbienteAuditoria({
               cursor: 'pointer',
               padding: 0,
               textDecoration: 'underline',
+              textAlign: 'left',
+              fontSize: 'var(--cc-caption)',
+              lineHeight: 1.35,
             }}
             title="Abrir registros involucrados"
           >
-            {regsNums(h).join(', ') || '—'}
+            {fmtRegistrosHallazgo(h)}
           </button>
         </td>
         <td style={{ ...sheet.td, textAlign: 'right', fontWeight: 700 }}>
           {fmtValorCop(h.valor_en_juego)}
         </td>
-        <td style={sheet.td}>{ESTADO_LABEL[h.estado] || h.estado}</td>
         <td style={sheet.td} onClick={(e) => e.stopPropagation()}>
           {h.estado === 'justificado' ? (
             h.justificacion || '—'
@@ -691,8 +677,6 @@ export default function SicoeAmbienteAuditoria({
             </button>
           )}
         </td>
-        <td style={sheet.td}>{h.justificado_por_nombre || '—'}</td>
-        <td style={sheet.td}>{fmtFecha(h.justificado_en)}</td>
       </tr>
     )
   }
@@ -896,27 +880,23 @@ export default function SicoeAmbienteAuditoria({
         }}
       >
         <div style={{ ...sheet.sheetWrap, maxHeight: isNarrow ? 360 : 480 }}>
-          <table style={{ ...sheet.sheetTable, minWidth: 980 }}>
+          <table style={{ ...sheet.sheetTable, minWidth: 720 }}>
             <thead>
               <tr>
-                {thBtn('tipo', 'Tipo', 90)}
+                {thBtn('tipo', 'Tipo', 100)}
                 {thBtn('item_numero', 'Ítem', 70)}
                 {thBtn('tramo', 'Tramo', 90)}
                 {thBtn('infraestructura', 'Infraestructura', 110)}
-                {thBtn('costado', 'Costado', 80)}
                 {thBtn('ubicacion', 'Ubicación', 140)}
-                {thBtn('medida_m', 'Medida', 70)}
-                {thBtn('registros', 'Registros', 100)}
+                {thBtn('medida_m', 'Medida', 80)}
+                {thBtn('registros', 'Registros', 140)}
                 {thBtn('valor_en_juego', 'Valor en juego', 110)}
-                {thBtn('estado', 'Estado', 90)}
                 {thBtn('justificacion', 'Justificación', 140)}
-                {thBtn('usuario', 'Usuario', 110)}
-                {thBtn('fecha', 'Fecha', 120)}
               </tr>
               <tr>
                 {[
-                  'tipo', 'item_numero', 'tramo', 'infraestructura', 'costado', 'ubicacion',
-                  'medida_m', 'registros', 'valor_en_juego', 'estado', 'justificacion', 'usuario', 'fecha',
+                  'tipo', 'item_numero', 'tramo', 'infraestructura', 'ubicacion',
+                  'medida_m', 'registros', 'valor_en_juego', 'justificacion',
                 ].map((col) => (
                   <th key={`f-${col}`} style={{ ...sheet.th, padding: 4, background: t.inputBg || t.bg }}>
                     <input
@@ -943,13 +923,13 @@ export default function SicoeAmbienteAuditoria({
             <tbody>
               {!cargaOk && !loading && error ? (
                 <tr>
-                  <td colSpan={13} style={{ ...sheet.td, textAlign: 'center', color: '#dc2626' }}>
+                  <td colSpan={9} style={{ ...sheet.td, textAlign: 'center', color: '#dc2626' }}>
                     No se pudieron cargar los hallazgos. Use Reintentar.
                   </td>
                 </tr>
               ) : !filtrados.length ? (
                 <tr>
-                  <td colSpan={13} style={{ ...sheet.td, textAlign: 'center', color: t.textMuted }}>
+                  <td colSpan={9} style={{ ...sheet.td, textAlign: 'center', color: t.textMuted }}>
                     {loading || syncing
                       ? 'Analizando hallazgos del contrato…'
                       : cargaOk
@@ -962,7 +942,7 @@ export default function SicoeAmbienteAuditoria({
                   <Fragment key={`g-${nombre}`}>
                     <tr>
                       <td
-                        colSpan={13}
+                        colSpan={9}
                         style={{
                           ...sheet.td,
                           background: sheet.headerBg,
@@ -1006,7 +986,7 @@ export default function SicoeAmbienteAuditoria({
               </span>
             ) : (
               <span style={{ fontWeight: 500, color: t.textMuted }}>
-                {' '}· {filtrados.length} filtrado{filtrados.length === 1 ? '' : 's'}
+                {' '}· seleccione un hallazgo
               </span>
             )}
           </div>
@@ -1028,7 +1008,7 @@ export default function SicoeAmbienteAuditoria({
                   ].filter((id) => id != null).map(String),
                 ),
               ],
-              filterItemNumeros,
+              filterItemNumeros: null,
               filterRegistroIds,
             })
           ) : (
@@ -1037,8 +1017,8 @@ export default function SicoeAmbienteAuditoria({
             </div>
           )}
           <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-            Cada hallazgo actúa como capa. El plano muestra solo los dibujos de los
-            hallazgos filtrados (o del seleccionado) sobre el eje y abscisado.
+            Base: eje y abscisado. Los dibujos aparecen solo al seleccionar un hallazgo
+            en la tabla, con el color estándar de su ítem.
           </div>
         </div>
       </div>

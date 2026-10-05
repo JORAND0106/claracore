@@ -13,6 +13,7 @@ import {
   addMapboxAbscisaLabelLayers,
   mapboxPlanoSymbolLayout,
 } from '../../mapboxPlanoLabels'
+import { colorDibujoPorItems, leyendaColoresItems } from './sicoeItemColores'
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
 
@@ -21,13 +22,6 @@ const FILTER_MAPBOX_LABEL_PK = [
   ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
   ['>', ['length', ['to-string', ['get', 'pk_id']]], 0],
 ]
-
-function colorItem(item) {
-  const s = String(item || '')
-  let h = 0
-  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) % 360
-  return `hsl(${h} 65% 45%)`
-}
 
 function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
   const hiReg = new Set((highlightRegistroIds || []).map(String))
@@ -39,14 +33,14 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
     const rid = String(f?.properties?.registro_id ?? '')
     const pk = String(f?.properties?.pk_id_id ?? '')
     const hi = hiReg.has(rid) || (pk && hiPk.has(pk))
-    let opacity = precis ? 0.4 : 0.22
-    let stroke_w = precis ? 1.4 : 1
-    let color = colorItem(f?.properties?.item_numero)
+    let opacity = precis ? 0.45 : 0.28
+    let stroke_w = precis ? 1.6 : 1.2
+    // Color estándar del ítem (nunca el color libre del usuario al dibujar).
+    const color = colorDibujoPorItems(f?.properties?.item_numero)
     if (hasHi) {
       if (hi) {
-        opacity = 0.78
-        stroke_w = 2.8
-        color = '#dc2626'
+        opacity = 0.72
+        stroke_w = 2.6
       } else {
         opacity = 0.12
         stroke_w = 0.8
@@ -66,7 +60,6 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
     const ht = String(f?.properties?.huella_tipo || f?.properties?.dibujo_tipo || '').toLowerCase()
     if (ht === 'nodo' || ht === 'punto') {
       if (f?.geometry?.type === 'Point') {
-        // Solo marcador (sin entidad): visible como círculo
         out[out.length - 1] = {
           ...f,
           properties: { ...props, is_lod_marker: 1, radius: hi ? 8 : 6 },
@@ -257,6 +250,7 @@ export default function SicoeMapaHuellas({
   const [error, setError] = useState('')
   const [reloadNonce, setReloadNonce] = useState(0)
   const [mostrarNodosPk, setMostrarNodosPk] = useState(false)
+  const [leyendaItems, setLeyendaItems] = useState([])
   const highlightRef = useRef({ highlightRegistroIds, highlightPkIds })
   highlightRef.current = { highlightRegistroIds, highlightPkIds }
 
@@ -283,6 +277,9 @@ export default function SicoeMapaHuellas({
       ? byReg
       : filterHuellasByItems(allHuellasRef.current, items)
     rawHuellasRef.current = filtered
+    setLeyendaItems(leyendaColoresItems(
+      (filtered || []).map((f) => f?.properties?.item_numero),
+    ))
     if (!map || !listo) return
     const { highlightRegistroIds: hrs, highlightPkIds: hps } = highlightRef.current
     const srcH = map.getSource('huellas-franjas')
@@ -327,6 +324,9 @@ export default function SicoeMapaHuellas({
           ? byReg
           : filterHuellasByItems(allHuellas, items)
         rawHuellasRef.current = huellasFeats
+        setLeyendaItems(leyendaColoresItems(
+          (huellasFeats || []).map((f) => f?.properties?.item_numero),
+        ))
         rawNodosRef.current = huellasRes?.nodos || EMPTY_FC
         const eje = huellasRes?.eje || EMPTY_FC
         planoBoundsRef.current = boundsFromFc(plano) || boundsFromFc(eje) || boundsFromFc({
@@ -642,15 +642,42 @@ export default function SicoeMapaHuellas({
       )}
       <div
         style={{
-          position: 'absolute', bottom: 8, left: 8,
-          background: `${t?.bgCard || '#fff'}DD`, borderRadius: 6, padding: '4px 8px',
-          fontSize: 'var(--cc-caption)', color: t?.textMuted, display: 'flex', gap: 8, flexWrap: 'wrap',
+          position: 'absolute', bottom: 8, left: 8, right: 8,
+          background: `${t?.bgCard || '#fff'}EE`, borderRadius: 8, padding: '6px 8px',
+          fontSize: 'var(--cc-caption)', color: t?.textMuted,
+          display: 'flex', flexDirection: 'column', gap: 4,
+          maxHeight: '42%', overflowY: 'auto',
+          border: `1px solid ${t?.border || 'transparent'}`,
         }}
       >
-        <span style={{ color: '#64748b' }}>▦ Proyecto</span>
-        <span style={{ color: '#0ea5e9' }}>━ Eje</span>
-        <span>▮ Huella</span>
-        <span style={{ color: '#7c3aed' }}>● Nodo</span>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ color: '#64748b' }}>▦ Proyecto</span>
+          <span style={{ color: '#0ea5e9' }}>━ Eje</span>
+        </div>
+        {leyendaItems.length > 0 ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontWeight: 700, color: t?.textMuted }}>Ítems:</span>
+            {leyendaItems.map((it) => (
+              <span
+                key={it.item_numero}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: t?.text }}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 2,
+                    background: it.color,
+                    flexShrink: 0,
+                  }}
+                />
+                {it.item_numero}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span>Seleccione un hallazgo para ver sus dibujos.</span>
+        )}
       </div>
     </div>
   )

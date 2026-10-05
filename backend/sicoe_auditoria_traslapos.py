@@ -115,16 +115,20 @@ def sectores_separan(a: dict, b: dict) -> bool:
 
 
 def mismo_reporte(a: Optional[dict], b: Optional[dict]) -> bool:
-    """True si ambos registros pertenecen al mismo reporte (ids presentes e iguales)."""
+    """True si ambos registros pertenecen al mismo reporte (ids o número)."""
     if not a or not b:
         return False
     ra, rb = a.get("reporte_id"), b.get("reporte_id")
-    if ra is None or rb is None:
-        return False
-    sa, sb = str(ra).strip(), str(rb).strip()
-    if not sa or not sb:
-        return False
-    return sa == sb
+    if ra is not None and rb is not None:
+        sa, sb = str(ra).strip(), str(rb).strip()
+        if sa and sb:
+            return sa == sb
+    na, nb = a.get("numero_reporte"), b.get("numero_reporte")
+    if na is not None and nb is not None:
+        sa, sb = str(na).strip(), str(nb).strip()
+        if sa and sb:
+            return sa == sb
+    return False
 
 
 def es_traslapo_mismo_reporte(hallazgo: Optional[dict]) -> bool:
@@ -139,15 +143,20 @@ def es_traslapo_mismo_reporte(hallazgo: Optional[dict]) -> bool:
     regs = hallazgo.get("registros_involucrados") or []
     if len(regs) < 2:
         return False
-    rep_ids = []
+    keys = []
     for r in regs:
         if not r:
-            continue
-        rid = r.get("reporte_id")
-        if rid is None or str(rid).strip() == "":
             return False
-        rep_ids.append(str(rid).strip())
-    return bool(rep_ids) and len(set(rep_ids)) == 1
+        rid = r.get("reporte_id")
+        if rid is not None and str(rid).strip() != "":
+            keys.append(f"id:{str(rid).strip()}")
+            continue
+        nrep = r.get("numero_reporte")
+        if nrep is not None and str(nrep).strip() != "":
+            keys.append(f"n:{str(nrep).strip()}")
+            continue
+        return False
+    return bool(keys) and len(set(keys)) == 1
 
 
 def costo_directo_parcial(cantidad_total: Any, vlr_unitario: Any, fraccion: float) -> float:
@@ -291,6 +300,14 @@ def _snapshot_involucrado(r: dict) -> dict:
         "cantidad_total": cant_n,
         "vlr_unitario": vu_n,
         "valor": valor if valor is not None else r.get("valor"),
+        "longitud": r.get("longitud"),
+        "ancho": r.get("ancho"),
+        "espesor": r.get("espesor"),
+        "cantidad": r.get("cantidad"),
+        "es_varilla": r.get("es_varilla"),
+        "diametro_varilla": r.get("diametro_varilla"),
+        "peso_kg_m": r.get("peso_kg_m"),
+        "unidad": r.get("unidad"),
         "observacion": r.get("observacion"),
         "nombre_reporte": r.get("nombre_reporte") or r.get("descripcion_actividad"),
         "usuario_nombre": r.get("usuario_nombre") or r.get("creado_por_nombre"),

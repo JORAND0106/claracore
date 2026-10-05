@@ -10,11 +10,11 @@ describe('mensajeErrorCarga', () => {
   it('traduce Load failed / Failed to fetch a español claro', () => {
     assert.match(
       mensajeErrorCarga({ message: 'Load failed' }, 'fallback'),
-      /No se pudieron cargar los hallazgos/,
+      /No se pudieron cargar o sincronizar los hallazgos/,
     )
     assert.match(
       mensajeErrorCarga({ message: 'Failed to fetch' }, 'fallback'),
-      /No se pudieron cargar los hallazgos/,
+      /No se pudieron cargar o sincronizar los hallazgos/,
     )
   })
 

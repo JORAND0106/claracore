@@ -118,16 +118,24 @@ export function sectoresSeparan(a, b) {
   return !!(sa && sb && sa !== sb)
 }
 
-/** True si ambos registros pertenecen al mismo reporte (ids presentes e iguales). */
+/** True si ambos registros pertenecen al mismo reporte (ids o número de reporte). */
 export function mismoReporte(a, b) {
   if (!a || !b) return false
   const ra = a.reporte_id
   const rb = b.reporte_id
-  if (ra == null || rb == null) return false
-  const sa = String(ra).trim()
-  const sb = String(rb).trim()
-  if (!sa || !sb) return false
-  return sa === sb
+  if (ra != null && rb != null) {
+    const sa = String(ra).trim()
+    const sb = String(rb).trim()
+    if (sa && sb) return sa === sb
+  }
+  const na = a.numero_reporte
+  const nb = b.numero_reporte
+  if (na != null && nb != null) {
+    const sa = String(na).trim()
+    const sb = String(nb).trim()
+    if (sa && sb) return sa === sb
+  }
+  return false
 }
 
 /**
@@ -139,12 +147,20 @@ export function esTraslapoMismoReporte(hallazgo) {
   if (txt(hallazgo.tipo).toLowerCase() !== 'traslapo') return false
   const regs = hallazgo.registros_involucrados || []
   if (regs.length < 2) return false
-  const ids = []
+  const keys = []
   for (const r of regs) {
-    if (!r || r.reporte_id == null || String(r.reporte_id).trim() === '') return false
-    ids.push(String(r.reporte_id).trim())
+    if (!r) return false
+    let key = ''
+    if (r.reporte_id != null && String(r.reporte_id).trim() !== '') {
+      key = `id:${String(r.reporte_id).trim()}`
+    } else if (r.numero_reporte != null && String(r.numero_reporte).trim() !== '') {
+      key = `n:${String(r.numero_reporte).trim()}`
+    } else {
+      return false
+    }
+    keys.push(key)
   }
-  return ids.length > 0 && new Set(ids).size === 1
+  return keys.length > 0 && new Set(keys).size === 1
 }
 
 export function costoDirectoParcial(cantidadTotal, vlrUnitario, fraccion) {
