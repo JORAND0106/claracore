@@ -30921,7 +30921,9 @@ def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[
                     .select(
                         "id, numero_registro, reporte_id, item_numero, item_descripcion, tramo, "
                         "infraestructura, calzada, margen, abs_inicio, abs_final, pk_id_id, "
-                        "cantidad_total, vlr_unitario, foto_url, grafico_url, observacion, "
+                        "cantidad_total, vlr_unitario, longitud, ancho, espesor, cantidad, "
+                        "es_varilla, diametro_varilla, peso_kg_m, unidad, "
+                        "foto_url, grafico_url, observacion, "
                         "coord_lat, coord_lng, huella_geojson, "
                         "creado_por_reg, created_at"
                     )
