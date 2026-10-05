@@ -1426,7 +1426,7 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
    - editar: solicitudes, eliminar entradas/salidas/devoluciones (con restricciones), abrir catálogo Insumos.
    - validar: revisar solicitudes; config; bypass para Director de Obra / Administrador.
    - exportar: Excel inventario, PDF OC.
-   - **Asignar insumo** en «Revisión de línea» (búsqueda, sugerencia y Guardar mapeo): permiso **editar** de Almacén. No exige rol gerencial. Quien no ve valores económicos no ve costo, cobro ni la tabla de rentabilidad.
+   - **Asignar insumo** en «Revisión de línea» (búsqueda, sugerencia y Guardar mapeo): permiso **editar** de Almacén. No exige rol gerencial ni Validar. El botón **Revisar** de la grilla de solicitudes y el botón **Revisar** de cada línea abren ese popup. Quien no ve valores económicos no ve costo, cobro ni la tabla de rentabilidad.
    - **Aprobar ítem / solicitud y generar OC**: validar + rol **Contratista Gerencial** (o Desarrollador). Esos botones no aparecen sin Validar.
    - **Corregir insumo de una línea ya en OC**: editar + Contratista Gerencial, solo mientras esa OC no tenga una entrada registrada.
    - **Valores económicos** (VU cobro/costo, utilidad, rentabilidad): Operativo Gerencial, Residente Administrativo o Desarrollador.

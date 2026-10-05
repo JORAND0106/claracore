@@ -625,6 +625,7 @@ export default function SolicitudDetalleModal({
                   items={items}
                   sol={sol}
                   puedeValidar={puedeValidar}
+                  puedeRevisarLinea={esRolRevision}
                   destacarSinInsumo={Boolean(permisos?.editar)}
                   puedeSeleccionar={puedeSeleccionar}
                   puedeAsignar={puedeAsignar}

@@ -20,6 +20,7 @@ import {
   panelNoPrevistoTouched,
   resolveProveedorFieldsForSave,
   backfillGanadoraProveedor,
+  aplicarRendimientoEnCotizaciones,
   sanitizeRendimientoInput,
   seedCotizacionPares,
   setGanadoraPar,
@@ -152,6 +153,22 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(sanitizeRendimientoInput('12.5m'), '12.5')
     assert.equal(sanitizeRendimientoInput('1,25'), '1.25')
     assert.equal(sanitizeRendimientoInput('ab'), '')
+  })
+
+  it('el rendimiento editado queda igual en todas las cotizaciones', () => {
+    const pares = [
+      { id: 'a', coherencia: { descripcion: 'X', unidad: 'M', rendimiento: '1' }, insumo: { numero: 'A' } },
+      { id: 'b', coherencia: { descripcion: 'X', unidad: 'M', rendimiento: '1' }, insumo: { numero: 'B' } },
+    ]
+    const next = aplicarRendimientoEnCotizaciones(pares, '2,5abc')
+    assert.equal(next[0].coherencia.rendimiento, '2.5')
+    assert.equal(next[1].coherencia.rendimiento, '2.5')
+    assert.equal(next[0].coherencia.descripcion, 'X')
+    assert.equal(next[1].coherencia.unidad, 'M')
+    assert.deepEqual(
+      coherenciaErrors(next, { descripcion: 'X', unidad: 'M', rendimiento: '2.5' }),
+      [],
+    )
   })
 
   it('buildParFromCapture guarda descripción y números en mayúsculas; NP vacío sin copiar', () => {

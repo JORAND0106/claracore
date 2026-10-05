@@ -715,6 +715,21 @@ export function toUpperTrim(s) {
   return String(s || '').trim().toUpperCase()
 }
 
+/**
+ * El rendimiento es del insumo: al cambiarlo queda igual en todas las cotizaciones.
+ * Descripción y unidad de cada fila no se tocan.
+ */
+export function aplicarRendimientoEnCotizaciones(pares, rendimiento) {
+  const rend = sanitizeRendimientoInput(rendimiento == null ? '' : String(rendimiento))
+  return (pares || []).map((p) => ({
+    ...p,
+    coherencia: {
+      ...(p.coherencia || {}),
+      rendimiento: rend,
+    },
+  }))
+}
+
 /** Solo dígitos y un separador decimal (punto o coma). */
 export function sanitizeRendimientoInput(raw) {
   let s = String(raw ?? '').replace(/[^\d.,]/g, '')

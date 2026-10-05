@@ -232,10 +232,10 @@ export function buildEditFormFromInsumoRow(row, { proveedoresDirectorio = [] } =
   })
   cotizaciones = cotizaciones.map((p) => ({
     ...p,
-    coherencia: p.coherencia || {
-      descripcion: row?.descripcion || '',
-      unidad: row?.unidad || '',
-      rendimiento: row?.rendimiento ?? '',
+    coherencia: {
+      descripcion: p.coherencia?.descripcion || row?.descripcion || '',
+      unidad: p.coherencia?.unidad || row?.unidad || '',
+      rendimiento: row?.rendimiento ?? p.coherencia?.rendimiento ?? '',
     },
   }))
   cotizaciones = ensureGanadora(cotizaciones)

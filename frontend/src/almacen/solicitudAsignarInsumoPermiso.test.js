@@ -157,6 +157,18 @@ describe('Fuentes — asignación separada de la aprobación', () => {
     assert.match(antesDeAprobar, /puedeValidarLinea &&/)
   })
 
+  it('la grilla muestra Revisar con Editar, no solo con Validar', () => {
+    const panel = readFileSync(join(dir, 'SolicitudesPanel.jsx'), 'utf8')
+    const btn = panel.slice(panel.indexOf('solicitud-revisar') - 400, panel.indexOf('solicitud-revisar'))
+    assert.match(btn, /puedeAbrirRevisionLinea\(permisos\)/)
+    assert.match(btn, /solicitudPuedeValidar\(s, permisos\)/)
+    const tabla = readFileSync(join(dir, 'SolicitudMaterialesExcelTable.jsx'), 'utf8')
+    assert.match(tabla, /puedeRevisarLinea/)
+    assert.match(tabla, /revision-linea-abrir/)
+    const detalle = readFileSync(join(dir, 'SolicitudDetalleModal.jsx'), 'utf8')
+    assert.match(detalle, /puedeRevisarLinea=\{esRolRevision\}/)
+  })
+
   it('el detalle no muestra Aprobar y generar OC sin Validar', () => {
     const detalle = readFileSync(join(dir, 'SolicitudDetalleModal.jsx'), 'utf8')
     const idx = detalle.indexOf('Aprobar y generar OC')

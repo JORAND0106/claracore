@@ -5,6 +5,7 @@ import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
+  puedeAbrirRevisionLinea,
   solicitudPuedeReabrirOc,
   solicitudPuedeValidar,
   solicitudOrdenesCompra,
@@ -333,10 +334,12 @@ export default function SolicitudesPanel({
                         entidadId={s.id}
                         titulo={`Almacén · Solicitud #${s.consecutivo}${s.titulo?.trim() ? ` · ${s.titulo.trim()}` : ''}`}
                       />
-                      {solicitudPuedeValidar(s, permisos) && (
+                      {(solicitudPuedeValidar(s, permisos) || puedeAbrirRevisionLinea(permisos)) && (
                         <button
                           type="button"
                           style={{ ...ui.btnPrimary, padding: '4px 8px', fontSize: 'var(--cc-caption)', minHeight: 0 }}
+                          data-testid="solicitud-revisar"
+                          title="Abrir el detalle y revisar cada línea"
                           onClick={() => abrirDetalle(s, 'portada')}
                         >
                           Revisar

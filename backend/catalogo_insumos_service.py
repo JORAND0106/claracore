@@ -11,6 +11,12 @@ import unicodedata
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from catalogo_insumos_grilla import (
+    GRILLA_INSUMO_SELECT,
+    completar_fila_grilla_desde_detalle,
+    fila_grilla_catalogo,
+    fila_grilla_incompleta,
+)
 from catalogo_insumos_cotizaciones_lib import (
     apply_auto_ganadora_detalle,
     build_biblioteca_cotizaciones,
@@ -1308,11 +1314,12 @@ def list_catalogo_insumos(
     limit: int = 50,
     offset: int = 0,
 ) -> Tuple[List[dict], int]:
+    """Grilla: solo columnas visibles. El detalle completo va en get_insumo_catalogo."""
     sb = _sb()
     q = (q or "").strip()
     query = (
         sb.table("almacen_insumo")
-        .select("*", count="exact")
+        .select(GRILLA_INSUMO_SELECT, count="exact")
         .eq("contrato_id", contrato_id)
         .eq("activo", True)
         .order("codigo")
@@ -1326,55 +1333,54 @@ def list_catalogo_insumos(
     total = resp.count if resp.count is not None else len(rows)
 
     prov_ids = {r.get("proveedor_id") for r in rows if r.get("proveedor_id")}
-    prov_map: Dict[int, dict] = {}
+    prov_nombres: Dict[int, str] = {}
     if prov_ids:
         provs = (
             sb.table("almacen_proveedor")
-            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
+            .select("id, razon_social")
             .in_("id", list(prov_ids))
             .execute()
             .data
             or []
         )
-        prov_map = {int(p["id"]): p for p in provs}
+        prov_nombres = {
+            int(p["id"]): (p.get("razon_social") or "").strip() or "—"
+            for p in provs
+            if p.get("id") is not None
+        }
 
     out = []
+    incompletas = []
     for row in rows:
         pid = row.get("proveedor_id")
-        if pid in (None, ""):
-            detalle = cotizaciones_detalle_from_row(row)
-            resolved, detalle_fixed = _resolve_proveedor_id_for_payload(
-                contrato_id=int(contrato_id),
-                proveedor_id=None,
-                body={},
-                detalle=detalle,
-                existing=None,
-            )
-            if resolved:
-                try:
-                    sb.table("almacen_insumo").update({
-                        "proveedor_id": int(resolved),
-                        "cotizaciones_detalle": detalle_fixed,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }).eq("id", int(row["id"])).execute()
-                    row = {**row, "proveedor_id": int(resolved), "cotizaciones_detalle": detalle_fixed}
-                    pid = int(resolved)
-                    if pid not in prov_map:
-                        provs = (
-                            sb.table("almacen_proveedor")
-                            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
-                            .eq("id", pid)
-                            .limit(1)
-                            .execute()
-                            .data
-                            or []
-                        )
-                        if provs:
-                            prov_map[pid] = provs[0]
-                except Exception:
-                    pass
-        prov = prov_map.get(int(pid or 0), {})
-        out.append(_enrich_insumo_catalogo_row(row, prov))
+        nombre = "—"
+        if pid not in (None, ""):
+            try:
+                nombre = prov_nombres.get(int(pid), "—")
+            except (TypeError, ValueError):
+                nombre = "—"
+        fila = fila_grilla_catalogo(row, nombre)
+        out.append(fila)
+        if fila_grilla_incompleta(fila) and fila.get("id") is not None:
+            incompletas.append(int(fila["id"]))
+
+    # Solo las filas sin proveedor o sin cotización visible leen el detalle, y no lo devuelven.
+    if incompletas:
+        det_rows = (
+            sb.table("almacen_insumo")
+            .select("id, cotizaciones_detalle")
+            .in_("id", incompletas)
+            .execute()
+            .data
+            or []
+        )
+        por_id = {int(r["id"]): r.get("cotizaciones_detalle") for r in det_rows if r.get("id") is not None}
+        out = [
+            completar_fila_grilla_desde_detalle(fila, por_id.get(int(fila["id"])))
+            if fila.get("id") is not None and int(fila["id"]) in por_id
+            else fila
+            for fila in out
+        ]
     return out, total
 
 
