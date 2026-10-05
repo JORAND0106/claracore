@@ -126,6 +126,7 @@ export default function SolicitudLineaRevisionModal({
       item.capitulo && item.item ? `${item.capitulo} · ${item.item}` : null,
       item.unidad ? `Und: ${item.unidad}` : null,
       item.pk_id ? `PK ${item.pk_id}` : null,
+      item.grupo_etiqueta ? item.grupo_etiqueta : null,
     ].filter(Boolean)
     return parts.join(' · ')
   }, [item])

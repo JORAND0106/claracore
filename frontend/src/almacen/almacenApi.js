@@ -138,6 +138,35 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       return fetch(`${base}/presupuesto-registros?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
+    getPresupuestoTramos: (capitulo, item, excludeSolicitudId) => {
+      const params = new URLSearchParams({
+        capitulo: capitulo || '',
+        item: item || '',
+      })
+      if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      return fetch(`${base}/presupuesto-tramos?${params}`, { headers: authHeaders() }).then(parseJson)
+    },
+
+    getPresupuestoTramoPks: (capitulo, item, tramo, excludeSolicitudId) => {
+      const params = new URLSearchParams({
+        capitulo: capitulo || '',
+        item: item || '',
+        tramo: tramo == null ? '' : String(tramo),
+      })
+      if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      return fetch(`${base}/presupuesto-tramo-pks?${params}`, { headers: authHeaders() }).then(parseJson)
+    },
+
+    getPresupuestoTramoDetalle: (capitulo, item, tramo, excludeSolicitudId) => {
+      const params = new URLSearchParams({
+        capitulo: capitulo || '',
+        item: item || '',
+        tramo: tramo == null ? '' : String(tramo),
+      })
+      if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      return fetch(`${base}/presupuesto-tramo-detalle?${params}`, { headers: authHeaders() }).then(parseJson)
+    },
+
     getPresupuestoContext: (presupuestoId, pkId, cantidad, excludeSolicitudId) => {
       const params = new URLSearchParams({
         presupuesto_id: String(presupuestoId),
@@ -249,6 +278,20 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         method: 'PATCH',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
+      }).then(parseJson),
+
+    mapearItemsBloque: (solicitudId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/mapear-bloque`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
+    aprobarItemsBloque: (solicitudId, itemIds) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/aprobar-bloque`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ item_ids: itemIds || [] }),
       }).then(parseJson),
 
     corregirInsumoItemPostOc: (solicitudId, itemId, body) =>

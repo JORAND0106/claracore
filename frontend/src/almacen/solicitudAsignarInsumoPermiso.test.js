@@ -170,10 +170,16 @@ describe('Fuentes — asignación separada de la aprobación', () => {
     const routes = readFileSync(join(dir, '../../../backend/almacen_routes.py'), 'utf8')
     const mapear = routes.slice(
       routes.indexOf('def route_mapear_item_gerencial'),
-      routes.indexOf('def route_corregir_insumo_post_oc'),
+      routes.indexOf('def route_mapear_items_bloque'),
     )
     assert.match(mapear, /require_permiso_almacen\(current_user, "editar"\)/)
     assert.doesNotMatch(mapear, /require_contratista_gerencial_almacen/)
+    const mapearBloque = routes.slice(
+      routes.indexOf('def route_mapear_items_bloque'),
+      routes.indexOf('def route_aprobar_items_bloque'),
+    )
+    assert.match(mapearBloque, /require_permiso_almacen\(current_user, "editar"\)/)
+    assert.doesNotMatch(mapearBloque, /require_contratista_gerencial_almacen/)
     const validar = routes.slice(
       routes.indexOf('def route_validar_item_solicitud'),
       routes.indexOf('def route_aprobar_todos_items'),

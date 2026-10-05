@@ -1978,6 +1978,110 @@ def list_presupuesto_registros(
     }
 
 
+def _presupuesto_rows_de_item(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+    tramo: Optional[str] = None,
+    *,
+    filtrar_tramo: bool = False,
+) -> List[dict]:
+    """Filas de presupuesto del capítulo/ítem. Si filtrar_tramo, solo ese tramo (vacío = sin tramo)."""
+    from almacen_presupuesto_arbol import norm_tramo
+
+    sb = _sb()
+    capitulo = (capitulo or "").strip()
+    want_item = _norm_item_key(item_numero)
+    if not capitulo or not want_item:
+        return []
+    rows = (
+        sb.table("presupuesto")
+        .select(_PRESUPUESTO_ROW_SELECT)
+        .eq("contrato_id", int(contrato_id))
+        .eq("dado_de_baja", False)
+        .eq("capitulo", capitulo)
+        .execute()
+        .data
+        or []
+    )
+    matched = [
+        r for r in rows
+        if _norm_item_key(r.get("item")) == want_item and _norm_pk_id(r.get("pk_id"))
+    ]
+    if filtrar_tramo:
+        want = norm_tramo(tramo)
+        matched = [r for r in matched if norm_tramo(r.get("tramo")) == want]
+    return matched
+
+
+def _acum_presupuesto_rows(sb, contrato_id: int, rows: List[dict], exclude_solicitud_id: Optional[int]):
+    keys = [
+        (int(r["id"]), _norm_pk_id(r.get("pk_id")))
+        for r in rows
+        if r.get("id") is not None and _norm_pk_id(r.get("pk_id"))
+    ]
+    return batch_cantidad_solicitada_acumulada(
+        sb, contrato_id, keys, exclude_solicitud_id,
+    )
+
+
+def list_presupuesto_tramos(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+    exclude_solicitud_id: Optional[int] = None,
+) -> dict:
+    """Primer nivel del acordeón: cantidades agregadas por tramo."""
+    from almacen_presupuesto_arbol import resumir_tramos
+
+    sb = _sb()
+    rows = _presupuesto_rows_de_item(contrato_id, capitulo, item_numero)
+    acum = _acum_presupuesto_rows(sb, contrato_id, rows, exclude_solicitud_id)
+    return {"tramos": resumir_tramos(rows, acum)}
+
+
+def list_presupuesto_pks(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+    tramo: str,
+    exclude_solicitud_id: Optional[int] = None,
+) -> dict:
+    """Segundo nivel: PK-ID de un tramo, sin traer todavía sus registros."""
+    from almacen_presupuesto_arbol import resumir_pks
+
+    sb = _sb()
+    rows = _presupuesto_rows_de_item(
+        contrato_id, capitulo, item_numero, tramo, filtrar_tramo=True,
+    )
+    acum = _acum_presupuesto_rows(sb, contrato_id, rows, exclude_solicitud_id)
+    return {"pks": resumir_pks(rows, acum, con_registros=False)}
+
+
+def list_presupuesto_tramo_detalle(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+    tramo: str,
+    exclude_solicitud_id: Optional[int] = None,
+) -> dict:
+    """PK-ID y registros de un tramo, para partir la selección en líneas al confirmar."""
+    from almacen_presupuesto_arbol import resumir_pks
+
+    sb = _sb()
+    rows = _presupuesto_rows_de_item(
+        contrato_id, capitulo, item_numero, tramo, filtrar_tramo=True,
+    )
+    for r in rows:
+        ubic = _enrich_ppto_ubicacion(r)
+        r["abscisa_inicial"] = ubic.get("abscisa_inicial")
+        r["abscisa_final"] = ubic.get("abscisa_final")
+        r["nodo_inicio"] = ubic.get("nodo_inicio")
+        r["nodo_final"] = ubic.get("nodo_final")
+    acum = _acum_presupuesto_rows(sb, contrato_id, rows, exclude_solicitud_id)
+    return {"pks": resumir_pks(rows, acum, con_registros=True)}
+
+
 def resolve_presupuesto_row(
     contrato_id: int,
     capitulo: str,

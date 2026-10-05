@@ -59,6 +59,8 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "observacion_residente",
     "numero_linea",
     "estado_validacion",
+    "grupo_seleccion",
+    "grupo_etiqueta",
 })
 
 ESTADOS_ITEM_VALIDACION = frozenset({"pendiente", "aprobado", "rechazado"})
@@ -1628,6 +1630,12 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 pass
         if src.get("estado_validacion") and not dst.get("estado_validacion"):
             dst["estado_validacion"] = src.get("estado_validacion")
+        grupo = str(src.get("grupo_seleccion") or "").strip()
+        if grupo:
+            dst["grupo_seleccion"] = grupo[:80]
+        etiqueta = str(src.get("grupo_etiqueta") or "").strip()
+        if etiqueta:
+            dst["grupo_etiqueta"] = etiqueta[:160]
     _require_justificacion_sobrepresupuesto(out)
     return out
 
@@ -1693,6 +1701,8 @@ def mapear_item_solicitud_gerencial(
     item_id: int,
     user_id: int,
     body: dict,
+    *,
+    return_solicitud: bool = True,
 ) -> dict:
     """
     Asocia el insumo del catálogo y ajusta cantidad/costo/cobro.
@@ -1807,7 +1817,169 @@ def mapear_item_solicitud_gerencial(
         raise ValueError("El valor de cobro no puede ser negativo.")
 
     sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
+    if not return_solicitud:
+        return {"ok": True, "item_id": int(item_id)}
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
+
+
+def mapear_items_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    item_ids: List[int],
+    body: dict,
+) -> dict:
+    """Asigna el mismo insumo a varias líneas. Las que no se pueden mapear se informan."""
+    sb = _sb()
+    ids: List[int] = []
+    for raw in item_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        raise ValueError("Seleccione al menos una línea.")
+    rows = (
+        sb.table("almacen_solicitud_item")
+        .select("id, numero_linea")
+        .eq("solicitud_id", int(solicitud_id))
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    numeros = {int(r["id"]): r.get("numero_linea") for r in rows if r.get("id")}
+    payload = {
+        "insumo_id": body.get("insumo_id"),
+    }
+    if body.get("valor_compra_unitario") is not None:
+        payload["valor_compra_unitario"] = body.get("valor_compra_unitario")
+    if body.get("vlr_unitario_cobro") is not None:
+        payload["vlr_unitario_cobro"] = body.get("vlr_unitario_cobro")
+    resultados = []
+    for iid in ids:
+        try:
+            mapear_item_solicitud_gerencial(
+                contrato_id,
+                solicitud_id,
+                iid,
+                user_id,
+                payload,
+                return_solicitud=False,
+            )
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": numeros.get(iid),
+                "ok": True,
+            })
+        except ValueError as exc:
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": numeros.get(iid),
+                "ok": False,
+                "error": str(exc),
+            })
+    return {
+        "solicitud": get_solicitud(contrato_id, solicitud_id, ligera=True),
+        "resultados": resultados,
+    }
+
+
+def aprobar_items_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    item_ids: List[int],
+) -> dict:
+    """
+    Aprueba las líneas que cumplen las condiciones vigentes.
+    Las que no, quedan sin aprobar y se listan con el motivo.
+    """
+    sb = _sb()
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
+    if sol["estado"] not in ("enviada", "aprobada"):
+        raise ValueError("Solo se pueden aprobar ítems de solicitudes enviadas o reabiertas.")
+    ids: List[int] = []
+    for raw in item_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        raise ValueError("Seleccione al menos una línea.")
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs]) if ocs else set()
+    rows = (
+        sb.table("almacen_solicitud_item")
+        .select(
+            "id, numero_linea, insumo_id, es_recurrente, valor_compra_unitario, estado_validacion"
+        )
+        .eq("solicitud_id", int(solicitud_id))
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    by_id = {int(r["id"]): r for r in rows if r.get("id")}
+    ok_ids: List[int] = []
+    resultados = []
+    for iid in ids:
+        row = by_id.get(iid)
+        if not row:
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": None,
+                "ok": False,
+                "error": "Ítem de solicitud no encontrado.",
+            })
+            continue
+        numero = row.get("numero_linea")
+        if iid in en_oc:
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": numero,
+                "ok": False,
+                "error": "Ya forma parte de la Orden de Compra.",
+            })
+            continue
+        if (row.get("estado_validacion") or "") == "aprobado":
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": numero,
+                "ok": False,
+                "error": "Ya está aprobada.",
+            })
+            continue
+        if not row.get("es_recurrente") and not row.get("insumo_id"):
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": numero,
+                "ok": False,
+                "error": "Falta asignar el insumo del catálogo.",
+            })
+            continue
+        if not row.get("es_recurrente") and _to_float(row.get("valor_compra_unitario")) <= 0:
+            resultados.append({
+                "item_id": iid,
+                "numero_linea": numero,
+                "ok": False,
+                "error": "Falta el costo de compra unitario.",
+            })
+            continue
+        ok_ids.append(iid)
+        resultados.append({
+            "item_id": iid,
+            "numero_linea": numero,
+            "ok": True,
+        })
+    if ok_ids:
+        sb.table("almacen_solicitud_item").update({
+            "estado_validacion": "aprobado",
+        }).in_("id", ok_ids).execute()
+    return {
+        "solicitud": get_solicitud(contrato_id, solicitud_id, ligera=True),
+        "resultados": resultados,
+    }
 
 
 def corregir_insumo_item_post_oc(

@@ -141,6 +141,8 @@ export function mapSolicitudItemsFromServer(s) {
     material_descripcion: it.material_descripcion || '',
     es_recurrente: it.es_recurrente,
     es_principal: coerceEsPrincipal(it.es_principal),
+    grupo_seleccion: it.grupo_seleccion || '',
+    grupo_etiqueta: it.grupo_etiqueta || '',
     en_orden_compra: Boolean(it.en_orden_compra),
     estado_validacion: it.estado_validacion || null,
     preview: {

@@ -7,9 +7,11 @@ import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
 import SolicitudMaterialesExcelTable from './SolicitudMaterialesExcelTable'
+import InsumoSearchTable from './InsumoSearchTable'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import { solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
+import { resumenAccionBloque } from './solicitudTramoSeleccion'
 import {
   estadoValidacionItem,
   puedeAbrirRevisionLinea,
@@ -51,6 +53,11 @@ export default function SolicitudDetalleModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmAprobar, setConfirmAprobar] = useState(false)
+  const [selIds, setSelIds] = useState(() => new Set())
+  const [asignar, setAsignar] = useState(null)
+  const [insumoSel, setInsumoSel] = useState(null)
+  const [costoBloque, setCostoBloque] = useState('')
+  const [cobroBloque, setCobroBloque] = useState('')
   const [expedienteOcId, setExpedienteOcId] = useState(null)
   const [loading, setLoading] = useState(!initialSeed)
   const [loadingSaldos, setLoadingSaldos] = useState(true)
@@ -112,6 +119,9 @@ export default function SolicitudDetalleModal({
   const editable = Boolean(permisos?.editar && solicitudAlmacenEditable(sol))
   const puedeEditarTitulo = solicitudTituloEditable(permisos)
   const puedeValidar = solicitudPuedeValidar(sol, permisos)
+  const verEconomicos = permisos?.verEconomicos !== false
+  const puedeAsignar = Boolean(permisos?.editar)
+  const puedeSeleccionar = puedeAsignar || puedeValidar
   const puedeRechazarCompleta = solicitudPuedeRechazarCompleta(sol, permisos)
   const puedeReabrir = solicitudPuedeReabrirOc(sol, permisos)
   const tieneOc = solicitudTieneOrdenCompra(sol)
@@ -212,6 +222,88 @@ export default function SolicitudDetalleModal({
     try {
       const r = await api.aprobarTodosItemsSolicitud(sol.id)
       setSol(r)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const aplicarResultadoBloque = (r, accion) => {
+    if (r?.solicitud) setSol(r.solicitud)
+    const okIds = new Set((r?.resultados || []).filter((row) => row.ok).map((row) => row.item_id))
+    setSelIds((prev) => {
+      const next = new Set(prev)
+      okIds.forEach((id) => next.delete(id))
+      return next
+    })
+    setError(resumenAccionBloque(r?.resultados, accion))
+  }
+
+  const idsDeLineas = (lineas) => (
+    (lineas || []).map((it) => it?.id).filter((id) => id != null)
+  )
+
+  const abrirAsignar = (lineas) => {
+    const ids = idsDeLineas(lineas)
+    if (!ids.length) {
+      setError('Seleccione al menos una línea.')
+      return
+    }
+    const desc = String(
+      (lineas || []).find((it) => String(it?.descripcion_solicitada || '').trim())?.descripcion_solicitada
+      || '',
+    ).trim()
+    setInsumoSel(null)
+    setCostoBloque('')
+    setCobroBloque('')
+    setAsignar({ ids, suggest: desc })
+    setError('')
+  }
+
+  const ejecutarAsignarBloque = async () => {
+    if (!sol || !asignar) return
+    if (!insumoSel?.insumo_id) {
+      setError('Seleccione el insumo del catálogo.')
+      return
+    }
+    const costo = Number(costoBloque)
+    if (verEconomicos && !(costo > 0)) {
+      setError('Defina el costo de compra unitario.')
+      return
+    }
+    const body = {
+      item_ids: asignar.ids,
+      insumo_id: Number(insumoSel.insumo_id),
+    }
+    if (costo > 0) body.valor_compra_unitario = costo
+    const cobro = cobroBloque !== '' && cobroBloque != null ? Number(cobroBloque) : NaN
+    if (Number.isFinite(cobro) && cobro > 0) body.vlr_unitario_cobro = cobro
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.mapearItemsBloque(sol.id, body)
+      setAsignar(null)
+      aplicarResultadoBloque(r, 'Insumo asignado')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const aprobarLineas = async (lineas) => {
+    if (!sol) return
+    const ids = idsDeLineas(lineas)
+    if (!ids.length) {
+      setError('Seleccione al menos una línea.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.aprobarItemsBloque(sol.id, ids)
+      aplicarResultadoBloque(r, 'Aprobadas')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -504,16 +596,56 @@ export default function SolicitudDetalleModal({
               </button>
 
               {materialesOpen && (
+                <>
+                  {puedeSeleccionar && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {puedeAsignar && (
+                        <button
+                          type="button"
+                          style={ui.btnSecondary}
+                          disabled={busy || selIds.size === 0}
+                          onClick={() => abrirAsignar(items.filter((it) => selIds.has(it.id)))}
+                        >
+                          Asignar insumo a la selección
+                        </button>
+                      )}
+                      {puedeValidar && (
+                        <button
+                          type="button"
+                          style={ui.btnSecondary}
+                          disabled={busy || selIds.size === 0}
+                          onClick={() => { void aprobarLineas(items.filter((it) => selIds.has(it.id))) }}
+                        >
+                          Aprobar selección
+                        </button>
+                      )}
+                    </div>
+                  )}
                 <SolicitudMaterialesExcelTable
                   items={items}
                   sol={sol}
                   puedeValidar={puedeValidar}
                   destacarSinInsumo={Boolean(permisos?.editar)}
+                  puedeSeleccionar={puedeSeleccionar}
+                  puedeAsignar={puedeAsignar}
+                  seleccion={selIds}
+                  onToggleLinea={(id, checked) => {
+                    if (id == null) return
+                    setSelIds((prev) => {
+                      const next = new Set(prev)
+                      if (checked) next.add(id)
+                      else next.delete(id)
+                      return next
+                    })
+                  }}
+                  onAsignarGrupo={(_grupoId, grupoItems) => abrirAsignar(grupoItems)}
+                  onAprobarGrupo={(_grupoId, grupoItems) => { void aprobarLineas(grupoItems) }}
                   onRowClick={(it) => {
                     if (it?.id != null) setRevisionItemId(it.id)
                   }}
                   onMapClick={(it) => setMapaItem(it)}
                 />
+                </>
               )}
 
               <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
@@ -579,6 +711,87 @@ export default function SolicitudDetalleModal({
           )}
         </div>
       </div>
+
+      {asignar && (
+        <div
+          className={compact ? 'cc-almacen-modal-overlay cc-almacen-modal-overlay--compact' : 'cc-almacen-modal-overlay'}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100045,
+            display: 'flex',
+            alignItems: compact ? 'flex-end' : 'center',
+            justifyContent: 'center',
+            padding: compact ? 0 : 20,
+          }}
+          onClick={() => !busy && setAsignar(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="asignar-bloque-titulo"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...almacenFormModalDialogStyle({ width: 'min(640px, 100%)', compact }),
+              padding: compact ? 16 : 22,
+            }}
+          >
+            <div id="asignar-bloque-titulo" style={{ fontWeight: 800, fontSize: 'var(--cc-title)', marginBottom: 6 }}>
+              Asignar insumo
+            </div>
+            <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', marginBottom: 12 }}>
+              El mismo insumo se aplica a {asignar.ids.length} línea(s). Cada una se puede revisar después.
+            </div>
+            <InsumoSearchTable
+              value={insumoSel}
+              disabled={busy}
+              suggestFrom={asignar.suggest}
+              onChange={(ins) => {
+                setInsumoSel(ins)
+                if (ins?.tiene_precio_compra && ins.valor_compra_referencia != null) {
+                  setCostoBloque(String(ins.valor_compra_referencia))
+                }
+              }}
+            />
+            {verEconomicos && (
+              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+                <label style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                  Costo unitario
+                  <input
+                    style={{ ...ui.input, marginTop: 4, width: 140, textAlign: 'right' }}
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={costoBloque}
+                    disabled={busy}
+                    onChange={(e) => setCostoBloque(e.target.value)}
+                  />
+                </label>
+                <label style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                  Cobro unitario
+                  <input
+                    style={{ ...ui.input, marginTop: 4, width: 140, textAlign: 'right' }}
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={cobroBloque}
+                    disabled={busy}
+                    onChange={(e) => setCobroBloque(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => setAsignar(null)}>
+                Cancelar
+              </button>
+              <button type="button" style={btnSuccessStyle(ui.btnPrimary)} disabled={busy} onClick={() => { void ejecutarAsignarBloque() }}>
+                {busy ? 'Asignando…' : 'Asignar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmAprobar && (
         <CcConfirmModal

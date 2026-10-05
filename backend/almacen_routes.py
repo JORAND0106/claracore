@@ -24,6 +24,9 @@ from almacen_insumos_service import (
     list_precios_insumo_proveedor,
     list_insumos_por_proveedor,
     list_presupuesto_registros,
+    list_presupuesto_tramos,
+    list_presupuesto_pks,
+    list_presupuesto_tramo_detalle,
     resolve_insumo_for_solicitud,
     search_insumos,
     search_insumos_solo_catalogo,
@@ -107,6 +110,8 @@ from almacen_service import (
     list_usuarios_receptor_obra,
     salidas_devolvibles_por_pk,
     mapear_item_solicitud_gerencial,
+    mapear_items_bloque,
+    aprobar_items_bloque,
     corregir_insumo_item_post_oc,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
@@ -214,6 +219,8 @@ class SolicitudItemBody(BaseModel):
     es_recurrente: bool = False
     es_principal: bool = True
     estado_validacion: Optional[str] = None
+    grupo_seleccion: Optional[str] = None
+    grupo_etiqueta: Optional[str] = None
 
 
 class MapearItemGerencialBody(BaseModel):
@@ -222,6 +229,17 @@ class MapearItemGerencialBody(BaseModel):
     valor_compra_unitario: Optional[float] = Field(None, ge=0)
     vlr_unitario_cobro: Optional[float] = Field(None, ge=0)
     es_recurrente: Optional[bool] = None
+
+
+class MapearBloqueBody(BaseModel):
+    item_ids: List[int] = Field(..., min_length=1)
+    insumo_id: int = Field(..., gt=0)
+    valor_compra_unitario: Optional[float] = Field(None, ge=0)
+    vlr_unitario_cobro: Optional[float] = Field(None, ge=0)
+
+
+class AprobarBloqueBody(BaseModel):
+    item_ids: List[int] = Field(..., min_length=1)
 
 
 class ImpuestoInsumoBody(BaseModel):
@@ -520,6 +538,63 @@ def route_search_transportadores(
     return search_transportadores(contrato_id, q, min(limit, 50))
 
 
+@router.get("/{contrato_id}/presupuesto-tramos")
+def route_presupuesto_tramos(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    exclude_solicitud_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    """Acordeón nivel 1: cantidades agregadas por tramo."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_almacen(current_user)
+    try:
+        return list_presupuesto_tramos(contrato_id, capitulo, item, exclude_solicitud_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/presupuesto-tramo-pks")
+def route_presupuesto_tramo_pks(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    tramo: str = "",
+    exclude_solicitud_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    """Acordeón nivel 2: PK-ID de un tramo (se pide al expandir)."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_almacen(current_user)
+    try:
+        return list_presupuesto_pks(
+            contrato_id, capitulo, item, tramo, exclude_solicitud_id,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/presupuesto-tramo-detalle")
+def route_presupuesto_tramo_detalle(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    tramo: str = "",
+    exclude_solicitud_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    """PK-ID y registros de un tramo, para generar las líneas al confirmar."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_almacen(current_user)
+    try:
+        return list_presupuesto_tramo_detalle(
+            contrato_id, capitulo, item, tramo, exclude_solicitud_id,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/presupuesto-registros")
 def route_presupuesto_registros(
     contrato_id: int,
@@ -809,6 +884,63 @@ def route_mapear_item_gerencial(
             {"item_id": item_id, **{k: payload.get(k) for k in ("insumo_id", "cantidad") if k in payload}},
             valor_anterior={"item_id": item_id},
             valor_nuevo={"item_id": item_id, **(payload or {})},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/mapear-bloque")
+def route_mapear_items_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    body: MapearBloqueBody,
+    current_user=Depends(get_current_user),
+):
+    """Asigna un insumo a varias líneas. Requiere Almacén · editar."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        result = mapear_items_bloque(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            body.item_ids,
+            body.model_dump(exclude_none=True),
+        )
+        log_almacen(
+            current_user, "MAPEAR_BLOQUE", "solicitud", solicitud_id,
+            {"item_ids": body.item_ids, "insumo_id": body.insumo_id},
+            valor_anterior=None,
+            valor_nuevo={"item_ids": body.item_ids, "insumo_id": body.insumo_id},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/aprobar-bloque")
+def route_aprobar_items_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    body: AprobarBloqueBody,
+    current_user=Depends(get_current_user),
+):
+    """Aprueba varias líneas. Validar + Contratista Gerencial. Informa las que no aplican."""
+    _check_contrato(current_user, contrato_id)
+    require_contratista_gerencial_almacen(current_user)
+    try:
+        result = aprobar_items_bloque(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            body.item_ids,
+        )
+        log_almacen(
+            current_user, "APROBAR_BLOQUE", "solicitud", solicitud_id,
+            {"item_ids": body.item_ids},
+            valor_anterior=None,
+            valor_nuevo={"item_ids": body.item_ids},
         )
         return result
     except ValueError as exc:

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SolicitudFormExcelTable from './SolicitudFormExcelTable'
+import SolicitudTramoAccordion from './SolicitudTramoAccordion'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import LineaResumenExcelTable from './LineaResumenExcelTable'
@@ -65,6 +66,8 @@ const emptyItem = () => ({
   valor_compra_unitario: '',
   es_recurrente: false,
   es_principal: true,
+  grupo_seleccion: '',
+  grupo_etiqueta: '',
   preview: null,
 })
 
@@ -180,6 +183,7 @@ export default function SolicitudForm({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const [items, setItems] = useState([emptyItem()])
+  const [tramoFlow, setTramoFlow] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
@@ -404,6 +408,7 @@ export default function SolicitudForm({
   const onPptoChange = (idx, { capitulo, item }) => {
     markDirty()
     const esAiu = isAdministracionAiu(capitulo, item)
+    const locked = Boolean(modoReabrirOc && items[idx]?.id)
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? {
         ...it,
@@ -419,6 +424,36 @@ export default function SolicitudForm({
       triggerPreview(idx, next)
       return next
     })
+    if (item && !esAiu && !locked) setTramoFlow(idx)
+    else setTramoFlow((cur) => (cur === idx ? null : cur))
+  }
+
+  const abrirTramos = (idx) => {
+    const it = items[idx]
+    if (!it || isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)) return
+    if (!it.presupuesto_item) {
+      setError('Seleccione el ítem antes de abrir los tramos.')
+      return
+    }
+    if (modoReabrirOc && it.id) return
+    setError('')
+    setTramoFlow(idx)
+  }
+
+  const aplicarLineasTramo = (lineas) => {
+    if (tramoFlow == null) return
+    if (!lineas?.length) {
+      setTramoFlow(null)
+      return
+    }
+    const idx0 = tramoFlow
+    const next = [...items]
+    next.splice(idx0, 1, ...lineas)
+    setItems(next)
+    setTramoFlow(null)
+    setError('')
+    markDirty()
+    lineas.forEach((_, i) => triggerPreview(idx0 + i, next))
   }
 
   const onDescripcionChange = (idx, val) => {
@@ -587,6 +622,8 @@ export default function SolicitudForm({
           presupuesto_id: esAiu ? null : (itemPresupuestoIds(it)[0] || it.presupuesto_id || null),
           presupuesto_ids: esAiu ? [] : itemPresupuestoIds(it),
           descripcion_solicitada: String(it.descripcion_solicitada || '').trim(),
+          grupo_seleccion: it.grupo_seleccion || undefined,
+          grupo_etiqueta: it.grupo_etiqueta || undefined,
           ...ubicacionPayload(it),
         }
         // Conservar mapeo Gerencial/legado si la línea ya tenía insumo (no se muestra al Contratista).
@@ -969,10 +1006,26 @@ export default function SolicitudForm({
             onRegistroSelect={onRegistroSelect}
             onRegistroToggle={onRegistroToggle}
             onUbicacionChange={onUbicacionChange}
+            onAbrirTramos={abrirTramos}
             onAddRow={addItemAt}
             onRemoveRow={removeItem}
             isRowLocked={(it) => isRowLocked(it)}
           />
+          {tramoFlow != null && items[tramoFlow] && (
+            <SolicitudTramoAccordion
+              key={tramoFlow}
+              capitulo={items[tramoFlow].presupuesto_capitulo}
+              item={items[tramoFlow].presupuesto_item}
+              descripcion={items[tramoFlow].descripcion_solicitada}
+              esPrincipal={items[tramoFlow].es_principal !== false}
+              observacion={items[tramoFlow].observacion_residente}
+              excludeSolicitudId={effectiveSolicitudId}
+              t={theme}
+              busy={busy}
+              onClose={() => setTramoFlow(null)}
+              onConfirm={aplicarLineasTramo}
+            />
+          )}
           {items.map((it, idx) => {
             const esAiu = isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)
               || Boolean(it.preview?.es_administracion_aiu)

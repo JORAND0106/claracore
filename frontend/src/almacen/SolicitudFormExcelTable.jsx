@@ -13,7 +13,7 @@ const COLS = [
   {
     key: 'mat',
     abbr: 'Material',
-    tip: 'Describa el material que necesita. El Contratista Gerencial seleccionará el insumo del catálogo al aprobar.',
+    tip: 'Describa el material que necesita. Quien tenga permiso de Editar asigna el insumo del catálogo en la revisión.',
     width: 200,
   },
   {
@@ -22,12 +22,12 @@ const COLS = [
     tip: 'Marcado = consume presupuesto del ítem. Desmarcado = insumo asociado (no descuenta saldo ni alerta sobrepresupuesto).',
     width: 78,
   },
-  { key: 'ubi', abbr: 'Ubicación', tip: 'PK-ID, registro de presupuesto, tramo, costado y abscisas', width: 110 },
+  { key: 'ubi', abbr: 'Ubicación', tip: 'Mapa o cantidades por tramo y PK-ID. También registro, costado y abscisas', width: 188 },
   { key: 'cant', abbr: 'Cantidad', tip: 'Cantidad solicitada', width: 80 },
   {
     key: 'obs',
     abbr: 'Justificación',
-    tip: 'Obligatoria si la cantidad supera el presupuesto del PK-ID: explique el desfase. En otros casos es opcional.',
+    tip: 'Observación. Obligatoria si la cantidad supera el presupuesto del PK-ID: explique el desfase. En otros casos es opcional.',
     width: 160,
   },
   { key: 'acc', abbr: '', tip: 'Agregar o eliminar fila', width: 80 },
@@ -94,6 +94,7 @@ export default function SolicitudFormExcelTable({
   onRegistroSelect,
   onRegistroToggle,
   onUbicacionChange,
+  onAbrirTramos,
   onAddRow,
   onRemoveRow,
   /** Si true, la fila no se edita ni elimina (líneas ya en OC). */
@@ -226,34 +227,49 @@ export default function SolicitudFormExcelTable({
                     </label>
                   </td>
                   <td style={{ ...tdBase, textAlign: 'center' }}>
-                    <button
-                      type="button"
-                      title={locked ? 'Línea bloqueada (en OC)' : ubicacionResumen(it)}
-                      disabled={rowDisabled}
-                      onClick={() => setUbicacionFlow({ idx, phase: 'mapa' })}
-                      style={{
-                        ...iconBtn({
-                          background: it.pk_id ? `${ui.accent}18` : undefined,
-                          borderColor: it.pk_id ? ui.accent : undefined,
-                          color: it.pk_id ? ui.accent : undefined,
-                          maxWidth: '100%',
-                        }),
-                      }}
-                    >
-                      <span aria-hidden>🗺️</span>
-                      <span style={{
-                        display: 'inline-block',
-                        maxWidth: 72,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        verticalAlign: 'middle',
-                        marginLeft: 4,
-                      }}
+                    <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        title={locked ? 'Línea bloqueada (en OC)' : ubicacionResumen(it)}
+                        disabled={rowDisabled}
+                        onClick={() => setUbicacionFlow({ idx, phase: 'mapa' })}
+                        style={{
+                          ...iconBtn({
+                            background: it.pk_id ? `${ui.accent}18` : undefined,
+                            borderColor: it.pk_id ? ui.accent : undefined,
+                            color: it.pk_id ? ui.accent : undefined,
+                            maxWidth: '100%',
+                          }),
+                        }}
                       >
-                        {it.pk_label || it.pk_id || 'PK'}
-                      </span>
-                    </button>
+                        <span aria-hidden>🗺️</span>
+                        <span style={{
+                          display: 'inline-block',
+                          maxWidth: 56,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          verticalAlign: 'middle',
+                          marginLeft: 4,
+                        }}
+                        >
+                          {it.pk_label || it.pk_id || 'PK'}
+                        </span>
+                      </button>
+                      {!esAiu && (
+                        <button
+                          type="button"
+                          title={it.presupuesto_item
+                            ? 'Cantidades por tramo y PK-ID'
+                            : 'Seleccione el ítem para ver los tramos'}
+                          disabled={rowDisabled || !it.presupuesto_item}
+                          onClick={() => onAbrirTramos?.(idx)}
+                          style={iconBtn()}
+                        >
+                          Tramos
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td style={{ ...tdBase, textAlign: 'center' }}>
                     <input
