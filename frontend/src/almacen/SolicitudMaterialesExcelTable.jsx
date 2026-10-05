@@ -98,6 +98,7 @@ export default function SolicitudMaterialesExcelTable({
   items = [],
   sol,
   puedeValidar = false,
+  puedeRevisarLinea = false,
   destacarSinInsumo = false,
   onRowClick,
   onMapClick,
@@ -122,7 +123,8 @@ export default function SolicitudMaterialesExcelTable({
   const minWidth = COLS.reduce((acc, c) => acc + c.width, 0)
     + (puedeValidar ? 78 : 0)
     + (puedeSeleccionar ? 36 : 0)
-  const colSpan = COLS.length + (puedeValidar ? 1 : 0) + (puedeSeleccionar ? 1 : 0)
+    + (puedeRevisarLinea ? 88 : 0)
+  const colSpan = COLS.length + (puedeValidar ? 1 : 0) + (puedeSeleccionar ? 1 : 0) + (puedeRevisarLinea ? 1 : 0)
 
   return (
     <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
@@ -132,6 +134,7 @@ export default function SolicitudMaterialesExcelTable({
           {COLS.map((c) => (
             <col key={c.key} style={{ width: c.width }} />
           ))}
+          {puedeRevisarLinea && <col style={{ width: 88 }} />}
           {puedeValidar && <col style={{ width: 78 }} />}
         </colgroup>
         <thead>
@@ -148,6 +151,14 @@ export default function SolicitudMaterialesExcelTable({
                 style={thBase}
               />
             ))}
+            {puedeRevisarLinea && (
+              <ColHeader
+                abbr="REV."
+                tip="Abrir la revisión de la línea para asignar el insumo"
+                style={thBase}
+                align="center"
+              />
+            )}
             {puedeValidar && (
               <ColHeader
                 abbr="EST."
@@ -312,6 +323,30 @@ export default function SolicitudMaterialesExcelTable({
                     🗺️
                   </button>
                 </td>
+                {puedeRevisarLinea && (
+                  <td
+                    style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      data-testid="revision-linea-abrir"
+                      title="Revisión de línea: asignar insumo"
+                      disabled={it.id == null}
+                      onClick={() => onRowClick?.(it, idx)}
+                      style={{
+                        ...ui.btnSecondary,
+                        padding: '2px 8px',
+                        minHeight: 0,
+                        height: 26,
+                        lineHeight: '22px',
+                        fontSize: 'var(--cc-xs)',
+                      }}
+                    >
+                      Revisar
+                    </button>
+                  </td>
+                )}
                 {puedeValidar && (
                   <td style={{
                     ...cellBase(ui),

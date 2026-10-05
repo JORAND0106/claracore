@@ -10,7 +10,8 @@ from fastapi import HTTPException
 
 AlmacenAccion = Literal["ver", "crear", "editar", "eliminar", "validar", "exportar"]
 
-_FUNC_NOMBRES = frozenset({"almacén", "almacen"})
+_FUNC_NOMBRES = frozenset({"almacén", "almacen", "almacen de obra"})
+_FUNC_CODIGO = "ALMACEN"
 _ACCIONES = ("ver", "crear", "editar", "eliminar", "validar", "exportar")
 
 _ROLES_EXCLUIDOS_ALMACEN = frozenset({
@@ -164,13 +165,14 @@ def _cargo_permiso_almacen(current_user, accion: AlmacenAccion) -> bool:
             return False
         funcs = supabase_execute(
             lambda: supabase.table("funciones")
-            .select("id, nombre")
+            .select("id, nombre, codigo")
             .in_("id", fids)
             .execute()
             .data
         ) or []
         for f in funcs:
-            if _norm(f.get("nombre") or "") in _FUNC_NOMBRES:
+            codigo = str(f.get("codigo") or "").strip().upper()
+            if codigo == _FUNC_CODIGO or _norm(f.get("nombre") or "") in _FUNC_NOMBRES:
                 return True
     except Exception:
         return False

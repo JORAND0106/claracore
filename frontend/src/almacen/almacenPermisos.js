@@ -6,7 +6,8 @@
  * - Entradas y Salidas: Entradas, Salidas, Despacho, Devoluciones
  * - Catálogo de insumos: catálogo / proveedores / cotizaciones
  */
-import { esDesarrolladorUsuario, permisoFuncionContrato, tienePermisoAlgunaAccion, tienePermisoFlag } from '../utils/permisosContrato'
+import { esDesarrolladorUsuario, tienePermisoAlgunaAccion } from '../utils/permisosContrato'
+import { filaAlmacenEnSesion } from './almacenFuncionMatch.js'
 import { permisosCatalogoInsumos, tieneAlgunaAccionCatalogoInsumos } from '../admin/catalogoInsumosPermisos'
 import { permisosEntradasSalidas, tieneAlgunaAccionEntradasSalidas } from './entradasSalidasPermisos'
 
@@ -102,9 +103,8 @@ export function permisoAlmacen(usuario, accion, contratoId) {
   if (rolExcluidoAlmacen(usuario)) return false
   if (esDesarrolladorUsuario(usuario)) return true
   if (accion === 'validar' && esValidadorAlmacenPorCargo(usuario)) return true
-  const cid = contratoId ?? usuario?.contrato_id
-  if (tienePermisoFlag(usuario, ALMACEN_FUNCION, accion, cid)) return true
-  return tienePermisoFlag(usuario, 'almacen', accion, cid)
+  const fila = filaAlmacen(usuario, contratoId)
+  return Boolean(fila && fila[accion])
 }
 
 /** Permisos propios de la función Almacén (solicitudes / inventario). Sin herencia. */
@@ -125,9 +125,7 @@ export function permisosAlmacen(usuario, contratoId) {
 }
 
 function filaAlmacen(usuario, contratoId) {
-  const cid = contratoId ?? usuario?.contrato_id
-  return permisoFuncionContrato(usuario, ALMACEN_FUNCION, cid)
-    || permisoFuncionContrato(usuario, 'almacen', cid)
+  return filaAlmacenEnSesion(usuario, contratoId)
 }
 
 /** True si hay al menos un flag propio en la función Almacén. */

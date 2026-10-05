@@ -7264,9 +7264,14 @@ def login(request: Request, body: LoginRequest):
             int(usuario["cargo_id"]),
             int(usuario["contrato_id"]) if usuario.get("contrato_id") is not None else None,
         )
-        funciones_rows = supabase.table("funciones").select("id, nombre").execute().data
+        funciones_rows = supabase.table("funciones").select("id, nombre, codigo").execute().data
         funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
-        permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
+        funciones_codigo = {f["id"]: (f.get("codigo") or "") for f in funciones_rows}
+        permisos = [{
+            **p,
+            "funcion_nombre": funciones_map.get(p["funcion_id"], ""),
+            "funcion_codigo": funciones_codigo.get(p["funcion_id"], ""),
+        } for p in permisos_raw]
     # Desarrollador: acceso total (sin depender de la matriz por función).
     # ROL Administrativo NO inyecta módulos: solo ve valores económicos en RRHH
     # (vía puede_ver_salario_rrhh) si su cargo tiene RRHH habilitado en la matriz.
@@ -7977,9 +7982,14 @@ def get_mi_usuario(
                 int(u["cargo_id"]),
                 int(cid_scope) if cid_scope is not None else None,
             )
-            funciones_rows = sb.table("funciones").select("id, nombre").execute().data or []
+            funciones_rows = sb.table("funciones").select("id, nombre, codigo").execute().data or []
             funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
-            permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
+            funciones_codigo = {f["id"]: (f.get("codigo") or "") for f in funciones_rows}
+            permisos = [{
+                **p,
+                "funcion_nombre": funciones_map.get(p["funcion_id"], ""),
+                "funcion_codigo": funciones_codigo.get(p["funcion_id"], ""),
+            } for p in permisos_raw]
         except Exception:
             permisos_raw = []
     # Desarrollador: acceso total (sin depender de la matriz por función).
