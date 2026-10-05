@@ -9,6 +9,7 @@ import {
   justificacionesParaTipo,
   parseAbsNum,
 } from './sicoeAuditoriaTraslapos'
+import { fmtCantidadConDimensiones } from './sicoeCantidadDimensiones'
 import { fetchAuditoriaHallazgoDetalle, justificarAuditoriaHallazgo } from './sicoeAuditoriaHallazgosApi'
 import { FranjaCoberturaHallazgo } from './SicoeHallazgoFranja'
 import { SicoeHallazgoComparativaMapa } from './SicoeHallazgoComparativaMapa'
@@ -82,9 +83,7 @@ const CMP_ROWS = [
   {
     key: 'cantidad_total',
     label: 'Cantidad',
-    render: (r) => (r?.cantidad_total == null || r?.cantidad_total === ''
-      ? '—'
-      : Number(r.cantidad_total).toLocaleString('es-CO')),
+    render: (r) => fmtCantidadConDimensiones(r),
   },
   {
     key: 'valor',

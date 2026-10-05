@@ -4,6 +4,7 @@
  * Preferimos geometría detallada desde dibujo_escena (forma real de entidades).
  */
 import { esquemaEscenaToDetalleGeojson } from '../../modules/sicoe-obra/sicoeDibujoEscenaGeojson.js'
+import { colorDibujoPorItems, SICOE_ITEM_COLOR_NEUTRO } from '../../modules/sicoe-obra/sicoeItemColores.js'
 
 export const ESQUEMA_DIBUJO_REFS_SOURCE = 'esquema-dibujo-refs'
 export const ESQUEMA_DIBUJO_REFS_FILL = 'esquema-dibujo-refs-fill'
@@ -11,10 +12,10 @@ export const ESQUEMA_DIBUJO_REFS_LINE = 'esquema-dibujo-refs-line'
 export const ESQUEMA_DIBUJO_REFS_POINT = 'esquema-dibujo-refs-point'
 export const ESQUEMA_DIBUJO_REFS_LABEL = 'esquema-dibujo-refs-label'
 
-/** Color de referencia: pizarra suave, claramente más apagado que el dibujo editable. */
-export const ESQUEMA_DIBUJO_REFS_COLOR = '#64748b'
-export const ESQUEMA_DIBUJO_REFS_FILL_OPACITY = 0.14
-export const ESQUEMA_DIBUJO_REFS_LINE_OPACITY = 0.7
+/** Color de referencia neutro (varios ítems o sin ítem). */
+export const ESQUEMA_DIBUJO_REFS_COLOR = SICOE_ITEM_COLOR_NEUTRO
+export const ESQUEMA_DIBUJO_REFS_FILL_OPACITY = 0.22
+export const ESQUEMA_DIBUJO_REFS_LINE_OPACITY = 0.85
 
 function featuresFromGeojson(dg) {
   if (dg == null) return []
@@ -62,10 +63,15 @@ export function buildDibujoReferenciasFeatureCollection(referencias) {
     const dg = geojsonParaReferencia(ref)
     const feats = featuresFromGeojson(dg)
     const regs = Array.isArray(ref.registros) ? ref.registros : []
+    const items = Array.isArray(ref.items) && ref.items.length
+      ? ref.items
+      : regs.map((r) => r?.item_numero).filter(Boolean)
+    const refColor = colorDibujoPorItems(items)
     const baseProps = {
       ref_reporte_id: ref.reporte_id,
       ref_numero_reporte: ref.numero_reporte ?? null,
-      ref_items: Array.isArray(ref.items) ? ref.items.join(', ') : '',
+      ref_items: Array.isArray(items) ? items.join(', ') : '',
+      ref_item_color: refColor,
       ref_costo_directo: ref.costo_directo ?? 0,
       ref_registros_json: JSON.stringify(regs),
       ref_readonly: 1,
@@ -146,7 +152,7 @@ export function ensureEsquemaDibujoReferenciasLayers(map, fc) {
       ['==', ['geometry-type'], 'MultiPolygon'],
     ],
     paint: {
-      'fill-color': ESQUEMA_DIBUJO_REFS_COLOR,
+      'fill-color': ['coalesce', ['get', 'ref_item_color'], ESQUEMA_DIBUJO_REFS_COLOR],
       'fill-opacity': ESQUEMA_DIBUJO_REFS_FILL_OPACITY,
     },
   })
@@ -163,8 +169,8 @@ export function ensureEsquemaDibujoReferenciasLayers(map, fc) {
       ['==', ['geometry-type'], 'MultiPolygon'],
     ],
     paint: {
-      'line-color': ESQUEMA_DIBUJO_REFS_COLOR,
-      'line-width': 1.6,
+      'line-color': ['coalesce', ['get', 'ref_item_color'], ESQUEMA_DIBUJO_REFS_COLOR],
+      'line-width': 1.8,
       'line-opacity': ESQUEMA_DIBUJO_REFS_LINE_OPACITY,
       'line-dasharray': [2.2, 1.8],
     },
@@ -177,8 +183,8 @@ export function ensureEsquemaDibujoReferenciasLayers(map, fc) {
     filter: ['==', ['geometry-type'], 'Point'],
     paint: {
       'circle-radius': 5.5,
-      'circle-color': ESQUEMA_DIBUJO_REFS_COLOR,
-      'circle-opacity': 0.55,
+      'circle-color': ['coalesce', ['get', 'ref_item_color'], ESQUEMA_DIBUJO_REFS_COLOR],
+      'circle-opacity': 0.7,
       'circle-stroke-width': 1.2,
       'circle-stroke-color': '#fff',
     },
@@ -196,10 +202,10 @@ export function ensureEsquemaDibujoReferenciasLayers(map, fc) {
       'text-allow-overlap': false,
     },
     paint: {
-      'text-color': ESQUEMA_DIBUJO_REFS_COLOR,
+      'text-color': ['coalesce', ['get', 'ref_item_color'], ESQUEMA_DIBUJO_REFS_COLOR],
       'text-halo-color': '#fff',
       'text-halo-width': 1.1,
-      'text-opacity': 0.85,
+      'text-opacity': 0.9,
     },
   })
 }
