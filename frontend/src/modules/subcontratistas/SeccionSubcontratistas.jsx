@@ -3,6 +3,7 @@ import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { tFrom, isDarkMode, isRestMode, buildContratoUiTheme } from '../../theme/adminPanelTheme'
 import CorteSsBlock from './CorteSsBlock'
 import PreciosSubcontratistaSheet from './PreciosSubcontratistaSheet'
+import SubcontratistaCalPicker from './SubcontratistaCalPicker'
 import SubcontratistaFormSheet, { EMPTY_SUBCONTRATISTA_FORM } from './SubcontratistaFormSheet'
 import { uploadDocumento, uploadPoliza } from './subcontratistasApi'
 import { nivelPolizaBadge, periodoFromCorte } from './subcontratistasDocsHelpers'
@@ -341,83 +342,17 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     }
   }
 
-  const CalPicker = ({ value, onChange, isOpen, onToggle }) => {
-    const [vd, setVd] = useState(() => (value ? new Date(`${value}T12:00:00`) : new Date()))
-    const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
-    const y = vd.getFullYear()
-    const m = vd.getMonth()
-    const fd = new Date(y, m, 1).getDay()
-    const dim = new Date(y, m + 1, 0).getDate()
-    const dias = [...Array(fd).fill(null), ...Array.from({ length: dim }, (_, i) => i + 1)]
-    const iso = (d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    const disp = (v) => (v
-      ? `${parseInt(v.split('-')[2], 10)} ${MESES[parseInt(v.split('-')[1], 10) - 1]}, ${v.split('-')[0]}`
-      : 'Seleccionar fecha')
-    return (
-      <div style={{ position: 'relative' }}>
-        <div
-          onClick={onToggle}
-          style={{ ...inputStyle, cursor: 'pointer', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}
-        >
-          <span>📅</span>
-          <span style={{ fontSize: 'var(--cc-sm)', color: value ? col.textPrimary : col.textMuted }}>{disp(value)}</span>
-        </div>
-        {isOpen && (
-          <div style={{
-            position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 10010,
-            background: tTok.bgCard,
-            border: `1px solid ${tTok.border}`,
-            borderRadius: 10, padding: 14,
-            boxShadow: uiTheme.shadow,
-            minWidth: 260,
-            color: tTok.text,
-            fontSize: 'var(--cc-sm)',
-          }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <button type="button" style={{ ...S.btn('ghost', true), padding: '4px 10px' }} onClick={() => setVd(new Date(y, m - 1, 1))}>◄</button>
-              <span style={{ fontSize: 'var(--cc-md)', fontWeight: 700, color: col.textPrimary }}>
-                {MESES[m]} <span style={{ color: tTok.primary }}>{y}</span>
-              </span>
-              <button type="button" style={{ ...S.btn('ghost', true), padding: '4px 10px' }} onClick={() => setVd(new Date(y, m + 1, 1))}>►</button>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2, marginBottom: 6 }}>
-              {['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'].map((d) => (
-                <div key={d} style={{ textAlign: 'center', fontSize: 'var(--cc-caption)', color: col.textMuted, fontWeight: 700, padding: '2px 0' }}>{d}</div>
-              ))}
-              {dias.map((d, i) => {
-                if (!d) return <div key={i} />
-                const hoy = new Date().toISOString().slice(0, 10)
-                const diso = iso(d)
-                const isSel = diso === value
-                const isHoy = diso === hoy
-                return (
-                  <div
-                    key={i}
-                    onClick={() => { onChange(diso); onToggle() }}
-                    style={{
-                      textAlign: 'center', padding: '5px 2px', borderRadius: 6, cursor: 'pointer', fontSize: 'var(--cc-sm)',
-                      fontWeight: isSel ? 700 : 400,
-                      background: isSel ? tTok.primary : isHoy ? uiTheme.cardSubtle : 'transparent',
-                      color: isSel ? (isDarkMode(theme) ? '#081318' : '#fff') : col.textPrimary,
-                      border: isHoy && !isSel ? `1px solid ${tTok.primary}66` : '1px solid transparent',
-                    }}
-                  >
-                    {d}
-                  </div>
-                )
-              })}
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `1px solid ${tTok.border}`, paddingTop: 8 }}>
-              <button type="button" style={{ ...S.btn('ghost', true) }} onClick={() => { onChange(new Date().toISOString().slice(0, 10)); onToggle() }}>↖ hoy</button>
-              <button type="button" style={{ ...S.btn('danger', true) }} onClick={() => { onChange(''); onToggle() }}>— borrar</button>
-              <button type="button" style={{ ...S.btn('ghost', true) }} onClick={onToggle}>✕ cerrar</button>
-            </div>
-          </div>
-        )}
-      </div>
-    )
+  const calPickerProps = {
+    theme,
+    inputStyle,
+    btn: (variant, sm) => S.btn(variant, sm),
+    colors: col,
+    tokens: tTok,
+    shadow: uiTheme.shadow,
+    cardSubtle: uiTheme.cardSubtle,
   }
+
+  const CalPicker = (props) => <SubcontratistaCalPicker {...calPickerProps} {...props} />
 
   const subsFiltrados = subs.filter((s) => !filtro
     || (s.razon_social || '').toLowerCase().includes(filtro.toLowerCase())
