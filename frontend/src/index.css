@@ -13,6 +13,80 @@ body {
   --cc-color-danger: #dc2626;
   --cc-btn-success-bg: #047857;
   --cc-btn-success-text: #ffffff;
+  /* Tooltips institucionales (CcTitleTooltips) — defaults tema claro */
+  --cc-tip-bg: #ffffff;
+  --cc-tip-border: #0077b6;
+  --cc-tip-text: #0f2942;
+  --cc-tip-muted: #4a7fa5;
+  --cc-tip-shadow: 0 8px 24px rgba(0, 119, 182, 0.18);
+  --cc-tip-accent: #0077b6;
+  --cc-tip-header-bg: rgba(0, 119, 182, 0.06);
+  --cc-tip-header-border: #bae6fd;
+  --cc-tip-brand: #0a4d68;
+}
+
+/* Tooltip flotante institucional (sustituye title nativo negro/blanco) */
+#cc-title-tooltip.cc-title-tooltip {
+  position: fixed;
+  z-index: 2147483000;
+  pointer-events: none;
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 24px));
+  border-radius: 10px;
+  border: 1px solid var(--cc-tip-border);
+  background: var(--cc-tip-bg);
+  color: var(--cc-tip-text);
+  box-shadow: var(--cc-tip-shadow);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: var(--cc-sm, 13px);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+#cc-title-tooltip .cc-title-tooltip__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--cc-tip-header-bg);
+  border-bottom: 1px solid var(--cc-tip-header-border);
+}
+
+#cc-title-tooltip .cc-title-tooltip__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+html[data-cc-theme='dark'] {
+  --cc-tip-bg: #0f2038;
+  --cc-tip-border: #00b4c6;
+  --cc-tip-text: #e0f2fe;
+  --cc-tip-muted: #7fb3d3;
+  --cc-tip-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  --cc-tip-accent: #00b4c6;
+  --cc-tip-header-bg: rgba(0, 180, 198, 0.12);
+  --cc-tip-header-border: #1e3a5f;
+  --cc-tip-brand: #e0f2fe;
+}
+
+html[data-cc-theme='rest'] {
+  --cc-tip-bg: #f2ede4;
+  --cc-tip-border: #0e7490;
+  --cc-tip-text: #2a2318;
+  --cc-tip-muted: #5c5346;
+  --cc-tip-shadow: 0 8px 22px rgba(42, 35, 24, 0.16);
+  --cc-tip-accent: #0e7490;
+  --cc-tip-header-bg: rgba(14, 116, 144, 0.08);
+  --cc-tip-header-border: #c9b8a4;
+  --cc-tip-brand: #0e7490;
+}
+
+@media (max-width: 639px) {
+  #cc-title-tooltip.cc-title-tooltip {
+    max-width: min(280px, calc(100vw - 20px));
+    font-size: var(--cc-label, 12px);
+  }
 }
 
 /* Logo ClaraCore (public/CLARA.CORE.png): lockup horizontal; evita compresión en filas flex */
