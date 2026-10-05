@@ -343,8 +343,8 @@ export function calcularFilaCartera(filaCampo, seccion, hTritPrev = null) {
   const vacio = [abscisa, tn, cfe, nivel, term, sub].every((v) => v == null)
 
   let hExc = null
-  if (abscisa != null && abscisa !== 0 && tn != null && cfe != null) hExc = tn - cfe
-  else if (tn != null && cfe != null && abscisa == null) hExc = tn - cfe
+  // Abscisa 0 es válida (PK inicial); solo se exige TN y CFE para H.Exc.
+  if (tn != null && cfe != null) hExc = tn - cfe
 
   let hTrit = null
   let hRel = null
@@ -727,7 +727,7 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
 }
 
 export function perfilLongitudinal(cartera, seccion) {
-  const tipo = seccion.tipo
+  const tipo = seccion?.tipo || 'ALCANTARILLA'
   const serie = {
     abscisas: [],
     terreno_natural: [],
@@ -759,6 +759,54 @@ export function perfilLongitudinal(cartera, seccion) {
   return serie
 }
 
+/**
+ * Perfil en vivo desde filas de cartera (sin Ø/ancho).
+ * Permite redibujar el gráfico mientras se diligencia, antes de completar la cabecera.
+ */
+export function perfilDesdeFilasCampo(filasCampo, tipo = 'ALCANTARILLA') {
+  const tipoU = String(tipo || 'ALCANTARILLA').toUpperCase()
+  const serie = {
+    abscisas: [],
+    terreno_natural: [],
+    nivel_referencia: [],
+    cota_fondo_excavacion: [],
+    etiqueta_nivel: tipoU === 'FILTRO' ? 'Terminado Filtro' : 'Cota Lomo',
+    titulo_grafico: 'Perfil Longitudinal de Tubería',
+  }
+  if (tipoU === 'ALCANTARILLA') {
+    serie.subrasante_via = []
+    serie.cota_lomo = []
+    serie.etiqueta_subrasante = 'Subrasante de Vía'
+  }
+  for (const fila of filasCampo || []) {
+    const abscisa = f(fila?.abscisa)
+    const tn = f(fila?.terreno_natural)
+    const cfe = f(fila?.cota_fondo_excavacion)
+    const sub = tipoU === 'ALCANTARILLA' ? f(fila?.subrasante_via) : null
+    let term = null
+    if (tipoU === 'FILTRO') {
+      term = f(fila?.terminado_filtro)
+      if (term == null) term = f(fila?.nivel_referencia)
+    } else {
+      term = f(fila?.cota_lomo)
+      if (term == null) term = f(fila?.terminado_filtro)
+    }
+    const nivel = tipoU === 'FILTRO' ? term : (sub != null ? sub : f(fila?.nivel_referencia))
+    if ([abscisa, tn, cfe, nivel, term, sub].every((v) => v == null)) continue
+    serie.abscisas.push(abscisa)
+    serie.terreno_natural.push(tn)
+    if (tipoU === 'FILTRO') {
+      serie.nivel_referencia.push(term != null ? term : nivel)
+    } else {
+      serie.subrasante_via.push(sub != null ? sub : nivel)
+      serie.cota_lomo.push(term)
+      serie.nivel_referencia.push(term != null ? term : (sub != null ? sub : nivel))
+    }
+    serie.cota_fondo_excavacion.push(cfe)
+  }
+  return serie
+}
+
 export function seccionTipicaParams(seccion, cartera) {
   const tot = cartera.totales || {}
   return {
@@ -781,7 +829,9 @@ export function seccionTipicaParams(seccion, cartera) {
 }
 
 /**
- * Preview local. Devuelve null si faltan diámetro/ancho (no se puede calcular sección).
+ * Preview local reactivo.
+ * - Con Ø y ancho: cálculo completo (perfil + cantidades + descuentos).
+ * - Sin Ø/ancho: preview parcial con perfil desde filas (cantidades vacías).
  */
 export function calcularPlanillaLocal({
   tipo,
@@ -795,12 +845,27 @@ export function calcularPlanillaLocal({
   cama_triturado_m: camaTrituradoM = 0,
   traslapo_m: traslapoM = 0,
 }) {
+  const tipoU = String(tipo || 'ALCANTARILLA').toUpperCase()
   const diam = f(diametroM)
   const ancho = f(anchoExcavacionM)
-  if (diam == null || diam <= 0 || ancho == null || ancho <= 0) return null
+  if (diam == null || diam <= 0 || ancho == null || ancho <= 0) {
+    return {
+      preview_parcial: true,
+      seccion: null,
+      seccion_tipica: { tipo: tipoU },
+      cartera: { filas: [], totales: { n_filas: 0, longitud_m: null } },
+      cantidades: [],
+      descuentos: [],
+      netos: [],
+      descuentos_altura: {},
+      descuentos_altura_detalle: [],
+      notas_descuento_altura: [],
+      perfil: perfilDesdeFilasCampo(filasCampo, tipoU),
+    }
+  }
   try {
     const seccion = calcularSeccion({
-      tipo,
+      tipo: tipoU,
       diametro_m: diam,
       espesor_m: f(espesorM) ?? 0,
       ancho_excavacion_m: ancho,
@@ -814,6 +879,7 @@ export function calcularPlanillaLocal({
       cantidades_manuales: cantidadesManuales,
     })
     return {
+      preview_parcial: false,
       seccion,
       cartera,
       cantidades: cant.cantidades,
@@ -829,6 +895,18 @@ export function calcularPlanillaLocal({
       seccion_tipica: seccionTipicaParams(seccion, cartera),
     }
   } catch {
-    return null
+    return {
+      preview_parcial: true,
+      seccion: null,
+      seccion_tipica: { tipo: tipoU },
+      cartera: { filas: [], totales: { n_filas: 0, longitud_m: null } },
+      cantidades: [],
+      descuentos: [],
+      netos: [],
+      descuentos_altura: {},
+      descuentos_altura_detalle: [],
+      notas_descuento_altura: [],
+      perfil: perfilDesdeFilasCampo(filasCampo, tipoU),
+    }
   }
 }

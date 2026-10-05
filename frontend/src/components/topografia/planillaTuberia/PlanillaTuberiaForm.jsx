@@ -829,8 +829,9 @@ export default function PlanillaTuberiaForm({
     })
   }, [filas, params, cantManuales, descManuales, planilla?.meta_cabecera])
 
-  /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
+  /** Preferir preview local (completo o parcial con perfil); si falla, último del servidor. */
   const calculoVista = calculoLocal || calculo
+  const previewParcial = !!calculoLocal?.preview_parcial
 
   const absExtremos = useMemo(
     () => abscisasExtremosPlanilla(calculoVista, filas),
@@ -1615,6 +1616,16 @@ export default function PlanillaTuberiaForm({
           </button>
         )}
       </div>
+      {previewParcial && (
+        <div style={{
+          marginBottom: 8, padding: '8px 10px', borderRadius: 8,
+          background: '#eff6ff', border: '1px solid #bfdbfe',
+          fontSize: 'var(--cc-xs)', color: '#1e3a8a',
+        }}>
+          El perfil se actualiza con la cartera. Complete <strong>diámetro</strong> y{' '}
+          <strong>ancho de excavación</strong> en la cabecera para ver el Resumen de Cantidades en vivo.
+        </div>
+      )}
       <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
