@@ -62,9 +62,34 @@ export function solicitudPuedeRechazarCompleta(sol, permisos) {
   )
 }
 
-/** Modal de revisión de línea: solo Contratista Gerencial (o Desarrollador). */
+/**
+ * Popup «Revisión de línea».
+ * Editar (Almacén) asigna el insumo. Gerencial / Desarrollador lo abren para aprobar,
+ * aunque no tengan Editar.
+ */
 export function puedeAbrirRevisionLinea(permisos) {
-  return Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
+  return Boolean(
+    permisos?.editar
+    || permisos?.esContratistaGerencial
+    || permisos?.esDesarrollador,
+  )
+}
+
+/**
+ * Asignar el insumo del catálogo (búsqueda y Guardar mapeo).
+ * Depende de Editar, no del rol gerencial ni de Validar.
+ * No cubre líneas ya aprobadas ni las que ya están en una OC:
+ * esa corrección sigue en itemPuedeCorregirInsumoPostOc.
+ */
+export function itemPuedeAsignarInsumo(item, sol, permisos) {
+  if (!permisos?.editar || !item?.id) return false
+  if (item.en_orden_compra) return false
+  const ev = item.estado_validacion || 'pendiente'
+  if (ev === 'aprobado') return false
+  const estado = String(sol?.estado || '')
+  if (!['borrador', 'rechazada', 'enviada', 'aprobada'].includes(estado)) return false
+  if (solicitudTieneOrdenCompra(sol) && estado !== 'aprobada') return false
+  return true
 }
 
 export function itemPuedeValidar(item, sol, permisos) {

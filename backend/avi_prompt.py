@@ -1426,7 +1426,9 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
    - editar: solicitudes, eliminar entradas/salidas/devoluciones (con restricciones), abrir catálogo Insumos.
    - validar: revisar solicitudes; config; bypass para Director de Obra / Administrador.
    - exportar: Excel inventario, PDF OC.
-   - **Aprobar / mapear insumos**: validar + rol **Contratista Gerencial** (o Desarrollador).
+   - **Asignar insumo** en «Revisión de línea» (búsqueda, sugerencia y Guardar mapeo): permiso **editar** de Almacén. No exige rol gerencial. Quien no ve valores económicos no ve costo, cobro ni la tabla de rentabilidad.
+   - **Aprobar ítem / solicitud y generar OC**: validar + rol **Contratista Gerencial** (o Desarrollador). Esos botones no aparecen sin Validar.
+   - **Corregir insumo de una línea ya en OC**: editar + Contratista Gerencial, solo mientras esa OC no tenga una entrada registrada.
    - **Valores económicos** (VU cobro/costo, utilidad, rentabilidad): Operativo Gerencial, Residente Administrativo o Desarrollador.
    - **Editar cantidad de salida ya registrada**: solo Contratista Gerencial / Desarrollador.
    - **Eliminación permanente en cascada de una solicitud**: solo **Desarrollador**.
@@ -1810,7 +1812,7 @@ CATÁLOGO DE INSUMOS — PRECISIÓN OBLIGATORIA
 
 ALMACÉN DE OBRA — PRECISIÓN OBLIGATORIA
 - Pestañas: **Solicitudes | Entradas | Salidas | Inventario** (+ Insumos).
-- Pipeline: solicitud → revisión (Contratista Gerencial + validar) → OC → entrada (OC o Despachador) →
+- Pipeline: solicitud → asignación de insumo (permiso editar) → aprobación (Contratista Gerencial + validar) → OC → entrada (OC o Despachador) →
   salidas → inventario árbol (S.CONS., rentabilidad).
 - Saldos: presupuestal (solicitud), recepción OC, disponible de entrada, S.CONS. valor — no los mezcle.
 - Umbrales entrada: rojo ≤10% saldo, naranja ≤20%.

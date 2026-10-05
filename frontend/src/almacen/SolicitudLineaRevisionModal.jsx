@@ -9,6 +9,7 @@ import {
   descripcionItemPresupuesto,
   fusionarManoObraEnRentabilidad,
   hermanosMismoPresupuestoItem,
+  itemPuedeAsignarInsumo,
   itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
   puedeAbrirRevisionLinea,
@@ -55,7 +56,7 @@ function ExcelHeader({ abbr, tip, style, align = 'left' }) {
 }
 
 /**
- * Modal enfocado en la revisión Gerencial de una línea.
+ * Revisión de una línea: asignar insumo (Editar) y, aparte, aprobar o rechazar (Validar).
  * Campos editables en fila tipo Excel; descripción del ítem en bloque propio.
  */
 export default function SolicitudLineaRevisionModal({
@@ -84,7 +85,8 @@ export default function SolicitudLineaRevisionModal({
 
   const puedeValidarLinea = itemPuedeValidar(item, sol, permisos)
   const puedeCorregirPostOc = itemPuedeCorregirInsumoPostOc(item, sol, permisos)
-  const puedeEditar = puedeValidarLinea || puedeCorregirPostOc
+  const puedeAsignarInsumo = itemPuedeAsignarInsumo(item, sol, permisos)
+  const puedeEditarMapeo = puedeAsignarInsumo || puedeCorregirPostOc
   const verEconomicos = permisos?.verEconomicos !== false
   const puedeAbrir = puedeAbrirRevisionLinea(permisos)
 
@@ -215,15 +217,16 @@ export default function SolicitudLineaRevisionModal({
       return null
     }
     const costo = Number(draft.valor_compra_unitario)
-    if (!(costo > 0)) {
+    // Quien no ve cifras no puede completar un campo oculto: el catálogo resuelve el costo.
+    if (verEconomicos && !(costo > 0)) {
       setError('Defina el costo de compra unitario.')
       return null
     }
     const body = {
       insumo_id: Number(draft.insumo.insumo_id),
       cantidad: cant,
-      valor_compra_unitario: costo,
     }
+    if (costo > 0) body.valor_compra_unitario = costo
     // Solo enviar VU cobro si el usuario ingresó un valor > 0.
     // Enviar 0 bloqueaba la resolución automática desde el listado/presupuesto.
     const cobroNum = draft.vlr_unitario_cobro !== '' && draft.vlr_unitario_cobro != null
@@ -248,12 +251,18 @@ export default function SolicitudLineaRevisionModal({
     setError('')
     try {
       if (accion === 'aprobar') {
-        const mapped = await guardarMapeo()
-        if (!mapped) {
+        if (puedeEditarMapeo) {
+          const mapped = await guardarMapeo()
+          if (!mapped) {
+            setBusy(false)
+            return
+          }
+          // mapear ya devolvió la solicitud actualizada; validar en seguida (respuesta ligera).
+        } else if (!item.insumo_id && !item.es_recurrente) {
+          setError('Esta línea no tiene insumo del catálogo. Quien tenga permiso de Editar debe asignarlo antes de aprobar.')
           setBusy(false)
           return
         }
-        // mapear ya devolvió la solicitud actualizada; validar en seguida (respuesta ligera).
       }
       const r = await api.validarItemSolicitud(sol.id, item.id, {
         accion,
@@ -269,7 +278,7 @@ export default function SolicitudLineaRevisionModal({
   }
 
   const soloGuardar = async () => {
-    if (!puedeEditar) return
+    if (!puedeEditarMapeo) return
     setBusy(true)
     setError('')
     try {
@@ -405,7 +414,7 @@ export default function SolicitudLineaRevisionModal({
           </div>
         )}
 
-        {puedeEditar ? (
+        {puedeEditarMapeo ? (
           <>
             <div style={{ ...ui.sheetWrap, overflow: 'visible', marginBottom: 12 }} className="cc-almacen-table-scroll">
               <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 920 : 640, tableLayout: 'fixed' }}>
@@ -515,24 +524,26 @@ export default function SolicitudLineaRevisionModal({
               </div>
             )}
 
-            <div style={{ marginBottom: 12 }}>
-              <textarea
-                style={{
-                  ...ui.input,
-                  minHeight: 72,
-                  resize: 'vertical',
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  fontSize: 'var(--cc-sm)',
-                  padding: '10px 12px',
-                  lineHeight: 1.45,
-                }}
-                placeholder="Motivo si rechaza este ítem…"
-                value={motivo}
-                disabled={busy}
-                onChange={(e) => setMotivo(e.target.value)}
-              />
-            </div>
+            {puedeValidarLinea && (
+              <div style={{ marginBottom: 12 }}>
+                <textarea
+                  style={{
+                    ...ui.input,
+                    minHeight: 72,
+                    resize: 'vertical',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    fontSize: 'var(--cc-sm)',
+                    padding: '10px 12px',
+                    lineHeight: 1.45,
+                  }}
+                  placeholder="Motivo si rechaza este ítem…"
+                  value={motivo}
+                  disabled={busy}
+                  onChange={(e) => setMotivo(e.target.value)}
+                />
+              </div>
+            )}
 
             {puedeCorregirPostOc && !puedeValidarLinea && (
               <div style={{
@@ -563,6 +574,7 @@ export default function SolicitudLineaRevisionModal({
                 type="button"
                 style={{ ...ui.btnSecondary, padding: '10px 16px' }}
                 disabled={busy}
+                data-testid="revision-linea-guardar-mapeo"
                 onClick={() => { void soloGuardar() }}
               >
                 {busy
@@ -575,6 +587,7 @@ export default function SolicitudLineaRevisionModal({
                     type="button"
                     style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
                     disabled={busy}
+                    data-testid="revision-linea-aprobar-item"
                     onClick={() => { void validar('aprobar') }}
                   >
                     ✓ Aprobar ítem
@@ -583,6 +596,7 @@ export default function SolicitudLineaRevisionModal({
                     type="button"
                     style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
                     disabled={busy}
+                    data-testid="revision-linea-rechazar-item"
                     onClick={() => { void validar('rechazar') }}
                   >
                     ✕ Rechazar ítem
@@ -633,9 +647,53 @@ export default function SolicitudLineaRevisionModal({
                 </tbody>
               </table>
             </div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>
-              Esta línea ya no admite revisión (aprobada, rechazada o con OC).
-            </div>
+            {puedeValidarLinea ? (
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <textarea
+                    style={{
+                      ...ui.input,
+                      minHeight: 72,
+                      resize: 'vertical',
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      fontSize: 'var(--cc-sm)',
+                      padding: '10px 12px',
+                      lineHeight: 1.45,
+                    }}
+                    placeholder="Motivo si rechaza este ítem…"
+                    value={motivo}
+                    disabled={busy}
+                    onChange={(e) => setMotivo(e.target.value)}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
+                    disabled={busy || (!item.insumo_id && !item.es_recurrente)}
+                    title={!item.insumo_id && !item.es_recurrente ? 'Asigne el insumo antes de aprobar' : undefined}
+                    data-testid="revision-linea-aprobar-item"
+                    onClick={() => { void validar('aprobar') }}
+                  >
+                    ✓ Aprobar ítem
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
+                    disabled={busy}
+                    data-testid="revision-linea-rechazar-item"
+                    onClick={() => { void validar('rechazar') }}
+                  >
+                    ✕ Rechazar ítem
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>
+                Esta línea ya no admite revisión (aprobada, rechazada o con OC).
+              </div>
+            )}
             {verEconomicos && tablaRentabilidad && (
               <TablaRentabilidadAcumulada
                 analisisRentabilidad={tablaRentabilidad}

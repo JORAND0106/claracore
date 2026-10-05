@@ -85,7 +85,7 @@ def puede_ver_valores_economicos_almacen(current_user) -> bool:
 
 
 def es_contratista_gerencial(current_user) -> bool:
-    """Rol Contratista Gerencial (o Desarrollador). Usado para mapear/aprobar, no para eco."""
+    """Rol Contratista Gerencial (o Desarrollador). Usado para aprobar y corregir post-OC, no para eco."""
     try:
         from main import _es_desarrollador
 
@@ -102,12 +102,12 @@ def es_contratista_gerencial(current_user) -> bool:
 
 
 def require_contratista_gerencial_almacen(current_user) -> None:
-    """Gate duro para mapear insumos / aprobar solicitudes (flujo Gerencial)."""
+    """Gate duro para aprobar ítems, la solicitud y generar la OC (flujo Gerencial)."""
     require_permiso_almacen(current_user, "validar")
     if not es_contratista_gerencial(current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo el rol Contratista Gerencial puede mapear insumos y aprobar solicitudes de materiales.",
+            detail="Solo el rol Contratista Gerencial puede aprobar solicitudes de materiales.",
         )
 
 

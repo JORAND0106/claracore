@@ -23,7 +23,7 @@ def test_residente_administrativo_ve_valores_economicos_aunque_no_sea_operativo_
 
 
 def test_contratista_gerencial_ya_no_ve_valores_economicos_por_rol():
-    """La regla económica dejó de usar Contratista Gerencial; sigue existiendo para mapear/aprobar."""
+    """La regla económica dejó de usar Contratista Gerencial; el rol sigue para aprobar y corregir post-OC."""
     u = {"rol": "Contratista Gerencial", "cargo": "Gerente de Proyecto"}
     assert es_contratista_gerencial(u) is True
     assert puede_ver_valores_economicos_almacen(u) is False

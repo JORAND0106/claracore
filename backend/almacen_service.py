@@ -1658,6 +1658,35 @@ def _require_justificacion_sobrepresupuesto(items: List[dict]) -> None:
         )
 
 
+def _mismo_insumo_linea(existing: dict, insumo_id) -> bool:
+    try:
+        return int(existing.get("insumo_id") or 0) == int(insumo_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def _costo_al_mapear(body: dict, existing: dict, resolved: dict, insumo_id):
+    """
+    Costo enviado gana. Si el cliente no lo manda (no ve cifras) y el insumo no cambia,
+    se conserva el costo ya guardado. Si el insumo cambia, se usa el del catálogo.
+    """
+    if body.get("valor_compra_unitario") is not None:
+        return _to_float(body["valor_compra_unitario"])
+    if _mismo_insumo_linea(existing, insumo_id) and existing.get("valor_compra_unitario") not in (None, ""):
+        return existing.get("valor_compra_unitario")
+    return resolved.get("valor_compra_unitario")
+
+
+def _cobro_al_mapear(override_cobro, existing: dict, resolved: dict, insumo_id):
+    if override_cobro is not None and override_cobro > 0:
+        return override_cobro
+    if _mismo_insumo_linea(existing, insumo_id):
+        prev = existing.get("vlr_unitario_cobro")
+        if prev not in (None, "") and _to_float(prev) > 0:
+            return prev
+    return resolved.get("vlr_unitario_cobro")
+
+
 def mapear_item_solicitud_gerencial(
     contrato_id: int,
     solicitud_id: int,
@@ -1666,8 +1695,8 @@ def mapear_item_solicitud_gerencial(
     body: dict,
 ) -> dict:
     """
-    Contratista Gerencial: asocia insumo del catálogo, ajusta cantidad/costo/cobro.
-    Conserva descripcion_solicitada inmutable.
+    Asocia el insumo del catálogo y ajusta cantidad/costo/cobro.
+    Quien llama debe tener Almacén · editar. Conserva descripcion_solicitada inmutable.
     """
     from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
 
@@ -1762,16 +1791,8 @@ def mapear_item_solicitud_gerencial(
         "descripcion_solicitada": desc_sol or resolved.get("material_descripcion"),
         "unidad": resolved.get("unidad") or existing.get("unidad"),
         "cantidad": cantidad,
-        "valor_compra_unitario": (
-            _to_float(body["valor_compra_unitario"])
-            if body.get("valor_compra_unitario") is not None
-            else resolved.get("valor_compra_unitario")
-        ),
-        "vlr_unitario_cobro": (
-            override_cobro
-            if override_cobro is not None and override_cobro > 0
-            else resolved.get("vlr_unitario_cobro")
-        ),
+        "valor_compra_unitario": _costo_al_mapear(body, existing, resolved, insumo_id),
+        "vlr_unitario_cobro": _cobro_al_mapear(override_cobro, existing, resolved, insumo_id),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
         "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
@@ -1892,11 +1913,7 @@ def corregir_insumo_item_post_oc(
         refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0,
     )
 
-    vu = (
-        _to_float(body["valor_compra_unitario"])
-        if body.get("valor_compra_unitario") is not None
-        else resolved.get("valor_compra_unitario")
-    )
+    vu = _costo_al_mapear(body, existing, resolved, insumo_id)
     if vu is None or _to_float(vu) <= 0:
         raise ValueError("Defina el costo de compra unitario del insumo corregido.")
 
@@ -1908,11 +1925,7 @@ def corregir_insumo_item_post_oc(
         "unidad": resolved.get("unidad") or existing.get("unidad"),
         "cantidad": cantidad,
         "valor_compra_unitario": vu,
-        "vlr_unitario_cobro": (
-            override_cobro
-            if override_cobro is not None and override_cobro > 0
-            else resolved.get("vlr_unitario_cobro")
-        ),
+        "vlr_unitario_cobro": _cobro_al_mapear(override_cobro, existing, resolved, insumo_id),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
         "es_principal": _coerce_es_principal(

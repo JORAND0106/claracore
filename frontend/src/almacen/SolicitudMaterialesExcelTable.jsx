@@ -97,6 +97,7 @@ export default function SolicitudMaterialesExcelTable({
   items = [],
   sol,
   puedeValidar = false,
+  destacarSinInsumo = false,
   onRowClick,
   onMapClick,
 }) {
@@ -149,7 +150,8 @@ export default function SolicitudMaterialesExcelTable({
             const ev = estadoValidacionItem(it, sol)
             const und = it.unidad || it.contexto_presupuesto?.unidad || ''
             const desc = descripcionGrillaItem(it)
-            const descTitle = !it.insumo_id && puedeValidar ? `${desc} (sin mapear)` : desc
+            const faltaInsumo = !it.insumo_id && (puedeValidar || destacarSinInsumo)
+            const descTitle = faltaInsumo ? `${desc} (sin mapear)` : desc
             const absTxt = fmtAbscisasLinea(it)
             const tramoTxt = it.tramo || it.contexto_presupuesto?.tramo || '—'
             const cantTxt = `${fmtCant(it.cantidad)}${und ? ` ${und}` : ''}`
@@ -170,7 +172,7 @@ export default function SolicitudMaterialesExcelTable({
                 <td style={cellBase(ui)}>
                   <Trunc title={it.item || '—'}>{it.item || '—'}</Trunc>
                 </td>
-                <td style={{ ...cellBase(ui), fontWeight: 600, color: !it.insumo_id && puedeValidar ? '#92400e' : undefined }}>
+                <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
                   <Trunc title={descTitle}>{desc}</Trunc>
                 </td>
                 <td style={cellBase(ui)}>

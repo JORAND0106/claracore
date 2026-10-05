@@ -83,7 +83,7 @@ export function puedeVerValoresEconomicosAlmacen(usuario) {
   return false
 }
 
-/** Solo Contratista Gerencial (o Desarrollador) mapea insumo y aprueba. */
+/** Contratista Gerencial (o Desarrollador): aprueba y puede corregir insumo post-OC. */
 export function esContratistaGerencialUsuario(usuario) {
   if (esDesarrolladorUsuario(usuario)) return true
   const rol = normRol(usuario?.rol_nombre || usuario?.rol)
