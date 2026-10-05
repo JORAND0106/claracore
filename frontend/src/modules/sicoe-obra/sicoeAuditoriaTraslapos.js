@@ -5,6 +5,9 @@
 
 export const SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M = 0.5
 export const SICOE_AUDITORIA_TOLERANCIA_MIN_M = 0.1
+/** Tope máximo (m) para considerar un hueco como vacío. Default 50. */
+export const SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M = 50
+export const SICOE_AUDITORIA_VACIO_MAX_MIN_M = 0.1
 
 export const SICOE_AUDITORIA_JUSTIFICACIONES = [
   'Sector diferente',
@@ -31,6 +34,23 @@ export function normalizarToleranciaM(raw) {
   const v = Number(raw)
   if (!Number.isFinite(v)) return SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M
   return Math.max(SICOE_AUDITORIA_TOLERANCIA_MIN_M, v)
+}
+
+export function normalizarVacioMaxM(raw) {
+  if (raw == null || raw === '') return SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M
+  const v = Number(raw)
+  if (!Number.isFinite(v)) return SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M
+  return Math.max(SICOE_AUDITORIA_VACIO_MAX_MIN_M, v)
+}
+
+/** Vacío con medida ≥ tope (no es hallazgo útil). */
+export function esVacioFueraDeLimite(hallazgo, vacioMaxM = SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M) {
+  if (!hallazgo) return false
+  if (txt(hallazgo.tipo).toLowerCase() !== 'vacio') return false
+  const vmax = normalizarVacioMaxM(vacioMaxM)
+  const medida = Number(hallazgo.medida_m)
+  if (!Number.isFinite(medida)) return false
+  return medida >= vmax
 }
 
 export function parseAbsNum(v) {
@@ -118,16 +138,24 @@ export function sectoresSeparan(a, b) {
   return !!(sa && sb && sa !== sb)
 }
 
-/** True si ambos registros pertenecen al mismo reporte (ids presentes e iguales). */
+/** True si ambos registros pertenecen al mismo reporte (ids o número de reporte). */
 export function mismoReporte(a, b) {
   if (!a || !b) return false
   const ra = a.reporte_id
   const rb = b.reporte_id
-  if (ra == null || rb == null) return false
-  const sa = String(ra).trim()
-  const sb = String(rb).trim()
-  if (!sa || !sb) return false
-  return sa === sb
+  if (ra != null && rb != null) {
+    const sa = String(ra).trim()
+    const sb = String(rb).trim()
+    if (sa && sb) return sa === sb
+  }
+  const na = a.numero_reporte
+  const nb = b.numero_reporte
+  if (na != null && nb != null) {
+    const sa = String(na).trim()
+    const sb = String(nb).trim()
+    if (sa && sb) return sa === sb
+  }
+  return false
 }
 
 /**
@@ -139,12 +167,20 @@ export function esTraslapoMismoReporte(hallazgo) {
   if (txt(hallazgo.tipo).toLowerCase() !== 'traslapo') return false
   const regs = hallazgo.registros_involucrados || []
   if (regs.length < 2) return false
-  const ids = []
+  const keys = []
   for (const r of regs) {
-    if (!r || r.reporte_id == null || String(r.reporte_id).trim() === '') return false
-    ids.push(String(r.reporte_id).trim())
+    if (!r) return false
+    let key = ''
+    if (r.reporte_id != null && String(r.reporte_id).trim() !== '') {
+      key = `id:${String(r.reporte_id).trim()}`
+    } else if (r.numero_reporte != null && String(r.numero_reporte).trim() !== '') {
+      key = `n:${String(r.numero_reporte).trim()}`
+    } else {
+      return false
+    }
+    keys.push(key)
   }
-  return ids.length > 0 && new Set(ids).size === 1
+  return keys.length > 0 && new Set(keys).size === 1
 }
 
 export function costoDirectoParcial(cantidadTotal, vlrUnitario, fraccion) {
@@ -226,8 +262,9 @@ function hallazgo(tipo, medida, absDesde, absHasta, candidato, otros, valor) {
 /**
  * Analiza un candidato contra pares del mismo ítem.
  */
-export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M) {
+export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M, vacioMaxM = SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M) {
   const tol = normalizarToleranciaM(toleranciaM)
+  const vacioMax = normalizarVacioMaxM(vacioMaxM)
   const candId = candidato?.id
   const item = txt(candidato?.item_numero)
   if (!item) {
@@ -328,8 +365,10 @@ export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SIC
         }
       } else {
         const gap = s.lo - prev.hi
-        if (gap >= tol) {
-          hallazgos.push(hallazgo('vacio', gap, prev.hi, s.lo, candidato, [prev.reg, s.reg], 0))
+        // Hueco corto: ≥ tolerancia mínima y < tope máximo (default 50 m).
+        if (gap >= tol && gap < vacioMax) {
+          // Solo vecinos del hueco (no el candidato): evita N filas del mismo vacío.
+          hallazgos.push(hallazgo('vacio', gap, prev.hi, s.lo, prev.reg, [s.reg], 0))
         }
         covered.push({ lo: s.lo, hi: s.hi, reg: s.reg })
       }
@@ -345,20 +384,21 @@ export function analizarCandidatoContraPares(candidato, pares, toleranciaM = SIC
     hallazgos,
     modo,
     tolerancia_m: tol,
+    vacio_max_m: vacioMax,
     item_numero: item,
     registro_id: candId,
     numero_registro: candidato?.numero_registro,
   }
 }
 
-export function analizarVarios(candidatos, paresPorItem, toleranciaM = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M) {
+export function analizarVarios(candidatos, paresPorItem, toleranciaM = SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M, vacioMaxM = SICOE_AUDITORIA_VACIO_MAX_DEFAULT_M) {
   const resultados = []
   const cont = { verde: 0, amarillo: 0, rojo: 0, traslapo: 0, vacio: 0, no_auditable: 0 }
   for (const c of candidatos || []) {
     const item = txt(c?.item_numero)
     const pares = paresPorItem?.[item] || []
     const otrosCand = (candidatos || []).filter((x) => x !== c && txt(x?.item_numero) === item)
-    const r = analizarCandidatoContraPares(c, [...pares, ...otrosCand], toleranciaM)
+    const r = analizarCandidatoContraPares(c, [...pares, ...otrosCand], toleranciaM, vacioMaxM)
     resultados.push(r)
     cont[r.semaforo] = (cont[r.semaforo] || 0) + 1
     for (const h of r.hallazgos || []) {
@@ -371,6 +411,7 @@ export function analizarVarios(candidatos, paresPorItem, toleranciaM = SICOE_AUD
     resumen: cont,
     resultados,
     tolerancia_m: normalizarToleranciaM(toleranciaM),
+    vacio_max_m: normalizarVacioMaxM(vacioMaxM),
   }
 }
 
@@ -406,21 +447,32 @@ function absKey(v) {
 /** Huella estable (misma semántica que backend fingerprint_hallazgo). */
 export function fingerprintHallazgo(h) {
   const tipo = txt(h?.tipo).toLowerCase()
-  const ids = [
-    ...new Set(
-      (h?.registros_involucrados || [])
-        .filter((r) => r && r.id != null && String(r.id).trim() !== '')
-        .map((r) => String(r.id)),
-    ),
-  ].sort()
-  const raw = [
-    tipo,
-    ids.join(','),
-    absKey(h?.abs_desde),
-    absKey(h?.abs_hasta),
-    txt(h?.item_numero),
-    txt(h?.pk_id_id),
-  ].join('|')
+  let raw
+  if (tipo === 'vacio') {
+    raw = [
+      tipo,
+      absKey(h?.abs_desde),
+      absKey(h?.abs_hasta),
+      txt(h?.item_numero),
+      txt(h?.costado || h?.tramo),
+    ].join('|')
+  } else {
+    const ids = [
+      ...new Set(
+        (h?.registros_involucrados || [])
+          .filter((r) => r && r.id != null && String(r.id).trim() !== '')
+          .map((r) => String(r.id)),
+      ),
+    ].sort()
+    raw = [
+      tipo,
+      ids.join(','),
+      absKey(h?.abs_desde),
+      absKey(h?.abs_hasta),
+      txt(h?.item_numero),
+      txt(h?.pk_id_id),
+    ].join('|')
+  }
   // Simple FNV-1a 32-bit + hex stretch (browser-safe; backend usa sha256[:40])
   let hash = 2166136261
   for (let i = 0; i < raw.length; i += 1) {
@@ -428,10 +480,60 @@ export function fingerprintHallazgo(h) {
     hash = Math.imul(hash, 16777619)
   }
   const hex = (hash >>> 0).toString(16).padStart(8, '0')
-  return `${hex}${ids.length}${tipo.slice(0, 2)}${absKey(h?.abs_desde)}`.slice(0, 40)
+  return `${hex}${tipo.slice(0, 2)}${absKey(h?.abs_desde)}`.slice(0, 40)
 }
 
-export function resumenAmbienteDesdeFilas(filas) {
+/**
+ * Deduplica hallazgos en cliente (p. ej. vacíos repetidos en datos guardados).
+ * Misma clave semántica que fingerprint backend para vacíos.
+ */
+export function dedupeHallazgosAmbiente(filas) {
+  const map = new Map()
+  for (const h of filas || []) {
+    if (!h) continue
+    const tipo = txt(h.tipo).toLowerCase()
+    let key
+    if (tipo === 'vacio') {
+      key = [
+        'vacio',
+        absKey(h.abs_desde),
+        absKey(h.abs_hasta),
+        txt(h.item_numero),
+        txt(h.costado || h.tramo),
+      ].join('|')
+    } else if (h.fingerprint) {
+      key = `fp:${h.fingerprint}`
+    } else {
+      key = `id:${h.id != null ? h.id : `${tipo}|${txt(h.item_numero)}|${absKey(h.abs_desde)}`}`
+    }
+    const prev = map.get(key)
+    if (!prev) {
+      map.set(key, { ...h })
+      continue
+    }
+    // Conserva mayor valor; une involucrados únicos.
+    if (Number(h.valor_en_juego || 0) > Number(prev.valor_en_juego || 0)) {
+      prev.valor_en_juego = h.valor_en_juego
+      if (h.texto) prev.texto = h.texto
+    }
+    const seen = new Set(
+      (prev.registros_involucrados || [])
+        .map((r) => (r?.id != null ? String(r.id) : ''))
+        .filter(Boolean),
+    )
+    const merged = [...(prev.registros_involucrados || [])]
+    for (const r of h.registros_involucrados || []) {
+      const id = r?.id != null ? String(r.id) : ''
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      merged.push(r)
+    }
+    prev.registros_involucrados = merged
+  }
+  return [...map.values()]
+}
+
+export function resumenAmbienteDesdeFilas(filas, vacioMaxM) {
   const out = {
     traslapos_sin_justificar: { cantidad: 0, valor: 0 },
     vacios_sin_justificar: { cantidad: 0, valor: 0 },
@@ -441,6 +543,7 @@ export function resumenAmbienteDesdeFilas(filas) {
   }
   for (const f of filas || []) {
     if (esTraslapoMismoReporte(f)) continue
+    if (esVacioFueraDeLimite(f, vacioMaxM)) continue
     const estado = txt(f?.estado).toLowerCase() || 'pendiente'
     if (estado === 'corregido') continue
     const tipo = txt(f?.tipo).toLowerCase()

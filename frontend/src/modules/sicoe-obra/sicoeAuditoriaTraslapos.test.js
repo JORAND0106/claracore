@@ -4,11 +4,14 @@ import {
   analizarCandidatoContraPares,
   analizarVarios,
   coloresMapaDesdeHallazgos,
+  dedupeHallazgosAmbiente,
   esTraslapoMismoReporte,
+  esVacioFueraDeLimite,
   fmtAbscisaK,
   justificacionesParaTipo,
   medidaTraslapo,
   normalizarToleranciaM,
+  normalizarVacioMaxM,
   resumenAmbienteDesdeFilas,
   sectoresSeparan,
   SICOE_AUDITORIA_JUSTIFICACIONES_VACIO,
@@ -104,6 +107,27 @@ describe('sicoeAuditoriaTraslapos', () => {
     assert.equal(r.hallazgos[0].medida_m, 20)
   })
 
+  it('no alerta vacío si el hueco es ≥ 50 m', () => {
+    const cand = {
+      id: 2, numero_registro: 2, item_numero: '3', tramo: 'T', infraestructura: 'I', margen: 'Der',
+      abs_inicio: 200, abs_final: 250, cantidad_total: 1, vlr_unitario: 1,
+    }
+    const peer = {
+      id: 1, numero_registro: 1, item_numero: '3', tramo: 'T', infraestructura: 'I', margen: 'Der',
+      abs_inicio: 0, abs_final: 50,
+    }
+    const r = analizarCandidatoContraPares(cand, [peer], 0.5, 50)
+    assert.equal(r.hallazgos.filter((h) => h.tipo === 'vacio').length, 0)
+  })
+
+  it('esVacioFueraDeLimite y normalizarVacioMaxM', () => {
+    assert.equal(normalizarVacioMaxM(null), 50)
+    assert.equal(normalizarVacioMaxM(0.01), 0.1)
+    assert.equal(esVacioFueraDeLimite({ tipo: 'vacio', medida_m: 50 }, 50), true)
+    assert.equal(esVacioFueraDeLimite({ tipo: 'vacio', medida_m: 49.9 }, 50), false)
+    assert.equal(esVacioFueraDeLimite({ tipo: 'traslapo', medida_m: 100 }, 50), false)
+  })
+
   it('no auditable sin ubicación', () => {
     const r = analizarCandidatoContraPares(
       { id: 1, item_numero: '1.1', cantidad_total: 1, vlr_unitario: 1 },
@@ -185,6 +209,35 @@ describe('sicoeAuditoriaTraslapos', () => {
     assert.equal(res.inconsistencias.cantidad, 1)
     assert.equal(res.justificados.cantidad, 1)
     assert.equal(res.justificados.valor, 200)
+  })
+
+  it('dedupeHallazgosAmbiente colapsa vacíos repetidos del mismo hueco', () => {
+    const list = dedupeHallazgosAmbiente([
+      {
+        id: 1, tipo: 'vacio', item_numero: '1.1.', abs_desde: 1265, abs_hasta: 10675,
+        medida_m: 9410, valor_en_juego: 0,
+        registros_involucrados: [{ id: 55 }, { id: 67 }, { id: 152 }],
+      },
+      {
+        id: 2, tipo: 'vacio', item_numero: '1.1.', abs_desde: 1265, abs_hasta: 10675,
+        medida_m: 9410, valor_en_juego: 0,
+        registros_involucrados: [{ id: 55 }, { id: 67 }],
+      },
+      {
+        id: 3, tipo: 'vacio', item_numero: '1.1.', abs_desde: 1265, abs_hasta: 10675,
+        medida_m: 9410, valor_en_juego: 0,
+        registros_involucrados: [{ id: 55 }, { id: 63 }, { id: 67 }],
+      },
+      {
+        id: 4, tipo: 'traslapo', item_numero: '1.1.', fingerprint: 'abc',
+        registros_involucrados: [{ id: 1 }, { id: 2 }],
+      },
+    ])
+    const vacios = list.filter((h) => h.tipo === 'vacio')
+    assert.equal(vacios.length, 1)
+    const ids = new Set(vacios[0].registros_involucrados.map((r) => r.id))
+    assert.deepEqual([...ids].sort((a, b) => a - b), [55, 63, 67, 152])
+    assert.equal(list.filter((h) => h.tipo === 'traslapo').length, 1)
   })
 
   it('colores mapa desde hallazgos (capa por PK / selección)', () => {

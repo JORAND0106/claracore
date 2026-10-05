@@ -21,7 +21,8 @@ import TopoTrazabilidadButton, { ENTIDAD_PLANILLA_TUBERIA } from '../TopoTrazabi
 import {
   calcularPlanillaLocal,
   cantidadDesdeDims,
-  CAMPOS_DESCUENTO_ALTURA,
+  LINEAS_DESCUENTO_VOLUMEN,
+  labelLineaDescuentoVolumen,
   esCodigoOtros,
   esCodigoDescOtros,
 } from './planillaTuberiaCalc'
@@ -70,6 +71,7 @@ import {
 } from './planillaTuberiaUtils'
 import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
+import { notifyPlanillaTopoGrillaChanged } from '../../../modules/sicoe-obra/sicoeGrillaReportesIndicadores'
 
 
 const CARTERA_MIN_WIDTH = 720
@@ -735,8 +737,22 @@ export default function PlanillaTuberiaForm({
     if (!planilla?.id) return
     setBusy(true); setErr(''); setMsg('')
     const teniaDatos = conDatos
+    const metaLinks = linksSicoeDesdeMeta(planilla?.meta_cabecera)
+    const listaLinks = Array.isArray(detalle?.planilla?.reportes_sicoe)
+      ? detalle.planilla.reportes_sicoe
+      : (Array.isArray(detalle?.reportes_sicoe) ? detalle.reportes_sicoe : [])
+    const linksPrev = [...metaLinks, ...listaLinks]
+      .map((l) => l?.reporte_id)
+      .filter((id) => id != null)
     try {
       await api(`/planillas-tuberia/${planilla.id}`, { method: 'DELETE' })
+      if (linksPrev.length) {
+        notifyPlanillaTopoGrillaChanged({
+          contratoId,
+          reporteIds: linksPrev,
+          tiene: false,
+        })
+      }
       setConfirmEliminar(null)
       volverAlListado(teniaDatos
         ? 'Planilla eliminada (incluía datos de cartera).'
@@ -828,8 +844,9 @@ export default function PlanillaTuberiaForm({
     })
   }, [filas, params, cantManuales, descManuales, planilla?.meta_cabecera])
 
-  /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
+  /** Preferir preview local (completo o parcial con perfil); si falla, último del servidor. */
   const calculoVista = calculoLocal || calculo
+  const previewParcial = !!calculoLocal?.preview_parcial
 
   const absExtremos = useMemo(
     () => abscisasExtremosPlanilla(calculoVista, filas),
@@ -1614,11 +1631,21 @@ export default function PlanillaTuberiaForm({
           </button>
         )}
       </div>
+      {previewParcial && (
+        <div style={{
+          marginBottom: 8, padding: '8px 10px', borderRadius: 8,
+          background: '#eff6ff', border: '1px solid #bfdbfe',
+          fontSize: 'var(--cc-xs)', color: '#1e3a8a',
+        }}>
+          El perfil se actualiza con la cartera. Complete <strong>diámetro</strong> y{' '}
+          <strong>ancho de excavación</strong> en la cabecera para ver el Resumen de Cantidades en vivo.
+        </div>
+      )}
       <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
             <tr>
-              {['Item', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Δ Altura', 'Foto'].map((h, i) => (
+              {['Item', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Descontar de', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -1626,7 +1653,7 @@ export default function PlanillaTuberiaForm({
                     background: '#4472C4',
                     color: '#fff',
                     ...(i === 0 ? { textAlign: 'left' } : null),
-                    ...(h === 'Foto' || h === 'Δ Altura' ? { width: h === 'Foto' ? 56 : 120, textAlign: 'center' } : null),
+                    ...(h === 'Foto' || h === 'Descontar de' ? { width: h === 'Foto' ? 56 : 130, textAlign: 'center' } : null),
                     ...(h === 'Und.' ? { width: 44, textAlign: 'center' } : null),
                   }}
                 >
@@ -1718,7 +1745,7 @@ export default function PlanillaTuberiaForm({
                       <select
                         disabled={!editable}
                         value={descontarDe || ''}
-                        title="Descontar el espesor de un promedio de la cartera"
+                        title="Descontar el volumen (L×A×E) de una línea del Resumen"
                         onChange={(e) => setOverrideCantidad(n.codigo, {
                           descontar_de: e.target.value || null,
                         })}
@@ -1732,8 +1759,10 @@ export default function PlanillaTuberiaForm({
                         }}
                       >
                         <option value="">—</option>
-                        {CAMPOS_DESCUENTO_ALTURA.map((c) => (
-                          <option key={c.key} value={c.key}>{c.label}</option>
+                        {LINEAS_DESCUENTO_VOLUMEN.map((c) => (
+                          <option key={c.key} value={c.key}>
+                            {c.key === 'TRI' ? labelLineaDescuentoVolumen('TRI', params.tipo) : c.label}
+                          </option>
                         ))}
                       </select>
                     ) : '—'}
@@ -1761,26 +1790,27 @@ export default function PlanillaTuberiaForm({
           </tbody>
         </table>
       </div>
-      {((calculoVista?.notas_descuento_altura || []).length > 0
+      {((calculoVista?.notas_descuento_volumen || calculoVista?.notas_descuento_altura || []).length > 0
+        || (calculoVista?.descuentos_volumen && Object.keys(calculoVista.descuentos_volumen).length > 0)
         || (calculoVista?.descuentos_altura && Object.keys(calculoVista.descuentos_altura).length > 0)) && (
         <div style={{
           marginTop: 8, padding: '8px 10px', borderRadius: 8,
           background: '#fff7ed', border: '1px solid #fed7aa',
           fontSize: 'var(--cc-xs)', color: '#9a3412',
         }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>Notas de descuento de altura</div>
-          {(calculoVista?.notas_descuento_altura || []).length > 0 ? (
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Notas de descuento de volumen</div>
+          {(calculoVista?.notas_descuento_volumen || calculoVista?.notas_descuento_altura || []).length > 0 ? (
             <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {calculoVista.notas_descuento_altura.map((n) => (
+              {(calculoVista?.notas_descuento_volumen || calculoVista?.notas_descuento_altura || []).map((n) => (
                 <li key={n}>{n}</li>
               ))}
             </ul>
           ) : (
             <div>
-              Descuentos de altura aplicados:{' '}
-              {Object.entries(calculoVista.descuentos_altura || {}).map(([k, v]) => {
-                const lbl = CAMPOS_DESCUENTO_ALTURA.find((c) => c.key === k)?.label || k
-                return `${lbl} −${fmtNDash(v)}`
+              Descuentos de volumen aplicados:{' '}
+              {Object.entries(calculoVista.descuentos_volumen || calculoVista.descuentos_altura || {}).map(([k, v]) => {
+                const lbl = labelLineaDescuentoVolumen(k, params.tipo)
+                return `${lbl} −${fmtNDash(v)} m³`
               }).join(' · ')}
             </div>
           )}
@@ -2402,6 +2432,13 @@ export default function PlanillaTuberiaForm({
           setMsg(num != null
             ? `Reporte SICOE #${num} creado con ${res?.n_registros || 0} registro(s) en Sin Asignar Ítem.`
             : 'Reporte SICOE creado.')
+          if (res?.reporte_id != null) {
+            notifyPlanillaTopoGrillaChanged({
+              contratoId,
+              reporteIds: [res.reporte_id],
+              tiene: true,
+            })
+          }
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }
@@ -2462,6 +2499,13 @@ export default function PlanillaTuberiaForm({
           setMsg(num != null
             ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados${extra}).`
             : 'Planilla asociada al reporte SICOE.')
+          if (res?.reporte_id != null) {
+            notifyPlanillaTopoGrillaChanged({
+              contratoId,
+              reporteIds: [res.reporte_id],
+              tiene: true,
+            })
+          }
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }

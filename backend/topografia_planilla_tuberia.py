@@ -51,20 +51,38 @@ def nombre_triturado_por_tipo(tipo: Optional[str]) -> str:
 # OTROS admite múltiples líneas: OTROS, OTROS_1, OTROS_2, …
 CODIGOS_CANTIDADES_EDITABLES = frozenset({"EXC_ROC", "OTROS"})
 
-# Campos de cartera (promedios) de los que se puede descontar altura/espesor.
-CAMPOS_DESCUENTO_ALTURA = (
-    ("prom_altura_excavacion", "Altura Excavación"),
-    ("prom_altura_triturado", "Altura Triturado"),
-    ("prom_altura_relleno", "Altura Relleno"),
+# Líneas del Resumen de Cantidades de las que se puede descontar volumen (m³).
+LINEAS_DESCUENTO_VOLUMEN = (
+    ("EXC", "Excavación Varias"),
+    ("TRI", "Atraque / Mat. filtrante"),
+    ("REL", "Relleno Gran."),
 )
-CAMPOS_DESCUENTO_ALTURA_SET = frozenset(c for c, _ in CAMPOS_DESCUENTO_ALTURA)
-# Campo de cartera → código de Resumen de Cantidades que absorbe el descuento de altura.
-CAMPO_DESCUENTO_ALTURA_A_CANTIDAD = {
+LINEAS_DESCUENTO_VOLUMEN_SET = frozenset(c for c, _ in LINEAS_DESCUENTO_VOLUMEN)
+LINEAS_DESCUENTO_VOLUMEN_LABEL = dict(LINEAS_DESCUENTO_VOLUMEN)
+# Compat: valores legacy del descuento por altura promedio → línea de volumen.
+LEGACY_DESCUENTO_ALTURA_A_LINEA = {
     "prom_altura_excavacion": "EXC",
     "prom_altura_triturado": "TRI",
     "prom_altura_relleno": "REL",
 }
-CAMPOS_DESCUENTO_ALTURA_LABEL = dict(CAMPOS_DESCUENTO_ALTURA)
+
+
+def resolver_linea_descuento_volumen(descontar_de: Any) -> Optional[str]:
+    """Normaliza descontar_de a EXC|TRI|REL (acepta claves legacy de altura)."""
+    raw = str(descontar_de or "").strip()
+    if not raw:
+        return None
+    if raw in LEGACY_DESCUENTO_ALTURA_A_LINEA:
+        return LEGACY_DESCUENTO_ALTURA_A_LINEA[raw]
+    cod = raw.upper()
+    return cod if cod in LINEAS_DESCUENTO_VOLUMEN_SET else None
+
+
+def label_linea_descuento_volumen(codigo: Any, tipo: Optional[str] = None) -> str:
+    cod = str(codigo or "").strip().upper()
+    if cod == "TRI":
+        return nombre_triturado_por_tipo(tipo)
+    return LINEAS_DESCUENTO_VOLUMEN_LABEL.get(cod, cod or "—")
 
 
 def es_codigo_otros(codigo: Any) -> bool:
@@ -83,7 +101,7 @@ def es_codigo_cantidad_editable(codigo: Any) -> bool:
     return cod == "EXC_ROC" or es_codigo_otros(cod)
 
 
-def _nombre_actividad_descuento_altura(codigo: Any, nombre: Any) -> str:
+def _nombre_actividad_descuento_volumen(codigo: Any, nombre: Any) -> str:
     """Texto de actividad para notas: sin prefijo «Otros:»."""
     cod = str(codigo or "").strip().upper()
     raw = str(nombre or "").strip()
@@ -98,6 +116,27 @@ def _nombre_actividad_descuento_altura(codigo: Any, nombre: Any) -> str:
     return raw or cod or "—"
 
 
+# Alias compat tests/imports antiguos.
+_nombre_actividad_descuento_altura = _nombre_actividad_descuento_volumen
+
+
+def formatear_nota_descuento_volumen(
+    *,
+    actividad: str,
+    linea_label: str,
+    volumen_original: float,
+    volumen_descontado: float,
+    volumen_final: float,
+) -> str:
+    """Nota breve: «Actividad: Vol Excavación Varias 100 − 12 = 88 m³»."""
+    act = str(actividad or "").strip() or "—"
+    lbl = str(linea_label or "").strip() or "Volumen"
+    return (
+        f"{act}: Vol {lbl} {_r2(volumen_original)} − {_r2(volumen_descontado)} "
+        f"= {_r2(volumen_final)} m³"
+    )
+
+
 def formatear_nota_descuento_altura(
     *,
     actividad: str,
@@ -106,75 +145,105 @@ def formatear_nota_descuento_altura(
     valor_descontado: float,
     altura_final: float,
 ) -> str:
-    """Nota breve: «Actividad: Altura Exc. 1.005 − 0.100 = 0.905 m»."""
-    act = str(actividad or "").strip() or "—"
-    lbl = str(campo_label or "").strip() or "Altura"
-    return (
-        f"{act}: {lbl} {_r3(altura_original)} − {_r3(valor_descontado)} "
-        f"= {_r3(altura_final)} m"
+    """Compat: redirige al formato de volumen (misma firma antigua)."""
+    return formatear_nota_descuento_volumen(
+        actividad=actividad,
+        linea_label=campo_label,
+        volumen_original=altura_original,
+        volumen_descontado=valor_descontado,
+        volumen_final=altura_final,
     )
 
 
-def _construir_descuentos_altura_detalle(
+def _dims_volumen_override(
+    ov: dict,
+    *,
+    default_long: float,
+    default_ancho: float,
+) -> tuple[Optional[float], Optional[float], Optional[float], float]:
+    """Long/Ancho/Espesor del override y volumen ROUND(PRODUCT(dims,2),2)."""
+    long_v = ov["long"] if "long" in ov and ov.get("long") is not None else default_long
+    ancho_v = ov["ancho"] if "ancho" in ov and ov.get("ancho") is not None else default_ancho
+    esp_v = ov.get("espesor")
+    if esp_v is None:
+        return None, None, None, 0.0
+    try:
+        esp_f = float(esp_v)
+        long_f = float(long_v) if long_v is not None else None
+        ancho_f = float(ancho_v) if ancho_v is not None else None
+    except (TypeError, ValueError):
+        return None, None, None, 0.0
+    if abs(esp_f) <= 1e-12:
+        return long_f, ancho_f, esp_f, 0.0
+    vol = _r2(_product_resumen([long_f, ancho_f, esp_f])) or 0.0
+    return long_f, ancho_f, esp_f, float(vol)
+
+
+def _construir_descuentos_volumen_detalle(
     overrides_list: list[dict],
     *,
-    long_m: float,
-    ancho_m: float,
-    alturas_orig: dict[str, float],
-    alturas_final: dict[str, float],
+    default_long: float,
+    default_ancho: float,
+    volumenes_orig: dict[str, float],
+    volumenes_final: dict[str, float],
+    tipo: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
-    Una fila por override EXC_ROC/OTROS con descontar_de + espesor.
-    Volumen = Long × Ancho excavación × espesor descontado (m³).
+    Una fila por override EXC_ROC/OTROS con descontar_de → línea EXC|TRI|REL.
+    Volumen descontado = Long×Ancho×Espesor propios de la línea (no el tramo completo).
     """
     out: list[dict[str, Any]] = []
     for ov in overrides_list:
-        campo = ov.get("descontar_de")
-        if campo not in CAMPOS_DESCUENTO_ALTURA_SET:
+        dest = resolver_linea_descuento_volumen(ov.get("descontar_de"))
+        if not dest:
             continue
-        esp = ov.get("espesor")
-        if esp is None:
-            continue
-        try:
-            esp_f = float(esp)
-        except (TypeError, ValueError):
-            continue
-        if abs(esp_f) <= 1e-12:
+        long_f, ancho_f, esp_f, vol = _dims_volumen_override(
+            ov, default_long=default_long, default_ancho=default_ancho,
+        )
+        if esp_f is None or abs(vol) <= 1e-12:
             continue
         codigo_origen = str(ov.get("codigo") or "").strip().upper()
         if not codigo_origen:
             continue
-        actividad = _nombre_actividad_descuento_altura(codigo_origen, ov.get("nombre"))
-        label = CAMPOS_DESCUENTO_ALTURA_LABEL.get(campo, campo)
-        h_orig = float(alturas_orig.get(campo) or 0.0)
-        h_fin = float(alturas_final.get(campo) or 0.0)
-        vol = _r2(_product_resumen([long_m, ancho_m, esp_f])) or 0.0
-        nota = formatear_nota_descuento_altura(
+        actividad = _nombre_actividad_descuento_volumen(codigo_origen, ov.get("nombre"))
+        label = label_linea_descuento_volumen(dest, tipo)
+        v_orig = float(volumenes_orig.get(dest) or 0.0)
+        v_fin = float(volumenes_final.get(dest) or 0.0)
+        nota = formatear_nota_descuento_volumen(
             actividad=actividad,
-            campo_label=label,
-            altura_original=h_orig,
-            valor_descontado=esp_f,
-            altura_final=h_fin,
+            linea_label=label,
+            volumen_original=v_orig,
+            volumen_descontado=vol,
+            volumen_final=v_fin,
         )
         out.append({
-            "codigo": f"DESC_ALT_{codigo_origen}",
+            "codigo": f"DESC_VOL_{codigo_origen}",
             "origen_codigo": codigo_origen,
-            "nombre": f"Desc. altura ({actividad})",
+            "nombre": f"Desc. volumen ({actividad})",
             "actividad": actividad,
-            "campo": campo,
+            "item_cant_codigo": dest,
+            "linea_label": label,
+            "volumen_original": _r2(v_orig),
+            "volumen_descontado": _r2(vol),
+            "volumen_final": _r2(v_fin),
+            # Compat claves antiguas leídas por Excel/UI.
+            "campo": dest,
             "campo_label": label,
-            "item_cant_codigo": CAMPO_DESCUENTO_ALTURA_A_CANTIDAD.get(campo),
-            "altura_original": _r3(h_orig),
-            "valor_descontado": _r3(esp_f),
-            "altura_final": _r3(h_fin),
-            "long": _dim_resumen_2(long_m),
-            "ancho": _dim_resumen_2(ancho_m),
+            "altura_original": _r2(v_orig),
+            "valor_descontado": _r2(vol),
+            "altura_final": _r2(v_fin),
+            "long": _dim_resumen_2(long_f),
+            "ancho": _dim_resumen_2(ancho_f),
             "espesor": _dim_resumen_2(esp_f),
             "cantidad": round(float(vol), 2),
             "unidad": "m³",
             "nota": nota,
         })
     return out
+
+
+# Alias compat.
+_construir_descuentos_altura_detalle = _construir_descuentos_volumen_detalle
 
 
 # Descuentos específicos (I43:N50). Vinculados por codigo de ítem de cantidad.
@@ -509,10 +578,8 @@ def calcular_fila_cartera(
     vacio = all(v is None for v in (abscisa, tn, cfe, nivel, term, sub))
 
     h_exc = None
-    if abscisa is not None and abscisa != 0 and tn is not None and cfe is not None:
-        h_exc = tn - cfe
-    elif tn is not None and cfe is not None and abscisa is None:
-        # fila parcial: aún así TN−CFE si hay cotas
+    # Abscisa 0 es válida (PK inicial); solo se exige TN y CFE para H.Exc.
+    if tn is not None and cfe is not None:
         h_exc = tn - cfe
 
     h_trit = None
@@ -704,8 +771,8 @@ def _normalize_cantidades_manuales(
                 entry[key] = _f(d.get(key))
         if es_codigo_otros(cod) and "nombre" in d:
             entry["nombre"] = str(d.get("nombre") or "").strip()
-        desc_de = d.get("descontar_de")
-        if desc_de in CAMPOS_DESCUENTO_ALTURA_SET:
+        desc_de = resolver_linea_descuento_volumen(d.get("descontar_de"))
+        if desc_de:
             entry["descontar_de"] = desc_de
         out.append(entry)
     # Siempre al menos una línea OTROS_1 (vacía) para UI/export
@@ -745,7 +812,8 @@ def calcular_cantidades_y_descuentos(
     − Desc (solo Triturado). Cada dimensión se redondea a 2 dec antes del producto
     para que el resultado coincida con los valores mostrados en UI/PDF/Excel.
     EXC_ROC y OTROS[_n] admiten Long/Ancho/Espesor (y nombre en OTROS) por override.
-    descontar_de resta el espesor del promedio de cartera indicado.
+    descontar_de (EXC|TRI|REL) resta el volumen L×A×E de la línea editable
+    del volumen de la línea de Resumen seleccionada.
     """
     tipo = seccion["tipo"]
     tot = cartera.get("totales") or {}
@@ -764,37 +832,15 @@ def calcular_cantidades_y_descuentos(
     ancho_geo = (ancho_geo_prom + traslapo) if tipo == "FILTRO" else None
 
     overrides_list = _normalize_cantidades_manuales(cantidades_manuales)
-    # Descuentos de altura cruzados (suma de espesores por campo destino)
-    h_exc_orig, h_trit_orig, h_rel_orig = h_exc, h_trit, h_rel
-    restas = {k: 0.0 for k in CAMPOS_DESCUENTO_ALTURA_SET}
+    # Descuentos de volumen cruzados: EXC_ROC/Otros → línea EXC|TRI|REL (sin tocar alturas).
+    restas_vol = {k: 0.0 for k in LINEAS_DESCUENTO_VOLUMEN_SET}
     for ov in overrides_list:
-        campo = ov.get("descontar_de")
-        esp = ov.get("espesor")
-        if campo in restas and esp is not None:
-            restas[campo] += float(esp)
-    h_exc = max(0.0, h_exc - restas.get("prom_altura_excavacion", 0.0))
-    h_trit = max(0.0, h_trit - restas.get("prom_altura_triturado", 0.0))
-    h_rel = max(0.0, h_rel - restas.get("prom_altura_relleno", 0.0))
-    alturas_orig = {
-        "prom_altura_excavacion": h_exc_orig,
-        "prom_altura_triturado": h_trit_orig,
-        "prom_altura_relleno": h_rel_orig,
-    }
-    alturas_final = {
-        "prom_altura_excavacion": h_exc,
-        "prom_altura_triturado": h_trit,
-        "prom_altura_relleno": h_rel,
-    }
-    descuentos_altura_detalle = _construir_descuentos_altura_detalle(
-        overrides_list,
-        long_m=L,
-        ancho_m=B,
-        alturas_orig=alturas_orig,
-        alturas_final=alturas_final,
-    )
-    notas_descuento_altura = [
-        d["nota"] for d in descuentos_altura_detalle if d.get("nota")
-    ]
+        dest = resolver_linea_descuento_volumen(ov.get("descontar_de"))
+        if not dest:
+            continue
+        _l, _a, _e, vol = _dims_volumen_override(ov, default_long=L, default_ancho=B)
+        if abs(vol) > 1e-12:
+            restas_vol[dest] += float(vol)
 
     # Descuentos dimensionales automáticos (dims a 2 dec antes del PRODUCT)
     if tipo == "ALCANTARILLA":
@@ -931,20 +977,45 @@ def calcular_cantidades_y_descuentos(
             "editable_nombre": True,
         })
 
+    # Volúmenes brutos de líneas destino (antes de descuentos de volumen Roca/Otros).
+    vol_bruto_linea = {
+        "EXC": _r2(_product_resumen([L, B, h_exc])) or 0.0,
+        "TRI": _r2(_product_resumen([L, B, h_trit])) or 0.0,
+        "REL": _r2(_product_resumen([L, B, h_rel])) or 0.0,
+    }
+    vol_final_linea = {
+        k: max(0.0, round(float(vol_bruto_linea[k]) - float(restas_vol.get(k) or 0.0), 2))
+        for k in LINEAS_DESCUENTO_VOLUMEN_SET
+    }
+    descuentos_volumen_detalle = _construir_descuentos_volumen_detalle(
+        overrides_list,
+        default_long=L,
+        default_ancho=B,
+        volumenes_orig=vol_bruto_linea,
+        volumenes_final=vol_final_linea,
+        tipo=tipo,
+    )
+    notas_descuento_volumen = [
+        d["nota"] for d in descuentos_volumen_detalle if d.get("nota")
+    ]
+
     netos = []
     for c in cantidades:
-        if c["codigo"] == "TRI":
-            descuento = c["desc"]
+        codigo = c["codigo"]
+        vol_extra = float(restas_vol.get(codigo) or 0.0)
+        if codigo == "TRI":
+            descuento = round(float(c["desc"]) + vol_extra, 2)
             bruto = c["bruto"]
-            neto = c["cantidad"]
-        elif c["codigo"] == "REL":
-            descuento = c["desc"]
+            neto = round(float(bruto) - descuento, 2)
+        elif codigo == "REL":
+            # Area 2 se reporta en Descuentos Específicos; el volumen Roca/Otros sí baja el neto.
+            descuento = round(float(c["desc"]) + vol_extra, 2)
             bruto = c["cantidad"]
-            neto = c["cantidad"]
-        elif c["codigo"] == "EXC":
-            descuento = desc_otros
+            neto = round(float(bruto) - vol_extra, 2)
+        elif codigo == "EXC":
+            descuento = round(float(desc_otros) + vol_extra, 2)
             bruto = c["cantidad"]
-            neto = round(bruto - descuento, 2)
+            neto = round(float(bruto) - descuento, 2)
         else:
             descuento = 0.0
             bruto = c["cantidad"]
@@ -967,11 +1038,17 @@ def calcular_cantidades_y_descuentos(
         "cantidades": cantidades,
         "descuentos": descuentos,
         "netos": netos,
-        "descuentos_altura": {
-            k: round(v, 4) for k, v in restas.items() if v
+        "descuentos_volumen": {
+            k: round(v, 2) for k, v in restas_vol.items() if v
         },
-        "descuentos_altura_detalle": descuentos_altura_detalle,
-        "notas_descuento_altura": notas_descuento_altura,
+        "descuentos_volumen_detalle": descuentos_volumen_detalle,
+        "notas_descuento_volumen": notas_descuento_volumen,
+        # Alias compat (Excel/UI/tests antiguos).
+        "descuentos_altura": {
+            k: round(v, 2) for k, v in restas_vol.items() if v
+        },
+        "descuentos_altura_detalle": descuentos_volumen_detalle,
+        "notas_descuento_altura": notas_descuento_volumen,
     }
 
 
@@ -1068,9 +1145,12 @@ def calcular_planilla_completa(
         "cantidades": cant["cantidades"],
         "descuentos": cant["descuentos"],
         "netos": cant["netos"],
-        "descuentos_altura": cant.get("descuentos_altura") or {},
-        "descuentos_altura_detalle": cant.get("descuentos_altura_detalle") or [],
-        "notas_descuento_altura": cant.get("notas_descuento_altura") or [],
+        "descuentos_volumen": cant.get("descuentos_volumen") or {},
+        "descuentos_volumen_detalle": cant.get("descuentos_volumen_detalle") or [],
+        "notas_descuento_volumen": cant.get("notas_descuento_volumen") or [],
+        "descuentos_altura": cant.get("descuentos_altura") or cant.get("descuentos_volumen") or {},
+        "descuentos_altura_detalle": cant.get("descuentos_altura_detalle") or cant.get("descuentos_volumen_detalle") or [],
+        "notas_descuento_altura": cant.get("notas_descuento_altura") or cant.get("notas_descuento_volumen") or [],
         "perfil": perfil_longitudinal(cartera, seccion),
         "seccion_tipica": seccion_tipica_params(seccion, cartera),
     }
@@ -1418,8 +1498,8 @@ def formatear_observacion_descuento_sicoe(
         ),
         "DESC_OTROS": "Descuento Otros (resta volumen de Excavación)",
     }
-    if cod.startswith("DESC_ALT_"):
-        base = f"Descuento altura ({nombre_txt})"
+    if cod.startswith("DESC_VOL_") or cod.startswith("DESC_ALT_"):
+        base = f"Descuento volumen ({nombre_txt})"
     elif es_codigo_desc_otros(cod):
         base = explicaciones["DESC_OTROS"]
         if nombre_txt and nombre_txt.lower() not in ("otros", "otros: ____", "descuento otros"):
@@ -1431,20 +1511,24 @@ def formatear_observacion_descuento_sicoe(
     return f"{base} para {tipo} para {tramo_txt}"
 
 
-def formatear_observacion_descuento_altura_sicoe(
+def formatear_observacion_descuento_volumen_sicoe(
     detalle: dict,
     tipo_red: Any,
     tramo: Any,
 ) -> str:
-    """Obs. negativa de descuento de altura (EXC_ROC / Otros → promedio cartera)."""
+    """Obs. negativa de descuento de volumen (EXC_ROC / Otros → línea Resumen)."""
     nota = str((detalle or {}).get("nota") or "").strip()
     actividad = str((detalle or {}).get("actividad") or "").strip() or "—"
-    base = nota or f"Descuento altura ({actividad})"
+    base = nota or f"Descuento volumen ({actividad})"
     if not base.lower().startswith("descuento"):
-        base = f"Descuento altura — {base}"
+        base = f"Descuento volumen — {base}"
     tipo = str(tipo_red or "").strip().upper() or "—"
     tramo_txt = str(tramo or "").strip() or "—"
     return f"{base} para {tipo} para {tramo_txt}"
+
+
+# Alias compat.
+formatear_observacion_descuento_altura_sicoe = formatear_observacion_descuento_volumen_sicoe
 
 
 def _dim_sicoe_3(v: Any) -> Optional[float]:
@@ -1526,32 +1610,25 @@ def lineas_planilla_a_registros_sicoe(
     tramo: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
-    Resumen de Cantidades (positivo, cantidad mayor = bruto) + Descuentos Específicos
-    y descuentos de altura (registro independiente en negativo) con cantidad ≠ 0 → so_registros.
+    Resumen de Cantidades (positivo = bruto) + Descuentos Específicos
+    y descuentos de volumen (registro independiente en negativo) con cantidad ≠ 0 → so_registros.
     Criterio de cero: mismo eps que la exportación Excel.
 
-    Descuento de altura (EXC_ROC/Otros → promedio cartera): el volumen descontado se
-    reincorpora al bruto del ítem afectado (EXC/TRI/REL) y se emite un registro negativo
-    aparte, igual que Area 1 / Area 2 / Tubería Filtro.
+    Descuento de volumen (EXC_ROC/Otros → línea EXC|TRI|REL): el bruto del ítem afectado
+    permanece completo y se emite un registro negativo aparte, igual que Area 1 / Area 2 /
+    Tubería Filtro.
     """
     if not isinstance(calculo, dict):
         return []
     out: list[dict[str, Any]] = []
-    detalle_alt = [
-        d for d in (calculo.get("descuentos_altura_detalle") or [])
+    detalle_vol = [
+        d for d in (
+            calculo.get("descuentos_volumen_detalle")
+            or calculo.get("descuentos_altura_detalle")
+            or []
+        )
         if isinstance(d, dict)
     ]
-    vol_altura_por_cant: dict[str, float] = {}
-    for d in detalle_alt:
-        dest = str(d.get("item_cant_codigo") or "").strip().upper()
-        if not dest:
-            continue
-        try:
-            vol_altura_por_cant[dest] = vol_altura_por_cant.get(dest, 0.0) + float(
-                d.get("cantidad") or 0
-            )
-        except (TypeError, ValueError):
-            continue
 
     def _push(
         nombre: Any, unidad: Any, long: Any, ancho: Any, espesor: Any, cant: Any,
@@ -1573,7 +1650,7 @@ def lineas_planilla_a_registros_sicoe(
             "_origen_tabla": origen,
         })
 
-    # Positivos: cantidad mayor (bruto del resumen + volumen de descuento de altura).
+    # Positivos: bruto del resumen (descuentos de volumen/área van aparte en negativo).
     for n in calculo.get("netos") or []:
         if not isinstance(n, dict):
             continue
@@ -1589,32 +1666,10 @@ def lineas_planilla_a_registros_sicoe(
             cant_f = float(cant) if cant is not None else 0.0
         except (TypeError, ValueError):
             continue
-        extra_alt = float(vol_altura_por_cant.get(codigo.upper(), 0.0) or 0.0)
-        if extra_alt:
-            cant_f = round(cant_f + extra_alt, 2)
-            # Espesor bruto = espesor neto + suma de descuentos de altura al campo.
-            try:
-                esp0 = float(n.get("espesor")) if n.get("espesor") is not None else None
-            except (TypeError, ValueError):
-                esp0 = None
-            if esp0 is not None:
-                # Volumen extra ≈ L×A×Δh → Δh ≈ extra/(L×A) si hay dims.
-                try:
-                    L = float(n.get("long")) if n.get("long") is not None else None
-                    A = float(n.get("ancho")) if n.get("ancho") is not None else None
-                    if L and A and abs(L * A) > 1e-12:
-                        esp0 = round(esp0 + extra_alt / (L * A), 4)
-                except (TypeError, ValueError):
-                    pass
-                espesor_out = esp0
-            else:
-                espesor_out = n.get("espesor")
-        else:
-            espesor_out = n.get("espesor")
         nombre = n.get("nombre") or codigo
         _push(
             nombre, n.get("unidad"),
-            n.get("long"), n.get("ancho"), espesor_out, cant_f,
+            n.get("long"), n.get("ancho"), n.get("espesor"), cant_f,
             origen="cantidades", codigo=codigo,
             observacion=formatear_observacion_registro_sicoe(nombre, tipo, tramo),
         )
@@ -1641,8 +1696,8 @@ def lineas_planilla_a_registros_sicoe(
             observacion=formatear_observacion_descuento_sicoe(codigo, nombre, tipo, tramo),
         )
 
-    # Negativos: descuentos de altura (EXC_ROC / Otros)
-    for d in detalle_alt:
+    # Negativos: descuentos de volumen (EXC_ROC / Otros → línea Resumen)
+    for d in detalle_vol:
         codigo = str(d.get("codigo") or "").strip()
         if not codigo:
             continue
@@ -1658,7 +1713,7 @@ def lineas_planilla_a_registros_sicoe(
             nombre, d.get("unidad") or "m³",
             d.get("long"), d.get("ancho"), d.get("espesor"), cant_neg,
             origen="descuentos", codigo=codigo,
-            observacion=formatear_observacion_descuento_altura_sicoe(d, tipo, tramo),
+            observacion=formatear_observacion_descuento_volumen_sicoe(d, tipo, tramo),
         )
     return out
 

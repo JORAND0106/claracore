@@ -727,8 +727,8 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
       : d.cantidad
     push('descuentos', d.codigo, d.nombre, d.unidad || 'm³', cant)
   }
-  // Descuentos de altura (mismo origen que backend → descuentos:CODIGO).
-  for (const d of calculo?.descuentos_altura_detalle || []) {
+  // Descuentos de volumen (mismo origen que backend → descuentos:CODIGO).
+  for (const d of calculo?.descuentos_volumen_detalle || calculo?.descuentos_altura_detalle || []) {
     if (!d?.codigo) continue
     push('descuentos', d.codigo, d.nombre || d.codigo, d.unidad || 'm³', d.cantidad)
   }
@@ -869,7 +869,17 @@ export function normalizarCantidadesManuales(raw) {
     if (seen.has(cod)) continue
     if (cod !== 'EXC_ROC' && !(cod === 'OTROS' || cod.startsWith('OTROS_'))) continue
     seen.add(cod)
-    out.push({ ...d, codigo: cod })
+    const entry = { ...d, codigo: cod }
+    const legacy = {
+      prom_altura_excavacion: 'EXC',
+      prom_altura_triturado: 'TRI',
+      prom_altura_relleno: 'REL',
+    }
+    if (entry.descontar_de != null && entry.descontar_de !== '') {
+      const raw = String(entry.descontar_de).trim()
+      entry.descontar_de = legacy[raw] || raw.toUpperCase()
+    }
+    out.push(entry)
   }
   if (!seen.has('EXC_ROC')) out.unshift({ codigo: 'EXC_ROC' })
   if (![...seen].some((c) => c === 'OTROS' || c.startsWith('OTROS_'))) {

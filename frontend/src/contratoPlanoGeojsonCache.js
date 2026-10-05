@@ -14,15 +14,26 @@ function normBase(apiBase) {
  * @param {string} apiBase URL del API (p. ej. import.meta.env.VITE_API_URL)
  * @param {number|string} contratoId
  * @param {string|null} token Bearer JWT o null
+ * @param {{ signal?: AbortSignal, timeoutMs?: number }} [opts]
  * @returns {Promise<{ plano_geojson: *, centro_lat: *, centro_lng: * }|null>}
  */
-export function getContratoPlanoGeojson(apiBase, contratoId, token) {
+export function getContratoPlanoGeojson(apiBase, contratoId, token, opts = {}) {
   const k = String(contratoId)
   if (resolved.has(k)) return Promise.resolve(resolved.get(k))
   if (inflight.has(k)) return inflight.get(k)
   const url = `${normBase(apiBase)}/contratos/${encodeURIComponent(k)}/plano-geojson`
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 0
+  const ctrl = timeoutMs && typeof AbortController !== 'undefined' ? new AbortController() : null
+  const external = opts.signal
+  if (external && ctrl) {
+    if (external.aborted) ctrl.abort()
+    else external.addEventListener('abort', () => ctrl.abort(), { once: true })
+  }
+  const timer = ctrl && timeoutMs ? setTimeout(() => ctrl.abort(), timeoutMs) : null
+  const signal = ctrl?.signal || external
   const p = fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
   })
     .then(async (r) => {
       if (!r.ok) return null
@@ -31,10 +42,14 @@ export function getContratoPlanoGeojson(apiBase, contratoId, token) {
       resolved.set(k, normalized)
       return normalized
     })
-    .catch((e) =>
-      Promise.reject(e instanceof Error ? e : new Error('No se pudo cargar el plano del contrato')),
-    )
+    .catch((e) => {
+      if (e?.name === 'AbortError') {
+        return Promise.reject(new Error('La carga del plano de obra tardó demasiado. Intente de nuevo.'))
+      }
+      return Promise.reject(e instanceof Error ? e : new Error('No se pudo cargar el plano del contrato'))
+    })
     .finally(() => {
+      if (timer) clearTimeout(timer)
       inflight.delete(k)
     })
   inflight.set(k, p)
