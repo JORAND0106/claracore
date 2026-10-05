@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import {
   descripcionGrillaItem,
   estadoValidacionItem,
@@ -100,6 +101,12 @@ export default function SolicitudMaterialesExcelTable({
   destacarSinInsumo = false,
   onRowClick,
   onMapClick,
+  puedeSeleccionar = false,
+  seleccion,
+  onToggleLinea,
+  puedeAsignar = false,
+  onAsignarGrupo,
+  onAprobarGrupo,
 }) {
   const ui = useAlmacenTheme()
   const thBase = { ...ui.th, fontSize: 'var(--cc-xs)' }
@@ -112,12 +119,16 @@ export default function SolicitudMaterialesExcelTable({
     )
   }
 
-  const minWidth = COLS.reduce((acc, c) => acc + c.width, 0) + (puedeValidar ? 78 : 0)
+  const minWidth = COLS.reduce((acc, c) => acc + c.width, 0)
+    + (puedeValidar ? 78 : 0)
+    + (puedeSeleccionar ? 36 : 0)
+  const colSpan = COLS.length + (puedeValidar ? 1 : 0) + (puedeSeleccionar ? 1 : 0)
 
   return (
     <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
       <table style={{ ...ui.sheetTable, minWidth, tableLayout: 'fixed' }}>
         <colgroup>
+          {puedeSeleccionar && <col style={{ width: 36 }} />}
           {COLS.map((c) => (
             <col key={c.key} style={{ width: c.width }} />
           ))}
@@ -125,6 +136,9 @@ export default function SolicitudMaterialesExcelTable({
         </colgroup>
         <thead>
           <tr>
+            {puedeSeleccionar && (
+              <ColHeader abbr="" tip="Seleccionar líneas para asignar o aprobar en bloque" style={thBase} />
+            )}
             {COLS.map((c) => (
               <ColHeader
                 key={c.key}
@@ -155,14 +169,80 @@ export default function SolicitudMaterialesExcelTable({
             const absTxt = fmtAbscisasLinea(it)
             const tramoTxt = it.tramo || it.contexto_presupuesto?.tramo || '—'
             const cantTxt = `${fmtCant(it.cantidad)}${und ? ` ${und}` : ''}`
+            const grupoId = String(it.grupo_seleccion || '').trim()
+            const prevGrupo = String(items[idx - 1]?.grupo_seleccion || '').trim()
+            const muestraGrupo = grupoId && grupoId !== prevGrupo
+            const grupoItems = muestraGrupo
+              ? items.filter((row) => String(row.grupo_seleccion || '').trim() === grupoId)
+              : []
+            const marcada = Boolean(it.id != null && seleccion?.has(it.id))
             return (
+              <Fragment key={it.id ?? `row-${idx}`}>
+                {muestraGrupo && (
+                  <tr>
+                    <td
+                      colSpan={colSpan}
+                      style={{
+                        ...cellBase(ui),
+                        background: ui.accentSoft,
+                        fontWeight: 700,
+                        fontSize: 'var(--cc-xs)',
+                        height: 'auto',
+                        maxHeight: 'none',
+                        lineHeight: 1.35,
+                        whiteSpace: 'normal',
+                        overflow: 'visible',
+                        padding: '6px 8px',
+                      }}
+                    >
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', width: '100%' }}>
+                        <span title={it.grupo_etiqueta || 'Grupo de la misma selección'}>
+                          {it.grupo_etiqueta || 'Grupo'}
+                          {' '}
+                          ({grupoItems.length})
+                        </span>
+                        {puedeAsignar && onAsignarGrupo && (
+                          <button
+                            type="button"
+                            style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24 }}
+                            onClick={() => onAsignarGrupo(grupoId, grupoItems)}
+                          >
+                            Asignar insumo
+                          </button>
+                        )}
+                        {puedeValidar && onAprobarGrupo && (
+                          <button
+                            type="button"
+                            style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24 }}
+                            onClick={() => onAprobarGrupo(grupoId, grupoItems)}
+                          >
+                            Aprobar grupo
+                          </button>
+                        )}
+                      </span>
+                    </td>
+                  </tr>
+                )}
               <tr
-                key={it.id ?? idx}
                 style={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_H }}
                 onClick={() => onRowClick?.(it, idx)}
                 onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
               >
+                {puedeSeleccionar && (
+                  <td
+                    style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={marcada}
+                      disabled={it.id == null}
+                      aria-label={`Seleccionar línea ${it.numero_linea ?? idx + 1}`}
+                      onChange={(e) => onToggleLinea?.(it.id, e.target.checked)}
+                    />
+                  </td>
+                )}
                 <td style={cellBase(ui, { align: 'right', mono: true })}>
                   <Trunc>{it.numero_linea ?? idx + 1}</Trunc>
                 </td>
@@ -246,6 +326,7 @@ export default function SolicitudMaterialesExcelTable({
                   </td>
                 )}
               </tr>
+              </Fragment>
             )
           })}
         </tbody>

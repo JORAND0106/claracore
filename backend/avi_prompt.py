@@ -1445,10 +1445,18 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
    Filtros vía modal.
 
    FORMULARIO (por línea)
-   - Insumo de catálogo (o texto libre previo a mapeo gerencial), capítulo/ítem cobro, PK en mapa,
+   - Tras capítulo e ítem (distinto de Administración AIU) se abre el acordeón Tramo → PK-ID →
+     registros. Seleccionar un tramo o varios PK-ID genera una línea por PK-ID en la misma solicitud,
+     con grupo visible. La cantidad menor al saldo se reparte proporcional al saldo. El mapa sigue
+     como camino alterno (un PK-ID). AIU no usa el acordeón ni control de presupuesto por PK-ID.
+   - Insumo de catálogo (o texto libre previo a mapeo), capítulo/ítem cobro, PK en mapa,
      registro presupuesto, ubicación, cantidad, flags recurrente / principal vs asociado.
    - **Cuadro presupuesto / saldo presupuestal**: presupuestado − acumulado solicitado; alerta si supera;
      confirmación al enviar si alguna línea excede.
+   - **Asignar insumo en bloque** (permiso editar): por grupo automático o por casillas, mismo buscador.
+   - **Aprobar en bloque** (validar + Contratista Gerencial): por grupo o por casillas. Las líneas que
+     no cumplan (sin insumo, sin costo, ya en OC, ya aprobadas) no se aprueban y se listan con el motivo.
+     Convive con «Aprobar todos los ítems» y «Aprobar y generar OC». No hay rechazo en bloque.
 
    FLUJO
    ```
