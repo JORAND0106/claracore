@@ -1,9 +1,14 @@
 /**
- * Franja de cobertura del detalle de hallazgo (lógica de rangos).
+ * Franja de cobertura del detalle de hallazgo + layout comparativa (regresión).
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseAbsNum } from './sicoeAuditoriaTraslapos.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 /** Misma lógica de extent que FranjaCoberturaHallazgo (sin React). */
 function extentCobertura(hallazgo, registros) {
@@ -49,5 +54,30 @@ describe('extentCobertura hallazgo', () => {
       extentCobertura({ tipo: 'traslapo', pk_id_id: 5 }, [{ pk_id_id: 5 }]),
       null,
     )
+  })
+})
+
+describe('SicoeHallazgoDetalle layout comparativa', () => {
+  const src = readFileSync(join(__dirname, 'SicoeHallazgoDetalle.jsx'), 'utf8')
+  const franja = readFileSync(join(__dirname, 'SicoeHallazgoFranja.jsx'), 'utf8')
+
+  it('ya no monta el plano SVG de dos puntos (ComparativaMapa)', () => {
+    assert.doesNotMatch(src, /SicoeHallazgoComparativaMapa/)
+    assert.match(src, /FranjaCoberturaHallazgo/)
+  })
+
+  it('bloquea scroll del fondo y usa scroll de contenido contenido', () => {
+    assert.match(src, /position = 'fixed'/)
+    assert.match(src, /touchmove/)
+    assert.match(src, /overscrollBehavior: 'contain'/)
+    assert.match(src, /data-sicoe-comparativa-scroll="body"/)
+    assert.match(src, /Justificación/)
+  })
+
+  it('franja muestra medida y abscisas sin overflow hidden en el chart', () => {
+    assert.match(franja, /medidaTxt/)
+    assert.match(franja, /overflow: 'visible'/)
+    assert.match(franja, /Zona pisada/)
+    assert.match(franja, /Hueco entre reportes/)
   })
 })

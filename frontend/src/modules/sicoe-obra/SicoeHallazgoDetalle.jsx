@@ -1,8 +1,8 @@
 /**
  * Ventana comparativa de un hallazgo de Auditoría (estilo ejecutivo Microsoft).
- * Dos paneles alineados (reporte más antiguo a la izquierda), plano, fotos y justificación.
+ * Dos paneles alineados (reporte más antiguo a la izquierda), zona pisada (barras), fotos y justificación.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fmtAbscisaK,
   fmtValorCop,
@@ -12,7 +12,6 @@ import {
 import { fmtCantidadConDimensiones } from './sicoeCantidadDimensiones'
 import { fetchAuditoriaHallazgoDetalle, justificarAuditoriaHallazgo } from './sicoeAuditoriaHallazgosApi'
 import { FranjaCoberturaHallazgo } from './SicoeHallazgoFranja'
-import { SicoeHallazgoComparativaMapa } from './SicoeHallazgoComparativaMapa'
 
 const TIPO_LABEL = {
   traslapo: 'Traslapo',
@@ -188,6 +187,8 @@ export default function SicoeHallazgoDetalle({
   const [msgJust, setMsgJust] = useState('')
   const [guardando, setGuardando] = useState(false)
   const [lightbox, setLightbox] = useState(null) // { left, right, label }
+  const scrollBodyRef = useRef(null)
+  const scrollYLockRef = useRef(0)
 
   const hid = hallazgoProp?.id
   const lista = Array.isArray(hallazgosLista) && hallazgosLista.length
@@ -196,6 +197,60 @@ export default function SicoeHallazgoDetalle({
   const idx = lista.findIndex((h) => String(h?.id) === String(hid))
   const hayPrev = idx > 0
   const hayNext = idx >= 0 && idx < lista.length - 1
+
+  /** Bloquea el scroll de la página de atrás (iPad/móvil/escritorio) mientras la ventana está abierta. */
+  useEffect(() => {
+    const body = document.body
+    const html = document.documentElement
+    scrollYLockRef.current = window.scrollY || window.pageYOffset || 0
+    const prev = {
+      bodyOverflow: body.style.overflow,
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyWidth: body.style.width,
+      bodyTouchAction: body.style.touchAction,
+      htmlOverflow: html.style.overflow,
+      htmlOverscroll: html.style.overscrollBehavior,
+    }
+    body.style.overflow = 'hidden'
+    body.style.position = 'fixed'
+    body.style.top = `-${scrollYLockRef.current}px`
+    body.style.width = '100%'
+    body.style.touchAction = 'none'
+    html.style.overflow = 'hidden'
+    html.style.overscrollBehavior = 'none'
+
+    const onTouchMove = (e) => {
+      let node = e.target
+      let allow = false
+      while (node && node !== document.body) {
+        if (node.nodeType === 1) {
+          if (
+            node === scrollBodyRef.current
+            || node.getAttribute('data-sicoe-comparativa-scroll')
+          ) {
+            allow = true
+            break
+          }
+        }
+        node = node.parentNode
+      }
+      if (!allow) e.preventDefault()
+    }
+    document.addEventListener('touchmove', onTouchMove, { passive: false })
+
+    return () => {
+      document.removeEventListener('touchmove', onTouchMove)
+      body.style.overflow = prev.bodyOverflow
+      body.style.position = prev.bodyPosition
+      body.style.top = prev.bodyTop
+      body.style.width = prev.bodyWidth
+      body.style.touchAction = prev.bodyTouchAction
+      html.style.overflow = prev.htmlOverflow
+      html.style.overscrollBehavior = prev.htmlOverscroll
+      window.scrollTo(0, scrollYLockRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!hid || !contratoId || !token) return undefined
@@ -395,6 +450,7 @@ export default function SicoeHallazgoDetalle({
         alignItems: isNarrow ? 'stretch' : 'center',
         justifyContent: 'center',
         padding: isNarrow ? 0 : 16,
+        touchAction: 'none',
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onCerrar?.()
@@ -404,6 +460,7 @@ export default function SicoeHallazgoDetalle({
         style={{
           width: isNarrow ? '100%' : 'min(1100px, 96vw)',
           maxHeight: isNarrow ? '100%' : '92vh',
+          height: isNarrow ? '100%' : 'auto',
           background: t.bgCard || t.bg,
           border: `1px solid ${t.border}`,
           borderRadius: isNarrow ? 0 : 10,
@@ -411,10 +468,12 @@ export default function SicoeHallazgoDetalle({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          minHeight: 0,
+          touchAction: 'manipulation',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Encabezado */}
+        {/* Encabezado fijo */}
         <div
           style={{
             display: 'flex',
@@ -424,6 +483,7 @@ export default function SicoeHallazgoDetalle({
             borderBottom: `1px solid ${t.border}`,
             background: t.inputBg || t.bg,
             flexShrink: 0,
+            zIndex: 2,
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -491,8 +551,24 @@ export default function SicoeHallazgoDetalle({
           </div>
         </div>
 
-        {/* Cuerpo scrollable */}
-        <div style={{ flex: 1, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* Único scroll de contenido */}
+        <div
+          ref={scrollBodyRef}
+          data-sicoe-comparativa-scroll="body"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehavior: 'contain',
+            touchAction: 'pan-y',
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}
+        >
           {loading && (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando detalle…</div>
           )}
@@ -500,29 +576,32 @@ export default function SicoeHallazgoDetalle({
             <div style={{ color: '#dc2626', fontSize: 'var(--cc-caption)' }}>{error}</div>
           )}
 
-          {/* Plano superpuesto */}
           <div
             style={{
               border: `1px solid ${t.border}`,
               borderRadius: 8,
-              overflow: 'hidden',
+              padding: '10px 12px 12px',
               background: t.bg,
+              minWidth: 0,
             }}
           >
-            <div style={{ padding: '8px 12px', fontWeight: 800, fontSize: 'var(--cc-sm)', color: t.text, borderBottom: `1px solid ${t.border}` }}>
-              Plano · {txt(h.tipo).toLowerCase() === 'vacio' ? 'hueco resaltado' : 'zona pisada resaltada'}
-            </div>
-            <SicoeHallazgoComparativaMapa t={t} hallazgo={h} left={leftReg} right={rightReg} height={isNarrow ? 180 : 220} />
-            <div style={{ padding: '0 12px 10px' }}>
-              <FranjaCoberturaHallazgo t={t} hallazgo={h} registros={regs} />
-            </div>
+            <FranjaCoberturaHallazgo t={t} hallazgo={h} registros={regs} />
           </div>
 
-          {/* Dos paneles */}
           {!regs.length ? (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin registros asociados.</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 0, border: `1px solid ${t.border}`, borderRadius: 8, overflow: 'hidden' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0,
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                overflow: 'visible',
+                minWidth: 0,
+              }}
+            >
               <div
                 style={{
                   display: 'grid',
@@ -541,7 +620,7 @@ export default function SicoeHallazgoDetalle({
                     const leftVal = valorCampo(row, leftReg)
                     const rightVal = right ? valorCampo(row, rightReg) : null
                     const match = right ? valoresCoinciden(leftVal, rightVal) : false
-                    const renderCell = (reg, val, side) => {
+                    const renderCell = (reg, val) => {
                       if (row.key === 'numero_registro' && reg) {
                         return (
                           <button
@@ -565,7 +644,15 @@ export default function SicoeHallazgoDetalle({
                       }
                       if (row.key === 'observacion') {
                         return (
-                          <span style={{ whiteSpace: 'pre-wrap', display: 'block' }}>
+                          <span
+                            style={{
+                              whiteSpace: 'pre-wrap',
+                              display: 'block',
+                              overflowWrap: 'anywhere',
+                              wordBreak: 'break-word',
+                              maxHeight: 'none',
+                            }}
+                          >
                             {val}
                           </span>
                         )
@@ -588,7 +675,7 @@ export default function SicoeHallazgoDetalle({
                             {row.label}
                           </td>
                           <td style={{ ...cellStyle(false, 'left'), verticalAlign: 'top' }}>
-                            {renderCell(leftReg, leftVal, 'left')}
+                            {renderCell(leftReg, leftVal)}
                           </td>
                         </tr>
                       )
@@ -608,10 +695,10 @@ export default function SicoeHallazgoDetalle({
                           {row.label}
                         </td>
                         <td style={{ ...cellStyle(match, 'left'), width: '41%', verticalAlign: 'top' }}>
-                          {renderCell(leftReg, leftVal, 'left')}
+                          {renderCell(leftReg, leftVal)}
                         </td>
                         <td style={{ ...cellStyle(match, 'right'), width: '41%', verticalAlign: 'top' }}>
-                          {renderCell(rightReg, rightVal, 'right')}
+                          {renderCell(rightReg, rightVal)}
                         </td>
                       </tr>
                     )
@@ -628,7 +715,10 @@ export default function SicoeHallazgoDetalle({
                 {[left, right].filter(Boolean).map((panel, pi) => (
                   <div
                     key={`media-${panel.key}`}
-                    style={{ borderRight: pi === 0 && right && !isNarrow ? `1px solid ${t.border}` : 'none' }}
+                    style={{
+                      borderRight: pi === 0 && right && !isNarrow ? `1px solid ${t.border}` : 'none',
+                      minWidth: 0,
+                    }}
                   >
                     <div style={{ padding: '6px 10px', fontWeight: 800, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
                       Foto y gráfico
@@ -639,111 +729,118 @@ export default function SicoeHallazgoDetalle({
               </div>
             </div>
           )}
+        </div>
 
-          {/* Justificación */}
-          <div
-            style={{
-              border: `1px solid ${t.border}`,
-              borderRadius: 8,
-              padding: 12,
-              background: t.inputBg || t.bg,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-sm)' }}>
-              Justificación
+        {/* Justificación fija al pie */}
+        <div
+          data-sicoe-comparativa-scroll="justificacion"
+          style={{
+            flexShrink: 0,
+            borderTop: `1px solid ${t.border}`,
+            padding: 12,
+            background: t.inputBg || t.bg,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            maxHeight: isNarrow ? '42%' : '38%',
+            overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehavior: 'contain',
+            touchAction: 'pan-y',
+            zIndex: 2,
+          }}
+        >
+          <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-sm)' }}>
+            Justificación
+          </div>
+          {h.estado === 'justificado' ? (
+            <div style={{ fontSize: 'var(--cc-sm)', color: t.text }}>
+              <div>
+                <strong>{h.justificacion || '—'}</strong>
+              </div>
+              <div style={{ color: t.textMuted, marginTop: 4 }}>
+                {h.justificado_por_nombre || '—'}
+                {h.justificado_en ? ` · ${fmtFecha(h.justificado_en)}` : ''}
+              </div>
+              {obsGuardada && (
+                <div style={{ marginTop: 6, color: t.text }}>
+                  Observación: {obsGuardada}
+                </div>
+              )}
             </div>
-            {h.estado === 'justificado' ? (
-              <div style={{ fontSize: 'var(--cc-sm)', color: t.text }}>
-                <div>
-                  <strong>{h.justificacion || '—'}</strong>
-                </div>
-                <div style={{ color: t.textMuted, marginTop: 4 }}>
-                  {h.justificado_por_nombre || '—'}
-                  {h.justificado_en ? ` · ${fmtFecha(h.justificado_en)}` : ''}
-                </div>
-                {obsGuardada && (
-                  <div style={{ marginTop: 6, color: t.text }}>
-                    Observación: {obsGuardada}
-                  </div>
+          ) : puedeJustificar ? (
+            <>
+              <select
+                value={justSel}
+                onChange={(e) => setJustSel(e.target.value)}
+                style={{
+                  background: t.bgCard || t.bg,
+                  color: t.text,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 6,
+                  padding: '8px 10px',
+                  fontSize: 'var(--cc-sm)',
+                }}
+              >
+                <option value="">Seleccione justificación…</option>
+                {justOpts.map((j) => (
+                  <option key={j} value={j}>{j}</option>
+                ))}
+              </select>
+              <textarea
+                value={obsJust}
+                onChange={(e) => setObsJust(e.target.value)}
+                placeholder="Observación opcional"
+                rows={2}
+                style={{
+                  background: t.bgCard || t.bg,
+                  color: t.text,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 6,
+                  padding: '8px 10px',
+                  fontSize: 'var(--cc-sm)',
+                  resize: 'vertical',
+                  fontFamily: 'inherit',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <IconBtn
+                  title={guardando ? 'Guardando…' : 'Guardar justificación'}
+                  onClick={onJustificar}
+                  disabled={guardando}
+                  t={t}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M3 8.5 6.5 12 13 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </IconBtn>
+                {msgJust && (
+                  <span style={{ color: '#dc2626', fontSize: 'var(--cc-caption)' }}>{msgJust}</span>
                 )}
               </div>
-            ) : puedeJustificar ? (
-              <>
-                <select
-                  value={justSel}
-                  onChange={(e) => setJustSel(e.target.value)}
-                  style={{
-                    background: t.bgCard || t.bg,
-                    color: t.text,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: 6,
-                    padding: '8px 10px',
-                    fontSize: 'var(--cc-sm)',
-                  }}
-                >
-                  <option value="">Seleccione justificación…</option>
-                  {justOpts.map((j) => (
-                    <option key={j} value={j}>{j}</option>
-                  ))}
-                </select>
-                <textarea
-                  value={obsJust}
-                  onChange={(e) => setObsJust(e.target.value)}
-                  placeholder="Observación opcional"
-                  rows={2}
-                  style={{
-                    background: t.bgCard || t.bg,
-                    color: t.text,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: 6,
-                    padding: '8px 10px',
-                    fontSize: 'var(--cc-sm)',
-                    resize: 'vertical',
-                    fontFamily: 'inherit',
-                  }}
-                />
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <IconBtn
-                    title={guardando ? 'Guardando…' : 'Guardar justificación'}
-                    onClick={onJustificar}
-                    disabled={guardando}
-                    t={t}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M3 8.5 6.5 12 13 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </IconBtn>
-                  {msgJust && (
-                    <span style={{ color: '#dc2626', fontSize: 'var(--cc-caption)' }}>{msgJust}</span>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                Estado: {ESTADO_LABEL[h.estado] || h.estado}
-              </div>
-            )}
+            </>
+          ) : (
+            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+              Estado: {ESTADO_LABEL[h.estado] || h.estado}
+            </div>
+          )}
 
-            {historial.length > 0 && (
-              <div style={{ marginTop: 4 }}>
-                <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 4 }}>
-                  Historial
-                </div>
-                <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {historial.slice(0, 6).map((ev, i) => (
-                    <li key={ev.id || `h-${i}`} style={{ fontSize: 'var(--cc-caption)', color: t.text }}>
-                      <strong>{fmtFecha(ev.fecha)}</strong>
-                      {ev.usuario_nombre ? ` · ${ev.usuario_nombre}` : ''}
-                      {ev.justificacion ? ` · ${ev.justificacion}` : ev.tipo ? ` · ${ev.tipo}` : ''}
-                    </li>
-                  ))}
-                </ul>
+          {historial.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 4 }}>
+                Historial
               </div>
-            )}
-          </div>
+              <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {historial.slice(0, 6).map((ev, i) => (
+                  <li key={ev.id || `h-${i}`} style={{ fontSize: 'var(--cc-caption)', color: t.text }}>
+                    <strong>{fmtFecha(ev.fecha)}</strong>
+                    {ev.usuario_nombre ? ` · ${ev.usuario_nombre}` : ''}
+                    {ev.justificacion ? ` · ${ev.justificacion}` : ev.tipo ? ` · ${ev.tipo}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
@@ -763,6 +860,7 @@ export default function SicoeHallazgoDetalle({
             justifyContent: 'center',
             padding: 16,
             gap: 12,
+            touchAction: 'none',
           }}
           onClick={() => setLightbox(null)}
         >
@@ -776,6 +874,10 @@ export default function SicoeHallazgoDetalle({
               gap: 12,
               width: 'min(960px, 100%)',
               maxHeight: '80vh',
+              overflow: 'auto',
+              WebkitOverflowScrolling: 'touch',
+              overscrollBehavior: 'contain',
+              touchAction: 'pan-y',
             }}
             onClick={(e) => e.stopPropagation()}
           >
