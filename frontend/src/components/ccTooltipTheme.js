@@ -117,3 +117,38 @@ export function placeTooltipRect(anchorRect, tipSize, viewport, gap = 10, pad = 
   top = Math.min(Math.max(pad, top), Math.max(pad, vh - pad - th))
   return { left, top }
 }
+
+/**
+ * Mueve `title` → `data-cc-title-held` para que el tip nativo del navegador
+ * (negro/blanco, auto-cierre ~2s) nunca aparezca.
+ * @param {Element} el
+ */
+export function adoptNativeTitle(el) {
+  if (!el || el.nodeType !== 1 || !el.getAttribute) return false
+  if (el.id === 'cc-title-tooltip') return false
+  if (el.closest?.('[data-cc-tooltip-off]')) return false
+  if (!el.hasAttribute('title')) return false
+  const raw = el.getAttribute('title')
+  el.removeAttribute('title')
+  if (raw == null || !String(raw).trim()) return true
+  el.setAttribute('data-cc-title-held', String(raw))
+  return true
+}
+
+/**
+ * @param {ParentNode|Element|null|undefined} root
+ * @returns {number} cantidad de titles adoptados
+ */
+export function adoptNativeTitlesInTree(root) {
+  if (!root) return 0
+  let n = 0
+  if (root.nodeType === 1 && root.hasAttribute?.('title')) {
+    if (adoptNativeTitle(root)) n += 1
+  }
+  const list = root.querySelectorAll?.('[title]')
+  if (!list) return n
+  Array.from(list).forEach((el) => {
+    if (adoptNativeTitle(el)) n += 1
+  })
+  return n
+}

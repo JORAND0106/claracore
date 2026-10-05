@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CcTipChrome from './components/CcTipChrome'
 
 const NO_PERM_MSG =
   'Para asignar agrupadores WBS contacta al administrador del sistema o a quien tenga acceso al Listado de Precios.'
@@ -68,8 +69,8 @@ export default function ProgSinAgrupadorCapIcon({
         ⚠
       </button>
       {popoverOpen && !puedeEditarListadoPrecios && (
-        <div
-          role="tooltip"
+        <CcTipChrome
+          variant="help"
           style={{
             position: 'absolute',
             left: 0,
@@ -77,21 +78,12 @@ export default function ProgSinAgrupadorCapIcon({
             zIndex: 50,
             minWidth: 220,
             maxWidth: 280,
-            padding: '8px 10px',
-            borderRadius: 8,
-            background: '#fffbeb',
-            border: '1px solid rgba(245,158,11,0.5)',
-            boxShadow: '0 4px 14px rgba(0,0,0,0.12)',
-            fontSize: 11,
-            fontWeight: 500,
-            color: '#92400e',
-            lineHeight: 1.45,
-            textAlign: 'left',
+            pointerEvents: 'auto',
           }}
           onClick={(e) => e.stopPropagation()}
         >
           {NO_PERM_MSG}
-        </div>
+        </CcTipChrome>
       )}
     </span>
   )

@@ -24,6 +24,7 @@ import { mensajeErrorCarga, fmtFechaHallazgosGuardados } from './sicoeAuditoriaM
 import { downloadSicoeRegistrosExcel } from './sicoeExportExcel'
 import SicoeCantidadesPorItemVista from './SicoeCantidadesPorItemVista'
 import SicoeHallazgoDetalle from './SicoeHallazgoDetalle'
+import CcTipChrome from '../../components/CcTipChrome'
 import {
   ayudaMedidaPorTipo,
   fmtRegistrosHallazgo,
@@ -599,8 +600,8 @@ export default function SicoeAmbienteAuditoria({
           )}
         </div>
         {open && ayuda && (
-          <div
-            role="tooltip"
+          <CcTipChrome
+            variant="help"
             style={{
               position: 'absolute',
               top: '100%',
@@ -609,19 +610,11 @@ export default function SicoeAmbienteAuditoria({
               marginTop: 4,
               minWidth: 180,
               maxWidth: 260,
-              background: t.bgCard || '#fff',
-              color: t.text,
-              border: `1px solid ${t.border}`,
-              borderRadius: 8,
-              padding: '8px 10px',
-              fontSize: 'var(--cc-caption)',
-              fontWeight: 500,
-              boxShadow: '0 8px 20px rgba(15,23,42,0.18)',
-              whiteSpace: 'normal',
+              pointerEvents: 'auto',
             }}
           >
             {ayuda}
-          </div>
+          </CcTipChrome>
         )}
       </th>
     )

@@ -89,6 +89,69 @@ html[data-cc-theme='rest'] {
   }
 }
 
+/* Chrome institucional compartido (popovers custom → misma apariencia que CcTitleTooltips) */
+.cc-tip-chrome {
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 24px));
+  border-radius: 10px;
+  border: 1px solid var(--cc-tip-border);
+  background: var(--cc-tip-bg);
+  color: var(--cc-tip-text);
+  box-shadow: var(--cc-tip-shadow);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: var(--cc-sm, 13px);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  z-index: 10050;
+  pointer-events: none;
+}
+
+.cc-tip-chrome__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--cc-tip-header-bg);
+  border-bottom: 1px solid var(--cc-tip-header-border);
+}
+
+.cc-tip-chrome__brand img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
+}
+
+.cc-tip-chrome__brand span {
+  font-size: var(--cc-caption, 12px);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--cc-tip-brand);
+  line-height: 1.2;
+  user-select: none;
+}
+
+.cc-tip-chrome__body {
+  padding: 10px 12px;
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+}
+
+.cc-tip-chrome--short .cc-tip-chrome__body {
+  padding: 7px 11px;
+}
+
+@media (max-width: 639px) {
+  .cc-tip-chrome {
+    max-width: min(280px, calc(100vw - 20px));
+    font-size: var(--cc-label, 12px);
+  }
+}
+
 /* Logo ClaraCore (public/CLARA.CORE.png): lockup horizontal; evita compresión en filas flex */
 img.cc-brand-logo {
   display: block;

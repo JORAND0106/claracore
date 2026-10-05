@@ -2,18 +2,23 @@ import { useEffect } from 'react'
 import {
   CC_TOOLTIP_BRAND_NAME,
   CC_TOOLTIP_FAVICON_SRC,
+  adoptNativeTitle,
+  adoptNativeTitlesInTree,
   ccTooltipPalette,
   placeTooltipRect,
   resolveTooltipThemeMode,
   resolveTooltipVariant,
 } from './ccTooltipTheme.js'
 
+const TIP_TARGET_SEL = '[data-cc-title-held], [data-cc-tooltip], [title]'
+
 /**
  * Tooltips institucionales ClaraCore para `title` / `data-cc-tooltip`.
+ * - Adopta todos los `title` nativos (sin excepciones de apariencia).
  * - Cortos (botones/iconos): sobrios, sin logo.
  * - Ayuda (`data-cc-tooltip-help` / texto largo): encabezado con favicon + ClaraCore.
- * Se adapta al tema activo (claro / oscuro / descansar; auto vía dataset).
- * En táctil: se muestran al tocar; no bloquean el clic del control.
+ * - Hover: permanece mientras el cursor está sobre el elemento (sin cierre por tiempo).
+ * - Táctil: al tocar; permanece hasta tocar en otro lugar.
  */
 export default function CcTitleTooltips() {
   useEffect(() => {
@@ -29,8 +34,10 @@ export default function CcTitleTooltips() {
     let activeEl = null
     let hideTimer = null
     let showTimer = null
-    let touchHideTimer = null
     let lastTouchShowAt = 0
+    /** @type {'hover'|'touch'|null} */
+    let mode = null
+    let lastPointer = { x: 0, y: 0 }
 
     const fineCapable = () => {
       try {
@@ -41,9 +48,9 @@ export default function CcTitleTooltips() {
     }
 
     const applyThemeStyles = () => {
-      const mode = resolveTooltipThemeMode()
-      const p = ccTooltipPalette(mode)
-      tip.dataset.ccTooltipTheme = mode
+      const resolved = resolveTooltipThemeMode()
+      const p = ccTooltipPalette(resolved)
+      tip.dataset.ccTooltipTheme = resolved
       tip.style.setProperty('--cc-tip-bg', p.bg)
       tip.style.setProperty('--cc-tip-border', p.border)
       tip.style.setProperty('--cc-tip-text', p.text)
@@ -77,32 +84,51 @@ export default function CcTitleTooltips() {
     applyThemeStyles()
     ensureBaseStyle()
 
+    // Adopción inicial: elimina tips nativos negro/blanco en toda la app
+    adoptNativeTitlesInTree(document)
+
     const themeObserver = new MutationObserver(() => applyThemeStyles())
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['data-cc-theme', 'style'],
     })
 
+    const titleObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'title' && m.target) {
+          adoptNativeTitle(/** @type {Element} */ (m.target))
+          continue
+        }
+        if (m.type === 'childList') {
+          m.addedNodes.forEach((node) => {
+            if (node.nodeType === 1) adoptNativeTitlesInTree(/** @type {Element} */ (node))
+          })
+        }
+      }
+    })
+    titleObserver.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['title'],
+    })
+
     const hide = () => {
       clearTimeout(showTimer)
       clearTimeout(hideTimer)
-      clearTimeout(touchHideTimer)
       tip.style.display = 'none'
       tip.innerHTML = ''
       tip.setAttribute('aria-hidden', 'true')
       tip.classList.remove('cc-title-tooltip--help', 'cc-title-tooltip--short')
-      if (activeEl?.dataset?.ccTitleHeld) {
-        const held = activeEl.dataset.ccTitleHeld
-        if (!activeEl.getAttribute('title') && held) activeEl.setAttribute('title', held)
-        delete activeEl.dataset.ccTitleHeld
-      }
+      // No restaurar `title`: se mantiene en data-cc-title-held para bloquear el nativo
       activeEl = null
+      mode = null
     }
 
     const resolveText = (el) => {
       const custom = el.getAttribute('data-cc-tooltip')
       if (custom != null && String(custom).trim()) return String(custom).trim()
-      const held = el.dataset?.ccTitleHeld
+      const held = el.getAttribute('data-cc-title-held') || el.dataset?.ccTitleHeld
       if (held != null && String(held).trim()) return String(held).trim()
       const title = el.getAttribute('title')
       if (title != null && String(title).trim()) return String(title).trim()
@@ -181,16 +207,13 @@ export default function CcTitleTooltips() {
       tip.style.visibility = 'visible'
     }
 
-    const showFor = (el) => {
+    const showFor = (el, nextMode) => {
       const text = resolveText(el)
       if (!text) return
       clearTimeout(hideTimer)
-      clearTimeout(touchHideTimer)
       activeEl = el
-      if (el.hasAttribute('title')) {
-        el.dataset.ccTitleHeld = el.getAttribute('title') || ''
-        el.removeAttribute('title')
-      }
+      mode = nextMode
+      if (el.hasAttribute('title')) adoptNativeTitle(el)
       const variant = resolveTooltipVariant(el, text)
       applyThemeStyles()
       renderContent(text, variant)
@@ -198,63 +221,121 @@ export default function CcTitleTooltips() {
       placeNearAnchor(el)
     }
 
-    const shouldShowHover = (e) => {
+    const findTipTargetAt = (x, y) => {
+      let stack
+      try {
+        stack = document.elementsFromPoint(x, y)
+      } catch {
+        return null
+      }
+      for (const node of stack) {
+        if (!node || node === tip || tip.contains(node)) continue
+        if (node.closest?.('[data-cc-tooltip-off]')) return null
+        const hit = node.closest?.(TIP_TARGET_SEL)
+        if (hit && hit !== tip) return hit
+      }
+      return null
+    }
+
+    const shouldTrackHover = (e) => {
       if (e.pointerType === 'touch' || e.pointerType === 'pen') return false
       if (e.pointerType === 'mouse') return true
       return fineCapable()
     }
 
+    const scheduleShowHover = (el) => {
+      clearTimeout(showTimer)
+      clearTimeout(hideTimer)
+      if (activeEl === el && mode === 'hover' && tip.style.display === 'block') {
+        placeNearAnchor(el)
+        return
+      }
+      showTimer = setTimeout(() => showFor(el, 'hover'), 260)
+    }
+
+    const scheduleHideHover = () => {
+      clearTimeout(showTimer)
+      if (mode === 'touch') return
+      hideTimer = setTimeout(() => {
+        if (mode === 'hover') hide()
+      }, 60)
+    }
+
+    const onPointerMove = (e) => {
+      lastPointer = { x: e.clientX, y: e.clientY }
+      if (!shouldTrackHover(e)) return
+      // Si hay tip táctil activo, el mouse no lo cierra hasta salir/click
+      if (mode === 'touch') return
+      const hit = findTipTargetAt(e.clientX, e.clientY)
+      if (hit) scheduleShowHover(hit)
+      else if (activeEl && mode === 'hover') scheduleHideHover()
+      else clearTimeout(showTimer)
+    }
+
     const onPointerOver = (e) => {
-      if (!shouldShowHover(e)) return
-      const el = e.target?.closest?.('[title], [data-cc-tooltip], [data-cc-title-held]')
+      if (!shouldTrackHover(e)) return
+      if (mode === 'touch') return
+      const el = e.target?.closest?.(TIP_TARGET_SEL)
       if (!el || el === tip) return
       if (el.closest('[data-cc-tooltip-off]')) return
-      clearTimeout(showTimer)
-      showTimer = setTimeout(() => showFor(el), 260)
+      scheduleShowHover(el)
     }
 
     const onPointerOut = (e) => {
-      const el = e.target?.closest?.('[title], [data-cc-tooltip], [data-cc-title-held]')
+      if (mode === 'touch') return
+      const el = e.target?.closest?.(TIP_TARGET_SEL)
       if (!el || el !== activeEl) {
         if (!activeEl) clearTimeout(showTimer)
         return
       }
       const related = e.relatedTarget
-      if (related && el.contains(related)) return
-      hideTimer = setTimeout(hide, 60)
+      if (related && (el.contains(related) || tip.contains(related))) return
+      // Confirmar con elementsFromPoint (cubre disabled / portales)
+      const still = findTipTargetAt(lastPointer.x, lastPointer.y)
+      if (still === activeEl) return
+      scheduleHideHover()
     }
 
-    /** Táctil: al tocar un control con title, mostrar tip anclado (sin bloquear el click). */
+    /** Táctil: al tocar un control con tip, mostrar y permanecer hasta tocar fuera. */
     const onPointerUp = (e) => {
       if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
-      const el = e.target?.closest?.('[title], [data-cc-tooltip]')
+      const el = e.target?.closest?.(TIP_TARGET_SEL)
       if (!el || el === tip) return
       if (el.closest('[data-cc-tooltip-off]')) return
       const text = resolveText(el)
       if (!text) return
-      // Evitar spam en el mismo gesto
       const now = Date.now()
-      if (now - lastTouchShowAt < 350 && activeEl === el) return
+      if (now - lastTouchShowAt < 350 && activeEl === el && mode === 'touch') return
       lastTouchShowAt = now
-      showFor(el)
-      clearTimeout(touchHideTimer)
-      touchHideTimer = setTimeout(hide, 2800)
+      showFor(el, 'touch')
     }
 
     const onPointerDownOutside = (e) => {
       if (!activeEl) return
-      const el = e.target?.closest?.('[title], [data-cc-tooltip], #cc-title-tooltip')
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
+      const el = e.target?.closest?.(TIP_TARGET_SEL)
       if (el === activeEl || el === tip) return
-      // En táctil, un toque fuera cierra
-      if (e.pointerType === 'touch' || e.pointerType === 'pen') hide()
+      hide()
     }
 
-    const onScroll = () => hide()
+    const onScroll = () => {
+      if (!activeEl || tip.style.display !== 'block') return
+      const r = activeEl.getBoundingClientRect()
+      const off =
+        r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth
+      if (off) {
+        hide()
+        return
+      }
+      placeNearAnchor(activeEl)
+    }
+
     const onKey = (e) => { if (e.key === 'Escape') hide() }
     const onResize = () => {
       if (activeEl && tip.style.display === 'block') placeNearAnchor(activeEl)
     }
 
+    document.addEventListener('pointermove', onPointerMove, true)
     document.addEventListener('pointerover', onPointerOver, true)
     document.addEventListener('pointerout', onPointerOut, true)
     document.addEventListener('pointerup', onPointerUp, true)
@@ -266,6 +347,8 @@ export default function CcTitleTooltips() {
     return () => {
       hide()
       themeObserver.disconnect()
+      titleObserver.disconnect()
+      document.removeEventListener('pointermove', onPointerMove, true)
       document.removeEventListener('pointerover', onPointerOver, true)
       document.removeEventListener('pointerout', onPointerOut, true)
       document.removeEventListener('pointerup', onPointerUp, true)

@@ -10,6 +10,7 @@ import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
 import { addMapboxGeolocateControl } from "./mapboxSafe";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import CcModalBrandHeader from "./components/CcModalBrandHeader";
+import CcTipChrome from "./components/CcTipChrome";
 import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
 import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
 import { RefreshCw } from "lucide-react";
@@ -4115,7 +4116,7 @@ function FilaTooltipDescripcionTruncada({ descripcion, rowStyle, theme, children
   const descRef = useRef(null);
   const timerRef = useRef(null);
   const [tip, setTip] = useState(null);
-  const tok = tFrom(theme);
+  void theme;
 
   const limpiarTimer = useCallback(() => {
     if (timerRef.current) {
@@ -4158,30 +4159,19 @@ function FilaTooltipDescripcionTruncada({ descripcion, rowStyle, theme, children
   };
 
   const tipEl = tip ? (
-    <div
-      role="tooltip"
+    <CcTipChrome
+      variant="help"
       style={{
         position: "fixed",
         left: tip.left,
         top: tip.top,
         transform: tip.abajo ? "translate(-50%, 0)" : "translate(-50%, -100%)",
         maxWidth: Math.min(440, window.innerWidth - 24),
-        padding: "8px 10px",
-        borderRadius: 8,
-        fontSize: "var(--cc-caption)",
-        lineHeight: 1.45,
-        zIndex: 10050,
         pointerEvents: "none",
-        background: isDarkMode(theme) ? "#0b1920" : tok.bgCard,
-        color: tok.text,
-        border: `1px solid ${tok.border}`,
-        boxShadow: isDarkMode(theme) ? "0 8px 28px rgba(0,0,0,0.55)" : "0 8px 24px rgba(0,0,0,0.18)",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
       }}
     >
       {tip.text}
-    </div>
+    </CcTipChrome>
   ) : null;
 
   return (

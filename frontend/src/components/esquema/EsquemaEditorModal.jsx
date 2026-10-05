@@ -70,6 +70,7 @@ import {
   resolveNodoPorNumero,
 } from './esquemaApplyCoordRows.js'
 import { DIBUJO_TIPOS } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
+import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
   deleteLibraryItem,
@@ -6494,8 +6495,8 @@ function ItemDescChip({ t, label, descripcion }) {
     >
       {label}
       {open && desc ? (
-        <span
-          role="tooltip"
+        <CcTipChrome
+          variant="help"
           data-testid="sicoe-dibujo-ref-item-tooltip"
           style={{
             position: 'absolute',
@@ -6504,21 +6505,11 @@ function ItemDescChip({ t, label, descripcion }) {
             zIndex: 20,
             minWidth: 140,
             maxWidth: 240,
-            padding: '6px 8px',
-            borderRadius: 8,
-            border: `1px solid ${t.border}`,
-            background: t.bgCard || '#fff',
-            boxShadow: '0 8px 20px rgba(15,23,42,0.18)',
-            color: t.text,
-            fontSize: 11,
-            fontWeight: 600,
-            lineHeight: 1.35,
-            whiteSpace: 'normal',
             pointerEvents: 'none',
           }}
         >
           {desc}
-        </span>
+        </CcTipChrome>
       ) : null}
     </span>
   )
