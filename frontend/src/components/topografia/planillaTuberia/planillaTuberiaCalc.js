@@ -52,15 +52,25 @@ export const ITEMS_DESCUENTOS_FILTRO = [
   },
 ]
 
-export const CAMPOS_DESCUENTO_ALTURA = [
-  { key: 'prom_altura_excavacion', label: 'Altura Excavación' },
-  { key: 'prom_altura_triturado', label: 'Altura Triturado' },
-  { key: 'prom_altura_relleno', label: 'Altura Relleno' },
+/** Líneas del Resumen de las que se descuenta volumen (EXC_ROC / Otros). */
+export const LINEAS_DESCUENTO_VOLUMEN = [
+  { key: 'EXC', label: 'Excavación Varias' },
+  { key: 'TRI', label: 'Atraque / Mat. filtrante' },
+  { key: 'REL', label: 'Relleno Gran.' },
 ]
+
+const LEGACY_ALTURA_A_LINEA = {
+  prom_altura_excavacion: 'EXC',
+  prom_altura_triturado: 'TRI',
+  prom_altura_relleno: 'REL',
+}
+
+/** @deprecated alias — usar LINEAS_DESCUENTO_VOLUMEN */
+export const CAMPOS_DESCUENTO_ALTURA = LINEAS_DESCUENTO_VOLUMEN
 
 const ALIAS_ALC = { DESC_TUB: 'DESC_A2', DESC_POZO: 'DESC_OTROS' }
 const ALIAS_FIL = { DESC_TUB: 'DESC_TUB_FILT', DESC_FILT: 'DESC_OTROS' }
-const CAMPOS_DESC_SET = new Set(CAMPOS_DESCUENTO_ALTURA.map((c) => c.key))
+const LINEAS_DESC_SET = new Set(LINEAS_DESCUENTO_VOLUMEN.map((c) => c.key))
 
 export function esCodigoOtros(codigo) {
   const cod = String(codigo || '').trim().toUpperCase()
@@ -77,9 +87,23 @@ export function esCodigoCantidadEditable(codigo) {
   return cod === 'EXC_ROC' || esCodigoOtros(cod)
 }
 
-const CAMPOS_DESC_LABEL = Object.fromEntries(CAMPOS_DESCUENTO_ALTURA.map((c) => [c.key, c.label]))
+const LINEAS_DESC_LABEL = Object.fromEntries(LINEAS_DESCUENTO_VOLUMEN.map((c) => [c.key, c.label]))
 
-function nombreActividadDescuentoAltura(codigo, nombre) {
+export function resolverLineaDescuentoVolumen(descontarDe) {
+  const raw = String(descontarDe || '').trim()
+  if (!raw) return null
+  if (LEGACY_ALTURA_A_LINEA[raw]) return LEGACY_ALTURA_A_LINEA[raw]
+  const cod = raw.toUpperCase()
+  return LINEAS_DESC_SET.has(cod) ? cod : null
+}
+
+export function labelLineaDescuentoVolumen(codigo, tipo = null) {
+  const cod = String(codigo || '').trim().toUpperCase()
+  if (cod === 'TRI') return nombreTrituradoPorTipo(tipo)
+  return LINEAS_DESC_LABEL[cod] || cod || '—'
+}
+
+function nombreActividadDescuentoVolumen(codigo, nombre) {
   const cod = String(codigo || '').trim().toUpperCase()
   let raw = String(nombre || '').trim()
   if (esCodigoOtros(cod)) {
@@ -91,55 +115,84 @@ function nombreActividadDescuentoAltura(codigo, nombre) {
   return raw || cod || '—'
 }
 
-/** Nota breve de descuento de altura para FE / Excel. */
-export function formatearNotaDescuentoAltura({
-  actividad, campoLabel, alturaOriginal, valorDescontado, alturaFinal,
+/** Nota breve de descuento de volumen para FE / Excel. */
+export function formatearNotaDescuentoVolumen({
+  actividad, lineaLabel, volumenOriginal, volumenDescontado, volumenFinal,
 }) {
   const act = String(actividad || '').trim() || '—'
-  const lbl = String(campoLabel || '').trim() || 'Altura'
+  const lbl = String(lineaLabel || '').trim() || 'Volumen'
   const fmt = (v) => {
     const n = Number(v)
     if (!Number.isFinite(n)) return '—'
-    return (Math.round(n * 1000) / 1000).toString()
+    return (Math.round(n * 100) / 100).toString()
   }
-  return `${act}: ${lbl} ${fmt(alturaOriginal)} − ${fmt(valorDescontado)} = ${fmt(alturaFinal)} m`
+  return `${act}: Vol ${lbl} ${fmt(volumenOriginal)} − ${fmt(volumenDescontado)} = ${fmt(volumenFinal)} m³`
 }
 
-function construirDescuentosAlturaDetalle(overridesList, L, B, alturasOrig, alturasFinal) {
+/** @deprecated alias */
+export function formatearNotaDescuentoAltura(opts = {}) {
+  return formatearNotaDescuentoVolumen({
+    actividad: opts.actividad,
+    lineaLabel: opts.campoLabel || opts.lineaLabel,
+    volumenOriginal: opts.alturaOriginal ?? opts.volumenOriginal,
+    volumenDescontado: opts.valorDescontado ?? opts.volumenDescontado,
+    volumenFinal: opts.alturaFinal ?? opts.volumenFinal,
+  })
+}
+
+function dimsVolumenOverride(ov, defaultLong, defaultAncho) {
+  const longV = (ov && 'long' in ov && ov.long != null) ? Number(ov.long) : Number(defaultLong)
+  const anchoV = (ov && 'ancho' in ov && ov.ancho != null) ? Number(ov.ancho) : Number(defaultAncho)
+  const espV = ov?.espesor
+  if (espV == null) return { long: null, ancho: null, espesor: null, vol: 0 }
+  const esp = Number(espV)
+  if (!Number.isFinite(esp) || Math.abs(esp) < 1e-12) {
+    return { long: longV, ancho: anchoV, espesor: esp, vol: 0 }
+  }
+  const vol = r2(productResumen([longV, anchoV, esp])) || 0
+  return { long: longV, ancho: anchoV, espesor: esp, vol }
+}
+
+function construirDescuentosVolumenDetalle(overridesList, defaultLong, defaultAncho, volsOrig, volsFinal, tipo) {
   const out = []
   for (const ov of overridesList || []) {
-    const campo = ov.descontar_de
-    if (!CAMPOS_DESC_SET.has(campo) || ov.espesor == null) continue
-    const esp = Number(ov.espesor)
-    if (!Number.isFinite(esp) || Math.abs(esp) < 1e-12) continue
+    const dest = resolverLineaDescuentoVolumen(ov.descontar_de)
+    if (!dest) continue
+    const dims = dimsVolumenOverride(ov, defaultLong, defaultAncho)
+    if (!dims.espesor && dims.espesor !== 0) continue
+    if (Math.abs(dims.vol) < 1e-12) continue
     const codigo = String(ov.codigo || '').trim().toUpperCase()
     if (!codigo) continue
-    const actividad = nombreActividadDescuentoAltura(codigo, ov.nombre)
-    const label = CAMPOS_DESC_LABEL[campo] || campo
-    const hOrig = Number(alturasOrig[campo] || 0)
-    const hFin = Number(alturasFinal[campo] || 0)
-    const vol = r2(productResumen([L, B, esp])) || 0
-    const nota = formatearNotaDescuentoAltura({
+    const actividad = nombreActividadDescuentoVolumen(codigo, ov.nombre)
+    const label = labelLineaDescuentoVolumen(dest, tipo)
+    const vOrig = Number(volsOrig[dest] || 0)
+    const vFin = Number(volsFinal[dest] || 0)
+    const nota = formatearNotaDescuentoVolumen({
       actividad,
-      campoLabel: label,
-      alturaOriginal: hOrig,
-      valorDescontado: esp,
-      alturaFinal: hFin,
+      lineaLabel: label,
+      volumenOriginal: vOrig,
+      volumenDescontado: dims.vol,
+      volumenFinal: vFin,
     })
     out.push({
-      codigo: `DESC_ALT_${codigo}`,
+      codigo: `DESC_VOL_${codigo}`,
       origen_codigo: codigo,
-      nombre: `Desc. altura (${actividad})`,
+      nombre: `Desc. volumen (${actividad})`,
       actividad,
-      campo,
+      item_cant_codigo: dest,
+      linea_label: label,
+      volumen_original: r2(vOrig),
+      volumen_descontado: r2(dims.vol),
+      volumen_final: r2(vFin),
+      campo: dest,
       campo_label: label,
-      altura_original: r4(hOrig),
-      valor_descontado: r4(esp),
-      altura_final: r4(hFin),
-      long: dimResumen2(L),
-      ancho: dimResumen2(B),
-      espesor: dimResumen2(esp),
-      cantidad: Math.round(vol * 100) / 100,
+      altura_original: r2(vOrig),
+      valor_descontado: r2(dims.vol),
+      altura_final: r2(vFin),
+      long: dimResumen2(dims.long),
+      ancho: dimResumen2(dims.ancho),
+      espesor: dimResumen2(dims.espesor),
+      cantidad: Math.round(dims.vol * 100) / 100,
       unidad: 'm³',
       nota,
     })
@@ -442,7 +495,8 @@ function normalizeCantidadesManuales(cantidadesManuales) {
       if (d[key] != null && d[key] !== '') entry[key] = f(d[key])
     }
     if (esCodigoOtros(cod) && 'nombre' in d) entry.nombre = String(d.nombre || '').trim()
-    if (CAMPOS_DESC_SET.has(d.descontar_de)) entry.descontar_de = d.descontar_de
+    const dest = resolverLineaDescuentoVolumen(d.descontar_de)
+    if (dest) entry.descontar_de = dest
     out.push(entry)
   }
   if (!out.some((x) => esCodigoOtros(x.codigo))) out.push({ codigo: 'OTROS_1' })
@@ -482,36 +536,13 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   const anchoGeo = tipo === 'FILTRO' ? anchoGeoProm + traslapo : null
 
   const overridesList = normalizeCantidadesManuales(cantidadesManuales)
-  const restas = {
-    prom_altura_excavacion: 0,
-    prom_altura_triturado: 0,
-    prom_altura_relleno: 0,
-  }
-  const hExcOrig = hExc
-  const hTritOrig = hTrit
-  const hRelOrig = hRel
+  const restasVol = { EXC: 0, TRI: 0, REL: 0 }
   for (const ov of overridesList) {
-    if (ov.descontar_de && ov.espesor != null && restas[ov.descontar_de] != null) {
-      restas[ov.descontar_de] += Number(ov.espesor) || 0
-    }
+    const dest = resolverLineaDescuentoVolumen(ov.descontar_de)
+    if (!dest) continue
+    const dims = dimsVolumenOverride(ov, L, B)
+    if (Math.abs(dims.vol) > 1e-12) restasVol[dest] += dims.vol
   }
-  hExc = Math.max(0, hExc - restas.prom_altura_excavacion)
-  hTrit = Math.max(0, hTrit - restas.prom_altura_triturado)
-  hRel = Math.max(0, hRel - restas.prom_altura_relleno)
-  const alturasOrig = {
-    prom_altura_excavacion: hExcOrig,
-    prom_altura_triturado: hTritOrig,
-    prom_altura_relleno: hRelOrig,
-  }
-  const alturasFinal = {
-    prom_altura_excavacion: hExc,
-    prom_altura_triturado: hTrit,
-    prom_altura_relleno: hRel,
-  }
-  const descuentosAlturaDetalle = construirDescuentosAlturaDetalle(
-    overridesList, L, B, alturasOrig, alturasFinal,
-  )
-  const notasDescuentoAltura = descuentosAlturaDetalle.map((d) => d.nota).filter(Boolean)
 
   let descA1 = 0
   let descA2 = 0
@@ -629,19 +660,38 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     })
   }
 
+  const volBrutoLinea = {
+    EXC: r2(productResumen([L, B, hExc])) || 0,
+    TRI: r2(productResumen([L, B, hTrit])) || 0,
+    REL: r2(productResumen([L, B, hRel])) || 0,
+  }
+  const volFinalLinea = {
+    EXC: Math.max(0, Math.round((volBrutoLinea.EXC - (restasVol.EXC || 0)) * 100) / 100),
+    TRI: Math.max(0, Math.round((volBrutoLinea.TRI - (restasVol.TRI || 0)) * 100) / 100),
+    REL: Math.max(0, Math.round((volBrutoLinea.REL - (restasVol.REL || 0)) * 100) / 100),
+  }
+  const descuentosVolumenDetalle = construirDescuentosVolumenDetalle(
+    overridesList, L, B, volBrutoLinea, volFinalLinea, tipo,
+  )
+  const notasDescuentoVolumen = descuentosVolumenDetalle.map((d) => d.nota).filter(Boolean)
+
   const netos = cantidades.map((c) => {
+    const volExtra = Number(restasVol[c.codigo] || 0)
     let descuento = 0
     let bruto = c.cantidad
     let neto = c.cantidad
     if (c.codigo === 'TRI') {
-      descuento = c.desc
+      descuento = Math.round((Number(c.desc) + volExtra) * 100) / 100
       bruto = c.bruto
-      neto = c.cantidad
+      neto = Math.round((Number(bruto) - descuento) * 100) / 100
     } else if (c.codigo === 'REL') {
-      descuento = c.desc
+      descuento = Math.round((Number(c.desc) + volExtra) * 100) / 100
+      bruto = c.cantidad
+      neto = Math.round((Number(bruto) - volExtra) * 100) / 100
     } else if (c.codigo === 'EXC') {
-      descuento = descOtros
-      neto = Math.round((bruto - descuento) * 100) / 100
+      descuento = Math.round((descOtros + volExtra) * 100) / 100
+      bruto = c.cantidad
+      neto = Math.round((Number(bruto) - descuento) * 100) / 100
     }
     return {
       codigo: c.codigo,
@@ -659,15 +709,20 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     }
   })
 
+  const descuentosVolumen = Object.fromEntries(
+    Object.entries(restasVol).filter(([, v]) => v).map(([k, v]) => [k, Math.round(v * 100) / 100]),
+  )
+
   return {
     cantidades,
     descuentos,
     netos,
-    descuentos_altura: Object.fromEntries(
-      Object.entries(restas).filter(([, v]) => v).map(([k, v]) => [k, Math.round(v * 10000) / 10000]),
-    ),
-    descuentos_altura_detalle: descuentosAlturaDetalle,
-    notas_descuento_altura: notasDescuentoAltura,
+    descuentos_volumen: descuentosVolumen,
+    descuentos_volumen_detalle: descuentosVolumenDetalle,
+    notas_descuento_volumen: notasDescuentoVolumen,
+    descuentos_altura: descuentosVolumen,
+    descuentos_altura_detalle: descuentosVolumenDetalle,
+    notas_descuento_altura: notasDescuentoVolumen,
   }
 }
 
@@ -764,9 +819,12 @@ export function calcularPlanillaLocal({
       cantidades: cant.cantidades,
       descuentos: cant.descuentos,
       netos: cant.netos,
-      descuentos_altura: cant.descuentos_altura || {},
-      descuentos_altura_detalle: cant.descuentos_altura_detalle || [],
-      notas_descuento_altura: cant.notas_descuento_altura || [],
+      descuentos_volumen: cant.descuentos_volumen || {},
+      descuentos_volumen_detalle: cant.descuentos_volumen_detalle || [],
+      notas_descuento_volumen: cant.notas_descuento_volumen || [],
+      descuentos_altura: cant.descuentos_altura || cant.descuentos_volumen || {},
+      descuentos_altura_detalle: cant.descuentos_altura_detalle || cant.descuentos_volumen_detalle || [],
+      notas_descuento_altura: cant.notas_descuento_altura || cant.notas_descuento_volumen || [],
       perfil: perfilLongitudinal(cartera, seccion),
       seccion_tipica: seccionTipicaParams(seccion, cartera),
     }

@@ -165,10 +165,10 @@ describe('Navegación flechas + pegado Abscisa + reportes vigentes', () => {
     assert.match(routesSrc, /planilla = _filtrar_sicoe_reportes_vigentes/)
   })
 
-  it('Excel reserva bloque Notas y calc genera notas_descuento_altura', () => {
+  it('Excel reserva bloque Notas y calc genera notas de descuento de volumen', () => {
     assert.match(excelSrc, /_write_bloque_notas/)
     assert.match(excelSrc, /Notas/)
-    assert.match(calcSrc, /notas_descuento_altura/)
-    assert.match(formSrc, /Notas de descuento de altura/)
+    assert.match(calcSrc, /notas_descuento_volumen/)
+    assert.match(formSrc, /Notas de descuento de volumen/)
   })
 })

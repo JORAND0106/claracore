@@ -404,15 +404,23 @@ def _descuentos_visibles_excel(calculo: Optional[dict]) -> list[dict]:
 
 
 def _notas_planilla_para_excel(calculo: Optional[dict], planilla: Optional[dict]) -> list[str]:
-    """Notas dinámicas (descuento altura) + notas manuales de meta_cabecera."""
+    """Notas dinámicas (descuento volumen) + notas manuales de meta_cabecera."""
     lines: list[str] = []
     seen: set[str] = set()
-    for n in (calculo or {}).get("notas_descuento_altura") or []:
+    for n in (
+        (calculo or {}).get("notas_descuento_volumen")
+        or (calculo or {}).get("notas_descuento_altura")
+        or []
+    ):
         txt = str(n or "").strip()
         if txt and txt not in seen:
             seen.add(txt)
             lines.append(txt)
-    for d in (calculo or {}).get("descuentos_altura_detalle") or []:
+    for d in (
+        (calculo or {}).get("descuentos_volumen_detalle")
+        or (calculo or {}).get("descuentos_altura_detalle")
+        or []
+    ):
         if not isinstance(d, dict):
             continue
         txt = str(d.get("nota") or "").strip()
