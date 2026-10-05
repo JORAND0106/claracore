@@ -26739,16 +26739,24 @@ def _sicoe_auditoria_dibujos_background(contrato_id: int, reporte_id=None, user_
         )
 
 
-def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, current_user=None) -> list:
+def _sicoe_auditoria_desde_dibujos(
+    contrato_id: int,
+    reporte_id: int = None,
+    current_user=None,
+    *,
+    persist: bool = True,
+) -> list:
     """
-    Genera y persiste hallazgos alimentados por dibujos:
+    Genera hallazgos alimentados por dibujos:
     - traslapo en nodo contenedor (mismo ítem)
     - traslapo geométrico línea/polígono (mismo ítem)
     - cantidad > área del polígono dibujado
     - abscisa / costado / PK inconsistente vs dibujo
+
+    persist=True (default): escribe cada hallazgo (ruta de guardado de dibujo).
+    persist=False: solo calcula y retorna (sync de contrato hace upsert por lotes).
     """
     from sicoe_dibujo_auditoria import (
-        centro_desde_feature,
         dibujo_tipo_desde_feature,
         hallazgos_cantidad_mayor_area_dibujo,
         hallazgos_consistencia_dibujo_registro,
@@ -26809,7 +26817,9 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
 
     # Features por reporte
     feats = {}
+    reportes_by_id = {}
     for rep in reportes:
+        reportes_by_id[rep.get("id")] = rep
         dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
         if not dg:
             continue
@@ -26820,7 +26830,6 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
     hallazgos = []
 
     # 1) Nodo contenedor: traslapo mismo ítem
-    # Si hay reporte_id, solo contenedores que lo incluyen.
     by_cont = {}
     for rep in reportes:
         cid = rep.get("nodo_contenedor_id")
@@ -26829,7 +26838,7 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
         by_cont.setdefault(cid, []).append(rep)
     cont_ids_focus = None
     if reporte_id is not None:
-        focus_rep = next((x for x in reportes if x.get("id") == reporte_id), None)
+        focus_rep = reportes_by_id.get(reporte_id)
         if focus_rep and focus_rep.get("nodo_contenedor_id") is not None:
             cont_ids_focus = {focus_rep.get("nodo_contenedor_id")}
     for _cid, reps in by_cont.items():
@@ -26841,25 +26850,59 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
             hallazgos_traslapo_nodo_contenedor(reps, regs_by_rep)
         )
 
-    # 2) Traslapo geométrico línea/polígono entre reportes con ítem en común
-    ids = [r.get("id") for r in reportes if r.get("id") in feats]
-    # Tras un guardado puntual: solo pares que involucran ese reporte (O(n) vs O(n²)).
+    # 2) Traslapo geométrico: solo pares de reportes que comparten al menos un ítem
+    #    (evita O(n²) de todos los dibujos del contrato).
+    items_por_rep = {}
+    by_item_reps = {}
+    for rid, regs in regs_by_rep.items():
+        if rid not in feats:
+            continue
+        items = {
+            str(r.get("item_numero") or "").strip()
+            for r in (regs or [])
+            if str(r.get("item_numero") or "").strip()
+        }
+        if not items:
+            continue
+        items_por_rep[rid] = items
+        for item in items:
+            by_item_reps.setdefault(item, set()).add(rid)
+
     if reporte_id is not None and reporte_id in feats:
-        peer_ids = [i for i in ids if i != reporte_id]
-        id_pairs = [(reporte_id, pid) for pid in peer_ids]
+        focus_items = items_por_rep.get(reporte_id) or set()
+        peer_ids = set()
+        for item in focus_items:
+            peer_ids |= by_item_reps.get(item) or set()
+        peer_ids.discard(reporte_id)
+        id_pairs = [(reporte_id, pid) for pid in sorted(peer_ids)]
     else:
-        id_pairs = [(ids[i], ids[j]) for i in range(len(ids)) for j in range(i + 1, len(ids))]
+        seen_pairs = set()
+        id_pairs = []
+        for _item, rids in by_item_reps.items():
+            ordered = sorted(rids)
+            for i in range(len(ordered)):
+                for j in range(i + 1, len(ordered)):
+                    pair = (ordered[i], ordered[j])
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    id_pairs.append(pair)
+
     pares = []
     for a_id, b_id in id_pairs:
-        fa, fb = feats[a_id], feats[b_id]
+        fa, fb = feats.get(a_id), feats.get(b_id)
+        if not fa or not fb:
+            continue
         ta, tb = dibujo_tipo_desde_feature(fa), dibujo_tipo_desde_feature(fb)
         if ta == "nodo" or tb == "nodo":
             continue
         if ta != tb:
             continue
-        ra = next((x for x in reportes if x.get("id") == a_id), {})
-        rb = next((x for x in reportes if x.get("id") == b_id), {})
-        shared = _sicoe_items_compartidos(regs_by_rep.get(a_id) or [], regs_by_rep.get(b_id) or [])
+        shared = sorted((items_por_rep.get(a_id) or set()) & (items_por_rep.get(b_id) or set()))
+        if not shared:
+            continue
+        ra = reportes_by_id.get(a_id) or {}
+        rb = reportes_by_id.get(b_id) or {}
         for item in shared:
             regs = [
                 r for r in (regs_by_rep.get(a_id) or []) + (regs_by_rep.get(b_id) or [])
@@ -26872,20 +26915,36 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
     ejes = _sicoe_ejes_contrato(contrato_id)
     tol_ubic = _sicoe_tolerancia_ubicacion_contrato(contrato_id)
     target_ids = [reporte_id] if reporte_id else list(feats.keys())
+
+    # Precargar nodos PK usados (evita 1 query por registro).
+    pk_ids_needed = set()
+    for rid in target_ids:
+        for reg in regs_by_rep.get(rid) or []:
+            if reg.get("pk_id_id") is not None:
+                pk_ids_needed.add(reg.get("pk_id_id"))
+    nodos_by_pk = {}
+    for pk in pk_ids_needed:
+        try:
+            nodo = _sicoe_nodo_pk_get(contrato_id, pk)
+            if nodo:
+                nodos_by_pk[pk] = nodo
+                nodos_by_pk[str(pk)] = nodo
+        except Exception:
+            pass
+
     for rid in target_ids:
         if rid not in feats:
             continue
-        rep = next((x for x in reportes if x.get("id") == rid), {"id": rid})
+        rep = reportes_by_id.get(rid) or {"id": rid}
         feat = feats[rid]
         regs = regs_by_rep.get(rid) or []
         hallazgos.extend(hallazgos_cantidad_mayor_area_dibujo(rep, feat, regs))
         for reg in regs:
             pk_poly = None
             pk = reg.get("pk_id_id")
-            if pk is not None:
-                nodo = _sicoe_nodo_pk_get(contrato_id, pk)
-                if nodo and isinstance(nodo.get("poligono_geojson"), dict):
-                    pk_poly = nodo["poligono_geojson"]
+            nodo = nodos_by_pk.get(pk) or nodos_by_pk.get(str(pk)) if pk is not None else None
+            if nodo and isinstance(nodo.get("poligono_geojson"), dict):
+                pk_poly = nodo["poligono_geojson"]
             hallazgos.extend(
                 hallazgos_consistencia_dibujo_registro(
                     reg,
@@ -26895,6 +26954,24 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
                     pk_poligono=pk_poly,
                 )
             )
+
+    if not persist:
+        # Canoniza fingerprints sin tocar BD (el sync del contrato upserta en lote).
+        from sicoe_auditoria_traslapos import canonizar_hallazgo
+        regs_by_id = {}
+        for r in registros:
+            if r.get("id") is not None:
+                regs_by_id[r["id"]] = r
+                regs_by_id[str(r["id"])] = r
+        out = []
+        for h in hallazgos or []:
+            try:
+                canon = canonizar_hallazgo(h, regs_by_id)
+            except Exception:
+                continue
+            if canon and canon.get("fingerprint"):
+                out.append(canon)
+        return out
 
     return _sicoe_persistir_hallazgos_lista(contrato_id, hallazgos, current_user)
 
@@ -30039,13 +30116,25 @@ def sicoe_auditoria_hallazgos_sincronizar(
     Por defecto NO regenera todas las huellas (evitar timeout en tablet/móvil).
     Pass incluir_huellas=true para también refrescar ubicación/costado vía huellas.
     """
+    return _sicoe_auditoria_hallazgos_sincronizar_impl(
+        contrato_id,
+        current_user,
+        incluir_huellas=bool(incluir_huellas),
+    )
+
+
+def _sicoe_auditoria_hallazgos_sincronizar_impl(
+    contrato_id: int,
+    current_user,
+    *,
+    incluir_huellas: bool = False,
+) -> dict:
     from sicoe_auditoria_traslapos import (
         analizar_contrato,
         es_traslapo_mismo_reporte,
         resumen_ambiente_desde_filas,
         usuario_ve_auditoria_traslapos,
     )
-    from sicoe_eje_franjas import ejes_to_geojson
     from datetime import datetime, timezone
 
     if not usuario_ve_auditoria_traslapos(current_user):
@@ -30071,7 +30160,16 @@ def sicoe_auditoria_hallazgos_sincronizar(
     except Exception as exc:
         _log_api.warning("unificar nodos en sync: %s", exc)
     try:
-        for h in (_sicoe_auditoria_desde_dibujos(contrato_id, current_user=current_user) or []):
+        # persist=False: evita N upserts individuales (cada hallazgo = 2 roundtrips a Supabase).
+        # El sync hace un upsert por lotes más abajo.
+        for h in (
+            _sicoe_auditoria_desde_dibujos(
+                contrato_id,
+                current_user=current_user,
+                persist=False,
+            )
+            or []
+        ):
             fp = h.get("fingerprint")
             if fp and fp not in vivos and not es_traslapo_mismo_reporte(h):
                 vivos[fp] = h
@@ -30118,6 +30216,7 @@ def sicoe_auditoria_hallazgos_sincronizar(
         upserts.append(row)
 
     corregidos = 0
+    corregir_ids = []
     for fp, prev in by_fp.items():
         # Desaparece del análisis vivo, o es traslapo inválido del mismo reporte.
         debe_corregir = fp not in vivos or es_traslapo_mismo_reporte(prev)
@@ -30125,45 +30224,76 @@ def sicoe_auditoria_hallazgos_sincronizar(
             continue
         if str(prev.get("estado") or "").lower() == "corregido":
             continue
+        if prev.get("id") is not None:
+            corregir_ids.append(prev["id"])
+
+    # Marcar corregidos por lotes (evita 1 UPDATE por hallazgo obsoleto).
+    for i in range(0, len(corregir_ids), 80):
+        chunk = corregir_ids[i : i + 80]
         try:
-            def _u(prev_id=prev["id"]):
+            def _u(ids=chunk):
                 return (
                     supabase.table("so_auditoria_hallazgos")
                     .update({"estado": "corregido", "actualizado_en": now})
-                    .eq("id", prev_id)
                     .eq("contrato_id", contrato_id)
+                    .in_("id", ids)
                     .execute()
                     .data
                 )
             supabase_execute(_u)
-            corregidos += 1
+            corregidos += len(chunk)
         except Exception as exc:
-            _log_api.warning("corregir hallazgo %s: %s", prev.get("id"), exc)
+            _log_api.warning("corregir hallazgos lote contrato=%s: %s", contrato_id, exc)
+            # Fallback uno a uno
+            for hid in chunk:
+                try:
+                    def _u1(prev_id=hid):
+                        return (
+                            supabase.table("so_auditoria_hallazgos")
+                            .update({"estado": "corregido", "actualizado_en": now})
+                            .eq("id", prev_id)
+                            .eq("contrato_id", contrato_id)
+                            .execute()
+                            .data
+                        )
+                    supabase_execute(_u1)
+                    corregidos += 1
+                except Exception as exc2:
+                    _log_api.warning("corregir hallazgo %s: %s", hid, exc2)
 
+    # Upsert por lotes: un solo payload gigante con 200+ JSON suele tumbar PostgREST / el proxy.
+    _UPSERT_CHUNK = 40
     if upserts:
-        try:
-            def _up():
-                return (
-                    supabase.table("so_auditoria_hallazgos")
-                    .upsert(upserts, on_conflict="contrato_id,fingerprint")
-                    .execute()
-                    .data
-                )
-            supabase_execute(_up)
-        except Exception as exc:
-            raise HTTPException(
-                500,
-                f"No se pudieron guardar hallazgos (¿migración SQL?): {exc}",
-            ) from exc
+        for i in range(0, len(upserts), _UPSERT_CHUNK):
+            chunk = upserts[i : i + _UPSERT_CHUNK]
+            try:
+                def _up(rows=chunk):
+                    return (
+                        supabase.table("so_auditoria_hallazgos")
+                        .upsert(rows, on_conflict="contrato_id,fingerprint")
+                        .execute()
+                        .data
+                    )
+                supabase_execute(_up)
+            except Exception as exc:
+                raise HTTPException(
+                    500,
+                    f"No se pudieron guardar los hallazgos del análisis (lote {i // _UPSERT_CHUNK + 1}). "
+                    f"Detalle: {exc}",
+                ) from exc
 
     filas = _sicoe_filtrar_hallazgos_tabla(_sicoe_hallazgos_tabla_lista(contrato_id))
     eje_fc = {"type": "FeatureCollection", "features": []}
-    try:
-        if not ejes and incluir_huellas is False:
-            ejes = _sicoe_ejes_contrato(contrato_id)
-        eje_fc = ejes_to_geojson(ejes) if ejes else eje_fc
-    except Exception:
-        pass
+    if incluir_huellas:
+        try:
+            from sicoe_eje_franjas import ejes_to_geojson
+            if not ejes:
+                ejes = _sicoe_ejes_contrato(contrato_id)
+            eje_fc = ejes_to_geojson(ejes) if ejes else eje_fc
+        except Exception:
+            pass
+
+    actualizado_en = _sicoe_hallazgos_max_actualizado_en(filas) or now
     return {
         "ok": True,
         "tolerancia_m": tol,
@@ -30176,7 +30306,23 @@ def sicoe_auditoria_hallazgos_sincronizar(
         "resumen": resumen_ambiente_desde_filas(filas),
         "hallazgos": filas,
         "eje": eje_fc,
+        "actualizado_en": actualizado_en,
+        "sincronizado_en": now,
     }
+
+
+def _sicoe_hallazgos_max_actualizado_en(filas: List[dict]) -> Optional[str]:
+    """Máxima fecha actualizado_en/creado_en de hallazgos (ISO)."""
+    best = None
+    for f in filas or []:
+        for key in ("actualizado_en", "creado_en"):
+            v = f.get(key)
+            if not v:
+                continue
+            s = str(v)
+            if best is None or s > best:
+                best = s
+    return best
 
 
 @app.get("/sicoe-obra/{contrato_id}/huellas")
@@ -30633,7 +30779,12 @@ def sicoe_auditoria_hallazgos_listar(
         }
 
     if sincronizar:
-        return sicoe_auditoria_hallazgos_sincronizar(contrato_id, current_user)
+        # IMPORTANTE: no pasar current_user como 2º posicional (era incluir_huellas=True por bug).
+        return _sicoe_auditoria_hallazgos_sincronizar_impl(
+            contrato_id,
+            current_user,
+            incluir_huellas=False,
+        )
 
     filas = _sicoe_filtrar_hallazgos_tabla(_sicoe_hallazgos_tabla_lista(contrato_id))
     return {
@@ -30641,6 +30792,7 @@ def sicoe_auditoria_hallazgos_listar(
         "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
         "resumen": resumen_ambiente_desde_filas(filas),
         "hallazgos": filas,
+        "actualizado_en": _sicoe_hallazgos_max_actualizado_en(filas),
         "justificaciones": list(SICOE_AUDITORIA_JUSTIFICACIONES),
         "justificaciones_vacio": list(SICOE_AUDITORIA_JUSTIFICACIONES_VACIO),
     }

@@ -137,10 +137,9 @@ describe('mismo reporte traslapo', () => {
 })
 
 describe('mensajeErrorCarga', () => {
-  it('traduce Load failed', () => {
-    assert.match(
-      mensajeErrorCarga({ message: 'Load failed' }, 'fb'),
-      /conexión|sincronizar|cargar/i,
-    )
+  it('traduce Load failed sin culpar la conexión local', () => {
+    const msg = mensajeErrorCarga({ message: 'Load failed' }, 'fb')
+    assert.match(msg, /cargar|servidor/i)
+    assert.doesNotMatch(msg, /compruebe la conexión/i)
   })
 })
