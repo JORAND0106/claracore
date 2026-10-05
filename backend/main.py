@@ -30368,6 +30368,40 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
                             continue
                         except Exception as exc2:
                             exc = exc2
+                # Payload grande: reintenta de a 5 y luego uno a uno.
+                try:
+                    for j in range(0, len(chunk), 5):
+                        _upsert_chunk(chunk[j : j + 5])
+                    _log_api.warning(
+                        "sync hallazgos contrato=%s: lote %s guardado en sublotes tras error: %s",
+                        contrato_id,
+                        i // _UPSERT_CHUNK + 1,
+                        exc,
+                    )
+                    continue
+                except Exception as exc3:
+                    ok_rows = 0
+                    for row in chunk:
+                        try:
+                            _upsert_chunk([row])
+                            ok_rows += 1
+                        except Exception as exc4:
+                            _log_api.warning(
+                                "sync hallazgos contrato=%s: fila fp=%s falló: %s",
+                                contrato_id,
+                                (row or {}).get("fingerprint"),
+                                exc4,
+                            )
+                    if ok_rows:
+                        _log_api.warning(
+                            "sync hallazgos contrato=%s: lote %s parcial (%s/%s) tras error: %s",
+                            contrato_id,
+                            i // _UPSERT_CHUNK + 1,
+                            ok_rows,
+                            len(chunk),
+                            exc3,
+                        )
+                        continue
                 raise HTTPException(
                     500,
                     f"No se pudieron guardar los hallazgos del análisis (lote {i // _UPSERT_CHUNK + 1}). "
