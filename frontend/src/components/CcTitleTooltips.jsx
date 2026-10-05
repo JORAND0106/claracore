@@ -1,8 +1,19 @@
 import { useEffect } from 'react'
+import {
+  CC_TOOLTIP_BRAND_NAME,
+  CC_TOOLTIP_FAVICON_SRC,
+  ccTooltipPalette,
+  placeTooltipRect,
+  resolveTooltipThemeMode,
+  resolveTooltipVariant,
+} from './ccTooltipTheme.js'
 
 /**
- * Tooltips nativos (`title`) suelen fallar en iPadOS aunque haya Magic Keyboard /
- * trackpad. Este enhancer muestra un tip flotante con pointer mouse o puntero fino.
+ * Tooltips institucionales ClaraCore para `title` / `data-cc-tooltip`.
+ * - Cortos (botones/iconos): sobrios, sin logo.
+ * - Ayuda (`data-cc-tooltip-help` / texto largo): encabezado con favicon + ClaraCore.
+ * Se adapta al tema activo (claro / oscuro / descansar; auto vía dataset).
+ * En táctil: se muestran al tocar; no bloquean el clic del control.
  */
 export default function CcTitleTooltips() {
   useEffect(() => {
@@ -10,29 +21,16 @@ export default function CcTitleTooltips() {
 
     const tip = document.createElement('div')
     tip.id = 'cc-title-tooltip'
+    tip.className = 'cc-title-tooltip'
     tip.setAttribute('role', 'tooltip')
-    Object.assign(tip.style, {
-      position: 'fixed',
-      zIndex: '2147483000',
-      pointerEvents: 'none',
-      maxWidth: '260px',
-      padding: '6px 10px',
-      borderRadius: '8px',
-      background: 'rgba(15, 23, 42, 0.94)',
-      color: '#f8fafc',
-      fontSize: '12px',
-      fontWeight: '600',
-      lineHeight: '1.35',
-      boxShadow: '0 8px 24px rgba(15,23,42,0.28)',
-      display: 'none',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    })
+    tip.setAttribute('aria-hidden', 'true')
     document.body.appendChild(tip)
 
     let activeEl = null
     let hideTimer = null
     let showTimer = null
+    let touchHideTimer = null
+    let lastTouchShowAt = 0
 
     const fineCapable = () => {
       try {
@@ -42,29 +40,57 @@ export default function CcTitleTooltips() {
       }
     }
 
-    const shouldShowForEvent = (e) => {
-      if (e.pointerType === 'touch' || e.pointerType === 'pen') return false
-      // iPad + Magic Keyboard: pointerType mouse; algunos builds reportan hover:none
-      if (e.pointerType === 'mouse') return true
-      return fineCapable()
+    const applyThemeStyles = () => {
+      const mode = resolveTooltipThemeMode()
+      const p = ccTooltipPalette(mode)
+      tip.dataset.ccTooltipTheme = mode
+      tip.style.setProperty('--cc-tip-bg', p.bg)
+      tip.style.setProperty('--cc-tip-border', p.border)
+      tip.style.setProperty('--cc-tip-text', p.text)
+      tip.style.setProperty('--cc-tip-muted', p.textMuted)
+      tip.style.setProperty('--cc-tip-shadow', p.shadow)
+      tip.style.setProperty('--cc-tip-accent', p.accent)
+      tip.style.setProperty('--cc-tip-header-bg', p.headerBg)
+      tip.style.setProperty('--cc-tip-header-border', p.headerBorder)
+      tip.style.setProperty('--cc-tip-brand', p.brand)
     }
 
-    const place = (clientX, clientY) => {
-      const pad = 12
-      const rect = tip.getBoundingClientRect()
-      let left = clientX + 14
-      let top = clientY + 16
-      if (left + rect.width > window.innerWidth - pad) left = clientX - rect.width - 12
-      if (top + rect.height > window.innerHeight - pad) top = clientY - rect.height - 12
-      tip.style.left = `${Math.max(pad, left)}px`
-      tip.style.top = `${Math.max(pad, top)}px`
+    const ensureBaseStyle = () => {
+      tip.style.position = 'fixed'
+      tip.style.zIndex = '2147483000'
+      tip.style.pointerEvents = 'none'
+      tip.style.display = 'none'
+      tip.style.boxSizing = 'border-box'
+      tip.style.maxWidth = 'min(320px, calc(100vw - 24px))'
+      tip.style.borderRadius = '10px'
+      tip.style.border = '1px solid var(--cc-tip-border)'
+      tip.style.background = 'var(--cc-tip-bg)'
+      tip.style.color = 'var(--cc-tip-text)'
+      tip.style.boxShadow = 'var(--cc-tip-shadow)'
+      tip.style.fontFamily = "'Segoe UI', system-ui, sans-serif"
+      tip.style.fontSize = 'var(--cc-sm, 13px)'
+      tip.style.fontWeight = '600'
+      tip.style.lineHeight = '1.4'
+      tip.style.overflow = 'hidden'
     }
+
+    applyThemeStyles()
+    ensureBaseStyle()
+
+    const themeObserver = new MutationObserver(() => applyThemeStyles())
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-cc-theme', 'style'],
+    })
 
     const hide = () => {
       clearTimeout(showTimer)
       clearTimeout(hideTimer)
+      clearTimeout(touchHideTimer)
       tip.style.display = 'none'
-      tip.textContent = ''
+      tip.innerHTML = ''
+      tip.setAttribute('aria-hidden', 'true')
+      tip.classList.remove('cc-title-tooltip--help', 'cc-title-tooltip--short')
       if (activeEl?.dataset?.ccTitleHeld) {
         const held = activeEl.dataset.ccTitleHeld
         if (!activeEl.getAttribute('title') && held) activeEl.setAttribute('title', held)
@@ -76,44 +102,120 @@ export default function CcTitleTooltips() {
     const resolveText = (el) => {
       const custom = el.getAttribute('data-cc-tooltip')
       if (custom != null && String(custom).trim()) return String(custom).trim()
+      const held = el.dataset?.ccTitleHeld
+      if (held != null && String(held).trim()) return String(held).trim()
       const title = el.getAttribute('title')
       if (title != null && String(title).trim()) return String(title).trim()
-      const aria = el.getAttribute('aria-label')
-      if (aria != null && String(aria).trim() && el.matches('button, [role="button"], a, summary')) {
-        // Solo si no hay title: evita duplicar en controles con label visible
-        return null
-      }
       return null
     }
 
-    const showFor = (el, e) => {
+    const renderContent = (text, variant) => {
+      tip.innerHTML = ''
+      tip.classList.toggle('cc-title-tooltip--help', variant === 'help')
+      tip.classList.toggle('cc-title-tooltip--short', variant === 'short')
+
+      if (variant === 'help') {
+        const head = document.createElement('div')
+        head.className = 'cc-title-tooltip__brand'
+        head.style.cssText = [
+          'display:flex',
+          'align-items:center',
+          'gap:8px',
+          'padding:8px 12px',
+          'background:var(--cc-tip-header-bg)',
+          'border-bottom:1px solid var(--cc-tip-header-border)',
+        ].join(';')
+
+        const img = document.createElement('img')
+        img.src = CC_TOOLTIP_FAVICON_SRC
+        img.alt = ''
+        img.width = 18
+        img.height = 18
+        img.draggable = false
+        img.style.cssText = 'width:18px;height:18px;object-fit:contain;flex-shrink:0;display:block'
+
+        const name = document.createElement('span')
+        name.textContent = CC_TOOLTIP_BRAND_NAME
+        name.style.cssText = [
+          'font-size:var(--cc-caption, 12px)',
+          'font-weight:800',
+          'letter-spacing:0.02em',
+          'color:var(--cc-tip-brand)',
+          'line-height:1.2',
+          'user-select:none',
+        ].join(';')
+
+        head.appendChild(img)
+        head.appendChild(name)
+
+        const body = document.createElement('div')
+        body.className = 'cc-title-tooltip__body'
+        body.style.cssText = 'padding:10px 12px;font-weight:600;white-space:pre-wrap;word-break:break-word'
+        body.textContent = text
+
+        tip.appendChild(head)
+        tip.appendChild(body)
+      } else {
+        const body = document.createElement('div')
+        body.className = 'cc-title-tooltip__body'
+        body.style.cssText = 'padding:7px 11px;font-weight:600;white-space:pre-wrap;word-break:break-word'
+        body.textContent = text
+        tip.appendChild(body)
+      }
+    }
+
+    const placeNearAnchor = (el) => {
+      const rect = el.getBoundingClientRect()
+      tip.style.visibility = 'hidden'
+      tip.style.display = 'block'
+      tip.style.left = '0px'
+      tip.style.top = '0px'
+      const tipRect = tip.getBoundingClientRect()
+      const pos = placeTooltipRect(
+        rect,
+        { width: tipRect.width, height: tipRect.height },
+        { width: window.innerWidth, height: window.innerHeight },
+      )
+      tip.style.left = `${pos.left}px`
+      tip.style.top = `${pos.top}px`
+      tip.style.visibility = 'visible'
+    }
+
+    const showFor = (el) => {
       const text = resolveText(el)
       if (!text) return
       clearTimeout(hideTimer)
+      clearTimeout(touchHideTimer)
       activeEl = el
-      // Quitar title nativo mientras se muestra el tip (evita doble tip / delay iPad)
       if (el.hasAttribute('title')) {
         el.dataset.ccTitleHeld = el.getAttribute('title') || ''
         el.removeAttribute('title')
       }
-      tip.textContent = text
-      tip.style.display = 'block'
-      place(e.clientX, e.clientY)
+      const variant = resolveTooltipVariant(el, text)
+      applyThemeStyles()
+      renderContent(text, variant)
+      tip.setAttribute('aria-hidden', 'false')
+      placeNearAnchor(el)
+    }
+
+    const shouldShowHover = (e) => {
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') return false
+      if (e.pointerType === 'mouse') return true
+      return fineCapable()
     }
 
     const onPointerOver = (e) => {
-      if (!shouldShowForEvent(e)) return
-      const el = e.target?.closest?.('[title], [data-cc-tooltip]')
+      if (!shouldShowHover(e)) return
+      const el = e.target?.closest?.('[title], [data-cc-tooltip], [data-cc-title-held]')
       if (!el || el === tip) return
       if (el.closest('[data-cc-tooltip-off]')) return
       clearTimeout(showTimer)
-      showTimer = setTimeout(() => showFor(el, e), 280)
+      showTimer = setTimeout(() => showFor(el), 260)
     }
 
     const onPointerOut = (e) => {
       const el = e.target?.closest?.('[title], [data-cc-tooltip], [data-cc-title-held]')
       if (!el || el !== activeEl) {
-        // saliendo de un candidato no activo
         if (!activeEl) clearTimeout(showTimer)
         return
       }
@@ -122,28 +224,55 @@ export default function CcTitleTooltips() {
       hideTimer = setTimeout(hide, 60)
     }
 
-    const onPointerMove = (e) => {
-      if (tip.style.display === 'block' && shouldShowForEvent(e)) {
-        place(e.clientX, e.clientY)
-      }
+    /** Táctil: al tocar un control con title, mostrar tip anclado (sin bloquear el click). */
+    const onPointerUp = (e) => {
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
+      const el = e.target?.closest?.('[title], [data-cc-tooltip]')
+      if (!el || el === tip) return
+      if (el.closest('[data-cc-tooltip-off]')) return
+      const text = resolveText(el)
+      if (!text) return
+      // Evitar spam en el mismo gesto
+      const now = Date.now()
+      if (now - lastTouchShowAt < 350 && activeEl === el) return
+      lastTouchShowAt = now
+      showFor(el)
+      clearTimeout(touchHideTimer)
+      touchHideTimer = setTimeout(hide, 2800)
+    }
+
+    const onPointerDownOutside = (e) => {
+      if (!activeEl) return
+      const el = e.target?.closest?.('[title], [data-cc-tooltip], #cc-title-tooltip')
+      if (el === activeEl || el === tip) return
+      // En táctil, un toque fuera cierra
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') hide()
     }
 
     const onScroll = () => hide()
     const onKey = (e) => { if (e.key === 'Escape') hide() }
+    const onResize = () => {
+      if (activeEl && tip.style.display === 'block') placeNearAnchor(activeEl)
+    }
 
     document.addEventListener('pointerover', onPointerOver, true)
     document.addEventListener('pointerout', onPointerOut, true)
-    document.addEventListener('pointermove', onPointerMove, true)
+    document.addEventListener('pointerup', onPointerUp, true)
+    document.addEventListener('pointerdown', onPointerDownOutside, true)
     document.addEventListener('scroll', onScroll, true)
     document.addEventListener('keydown', onKey, true)
+    window.addEventListener('resize', onResize)
 
     return () => {
       hide()
+      themeObserver.disconnect()
       document.removeEventListener('pointerover', onPointerOver, true)
       document.removeEventListener('pointerout', onPointerOut, true)
-      document.removeEventListener('pointermove', onPointerMove, true)
+      document.removeEventListener('pointerup', onPointerUp, true)
+      document.removeEventListener('pointerdown', onPointerDownOutside, true)
       document.removeEventListener('scroll', onScroll, true)
       document.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('resize', onResize)
       tip.remove()
     }
   }, [])
