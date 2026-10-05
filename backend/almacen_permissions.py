@@ -127,8 +127,10 @@ def require_editar_cantidad_salida_almacen(current_user) -> None:
 
 
 def _es_validador_almacen_por_cargo(current_user) -> bool:
+    # Director de obra: regla operativa de validación.
+    # Cargo Administrador debe tener «validar» en la matriz (sin bypass por nombre).
     cargo = _norm(current_user.get("cargo_nombre") or "")
-    return cargo in ("director de obra", "administrador")
+    return cargo == "director de obra"
 
 
 def _cargo_permiso_almacen(current_user, accion: AlmacenAccion) -> bool:

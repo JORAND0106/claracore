@@ -20607,7 +20607,7 @@ const [navReporteId, setNavReporteId] = useState(null)
     })
   }, [analisisData, analisisDir, analisisRangoMin, analisisRangoMax, analisisSortCol, analisisSortDir])
 
-  // Desarrollador ve todo; otros usuarios ven solo su contrato
+  // Desarrollador ve todo; otros usuarios ven solo lo habilitado en Gestión de Cargos.
   const esDeveloper = esUsuarioDesarrollador(usuario)
   const esContador = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'contador'
   const esAdminCargo = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'administrador'
@@ -20620,18 +20620,19 @@ const [navReporteId, setNavReporteId] = useState(null)
       (p) => (p.funcion_nombre || "").toLowerCase() === fn && _permisoAlgunaAccion(p)
     )
   )
-  const canAdmin = !esContador && (esDeveloper || esAdminCargo || tienePermisoAdmin)
+  // Panel admin: solo matriz (o Desarrollador). El cargo «Administrador» ya no abre todo solo por nombre.
+  const canAdmin = !esContador && (esDeveloper || tienePermisoAdmin)
   /** Misma regla que el backend (logs / novedades): solo estos cargos publican novedades de inicio. */
   const puedePublicarNovedadesInicio = esDeveloper || esAdminCargo
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
   const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
-  const tienePermisoInformesCcd = esDeveloper || esAdminCargo
+  const tienePermisoInformesCcd = esDeveloper
     || (usuario?.permisos || []).some(p =>
       (p.funcion_nombre || '').toLowerCase() === 'informes ccd' &&
       (p.ver || p.validar || p.exportar)
     )
   const _permisoInformesCcdFlag = (flag) => {
-    if (esDeveloper || esAdminCargo) return true
+    if (esDeveloper) return true
     return (usuario?.permisos || []).some(
       p => (p.funcion_nombre || '').toLowerCase() === 'informes ccd' && p[flag]
     )
@@ -25146,7 +25147,7 @@ export default function App() {
         />
       )
     }
-    const _esPrivilegiado = ['Desarrollador', 'Administrador'].includes(usuario.cargo_nombre)
+    const _esPrivilegiado = (usuario.cargo_nombre || '').trim().toLowerCase() === 'desarrollador'
     const maintenanceBannerHeight = mantenimiento?.activo ? 74 : 0
     const updateBannerHeight = hayNuevaVersion ? 74 : 0
     const apiBannerHeight = apiDegraded ? 52 : 0

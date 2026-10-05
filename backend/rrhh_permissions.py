@@ -132,8 +132,8 @@ def tiene_permiso_rrhh(
 ) -> bool:
     if _es_desarrollador_seguro(current_user):
         return True
-    if _es_rol_administrativo(current_user):
-        return True
+    # ROL Administrativo ya no otorga CRUD/acceso al módulo: solo salarios vía
+    # puede_ver_salario_rrhh si la matriz del cargo tiene RRHH·ver.
     return _cargo_permiso_rrhh(current_user, accion, contrato_id)
 
 
@@ -179,10 +179,18 @@ def es_admin_plataforma(current_user) -> bool:
     return cargo == "administrador" or rol == "administrador"
 
 
-def puede_ver_salario_rrhh(current_user) -> bool:
-    """Salarios / consolidado de nómina: Dev, ROL Administrativo o cargo Administrador."""
+def puede_ver_salario_rrhh(current_user, contrato_id: Optional[int] = None) -> bool:
+    """
+    Salarios / consolidado de nómina.
+    Requiere acceso al módulo RRHH vía matriz del cargo, más:
+    - cargo Desarrollador, o
+    - ROL Administrativo, o
+    - cargo Administrador.
+    """
     if _es_desarrollador_seguro(current_user):
         return True
+    if not _cargo_permiso_rrhh(current_user, "ver", contrato_id):
+        return False
     if _es_rol_administrativo(current_user):
         return True
     cargo = _norm(current_user.get("cargo_nombre") or current_user.get("cargo") or "")
