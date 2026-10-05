@@ -189,27 +189,15 @@ function TipoCard({ t, icon, title, desc, accent, onClick }) {
   )
 }
 
-function CriticidadEmoji({ c, selected, onSelect, index, total }) {
-  const [hover, setHover] = useState(false)
-  const align = index <= 1 ? 'start' : index >= total - 2 ? 'end' : 'center'
-  const tooltipPos =
-    align === 'start'
-      ? { left: 0, right: 'auto', transform: 'none' }
-      : align === 'end'
-        ? { left: 'auto', right: 0, transform: 'none' }
-        : { left: '50%', right: 'auto', transform: 'translateX(-50%)' }
-
+function CriticidadEmoji({ c, selected, onSelect }) {
+  // Tip institucional vía `title` → CcTitleTooltips (sin floater negro/blanco propio)
   return (
     <div style={{ position: 'relative', flex: '1 1 0', minWidth: 0 }}>
       <button
         type="button"
-        title=""
+        title={c.label}
         aria-label={c.label}
         onClick={() => onSelect(c.key)}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        onFocus={() => setHover(true)}
-        onBlur={() => setHover(false)}
         style={{
           width: '100%',
           aspectRatio: '1',
@@ -225,45 +213,11 @@ function CriticidadEmoji({ c, selected, onSelect, index, total }) {
           border: `2px solid ${selected ? c.color : 'transparent'}`,
           boxShadow: selected ? `0 0 0 1px ${c.color}44` : 'none',
           transition: 'background 0.12s, border-color 0.12s, transform 0.1s',
-          transform: hover && !selected ? 'scale(1.08)' : selected ? 'scale(1.05)' : 'none',
+          transform: selected ? 'scale(1.05)' : 'none',
         }}
       >
         {c.emoji}
       </button>
-      {hover && (
-        <div
-          role="tooltip"
-          style={{
-            position: 'absolute',
-            bottom: 'calc(100% + 8px)',
-            ...tooltipPos,
-            background: '#0F172A',
-            color: '#F8FAFC',
-            fontSize: 'var(--cc-caption)',
-            fontWeight: 600,
-            padding: '6px 10px',
-            borderRadius: '8px',
-            whiteSpace: 'nowrap',
-            textAlign: 'center',
-            lineHeight: 1.3,
-            zIndex: 10,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-            pointerEvents: 'none',
-          }}
-        >
-          {c.label}
-          <div
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              border: '6px solid transparent',
-              borderTopColor: '#0F172A',
-            }}
-          />
-        </div>
-      )}
     </div>
   )
 }

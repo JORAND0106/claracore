@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CcTipChrome from '../components/CcTipChrome'
 
 export function FieldLabel({ label, hint, t, style }) {
   const [open, setOpen] = useState(false)
@@ -37,8 +38,8 @@ export function FieldLabel({ label, hint, t, style }) {
             ⓘ
           </button>
           {open && (
-            <span
-              role="tooltip"
+            <CcTipChrome
+              variant="help"
               style={{
                 position: 'absolute',
                 left: '50%',
@@ -47,20 +48,11 @@ export function FieldLabel({ label, hint, t, style }) {
                 zIndex: 50,
                 minWidth: 200,
                 maxWidth: 280,
-                padding: '10px 12px',
-                background: t.bgCard,
-                border: `1px solid ${t.border}`,
-                borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-                fontSize: 'var(--cc-sm)',
-                color: t.text,
-                fontWeight: 400,
-                lineHeight: 1.45,
-                textAlign: 'left',
+                pointerEvents: 'auto',
               }}
             >
               {hint}
-            </span>
+            </CcTipChrome>
           )}
         </span>
       )}

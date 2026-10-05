@@ -1,10 +1,12 @@
 /**
- * Tests de tokens / variante / posicionamiento de tooltips institucionales.
+ * Tests de tokens / variante / posicionamiento / adopción de titles nativos.
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   CC_TOOLTIP_HELP_CHARS,
+  adoptNativeTitle,
+  adoptNativeTitlesInTree,
   ccTooltipPalette,
   placeTooltipRect,
   resolveTooltipThemeMode,
@@ -50,7 +52,7 @@ describe('ccTooltipTheme', () => {
     assert.equal(resolveTooltipVariant(elPlain, 'Línea 1\nLínea 2'), 'help')
   })
 
-  it('placeTooltipRect no se sale del viewport ni centra sobre el ancla', () => {
+  it('placeTooltipRect no se sale del viewport ni tapa el ancla', () => {
     const anchor = { left: 100, top: 200, width: 40, height: 30, right: 140, bottom: 230 }
     const tip = { width: 180, height: 48 }
     const vp = { width: 800, height: 600 }
@@ -59,16 +61,61 @@ describe('ccTooltipTheme', () => {
     assert.ok(pos.top >= 10)
     assert.ok(pos.left + tip.width <= vp.width - 10)
     assert.ok(pos.top + tip.height <= vp.height - 10)
-    // Preferido: arriba del ancla
     assert.ok(pos.top + tip.height <= anchor.top || pos.top >= anchor.bottom)
   })
 
-  it('placeTooltipRect en borde inferior pasa a lateral o arriba', () => {
+  it('placeTooltipRect en borde inferior no se sale', () => {
     const anchor = { left: 50, top: 560, width: 40, height: 30, right: 90, bottom: 590 }
     const tip = { width: 200, height: 80 }
     const vp = { width: 400, height: 600 }
     const pos = placeTooltipRect(anchor, tip, vp)
     assert.ok(pos.top + tip.height <= vp.height - 10)
     assert.ok(pos.left + tip.width <= vp.width - 10)
+  })
+})
+
+describe('adoptNativeTitle', () => {
+  it('mueve title a data-cc-title-held y elimina el atributo nativo', () => {
+    const attrs = { title: 'Editar fila' }
+    const el = {
+      nodeType: 1,
+      id: '',
+      getAttribute: (k) => (k in attrs ? attrs[k] : null),
+      hasAttribute: (k) => k in attrs,
+      setAttribute: (k, v) => { attrs[k] = String(v) },
+      removeAttribute: (k) => { delete attrs[k] },
+      closest: () => null,
+    }
+    assert.equal(adoptNativeTitle(el), true)
+    assert.equal(attrs.title, undefined)
+    assert.equal(attrs['data-cc-title-held'], 'Editar fila')
+  })
+
+  it('adopta en árbol y cuenta elementos', () => {
+    const kids = []
+    const makeEl = (title) => {
+      const attrs = title != null ? { title } : {}
+      const el = {
+        nodeType: 1,
+        id: '',
+        getAttribute: (k) => (k in attrs ? attrs[k] : null),
+        hasAttribute: (k) => k in attrs,
+        setAttribute: (k, v) => { attrs[k] = String(v) },
+        removeAttribute: (k) => { delete attrs[k] },
+        closest: () => null,
+        querySelectorAll: (sel) => (sel === '[title]' ? kids.filter((k) => k.hasAttribute('title')) : []),
+        _attrs: attrs,
+      }
+      return el
+    }
+    const a = makeEl('Uno')
+    const b = makeEl('Dos')
+    kids.push(a, b)
+    const root = makeEl(null)
+    root.querySelectorAll = (sel) => (sel === '[title]' ? kids.filter((k) => k.hasAttribute('title')) : [])
+    const n = adoptNativeTitlesInTree(root)
+    assert.equal(n, 2)
+    assert.equal(a._attrs['data-cc-title-held'], 'Uno')
+    assert.equal(b._attrs['data-cc-title-held'], 'Dos')
   })
 })

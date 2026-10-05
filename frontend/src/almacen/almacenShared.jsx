@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useClaraViewport } from '../useClaraViewport'
 import { isLikelyDarkBackground } from '../theme/adminPanelTheme'
 import { createAlmacenApi } from './almacenApi'
+import CcTipChrome from '../components/CcTipChrome'
 
 export function almacenStyles(t, compact = false) {
   const primary = t?.primary || '#2563eb'
@@ -315,8 +316,8 @@ export function AlmacenHelpIcon({ ayuda }) {
         ?
       </button>
       {open && (
-        <span
-          role="tooltip"
+        <CcTipChrome
+          variant="help"
           style={{
             position: 'absolute',
             left: '50%',
@@ -325,21 +326,11 @@ export function AlmacenHelpIcon({ ayuda }) {
             zIndex: 80,
             minWidth: 160,
             maxWidth: 260,
-            padding: '8px 10px',
-            background: 'var(--cc-almacen-bg-card, #fff)',
-            border: '1px solid var(--cc-almacen-border, #e2e8f0)',
-            borderRadius: 8,
-            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
-            fontSize: 'var(--cc-xs)',
-            color: 'var(--cc-almacen-text, #0f172a)',
-            fontWeight: 500,
-            lineHeight: 1.4,
-            textAlign: 'left',
-            whiteSpace: 'normal',
+            pointerEvents: 'auto',
           }}
         >
           {ayuda}
-        </span>
+        </CcTipChrome>
       )}
     </span>
   )
