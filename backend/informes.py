@@ -117,6 +117,7 @@ from fastapi.responses import HTMLResponse, Response
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from pydantic import BaseModel
 from xhtml2pdf import pisa
 from main import get_current_user as _get_user
@@ -13794,12 +13795,15 @@ def _fill_corte_sub_001_excel_ws(
     resumen_4cols: Optional[Dict[str, Any]] = None,
     otros_conceptos: Optional[List[dict]] = None,
     memoria_links: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> None:
+) -> List[Dict[str, Any]]:
     """Hoja CC-SUB-001: encabezado tipo PDF, ítems 4 bloques, resumen 4 cols formulado, firmas.
 
     Sin columna Capítulo: ítems agrupados con fila Subtotal {capítulo}.
     Si `memoria_links` está presente, la cantidad Presente acta (col G) referencia
     por fórmula el total de la pestaña de memoria del ítem.
+
+    Devuelve una ancla por ítem (fila del cuadro, fila del subtotal de su capítulo
+    y texto de capítulo). No agrega columnas ni filas al cuadro.
     """
     import corte_sub_conciliacion as csc
 
@@ -13954,6 +13958,9 @@ def _fill_corte_sub_001_excel_ws(
     cap_subtotal_rows: List[int] = []
     # Filas de ítem del capítulo en curso (para fórmulas de subtotal)
     cap_item_rows: List[int] = []
+    # Anclas para la tabla preacta_obra (el cuadro del informe no las escribe).
+    preacta_filas: List[Dict[str, Any]] = []
+    preacta_grupo: List[Dict[str, Any]] = []
     row = data0
     for entry in plan:
         kind = entry[0]
@@ -13995,6 +14002,9 @@ def _fill_corte_sub_001_excel_ws(
                 else:
                     cell.value = None
             cap_subtotal_rows.append(row)
+            for rec in preacta_grupo:
+                rec["subtotal_row"] = row
+            preacta_grupo = []
             cap_item_rows = []
             row += 1
             continue
@@ -14074,6 +14084,13 @@ def _fill_corte_sub_001_excel_ws(
         saldo_valor_rows.append(row)
 
         cap_item_rows.append(row)
+        preacta_rec = {
+            "row": row,
+            "subtotal_row": None,
+            "capitulo": _capitulo_norm_conc(it),
+        }
+        preacta_filas.append(preacta_rec)
+        preacta_grupo.append(preacta_rec)
         row += 1
 
     tot_r = row
@@ -14363,6 +14380,7 @@ def _fill_corte_sub_001_excel_ws(
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = 1
     ws.print_options.horizontalCentered = True
+    return preacta_filas
 
 
 def _corte_sub_001_excel_bytes(
@@ -14796,6 +14814,182 @@ def _cc_mes_001_excel_bytes(
     return buf.getvalue()
 
 
+# Tabla de datos que alimenta el acta financiera. Nombre y encabezados fijos.
+_PREACTA_OBRA_NAME = "preacta_obra"
+_PREACTA_OBRA_HEADERS: Tuple[str, ...] = (
+    "Clave",
+    "Capitulo",
+    "Item",
+    "Descripcion",
+    "Unidad",
+    "VrUnitario",
+    "ActualizadaCant",
+    "ActualizadaValor",
+    "AnteriorCant",
+    "AnteriorValor",
+    "PresenteCant",
+    "PresenteValor",
+    "AcumuladoCant",
+    "AcumuladoValor",
+    "SaldoCant",
+    "SaldoValor",
+)
+# Columnas del cuadro CC-MES-001 (ÍTEM…SALDO, sin columna Capítulo).
+_PREACTA_DESDE_INFORME = {
+    "Item": "A",
+    "Descripcion": "B",
+    "Unidad": "C",
+    "VrUnitario": "D",
+    "ActualizadaCant": "E",
+    "ActualizadaValor": "F",
+    "PresenteCant": "G",
+    "PresenteValor": "H",
+    "AcumuladoCant": "I",
+    "AcumuladoValor": "J",
+    "SaldoCant": "K",
+    "SaldoValor": "L",
+}
+_PREACTA_SUBTOTAL_PREFIX = "Subtotal "
+
+
+def _excel_sheet_cell_ref(sheet: str, col: str, row: int) -> str:
+    """Referencia absoluta a una celda de otra hoja (nombre entre comillas)."""
+    safe = str(sheet or "").replace("'", "''")
+    return f"'{safe}'!{col}{int(row)}"
+
+
+def _excel_formula_quoted(text: str) -> str:
+    """Literal de texto para una fórmula de Excel."""
+    return '"' + str(text).replace('"', '""') + '"'
+
+
+def _preacta_capitulo_expr(
+    hoja_informe: str,
+    fila_subtotal: Optional[int],
+    capitulo: str,
+) -> str:
+    """Expresión (sin «=») del capítulo, leída del rótulo «Subtotal {capítulo}» del informe."""
+    if fila_subtotal:
+        src = _excel_sheet_cell_ref(hoja_informe, "A", int(fila_subtotal))
+        # El cuadro escribe «Subtotal» a secas cuando el capítulo es «—».
+        vacio = _excel_formula_quoted("—")
+        pref = _excel_formula_quoted(_PREACTA_SUBTOTAL_PREFIX)
+        return (
+            f'IF({src}={_excel_formula_quoted("Subtotal")},{vacio},'
+            f"MID({src},LEN({pref})+1,500))"
+        )
+    return _excel_formula_quoted(capitulo or "—")
+
+
+def _preacta_obra_formulas_fila(
+    hoja_informe: str,
+    fila_informe: int,
+    fila_subtotal: Optional[int],
+    capitulo: str,
+) -> List[str]:
+    """Una fórmula por encabezado de ``preacta_obra``, en el orden fijo de la tabla.
+
+    Todas leen la pestaña del informe. Anterior no tiene columna propia: la cantidad
+    anterior está embebida en Acumulado (``ROUND(Presente+anterior,2)``), así que
+    AnteriorCant = AcumuladoCant − PresenteCant y AnteriorValor usa la misma regla
+    ROUND0(cantidad × VU) que el resto del informe.
+    """
+    def ref(col: str) -> str:
+        return _excel_sheet_cell_ref(hoja_informe, col, fila_informe)
+
+    cap_expr = _preacta_capitulo_expr(hoja_informe, fila_subtotal, capitulo)
+    ant_cant = f"ROUND({ref('I')}-{ref('G')},2)"
+    formulas: Dict[str, str] = {
+        "Clave": f"={cap_expr}&\"|\"&{ref('A')}",
+        "Capitulo": f"={cap_expr}",
+        "AnteriorCant": f"={ant_cant}",
+        "AnteriorValor": _excel_formula_valor_cant_vu(ant_cant, ref("D")),
+    }
+    for header, col in _PREACTA_DESDE_INFORME.items():
+        formulas[header] = f"={ref(col)}"
+    return [formulas[h] for h in _PREACTA_OBRA_HEADERS]
+
+
+def _preacta_obra_number_format(header: str) -> Optional[str]:
+    if header == "VrUnitario":
+        return "#,##0.00"
+    if header.endswith("Cant"):
+        return _EXCEL_NUM_FMT_CANT
+    if header.endswith("Valor"):
+        return _EXCEL_NUM_FMT_MONEY
+    return None
+
+
+def _append_preacta_obra_sheet(
+    wb: Workbook,
+    hoja_informe: str,
+    filas_item: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Pestaña ``preacta_obra`` con la tabla de datos del mismo nombre.
+
+    Una fila por ítem del informe, sin subtotales ni filas vacías. No escribe
+    en la hoja del informe.
+    """
+    if hoja_informe not in wb.sheetnames:
+        raise ValueError(f"No existe la hoja del informe {hoja_informe}")
+    if _PREACTA_OBRA_NAME in wb.sheetnames:
+        otro = wb[_PREACTA_OBRA_NAME]
+        otro.title = _excel_unique_sheet_name_raw(wb, "hoja")
+
+    ws = wb.create_sheet(_PREACTA_OBRA_NAME, 1)
+    ncols = len(_PREACTA_OBRA_HEADERS)
+    widths = [46, 36, 14, 42, 10, 14, 16, 16, 14, 16, 14, 16, 16, 16, 14, 16]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    header_fill = PatternFill("solid", fgColor="1E3A8A")
+    header_font = Font(bold=True, size=9, color="FFFFFF")
+    for col, header in enumerate(_PREACTA_OBRA_HEADERS, start=1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    filas = list(filas_item or [])
+    for offset, rec in enumerate(filas):
+        excel_row = 2 + offset
+        formulas = _preacta_obra_formulas_fila(
+            hoja_informe,
+            int(rec["row"]),
+            rec.get("subtotal_row"),
+            str(rec.get("capitulo") or ""),
+        )
+        for col, header in enumerate(_PREACTA_OBRA_HEADERS, start=1):
+            cell = ws.cell(row=excel_row, column=col, value=formulas[col - 1])
+            cell.font = Font(size=9)
+            fmt = _preacta_obra_number_format(header)
+            if fmt:
+                cell.number_format = fmt
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif header in ("Item", "Unidad"):
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    last_row = 1 + len(filas)
+    # Una tabla de Excel exige al menos el encabezado. Sin ítems el rango es solo la fila 1.
+    ref = f"A1:{get_column_letter(ncols)}{max(last_row, 1)}"
+    tabla = Table(displayName=_PREACTA_OBRA_NAME, ref=ref)
+    tabla.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    ws.add_table(tabla)
+    ws.freeze_panes = "A2"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = 1
+    ws.print_options.horizontalCentered = True
+    _log.info("preacta_obra hoja=%s filas=%s", hoja_informe, len(filas))
+
+
 def _cc_sem_mes_integral_excel_bytes(
     contrato_id: int,
     current_user: dict,
@@ -14805,7 +14999,11 @@ def _cc_sem_mes_integral_excel_bytes(
     acta_id: Optional[int] = None,
     nivel_aprobacion: Optional[int] = None,
 ) -> bytes:
-    """Libro integral: hoja 1 = ejecución (001) formulada; siguientes = memorias (002) por capítulo|ítem."""
+    """Libro integral: hoja 1 = ejecución (001) formulada; siguientes = memorias (002) por capítulo|ítem.
+
+    En el mensual, además inserta la tabla ``preacta_obra`` (una fila por ítem, fórmulas
+    hacia la pestaña del informe) justo después de CC-MES-001.
+    """
     modo = (modo or "").strip().lower()
     if modo not in ("sem", "mes"):
         raise HTTPException(400, "modo integral inválido")
@@ -14998,7 +15196,7 @@ def _cc_sem_mes_integral_excel_bytes(
         # Limpiar y rellenar
         wb.remove(ws_ejec)
         ws_ejec = wb.create_sheet(title=sheet_ejec, index=0)
-        _fill_corte_sub_001_excel_ws(
+        item_filas = _fill_corte_sub_001_excel_ws(
             ws_ejec,
             contrato,
             sub_m,
@@ -15025,6 +15223,8 @@ def _cc_sem_mes_integral_excel_bytes(
                         cell.value = c4_label
         except Exception:
             pass
+        # Tabla fija para el acta financiera. No altera la pestaña del informe.
+        _append_preacta_obra_sheet(wb, sheet_ejec, item_filas)
     # Orden: ejecución primero (ya es active), memorias en el orden creado.
     buf = io.BytesIO()
     wb.save(buf)
