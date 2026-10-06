@@ -126,8 +126,8 @@ def test_corte_sub_001_excel_bloques_y_formulas():
     assert ws.cell(9, 5).value == 100.0
     assert str(ws.cell(9, 6).value).startswith("=")
     assert ws.cell(9, 7).value == 10.0
-    assert str(ws.cell(9, 9).value) == "=G9+40.0"
-    assert str(ws.cell(9, 11).value) == "=E9-I9"
+    assert str(ws.cell(9, 9).value) == "=ROUND(G9+40.0,2)"
+    assert str(ws.cell(9, 11).value) == "=ROUND(E9-I9,2)"
     # Subtotal del capítulo I
     assert str(ws.cell(11, 1).value).startswith("Subtotal")
     assert "F9" in str(ws.cell(11, 6).value)

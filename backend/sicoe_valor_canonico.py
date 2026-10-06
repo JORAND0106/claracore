@@ -117,7 +117,7 @@ def load_listado_vu_by_cap_item(sb, contrato_id: int) -> Dict[CapItemKey, dict]:
             batch = (
                 sb.table("listado_precios")
                 .select(
-                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia"
+                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia, especificacion_tecnica"
                 )
                 .eq("contrato_id", int(contrato_id))
                 .order("id")
@@ -145,6 +145,7 @@ def load_listado_vu_by_cap_item(sb, contrato_id: int) -> Dict[CapItemKey, dict]:
             "unidad": str(r.get("unidad") or "").strip(),
             "descripcion": str(r.get("descripcion") or "").strip(),
             "competencia": str(r.get("competencia") or "").strip(),
+            "especificacion_tecnica": str(r.get("especificacion_tecnica") or "").strip(),
         }
         prev = idx.get(k)
         if prev is None or int(meta.get("id") or 0) >= int(prev.get("id") or 0):

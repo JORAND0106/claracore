@@ -1,8 +1,7 @@
-"""Evaluador mínimo de fórmulas de Excel para pruebas de preacta_obra.
+"""Evaluador mínimo de fórmulas de Excel para pruebas del informe mensual.
 
-Cubre el subconjunto que escribe el informe mensual y la tabla preacta_obra:
-referencias de hoja, ROUND, IF, AND, OR, MID, LEN, SUM, concatenación y aritmética.
-El redondeo es half-away-from-zero, como Excel.
+Cubre referencias de hoja, ROUND, IF, AND, OR, MIN, MID, LEN, SUM,
+concatenación y aritmética. El redondeo es half-away-from-zero, como Excel.
 """
 from __future__ import annotations
 
@@ -372,6 +371,10 @@ class FormulaBook:
             return all(_truthy(self._ev(sheet, a)) for a in args)
         if name == "OR":
             return any(_truthy(self._ev(sheet, a)) for a in args)
+        if name == "MIN":
+            return min(_num(self._ev(sheet, a)) for a in args)
+        if name == "MAX":
+            return max(_num(self._ev(sheet, a)) for a in args)
         if name == "SUM":
             total = 0.0
             for arg in args:
