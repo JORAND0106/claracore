@@ -206,6 +206,8 @@ class CrearReporteSicoeBody(BaseModel):
     abs_final: Optional[float] = None
     # Data URI PNG/JPEG del esquema del tramo (popup Crear reporte).
     esquema_data_uri: Optional[str] = None
+    # Ítems asignados en la planilla (mismo listado de SICOE). Si viene, persiste y se usa.
+    sicoe_items_por_linea: Optional[dict[str, Any]] = None
 
 
 class AsociarReporteSicoeBody(BaseModel):
@@ -542,12 +544,18 @@ def _assert_scope_codigo(scope: str, codigo: str) -> tuple[str, str]:
 
 
 
-def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict:
+def _calcular(
+    planilla: dict,
+    filas_db: list[dict],
+    desc_db: list[dict],
+    *,
+    aplicar_dims: bool = True,
+) -> dict:
     diam = float(planilla.get("diametro_m") or 0)
     ancho = float(planilla.get("ancho_excavacion_m") or 0)
     if diam <= 0 or ancho <= 0:
         raise HTTPException(422, "Configure diámetro y ancho de excavación.")
-    return calcular_planilla_completa(
+    calc = calcular_planilla_completa(
         tipo=planilla.get("tipo") or "ALCANTARILLA",
         diametro_m=diam,
         espesor_m=float(planilla.get("espesor_m") or 0),
@@ -559,6 +567,14 @@ def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict
         cama_triturado_m=_cama_triturado_m(planilla),
         traslapo_m=_traslapo_m(planilla),
     )
+    if not aplicar_dims:
+        return calc
+    meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+    dims = meta.get("sicoe_dims_por_linea") if isinstance(meta, dict) else None
+    if not isinstance(dims, dict) or not dims:
+        return calc
+    from topografia_planilla_sicoe_enlace import aplicar_dims_enlace
+    return aplicar_dims_enlace(calc, dims)
 
 
 def _audit(
@@ -1040,6 +1056,75 @@ def alerta_planillas_sin_reporte(contrato_id: int, current_user=Depends(get_curr
     return {"hay": total > 0, "total": total}
 
 
+def _puede_editar_reporte_cantidades(user, contrato_id: int) -> bool:
+    """Alerta del ícono: solo quien edita el reporte de cantidades."""
+    if _es_desarrollador(user):
+        return True
+    uid = _uid(user)
+    if uid is None:
+        return False
+    try:
+        from main import _cargo_permiso_editar_reporte_cantidades_user_id
+    except ImportError:
+        return False
+    return bool(_cargo_permiso_editar_reporte_cantidades_user_id(uid, contrato_id))
+
+
+@router.get("/{contrato_id}/planillas-tuberia/alerta-sync-cantidades")
+def alerta_sync_cantidades(contrato_id: int, current_user=Depends(get_current_user)):
+    """Planillas abiertas cuya edición modificó un reporte de cantidades enlazado."""
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_editar_reporte_cantidades(current_user, contrato_id):
+        return {"hay": False, "total": 0}
+    from topografia_planilla_sicoe_enlace import contar_planillas_con_alerta_sync
+    rows = (
+        supabase.table("topo_planillas_tuberia")
+        .select("id,meta_cabecera")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    total = contar_planillas_con_alerta_sync(rows)
+    return {"hay": total > 0, "total": total}
+
+
+@router.post("/{contrato_id}/planillas-tuberia/alerta-sync-cantidades/vista")
+def vista_alerta_sync_cantidades(contrato_id: int, current_user=Depends(get_current_user)):
+    """Quita el indicador al entrar a SICOE Obra. No lo quita el GET que pinta el ícono."""
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_editar_reporte_cantidades(current_user, contrato_id):
+        return {"ok": True, "total": 0}
+    from topografia_planilla_sicoe_enlace import limpiar_alerta_link, planilla_tiene_alerta_sync
+    rows = (
+        supabase.table("topo_planillas_tuberia")
+        .select("id,meta_cabecera")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    n = 0
+    now = _now()
+    for planilla in rows:
+        if not planilla_tiene_alerta_sync(planilla):
+            continue
+        meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+        links = [
+            limpiar_alerta_link(lk) if isinstance(lk, dict) else lk
+            for lk in (meta.get("sicoe_reportes") or [])
+        ]
+        try:
+            supabase.table("topo_planillas_tuberia").update({
+                "meta_cabecera": {**meta, "sicoe_reportes": links},
+                "updated_at": now,
+            }).eq("id", planilla["id"]).eq("contrato_id", int(contrato_id)).execute()
+            n += 1
+        except Exception:
+            logger.exception("limpiar alerta sync planilla=%s", planilla.get("id"))
+    return {"ok": True, "total": n}
+
+
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}")
 def obtener(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -1080,7 +1165,9 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
         patch["relacion_atraque"] = body.relacion_atraque
     if body.meta_cabecera is not None:
         prev = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
-        patch["meta_cabecera"] = {**prev, **body.meta_cabecera}
+        _assert_puede_cambiar_items(current_user, contrato_id, prev, body.meta_cabecera)
+        from topografia_planilla_sicoe_enlace import fusionar_meta_cliente
+        patch["meta_cabecera"] = fusionar_meta_cliente(prev, body.meta_cabecera)
     if body.firmas is not None:
         prev_f = p.get("firmas") if isinstance(p.get("firmas"), dict) else {}
         patch["firmas"] = {**prev_f, **body.firmas}
@@ -1152,6 +1239,7 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
         if calc_final:
             sync = _sincronizar_so_registros_desde_calc(
                 detalle.get("planilla") or p, calc_final, contrato_id,
+                current_user=current_user,
             )
             if isinstance(detalle, dict):
                 detalle = {**detalle, "sicoe_sync": sync}
@@ -1228,7 +1316,9 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     if body.meta_cabecera is not None:
         if not isinstance(body.meta_cabecera, dict):
             raise HTTPException(422, "meta_cabecera inválida")
-        new_meta = {**new_meta, **body.meta_cabecera}
+        _assert_puede_cambiar_items(current_user, contrato_id, new_meta, body.meta_cabecera)
+        from topografia_planilla_sicoe_enlace import fusionar_meta_cliente
+        new_meta = fusionar_meta_cliente(new_meta, body.meta_cabecera)
         meta_changed = True
 
     if body.cantidades_manuales is not None:
@@ -1403,7 +1493,9 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     try:
         calc_final = detalle.get("calculo")
         if calc_final:
-            sync_info = _sincronizar_so_registros_desde_calc(detalle.get("planilla") or p, calc_final, contrato_id)
+            sync_info = _sincronizar_so_registros_desde_calc(
+                detalle.get("planilla") or p, calc_final, contrato_id, current_user=current_user,
+            )
     except Exception:
         logger.exception("sync sicoe tras guardar cartera planilla=%s", planilla_id)
 
@@ -1771,17 +1863,143 @@ def _mapa_codigos_por_nombre_registros(
     return out
 
 
+def _usuario_puede_asignar_item(user, contrato_id: int) -> bool:
+    """Crear o editar «reporte de cantidades». Desarrollador, igual que la edición SICOE."""
+    from topografia_planilla_sicoe_enlace import puede_asignar_item_cobro
+    try:
+        from main import (
+            _cargo_permiso_crear_reporte_cantidades_user_id,
+            _cargo_permiso_editar_reporte_cantidades_user_id,
+        )
+    except ImportError:
+        return puede_asignar_item_cobro(es_desarrollador=_es_desarrollador(user))
+    if _es_desarrollador(user):
+        return True
+    uid = _uid(user)
+    if uid is None:
+        return False
+    return puede_asignar_item_cobro(
+        puede_crear=_cargo_permiso_crear_reporte_cantidades_user_id(uid, contrato_id),
+        puede_editar=_cargo_permiso_editar_reporte_cantidades_user_id(uid, contrato_id),
+    )
+
+
+def _assert_puede_cambiar_items(user, contrato_id: int, prev_meta: Any, client_meta: Any) -> None:
+    if not isinstance(client_meta, dict) or "sicoe_items_por_linea" not in client_meta:
+        return
+    from topografia_planilla_sicoe_enlace import items_cambiaron
+    prev_items = (prev_meta or {}).get("sicoe_items_por_linea") if isinstance(prev_meta, dict) else None
+    if not items_cambiaron(prev_items, client_meta.get("sicoe_items_por_linea")):
+        return
+    if not _usuario_puede_asignar_item(user, contrato_id):
+        raise HTTPException(
+            403,
+            "Solo quien puede crear o editar el reporte de cantidades puede asignar el ítem de cobro.",
+        )
+
+
+def _registro_por_numero(contrato_id: int, reporte_id: int, numero: int) -> Optional[dict]:
+    try:
+        rows = (
+            supabase.table("so_registros").select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("reporte_id", int(reporte_id))
+            .eq("numero_registro", int(numero))
+            .limit(1)
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        logger.exception("leer so_registro reporte=%s num=%s", reporte_id, numero)
+        return None
+    return rows[0] if rows else None
+
+
+def _registro_por_id(contrato_id: int, registro_id: int) -> Optional[dict]:
+    try:
+        rows = (
+            supabase.table("so_registros").select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("id", int(registro_id))
+            .limit(1)
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        logger.exception("leer so_registro id=%s", registro_id)
+        return None
+    return rows[0] if rows else None
+
+
+def _registro_sellado_sync(row: Optional[dict], contrato_id: int) -> bool:
+    """No escribe un registro sellado en el nivel máximo (doble llave aún no reversada)."""
+    if not isinstance(row, dict):
+        return True
+    try:
+        from main import _registro_nivel_max_aprobado
+    except ImportError:
+        from topografia_planilla_sicoe_enlace import registro_esta_sellado
+        return registro_esta_sellado(row, "nivel3_estado")
+    try:
+        return bool(_registro_nivel_max_aprobado(row, int(contrato_id)))
+    except Exception:
+        logger.exception("nivel max registro")
+        return True
+
+
+def _log_sync_registro(
+    user,
+    contrato_id: int,
+    registro_id: Any,
+    cambios: list[dict],
+    *,
+    origen_cambio: str,
+    planilla_id: Any,
+    reporte_id: Any,
+    item_numero: Any,
+) -> None:
+    if not cambios or user is None:
+        return
+    try:
+        from main import _audit_user_contrato, registrar_log
+        from topografia_planilla_sicoe_enlace import detalle_sync_log, snapshots_de_diff
+    except ImportError:
+        return
+    antes, despues = snapshots_de_diff(cambios)
+    detalle = detalle_sync_log(
+        cambios,
+        origen_cambio=origen_cambio,
+        planilla_id=planilla_id,
+        reporte_id=reporte_id,
+        registro_id=registro_id,
+        item_numero=item_numero,
+    )
+    try:
+        registrar_log(
+            _audit_user_contrato(user, contrato_id),
+            "SINCRONIZAR",
+            "SICOE",
+            "registro",
+            str(registro_id),
+            detalle,
+            valor_anterior=antes,
+            valor_nuevo=despues,
+        )
+    except Exception:
+        logger.exception("log sync registro %s", registro_id)
+
+
 def _sincronizar_so_registros_desde_calc(
     planilla: dict,
     calculo: Optional[dict],
     contrato_id: int,
+    current_user=None,
 ) -> dict[str, Any]:
     """
     Actualiza so_registros ya vinculados (dims/cantidad) tras editar la planilla.
-    No crea registros nuevos; solo parchea los mapeados en meta.sicoe_reportes.
-    Mientras la planilla no esté sellada (interventoría), sincroniza también los
-    vínculos «asociar» (solo_adjunto): la edición de cantidades va primero por
-    topografía; las casillas en SICOE siguen editables.
+    No crea registros nuevos. Los vínculos con ``enlaces`` se identifican por el
+    ítem de la línea; los vínculos anteriores siguen por ``registro_numeros_por_codigo``.
+    Nunca modifica un registro sellado en el nivel máximo.
     """
     if _planilla_tuberia_sellada(planilla):
         return {"updated": 0, "skipped": True, "reason": "sellada"}
@@ -1799,18 +2017,82 @@ def _sincronizar_so_registros_desde_calc(
         tipo=planilla.get("tipo"),
         tramo=tramo_lbl,
     )
+    from topografia_planilla_sicoe_enlace import (
+        diff_campos_sync,
+        enlace_coincide_item,
+        item_de_linea,
+        items_desde_meta,
+        marcar_alerta_link,
+    )
+    items = items_desde_meta(planilla.get("meta_cabecera"))
     updated = 0
     errors: list[str] = []
     mapa_persistir: dict[str, dict[str, int]] = {}
+    links_alerta: set[int] = set()
+    now = _now()
     for link in links:
         try:
             reporte_id = int(link.get("reporte_id"))
         except (TypeError, ValueError):
             continue
+        enlaces = link.get("enlaces") if isinstance(link.get("enlaces"), list) else None
+        if enlaces:
+            for en in enlaces:
+                if not isinstance(en, dict):
+                    continue
+                origen_key = str(en.get("origen") or "")
+                linea = by_origen.get(origen_key)
+                if not linea:
+                    continue
+                item = item_de_linea(
+                    {**linea, "_origen_tabla": linea.get("_origen_tabla"), "_origen_codigo": linea.get("_origen_codigo"),
+                     "_item_cant_codigo": linea.get("_item_cant_codigo")},
+                    items,
+                    planilla.get("tipo"),
+                )
+                if not enlace_coincide_item(en, item):
+                    continue
+                try:
+                    rid = int(en.get("registro_id"))
+                except (TypeError, ValueError):
+                    continue
+                reg = _registro_por_id(contrato_id, rid)
+                if not reg or _registro_sellado_sync(reg, contrato_id):
+                    continue
+                patch = patch_so_registro_desde_linea_planilla(linea)
+                vlr = reg.get("vlr_unitario")
+                if patch.get("cantidad_total") is not None and vlr not in (None, ""):
+                    try:
+                        from topografia_planilla_tuberia import redondear_costo_directo_sicoe
+                        patch["costo_directo"] = redondear_costo_directo_sicoe(
+                            float(patch["cantidad_total"]) * float(vlr)
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                cambios = diff_campos_sync(reg, patch)
+                if not cambios:
+                    continue
+                try:
+                    supabase.table("so_registros").update(patch).eq(
+                        "contrato_id", int(contrato_id),
+                    ).eq("id", rid).execute()
+                    updated += 1
+                    links_alerta.add(reporte_id)
+                    _log_sync_registro(
+                        current_user, contrato_id, rid, cambios,
+                        origen_cambio="planilla",
+                        planilla_id=planilla.get("id"),
+                        reporte_id=reporte_id,
+                        item_numero=en.get("item_numero"),
+                    )
+                except Exception as exc:
+                    errors.append(f"{origen_key}#{rid}: {exc}")
+                    logger.exception("sync enlace planilla→sicoe registro=%s", rid)
+            continue
         mapa = link.get("registro_numeros_por_codigo") or {}
         if not isinstance(mapa, dict):
             mapa = {}
-        # Si el vínculo no trae mapa (p. ej. asociar con pocos matches), armar por nombre.
+        # Vínculos previos (sin enlaces por ítem): mismo emparejamiento de siempre.
         if not mapa and by_origen:
             mapa = _mapa_codigos_por_nombre_registros(contrato_id, reporte_id, by_origen)
             if mapa:
@@ -1825,6 +2107,9 @@ def _sincronizar_so_registros_desde_calc(
             linea = by_origen.get(str(origen_key))
             if not linea:
                 continue
+            reg = _registro_por_numero(contrato_id, reporte_id, num)
+            if reg is None or _registro_sellado_sync(reg, contrato_id):
+                continue
             patch = patch_so_registro_desde_linea_planilla(linea)
             try:
                 supabase.table("so_registros").update(patch).eq(
@@ -1838,30 +2123,32 @@ def _sincronizar_so_registros_desde_calc(
                     reporte_id, num,
                 )
 
-    # Persistir mapas reconstruidos para próximos guardados.
-    if mapa_persistir and planilla.get("id"):
+    persistir = bool(mapa_persistir or links_alerta)
+    if persistir and planilla.get("id"):
         try:
             prev_meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
             links_new = []
             for lk in links:
                 entry = dict(lk) if isinstance(lk, dict) else {}
                 try:
-                    rid_k = str(int(entry.get("reporte_id")))
+                    rid_k = int(entry.get("reporte_id"))
                 except (TypeError, ValueError):
                     links_new.append(entry)
                     continue
-                if rid_k in mapa_persistir:
-                    entry["registro_numeros_por_codigo"] = mapa_persistir[rid_k]
+                if str(rid_k) in mapa_persistir:
+                    entry["registro_numeros_por_codigo"] = mapa_persistir[str(rid_k)]
+                if rid_k in links_alerta:
+                    entry = marcar_alerta_link(entry, now)
                 links_new.append(entry)
             new_meta = {**prev_meta, "sicoe_reportes": links_new}
             supabase.table("topo_planillas_tuberia").update({
                 "meta_cabecera": new_meta,
-                "updated_at": _now(),
+                "updated_at": now,
             }).eq("id", planilla["id"]).eq("contrato_id", int(contrato_id)).execute()
         except Exception:
             logger.exception("persist mapa codigos tras sync planilla=%s", planilla.get("id"))
 
-    return {"updated": updated, "errors": errors}
+    return {"updated": updated, "errors": errors, "alerta": bool(links_alerta)}
 
 
 def _coords_wgs_planilla(p: dict) -> tuple[Optional[float], Optional[float]]:
@@ -2101,8 +2388,9 @@ def crear_reporte_sicoe_desde_planilla(
     current_user=Depends(get_current_user),
 ):
     """
-    Crea so_reportes + so_registros (sin ítem) a partir de la planilla.
-    Reutiliza el mismo modelo/estructura que el wizard SICOE Obra.
+    Crea so_reportes + so_registros con el ítem ya asignado en la planilla.
+    El reporte queda en «No Revisados» (pestaña Ítem/Registros). Los niveles
+    siguen en «No Revisado» hasta el cierre de la planilla.
     """
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar", contrato_id)
@@ -2181,6 +2469,37 @@ def crear_reporte_sicoe_desde_planilla(
             "No hay líneas de cantidad/descuento con valor ≠ 0 para generar registros.",
         )
 
+    from topografia_planilla_sicoe_enlace import (
+        ESTADO_REPORTE_CON_ITEM,
+        campos_item_en_registro,
+        construir_enlace,
+        item_capitulo_distinto,
+        item_de_linea,
+        items_desde_meta,
+        lineas_sin_item,
+        mensaje_faltan_items,
+        normalizar_items_por_linea,
+    )
+    meta_items = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    if body.sicoe_items_por_linea is not None:
+        _assert_puede_cambiar_items(current_user, contrato_id, meta_items, {
+            "sicoe_items_por_linea": body.sicoe_items_por_linea,
+        })
+        items_cobro = normalizar_items_por_linea(body.sicoe_items_por_linea)
+    else:
+        items_cobro = items_desde_meta(meta_items)
+    faltan_item = lineas_sin_item(lineas, items_cobro, p.get("tipo"))
+    if faltan_item:
+        raise HTTPException(422, mensaje_faltan_items(faltan_item))
+    for line in lineas:
+        item_line = item_de_linea(line, items_cobro, p.get("tipo"))
+        if item_line and item_capitulo_distinto(item_line, capitulo):
+            raise HTTPException(
+                422,
+                f"El ítem {item_line.get('item_numero')} pertenece al capítulo "
+                f"«{item_line.get('capitulo')}» y el reporte usa «{capitulo}».",
+            )
+
     lat, lng = _coords_wgs_planilla(p)
     # costado del maestro PK («Derecho») → catálogo so_reportes.margen («Derecha»)
     margen = normalizar_margen_sicoe(p.get("costado"))
@@ -2239,7 +2558,7 @@ def crear_reporte_sicoe_desde_planilla(
         "coord_lat": lat,
         "coord_lng": lng,
         "tipo_localizacion": "unica",
-        "estado": "Sin Asignar Ítem",
+        "estado": ESTADO_REPORTE_CON_ITEM,
         "contrato_id": contrato_id,
         "numero_reporte": numero,
         "creado_por": uid,
@@ -2314,6 +2633,8 @@ def crear_reporte_sicoe_desde_planilla(
         # Solo Longitud/Ancho/Espesor como dims; cantidad (factor) vacío.
         # cantidad_total ya viene del Resumen (2 dec) — no recalcular PRODUCT.
         data["cantidad"] = None
+        item_line = item_de_linea(line, items_cobro, p.get("tipo")) or {}
+        data.update(campos_item_en_registro(line, item_line))
         if data.get("costo_directo") is not None:
             data["costo_directo"] = redondear_costo_directo_sicoe(data.get("costo_directo"))
         data.update({
@@ -2378,6 +2699,43 @@ def crear_reporte_sicoe_desde_planilla(
     inserted = supabase_execute(
         lambda: supabase.table("so_registros").insert(rows_ins).execute().data
     ) or []
+    by_num: dict[int, dict] = {}
+    for row in inserted:
+        try:
+            by_num[int(row.get("numero_registro"))] = row
+        except (TypeError, ValueError):
+            continue
+    if any(not (row or {}).get("id") for row in by_num.values()) or len(by_num) != len(numeros):
+        try:
+            fetched = (
+                supabase.table("so_registros")
+                .select("id,numero_registro")
+                .eq("contrato_id", int(contrato_id))
+                .eq("reporte_id", reporte_id)
+                .execute()
+                .data
+            ) or []
+            for row in fetched:
+                try:
+                    by_num[int(row.get("numero_registro"))] = {
+                        **(by_num.get(int(row.get("numero_registro"))) or {}),
+                        **row,
+                    }
+                except (TypeError, ValueError):
+                    continue
+        except Exception:
+            logger.exception("leer ids de registros del reporte %s", reporte_id)
+    enlaces_planilla: list[dict[str, Any]] = []
+    for line, num in zip(lineas, numeros):
+        item_line = item_de_linea(line, items_cobro, p.get("tipo")) or {}
+        row = by_num.get(int(num)) or {}
+        try:
+            rid = int(row["id"]) if row.get("id") is not None else None
+        except (TypeError, ValueError, KeyError):
+            rid = None
+        enlaces_planilla.append(construir_enlace(
+            line, item_line, registro_id=rid, numero_registro=int(num),
+        ))
 
     # 3) Vínculo cruzado en meta_cabecera de la planilla
     prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
@@ -2389,12 +2747,13 @@ def crear_reporte_sicoe_desde_planilla(
         "capitulo": capitulo,
         "n_registros": len(rows_ins),
         "registro_numeros_por_codigo": mapa_codigos,
+        "enlaces": enlaces_planilla,
         "n_puntos_topograficos": n_puntos,
         "n_fotos_sincronizadas": n_fotos,
         "esquema_adjunto": bool(grafico_url),
     }
     links.append(link)
-    new_meta = {**prev_meta, "sicoe_reportes": links}
+    new_meta = {**prev_meta, "sicoe_reportes": links, "sicoe_items_por_linea": items_cobro}
     supabase.table("topo_planillas_tuberia").update({
         "meta_cabecera": new_meta,
         "updated_at": _now(),
@@ -2921,6 +3280,7 @@ def _ejecutar_cierre_planilla_tuberia(
     if estado_act not in ("borrador", "cerrado"):
         # Ya validada u otro estado: no re-cerrar.
         if estado_act == "validado" and estado_final == "validado":
+            _sellar_registros_enlazados_planilla(contrato_id, p, current_user)
             return p
         raise HTTPException(422, "Solo se cierran planillas en borrador (o cerrado previo a sello).")
     if estado_act == "borrador":
@@ -2995,7 +3355,82 @@ def _ejecutar_cierre_planilla_tuberia(
         current_user,
         {"consolidado": consol, "estado": estado_out},
     )
+    if estado_out == "validado":
+        _sellar_registros_enlazados_planilla(
+            contrato_id, {**p, **update}, current_user,
+        )
     return {**p, **update}
+
+
+def _sellar_registros_enlazados_planilla(contrato_id: int, planilla: dict, current_user) -> int:
+    """Sello de validación de cantidades al cerrar por interventoría.
+
+    Reutiliza niveles activos → Aprobado y ``_sicoe_aplicar_bloqueado_si_nivel_es_maximo``.
+    Solo los registros del enlace. Idempotente si ya están en el nivel máximo.
+    """
+    from topografia_planilla_sicoe_enlace import (
+        enlaces_de_meta,
+        limpiar_alerta_link,
+        payload_sellado_registro,
+    )
+    meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+    enlaces = enlaces_de_meta(meta)
+    if not enlaces:
+        return 0
+    try:
+        from main import (
+            _get_nivel_numero_maximo_contrato,
+            _get_niveles_activos_contrato,
+            _registro_nivel_max_aprobado,
+            _sicoe_aplicar_bloqueado_si_nivel_es_maximo,
+        )
+    except ImportError:
+        logger.exception("sellado: helpers SICOE no disponibles")
+        return 0
+    niveles = _get_niveles_activos_contrato(int(contrato_id)) or [1, 2, 3]
+    max_n = _get_nivel_numero_maximo_contrato(int(contrato_id))
+    now = _now()
+    uid = _uid(current_user)
+    sellados = 0
+    for en in enlaces:
+        try:
+            rid = int(en.get("registro_id"))
+        except (TypeError, ValueError):
+            continue
+        reg = _registro_por_id(contrato_id, rid)
+        if not reg or _registro_nivel_max_aprobado(reg, int(contrato_id)):
+            continue
+        update = payload_sellado_registro(niveles, uid, now)
+        _sicoe_aplicar_bloqueado_si_nivel_es_maximo(
+            int(contrato_id), int(max_n), update, "Aprobado",
+        )
+        supabase.table("so_registros").update(update).eq("id", rid).eq(
+            "contrato_id", int(contrato_id),
+        ).execute()
+        cambios = [
+            {"campo": k, "anterior": reg.get(k), "nuevo": v}
+            for k, v in update.items()
+            if reg.get(k) != v and (str(k).endswith("_estado") or k == "bloqueado")
+        ]
+        _log_sync_registro(
+            current_user, contrato_id, rid, cambios,
+            origen_cambio="planilla",
+            planilla_id=planilla.get("id"),
+            reporte_id=None,
+            item_numero=en.get("item_numero"),
+        )
+        sellados += 1
+    links = _sicoe_links_from_meta(meta)
+    if links and planilla.get("id"):
+        limpios = [limpiar_alerta_link(lk) if isinstance(lk, dict) else lk for lk in links]
+        try:
+            supabase.table("topo_planillas_tuberia").update({
+                "meta_cabecera": {**meta, "sicoe_reportes": limpios},
+                "updated_at": now,
+            }).eq("id", planilla["id"]).eq("contrato_id", int(contrato_id)).execute()
+        except Exception:
+            logger.exception("limpiar alerta sync al sellar planilla=%s", planilla.get("id"))
+    return sellados
 
 
 def _aplicar_validacion_planilla_tuberia(
@@ -3181,11 +3616,152 @@ def validar_nivel2(
     return _aplicar_validacion_planilla_tuberia(contrato_id, planilla_id, p, 2, body, current_user)
 
 
+def sincronizar_planilla_desde_registro_sicoe(
+    contrato_id: int,
+    registro_id: int,
+    prev_row: dict,
+    row: dict,
+    current_user=None,
+) -> dict[str, Any]:
+    """Empuja dimensiones y cantidad del registro enlazado hacia la planilla abierta.
+
+    No reescribe el registro (evita el bucle con el PUT). Un registro creado a
+    mano no está en ``enlaces`` y no se toca. Un registro sellado tampoco.
+    """
+    if _registro_sellado_sync(prev_row, contrato_id) or _registro_sellado_sync(row, contrato_id):
+        return {"updated": False, "reason": "sellado"}
+    from topografia_planilla_sicoe_enlace import (
+        codigo_manual_de_origen,
+        detalle_sync_log,
+        diff_campos_sync,
+        enlaces_de_meta,
+        override_desde_registro,
+        patch_manual_desde_override,
+        snapshots_de_diff,
+    )
+    from topografia_planilla_sicoe_enlace import _natural_de
+    cambios = diff_campos_sync(prev_row or {}, {
+        "longitud": (row or {}).get("longitud"),
+        "ancho": (row or {}).get("ancho"),
+        "espesor": (row or {}).get("espesor"),
+        "cantidad_total": (row or {}).get("cantidad_total"),
+    })
+    if not cambios:
+        return {"updated": False, "reason": "sin_cambios"}
+    try:
+        planillas = (
+            supabase.table("topo_planillas_tuberia")
+            .select("id,estado,nivel2_estado,meta_cabecera,version")
+            .eq("contrato_id", int(contrato_id))
+            .order("updated_at", desc=True)
+            .limit(200)
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        logger.exception("buscar planilla del registro %s", registro_id)
+        return {"updated": False, "reason": "error"}
+    target = None
+    enlace = None
+    for p in planillas:
+        if _planilla_tuberia_sellada(p):
+            continue
+        for en in enlaces_de_meta(p.get("meta_cabecera")):
+            try:
+                if int(en.get("registro_id")) == int(registro_id):
+                    target = p
+                    enlace = en
+                    break
+            except (TypeError, ValueError):
+                continue
+        if target:
+            break
+    if not target or not enlace:
+        return {"updated": False, "reason": "sin_enlace"}
+    full = _row("topo_planillas_tuberia", id=target["id"], contrato_id=contrato_id) or target
+    if _planilla_tuberia_sellada(full):
+        return {"updated": False, "reason": "sellada"}
+    origen = str(enlace.get("origen") or "")
+    try:
+        natural_calc = _calcular(full, _filas(full["id"]), _descuentos(full["id"]), aplicar_dims=False)
+    except HTTPException:
+        natural_calc = {}
+    natural = _natural_de(natural_calc, origen) if natural_calc else {}
+    ov = override_desde_registro(row, signo=int(enlace.get("signo") or 1), natural=natural)
+    meta = dict(full.get("meta_cabecera") or {}) if isinstance(full.get("meta_cabecera"), dict) else {}
+    dims = dict(meta.get("sicoe_dims_por_linea") or {})
+    dims[origen] = ov
+    meta["sicoe_dims_por_linea"] = dims
+    cod_manual = codigo_manual_de_origen(origen)
+    if cod_manual:
+        if cod_manual.startswith("DESC_"):
+            meta["descuentos_manuales"] = patch_manual_desde_override(
+                meta.get("descuentos_manuales"), cod_manual, ov,
+            )
+        else:
+            meta["cantidades_manuales"] = patch_manual_desde_override(
+                meta.get("cantidades_manuales"), cod_manual, ov,
+            )
+    now = _now()
+    supabase.table("topo_planillas_tuberia").update({
+        "meta_cabecera": meta,
+        "version": int(full.get("version") or 1) + 1,
+        "updated_at": now,
+    }).eq("id", full["id"]).eq("contrato_id", int(contrato_id)).execute()
+    antes, despues = snapshots_de_diff(cambios)
+    tabla = "resumen_cantidades" if origen.startswith("cantidades:") else "descuentos_especificos"
+    cod = origen.split(":")[-1] or origen
+    _audit(
+        contrato_id,
+        full["id"],
+        "SINCRONIZAR",
+        current_user,
+        detalle_sync_log(
+            cambios,
+            origen_cambio="reporte",
+            planilla_id=full.get("id"),
+            reporte_id=(row or {}).get("reporte_id"),
+            registro_id=registro_id,
+            item_numero=enlace.get("item_numero"),
+        ),
+        valor_anterior={tabla: {cod: antes}},
+        valor_nuevo={tabla: {cod: despues}},
+    )
+    return {"updated": True, "planilla_id": full.get("id")}
+
+
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/reabrir")
 def reabrir(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+    if (p.get("estado") or "").lower() not in ("cerrado", "validado"):
+        raise HTTPException(422, "La planilla no está cerrada.")
+    # Desarrollador: la reapertura de pruebas no toca registros sellados.
     if not _es_desarrollador(current_user):
-        raise HTTPException(403, "Solo Desarrollador puede reabrir planillas.")
+        _perm(current_user, "editar", contrato_id)
+        from topografia_planilla_sicoe_enlace import enlaces_de_meta, puede_reabrir_para_editar
+        enlaces = enlaces_de_meta(p.get("meta_cabecera"))
+        if not enlaces:
+            raise HTTPException(403, "Solo Desarrollador puede reabrir planillas.")
+        try:
+            from main import _get_nivel_maximo_contrato
+            campo = _get_nivel_maximo_contrato(int(contrato_id))
+        except ImportError:
+            campo = "nivel3_estado"
+        regs = []
+        for en in enlaces:
+            try:
+                rid = int(en.get("registro_id"))
+            except (TypeError, ValueError):
+                continue
+            row = _registro_por_id(contrato_id, rid)
+            if row:
+                regs.append(row)
+        ok, msg = puede_reabrir_para_editar(regs, campo)
+        if not ok:
+            raise HTTPException(422, msg)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")

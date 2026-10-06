@@ -16,6 +16,7 @@ import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
 import PlanillaTuberiaAsociarReporteModal from './PlanillaTuberiaAsociarReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
+import PlanillaTuberiaItemCobro from './PlanillaTuberiaItemCobro'
 import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
 import TopoTrazabilidadButton, { ENTIDAD_PLANILLA_TUBERIA } from '../TopoTrazabilidadButton'
 import {
@@ -26,6 +27,11 @@ import {
   esCodigoOtros,
   esCodigoDescOtros,
 } from './planillaTuberiaCalc'
+import { aplicarDimsEnlace, lineasSinItem, padreDeDescuento } from './planillaTuberiaItemSicoe'
+import {
+  usuarioPuedeCrearRegistrosSicoe,
+  usuarioPuedeEditarRegistrosSicoe,
+} from '../../../utils/permisosContrato'
 import {
   CALC_CELL_BG,
   RELACIONES_ATRAQUE,
@@ -70,6 +76,7 @@ import {
   desgloseAtraqueAlcantarilla,
   pasosDesgloseAtraque,
   notifyPlanillaTuberiaAlerta,
+  notifyAlertaSyncCantidades,
 } from './planillaTuberiaUtils'
 import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
@@ -140,6 +147,10 @@ export default function PlanillaTuberiaForm({
   const { isCompact } = useTopoViewport()
   const { api, downloadPdf, downloadExcel } = useTopografiaApi(contratoId, token)
   const esDev = esDesarrolladorTopo(usuario)
+  const puedeAsignarItem = (
+    usuarioPuedeCrearRegistrosSicoe(usuario, contratoId)
+    || usuarioPuedeEditarRegistrosSicoe(usuario, contratoId)
+  )
   const editablePerm = puede(permisos, 'editar') && !modoSoloLectura
 
   const [detalle, setDetalle] = useState(null)
@@ -179,6 +190,8 @@ export default function PlanillaTuberiaForm({
   const [descManuales, setDescManuales] = useState([])
   /** Fotos por línea de cantidad/descuento (meta_cabecera.evidencias_fotograficas). */
   const [evidencias, setEvidencias] = useState(() => normalizarEvidenciasFotograficas(null))
+  const [itemsPorLinea, setItemsPorLinea] = useState({})
+  const [dimsSync, setDimsSync] = useState({})
   /** Contenedor del editor: Enter avanza como Tab en cabecera/cartera/cantidades/descuentos. */
   const editorRef = useRef(null)
 
@@ -245,6 +258,16 @@ export default function PlanillaTuberiaForm({
       (descSrc || []).filter((d) => esCodigoDescOtros(d?.codigo)),
     ))
     setEvidencias(normalizarEvidenciasFotograficas(meta.evidencias_fotograficas))
+    setItemsPorLinea(
+      meta.sicoe_items_por_linea && typeof meta.sicoe_items_por_linea === 'object'
+        ? meta.sicoe_items_por_linea
+        : {},
+    )
+    setDimsSync(
+      meta.sicoe_dims_por_linea && typeof meta.sicoe_dims_por_linea === 'object'
+        ? meta.sicoe_dims_por_linea
+        : {},
+    )
   }, [])
 
   // Embebido SICOE: aplicar detalle de la planilla de origen (misma UI, solo lectura).
@@ -341,6 +364,7 @@ export default function PlanillaTuberiaForm({
       ...prev,
       cantidades_manuales: cantManuales,
       descuentos_manuales: descManuales,
+      sicoe_items_por_linea: itemsPorLinea,
     }
     const tipoU = String(params.tipo || '').toUpperCase()
     if (tipoU === 'ALCANTARILLA') {
@@ -574,10 +598,14 @@ export default function PlanillaTuberiaForm({
       const filasPayload = payloadFilas(filas, params.tipo)
       if (!filasPayload.length) {
         // Solo cabecera/tramo (sin filas de campo).
-        aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/params`, {
+        const resCab = await api(`/planillas-tuberia/${planilla.id}/params`, {
           method: 'PUT',
           body: JSON.stringify({ version, ...cabecera }),
-        }))
+        })
+        aplicarDetalle(resCab)
+        if (Number(resCab?.sicoe_sync?.updated || 0) > 0 || resCab?.sicoe_sync?.alerta) {
+          notifyAlertaSyncCantidades(contratoId)
+        }
         setMsg('Planilla guardada (cabecera / tramo).')
         await cargarLista()
         return
@@ -606,6 +634,7 @@ export default function PlanillaTuberiaForm({
       }
       aplicarDetalle(res)
       const syncN = Number(res?.sicoe_sync?.updated || 0)
+      if (syncN > 0 || res?.sicoe_sync?.alerta) notifyAlertaSyncCantidades(contratoId)
       const syncTxt = syncN > 0
         ? ` Cantidades sincronizadas al reporte SICOE (${syncN} registro(s)).`
         : ''
@@ -856,8 +885,11 @@ export default function PlanillaTuberiaForm({
     })
   }, [filas, params, cantManuales, descManuales, planilla?.meta_cabecera])
 
-  /** Preferir preview local (completo o parcial con perfil); si falla, último del servidor. */
-  const calculoVista = calculoLocal || calculo
+  /** Preferir preview local; las dims empujadas desde el reporte se superponen si la base no cambió. */
+  const calculoVista = useMemo(
+    () => aplicarDimsEnlace(calculoLocal || calculo, dimsSync),
+    [calculoLocal, calculo, dimsSync],
+  )
   const previewParcial = !!calculoLocal?.preview_parcial
 
   const absExtremos = useMemo(
@@ -1146,6 +1178,16 @@ export default function PlanillaTuberiaForm({
                     setMsg('')
                     return
                   }
+                  const faltanItem = lineasSinItem(lineasReporteSicoe, itemsPorLinea)
+                  if (faltanItem.length) {
+                    const lista = faltanItem.slice(0, 8).map((f) => f.nombre || f.origen).join(', ')
+                    const extra = faltanItem.length > 8 ? ` y ${faltanItem.length - 8} más` : ''
+                    setErr(
+                      `Asigne el ítem de cobro en cada línea con cantidad antes de crear el reporte: ${lista}${extra}.`,
+                    )
+                    setMsg('')
+                    return
+                  }
                   setErr('')
                   setMsg('')
                   setCrearReporteOpen(true)
@@ -1229,6 +1271,11 @@ export default function PlanillaTuberiaForm({
                 </span>
               )}
             </span>
+          )}
+          {!esDev && sellada && puede(permisos, 'editar') && linksSicoe.some((l) => Array.isArray(l.enlaces) && l.enlaces.length > 0) && (
+            <AccionIcono title="Reabrir planilla" disabled={busy} onClick={reabrir}>
+              <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
+            </AccionIcono>
           )}
           {esDev && sellada && (
             <AccionIcono title="Reabrir (Dev)" disabled={busy} onClick={reabrir}>
@@ -1657,14 +1704,15 @@ export default function PlanillaTuberiaForm({
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
             <tr>
-              {['Item', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Descontar de', 'Foto'].map((h, i) => (
+              {['Item', 'Ítem cobro', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Descontar de', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
                     ...(i === 0 ? thResumenItem : thResumenCalc),
                     background: '#4472C4',
                     color: '#fff',
-                    ...(i === 0 ? { textAlign: 'left' } : null),
+                    ...(i === 0 || h === 'Ítem cobro' ? { textAlign: 'left' } : null),
+                    ...(h === 'Ítem cobro' ? { minWidth: 150 } : null),
                     ...(h === 'Foto' || h === 'Descontar de' ? { width: h === 'Foto' ? 56 : 130, textAlign: 'center' } : null),
                     ...(h === 'Und.' ? { width: 44, textAlign: 'center' } : null),
                   }}
@@ -1733,6 +1781,23 @@ export default function PlanillaTuberiaForm({
                         )}
                       </span>
                     ) : displayNombreCant(n)}
+                  </td>
+                  <td style={{ ...tdResumenItem, minWidth: 150 }}>
+                    <PlanillaTuberiaItemCobro
+                      contratoId={contratoId}
+                      token={token}
+                      item={itemsPorLinea[`cantidades:${String(n.codigo || '').toUpperCase()}`]}
+                      disabled={!editable || !puedeAsignarItem}
+                      tituloPermiso={
+                        puedeAsignarItem
+                          ? ''
+                          : 'Se requiere permiso de crear o editar el reporte de cantidades'
+                      }
+                      onSelect={(item) => setItemsPorLinea((prev) => ({
+                        ...prev,
+                        [`cantidades:${String(n.codigo || '').toUpperCase()}`]: item,
+                      }))}
+                    />
                   </td>
                   <td style={{ ...tdResumenCalc, textAlign: 'center' }}>{n.unidad || ''}</td>
                   {['long', 'ancho', 'espesor'].map((k) => (
@@ -1848,14 +1913,15 @@ export default function PlanillaTuberiaForm({
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Área', 'Cantidad', 'Foto'].map((h, i) => (
+              {['Item', 'Ítem cobro', 'Long', 'Ancho', 'Área', 'Cantidad', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
                     ...(i === 0 ? thResumenItem : thResumenCalc),
                     background: '#EA4296',
                     color: '#fff',
-                    ...(i === 0 ? { textAlign: 'left' } : null),
+                    ...(i === 0 || h === 'Ítem cobro' ? { textAlign: 'left' } : null),
+                    ...(h === 'Ítem cobro' ? { minWidth: 150 } : null),
                     ...(h === 'Foto' ? { width: 56, textAlign: 'center' } : null),
                   }}
                 >
@@ -1922,6 +1988,12 @@ export default function PlanillaTuberiaForm({
                         )}
                       </span>
                     ) : displayNombreDesc(d)}
+                  </td>
+                  <td style={{ ...tdResumenItem, minWidth: 150 }}>
+                    <PlanillaTuberiaItemCobro
+                      heredado
+                      item={itemsPorLinea[padreDeDescuento(d.codigo, d.item_cant_codigo)] || null}
+                    />
                   </td>
                   {['long', 'ancho', 'espesor'].map((k) => (
                     <td key={k} style={editDims ? { ...tdResumenCalc, padding: 0 } : tdResumenCalc}>
@@ -2408,6 +2480,7 @@ export default function PlanillaTuberiaForm({
         absInicioDefault={absExtremos.absInicio}
         absFinalDefault={absExtremos.absFinal}
         lineasPreview={lineasReporteSicoe}
+        itemsPorLinea={itemsPorLinea}
         logoUrl={usuario?.logo_contratista || null}
         contratoMeta={{
           numero: usuario?.contrato_numero || usuario?.numero_contrato || null,
@@ -2442,7 +2515,7 @@ export default function PlanillaTuberiaForm({
           if (res?.planilla) aplicarDetalle(res.planilla)
           const num = res?.numero_reporte
           setMsg(num != null
-            ? `Reporte SICOE #${num} creado con ${res?.n_registros || 0} registro(s) en Sin Asignar Ítem.`
+            ? `Reporte SICOE #${num} creado con ${res?.n_registros || 0} registro(s) en Ítem/Registros.`
             : 'Reporte SICOE creado.')
           if (res?.reporte_id != null) {
             notifyPlanillaTopoGrillaChanged({

@@ -246,7 +246,8 @@ import {
   sicoeSubcontratistaIdDeRegistro,
 } from './modules/sicoe-obra/sicoeRegistroSubcontratista'
 import { permisosProgramacionObra } from './progObraPermisos'
-import { permisosTopografia } from './utils/permisosContrato'
+import { permisosTopografia, usuarioPuedeEditarRegistrosSicoe } from './utils/permisosContrato'
+import { SICOE_ALERTA_SYNC_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
@@ -18932,6 +18933,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [alertaPlanillasSinReporte, setAlertaPlanillasSinReporte] = useState(0)
+  const [alertaSyncCantidades, setAlertaSyncCantidades] = useState(0)
   const [isMobileHeader, setIsMobileHeader] = useState(() => {
     if (typeof window === 'undefined') return false
     const w = window.innerWidth
@@ -20745,6 +20747,62 @@ const [navReporteId, setNavReporteId] = useState(null)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [tienePermisoTopografia, usuario?.contrato_id, API_URL, moduloActivo])
+  const puedeEditarReporteCantidades = usuarioPuedeEditarRegistrosSicoe(usuario, usuario?.contrato_id)
+  useEffect(() => {
+    const cid = usuario?.contrato_id
+    if (!puedeEditarReporteCantidades || cid == null || cid === '') {
+      setAlertaSyncCantidades(0)
+      return undefined
+    }
+    let cancel = false
+    const cargar = async () => {
+      try {
+        const tok = getToken()
+        const res = await fetch(`${API_URL}/topografia/${cid}/planillas-tuberia/alerta-sync-cantidades`, {
+          headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+        })
+        if (cancel) return
+        if (!res.ok) {
+          setAlertaSyncCantidades(0)
+          return
+        }
+        const data = await res.json()
+        if (!cancel) setAlertaSyncCantidades(Number(data?.total) || 0)
+      } catch {
+        if (!cancel) setAlertaSyncCantidades(0)
+      }
+    }
+    void cargar()
+    const onCambio = (ev) => {
+      const detailCid = ev?.detail?.contratoId
+      if (detailCid != null && Number(detailCid) !== Number(cid)) return
+      void cargar()
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void cargar()
+    }
+    window.addEventListener(SICOE_ALERTA_SYNC_EVENT, onCambio)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancel = true
+      window.removeEventListener(SICOE_ALERTA_SYNC_EVENT, onCambio)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [puedeEditarReporteCantidades, usuario?.contrato_id, API_URL])
+  useEffect(() => {
+    if (moduloActivo !== 'sicoe_obra') return undefined
+    const cid = usuario?.contrato_id
+    if (!puedeEditarReporteCantidades || cid == null || cid === '') return undefined
+    let cancel = false
+    const tok = getToken()
+    fetch(`${API_URL}/topografia/${cid}/planillas-tuberia/alerta-sync-cantidades/vista`, {
+      method: 'POST',
+      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+    }).then(() => {
+      if (!cancel) setAlertaSyncCantidades(0)
+    }).catch(() => {})
+    return () => { cancel = true }
+  }, [moduloActivo, puedeEditarReporteCantidades, usuario?.contrato_id, API_URL])
   const puedeCrearTopografia = topoPermisos.crear
   const puedeEditarTopografia = topoPermisos.editar
   const puedeValidarTopografia = topoPermisos.validar
@@ -21434,11 +21492,17 @@ const [navReporteId, setNavReporteId] = useState(null)
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
           ].filter(([,,, visible]) => visible).map(([key, icon, label]) => {
             const alertaTopo = key === 'topografia' ? alertaPlanillasSinReporte : 0
+            const alertaSicoe = key === 'sicoe_obra' ? alertaSyncCantidades : 0
+            const alertaIcono = alertaTopo || alertaSicoe
             const tituloAlertaTopo = alertaTopo > 0
               ? `${alertaTopo} planilla${alertaTopo === 1 ? '' : 's'} de tubería sin asociar a un reporte de SICOE Obra`
               : ''
+            const tituloAlertaSicoe = alertaSicoe > 0
+              ? `${alertaSicoe} planilla${alertaSicoe === 1 ? '' : 's'} de tubería modificó un reporte de cantidades`
+              : ''
+            const tituloAlerta = tituloAlertaTopo || tituloAlertaSicoe
             return (
-            <button key={key} title={tituloAlertaTopo || undefined} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
+            <button key={key} title={tituloAlerta || undefined} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
               border: 'none',
               borderLeft: moduloActivo === key ? `3px solid ${t.primary}` : '3px solid transparent',
@@ -21449,8 +21513,8 @@ const [navReporteId, setNavReporteId] = useState(null)
               fontSize: 'var(--cc-sm)', whiteSpace: 'nowrap', width: '100%',
               transition: 'all 0.15s', textAlign: 'left',
             }}>
-              {alertaTopo > 0 ? (
-                <IconoModuloConAlerta icon={icon} total={alertaTopo} title={tituloAlertaTopo} ring={t.headerBg} />
+              {alertaIcono > 0 ? (
+                <IconoModuloConAlerta icon={icon} total={alertaIcono} title={tituloAlerta} ring={t.headerBg} />
               ) : (
                 <span style={{ fontSize:'var(--cc-lg)', lineHeight:1, flexShrink:0 }}>{icon}</span>
               )}
@@ -21499,14 +21563,20 @@ const [navReporteId, setNavReporteId] = useState(null)
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
             ].filter(([, , , visible]) => visible).map(([key, icon, label]) => {
               const alertaTopo = key === 'topografia' ? alertaPlanillasSinReporte : 0
+              const alertaSicoe = key === 'sicoe_obra' ? alertaSyncCantidades : 0
+              const alertaIcono = alertaTopo || alertaSicoe
               const tituloAlertaTopo = alertaTopo > 0
                 ? `${alertaTopo} planilla${alertaTopo === 1 ? '' : 's'} de tubería sin asociar a un reporte de SICOE Obra`
                 : ''
+              const tituloAlertaSicoe = alertaSicoe > 0
+                ? `${alertaSicoe} planilla${alertaSicoe === 1 ? '' : 's'} de tubería modificó un reporte de cantidades`
+                : ''
+              const tituloAlerta = tituloAlertaTopo || tituloAlertaSicoe
               return (
               <button
                 key={key}
                 type="button"
-                title={tituloAlertaTopo || undefined}
+                title={tituloAlerta || undefined}
                 onClick={() => setModuloActivo(key)}
                 style={{
                   flex: '0 0 auto',
@@ -21522,8 +21592,8 @@ const [navReporteId, setNavReporteId] = useState(null)
                   minHeight: 40,
                 }}
               >
-                {alertaTopo > 0 ? (
-                  <IconoModuloConAlerta icon={icon} total={alertaTopo} title={tituloAlertaTopo} ring={t.bgCard} />
+                {alertaIcono > 0 ? (
+                  <IconoModuloConAlerta icon={icon} total={alertaIcono} title={tituloAlerta} ring={t.bgCard} />
                 ) : icon}{' '}{label}
               </button>
               )

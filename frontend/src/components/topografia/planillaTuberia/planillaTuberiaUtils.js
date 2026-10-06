@@ -701,7 +701,7 @@ export function abscisasExtremosPlanilla(calculo, filas = []) {
 export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
   const displayNeto = typeof opts.displayNeto === 'function' ? opts.displayNeto : null
   const out = []
-  const push = (scope, codigo, nombre, unidad, cantidad) => {
+  const push = (scope, codigo, nombre, unidad, cantidad, itemCant) => {
     const n = Number(cantidad)
     if (!Number.isFinite(n) || Math.abs(n) <= 1e-9) return
     out.push({
@@ -710,6 +710,7 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
       nombre: nombre || codigo,
       unidad: unidad || '',
       cantidad: Math.round(n * 100) / 100,
+      item_cant_codigo: itemCant ? String(itemCant).trim().toUpperCase() : null,
     })
   }
   for (const n of calculo?.netos || []) {
@@ -725,12 +726,12 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
     const cant = displayNeto && d.editable_dims
       ? (typeof opts.displayCantDesc === 'function' ? opts.displayCantDesc(d) : d.cantidad)
       : d.cantidad
-    push('descuentos', d.codigo, d.nombre, d.unidad || 'm³', cant)
+    push('descuentos', d.codigo, d.nombre, d.unidad || 'm³', cant, d.item_cant_codigo)
   }
   // Descuentos de volumen (mismo origen que backend → descuentos:CODIGO).
   for (const d of calculo?.descuentos_volumen_detalle || calculo?.descuentos_altura_detalle || []) {
     if (!d?.codigo) continue
-    push('descuentos', d.codigo, d.nombre || d.codigo, d.unidad || 'm³', d.cantidad)
+    push('descuentos', d.codigo, d.nombre || d.codigo, d.unidad || 'm³', d.cantidad, d.item_cant_codigo || d.campo)
   }
   return out
 }
@@ -782,6 +783,18 @@ export function nombreArchivoPlanillaTuberia(links, { extension = 'pdf', plantil
 
 /** Avisa al ícono de Topografía que el conjunto de planillas sin reporte pudo cambiar. */
 export const PLANILLA_TUBERIA_ALERTA_EVENT = 'topo-planilla-tuberia-alerta'
+export const SICOE_ALERTA_SYNC_EVENT = 'sicoe-planilla-sync-alerta'
+
+export function notifyAlertaSyncCantidades(contratoId) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
+  try {
+    window.dispatchEvent(new CustomEvent(SICOE_ALERTA_SYNC_EVENT, {
+      detail: { contratoId: contratoId != null && contratoId !== '' ? Number(contratoId) : null },
+    }))
+  } catch {
+    /* noop */
+  }
+}
 
 export function notifyPlanillaTuberiaAlerta(contratoId) {
   if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
