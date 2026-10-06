@@ -2117,10 +2117,44 @@ def links_sicoe_meta_planilla(planilla: Any) -> list[dict]:
     return [dict(item) for item in raw if isinstance(item, dict) and item.get("reporte_id") is not None]
 
 
+def ids_reporte_enlazados(planillas: Any) -> list[int]:
+    """reporte_id distintos guardados en las planillas, para consultar so_reportes una sola vez."""
+    ids: list[int] = []
+    seen: set[int] = set()
+    for planilla in planillas or []:
+        for link in links_sicoe_meta_planilla(planilla):
+            try:
+                rid = int(link["reporte_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if rid in seen:
+                continue
+            seen.add(rid)
+            ids.append(rid)
+    return ids
+
+
+def reportes_sicoe_para_listado(planilla: Any, filas_so_reportes: Any) -> list[dict]:
+    """Columna «Reporte asociado»: solo el reporte que existe hoy, con su número vivo.
+
+    Misma vigencia que la alerta del ícono. No reescribe la asociación guardada.
+    """
+    links = links_sicoe_meta_planilla(planilla)
+    kept = conservar_links_sicoe_vigentes(links, filas_so_reportes)
+    out: list[dict] = []
+    for lk in kept:
+        if lk.get("reporte_id") is None:
+            continue
+        out.append({
+            "reporte_id": lk.get("reporte_id"),
+            "numero_reporte": lk.get("numero_reporte"),
+        })
+    return out
+
+
 def planilla_sin_reporte_vigente(planilla: Any, filas_so_reportes: Any) -> bool:
     """True si la planilla no tiene ningún reporte que exista hoy en so_reportes."""
-    links = links_sicoe_meta_planilla(planilla)
-    return len(conservar_links_sicoe_vigentes(links, filas_so_reportes)) == 0
+    return len(reportes_sicoe_para_listado(planilla, filas_so_reportes)) == 0
 
 
 def contar_planillas_sin_reporte_vigente(planillas: Any, filas_so_reportes: Any) -> int:
