@@ -72,6 +72,7 @@ import {
   reporteTienePlanillaTopografia,
   SICOE_PLANILLA_TOPO_GRILLA_EVENT,
 } from './modules/sicoe-obra/sicoeGrillaReportesIndicadores'
+import { PLANILLA_TUBERIA_ALERTA_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
 import {
   mensajeErrorGuardarTopografiaPortada,
   mensajeErrorRespuestaTopo,
@@ -18886,6 +18887,42 @@ function DashResumenEdadBadge({ updatedAt, t, du, dashInfoColor, dashKpiLoading,
   )
 }
 
+/** Mismo indicador rojo del buzón, sobre el ícono de un módulo. */
+function IconoModuloConAlerta({ icon, total = 0, title, ring }) {
+  const n = Number(total) || 0
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', lineHeight: 1, flexShrink: 0 }}>
+      <span style={{ fontSize: 'var(--cc-lg)', lineHeight: 1 }}>{icon}</span>
+      {n > 0 && (
+        <span
+          className="cc-buzon-badge"
+          title={title}
+          aria-label={title}
+          style={{
+            position: 'absolute',
+            top: -7,
+            right: -10,
+            background: '#EF4444',
+            color: '#fff',
+            borderRadius: 20,
+            fontSize: 10,
+            fontWeight: 700,
+            padding: '1px 4px',
+            minWidth: 14,
+            height: 14,
+            textAlign: 'center',
+            lineHeight: '12px',
+            boxShadow: ring ? `0 0 0 2px ${ring}` : undefined,
+            pointerEvents: 'none',
+          }}
+        >
+          {n > 99 ? '99+' : n}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, onRefreshContratos, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
@@ -18894,6 +18931,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDetallePpto, setDashDetallePpto] = useState(null)
   const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
+  const [alertaPlanillasSinReporte, setAlertaPlanillasSinReporte] = useState(0)
   const [isMobileHeader, setIsMobileHeader] = useState(() => {
     if (typeof window === 'undefined') return false
     const w = window.innerWidth
@@ -20664,6 +20702,49 @@ const [navReporteId, setNavReporteId] = useState(null)
   const puedeExportarProgramacionObra = progPermisos.exportar
   const topoPermisos = permisosTopografia(usuario, usuario?.contrato_id)
   const tienePermisoTopografia = topoPermisos.ver
+  useEffect(() => {
+    const cid = usuario?.contrato_id
+    if (!tienePermisoTopografia || cid == null || cid === '') {
+      setAlertaPlanillasSinReporte(0)
+      return undefined
+    }
+    let cancel = false
+    const cargar = async () => {
+      try {
+        const tok = getToken()
+        const res = await fetch(`${API_URL}/topografia/${cid}/planillas-tuberia/alerta-sin-reporte`, {
+          headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+        })
+        if (cancel) return
+        if (!res.ok) {
+          setAlertaPlanillasSinReporte(0)
+          return
+        }
+        const data = await res.json()
+        if (!cancel) setAlertaPlanillasSinReporte(Number(data?.total) || 0)
+      } catch {
+        if (!cancel) setAlertaPlanillasSinReporte(0)
+      }
+    }
+    void cargar()
+    const onCambio = (ev) => {
+      const detailCid = ev?.detail?.contratoId
+      if (detailCid != null && Number(detailCid) !== Number(cid)) return
+      void cargar()
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void cargar()
+    }
+    window.addEventListener(PLANILLA_TUBERIA_ALERTA_EVENT, onCambio)
+    window.addEventListener(SICOE_PLANILLA_TOPO_GRILLA_EVENT, onCambio)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancel = true
+      window.removeEventListener(PLANILLA_TUBERIA_ALERTA_EVENT, onCambio)
+      window.removeEventListener(SICOE_PLANILLA_TOPO_GRILLA_EVENT, onCambio)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [tienePermisoTopografia, usuario?.contrato_id, API_URL, moduloActivo])
   const puedeCrearTopografia = topoPermisos.crear
   const puedeEditarTopografia = topoPermisos.editar
   const puedeValidarTopografia = topoPermisos.validar
@@ -21351,8 +21432,13 @@ const [navReporteId, setNavReporteId] = useState(null)
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
-          ].filter(([,,, visible]) => visible).map(([key, icon, label]) => (
-            <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
+          ].filter(([,,, visible]) => visible).map(([key, icon, label]) => {
+            const alertaTopo = key === 'topografia' ? alertaPlanillasSinReporte : 0
+            const tituloAlertaTopo = alertaTopo > 0
+              ? `${alertaTopo} planilla${alertaTopo === 1 ? '' : 's'} de tubería sin asociar a un reporte de SICOE Obra`
+              : ''
+            return (
+            <button key={key} title={tituloAlertaTopo || undefined} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
               border: 'none',
               borderLeft: moduloActivo === key ? `3px solid ${t.primary}` : '3px solid transparent',
@@ -21363,10 +21449,15 @@ const [navReporteId, setNavReporteId] = useState(null)
               fontSize: 'var(--cc-sm)', whiteSpace: 'nowrap', width: '100%',
               transition: 'all 0.15s', textAlign: 'left',
             }}>
-              <span style={{ fontSize:'var(--cc-lg)', lineHeight:1, flexShrink:0 }}>{icon}</span>
+              {alertaTopo > 0 ? (
+                <IconoModuloConAlerta icon={icon} total={alertaTopo} title={tituloAlertaTopo} ring={t.headerBg} />
+              ) : (
+                <span style={{ fontSize:'var(--cc-lg)', lineHeight:1, flexShrink:0 }}>{icon}</span>
+              )}
               {menuAbierto && <span>{label}</span>}
             </button>
-          ))}
+            )
+          })}
         </div>
 
         {/* ── Contenido principal ── */}
@@ -21406,10 +21497,16 @@ const [navReporteId, setNavReporteId] = useState(null)
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'Semáforo', !esContador],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
-            ].filter(([, , , visible]) => visible).map(([key, icon, label]) => (
+            ].filter(([, , , visible]) => visible).map(([key, icon, label]) => {
+              const alertaTopo = key === 'topografia' ? alertaPlanillasSinReporte : 0
+              const tituloAlertaTopo = alertaTopo > 0
+                ? `${alertaTopo} planilla${alertaTopo === 1 ? '' : 's'} de tubería sin asociar a un reporte de SICOE Obra`
+                : ''
+              return (
               <button
                 key={key}
                 type="button"
+                title={tituloAlertaTopo || undefined}
                 onClick={() => setModuloActivo(key)}
                 style={{
                   flex: '0 0 auto',
@@ -21425,9 +21522,12 @@ const [navReporteId, setNavReporteId] = useState(null)
                   minHeight: 40,
                 }}
               >
-                {icon} {label}
+                {alertaTopo > 0 ? (
+                  <IconoModuloConAlerta icon={icon} total={alertaTopo} title={tituloAlertaTopo} ring={t.bgCard} />
+                ) : icon}{' '}{label}
               </button>
-            ))}
+              )
+            })}
           </div>
         )}
         {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && !viewportNavDrawer && (

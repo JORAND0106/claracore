@@ -35,6 +35,8 @@ from topografia_planilla_tuberia import (
     aplicar_firmas_validacion_export,
     calcular_planilla_completa,
     conservar_links_sicoe_vigentes,
+    contar_planillas_sin_reporte_vigente,
+    links_sicoe_meta_planilla,
     construir_fila_consolidado,
     html_pie_firmas_planilla,
     filtrar_descuentos_manuales_por_tipo,
@@ -989,6 +991,53 @@ def planilla_por_reporte_sicoe(
             except (TypeError, ValueError):
                 continue
     raise HTTPException(404, "No hay planilla de tubería vinculada a este reporte.")
+
+
+@router.get("/{contrato_id}/planillas-tuberia/alerta-sin-reporte")
+def alerta_planillas_sin_reporte(contrato_id: int, current_user=Depends(get_current_user)):
+    """Cuántas planillas de tubería no tienen un reporte que exista hoy en SICOE Obra.
+
+    Misma regla de vigencia que la sección «Reportes SICOE». Solo quien puede ver
+    Topografía obtiene el conteo.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver", contrato_id)
+    rows = (
+        supabase.table("topo_planillas_tuberia")
+        .select("id,meta_cabecera")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    ids: list[int] = []
+    seen: set[int] = set()
+    for planilla in rows:
+        for link in links_sicoe_meta_planilla(planilla):
+            try:
+                rid = int(link["reporte_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if rid in seen:
+                continue
+            seen.add(rid)
+            ids.append(rid)
+    vigentes: list[dict] = []
+    if ids:
+        try:
+            vigentes = (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte")
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            ) or []
+        except Exception as exc:
+            logger.exception("alerta planillas sin reporte vigente")
+            raise HTTPException(500, "No se pudo consultar los reportes vigentes") from exc
+    total = contar_planillas_sin_reporte_vigente(rows, vigentes)
+    return {"hay": total > 0, "total": total}
 
 
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}")
