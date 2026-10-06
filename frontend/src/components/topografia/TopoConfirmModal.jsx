@@ -16,6 +16,7 @@ export default function TopoConfirmModal({
   onCancel,
   danger = false,
   busy = false,
+  zIndex = 100040,
 }) {
   const t = theme || {}
   const acento = danger ? '#DC2626' : '#0E7C86'
@@ -27,7 +28,7 @@ export default function TopoConfirmModal({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100040,
+        zIndex,
         background: t.overlay || 'rgba(15, 23, 42, 0.5)',
         display: 'flex',
         alignItems: 'center',

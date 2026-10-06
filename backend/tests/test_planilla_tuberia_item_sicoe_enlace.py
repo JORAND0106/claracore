@@ -14,8 +14,10 @@ from topografia_planilla_sicoe_enlace import (
     diff_campos_sync,
     fusionar_meta_cliente,
     item_de_linea,
+    item_capitulo_distinto,
     lineas_sin_item,
     mensaje_faltan_items,
+    mensaje_item_capitulo_distinto,
     origen_padre_item,
     override_desde_registro,
     payload_sellado_registro,
@@ -152,6 +154,33 @@ class TestAsignacionYHerencia(unittest.TestCase):
         self.assertTrue(puede_asignar_item_cobro(puede_crear=True))
         self.assertTrue(puede_asignar_item_cobro(puede_editar=True))
         self.assertTrue(puede_asignar_item_cobro(es_desarrollador=True))
+
+    def test_capitulo_distinto_avisa_y_no_bloquea_el_alta(self):
+        item = {
+            "item_numero": "1.1.",
+            "capitulo": "1. ACTIVIDADES PRELIMINARES, EXPLANACIONES Y EXCAVACIONES",
+        }
+        reporte = "3. OBRAS DE ARTE (ALCANTARILLA)"
+        self.assertTrue(item_capitulo_distinto(item, reporte))
+        self.assertFalse(item_capitulo_distinto(item, item["capitulo"]))
+        self.assertFalse(item_capitulo_distinto({"item_numero": "1.1."}, reporte))
+        self.assertEqual(
+            mensaje_item_capitulo_distinto(item, reporte),
+            "El ítem 1.1. pertenece al capítulo "
+            "«1. ACTIVIDADES PRELIMINARES, EXPLANACIONES Y EXCAVACIONES» "
+            "y el reporte usa «3. OBRAS DE ARTE (ALCANTARILLA)».",
+        )
+        self.assertEqual(mensaje_item_capitulo_distinto(item, item["capitulo"]), "")
+        src = Path(__file__).resolve().parents[1].joinpath(
+            "topografia_planilla_tuberia_routes.py",
+        ).read_text(encoding="utf-8")
+        alta = src.split("def crear_reporte_sicoe_desde_planilla(", 1)[1].split(
+            "\ndef ", 1,
+        )[0]
+        self.assertNotIn("item_capitulo_distinto", alta)
+        self.assertNotIn("pertenece al capítulo", alta)
+        self.assertIn("campos_item_en_registro", alta)
+        self.assertIn("ESTADO_REPORTE_CON_ITEM", alta)
 
 
 class TestEnlaceYSync(unittest.TestCase):

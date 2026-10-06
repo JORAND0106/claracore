@@ -8,12 +8,16 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
+import TopoConfirmModal from '../TopoConfirmModal'
 import { filtrarCapitulosPorTipoPlanilla } from './planillaTuberiaCrearReporteUi'
+import { mensajeCapituloDistinto } from './planillaTuberiaItemSicoe'
 
 /** Por encima del editor de planilla (100030) y del mapa PK (100050). */
 export const CREAR_REPORTE_Z_INDEX = 100060
 /** Por encima del propio popup Crear reporte. */
 export const CREAR_REPORTE_ESQUEMA_Z_INDEX = 100070
+/** Confirmación de capítulo, por encima de Crear reporte y del esquema. */
+export const CREAR_REPORTE_CONFIRMA_Z_INDEX = 100080
 
 /**
  * Autocomplete de catálogo {id, nombre}: un solo input con sugerencias (sin dropdown aparte).
@@ -229,12 +233,14 @@ export default function PlanillaTuberiaCrearReporteModal({
   const [nodoFin, setNodoFin] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [avisoCapitulo, setAvisoCapitulo] = useState('')
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaDataUri, setEsquemaDataUri] = useState(null)
 
   useEffect(() => {
     if (!open) return
     setErr('')
+    setAvisoCapitulo('')
     setSubId('')
     setInspId('')
     setCapitulo('')
@@ -347,7 +353,7 @@ export default function PlanillaTuberiaCrearReporteModal({
   const logoSrc = String(logoUrl || '').trim()
   const meta = contratoMeta && typeof contratoMeta === 'object' ? contratoMeta : {}
 
-  const crear = async () => {
+  const crear = async (aceptaCapituloDistinto = false) => {
     if (!subId) { setErr('Seleccione subcontratista'); return }
     if (!inspId) { setErr('Seleccione inspector'); return }
     if (!String(capitulo || '').trim()) { setErr('Seleccione capítulo'); return }
@@ -356,6 +362,14 @@ export default function PlanillaTuberiaCrearReporteModal({
     if (!esquemaListo) {
       setErr('Genere y guarde el esquema del tramo (Inicio → Fin) antes de crear el reporte.')
       return
+    }
+    if (!aceptaCapituloDistinto) {
+      const aviso = mensajeCapituloDistinto(lineasPreview, itemsPorLinea, capitulo)
+      if (aviso) {
+        setErr('')
+        setAvisoCapitulo(aviso)
+        return
+      }
     }
     setBusy(true); setErr('')
     try {
@@ -375,9 +389,11 @@ export default function PlanillaTuberiaCrearReporteModal({
         esquema_data_uri: esquemaDataUri || null,
         sicoe_items_por_linea: itemsPorLinea || {},
       })
+      setAvisoCapitulo('')
       onCreated?.(res)
       onClose?.()
     } catch (e) {
+      setAvisoCapitulo('')
       setErr(e.message || 'No se pudo crear el reporte')
     } finally {
       setBusy(false)
@@ -738,7 +754,7 @@ export default function PlanillaTuberiaCrearReporteModal({
             <button
               type="button"
               disabled={busy || !puedeCrear}
-              onClick={crear}
+              onClick={() => { void crear(false) }}
               title={
                 !nodosListos
                   ? 'Indique nodo de inicio y nodo de fin'
@@ -764,6 +780,22 @@ export default function PlanillaTuberiaCrearReporteModal({
   return (
     <>
       {createPortal(overlay, document.body)}
+      {avisoCapitulo && createPortal(
+        <TopoConfirmModal
+          theme={ui?.t}
+          titulo="Capítulo del ítem"
+          confirmLabel="Sí"
+          cancelLabel="No"
+          zIndex={CREAR_REPORTE_CONFIRMA_Z_INDEX}
+          busy={busy}
+          onCancel={() => { if (!busy) setAvisoCapitulo('') }}
+          onConfirm={() => { void crear(true) }}
+        >
+          <p style={{ margin: '0 0 10px' }}>{avisoCapitulo}</p>
+          <p style={{ margin: 0, fontWeight: 700 }}>¿Desea continuar?</p>
+        </TopoConfirmModal>,
+        document.body,
+      )}
       {esquemaOpen && createPortal(
         <div style={{ position: 'fixed', inset: 0, zIndex: CREAR_REPORTE_ESQUEMA_Z_INDEX }}>
           <EsquemaEditorModal

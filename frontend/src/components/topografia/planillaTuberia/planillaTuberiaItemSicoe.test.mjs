@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url'
 import {
   aplicarDimsEnlace,
   etiquetaItem,
+  capituloItemDistinto,
   lineasSinItem,
+  mensajeCapituloDistinto,
   padreDeDescuento,
 } from './planillaTuberiaItemSicoe.js'
 
@@ -50,6 +52,39 @@ describe('ítem de cobro en la planilla', () => {
     assert.match(app, /usuarioPuedeEditarRegistrosSicoe/)
     assert.match(app, /alertaSyncCantidades/)
     assert.match(app, /IconoModuloConAlerta icon=\{icon\} total=\{alertaIcono\}/)
+  })
+
+  it('el capítulo distinto pregunta si continúa y el mismo capítulo no', () => {
+    const capItem = '1. ACTIVIDADES PRELIMINARES, EXPLANACIONES Y EXCAVACIONES'
+    const capReporte = '3. OBRAS DE ARTE (ALCANTARILLA)'
+    const item = { item_numero: '1.1.', capitulo: capItem, descripcion: 'Excavación' }
+    const lineas = [
+      { scope: 'cantidades', codigo: 'EXC', nombre: 'Excavación' },
+      { scope: 'descuentos', codigo: 'DESC_A1', nombre: 'Area 1', item_cant_codigo: 'TRI' },
+    ]
+    const items = {
+      'cantidades:EXC': item,
+      'cantidades:TRI': { item_numero: '1.02', capitulo: capReporte },
+    }
+    const aviso = mensajeCapituloDistinto(lineas, items, capReporte)
+    assert.equal(
+      aviso,
+      `El ítem 1.1. pertenece al capítulo «${capItem}» y el reporte usa «${capReporte}».`,
+    )
+    assert.equal(mensajeCapituloDistinto(
+      [{ scope: 'cantidades', codigo: 'EXC', nombre: 'Excavación' }],
+      { 'cantidades:EXC': { ...item, capitulo: capReporte } },
+      capReporte,
+    ), '')
+    assert.equal(capituloItemDistinto({ item_numero: '1.1.' }, capReporte), false)
+    assert.match(modal, /TopoConfirmModal/)
+    assert.match(modal, /¿Desea continuar\?/)
+    assert.match(modal, /confirmLabel="Sí"/)
+    assert.match(modal, /cancelLabel="No"/)
+    assert.match(modal, /CREAR_REPORTE_CONFIRMA_Z_INDEX/)
+    assert.match(modal, /crear\(false\)/)
+    assert.match(modal, /crear\(true\)/)
+    assert.doesNotMatch(modal, /pertenece al capítulo/)
   })
 
   it('el empuje del reporte actualiza la cantidad y cae si la base cambió', () => {
