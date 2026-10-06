@@ -207,6 +207,7 @@ def test_cc_sem_integral_builds_workbook_with_formulas():
     wb = load_workbook(BytesIO(raw))
     assert wb.sheetnames[0] == "CC-SEM-001"
     assert len(wb.sheetnames) == 3  # ejecución + 2 memorias
+    assert "preacta_obra" not in wb.sheetnames
     # Nombres de pestaña incluyen capítulo distinto para mismo ítem
     mem_names = wb.sheetnames[1:]
     assert any("IV" in n for n in mem_names)
