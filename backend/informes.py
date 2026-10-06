@@ -117,7 +117,6 @@ from fastapi.responses import HTMLResponse, Response
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
 from pydantic import BaseModel
 from xhtml2pdf import pisa
 from main import get_current_user as _get_user
@@ -1803,6 +1802,21 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     ctx["cortes_acum_anteriores_ids"] = prev_ids
 
 
+def _aplicar_norma_tecnica_desde_listado(items: List[dict], meta_cap_item: Optional[dict]) -> None:
+    """Copia la especificación técnica del listado (capítulo, ítem) al ítem del informe.
+
+    En el Excel mensual esa ficha se muestra como columna Norma técnica.
+    Si el listado no tiene texto para ese capítulo e ítem, queda cadena vacía.
+    """
+    from sicoe_valor_canonico import cap_item_key
+
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        meta = (meta_cap_item or {}).get(cap_item_key(it.get("capitulo"), it.get("item_numero"))) or {}
+        it["norma_tecnica"] = str(meta.get("especificacion_tecnica") or "").strip()
+
+
 def _contexto_acta_mes_conciliacion(
     contrato_id: int,
     acta_id: int,
@@ -1891,6 +1905,7 @@ def _contexto_acta_mes_conciliacion(
             it["sin_precio"] = True
     items = amc.filtrar_items_con_cantidades(items)
     items = amc.sort_items_capitulo_item_asc(items)
+    _aplicar_norma_tecnica_desde_listado(items, meta_cap_item)
     # Total canónico: Σ ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem).
     total_costo = float(total_costo_canon)
 
@@ -8498,7 +8513,7 @@ def excel_cc_mes_integral_acta(
         )
         ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
         nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
-        fname = _safe_filename_part(f"CC-MES-integral_acta_{nrpo}.xlsx")
+        fname = _safe_filename_part(f"CC-MES-integral_Acta_{nrpo}.xlsx")
         return Response(
             content=xbytes,
             media_type=_XLSX_MEDIA,
@@ -13795,15 +13810,16 @@ def _fill_corte_sub_001_excel_ws(
     resumen_4cols: Optional[Dict[str, Any]] = None,
     otros_conceptos: Optional[List[dict]] = None,
     memoria_links: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
+    incluir_norma_tecnica: bool = False,
+) -> None:
     """Hoja CC-SUB-001: encabezado tipo PDF, ítems 4 bloques, resumen 4 cols formulado, firmas.
 
     Sin columna Capítulo: ítems agrupados con fila Subtotal {capítulo}.
-    Si `memoria_links` está presente, la cantidad Presente acta (col G) referencia
-    por fórmula el total de la pestaña de memoria del ítem.
+    Si `memoria_links` está presente, la cantidad Presente acta referencia
+    por fórmula el total de la pestaña de memoria del ítem (columna H de esa pestaña).
 
-    Devuelve una ancla por ítem (fila del cuadro, fila del subtotal de su capítulo
-    y texto de capítulo). No agrega columnas ni filas al cuadro.
+    Con `incluir_norma_tecnica` (informe mensual) se inserta NORMA TÉCNICA
+    entre UND y V. UNIT. y el resto de columnas se corre un lugar.
     """
     import corte_sub_conciliacion as csc
 
@@ -13829,8 +13845,28 @@ def _fill_corte_sub_001_excel_ws(
     fill_blk = PatternFill("solid", fgColor=blk_bg)
     fill_hdr = PatternFill("solid", fgColor="1E3A8A")
     fill_cap_sub = PatternFill("solid", fgColor=cap_sub_bg)
-    ncols = _CC_SUB_001_NCOLS
-    id_cols = _CC_SUB_001_ID_COLS
+    # Informe mensual: NORMA TÉCNICA entre UND y V. UNIT. corre valor/cantidad +1.
+    norma_shift = 1 if incluir_norma_tecnica else 0
+    ncols = _CC_SUB_001_NCOLS + norma_shift
+    id_cols = _CC_SUB_001_ID_COLS + norma_shift
+    col_vu = 4 + norma_shift
+    col_cant_act = 5 + norma_shift
+    col_val_act = 6 + norma_shift
+    col_cant_pres = 7 + norma_shift
+    col_val_pres = 8 + norma_shift
+    col_cant_acum = 9 + norma_shift
+    col_val_acum = 10 + norma_shift
+    col_cant_saldo = 11 + norma_shift
+    col_val_saldo = 12 + norma_shift
+    L_vu = get_column_letter(col_vu)
+    L_cant_act = get_column_letter(col_cant_act)
+    L_act = get_column_letter(col_val_act)
+    L_cant_pres = get_column_letter(col_cant_pres)
+    L_pres = get_column_letter(col_val_pres)
+    L_cant_acum = get_column_letter(col_cant_acum)
+    L_acum = get_column_letter(col_val_acum)
+    L_cant_saldo = get_column_letter(col_cant_saldo)
+    L_saldo = get_column_letter(col_val_saldo)
 
     def _link_for_item(it: dict) -> Optional[Dict[str, Any]]:
         if not memoria_links:
@@ -13842,8 +13878,10 @@ def _fill_corte_sub_001_excel_ws(
                 return memoria_links[key]
         return None
 
-    # CAP. (8) → Descripción (+8). Total landscape ~145.
+    # ÍTEM, DESCRIPCIÓN, UND, [NORMA], V.UNIT. + 4 bloques cant/valor.
     widths = [8, 36, 6, 11, 9, 12, 9, 12, 9, 12, 9, 12]
+    if incluir_norma_tecnica:
+        widths.insert(3, 18)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -13902,11 +13940,11 @@ def _fill_corte_sub_001_excel_ws(
         ("CONTRATO", str(contrato.get("numero") or "—"), 1, 3),
         ("FECHA", fecha_gen, 4, 6),
         ("SUBCONTRATISTA", str(sub.get("razon_social") or "—"), 7, 9),
-        ("CORTE", corte_lbl, 10, 12),
+        ("CORTE", corte_lbl, 10, ncols),
     ])
     _meta_quad(4, [
         ("CONTRATISTA", contratista_val, 1, 7),
-        ("INTERVENTORÍA", str(contrato.get("interventoria") or "—"), 8, 12),
+        ("INTERVENTORÍA", str(contrato.get("interventoria") or "—"), 8, ncols),
     ])
     ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=ncols)
     per = ws.cell(row=5, column=1, value=f"PERÍODO DEL CORTE: {periodo}")
@@ -13917,7 +13955,11 @@ def _fill_corte_sub_001_excel_ws(
 
     # ── Cabecera ítems (2 filas) — sin CAP. ───────────────────────────────────
     hr, hr2 = 7, 8
-    for col, h in enumerate(["ÍTEM", "DESCRIPCIÓN", "UND", "V. UNIT."], start=1):
+    id_headers = ["ÍTEM", "DESCRIPCIÓN", "UND"]
+    if incluir_norma_tecnica:
+        id_headers.append("NORMA TÉCNICA")
+    id_headers.append("V. UNIT.")
+    for col, h in enumerate(id_headers, start=1):
         ws.merge_cells(start_row=hr, start_column=col, end_row=hr2, end_column=col)
         cell = ws.cell(row=hr, column=col, value=h)
         cell.fill = fill_th
@@ -13928,10 +13970,10 @@ def _fill_corte_sub_001_excel_ws(
         ws.cell(row=hr2, column=col).fill = fill_th
 
     bloques = [
-        (5, 6, "ACTUALIZADAS", True),
-        (7, 8, "PRESENTE ACTA", False),
-        (9, 10, "ACUMULADO", True),
-        (11, 12, "SALDO", False),
+        (col_cant_act, col_val_act, "ACTUALIZADAS", True),
+        (col_cant_pres, col_val_pres, "PRESENTE ACTA", False),
+        (col_cant_acum, col_val_acum, "ACUMULADO", True),
+        (col_cant_saldo, col_val_saldo, "SALDO", False),
     ]
     for c1, c2, titulo, alt in bloques:
         ws.merge_cells(start_row=hr, start_column=c1, end_row=hr, end_column=c2)
@@ -13958,9 +14000,6 @@ def _fill_corte_sub_001_excel_ws(
     cap_subtotal_rows: List[int] = []
     # Filas de ítem del capítulo en curso (para fórmulas de subtotal)
     cap_item_rows: List[int] = []
-    # Anclas para la tabla preacta_obra (el cuadro del informe no las escribe).
-    preacta_filas: List[Dict[str, Any]] = []
-    preacta_grupo: List[Dict[str, Any]] = []
     row = data0
     for entry in plan:
         kind = entry[0]
@@ -13978,14 +14017,14 @@ def _fill_corte_sub_001_excel_ws(
 
             # Cant vacías + Valor = SUM(rango) de ítems del capítulo (nunca celda+celda)
             for col, letter, rows, key in (
-                (5, None, None, None),
-                (6, "F", cap_item_rows, "valor_actualizadas"),
-                (7, None, None, None),
-                (8, "H", cap_item_rows, "valor_presente"),
-                (9, None, None, None),
-                (10, "J", cap_item_rows, "valor_acumulado"),
-                (11, None, None, None),
-                (12, "L", cap_item_rows, "valor_saldo"),
+                (col_cant_act, None, None, None),
+                (col_val_act, L_act, cap_item_rows, "valor_actualizadas"),
+                (col_cant_pres, None, None, None),
+                (col_val_pres, L_pres, cap_item_rows, "valor_presente"),
+                (col_cant_acum, None, None, None),
+                (col_val_acum, L_acum, cap_item_rows, "valor_acumulado"),
+                (col_cant_saldo, None, None, None),
+                (col_val_saldo, L_saldo, cap_item_rows, "valor_saldo"),
             ):
                 cell = ws.cell(row=row, column=col)
                 cell.border = bd
@@ -14002,9 +14041,6 @@ def _fill_corte_sub_001_excel_ws(
                 else:
                     cell.value = None
             cap_subtotal_rows.append(row)
-            for rec in preacta_grupo:
-                rec["subtotal_row"] = row
-            preacta_grupo = []
             cap_item_rows = []
             row += 1
             continue
@@ -14024,73 +14060,72 @@ def _fill_corte_sub_001_excel_ws(
         if sin_p or vu_num is None:
             vu_num = 0.0
 
-        id_vals = [it.get("item_numero", ""), desc, it.get("unidad", ""), vu_num]
+        id_vals = [it.get("item_numero", ""), desc, it.get("unidad", "")]
+        if incluir_norma_tecnica:
+            norma = str(it.get("norma_tecnica") or it.get("especificacion_tecnica") or "").strip()
+            id_vals.append(norma or None)
+        id_vals.append(vu_num)
         for col, v in enumerate(id_vals, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
-            cell.font = Font(size=7, bold=(sin_p and col == 4), color="B45309" if sin_p and col == 4 else "000000")
+            cell.font = Font(size=7, bold=(sin_p and col == col_vu), color="B45309" if sin_p and col == col_vu else "000000")
             cell.fill = fill
             if col == 2:
                 cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-            elif col == 4:
+            elif incluir_norma_tecnica and col == 4:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            elif col == col_vu:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
                 cell.number_format = "#,##0.00"
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        c_e = ws.cell(row=row, column=5, value=cant_act)
+        c_e = ws.cell(row=row, column=col_cant_act, value=cant_act)
         c_e.border = bd; c_e.font = Font(size=7); c_e.fill = fill
         c_e.alignment = Alignment(horizontal="right", vertical="center")
         c_e.number_format = _EXCEL_NUM_FMT_CANT
 
-        c_f = ws.cell(row=row, column=6, value=_excel_formula_valor_cant_vu(f"E{row}", f"D{row}"))
+        c_f = ws.cell(row=row, column=col_val_act, value=_excel_formula_valor_cant_vu(f"{L_cant_act}{row}", f"{L_vu}{row}"))
         c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
         c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = _EXCEL_NUM_FMT_MONEY
         act_valor_rows.append(row)
 
-        c_g = ws.cell(row=row, column=7, value=cant_pres)
+        c_g = ws.cell(row=row, column=col_cant_pres, value=cant_pres)
         link = _link_for_item(it)
         if link and link.get("sheet") and link.get("tot_row"):
-            # Presente cant (G) ← total col H de la pestaña de memoria del ítem
+            # Presente cant ← total col H de la pestaña de memoria del ítem (la memoria no se corre).
             sh = str(link["sheet"]).replace("'", "''")
             c_g.value = f"=ROUND('{sh}'!H{int(link['tot_row'])},2)"
         c_g.border = bd; c_g.font = Font(size=7); c_g.fill = fill
         c_g.alignment = Alignment(horizontal="right", vertical="center")
         c_g.number_format = _EXCEL_NUM_FMT_CANT
 
-        c_h = ws.cell(row=row, column=8, value=_excel_formula_valor_cant_vu(f"G{row}", f"D{row}"))
+        c_h = ws.cell(row=row, column=col_val_pres, value=_excel_formula_valor_cant_vu(f"{L_cant_pres}{row}", f"{L_vu}{row}"))
         c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
         c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = _EXCEL_NUM_FMT_MONEY
         presente_valor_rows.append(row)
 
-        c_i = ws.cell(row=row, column=9, value=f"=ROUND(G{row}+{cant_ant},2)")
+        c_i = ws.cell(row=row, column=col_cant_acum, value=f"=ROUND({L_cant_pres}{row}+{cant_ant},2)")
         c_i.border = bd; c_i.font = Font(size=7); c_i.fill = fill
         c_i.alignment = Alignment(horizontal="right", vertical="center")
         c_i.number_format = _EXCEL_NUM_FMT_CANT
 
-        c_j = ws.cell(row=row, column=10, value=_excel_formula_valor_cant_vu(f"I{row}", f"D{row}"))
+        c_j = ws.cell(row=row, column=col_val_acum, value=_excel_formula_valor_cant_vu(f"{L_cant_acum}{row}", f"{L_vu}{row}"))
         c_j.border = bd; c_j.font = Font(size=7); c_j.fill = fill
         c_j.alignment = Alignment(horizontal="right", vertical="center"); c_j.number_format = _EXCEL_NUM_FMT_MONEY
         acum_valor_rows.append(row)
 
-        c_k = ws.cell(row=row, column=11, value=f"=ROUND(E{row}-I{row},2)")
+        c_k = ws.cell(row=row, column=col_cant_saldo, value=f"=ROUND({L_cant_act}{row}-{L_cant_acum}{row},2)")
         c_k.border = bd; c_k.font = Font(size=7); c_k.fill = fill
         c_k.alignment = Alignment(horizontal="right", vertical="center")
         c_k.number_format = _EXCEL_NUM_FMT_CANT
 
-        c_l = ws.cell(row=row, column=12, value=_excel_formula_valor_cant_vu(f"K{row}", f"D{row}"))
+        c_l = ws.cell(row=row, column=col_val_saldo, value=_excel_formula_valor_cant_vu(f"{L_cant_saldo}{row}", f"{L_vu}{row}"))
         c_l.border = bd; c_l.font = Font(size=7); c_l.fill = fill
         c_l.alignment = Alignment(horizontal="right", vertical="center"); c_l.number_format = _EXCEL_NUM_FMT_MONEY
         saldo_valor_rows.append(row)
 
         cap_item_rows.append(row)
-        preacta_rec = {
-            "row": row,
-            "subtotal_row": None,
-            "capitulo": _capitulo_norm_conc(it),
-        }
-        preacta_filas.append(preacta_rec)
-        preacta_grupo.append(preacta_rec)
         row += 1
 
     tot_r = row
@@ -14131,7 +14166,7 @@ def _fill_corte_sub_001_excel_ws(
         ws.cell(row=res_start, column=c).fill = fill_hdr
 
     hdr_r = res_start + 1
-    # Label en A-D; valores bajo F/H/J/L
+    # Label en columnas de identificación; valores bajo las columnas Valor de cada bloque.
     ws.merge_cells(start_row=hdr_r, start_column=1, end_row=hdr_r, end_column=id_cols)
     h0 = ws.cell(row=hdr_r, column=1, value="Concepto")
     h0.font = Font(bold=True, size=7)
@@ -14140,7 +14175,16 @@ def _fill_corte_sub_001_excel_ws(
     for c in range(1, id_cols + 1):
         ws.cell(row=hdr_r, column=c).fill = fill_blk
         ws.cell(row=hdr_r, column=c).border = bd
-    for col, title in ((5, ""), (6, "Actualizadas"), (7, ""), (8, "Presente acta"), (9, ""), (10, "Acumulado"), (11, ""), (12, "Saldo")):
+    for col, title in (
+        (col_cant_act, ""),
+        (col_val_act, "Actualizadas"),
+        (col_cant_pres, ""),
+        (col_val_pres, "Presente acta"),
+        (col_cant_acum, ""),
+        (col_val_acum, "Acumulado"),
+        (col_cant_saldo, ""),
+        (col_val_saldo, "Saldo"),
+    ):
         cell = ws.cell(row=hdr_r, column=col, value=title or None)
         cell.font = Font(bold=True, size=7)
         cell.fill = fill_blk
@@ -14148,9 +14192,6 @@ def _fill_corte_sub_001_excel_ws(
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     row_by_key: Dict[str, int] = {}
-    # Columnas valor: Act=F=6, Pres=H=8, Acum=J=10, Saldo=L=12
-    val_cols = {"actualizadas": 6, "presente": 8, "acumulado": 10, "saldo": 12}
-    val_letters = {6: "F", 8: "H", 10: "J", 12: "L"}
 
     cur = hdr_r + 1
     ant_map = {
@@ -14210,40 +14251,41 @@ def _fill_corte_sub_001_excel_ws(
             ws.cell(row=cur, column=c).fill = bg
             ws.cell(row=cur, column=c).border = bd
 
-        for col in (5, 7, 9, 11):
+        for col in (col_cant_act, col_cant_pres, col_cant_acum, col_cant_saldo):
             cell = ws.cell(row=cur, column=col, value="")
             cell.border = bd
             cell.fill = bg
 
         row_by_key[key] = cur
+        saldo_f = f"={L_act}{cur}-{L_acum}{cur}"
 
         if key == "cd":
             # Suma de subtotales por capítulo (no suma celda a celda de ítems)
             formulas = {
-                6: _sum_formula(cap_subtotal_rows, "F", cds.get("actualizadas") or 0),
-                8: _sum_formula(cap_subtotal_rows, "H", cds.get("presente") or total_costo or 0),
-                10: _sum_formula(cap_subtotal_rows, "J", cds.get("acumulado") or 0),
-                12: f"=F{cur}-J{cur}",
+                col_val_act: _sum_formula(cap_subtotal_rows, L_act, cds.get("actualizadas") or 0),
+                col_val_pres: _sum_formula(cap_subtotal_rows, L_pres, cds.get("presente") or total_costo or 0),
+                col_val_acum: _sum_formula(cap_subtotal_rows, L_acum, cds.get("acumulado") or 0),
+                col_val_saldo: saldo_f,
             }
         elif key in ("a", "i", "u"):
             pct = pct_by_key.get(key, 0.0) / 100.0
             cd_r = row_by_key.get("cd", cur)
             ant_c = ant_map.get(key, 0.0)
             formulas = {
-                6: f"=ROUND(F{cd_r}*{pct},0)",
-                8: f"=ROUND(H{cd_r}*{pct},0)",
-                10: f"=H{cur}+{ant_c}",
-                12: f"=F{cur}-J{cur}",
+                col_val_act: f"=ROUND({L_act}{cd_r}*{pct},0)",
+                col_val_pres: f"=ROUND({L_pres}{cd_r}*{pct},0)",
+                col_val_acum: f"={L_pres}{cur}+{ant_c}",
+                col_val_saldo: saldo_f,
             }
         elif key == "iva":
             pct = pct_by_key.get("iva", 0.0) / 100.0
             u_r = row_by_key.get("u", cur)
             ant_c = ant_map.get("iva", 0.0)
             formulas = {
-                6: f"=ROUND(F{u_r}*{pct},0)",
-                8: f"=ROUND(H{u_r}*{pct},0)",
-                10: f"=H{cur}+{ant_c}",
-                12: f"=F{cur}-J{cur}",
+                col_val_act: f"=ROUND({L_act}{u_r}*{pct},0)",
+                col_val_pres: f"=ROUND({L_pres}{u_r}*{pct},0)",
+                col_val_acum: f"={L_pres}{cur}+{ant_c}",
+                col_val_saldo: saldo_f,
             }
         elif key == "cd_aiu":
             refs = [row_by_key.get(k) for k in ("cd", "a", "i", "u", "iva")]
@@ -14251,60 +14293,60 @@ def _fill_corte_sub_001_excel_ws(
             def _sum_col(letter):
                 return "=" + "+".join(f"{letter}{r}" for r in refs) if refs else 0
             formulas = {
-                6: _sum_col("F"),
-                8: _sum_col("H"),
-                10: _sum_col("J"),
-                12: f"=F{cur}-J{cur}",
+                col_val_act: _sum_col(L_act),
+                col_val_pres: _sum_col(L_pres),
+                col_val_acum: _sum_col(L_acum),
+                col_val_saldo: saldo_f,
             }
         elif key == "amort":
             pct = pct_by_key.get("amort")
             cd_aiu_r = row_by_key.get("cd_aiu", cur)
             if pct is not None:
-                bruto = f"ROUND(H{cd_aiu_r}*{float(pct)/100.0},0)"
+                bruto = f"ROUND({L_pres}{cd_aiu_r}*{float(pct)/100.0},0)"
                 saldo_pend = max(0.0, anticipo_val - amort_ant)
                 pres_f = f"=MIN({bruto},{saldo_pend})"
             else:
                 pres_f = 0
             formulas = {
-                6: anticipo_val,
-                8: pres_f,
-                10: f"=H{cur}+{amort_ant}",
-                12: f"=F{cur}-J{cur}",
+                col_val_act: anticipo_val,
+                col_val_pres: pres_f,
+                col_val_acum: f"={L_pres}{cur}+{amort_ant}",
+                col_val_saldo: saldo_f,
             }
         elif key == "sub_amort":
             cd_aiu_r = row_by_key.get("cd_aiu", cur)
             am_r = row_by_key.get("amort", cur)
             formulas = {
-                6: f"=F{cd_aiu_r}-F{am_r}",
-                8: f"=H{cd_aiu_r}-H{am_r}",
-                10: f"=J{cd_aiu_r}-J{am_r}",
-                12: f"=F{cur}-J{cur}",
+                col_val_act: f"={L_act}{cd_aiu_r}-{L_act}{am_r}",
+                col_val_pres: f"={L_pres}{cd_aiu_r}-{L_pres}{am_r}",
+                col_val_acum: f"={L_acum}{cd_aiu_r}-{L_acum}{am_r}",
+                col_val_saldo: saldo_f,
             }
         elif key == "otros":
             formulas = {
-                6: None,
-                8: float(vals.get("presente") or 0),
-                10: f"=H{cur}+{otros_ant}",
-                12: None,
+                col_val_act: None,
+                col_val_pres: float(vals.get("presente") or 0),
+                col_val_acum: f"={L_pres}{cur}+{otros_ant}",
+                col_val_saldo: None,
             }
         elif key == "gran_total":
             sub_r = row_by_key.get("sub_amort", cur)
             ot_r = row_by_key.get("otros", cur)
             formulas = {
-                6: f"=F{sub_r}",
-                8: f"=H{sub_r}+H{ot_r}" if ot_r else f"=H{sub_r}",
-                10: f"=J{sub_r}+J{ot_r}" if ot_r else f"=J{sub_r}",
-                12: f"=F{cur}-J{cur}",
+                col_val_act: f"={L_act}{sub_r}",
+                col_val_pres: f"={L_pres}{sub_r}+{L_pres}{ot_r}" if ot_r else f"={L_pres}{sub_r}",
+                col_val_acum: f"={L_acum}{sub_r}+{L_acum}{ot_r}" if ot_r else f"={L_acum}{sub_r}",
+                col_val_saldo: saldo_f,
             }
         else:
             formulas = {
-                6: vals.get("actualizadas"),
-                8: vals.get("presente"),
-                10: vals.get("acumulado"),
-                12: vals.get("saldo"),
+                col_val_act: vals.get("actualizadas"),
+                col_val_pres: vals.get("presente"),
+                col_val_acum: vals.get("acumulado"),
+                col_val_saldo: vals.get("saldo"),
             }
 
-        for col in (6, 8, 10, 12):
+        for col in (col_val_act, col_val_pres, col_val_acum, col_val_saldo):
             v = formulas.get(col)
             if v is None:
                 cell = ws.cell(row=cur, column=col, value="—")
@@ -14331,10 +14373,14 @@ def _fill_corte_sub_001_excel_ws(
                 ws.cell(row=cur, column=1, value=det).font = Font(size=6)
                 for c in range(1, id_cols + 1):
                     ws.cell(row=cur, column=c).border = bd
-                for col in (5, 6, 7, 9, 10, 11, 12):
-                    cell = ws.cell(row=cur, column=col, value="—" if col != 8 else float(oc.get("costo_total") or 0))
+                for col in range(id_cols + 1, ncols + 1):
+                    cell = ws.cell(
+                        row=cur,
+                        column=col,
+                        value=float(oc.get("costo_total") or 0) if col == col_val_pres else "—",
+                    )
                     cell.border = bd
-                    if col == 8:
+                    if col == col_val_pres:
                         cell.number_format = _EXCEL_NUM_FMT_MONEY
                         cell.alignment = Alignment(horizontal="right", vertical="center")
                         cell.font = Font(size=7)
@@ -14380,7 +14426,6 @@ def _fill_corte_sub_001_excel_ws(
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = 1
     ws.print_options.horizontalCentered = True
-    return preacta_filas
 
 
 def _corte_sub_001_excel_bytes(
@@ -14814,181 +14859,6 @@ def _cc_mes_001_excel_bytes(
     return buf.getvalue()
 
 
-# Tabla de datos que alimenta el acta financiera. Nombre y encabezados fijos.
-_PREACTA_OBRA_NAME = "preacta_obra"
-_PREACTA_OBRA_HEADERS: Tuple[str, ...] = (
-    "Clave",
-    "Capitulo",
-    "Item",
-    "Descripcion",
-    "Unidad",
-    "VrUnitario",
-    "ActualizadaCant",
-    "ActualizadaValor",
-    "AnteriorCant",
-    "AnteriorValor",
-    "PresenteCant",
-    "PresenteValor",
-    "AcumuladoCant",
-    "AcumuladoValor",
-    "SaldoCant",
-    "SaldoValor",
-)
-# Columnas del cuadro CC-MES-001 (ÍTEM…SALDO, sin columna Capítulo).
-_PREACTA_DESDE_INFORME = {
-    "Item": "A",
-    "Descripcion": "B",
-    "Unidad": "C",
-    "VrUnitario": "D",
-    "ActualizadaCant": "E",
-    "ActualizadaValor": "F",
-    "PresenteCant": "G",
-    "PresenteValor": "H",
-    "AcumuladoCant": "I",
-    "AcumuladoValor": "J",
-    "SaldoCant": "K",
-    "SaldoValor": "L",
-}
-_PREACTA_SUBTOTAL_PREFIX = "Subtotal "
-
-
-def _excel_sheet_cell_ref(sheet: str, col: str, row: int) -> str:
-    """Referencia absoluta a una celda de otra hoja (nombre entre comillas)."""
-    safe = str(sheet or "").replace("'", "''")
-    return f"'{safe}'!{col}{int(row)}"
-
-
-def _excel_formula_quoted(text: str) -> str:
-    """Literal de texto para una fórmula de Excel."""
-    return '"' + str(text).replace('"', '""') + '"'
-
-
-def _preacta_capitulo_expr(
-    hoja_informe: str,
-    fila_subtotal: Optional[int],
-    capitulo: str,
-) -> str:
-    """Expresión (sin «=») del capítulo, leída del rótulo «Subtotal {capítulo}» del informe."""
-    if fila_subtotal:
-        src = _excel_sheet_cell_ref(hoja_informe, "A", int(fila_subtotal))
-        # El cuadro escribe «Subtotal» a secas cuando el capítulo es «—».
-        vacio = _excel_formula_quoted("—")
-        pref = _excel_formula_quoted(_PREACTA_SUBTOTAL_PREFIX)
-        return (
-            f'IF({src}={_excel_formula_quoted("Subtotal")},{vacio},'
-            f"MID({src},LEN({pref})+1,500))"
-        )
-    return _excel_formula_quoted(capitulo or "—")
-
-
-def _preacta_obra_formulas_fila(
-    hoja_informe: str,
-    fila_informe: int,
-    fila_subtotal: Optional[int],
-    capitulo: str,
-) -> List[str]:
-    """Una fórmula por encabezado de ``preacta_obra``, en el orden fijo de la tabla.
-
-    Todas leen la pestaña del informe. Anterior no tiene columna propia: la cantidad
-    anterior está embebida en Acumulado (``ROUND(Presente+anterior,2)``), así que
-    AnteriorCant = AcumuladoCant − PresenteCant y AnteriorValor usa la misma regla
-    ROUND0(cantidad × VU) que el resto del informe.
-    """
-    def ref(col: str) -> str:
-        return _excel_sheet_cell_ref(hoja_informe, col, fila_informe)
-
-    cap_expr = _preacta_capitulo_expr(hoja_informe, fila_subtotal, capitulo)
-    ant_cant = f"ROUND({ref('I')}-{ref('G')},2)"
-    formulas: Dict[str, str] = {
-        "Clave": f"={cap_expr}&\"|\"&{ref('A')}",
-        "Capitulo": f"={cap_expr}",
-        "AnteriorCant": f"={ant_cant}",
-        "AnteriorValor": _excel_formula_valor_cant_vu(ant_cant, ref("D")),
-    }
-    for header, col in _PREACTA_DESDE_INFORME.items():
-        formulas[header] = f"={ref(col)}"
-    return [formulas[h] for h in _PREACTA_OBRA_HEADERS]
-
-
-def _preacta_obra_number_format(header: str) -> Optional[str]:
-    if header == "VrUnitario":
-        return "#,##0.00"
-    if header.endswith("Cant"):
-        return _EXCEL_NUM_FMT_CANT
-    if header.endswith("Valor"):
-        return _EXCEL_NUM_FMT_MONEY
-    return None
-
-
-def _append_preacta_obra_sheet(
-    wb: Workbook,
-    hoja_informe: str,
-    filas_item: Optional[List[Dict[str, Any]]],
-) -> None:
-    """Pestaña ``preacta_obra`` con la tabla de datos del mismo nombre.
-
-    Una fila por ítem del informe, sin subtotales ni filas vacías. No escribe
-    en la hoja del informe.
-    """
-    if hoja_informe not in wb.sheetnames:
-        raise ValueError(f"No existe la hoja del informe {hoja_informe}")
-    if _PREACTA_OBRA_NAME in wb.sheetnames:
-        otro = wb[_PREACTA_OBRA_NAME]
-        otro.title = _excel_unique_sheet_name_raw(wb, "hoja")
-
-    ws = wb.create_sheet(_PREACTA_OBRA_NAME, 1)
-    ncols = len(_PREACTA_OBRA_HEADERS)
-    widths = [46, 36, 14, 42, 10, 14, 16, 16, 14, 16, 14, 16, 16, 16, 14, 16]
-    for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
-
-    header_fill = PatternFill("solid", fgColor="1E3A8A")
-    header_font = Font(bold=True, size=9, color="FFFFFF")
-    for col, header in enumerate(_PREACTA_OBRA_HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    filas = list(filas_item or [])
-    for offset, rec in enumerate(filas):
-        excel_row = 2 + offset
-        formulas = _preacta_obra_formulas_fila(
-            hoja_informe,
-            int(rec["row"]),
-            rec.get("subtotal_row"),
-            str(rec.get("capitulo") or ""),
-        )
-        for col, header in enumerate(_PREACTA_OBRA_HEADERS, start=1):
-            cell = ws.cell(row=excel_row, column=col, value=formulas[col - 1])
-            cell.font = Font(size=9)
-            fmt = _preacta_obra_number_format(header)
-            if fmt:
-                cell.number_format = fmt
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-            elif header in ("Item", "Unidad"):
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            else:
-                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-
-    last_row = 1 + len(filas)
-    # Una tabla de Excel exige al menos el encabezado. Sin ítems el rango es solo la fila 1.
-    ref = f"A1:{get_column_letter(ncols)}{max(last_row, 1)}"
-    tabla = Table(displayName=_PREACTA_OBRA_NAME, ref=ref)
-    tabla.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium2",
-        showFirstColumn=False,
-        showLastColumn=False,
-        showRowStripes=True,
-        showColumnStripes=False,
-    )
-    ws.add_table(tabla)
-    ws.freeze_panes = "A2"
-    ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize = 1
-    ws.print_options.horizontalCentered = True
-    _log.info("preacta_obra hoja=%s filas=%s", hoja_informe, len(filas))
-
 
 def _cc_sem_mes_integral_excel_bytes(
     contrato_id: int,
@@ -14999,11 +14869,7 @@ def _cc_sem_mes_integral_excel_bytes(
     acta_id: Optional[int] = None,
     nivel_aprobacion: Optional[int] = None,
 ) -> bytes:
-    """Libro integral: hoja 1 = ejecución (001) formulada; siguientes = memorias (002) por capítulo|ítem.
-
-    En el mensual, además inserta la tabla ``preacta_obra`` (una fila por ítem, fórmulas
-    hacia la pestaña del informe) justo después de CC-MES-001.
-    """
+    """Libro integral: hoja 1 = ejecución (001) formulada; siguientes = memorias (002) por capítulo|ítem."""
     modo = (modo or "").strip().lower()
     if modo not in ("sem", "mes"):
         raise HTTPException(400, "modo integral inválido")
@@ -15196,7 +15062,7 @@ def _cc_sem_mes_integral_excel_bytes(
         # Limpiar y rellenar
         wb.remove(ws_ejec)
         ws_ejec = wb.create_sheet(title=sheet_ejec, index=0)
-        item_filas = _fill_corte_sub_001_excel_ws(
+        _fill_corte_sub_001_excel_ws(
             ws_ejec,
             contrato,
             sub_m,
@@ -15209,6 +15075,7 @@ def _cc_sem_mes_integral_excel_bytes(
             resumen_4cols=mes_resumen_4cols,
             otros_conceptos=mes_otros or [],
             memoria_links=memoria_links or None,
+            incluir_norma_tecnica=True,
         )
         try:
             for row in ws_ejec.iter_rows(min_row=1, max_row=2, max_col=13):
@@ -15223,8 +15090,6 @@ def _cc_sem_mes_integral_excel_bytes(
                         cell.value = c4_label
         except Exception:
             pass
-        # Tabla fija para el acta financiera. No altera la pestaña del informe.
-        _append_preacta_obra_sheet(wb, sheet_ejec, item_filas)
     # Orden: ejecución primero (ya es active), memorias en el orden creado.
     buf = io.BytesIO()
     wb.save(buf)
