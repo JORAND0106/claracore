@@ -8,7 +8,9 @@ from openpyxl import load_workbook
 
 from logs_export_xlsx import (
     GRID_COLUMNS,
+    GRID_MODIFICACIONES,
     aggregate_activity_by_day,
+    aplanar_modificaciones,
     build_filtros_resumen,
     build_logs_informe_xlsx,
     day_key_bogota,
@@ -149,6 +151,47 @@ class TestLogsExportXlsx(unittest.TestCase):
         self.assertTrue(any(isinstance(v, str) and v.startswith("Registros filtrados (0)") for v in labels))
         # Sin series no se crea gráfico OOXML (solo mensaje)
         self.assertEqual(len(ws._charts), 0)
+
+
+class TestLogsExportModificaciones(unittest.TestCase):
+    def test_aplanado_y_excel_muestran_antes_y_despues(self):
+        row = _row(
+            categoria="datos",
+            accion="EDITAR",
+            modulo="Presupuesto",
+            detalle={
+                "tipo": "modificacion_datos",
+                "registro": "Ítem de presupuesto · Excavación",
+                "operacion": "EDITAR",
+                "carga_id": None,
+                "campos": [
+                    {"etiqueta": "Cantidad", "anterior": "10", "nuevo": "12"},
+                    {"etiqueta": "Descripción", "anterior": "Vieja", "nuevo": "Nueva"},
+                ],
+            },
+        )
+        planas = aplanar_modificaciones([row])
+        self.assertEqual(len(planas), 2)
+        self.assertEqual(planas[0]["campo"], "Cantidad")
+        self.assertEqual(planas[1]["anterior"], "Vieja")
+        blob = build_logs_informe_xlsx([row], filtros_resumen="Módulo: Presupuesto")
+        wb = load_workbook(io.BytesIO(blob))
+        ws = wb.active
+        self.assertEqual(ws["B1"].value, "Modificaciones de datos")
+        headers = [label for _k, label in GRID_MODIFICACIONES]
+        found = False
+        for r in range(1, 30):
+            if ws.cell(row=r, column=1).value == headers[0] and ws.cell(row=r, column=8).value == "Valor anterior":
+                self.assertEqual(
+                    [ws.cell(row=r, column=i).value for i in range(1, len(headers) + 1)],
+                    headers,
+                )
+                found = True
+                self.assertEqual(ws.cell(row=r + 1, column=7).value, "Cantidad")
+                self.assertEqual(ws.cell(row=r + 1, column=8).value, "10")
+                self.assertEqual(ws.cell(row=r + 1, column=9).value, "12")
+                break
+        self.assertTrue(found)
 
 
 class TestLogsExportRouteWired(unittest.TestCase):

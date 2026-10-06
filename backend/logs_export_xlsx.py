@@ -8,6 +8,7 @@ gráfico de barras de actividad por día (openpyxl.chart.BarChart).
 from __future__ import annotations
 
 import io
+import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +53,24 @@ GRID_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("ip", "IP"),
     ("resultado", "Resultado"),
 )
+
+GRID_MODIFICACIONES: Tuple[Tuple[str, str], ...] = (
+    ("created_at", "Fecha"),
+    ("usuario_nombre", "Usuario"),
+    ("modulo", "Módulo"),
+    ("registro", "Registro"),
+    ("accion_legible", "Acción"),
+    ("carga_id", "Carga"),
+    ("campo", "Campo"),
+    ("anterior", "Valor anterior"),
+    ("nuevo", "Valor nuevo"),
+)
+
+_ACCION_LEGIBLE = {
+    "CREAR": "Creación",
+    "EDITAR": "Edición",
+    "ELIMINAR": "Eliminación",
+}
 
 _LOGO_BYTES: Optional[bytes] = None
 _LOGO_RESOLVED = False
@@ -132,6 +151,59 @@ def _cell_str(v: Any) -> str:
     return str(v)
 
 
+def _detalle_log(row: Dict[str, Any]) -> Dict[str, Any]:
+    det = row.get("detalle")
+    if isinstance(det, str):
+        try:
+            det = json.loads(det)
+        except Exception:
+            return {}
+    return det if isinstance(det, dict) else {}
+
+
+def es_fila_modificacion(row: Dict[str, Any]) -> bool:
+    if (row.get("categoria") or "") == "datos":
+        return True
+    return _detalle_log(row).get("tipo") == "modificacion_datos"
+
+
+def accion_legible(row: Dict[str, Any], det: Optional[Dict[str, Any]] = None) -> str:
+    det = _detalle_log(row) if det is None else det
+    accion = (row.get("accion") or "").strip()
+    if accion == "CARGA_MASIVA":
+        op = _ACCION_LEGIBLE.get((det.get("operacion") or "").strip(), "")
+        return f"Carga masiva · {op}" if op else "Carga masiva"
+    return _ACCION_LEGIBLE.get(accion, accion or "—")
+
+
+def aplanar_modificaciones(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Una fila de Excel por campo, para leer anterior y nuevo sin abrir JSON."""
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        det = _detalle_log(row)
+        campos = det.get("campos") if isinstance(det.get("campos"), list) else []
+        base = {
+            "created_at": row.get("created_at"),
+            "usuario_nombre": row.get("usuario_nombre"),
+            "modulo": row.get("modulo"),
+            "registro": det.get("registro") or row.get("registro_etiqueta") or _entidad_cell(row),
+            "accion_legible": accion_legible(row, det),
+            "carga_id": det.get("carga_id") or row.get("carga_id") or "—",
+        }
+        utiles = [c for c in campos if isinstance(c, dict)]
+        if not utiles:
+            out.append({**base, "campo": "—", "anterior": "—", "nuevo": "—"})
+            continue
+        for campo in utiles:
+            out.append({
+                **base,
+                "campo": campo.get("etiqueta") or campo.get("campo") or "—",
+                "anterior": campo.get("anterior") if campo.get("anterior") not in (None, "") else "—",
+                "nuevo": campo.get("nuevo") if campo.get("nuevo") not in (None, "") else "—",
+            })
+    return out
+
+
 def _apply_header(
     ws,
     *,
@@ -140,6 +212,7 @@ def _apply_header(
     filtros_resumen: str,
     descargado_por: str,
     gen_ts: str,
+    titulo_informe: str = "Informe de Logs del Sistema",
 ) -> int:
     """Logo plataforma + datos contrato + meta de exportación. Devuelve primera fila libre."""
     ws.row_dimensions[1].height = 52
@@ -161,7 +234,7 @@ def _apply_header(
 
     if ncols > 1:
         ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=ncols)
-    title = ws.cell(row=1, column=2, value="Informe de Logs del Sistema")
+    title = ws.cell(row=1, column=2, value=titulo_informe)
     title.font = _FONT_TITLE
     title.alignment = Alignment(horizontal="left", vertical="center")
 
@@ -242,13 +315,20 @@ def _write_usuario_block(
     return r + 1
 
 
-def _write_grid(ws, start_row: int, rows: Sequence[Dict[str, Any]]) -> int:
-    ncols = len(GRID_COLUMNS)
+def _write_grid(
+    ws,
+    start_row: int,
+    rows: Sequence[Dict[str, Any]],
+    columns: Optional[Sequence[Tuple[str, str]]] = None,
+    titulo: Optional[str] = None,
+) -> int:
+    columns = tuple(columns or GRID_COLUMNS)
+    ncols = len(columns)
     ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=ncols)
     title = ws.cell(
         row=start_row,
         column=1,
-        value=f"Registros filtrados ({len(rows)})",
+        value=titulo or f"Registros filtrados ({len(rows)})",
     )
     title.font = _FONT_SECTION
     title.fill = _FILL_SECTION
@@ -257,7 +337,7 @@ def _write_grid(ws, start_row: int, rows: Sequence[Dict[str, Any]]) -> int:
         ws.cell(row=start_row, column=col).border = _BORDER
 
     hdr_row = start_row + 1
-    for ci, (_key, label) in enumerate(GRID_COLUMNS, start=1):
+    for ci, (_key, label) in enumerate(columns, start=1):
         cell = ws.cell(row=hdr_row, column=ci, value=label)
         cell.font = _FONT_HDR
         cell.fill = _FILL_HDR
@@ -277,7 +357,7 @@ def _write_grid(ws, start_row: int, rows: Sequence[Dict[str, Any]]) -> int:
         return data_row + 2
 
     for row in rows:
-        for ci, (key, _label) in enumerate(GRID_COLUMNS, start=1):
+        for ci, (key, _label) in enumerate(columns, start=1):
             if key == "created_at":
                 val = format_log_fecha_bogota(row.get("created_at"))
             elif key == "entidad":
@@ -373,6 +453,7 @@ def build_filtros_resumen(
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
     excluir_rutina_auth: bool = False,
+    busqueda: Optional[str] = None,
 ) -> str:
     parts: List[str] = []
     if usuario_nombre:
@@ -389,6 +470,8 @@ def build_filtros_resumen(
         parts.append(f"Rango: {fecha_desde or '…'} → {fecha_hasta or '…'}")
     if excluir_rutina_auth and not accion:
         parts.append("Sin LOGIN/LOGIN_FAIL")
+    if busqueda:
+        parts.append(f"Búsqueda: {busqueda}")
     return " · ".join(parts) if parts else "Sin filtros"
 
 
@@ -419,7 +502,18 @@ def build_logs_informe_xlsx(
     ws.title = "Logs"
     ws.sheet_view.showGridLines = False
 
-    ncols = len(GRID_COLUMNS)
+    uso_mod = any(es_fila_modificacion(r) for r in rows)
+    if uso_mod:
+        grid_rows: Sequence[Dict[str, Any]] = aplanar_modificaciones(rows)
+        columns: Sequence[Tuple[str, str]] = GRID_MODIFICACIONES
+        titulo_grid = f"Modificaciones filtradas ({len(rows)} registros)"
+        titulo_informe = "Modificaciones de datos"
+    else:
+        grid_rows = rows
+        columns = GRID_COLUMNS
+        titulo_grid = None
+        titulo_informe = "Informe de Logs del Sistema"
+    ncols = len(columns)
     next_row = _apply_header(
         ws,
         ncols=ncols,
@@ -427,9 +521,10 @@ def build_logs_informe_xlsx(
         filtros_resumen=filtros_resumen,
         descargado_por=descargado_por,
         gen_ts=gen_ts,
+        titulo_informe=titulo_informe,
     )
     next_row = _write_usuario_block(ws, next_row, ncols, usuario_filtrado)
-    next_row = _write_grid(ws, next_row, rows)
+    next_row = _write_grid(ws, next_row, grid_rows, columns, titulo=titulo_grid)
     series = aggregate_activity_by_day(rows)
     _write_chart_block(
         ws,

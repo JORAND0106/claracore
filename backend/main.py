@@ -32,6 +32,8 @@ import hashlib
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
 
+import auditoria_datos
+
 from presupuesto_helpers import (
     _presupuesto_aplica_filtro_interventoria,
     _presupuesto_q_estructura,
@@ -1559,24 +1561,34 @@ def _http_reversion_doble_llave_db_error(ex: Exception) -> HTTPException:
     )
 
 
-def _logs_insert_row(row: Dict[str, Any]) -> bool:
-    """Inserta en logs; omite columnas desconocidas y las guarda en caché para no penalizar cada request."""
-    payload = dict(row)
+def _logs_insert_payload(payload: Any) -> bool:
+    """Inserta uno o varios registros en logs. Omite columnas que PostgREST aún no conoce."""
+    if isinstance(payload, list):
+        items = [dict(r) for r in payload if isinstance(r, dict)]
+    elif isinstance(payload, dict):
+        items = [dict(payload)]
+    else:
+        return False
+    if not items:
+        return True
     with _logs_omit_lock:
         frozen_omit = frozenset(_logs_omit_columns)
-    for c in frozen_omit:
-        payload.pop(c, None)
+    for item in items:
+        for c in frozen_omit:
+            item.pop(c, None)
     strips = 0
     while strips <= _LOGS_INSERT_MAX_STRIPS:
         try:
-            supabase.table("logs").insert(payload).execute()
+            body: Any = items[0] if len(items) == 1 else items
+            supabase.table("logs").insert(body).execute()
             return True
         except Exception as e:
             col = _logs_pgrst_unknown_column(e)
-            if col and col in payload:
+            if col and any(col in item for item in items):
                 with _logs_omit_lock:
                     _logs_omit_columns.add(col)
-                payload.pop(col, None)
+                for item in items:
+                    item.pop(col, None)
                 strips += 1
                 continue
             try:
@@ -1593,6 +1605,15 @@ def _logs_insert_row(row: Dict[str, Any]) -> bool:
     except Exception:
         pass
     return False
+
+
+def _logs_insert_row(row: Dict[str, Any]) -> bool:
+    """Inserta en logs; omite columnas desconocidas y las guarda en caché para no penalizar cada request."""
+    return _logs_insert_payload(row)
+
+
+auditoria_datos.configurar_insertador(_logs_insert_payload)
+auditoria_datos.instalar()
 
 
 def registrar_log_sistema(
@@ -5652,6 +5673,29 @@ async def registrar_respuesta_lenta(request: Request, call_next):
         except Exception:
             pass
     return response
+
+
+@app.middleware("http")
+async def contexto_modificaciones_datos(request: Request, call_next):
+    """Identifica al usuario de la petición para el log de modificaciones. No bloquea la ruta."""
+    usuario = None
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer ") and SECRET_KEY and ALGORITHM:
+        try:
+            usuario = jwt.decode(auth.split(" ", 1)[1], SECRET_KEY, algorithms=[ALGORITHM])
+        except Exception:
+            usuario = None
+    token_ctx = auditoria_datos.abrir_contexto(
+        usuario=usuario if isinstance(usuario, dict) else None,
+        ip=_client_ip(request),
+        endpoint=request.url.path,
+        metodo_http=request.method,
+        es_carga=auditoria_datos.ruta_es_carga(request.url.path, request.method),
+    )
+    try:
+        return await call_next(request)
+    finally:
+        auditoria_datos.cerrar_contexto(token_ctx)
 
 
 # Debe ir después de todos los @app.middleware("http") para quedar como capa externa y que
@@ -15877,6 +15921,8 @@ def _logs_query_base(
     excluir_accion: Optional[str] = None,
     excluir_acciones: Optional[List[str]] = None,
     excluir_modulo: Optional[str] = None,
+    q_text: Optional[str] = None,
+    busqueda_extendida: bool = True,
 ):
     q = supabase.table("logs").select("*")
     if usuario_id:
@@ -15899,7 +15945,22 @@ def _logs_query_base(
         q = q.gte("created_at", fecha_desde)
     if fecha_hasta:
         q = q.lte("created_at", fecha_hasta + "T23:59:59")
+    if q_text:
+        clause = auditoria_datos.clausula_busqueda(q_text, extendida=busqueda_extendida)
+        if clause:
+            q = q.or_(clause)
     return q.order("created_at", desc=True, nullsfirst=False).order("id", desc=True)
+
+
+def _logs_execute(build):
+    """Ejecuta la consulta y, si faltan columnas nuevas de búsqueda, reintenta sin ellas."""
+    try:
+        return build(True).execute().data
+    except Exception as e:
+        msg = str(e)
+        if any(tok in msg for tok in ("busqueda", "registro_etiqueta", "carga_id", "PGRST204")):
+            return build(False).execute().data
+        raise
 
 
 @app.get("/logs")
@@ -15914,6 +15975,7 @@ def get_logs(
     excluir_accion: Optional[str] = None,
     excluir_rutina_auth: bool = Query(False, description="Excluye LOGIN y LOGIN_FAIL (los 50 más recientes suelen ser solo inicios de sesión)."),
     excluir_modulo: Optional[str] = None,
+    q:            Optional[str] = None,
     limit:        int = 100,
     offset:       int = 0,
     current_user=Depends(require_logs_auditoria),
@@ -15922,20 +15984,25 @@ def get_logs(
     excluir_acciones = None
     if excluir_rutina_auth and not accion:
         excluir_acciones = ["LOGIN", "LOGIN_FAIL"]
-    q = _logs_query_base(
-        usuario_id=usuario_id,
-        modulo=modulo,
-        accion=accion,
-        categoria=categoria,
-        severidad=severidad,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        excluir_accion=excluir_accion if not excluir_acciones else None,
-        excluir_acciones=excluir_acciones,
-        excluir_modulo=excluir_modulo,
-    )
-    q = q.range(offset, offset + limit - 1)
-    return _sort_logs_rows(q.execute().data)
+
+    def build(extendida: bool):
+        query = _logs_query_base(
+            usuario_id=usuario_id,
+            modulo=modulo,
+            accion=accion,
+            categoria=categoria,
+            severidad=severidad,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            excluir_accion=excluir_accion if not excluir_acciones else None,
+            excluir_acciones=excluir_acciones,
+            excluir_modulo=excluir_modulo,
+            q_text=q,
+            busqueda_extendida=extendida,
+        )
+        return query.range(offset, offset + limit - 1)
+
+    return _sort_logs_rows(_logs_execute(build))
 
 
 @app.get("/logs/alertas")
@@ -16132,6 +16199,7 @@ def export_logs_xlsx(
     excluir_rutina_auth: bool = Query(False),
     excluir_modulo: Optional[str] = None,
     contrato_id: Optional[int] = None,
+    q:           Optional[str] = None,
     max_rows:    int = 5000,
     current_user=Depends(require_logs_auditoria),
 ):
@@ -16149,19 +16217,25 @@ def export_logs_xlsx(
     excluir_acciones = None
     if excluir_rutina_auth and not accion:
         excluir_acciones = ["LOGIN", "LOGIN_FAIL"]
-    q = _logs_query_base(
-        usuario_id=usuario_id,
-        modulo=modulo,
-        accion=accion,
-        categoria=categoria,
-        severidad=severidad,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        excluir_accion=excluir_accion if not excluir_acciones else None,
-        excluir_acciones=excluir_acciones,
-        excluir_modulo=excluir_modulo,
-    )
-    rows = _sort_logs_rows(q.limit(cap).execute().data or [])
+
+    def build(extendida: bool):
+        query = _logs_query_base(
+            usuario_id=usuario_id,
+            modulo=modulo,
+            accion=accion,
+            categoria=categoria,
+            severidad=severidad,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            excluir_accion=excluir_accion if not excluir_acciones else None,
+            excluir_acciones=excluir_acciones,
+            excluir_modulo=excluir_modulo,
+            q_text=q,
+            busqueda_extendida=extendida,
+        )
+        return query.limit(cap)
+
+    rows = _sort_logs_rows(_logs_execute(build) or [])
 
     caller_cid, _ = _caller_contract_scope(current_user)
     cid_meta = contrato_id or caller_cid
@@ -16256,6 +16330,7 @@ def export_logs_xlsx(
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         excluir_rutina_auth=bool(excluir_rutina_auth),
+        busqueda=q,
     )
     payload = build_logs_informe_xlsx(
         rows,
@@ -16286,6 +16361,7 @@ def export_logs_csv(
     excluir_accion: Optional[str] = None,
     excluir_rutina_auth: bool = Query(False),
     excluir_modulo: Optional[str] = None,
+    q:           Optional[str] = None,
     max_rows:    int = 5000,
     current_user=Depends(require_logs_auditoria),
 ):
@@ -16294,19 +16370,25 @@ def export_logs_csv(
     excluir_acciones = None
     if excluir_rutina_auth and not accion:
         excluir_acciones = ["LOGIN", "LOGIN_FAIL"]
-    q = _logs_query_base(
-        usuario_id=usuario_id,
-        modulo=modulo,
-        accion=accion,
-        categoria=categoria,
-        severidad=severidad,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        excluir_accion=excluir_accion if not excluir_acciones else None,
-        excluir_acciones=excluir_acciones,
-        excluir_modulo=excluir_modulo,
-    )
-    rows = _sort_logs_rows(q.limit(cap).execute().data or [])
+
+    def build(extendida: bool):
+        query = _logs_query_base(
+            usuario_id=usuario_id,
+            modulo=modulo,
+            accion=accion,
+            categoria=categoria,
+            severidad=severidad,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            excluir_accion=excluir_accion if not excluir_acciones else None,
+            excluir_acciones=excluir_acciones,
+            excluir_modulo=excluir_modulo,
+            q_text=q,
+            busqueda_extendida=extendida,
+        )
+        return query.limit(cap)
+
+    rows = _sort_logs_rows(_logs_execute(build) or [])
     import json as _json
 
     def _cell(v):
