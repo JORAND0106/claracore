@@ -1000,8 +1000,12 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
   const [nuevo, setNuevo] = useState("");
   const [msg, setMsg] = useState(null);
   const [eliminando, setEliminando] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const [editNombre, setEditNombre] = useState("");
+  const [guardando, setGuardando] = useState(false);
   const col = C(theme);
   const tdStyle = S.td(theme);
+  const tTok = tFrom(theme);
 
   const crear = async () => {
     const nombre = nuevo.trim();
@@ -1016,12 +1020,56 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
     }
   };
 
+  const iniciarEdicion = (c) => {
+    setEditId(c.id);
+    setEditNombre(c.nombre || "");
+    setMsg(null);
+  };
+
+  const cancelarEdicion = () => {
+    setEditId(null);
+    setEditNombre("");
+    setGuardando(false);
+  };
+
+  const guardarNombre = async (id) => {
+    const nombre = editNombre.trim().replace(/\s+/g, " ");
+    if (!nombre) {
+      setMsg({ type: "error", text: "El nombre del cargo no puede quedar vacío." });
+      return;
+    }
+    const actual = (cargos || []).find((x) => x.id === id);
+    if (actual && (actual.nombre || "").trim() === nombre) {
+      cancelarEdicion();
+      return;
+    }
+    const dup = (cargos || []).find(
+      (x) => x.id !== id && (x.nombre || "").trim().toLowerCase() === nombre.toLowerCase(),
+    );
+    if (dup) {
+      setMsg({ type: "error", text: `Ya existe un cargo llamado "${dup.nombre}".` });
+      return;
+    }
+    setGuardando(true);
+    try {
+      await call("PUT", `/admin/cargos/${id}`, { nombre });
+      setMsg({ type: "success", text: `Cargo renombrado a "${nombre}".` });
+      cancelarEdicion();
+      recargarCargos();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setGuardando(false);
+    }
+  };
+
   const eliminar = async (id, nombre) => {
     if (!window.confirm(`¿Eliminar el cargo "${nombre}"? Los usuarios con este cargo perderán el acceso.`)) return;
     setEliminando(id);
     try {
       await call("DELETE", `/admin/cargos/${id}`);
       setMsg({ type: "success", text: `Cargo "${nombre}" eliminado.` });
+      if (editId === id) cancelarEdicion();
       recargarCargos();
     } catch (e) {
       setMsg({ type: "error", text: e.message });
@@ -1029,6 +1077,35 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
       setEliminando(null);
     }
   };
+
+  const iconBtn = (title, onClick, disabled, children, danger = false) => (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 32,
+        height: 32,
+        padding: 0,
+        borderRadius: 8,
+        border: `1px solid ${danger ? "#dc262688" : tTok.border}`,
+        background: tTok.inputBg || "transparent",
+        color: danger ? "#ef4444" : tTok.text,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 0.75,
+        flexShrink: 0,
+        fontSize: "var(--cc-body, 15px)",
+        lineHeight: 1,
+      }}
+    >
+      {children}
+    </button>
+  );
 
   return (
     <div>
@@ -1063,9 +1140,37 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
           {cargos.map((c, i) => (
             <tr key={c.id}>
               <td style={{ ...tdStyle, color: col.textMuted, width: 40 }}>{i + 1}</td>
-              <td style={tdStyle}><span style={{ color: col.textTable }}>{c.nombre}</span></td>
               <td style={tdStyle}>
-                <button style={S.btn("danger", true)} disabled={eliminando === c.id} onClick={() => eliminar(c.id, c.nombre)}>
+                {editId === c.id ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <input
+                      autoFocus
+                      style={{ ...S.input, flex: 1, minWidth: 160, maxWidth: 360 }}
+                      value={editNombre}
+                      disabled={guardando}
+                      onChange={(e) => setEditNombre(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") guardarNombre(c.id);
+                        if (e.key === "Escape") cancelarEdicion();
+                      }}
+                      aria-label="Nuevo nombre del cargo"
+                    />
+                    {iconBtn("Guardar nombre", () => guardarNombre(c.id), guardando, guardando ? "…" : "✓")}
+                    {iconBtn("Cancelar", cancelarEdicion, guardando, "✕")}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: col.textTable }}>{c.nombre}</span>
+                    {iconBtn("Editar nombre del cargo", () => iniciarEdicion(c), eliminando === c.id || guardando, "✎")}
+                  </div>
+                )}
+              </td>
+              <td style={tdStyle}>
+                <button
+                  style={S.btn("danger", true)}
+                  disabled={eliminando === c.id || editId === c.id}
+                  onClick={() => eliminar(c.id, c.nombre)}
+                >
                   {eliminando === c.id ? "..." : "Eliminar"}
                 </button>
               </td>
@@ -8012,7 +8117,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
 
   const TITULOS = {
     usuarios:  { title: "Gestión de usuarios",    sub: "Pendientes y aprobados; rechazar los archiva fuera del sistema" },
-    cargos:    { title: "Gestión de cargos",      sub: "Crea y elimina cargos del sistema" },
+    cargos:    { title: "Gestión de cargos",      sub: "Crea, renombra y elimina cargos del sistema" },
     permisos:  { title: "Control de accesos",     sub: "Configura qué puede hacer cada cargo" },
     contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
