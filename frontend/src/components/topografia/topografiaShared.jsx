@@ -14,8 +14,10 @@ import {
   puede,
   determinarNivelValidacionTopo,
 } from './topografiaPermisosNivel'
+import { filenameFromContentDisposition } from './contentDispositionFilename.js'
 
 export { esDesarrolladorTopo, puede, determinarNivelValidacionTopo }
+export { filenameFromContentDisposition }
 
 function useTopoOfflineOptional() {
   return useTopoOffline()
@@ -481,8 +483,11 @@ export function useTopografiaApi(contratoId, token) {
     }
 
     const url = `${API_BASE}/topografia/${contratoId}${path}`
+    const fetchOptions = { ...options }
+    delete fetchOptions.captureDisposition
+    delete fetchOptions.offlineMeta
     try {
-      const res = await fetch(url, { ...options, headers: { ...headers, ...(options.headers || {}) } })
+      const res = await fetch(url, { ...fetchOptions, headers: { ...headers, ...(options.headers || {}) } })
       const ct = res.headers.get('content-type') || ''
       const isJson = ct.includes('application/json')
       const isPdf = ct.includes('application/pdf')
@@ -521,7 +526,14 @@ export function useTopografiaApi(contratoId, token) {
         throw new Error(msg)
       }
       if (res.status === 204) return null
-      if (isPdf || (isXlsx && accept.includes('spreadsheetml'))) return res.blob()
+      if (isPdf || (isXlsx && accept.includes('spreadsheetml'))) {
+        const blob = await res.blob()
+        if (options.captureDisposition) {
+          const fromHeader = filenameFromContentDisposition(res.headers.get('content-disposition'))
+          if (fromHeader) blob.__downloadName = fromHeader
+        }
+        return blob
+      }
       if (!isJson) {
         const text = await res.text()
         if (text.trimStart().startsWith('<!')) {
@@ -595,25 +607,30 @@ export function useTopografiaApi(contratoId, token) {
     return result
   }, [api, clearDraft, loadDraft, efectivoOffline])
 
-  const downloadPdf = useCallback(async (path, filename) => {
-    const blob = await api(path, { method: 'GET', headers: { Accept: 'application/pdf' } })
+  const downloadPdf = useCallback(async (path, filename, opts = {}) => {
+    const blob = await api(path, {
+      method: 'GET',
+      headers: { Accept: 'application/pdf' },
+      captureDisposition: !!opts.preferServerFilename,
+    })
     if (!(blob instanceof Blob) || blob.size < 80) {
       throw new Error('El servidor no devolvió un PDF válido. Reinicie el backend e intente de nuevo.')
     }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = filename
+    a.download = (opts.preferServerFilename && blob.__downloadName) || filename
     a.click()
     URL.revokeObjectURL(url)
   }, [api])
 
-  const downloadExcel = useCallback(async (path, filename) => {
+  const downloadExcel = useCallback(async (path, filename, opts = {}) => {
     const blob = await api(path, {
       method: 'GET',
       headers: {
         Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       },
+      captureDisposition: !!opts.preferServerFilename,
     })
     if (!(blob instanceof Blob) || blob.size < 80) {
       throw new Error('El servidor no devolvió un Excel válido. Reinicie el backend e intente de nuevo.')
@@ -621,7 +638,7 @@ export function useTopografiaApi(contratoId, token) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = filename
+    a.download = (opts.preferServerFilename && blob.__downloadName) || filename
     a.click()
     URL.revokeObjectURL(url)
   }, [api])

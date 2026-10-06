@@ -32,8 +32,11 @@ from topografia_planilla_tuberia import (
     RELACIONES_ATRAQUE,
     TIPOS_PLANILLA,
     abscisas_extremos_cartera,
+    aplicar_firmas_validacion_export,
     calcular_planilla_completa,
+    conservar_links_sicoe_vigentes,
     construir_fila_consolidado,
+    html_pie_firmas_planilla,
     filtrar_descuentos_manuales_por_tipo,
     es_codigo_desc_otros,
     lineas_planilla_a_registros_sicoe,
@@ -45,6 +48,7 @@ from topografia_planilla_tuberia import (
     origen_key_linea_sicoe,
     patch_so_registro_desde_linea_planilla,
     puntos_topograficos_desde_planilla,
+    nombre_archivo_planilla_tuberia,
     nombre_triturado_por_tipo,
     redondear_costo_directo_sicoe,
     resolver_lineas_por_origenes_seleccionados,
@@ -1645,26 +1649,7 @@ def _filtrar_sicoe_reportes_vigentes(
         logger.exception("filtrar sicoe_reportes vigentes")
         return planilla
 
-    by_id = {}
-    for r in rows:
-        try:
-            by_id[int(r["id"])] = r
-        except (TypeError, ValueError, KeyError):
-            continue
-
-    kept: list[dict] = []
-    for l in links:
-        try:
-            rid = int(l["reporte_id"])
-        except (TypeError, ValueError, KeyError):
-            continue
-        if rid not in by_id:
-            continue
-        row = dict(l)
-        nr = by_id[rid].get("numero_reporte")
-        if nr is not None:
-            row["numero_reporte"] = nr
-        kept.append(row)
+    kept = conservar_links_sicoe_vigentes(links, rows)
 
     if len(kept) == len(links):
         # Actualizar números si cambiaron, sin persistir si idéntico
@@ -3330,6 +3315,71 @@ def _contrato_para_pdf(contrato_id: int) -> dict:
     return row
 
 
+def _nombres_validadores_planilla(planilla: dict) -> dict[int, str]:
+    """Nombre y apellidos de quien validó cada nivel, desde usuarios."""
+    ids: list[int] = []
+    for key in ("nivel1_usuario_id", "nivel2_usuario_id"):
+        raw = (planilla or {}).get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {}
+    try:
+        data = (
+            supabase.table("usuarios")
+            .select("id,nombre,apellidos")
+            .in_("id", ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        logger.exception("nombres validadores planilla tuberia")
+        return {}
+    out: dict[int, str] = {}
+    for u in data:
+        try:
+            uid = int(u["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        nom = " ".join(
+            x
+            for x in (
+                str(u.get("nombre") or "").strip(),
+                str(u.get("apellidos") or "").strip(),
+            )
+            if x
+        ).strip()
+        if nom:
+            out[uid] = nom
+    return out
+
+
+def _links_reporte_vigente_export(contrato_id: int, planilla: dict) -> list[dict]:
+    """Reportes que existen hoy en so_reportes, igual que «Reportes SICOE»."""
+    vigente = _filtrar_sicoe_reportes_vigentes(contrato_id, planilla, persist=False)
+    meta = vigente.get("meta_cabecera") if isinstance(vigente, dict) else None
+    return _sicoe_links_from_meta(meta)
+
+
+def _nombre_descarga_planilla(
+    contrato_id: int,
+    planilla: dict,
+    *,
+    extension: str,
+    plantilla: bool,
+) -> str:
+    links = _links_reporte_vigente_export(contrato_id, planilla)
+    return nombre_archivo_planilla_tuberia(
+        links, extension=extension, plantilla=plantilla,
+    )
+
+
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}/excel")
 def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     """Exporta .xlsx (sin macros) construido desde el inventario JSON versionado."""
@@ -3343,15 +3393,18 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
 
     p = det["planilla"]
     calc = det.get("calculo") or {}
+    p_export = aplicar_firmas_validacion_export(p, _nombres_validadores_planilla(p))
     try:
-        content = build_planilla_tuberia_xlsx(planilla=p, calculo=calc, vacia=vacia)
+        content = build_planilla_tuberia_xlsx(planilla=p_export, calculo=calc, vacia=vacia)
     except FileNotFoundError as exc:
         raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         logger.exception("excel planilla tuberia")
         raise HTTPException(500, f"No se pudo generar Excel: {exc}") from exc
 
-    suffix = "_plantilla" if vacia else ""
+    fname = _nombre_descarga_planilla(
+        contrato_id, p, extension="xlsx", plantilla=vacia,
+    )
     _audit(
         contrato_id,
         planilla_id,
@@ -3362,11 +3415,7 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="planilla_tuberia_{planilla_id[:8]}{suffix}.xlsx"'
-            )
-        },
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 
@@ -3394,7 +3443,6 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
 
     nivel_hdr = "Terminado Filtro" if tipo == "FILTRO" else "Subrasante de Vía"
     meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
-    firmas = p.get("firmas") if isinstance(p.get("firmas"), dict) else {}
     titulo = (
         "PLANILLA DE INSTALACIÓN DE FILTROS"
         if tipo == "FILTRO"
@@ -3478,8 +3526,12 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         if vacia else ""
     )
     sec = calc.get("seccion") or {}
-    elaboro = firmas.get("elaboro_nombre") or ""
-    aprobo = firmas.get("aprobo_nombre") or ""
+    firmas_validacion = aplicar_firmas_validacion_export(
+        p, _nombres_validadores_planilla(p),
+    ).get("firmas") or {}
+    elaboro = str(firmas_validacion.get("elaboro_nombre") or "")
+    aprobo = str(firmas_validacion.get("aprobo_nombre") or "")
+    tabla_firmas = html_pie_firmas_planilla(elaboro, aprobo)
 
     from topografia_planilla_tuberia_pdf import (
         html_bloque_graficos_pdf,
@@ -3545,17 +3597,16 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         </tr></thead><tbody>{descs}</tbody></table>
       </td>
     </tr></table>
-    <table class="firmas"><tr>
-      <td><b>Elaboró</b><br/>{elaboro}<br/><span class="meta">Topografo de Obra (Contratista)</span></td>
-      <td><b>Aprobó:</b><br/>{aprobo}<br/><span class="meta">Topografo Interventoria</span></td>
-    </tr></table>
+    {tabla_firmas}
     </body></html>"""
     try:
         from topografia_utils import to_pdf_bytes
         content, media = to_pdf_bytes(html_doc, landscape=False), "application/pdf"
     except Exception:
         content, media = html_doc.encode("utf-8"), "text/html; charset=utf-8"
-    suffix = "_plantilla" if vacia else ""
+    fname = _nombre_descarga_planilla(
+        contrato_id, p, extension="pdf", plantilla=vacia,
+    )
     _audit(
         contrato_id,
         planilla_id,
@@ -3565,6 +3616,6 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     )
     return Response(
         content=content, media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}{suffix}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 

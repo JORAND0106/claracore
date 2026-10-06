@@ -742,7 +742,45 @@ export function origenKeyLineaAsociarSicoe(linea) {
   return `${scope}:${codigo}`
 }
 
-  /** Links SICOE guardados en meta_cabecera.sicoe_reportes */
+  /** Token de numero_reporte seguro para el nombre del archivo (mismo criterio que el backend). */
+export function tokenNumeroReporteArchivo(raw) {
+  if (raw == null || raw === '' || typeof raw === 'boolean') return ''
+  let txt
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    txt = Number.isInteger(raw) ? String(raw) : String(raw).trim()
+  } else {
+    txt = String(raw).trim()
+  }
+  return txt.replace(/[^0-9A-Za-z._-]+/g, '')
+}
+
+/** Números vigentes, en orden y sin repetir. */
+export function numerosReporteParaArchivo(links) {
+  const nums = []
+  const seen = new Set()
+  for (const lk of links || []) {
+    const token = tokenNumeroReporteArchivo(lk?.numero_reporte)
+    if (!token || seen.has(token)) continue
+    seen.add(token)
+    nums.push(token)
+  }
+  return nums
+}
+
+/**
+ * Nombre de descarga. El número del reporte vigente queda al final, antes de la extensión.
+ * Sin reporte: planilla_tuberia.pdf / .xlsx (sin el código interno).
+ */
+export function nombreArchivoPlanillaTuberia(links, { extension = 'pdf', plantilla = false } = {}) {
+  const ext = String(extension || 'pdf').trim().replace(/^\./, '') || 'pdf'
+  let base = 'planilla_tuberia'
+  if (plantilla) base += '_plantilla'
+  const nums = numerosReporteParaArchivo(links)
+  if (nums.length) base += `_${nums.join('_')}`
+  return `${base}.${ext}`
+}
+
+/** Links SICOE guardados en meta_cabecera.sicoe_reportes */
 export function linksSicoeDesdeMeta(meta) {
   const raw = meta && typeof meta === 'object' ? meta.sicoe_reportes : null
   if (!Array.isArray(raw)) return []

@@ -54,6 +54,7 @@ import {
   abscisasExtremosPlanilla,
   lineasPlanillaParaReporteSicoe,
   linksSicoeDesdeMeta,
+  nombreArchivoPlanillaTuberia,
   puedeAsociarReporteSicoe,
   puedeCrearReporteSicoe,
   puedeVerBotonCrearReporteSicoe,
@@ -771,10 +772,14 @@ export default function PlanillaTuberiaForm({
       return
     }
     try {
-      const suffix = exportPlantillaVacia ? '_plantilla' : ''
+      const filename = nombreArchivoPlanillaTuberia(
+        linksSicoeDesdeMeta(planilla?.meta_cabecera),
+        { extension: 'pdf', plantilla: exportPlantillaVacia },
+      )
       await downloadPdf(
         `/planillas-tuberia/${planilla.id}/pdf`,
-        `planilla_tuberia_${String(planilla.id).slice(0, 8)}${suffix}.pdf`,
+        filename,
+        { preferServerFilename: true },
       )
     } catch (e) {
       setErr(e.message)
@@ -788,10 +793,14 @@ export default function PlanillaTuberiaForm({
       return
     }
     try {
-      const suffix = exportPlantillaVacia ? '_plantilla' : ''
+      const filename = nombreArchivoPlanillaTuberia(
+        linksSicoeDesdeMeta(planilla?.meta_cabecera),
+        { extension: 'xlsx', plantilla: exportPlantillaVacia },
+      )
       await downloadExcel(
         `/planillas-tuberia/${planilla.id}/excel`,
-        `planilla_tuberia_${String(planilla.id).slice(0, 8)}${suffix}.xlsx`,
+        filename,
+        { preferServerFilename: true },
       )
     } catch (e) {
       setErr(e.message)

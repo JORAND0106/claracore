@@ -7,8 +7,12 @@ estos resultados; no recalculan.
 """
 from __future__ import annotations
 
+import html
 import math
+import re
+from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 TIPOS_PLANILLA = ("ALCANTARILLA", "FILTRO")
 # Filas mínimas al crear planilla / plantilla PDF vacía (UI + export).
@@ -1920,3 +1924,187 @@ def resolver_lineas_por_origenes_seleccionados(
 # Aliases estables para rutas / tests
 calcular_seccion_planilla = calcular_seccion
 altura_relleno_m = altura_relleno_atraque_m
+
+_TZ_BOGOTA = ZoneInfo("America/Bogota")
+_TZ_UTC = timezone.utc
+_ESTADO_FIRMA_APROBADO = "Aprobado"
+_RE_TOKEN_ARCHIVO = re.compile(r"[^0-9A-Za-z._-]+")
+
+
+def fecha_hora_colombia_sin_segundos(raw: Any) -> str:
+    """dd/mm/aaaa HH:MM en America/Bogota. Sin segundos ni fracciones.
+
+    Las marcas de validación se guardan en UTC. Un valor sin zona se trata como UTC.
+    """
+    if raw is None or isinstance(raw, bool):
+        return ""
+    try:
+        if isinstance(raw, datetime):
+            dt = raw
+        else:
+            s = str(raw).strip()
+            if not s:
+                return ""
+            if " " in s and "T" not in s.upper():
+                s = s.replace(" ", "T", 1)
+            if s.endswith("Z") or s.endswith("z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_TZ_UTC)
+        return dt.astimezone(_TZ_BOGOTA).strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def texto_pie_firma_validacion(estado: Any, nombre: Any, fecha: Any) -> str:
+    """Nombre y marca de un nivel Aprobado. Vacío si el nivel no está aprobado."""
+    if str(estado or "").strip() != _ESTADO_FIRMA_APROBADO:
+        return ""
+    nom = " ".join(str(nombre or "").split())
+    marca = fecha_hora_colombia_sin_segundos(fecha)
+    if nom and marca:
+        return f"{nom} · {marca}"
+    return nom or marca
+
+
+def _nombre_validador(nombres_por_id: dict, usuario_id: Any) -> str:
+    if usuario_id is None or str(usuario_id).strip() == "":
+        return ""
+    try:
+        uid = int(usuario_id)
+    except (TypeError, ValueError):
+        return ""
+    raw = nombres_por_id.get(uid)
+    if raw is None:
+        raw = nombres_por_id.get(str(uid))
+    return " ".join(str(raw or "").split())
+
+
+def textos_pie_firmas_validacion(
+    planilla: Optional[dict],
+    nombres_por_id: Optional[dict] = None,
+) -> tuple[str, str]:
+    """(Elaboró = contratista N1, Aprobó = interventoría N2)."""
+    p = planilla if isinstance(planilla, dict) else {}
+    nombres = nombres_por_id if isinstance(nombres_por_id, dict) else {}
+    elaboro = texto_pie_firma_validacion(
+        p.get("nivel1_estado"),
+        _nombre_validador(nombres, p.get("nivel1_usuario_id")),
+        p.get("nivel1_fecha"),
+    )
+    aprobo = texto_pie_firma_validacion(
+        p.get("nivel2_estado"),
+        _nombre_validador(nombres, p.get("nivel2_usuario_id")),
+        p.get("nivel2_fecha"),
+    )
+    return elaboro, aprobo
+
+
+def aplicar_firmas_validacion_export(
+    planilla: Optional[dict],
+    nombres_por_id: Optional[dict] = None,
+) -> dict:
+    """Copia de la planilla cuyo pie Elaboró/Aprobó es solo la validación aprobada.
+
+    No persiste. Un nivel que no está Aprobado deja el nombre en blanco,
+    aunque la planilla tenga un nombre configurado en `firmas`.
+    """
+    base = dict(planilla or {})
+    elaboro, aprobo = textos_pie_firmas_validacion(base, nombres_por_id)
+    firmas = dict(base.get("firmas") or {}) if isinstance(base.get("firmas"), dict) else {}
+    firmas["elaboro_nombre"] = elaboro
+    firmas["elaboro"] = elaboro
+    firmas["aprobo_nombre"] = aprobo
+    firmas["aprobo"] = aprobo
+    base["firmas"] = firmas
+    return base
+
+
+def conservar_links_sicoe_vigentes(links: Any, filas_so_reportes: Any) -> list[dict]:
+    """Deja solo reporte_id que existen hoy y refresca numero_reporte desde la fila viva.
+
+    Misma regla que la sección «Reportes SICOE» de la planilla.
+    """
+    by_id: dict[int, dict] = {}
+    for row in filas_so_reportes or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            by_id[int(row["id"])] = row
+        except (TypeError, ValueError, KeyError):
+            continue
+    kept: list[dict] = []
+    for item in links or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            rid = int(item["reporte_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if rid not in by_id:
+            continue
+        out = dict(item)
+        nr = by_id[rid].get("numero_reporte")
+        if nr is not None:
+            out["numero_reporte"] = nr
+        kept.append(out)
+    return kept
+
+
+def _token_numero_reporte_archivo(raw: Any) -> str:
+    if raw is None or isinstance(raw, bool):
+        return ""
+    if isinstance(raw, int):
+        txt = str(raw)
+    elif isinstance(raw, float):
+        txt = str(int(raw)) if raw.is_integer() else str(raw).strip()
+    else:
+        txt = str(raw).strip()
+    return _RE_TOKEN_ARCHIVO.sub("", txt)
+
+
+def numeros_reporte_para_archivo(links: Any) -> list[str]:
+    """Números de reporte, en orden, sin repetir y seguros para un nombre de archivo."""
+    nums: list[str] = []
+    seen: set[str] = set()
+    for item in links or []:
+        if not isinstance(item, dict):
+            continue
+        token = _token_numero_reporte_archivo(item.get("numero_reporte"))
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        nums.append(token)
+    return nums
+
+
+def html_pie_firmas_planilla(elaboro: str, aprobo: str) -> str:
+    """Pie Elaboró / Aprobó del PDF. El texto ya resuelto se escapa aquí."""
+    e = html.escape(elaboro or "", quote=True)
+    a = html.escape(aprobo or "", quote=True)
+    return (
+        '<table class="firmas"><tr>'
+        '<td><b>Elaboró</b><br/>'
+        f'{e}<br/><span class="meta">Topografo de Obra (Contratista)</span></td>'
+        '<td><b>Aprobó:</b><br/>'
+        f'{a}<br/><span class="meta">Topografo Interventoria</span></td>'
+        '</tr></table>'
+    )
+
+
+def nombre_archivo_planilla_tuberia(
+    links: Any,
+    *,
+    extension: str,
+    plantilla: bool = False,
+) -> str:
+    """planilla_tuberia[_plantilla][_12_15].ext — el número vigente cierra el nombre."""
+    ext = str(extension or "pdf").strip().lstrip(".") or "pdf"
+    base = "planilla_tuberia"
+    if plantilla:
+        base += "_plantilla"
+    nums = numeros_reporte_para_archivo(links)
+    if nums:
+        base += "_" + "_".join(nums)
+    return f"{base}.{ext}"
