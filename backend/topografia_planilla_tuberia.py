@@ -10,7 +10,7 @@ from __future__ import annotations
 import html
 import math
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -1929,6 +1929,34 @@ _TZ_BOGOTA = ZoneInfo("America/Bogota")
 _TZ_UTC = timezone.utc
 _ESTADO_FIRMA_APROBADO = "Aprobado"
 _RE_TOKEN_ARCHIVO = re.compile(r"[^0-9A-Za-z._-]+")
+_RE_ZONA_FINAL = re.compile(
+    r"\s+(?:UTC|GMT|COT|EST|EDT|America/Bogota)$",
+    re.IGNORECASE,
+)
+_RE_PARECE_FECHA = re.compile(r"\d{4}|\d{1,2}[/.-]\d{1,2}")
+# Mismo instante de sello N2 si `nivel2_fecha` no vino en la fila.
+_FECHAS_SELLO_NIVEL2 = ("validado_at", "comentario_interventoria_at")
+
+
+def _limpiar_marca_temporal(raw: str) -> str:
+    """Deja un ISO que `fromisoformat` pueda leer (offset corto, Z, zona escrita)."""
+    s = str(raw or "").strip().replace("\u00a0", " ")
+    if not s:
+        return ""
+    s = re.sub(r"\[[^\]]*\]\s*$", "", s).strip()
+    s = _RE_ZONA_FINAL.sub("", s).strip()
+    s = re.sub(r"([+-]\d{2}:?\d{2}(?::\d{2})?)[Zz]$", r"\1", s)
+    if s.endswith("Z") or s.endswith("z"):
+        s = s[:-1] + "+00:00"
+    if re.match(r"\d{4}-\d{2}-\d{2} ", s) and "T" not in s.upper():
+        s = s.replace(" ", "T", 1)
+    return s
+
+
+def _a_colombia_sin_segundos(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_TZ_UTC)
+    return dt.astimezone(_TZ_BOGOTA).strftime("%d/%m/%Y %H:%M")
 
 
 def fecha_hora_colombia_sin_segundos(raw: Any) -> str:
@@ -1940,21 +1968,28 @@ def fecha_hora_colombia_sin_segundos(raw: Any) -> str:
         return ""
     try:
         if isinstance(raw, datetime):
-            dt = raw
-        else:
-            s = str(raw).strip()
-            if not s:
-                return ""
-            if " " in s and "T" not in s.upper():
-                s = s.replace(" ", "T", 1)
-            if s.endswith("Z") or s.endswith("z"):
-                s = s[:-1] + "+00:00"
-            dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_TZ_UTC)
-        return dt.astimezone(_TZ_BOGOTA).strftime("%d/%m/%Y %H:%M")
-    except (TypeError, ValueError, OSError):
-        return ""
+            return _a_colombia_sin_segundos(raw)
+        if isinstance(raw, date):
+            return _a_colombia_sin_segundos(datetime(raw.year, raw.month, raw.day, tzinfo=_TZ_UTC))
+        if isinstance(raw, (int, float)):
+            n = float(raw)
+            if n > 10_000_000_000:
+                n /= 1000.0
+            return _a_colombia_sin_segundos(datetime.fromtimestamp(n, tz=_TZ_UTC))
+        s = _limpiar_marca_temporal(str(raw))
+        if not s:
+            return ""
+        return _a_colombia_sin_segundos(datetime.fromisoformat(s))
+    except (TypeError, ValueError, OSError, OverflowError):
+        s = _limpiar_marca_temporal(str(raw))
+        if not s or not _RE_PARECE_FECHA.search(s):
+            return ""
+        try:
+            from dateutil import parser as date_parser
+
+            return _a_colombia_sin_segundos(date_parser.parse(s))
+        except (TypeError, ValueError, OverflowError, OSError):
+            return ""
 
 
 def texto_pie_firma_validacion(estado: Any, nombre: Any, fecha: Any) -> str:
@@ -1966,6 +2001,23 @@ def texto_pie_firma_validacion(estado: Any, nombre: Any, fecha: Any) -> str:
     if nom and marca:
         return f"{nom} · {marca}"
     return nom or marca
+
+
+def _marca_aprobacion_nivel(planilla: dict, nivel: int) -> str:
+    """Hora de la aprobación, del mismo registro que `nivel{n}_usuario_id`.
+
+    La fuente es `nivel{n}_fecha` (se escribe en el mismo update que el usuario).
+    En interventoría, si esa columna no trae una hora legible, se usa el sello
+    de la misma aprobación (`validado_at` o el comentario de interventoría).
+    """
+    candidatos = [planilla.get(f"nivel{nivel}_fecha")]
+    if nivel == 2:
+        candidatos.extend(planilla.get(k) for k in _FECHAS_SELLO_NIVEL2)
+    for raw in candidatos:
+        marca = fecha_hora_colombia_sin_segundos(raw)
+        if marca:
+            return marca
+    return ""
 
 
 def _nombre_validador(nombres_por_id: dict, usuario_id: Any) -> str:
@@ -1988,17 +2040,17 @@ def textos_pie_firmas_validacion(
     """(Elaboró = contratista N1, Aprobó = interventoría N2)."""
     p = planilla if isinstance(planilla, dict) else {}
     nombres = nombres_por_id if isinstance(nombres_por_id, dict) else {}
-    elaboro = texto_pie_firma_validacion(
-        p.get("nivel1_estado"),
-        _nombre_validador(nombres, p.get("nivel1_usuario_id")),
-        p.get("nivel1_fecha"),
-    )
-    aprobo = texto_pie_firma_validacion(
-        p.get("nivel2_estado"),
-        _nombre_validador(nombres, p.get("nivel2_usuario_id")),
-        p.get("nivel2_fecha"),
-    )
-    return elaboro, aprobo
+    def _linea(nivel: int) -> str:
+        if str(p.get(f"nivel{nivel}_estado") or "").strip() != _ESTADO_FIRMA_APROBADO:
+            return ""
+        nom = _nombre_validador(nombres, p.get(f"nivel{nivel}_usuario_id"))
+        # `nivel{n}_fecha` vive en el mismo registro que `nivel{n}_usuario_id`.
+        marca = _marca_aprobacion_nivel(p, nivel)
+        if nom and marca:
+            return f"{nom} · {marca}"
+        return nom or marca
+
+    return _linea(1), _linea(2)
 
 
 def aplicar_firmas_validacion_export(
@@ -2107,17 +2159,29 @@ def numeros_reporte_para_archivo(links: Any) -> list[str]:
     return nums
 
 
+def _html_celda_firma(titulo: str, texto: str, rol: str) -> str:
+    """Nombre y, debajo, la hora. La celda derecha recorta el final de una sola línea."""
+    partes = str(texto or "").split(" · ", 1)
+    nom = html.escape(partes[0], quote=True)
+    marca = html.escape(partes[1], quote=True) if len(partes) > 1 else ""
+    marca_html = f"{marca}<br/>" if marca else ""
+    return (
+        '<td width="50%">'
+        f"<b>{titulo}</b><br/>"
+        f"{nom}<br/>"
+        f"{marca_html}"
+        f'<span class="meta">{rol}</span>'
+        "</td>"
+    )
+
+
 def html_pie_firmas_planilla(elaboro: str, aprobo: str) -> str:
     """Pie Elaboró / Aprobó del PDF. El texto ya resuelto se escapa aquí."""
-    e = html.escape(elaboro or "", quote=True)
-    a = html.escape(aprobo or "", quote=True)
     return (
-        '<table class="firmas"><tr>'
-        '<td><b>Elaboró</b><br/>'
-        f'{e}<br/><span class="meta">Topografo de Obra (Contratista)</span></td>'
-        '<td><b>Aprobó:</b><br/>'
-        f'{a}<br/><span class="meta">Topografo Interventoria</span></td>'
-        '</tr></table>'
+        '<table class="firmas" width="100%"><tr>'
+        + _html_celda_firma("Elaboró", elaboro, "Topografo de Obra (Contratista)")
+        + _html_celda_firma("Aprobó:", aprobo, "Topografo Interventoria")
+        + "</tr></table>"
     )
 
 

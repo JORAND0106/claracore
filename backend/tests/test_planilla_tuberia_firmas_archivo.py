@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 from topografia_planilla_tuberia import (
     aplicar_firmas_validacion_export,
     conservar_links_sicoe_vigentes,
+    fecha_hora_colombia_sin_segundos,
     html_pie_firmas_planilla,
     nombre_archivo_planilla_tuberia,
 )
@@ -84,11 +85,16 @@ class TestPieFirmasYNombreArchivo(unittest.TestCase):
 
         html = html_pie_firmas_planilla(_ELABORO, _APROBO)
         self.assertIn("Elaboró", html)
-        self.assertIn(_ELABORO, html)
+        self.assertIn("Ana Gómez", html)
+        self.assertIn("06/10/2026 14:35", html)
         self.assertIn("Aprobó:", html)
-        self.assertIn(_APROBO, html)
+        self.assertIn("Luis Pérez", html)
+        self.assertIn("06/10/2026 16:10", html)
         self.assertIn("Topografo de Obra (Contratista)", html)
         self.assertIn("Topografo Interventoria", html)
+        # La hora va en su propio renglón: la celda de interventoría no la recorta.
+        self.assertIn("Luis Pérez<br/>06/10/2026 16:10<br/>", html)
+        self.assertIn("Ana Gómez<br/>06/10/2026 14:35<br/>", html)
 
         ws = _excel(exportada)
         self.assertEqual(ws["A65"].value, _ELABORO)
@@ -126,7 +132,7 @@ class TestPieFirmasYNombreArchivo(unittest.TestCase):
         )
 
         html = html_pie_firmas_planilla(_ELABORO, "")
-        self.assertIn(_ELABORO, html)
+        self.assertIn("Ana Gómez<br/>06/10/2026 14:35<br/>", html)
         self.assertNotIn("Luis Pérez", html)
         self.assertNotIn("Otro configurado", html)
         self.assertIn("<b>Aprobó:</b><br/><br/>", html)
@@ -165,8 +171,8 @@ class TestPieFirmasYNombreArchivo(unittest.TestCase):
             exportada["firmas"]["elaboro_nombre"],
             exportada["firmas"]["aprobo_nombre"],
         )
-        self.assertIn(_ELABORO, html)
-        self.assertIn(_APROBO, html)
+        self.assertIn("Ana Gómez<br/>06/10/2026 14:35<br/>", html)
+        self.assertIn("Luis Pérez<br/>06/10/2026 16:10<br/>", html)
         ws = _excel(exportada)
         self.assertEqual(ws["A65"].value, _ELABORO)
         self.assertEqual(ws["H65"].value, _APROBO)
@@ -195,6 +201,100 @@ class TestPieFirmasYNombreArchivo(unittest.TestCase):
         self.assertIn("nombre_archivo_planilla_tuberia", src)
         self.assertIn("_filtrar_sicoe_reportes_vigentes", src)
         self.assertIn("conservar_links_sicoe_vigentes", src)
+
+    def test_hora_interventoria_si_nivel2_fecha_no_parsea_usa_el_sello(self):
+        """El nombre sale de nivel2_usuario_id; la hora, del mismo registro.
+
+        Si `nivel2_fecha` no es legible, el sello de esa aprobación (`validado_at`)
+        ocupa el mismo lugar. Contratista sigue leyendo solo `nivel1_fecha`.
+        """
+        p = _planilla(
+            nivel1_estado="Aprobado",
+            nivel1_usuario_id=10,
+            nivel1_fecha=_N1,
+            nivel2_estado="Aprobado",
+            nivel2_usuario_id=20,
+            nivel2_fecha="no-es-una-fecha",
+            validado_at="2026-10-06T21:10:07.999999+00:00Z",
+            comentario_interventoria_at="2026-01-01T00:00:00+00:00",
+        )
+        exportada = aplicar_firmas_validacion_export(p, _NOMBRES)
+        self.assertEqual(exportada["firmas"]["elaboro_nombre"], _ELABORO)
+        self.assertEqual(exportada["firmas"]["aprobo_nombre"], _APROBO)
+        self.assertEqual(
+            fecha_hora_colombia_sin_segundos("2026-10-06T21:10:07.123456 UTC"),
+            "06/10/2026 16:10",
+        )
+        self.assertEqual(
+            fecha_hora_colombia_sin_segundos("06 Oct 2026 21:10:07 GMT"),
+            "06/10/2026 16:10",
+        )
+
+    def test_pdf_muestra_la_hora_de_los_dos_niveles_y_excel_la_misma(self):
+        import pymupdf
+        from topografia_utils import to_pdf_bytes
+
+        ambos = aplicar_firmas_validacion_export(
+            _planilla(
+                nivel1_estado="Aprobado",
+                nivel1_usuario_id=10,
+                nivel1_fecha=_N1,
+                nivel2_estado="Aprobado",
+                nivel2_usuario_id=20,
+                nivel2_fecha=_N2,
+            ),
+            _NOMBRES,
+        )
+        solo = aplicar_firmas_validacion_export(
+            _planilla(
+                nivel1_estado="Aprobado",
+                nivel1_usuario_id=10,
+                nivel1_fecha=_N1,
+                nivel2_estado="Pendiente",
+                nivel2_usuario_id=20,
+                nivel2_fecha=_N2,
+                validado_at=_N2,
+            ),
+            _NOMBRES,
+        )
+
+        def _pdf(elaboro, aprobo):
+            html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
+            <style>
+            @page {{ size: letter portrait; margin: 6mm 5mm; }}
+            body{{font-family:Arial,sans-serif;font-size:6.5pt;color:#0f172a}}
+            .firmas{{width:100%}}
+            .firmas td{{width:50%;font-size:6.5pt;vertical-align:top}}
+            .meta{{font-size:6.5pt}}
+            </style></head><body>
+            {html_pie_firmas_planilla(elaboro, aprobo)}
+            </body></html>"""
+            return pymupdf.open(stream=to_pdf_bytes(html, landscape=False), filetype="pdf")[0]
+
+        pag_ambos = _pdf(ambos["firmas"]["elaboro_nombre"], ambos["firmas"]["aprobo_nombre"])
+        palabras = pag_ambos.get_text("words")
+        def _xs(texto):
+            return [w[0] for w in palabras if w[4] == texto]
+        self.assertTrue(_xs("14:35"))
+        self.assertTrue(_xs("16:10"))
+        self.assertLess(max(_xs("14:35")), 200)
+        self.assertGreater(min(_xs("16:10")), 250)
+        self.assertIn("Ana Gómez", pag_ambos.get_text())
+        self.assertIn("Luis Pérez", pag_ambos.get_text())
+
+        ws = _excel(ambos)
+        self.assertEqual(ws["A65"].value, _ELABORO)
+        self.assertEqual(ws["H65"].value, _APROBO)
+
+        pag_solo = _pdf(solo["firmas"]["elaboro_nombre"], solo["firmas"]["aprobo_nombre"])
+        texto_solo = pag_solo.get_text()
+        self.assertIn("14:35", texto_solo)
+        self.assertIn("Ana Gómez", texto_solo)
+        self.assertNotIn("16:10", texto_solo)
+        self.assertNotIn("Luis Pérez", texto_solo)
+        ws_solo = _excel(solo)
+        self.assertEqual(ws_solo["A65"].value, _ELABORO)
+        self.assertFalse(ws_solo["H65"].value)
 
 
 if __name__ == "__main__":
