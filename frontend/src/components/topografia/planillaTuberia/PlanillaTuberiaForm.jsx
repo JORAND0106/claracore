@@ -59,6 +59,7 @@ import {
   puedeCrearReporteSicoe,
   puedeVerBotonCrearReporteSicoe,
   etiquetaReportesAsociadosLista,
+  planillaListaSinReporteVigente,
   etiquetaValidacionLista,
   normalizarEvidenciasFotograficas,
   validarEvidenciasFotograficas,
@@ -2092,7 +2093,10 @@ export default function PlanillaTuberiaForm({
               </tr>
             </thead>
             <tbody>
-              {lista.map((p, idx) => (
+              {lista.map((p, idx) => {
+                const sinReporteVigente = planillaListaSinReporteVigente(p)
+                const tdFila = sinReporteVigente ? { ...tdLista, background: '#fffbeb' } : tdLista
+                return (
                 <tr
                   key={p.id}
                   onClick={() => !busy && abrir(p.id)}
@@ -2104,26 +2108,33 @@ export default function PlanillaTuberiaForm({
                   }}
                   tabIndex={0}
                   role="button"
-                  title={`Abrir «${p.nombre || p.tipo}»`}
-                  style={{ cursor: busy ? 'wait' : 'pointer' }}
+                  title={
+                    sinReporteVigente
+                      ? `Sin reporte vigente en SICOE Obra. Abrir «${p.nombre || p.tipo}»`
+                      : `Abrir «${p.nombre || p.tipo}»`
+                  }
+                  style={{
+                    cursor: busy ? 'wait' : 'pointer',
+                    ...(sinReporteVigente ? { background: '#fffbeb' } : null),
+                  }}
                 >
-                  <td style={{ ...tdLista, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
-                  <td style={{ ...tdLista, fontWeight: 600 }}>
+                  <td style={{ ...tdFila, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
+                  <td style={{ ...tdFila, fontWeight: 600 }}>
                     {p.nombre || p.tipo}
                     <span style={{ display: 'block', fontWeight: 400, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
                       {p.tipo} · {p.estado}{p.pk_id ? ` · ${p.pk_id}` : ''}
                     </span>
                   </td>
-                  <td style={tdLista}>{fmtFechaLista(p.created_at)}</td>
-                  <td style={tdLista} title={p.nivel1_usuario_nombre || undefined}>
+                  <td style={tdFila}>{fmtFechaLista(p.created_at)}</td>
+                  <td style={tdFila} title={p.nivel1_usuario_nombre || undefined}>
                     {etiquetaValidacionLista(p.nivel1_estado, p.nivel1_fecha)}
                   </td>
-                  <td style={tdLista} title={p.nivel2_usuario_nombre || undefined}>
+                  <td style={tdFila} title={p.nivel2_usuario_nombre || undefined}>
                     {etiquetaValidacionLista(p.nivel2_estado, p.nivel2_fecha)}
                   </td>
-                  <td style={tdLista}>{etiquetaReportesAsociadosLista(p)}</td>
+                  <td style={tdFila}>{etiquetaReportesAsociadosLista(p)}</td>
                   <td
-                    style={{ ...tdLista, textAlign: 'center' }}
+                    style={{ ...tdFila, textAlign: 'center' }}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
@@ -2138,7 +2149,8 @@ export default function PlanillaTuberiaForm({
                     />
                   </td>
                 </tr>
-              ))}
+                )
+              })}
               {!lista.length && (
                 <tr>
                   <td colSpan={7} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>

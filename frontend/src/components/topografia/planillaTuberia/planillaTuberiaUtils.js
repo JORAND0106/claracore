@@ -805,6 +805,12 @@ export function linksSicoeDesdeMeta(meta) {
  * Etiqueta compacta de reportes asociados en el listado.
  * Acepta `reportes_sicoe` del API de listado o links de meta.
  */
+/** La grilla ya trae `reportes_sicoe` filtrado a reportes que existen hoy. */
+export function planillaListaSinReporteVigente(planilla) {
+  const links = Array.isArray(planilla?.reportes_sicoe) ? planilla.reportes_sicoe : []
+  return !links.some((lk) => lk && lk.reporte_id != null)
+}
+
 export function etiquetaReportesAsociadosLista(planillaOLinks) {
   const links = Array.isArray(planillaOLinks)
     ? planillaOLinks
