@@ -936,6 +936,10 @@ class CargoCreate(BaseModel):
     categoria_id: Optional[int] = None
 
 
+class CargoUpdate(BaseModel):
+    nombre: str
+
+
 class GuiaCreate(BaseModel):
     titulo: str
     modulo: Optional[str] = None
@@ -8771,9 +8775,66 @@ def rechazar_usuario(usuario_id: int, current_user=Depends(get_current_user)):
 
 @app.post("/admin/cargos")
 def crear_cargo(cargo: CargoCreate, current_user=Depends(get_current_user)):
+    from cargos_service import validar_nombre_cargo
+
+    existentes = supabase.table("cargos").select("id, nombre").execute().data or []
+    limpio, err = validar_nombre_cargo(
+        cargo.nombre,
+        nombres_existentes=[],
+        existentes_con_id=[(int(r["id"]), r.get("nombre") or "") for r in existentes if r.get("id") is not None],
+    )
+    if err:
+        raise HTTPException(status_code=400, detail=err)
     return supabase.table("cargos").insert({
-        "nombre": cargo.nombre, "rol_id": cargo.rol_id, "categoria_id": cargo.categoria_id
+        "nombre": limpio, "rol_id": cargo.rol_id, "categoria_id": cargo.categoria_id
     }).execute().data
+
+
+@app.put("/admin/cargos/{cargo_id}")
+def renombrar_cargo(cargo_id: int, body: CargoUpdate, current_user=Depends(get_current_user)):
+    """
+    Renombra un cargo. Los usuarios siguen apuntando por cargo_id; cargo_nombre
+    se resuelve desde `cargos` en login/`/usuarios/me`/listados. No toca permisos.
+    """
+    from cargos_service import validar_nombre_cargo
+
+    row = supabase.table("cargos").select("id, nombre").eq("id", cargo_id).limit(1).execute().data
+    if not row:
+        raise HTTPException(status_code=404, detail="Cargo no encontrado.")
+    existentes = supabase.table("cargos").select("id, nombre").execute().data or []
+    limpio, err = validar_nombre_cargo(
+        body.nombre,
+        nombres_existentes=[],
+        cargo_id_excluir=cargo_id,
+        existentes_con_id=[(int(r["id"]), r.get("nombre") or "") for r in existentes if r.get("id") is not None],
+    )
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    anterior = (row[0].get("nombre") or "").strip()
+    if limpio.casefold() == anterior.casefold() and limpio == anterior:
+        return {"id": cargo_id, "nombre": anterior, "mensaje": "Sin cambios."}
+    updated = (
+        supabase.table("cargos")
+        .update({"nombre": limpio})
+        .eq("id", cargo_id)
+        .execute()
+        .data
+    )
+    try:
+        registrar_log(
+            current_user,
+            "RENOMBRAR",
+            "CARGOS",
+            "cargo",
+            str(cargo_id),
+            {"antes": anterior, "despues": limpio},
+        )
+    except Exception:
+        pass
+    if updated:
+        return updated[0] if isinstance(updated, list) else updated
+    return {"id": cargo_id, "nombre": limpio}
+
 
 @app.delete("/admin/cargos/{cargo_id}")
 def eliminar_cargo(cargo_id: int, current_user=Depends(get_current_user)):
