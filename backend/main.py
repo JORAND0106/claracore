@@ -28430,6 +28430,21 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             _invalidate_dashboard_financial_caches(int(contrato_id))
         except Exception:
             pass
+    # Planilla de tubería enlazada: dimensiones y cantidad vuelven a la tabla.
+    # No altera la validación del PUT. Ignora registros sellados y los creados a mano.
+    _dims_planilla = {"longitud", "ancho", "espesor", "cantidad", "cantidad_total"}
+    if (not sellado) and (set(data.keys()) & _dims_planilla):
+        try:
+            from topografia_planilla_tuberia_routes import (
+                sincronizar_planilla_desde_registro_sicoe,
+            )
+            sincronizar_planilla_desde_registro_sicoe(
+                int(contrato_id), int(registro_id), prev_row, row, current_user,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "sync planilla desde registro sicoe %s", registro_id,
+            )
     return row
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/registros")

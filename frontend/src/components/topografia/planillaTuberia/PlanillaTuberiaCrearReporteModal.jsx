@@ -205,6 +205,7 @@ export default function PlanillaTuberiaCrearReporteModal({
   /** Nodo fin (obligatorio en Crear reporte). */
   nodoFinalDefault = '',
   lineasPreview = [],
+  itemsPorLinea = null,
   apiCrear,
   ui,
   logoUrl,
@@ -372,6 +373,7 @@ export default function PlanillaTuberiaCrearReporteModal({
         abs_inicio: numOrNull(absIni),
         abs_final: numOrNull(absFin),
         esquema_data_uri: esquemaDataUri || null,
+        sicoe_items_por_linea: itemsPorLinea || {},
       })
       onCreated?.(res)
       onClose?.()
@@ -692,7 +694,7 @@ export default function PlanillaTuberiaCrearReporteModal({
               }}
               >
                 <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                  Se generarán {lineasPreview.length} registro(s) en «Sin Asignar Ítem»:
+                  Se generarán {lineasPreview.length} registro(s) en Ítem/Registros, con el ítem ya asignado:
                 </div>
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
                   {lineasPreview.slice(0, 12).map((l, i) => (

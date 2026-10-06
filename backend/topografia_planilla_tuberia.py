@@ -1637,11 +1637,13 @@ def lineas_planilla_a_registros_sicoe(
     def _push(
         nombre: Any, unidad: Any, long: Any, ancho: Any, espesor: Any, cant: Any,
         *, origen: str, codigo: str, observacion: str,
+        item_cant_codigo: Optional[str] = None,
     ) -> None:
         if not _cantidad_sicoe_no_cero(cant):
             return
         txt = str(nombre or codigo or "").strip() or codigo
         dims = dims_y_cantidad_registro_sicoe(long, ancho, espesor, cant)
+        padre = str(item_cant_codigo or codigo or "").strip().upper() or None
         out.append({
             "nombre": txt,
             "descripcion": txt,
@@ -1652,6 +1654,8 @@ def lineas_planilla_a_registros_sicoe(
             "item_descripcion": None,
             "_origen_codigo": codigo,
             "_origen_tabla": origen,
+            # Línea de Resumen de la que hereda el ítem de cobro (descuento → padre).
+            "_item_cant_codigo": padre,
         })
 
     # Positivos: bruto del resumen (descuentos de volumen/área van aparte en negativo).
@@ -1676,6 +1680,7 @@ def lineas_planilla_a_registros_sicoe(
             n.get("long"), n.get("ancho"), n.get("espesor"), cant_f,
             origen="cantidades", codigo=codigo,
             observacion=formatear_observacion_registro_sicoe(nombre, tipo, tramo),
+            item_cant_codigo=codigo,
         )
 
     # Negativos: Descuentos Específicos ≠ 0
@@ -1693,11 +1698,15 @@ def lineas_planilla_a_registros_sicoe(
             continue
         cant_neg = -abs(cant_abs)
         nombre = d.get("nombre") or codigo
+        padre_desc = d.get("item_cant_codigo")
+        if not padre_desc:
+            padre_desc = (_meta_item_descuento(codigo, str(tipo or "")) or {}).get("item_cant_codigo")
         _push(
             nombre, d.get("unidad") or "m³",
             d.get("long"), d.get("ancho"), d.get("espesor"), cant_neg,
             origen="descuentos", codigo=codigo,
             observacion=formatear_observacion_descuento_sicoe(codigo, nombre, tipo, tramo),
+            item_cant_codigo=padre_desc,
         )
 
     # Negativos: descuentos de volumen (EXC_ROC / Otros → línea Resumen)
@@ -1718,6 +1727,7 @@ def lineas_planilla_a_registros_sicoe(
             d.get("long"), d.get("ancho"), d.get("espesor"), cant_neg,
             origen="descuentos", codigo=codigo,
             observacion=formatear_observacion_descuento_volumen_sicoe(d, tipo, tramo),
+            item_cant_codigo=d.get("item_cant_codigo") or d.get("campo"),
         )
     return out
 
@@ -1767,6 +1777,7 @@ def mapa_lineas_sicoe_por_origen(
             "cantidad_total": line.get("cantidad_total"),
             "_origen_tabla": line.get("_origen_tabla"),
             "_origen_codigo": line.get("_origen_codigo"),
+            "_item_cant_codigo": line.get("_item_cant_codigo"),
         }
     # Incluir ceros del catálogo de descuentos específicos (para poder bajar a 0 en sync).
     for d in calculo.get("descuentos") or []:
