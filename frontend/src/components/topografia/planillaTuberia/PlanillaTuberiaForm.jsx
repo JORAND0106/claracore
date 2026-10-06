@@ -69,6 +69,7 @@ import {
   siguienteCodigoDescOtros,
   desgloseAtraqueAlcantarilla,
   pasosDesgloseAtraque,
+  notifyPlanillaTuberiaAlerta,
 } from './planillaTuberiaUtils'
 import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
@@ -323,6 +324,7 @@ export default function PlanillaTuberiaForm({
       await cargarLista()
       setEditorOpen(true)
       setMsg('Planilla creada.')
+      notifyPlanillaTuberiaAlerta(contratoId)
     } catch (e) {
       setErr(e.message)
     } finally {
@@ -754,6 +756,7 @@ export default function PlanillaTuberiaForm({
           tiene: false,
         })
       }
+      notifyPlanillaTuberiaAlerta(contratoId)
       setConfirmEliminar(null)
       volverAlListado(teniaDatos
         ? 'Planilla eliminada (incluía datos de cartera).'
@@ -2448,6 +2451,7 @@ export default function PlanillaTuberiaForm({
               tiene: true,
             })
           }
+          notifyPlanillaTuberiaAlerta(contratoId)
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }
@@ -2515,6 +2519,7 @@ export default function PlanillaTuberiaForm({
               tiene: true,
             })
           }
+          notifyPlanillaTuberiaAlerta(contratoId)
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }

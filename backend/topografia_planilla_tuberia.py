@@ -2052,6 +2052,34 @@ def conservar_links_sicoe_vigentes(links: Any, filas_so_reportes: Any) -> list[d
     return kept
 
 
+def links_sicoe_meta_planilla(planilla: Any) -> list[dict]:
+    """Links guardados en meta_cabecera.sicoe_reportes (aún sin filtrar vigencia)."""
+    if not isinstance(planilla, dict):
+        return []
+    meta = planilla.get("meta_cabecera")
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("sicoe_reportes")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict) and item.get("reporte_id") is not None]
+
+
+def planilla_sin_reporte_vigente(planilla: Any, filas_so_reportes: Any) -> bool:
+    """True si la planilla no tiene ningún reporte que exista hoy en so_reportes."""
+    links = links_sicoe_meta_planilla(planilla)
+    return len(conservar_links_sicoe_vigentes(links, filas_so_reportes)) == 0
+
+
+def contar_planillas_sin_reporte_vigente(planillas: Any, filas_so_reportes: Any) -> int:
+    """Cuántas planillas del contrato quedan sin reporte vigente asociado."""
+    total = 0
+    for planilla in planillas or []:
+        if isinstance(planilla, dict) and planilla_sin_reporte_vigente(planilla, filas_so_reportes):
+            total += 1
+    return total
+
+
 def _token_numero_reporte_archivo(raw: Any) -> str:
     if raw is None or isinstance(raw, bool):
         return ""

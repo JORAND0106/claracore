@@ -780,6 +780,20 @@ export function nombreArchivoPlanillaTuberia(links, { extension = 'pdf', plantil
   return `${base}.${ext}`
 }
 
+/** Avisa al ícono de Topografía que el conjunto de planillas sin reporte pudo cambiar. */
+export const PLANILLA_TUBERIA_ALERTA_EVENT = 'topo-planilla-tuberia-alerta'
+
+export function notifyPlanillaTuberiaAlerta(contratoId) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
+  try {
+    window.dispatchEvent(new CustomEvent(PLANILLA_TUBERIA_ALERTA_EVENT, {
+      detail: { contratoId: contratoId != null && contratoId !== '' ? Number(contratoId) : null },
+    }))
+  } catch {
+    /* noop */
+  }
+}
+
 /** Links SICOE guardados en meta_cabecera.sicoe_reportes */
 export function linksSicoeDesdeMeta(meta) {
   const raw = meta && typeof meta === 'object' ? meta.sicoe_reportes : null
