@@ -2462,7 +2462,6 @@ def crear_reporte_sicoe_desde_planilla(
         ESTADO_REPORTE_CON_ITEM,
         campos_item_en_registro,
         construir_enlace,
-        item_capitulo_distinto,
         item_de_linea,
         items_desde_meta,
         lineas_sin_item,
@@ -2480,14 +2479,8 @@ def crear_reporte_sicoe_desde_planilla(
     faltan_item = lineas_sin_item(lineas, items_cobro, p.get("tipo"))
     if faltan_item:
         raise HTTPException(422, mensaje_faltan_items(faltan_item))
-    for line in lineas:
-        item_line = item_de_linea(line, items_cobro, p.get("tipo"))
-        if item_line and item_capitulo_distinto(item_line, capitulo):
-            raise HTTPException(
-                422,
-                f"El ítem {item_line.get('item_numero')} pertenece al capítulo "
-                f"«{item_line.get('capitulo')}» y el reporte usa «{capitulo}».",
-            )
+    # Un ítem de otro capítulo no bloquea: el formulario lo confirma y, si el
+    # usuario sigue, el reporte queda con el capítulo seleccionado y esos ítems.
 
     lat, lng = _coords_wgs_planilla(p)
     # costado del maestro PK («Derecho») → catálogo so_reportes.margen («Derecha»)

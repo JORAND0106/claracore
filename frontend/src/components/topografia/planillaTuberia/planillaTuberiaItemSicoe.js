@@ -28,6 +28,34 @@ export function lineasSinItem(lineas, items) {
   return faltan
 }
 
+/** Misma regla que `item_capitulo_distinto`: vacío en cualquiera de los dos no es diferencia. */
+export function capituloItemDistinto(item, capituloReporte) {
+  const capItem = String(item?.capitulo || '').trim()
+  const capRep = String(capituloReporte || '').trim()
+  if (!capItem || !capRep) return false
+  return capItem !== capRep
+}
+
+/** Primer ítem de otro capítulo, con el texto que ya mostraba el formulario. */
+export function mensajeCapituloDistinto(lineas, items, capituloReporte) {
+  const map = items && typeof items === 'object' ? items : {}
+  const capRep = String(capituloReporte || '').trim()
+  for (const l of lineas || []) {
+    const codigo = String(l?.codigo || '').toUpperCase()
+    const scope = String(l?.scope || 'cantidades').toLowerCase()
+    const origen = `${scope}:${codigo}`
+    const padre = scope === 'descuentos'
+      ? padreDeDescuento(codigo, l?.item_cant_codigo)
+      : origen
+    const item = padre ? map[padre] : null
+    if (!item || !capituloItemDistinto(item, capRep)) continue
+    const numero = item.item_numero
+    const cap = item.capitulo
+    return `El ítem ${numero} pertenece al capítulo «${cap}» y el reporte usa «${capRep}».`
+  }
+  return ''
+}
+
 export function etiquetaItem(item) {
   if (!item?.item_numero) return ''
   const desc = String(item.descripcion || '').trim()

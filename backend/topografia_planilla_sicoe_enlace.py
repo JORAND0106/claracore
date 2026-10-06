@@ -164,6 +164,17 @@ def item_capitulo_distinto(item: dict[str, Any], capitulo_reporte: str) -> bool:
     return cap_item != cap_rep
 
 
+def mensaje_item_capitulo_distinto(item: dict[str, Any], capitulo_reporte: str) -> str:
+    """Mismo texto de siempre. Vacío cuando la regla no detecta diferencia."""
+    if not isinstance(item, dict) or not item_capitulo_distinto(item, capitulo_reporte):
+        return ""
+    capitulo = str(capitulo_reporte or "").strip()
+    return (
+        f"El ítem {item.get('item_numero')} pertenece al capítulo "
+        f"«{item.get('capitulo')}» y el reporte usa «{capitulo}»."
+    )
+
+
 def campos_item_en_registro(linea: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     """Campos de ítem para ``so_registros``. No toca niveles ni ``bloqueado``."""
     vlr = item.get("precio_unitario")
