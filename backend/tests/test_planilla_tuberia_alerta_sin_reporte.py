@@ -7,6 +7,7 @@ from pathlib import Path
 from topografia_planilla_tuberia import (
     contar_planillas_sin_reporte_vigente,
     planilla_sin_reporte_vigente,
+    reportes_sicoe_para_listado,
 )
 
 _VIGENTES = [{"id": 9, "numero_reporte": 128}, {"id": 3, "numero_reporte": 7}]
@@ -44,6 +45,37 @@ class TestAlertaPlanillasSinReporte(unittest.TestCase):
         self.assertIn('_perm(current_user, "ver", contrato_id)', bloque)
         self.assertIn('supabase.table("so_reportes")', bloque)
         self.assertIn("contar_planillas_sin_reporte_vigente", bloque)
+        self.assertIn("_so_reportes_existentes", bloque)
+        listar = src.split("def listar(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("reportes_sicoe_para_listado", listar)
+        self.assertIn("_so_reportes_existentes", listar)
+
+    def test_grilla_y_alerta_coinciden(self):
+        """El número guardado no cuenta si el reporte ya no existe."""
+        vigente = _planilla([{"reporte_id": 9, "numero_reporte": 1}])
+        eliminado = _planilla([{"reporte_id": 4, "numero_reporte": 99}])
+        nueva = _planilla([])
+        casos = [vigente, eliminado, nueva]
+        self.assertEqual(contar_planillas_sin_reporte_vigente(casos, _VIGENTES), 2)
+        self.assertEqual(
+            reportes_sicoe_para_listado(vigente, _VIGENTES),
+            [{"reporte_id": 9, "numero_reporte": 128}],
+        )
+        self.assertEqual(reportes_sicoe_para_listado(eliminado, _VIGENTES), [])
+        self.assertEqual(reportes_sicoe_para_listado(nueva, _VIGENTES), [])
+        self.assertEqual(
+            sum(1 for p in casos if not reportes_sicoe_para_listado(p, _VIGENTES)),
+            contar_planillas_sin_reporte_vigente(casos, _VIGENTES),
+        )
+        mezcla = _planilla([
+            {"reporte_id": 4, "numero_reporte": 99},
+            {"reporte_id": 3, "numero_reporte": 1},
+        ])
+        self.assertFalse(planilla_sin_reporte_vigente(mezcla, _VIGENTES))
+        self.assertEqual(
+            reportes_sicoe_para_listado(mezcla, _VIGENTES),
+            [{"reporte_id": 3, "numero_reporte": 7}],
+        )
 
 
 if __name__ == "__main__":

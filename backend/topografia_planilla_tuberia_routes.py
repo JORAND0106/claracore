@@ -36,7 +36,9 @@ from topografia_planilla_tuberia import (
     calcular_planilla_completa,
     conservar_links_sicoe_vigentes,
     contar_planillas_sin_reporte_vigente,
+    ids_reporte_enlazados,
     links_sicoe_meta_planilla,
+    reportes_sicoe_para_listado,
     construir_fila_consolidado,
     html_pie_firmas_planilla,
     filtrar_descuentos_manuales_por_tipo,
@@ -886,19 +888,13 @@ def listar(contrato_id: int, current_user=Depends(get_current_user)):
 
         item["nivel1_usuario_nombre"] = _uid_nombre(r.get("nivel1_usuario_id"))
         item["nivel2_usuario_nombre"] = _uid_nombre(r.get("nivel2_usuario_id"))
-
-        # Proyección ligera de reportes asociados (sin enviar meta completa al cliente).
-        links = _sicoe_links_from_meta(r.get("meta_cabecera"))
-        item["reportes_sicoe"] = [
-            {
-                "reporte_id": lk.get("reporte_id"),
-                "numero_reporte": lk.get("numero_reporte"),
-            }
-            for lk in links
-            if lk.get("reporte_id") is not None or lk.get("numero_reporte") is not None
-        ]
         item.pop("meta_cabecera", None)
         out.append(item)
+    # Misma consulta y la misma vigencia que la alerta del ícono: el número
+    # guardado en la planilla no cuenta si el reporte ya no existe en SICOE Obra.
+    vigentes = _so_reportes_existentes(contrato_id, ids_reporte_enlazados(rows))
+    for item, src in zip(out, rows):
+        item["reportes_sicoe"] = reportes_sicoe_para_listado(src, vigentes)
     return out
 
 
@@ -1026,34 +1022,27 @@ def alerta_planillas_sin_reporte(contrato_id: int, current_user=Depends(get_curr
         .data
         or []
     )
-    ids: list[int] = []
-    seen: set[int] = set()
-    for planilla in rows:
-        for link in links_sicoe_meta_planilla(planilla):
-            try:
-                rid = int(link["reporte_id"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            if rid in seen:
-                continue
-            seen.add(rid)
-            ids.append(rid)
-    vigentes: list[dict] = []
-    if ids:
-        try:
-            vigentes = (
-                supabase.table("so_reportes")
-                .select("id, numero_reporte")
-                .eq("contrato_id", int(contrato_id))
-                .in_("id", ids)
-                .execute()
-                .data
-            ) or []
-        except Exception as exc:
-            logger.exception("alerta planillas sin reporte vigente")
-            raise HTTPException(500, "No se pudo consultar los reportes vigentes") from exc
+    vigentes = _so_reportes_existentes(contrato_id, ids_reporte_enlazados(rows))
     total = contar_planillas_sin_reporte_vigente(rows, vigentes)
     return {"hay": total > 0, "total": total}
+
+
+def _so_reportes_existentes(contrato_id: int, ids: list[int]) -> list[dict]:
+    """Filas de so_reportes que siguen existiendo. La alerta y el listado la comparten."""
+    if not ids:
+        return []
+    try:
+        return (
+            supabase.table("so_reportes")
+            .select("id, numero_reporte")
+            .eq("contrato_id", int(contrato_id))
+            .in_("id", ids)
+            .execute()
+            .data
+        ) or []
+    except Exception as exc:
+        logger.exception("consultar reportes vigentes de planillas de tubería")
+        raise HTTPException(500, "No se pudo consultar los reportes vigentes") from exc
 
 
 def _puede_editar_reporte_cantidades(user, contrato_id: int) -> bool:
