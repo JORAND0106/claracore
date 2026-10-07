@@ -18,6 +18,13 @@ export function roundCop(n) {
   return Math.round(x)
 }
 
+/** Cantidades a 2 decimales (regla de exportación Excel / sumatorias). */
+export function roundQty(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return 0
+  return Math.round(x * 100) / 100
+}
+
 /**
  * ▲ unitario = VU Costo M.O. − VU Cobro.
  * Rojo si sub > cobro (positivo); verde si ≤ (cero o negativo).
@@ -26,6 +33,11 @@ export function deltaVuCostoVsCobro(vuCostoMo, vuCobro) {
   const a = roundCop(vuCostoMo)
   const b = roundCop(vuCobro)
   return roundCop(a - b)
+}
+
+/** ▲ Valor Total = Valor Total Antes AIU/IVA − Valor Total VU Cobro. */
+export function deltaValorTotalVsCobro(totalAntesAiu, totalVuCobro) {
+  return roundCop(roundCop(totalAntesAiu) - roundCop(totalVuCobro))
 }
 
 /** Texto con signo explícito para impresión B/N (+ / − / 0). */
@@ -43,6 +55,7 @@ export function deltaEsRojo(delta) {
 /**
  * Arma filas exportables a partir de lo visible en pantalla (rows + drafts).
  * Incluye presupuesto y manuales; omite borradores incompletos y filas sin VU/cantidad.
+ * Cantidades a 2 dp; valores económicos a 0 dp (coherente con fórmulas Excel).
  * @param {boolean} [incluirVuCobro=false]
  */
 export function buildPreciosExportLineas(
@@ -57,17 +70,18 @@ export function buildPreciosExportLineas(
     const d = drafts[key] || {}
     const vuRaw = d.vu_costo != null ? d.vu_costo : r.vu_costo_mo
     const cantRaw = d.cantidad != null ? d.cantidad : r.cantidad
-    const vu = parseNum(vuRaw)
-    const cant = parseNum(cantRaw)
-    if (vu == null || Number.isNaN(vu) || vu < 0) continue
-    if (cant == null || Number.isNaN(cant) || cant < 0) continue
+    const vuParsed = parseNum(vuRaw)
+    const cantParsed = parseNum(cantRaw)
+    if (vuParsed == null || Number.isNaN(vuParsed) || vuParsed < 0) continue
+    if (cantParsed == null || Number.isNaN(cantParsed) || cantParsed < 0) continue
     if (!r.listado_precio_id && !(r.item_numero || r.descripcion)) continue
 
-    const vuCosto = roundCop(vu)
-    const vuConAiu = computeValorDespuesAiuIva(vu, impuesto || EMPTY_IMPUESTO, {
+    const cant = roundQty(cantParsed)
+    const vuCosto = roundCop(vuParsed)
+    const vuConAiu = computeValorDespuesAiuIva(vuCosto, impuesto || EMPTY_IMPUESTO, {
       valoresEnDecimal: true,
     })
-    const totalAntes = roundCop(cant * vu)
+    const totalAntes = roundCop(cant * vuCosto)
     const totalCon = roundCop(cant * vuConAiu)
 
     const row = {
@@ -84,10 +98,10 @@ export function buildPreciosExportLineas(
     if (incluirVuCobro) {
       const vuCobroRaw = parseNum(r.vu_cobro)
       const vuCobro = vuCobroRaw == null || Number.isNaN(vuCobroRaw) ? 0 : roundCop(vuCobroRaw)
-      const delta = deltaVuCostoVsCobro(vuCosto, vuCobro)
       row.vu_cobro = vuCobro
       row.total_vu_cobro = roundCop(cant * vuCobro)
-      row.delta_vu = delta
+      row.delta_vu = deltaVuCostoVsCobro(vuCosto, vuCobro)
+      row.delta_valor_total = deltaValorTotalVsCobro(totalAntes, row.total_vu_cobro)
     }
 
     out.push(row)
@@ -99,23 +113,28 @@ export function sumarTotalesExport(lineas, incluirVuCobro = false) {
   let sumAntes = 0
   let sumCon = 0
   let sumCobro = 0
+  let sumDeltaValor = 0
   for (const L of lineas || []) {
     sumAntes += Number(L.total_antes_aiu) || 0
     sumCon += Number(L.total_con_aiu) || 0
-    if (incluirVuCobro) sumCobro += Number(L.total_vu_cobro) || 0
+    if (incluirVuCobro) {
+      sumCobro += Number(L.total_vu_cobro) || 0
+      sumDeltaValor += Number(L.delta_valor_total) || 0
+    }
   }
   sumAntes = roundCop(sumAntes)
   sumCon = roundCop(sumCon)
   sumCobro = roundCop(sumCobro)
+  sumDeltaValor = roundCop(sumDeltaValor)
   const out = {
     sumatoria_antes_aiu: sumAntes,
     valor_aiu_iva: roundCop(sumCon - sumAntes),
     total_general_con_aiu: sumCon,
   }
   if (incluirVuCobro) {
-    // Misma lógica que ▲ unitario: total antes AIU − total a VU Cobro
     out.sumatoria_vu_cobro = sumCobro
     out.diferencia_total_vs_cobro = roundCop(sumAntes - sumCobro)
+    out.sumatoria_delta_valor_total = sumDeltaValor
   }
   return out
 }
@@ -190,4 +209,36 @@ export function buildPreciosExportFilename(subcontratista, generadoEn = new Date
   const fecha = d.toISOString().slice(0, 10)
   const slug = slugFilenamePart(subcontratista?.razon_social)
   return `precios_pactados_${slug}_${fecha}.xlsx`
+}
+
+/**
+ * Fórmula Excel del VU unitario con AIU/IVA (literales de %; se recalcula al editar VU).
+ * @param {string} vuRef — p.ej. "G8"
+ * @param {{ administracion?: number|null, imprevistos?: number|null, utilidad?: number|null, iva_sobre_utilidad?: number|null, tipo?: string|null }} aiu
+ */
+export function formulaVuConAiuExcel(vuRef, aiu = {}) {
+  const a = Number(aiu.administracion) || 0
+  const i = Number(aiu.imprevistos) || 0
+  const u = Number(aiu.utilidad) || 0
+  const iva = Number(aiu.iva_sobre_utilidad) || 0
+  const tipo = aiu.tipo
+  if (tipo === 'iva_pleno') {
+    return `ROUND(${vuRef}*(1+${iva}/100),0)`
+  }
+  if (tipo === 'aiu_sin_iva') {
+    return `ROUND(${vuRef}*(1+${a}/100+${i}/100+${u}/100),0)`
+  }
+  if (tipo === 'iva_sobre_utilidad') {
+    return `ROUND(${vuRef}*(1+${a}/100+${i}/100+${u}/100+${u}/100*${iva}/100),0)`
+  }
+  return `ROUND(${vuRef},0)`
+}
+
+/**
+ * Total fila con AIU/IVA: ROUND(ROUND(cant,2) * VU_con_AIU, 0)
+ * @param {string} cantRef
+ * @param {string} vuRef
+ */
+export function formulaTotalConAiuExcel(cantRef, vuRef, aiu = {}) {
+  return `ROUND(ROUND(${cantRef},2)*${formulaVuConAiuExcel(vuRef, aiu)},0)`
 }
