@@ -3103,6 +3103,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     || _urlMedia(registro.grafico_url)
     || _urlMedia(regMismoEnReporte?.grafico_url)
   const [estadoValidando,        setEstadoValidando]        = useState('')
+  const [avisoItemNoAprobado,    setAvisoItemNoAprobado]    = useState(null)
   const [toastMsg,               setToastMsg]               = useState(null)
   const [listaCortes,            setListaCortes]            = useState([])
   const [corteSel,               setCorteSel]               = useState('')
@@ -4230,13 +4231,24 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || `Error ${res.status}`)
+        const detail = err?.detail
+        let msg = `Error ${res.status}`
+        if (typeof detail === 'string') msg = detail
+        else if (Array.isArray(detail)) msg = detail.map(x => x?.msg || JSON.stringify(x)).join(', ')
+        else if (detail && typeof detail === 'object') msg = JSON.stringify(detail)
+        else if (err?.message) msg = String(err.message)
+        throw new Error(msg)
       }
       onItemAsignado?.()
     } catch(e) {
       // Revertir estado optimista si falló
       onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
-      alert(`No se pudo aplicar la validación: ${e.message}`)
+      const msg = e?.message || String(e)
+      if (/último nivel|ultimo nivel|Listado de Precios/i.test(msg)) {
+        setAvisoItemNoAprobado(msg)
+      } else {
+        alert(`No se pudo aplicar la validación: ${msg}`)
+      }
     }
   }
 
@@ -5655,6 +5667,23 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </CcConfirmModal>
       )}
 
+      {avisoItemNoAprobado && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={10850}
+          tipo="warn"
+          titulo="Ítem no aprobado en Listado de Precios"
+          confirmar="Entendido"
+          soloConfirmar
+          onCancel={() => setAvisoItemNoAprobado(null)}
+          onConfirm={() => setAvisoItemNoAprobado(null)}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+            {avisoItemNoAprobado}
+          </p>
+        </CcConfirmModal>
+      )}
+
       {modalAuditoriaTraslapos?.analisis && (
         <SicoeAuditoriaTraslaposModal
           t={t}
@@ -7005,29 +7034,51 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         const parts = [`✅ ${data.actualizados} actualizado(s)`]
         if (data.omitidos != null) parts.push(`${data.omitidos} omitido(s)`)
         if (data.omitidos_topografia) parts.push(`${data.omitidos_topografia} sin topografía (N2)`)
+        if (data.omitidos_item_no_aprobado) parts.push(`${data.omitidos_item_no_aprobado} ítem no aprobado (último nivel)`)
         if (data.excluidos_objeto_pago_sub) parts.push(`${data.excluidos_objeto_pago_sub} objeto pago sub`)
         if (data.truncado_mas_de_500) parts.push(`tope ${data.tope_registros ?? 500}`)
         let msg = parts.join(', ') + '.'
+        if (data.alerta_item_no_aprobado) msg += ` ${data.alerta_item_no_aprobado}`
         if (data.alerta_topografia) msg += ` ${data.alerta_topografia}`
         if (data.alerta_objeto_sub) msg += ` ${data.alerta_objeto_sub}`
         if (data.alerta_tope) msg += ` ${data.alerta_tope}`
         setMsgMasivo(msg)
-        if (data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope) window.alert(msg)
+        if (data.alerta_item_no_aprobado || data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope || data.omitidos_item_no_aprobado) {
+          window.alert(msg)
+        }
       } else {
         const sufPut = `validar-nivel${nv}`
         const bodyPut = { estado }
         if (comentarioData) bodyPut.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
         let ok = 0
         let fail = 0
+        const failItemMsgs = []
         for (const rid of ids) {
           const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${rid}/${sufPut}`, {
             method: 'PUT', headers: hdrs, body: JSON.stringify(bodyPut),
           })
-          if (res.ok) ok += 1
-          else fail += 1
+          if (res.ok) {
+            ok += 1
+          } else {
+            fail += 1
+            const err = await res.json().catch(() => ({}))
+            const detail = typeof err?.detail === 'string' ? err.detail : ''
+            if (/último nivel|ultimo nivel|Listado de Precios/i.test(detail)) {
+              failItemMsgs.push(detail)
+            }
+          }
         }
         setMsgMasivo(`✅ ${ok} actualizado(s)${fail ? `, ${fail} error(es)` : ''}.`)
-        if (fail) window.alert(`Validación masiva: ${ok} ok, ${fail} rechazados por el servidor (revisa nivel previo o permisos).`)
+        if (fail) {
+          const extra = failItemMsgs.length
+            ? `\n\n${failItemMsgs.slice(0, 5).join('\n')}${failItemMsgs.length > 5 ? `\n… y ${failItemMsgs.length - 5} más` : ''}`
+            : ''
+          window.alert(
+            `Validación masiva: ${ok} ok, ${fail} rechazados por el servidor`
+            + (failItemMsgs.length ? ' (ítem no aprobado en último nivel u otras reglas).' : ' (revisa nivel previo o permisos).')
+            + extra,
+          )
+        }
       }
       recargar()
     } catch (e) {
@@ -9141,6 +9192,7 @@ function ModuloSicoeObra({
   const [cpiRefreshNonce, setCpiRefreshNonce] = useState(0)
   const [cpiFiltrosVersion, setCpiFiltrosVersion] = useState(0)
   const [ejecutandoCpiValidacion, setEjecutandoCpiValidacion] = useState(false)
+  const [avisoItemNoAprobadoSicoe, setAvisoItemNoAprobadoSicoe] = useState(null)
   /** Antes de filtrar la grilla por PK desde el mapa: asignar inspector/subcontratista en bloque. */
   const [modalPkAsignacionMapa, setModalPkAsignacionMapa] = useState(null)
   const [pkMapaInspectorId, setPkMapaInspectorId] = useState('')
@@ -10673,13 +10725,23 @@ function ModuloSicoeObra({
       const om = []
       if (data.omitidos_precondicion) om.push(`${data.omitidos_precondicion} omitidos (no cumplen nivel previo u otras reglas)`)
       if (data.omitidos_topografia) om.push(`${data.omitidos_topografia} sin topografía (N2)`)
+      if (data.omitidos_item_no_aprobado) om.push(`${data.omitidos_item_no_aprobado} ítem no aprobado (último nivel)`)
       if (data.excluidos_objeto_pago_sub) om.push(`${data.excluidos_objeto_pago_sub} objeto pago sub (revisión punto a punto)`)
       if (om.length) msgOk += `. ${om.join('; ')}.`
+      if (data.alerta_item_no_aprobado) msgOk += `\n\n${data.alerta_item_no_aprobado}`
       if (data.alerta_topografia) msgOk += `\n\n${data.alerta_topografia}`
       if (data.alerta_objeto_sub) msgOk += `\n\n${data.alerta_objeto_sub}`
       if (data.alerta_tope) msgOk += `\n\n${data.alerta_tope}`
       setMsgMasivoFiltro(msgOk)
-      if (data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope || data.omitidos_topografia || data.excluidos_objeto_pago_sub) {
+      if (
+        data.alerta_item_no_aprobado
+        || data.alerta_topografia
+        || data.alerta_objeto_sub
+        || data.alerta_tope
+        || data.omitidos_topografia
+        || data.omitidos_item_no_aprobado
+        || data.excluidos_objeto_pago_sub
+      ) {
         window.alert(msgOk)
       }
       invalidateSicoeVistaCache(contrato_id)
@@ -11961,7 +12023,12 @@ function ModuloSicoeObra({
         try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
       }
     } catch (e) {
-      window.alert(e?.message || String(e))
+      const msg = e?.message || String(e)
+      if (/último nivel|ultimo nivel|Listado de Precios/i.test(msg)) {
+        setAvisoItemNoAprobadoSicoe(msg)
+      } else {
+        window.alert(msg)
+      }
     } finally {
       setEjecutandoCpiValidacion(false)
     }
@@ -11973,6 +12040,23 @@ function ModuloSicoeObra({
       <OfflineStatusBanner />
       <SicoeSinCacheOfflineBanner />
       <ConflictModal />
+
+      {avisoItemNoAprobadoSicoe && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={10850}
+          tipo="warn"
+          titulo="Ítem no aprobado en Listado de Precios"
+          confirmar="Entendido"
+          soloConfirmar
+          onCancel={() => setAvisoItemNoAprobadoSicoe(null)}
+          onConfirm={() => setAvisoItemNoAprobadoSicoe(null)}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+            {avisoItemNoAprobadoSicoe}
+          </p>
+        </CcConfirmModal>
+      )}
 
       {sicoeSyncOfferOpen && (
         <div

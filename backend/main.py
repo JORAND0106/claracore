@@ -2056,6 +2056,14 @@ from sicoe_varilla import (  # noqa: E402
     sicoe_unidad_es_kg as _sicoe_unidad_es_kg,
     sicoe_validar_y_preparar_medicion_varilla as _sicoe_validar_preparar_varilla,
 )
+from sicoe_ultimo_nivel_item_aprobado import (  # noqa: E402
+    alerta_omitidos_item_no_aprobado as _sicoe_alerta_omitidos_item_no_aprobado,
+    detalle_omitido_item as _sicoe_detalle_omitido_item,
+    es_aprobacion_en_nivel_maximo as _sicoe_es_aprobacion_en_nivel_maximo,
+    item_estado_permite_aprobacion_ultimo_nivel as _sicoe_item_permite_aprobacion_ultimo_nivel,
+    mensaje_bloqueo_ultimo_nivel as _sicoe_mensaje_bloqueo_ultimo_nivel,
+    resolver_estado_precio_en_indice as _sicoe_resolver_estado_precio_en_indice,
+)
 
 
 def _sicoe_uid_from_user(current_user) -> Optional[int]:
@@ -3812,6 +3820,90 @@ def _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id: int, nivel: int, up
         update["bloqueado"] = True
         # Sellado final: la alerta de cambio de cantidad deja de ser operativa.
         _sicoe_limpiar_alerta_cantidad(update)
+
+
+def _sicoe_estado_precio_listado_registro(
+    contrato_id: int,
+    row: Optional[dict],
+    *,
+    listado_idx: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
+) -> str:
+    """Estado del ítem en Listado de Precios para la fila de cantidades (cap+ítem)."""
+    if not row:
+        return _sicoe_resolver_estado_precio_en_indice(
+            None, None, None, norm_cap=_dash_norm_capitulo_key_py, norm_item=_dash_norm_item_key_py
+        )
+    idx = listado_idx if listado_idx is not None else _listado_precios_vu_by_cap_item(int(contrato_id))
+    return _sicoe_resolver_estado_precio_en_indice(
+        idx,
+        row.get("capitulo"),
+        row.get("item_numero"),
+        norm_cap=_dash_norm_capitulo_key_py,
+        norm_item=_dash_norm_item_key_py,
+    )
+
+
+def _sicoe_raise_si_item_no_aprobado_ultimo_nivel(
+    contrato_id: int,
+    nivel: int,
+    estado: str,
+    row: Optional[dict],
+    *,
+    listado_idx: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
+) -> None:
+    """
+    Bloquea aprobación en el último nivel activo si el ítem del Listado no está Aprobado.
+    No aplica a Pendiente/Rechazado ni a niveles que no sean el máximo.
+    """
+    nivel_max = _get_nivel_numero_maximo_contrato(contrato_id)
+    if not _sicoe_es_aprobacion_en_nivel_maximo(nivel, nivel_max, estado):
+        return
+    est = _sicoe_estado_precio_listado_registro(contrato_id, row, listado_idx=listado_idx)
+    if _sicoe_item_permite_aprobacion_ultimo_nivel(est):
+        return
+    item = (row or {}).get("item_numero")
+    raise HTTPException(
+        status_code=422,
+        detail=_sicoe_mensaje_bloqueo_ultimo_nivel(item, est),
+    )
+
+
+def _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+    contrato_id: int,
+    nivel: int,
+    estado: str,
+    row: Optional[dict],
+    omitidos_detalle: List[dict],
+    *,
+    listado_idx: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
+    nivel_max: Optional[int] = None,
+) -> bool:
+    """
+    Para masivos: True si debe omitirse (ítem no Aprobado en último nivel).
+    Acumula detalle en omitidos_detalle. No afecta otros niveles ni no-aprobaciones.
+    """
+    mx = nivel_max if nivel_max is not None else _get_nivel_numero_maximo_contrato(contrato_id)
+    if not _sicoe_es_aprobacion_en_nivel_maximo(nivel, mx, estado):
+        return False
+    est = _sicoe_estado_precio_listado_registro(contrato_id, row, listado_idx=listado_idx)
+    if _sicoe_item_permite_aprobacion_ultimo_nivel(est):
+        return False
+    try:
+        rid = int((row or {}).get("id")) if row and row.get("id") is not None else None
+    except (TypeError, ValueError):
+        rid = None
+    omitidos_detalle.append(
+        _sicoe_detalle_omitido_item(rid, (row or {}).get("item_numero"), est)
+    )
+    return True
+
+
+def _sicoe_pack_omitidos_item_no_aprobado(out: dict, omitidos_detalle: List[dict]) -> None:
+    if not omitidos_detalle:
+        return
+    out["omitidos_item_no_aprobado"] = len(omitidos_detalle)
+    out["omitidos_item_detalle"] = omitidos_detalle[:50]
+    out["alerta_item_no_aprobado"] = _sicoe_alerta_omitidos_item_no_aprobado(omitidos_detalle)
 
 # Mismo catálogo que el desplegable de validación en frontend (ETIQUETAS_VALIDACION).
 SICOE_ETIQUETAS_VALIDACION = (
@@ -22026,6 +22118,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
         "nivel5_estado",
         "nivel6_estado",
         "nivel2_objeto_pago_sub",
+        "capitulo",
         "item_numero",
         "item_descripcion",
         "cantidad_total",
@@ -33801,7 +33894,7 @@ def _put_validar_nivel_sicoe_alto(
         def _get():
             return (
                 supabase.table("so_registros")
-                .select(f"item_numero,{prev_f},{campo},cantidad_alerta_nivel_max_previo")
+                .select(f"capitulo,item_numero,{prev_f},{campo},cantidad_alerta_nivel_max_previo")
                 .eq("id", registro_id)
                 .eq("contrato_id", contrato_id)
                 .limit(1)
@@ -33824,6 +33917,7 @@ def _put_validar_nivel_sicoe_alto(
                 status_code=422,
                 detail=f"El registro debe estar {prev_ok} en el nivel previo antes de validar en Nivel {nivel}.",
             )
+        _sicoe_raise_si_item_no_aprobado_ultimo_nivel(contrato_id, nivel, body.estado, r0)
 
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         u_key, f_key = _sicoe_campo_usuario_fecha_desde_estado(campo)
@@ -34062,7 +34156,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 1, contrato_id)
         def _get_n3():
             return supabase.table("so_registros").select(
-                f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id,cantidad_alerta_nivel_max_previo"
+                f"contrato_id,capitulo,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id,cantidad_alerta_nivel_max_previo"
             ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
         n3rows = supabase_execute(_get_n3)
         if not n3rows:
@@ -34073,6 +34167,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                 status_code=400,
                 detail="El registro está aprobado en el último nivel de validación del contrato y no puede modificarse por esta vía.",
             )
+        _sicoe_raise_si_item_no_aprobado_ultimo_nivel(contrato_id, 1, body.estado, n3rows[0])
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
             "nivel1_estado":     body.estado,
@@ -34217,7 +34312,7 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
-                .select(f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id,cantidad_alerta_nivel_max_previo").eq("id", registro_id)\
+                .select(f"contrato_id,capitulo,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id,cantidad_alerta_nivel_max_previo").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
         if not rows:
@@ -34250,6 +34345,7 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
                     status_code=422,
                     detail="No se puede aprobar en Nivel 2 (Residente) sin coordenadas topográficas en la Portada del reporte. Carga al menos un punto en Topografía antes de aprobar.",
                 )
+        _sicoe_raise_si_item_no_aprobado_ultimo_nivel(contrato_id, 2, estado_real, rows[0])
 
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
@@ -34441,6 +34537,13 @@ def validar_nivel_masivo_por_filtro(
         actualizados = 0
         omitidos_precondicion = 0
         omitidos_topografia = 0
+        omitidos_item_detalle: List[dict] = []
+        nivel_max_contrato = _get_nivel_numero_maximo_contrato(contrato_id)
+        listado_idx_item = (
+            _listado_precios_vu_by_cap_item(contrato_id)
+            if marcar == "Aprobado" and nivel == nivel_max_contrato
+            else None
+        )
 
         _n_cand = len(candidatos)
         candidatos = [r for r in candidatos if _sicoe_registro_tiene_item_asignado(r)]
@@ -34460,6 +34563,11 @@ def validar_nivel_masivo_por_filtro(
                     continue
                 if (row.get("nivel1_estado") or "") == "Aprobado" and marcar != "Aprobado":
                     omitidos_precondicion += 1
+                    continue
+                if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                    contrato_id, 1, marcar, row, omitidos_item_detalle,
+                    listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+                ):
                     continue
 
                 prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
@@ -34542,6 +34650,11 @@ def validar_nivel_masivo_por_filtro(
                     if not rpi or rpi not in topo_ok:
                         omitidos_topografia += 1
                         continue
+                if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                    contrato_id, 2, marcar, row, omitidos_item_detalle,
+                    listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+                ):
+                    continue
 
                 prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
                 update = {
@@ -34612,6 +34725,11 @@ def validar_nivel_masivo_por_filtro(
                     continue
                 if (row.get("nivel2_estado") or "") != "Aprobado":
                     omitidos_precondicion += 1
+                    continue
+                if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                    contrato_id, 3, marcar, row, omitidos_item_detalle,
+                    listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+                ):
                     continue
 
                 prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
@@ -34697,6 +34815,11 @@ def validar_nivel_masivo_por_filtro(
                 if (row.get(prev_field) or "") != prev_ok:
                     omitidos_precondicion += 1
                     continue
+                if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                    contrato_id, nivel, marcar, row, omitidos_item_detalle,
+                    listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+                ):
+                    continue
 
                 prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
                 update = {
@@ -34773,6 +34896,7 @@ def validar_nivel_masivo_por_filtro(
             "tope_registros": SICOE_MASIVO_MAX_REGISTROS,
             "candidatos_en_lote": len(candidatos),
         }
+        _sicoe_pack_omitidos_item_no_aprobado(out, omitidos_item_detalle)
         if out["omitidos_topografia"]:
             out["alerta_topografia"] = (
                 f"{out['omitidos_topografia']} registro(s) no se aprobaron en N2 por falta de topografía en el reporte. "
@@ -39383,7 +39507,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
     from listado_precios_meta import merge_listado_ficha_prefer_newer
 
     cached = _dash_agg_cache_get(
-        "listado_precios_vu_idx_v4",
+        "listado_precios_vu_idx_v5",
         contrato_id,
         ttl_sec=_LISTADO_VU_CACHE_TTL_SEC,
     )
@@ -39397,7 +39521,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
             return (
                 supabase.table("listado_precios")
                 .select(
-                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia"
+                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia, estado_precio"
                 )
                 .eq("contrato_id", contrato_id)
                 .order("id")
@@ -39420,7 +39544,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
         if len(batch) < 1000:
             break
         off += 1000
-    _dash_agg_cache_set("listado_precios_vu_idx_v4", contrato_id, idx)
+    _dash_agg_cache_set("listado_precios_vu_idx_v5", contrato_id, idx)
     return idx
 
 
@@ -42098,6 +42222,13 @@ def validar_masivo_nivel1(contrato_id: int, reporte_id: int, body: ValidarMasivo
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 1, contrato_id)
         actualizados = 0
         omitidos_precondicion = 0
+        omitidos_item_detalle: List[dict] = []
+        nivel_max_contrato = _get_nivel_numero_maximo_contrato(contrato_id)
+        listado_idx_item = (
+            _listado_precios_vu_by_cap_item(contrato_id)
+            if body.estado == "Aprobado" and 1 == nivel_max_contrato
+            else None
+        )
 
         ids_all = list(body.ids_registros or [])
         truncado_mas_de_500 = len(ids_all) > SICOE_MASIVO_MAX_REGISTROS
@@ -42106,7 +42237,10 @@ def validar_masivo_nivel1(contrato_id: int, reporte_id: int, body: ValidarMasivo
             def _get(rid=reg_id):
                 return (
                     supabase.table("so_registros")
-                    .select(f"reporte_id, item_numero, nivel1_estado, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")
+                    .select(
+                        f"id, reporte_id, capitulo, item_numero, nivel1_estado, contrato_id, "
+                        f"{SICOE_SELECT_NIVELES_ESTADO}"
+                    )
                     .eq("id", rid)
                     .eq("contrato_id", contrato_id)
                     .limit(1)
@@ -42134,6 +42268,11 @@ def validar_masivo_nivel1(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 continue
             if (row0.get("nivel1_estado") or "") == "Aprobado" and body.estado != "Aprobado":
                 omitidos_precondicion += 1
+                continue
+            if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                contrato_id, 1, body.estado, row0, omitidos_item_detalle,
+                listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+            ):
                 continue
 
             prev_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
@@ -42213,13 +42352,14 @@ def validar_masivo_nivel1(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 pass
             actualizados += 1
 
-        omitidos = omitidos_precondicion
+        omitidos = omitidos_precondicion + len(omitidos_item_detalle)
         out = {
             "actualizados": actualizados,
             "omitidos": omitidos,
             "omitidos_precondicion": omitidos_precondicion,
             "truncado_mas_de_500": truncado_mas_de_500,
         }
+        _sicoe_pack_omitidos_item_no_aprobado(out, omitidos_item_detalle)
         if truncado_mas_de_500:
             out["alerta_tope"] = f"Se procesaron como máximo {SICOE_MASIVO_MAX_REGISTROS} registros por solicitud."
         return out
@@ -42253,6 +42393,13 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
         omitidos_precondicion = 0
         omitidos_topografia = 0
         excluidos_objeto_pago_sub = 0
+        omitidos_item_detalle: List[dict] = []
+        nivel_max_contrato = _get_nivel_numero_maximo_contrato(contrato_id)
+        listado_idx_item = (
+            _listado_precios_vu_by_cap_item(contrato_id)
+            if estado_real == "Aprobado" and 2 == nivel_max_contrato
+            else None
+        )
 
         ids_all = list(body.ids_registros or [])
         truncado_mas_de_500 = len(ids_all) > SICOE_MASIVO_MAX_REGISTROS
@@ -42272,7 +42419,10 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 def _rb(c=chunk):
                     return (
                         supabase.table("so_registros")
-                        .select(f"id, nivel1_estado, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}, reporte_id, nivel2_objeto_pago_sub")
+                        .select(
+                            f"id, nivel1_estado, contrato_id, capitulo, item_numero, "
+                            f"{SICOE_SELECT_NIVELES_ESTADO}, reporte_id, nivel2_objeto_pago_sub"
+                        )
                         .eq("contrato_id", contrato_id)
                         .in_("id", c)
                         .execute()
@@ -42315,6 +42465,11 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 if not rpi or rpi not in topo_reportes:
                     omitidos_topografia += 1
                     continue
+            if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                contrato_id, 2, estado_real, rinfo, omitidos_item_detalle,
+                listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+            ):
+                continue
 
             prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
 
@@ -42360,7 +42515,12 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 pass
             actualizados += 1
 
-        omitidos = omitidos_precondicion + omitidos_topografia + excluidos_objeto_pago_sub
+        omitidos = (
+            omitidos_precondicion
+            + omitidos_topografia
+            + excluidos_objeto_pago_sub
+            + len(omitidos_item_detalle)
+        )
         out = {
             "actualizados": actualizados,
             "omitidos": omitidos,
@@ -42369,6 +42529,7 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
             "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
             "truncado_mas_de_500": truncado_mas_de_500,
         }
+        _sicoe_pack_omitidos_item_no_aprobado(out, omitidos_item_detalle)
         if omitidos_topografia:
             out["alerta_topografia"] = (
                 f"{omitidos_topografia} registro(s) no se aprobaron en N2 por falta de topografía en el reporte correspondiente."
@@ -42401,6 +42562,13 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
         actualizados = 0
         omitidos_precondicion = 0
         excluidos_objeto_pago_sub = 0
+        omitidos_item_detalle: List[dict] = []
+        nivel_max_contrato = _get_nivel_numero_maximo_contrato(contrato_id)
+        listado_idx_item = (
+            _listado_precios_vu_by_cap_item(contrato_id)
+            if body.estado == "Aprobado" and 3 == nivel_max_contrato
+            else None
+        )
 
         ids_all = list(body.ids_registros or [])
         truncado_mas_de_500 = len(ids_all) > SICOE_MASIVO_MAX_REGISTROS
@@ -42408,7 +42576,9 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
         for reg_id in ids_all[:SICOE_MASIVO_MAX_REGISTROS]:
             def _get(rid=reg_id):
                 return supabase.table("so_registros")\
-                    .select("nivel2_estado, nivel3_estado, nivel2_objeto_pago_sub").eq("id", rid)\
+                    .select(
+                        "id, capitulo, item_numero, nivel2_estado, nivel3_estado, nivel2_objeto_pago_sub"
+                    ).eq("id", rid)\
                     .eq("contrato_id", contrato_id).limit(1).execute().data
             rows = supabase_execute(_get)
             if not rows:
@@ -42423,6 +42593,11 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 continue
             if row0.get("nivel3_estado") == "Aprobado" and body.estado != "Aprobado":
                 omitidos_precondicion += 1
+                continue
+            if _sicoe_omitir_si_item_no_aprobado_ultimo_nivel(
+                contrato_id, 3, body.estado, row0, omitidos_item_detalle,
+                listado_idx=listado_idx_item, nivel_max=nivel_max_contrato,
+            ):
                 continue
 
             prev_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
@@ -42465,7 +42640,7 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 pass
             actualizados += 1
 
-        omitidos = omitidos_precondicion + excluidos_objeto_pago_sub
+        omitidos = omitidos_precondicion + excluidos_objeto_pago_sub + len(omitidos_item_detalle)
         out = {
             "actualizados": actualizados,
             "omitidos": omitidos,
@@ -42473,6 +42648,7 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
             "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
             "truncado_mas_de_500": truncado_mas_de_500,
         }
+        _sicoe_pack_omitidos_item_no_aprobado(out, omitidos_item_detalle)
         if excluidos_objeto_pago_sub:
             out["alerta_objeto_sub"] = (
                 "Hay líneas con objeto de pago a subcontratista: no entran en el masivo de N3."
