@@ -40,7 +40,14 @@ def merge_listado_ficha_prefer_newer(prev: Optional[dict], new: Optional[dict]) 
         base, other = dict(new), prev
     else:
         base, other = dict(prev), new
-    for field in ("descripcion", "unidad", "item_numero", "competencia", "capitulo"):
+    for field in (
+        "descripcion",
+        "unidad",
+        "item_numero",
+        "competencia",
+        "capitulo",
+        "especificacion_tecnica",
+    ):
         if not str(base.get(field) or "").strip() and str(other.get(field) or "").strip():
             base[field] = other.get(field)
     if base.get("precio_unitario") in (None, "") and other.get("precio_unitario") not in (None, ""):
@@ -124,7 +131,96 @@ def overlay_sicoe_row(
             out["descripcion"] = desc
     if meta.get("unidad") not in (None, ""):
         out["unidad"] = meta["unidad"]
+    # Norma técnica del informe = especificación técnica del listado.
+    # No se copia acta_fijacion ni ningún otro campo.
+    if "especificacion_tecnica" in meta or "norma_tecnica" in meta:
+        esp = str(meta.get("especificacion_tecnica") or "").strip()
+        out["especificacion_tecnica"] = esp
+        out["norma_tecnica"] = esp
     out["_listado_meta_vivo"] = True
+    return out
+
+
+def aplicar_identificacion_listado(
+    rows: Sequence[dict],
+    listado_idx: Optional[Dict[ItemKey, dict]],
+    *,
+    aplicar_vu: bool = False,
+) -> List[dict]:
+    """Pisa capítulo, ítem, descripción, unidad y norma con el texto del listado.
+
+    La clave es (capítulo, ítem) normalizada. El texto que se muestra es el
+    almacenado en la fila vigente (mayor id), sin cambiar mayúsculas.
+    ``aplicar_vu`` copia ``vlr_unitario`` del listado del contrato a
+    ``vlr_unitario`` y ``vlr_unitario_sub``. Si no hay cruce, no conserva
+    el precio copiado en el registro.
+    No lee ``acta_fijacion``.
+    """
+    from sicoe_valor_canonico import cap_item_key
+
+    idx = listado_idx or {}
+    out: List[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        k = cap_item_key(item.get("capitulo"), item.get("item_numero") or item.get("item"))
+        meta = idx.get(k) if isinstance(idx.get(k), dict) else None
+        if meta is None and not k[0]:
+            hits = [
+                v
+                for (ck, ik), v in idx.items()
+                if ik == k[1] and isinstance(v, dict)
+            ]
+            if len(hits) == 1:
+                meta = hits[0]
+        if not meta:
+            if aplicar_vu:
+                item["vlr_unitario"] = 0.0
+                item["vlr_unitario_sub"] = 0.0
+                item["sin_precio"] = True
+                item["precio_fuente"] = None
+            item["_identificacion_listado"] = False
+            out.append(item)
+            continue
+        cap = str(meta.get("capitulo") or "").strip()
+        num = str(meta.get("item_numero") or "").strip()
+        desc = str(meta.get("descripcion") or "")
+        und = str(meta.get("unidad") or "").strip()
+        esp = str(meta.get("especificacion_tecnica") or "").strip()
+        if cap:
+            item["capitulo"] = cap
+        if num:
+            item["item_numero"] = num
+            if "item" in item:
+                item["item"] = num
+        item["item_descripcion"] = desc
+        item["descripcion"] = desc
+        item["unidad"] = und
+        if "und" in item:
+            item["und"] = und
+        item["especificacion_tecnica"] = esp
+        item["norma_tecnica"] = esp
+        item["_identificacion_listado"] = True
+        if aplicar_vu:
+            vu = meta.get("vlr_unitario")
+            if vu in (None, ""):
+                vu = meta.get("precio_unitario")
+            try:
+                vu_n = float(vu or 0)
+            except (TypeError, ValueError):
+                vu_n = 0.0
+            item["vlr_unitario"] = vu_n
+            item["vlr_unitario_sub"] = vu_n
+            item["precio_unitario"] = vu_n
+            item["precio_fuente"] = "listado_precios" if vu_n > 0 else None
+            item["sin_precio"] = vu_n <= 0
+        elif meta.get("precio_unitario") not in (None, "") or meta.get("vlr_unitario") not in (None, ""):
+            bruto = meta.get("precio_unitario")
+            if bruto in (None, ""):
+                bruto = meta.get("vlr_unitario")
+            item["precio_unitario_listado"] = bruto
+        out.append(item)
     return out
 
 

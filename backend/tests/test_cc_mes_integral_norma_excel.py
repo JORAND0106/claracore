@@ -197,6 +197,7 @@ def test_integral_no_trae_preacta_y_corre_norma_tecnica():
     for row, it in zip(filas, items):
         esperado = str(it.get("norma_tecnica") or "").strip()
         assert (ws.cell(row, 4).value or "") == esperado
+        assert ws.cell(row, 2).value == it["item_descripcion"]
         assert ws.cell(row, 5).value == it["vlr_unitario_sub"]
         assert book.eval_cell("CC-MES-001", row, 7) == it["valor_actualizadas"]
         assert book.eval_cell("CC-MES-001", row, 8) == it["cant_presente"]
@@ -257,6 +258,41 @@ def test_norma_se_cruza_por_capitulo_e_item():
     assert items[0]["norma_tecnica"] == "NTC 174"
     assert items[1]["norma_tecnica"] == "INVIAS 300"
     assert items[2]["norma_tecnica"] == ""
+
+
+def test_vista_previa_conserva_texto_del_listado():
+    inf = _import_informes_with_stubs()
+    desc = "EXCAVACIÓN MANUAL EN ROCA H=0.0-2.0 M (SECO SIN EXPLOSIVOS)"
+    html_mes = inf._html_cc_conc_001_tr_item(
+        {
+            "capitulo": "3. EXCAVACIONES",
+            "item_numero": "NP-08",
+            "item_descripcion": desc,
+            "unidad": "M3",
+            "vlr_unitario": 222133,
+            "cantidad": 1,
+            "costo_directo": 222133,
+        },
+        "border:1px solid #ccc",
+    )
+    html_sub = inf._html_cc_sub_001_tr_item(
+        {
+            "item_numero": "NP-05",
+            "item_descripcion": "MEJORAMIENTO DE LA SUBRASANTE INVOLUCRANDO EL SUELO EXISTENTE",
+            "unidad": "M2",
+            "vlr_unitario_sub": 15000,
+            "cantidad": 1,
+            "cant_actualizadas": 1,
+            "cant_presente": 1,
+            "cant_acumulado": 1,
+            "cant_saldo": 0,
+        },
+        "border:1px solid #ccc",
+    )
+    assert desc in html_mes
+    assert "excavacion en roca" not in html_mes
+    assert "MEJORAMIENTO DE LA SUBRASANTE INVOLUCRANDO EL SUELO EXISTENTE" in html_sub
+    assert "nivelacion y compactacion" not in html_sub
 
 
 def test_nombre_descarga_incluye_numero_de_acta():

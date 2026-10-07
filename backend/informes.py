@@ -27,9 +27,14 @@ _GERENCIA_PDF_CACHE_LOCK = threading.Lock()
 _GERENCIA_PDF_CACHE_TTL_SEC = 600
 
 
+_FICHA_LISTADO_CACHE: Dict[int, tuple] = {}
+_FICHA_LISTADO_TTL_SEC = 15
+
+
 def invalidate_caches_dependientes_listado(contrato_id: int) -> None:
     """Limpia caches de Informes que embeben ficha de ítem tras editar listado_precios."""
     cid = int(contrato_id)
+    _FICHA_LISTADO_CACHE.pop(cid, None)
     with _GERENCIA_MATRIZ_CACHE_LOCK:
         dead_m = [k for k in _GERENCIA_MATRIZ_CACHE if len(k) >= 3 and k[2] == cid]
         for k in dead_m:
@@ -38,6 +43,44 @@ def invalidate_caches_dependientes_listado(contrato_id: int) -> None:
         dead_p = [k for k in _GERENCIA_PDF_CACHE if len(k) >= 3 and k[2] == cid]
         for k in dead_p:
             _GERENCIA_PDF_CACHE.pop(k, None)
+
+
+def _indice_ficha_listado(contrato_id: int) -> dict:
+    """(capítulo_norm, ítem_norm) → ficha vigente de listado_precios."""
+    import time
+    from sicoe_valor_canonico import load_listado_vu_by_cap_item
+
+    cid = int(contrato_id)
+    now = time.monotonic()
+    hit = _FICHA_LISTADO_CACHE.get(cid)
+    if hit and now - hit[0] < _FICHA_LISTADO_TTL_SEC:
+        return hit[1]
+    idx = load_listado_vu_by_cap_item(_sb, cid)
+    _FICHA_LISTADO_CACHE[cid] = (now, idx)
+    return idx
+
+
+def _aplicar_ficha_items(contrato_id: int, items: list, *, aplicar_vu: bool = False) -> list:
+    """Identificación del ítem solo desde el listado del contrato.
+
+    Con ``aplicar_vu`` el valor unitario también sale de ese listado
+    (informes de obra). Los formatos de subcontratista pasan aplicar_vu=False
+    y conservan el precio del listado del sub.
+    """
+    if not items:
+        return items
+    try:
+        from listado_precios_meta import aplicar_identificacion_listado
+
+        res = aplicar_identificacion_listado(
+            items, _indice_ficha_listado(int(contrato_id)), aplicar_vu=aplicar_vu
+        )
+        if isinstance(items, list):
+            items[:] = res
+        return res
+    except Exception as exc:
+        _log.warning("ficha listado contrato=%s: %s", contrato_id, exc)
+        return items
 
 
 def _aplicar_meta_vivo_listado_sicoe(contrato_id: int, rows: list) -> list:
@@ -198,6 +241,42 @@ from ccd_conciliacion import (
     _fetch_cascade_interventoria_actas_rpo,
     matriz_params_contrato,
 )
+_aggregate_items_conciliacion_raw = aggregate_items_conciliacion
+
+
+def aggregate_items_conciliacion(registros, contrato_id=None, *, vu="auto"):
+    """Agrega registros y sustituye la ficha por el listado de precios del contrato.
+
+    ``vu="auto"`` o ``"contrato"``: valor unitario del listado del contrato.
+    ``vu="identidad"``: solo capítulo, ítem, descripción, unidad y norma.
+    Sin contrato_id no hay cruce y se conserva el agregado crudo.
+    """
+    items, _total = _aggregate_items_conciliacion_raw(registros)
+    cid = contrato_id
+    if cid is None:
+        for r in registros or []:
+            if isinstance(r, dict) and r.get("contrato_id") not in (None, ""):
+                try:
+                    cid = int(r["contrato_id"])
+                    break
+                except (TypeError, ValueError):
+                    continue
+    aplicar_vu = vu in ("auto", "contrato")
+    if cid is not None and vu != "no":
+        _aplicar_ficha_items(int(cid), items, aplicar_vu=aplicar_vu)
+        if aplicar_vu:
+            from corte_sub_conciliacion import valor_por_cantidad_vu
+
+            for it in items:
+                it["costo_directo"] = valor_por_cantidad_vu(
+                    it.get("cantidad"), it.get("vlr_unitario")
+                )
+    total = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
+    if not math.isfinite(total):
+        total = 0.0
+    return items, total
+
+
 from ccd_firma_integridad import (
     FIRMA_INVALIDADA_MARKER,
     es_marcador_firma_invalidada,
@@ -1800,6 +1879,8 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     ctx["gran_total"] = gt
     ctx["resumen_4cols"] = resumen4
     ctx["cortes_acum_anteriores_ids"] = prev_ids
+    _aplicar_ficha_items(int(contrato_id), ctx.get("items") or [], aplicar_vu=False)
+    ctx["items"] = csc.sort_items_capitulo_item_asc(list(ctx.get("items") or []))
 
 
 def _aplicar_norma_tecnica_desde_listado(items: List[dict], meta_cap_item: Optional[dict]) -> None:
@@ -1904,8 +1985,9 @@ def _contexto_acta_mes_conciliacion(
         if _sf(it.get("vlr_unitario")) <= 0 and _sf(it.get("vlr_unitario_sub")) <= 0:
             it["sin_precio"] = True
     items = amc.filtrar_items_con_cantidades(items)
-    items = amc.sort_items_capitulo_item_asc(items)
+    _aplicar_ficha_items(int(contrato_id), items, aplicar_vu=False)
     _aplicar_norma_tecnica_desde_listado(items, meta_cap_item)
+    items = amc.sort_items_capitulo_item_asc(items)
     # Total canónico: Σ ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem).
     total_costo = float(total_costo_canon)
 
@@ -2144,6 +2226,10 @@ def _contexto_memoria_item(
     # Enlace de memorias = biblioteca del reporte (so_reportes), no del registro.
     registros = overlay_enlace_soporte_desde_reporte(_sb, registros)
 
+    for r in registros:
+        if isinstance(r, dict) and r.get("contrato_id") in (None, ""):
+            r["contrato_id"] = int(contrato_id)
+    registros = _aplicar_ficha_items(int(contrato_id), registros, aplicar_vu=False)
     item_info = _item_info_desde_registros(registros, item_numero)
 
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
@@ -2492,7 +2578,9 @@ def _payload_contenido_documento(
                         "bloqueado": False,
                     }
                     for r in regs
-                ]
+                ],
+                contrato_id,
+                vu="identidad",
             )
             # CC-SUB agrega con vlr_unitario_sub en _contexto_corte_sub; alinear claves.
             for it in items:
@@ -2546,7 +2634,7 @@ def _payload_contenido_documento(
                     contexto_id=cid,
                     registros=regs,
                 )
-            items, total = aggregate_items_conciliacion(regs)
+            items, total = aggregate_items_conciliacion(regs, contrato_id)
             return payload_desde_items_agregados(
                 formato_codigo=fmt,
                 contexto_tipo=contexto_tipo,
@@ -9423,10 +9511,10 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
                 fi["grafico_numero"] = r.get("grafico_numero")
         _log.info("fo_eo_04 fetch_items_n3: items_unicos=%s", len(items_meta))
 
-        # 4+5. so_semanas y listado_precios EN PARALELO (son independientes)
+        # Semanas del acta. La norma técnica sale del listado por capítulo e ítem
+        # (no por número de ítem suelto: el mismo código puede repetirse).
         all_sem_ids = list({sid for sems in items_sem.values() for sid in sems if sid})
         sem_info: dict = {}
-        esp_map: dict = {}
 
         def _fetch_semanas():
             if not all_sem_ids:
@@ -9444,44 +9532,11 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
                 _log.warning("fetch_items_n3: semanas: %s", exc)
                 return {}
 
-        def _fetch_esp():
-            nums = list({k[0] for k in items_meta if k[0]})
-            if not nums:
-                return {}
-            esp: dict = {}
-            try:
-                for i in range(0, len(nums), 100):
-                    part = nums[i : i + 100]
-                    lp = (
-                        _sb.table("listado_precios")
-                        .select("item_numero, especificacion_tecnica")
-                        .eq("contrato_id", int(contrato_id))
-                        .in_("item_numero", part)
-                        .execute()
-                        .data
-                        or []
-                    )
-                    for r in lp:
-                        n = (r.get("item_numero") or "").strip()
-                        if n and n not in esp:
-                            esp[n] = (r.get("especificacion_tecnica") or "")
-            except Exception as exc:
-                _log.warning("fetch_items_n3: listado_precios: %s", exc)
-            return esp
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_sem = pool.submit(_fetch_semanas)
-            f_esp = pool.submit(_fetch_esp)
-            try:
-                sem_info = f_sem.result()
-            except Exception as exc:
-                _log.warning("fetch_items_n3: semanas pool: %s", exc)
-                sem_info = {}
-            try:
-                esp_map = f_esp.result()
-            except Exception as exc:
-                _log.warning("fetch_items_n3: esp pool: %s", exc)
-                esp_map = {}
+        try:
+            sem_info = _fetch_semanas()
+        except Exception as exc:
+            _log.warning("fetch_items_n3: semanas: %s", exc)
+            sem_info = {}
 
         # 6. Construir lista final con semanas ordenadas por numero_semana
         result: list = []
@@ -9501,7 +9556,6 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
             sem_entries.sort(key=lambda s: (s.get("numero_semana") or 0))
             meta["semanas"] = sem_entries
             meta["total_acta"] = total_acta
-            meta["especificacion_tecnica"] = esp_map.get(num, "")
             # Fotos de registros sellados en el nivel máximo del contrato
             fi = items_foto.get(key, {})
             meta["foto_url"]       = fi.get("foto_url")
@@ -9511,13 +9565,14 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
             _log.info("fo_eo_04 item=%s foto=#%s grf=#%s", num, meta["foto_numero"], meta["grafico_numero"])
             result.append(meta)
 
-        return sorted(
+        ordenado = sorted(
             result,
             key=lambda r: (
                 _orden_titulo_capitulo_obra(r.get("capitulo") or ""),
                 _orden_item_numero(r.get("item_numero") or ""),
             ),
         )
+        return _aplicar_ficha_items(int(contrato_id), ordenado, aplicar_vu=False)
     except Exception as exc:
         _log.warning("fetch_items_n3_acta ERROR: %s", exc)
         return []
@@ -12388,14 +12443,29 @@ def _excel_unique_sheet_name_raw(wb: Workbook, base: str) -> str:
 
 
 def _item_info_desde_registros(registros: List[dict], item_numero: str = "") -> Dict[str, Any]:
-    """Ítem + capítulo para encabezado de memorias (CC-SUB/SEM/MES-002)."""
+    """Ítem + capítulo para encabezado de memorias (CC-SUB/SEM/MES-002).
+
+    Si el registro trae contrato_id, la ficha sale del listado de precios.
+    """
     r0 = registros[0] if registros else {}
-    return {
+    info = {
         "item_numero": r0.get("item_numero", item_numero) or item_numero,
         "item_descripcion": r0.get("item_descripcion", "") or "",
         "unidad": r0.get("unidad", "") or "",
         "capitulo": str(r0.get("capitulo") or "").strip(),
+        "contrato_id": r0.get("contrato_id"),
+        "norma_tecnica": r0.get("norma_tecnica") or r0.get("especificacion_tecnica") or "",
+        "especificacion_tecnica": r0.get("especificacion_tecnica") or "",
     }
+    cid = r0.get("contrato_id")
+    if cid not in (None, ""):
+        try:
+            got = _aplicar_ficha_items(int(cid), [info], aplicar_vu=False)
+            if got:
+                info = got[0]
+        except (TypeError, ValueError):
+            pass
+    return info
 
 
 def _capitulo_memoria(item_info: Optional[dict], registros: Optional[List[dict]] = None) -> str:
@@ -13096,7 +13166,7 @@ def _fill_memoria_excel_ws(
     ws["D5"] = "DESCRIPCIÓN"
     ws["D5"].font = lbl_font
     ws.merge_cells("E5:H5")
-    ws["E5"] = _descripcion_memoria_compacta(item_info.get("item_descripcion"))
+    ws["E5"] = str(item_info.get("item_descripcion") or "").strip()
     ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
     ws["I5"] = "UNIDAD"
     ws["I5"].font = lbl_font
@@ -14046,7 +14116,7 @@ def _fill_corte_sub_001_excel_ws(
             continue
 
         _, it, idx = entry
-        desc = str(it.get("item_descripcion", "") or "").lower()
+        desc = str(it.get("item_descripcion", "") or "").strip()
         sin_p = bool(it.get("sin_precio"))
         if sin_p:
             desc = f"⚠ SIN PRECIO SUB · {desc}".strip()
@@ -14602,7 +14672,7 @@ def _fill_cc_conc_001_excel_ws(
             while j < len(item_list) and _capitulo_norm_conc(item_list[j]) == cap:
                 it = item_list[j]
                 cap_cell = (it.get("capitulo") or "").strip() or "—"
-                desc = str(it.get("item_descripcion", "") or "").lower()
+                desc = str(it.get("item_descripcion", "") or "").strip()
                 vu = it.get("vlr_unitario")
                 if vu is None:
                     vu = it.get("vlr_unitario_sub")
@@ -15179,7 +15249,7 @@ def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
 
 
 def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
-    desc = str(item.get("item_descripcion", "") or "").lower()
+    desc = str(item.get("item_descripcion", "") or "").strip()
     if item.get("sin_precio"):
         desc = f"⚠ SIN PRECIO SUB · {desc}".strip()
     trs = f"background:{row_bg};" if row_bg else ""
@@ -15662,7 +15732,7 @@ def _html_cc_conc_001_tr_subtotal_capitulo(bd: str, cap_etiqueta: str, sum_cd: f
 
 def _html_cc_conc_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
     cap = (item.get("capitulo") or "").strip() or "—"
-    desc = str(item.get("item_descripcion", "") or "").lower()
+    desc = str(item.get("item_descripcion", "") or "").strip()
     trs = f"background:{row_bg};" if row_bg else ""
     vu = item.get("vlr_unitario")
     if vu is None:
@@ -16225,7 +16295,7 @@ def _html_memoria_item_body(
             cells.append(("", ""))
         c5 = cells[:5]
         it_num = _h(str(item_info.get("item_numero") or ""))
-        it_desc = _h(_descripcion_memoria_compacta(item_info.get("item_descripcion")))
+        it_desc = _h(str(item_info.get("item_descripcion") or "").strip())
         it_und = _h(str(item_info.get("unidad") or ""))
         lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
         val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
