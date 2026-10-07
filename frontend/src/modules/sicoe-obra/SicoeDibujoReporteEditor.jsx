@@ -12,8 +12,11 @@ import {
   snapshotEntidadDesdeEscena,
 } from './sicoeDibujoEscenaGeojson'
 import { resolveHuellaMapOrigin } from './sicoeDibujoHuellaOrigin'
-import { fetchDibujoReferencias, guardarDibujoReporte } from './sicoeDibujoReporteApi'
-import { coordRowsDesdePuntosPortada } from './sicoeDibujoCoordsPortada'
+import { fetchDibujoReferencias, guardarDibujoReporte, sincronizarPuntosTopoDesdeDibujo } from './sicoeDibujoReporteApi'
+import {
+  coordRowsDesdePuntosPortada,
+  puntosPortadaDesdeCoordRows,
+} from './sicoeDibujoCoordsPortada'
 import {
   sugerirTipoDibujo,
   tipoDesdeEscenaGuardada,
@@ -98,7 +101,7 @@ export default function SicoeDibujoReporteEditor({
     ? `Editar dibujo · Reporte #${reporte?.numero_reporte ?? ''}`
     : `Dibujar reporte #${reporte?.numero_reporte ?? ''}`
 
-  const onSaveHuella = async ({ objects, originLngLat }) => {
+  const onSaveHuella = async ({ objects, originLngLat, coordRows = null }) => {
     setError('')
     // Preferir ancla Gauss de nodos (idempotente al reabrir/guardar sin cambios).
     const resolved = resolveHuellaMapOrigin({
@@ -144,6 +147,7 @@ export default function SicoeDibujoReporteEditor({
     const poligonoSentidoEje = (objects || []).some((o) => (
       o && o.sentidoEje === true && o.type === 'polilinea' && o.closed
     ))
+    const puntosPortada = puntosPortadaDesdeCoordRows(coordRows)
     setGuardando(true)
     setError('')
     try {
@@ -166,8 +170,33 @@ export default function SicoeDibujoReporteEditor({
         },
         origenLngLat: originFijo,
       })
+      // Misma información que el panel topo de portada (filas vacías no se llevan).
+      let puntosGuardados = puntosPortada
+      try {
+        puntosGuardados = await sincronizarPuntosTopoDesdeDibujo({
+          API_URL,
+          contratoId,
+          token,
+          reporteId: reporte.id,
+          puntos: puntosPortada,
+        })
+      } catch (topoErr) {
+        const rawTopo = String(topoErr?.message || topoErr || '')
+        setError(rawTopo.length < 180 && rawTopo
+          ? `Dibujo guardado, pero no se sincronizó la portada: ${rawTopo}`
+          : 'Dibujo guardado, pero no se pudieron sincronizar las coordenadas con la portada.')
+        throw topoErr
+      }
+      const payload = {
+        ...(data || {}),
+        reporte: {
+          ...(data?.reporte || {}),
+          puntos: puntosGuardados,
+        },
+        puntos: puntosGuardados,
+      }
       // Aviso de nodo alojado lo muestra el padre (toast no bloqueante).
-      onGuardado?.(data)
+      onGuardado?.(payload)
       // Cerrar de inmediato: no esperar hallazgos ni pausas artificiales.
       onClose?.()
     } catch (e) {
@@ -179,6 +208,8 @@ export default function SicoeDibujoReporteEditor({
         msg = raw.length < 180 ? raw : 'El dibujo no tiene una geometría válida para guardar.'
       } else if (/network|fetch|failed|timeout|timed out/i.test(raw)) {
         msg = 'Error de red al guardar. El dibujo sigue en pantalla: puede reintentar.'
+      } else if (/portada|coordenadas|puntos/i.test(raw)) {
+        msg = raw.length < 200 ? raw : 'No se pudieron sincronizar las coordenadas con la portada.'
       } else if (raw && raw.length < 180 && !/^Error \d+/.test(raw)) {
         msg = raw
       }

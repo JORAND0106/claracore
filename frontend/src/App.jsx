@@ -8713,6 +8713,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           onClose={() => setEditorDibujoReporte(false)}
           onGuardado={(data) => {
             const patch = data?.reporte || data || {}
+            const puntosSync = Array.isArray(patch.puntos)
+              ? patch.puntos
+              : (Array.isArray(data?.puntos) ? data.puntos : null)
             setReporte((prev) => ({
               ...prev,
               ...patch,
@@ -8720,13 +8723,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               dibujo_escena: patch.dibujo_escena ?? prev.dibujo_escena,
               nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id ?? prev.nodo_contenedor_id,
               tiene_dibujo: true,
+              ...(puntosSync ? { puntos: puntosSync } : {}),
             }))
+            if (puntosSync) {
+              try { setPuntosEdit(puntosSync.map((p) => ({ ...p }))) } catch { /* noop */ }
+            }
             try {
               propagarReporteGuardado({
                 id: reporte?.id,
                 dibujo_geojson: patch.dibujo_geojson,
                 tiene_dibujo: true,
                 nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id,
+                ...(puntosSync ? { puntos: puntosSync } : {}),
               })
             } catch { /* noop */ }
             const cmd = data?.mensaje_cmd
