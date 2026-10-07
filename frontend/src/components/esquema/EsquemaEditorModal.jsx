@@ -2363,10 +2363,17 @@ export default function EsquemaEditorModal({
         id: uid(),
         type: 'linea',
         joinSeq: true,
+        fromJoinSequence: true,
         x1: a.x,
         y1: a.y,
         x2: b.x,
         y2: b.y,
+        ...(Number.isFinite(a.este) && Number.isFinite(a.norte)
+          ? { este1: a.este, norte1: a.norte }
+          : {}),
+        ...(Number.isFinite(b.este) && Number.isFinite(b.norte)
+          ? { este2: b.este, norte2: b.norte }
+          : {}),
         color: colorRef.current,
         width: widthRef.current,
         lineStyle: lineStyleRef.current,

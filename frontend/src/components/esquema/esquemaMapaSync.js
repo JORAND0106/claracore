@@ -254,10 +254,46 @@ export function reprojectSceneObjectsToMap(objects, map, pan, zoom, gkOrigin) {
       return { ...obj, x: w.x, y: w.y }
     }
     if (obj.type === 'linea' || obj.type === 'flecha') {
-      const a = mapPoint(obj.x1, obj.y1, obj.este1, obj.norte1)
-      const b = mapPoint(obj.x2, obj.y2, obj.este2, obj.norte2)
+      // Igual que polilínea: sellar GK en extremos en la primera pasada.
+      // Sin sello, cada zoom reinterpreta mundo Mercator como Gauss planar y
+      // el extremo lejos del origen se alarga / cambia de inclinación.
+      const sealEndpoint = (x, y, este, norte) => {
+        if (Number.isFinite(Number(este)) && Number.isFinite(Number(norte))) {
+          const w = gkToCanvasWorld(map, Number(este), Number(norte), pan, z)
+          if (!w) return null
+          return { x: w.x, y: w.y, este: Number(este), norte: Number(norte) }
+        }
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+        const intent = canvasWorldToGkIntent(x, y, gkOrigin)
+        const ll = gkBogotaToWgs84(intent.este, intent.norte)
+        const w = ll
+          ? lngLatToCanvasWorld(map, ll.lng, ll.lat, pan, z)
+          : reprojectXy(x, y, map, pan, z, gkOrigin)
+        if (!w) return null
+        return {
+          x: w.x,
+          y: w.y,
+          este: intent.este,
+          norte: intent.norte,
+          ...(ll ? { lng: ll.lng, lat: ll.lat } : {}),
+        }
+      }
+      const a = sealEndpoint(obj.x1, obj.y1, obj.este1, obj.norte1)
+      const b = sealEndpoint(obj.x2, obj.y2, obj.este2, obj.norte2)
       if (!a || !b) return obj
-      return { ...obj, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+      return {
+        ...obj,
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+        este1: a.este,
+        norte1: a.norte,
+        este2: b.este,
+        norte2: b.norte,
+        ...(a.lng != null && a.lat != null ? { lng1: a.lng, lat1: a.lat } : {}),
+        ...(b.lng != null && b.lat != null ? { lng2: b.lng, lat2: b.lat } : {}),
+      }
     }
     if (obj.type === 'polilinea' || obj.type === 'stroke') {
       const pts = Array.isArray(obj.points) ? obj.points : []
