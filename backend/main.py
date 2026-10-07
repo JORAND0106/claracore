@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse, JSONResponse, Response
 import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any, Dict, Set, Tuple, Iterable
 from collections import Counter, defaultdict
 from supabase import create_client, ClientOptions
@@ -28932,6 +28932,16 @@ class PuntoTopo(BaseModel):
     este: Optional[float] = None
     cota: Optional[float] = None
     descripcion: Optional[str] = None
+
+    @field_validator("norte", "este", "cota", mode="before")
+    @classmethod
+    def _sicoe_topo_empty_str_to_none(cls, v):
+        """Cota (y Norte/Este) vacíos → null; no rechazar string vacío como float."""
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 class PuntosCreate(BaseModel):
     reporte_id: int

@@ -2,12 +2,26 @@
  * Mensajes de error al guardar/enviar reportes SicoeObra.
  * Nunca muestra texto técnico en inglés (APIError, PGRST, schema cache) al usuario.
  */
+import { mensajeDesdeDetailApi } from './sicoePortadaTopografia.js'
 
 function extractEmbeddedMessage(raw) {
   const s = String(raw || '')
   const mMsg = s.match(/['"]message['"]\s*:\s*['"]([^'"]+)['"]/i)
   const mDetail = s.match(/['"]details?['"]\s*:\s*['"]([^'"]+)['"]/i)
   return [mMsg?.[1], mDetail?.[1]].filter(Boolean).join(' — ')
+}
+
+function tryParseDetailJson(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return null
+  if (s.startsWith('[') || s.startsWith('{')) {
+    try {
+      return JSON.parse(s)
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 /**
@@ -18,6 +32,17 @@ export function mensajeErrorGuardarReporte(err) {
   const raw = String(err?.message || err || '').trim()
   if (!raw) {
     return 'No se pudo guardar el reporte. Intente de nuevo.'
+  }
+  // Detalle FastAPI serializado (p. ej. float_parsing en cota) → español breve
+  const parsedDetail = tryParseDetailJson(raw)
+  if (parsedDetail != null && (/float_parsing|type_error|puntos|cota|norte|este/i.test(raw) || Array.isArray(parsedDetail))) {
+    const translated = mensajeDesdeDetailApi(parsedDetail, '')
+    if (translated && translated !== '[object Object]') {
+      return translated
+    }
+    if (/cota/i.test(raw) && /float_parsing|valid number/i.test(raw)) {
+      return 'Revise la Cota en coordenadas topográficas: déjela vacía o indique un número válido.'
+    }
   }
   if (/failed to fetch|networkerror|network request failed|load failed|fetch failed|timeout|aborted|econnreset|econnrefused|etimedout/i.test(raw)) {
     return (
