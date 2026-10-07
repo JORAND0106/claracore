@@ -375,8 +375,8 @@ def aplicar_precios_contrato_a_items(
 
     Preferencia de VU:
       1. listado (capítulo, ítem) si ``meta_by_cap_item``;
-      2. listado por ítem solo (``vu_por_item``) — legacy;
-      3. stamp del registro.
+      2. listado por ítem solo (``vu_por_item``).
+    El precio copiado en el registro no se usa.
     """
     from sicoe_valor_canonico import cap_item_key
 
@@ -385,7 +385,6 @@ def aplicar_precios_contrato_a_items(
     for it in items or []:
         row = dict(it)
         k = item_key(row.get("item_numero"))
-        stamped = _sf(row.get("vlr_unitario"))
         vu = 0.0
         fuente = None
         if meta_by_cap_item:
@@ -400,9 +399,6 @@ def aplicar_precios_contrato_a_items(
             if pactado > 0:
                 vu = pactado
                 fuente = "listado_precios"
-        if vu <= 0 and stamped > 0:
-            vu = stamped
-            fuente = "stamp_registro"
         if vu <= 0:
             fuente = None
             row["sin_precio"] = True

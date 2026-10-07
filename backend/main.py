@@ -24056,13 +24056,13 @@ def filtros_items_registros(
         _semana_id_l = semana_id
         _cap_l       = capitulo
         _sub_l       = subcontratista_id
-        _q_l         = q
+        _q_l         = (q or "").strip()
         item_todos: list = []
         off3 = 0
         while True:
             def _items(o=off3):
                 qr = supabase.table("so_registros")\
-                    .select("item_numero, item_descripcion")\
+                    .select("item_numero, capitulo")\
                     .eq("contrato_id", contrato_id)\
                     .not_.is_("item_numero", "null")
                 if _acta_id_l is not None:
@@ -24073,26 +24073,65 @@ def filtros_items_registros(
                     qr = qr.eq("capitulo", _cap_l)
                 if _sub_l is not None:
                     qr = qr.eq("subcontratista_id", _sub_l)
-                if _q_l:
-                    qr = qr.or_(f"item_numero.ilike.%{_q_l}%,item_descripcion.ilike.%{_q_l}%")
                 return qr.order("id").range(o, o + 999).execute().data
             batch = supabase_execute(_items)
             item_todos.extend(batch)
             if len(batch) < 1000:
                 break
             off3 += 1000
-        # Deduplicar por item_numero, conservar descripcion
-        seen: dict = {}
+        # Qué ítems hay en el alcance del filtro sale de los registros.
+        # La ficha (descripción, unidad, norma, valor) sale solo del listado.
+        from listado_precios_meta import aplicar_identificacion_listado
+        from sicoe_valor_canonico import load_listado_vu_by_cap_item
+
+        caps_por_item: dict = {}
         for r in item_todos:
             num = r.get("item_numero")
             if not num:
                 continue
-            if num not in seen:
-                seen[num] = r.get("item_descripcion") or ""
-            elif not seen[num] and r.get("item_descripcion"):
-                seen[num] = r["item_descripcion"]
-        results = [{"item_numero": k, "item_descripcion": v} for k, v in sorted(seen.items())]
-        return results[:20]
+            caps_por_item.setdefault(num, [])
+            cap = r.get("capitulo")
+            if cap not in caps_por_item[num]:
+                caps_por_item[num].append(cap)
+        idx = _dash_agg_cache_get(
+            "listado_precios_ficha_filtros", int(contrato_id), ttl_sec=_LISTADO_VU_CACHE_TTL_SEC
+        )
+        if idx is None:
+            idx = load_listado_vu_by_cap_item(supabase, int(contrato_id))
+            _dash_agg_cache_set("listado_precios_ficha_filtros", int(contrato_id), idx)
+        filas = []
+        for num, caps in caps_por_item.items():
+            candidatos = [
+                {"item_numero": num, "capitulo": cap or ""}
+                for cap in (caps or [""])
+            ]
+            resueltos = aplicar_identificacion_listado(candidatos, idx, aplicar_vu=False)
+            elegido = next((x for x in resueltos if x.get("_identificacion_listado")), None)
+            if elegido is None and resueltos:
+                elegido = resueltos[0]
+            if elegido:
+                filas.append(elegido)
+        if _q_l:
+            nq = _q_l.casefold()
+            filas = [
+                x for x in filas
+                if nq in str(x.get("item_numero") or "").casefold()
+                or nq in str(x.get("item_descripcion") or "").casefold()
+            ]
+        filas.sort(key=lambda x: str(x.get("item_numero") or ""))
+        results = []
+        for x in filas[:20]:
+            vu = x.get("precio_unitario_listado")
+            results.append({
+                "item_numero": x.get("item_numero"),
+                "capitulo": x.get("capitulo") or "",
+                "item_descripcion": x.get("item_descripcion") or "",
+                "unidad": x.get("unidad") or "",
+                "especificacion_tecnica": x.get("especificacion_tecnica") or "",
+                "norma_tecnica": x.get("norma_tecnica") or "",
+                "precio_unitario": vu,
+            })
+        return results
     except Exception:
         return []
 
@@ -39507,7 +39546,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
     from listado_precios_meta import merge_listado_ficha_prefer_newer
 
     cached = _dash_agg_cache_get(
-        "listado_precios_vu_idx_v5",
+        "listado_precios_vu_idx_v6",
         contrato_id,
         ttl_sec=_LISTADO_VU_CACHE_TTL_SEC,
     )
@@ -39521,7 +39560,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
             return (
                 supabase.table("listado_precios")
                 .select(
-                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia, estado_precio"
+                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia, estado_precio, especificacion_tecnica"
                 )
                 .eq("contrato_id", contrato_id)
                 .order("id")
@@ -39544,7 +39583,7 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
         if len(batch) < 1000:
             break
         off += 1000
-    _dash_agg_cache_set("listado_precios_vu_idx_v5", contrato_id, idx)
+    _dash_agg_cache_set("listado_precios_vu_idx_v6", contrato_id, idx)
     return idx
 
 

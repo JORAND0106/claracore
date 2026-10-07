@@ -1616,6 +1616,7 @@ def aplicar_precios_sub_a_items(
     """
     Sobrescribe vlr_unitario_sub con el pactado del sub cuando existe.
     Marca sin_precio=True si el ítem del corte no tiene VU en el listado del sub.
+    No usa el precio copiado en el registro.
     Recalcula costo_directo = cant × VU (0 dp).
     """
     sin_precio: List[str] = []
@@ -1623,14 +1624,10 @@ def aplicar_precios_sub_a_items(
     for it in items or []:
         row = dict(it)
         k = item_key(row.get("item_numero"))
-        stamped = _sf(row.get("vlr_unitario_sub"))
         pactado = _sf(vu_por_item.get(k)) if k in (vu_por_item or {}) else 0.0
         if pactado > 0:
             vu = pactado
             row["precio_fuente"] = "subcontratista_precios"
-        elif stamped > 0:
-            vu = stamped
-            row["precio_fuente"] = "stamp_registro"
         else:
             vu = 0.0
             row["precio_fuente"] = None

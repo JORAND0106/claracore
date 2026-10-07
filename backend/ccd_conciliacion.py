@@ -281,6 +281,9 @@ def fetch_registros_conciliacion(
     except Exception as e2:
         _log.warning("conciliación: lectura N3 aprob. interventoría (%s)", e2)
         return []
+    for r in raw or []:
+        if isinstance(r, dict):
+            r["contrato_id"] = int(contrato_id)
     if acta_rpo_id is not None:
         return _aplicar_regla_bloqueado_por_acta(raw)
     if semana_id is not None:
@@ -385,6 +388,9 @@ def fetch_registros_memoria_conciliacion(
     except Exception as e:
         _log.warning("memoria conc: lectura N3 aprob. interventoría (%s)", e)
         return []
+    for r in raw or []:
+        if isinstance(r, dict):
+            r["contrato_id"] = int(contrato_id)
     try:
         from main import _overlay_sicoe_meta_vivo
 
@@ -520,6 +526,8 @@ def _fetch_cascade_interventoria_actas_rpo(
         )
         for r in raw or []:
             if _registro_aprobado_matriz_panel(r, niveles_activos, campo_nivel_max):
+                if isinstance(r, dict):
+                    r["contrato_id"] = int(contrato_id)
                 out.append(r)
     return out
 
@@ -676,8 +684,17 @@ def fetch_registros_memoria_cc_mes_acta_todos(
     out: List[Dict[str, Any]] = []
     for r in raw or []:
         if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+            if isinstance(r, dict):
+                r["contrato_id"] = cid
             out.append(r)
-    return overlay_enlace_soporte_desde_reporte(sb, out)
+    out = overlay_enlace_soporte_desde_reporte(sb, out)
+    try:
+        from main import _overlay_sicoe_meta_vivo
+
+        out = _overlay_sicoe_meta_vivo(cid, out)
+    except Exception as exc:
+        _log.warning("memoria CC-MES acta completa: ficha listado (%s)", exc)
+    return out
 
 
 def group_registros_memoria_por_item(
@@ -747,8 +764,17 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
     out: List[Dict[str, Any]] = []
     for r in raw or []:
         if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+            if isinstance(r, dict):
+                r["contrato_id"] = int(contrato_id)
             out.append(r)
-    return overlay_enlace_soporte_desde_reporte(sb, out)
+    out = overlay_enlace_soporte_desde_reporte(sb, out)
+    try:
+        from main import _overlay_sicoe_meta_vivo
+
+        out = _overlay_sicoe_meta_vivo(int(contrato_id), out)
+    except Exception as exc:
+        _log.warning("memoria CC-MES alineada: ficha listado (%s)", exc)
+    return out
 
 
 def suma_por_capitulo_desde_registros(registros: List[Dict[str, Any]]) -> Dict[str, float]:
