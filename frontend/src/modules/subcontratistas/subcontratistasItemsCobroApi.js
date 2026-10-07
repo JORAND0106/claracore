@@ -70,6 +70,20 @@ export async function desvincularItemsCobro(subId, listadoPrecioIds, token) {
   return res.json()
 }
 
+/**
+ * Registra la exportación Excel y valida permiso de VU Cobro en servidor.
+ * @returns {{ ok: boolean, incluir_vu_cobro: boolean, puede_incluir_vu_cobro: boolean }}
+ */
+export async function registrarExportPreciosExcel(subId, { incluirVuCobro = false } = {}, token) {
+  const res = await fetch(`${API_BASE}/subcontratistas/${subId}/precios/export-excel-log`, {
+    method: 'POST',
+    headers: authHeaders(token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ incluir_vu_cobro: !!incluirVuCobro }),
+  })
+  if (!res.ok) await parseError(res)
+  return res.json()
+}
+
 /** PUT AIU/IVA global del subcontratista. */
 export async function upsertTributosSub(subId, tributos, token) {
   const res = await fetch(`${API_BASE}/subcontratistas/${subId}/tributos`, {
