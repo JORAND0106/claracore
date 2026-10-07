@@ -134,20 +134,43 @@ export function pptoFiltroUbicacionCacheKey(f) {
 /**
  * Params de cascada para GET /presupuesto/{id}/filtros.
  * Con un solo capítulo/competencia se acotan tramos/calzadas (p. ej. alcantarillado sanitario).
+ *
+ * Importante: NO enviar el propio tramo/calzada ya elegidos. Si se filtra la RPC por
+ * p_tramo / p_calzada, la lista DISTINCT de ese campo queda en un solo valor y el
+ * select_multi «Agregar» se bloquea (no hay más opciones disponibles).
  */
 export function pptoFiltroCascadeOpcionesParams(f, tipoEjecucionActivo) {
   const capVals = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), f)
   const compVals = pptoFiltroValoresLista(pptoFiltroDef('competencia'), f)
-  const tramoVals = pptoFiltroValoresLista(pptoFiltroDef('tramo'), f)
-  const calzadaVals = pptoFiltroValoresLista(pptoFiltroDef('calzada'), f)
   const te = String(tipoEjecucionActivo || f?.tipoEjecucion || 'Presupuesto de Obra').trim()
   return {
     capitulo: capVals.length === 1 ? capVals[0] : undefined,
     competencia: compVals.length === 1 ? compVals[0] : undefined,
-    tramo: tramoVals[0] || undefined,
-    calzada: calzadaVals[0] || undefined,
     tipo_ejecucion: te || 'Presupuesto de Obra',
   }
+}
+
+/** Une catálogos de opciones (string u objetos) sin duplicar, orden natural. */
+export function pptoMergeOpcionesFiltro(...listas) {
+  const seen = new Set()
+  const out = []
+  for (const list of listas) {
+    if (!Array.isArray(list)) continue
+    for (const raw of list) {
+      let value = ''
+      if (raw != null && typeof raw === 'object') {
+        value = String(raw.value ?? raw.item ?? raw.capitulo ?? raw.label ?? '').trim()
+      } else {
+        value = String(raw ?? '').trim()
+      }
+      if (!value) continue
+      const key = value.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(value)
+    }
+  }
+  return out.sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }))
 }
 
 /** Valores activos de un filtro (lista para multi-select). */
