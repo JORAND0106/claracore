@@ -19785,33 +19785,12 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
             break
         offset += 1000
 
-    try:
-        precios_rows = (
-            supabase.table("subcontratista_precios")
-            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual, tributos")
-            .eq("subcontratista_id", int(sub_id))
-            .execute()
-            .data
-        ) or []
-    except Exception:
-        try:
-            precios_rows = (
-                supabase.table("subcontratista_precios")
-                .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
-                .eq("subcontratista_id", int(sub_id))
-                .execute()
-                .data
-            ) or []
-        except Exception:
-            precios_rows = (
-                supabase.table("subcontratista_precios")
-                .select("id, listado_precio_id, precio_unitario_sub")
-                .eq("subcontratista_id", int(sub_id))
-                .execute()
-                .data
-            ) or []
+    from subcontratistas_items_cobro import (
+        fetch_subcontratista_precios_rows,
+        resolve_tributos_subcontratista,
+    )
 
-    from subcontratistas_items_cobro import resolve_tributos_subcontratista
+    precios_rows = fetch_subcontratista_precios_rows(supabase, int(sub_id))
 
     tributos_sub = {}
     try:

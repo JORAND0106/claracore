@@ -329,7 +329,18 @@ def validate_soporte_upload(content_type: Optional[str], size: int) -> str:
 
 
 def item_key(item_numero: Any) -> str:
-    return str(item_numero or "").strip() or "SIN_ITEM"
+    """
+    Clave de ítem normalizada (quita puntos finales: ``1.1.`` → ``1.1``).
+    Alineada con ``sicoe_valor_canonico.norm_item`` / Tab Precios.
+    """
+    try:
+        from sicoe_valor_canonico import norm_item
+
+        t = norm_item(item_numero)
+    except Exception:
+        t = str(item_numero or "").strip()
+        t = re.sub(r"\.+$", "", t).strip()
+    return t or "SIN_ITEM"
 
 
 def _natural_sort_key_item(s: object) -> Tuple[Any, ...]:
@@ -474,7 +485,9 @@ def enriquecer_items_bloques(
     cant_actualizadas: Dict[str, float],
     cant_acum_anterior: Dict[str, float],
     vu_por_item: Optional[Dict[str, float]] = None,
+    vu_por_cap_item: Optional[Dict[Tuple[str, str], float]] = None,
     meta_por_item: Optional[Dict[str, dict]] = None,
+    meta_por_cap_item: Optional[Dict[Tuple[str, str], dict]] = None,
 ) -> List[dict]:
     """
     Añade bloques Actualizadas / Presente / Acumulado / Saldo (cant + valor) por ítem.
@@ -482,10 +495,14 @@ def enriquecer_items_bloques(
     Saldo = actualizadas − acumulado.
 
     Ítems que solo existen en Actualizadas se materializan con la ficha del
-    listado (``meta_por_item``): capítulo, descripción, unidad, VU y orden.
+    listado (``meta_por_item`` / ``meta_por_cap_item``): capítulo, descripción, unidad, VU y orden.
     """
+    from sicoe_valor_canonico import cap_item_key
+
     vu_por_item = vu_por_item or {}
+    vu_por_cap_item = vu_por_cap_item or {}
     meta_por_item = meta_por_item or {}
+    meta_por_cap_item = meta_por_cap_item or {}
     keys = set(cant_actualizadas) | set(cant_acum_anterior) | set(meta_por_item)
     for it in items_presente or []:
         keys.add(item_key(it.get("item_numero")))
@@ -496,9 +513,17 @@ def enriquecer_items_bloques(
         if k == "SIN_ITEM":
             continue
         base = dict(by_presente.get(k) or {})
-        meta = meta_por_item.get(k) or {}
+        ck = cap_item_key(base.get("capitulo"), base.get("item_numero") or k)
+        meta = meta_por_cap_item.get(ck) or meta_por_item.get(k) or {}
         if not base:
-            vu0 = _sf(vu_por_item.get(k)) if k in vu_por_item else _sf(meta.get("vlr_unitario"))
+            vu0 = resolver_vu_costo_mo_item(
+                item_numero=k,
+                capitulo=(meta.get("capitulo") if meta else None),
+                vu_por_item=vu_por_item,
+                vu_por_cap_item=vu_por_cap_item,
+            )
+            if vu0 <= 0:
+                vu0 = _sf(meta.get("vlr_unitario"))
             base = {
                 "item_numero": k,
                 "item_descripcion": str(meta.get("descripcion") or ""),
@@ -523,9 +548,14 @@ def enriquecer_items_bloques(
             base["orden_listado"] = meta["orden_listado"]
 
         # Canon del informe de subcontratista: solo VU Costo M.O.
-        # Preferir mapa pactado; luego vlr_unitario_sub ya aplicado; luego meta del sub.
+        # Preferir (capítulo, ítem); luego ítem; luego vlr ya aplicado / meta del sub.
         # No usar base.vlr_unitario suelto (podría arrastrar precio del listado del contrato).
-        vu = _sf(vu_por_item.get(k)) if k in vu_por_item else 0.0
+        vu = resolver_vu_costo_mo_item(
+            item_numero=base.get("item_numero") or k,
+            capitulo=base.get("capitulo"),
+            vu_por_item=vu_por_item,
+            vu_por_cap_item=vu_por_cap_item,
+        )
         if vu <= 0:
             vu = _sf(base.get("vlr_unitario_sub"))
         if vu <= 0:
@@ -795,16 +825,9 @@ def cantidades_actualizadas_sub(sb, *, contrato_id: int, subcontratista_id: int)
         _log.warning("cantidades_actualizadas_sub listado: %s", exc)
         return {}
 
-    try:
-        precios_rows = (
-            sb.table("subcontratista_precios")
-            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
-            .eq("subcontratista_id", int(subcontratista_id))
-            .execute()
-            .data
-        ) or []
-    except Exception:
-        precios_rows = []
+    from subcontratistas_items_cobro import fetch_subcontratista_precios_rows
+
+    precios_rows = fetch_subcontratista_precios_rows(sb, int(subcontratista_id))
 
     sheet = build_precios_sheet(listado, cant_map, precios_rows)
     acc: Dict[str, float] = {}
@@ -1432,13 +1455,90 @@ def vu_costo_mo_desde_fila_precios(row: Optional[dict]) -> float:
     return 0.0
 
 
+def _fetch_listado_precios_contrato(sb, contrato_id: int) -> List[dict]:
+    listado: List[dict] = []
+    try:
+        offset = 0
+        while True:
+            batch = (
+                sb.table("listado_precios")
+                .select(
+                    "id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .order("item_numero")
+                .range(offset, offset + 999)
+                .execute()
+                .data
+            )
+            listado.extend(batch or [])
+            if len(batch or []) < 1000:
+                break
+            offset += 1000
+    except Exception as exc:
+        _log.warning("_fetch_listado_precios_contrato: %s", exc)
+        return []
+    return listado
+
+
+def precios_vu_sub_maps(
+    sb, *, contrato_id: int, subcontratista_id: int
+) -> Tuple[Dict[str, float], Dict[Tuple[str, str], float]]:
+    """
+    Mapas de VU Costo M.O. pactado del subcontratista.
+
+    - by_item: item_norm → VU (compat; si hay homónimos en capítulos distintos
+      con VU distintos, el de capítulo es la fuente de verdad).
+    - by_cap_item: (capítulo_norm, item_norm) → VU.
+
+    Fuente: ``subcontratista_precios`` + ``listado_precios`` (misma que Tab Precios).
+    Nunca usa precio del contrato (VU Cobro).
+    """
+    from sicoe_valor_canonico import cap_item_key
+    from subcontratistas_items_cobro import fetch_subcontratista_precios_rows
+
+    listado = _fetch_listado_precios_contrato(sb, int(contrato_id))
+    listado_by_id: Dict[int, dict] = {}
+    for lp in listado:
+        try:
+            listado_by_id[int(lp.get("id"))] = lp
+        except (TypeError, ValueError):
+            continue
+
+    precios_rows = fetch_subcontratista_precios_rows(sb, int(subcontratista_id))
+    by_item: Dict[str, float] = {}
+    by_cap: Dict[Tuple[str, str], float] = {}
+    for pr in precios_rows:
+        try:
+            lp_id = int(pr.get("listado_precio_id"))
+        except (TypeError, ValueError):
+            continue
+        lp = listado_by_id.get(lp_id)
+        if not lp:
+            continue
+        vu = vu_costo_mo_desde_fila_precios(pr)
+        if vu <= 0:
+            continue
+        ik = item_key(lp.get("item_numero"))
+        if ik == "SIN_ITEM":
+            continue
+        ck = cap_item_key(lp.get("capitulo"), lp.get("item_numero"))
+        by_cap[ck] = vu
+        # Si ya hay otro VU para el mismo código en otro capítulo, no pisar a ciegas:
+        # setdefault conserva el primero; el lookup por capítulo resuelve el correcto.
+        by_item.setdefault(ik, vu)
+    return by_item, by_cap
+
+
 def precios_vu_sub_por_item(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, float]:
     """
-    Mapa item_numero → VU Costo M.O. (precio_unitario_sub) del subcontratista.
-    Fuente: subcontratista_precios; nunca precios del contrato principal (VU Cobro).
+    Mapa item_numero_norm → VU Costo M.O. del subcontratista.
+    Preferir ``precios_vu_sub_maps`` + lookup por capítulo cuando haya homónimos.
     """
-    meta = meta_listado_sub(sb, contrato_id=contrato_id, subcontratista_id=subcontratista_id)
-    return {k: _sf(v.get("vlr_unitario")) for k, v in meta.items() if _sf(v.get("vlr_unitario")) > 0}
+    by_item, _by_cap = precios_vu_sub_maps(
+        sb, contrato_id=contrato_id, subcontratista_id=subcontratista_id
+    )
+    return by_item
 
 
 def meta_listado_contrato(sb, *, contrato_id: int) -> Dict[str, dict]:
@@ -1533,11 +1633,43 @@ def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[st
     ``vlr_unitario`` es únicamente el VU Costo M.O. pactado
     (``subcontratista_precios.precio_unitario_sub``). Si el ítem no tiene
     precio de mano de obra, queda en 0 — no se usa el VU Cobro del contrato.
+
+    Clave: item_numero normalizado. Para homónimos entre capítulos usar
+    ``meta_listado_sub_by_cap_item``.
     """
+    _by_item, by_cap = meta_listado_sub_maps(
+        sb, contrato_id=contrato_id, subcontratista_id=subcontratista_id
+    )
+    out: Dict[str, dict] = {}
+    for (_cap, ik), meta in by_cap.items():
+        prev = out.get(ik)
+        if prev is None or (
+            not prev.get("tiene_vu_costo_mo") and meta.get("tiene_vu_costo_mo")
+        ):
+            out[ik] = meta
+    return out
+
+
+def meta_listado_sub_by_cap_item(
+    sb, *, contrato_id: int, subcontratista_id: int
+) -> Dict[Tuple[str, str], dict]:
+    """Índice (capítulo_norm, ítem_norm) → ficha del sub con VU Costo M.O."""
+    _by_item, by_cap = meta_listado_sub_maps(
+        sb, contrato_id=contrato_id, subcontratista_id=subcontratista_id
+    )
+    return by_cap
+
+
+def meta_listado_sub_maps(
+    sb, *, contrato_id: int, subcontratista_id: int
+) -> Tuple[Dict[str, dict], Dict[Tuple[str, str], dict]]:
+    """Construye meta por ítem y por (capítulo, ítem) desde la misma fuente que Tab Precios."""
     from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
+    from sicoe_valor_canonico import cap_item_key
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
         build_precios_sheet,
+        fetch_subcontratista_precios_rows,
     )
 
     try:
@@ -1549,70 +1681,119 @@ def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[st
         ppto_rows = []
 
     cant_map = aggregate_presupuesto_cant_map(ppto_rows)
+    listado = _fetch_listado_precios_contrato(sb, int(contrato_id))
+    if not listado:
+        return {}, {}
 
-    listado: List[dict] = []
-    try:
-        offset = 0
-        while True:
-            batch = (
-                sb.table("listado_precios")
-                .select(
-                    "id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario"
-                )
-                .eq("contrato_id", int(contrato_id))
-                .order("item_numero")
-                .range(offset, offset + 999)
-                .execute()
-                .data
-            )
-            listado.extend(batch or [])
-            if len(batch or []) < 1000:
-                break
-            offset += 1000
-    except Exception as exc:
-        _log.warning("meta_listado_sub listado: %s", exc)
-        return {}
-
-    try:
-        precios_rows = (
-            sb.table("subcontratista_precios")
-            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
-            .eq("subcontratista_id", int(subcontratista_id))
-            .execute()
-            .data
-        ) or []
-    except Exception:
-        precios_rows = []
-
+    precios_rows = fetch_subcontratista_precios_rows(sb, int(subcontratista_id))
     sheet = build_precios_sheet(listado, cant_map, precios_rows)
-    out: Dict[str, dict] = {}
+
+    # VU canónico directo desde precios pactados (no depende de cant ppto > 0)
+    _vu_item, vu_cap = precios_vu_sub_maps(
+        sb, contrato_id=int(contrato_id), subcontratista_id=int(subcontratista_id)
+    )
+
+    by_cap: Dict[Tuple[str, str], dict] = {}
+    by_item: Dict[str, dict] = {}
     for idx, row in enumerate(sheet):
-        k = item_key(row.get("item_numero"))
-        if k == "SIN_ITEM" or k in out:
+        ik = item_key(row.get("item_numero"))
+        if ik == "SIN_ITEM":
             continue
-        # Solo VU Costo M.O. pactado. Sin fallback a VU Cobro / listado del contrato
-        # (esa fuga llenaba V. UNIT. del Excel/PDF CC-SUB-001 con precios contractuales).
-        vu = vu_costo_mo_desde_fila_precios(row)
-        out[k] = {
+        ck = cap_item_key(row.get("capitulo"), row.get("item_numero"))
+        vu_sheet = vu_costo_mo_desde_fila_precios(row)
+        vu = _sf(vu_cap.get(ck), vu_sheet)
+        if vu <= 0:
+            vu = _sf(_vu_item.get(ik), 0.0)
+        meta = {
             "capitulo": str(row.get("capitulo") or "").strip(),
             "competencia": str(row.get("competencia") or "").strip(),
             "descripcion": str(row.get("descripcion") or "").strip(),
             "unidad": str(row.get("unidad") or "").strip(),
+            "item_numero": str(row.get("item_numero") or "").strip(),
             "vlr_unitario": vu,
             "orden_listado": idx,
             "tiene_vu_costo_mo": vu > 0,
+            "listado_precio_id": row.get("listado_precio_id"),
         }
-    return out
+        by_cap[ck] = meta
+        prev = by_item.get(ik)
+        if prev is None or (not prev.get("tiene_vu_costo_mo") and meta["tiene_vu_costo_mo"]):
+            by_item[ik] = meta
+
+    # Ítems con precio pactado fuera del sheet (sin cant ppto): igual deben valorarse.
+    listado_by_id = {}
+    for lp in listado:
+        try:
+            listado_by_id[int(lp.get("id"))] = lp
+        except (TypeError, ValueError):
+            continue
+    for pr in precios_rows:
+        try:
+            lp_id = int(pr.get("listado_precio_id"))
+        except (TypeError, ValueError):
+            continue
+        lp = listado_by_id.get(lp_id)
+        if not lp:
+            continue
+        ik = item_key(lp.get("item_numero"))
+        if ik == "SIN_ITEM":
+            continue
+        ck = cap_item_key(lp.get("capitulo"), lp.get("item_numero"))
+        if ck in by_cap and by_cap[ck].get("tiene_vu_costo_mo"):
+            continue
+        vu = vu_costo_mo_desde_fila_precios(pr)
+        if vu <= 0:
+            continue
+        meta = {
+            "capitulo": str(lp.get("capitulo") or "").strip(),
+            "competencia": str(lp.get("competencia") or "").strip(),
+            "descripcion": str(lp.get("descripcion") or "").strip(),
+            "unidad": str(lp.get("unidad") or "").strip(),
+            "item_numero": str(lp.get("item_numero") or "").strip(),
+            "vlr_unitario": vu,
+            "orden_listado": by_cap.get(ck, {}).get("orden_listado", 10_000 + lp_id),
+            "tiene_vu_costo_mo": True,
+            "listado_precio_id": lp_id,
+        }
+        by_cap[ck] = meta
+        prev = by_item.get(ik)
+        if prev is None or not prev.get("tiene_vu_costo_mo"):
+            by_item[ik] = meta
+
+    return by_item, by_cap
+
+
+def resolver_vu_costo_mo_item(
+    *,
+    item_numero: Any,
+    capitulo: Any = None,
+    vu_por_item: Optional[Dict[str, float]] = None,
+    vu_por_cap_item: Optional[Dict[Tuple[str, str], float]] = None,
+) -> float:
+    """Resuelve VU Costo M.O.: primero (capítulo, ítem), luego solo ítem."""
+    from sicoe_valor_canonico import cap_item_key
+
+    if vu_por_cap_item:
+        ck = cap_item_key(capitulo, item_numero)
+        vu = _sf(vu_por_cap_item.get(ck))
+        if vu > 0:
+            return vu
+    k = item_key(item_numero)
+    if k != "SIN_ITEM" and vu_por_item and k in vu_por_item:
+        return _sf(vu_por_item.get(k))
+    return 0.0
 
 
 def aplicar_precios_sub_a_items(
     items: List[dict],
     vu_por_item: Dict[str, float],
+    vu_por_cap_item: Optional[Dict[Tuple[str, str], float]] = None,
 ) -> Tuple[List[dict], List[str]]:
     """
     Sobrescribe vlr_unitario_sub con el pactado del sub cuando existe.
+    Empareja por (capítulo, ítem) y, si falta capítulo, por ítem normalizado.
     Marca sin_precio=True si el ítem del corte no tiene VU en el listado del sub.
-    No usa el precio copiado en el registro.
+    No usa el precio del contrato.
     Recalcula costo_directo = cant × VU (0 dp).
     """
     sin_precio: List[str] = []
@@ -1620,10 +1801,16 @@ def aplicar_precios_sub_a_items(
     for it in items or []:
         row = dict(it)
         k = item_key(row.get("item_numero"))
-        pactado = _sf(vu_por_item.get(k)) if k in (vu_por_item or {}) else 0.0
+        pactado = resolver_vu_costo_mo_item(
+            item_numero=row.get("item_numero"),
+            capitulo=row.get("capitulo"),
+            vu_por_item=vu_por_item,
+            vu_por_cap_item=vu_por_cap_item,
+        )
         if pactado > 0:
             vu = pactado
             row["precio_fuente"] = "subcontratista_precios"
+            row["sin_precio"] = False
         else:
             vu = 0.0
             row["precio_fuente"] = None
