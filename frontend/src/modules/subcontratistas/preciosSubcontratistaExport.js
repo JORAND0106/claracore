@@ -92,7 +92,9 @@ export function formatPctExport(pts) {
 
 /**
  * Valida antes de generar el archivo.
- * @returns {{ ok: true, lineas: object[], totales: object, aiu: object } | { ok: false, message: string }}
+ * Sin ítems → bloquea. Sin AIU/IVA → ok con `faltaAiu: true` para que la UI confirme Sí/No.
+ * @returns {{ ok: true, lineas: object[], totales: object, aiu: object, faltaAiu: boolean }
+ *   | { ok: false, message: string }}
  */
 export function validatePreciosExport({ rows, drafts, impuesto } = {}) {
   const lineas = buildPreciosExportLineas(rows, drafts, impuesto)
@@ -104,21 +106,19 @@ export function validatePreciosExport({ rows, drafts, impuesto } = {}) {
         + 'Complete la hoja de Precios antes de generar el Excel.',
     }
   }
-  if (!impuestoTieneDatos(impuesto || EMPTY_IMPUESTO)) {
-    return {
-      ok: false,
-      message:
-        'Falta el desglose AIU/IVA del subcontratista. '
-        + 'Configure Administración, Imprevistos, Utilidad e IVA antes de exportar.',
-    }
-  }
+  const faltaAiu = !impuestoTieneDatos(impuesto || EMPTY_IMPUESTO)
   return {
     ok: true,
+    faltaAiu,
     lineas,
     totales: sumarTotalesExport(lineas),
     aiu: desgloseAiuIvaParaExport(impuesto),
   }
 }
+
+/** Texto del confirm cuando falta AIU/IVA (Sí → continuar / No → cancelar). */
+export const MSG_CONFIRMAR_EXPORT_SIN_AIU =
+  'Este subcontratista no tiene asignado AIU/IVA. ¿Desea continuar con la exportación?'
 
 export function slugFilenamePart(txt, max = 40) {
   const s = String(txt || '')

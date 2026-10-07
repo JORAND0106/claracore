@@ -104,7 +104,7 @@ describe('preciosSubcontratistaExport', () => {
     assert.match(r.message, /precio pactado/i)
   })
 
-  it('validatePreciosExport bloquea sin AIU/IVA', () => {
+  it('validatePreciosExport avisa sin AIU/IVA pero no bloquea (confirm en UI)', () => {
     const rows = [{
       listado_precio_id: 1,
       item_numero: '1',
@@ -118,8 +118,11 @@ describe('preciosSubcontratistaExport', () => {
       drafts: {},
       impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '' },
     })
-    assert.equal(r.ok, false)
-    assert.match(r.message, /AIU\/IVA/i)
+    assert.equal(r.ok, true)
+    assert.equal(r.faltaAiu, true)
+    assert.equal(r.lineas.length, 1)
+    assert.equal(r.totales.sumatoria_antes_aiu, 100)
+    assert.equal(r.totales.total_general_con_aiu, 100)
   })
 
   it('validatePreciosExport ok con ítems + AIU', () => {
