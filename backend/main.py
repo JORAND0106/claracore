@@ -19947,6 +19947,11 @@ def bulk_upsert_precios_sub(
     return {"ok": True, "insertados": insertados, "actualizados": actualizados, "total": len(payload)}
 
 
+class SubcontratistaItemsCobroDesvincular(BaseModel):
+    """Ítems de la hoja Precios a desvincular del subcontratista."""
+    listado_precio_ids: List[int]
+
+
 @app.delete("/subcontratistas/precios/{precio_id}")
 def eliminar_precio_sub(precio_id: int, current_user=Depends(get_current_user)):
     """Elimina solo filas de origen manual."""
@@ -19992,6 +19997,51 @@ def eliminar_precio_sub(precio_id: int, current_user=Depends(get_current_user)):
         {"listado_precio_id": row.get("listado_precio_id"), "origen": origen or "manual"},
     )
     return {"ok": True}
+
+
+@app.post("/subcontratistas/{sub_id}/items-cobro/desvincular")
+def desvincular_items_cobro_sub(
+    sub_id: int,
+    body: SubcontratistaItemsCobroDesvincular,
+    current_user=Depends(get_current_user),
+):
+    """
+    Quita ítems de la hoja Precios del subcontratista (Presupuesto y/o manuales).
+
+    No borra el ítem del presupuesto ni del listado del contrato ni afecta a otros
+    subcontratistas. Bloquea ítems con cantidades en cortes enviados/conciliados.
+    """
+    from subcontratistas_precios_desvincular import desvincular_items_cobro
+
+    sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=True)
+    contrato_id = int(sub["contrato_id"])
+    ids = [int(x) for x in (body.listado_precio_ids or []) if int(x) > 0]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para eliminar.")
+
+    result = desvincular_items_cobro(
+        supabase,
+        contrato_id=contrato_id,
+        subcontratista_id=int(sub_id),
+        listado_precio_ids=ids,
+        usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+    )
+    registrar_log(
+        current_user,
+        "ELIMINAR",
+        "SUBCONTRATISTAS",
+        "items_cobro_desvincular",
+        str(sub_id),
+        {
+            "contrato_id": contrato_id,
+            "subcontratista_id": int(sub_id),
+            "razon_social": sub.get("razon_social"),
+            "solicitados": ids,
+            "eliminados": result.get("eliminados"),
+            "bloqueados": result.get("bloqueados"),
+        },
+    )
+    return result
 
 
 @app.get("/subcontratistas/{contrato_id}/alertas-corte")
