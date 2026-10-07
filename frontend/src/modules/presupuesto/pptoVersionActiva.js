@@ -84,6 +84,8 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
       bulkCompetencia: `${base}/bulk-competencia`,
       bulkNodos: `${base}/bulk-nodos`,
       bulkSubcontratista: `${base}/bulk-subcontratista`,
+      subRedistribucionPreview: `${base}/subcontratista-redistribucion/preview`,
+      subRedistribucionAplicar: `${base}/subcontratista-redistribucion/aplicar`,
       bulkObservacion: `${base}/bulk-observacion`,
       bulkReabrir: `${base}/bulk-reabrir`,
       agregarCantidad: `${base}/agregar-cantidad`,
@@ -121,6 +123,9 @@ export function buildPptoEndpoints({ API, contratoId, versionActiva }) {
     bulkCompetencia: `${vb}/bulk-competencia`,
     bulkNodos: `${vb}/bulk-nodos`,
     bulkSubcontratista: `${vb}/bulk-subcontratista`,
+    // Redistribución compartida solo sobre presupuesto vivo.
+    subRedistribucionPreview: null,
+    subRedistribucionAplicar: null,
     bulkObservacion: `${vb}/bulk-observacion`,
     bulkReabrir: null,
     agregarCantidad: `${vb}/bulk`,
