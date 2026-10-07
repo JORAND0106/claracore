@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   pptoFiltroPatchActivar,
   pptoFiltroPatchLimpiar,
@@ -278,15 +278,26 @@ function AutocompleteSingle({ opts, value, onChange, t, placeholder }) {
 function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
   const [pickAdd, setPickAdd] = useState('')
 
-  const disponibles = useMemo(
-    () => opts.filter((o) => !lista.includes(o.value)),
-    [opts, lista],
+  const listaNorm = useMemo(
+    () => new Set((lista || []).map((v) => String(v ?? '').trim()).filter(Boolean)),
+    [lista],
   )
+
+  const disponibles = useMemo(
+    () => opts.filter((o) => o?.value && !listaNorm.has(String(o.value).trim())),
+    [opts, listaNorm],
+  )
+
+  // Si el valor elegido desapareció del catálogo (cascada), limpiar para no dejar el + muerto.
+  useEffect(() => {
+    if (!pickAdd) return
+    if (!disponibles.some((o) => o.value === pickAdd)) setPickAdd('')
+  }, [pickAdd, disponibles])
 
   const agregar = (val) => {
     const v = String(val ?? '').trim()
-    if (!v || lista.includes(v)) return
-    onChangeLista([...lista, v])
+    if (!v || listaNorm.has(v)) return
+    onChangeLista([...(lista || []), v])
     setPickAdd('')
   }
 
@@ -303,6 +314,7 @@ function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
           value={pickAdd}
           onChange={(e) => setPickAdd(e.target.value)}
           style={{ ...inp(t), flex: 1, minWidth: 0 }}
+          aria-label="Elegir valor para agregar"
         >
           <option value="">— Elegir y agregar —</option>
           {disponibles.map((o) => (
@@ -311,7 +323,7 @@ function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
         </select>
         <button
           type="button"
-          disabled={!pickAdd}
+          disabled={!pickAdd || !disponibles.some((o) => o.value === pickAdd)}
           onClick={() => agregar(pickAdd)}
           title="Agregar valor"
           style={{
@@ -330,6 +342,11 @@ function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
           +
         </button>
       </div>
+      {!disponibles.length && listaNorm.size > 0 ? (
+        <div style={{ marginTop: 4, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+          No hay más valores disponibles para agregar.
+        </div>
+      ) : null}
     </div>
   )
 }
