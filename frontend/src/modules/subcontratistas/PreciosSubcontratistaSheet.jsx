@@ -25,7 +25,10 @@ import {
   rowKey,
   uniqueCapitulos,
 } from './preciosSubcontratistaSheetHelpers'
-import { validatePreciosExport } from './preciosSubcontratistaExport'
+import {
+  MSG_CONFIRMAR_EXPORT_SIN_AIU,
+  validatePreciosExport,
+} from './preciosSubcontratistaExport'
 import { downloadPreciosSubcontratistaExcel } from './preciosSubcontratistaExportExcel'
 import { subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 import { tFrom } from '../../theme/adminPanelTheme'
@@ -317,6 +320,12 @@ export default function PreciosSubcontratistaSheet({
       onMsg?.({ type: 'error', text: check.message })
       return
     }
+    if (check.faltaAiu) {
+      const seguir = typeof window !== 'undefined'
+        ? window.confirm(MSG_CONFIRMAR_EXPORT_SIN_AIU)
+        : false
+      if (!seguir) return
+    }
     setExporting(true)
     try {
       const { filename } = await downloadPreciosSubcontratistaExcel({
@@ -331,7 +340,7 @@ export default function PreciosSubcontratistaSheet({
       })
       onMsg?.({
         type: 'success',
-        text: `Excel descargado: ${filename} (${check.lineas.length} ítem${check.lineas.length === 1 ? '' : 's'}).`,
+        text: `Excel descargado: ${filename} (${check.lineas.length} ítem${check.lineas.length === 1 ? '' : 's'})${check.faltaAiu ? ' · sin AIU/IVA' : ''}.`,
       })
     } catch (e) {
       onMsg?.({ type: 'error', text: e.message || 'No se pudo generar el Excel de precios.' })

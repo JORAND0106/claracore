@@ -256,12 +256,26 @@ export function buildPreciosSubcontratistaWorkbook({
   // Pie
   r += 1
   ws.mergeCells(r, 1, r, COLS)
-  ws.getCell(r, 1).value =
-    'Documento de soporte contractual generado por ClaraCore. '
-    + 'No incluye VU Cobro (información interna). Los montos están en COP redondeados a pesos enteros.'
+  {
+    const sinAiu = !aiu || (
+      aiu.administracion == null
+      && aiu.imprevistos == null
+      && aiu.utilidad == null
+      && aiu.iva_sobre_utilidad == null
+    )
+    const pie = [
+      'Documento de soporte contractual generado por ClaraCore.',
+      'No incluye VU Cobro (información interna).',
+      'Los montos están en COP redondeados a pesos enteros.',
+    ]
+    if (sinAiu) {
+      pie.push('AIU/IVA no configurado al generar este archivo: valores «con AIU/IVA» iguales a los valores antes de AIU/IVA.')
+    }
+    ws.getCell(r, 1).value = pie.join(' ')
+  }
   ws.getCell(r, 1).font = { size: 8, italic: true, color: { argb: 'FF5A7A85' }, name: 'Calibri' }
   ws.getCell(r, 1).alignment = { wrapText: true, vertical: 'top' }
-  ws.getRow(r).height = 28
+  ws.getRow(r).height = 36
 
   ws.autoFilter = {
     from: { row: headerRowIdx, column: 1 },
@@ -303,9 +317,15 @@ export async function downloadPreciosSubcontratistaExcel(opts = {}) {
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  a.rel = 'noopener'
+  a.style.display = 'none'
   document.body.appendChild(a)
   a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+  // Diferir revoke: revoke inmediato provoca net::ERR_FILE_NOT_FOUND en varios navegadores
+  // antes de que arranque la descarga del blob.
+  setTimeout(() => {
+    try { a.remove() } catch { /* ignore */ }
+    try { URL.revokeObjectURL(url) } catch { /* ignore */ }
+  }, 2500)
   return { blob, filename }
 }
