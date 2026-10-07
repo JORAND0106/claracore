@@ -552,12 +552,20 @@ def _calcular(
     desc_db: list[dict],
     *,
     aplicar_dims: bool = True,
+    motor: Optional[str] = None,
 ) -> dict:
+    from topografia_planilla_tuberia_motor import (
+        MOTOR_ALTURA_V1,
+        MOTOR_VIGENTE,
+        stamp_motor_en_calculo,
+    )
+
     diam = float(planilla.get("diametro_m") or 0)
     ancho = float(planilla.get("ancho_excavacion_m") or 0)
     if diam <= 0 or ancho <= 0:
         raise HTTPException(422, "Configure diámetro y ancho de excavación.")
-    calc = calcular_planilla_completa(
+    motor_eff = motor or MOTOR_VIGENTE
+    kwargs = dict(
         tipo=planilla.get("tipo") or "ALCANTARILLA",
         diametro_m=diam,
         espesor_m=float(planilla.get("espesor_m") or 0),
@@ -569,6 +577,12 @@ def _calcular(
         cama_triturado_m=_cama_triturado_m(planilla),
         traslapo_m=_traslapo_m(planilla),
     )
+    if motor_eff == MOTOR_ALTURA_V1:
+        from topografia_planilla_tuberia_motor_altura import calcular_planilla_completa_altura
+        calc = calcular_planilla_completa_altura(**kwargs)
+    else:
+        calc = calcular_planilla_completa(**kwargs)
+    calc = stamp_motor_en_calculo(calc, motor_eff)
     if not aplicar_dims:
         return calc
     meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
@@ -577,6 +591,76 @@ def _calcular(
         return calc
     from topografia_planilla_sicoe_enlace import aplicar_dims_enlace
     return aplicar_dims_enlace(calc, dims)
+
+
+def _contrastar_calculo_con_sicoe_sellados(
+    planilla: dict,
+    calculo: dict,
+    contrato_id: int,
+) -> dict[str, Any]:
+    """
+    Solo lectura: compara líneas del cálculo (memoria) con so_registros sellados.
+    No escribe. Usado cuando se reconstruye un snapshot incompleto.
+    """
+    from topografia_planilla_tuberia_motor import cantidades_comparables
+
+    links = _sicoe_links_from_meta(planilla.get("meta_cabecera"))
+    if not links:
+        return {"ok": True, "skipped": True, "reason": "sin_vinculos", "diferencias": []}
+    lineas = cantidades_comparables(calculo)
+    by_nombre: dict[str, dict] = {}
+    for ln in lineas:
+        key = _norm_nombre_match(ln.get("nombre") or ln.get("codigo"))
+        if key and key not in by_nombre:
+            by_nombre[key] = ln
+    diferencias: list[dict] = []
+    comparados = 0
+    for link in links:
+        try:
+            reporte_id = int(link.get("reporte_id"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            regs = (
+                supabase.table("so_registros")
+                .select("id,numero_registro,nombre,cantidad_total")
+                .eq("contrato_id", int(contrato_id))
+                .eq("reporte_id", reporte_id)
+                .execute()
+                .data
+            ) or []
+        except Exception:
+            logger.exception("contraste sicoe lectura reporte=%s", reporte_id)
+            continue
+        for reg in regs:
+            if not _registro_sellado_sync(reg, contrato_id):
+                continue
+            key = _norm_nombre_match(reg.get("nombre"))
+            ln = by_nombre.get(key) if key else None
+            if not ln:
+                continue
+            comparados += 1
+            try:
+                a = float(ln.get("cantidad") if ln.get("cantidad") is not None else 0)
+                b = float(reg.get("cantidad_total") if reg.get("cantidad_total") is not None else 0)
+            except (TypeError, ValueError):
+                continue
+            # Descuentos en planilla +; en SICOE a menudo −
+            if abs(abs(a) - abs(b)) > 0.02:
+                diferencias.append({
+                    "codigo": ln.get("codigo"),
+                    "nombre": ln.get("nombre") or reg.get("nombre"),
+                    "cantidad_calculo": a,
+                    "cantidad_sicoe_sellada": b,
+                    "diferencia": round(a - b, 4),
+                    "reporte_id": reporte_id,
+                    "numero_registro": reg.get("numero_registro"),
+                })
+    return {
+        "ok": len(diferencias) == 0,
+        "comparados": comparados,
+        "diferencias": diferencias,
+    }
 
 
 def _audit(
@@ -615,16 +699,58 @@ def _audit(
 
 
 def _detalle(contrato_id: int, planilla_id: str) -> dict:
+    from topografia_planilla_tuberia_motor import (
+        MOTOR_VIGENTE,
+        planilla_tuberia_sellada,
+        resolver_motor_calculo,
+        snapshot_completo,
+    )
+
     planilla = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not planilla:
         raise HTTPException(404, "Planilla no encontrada")
-    planilla = _filtrar_sicoe_reportes_vigentes(contrato_id, planilla, persist=True)
+    sellada = planilla_tuberia_sellada(planilla)
+    # Abrir sellada: cero escrituras. Abrir cualquiera: nunca escribe a so_* (solo meta local
+    # de vínculos vigentes en borradores; en selladas tampoco se toca meta).
+    planilla = _filtrar_sicoe_reportes_vigentes(
+        contrato_id, planilla, persist=not sellada,
+    )
     filas = _filas(planilla_id)
     descuentos = _descuentos(planilla_id)
     calculo = None
+    calculo_origen = None
+    calculo_reconstruido = False
+    contraste_sicoe = None
+    motor_version = resolver_motor_calculo(planilla)
     try:
-        if planilla.get("diametro_m") and planilla.get("ancho_excavacion_m"):
-            calculo = _calcular(planilla, filas, descuentos)
+        if sellada:
+            snap = planilla.get("calculo_snapshot")
+            if snapshot_completo(snap):
+                calculo = dict(snap)
+                calculo_origen = "snapshot"
+                motor_version = str(
+                    calculo.get("motor_calculo_version") or motor_version
+                )
+            elif planilla.get("diametro_m") and planilla.get("ancho_excavacion_m"):
+                # Sin snapshot usable: reconstruir en memoria con el motor del sello.
+                # No persistir.
+                calculo = _calcular(
+                    planilla, filas, descuentos,
+                    aplicar_dims=False,
+                    motor=motor_version,
+                )
+                calculo_origen = "reconstruido"
+                calculo_reconstruido = True
+                contraste_sicoe = _contrastar_calculo_con_sicoe_sellados(
+                    planilla, calculo, contrato_id,
+                )
+            # Sellada: jamás UPDATE de altura_relleno / Area 1 / Area 2.
+        elif planilla.get("diametro_m") and planilla.get("ancho_excavacion_m"):
+            calculo = _calcular(
+                planilla, filas, descuentos, motor=MOTOR_VIGENTE,
+            )
+            calculo_origen = "vivo"
+            motor_version = MOTOR_VIGENTE
             sec = calculo["seccion"]
             supabase.table("topo_planillas_tuberia").update({
                 "altura_relleno_m": sec["altura_relleno_m"],
@@ -670,6 +796,10 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
         "filas_campo": _as_campo(filas, tipo=planilla.get("tipo")),
         "descuentos_manuales": _merge_descuentos_para_calculo(planilla, descuentos),
         "calculo": calculo,
+        "calculo_origen": calculo_origen,
+        "calculo_reconstruido": calculo_reconstruido,
+        "motor_calculo_version": motor_version,
+        "contraste_sicoe": contraste_sicoe,
         "coords_wgs84": coords,
         "coords_wgs84_fin": coords_fin,
         "relaciones_atraque": list(RELACIONES_ATRAQUE),
@@ -1180,6 +1310,10 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
             "area_1_m2": sec["area_1_m2"],
             "area_2_m2": sec["area_2_m2"],
         })
+    # Planilla abierta: dejar constancia del motor vigente al calcular/guardar.
+    from topografia_planilla_tuberia_motor import MOTOR_VIGENTE, merge_motor_en_meta
+    meta_stamp = patch.get("meta_cabecera", p.get("meta_cabecera"))
+    patch["meta_cabecera"] = merge_motor_en_meta(meta_stamp, MOTOR_VIGENTE)
     supabase.table("topo_planillas_tuberia").update(patch).eq("id", planilla_id).execute()
 
     # Al cambiar tipo: migrar nivel de cartera y depurar descuentos del catálogo anterior
@@ -1337,6 +1471,11 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
 
     if meta_changed:
         patch_cab["meta_cabecera"] = new_meta
+
+    # Guardado de planilla abierta: motor vigente.
+    from topografia_planilla_tuberia_motor import MOTOR_VIGENTE, merge_motor_en_meta
+    meta_base = patch_cab.get("meta_cabecera", new_meta if meta_changed else prev_meta)
+    patch_cab["meta_cabecera"] = merge_motor_en_meta(meta_base, MOTOR_VIGENTE)
 
     cabecera_explicit = (
         body.meta_cabecera is not None
@@ -1804,12 +1943,8 @@ def _filtrar_sicoe_reportes_vigentes(
 
 def _planilla_tuberia_sellada(planilla: Optional[dict]) -> bool:
     """Sellada = cerrada/validada o interventoría (N2) Aprobado."""
-    if not isinstance(planilla, dict):
-        return False
-    est = str(planilla.get("estado") or "").lower()
-    if est in ("cerrado", "validado"):
-        return True
-    return str(planilla.get("nivel2_estado") or "") == "Aprobado"
+    from topografia_planilla_tuberia_motor import planilla_tuberia_sellada
+    return planilla_tuberia_sellada(planilla)
 
 
 def _mapa_codigos_por_nombre_registros(
@@ -3286,16 +3421,31 @@ def _ejecutar_cierre_planilla_tuberia(
     now = _now()
     uid = _uid(current_user)
     estado_out = "validado" if estado_final == "validado" else "cerrado"
-    consol = construir_fila_consolidado(
-        {**p, "estado": estado_out, "cerrado_at": p.get("cerrado_at") or now, "contrato_id": contrato_id},
-        calc,
-    )
     update: dict[str, Any] = {
         "estado": estado_out,
         "calculo_snapshot": calc,
         "version": int(p.get("version") or 1) + 1,
         "updated_at": now,
     }
+    # Sellar versión del motor junto al snapshot (meta + cálculo).
+    from topografia_planilla_tuberia_motor import (
+        MOTOR_VIGENTE,
+        merge_motor_en_meta,
+        resolver_motor_calculo,
+        stamp_motor_en_calculo,
+    )
+    motor_sello = resolver_motor_calculo(p) if estado_act != "borrador" else MOTOR_VIGENTE
+    # Al cerrar desde borrador se usa el motor vigente de ese momento.
+    if estado_act == "borrador":
+        motor_sello = MOTOR_VIGENTE
+    calc = stamp_motor_en_calculo(calc if isinstance(calc, dict) else {}, motor_sello)
+    update["calculo_snapshot"] = calc
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    update["meta_cabecera"] = merge_motor_en_meta(prev_meta, motor_sello)
+    consol = construir_fila_consolidado(
+        {**p, "estado": estado_out, "cerrado_at": p.get("cerrado_at") or now, "contrato_id": contrato_id},
+        calc,
+    )
     if not p.get("cerrado_at"):
         update["cerrado_at"] = now
         update["cerrado_por"] = uid

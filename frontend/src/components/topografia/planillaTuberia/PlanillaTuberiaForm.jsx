@@ -199,6 +199,7 @@ export default function PlanillaTuberiaForm({
   const planilla = detalle?.planilla
   const calculo = detalle?.calculo
   const sellada = ['cerrado', 'validado'].includes(String(planilla?.estado || '').toLowerCase())
+    || String(planilla?.nivel2_estado || '') === 'Aprobado'
   const editable = editablePerm && !sellada && !modoSoloLectura
   const comentarioInterventoria = String(planilla?.comentario_interventoria || '').trim()
   const adjuntosValidacion = (() => {
@@ -859,8 +860,9 @@ export default function PlanillaTuberiaForm({
     setFilas((prev) => aplicarPasteColumna(prev, idx, key, values))
   }
 
-  /** Recálculo local reactivo (perfil, cantidades, columnas calculadas) sin guardar. */
+  /** Recálculo local reactivo solo en planillas abiertas. Selladas usan el cálculo congelado del backend. */
   const calculoLocal = useMemo(() => {
+    if (sellada || modoSoloLectura) return null
     const meta = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
       ? planilla.meta_cabecera
       : {}
@@ -884,13 +886,13 @@ export default function PlanillaTuberiaForm({
       cama_triturado_m: Number.isFinite(Number(cama)) ? Number(cama) : 0,
       traslapo_m: Number.isFinite(Number(traslapo)) ? Number(traslapo) : 0,
     })
-  }, [filas, params, cantManuales, descManuales, planilla?.meta_cabecera])
+  }, [filas, params, cantManuales, descManuales, planilla?.meta_cabecera, sellada, modoSoloLectura])
 
-  /** Preferir preview local; las dims empujadas desde el reporte se superponen si la base no cambió. */
-  const calculoVista = useMemo(
-    () => aplicarDimsEnlace(calculoLocal || calculo, dimsSync),
-    [calculoLocal, calculo, dimsSync],
-  )
+  /** Sellada: snapshot del servidor. Abierta: preview local + dims de enlace. */
+  const calculoVista = useMemo(() => {
+    if (sellada) return calculo || null
+    return aplicarDimsEnlace(calculoLocal || calculo, dimsSync)
+  }, [sellada, calculoLocal, calculo, dimsSync])
   const previewParcial = !!calculoLocal?.preview_parcial
 
   const absExtremos = useMemo(
