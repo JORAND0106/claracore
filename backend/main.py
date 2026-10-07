@@ -33355,18 +33355,23 @@ def _sicoe_mover_registros_entre_actas_ejecutar(
 
 class MoverRegistrosEntreCortesPreviewBody(BaseModel):
     subcontratista_id: int
-    corte_origen_id: int
+    # None = registros del subcontratista sin corte asignado («Sin corte»).
+    corte_origen_id: Optional[int] = None
     corte_destino_id: int
 
 
 class MoverRegistrosEntreCortesBody(BaseModel):
     subcontratista_id: int
-    corte_origen_id: int
+    # None = origen «Sin corte» (registros con corte_id nulo).
+    corte_origen_id: Optional[int] = None
     corte_destino_id: int
     registro_ids: List[int]
     incluir_sellados: bool = False
     confirmacion_sellados: Optional[str] = None
     motivo: Optional[str] = None
+
+
+SICOE_CORTE_ORIGEN_SIN_CORTE_LABEL = "Sin corte"
 
 
 class ReasignarSubcontratistaBuscarBody(BaseModel):
@@ -33474,22 +33479,65 @@ def _sicoe_label_sub(meta: dict) -> str:
     return f"Subcontratista #{meta.get('id')}"
 
 
+def _sicoe_es_corte_origen_sin_corte(corte_origen_id: Optional[int]) -> bool:
+    return corte_origen_id is None
+
+
+def _sicoe_corte_origen_payload(origen: Optional[dict]) -> dict:
+    """Payload de corte origen para preview/resultado (incluye «Sin corte»)."""
+    if origen is None:
+        return {
+            "id": None,
+            "consecutivo": None,
+            "label": SICOE_CORTE_ORIGEN_SIN_CORTE_LABEL,
+            "sin_corte": True,
+        }
+    return {
+        "id": int(origen["id"]),
+        "consecutivo": origen.get("consecutivo"),
+        "label": _sicoe_label_corte(origen),
+        "sin_corte": False,
+    }
+
+
+def _sicoe_registro_en_corte_origen(
+    row: Optional[dict], sub_id: int, corte_origen_id: Optional[int]
+) -> bool:
+    if not row:
+        return False
+    try:
+        if int(row.get("subcontratista_id") or 0) != int(sub_id):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if _sicoe_es_corte_origen_sin_corte(corte_origen_id):
+        return row.get("corte_id") is None
+    try:
+        return int(row.get("corte_id") or 0) == int(corte_origen_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def _sicoe_validar_par_cortes_mover(
-    contrato_id: int, sub_id: int, origen_id: int, destino_id: int
-) -> Tuple[dict, dict, dict]:
-    if int(origen_id) == int(destino_id):
+    contrato_id: int, sub_id: int, origen_id: Optional[int], destino_id: int
+) -> Tuple[dict, Optional[dict], dict]:
+    """
+    Valida sub + par origen/destino.
+    origen_id=None → origen «Sin corte» (no exige fila en subcontratista_cortes).
+    """
+    if origen_id is not None and int(origen_id) == int(destino_id):
         raise HTTPException(
             status_code=422,
             detail="El corte de origen y el de destino deben ser distintos.",
         )
     sub = _sicoe_subcontratista_meta(contrato_id, sub_id)
-    origen = _sicoe_corte_meta(contrato_id, sub_id, origen_id)
     destino = _sicoe_corte_meta(contrato_id, sub_id, destino_id)
+    origen = None if origen_id is None else _sicoe_corte_meta(contrato_id, sub_id, origen_id)
     return sub, origen, destino
 
 
 def _sicoe_fetch_registros_corte_origen(
-    contrato_id: int, sub_id: int, corte_origen_id: int
+    contrato_id: int, sub_id: int, corte_origen_id: Optional[int]
 ) -> List[dict]:
     out: List[dict] = []
     off = 0
@@ -33499,19 +33547,20 @@ def _sicoe_fetch_registros_corte_origen(
         f"cantidad_total, bloqueado, subcontratista_id, corte_id, "
         f"contrato_id, {SICOE_SELECT_NIVELES_ESTADO}"
     )
+    sin_corte = _sicoe_es_corte_origen_sin_corte(corte_origen_id)
     while True:
         def _q(o=off):
-            return (
+            q = (
                 supabase.table("so_registros")
                 .select(campos)
                 .eq("contrato_id", int(contrato_id))
                 .eq("subcontratista_id", int(sub_id))
-                .eq("corte_id", int(corte_origen_id))
-                .order("id")
-                .range(o, o + page - 1)
-                .execute()
-                .data
             )
+            if sin_corte:
+                q = q.is_("corte_id", "null")
+            else:
+                q = q.eq("corte_id", int(corte_origen_id))
+            return q.order("id").range(o, o + page - 1).execute().data
 
         batch = supabase_execute(_q) or []
         out.extend(batch)
@@ -33550,7 +33599,7 @@ def _sicoe_preview_item_mover_corte(reg: dict, contrato_id: int) -> dict:
 def _sicoe_mover_registros_entre_cortes_ejecutar(
     contrato_id: int,
     sub_id: int,
-    corte_origen_id: int,
+    corte_origen_id: Optional[int],
     corte_destino_id: int,
     ids: List[int],
     current_user,
@@ -33570,6 +33619,8 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
     sub, origen, destino = _sicoe_validar_par_cortes_mover(
         contrato_id, sub_id, corte_origen_id, corte_destino_id
     )
+    sin_corte = _sicoe_es_corte_origen_sin_corte(corte_origen_id)
+    origen_payload = _sicoe_corte_origen_payload(origen)
 
     por_id: Dict[int, dict] = {}
     for chunk in _sicoe_chunks_int(ids_u, 200):
@@ -33601,8 +33652,7 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
     fuera = [
         i
         for i in ids_u
-        if int(por_id[i].get("subcontratista_id") or 0) != int(sub_id)
-        or int(por_id[i].get("corte_id") or 0) != int(corte_origen_id)
+        if not _sicoe_registro_en_corte_origen(por_id[i], sub_id, corte_origen_id)
     ]
     if fuera:
         raise HTTPException(
@@ -33633,16 +33683,17 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
             ch = list(chunk)
 
             def _mov(ids=ch):
-                return (
+                q = (
                     supabase.table("so_registros")
                     .update(patch)
                     .eq("contrato_id", int(contrato_id))
                     .eq("subcontratista_id", int(sub_id))
-                    .eq("corte_id", int(corte_origen_id))
-                    .in_("id", ids)
-                    .execute()
-                    .data
                 )
+                if sin_corte:
+                    q = q.is_("corte_id", "null")
+                else:
+                    q = q.eq("corte_id", int(corte_origen_id))
+                return q.in_("id", ids).execute().data
 
             supabase_execute(_mov)
     except Exception as ex:
@@ -33683,15 +33734,16 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
             "MOVER_CORTE_SUB",
             "SICOE",
             "corte",
-            str(corte_origen_id),
+            "sin_corte" if sin_corte else str(corte_origen_id),
             {
                 "accion": "mover_registros_entre_cortes",
                 "contrato_id": int(contrato_id),
                 "subcontratista_id": int(sub_id),
                 "subcontratista": _sicoe_label_sub(sub),
-                "corte_origen_id": int(corte_origen_id),
+                "corte_origen_id": None if sin_corte else int(corte_origen_id),
+                "corte_origen_sin_corte": bool(sin_corte),
                 "corte_destino_id": int(corte_destino_id),
-                "corte_origen_label": _sicoe_label_corte(origen),
+                "corte_origen_label": origen_payload["label"],
                 "corte_destino_label": _sicoe_label_corte(destino),
                 "movidos": len(movidos_ids),
                 "no_movidos": len(no_movidos),
@@ -33700,7 +33752,10 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
                 "motivo": (motivo or "").strip() or None,
                 "ids_movidos_muestra": movidos_ids[:50],
             },
-            valor_anterior={"corte_id": int(corte_origen_id), "ids": movidos_ids},
+            valor_anterior={
+                "corte_id": None if sin_corte else int(corte_origen_id),
+                "ids": movidos_ids,
+            },
             valor_nuevo={"corte_id": int(corte_destino_id), "ids": movidos_ids},
             severidad="AUDIT",
             alerta_generada=True,
@@ -33716,11 +33771,7 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
             "razon_social": sub.get("razon_social"),
             "label": _sicoe_label_sub(sub),
         },
-        "corte_origen": {
-            "id": int(origen["id"]),
-            "consecutivo": origen.get("consecutivo"),
-            "label": _sicoe_label_corte(origen),
-        },
+        "corte_origen": origen_payload,
         "corte_destino": {
             "id": int(destino["id"]),
             "consecutivo": destino.get("consecutivo"),
@@ -33731,7 +33782,7 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
                 "id": i,
                 "numero_registro": por_id[i].get("numero_registro"),
                 "sellado": _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id),
-                "corte_origen_id": int(corte_origen_id),
+                "corte_origen_id": None if sin_corte else int(corte_origen_id),
                 "corte_destino_id": int(corte_destino_id),
             }
             for i in movidos_ids
@@ -43376,11 +43427,7 @@ def sicoe_mover_registros_entre_cortes_preview(
                 "razon_social": sub.get("razon_social"),
                 "label": _sicoe_label_sub(sub),
             },
-            "corte_origen": {
-                "id": int(origen["id"]),
-                "consecutivo": origen.get("consecutivo"),
-                "label": _sicoe_label_corte(origen),
-            },
+            "corte_origen": _sicoe_corte_origen_payload(origen),
             "corte_destino": {
                 "id": int(destino["id"]),
                 "consecutivo": destino.get("consecutivo"),

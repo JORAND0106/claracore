@@ -11,6 +11,8 @@ import { sicoeBundleTieneCriteriosUsuario } from './sicoeFiltroCatalogo'
 import { sicoeBundleToReasignarPayload } from './sicoeMoverReasignarPayload'
 
 const CONFIRM_SELLADOS = 'INCLUIR-SELLADOS'
+/** Sentinel UI: registros del subcontratista con corte_id nulo. */
+const CORTE_ORIGEN_SIN = 'sin'
 const TABS = [
   { id: 'actas', label: 'Entre actas' },
   { id: 'cortes', label: 'Entre cortes de subcontratista' },
@@ -26,9 +28,17 @@ function labelActa(a) {
 
 function labelCorte(c) {
   if (!c) return '—'
+  if (c.sin_corte) return c.label || 'Sin corte'
   if (c.label) return c.label
   if (c.consecutivo != null) return `Corte #${c.consecutivo}`
   return `Corte #${c.id}`
+}
+
+/** Payload API: null = Sin corte; número = id de corte. */
+function corteOrigenIdPayload(origenCorte) {
+  if (origenCorte === CORTE_ORIGEN_SIN) return null
+  if (origenCorte === '' || origenCorte == null) return undefined
+  return Number(origenCorte)
 }
 
 function labelSub(s) {
@@ -420,11 +430,12 @@ export default function SicoeMoverRegistrosActasModal({
 
   const cargarPreviewCortes = useCallback(async () => {
     setError(null)
-    if (!subId || !origenCorte || !destinoCorte) {
+    const origenId = corteOrigenIdPayload(origenCorte)
+    if (!subId || origenId === undefined || !destinoCorte) {
       setError('Seleccione subcontratista, corte de origen y de destino.')
       return
     }
-    if (String(origenCorte) === String(destinoCorte)) {
+    if (origenCorte !== CORTE_ORIGEN_SIN && String(origenCorte) === String(destinoCorte)) {
       setError('Origen y destino deben ser distintos.')
       return
     }
@@ -435,7 +446,7 @@ export default function SicoeMoverRegistrosActasModal({
         headers: hdrs,
         body: JSON.stringify({
           subcontratista_id: Number(subId),
-          corte_origen_id: Number(origenCorte),
+          corte_origen_id: origenId,
           corte_destino_id: Number(destinoCorte),
         }),
       })
@@ -459,11 +470,16 @@ export default function SicoeMoverRegistrosActasModal({
       setError('Hay registros sellados seleccionados: confirme su inclusión.')
       return
     }
+    const origenId = corteOrigenIdPayload(origenCorte)
+    if (origenId === undefined || !destinoCorte) {
+      setError('Seleccione corte de origen y de destino.')
+      return
+    }
     setEjecutandoCortes(true)
     try {
       const body = {
         subcontratista_id: Number(subId),
-        corte_origen_id: Number(origenCorte),
+        corte_origen_id: origenId,
         corte_destino_id: Number(destinoCorte),
         registro_ids: [...selCortes],
         incluir_sellados: nSellCortes > 0,
@@ -961,6 +977,7 @@ export default function SicoeMoverRegistrosActasModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <p style={{ margin: 0, color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
                 Seleccione el subcontratista y luego los cortes de origen y destino (del mismo sub).
+                El origen incluye la opción «Sin corte» para cantidades de ese subcontratista que aún no tienen número de corte.
               </p>
               {cargandoSubs ? (
                 <div style={{ color: t.textMuted }}>Cargando subcontratistas…</div>
@@ -987,6 +1004,7 @@ export default function SicoeMoverRegistrosActasModal({
                           ) : (
                             <select value={origenCorte} onChange={(e) => setOrigenCorte(e.target.value)} style={selectSt} disabled={!subId}>
                               <option value="">— Seleccionar —</option>
+                              <option value={CORTE_ORIGEN_SIN}>Sin corte</option>
                               {cortes.map((c) => (
                                 <option key={c.id} value={c.id}>{labelCorte(c)}</option>
                               ))}
@@ -1000,7 +1018,11 @@ export default function SicoeMoverRegistrosActasModal({
                           <select value={destinoCorte} onChange={(e) => setDestinoCorte(e.target.value)} style={selectSt} disabled={!subId}>
                             <option value="">— Seleccionar —</option>
                             {cortes.map((c) => (
-                              <option key={c.id} value={c.id} disabled={String(c.id) === String(origenCorte)}>
+                              <option
+                                key={c.id}
+                                value={c.id}
+                                disabled={origenCorte !== CORTE_ORIGEN_SIN && String(c.id) === String(origenCorte)}
+                              >
                                 {labelCorte(c)}
                               </option>
                             ))}
@@ -1053,7 +1075,17 @@ export default function SicoeMoverRegistrosActasModal({
                 <span style={{ fontSize: 'var(--cc-label)', fontWeight: 800, color: t.textMuted }}>Motivo (opcional, auditoría)</span>
                 <input value={motivoCortes} onChange={(e) => setMotivoCortes(e.target.value)} placeholder="Ej. Traslado a corte vigente" style={{ ...selectSt, boxSizing: 'border-box' }} />
               </label>
-              {renderPreviewGrid(regsPrevCortes, selCortes, confSellCortes, toggleCheck(setSelCortes, confSellCortes), { emptyMsg: 'No hay registros en el corte de origen.' })}
+              {renderPreviewGrid(
+                regsPrevCortes,
+                selCortes,
+                confSellCortes,
+                toggleCheck(setSelCortes, confSellCortes),
+                {
+                  emptyMsg: previewCortes.corte_origen?.sin_corte
+                    ? 'No hay registros sin corte asignado para este subcontratista.'
+                    : 'No hay registros en el corte de origen.',
+                },
+              )}
               {previewCortes.truncado && (
                 <div style={{ fontSize: 'var(--cc-caption)', color: '#b45309', fontWeight: 700 }}>
                   Vista limitada a {previewCortes.tope_registros} registros.
