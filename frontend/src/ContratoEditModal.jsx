@@ -23,6 +23,7 @@ import {
   fmtPctDesdeDecimal,
   puntosPctADecimal,
 } from "./admin/catalogoInsumosTributos";
+import { desgloseValorContrato } from "./contratoFinanciero";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
@@ -107,6 +108,7 @@ export default function ContratoEditModal({
   const cellSelect = useMemo(() => ({ ...sheet.cellSelect, minHeight: 32, height: "auto" }), [sheet]);
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
   const compact = vpMobile || isLandscapeMobile;
+  const desgloseContrato = useMemo(() => desgloseValorContrato(form), [form]);
 
   function copHint(val) {
     if (val == null || val === "" || Number.isNaN(Number(val))) return null;
@@ -709,12 +711,17 @@ export default function ContratoEditModal({
               <TopoExcelSheet
                 sheet={sheet}
                 compact={compact}
-                title="Tasas (fracción 0–1)"
+                title="Costo directo y tasas (AIU e IVA en fracción 0–1)"
                 columns={[
-                  { key: "aiu", label: "AIU", width: "50%" },
-                  { key: "iva", label: "IVA", width: "50%" },
+                  { key: "cd", label: "Costo directo", width: "40%" },
+                  { key: "aiu", label: "AIU", width: "30%" },
+                  { key: "iva", label: "IVA", width: "30%" },
                 ]}
                 cells={[
+                  <div key="cd">
+                    <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.costo_directo_contrato} onChange={(e) => setForm((f) => ({ ...f, costo_directo_contrato: e.target.value }))} />
+                    {copHint(form.costo_directo_contrato)}
+                  </div>,
                   <div key="aiu">
                     <input style={cellInp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.25 → 25%" value={form.aiu} onChange={(e) => setForm((f) => ({ ...f, aiu: e.target.value }))} />
                     {pctHint(form.aiu)}
@@ -807,7 +814,6 @@ export default function ContratoEditModal({
                   { key: "amb", label: "Componente ambiental" },
                   { key: "soc", label: "Componente social" },
                   { key: "pmt", label: "Componente PMT" },
-                  { key: "cd", label: "Costo directo del contrato" },
                 ]}
                 cells={[
                   <div key="amb">
@@ -821,10 +827,6 @@ export default function ContratoEditModal({
                   <div key="pmt">
                     <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_pmt} onChange={(e) => setForm((f) => ({ ...f, valor_componente_pmt: e.target.value }))} />
                     {copHint(form.valor_componente_pmt)}
-                  </div>,
-                  <div key="cd">
-                    <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.costo_directo_contrato} onChange={(e) => setForm((f) => ({ ...f, costo_directo_contrato: e.target.value }))} />
-                    {copHint(form.costo_directo_contrato)}
                   </div>,
                 ]}
               />
@@ -960,6 +962,32 @@ export default function ContratoEditModal({
                   })
                 )}
               </TopoExcelSheet>
+              <TopoExcelSheet
+                sheet={sheet}
+                compact={compact}
+                title="Valor total del contrato"
+                columns={[{ key: "total", label: "Costo directo + AIU + ambiental + social + PMT + costos adicionales", width: "100%" }]}
+                cells={[
+                  <div key="total" data-testid="valor-total-contrato">
+                    <div
+                      style={{
+                        ...cellInp,
+                        fontWeight: 800,
+                        color: ui.primary,
+                        background: ui.cardSubtle,
+                        cursor: "default",
+                      }}
+                      aria-live="polite"
+                    >
+                      {formatCOP(desgloseContrato.total)}
+                    </div>
+                    <div style={{ fontSize: "var(--cc-caption)", color: ui.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                      AIU {formatCOP(desgloseContrato.aiu)} sobre el costo directo.
+                      El anticipo no se descuenta y el IVA no entra en este total.
+                    </div>
+                  </div>,
+                ]}
+              />
             </div>
           )}
 
