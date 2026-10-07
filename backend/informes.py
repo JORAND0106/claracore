@@ -1750,15 +1750,19 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     except (TypeError, ValueError):
         consecutivo = 0
 
-    vu_map = ctx.get("vu_por_item") or csc.precios_vu_sub_por_item(
-        _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+    vu_map = dict(
+        ctx.get("vu_por_item")
+        or csc.precios_vu_sub_por_item(
+            _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+        )
+        or {}
     )
     meta_map = csc.meta_listado_sub(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
     )
-    # Completar VU desde meta si falta
+    # Completar VU solo con VU Costo M.O. del meta del sub (nunca VU Cobro del contrato).
     for k, m in meta_map.items():
-        if k not in vu_map and _sf(m.get("vlr_unitario")) > 0:
+        if k not in vu_map and _sf(m.get("vlr_unitario")) > 0 and m.get("tiene_vu_costo_mo", True):
             vu_map[k] = _sf(m.get("vlr_unitario"))
     cant_act = csc.cantidades_actualizadas_sub(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
