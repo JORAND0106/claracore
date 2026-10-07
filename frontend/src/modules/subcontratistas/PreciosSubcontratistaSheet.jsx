@@ -70,6 +70,8 @@ export default function PreciosSubcontratistaSheet({
   const [selectedKeys, setSelectedKeys] = useState(() => new Set())
   const [confirmEliminarOpen, setConfirmEliminarOpen] = useState(false)
   const [exportVuOpen, setExportVuOpen] = useState(false)
+  const [confirmAiuExportOpen, setConfirmAiuExportOpen] = useState(false)
+  const [exportPendingOpts, setExportPendingOpts] = useState(null) // { incluirVuCobro }
   const wrapRef = useRef(null)
 
   const loadSheet = useCallback(async () => {
@@ -392,7 +394,10 @@ export default function PreciosSubcontratistaSheet({
     return n.toLocaleString('es-CO', { maximumFractionDigits: 4 })
   }
 
-  const ejecutarExportExcel = async ({ incluirVuCobro = false } = {}) => {
+  const ejecutarExportExcel = async ({
+    incluirVuCobro = false,
+    aiuConfirmado = false,
+  } = {}) => {
     const check = validatePreciosExport({
       rows,
       drafts,
@@ -403,12 +408,14 @@ export default function PreciosSubcontratistaSheet({
       onMsg?.({ type: 'error', text: check.message })
       return
     }
-    if (check.faltaAiu) {
-      const seguir = typeof window !== 'undefined'
-        ? window.confirm(MSG_CONFIRMAR_EXPORT_SIN_AIU)
-        : false
-      if (!seguir) return
+    if (check.faltaAiu && !aiuConfirmado) {
+      setExportPendingOpts({ incluirVuCobro: !!incluirVuCobro })
+      setExportVuOpen(false)
+      setConfirmAiuExportOpen(true)
+      return
     }
+    setConfirmAiuExportOpen(false)
+    setExportPendingOpts(null)
     setExporting(true)
     try {
       // Servidor decide y registra: fuerza sin VU Cobro si el cargo no puede verlo.
@@ -864,6 +871,41 @@ export default function PreciosSubcontratistaSheet({
         onCancel={() => !exporting && setExportVuOpen(false)}
         onConfirm={({ incluirVuCobro }) => void ejecutarExportExcel({ incluirVuCobro })}
       />
+
+      {confirmAiuExportOpen && (
+        <CcConfirmModal
+          theme={theme}
+          tipo="warn"
+          titulo="Exportar sin AIU/IVA"
+          confirmar="Sí, continuar"
+          cancelar="No"
+          procesando={exporting}
+          zIndex={100080}
+          onCancel={() => {
+            if (exporting) return
+            setConfirmAiuExportOpen(false)
+            setExportPendingOpts(null)
+          }}
+          onConfirm={() => void ejecutarExportExcel({
+            incluirVuCobro: !!exportPendingOpts?.incluirVuCobro,
+            aiuConfirmado: true,
+          })}
+        >
+          <div style={{ lineHeight: 1.45 }}>
+            {MSG_CONFIRMAR_EXPORT_SIN_AIU}
+          </div>
+          <div style={{
+            marginTop: 10,
+            fontSize: 'var(--cc-caption)',
+            color: tTok.textMuted,
+            lineHeight: 1.4,
+          }}
+          >
+            El archivo se generará con los valores «con AIU/IVA» iguales a los de antes de AIU/IVA
+            hasta que configure el desglose del subcontratista.
+          </div>
+        </CcConfirmModal>
+      )}
 
       {confirmEliminarOpen && (
         <CcConfirmModal
