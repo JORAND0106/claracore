@@ -78,6 +78,7 @@ import {
   mensajeErrorRespuestaTopo,
   normalizarPuntosTopoPortada,
 } from './modules/sicoe-obra/sicoePortadaTopografia'
+import SicoePortadaTopoCoordsTable from './modules/sicoe-obra/SicoePortadaTopoCoordsTable'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -7941,49 +7942,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 </div>
 
                 {editandoTopo ? (
-                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
-                    <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Registra las coordenadas levantadas en campo. Puedes importar desde CSV (Punto, Norte, Este, Cota, Descripción).</div>
-                    <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, padding:'0 4px', letterSpacing:'0.5px', textTransform:'uppercase' }}>
-                      <div>Punto</div><div>Norte</div><div>Este</div><div>Cota</div><div>Descripción</div><div></div>
-                    </div>
-                    {puntosEdit.map((p, idx) => (
-                      <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', alignItems:'center' }}>
-                        {['punto','norte','este','cota','descripcion'].map(campo => (
-                          <input key={campo} value={p[campo] ?? ''} onChange={e => {
-                            const arr = [...puntosEdit]; arr[idx] = {...arr[idx], [campo]: e.target.value}; setPuntosEdit(arr)
-                          }}
-                          type={['norte','este','cota'].includes(campo) ? 'number' : 'text'}
-                          step='0.000001'
-                          placeholder={campo.charAt(0).toUpperCase()+campo.slice(1)}
-                          style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', width:'100%', boxSizing:'border-box' }} />
-                        ))}
-                        <button onClick={() => setPuntosEdit(prev => prev.filter((_,i) => i!==idx))}
-                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'var(--cc-lg)', padding:0 }}>✕</button>
-                      </div>
-                    ))}
-                    <div style={{ display:'flex', gap:'8px' }}>
-                      <button onClick={() => setPuntosEdit(prev => [...prev, {punto:'',norte:'',este:'',cota:'',descripcion:''}])}
-                        style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
-                        + Agregar punto
-                      </button>
-                      <label style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
-                        📂 Importar CSV
-                        <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
-                          const file = e.target.files[0]; if (!file) return
-                          const reader = new FileReader()
-                          reader.onload = ev => {
-                            const lines = ev.target.result.split('\n').filter(l => l.trim())
-                            const rows = lines.slice(1).map(l => {
-                              const cols = l.split(',')
-                              return { punto:cols[0]||'', norte:cols[1]||'', este:cols[2]||'', cota:cols[3]||'', descripcion:cols[4]||'' }
-                            })
-                            if (rows.length) setPuntosEdit(rows)
-                          }
-                          reader.readAsText(file)
-                        }} />
-                      </label>
-                    </div>
-                  </div>
+                  <SicoePortadaTopoCoordsTable
+                    t={t}
+                    puntos={puntosEdit}
+                    onChange={setPuntosEdit}
+                    editable
+                    showCsvImport
+                  />
                 ) : (reporte.puntos || []).length === 0 ? (
                   <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600', textAlign:'center' }}>
                     {Number(contrato_id) === 2
@@ -16075,56 +16040,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           {/* ── TAB 4: Topografía ── */}
           {tabActivo === TAB_TOPO && (
             <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
-              <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>
-                Registra las coordenadas levantadas en campo. Opcional — puedes importar desde CSV.
-              </div>
-              {/* Header grid */}
-              <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px',
-                gap:'8px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted,
-                padding:'0 8px', letterSpacing:'0.5px' }}>
-                <div>PUNTO</div><div>NORTE</div><div>ESTE</div><div>COTA</div><div>DESCRIPCIÓN</div>
-              </div>
-              {puntos.map((p, idx) => (
-                <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', alignItems:'center' }}>
-                  {['punto','norte','este','cota','descripcion'].map(campo => (
-                    <input key={campo} value={p[campo]}
-                      onChange={e => {
-                        const arr = [...puntos]; arr[idx] = {...arr[idx], [campo]: e.target.value}; setPuntos(arr)
-                      }}
-                      type={['norte','este','cota'].includes(campo) ? 'number' : 'text'}
-                      step='0.000001'
-                      placeholder={campo.charAt(0).toUpperCase()+campo.slice(1)}
-                      style={inpStyle(false)} />
-                  ))}
-                  <button onClick={() => setPuntos(prev => prev.filter((_,i) => i!==idx))}
-                    style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'var(--cc-lg)', padding:0 }}>✕</button>
-                </div>
-              ))}
-              <div style={{ display:'flex', gap:'8px' }}>
-                <button onClick={agregarPunto} style={{
-                  background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
-                  borderRadius:'8px', padding:'8px 16px', fontSize:'var(--cc-sm)', cursor:'pointer'
-                }}>+ Agregar punto</button>
-                <label style={{
-                  background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
-                  borderRadius:'8px', padding:'8px 16px', fontSize:'var(--cc-sm)', cursor:'pointer'
-                }}>
-                  📂 Importar CSV
-                  <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
-                    const file = e.target.files[0]; if (!file) return
-                    const reader = new FileReader()
-                    reader.onload = ev => {
-                      const lines = ev.target.result.split('\n').filter(l => l.trim())
-                      const rows = lines.slice(1).map(l => {
-                        const cols = l.split(',')
-                        return { punto:cols[0]||'', norte:cols[1]||'', este:cols[2]||'', cota:cols[3]||'', descripcion:cols[4]||'' }
-                      })
-                      if (rows.length) setPuntos(rows)
-                    }
-                    reader.readAsText(file)
-                  }} />
-                </label>
-              </div>
+              <SicoePortadaTopoCoordsTable
+                t={t}
+                puntos={puntos}
+                onChange={setPuntos}
+                editable
+                showCsvImport
+                helpText="Registra las coordenadas levantadas en campo. Opcional — puede agregar puntos, importar CSV o pegar desde Excel."
+              />
               <div style={{ marginTop:'16px', padding:'14px', background:t.bg, borderRadius:'12px', border:`1px solid ${t.border}` }}>
                 <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted, marginBottom:'6px', letterSpacing:'0.4px' }}>🔗 ENLACE (OPCIONAL)</div>
                 <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'8px', lineHeight:1.45 }}>
