@@ -135,6 +135,10 @@ import {
   sicoeBasemapStyleUrl,
 } from '../../modules/sicoe-obra/sicoeMapaBasemap'
 import {
+  appendCoordRowDesdePlano,
+  redondearCoordGaussDesdePlano,
+} from '../../modules/sicoe-obra/sicoeDibujoCoordsPortada'
+import {
   ESQUEMA_MAPA_CENTER_DEFAULT,
   ESQUEMA_MAPA_ZOOM_CON_UBICACION,
   ESQUEMA_MAPA_ZOOM_DEFAULT,
@@ -148,6 +152,7 @@ import {
 import {
   lngLatToCanvasWorld,
   canvasWorldToLngLat,
+  gkToCanvasWorld,
   mapCenterAsGeoOrigin,
   mapRelativeZoomPercent,
   mapZoomAfterVisualFactor,
@@ -501,6 +506,10 @@ export default function EsquemaEditorModal({
   const coordRowsRef = useRef([])
   coordRowsRef.current = coordRows
   const [coordPanelOpen, setCoordPanelOpen] = useState(false)
+  /** Agregar nodos tocando el plano → filas Gauss en la tabla. */
+  const [pickNodoFromMap, setPickNodoFromMap] = useState(false)
+  const pickNodoFromMapRef = useRef(false)
+  pickNodoFromMapRef.current = pickNodoFromMap
   /** Pendiente confirmar «En sentido del eje» al dibujar tipo Línea. */
   const [sentidoEjePrompt, setSentidoEjePrompt] = useState(false)
   const pendingDrawRowsRef = useRef(null)
@@ -522,6 +531,14 @@ export default function EsquemaEditorModal({
     setInsertHint('')
     return undefined
   }, [huellaMode, huellaDibujoTipo])
+
+  // Cambiar de herramienta desactiva el modo «nodo desde el plano».
+  useEffect(() => {
+    if (!pickNodoFromMapRef.current) return undefined
+    setPickNodoFromMap(false)
+    setToolHint('')
+    return undefined
+  }, [tool])
 
   const [iaPrompt, setIaPrompt] = useState(null)
   const [iaUsos, setIaUsos] = useState(0)
@@ -2666,6 +2683,117 @@ export default function EsquemaEditorModal({
     applyCoordRowsToCanvas(rows, { sentidoEje: !!si })
   }
 
+  const resolveGkFromScreen = (screen) => {
+    const map = mapRef.current
+    if (mapActiveRef.current && map && typeof map.unproject === 'function') {
+      try {
+        const ll = map.unproject([screen.x, screen.y])
+        const lng = Number(ll?.lng)
+        const lat = Number(ll?.lat)
+        if (Number.isFinite(lng) && Number.isFinite(lat)) {
+          const gk = wgs84ToGkBogota(lng, lat)
+          if (gk && Number.isFinite(gk.este) && Number.isFinite(gk.norte)) {
+            return {
+              este: redondearCoordGaussDesdePlano(gk.este),
+              norte: redondearCoordGaussDesdePlano(gk.norte),
+              lng,
+              lat,
+            }
+          }
+        }
+      } catch { /* fall through */ }
+    }
+    const z = zoomRef.current || 1
+    const wx = (screen.x - panRef.current.x) / z
+    const wy = (screen.y - panRef.current.y) / z
+    const origin = coordOriginRef.current
+    if (origin && Number.isFinite(origin.este0) && Number.isFinite(origin.norte0)) {
+      const este = redondearCoordGaussDesdePlano(origin.este0 + (wx / 50))
+      const norte = redondearCoordGaussDesdePlano(origin.norte0 - (wy / 50))
+      if (este == null || norte == null) return null
+      const ll = gkBogotaToWgs84(este, norte)
+      return { este, norte, lng: ll?.lng ?? null, lat: ll?.lat ?? null }
+    }
+    return null
+  }
+
+  const addNodoDesdePlanoAt = (screen, world) => {
+    const gk = resolveGkFromScreen(screen)
+    if (!gk) {
+      setToolHint('Active el mapa (o cargue coordenadas) para tomar nodos del plano.')
+      return false
+    }
+    const { rows: nextRows, index: filledIdx } = appendCoordRowDesdePlano(coordRowsRef.current, {
+      norte: gk.norte,
+      este: gk.este,
+    })
+    const row = filledIdx >= 0 ? nextRows[filledIdx] : nextRows[nextRows.length - 1]
+    const num = String(row?.num || nextRows.length)
+    pushHistory()
+    const origin = coordOriginRef.current
+    const hasOrigin = origin
+      && Number.isFinite(origin.este0)
+      && Number.isFinite(origin.norte0)
+      && (
+        origin.este0 !== 0
+        || origin.norte0 !== 0
+        || (objectsRef.current || []).some((o) => o?.type === 'nodo' && Number.isFinite(Number(o.este)))
+      )
+    if (!hasOrigin) {
+      coordOriginRef.current = { este0: gk.este, norte0: gk.norte }
+    }
+    let wx = Number(world?.x)
+    let wy = Number(world?.y)
+    const map = mapRef.current
+    if (mapActiveRef.current && map) {
+      const w = gkToCanvasWorld(map, gk.este, gk.norte, panRef.current, zoomRef.current)
+      if (w) {
+        wx = w.x
+        wy = w.y
+      }
+    } else if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
+      const pt = topoToWorld(gk.este, gk.norte, coordOriginRef.current)
+      wx = pt.x
+      wy = pt.y
+    }
+    const node = {
+      id: uid(),
+      type: 'nodo',
+      x: wx,
+      y: wy,
+      nodeNum: num,
+      norte: gk.norte,
+      este: gk.este,
+      cota: null,
+      desc: '',
+      color: colorRef.current || '#0f172a',
+      fromCoordTable: true,
+    }
+    objectsRef.current = [...objectsRef.current, node]
+    setCoordRows(nextRows)
+    setCoordPanelOpen(true)
+    setDirty(true)
+    if (mapActiveRef.current) {
+      try { syncCanvasToMapRef.current() } catch { /* ignore */ }
+    }
+    setToolHint(`Nodo ${num} agregado · N ${gk.norte}  E ${gk.este}. Toque otro punto o desactive el modo.`)
+    selectOne(node.id)
+    setPanTick((n) => n + 1)
+    redraw()
+    return true
+  }
+
+  const togglePickNodoFromMap = () => {
+    const next = !pickNodoFromMapRef.current
+    setPickNodoFromMap(next)
+    setCoordPanelOpen(true)
+    if (next) {
+      setToolHint('Toque un punto del plano para agregar un nodo con sus coordenadas Gauss.')
+    } else {
+      setToolHint('')
+    }
+  }
+
   const onPointerDown = (e) => {
     e.preventDefault()
     const c = canvasRef.current
@@ -2681,6 +2809,22 @@ export default function EsquemaEditorModal({
       printAreaDraftRef.current = { from: { ...screen }, to: { ...screen } }
       drawing.current = true
       setPrintAreaTick((n) => n + 1)
+      return
+    }
+
+    // Modo «nodo desde el plano»: solo agrega nodos (no otras herramientas ni referencias).
+    if (pickNodoFromMapRef.current) {
+      // Dos dedos → pellizco (zoom) sigue permitido.
+      if (pointersRef.current.size >= 2) {
+        beginPinchIfNeeded()
+        return
+      }
+      if (pinchRef.current) return
+      const world = posFromEvent(e)
+      addNodoDesdePlanoAt(screen, world)
+      drawing.current = false
+      try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
+      pointersRef.current.delete(e.pointerId)
       return
     }
 
@@ -4554,7 +4698,10 @@ export default function EsquemaEditorModal({
             : '')
     : ''
   const insertHintVisible = !huellaMode || huellaTipoRef.current === 'nodo'
-  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || (insertHintVisible ? insertHint : '')
+  const pickFromMapHint = pickNodoFromMap
+    ? 'Toque un punto del plano para agregar un nodo con sus coordenadas Gauss.'
+    : ''
+  const canvasHint = toolHint || pickFromMapHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || (insertHintVisible ? insertHint : '')
 
   const pedirGuardar = () => {
     if (busy) return
@@ -4567,6 +4714,7 @@ export default function EsquemaEditorModal({
           await onSaveHuella?.({
             objects: cloneScene(objectsRef.current),
             originLngLat: origin,
+            coordRows: coordRowsRef.current,
           })
         } catch {
           /* el caller muestra el error */
@@ -5128,7 +5276,13 @@ export default function EsquemaEditorModal({
                       rows={coordRows}
                       fileRef={coordFileRef}
                       embedded
-                      onClose={() => setCoordPanelOpen(false)}
+                      pickFromMapActive={pickNodoFromMap}
+                      onTogglePickFromMap={togglePickNodoFromMap}
+                      onClose={() => {
+                        setPickNodoFromMap(false)
+                        setCoordPanelOpen(false)
+                        setToolHint('')
+                      }}
                       onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
                       onImport={async (file) => {
                         try {
@@ -5392,7 +5546,7 @@ export default function EsquemaEditorModal({
                 overflow: 'hidden',
                 opacity: mapOpacity,
                 zIndex: 0,
-                pointerEvents: (tool === 'paneo' && !printAreaSelecting) ? 'auto' : 'none',
+                pointerEvents: (tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap) ? 'auto' : 'none',
                 background: '#fff',
               }}
             />
@@ -5407,8 +5561,8 @@ export default function EsquemaEditorModal({
               background: mapActive ? 'transparent' : ui.canvas,
               borderRadius: 8, touchAction: 'none',
               outline: 'none',
-              pointerEvents: (mapActive && tool === 'paneo' && !printAreaSelecting) ? 'none' : 'auto',
-              cursor: printAreaSelecting
+              pointerEvents: (mapActive && tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap) ? 'none' : 'auto',
+              cursor: (printAreaSelecting || pickNodoFromMap)
                 ? 'crosshair'
                 : hoverCursor
                 || (tool === 'paneo' ? 'grab'
@@ -5697,7 +5851,13 @@ export default function EsquemaEditorModal({
               rows={coordRows}
               fileRef={coordFileRef}
               topOffset={18}
-              onClose={() => setCoordPanelOpen(false)}
+              pickFromMapActive={pickNodoFromMap}
+              onTogglePickFromMap={togglePickNodoFromMap}
+              onClose={() => {
+                setPickNodoFromMap(false)
+                setCoordPanelOpen(false)
+                setToolHint('')
+              }}
               onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
               onImport={async (file) => {
                 try {
@@ -7595,7 +7755,18 @@ function coordSheetStyles(t) {
   }
 }
 
-function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOffset = 18, embedded = false }) {
+function CoordsPanel({
+  t,
+  rows,
+  fileRef,
+  onClose,
+  onRowsChange,
+  onImport,
+  topOffset = 18,
+  embedded = false,
+  pickFromMapActive = false,
+  onTogglePickFromMap = null,
+}) {
   const list = rows?.length ? renumberCoordRows(rows) : [{ num: '1', norte: '', este: '', cota: '', desc: '' }]
   const sheet = coordSheetStyles(t)
   const setCell = (i, key, value) => {
@@ -7606,9 +7777,18 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOff
     ...ghost(t),
     padding: 4,
     minWidth: 30,
+    height: 30,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+  }
+  const pickActive = !!pickFromMapActive
+  const pickBtnStyle = {
+    ...iconAction,
+    background: pickActive ? (t.primary || '#0d9488') : iconAction.background,
+    color: pickActive ? '#fff' : (t.text || iconAction.color),
+    border: pickActive ? 'none' : `1px solid ${t.border}`,
+    boxShadow: pickActive ? '0 0 0 2px rgba(13,148,136,0.35)' : undefined,
   }
   return (
     <div
@@ -7665,6 +7845,23 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOff
         >
           <IconAgregarFila />
         </button>
+        {typeof onTogglePickFromMap === 'function' ? (
+          <button
+            type="button"
+            data-testid="esquema-coords-pick-from-map"
+            style={pickBtnStyle}
+            title={pickActive
+              ? 'Desactivar: agregar nodo desde el plano'
+              : 'Agregar nodo con coordenadas desde el plano'}
+            aria-label={pickActive
+              ? 'Desactivar agregar nodo desde el plano'
+              : 'Agregar nodo con coordenadas desde el plano'}
+            aria-pressed={pickActive}
+            onClick={onTogglePickFromMap}
+          >
+            <IconNodoDesdePlano />
+          </button>
+        ) : null}
       </div>
       <input
         ref={fileRef}
@@ -8658,6 +8855,21 @@ function IconAgregarFila() {
       <path d="M4 17h10" />
       <path d="M17 14v6" />
       <path d="M14 17h6" />
+    </svg>
+  )
+}
+function IconNodoDesdePlano() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3" />
+      <path d="M12 19v3" />
+      <path d="M2 12h3" />
+      <path d="M19 12h3" />
+      <path d="m4.9 4.9 2.1 2.1" />
+      <path d="m17 17 2.1 2.1" />
+      <path d="m17 7 2.1-2.1" />
+      <path d="m4.9 19.1 2.1-2.1" />
     </svg>
   )
 }

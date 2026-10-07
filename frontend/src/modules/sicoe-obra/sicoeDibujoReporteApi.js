@@ -80,6 +80,48 @@ export async function guardarDibujoReporte({
   return res.json()
 }
 
+/**
+ * Reemplaza los puntos topográficos de la portada (DELETE + POST),
+ * misma secuencia que el guardado de topografía en portada.
+ * @returns {object[]} puntos guardados (o [] si se vació)
+ */
+export async function sincronizarPuntosTopoDesdeDibujo({
+  API_URL,
+  contratoId,
+  token,
+  reporteId,
+  puntos,
+}) {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  }
+  const delRes = await fetch(
+    `${API_URL}/sicoe-obra/${contratoId}/reportes/${reporteId}/puntos-topograficos`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!delRes.ok) {
+    const txt = await delRes.text().catch(() => '')
+    throw new Error(txt || `Error ${delRes.status} al vaciar coordenadas de portada`)
+  }
+  const list = Array.isArray(puntos) ? puntos : []
+  if (!list.length) return []
+  const postRes = await fetch(
+    `${API_URL}/sicoe-obra/${contratoId}/puntos-topograficos`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reporte_id: reporteId, puntos: list }),
+    },
+  )
+  if (!postRes.ok) {
+    const txt = await postRes.text().catch(() => '')
+    throw new Error(txt || `Error ${postRes.status} al guardar coordenadas de portada`)
+  }
+  const data = await postRes.json().catch(() => list)
+  return Array.isArray(data) ? data : list
+}
+
 export async function borrarDibujoReporte({ API_URL, contratoId, token, reporteId }) {
   const res = await fetch(
     `${API_URL}/sicoe-obra/${contratoId}/reportes/${reporteId}/dibujo`,
