@@ -498,15 +498,17 @@ def enriquecer_items_bloques(
         base = dict(by_presente.get(k) or {})
         meta = meta_por_item.get(k) or {}
         if not base:
+            vu0 = _sf(vu_por_item.get(k)) if k in vu_por_item else _sf(meta.get("vlr_unitario"))
             base = {
                 "item_numero": k,
                 "item_descripcion": str(meta.get("descripcion") or ""),
                 "unidad": str(meta.get("unidad") or ""),
                 "capitulo": str(meta.get("capitulo") or ""),
                 "cantidad": 0.0,
-                "vlr_unitario_sub": _sf(meta.get("vlr_unitario"), vu_por_item.get(k, 0.0)),
-                "vlr_unitario": _sf(meta.get("vlr_unitario"), vu_por_item.get(k, 0.0)),
+                "vlr_unitario_sub": vu0,
+                "vlr_unitario": vu0,
                 "costo_directo": 0.0,
+                "sin_precio": vu0 <= 0,
             }
         else:
             # Completar ficha aunque el registro SICOE venga sin descripción/unidad/capítulo
@@ -520,17 +522,21 @@ def enriquecer_items_bloques(
         if meta.get("orden_listado") is not None:
             base["orden_listado"] = meta["orden_listado"]
 
-        vu = _sf(base.get("vlr_unitario_sub"))
-        if vu == 0.0:
-            vu = _sf(base.get("vlr_unitario"))
-        if vu == 0.0 and k in vu_por_item:
-            vu = _sf(vu_por_item[k])
-        if vu == 0.0 and meta.get("vlr_unitario"):
+        # Canon del informe de subcontratista: solo VU Costo M.O.
+        # Preferir mapa pactado; luego vlr_unitario_sub ya aplicado; luego meta del sub.
+        # No usar base.vlr_unitario suelto (podría arrastrar precio del listado del contrato).
+        vu = _sf(vu_por_item.get(k)) if k in vu_por_item else 0.0
+        if vu <= 0:
+            vu = _sf(base.get("vlr_unitario_sub"))
+        if vu <= 0:
             vu = _sf(meta.get("vlr_unitario"))
         if vu > 0:
             base["vlr_unitario_sub"] = vu
-            if _sf(base.get("vlr_unitario")) <= 0:
-                base["vlr_unitario"] = vu
+            base["vlr_unitario"] = vu
+            base["sin_precio"] = False
+        else:
+            base["vlr_unitario_sub"] = 0.0
+            base["sin_precio"] = True
 
         # Regla única: cantidades a 2 dp; valor = ROUND0(cant_2dp × VU).
         cant_pres = _round2(base.get("cantidad") or 0.0)
@@ -1408,10 +1414,28 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r"[^\w.\-]", "_", (name or "soporte").strip())[:120]
 
 
+def vu_costo_mo_desde_fila_precios(row: Optional[dict]) -> float:
+    """
+    VU unitario del informe de subcontratista = solo VU Costo M.O.
+    (``precio_unitario_sub`` / ``vu_costo_mo``).
+
+    Nunca usa VU Cobro ni ``listado_precios.precio_unitario`` del contrato.
+    Sin precio pactado → 0 (el informe marca SIN PRECIO).
+    """
+    if not isinstance(row, dict):
+        return 0.0
+    # Campos posibles según origen (sheet unificado vs fila cruda de subcontratista_precios)
+    for key in ("vu_costo_mo", "precio_unitario_sub"):
+        vu = _sf(row.get(key))
+        if vu > 0:
+            return vu
+    return 0.0
+
+
 def precios_vu_sub_por_item(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, float]:
     """
-    Mapa item_numero → precio_unitario_sub del listado del subcontratista.
-    Fuente: subcontratista_precios (+ listado_precios), nunca precios del contrato principal.
+    Mapa item_numero → VU Costo M.O. (precio_unitario_sub) del subcontratista.
+    Fuente: subcontratista_precios; nunca precios del contrato principal (VU Cobro).
     """
     meta = meta_listado_sub(sb, contrato_id=contrato_id, subcontratista_id=subcontratista_id)
     return {k: _sf(v.get("vlr_unitario")) for k, v in meta.items() if _sf(v.get("vlr_unitario")) > 0}
@@ -1505,6 +1529,10 @@ def vu_listado_cap_item(
 def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, dict]:
     """
     Ficha + orden del listado de precios del sub (hoja build_precios_sheet).
+
+    ``vlr_unitario`` es únicamente el VU Costo M.O. pactado
+    (``subcontratista_precios.precio_unitario_sub``). Si el ítem no tiene
+    precio de mano de obra, queda en 0 — no se usa el VU Cobro del contrato.
     """
     from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
     from subcontratistas_items_cobro import (
@@ -1562,12 +1590,9 @@ def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[st
         k = item_key(row.get("item_numero"))
         if k == "SIN_ITEM" or k in out:
             continue
-        # VU del sub = vu_costo_mo (precio_unitario_sub); fallback a vu_cobro del contrato
-        vu = _sf(row.get("vu_costo_mo"))
-        if vu <= 0:
-            vu = _sf(row.get("vu_cobro"))
-        if vu <= 0:
-            vu = _sf(row.get("precio_unitario"))
+        # Solo VU Costo M.O. pactado. Sin fallback a VU Cobro / listado del contrato
+        # (esa fuga llenaba V. UNIT. del Excel/PDF CC-SUB-001 con precios contractuales).
+        vu = vu_costo_mo_desde_fila_precios(row)
         out[k] = {
             "capitulo": str(row.get("capitulo") or "").strip(),
             "competencia": str(row.get("competencia") or "").strip(),
@@ -1575,6 +1600,7 @@ def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[st
             "unidad": str(row.get("unidad") or "").strip(),
             "vlr_unitario": vu,
             "orden_listado": idx,
+            "tiene_vu_costo_mo": vu > 0,
         }
     return out
 

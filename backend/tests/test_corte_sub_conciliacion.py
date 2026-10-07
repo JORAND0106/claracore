@@ -133,6 +133,71 @@ def test_aplicar_precios_sub_marca_sin_precio():
     assert "2.1" in sin
 
 
+def test_vu_costo_mo_nunca_usa_vu_cobro_del_contrato():
+    """V. UNIT. del informe de subcontratista = solo mano de obra pactada."""
+    from corte_sub_conciliacion import vu_costo_mo_desde_fila_precios
+
+    # Con MO pactado: usa ese valor aunque exista VU Cobro del contrato
+    assert vu_costo_mo_desde_fila_precios({
+        "vu_costo_mo": 12_500,
+        "vu_cobro": 33_924,
+        "precio_unitario": 33_924,
+    }) == 12_500
+    # Sin MO: 0 (SIN PRECIO) — no caer al listado del contrato
+    assert vu_costo_mo_desde_fila_precios({
+        "vu_costo_mo": None,
+        "vu_cobro": 297_349,
+        "precio_unitario": 297_349,
+    }) == 0.0
+    assert vu_costo_mo_desde_fila_precios({
+        "vu_costo_mo": 0,
+        "vu_cobro": 1_007_517,
+    }) == 0.0
+    # Fila cruda de subcontratista_precios
+    assert vu_costo_mo_desde_fila_precios({
+        "precio_unitario_sub": 8_000,
+        "vu_cobro": 50_000,
+    }) == 8_000
+
+
+def test_enriquecer_no_inyecta_precio_contrato_en_vlr_unitario():
+    """Si falta VU Costo M.O., no rellenar V. UNIT. desde un vlr_unitario contractual."""
+    presente = [
+        {
+            "item_numero": "1.1",
+            "item_descripcion": "Exc",
+            "unidad": "M3",
+            "cantidad": 10,
+            "vlr_unitario_sub": 0,
+            # Simula valor contractual colado en el registro
+            "vlr_unitario": 33_924,
+            "capitulo": "I",
+        }
+    ]
+    items = enriquecer_items_bloques(
+        presente,
+        cant_actualizadas={"1.1": 100},
+        cant_acum_anterior={},
+        vu_por_item={},  # sin precio pactado del sub
+        meta_por_item={"1.1": {"descripcion": "Exc", "unidad": "M3", "vlr_unitario": 0}},
+    )
+    assert items[0]["vlr_unitario_sub"] == 0
+    assert items[0]["sin_precio"] is True
+    assert items[0]["valor_actualizadas"] == 0
+
+    # Con VU Costo M.O. pactado: ese manda, no el del contrato
+    items2 = enriquecer_items_bloques(
+        presente,
+        cant_actualizadas={"1.1": 100},
+        cant_acum_anterior={},
+        vu_por_item={"1.1": 12_500},
+        meta_por_item={"1.1": {"vlr_unitario": 12_500, "tiene_vu_costo_mo": True}},
+    )
+    assert items2[0]["vlr_unitario_sub"] == 12_500
+    assert items2[0]["valor_actualizadas"] == valor_por_cantidad_vu(100, 12_500)
+    assert items2[0].get("sin_precio") is False
+
+
 def test_calc_amortizacion_tope_por_saldo():
     from corte_sub_conciliacion import calc_amortizacion
 
