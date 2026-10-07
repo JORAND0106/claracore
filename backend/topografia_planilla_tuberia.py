@@ -1157,6 +1157,7 @@ def calcular_planilla_completa(
         "notas_descuento_altura": cant.get("notas_descuento_altura") or cant.get("notas_descuento_volumen") or [],
         "perfil": perfil_longitudinal(cartera, seccion),
         "seccion_tipica": seccion_tipica_params(seccion, cartera),
+        "motor_calculo_version": "volumen_v1",
     }
 
 
