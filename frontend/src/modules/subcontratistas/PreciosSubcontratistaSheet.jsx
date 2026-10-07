@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../../apiBase'
+import CcConfirmModal from '../../components/CcConfirmModal'
 import {
   EMPTY_IMPUESTO,
   computeValorDespuesAiuIva,
@@ -11,7 +12,7 @@ import { fmtMoneda } from './subcontratistasDocsHelpers'
 import PreciosAiuIvaModal from './PreciosAiuIvaModal'
 import {
   bulkUpsertPreciosSub,
-  deletePrecioSub,
+  desvincularItemsCobro,
   fetchItemsCobroAsignados,
   upsertTributosSub,
 } from './subcontratistasItemsCobroApi'
@@ -62,6 +63,8 @@ export default function PreciosSubcontratistaSheet({
   const [impuestoGlobal, setImpuestoGlobal] = useState({ ...EMPTY_IMPUESTO })
   const [aiuOpen, setAiuOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set())
+  const [confirmEliminarOpen, setConfirmEliminarOpen] = useState(false)
   const wrapRef = useRef(null)
 
   const loadSheet = useCallback(async () => {
@@ -72,6 +75,7 @@ export default function PreciosSubcontratistaSheet({
       const data = await fetchItemsCobroAsignados(subId, token)
       const items = Array.isArray(data?.items) ? data.items : []
       setRows(items)
+      setSelectedKeys(new Set())
       const next = {}
       for (const it of items) {
         const key = rowKey(it)
@@ -290,14 +294,87 @@ export default function PreciosSubcontratistaSheet({
       cancelDraft(key)
       return
     }
-    if (!window.confirm('¿Eliminar este ítem agregado manualmente?')) return
+    setSelectedKeys(new Set([key]))
+    setConfirmEliminarOpen(true)
+  }
+
+  const filasSeleccionables = useMemo(
+    () => rows.filter((r) => !r._isDraft || r.listado_precio_id),
+    [rows],
+  )
+
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selectedKeys.has(rowKey(r))),
+    [rows, selectedKeys],
+  )
+
+  const allSelectableSelected = filasSeleccionables.length > 0
+    && filasSeleccionables.every((r) => selectedKeys.has(rowKey(r)))
+
+  const toggleSelectKey = (key) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (allSelectableSelected) {
+      setSelectedKeys(new Set())
+      return
+    }
+    setSelectedKeys(new Set(filasSeleccionables.map((r) => rowKey(r))))
+  }
+
+  const confirmarEliminarSeleccion = async () => {
+    if (!canEdit || !selectedRows.length) {
+      setConfirmEliminarOpen(false)
+      return
+    }
     setSaving(true)
     try {
-      await deletePrecioSub(row.precio_id, token)
-      onMsg?.({ type: 'success', text: 'Ítem manual eliminado.' })
+      // Borradores sin persistir: solo quitar de la UI
+      const draftsOnly = selectedRows.filter((r) => r._isDraft && !r.precio_id)
+      for (const r of draftsOnly) cancelDraft(rowKey(r))
+
+      const persistidos = selectedRows.filter((r) => !r._isDraft || r.precio_id)
+      const lpIds = [...new Set(
+        persistidos
+          .map((r) => Number(r.listado_precio_id))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      )]
+
+      let result = null
+      if (lpIds.length) {
+        result = await desvincularItemsCobro(subId, lpIds, token)
+      }
+
+      const nOk = (result?.eliminados || []).length + draftsOnly.length
+      const bloqueados = result?.bloqueados || []
+      if (bloqueados.length) {
+        const detalle = bloqueados
+          .slice(0, 5)
+          .map((b) => `${b.item_numero || b.listado_precio_id}: ${b.motivo}`)
+          .join(' · ')
+        onMsg?.({
+          type: bloqueados.length && !nOk ? 'error' : 'error',
+          text: nOk
+            ? `${nOk} eliminado(s). ${bloqueados.length} no se pudo(ieron): ${detalle}`
+            : `No se eliminó nada. ${detalle}`,
+        })
+      } else if (nOk) {
+        onMsg?.({
+          type: 'success',
+          text: result?.message || `${nOk} ítem(s) eliminado(s) de este subcontratista.`,
+        })
+      }
+      setConfirmEliminarOpen(false)
+      setSelectedKeys(new Set())
       await loadSheet()
     } catch (e) {
-      onMsg?.({ type: 'error', text: e.message || 'No se pudo eliminar el ítem.' })
+      onMsg?.({ type: 'error', text: e.message || 'No se pudieron eliminar los ítems.' })
     } finally {
       setSaving(false)
     }
@@ -381,6 +458,21 @@ export default function PreciosSubcontratistaSheet({
           {canEdit && (
             <button
               type="button"
+              style={{
+                ...S.btn('ghost', true),
+                color: selectedKeys.size ? (tTok.danger || '#dc2626') : tTok.textMuted,
+                borderColor: selectedKeys.size ? (tTok.danger || '#dc2626') : tTok.border,
+              }}
+              onClick={() => setConfirmEliminarOpen(true)}
+              disabled={exporting || saving || loading || selectedKeys.size === 0}
+              title="Quitar ítems seleccionados de este subcontratista"
+            >
+              Eliminar{selectedKeys.size ? ` (${selectedKeys.size})` : ''}
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
               style={S.btn('primary', true)}
               onClick={agregarItem}
               disabled={saving || loading || listadoLoading || exporting}
@@ -452,16 +544,29 @@ export default function PreciosSubcontratistaSheet({
         <div style={{ ...ui.sheetWrap, maxHeight: 'min(560px, 58vh)' }}>
           <table style={ui.sheetTable}>
             <colgroup>
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '28%' }} />
+              {canEdit ? <col style={{ width: '4%' }} /> : null}
+              <col style={{ width: canEdit ? '9%' : '10%' }} />
+              <col style={{ width: canEdit ? '26%' : '28%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '14%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '15%' }} />
+              <col style={{ width: '14%' }} />
             </colgroup>
             <thead>
               <tr>
+                {canEdit && (
+                  <th style={{ ...ui.th, textAlign: 'center', width: 36 }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelectableSelected}
+                      disabled={saving || !filasSeleccionables.length}
+                      onChange={toggleSelectAll}
+                      title="Seleccionar todos"
+                      aria-label="Seleccionar todos"
+                    />
+                  </th>
+                )}
                 {['Ítem', 'Descripción', 'Und', 'Cantidad', 'VU Cobro', 'VU Costo M.O.', 'Con AIU/IVA'].map((h) => (
                   <th key={h} style={ui.th}>{h}</th>
                 ))}
@@ -473,6 +578,7 @@ export default function PreciosSubcontratistaSheet({
                 const d = drafts[key] || {}
                 const isManual = String(r.origen || '').toLowerCase() === 'manual' || r._isDraft
                 const cantEditable = !!r.cantidad_editable || !!r._isDraft
+                const selectable = !r._isDraft || !!r.listado_precio_id
                 const suggestions = (r._isDraft && acOpenKey === key)
                   ? filterListadoItems(listado, {
                     capitulo: r.capitulo,
@@ -484,6 +590,17 @@ export default function PreciosSubcontratistaSheet({
 
                 return (
                   <tr key={key}>
+                    {canEdit && (
+                      <td style={{ ...ui.td, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(key)}
+                          disabled={saving || !selectable}
+                          onChange={() => toggleSelectKey(key)}
+                          aria-label={`Seleccionar ítem ${r.item_numero || key}`}
+                        />
+                      </td>
+                    )}
                     <td style={{ ...ui.td, fontWeight: 700, color: tTok.primary, position: 'relative' }}>
                       {r._isDraft ? (
                         <div>
@@ -524,7 +641,7 @@ export default function PreciosSubcontratistaSheet({
                               }}
                               disabled={saving}
                               onClick={() => eliminarManual(r)}
-                              title={r._isDraft ? 'Descartar fila' : 'Eliminar ítem manual'}
+                              title={r._isDraft ? 'Descartar fila' : 'Eliminar ítem'}
                             >
                               {r._isDraft ? 'Descartar' : 'Eliminar'}
                             </button>
@@ -706,6 +823,51 @@ export default function PreciosSubcontratistaSheet({
         onClose={() => setAiuOpen(false)}
         onSave={guardarAiuGlobal}
       />
+
+      {confirmEliminarOpen && (
+        <CcConfirmModal
+          theme={theme}
+          tipo="danger"
+          titulo="Eliminar ítems de Precios"
+          confirmar="Eliminar"
+          cancelar="Cancelar"
+          procesando={saving}
+          onCancel={() => !saving && setConfirmEliminarOpen(false)}
+          onConfirm={() => void confirmarEliminarSeleccion()}
+        >
+          <div style={{ marginBottom: 8 }}>
+            Se quitarán de{' '}
+            <strong>{subcontratista?.razon_social || `subcontratista #${subId}`}</strong>
+            {' '}los siguientes ítems. No se elimina el presupuesto ni el listado del contrato,
+            ni se afecta a otros subcontratistas.
+          </div>
+          <ul style={{
+            margin: '8px 0 0',
+            paddingLeft: 18,
+            maxHeight: 180,
+            overflow: 'auto',
+            fontSize: 'var(--cc-caption)',
+          }}
+          >
+            {selectedRows.map((r) => (
+              <li key={rowKey(r)} style={{ marginBottom: 4 }}>
+                <strong>{r.item_numero || '—'}</strong>
+                {' — '}
+                {r.descripcion || 'Sin descripción'}
+                {' '}
+                <span style={{ color: tTok.textMuted }}>
+                  ({String(r.origen || '').toLowerCase() === 'manual' || r._isDraft ? 'manual' : 'presupuesto'}
+                  {r.cantidad != null ? ` · cant. ${fmtCant(r.cantidad)}` : ''})
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 10, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+            Si algún ítem tiene cantidades en cortes enviados y conciliados, no se eliminará
+            y se informará el motivo.
+          </div>
+        </CcConfirmModal>
+      )}
     </div>
   )
 }
