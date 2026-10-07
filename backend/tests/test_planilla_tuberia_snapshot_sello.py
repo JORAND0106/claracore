@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from topografia_planilla_tuberia import calcular_planilla_completa
+from topografia_planilla_tuberia import calcular_planilla_completa, presentar_calculo_resumen_2dec
 from topografia_planilla_tuberia_motor import (
     CORTE_MOTOR_VOLUMEN_UTC,
     MOTOR_ALTURA_V1,
@@ -253,7 +253,13 @@ class TestDetalleSelladaNoEscribe(unittest.TestCase):
 
         self.assertEqual(det.get("calculo_origen"), "snapshot")
         self.assertFalse(det.get("calculo_reconstruido"))
-        self.assertTrue(calculo_coincide_con_snapshot(det.get("calculo"), snap))
+        # Lo mostrado = snapshot con capa de presentación 2dec (sin persistir).
+        self.assertTrue(
+            calculo_coincide_con_snapshot(
+                det.get("calculo"),
+                presentar_calculo_resumen_2dec(snap),
+            )
+        )
         calc_mock.assert_not_called()
         # Ningún UPDATE al abrir sellada
         sb.table.return_value.update.assert_not_called()

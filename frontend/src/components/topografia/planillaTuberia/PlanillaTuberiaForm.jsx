@@ -502,12 +502,24 @@ export default function PlanillaTuberiaForm({
     return n[key] ?? ''
   }
 
+  /** Cantidad = PRODUCT(dims a 2 dec) − Desc.; valor visto = valor usado. */
   const displayNetoCant = (n) => {
-    if (!n?.editable_dims) return n?.neto
     const long = cellValCant(n, 'long')
     const ancho = cellValCant(n, 'ancho')
     const espesor = cellValCant(n, 'espesor')
-    return cantidadDesdeDims(long, ancho, espesor)
+    const hasDim = [long, ancho, espesor].some((v) => v !== '' && v != null && Number.isFinite(Number(v)))
+    if (hasDim) {
+      const bruto = cantidadDesdeDims(long, ancho, espesor)
+      const descRaw = n?.descuentos
+      const desc = (descRaw !== '' && descRaw != null && Number.isFinite(Number(descRaw)))
+        ? Math.round(Number(descRaw) * 100) / 100
+        : 0
+      return Math.round((Number(bruto) - desc) * 100) / 100
+    }
+    if (n?.neto != null && n.neto !== '') {
+      return Math.round(Number(n.neto) * 100) / 100
+    }
+    return n?.neto
   }
 
   const displayNombreCant = (n) => {
@@ -538,13 +550,16 @@ export default function PlanillaTuberiaForm({
     return d[key] ?? ''
   }
 
+  /** Descuentos Específicos: siempre PRODUCT de dims redondeadas a 2 dec. */
   const displayCantDesc = (d) => {
-    if (!d?.editable_dims) return d?.cantidad
     const long = cellValDesc(d, 'long')
     const ancho = cellValDesc(d, 'ancho')
     const espesor = cellValDesc(d, 'espesor')
-    const fromDims = cantidadDesdeDims(long, ancho, espesor)
-    if (fromDims) return fromDims
+    const hasDim = [long, ancho, espesor].some((v) => v !== '' && v != null && Number.isFinite(Number(v)))
+    if (hasDim) return cantidadDesdeDims(long, ancho, espesor)
+    if (d?.cantidad != null && d.cantidad !== '') {
+      return Math.round(Number(d.cantidad) * 100) / 100
+    }
     return d?.cantidad ?? 0
   }
 
@@ -2013,7 +2028,7 @@ export default function PlanillaTuberiaForm({
                       ) : fmtResumenCantidades(d[k])}
                     </td>
                   ))}
-                  <td style={tdResumenCalc}>{fmtResumenCantidades(esOtrosDesc ? displayCantDesc(d) : d.cantidad)}</td>
+                  <td style={tdResumenCalc}>{fmtResumenCantidades(displayCantDesc(d))}</td>
                   <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
                     <PlanillaTuberiaEvidenciaBtn
                       scope="descuentos"

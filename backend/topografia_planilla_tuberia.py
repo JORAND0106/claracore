@@ -670,6 +670,100 @@ def _cantidad_desde_dims(
     return float(fb) if fb is not None else 0.0
 
 
+def _presentar_fila_dims_2dec(row: dict[str, Any], *, cantidad_key: str = "cantidad") -> dict[str, Any]:
+    """
+    Presentación: dims a 2 dec y cantidad = PRODUCT(dims redondeadas).
+    No muta el dict de entrada; no persiste.
+    """
+    if not isinstance(row, dict):
+        return row
+    out = dict(row)
+    long2 = _dim_resumen_2(_f(out.get("long")))
+    ancho2 = _dim_resumen_2(_f(out.get("ancho")))
+    esp2 = _dim_resumen_2(_f(out.get("espesor")))
+    if "long" in out:
+        out["long"] = long2
+    if "ancho" in out:
+        out["ancho"] = ancho2
+    if "espesor" in out:
+        out["espesor"] = esp2
+    if "desc" in out and out.get("desc") is not None:
+        out["desc"] = _r2(_f(out.get("desc"))) or 0.0
+    tiene_dim = any(v is not None for v in (long2, ancho2, esp2))
+    if tiene_dim:
+        out[cantidad_key] = _cantidad_desde_dims(long2, ancho2, esp2, out.get(cantidad_key))
+        if "bruto" in out:
+            out["bruto"] = _cantidad_desde_dims(long2, ancho2, esp2, out.get("bruto"))
+    elif cantidad_key in out and out.get(cantidad_key) is not None:
+        out[cantidad_key] = _r2(_f(out.get(cantidad_key)))
+    return out
+
+
+def presentar_calculo_resumen_2dec(calculo: Optional[dict]) -> Optional[dict]:
+    """
+    Capa de presentación (abiertas y selladas): Long/Ancho/Espesor/Desc. a 2 dec,
+    Cantidad = PRODUCT de esas dims ya redondeadas (p. ej. 90 × 0.009 → 0.90).
+
+    Solo transforma el dict en memoria. No escribe BD ni altera datos crudos.
+    Idempotente si el motor ya redondeó.
+    """
+    if not isinstance(calculo, dict) or not calculo:
+        return calculo
+    out = dict(calculo)
+    if isinstance(out.get("cantidades"), list):
+        out["cantidades"] = [
+            _presentar_fila_dims_2dec(c, cantidad_key="cantidad")
+            if isinstance(c, dict) else c
+            for c in out["cantidades"]
+        ]
+    if isinstance(out.get("descuentos"), list):
+        out["descuentos"] = [
+            _presentar_fila_dims_2dec(d, cantidad_key="cantidad")
+            if isinstance(d, dict) else d
+            for d in out["descuentos"]
+        ]
+    netos_out: list[dict] = []
+    for n in out.get("netos") or []:
+        if not isinstance(n, dict):
+            netos_out.append(n)
+            continue
+        row = dict(n)
+        long2 = _dim_resumen_2(_f(row.get("long")))
+        ancho2 = _dim_resumen_2(_f(row.get("ancho")))
+        esp2 = _dim_resumen_2(_f(row.get("espesor")))
+        if "long" in row:
+            row["long"] = long2
+        if "ancho" in row:
+            row["ancho"] = ancho2
+        if "espesor" in row:
+            row["espesor"] = esp2
+        desc2 = _r2(_f(row.get("descuentos"))) if row.get("descuentos") is not None else 0.0
+        if row.get("descuentos") is not None:
+            row["descuentos"] = desc2 or 0.0
+        tiene_dim = any(v is not None for v in (long2, ancho2, esp2))
+        if tiene_dim:
+            bruto2 = _cantidad_desde_dims(long2, ancho2, esp2, row.get("bruto"))
+            row["bruto"] = bruto2
+            # Cantidad visible = neto tras Desc. (misma regla que la UI).
+            row["neto"] = round(float(bruto2) - float(desc2 or 0.0), 2)
+        elif row.get("neto") is not None:
+            row["neto"] = _r2(_f(row.get("neto")))
+        netos_out.append(row)
+    if "netos" in out:
+        out["netos"] = netos_out
+    # Detalle de descuentos Roca/Otros (nota / volumen): dims y cantidad a 2.
+    for key in ("descuentos_volumen_detalle", "descuentos_altura_detalle"):
+        det = out.get(key)
+        if not isinstance(det, list):
+            continue
+        out[key] = [
+            _presentar_fila_dims_2dec(d, cantidad_key="cantidad")
+            if isinstance(d, dict) else d
+            for d in det
+        ]
+    return out
+
+
 def _label_desc_otros(nombre: Any) -> str:
     raw = str(nombre or "").strip()
     if not raw:

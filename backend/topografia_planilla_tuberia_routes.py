@@ -51,6 +51,7 @@ from topografia_planilla_tuberia import (
     normalizar_margen_sicoe,
     origen_key_linea_sicoe,
     patch_so_registro_desde_linea_planilla,
+    presentar_calculo_resumen_2dec,
     puntos_topograficos_desde_planilla,
     nombre_archivo_planilla_tuberia,
     nombre_triturado_por_tipo,
@@ -790,6 +791,9 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
             coords_fin = {"lon": lon_f, "lat": lat_f, "label": "Fin"}
         except Exception:
             coords_fin = None
+
+    # Presentación 2 dec (dims→PRODUCT→cantidad). En memoria; no escribe snapshot ni crudos.
+    calculo = presentar_calculo_resumen_2dec(calculo)
 
     return {
         "planilla": planilla,
