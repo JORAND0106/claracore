@@ -21,6 +21,21 @@ describe('mensajeErrorGuardarReporte', () => {
     const msg = mensajeErrorGuardarReporte('Debe tener al menos un registro')
     assert.equal(msg, 'Debe tener al menos un registro')
   })
+
+  it('traduce float_parsing de cota (JSON) a español sin inglés técnico', () => {
+    const raw = JSON.stringify([
+      {
+        type: 'float_parsing',
+        loc: ['body', 'puntos', 0, 'cota'],
+        msg: 'Input should be a valid number, unable to parse string as a number',
+        input: '',
+      },
+    ])
+    const msg = mensajeErrorGuardarReporte(raw)
+    assert.match(msg, /Cota/i)
+    assert.doesNotMatch(msg, /float_parsing|Input should|unable to parse/i)
+    assert.equal(msg.includes('[object Object]'), false)
+  })
 })
 
 describe('alertaErrorGuardarReporte', () => {

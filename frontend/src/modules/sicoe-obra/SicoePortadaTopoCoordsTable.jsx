@@ -23,16 +23,25 @@ export default function SicoePortadaTopoCoordsTable({
   editable = true,
   showCsvImport = true,
   helpText = 'Registra las coordenadas levantadas en campo. Puede digitar, agregar puntos, importar CSV o pegar un bloque desde Excel (Ctrl+V / Cmd+V) a partir de la celda activa.',
+  /** Claves `fila:campo` resaltadas (p. ej. cota vacía tras cancelar advertencia). */
+  highlightKeys = null,
+  /** Notifica nuevas filas para que el padre limpie resaltes obsoletos. */
+  onRowsEdited = null,
 }) {
   const sheet = useMemo(() => topoSheetStyles(t), [t])
   const [invalidKeys, setInvalidKeys] = useState(() => new Set())
   const [pasteMsg, setPasteMsg] = useState('')
 
   const filas = Array.isArray(puntos) && puntos.length ? puntos : [puntoTopoVacio()]
+  const highlightSet = highlightKeys instanceof Set
+    ? highlightKeys
+    : new Set(Array.isArray(highlightKeys) ? highlightKeys : [])
 
   const setFilas = useCallback((next) => {
-    onChange?.(Array.isArray(next) ? next : [])
-  }, [onChange])
+    const rows = Array.isArray(next) ? next : []
+    onChange?.(rows)
+    onRowsEdited?.(rows)
+  }, [onChange, onRowsEdited])
 
   const updateCell = (rowIdx, campo, value) => {
     const next = filas.map((r, i) => (i === rowIdx ? { ...r, [campo]: value } : r))
@@ -148,7 +157,8 @@ export default function SicoePortadaTopoCoordsTable({
             {filas.map((p, idx) => (
               <tr key={`topo-row-${idx}`}>
                 {SICOE_PORTADA_TOPO_CAMPOS.map((campo) => {
-                  const bad = invalidKeys.has(claveCeldaTopo(idx, campo))
+                  const key = claveCeldaTopo(idx, campo)
+                  const bad = invalidKeys.has(key) || highlightSet.has(key)
                   const num = SICOE_PORTADA_TOPO_CAMPOS_NUMERICOS.includes(campo)
                   return (
                     <td
@@ -168,7 +178,11 @@ export default function SicoePortadaTopoCoordsTable({
                         placeholder={SICOE_PORTADA_TOPO_LABELS[campo]}
                         disabled={!editable}
                         aria-invalid={bad || undefined}
-                        title={bad ? 'Valor no numérico — corríjalo antes de guardar' : undefined}
+                        title={bad
+                          ? (highlightSet.has(key) && campo === 'cota'
+                            ? 'Cota vacía'
+                            : 'Valor no numérico — corríjalo antes de guardar')
+                          : undefined}
                         style={{
                           ...sheet.cellInp,
                           fontVariantNumeric: num ? 'tabular-nums' : undefined,

@@ -74,10 +74,17 @@ import {
 } from './modules/sicoe-obra/sicoeGrillaReportesIndicadores'
 import { PLANILLA_TUBERIA_ALERTA_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
 import {
+  mensajeDesdeDetailApi,
   mensajeErrorGuardarTopografiaPortada,
   mensajeErrorRespuestaTopo,
   normalizarPuntosTopoPortada,
 } from './modules/sicoe-obra/sicoePortadaTopografia'
+import {
+  analizarPuntosTopoParaGuardar,
+  depurarResaltesTopo,
+  mensajeAdvertenciaCotaVacia,
+  mensajeErrorDatosTopo,
+} from './modules/sicoe-obra/sicoeTopoCoordsValidacion'
 import SicoePortadaTopoCoordsTable from './modules/sicoe-obra/SicoePortadaTopoCoordsTable'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
@@ -5961,6 +5968,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [puntosEdit, setPuntosEdit]               = useState((repoProp.puntos || []).map(p => ({...p})))
   const [editandoTopo, setEditandoTopo]            = useState(false)
   const [guardandoTopo, setGuardandoTopo]          = useState(false)
+  const [topoHighlightKeys, setTopoHighlightKeys] = useState(() => new Set())
+  const [topoAviso, setTopoAviso] = useState(null) // { tipo: 'cota'|'error', mensaje, highlightOnNo? }
+  const skipCotaWarnPortadaRef = useRef(false)
   const [modoEdicion, setModoEdicion]              = useState(false)
   const [guardandoEdicion, setGuardandoEdicion]    = useState(false)
   const [editDesc, setEditDesc]                    = useState(repoProp.descripcion_actividad || '')
@@ -6502,28 +6512,36 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   const guardarTopografia = async () => {
-    const puntosValidos = normalizarPuntosTopoPortada(puntosEdit)
+    const analysis = analizarPuntosTopoParaGuardar(puntosEdit)
+    const puntosValidos = analysis.puntos
     const teniaPuntos = Array.isArray(reporte?.puntos) && reporte.puntos.length > 0
     // Permitir guardar vacío solo si se están eliminando todos los puntos existentes.
     if (puntosValidos.length === 0 && !teniaPuntos && !(puntosEdit || []).some((p) => (
       String(p?.norte ?? '').trim() || String(p?.este ?? '').trim()
     ))) {
-      alert('Agregue al menos un punto con Norte o Este, o cancele la edición.')
+      setTopoAviso({
+        tipo: 'error',
+        mensaje: 'Agregue al menos un punto con Norte o Este, o cancele la edición.',
+      })
       return
     }
-    // Filas con texto en Norte/Este que no son número
-    const filasInvalidas = (puntosEdit || []).filter((p) => {
-      const nRaw = String(p?.norte ?? '').trim()
-      const eRaw = String(p?.este ?? '').trim()
-      if (!nRaw && !eRaw) return false
-      const nOk = !nRaw || Number.isFinite(Number(String(nRaw).replace(',', '.')))
-      const eOk = !eRaw || Number.isFinite(Number(String(eRaw).replace(',', '.')))
-      return !(nOk && eOk)
-    })
-    if (filasInvalidas.length) {
-      alert('Revise Norte y Este: deben ser números válidos en todas las filas con coordenadas.')
+    if (analysis.errores.length) {
+      setTopoHighlightKeys(new Set(analysis.errores.map((e) => e.clave)))
+      setTopoAviso({
+        tipo: 'error',
+        mensaje: mensajeErrorDatosTopo(analysis.errores),
+      })
       return
     }
+    if (analysis.cotasVacias.length && !skipCotaWarnPortadaRef.current) {
+      setTopoAviso({
+        tipo: 'cota',
+        mensaje: mensajeAdvertenciaCotaVacia(analysis.cotasVacias),
+        highlightOnNo: analysis.cotasVacias.map((c) => c.clave),
+      })
+      return
+    }
+    skipCotaWarnPortadaRef.current = false
     setGuardandoTopo(true)
     try {
       const delRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/puntos-topograficos`, {
@@ -6552,10 +6570,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       }
       setReporte((r) => ({ ...r, puntos: guardados }))
       setPuntosEdit(guardados.map((p) => ({ ...p })))
+      setTopoHighlightKeys(new Set())
       await recargar()
       setEditandoTopo(false)
     } catch (e) {
-      alert(mensajeErrorGuardarTopografiaPortada(e))
+      setTopoAviso({
+        tipo: 'error',
+        mensaje: mensajeErrorGuardarTopografiaPortada(e),
+      })
     }
     setGuardandoTopo(false)
   }
@@ -7948,6 +7970,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     onChange={setPuntosEdit}
                     editable
                     showCsvImport
+                    highlightKeys={topoHighlightKeys}
+                    onRowsEdited={(rows) => setTopoHighlightKeys((prev) => depurarResaltesTopo(prev, rows))}
                   />
                 ) : (reporte.puntos || []).length === 0 ? (
                   <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600', textAlign:'center' }}>
@@ -8689,6 +8713,35 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           vlrUnitario={itemInfoPopup.vlrUnitario}
           onClose={() => setItemInfoPopup(null)}
         />
+      )}
+
+      {topoAviso && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={10800}
+          tipo={topoAviso.tipo === 'error' ? 'danger' : 'warn'}
+          titulo="Coordenadas topográficas"
+          confirmar={topoAviso.tipo === 'cota' ? 'Sí' : 'Entendido'}
+          cancelar="No"
+          soloConfirmar={topoAviso.tipo !== 'cota'}
+          onCancel={() => {
+            if (topoAviso.tipo === 'cota' && Array.isArray(topoAviso.highlightOnNo)) {
+              setTopoHighlightKeys(new Set(topoAviso.highlightOnNo))
+            }
+            setTopoAviso(null)
+          }}
+          onConfirm={() => {
+            if (topoAviso.tipo === 'cota') {
+              setTopoAviso(null)
+              skipCotaWarnPortadaRef.current = true
+              void guardarTopografia()
+              return
+            }
+            setTopoAviso(null)
+          }}
+        >
+          <p style={{ margin: 0 }}>{topoAviso.mensaje}</p>
+        </CcConfirmModal>
       )}
 
       {ofertaDibujoReporte && (
@@ -14697,6 +14750,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [draftBanner, setDraftBanner] = useState(null) // string | null
   const [autosaveTick, setAutosaveTick] = useState(0)
   const draftRestoredRef = useRef(false)
+  const [wizardTopoHighlightKeys, setWizardTopoHighlightKeys] = useState(() => new Set())
+  const [wizardTopoAviso, setWizardTopoAviso] = useState(null) // { tipo, mensaje, highlightOnNo? }
+  const skipCotaWarnWizardRef = useRef(false)
 
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
@@ -15405,6 +15461,27 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         }
       }
     }
+    // Coordenadas topográficas: Cota opcional (aviso); Norte/Este inválidos bloquean.
+    const analysisTopo = analizarPuntosTopoParaGuardar(puntos)
+    if (analysisTopo.errores.length) {
+      setWizardTopoHighlightKeys(new Set(analysisTopo.errores.map((e) => e.clave)))
+      setWizardTopoAviso({
+        tipo: 'error',
+        mensaje: mensajeErrorDatosTopo(analysisTopo.errores),
+      })
+      setTabActivo(4)
+      return
+    }
+    if (analysisTopo.cotasVacias.length && !skipCotaWarnWizardRef.current) {
+      setWizardTopoAviso({
+        tipo: 'cota',
+        mensaje: mensajeAdvertenciaCotaVacia(analysisTopo.cotasVacias),
+        highlightOnNo: analysisTopo.cotasVacias.map((c) => c.clave),
+      })
+      setTabActivo(4)
+      return
+    }
+    skipCotaWarnWizardRef.current = false
     setGuardando(true)
 
     // ── Modo offline: guardar localmente y encolar ────────────────────────────
@@ -15474,13 +15551,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     }
 
     const httpErr = async (res) => {
-      const t = await res.text()
+      const bodyTxt = await res.text()
       try {
-        const j = JSON.parse(t)
-        if (j?.detail) return typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+        const j = JSON.parse(bodyTxt)
+        if (j?.detail != null) {
+          if (typeof j.detail === 'string') return j.detail
+          return mensajeDesdeDetailApi(j.detail, `No se pudo guardar (error ${res.status}).`)
+        }
         if (j?.message) return j.message
       } catch { /* cuerpo no JSON */ }
-      return t || `HTTP ${res.status}`
+      return bodyTxt || `HTTP ${res.status}`
     }
     try {
       // Usar variable local para evitar problemas de closure con el estado asíncrono
@@ -15619,8 +15699,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         }
       }
       }
-      // Guardar puntos topográficos
-      const puntosValidos = puntos.filter(p => p.norte || p.este)
+      // Guardar puntos topográficos (Cota vacía → null; filas vacías omitidas)
+      const puntosValidos = normalizarPuntosTopoPortada(puntos)
       if (puntosValidos.length > 0) {
         const rPt = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
@@ -15631,6 +15711,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       try {
         sicoeNuevoReporteDraftClear(contrato_id, userIdDraft, idParaGuardar || borradorId || reporteInicial?.id || null)
       } catch { /* noop */ }
+      setWizardTopoHighlightKeys(new Set())
       onGuardado({
         reporteId: idParaGuardar,
         ofertaDibujo: !modoEdicion && registros.length > 0,
@@ -15638,7 +15719,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })
     } catch (e) {
       try { flushDraftLocal() } catch { /* noop */ }
-      alert(alertaErrorGuardarReporte(e, { borradorId }))
+      setWizardTopoAviso({
+        tipo: 'error',
+        mensaje: alertaErrorGuardarReporte(e, { borradorId }),
+      })
     }
     setGuardando(false)
   }
@@ -16054,6 +16138,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 onChange={setPuntos}
                 editable
                 showCsvImport
+                highlightKeys={wizardTopoHighlightKeys}
+                onRowsEdited={(rows) => setWizardTopoHighlightKeys((prev) => depurarResaltesTopo(prev, rows))}
                 helpText="Registra las coordenadas levantadas en campo. Opcional — puede agregar puntos, importar CSV o pegar desde Excel."
               />
               <div style={{ marginTop:'16px', padding:'14px', background:t.bg, borderRadius:'12px', border:`1px solid ${t.border}` }}>
@@ -16141,6 +16227,36 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           </div>
         </div>
       </div>
+
+      {wizardTopoAviso && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={11000}
+          tipo={wizardTopoAviso.tipo === 'error' ? 'danger' : 'warn'}
+          titulo="Coordenadas topográficas"
+          confirmar={wizardTopoAviso.tipo === 'cota' ? 'Sí' : 'Entendido'}
+          cancelar="No"
+          soloConfirmar={wizardTopoAviso.tipo !== 'cota'}
+          onCancel={() => {
+            if (wizardTopoAviso.tipo === 'cota' && Array.isArray(wizardTopoAviso.highlightOnNo)) {
+              setWizardTopoHighlightKeys(new Set(wizardTopoAviso.highlightOnNo))
+              setTabActivo(TAB_TOPO)
+            }
+            setWizardTopoAviso(null)
+          }}
+          onConfirm={() => {
+            if (wizardTopoAviso.tipo === 'cota') {
+              setWizardTopoAviso(null)
+              skipCotaWarnWizardRef.current = true
+              void guardarReporte()
+              return
+            }
+            setWizardTopoAviso(null)
+          }}
+        >
+          <p style={{ margin: 0 }}>{wizardTopoAviso.mensaje}</p>
+        </CcConfirmModal>
+      )}
 
 {/* ── Modal Detalle Registro ── */}
       {modalRegistro !== null && registros[modalRegistro] && (
