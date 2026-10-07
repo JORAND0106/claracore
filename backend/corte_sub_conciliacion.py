@@ -750,33 +750,18 @@ def cantidades_por_item_cortes(
 def cantidades_actualizadas_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, float]:
     """
     Cantidades cargadas para el sub en panel administrativo:
-    Presupuesto asignado + filas manuales de subcontratista_precios.
+    Presupuesto asignado (compartido vía presupuesto_sub_asignacion) + filas manuales.
     """
+    from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
         build_precios_sheet,
     )
 
-    ppto_rows: List[dict] = []
     try:
-        offset = 0
-        while True:
-            batch = (
-                sb.table("presupuesto")
-                .select("capitulo, competencia, item, cant_total")
-                .eq("contrato_id", int(contrato_id))
-                .eq("subcontratista_id", int(subcontratista_id))
-                .eq("tipo_ejecucion", "Presupuesto de Obra")
-                .eq("dado_de_baja", False)
-                .order("id")
-                .range(offset, offset + 999)
-                .execute()
-                .data
-            )
-            ppto_rows.extend(batch or [])
-            if len(batch or []) < 1000:
-                break
-            offset += 1000
+        ppto_rows = fetch_ppto_rows_cant_map_for_sub(
+            sb, contrato_id=int(contrato_id), subcontratista_id=int(subcontratista_id),
+        )
     except Exception as exc:
         _log.warning("cantidades_actualizadas_sub ppto: %s", exc)
         ppto_rows = []
@@ -1521,31 +1506,16 @@ def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[st
     """
     Ficha + orden del listado de precios del sub (hoja build_precios_sheet).
     """
+    from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
         build_precios_sheet,
     )
 
-    ppto_rows: List[dict] = []
     try:
-        offset = 0
-        while True:
-            batch = (
-                sb.table("presupuesto")
-                .select("capitulo, competencia, item, cant_total")
-                .eq("contrato_id", int(contrato_id))
-                .eq("subcontratista_id", int(subcontratista_id))
-                .eq("tipo_ejecucion", "Presupuesto de Obra")
-                .eq("dado_de_baja", False)
-                .order("id")
-                .range(offset, offset + 999)
-                .execute()
-                .data
-            )
-            ppto_rows.extend(batch or [])
-            if len(batch or []) < 1000:
-                break
-            offset += 1000
+        ppto_rows = fetch_ppto_rows_cant_map_for_sub(
+            sb, contrato_id=int(contrato_id), subcontratista_id=int(subcontratista_id),
+        )
     except Exception as exc:
         _log.warning("meta_listado_sub ppto: %s", exc)
         ppto_rows = []

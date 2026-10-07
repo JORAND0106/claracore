@@ -1,8 +1,8 @@
 """
 Ítems de cobro del subcontratista según cantidades asignadas en Presupuesto.
 
-Une `presupuesto.subcontratista_id` (cantidades) con `listado_precios` (VU Cobro)
-y `subcontratista_precios` (VU Costo M.O. ya pactado).
+Une cantidades de `presupuesto_sub_asignacion` (o legado `presupuesto.subcontratista_id`)
+con `listado_precios` (VU Cobro) y `subcontratista_precios` (VU Costo M.O. ya pactado).
 """
 from __future__ import annotations
 

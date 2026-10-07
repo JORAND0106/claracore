@@ -143,8 +143,67 @@ def _tributos_por_sub(sb, contrato_id: int, sub_ids: List[int]) -> Dict[int, dic
 
 
 def _subs_asignados_por_item(sb, contrato_id: int) -> Dict[str, set]:
-    """item_key → set(subcontratista_id) desde presupuesto (si la columna existe)."""
+    """item_key → set(subcontratista_id) desde asignación compartida (o legado)."""
     out: Dict[str, set] = {}
+    # Preferir presupuesto_sub_asignacion (multi-sub).
+    try:
+        offset = 0
+        asig_rows: list = []
+        while True:
+            batch = (
+                sb.table("presupuesto_sub_asignacion")
+                .select("presupuesto_id, subcontratista_id, cantidad")
+                .eq("contrato_id", int(contrato_id))
+                .order("id")
+                .range(offset, offset + 999)
+                .execute()
+                .data
+                or []
+            )
+            asig_rows.extend(batch)
+            if len(batch) < 1000:
+                break
+            offset += 1000
+        if asig_rows:
+            pids = [int(a["presupuesto_id"]) for a in asig_rows if a.get("presupuesto_id")]
+            meta: Dict[int, tuple] = {}
+            for i in range(0, len(pids), 200):
+                chunk = pids[i:i + 200]
+                pr = (
+                    sb.table("presupuesto")
+                    .select("id, capitulo, item, dado_de_baja, tipo_ejecucion")
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+                for r in pr:
+                    if r.get("dado_de_baja") is True:
+                        continue
+                    if str(r.get("tipo_ejecucion") or "") != "Presupuesto de Obra":
+                        continue
+                    meta[int(r["id"])] = (r.get("capitulo"), r.get("item"))
+            for a in asig_rows:
+                if _f(a.get("cantidad")) <= 0:
+                    continue
+                try:
+                    sub_id = int(a["subcontratista_id"])
+                    pid = int(a["presupuesto_id"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                cap_item = meta.get(pid)
+                if not cap_item:
+                    continue
+                ikey = _item_key(cap_item[0], cap_item[1])
+                _cap, _, itm = ikey.partition("|")
+                if not itm:
+                    continue
+                out.setdefault(ikey, set()).add(sub_id)
+            if out:
+                return out
+    except Exception:
+        pass
+
     try:
         offset = 0
         while True:

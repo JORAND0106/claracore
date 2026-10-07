@@ -1250,6 +1250,20 @@ class PresupuestoBulkSubcontratista(BaseModel):
     subcontratista_id: int
 
 
+class PresupuestoSubRedistribucionPreview(BaseModel):
+    """Preview de asignación compartida / redistribución de saldo."""
+    ids: List[int]
+    subcontratista_id: int
+
+
+class PresupuestoSubRedistribucionAplicar(BaseModel):
+    """Confirma proporciones y aplica redistribución + asignaciones simples."""
+    ids: List[int]
+    subcontratista_id: int
+    proporciones: Optional[Dict[str, float]] = None
+    preview: Optional[dict] = None
+
+
 class PresupuestoBulkObservacion(BaseModel):
     ids: List[int]
     observacion_externa: str
@@ -14631,23 +14645,8 @@ def bulk_nodos(contrato_id: int, body: PresupuestoBulkNodos, current_user=Depend
     return {"actualizados": len(ids_ok), **patch}
 
 
-@app.put("/presupuesto/{contrato_id}/bulk-subcontratista")
-def bulk_subcontratista(
-    contrato_id: int, body: PresupuestoBulkSubcontratista, current_user=Depends(get_current_user)
-):
-    """Asigna `subcontratista_id` en lote (edición masiva · Capítulo/Ítem).
-
-    Solo toca subcontratista_id (+ updated_at). No modifica validación ni sellado.
-    Los registros sellados se rechazan (misma regla que cap/ítem editable).
-    """
-    _require_contract_access(current_user, contrato_id)
-    if not body.ids:
-        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
-        current_user, contrato_id
-    ):
-        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
-    sub_id = int(body.subcontratista_id or 0)
+def _validar_sub_para_asignacion_ppto(contrato_id: int, sub_id: int):
+    """Valida subcontratista del contrato y activo. Retorna fila o HTTPException."""
     if sub_id <= 0:
         raise HTTPException(status_code=422, detail="subcontratista_id inválido.")
     sub_rows = (
@@ -14663,30 +14662,213 @@ def bulk_subcontratista(
         raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato.")
     if sub_rows[0].get("activo") is False:
         raise HTTPException(status_code=422, detail="El subcontratista está inactivo.")
+    return sub_rows[0]
+
+
+@app.post("/presupuesto/{contrato_id}/subcontratista-redistribucion/preview")
+def presupuesto_sub_redistribucion_preview(
+    contrato_id: int,
+    body: PresupuestoSubRedistribucionPreview,
+    current_user=Depends(get_current_user),
+):
+    """Preview de asignación compartida (popup de proporciones). Solo usuarios internos con edición."""
+    from presupuesto_sub_redistribucion import preview_asignacion_compartida
+
+    _require_contract_access(current_user, contrato_id)
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    # Usuarios subcontratista nunca ven este popup / datos de otros
+    from subcontratista_visibilidad import scope_from_user_dict
+    restricted, _forced = scope_from_user_dict(current_user)
+    if restricted:
+        raise HTTPException(status_code=403, detail="La redistribución solo está disponible para usuarios internos.")
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    sub_id = int(body.subcontratista_id or 0)
+    _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
     _reject_if_presupuesto_sellado(supabase, body.ids)
-    rows = (
-        supabase.table("presupuesto")
-        .select("id, contrato_id, id_pol, subcontratista_id")
-        .in_("id", body.ids)
-        .execute()
-        .data
-        or []
+    return preview_asignacion_compartida(
+        supabase,
+        contrato_id=int(contrato_id),
+        presupuesto_ids=body.ids,
+        nuevo_subcontratista_id=sub_id,
     )
-    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
-    if not ids_ok:
-        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
-    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
-    supabase.table("presupuesto").update(
-        {"subcontratista_id": sub_id, "updated_at": "now()"}
-    ).in_("id", ids_ok).execute()
+
+
+@app.post("/presupuesto/{contrato_id}/subcontratista-redistribucion/aplicar")
+def presupuesto_sub_redistribucion_aplicar(
+    contrato_id: int,
+    body: PresupuestoSubRedistribucionAplicar,
+    current_user=Depends(get_current_user),
+):
+    """Aplica asignación simple y/o redistribución confirmada en el popup."""
+    from presupuesto_sub_redistribucion import (
+        aplicar_asignacion_compartida,
+        preview_asignacion_compartida,
+    )
+
+    _require_contract_access(current_user, contrato_id)
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    from subcontratista_visibilidad import scope_from_user_dict
+    restricted, _forced = scope_from_user_dict(current_user)
+    if restricted:
+        raise HTTPException(status_code=403, detail="La redistribución solo está disponible para usuarios internos.")
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    sub_id = int(body.subcontratista_id or 0)
+    sub_row = _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+
+    preview = body.preview
+    if not isinstance(preview, dict) or not preview.get("mode"):
+        preview = preview_asignacion_compartida(
+            supabase,
+            contrato_id=int(contrato_id),
+            presupuesto_ids=body.ids,
+            nuevo_subcontratista_id=sub_id,
+        )
+    try:
+        result = aplicar_asignacion_compartida(
+            supabase,
+            contrato_id=int(contrato_id),
+            nuevo_subcontratista_id=sub_id,
+            proporciones=body.proporciones,
+            preview=preview,
+            usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     det_bulk = {
         "contrato_id": contrato_id,
-        "cantidad_registros": len(ids_ok),
+        "cantidad_registros": result.get("actualizados"),
         "subcontratista_id": sub_id,
-        "razon_social": sub_rows[0].get("razon_social"),
+        "razon_social": sub_row.get("razon_social"),
+        "mode": result.get("mode"),
+        "simples": result.get("simples"),
+        "redistribuidos": result.get("redistribuidos"),
+        "proporciones": body.proporciones,
     }
-    audit_filas = [(dict(r), {**dict(r), "subcontratista_id": sub_id}) for r in rows_ok]
-    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_sub_redistribucion",
+        str(contrato_id),
+        det_bulk,
+    )
+    return result
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-subcontratista")
+def bulk_subcontratista(
+    contrato_id: int, body: PresupuestoBulkSubcontratista, current_user=Depends(get_current_user)
+):
+    """Asigna subcontratista en lote (edición masiva · Capítulo/Ítem).
+
+    Si los registros ya tienen otros subcontratistas, responde
+    ``requires_redistribution: true`` + preview para que el cliente abra el popup.
+    Si todos están libres, asigna la cantidad completa al nuevo sub (tabla compartida).
+    """
+    from presupuesto_sub_redistribucion import (
+        aplicar_asignacion_compartida,
+        preview_asignacion_compartida,
+    )
+
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    sub_id = int(body.subcontratista_id or 0)
+    sub_row = _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+
+    # Si aún no existe la tabla de asignación compartida, fallback legado (exclusivo).
+    from presupuesto_sub_redistribucion import _table_exists as _ppto_sub_table_exists
+    if not _ppto_sub_table_exists(supabase, "presupuesto_sub_asignacion"):
+        rows = (
+            supabase.table("presupuesto")
+            .select("id, contrato_id, id_pol, subcontratista_id")
+            .in_("id", body.ids)
+            .execute()
+            .data
+            or []
+        )
+        ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+        if not ids_ok:
+            raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+        rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+        supabase.table("presupuesto").update(
+            {"subcontratista_id": sub_id, "updated_at": "now()"}
+        ).in_("id", ids_ok).execute()
+        det_bulk = {
+            "contrato_id": contrato_id,
+            "cantidad_registros": len(ids_ok),
+            "subcontratista_id": sub_id,
+            "razon_social": sub_row.get("razon_social"),
+            "mode": "legado_exclusivo",
+        }
+        audit_filas = [(dict(r), {**dict(r), "subcontratista_id": sub_id}) for r in rows_ok]
+        _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "PRESUPUESTO",
+            "presupuesto_bulk_subcontratista",
+            str(contrato_id),
+            det_bulk,
+        )
+        return {
+            "actualizados": len(ids_ok),
+            "subcontratista_id": sub_id,
+            "requires_redistribution": False,
+            "mode": "legado_exclusivo",
+        }
+
+    preview = preview_asignacion_compartida(
+        supabase,
+        contrato_id=int(contrato_id),
+        presupuesto_ids=body.ids,
+        nuevo_subcontratista_id=sub_id,
+    )
+    if preview.get("mode") == "bloqueado":
+        raise HTTPException(status_code=422, detail=preview.get("message") or "Asignación bloqueada.")
+    if preview.get("mode") == "redistribuir":
+        return {
+            "requires_redistribution": True,
+            "preview": preview,
+            "subcontratista_id": sub_id,
+            "razon_social": sub_row.get("razon_social"),
+        }
+
+    # mode == simple (o solo bloqueados parciales + simples)
+    try:
+        result = aplicar_asignacion_compartida(
+            supabase,
+            contrato_id=int(contrato_id),
+            nuevo_subcontratista_id=sub_id,
+            proporciones=preview.get("proporciones_default"),
+            preview=preview,
+            usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    det_bulk = {
+        "contrato_id": contrato_id,
+        "cantidad_registros": result.get("actualizados"),
+        "subcontratista_id": sub_id,
+        "razon_social": sub_row.get("razon_social"),
+        "mode": "simple",
+    }
     registrar_log(
         current_user,
         "EDITAR",
@@ -14695,7 +14877,12 @@ def bulk_subcontratista(
         str(contrato_id),
         det_bulk,
     )
-    return {"actualizados": len(ids_ok), "subcontratista_id": sub_id}
+    return {
+        "actualizados": result.get("actualizados"),
+        "subcontratista_id": sub_id,
+        "requires_redistribution": False,
+        "mode": "simple",
+    }
 
 
 @app.put("/presupuesto/{contrato_id}/bulk-observacion")
@@ -18990,9 +19177,60 @@ def _scope_subcontratista_usuario(current_user) -> Tuple[bool, Optional[int]]:
 
 
 def _presupuesto_q_visibilidad_usuario(q, current_user):
-    """Interventoría + aislamiento subcontratista sobre consultas de presupuesto."""
+    """Interventoría + aislamiento subcontratista sobre consultas de presupuesto.
+
+    Con asignación compartida, un registro puede tener varios subs y
+    ``subcontratista_id`` legado queda null: se filtra también por
+    ``presupuesto_sub_asignacion``.
+    """
     q = _presupuesto_q_visibilidad_interventoria(q, current_user)
     restricted, forced = _scope_subcontratista_usuario(current_user)
+    if not restricted:
+        return q
+    if forced is None:
+        return apply_subcontratista_filter_q(q, True, None)
+    try:
+        from presupuesto_sub_redistribucion import _table_exists as _psa_exists
+        if _psa_exists(supabase, "presupuesto_sub_asignacion"):
+            pids: List[int] = []
+            offset = 0
+            while True:
+                batch = (
+                    supabase.table("presupuesto_sub_asignacion")
+                    .select("presupuesto_id")
+                    .eq("subcontratista_id", int(forced))
+                    .order("id")
+                    .range(offset, offset + 999)
+                    .execute()
+                    .data
+                ) or []
+                for r in batch:
+                    try:
+                        pids.append(int(r["presupuesto_id"]))
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                if len(batch) < 1000:
+                    break
+                offset += 1000
+            if pids:
+                # Incluye legado (FK) + filas compartidas vía asignacion.
+                # PostgREST limita URL: trocear .in_ si hace falta → usar or con FK.
+                if len(pids) <= 200:
+                    id_list = ",".join(str(p) for p in pids)
+                    return q.or_(
+                        f"subcontratista_id.eq.{int(forced)},id.in.({id_list})"
+                    )
+                # Muchas filas: filtrar solo por id.in en chunks no es trivial en un
+                # único query builder; caer a FK legado + primer chunk (el resto
+                # sigue visible vía Precios/items-cobro que leen asignacion).
+                id_list = ",".join(str(p) for p in pids[:200])
+                return q.or_(
+                    f"subcontratista_id.eq.{int(forced)},id.in.({id_list})"
+                )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "visibilidad presupuesto vía asignacion compartida: %s", exc,
+        )
     return apply_subcontratista_filter_q(q, restricted, forced)
 
 
@@ -19506,6 +19744,7 @@ def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=De
 @app.get("/subcontratistas/{sub_id}/items-cobro-asignados")
 def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_user)):
     """Hoja unificada: ítems de Presupuesto (cant > 0) + filas manuales."""
+    from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
         build_precios_sheet,
@@ -19514,29 +19753,13 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
     sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=False)
     contrato_id = int(sub["contrato_id"])
 
-    ppto_rows: List[dict] = []
     try:
-        offset = 0
-        while True:
-            batch = (
-                supabase.table("presupuesto")
-                .select("capitulo, competencia, item, cant_total")
-                .eq("contrato_id", contrato_id)
-                .eq("subcontratista_id", int(sub_id))
-                .eq("tipo_ejecucion", "Presupuesto de Obra")
-                .eq("dado_de_baja", False)
-                .order("id")
-                .range(offset, offset + 999)
-                .execute()
-                .data
-            )
-            ppto_rows.extend(batch or [])
-            if len(batch or []) < 1000:
-                break
-            offset += 1000
+        ppto_rows = fetch_ppto_rows_cant_map_for_sub(
+            supabase, contrato_id=contrato_id, subcontratista_id=int(sub_id),
+        )
     except Exception as exc:
         logging.getLogger(__name__).warning(
-            "items-cobro-asignados: no se pudo leer presupuesto.subcontratista_id (sub=%s): %s",
+            "items-cobro-asignados: no se pudo leer asignación compartida (sub=%s): %s",
             sub_id,
             exc,
         )
