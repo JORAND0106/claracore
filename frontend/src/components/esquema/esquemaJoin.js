@@ -329,7 +329,13 @@ export function materializeJoinAsClosedPolygon(objects, nodeNums, opts = {}) {
     ? opts.uid
     : () => `jp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 
-  let points = nodes.map((n) => ({ x: Number(n.x), y: Number(n.y) }))
+  let points = nodes.map((n) => ({
+    x: Number(n.x),
+    y: Number(n.y),
+    ...(Number.isFinite(n.este) && Number.isFinite(n.norte)
+      ? { este: Number(n.este), norte: Number(n.norte) }
+      : {}),
+  }))
   let usedEje = false
   let failedEdges = 0
   let sentidoEje = false
@@ -385,7 +391,13 @@ export function buildJoinPolygonDraft(nodes, opts = {}) {
     type: 'polilinea',
     joinSeq: true,
     closed: list.length >= 3,
-    points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
+    points: list.map((n) => ({
+      x: Number(n.x),
+      y: Number(n.y),
+      ...(Number.isFinite(n.este) && Number.isFinite(n.norte)
+        ? { este: Number(n.este), norte: Number(n.norte) }
+        : {}),
+    })),
     color: opts.color || '#0f172a',
     width: opts.width || 3,
     lineStyle: opts.lineStyle || 'continua',

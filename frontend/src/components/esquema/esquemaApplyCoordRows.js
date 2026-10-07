@@ -181,6 +181,12 @@ export function buildLineasUniendoNodos(nodes, opts = {}) {
       y1: a.y,
       x2: b.x,
       y2: b.y,
+      ...(Number.isFinite(a.este) && Number.isFinite(a.norte)
+        ? { este1: a.este, norte1: a.norte }
+        : {}),
+      ...(Number.isFinite(b.este) && Number.isFinite(b.norte)
+        ? { este2: b.este, norte2: b.norte }
+        : {}),
       color: opts.color || a.color || '#0f172a',
       width: opts.width || 3,
       lineStyle: opts.lineStyle || 'continua',
@@ -279,6 +285,12 @@ export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
       y1: a.y,
       x2: b.x,
       y2: b.y,
+      ...(Number.isFinite(a.este) && Number.isFinite(a.norte)
+        ? { este1: a.este, norte1: a.norte }
+        : {}),
+      ...(Number.isFinite(b.este) && Number.isFinite(b.norte)
+        ? { este2: b.este, norte2: b.norte }
+        : {}),
       color: opts.color || a.color || '#0f172a',
       width: opts.width || 3,
       lineStyle: opts.lineStyle || 'continua',

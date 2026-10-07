@@ -302,4 +302,69 @@ describe('reprojectSceneObjectsToMap / gkToCanvasWorld', () => {
     assert.ok(Math.abs(screen.x - p.x) < 1e-6)
     assert.ok(Math.abs(screen.y - p.y) < 1e-6)
   })
+
+  it('línea fromCoordTable queda amarrada a nodos tras varios zoom (sella GK)', () => {
+    const este0 = 959000
+    const norte0 = 970800
+    const n1 = { este: 959000, norte: 970800 }
+    const n2 = { este: 959120, norte: 972840 } // ~2 km al norte + este
+    const ll0 = gkBogotaToWgs84(este0, norte0)
+    assert.ok(ll0)
+
+    const mapA = makeLinearMap({ ppm: 2, lng0: ll0.lng, lat0: ll0.lat })
+    const syncA = syncCanvasTransformToMap(mapA, ll0)
+    assert.ok(syncA)
+    const gkOrigin = { este0, norte0 }
+
+    // Mundo planar inicial (como topoToWorld) — sin este1/norte1 (bug histórico).
+    const line0 = {
+      id: 'L',
+      type: 'linea',
+      fromCoordTable: true,
+      joinSeq: true,
+      x1: 0,
+      y1: 0,
+      x2: (n2.este - este0) * PX_PER_METER,
+      y2: -(n2.norte - norte0) * PX_PER_METER,
+    }
+    const nodoA = { id: 'a', type: 'nodo', nodeNum: '1', x: line0.x1, y: line0.y1, ...n1 }
+    const nodoB = { id: 'b', type: 'nodo', nodeNum: '2', x: line0.x2, y: line0.y2, ...n2 }
+
+    const pass1 = reprojectSceneObjectsToMap(
+      [nodoA, nodoB, line0],
+      mapA,
+      syncA.pan,
+      syncA.zoom,
+      gkOrigin,
+    )
+    const line1 = pass1.find((o) => o.id === 'L')
+    const na1 = pass1.find((o) => o.id === 'a')
+    const nb1 = pass1.find((o) => o.id === 'b')
+    assert.ok(Number.isFinite(line1.este1) && Number.isFinite(line1.norte1))
+    assert.ok(Number.isFinite(line1.este2) && Number.isFinite(line1.norte2))
+    assert.ok(Math.hypot(line1.x1 - na1.x, line1.y1 - na1.y) < 1e-6)
+    assert.ok(Math.hypot(line1.x2 - nb1.x, line1.y2 - nb1.y) < 1e-6)
+
+    // Acercar (ppm ×4) y volver a alejar: extremos deben seguir en los nodos.
+    const mapB = makeLinearMap({ ppm: 8, lng0: ll0.lng, lat0: ll0.lat })
+    const syncB = syncCanvasTransformToMap(mapB, ll0)
+    const pass2 = reprojectSceneObjectsToMap(pass1, mapB, syncB.pan, syncB.zoom, gkOrigin)
+    const line2 = pass2.find((o) => o.id === 'L')
+    const na2 = pass2.find((o) => o.id === 'a')
+    const nb2 = pass2.find((o) => o.id === 'b')
+    assert.ok(Math.hypot(line2.x1 - na2.x, line2.y1 - na2.y) < 1e-6, 'inicio suelto en zoom in')
+    assert.ok(Math.hypot(line2.x2 - nb2.x, line2.y2 - nb2.y) < 1e-6, 'fin suelto en zoom in')
+
+    const mapC = makeLinearMap({ ppm: 2, lng0: ll0.lng, lat0: ll0.lat })
+    const syncC = syncCanvasTransformToMap(mapC, ll0)
+    const pass3 = reprojectSceneObjectsToMap(pass2, mapC, syncC.pan, syncC.zoom, gkOrigin)
+    const line3 = pass3.find((o) => o.id === 'L')
+    const na3 = pass3.find((o) => o.id === 'a')
+    const nb3 = pass3.find((o) => o.id === 'b')
+    assert.ok(Math.hypot(line3.x1 - na3.x, line3.y1 - na3.y) < 1e-6)
+    assert.ok(Math.hypot(line3.x2 - nb3.x, line3.y2 - nb3.y) < 1e-6)
+    // Sin desplazamiento acumulado respecto a la 1.ª pasada (mismo ppm).
+    assert.ok(Math.hypot(line3.x1 - line1.x1, line3.y1 - line1.y1) < 1e-6)
+    assert.ok(Math.hypot(line3.x2 - line1.x2, line3.y2 - line1.y2) < 1e-6)
+  })
 })

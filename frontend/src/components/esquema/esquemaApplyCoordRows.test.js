@@ -46,6 +46,11 @@ describe('esquemaApplyCoordRows', () => {
     assert.equal(lines[0].y1, nodes[0].y)
     assert.equal(lines[0].x2, nodes[1].x)
     assert.equal(lines[0].y2, nodes[1].y)
+    // Amarre geo: extremos sellados con Gauss de los nodos (anti-deriva en zoom).
+    assert.equal(lines[0].este1, nodes[0].este)
+    assert.equal(lines[0].norte1, nodes[0].norte)
+    assert.equal(lines[0].este2, nodes[1].este)
+    assert.equal(lines[0].norte2, nodes[1].norte)
     // ΔN=+10 → world Y negativo (Norte arriba)
     assert.ok(nodes[1].y < nodes[0].y)
     assert.equal(nodes[1].x, nodes[0].x)
@@ -104,6 +109,10 @@ describe('esquemaApplyCoordRows', () => {
     assert.equal(empty.objects.length, 1)
     assert.equal(empty.objects[0].type, 'linea')
     assert.equal(empty.objects[0].sentidoEje, false)
+    assert.equal(empty.objects[0].este1, nodes[0].este)
+    assert.equal(empty.objects[0].norte1, nodes[0].norte)
+    assert.equal(empty.objects[0].este2, nodes[1].este)
+    assert.equal(empty.objects[0].norte2, nodes[1].norte)
   })
 
   it('buildLineasSentidoEje con ejes produce polilínea sentidoEje', async () => {
