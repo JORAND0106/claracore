@@ -19,10 +19,38 @@ export function roundCop(n) {
 }
 
 /**
+ * ▲ unitario = VU Costo M.O. − VU Cobro.
+ * Rojo si sub > cobro (positivo); verde si ≤ (cero o negativo).
+ */
+export function deltaVuCostoVsCobro(vuCostoMo, vuCobro) {
+  const a = roundCop(vuCostoMo)
+  const b = roundCop(vuCobro)
+  return roundCop(a - b)
+}
+
+/** Texto con signo explícito para impresión B/N (+ / − / 0). */
+export function formatDeltaConSigno(delta) {
+  const n = roundCop(delta)
+  if (n > 0) return `+${n}`
+  if (n < 0) return `${n}` // ya trae −
+  return '0'
+}
+
+export function deltaEsRojo(delta) {
+  return roundCop(delta) > 0
+}
+
+/**
  * Arma filas exportables a partir de lo visible en pantalla (rows + drafts).
  * Incluye presupuesto y manuales; omite borradores incompletos y filas sin VU/cantidad.
+ * @param {boolean} [incluirVuCobro=false]
  */
-export function buildPreciosExportLineas(rows, drafts = {}, impuesto = EMPTY_IMPUESTO) {
+export function buildPreciosExportLineas(
+  rows,
+  drafts = {},
+  impuesto = EMPTY_IMPUESTO,
+  incluirVuCobro = false,
+) {
   const out = []
   for (const r of rows || []) {
     const key = rowKey(r)
@@ -42,7 +70,7 @@ export function buildPreciosExportLineas(rows, drafts = {}, impuesto = EMPTY_IMP
     const totalAntes = roundCop(cant * vu)
     const totalCon = roundCop(cant * vuConAiu)
 
-    out.push({
+    const row = {
       item: String(r.item_numero || '').trim() || '—',
       descripcion: String(r.descripcion || '').trim() || '—',
       und: String(r.unidad || r.und || '').trim() || '—',
@@ -51,25 +79,45 @@ export function buildPreciosExportLineas(rows, drafts = {}, impuesto = EMPTY_IMP
       total_antes_aiu: totalAntes,
       total_con_aiu: totalCon,
       vu_con_aiu: vuConAiu,
-    })
+    }
+
+    if (incluirVuCobro) {
+      const vuCobroRaw = parseNum(r.vu_cobro)
+      const vuCobro = vuCobroRaw == null || Number.isNaN(vuCobroRaw) ? 0 : roundCop(vuCobroRaw)
+      const delta = deltaVuCostoVsCobro(vuCosto, vuCobro)
+      row.vu_cobro = vuCobro
+      row.total_vu_cobro = roundCop(cant * vuCobro)
+      row.delta_vu = delta
+    }
+
+    out.push(row)
   }
   return out
 }
 
-export function sumarTotalesExport(lineas) {
+export function sumarTotalesExport(lineas, incluirVuCobro = false) {
   let sumAntes = 0
   let sumCon = 0
+  let sumCobro = 0
   for (const L of lineas || []) {
     sumAntes += Number(L.total_antes_aiu) || 0
     sumCon += Number(L.total_con_aiu) || 0
+    if (incluirVuCobro) sumCobro += Number(L.total_vu_cobro) || 0
   }
   sumAntes = roundCop(sumAntes)
   sumCon = roundCop(sumCon)
-  return {
+  sumCobro = roundCop(sumCobro)
+  const out = {
     sumatoria_antes_aiu: sumAntes,
     valor_aiu_iva: roundCop(sumCon - sumAntes),
     total_general_con_aiu: sumCon,
   }
+  if (incluirVuCobro) {
+    // Misma lógica que ▲ unitario: total antes AIU − total a VU Cobro
+    out.sumatoria_vu_cobro = sumCobro
+    out.diferencia_total_vs_cobro = roundCop(sumAntes - sumCobro)
+  }
+  return out
 }
 
 /** Desglose AIU/IVA en puntos % (como en plataforma / etiquetaTributos). */
@@ -96,8 +144,14 @@ export function formatPctExport(pts) {
  * @returns {{ ok: true, lineas: object[], totales: object, aiu: object, faltaAiu: boolean }
  *   | { ok: false, message: string }}
  */
-export function validatePreciosExport({ rows, drafts, impuesto } = {}) {
-  const lineas = buildPreciosExportLineas(rows, drafts, impuesto)
+export function validatePreciosExport({
+  rows,
+  drafts,
+  impuesto,
+  incluirVuCobro = false,
+} = {}) {
+  const conCobro = !!incluirVuCobro
+  const lineas = buildPreciosExportLineas(rows, drafts, impuesto, conCobro)
   if (!lineas.length) {
     return {
       ok: false,
@@ -110,8 +164,9 @@ export function validatePreciosExport({ rows, drafts, impuesto } = {}) {
   return {
     ok: true,
     faltaAiu,
+    incluirVuCobro: conCobro,
     lineas,
-    totales: sumarTotalesExport(lineas),
+    totales: sumarTotalesExport(lineas, conCobro),
     aiu: desgloseAiuIvaParaExport(impuesto),
   }
 }

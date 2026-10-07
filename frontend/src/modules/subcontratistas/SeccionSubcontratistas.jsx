@@ -15,6 +15,11 @@ import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from '
  */
 export default function SeccionSubcontratistas({ call, user, perms, theme, token }) {
   const contratoId = user?.contrato_id
+  const cargoNom = String(user?.cargo_nombre || '').trim().toLowerCase()
+  const rolNom = String(user?.rol_nombre || user?.rol || '').trim().toLowerCase().replace(/í/g, 'i')
+  const esCargoSub = cargoNom === 'subcontratista'
+  const esOperativoOcultoEco = rolNom === 'operativo contratista' || rolNom === 'operativo interventoria'
+  const puedeExportarVuCobro = !esCargoSub && !esOperativoOcultoEco
   const tTok = tFrom(theme)
   const uiTheme = buildContratoUiTheme(theme, tTok)
   const S = subUi(theme, tTok)
@@ -727,6 +732,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   contratoId={contratoId}
                   subcontratista={detalle}
                   canEdit={!!(perms?.crear || perms?.editar)}
+                  puedeExportarVuCobro={puedeExportarVuCobro}
                   onMsg={setMsg}
                 />
               )}

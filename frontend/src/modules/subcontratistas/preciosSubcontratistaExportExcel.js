@@ -1,15 +1,16 @@
 /**
  * Generación Excel (soporte contractual) — Tab Precios Subcontratistas.
  * Cliente con ExcelJS; formato profesional listo para anexar al contrato.
+ * Opcionalmente incluye VU Cobro + comparativo (solo uso interno).
  */
 import ExcelJS from 'exceljs'
 import {
   buildPreciosExportFilename,
+  deltaEsRojo,
+  formatDeltaConSigno,
   formatPctExport,
   validatePreciosExport,
 } from './preciosSubcontratistaExport.js'
-
-const COLS = 7
 
 const FILL_TITLE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B5C75' } }
 const FILL_META = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F6F9' } }
@@ -22,6 +23,8 @@ const FONT_META = { bold: true, size: 11, color: { argb: 'FF0F2942' }, name: 'Ca
 const FONT_HEADER = { bold: true, size: 10, color: { argb: 'FFFFFFFF' }, name: 'Calibri' }
 const FONT_BODY = { size: 10, color: { argb: 'FF1A1A1A' }, name: 'Calibri' }
 const FONT_SECTION = { bold: true, size: 11, color: { argb: 'FF0B5C75' }, name: 'Calibri' }
+const FONT_DELTA_RED = { bold: true, size: 10, color: { argb: 'FFDC2626' }, name: 'Calibri' }
+const FONT_DELTA_GREEN = { bold: true, size: 10, color: { argb: 'FF15803D' }, name: 'Calibri' }
 
 const BORDER_THIN = {
   top: { style: 'thin', color: { argb: 'FF8AB8C4' } },
@@ -51,6 +54,13 @@ function fechaGeneracionTxt(d) {
   })
 }
 
+function paintDeltaCell(cell, delta) {
+  const n = Number(delta) || 0
+  cell.value = formatDeltaConSigno(n)
+  cell.font = deltaEsRojo(n) ? FONT_DELTA_RED : FONT_DELTA_GREEN
+  cell.alignment = { horizontal: 'right', vertical: 'middle' }
+}
+
 /**
  * Construye el workbook listo para descargar.
  * @throws Error si validatePreciosExport falla
@@ -61,8 +71,15 @@ export function buildPreciosSubcontratistaWorkbook({
   drafts = {},
   impuesto,
   generadoEn = new Date(),
+  incluirVuCobro = false,
 } = {}) {
-  const check = validatePreciosExport({ rows, drafts, impuesto })
+  const conCobro = !!incluirVuCobro
+  const check = validatePreciosExport({
+    rows,
+    drafts,
+    impuesto,
+    incluirVuCobro: conCobro,
+  })
   if (!check.ok) {
     const err = new Error(check.message)
     err.code = 'PRECIOS_EXPORT_INVALID'
@@ -70,13 +87,18 @@ export function buildPreciosSubcontratistaWorkbook({
   }
   const { lineas, totales, aiu } = check
   const hoy = generadoEn instanceof Date ? generadoEn : new Date()
+  const COLS = conCobro ? 10 : 7
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'ClaraCore'
   wb.created = hoy
   wb.modified = hoy
-  wb.title = 'Precios pactados — Subcontratista'
-  wb.description = 'Soporte contractual de ítems, cantidades y precios pactados'
+  wb.title = conCobro
+    ? 'Precios pactados — Subcontratista (con VU Cobro)'
+    : 'Precios pactados — Subcontratista'
+  wb.description = conCobro
+    ? 'Soporte interno con VU Cobro y comparativo (no entregar al subcontratista)'
+    : 'Soporte contractual de ítems, cantidades y precios pactados'
 
   const ws = wb.addWorksheet('Precios pactados', {
     views: [{ showGridLines: false, state: 'frozen', ySplit: 7 }],
@@ -85,19 +107,23 @@ export function buildPreciosSubcontratistaWorkbook({
       fitToPage: true,
       fitToWidth: 1,
       fitToHeight: 0,
-      paperSize: 9, // A4
+      paperSize: 9,
       margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
     },
     properties: { defaultRowHeight: 18 },
   })
 
-  const widths = [12, 42, 8, 12, 16, 18, 18]
+  const widths = conCobro
+    ? [11, 34, 7, 10, 13, 14, 11, 14, 16, 16]
+    : [12, 42, 8, 12, 16, 18, 18]
   widths.forEach((w, i) => { ws.getColumn(i + 1).width = w })
 
   // ── Encabezado ──────────────────────────────────────────────
   ws.mergeCells(1, 1, 1, COLS)
   const title = ws.getCell(1, 1)
-  title.value = 'CLARACORE — PRECIOS PACTADOS CON SUBCONTRATISTA'
+  title.value = conCobro
+    ? 'CLARACORE — PRECIOS PACTADOS (USO INTERNO · CON VU COBRO)'
+    : 'CLARACORE — PRECIOS PACTADOS CON SUBCONTRATISTA'
   title.fill = FILL_TITLE
   title.font = FONT_WHITE_BOLD
   title.alignment = { horizontal: 'center', vertical: 'middle' }
@@ -126,19 +152,31 @@ export function buildPreciosSubcontratistaWorkbook({
   })
   applyBorderRange(ws, 2, 1, 5, COLS)
 
-  // fila vacía
   ws.getRow(6).height = 8
 
-  // ── Tabla de ítems ──────────────────────────────────────────
-  const headerLabels = [
-    'Ítem',
-    'Descripción',
-    'Und',
-    'Cantidad',
-    'VU Costo M.O.\n(antes AIU/IVA)',
-    'Valor Total\nantes de AIU/IVA',
-    'Valor Total\ncon AIU/IVA',
-  ]
+  // ── Tabla ───────────────────────────────────────────────────
+  const headerLabels = conCobro
+    ? [
+      'Ítem',
+      'Descripción',
+      'Und',
+      'Cantidad',
+      'VU Cobro',
+      'VU Costo M.O.\n(antes AIU/IVA)',
+      '▲',
+      'Valor Total\na VU Cobro',
+      'Valor Total\nantes de AIU/IVA',
+      'Valor Total\ncon AIU/IVA',
+    ]
+    : [
+      'Ítem',
+      'Descripción',
+      'Und',
+      'Cantidad',
+      'VU Costo M.O.\n(antes AIU/IVA)',
+      'Valor Total\nantes de AIU/IVA',
+      'Valor Total\ncon AIU/IVA',
+    ]
   const headerRowIdx = 7
   const hr = ws.getRow(headerRowIdx)
   headerLabels.forEach((h, i) => {
@@ -154,21 +192,40 @@ export function buildPreciosSubcontratistaWorkbook({
   let r = headerRowIdx + 1
   for (const L of lineas) {
     const row = ws.getRow(r)
-    row.getCell(1).value = L.item
-    row.getCell(2).value = L.descripcion
-    row.getCell(3).value = L.und
-    row.getCell(4).value = L.cantidad
-    row.getCell(4).numFmt = NUM_QTY
-    row.getCell(5).value = L.vu_costo_mo
-    row.getCell(5).numFmt = NUM_COP
-    row.getCell(6).value = L.total_antes_aiu
-    row.getCell(6).numFmt = NUM_COP
-    row.getCell(7).value = L.total_con_aiu
-    row.getCell(7).numFmt = NUM_COP
+    if (conCobro) {
+      row.getCell(1).value = L.item
+      row.getCell(2).value = L.descripcion
+      row.getCell(3).value = L.und
+      row.getCell(4).value = L.cantidad
+      row.getCell(4).numFmt = NUM_QTY
+      row.getCell(5).value = L.vu_cobro
+      row.getCell(5).numFmt = NUM_COP
+      row.getCell(6).value = L.vu_costo_mo
+      row.getCell(6).numFmt = NUM_COP
+      paintDeltaCell(row.getCell(7), L.delta_vu)
+      row.getCell(8).value = L.total_vu_cobro
+      row.getCell(8).numFmt = NUM_COP
+      row.getCell(9).value = L.total_antes_aiu
+      row.getCell(9).numFmt = NUM_COP
+      row.getCell(10).value = L.total_con_aiu
+      row.getCell(10).numFmt = NUM_COP
+    } else {
+      row.getCell(1).value = L.item
+      row.getCell(2).value = L.descripcion
+      row.getCell(3).value = L.und
+      row.getCell(4).value = L.cantidad
+      row.getCell(4).numFmt = NUM_QTY
+      row.getCell(5).value = L.vu_costo_mo
+      row.getCell(5).numFmt = NUM_COP
+      row.getCell(6).value = L.total_antes_aiu
+      row.getCell(6).numFmt = NUM_COP
+      row.getCell(7).value = L.total_con_aiu
+      row.getCell(7).numFmt = NUM_COP
+    }
 
     for (let c = 1; c <= COLS; c += 1) {
       const cell = row.getCell(c)
-      cell.font = FONT_BODY
+      if (!(conCobro && c === 7)) cell.font = FONT_BODY
       cell.border = BORDER_THIN
       cell.alignment = {
         vertical: 'middle',
@@ -182,7 +239,7 @@ export function buildPreciosSubcontratistaWorkbook({
 
   const lastDataRow = r - 1
 
-  // ── Bloque AIU/IVA ──────────────────────────────────────────
+  // ── AIU/IVA ─────────────────────────────────────────────────
   r += 1
   ws.mergeCells(r, 1, r, COLS)
   {
@@ -228,26 +285,38 @@ export function buildPreciosSubcontratistaWorkbook({
   }
   r += 1
 
-  const totLines = [
-    ['Sumatoria antes de AIU/IVA', totales.sumatoria_antes_aiu],
-    ['Valor correspondiente al AIU/IVA', totales.valor_aiu_iva],
-    ['Total general con AIU/IVA', totales.total_general_con_aiu],
-  ]
-  totLines.forEach(([lab, val], idx) => {
+  const totLines = []
+  if (conCobro) {
+    totLines.push(['Sumatoria a VU Cobro', totales.sumatoria_vu_cobro, 'money'])
+    totLines.push(['Diferencia total (antes AIU − VU Cobro)', totales.diferencia_total_vs_cobro, 'delta'])
+  }
+  totLines.push(['Sumatoria antes de AIU/IVA', totales.sumatoria_antes_aiu, 'money'])
+  totLines.push(['Valor correspondiente al AIU/IVA', totales.valor_aiu_iva, 'money'])
+  totLines.push(['Total general con AIU/IVA', totales.total_general_con_aiu, 'money'])
+
+  const valueColStart = conCobro ? 8 : 6
+  totLines.forEach(([lab, val, kind], idx) => {
     const isGrand = idx === totLines.length - 1
-    ws.mergeCells(r, 1, r, 5)
+    ws.mergeCells(r, 1, r, valueColStart - 1)
     ws.getCell(r, 1).value = lab
-    ws.mergeCells(r, 6, r, 7)
-    ws.getCell(r, 6).value = val
-    ws.getCell(r, 6).numFmt = NUM_COP
+    ws.mergeCells(r, valueColStart, r, COLS)
+    const valCell = ws.getCell(r, valueColStart)
+    if (kind === 'delta') {
+      paintDeltaCell(valCell, val)
+    } else {
+      valCell.value = val
+      valCell.numFmt = NUM_COP
+    }
     for (let c = 1; c <= COLS; c += 1) {
       const cell = ws.getCell(r, c)
       cell.fill = isGrand ? FILL_TOTAL : FILL_META
-      cell.font = isGrand
-        ? { bold: true, size: 12, color: { argb: 'FF0B5C75' }, name: 'Calibri' }
-        : FONT_META
+      if (!(kind === 'delta' && c >= valueColStart)) {
+        cell.font = isGrand
+          ? { bold: true, size: 12, color: { argb: 'FF0B5C75' }, name: 'Calibri' }
+          : FONT_META
+      }
       cell.border = BORDER_THIN
-      cell.alignment = { vertical: 'middle', horizontal: c >= 6 ? 'right' : 'left' }
+      cell.alignment = { vertical: 'middle', horizontal: c >= valueColStart ? 'right' : 'left' }
     }
     ws.getRow(r).height = isGrand ? 24 : 20
     r += 1
@@ -264,18 +333,23 @@ export function buildPreciosSubcontratistaWorkbook({
       && aiu.iva_sobre_utilidad == null
     )
     const pie = [
-      'Documento de soporte contractual generado por ClaraCore.',
-      'No incluye VU Cobro (información interna).',
+      'Documento generado por ClaraCore.',
+      conCobro
+        ? 'Incluye VU Cobro y comparativo (uso interno; no entregar al subcontratista).'
+        : 'No incluye VU Cobro (información interna).',
       'Los montos están en COP redondeados a pesos enteros.',
-    ]
+      conCobro
+        ? '▲ = VU Costo M.O. − VU Cobro (rojo si el subcontratista es más caro). Totales con AIU/IVA se calculan solo con VU Costo M.O.'
+        : null,
+    ].filter(Boolean)
     if (sinAiu) {
-      pie.push('AIU/IVA no configurado al generar este archivo: valores «con AIU/IVA» iguales a los valores antes de AIU/IVA.')
+      pie.push('AIU/IVA no configurado: valores «con AIU/IVA» iguales a los valores antes de AIU/IVA.')
     }
     ws.getCell(r, 1).value = pie.join(' ')
   }
   ws.getCell(r, 1).font = { size: 8, italic: true, color: { argb: 'FF5A7A85' }, name: 'Calibri' }
   ws.getCell(r, 1).alignment = { wrapText: true, vertical: 'top' }
-  ws.getRow(r).height = 36
+  ws.getRow(r).height = conCobro ? 42 : 36
 
   ws.autoFilter = {
     from: { row: headerRowIdx, column: 1 },
@@ -283,7 +357,9 @@ export function buildPreciosSubcontratistaWorkbook({
   }
 
   ws.headerFooter = {
-    oddFooter: '&LClaraCore — Precios pactados&RPágina &P de &N',
+    oddFooter: conCobro
+      ? '&LClaraCore — Precios (interno · VU Cobro)&RPágina &P de &N'
+      : '&LClaraCore — Precios pactados&RPágina &P de &N',
   }
 
   return wb
@@ -321,8 +397,6 @@ export async function downloadPreciosSubcontratistaExcel(opts = {}) {
   a.style.display = 'none'
   document.body.appendChild(a)
   a.click()
-  // Diferir revoke: revoke inmediato provoca net::ERR_FILE_NOT_FOUND en varios navegadores
-  // antes de que arranque la descarga del blob.
   setTimeout(() => {
     try { a.remove() } catch { /* ignore */ }
     try { URL.revokeObjectURL(url) } catch { /* ignore */ }

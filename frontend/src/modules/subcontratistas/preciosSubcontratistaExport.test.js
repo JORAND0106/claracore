@@ -4,7 +4,10 @@ import ExcelJS from 'exceljs'
 import {
   buildPreciosExportFilename,
   buildPreciosExportLineas,
+  deltaEsRojo,
+  deltaVuCostoVsCobro,
   desgloseAiuIvaParaExport,
+  formatDeltaConSigno,
   roundCop,
   sumarTotalesExport,
   validatePreciosExport,
@@ -153,6 +156,68 @@ describe('preciosSubcontratistaExport', () => {
       new Date('2026-10-07T15:00:00Z'),
     )
     assert.match(name, /^precios_pactados_Constructora_ABC_S_A_S_2026-10-07\.xlsx$/)
+  })
+
+  it('comparativo VU Cobro: ▲ rojo si sub > cobro, verde si ≤', () => {
+    assert.equal(deltaVuCostoVsCobro(1200, 1000), 200)
+    assert.equal(deltaEsRojo(200), true)
+    assert.equal(formatDeltaConSigno(200), '+200')
+    assert.equal(deltaVuCostoVsCobro(800, 1000), -200)
+    assert.equal(deltaEsRojo(-200), false)
+    assert.equal(formatDeltaConSigno(-200), '-200')
+    assert.equal(deltaVuCostoVsCobro(1000, 1000), 0)
+    assert.equal(deltaEsRojo(0), false)
+    assert.equal(formatDeltaConSigno(0), '0')
+  })
+
+  it('incluirVuCobro agrega columnas y totales sin alterar AIU', () => {
+    const rows = [
+      {
+        listado_precio_id: 1,
+        item_numero: '1',
+        descripcion: 'caro',
+        unidad: 'u',
+        cantidad: 2,
+        vu_costo_mo: 1200,
+        vu_cobro: 1000,
+      },
+      {
+        listado_precio_id: 2,
+        item_numero: '2',
+        descripcion: 'barato',
+        unidad: 'u',
+        cantidad: 3,
+        vu_costo_mo: 800,
+        vu_cobro: 1000,
+      },
+      {
+        listado_precio_id: 3,
+        item_numero: '3',
+        descripcion: 'igual',
+        unidad: 'u',
+        cantidad: 1,
+        vu_costo_mo: 500,
+        vu_cobro: 500,
+      },
+    ]
+    const sin = validatePreciosExport({ rows, drafts: {}, impuesto: impuestoEjemplo, incluirVuCobro: false })
+    const con = validatePreciosExport({ rows, drafts: {}, impuesto: impuestoEjemplo, incluirVuCobro: true })
+    assert.equal(con.ok, true)
+    assert.equal(con.lineas[0].delta_vu, 200)
+    assert.equal(con.lineas[0].total_vu_cobro, 2000)
+    assert.equal(con.lineas[1].delta_vu, -200)
+    assert.equal(con.lineas[2].delta_vu, 0)
+    // Totales AIU idénticos con/sin VU Cobro
+    assert.equal(con.totales.sumatoria_antes_aiu, sin.totales.sumatoria_antes_aiu)
+    assert.equal(con.totales.valor_aiu_iva, sin.totales.valor_aiu_iva)
+    assert.equal(con.totales.total_general_con_aiu, sin.totales.total_general_con_aiu)
+    // Sum cobro = 2*1000 + 3*1000 + 1*500 = 5500
+    assert.equal(con.totales.sumatoria_vu_cobro, 5500)
+    assert.equal(
+      con.totales.diferencia_total_vs_cobro,
+      roundCop(con.totales.sumatoria_antes_aiu - 5500),
+    )
+    assert.ok(!('vu_cobro' in sin.lineas[0]))
   })
 
   it('workbook Excel coincide con totales de pantalla (presupuesto + manual)', async () => {

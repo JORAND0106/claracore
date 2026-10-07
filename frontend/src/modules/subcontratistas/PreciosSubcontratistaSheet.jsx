@@ -10,10 +10,12 @@ import {
 } from '../../admin/catalogoInsumosTributos'
 import { fmtMoneda } from './subcontratistasDocsHelpers'
 import PreciosAiuIvaModal from './PreciosAiuIvaModal'
+import PreciosExportVuCobroModal from './PreciosExportVuCobroModal'
 import {
   bulkUpsertPreciosSub,
   desvincularItemsCobro,
   fetchItemsCobroAsignados,
+  registrarExportPreciosExcel,
   upsertTributosSub,
 } from './subcontratistasItemsCobroApi'
 import {
@@ -45,6 +47,8 @@ export default function PreciosSubcontratistaSheet({
   contratoId,
   subcontratista = null,
   canEdit = true,
+  /** Solo internos con visión económica del contrato pueden pedir VU Cobro. */
+  puedeExportarVuCobro = false,
   onMsg,
 }) {
   const tTok = tFrom(theme)
@@ -65,6 +69,7 @@ export default function PreciosSubcontratistaSheet({
   const [exporting, setExporting] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState(() => new Set())
   const [confirmEliminarOpen, setConfirmEliminarOpen] = useState(false)
+  const [exportVuOpen, setExportVuOpen] = useState(false)
   const wrapRef = useRef(null)
 
   const loadSheet = useCallback(async () => {
@@ -387,11 +392,12 @@ export default function PreciosSubcontratistaSheet({
     return n.toLocaleString('es-CO', { maximumFractionDigits: 4 })
   }
 
-  const exportarExcel = async () => {
+  const ejecutarExportExcel = async ({ incluirVuCobro = false } = {}) => {
     const check = validatePreciosExport({
       rows,
       drafts,
       impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+      incluirVuCobro: false, // validación base (ítems); cobro se aplica tras permiso servidor
     })
     if (!check.ok) {
       onMsg?.({ type: 'error', text: check.message })
@@ -405,6 +411,13 @@ export default function PreciosSubcontratistaSheet({
     }
     setExporting(true)
     try {
+      // Servidor decide y registra: fuerza sin VU Cobro si el cargo no puede verlo.
+      const meta = await registrarExportPreciosExcel(
+        subId,
+        { incluirVuCobro: !!incluirVuCobro && !!puedeExportarVuCobro },
+        token,
+      )
+      const conCobro = !!meta?.incluir_vu_cobro
       const { filename } = await downloadPreciosSubcontratistaExcel({
         subcontratista: {
           razon_social: subcontratista?.razon_social || '',
@@ -414,16 +427,36 @@ export default function PreciosSubcontratistaSheet({
         rows,
         drafts,
         impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+        incluirVuCobro: conCobro,
       })
+      const n = check.lineas.length
       onMsg?.({
         type: 'success',
-        text: `Excel descargado: ${filename} (${check.lineas.length} ítem${check.lineas.length === 1 ? '' : 's'})${check.faltaAiu ? ' · sin AIU/IVA' : ''}.`,
+        text: `Excel descargado: ${filename} (${n} ítem${n === 1 ? '' : 's'})${check.faltaAiu ? ' · sin AIU/IVA' : ''}${conCobro ? ' · con VU Cobro' : ''}.`,
       })
+      setExportVuOpen(false)
     } catch (e) {
       onMsg?.({ type: 'error', text: e.message || 'No se pudo generar el Excel de precios.' })
     } finally {
       setExporting(false)
     }
+  }
+
+  const exportarExcel = () => {
+    const check = validatePreciosExport({
+      rows,
+      drafts,
+      impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+    })
+    if (!check.ok) {
+      onMsg?.({ type: 'error', text: check.message })
+      return
+    }
+    if (puedeExportarVuCobro) {
+      setExportVuOpen(true)
+      return
+    }
+    void ejecutarExportExcel({ incluirVuCobro: false })
   }
 
   return (
@@ -449,7 +482,7 @@ export default function PreciosSubcontratistaSheet({
           <button
             type="button"
             style={S.btn('ghost', true)}
-            onClick={() => void exportarExcel()}
+            onClick={() => exportarExcel()}
             disabled={exporting || saving || loading}
             title="Descargar Excel de precios pactados (soporte contractual)"
           >
@@ -822,6 +855,14 @@ export default function PreciosSubcontratistaSheet({
         impuesto={impuestoGlobal}
         onClose={() => setAiuOpen(false)}
         onSave={guardarAiuGlobal}
+      />
+
+      <PreciosExportVuCobroModal
+        open={exportVuOpen}
+        theme={theme}
+        procesando={exporting}
+        onCancel={() => !exporting && setExportVuOpen(false)}
+        onConfirm={({ incluirVuCobro }) => void ejecutarExportExcel({ incluirVuCobro })}
       />
 
       {confirmEliminarOpen && (

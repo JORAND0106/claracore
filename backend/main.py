@@ -51,6 +51,7 @@ from subcontratista_visibilidad import (
     redactar_filas_economicos_contrato,
     resolver_filtro_subcontratista_solicitado,
     scope_subcontratista,
+    usuario_ve_valores_economicos_contrato,
     validar_vinculo_subcontratista_en_contrato,
 )
 from presupuesto_panel_validacion import (
@@ -19831,7 +19832,19 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
 
     tributos = resolve_tributos_subcontratista(tributos_sub, precios_rows)
     items = build_precios_sheet(listado, cant_map, precios_rows)
-    return {"items": items, "total": len(items), "tributos": tributos}
+    # VU Cobro es economía del contrato: nunca al cargo subcontratista / operativos.
+    cargo = (current_user or {}).get("cargo_nombre")
+    rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
+    if not usuario_ve_valores_economicos_contrato(cargo, rol):
+        for it in items:
+            if isinstance(it, dict) and "vu_cobro" in it:
+                it["vu_cobro"] = None
+    return {
+        "items": items,
+        "total": len(items),
+        "tributos": tributos,
+        "puede_incluir_vu_cobro": bool(usuario_ve_valores_economicos_contrato(cargo, rol)),
+    }
 
 
 @app.put("/subcontratistas/{sub_id}/tributos")
@@ -19952,6 +19965,11 @@ class SubcontratistaItemsCobroDesvincular(BaseModel):
     listado_precio_ids: List[int]
 
 
+class SubcontratistaPreciosExportLog(BaseModel):
+    """Registro de exportación Excel de Precios (con/sin VU Cobro)."""
+    incluir_vu_cobro: bool = False
+
+
 @app.delete("/subcontratistas/precios/{precio_id}")
 def eliminar_precio_sub(precio_id: int, current_user=Depends(get_current_user)):
     """Elimina solo filas de origen manual."""
@@ -20042,6 +20060,47 @@ def desvincular_items_cobro_sub(
         },
     )
     return result
+
+
+@app.post("/subcontratistas/{sub_id}/precios/export-excel-log")
+def registrar_export_precios_excel_sub(
+    sub_id: int,
+    body: SubcontratistaPreciosExportLog,
+    current_user=Depends(get_current_user),
+):
+    """
+    Autoriza y registra la exportación Excel de Precios.
+
+    Si el usuario no puede ver economía del contrato (p. ej. cargo subcontratista),
+    fuerza ``incluir_vu_cobro=false`` aunque el cliente lo pida.
+    """
+    sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=False)
+    cargo = (current_user or {}).get("cargo_nombre")
+    rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
+    puede = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+    solicitado = bool(body.incluir_vu_cobro)
+    efectivo = bool(solicitado and puede)
+    det = {
+        "contrato_id": int(sub["contrato_id"]),
+        "subcontratista_id": int(sub_id),
+        "razon_social": sub.get("razon_social"),
+        "incluir_vu_cobro_solicitado": solicitado,
+        "incluir_vu_cobro": efectivo,
+        "puede_incluir_vu_cobro": puede,
+    }
+    registrar_log(
+        current_user,
+        "EXPORTAR",
+        "SUBCONTRATISTAS",
+        "precios_excel",
+        str(sub_id),
+        det,
+    )
+    return {
+        "ok": True,
+        "incluir_vu_cobro": efectivo,
+        "puede_incluir_vu_cobro": puede,
+    }
 
 
 @app.get("/subcontratistas/{contrato_id}/alertas-corte")
