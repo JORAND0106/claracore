@@ -725,6 +725,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   token={token}
                   subId={detalle.id}
                   contratoId={contratoId}
+                  subcontratista={detalle}
                   canEdit={!!(perms?.crear || perms?.editar)}
                   onMsg={setMsg}
                 />

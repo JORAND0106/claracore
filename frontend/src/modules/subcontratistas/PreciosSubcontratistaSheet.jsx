@@ -25,6 +25,8 @@ import {
   rowKey,
   uniqueCapitulos,
 } from './preciosSubcontratistaSheetHelpers'
+import { validatePreciosExport } from './preciosSubcontratistaExport'
+import { downloadPreciosSubcontratistaExcel } from './preciosSubcontratistaExportExcel'
 import { subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 import { tFrom } from '../../theme/adminPanelTheme'
 
@@ -37,6 +39,7 @@ export default function PreciosSubcontratistaSheet({
   token,
   subId,
   contratoId,
+  subcontratista = null,
   canEdit = true,
   onMsg,
 }) {
@@ -55,6 +58,7 @@ export default function PreciosSubcontratistaSheet({
   const [acQuery, setAcQuery] = useState('')
   const [impuestoGlobal, setImpuestoGlobal] = useState({ ...EMPTY_IMPUESTO })
   const [aiuOpen, setAiuOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const wrapRef = useRef(null)
 
   const loadSheet = useCallback(async () => {
@@ -303,6 +307,39 @@ export default function PreciosSubcontratistaSheet({
     return n.toLocaleString('es-CO', { maximumFractionDigits: 4 })
   }
 
+  const exportarExcel = async () => {
+    const check = validatePreciosExport({
+      rows,
+      drafts,
+      impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+    })
+    if (!check.ok) {
+      onMsg?.({ type: 'error', text: check.message })
+      return
+    }
+    setExporting(true)
+    try {
+      const { filename } = await downloadPreciosSubcontratistaExcel({
+        subcontratista: {
+          razon_social: subcontratista?.razon_social || '',
+          nit: subcontratista?.nit || '',
+          objeto_contrato: subcontratista?.objeto_contrato || '',
+        },
+        rows,
+        drafts,
+        impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+      })
+      onMsg?.({
+        type: 'success',
+        text: `Excel descargado: ${filename} (${check.lineas.length} ítem${check.lineas.length === 1 ? '' : 's'}).`,
+      })
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo generar el Excel de precios.' })
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div ref={wrapRef}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
@@ -323,12 +360,21 @@ export default function PreciosSubcontratistaSheet({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            style={S.btn('ghost', true)}
+            onClick={() => void exportarExcel()}
+            disabled={exporting || saving || loading}
+            title="Descargar Excel de precios pactados (soporte contractual)"
+          >
+            {exporting ? 'Exportando…' : '⬇ Excel precios'}
+          </button>
           {canEdit && (
             <button
               type="button"
               style={S.btn('primary', true)}
               onClick={agregarItem}
-              disabled={saving || loading || listadoLoading}
+              disabled={saving || loading || listadoLoading || exporting}
             >
               + Agregar Ítem
             </button>
@@ -338,7 +384,7 @@ export default function PreciosSubcontratistaSheet({
               type="button"
               style={S.btn('ghost', true)}
               onClick={guardar}
-              disabled={saving || loading || invalid || !payload.length}
+              disabled={saving || loading || invalid || !payload.length || exporting}
             >
               {saving ? 'Guardando…' : `Guardar (${payload.length})`}
             </button>
