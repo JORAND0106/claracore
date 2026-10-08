@@ -1,21 +1,29 @@
 import { useEffect, useState } from 'react'
 
+/** @typedef {'sin_cobro' | 'con_cobro' | 'crudo'} ExportPreciosModo */
+
 /**
- * Popup: ¿exportar Excel de Precios con o sin VU Cobro?
- * Por defecto: sin VU Cobro (seguro para entregar al subcontratista).
+ * Popup: modo de exportación Excel de Precios.
+ * - sin_cobro / con_cobro: soporte contractual (como antes)
+ * - crudo: listado vacío de VU Costo M.O. (solo internos con canEdit)
  */
 export default function PreciosExportVuCobroModal({
   open,
   theme,
   procesando = false,
+  /** Mostrar opción VU Cobro (visión económica del contrato). */
+  puedeExportarVuCobro = false,
+  /** Mostrar opción en crudo (permiso de edición de precios). */
+  puedeExportarCrudo = false,
   onCancel,
   onConfirm,
 }) {
   const t = theme || {}
-  const [incluir, setIncluir] = useState(false)
+  /** @type {[ExportPreciosModo, function]} */
+  const [modo, setModo] = useState('sin_cobro')
 
   useEffect(() => {
-    if (open) setIncluir(false)
+    if (open) setModo('sin_cobro')
   }, [open])
 
   if (!open) return null
@@ -26,6 +34,18 @@ export default function PreciosExportVuCobroModal({
   const primary = t.primary || '#0077B6'
   const muted = t.textMuted || '#64748b'
   const warn = t.warn || '#D97706'
+
+  const optionStyle = (active) => ({
+    display: 'flex',
+    gap: 10,
+    alignItems: 'flex-start',
+    padding: '10px 12px',
+    borderRadius: 8,
+    border: `1px solid ${active ? primary : border}`,
+    background: active ? `color-mix(in srgb, ${primary} 8%, ${surface})` : 'transparent',
+    marginBottom: 8,
+    cursor: 'pointer',
+  })
 
   return (
     <div
@@ -48,7 +68,7 @@ export default function PreciosExportVuCobroModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
-          maxWidth: 460,
+          maxWidth: 480,
           background: surface,
           border: `1px solid ${border}`,
           borderRadius: 14,
@@ -74,69 +94,70 @@ export default function PreciosExportVuCobroModal({
             Exportar Excel de Precios
           </div>
           <div style={{ fontSize: 'var(--cc-caption)', color: muted, marginTop: 4, lineHeight: 1.4 }}>
-            Elija si el archivo incluye el VU Cobro (información interna del contrato).
+            Elija el tipo de archivo: soporte contractual, con VU Cobro, o plantilla en crudo para diligenciar precios.
           </div>
         </div>
 
         <div style={{ padding: '16px 18px', fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
-          <label style={{
-            display: 'flex',
-            gap: 10,
-            alignItems: 'flex-start',
-            padding: '10px 12px',
-            borderRadius: 8,
-            border: `1px solid ${!incluir ? primary : border}`,
-            background: !incluir ? `color-mix(in srgb, ${primary} 8%, ${surface})` : 'transparent',
-            marginBottom: 8,
-            cursor: 'pointer',
-          }}
-          >
+          <label style={optionStyle(modo === 'sin_cobro')}>
             <input
               type="radio"
-              name="export-vu-cobro"
-              checked={!incluir}
-              onChange={() => setIncluir(false)}
+              name="export-precios-modo"
+              checked={modo === 'sin_cobro'}
+              onChange={() => setModo('sin_cobro')}
               disabled={procesando}
               style={{ marginTop: 3 }}
             />
             <span>
               <strong>Sin VU Cobro</strong>
               <span style={{ display: 'block', color: muted, fontSize: 'var(--cc-caption)', marginTop: 2 }}>
-                Opción recomendada para entregar al subcontratista. Igual al soporte contractual.
+                Soporte contractual con los precios ya pactados. Recomendado para entregar al subcontratista.
               </span>
             </span>
           </label>
 
-          <label style={{
-            display: 'flex',
-            gap: 10,
-            alignItems: 'flex-start',
-            padding: '10px 12px',
-            borderRadius: 8,
-            border: `1px solid ${incluir ? primary : border}`,
-            background: incluir ? `color-mix(in srgb, ${primary} 8%, ${surface})` : 'transparent',
-            cursor: 'pointer',
-          }}
-          >
-            <input
-              type="radio"
-              name="export-vu-cobro"
-              checked={incluir}
-              onChange={() => setIncluir(true)}
-              disabled={procesando}
-              style={{ marginTop: 3 }}
-            />
-            <span>
-              <strong>Con VU Cobro y comparativo</strong>
-              <span style={{ display: 'block', color: muted, fontSize: 'var(--cc-caption)', marginTop: 2 }}>
-                Agrega VU Cobro, total a VU Cobro y diferencia (▲) frente al VU Costo M.O.
+          {puedeExportarVuCobro && (
+            <label style={optionStyle(modo === 'con_cobro')}>
+              <input
+                type="radio"
+                name="export-precios-modo"
+                checked={modo === 'con_cobro'}
+                onChange={() => setModo('con_cobro')}
+                disabled={procesando}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <strong>Con VU Cobro y comparativo</strong>
+                <span style={{ display: 'block', color: muted, fontSize: 'var(--cc-caption)', marginTop: 2 }}>
+                  Agrega VU Cobro, total a VU Cobro y diferencia (▲) frente al VU Costo M.O.
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+          )}
 
-          {incluir && (
+          {puedeExportarCrudo && (
+            <label style={optionStyle(modo === 'crudo')}>
+              <input
+                type="radio"
+                name="export-precios-modo"
+                checked={modo === 'crudo'}
+                onChange={() => setModo('crudo')}
+                disabled={procesando}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <strong>En crudo (sin precios)</strong>
+                <span style={{ display: 'block', color: muted, fontSize: 'var(--cc-caption)', marginTop: 2 }}>
+                  Ítems y cantidades con VU Costo M.O. vacío para diligenciar en Excel y pegar de vuelta.
+                  No incluye VU Cobro ni precios ya guardados.
+                </span>
+              </span>
+            </label>
+          )}
+
+          {modo === 'con_cobro' && (
             <div style={{
-              marginTop: 12,
+              marginTop: 4,
               padding: '10px 12px',
               borderRadius: 8,
               background: `color-mix(in srgb, ${warn} 14%, ${surface})`,
@@ -149,6 +170,24 @@ export default function PreciosExportVuCobroModal({
             >
               Incluir el VU Cobro hace que el archivo contenga información que el
               subcontratista no debe ver. Úselo solo para uso interno.
+            </div>
+          )}
+
+          {modo === 'crudo' && (
+            <div style={{
+              marginTop: 4,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: `color-mix(in srgb, ${primary} 10%, ${surface})`,
+              border: `1px solid color-mix(in srgb, ${primary} 35%, ${border})`,
+              color: primary,
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 600,
+              lineHeight: 1.4,
+            }}
+            >
+              Tras diligenciar la columna en Excel, copie esos valores y péguelos
+              sobre VU Costo M.O. en la tabla. Confirme el pegado y pulse Guardar.
             </div>
           )}
         </div>
@@ -181,7 +220,10 @@ export default function PreciosExportVuCobroModal({
           <button
             type="button"
             disabled={procesando}
-            onClick={() => onConfirm?.({ incluirVuCobro: incluir })}
+            onClick={() => onConfirm?.({
+              incluirVuCobro: modo === 'con_cobro',
+              modoCrudo: modo === 'crudo',
+            })}
             style={{
               background: primary,
               color: '#fff',
