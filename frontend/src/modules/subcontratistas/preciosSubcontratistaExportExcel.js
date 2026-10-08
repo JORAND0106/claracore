@@ -331,48 +331,152 @@ export function layoutPrimeraLineaDatos(cols) {
   }
 }
 
+/** Mínimo de columnas del formato para 4 pares AIU (etiqueta|valor). */
+export const FORMAT_GRID_MIN_COLS = 8
+
 /**
- * 4 pares etiqueta|valor uniformes para el desglose AIU/IVA (y similar Anticipo).
- * Omite la columna oculta de fórmulas; agrega columnas auxiliares si hacen falta.
- * @returns {{ pairs: { labelCol: number, valueStart: number, valueEnd: number }[], maxCol: number }}
+ * Cuadrícula única del archivo: al menos FORMAT_GRID_MIN_COLS columnas.
+ * Si la tabla de ítems tiene menos, se insertan columnas extra en Descripción
+ * (combinadas en filas de ítems) para no cambiar el aspecto percibido.
+ * La columna oculta de fórmulas queda justo después del borde derecho.
+ *
+ * @returns {{
+ *   gridCols: number,
+ *   itemCols: number,
+ *   spans: Record<number, { start: number, end: number }>,
+ *   map: object,
+ *   widths: number[],
+ *   hiddenCol: number|null,
+ * }}
  */
-export function layoutAiuFooterPairs(cols, hiddenCol = null, pairCount = 4) {
-  const need = Math.max(2, Number(pairCount) || 4) * 2
-  const hidden = hiddenCol != null && Number(hiddenCol) > 0 ? Number(hiddenCol) : null
-  const usable = []
-  let c = 1
-  while (usable.length < need) {
-    if (hidden == null || c !== hidden) usable.push(c)
-    c += 1
-    if (c > need + 4 && usable.length < need) {
-      // seguridad: no bucle infinito
-      usable.push(c)
-      c += 1
+export function resolveFormatGrid(baseMap) {
+  const itemCols = baseMap.cols
+  const gridCols = Math.max(itemCols, FORMAT_GRID_MIN_COLS)
+  const extra = gridCols - itemCols
+  const absorbLogical = baseMap.descripcion || 2
+
+  /** @type {Record<number, { start: number, end: number }>} */
+  const spans = {}
+  let phys = 1
+  for (let logical = 1; logical <= itemCols; logical += 1) {
+    const take = logical === absorbLogical ? 1 + extra : 1
+    spans[logical] = { start: phys, end: phys + take - 1 }
+    phys += take
+  }
+
+  const widths = new Array(gridCols).fill(12)
+  for (let logical = 1; logical <= itemCols; logical += 1) {
+    const sp = spans[logical]
+    const w = Number(baseMap.widths[logical - 1]) || 12
+    const n = sp.end - sp.start + 1
+    if (n === 1) {
+      widths[sp.start - 1] = w
+    } else {
+      const each = Math.max(8, Math.floor(w / n))
+      let used = 0
+      for (let c = sp.start; c < sp.end; c += 1) {
+        widths[c - 1] = each
+        used += each
+      }
+      widths[sp.end - 1] = Math.max(8, w - used)
     }
   }
-  // Si la tabla ya es ancha, repartir de forma uniforme sobre las visibles (sin hidden).
-  const tableUsable = []
-  for (let i = 1; i <= Math.max(cols, need); i += 1) {
-    if (hidden == null || i !== hidden) tableUsable.push(i)
+
+  const map = {
+    ...baseMap,
+    cols: gridCols,
+    itemCols,
+    gridCols,
+    spans,
+    widths,
   }
-  const pool = tableUsable.length >= need ? tableUsable : usable
-  const pairs = []
-  let idx = 0
+  const remap = [
+    'item', 'descripcion', 'und', 'cantidad',
+    'vuCobro', 'totalVuCobro', 'vuMo', 'totalAntes',
+    'deltaCosto', 'deltaValor',
+  ]
+  for (const key of remap) {
+    if (baseMap[key] != null && spans[baseMap[key]]) {
+      map[key] = spans[baseMap[key]].start
+    }
+  }
+  map.hiddenConAiu = baseMap.hiddenConAiu ? gridCols + 1 : null
+
+  return {
+    gridCols,
+    itemCols,
+    spans,
+    map,
+    widths,
+    hiddenCol: map.hiddenConAiu,
+  }
+}
+
+/**
+ * Pares etiqueta|valor uniformes dentro de `gridCols` (sin salirse del formato).
+ * @returns {{ pairs: { labelCol: number, valueStart: number, valueEnd: number }[], maxCol: number }}
+ */
+export function layoutAiuFooterPairs(gridCols, pairCount = 4) {
   const nPairs = Math.max(2, Number(pairCount) || 4)
+  const cols = Math.max(Number(gridCols) || FORMAT_GRID_MIN_COLS, nPairs * 2)
+  const pairs = []
+  let idx = 1
   for (let g = 0; g < nPairs; g += 1) {
     const remainingPairs = nPairs - g
-    const remainingCols = pool.length - idx
+    const remainingCols = cols - idx + 1
     const take = Math.max(2, Math.floor(remainingCols / remainingPairs))
-    const slice = pool.slice(idx, idx + take)
-    idx += take
     pairs.push({
-      labelCol: slice[0],
-      valueStart: slice[1] ?? slice[0],
-      valueEnd: slice[slice.length - 1],
+      labelCol: idx,
+      valueStart: idx + 1,
+      valueEnd: idx + take - 1,
     })
+    idx += take
   }
-  const maxCol = Math.max(cols, pool[pool.length - 1] || cols, hidden || 0)
-  return { pairs, maxCol }
+  return { pairs, maxCol: cols }
+}
+
+function mergeSpan(ws, row, start, end) {
+  if (end > start) {
+    try { ws.mergeCells(row, start, row, end) } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Asegura ancho mínimo de etiquetas del pie (p. ej. «Imprevistos», «Administración»)
+ * sin salir del grid: toma ancho de las columnas de valor del par y, si hace falta,
+ * de otras columnas anchas del formato (p. ej. Descripción).
+ */
+function ensureFooterLabelWidths(ws, pairs, minChars = 14, gridCols = null) {
+  const labelCols = new Set(pairs.map((p) => p.labelCol))
+  const lastCol = gridCols || Math.max(...pairs.map((p) => p.valueEnd), 1)
+
+  for (const p of pairs) {
+    let labW = Number(ws.getColumn(p.labelCol).width) || 12
+    if (labW >= minChars) continue
+    let need = minChars - labW
+
+    const donors = []
+    for (let c = p.valueStart; c <= p.valueEnd; c += 1) donors.push(c)
+    for (let c = 1; c <= lastCol; c += 1) {
+      if (labelCols.has(c) || donors.includes(c) || c === p.labelCol) continue
+      donors.push(c)
+    }
+    donors.sort((a, b) => (
+      (Number(ws.getColumn(b).width) || 12) - (Number(ws.getColumn(a).width) || 12)
+    ))
+
+    for (const c of donors) {
+      if (need <= 0) break
+      const valW = Number(ws.getColumn(c).width) || 12
+      const floor = donors.indexOf(c) < (p.valueEnd - p.valueStart + 1) ? 6 : 8
+      const give = Math.min(need, Math.max(0, valW - floor))
+      if (give <= 0) continue
+      ws.getColumn(c).width = valW - give
+      labW += give
+      need -= give
+    }
+    ws.getColumn(p.labelCol).width = Math.max(labW, minChars)
+  }
 }
 
 function escribirParEtiquetaValorFooter(ws, r, pair, label, value, {
@@ -385,12 +489,11 @@ function escribirParEtiquetaValorFooter(ws, r, pair, label, value, {
   lab.value = label
   lab.fill = solidFill(theme.metaBg)
   lab.font = { bold: true, size: 9, color: { argb: theme.metaText }, name: 'Calibri' }
+  // wrapText: Excel parte en espacios/guiones, no a mitad de palabra si cabe el vocablo.
   lab.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
   lab.border = border
 
-  if (pair.valueEnd > pair.valueStart) {
-    try { ws.mergeCells(r, pair.valueStart, r, pair.valueEnd) } catch { /* ignore */ }
-  }
+  mergeSpan(ws, r, pair.valueStart, pair.valueEnd)
   for (let c = pair.valueStart; c <= pair.valueEnd; c += 1) {
     const cell = ws.getCell(r, c)
     cell.fill = FILL_AIU_VALUE
@@ -480,8 +583,11 @@ export async function buildPreciosSubcontratistaWorkbook({
   }
   const { lineas, totales, aiu } = check
   const hoy = generadoEn instanceof Date ? generadoEn : new Date()
-  const map = preciosExportColumnMap(conCobro, { modoCrudo: crudo })
-  const COLS = map.cols
+  const baseMap = preciosExportColumnMap(conCobro, { modoCrudo: crudo })
+  const grid = resolveFormatGrid(baseMap)
+  const map = grid.map
+  const COLS = grid.gridCols
+  const spans = grid.spans
   const theme = buildCompareExcelColors(contrato?.export_palette)
   const border = thinBorder(theme.border)
   const fillTitle = solidFill(theme.title)
@@ -536,10 +642,16 @@ export async function buildPreciosSubcontratistaWorkbook({
     properties: { defaultRowHeight: 18 },
   })
 
-  map.widths.forEach((w, i) => { ws.getColumn(i + 1).width = w })
-  if (map.hiddenConAiu) {
-    ws.getColumn(map.hiddenConAiu).hidden = true
-    ws.getColumn(map.hiddenConAiu).width = 14
+  grid.widths.forEach((w, i) => { ws.getColumn(i + 1).width = w })
+  if (grid.hiddenCol) {
+    ws.getColumn(grid.hiddenCol).hidden = true
+    ws.getColumn(grid.hiddenCol).width = 14
+  }
+
+  /** Combina celdas de una columna lógica de ítems en la cuadrícula del formato. */
+  const mergeItemCol = (rowIdx, logicalCol) => {
+    const sp = spans[logicalCol]
+    if (sp) mergeSpan(ws, rowIdx, sp.start, sp.end)
   }
 
   let logoDesc = null
@@ -561,9 +673,10 @@ export async function buildPreciosSubcontratistaWorkbook({
   if (logoImageId != null) {
     logoSize = sizeLogoFixedWidth(logoDesc.natW, logoDesc.natH, LOGO_WIDTH_PX)
     const colANeed = excelPxToColWidth(logoSize.width + LOGO_PAD_PX * 2)
-    const curA = Number(ws.getColumn(1).width) || map.widths[0] || 12
+    const curA = Number(ws.getColumn(1).width) || grid.widths[0] || 12
     if (curA < colANeed) {
       ws.getColumn(1).width = colANeed
+      grid.widths[0] = colANeed
       map.widths[0] = colANeed
     }
   }
@@ -598,12 +711,12 @@ export async function buildPreciosSubcontratistaWorkbook({
 
   const textHeaderH = Math.max(
     HEADER_ROW_HEIGHT_NO_LOGO,
-    estimateWrappedRowHeight(titulo, sumColWidths(map.widths, lay.titleStart, lay.titleEnd), {
+    estimateWrappedRowHeight(titulo, sumColWidths(grid.widths, lay.titleStart, lay.titleEnd), {
       fontSize: 13,
       min: HEADER_ROW_HEIGHT_NO_LOGO,
       max: 72,
     }),
-    estimateWrappedRowHeight(calidadTxt, sumColWidths(map.widths, lay.rightStart, lay.rightEnd), {
+    estimateWrappedRowHeight(calidadTxt, sumColWidths(grid.widths, lay.rightStart, lay.rightEnd), {
       fontSize: 9,
       min: HEADER_ROW_HEIGHT_NO_LOGO,
       max: 72,
@@ -636,62 +749,68 @@ export async function buildPreciosSubcontratistaWorkbook({
   // Línea 1: Objeto (A + B…n-2) | Número de contrato (penúltima + última)
   let h = escribirCeldaEtiquetaValor(
     ws, 2, line1.objetoLabel, line1.objetoValueStart, line1.objetoValueEnd,
-    'Objeto del contrato', objetoContrato, theme, map.widths,
+    'Objeto del contrato', objetoContrato, theme, grid.widths,
   )
   h = Math.max(h, escribirCeldaEtiquetaValor(
     ws, 2, line1.numeroLabel, line1.numeroValue, line1.numeroValue,
-    'Número de contrato', numContrato, theme, map.widths,
+    'Número de contrato', numContrato, theme, grid.widths,
   ))
   ws.getRow(2).height = h
 
   // Línea 2: Subcontratista | NIT
   h = escribirCeldaEtiquetaValor(
     ws, 3, split.leftLabel, split.leftValueStart, split.leftValueEnd,
-    'Subcontratista', razon, theme, map.widths,
+    'Subcontratista', razon, theme, grid.widths,
   )
   h = Math.max(h, escribirCeldaEtiquetaValor(
     ws, 3, split.rightLabel, split.rightValueStart, split.rightValueEnd,
-    'NIT', nit, theme, map.widths,
+    'NIT', nit, theme, grid.widths,
   ))
   ws.getRow(3).height = h
 
   // Línea 3: Objeto subcontratista (línea completa)
   h = escribirCeldaEtiquetaValor(
     ws, 4, 1, 2, COLS,
-    'Objeto del contrato (subcontratista)', objetoSub, theme, map.widths,
+    'Objeto del contrato (subcontratista)', objetoSub, theme, grid.widths,
   )
   ws.getRow(4).height = h
 
   // Línea 4: Nombre y teléfono de contacto (misma fila, etiquetas diferenciadas)
   h = escribirCeldaEtiquetaValor(
     ws, 5, split.leftLabel, split.leftValueStart, split.leftValueEnd,
-    'Nombre de contacto', contactoNombre, theme, map.widths,
+    'Nombre de contacto', contactoNombre, theme, grid.widths,
   )
   h = Math.max(h, escribirCeldaEtiquetaValor(
     ws, 5, split.rightLabel, split.rightValueStart, split.rightValueEnd,
-    'Teléfono', contactoTel, theme, map.widths,
+    'Teléfono', contactoTel, theme, grid.widths,
   ))
   ws.getRow(5).height = h
 
   ws.getRow(6).height = 8
 
-  // ── Tabla ───────────────────────────────────────────────────
+  // ── Tabla (columnas lógicas combinadas sobre la cuadrícula del formato) ──
   const hr = ws.getRow(headerRowIdx)
-  map.headers.forEach((headerTxt, i) => {
-    const cell = hr.getCell(i + 1)
-    cell.value = headerTxt
-    cell.fill = fillHeader
-    cell.font = FONT_HEADER
-    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-    cell.border = border
-  })
+  const itemCols = grid.itemCols
+  for (let logical = 1; logical <= itemCols; logical += 1) {
+    const sp = spans[logical]
+    mergeItemCol(headerRowIdx, logical)
+    const headerTxt = baseMap.headers[logical - 1]
+    for (let c = sp.start; c <= sp.end; c += 1) {
+      const cell = hr.getCell(c)
+      cell.fill = fillHeader
+      cell.font = FONT_HEADER
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+      cell.border = border
+    }
+    hr.getCell(sp.start).value = headerTxt
+  }
   hr.height = Math.max(
     32,
-    ...map.headers.map((headerTxt, i) => estimateWrappedRowHeight(
-      headerTxt,
-      map.widths[i] || 12,
-      { fontSize: 10, min: 32, max: 48 },
-    )),
+    ...baseMap.headers.map((headerTxt, i) => {
+      const sp = spans[i + 1]
+      const w = sumColWidths(grid.widths, sp.start, sp.end)
+      return estimateWrappedRowHeight(headerTxt, w, { fontSize: 10, min: 32, max: 48 })
+    }),
   )
 
   const firstDataRow = headerRowIdx + 1
@@ -710,6 +829,8 @@ export async function buildPreciosSubcontratistaWorkbook({
     const rowFill = ((r - firstDataRow) % 2 === 0) ? fillRow : fillRowAlt
     const rowTextArgb = ((r - firstDataRow) % 2 === 0) ? theme.rowText : theme.rowTextAlt
     const fontBody = { ...FONT_BODY, color: { argb: rowTextArgb } }
+
+    for (let logical = 1; logical <= itemCols; logical += 1) mergeItemCol(r, logical)
 
     row.getCell(map.item).value = L.item
     row.getCell(map.descripcion).value = L.descripcion
@@ -774,15 +895,19 @@ export async function buildPreciosSubcontratistaWorkbook({
       if (!isDelta) cell.font = fontBody
       cell.fill = rowFill
       cell.border = border
+      const inDesc = c >= spans[baseMap.descripcion].start && c <= spans[baseMap.descripcion].end
+      const inItem = c >= spans[baseMap.item].start && c <= spans[baseMap.item].end
+      const inUnd = c >= spans[baseMap.und].start && c <= spans[baseMap.und].end
       cell.alignment = {
         vertical: 'middle',
-        wrapText: c === map.descripcion || c === map.item,
-        horizontal: c >= map.cantidad ? 'right' : (c === map.und ? 'center' : 'left'),
+        wrapText: inDesc || inItem,
+        horizontal: c >= map.cantidad ? 'right' : (inUnd ? 'center' : 'left'),
       }
     }
+    const descSp = spans[baseMap.descripcion]
     const descH = estimateWrappedRowHeight(
       L.descripcion,
-      map.widths[map.descripcion - 1] || 34,
+      sumColWidths(grid.widths, descSp.start, descSp.end),
       { fontSize: 10, min: 18, max: 90 },
     )
     row.height = descH
@@ -821,7 +946,12 @@ export async function buildPreciosSubcontratistaWorkbook({
   const totalsRowIdx = r
   {
     const row = ws.getRow(totalsRowIdx)
-    ws.mergeCells(totalsRowIdx, 1, totalsRowIdx, map.cantidad)
+    // «Totales» ocupa desde A hasta el final de Cantidad; el resto = columnas lógicas.
+    const cantEnd = spans[baseMap.cantidad].end
+    mergeSpan(ws, totalsRowIdx, 1, cantEnd)
+    for (let logical = baseMap.cantidad + 1; logical <= itemCols; logical += 1) {
+      mergeItemCol(totalsRowIdx, logical)
+    }
     row.getCell(1).value = 'Totales'
     row.getCell(1).font = FONT_TOTALS
     row.getCell(1).alignment = { vertical: 'middle', horizontal: 'left' }
@@ -874,35 +1004,26 @@ export async function buildPreciosSubcontratistaWorkbook({
   r = totalsRowIdx + 1
   let footerMeta = null
 
-  // ── AIU/IVA (1 fila) + Anticipo/% amortización (informativo) ─
-  // Aplica a todas las variantes (incl. crudo). Totales con fórmulas solo si no es crudo.
+  // ── AIU/IVA (1 fila) + Anticipo/% amortización — dentro del GRID ─
   {
-    const hiddenCol = map.hiddenConAiu || null
-    const aiuLayout = layoutAiuFooterPairs(COLS, hiddenCol, 4)
-    const antLayout = layoutAiuFooterPairs(COLS, hiddenCol, 2)
-    const footerMaxCol = Math.max(COLS, aiuLayout.maxCol, antLayout.maxCol)
-
-    // Columnas auxiliares del pie (no alteran la tabla de ítems).
-    for (let c = COLS + 1; c <= footerMaxCol; c += 1) {
-      if (hiddenCol && c === hiddenCol) continue
-      const col = ws.getColumn(c)
-      if (!col.width || col.width < 12) col.width = 14
-    }
+    const aiuLayout = layoutAiuFooterPairs(COLS, 4)
+    const antLayout = layoutAiuFooterPairs(COLS, 2)
+    ensureFooterLabelWidths(ws, aiuLayout.pairs, 14, COLS)
+    ensureFooterLabelWidths(ws, antLayout.pairs, 14, COLS)
 
     r += 1
-    ws.mergeCells(r, 1, r, Math.max(COLS, footerMaxCol))
+    ws.mergeCells(r, 1, r, COLS)
     {
       const cell = ws.getCell(r, 1)
       cell.value = 'AIU / IVA pactado (único del subcontratista)'
       cell.fill = fillSection
       cell.font = FONT_SECTION
       cell.alignment = { vertical: 'middle' }
-      applyBorderRange(ws, r, 1, r, Math.max(COLS, footerMaxCol), border)
+      applyBorderRange(ws, r, 1, r, COLS, border)
       ws.getRow(r).height = 22
     }
     r += 1
 
-    // Una sola fila: Administración (A) | Imprevistos (Í) | Utilidad (U) | IVA sobre Utilidad
     AIU_DESGLOSE_COMPONENTES.forEach((comp, i) => {
       const pts = aiu?.[comp.key]
       const has = pts != null && Number.isFinite(Number(pts))
@@ -920,14 +1041,22 @@ export async function buildPreciosSubcontratistaWorkbook({
         },
       )
     })
-    ws.getRow(r).height = Math.max(
-      22,
-      estimateWrappedRowHeight('IVA sobre Utilidad (IVA)', 14, { fontSize: 9, min: 22, max: 40 }),
-    )
+    {
+      const labelWs = aiuLayout.pairs.map((p) => Number(ws.getColumn(p.labelCol).width) || 14)
+      const minLabelW = Math.min(...labelWs)
+      ws.getRow(r).height = Math.max(
+        24,
+        estimateWrappedRowHeight('IVA sobre Utilidad (IVA)', minLabelW, {
+          fontSize: 9, min: 24, max: 48,
+        }),
+        estimateWrappedRowHeight('Imprevistos (Í)', minLabelW, {
+          fontSize: 9, min: 24, max: 48,
+        }),
+      )
+    }
     const aiuDesgloseRowIdx = r
     r += 1
 
-    // Anticipo (COP 0 dp) + % Amortización — informativos, no afectan totales
     const anticipoRaw = subcontratista?.anticipo
     const amortRaw = subcontratista?.amortizacion_pct
     const anticipoOk = anticipoRaw != null && anticipoRaw !== '' && Number.isFinite(Number(anticipoRaw))
@@ -955,12 +1084,12 @@ export async function buildPreciosSubcontratistaWorkbook({
     footerMeta = {
       aiuDesgloseRowIdx,
       anticipoRowIdx,
-      footerMaxCol,
+      footerMaxCol: COLS,
+      gridCols: COLS,
       aiuLayout,
       antLayout,
     }
 
-    // Totales con AIU/IVA (fórmulas) — no aplica al archivo en crudo
     if (!crudo) {
       r += 1
       const valueColStart = map.totalAntes
@@ -1030,8 +1159,9 @@ export async function buildPreciosSubcontratistaWorkbook({
     }
   }
 
-  // Pie
+  // Pie (mismo ancho del formato)
   r += 1
+  const pieRowIdx = r
   ws.mergeCells(r, 1, r, COLS)
   {
     const sinAiu = !crudo && (!aiu || (
@@ -1065,17 +1195,25 @@ export async function buildPreciosSubcontratistaWorkbook({
   }
   ws.getCell(r, 1).font = { size: 8, italic: true, color: { argb: 'FF5A7A85' }, name: 'Calibri' }
   ws.getCell(r, 1).alignment = { wrapText: true, vertical: 'top' }
-  const pieW = sumColWidths(map.widths, 1, COLS)
+  applyBorderRange(ws, r, 1, r, COLS, border)
+  const pieW = sumColWidths(grid.widths, 1, COLS)
   ws.getRow(r).height = estimateWrappedRowHeight(ws.getCell(r, 1).value, pieW, {
     fontSize: 8,
     min: crudo || conCobro ? 48 : 40,
-    max: 72,
+    max: 96,
   })
 
   ws.autoFilter = {
     from: { row: headerRowIdx, column: 1 },
     to: { row: lastDataRow, column: COLS },
   }
+
+  // Área de impresión = exactamente el ancho del formato (sin columnas sueltas).
+  const printLastCol = colLetter(COLS)
+  ws.pageSetup.printArea = `A1:${printLastCol}${pieRowIdx}`
+  ws.pageSetup.fitToPage = true
+  ws.pageSetup.fitToWidth = 1
+  ws.pageSetup.fitToHeight = 0
 
   ws.headerFooter = {
     oddFooter: crudo
@@ -1093,6 +1231,9 @@ export async function buildPreciosSubcontratistaWorkbook({
     lastDataRow,
     totalsRowIdx,
     columnMap: map,
+    gridCols: COLS,
+    itemCols: grid.itemCols,
+    printArea: `A1:${printLastCol}${pieRowIdx}`,
     totales,
     aiu,
     formatoCalidad: { ...PRECIOS_FORMATO_CALIDAD },
