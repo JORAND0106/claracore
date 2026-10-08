@@ -2,8 +2,12 @@
  * Generación Excel (soporte contractual) — Tab Precios Subcontratistas.
  * Valores calculados = fórmulas vivas (ROUND) enlazadas a cantidad/precio.
  * Opcionalmente incluye VU Cobro + comparativo (solo uso interno).
+ *
+ * Presentación: encabezado 3 secciones (logo contratista | nombre formato | calidad),
+ * bloque de datos contrato/subcontratista, paleta del contrato y alturas al texto.
  */
 import ExcelJS from 'exceljs'
+import { buildCompareExcelColors } from '../../utils/exportPalette.js'
 import {
   buildPreciosExportFilename,
   deltaEsRojo,
@@ -11,41 +15,41 @@ import {
   validatePreciosExport,
 } from './preciosSubcontratistaExport.js'
 
-const FILL_TITLE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B5C75' } }
-const FILL_META = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F6F9' } }
-const FILL_HEADER = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00AFC5' } }
-const FILL_SECTION = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDDEFF8' } }
-const FILL_TOTAL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB8E4EC' } }
-const FILL_TOTALS_ROW = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC5E8F0' } }
+/** Identificación de calidad del formato (sistema CCD ClaraCore). */
+export const PRECIOS_FORMATO_CALIDAD = Object.freeze({
+  codigo: 'CC-SUB-PRE',
+  version: '1.0',
+  nombre: 'PRECIOS DE MANO DE OBRA',
+  nombreCrudo: 'PRECIOS DE MANO DE OBRA EN CRUDO',
+  nombreInterno: 'PRECIOS DE MANO DE OBRA (USO INTERNO · VU COBRO)',
+})
 
-const FONT_WHITE_BOLD = { bold: true, size: 14, color: { argb: 'FFFFFFFF' }, name: 'Calibri' }
-const FONT_META = { bold: true, size: 11, color: { argb: 'FF0F2942' }, name: 'Calibri' }
-const FONT_HEADER = { bold: true, size: 10, color: { argb: 'FFFFFFFF' }, name: 'Calibri' }
-const FONT_BODY = { size: 10, color: { argb: 'FF1A1A1A' }, name: 'Calibri' }
-const FONT_SECTION = { bold: true, size: 11, color: { argb: 'FF0B5C75' }, name: 'Calibri' }
-const FONT_TOTALS = { bold: true, size: 10, color: { argb: 'FF0B5C75' }, name: 'Calibri' }
 const FONT_DELTA_RED = { bold: true, size: 10, color: { argb: 'FFDC2626' }, name: 'Calibri' }
 const FONT_DELTA_GREEN = { bold: true, size: 10, color: { argb: 'FF15803D' }, name: 'Calibri' }
-const FONT_GRAND = { bold: true, size: 12, color: { argb: 'FF0B5C75' }, name: 'Calibri' }
-
-const BORDER_THIN = {
-  top: { style: 'thin', color: { argb: 'FF8AB8C4' } },
-  left: { style: 'thin', color: { argb: 'FF8AB8C4' } },
-  bottom: { style: 'thin', color: { argb: 'FF8AB8C4' } },
-  right: { style: 'thin', color: { argb: 'FF8AB8C4' } },
-}
 
 const NUM_COP = '"$"#,##0'
 const NUM_QTY = '#,##0.00'
 const NUM_DELTA = '+#,##0;-#,##0;0'
 const NUM_PCT = '0.####" %"'
 
-function applyBorderRange(ws, r1, c1, r2, c2) {
-  for (let r = r1; r <= r2; r += 1) {
-    for (let c = c1; c <= c2; c += 1) {
-      ws.getCell(r, c).border = BORDER_THIN
-    }
-  }
+const LOGO_WIDTH_PX = 112
+const LOGO_HEIGHT_PX = 44
+const HEADER_ROW_HEIGHT_LOGO = 52
+const HEADER_ROW_HEIGHT_NO_LOGO = 36
+
+function solidFill(argb) {
+  return { type: 'pattern', pattern: 'solid', fgColor: { argb } }
+}
+
+function thinBorder(argb) {
+  const edge = { style: 'thin', color: { argb } }
+  return { top: edge, left: edge, bottom: edge, right: edge }
+}
+
+function dashOrValue(v) {
+  if (v == null) return '—'
+  const s = String(v).trim()
+  return s || '—'
 }
 
 function fechaGeneracionTxt(d) {
@@ -55,6 +59,14 @@ function fechaGeneracionTxt(d) {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+  })
+}
+
+function fechaCalidadTxt(d) {
+  return d.toLocaleDateString('es-CO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
   })
 }
 
@@ -74,6 +86,82 @@ export function colLetter(n) {
 function setFormula(cell, formula, result, numFmt) {
   cell.value = { formula, result }
   if (numFmt) cell.numFmt = numFmt
+}
+
+function applyBorderRange(ws, r1, c1, r2, c2, border) {
+  for (let r = r1; r <= r2; r += 1) {
+    for (let c = c1; c <= c2; c += 1) {
+      ws.getCell(r, c).border = border
+    }
+  }
+}
+
+/** Altura estimada con wrap según ancho aproximado de caracteres Excel. */
+export function estimateWrappedRowHeight(text, widthChars, {
+  fontSize = 10,
+  min = 18,
+  max = 96,
+  padding = 6,
+} = {}) {
+  const s = String(text ?? '')
+  if (!s) return min
+  const charsPerLine = Math.max(6, Math.floor(Number(widthChars) * 1.05) || 12)
+  const lines = s.split(/\r?\n/).reduce(
+    (acc, part) => acc + Math.max(1, Math.ceil(Math.max(part.length, 1) / charsPerLine)),
+    0,
+  )
+  const linePt = fontSize * 1.35
+  return Math.min(max, Math.max(min, Math.ceil(lines * linePt + padding)))
+}
+
+function sumColWidths(widths, fromCol, toCol) {
+  let w = 0
+  for (let c = fromCol; c <= toCol; c += 1) {
+    w += Number(widths[c - 1]) || 12
+  }
+  return w
+}
+
+/**
+ * Carga logo (data URI o URL) al workbook. Devuelve imageId o null.
+ * No falla la exportación si el logo falta o no se puede leer.
+ */
+export async function prepararLogoPreciosWorkbook(wb, logoUrl) {
+  if (!logoUrl || typeof logoUrl !== 'string') return null
+  const raw = logoUrl.trim()
+  if (!raw) return null
+  try {
+    if (raw.startsWith('data:image')) {
+      const comma = raw.indexOf(',')
+      if (comma < 0) return null
+      const header = raw.slice(0, comma).toLowerCase()
+      let b64 = raw.slice(comma + 1).replace(/\s+/g, '')
+      if (!b64 || !header.includes('base64')) return null
+      let ext = 'png'
+      const m = header.match(/^data:image\/([a-z0-9+.-]+)/i)
+      if (m) {
+        ext = m[1].toLowerCase()
+        if (ext === 'jpg') ext = 'jpeg'
+        if (ext === 'svg+xml' || ext === 'webp') return null
+        if (!['png', 'jpeg', 'gif'].includes(ext)) ext = 'png'
+      }
+      const binary = atob(b64)
+      const buffer = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i += 1) buffer[i] = binary.charCodeAt(i)
+      return wb.addImage({ buffer, extension: ext })
+    }
+    const res = await fetch(raw, { mode: 'cors', credentials: 'omit' })
+    if (!res.ok) return null
+    const blob = await res.blob()
+    const buffer = new Uint8Array(await blob.arrayBuffer())
+    if (!buffer.length) return null
+    let ext = 'png'
+    if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
+    else if (blob.type.includes('gif') ) ext = 'gif'
+    return wb.addImage({ buffer, extension: ext })
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -155,18 +243,89 @@ export function preciosExportColumnMap(incluirVuCobro, { modoCrudo = false } = {
   }
 }
 
+function nombreFormato(crudo, conCobro) {
+  if (crudo) return PRECIOS_FORMATO_CALIDAD.nombreCrudo
+  if (conCobro) return PRECIOS_FORMATO_CALIDAD.nombreInterno
+  return PRECIOS_FORMATO_CALIDAD.nombre
+}
+
+function layoutEncabezado(cols) {
+  const leftSpan = cols >= 8 ? 2 : Math.min(2, Math.max(1, Math.floor(cols / 3)))
+  const rightSpan = cols >= 8 ? 3 : Math.min(2, Math.max(1, Math.floor(cols / 3)))
+  const titleStart = leftSpan + 1
+  const titleEnd = Math.max(titleStart, cols - rightSpan)
+  const rightStart = titleEnd + 1
+  return { leftSpan, titleStart, titleEnd, rightStart, rightSpan: cols - titleEnd }
+}
+
+function layoutDataSplit(cols) {
+  const split = Math.max(2, Math.floor(cols / 2))
+  return {
+    leftLabel: 1,
+    leftValueStart: 2,
+    leftValueEnd: split,
+    rightLabel: split + 1,
+    rightValueStart: split + 2,
+    rightValueEnd: cols,
+  }
+}
+
+function styleRange(ws, r, c1, c2, { fill, font, border, align }) {
+  for (let c = c1; c <= c2; c += 1) {
+    const cell = ws.getCell(r, c)
+    if (fill) cell.fill = fill
+    if (font) cell.font = font
+    if (border) cell.border = border
+    if (align) cell.alignment = align
+  }
+}
+
+function escribirCeldaEtiquetaValor(ws, r, labelCol, valueStart, valueEnd, label, value, theme, widths) {
+  const lab = ws.getCell(r, labelCol)
+  lab.value = label
+  lab.fill = solidFill(theme.metaBg)
+  lab.font = { bold: true, size: 9, color: { argb: theme.metaText }, name: 'Calibri' }
+  lab.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
+  lab.border = thinBorder(theme.border)
+
+  if (valueEnd > valueStart) {
+    try {
+      ws.mergeCells(r, valueStart, r, valueEnd)
+    } catch { /* ya fusionado */ }
+  }
+  const val = ws.getCell(r, valueStart)
+  val.value = value
+  val.fill = solidFill(theme.rowBg)
+  val.font = { size: 10, color: { argb: theme.rowText }, name: 'Calibri' }
+  val.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
+  styleRange(ws, r, valueStart, valueEnd, {
+    fill: solidFill(theme.rowBg),
+    font: { size: 10, color: { argb: theme.rowText }, name: 'Calibri' },
+    border: thinBorder(theme.border),
+    align: { vertical: 'middle', horizontal: 'left', wrapText: true },
+  })
+
+  const wLabel = sumColWidths(widths, labelCol, labelCol)
+  const wVal = sumColWidths(widths, valueStart, valueEnd)
+  const hLab = estimateWrappedRowHeight(label, wLabel, { fontSize: 9, min: 20, max: 72 })
+  const hVal = estimateWrappedRowHeight(value, wVal, { fontSize: 10, min: 20, max: 96 })
+  return Math.max(hLab, hVal)
+}
+
 /**
  * Construye el workbook listo para descargar.
  * @throws Error si validatePreciosExport falla
  */
-export function buildPreciosSubcontratistaWorkbook({
+export async function buildPreciosSubcontratistaWorkbook({
   subcontratista = {},
+  contrato = {},
   rows = [],
   drafts = {},
   impuesto,
   generadoEn = new Date(),
   incluirVuCobro = false,
   modoCrudo = false,
+  logoImageId: logoImageIdPrefetched = null,
 } = {}) {
   const crudo = !!modoCrudo
   const conCobro = !crudo && !!incluirVuCobro
@@ -186,6 +345,25 @@ export function buildPreciosSubcontratistaWorkbook({
   const hoy = generadoEn instanceof Date ? generadoEn : new Date()
   const map = preciosExportColumnMap(conCobro, { modoCrudo: crudo })
   const COLS = map.cols
+  const theme = buildCompareExcelColors(contrato?.export_palette)
+  const border = thinBorder(theme.border)
+  const fillTitle = solidFill(theme.title)
+  const fillMeta = solidFill(theme.metaBg)
+  const fillHeader = solidFill(theme.headerBg)
+  const fillSection = solidFill(theme.metaBg)
+  const fillTotal = solidFill(theme.totalBg)
+  const fillTotalsRow = solidFill(theme.totalBg)
+  const fillRow = solidFill(theme.rowBg)
+  const fillRowAlt = solidFill(theme.rowBgAlt)
+
+  const FONT_TITLE = { bold: true, size: 13, color: { argb: theme.titleText }, name: 'Calibri' }
+  const FONT_META = { bold: true, size: 9, color: { argb: theme.metaText }, name: 'Calibri' }
+  const FONT_HEADER = { bold: true, size: 10, color: { argb: theme.headerText }, name: 'Calibri' }
+  const FONT_BODY = { size: 10, color: { argb: theme.rowText }, name: 'Calibri' }
+  const FONT_SECTION = { bold: true, size: 11, color: { argb: theme.metaText }, name: 'Calibri' }
+  const FONT_TOTALS = { bold: true, size: 10, color: { argb: theme.totalText }, name: 'Calibri' }
+  const FONT_GRAND = { bold: true, size: 12, color: { argb: theme.totalText }, name: 'Calibri' }
+  const FONT_CALIDAD = { bold: true, size: 9, color: { argb: theme.titleText }, name: 'Calibri' }
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'ClaraCore'
@@ -202,8 +380,14 @@ export function buildPreciosSubcontratistaWorkbook({
       ? 'Soporte interno con VU Cobro y comparativo (no entregar al subcontratista)'
       : 'Soporte contractual de ítems, cantidades y precios pactados'
 
+  // Encabezado (1) + bloque datos (4) + spacer (1) + header tabla → ySplit dinámico
+  const headerBandRows = 1
+  const dataBlockRows = 4
+  const spacerAfterMeta = 1
+  const headerRowIdx = headerBandRows + dataBlockRows + spacerAfterMeta + 1
+
   const ws = wb.addWorksheet('Precios pactados', {
-    views: [{ showGridLines: false, state: 'frozen', ySplit: 7 }],
+    views: [{ showGridLines: false, state: 'frozen', ySplit: headerRowIdx }],
     pageSetup: {
       orientation: 'landscape',
       fitToPage: true,
@@ -221,56 +405,135 @@ export function buildPreciosSubcontratistaWorkbook({
     ws.getColumn(map.hiddenConAiu).width = 14
   }
 
-  // ── Encabezado ──────────────────────────────────────────────
-  ws.mergeCells(1, 1, 1, COLS)
-  const title = ws.getCell(1, 1)
-  title.value = crudo
-    ? 'CLARACORE — PRECIOS EN CRUDO (DILIGENCIAR VU COSTO M.O.)'
-    : conCobro
-      ? 'CLARACORE — PRECIOS PACTADOS (USO INTERNO · CON VU COBRO)'
-      : 'CLARACORE — PRECIOS PACTADOS CON SUBCONTRATISTA'
-  title.fill = FILL_TITLE
-  title.font = FONT_WHITE_BOLD
-  title.alignment = { horizontal: 'center', vertical: 'middle' }
-  ws.getRow(1).height = 28
+  let logoImageId = logoImageIdPrefetched
+  if (logoImageId == null) {
+    logoImageId = await prepararLogoPreciosWorkbook(wb, contrato?.logo_contratista)
+  }
 
-  const metaRows = [
-    ['Subcontratista (razón social)', subcontratista.razon_social || '—'],
-    ['NIT', subcontratista.nit || '—'],
-    ['Objeto del contrato', subcontratista.objeto_contrato || '—'],
-    ['Fecha de generación', fechaGeneracionTxt(hoy)],
-  ]
-  metaRows.forEach((pair, idx) => {
-    const r = 2 + idx
-    ws.mergeCells(r, 2, r, COLS)
-    const lab = ws.getCell(r, 1)
-    const val = ws.getCell(r, 2)
-    lab.value = pair[0]
-    val.value = pair[1]
-    lab.fill = FILL_META
-    val.fill = FILL_META
-    lab.font = FONT_META
-    val.font = { ...FONT_BODY, size: 11 }
-    lab.alignment = { vertical: 'middle' }
-    val.alignment = { vertical: 'middle', wrapText: true }
-    ws.getRow(r).height = idx === 2 ? 36 : 20
+  // ── Encabezado 3 secciones ──────────────────────────────────
+  const lay = layoutEncabezado(COLS)
+  const titulo = nombreFormato(crudo, conCobro)
+
+  styleRange(ws, 1, 1, COLS, {
+    fill: fillTitle,
+    border,
+    align: { vertical: 'middle', horizontal: 'center', wrapText: true },
   })
-  applyBorderRange(ws, 2, 1, 5, COLS)
+
+  try { ws.mergeCells(1, 1, 1, lay.leftSpan) } catch { /* ignore */ }
+  try { ws.mergeCells(1, lay.titleStart, 1, lay.titleEnd) } catch { /* ignore */ }
+  if (lay.rightStart <= COLS) {
+    try { ws.mergeCells(1, lay.rightStart, 1, COLS) } catch { /* ignore */ }
+  }
+
+  const titleCell = ws.getCell(1, lay.titleStart)
+  titleCell.value = titulo
+  titleCell.font = FONT_TITLE
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+
+  const calidadTxt = [
+    PRECIOS_FORMATO_CALIDAD.codigo,
+    `Versión ${PRECIOS_FORMATO_CALIDAD.version}`,
+    `Fecha ${fechaCalidadTxt(hoy)}`,
+  ].join('\n')
+  const calidadCell = ws.getCell(1, lay.rightStart)
+  calidadCell.value = calidadTxt
+  calidadCell.font = FONT_CALIDAD
+  calidadCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+
+  if (logoImageId != null) {
+    ws.addImage(logoImageId, {
+      tl: { col: 0.12, row: 0.12 },
+      ext: { width: LOGO_WIDTH_PX, height: LOGO_HEIGHT_PX },
+    })
+    ws.getRow(1).height = HEADER_ROW_HEIGHT_LOGO
+  } else {
+    ws.getCell(1, 1).value = ''
+    ws.getRow(1).height = Math.max(
+      HEADER_ROW_HEIGHT_NO_LOGO,
+      estimateWrappedRowHeight(titulo, sumColWidths(map.widths, lay.titleStart, lay.titleEnd), {
+        fontSize: 13,
+        min: HEADER_ROW_HEIGHT_NO_LOGO,
+        max: 64,
+      }),
+      estimateWrappedRowHeight(calidadTxt, sumColWidths(map.widths, lay.rightStart, COLS), {
+        fontSize: 8,
+        min: HEADER_ROW_HEIGHT_NO_LOGO,
+        max: 64,
+      }),
+    )
+  }
+
+  // ── Bloque de datos (4 líneas) ──────────────────────────────
+  const split = layoutDataSplit(COLS)
+  const numContrato = dashOrValue(contrato?.numero ?? contrato?.numero_contrato)
+  const objetoContrato = dashOrValue(contrato?.objeto)
+  const razon = dashOrValue(subcontratista?.razon_social)
+  const nit = dashOrValue(subcontratista?.nit)
+  const objetoSub = dashOrValue(subcontratista?.objeto_contrato)
+  const contactoNombre = dashOrValue(subcontratista?.nombre_contacto)
+  const contactoTel = dashOrValue(subcontratista?.telefono)
+
+  // Línea 1: Nº contrato | Objeto contrato contratista
+  let h = escribirCeldaEtiquetaValor(
+    ws, 2, split.leftLabel, split.leftValueStart, split.leftValueEnd,
+    'Nº contrato', numContrato, theme, map.widths,
+  )
+  h = Math.max(h, escribirCeldaEtiquetaValor(
+    ws, 2, split.rightLabel, split.rightValueStart, split.rightValueEnd,
+    'Objeto del contrato', objetoContrato, theme, map.widths,
+  ))
+  ws.getRow(2).height = h
+
+  // Línea 2: Subcontratista | NIT
+  h = escribirCeldaEtiquetaValor(
+    ws, 3, split.leftLabel, split.leftValueStart, split.leftValueEnd,
+    'Subcontratista', razon, theme, map.widths,
+  )
+  h = Math.max(h, escribirCeldaEtiquetaValor(
+    ws, 3, split.rightLabel, split.rightValueStart, split.rightValueEnd,
+    'NIT', nit, theme, map.widths,
+  ))
+  ws.getRow(3).height = h
+
+  // Línea 3: Objeto subcontratista (línea completa)
+  h = escribirCeldaEtiquetaValor(
+    ws, 4, 1, 2, COLS,
+    'Objeto del contrato (subcontratista)', objetoSub, theme, map.widths,
+  )
+  ws.getRow(4).height = h
+
+  // Línea 4: Nombre y teléfono de contacto (misma fila, etiquetas diferenciadas)
+  h = escribirCeldaEtiquetaValor(
+    ws, 5, split.leftLabel, split.leftValueStart, split.leftValueEnd,
+    'Nombre de contacto', contactoNombre, theme, map.widths,
+  )
+  h = Math.max(h, escribirCeldaEtiquetaValor(
+    ws, 5, split.rightLabel, split.rightValueStart, split.rightValueEnd,
+    'Teléfono', contactoTel, theme, map.widths,
+  ))
+  ws.getRow(5).height = h
 
   ws.getRow(6).height = 8
 
   // ── Tabla ───────────────────────────────────────────────────
-  const headerRowIdx = 7
   const hr = ws.getRow(headerRowIdx)
-  map.headers.forEach((h, i) => {
+  map.headers.forEach((headerTxt, i) => {
     const cell = hr.getCell(i + 1)
-    cell.value = h
-    cell.fill = FILL_HEADER
+    cell.value = headerTxt
+    cell.fill = fillHeader
     cell.font = FONT_HEADER
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-    cell.border = BORDER_THIN
+    cell.border = border
   })
-  hr.height = 36
+  hr.height = Math.max(
+    32,
+    ...map.headers.map((headerTxt, i) => estimateWrappedRowHeight(
+      headerTxt,
+      map.widths[i] || 12,
+      { fontSize: 10, min: 32, max: 48 },
+    )),
+  )
 
   const firstDataRow = headerRowIdx + 1
   let r = firstDataRow
@@ -285,12 +548,15 @@ export function buildPreciosSubcontratistaWorkbook({
 
   for (const L of lineas) {
     const row = ws.getRow(r)
+    const rowFill = ((r - firstDataRow) % 2 === 0) ? fillRow : fillRowAlt
+    const rowTextArgb = ((r - firstDataRow) % 2 === 0) ? theme.rowText : theme.rowTextAlt
+    const fontBody = { ...FONT_BODY, color: { argb: rowTextArgb } }
+
     row.getCell(map.item).value = L.item
     row.getCell(map.descripcion).value = L.descripcion
     row.getCell(map.und).value = L.und
     row.getCell(map.cantidad).value = L.cantidad
     row.getCell(map.cantidad).numFmt = NUM_QTY
-    // Crudo: VU vacío para diligenciar; resto: precio pactado
     if (crudo) {
       row.getCell(map.vuMo).value = null
     } else {
@@ -346,21 +612,26 @@ export function buildPreciosSubcontratistaWorkbook({
     for (let c = 1; c <= COLS; c += 1) {
       const cell = row.getCell(c)
       const isDelta = conCobro && (c === map.deltaCosto || c === map.deltaValor)
-      if (!isDelta) cell.font = FONT_BODY
-      cell.border = BORDER_THIN
+      if (!isDelta) cell.font = fontBody
+      cell.fill = rowFill
+      cell.border = border
       cell.alignment = {
         vertical: 'middle',
-        wrapText: c === map.descripcion,
+        wrapText: c === map.descripcion || c === map.item,
         horizontal: c >= map.cantidad ? 'right' : (c === map.und ? 'center' : 'left'),
       }
     }
-    row.height = 18
+    const descH = estimateWrappedRowHeight(
+      L.descripcion,
+      map.widths[map.descripcion - 1] || 34,
+      { fontSize: 10, min: 18, max: 90 },
+    )
+    row.height = descH
     r += 1
   }
 
   const lastDataRow = r - 1
 
-  // Conditional formatting ▲ (se actualiza al editar cantidad/precio en Excel)
   if (conCobro && lastDataRow >= firstDataRow) {
     const deltaRefs = [
       `${LdeltaCosto}${firstDataRow}:${LdeltaCosto}${lastDataRow}`,
@@ -387,7 +658,7 @@ export function buildPreciosSubcontratistaWorkbook({
     }
   }
 
-  // ── Fila de totales (sumatorias económicas) ─────────────────
+  // ── Fila de totales ─────────────────────────────────────────
   const totalsRowIdx = r
   {
     const row = ws.getRow(totalsRowIdx)
@@ -431,8 +702,8 @@ export function buildPreciosSubcontratistaWorkbook({
 
     for (let c = 1; c <= COLS; c += 1) {
       const cell = row.getCell(c)
-      cell.fill = FILL_TOTALS_ROW
-      cell.border = BORDER_THIN
+      cell.fill = fillTotalsRow
+      cell.border = border
       if (!(conCobro && c === map.deltaValor)) cell.font = FONT_TOTALS
       cell.alignment = {
         vertical: 'middle',
@@ -450,10 +721,10 @@ export function buildPreciosSubcontratistaWorkbook({
     {
       const cell = ws.getCell(r, 1)
       cell.value = 'AIU / IVA pactado (único del subcontratista)'
-      cell.fill = FILL_SECTION
+      cell.fill = fillSection
       cell.font = FONT_SECTION
       cell.alignment = { vertical: 'middle' }
-      applyBorderRange(ws, r, 1, r, COLS)
+      applyBorderRange(ws, r, 1, r, COLS, border)
       ws.getRow(r).height = 22
     }
     r += 1
@@ -476,14 +747,13 @@ export function buildPreciosSubcontratistaWorkbook({
       }
       ws.getCell(r, 1).font = FONT_META
       valCell.font = FONT_BODY
-      ws.getCell(r, 1).fill = FILL_META
-      valCell.fill = FILL_META
-      applyBorderRange(ws, r, 1, r, COLS)
+      ws.getCell(r, 1).fill = fillMeta
+      valCell.fill = fillMeta
+      applyBorderRange(ws, r, 1, r, COLS, border)
       ws.getRow(r).height = 18
       r += 1
     }
 
-    // ── Total general con AIU/IVA (fórmulas) ────────────────────
     r += 1
     const valueColStart = map.totalAntes
     const totAiuLines = [
@@ -539,11 +809,11 @@ export function buildPreciosSubcontratistaWorkbook({
       }
       for (let c = 1; c <= COLS; c += 1) {
         const cell = ws.getCell(r, c)
-        cell.fill = isGrand ? FILL_TOTAL : FILL_META
+        cell.fill = isGrand ? fillTotal : fillMeta
         if (!(line.kind === 'delta' && c >= valueColStart)) {
           cell.font = isGrand ? FONT_GRAND : FONT_META
         }
-        cell.border = BORDER_THIN
+        cell.border = border
         cell.alignment = { vertical: 'middle', horizontal: c >= valueColStart ? 'right' : 'left' }
       }
       ws.getRow(r).height = isGrand ? 24 : 20
@@ -586,7 +856,12 @@ export function buildPreciosSubcontratistaWorkbook({
   }
   ws.getCell(r, 1).font = { size: 8, italic: true, color: { argb: 'FF5A7A85' }, name: 'Calibri' }
   ws.getCell(r, 1).alignment = { wrapText: true, vertical: 'top' }
-  ws.getRow(r).height = crudo || conCobro ? 48 : 40
+  const pieW = sumColWidths(map.widths, 1, COLS)
+  ws.getRow(r).height = estimateWrappedRowHeight(ws.getCell(r, 1).value, pieW, {
+    fontSize: 8,
+    min: crudo || conCobro ? 48 : 40,
+    max: 72,
+  })
 
   ws.autoFilter = {
     from: { row: headerRowIdx, column: 1 },
@@ -601,7 +876,6 @@ export function buildPreciosSubcontratistaWorkbook({
         : '&LClaraCore — Precios pactados&RPágina &P de &N',
   }
 
-  // Metadatos útiles para pruebas / introspección
   wb.preciosExportMeta = {
     conCobro,
     modoCrudo: crudo,
@@ -612,6 +886,9 @@ export function buildPreciosSubcontratistaWorkbook({
     columnMap: map,
     totales,
     aiu,
+    formatoCalidad: { ...PRECIOS_FORMATO_CALIDAD },
+    theme,
+    hasLogo: logoImageId != null,
   }
 
   return wb
@@ -638,7 +915,7 @@ export async function workbookToXlsxBlob(wb) {
 }
 
 export async function downloadPreciosSubcontratistaExcel(opts = {}) {
-  const wb = buildPreciosSubcontratistaWorkbook(opts)
+  const wb = await buildPreciosSubcontratistaWorkbook(opts)
   const blob = await workbookToXlsxBlob(wb)
   const filename = buildPreciosExportFilename(opts.subcontratista, opts.generadoEn, {
     modoCrudo: !!opts.modoCrudo,
