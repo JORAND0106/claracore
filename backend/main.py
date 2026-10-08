@@ -344,6 +344,28 @@ _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", st
 
 app = FastAPI(title="ClaraCore API")
 
+
+@app.on_event("startup")
+def _startup_ensure_critical_schema():
+    """Aplica DDL crítico (cierre_motivo, flags Bitácora) si hay SUPABASE_DB_URL."""
+    try:
+        from schema_migrations_runner import ensure_critical_migrations
+
+        result = ensure_critical_migrations()
+        if result.get("applied"):
+            logging.getLogger("claracore.api").info(
+                "schema startup applied=%s", result.get("applied"),
+            )
+        elif not result.get("ok") and result.get("reason") not in (
+            None, "missing_SUPABASE_DB_URL",
+        ):
+            logging.getLogger("claracore.api").warning(
+                "schema startup: %s", result.get("reason"),
+            )
+    except Exception as exc:
+        logging.getLogger("claracore.api").warning("schema startup skip: %s", exc)
+
+
 from application_insights import setup_application_insights
 
 setup_application_insights(app)

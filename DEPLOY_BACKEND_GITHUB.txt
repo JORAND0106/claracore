@@ -43,6 +43,12 @@ PASO 4 — Variables de entorno (qué hacer, sin misterio)
     SECRET_KEY
     ALGORITHM          (ejemplo de valor: HS256)
 
+  Recomendado para migraciones DDL automáticas (cierre_motivo automatico_atrasado,
+  bitacora_asistencia_rrhh_activa, etc.):
+    SUPABASE_DB_URL    (URI postgresql://… del proyecto Supabase)
+    También como secreto de GitHub Actions con el mismo nombre, para que el
+    workflow "Deploy backend on push" aplique backend/migrations críticas.
+
   Si en tu .env también tienes Cloudinary, Anthropic, etc., cópialas igual.
 
   Obligatorio para el deploy con pip en el servidor (añádela aparte si no está):
