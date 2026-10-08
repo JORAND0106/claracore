@@ -276,6 +276,8 @@ import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './
 import { applyClaraThemeTokens } from './theme/adminPanelTheme'
 import { useClaraViewport, CLARA_BP } from './useClaraViewport'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
+import { confrontarContratoPresupuesto } from './contratoFinanciero'
+import DashAlertaContratoPresupuesto from './components/DashAlertaContratoPresupuesto'
 import { logosDesdeContratosActivo } from './utils/usuarioLogosContrato'
 import ModalSelectorContrato from './components/ModalSelectorContrato'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
@@ -19145,6 +19147,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashCapFin, setDashCapFin] = useState(null)
   const [dashCapFinLoading, setDashCapFinLoading] = useState(false)
   const [dashCapFinError, setDashCapFinError] = useState(null)
+  const [dashConfrontacion, setDashConfrontacion] = useState(null)
+  const confrontacionSeqRef = useRef(0)
   const [dashDrill,    setDashDrill]    = useState([])
   const dashDrillRef = useRef([])
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
@@ -19432,6 +19436,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setKpiCobro(null)
     setDashCapFin(null)
     setDashCapFinError(null)
+    confrontacionSeqRef.current += 1
+    setDashConfrontacion(null)
     setDashResumenUpdatedAt(null)
     setDashKpiError(null)
     setDashDrill([])
@@ -19535,6 +19541,31 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
   }, [contratoIdDash, dashModuloActivo, dashVistaParam, API_URL])
 
+  const cargarConfrontacionPresupuesto = useCallback(async () => {
+    if (!contratoIdDash || !dashModuloActivo) return
+    const cid = contratoIdDash
+    const seq = ++confrontacionSeqRef.current
+    const tok = getToken()
+    const headers = { Authorization: `Bearer ${tok}` }
+    try {
+      const [cRes, vRes] = await Promise.all([
+        fetch(`${API_URL}/contratos/${cid}`, { headers }),
+        fetch(`${API_URL}/presupuesto/${cid}/versiones`, { headers }),
+      ])
+      if (seq !== confrontacionSeqRef.current) return
+      if (!cRes.ok || !vRes.ok) {
+        setDashConfrontacion(null)
+        return
+      }
+      const contrato = await cRes.json()
+      const versiones = await vRes.json()
+      if (seq !== confrontacionSeqRef.current) return
+      setDashConfrontacion(confrontarContratoPresupuesto(contrato, Array.isArray(versiones) ? versiones : []))
+    } catch {
+      if (seq === confrontacionSeqRef.current) setDashConfrontacion(null)
+    }
+  }, [contratoIdDash, dashModuloActivo, API_URL])
+
   useEffect(() => {
     if (moduloActivo !== 'dashboard') return undefined
     const busy = dashKpiLoading || dashCapFinLoading
@@ -19544,6 +19575,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         await Promise.all([
           cargarDashboardResumen({ force: true }),
           cargarDashCapFin({ force: true }),
+          cargarConfrontacionPresupuesto(),
         ])
       },
       disabled: busy,
@@ -19556,6 +19588,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     dashCapFinLoading,
     cargarDashboardResumen,
     cargarDashCapFin,
+    cargarConfrontacionPresupuesto,
     setModuloRefresh,
     clearModuloRefresh,
   ])
@@ -19564,7 +19597,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     if (!contratoIdDash || !dashModuloActivo) return
     void cargarDashboardResumen()
     void cargarDashCapFin()
-  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen, cargarDashCapFin])
+    void cargarConfrontacionPresupuesto()
+  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen, cargarDashCapFin, cargarConfrontacionPresupuesto])
 
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
@@ -20313,6 +20347,19 @@ const [navReporteId, setNavReporteId] = useState(null)
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
       setNavRegistroId(parseInt(notif.entidad_id))
     }
+  }
+
+  async function abrirRegistroDesdeRevisionListado(contrato, registroId, reporteId) {
+    const rid = Number(registroId)
+    const rep = Number(reporteId)
+    if (!Number.isFinite(rid) || rid <= 0) return
+    if (contrato?.id != null && Number(usuario?.contrato_id) !== Number(contrato.id)) {
+      await onCambiarContrato(contrato)
+    }
+    if (Number.isFinite(rep) && rep > 0) setNavReporteId(rep)
+    setNavRegistroNumero(rid)
+    setShowAdmin(false)
+    setModuloActivo('sicoe_obra')
   }
 
   async function abrirRegistroSicoeObraDesdePopup(registroId) {
@@ -22032,7 +22079,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                 <button
                   type="button"
                   className={dashMobile ? 'cc-dash-touch-btn' : undefined}
-                  onClick={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }) }}
+                  onClick={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }); void cargarConfrontacionPresupuesto() }}
                   disabled={dashRefreshBusy}
                   title="Actualizar resumen"
                   style={{
@@ -22066,7 +22113,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                   du={du}
                   dashInfoColor={dashInfoColor}
                   dashKpiLoading={dashRefreshBusy}
-                  onRefresh={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }) }}
+                  onRefresh={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }); void cargarConfrontacionPresupuesto() }}
                 />
                 {!viewportNavDrawer && (
                   usuario?._contratos?.length > 1 ? (
@@ -22140,6 +22187,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                     sub: 'Presupuesto ClaraCore · revisado = Aprobado · sin filtro AIU/IVA',
                     color: '#0f766e',
                     icon: '✅',
+                    alertaPresupuesto: true,
                   },
                   {
                     label: 'PPTO. CLARACORE NO REVIS. NIVEL MÁX.',
@@ -22147,6 +22195,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                     sub: 'Presupuesto ClaraCore · Pendiente / No revisado / Rechazado',
                     color: '#ca8a04',
                     icon: '📋',
+                    alertaPresupuesto: true,
                   },
                 ]
                 return kpis.map((k, ki) => (
@@ -22154,6 +22203,9 @@ const [navReporteId, setNavReporteId] = useState(null)
                     <div style={{ fontSize:`${du.kpiLabel}px`, fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
                     <div style={{ fontSize:`${du.kpiValue}px`, fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.value}</div>
                     <div style={{ fontSize:`${du.kpiSub}px`, color:t.textMuted }}>{k.sub}</div>
+                    {k.alertaPresupuesto ? (
+                      <DashAlertaContratoPresupuesto confrontacion={dashConfrontacion} t={t} fontSize={du.kpiSub} />
+                    ) : null}
                   </div>
                 ))
               })()}
@@ -24763,6 +24815,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             void onRefreshContratos?.()
           }}
           onContratosMutated={() => { void onRefreshContratos?.() }}
+          onAbrirRegistro={abrirRegistroDesdeRevisionListado}
           activeTheme={activeTheme}
           t={t}
         />

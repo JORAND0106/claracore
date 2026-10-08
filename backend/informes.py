@@ -1696,10 +1696,12 @@ def _contexto_corte_sub(
     # Fuente de verdad: subcontratista_precios del sub del corte (nunca precios del contrato).
     import corte_sub_conciliacion as csc
 
-    vu_map = csc.precios_vu_sub_por_item(
+    vu_map, vu_cap_map = csc.precios_vu_sub_maps(
         _sb, contrato_id=int(contrato_id), subcontratista_id=int(sub_id)
     )
-    items, items_sin_precio = csc.aplicar_precios_sub_a_items(list(items_map.values()), vu_map)
+    items, items_sin_precio = csc.aplicar_precios_sub_a_items(
+        list(items_map.values()), vu_map, vu_por_cap_item=vu_cap_map
+    )
     _sort_items_corte_por_item_numero_asc(items)
     total_costo = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
     if not math.isfinite(total_costo):
@@ -1723,6 +1725,7 @@ def _contexto_corte_sub(
         "gran_total": None,
         "items_sin_precio": items_sin_precio,
         "vu_por_item": vu_map,
+        "vu_por_cap_item": vu_cap_map,
         "amortizacion": None,
     }
     try:
@@ -1750,16 +1753,25 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     except (TypeError, ValueError):
         consecutivo = 0
 
-    vu_map = ctx.get("vu_por_item") or csc.precios_vu_sub_por_item(
-        _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
-    )
+    vu_map = dict(ctx.get("vu_por_item") or {})
+    vu_cap_map = dict(ctx.get("vu_por_cap_item") or {})
+    if not vu_map and not vu_cap_map:
+        vu_map, vu_cap_map = csc.precios_vu_sub_maps(
+            _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+        )
     meta_map = csc.meta_listado_sub(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
     )
-    # Completar VU desde meta si falta
+    meta_cap_map = csc.meta_listado_sub_by_cap_item(
+        _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+    )
+    # Completar VU solo con VU Costo M.O. del meta del sub (nunca VU Cobro del contrato).
     for k, m in meta_map.items():
-        if k not in vu_map and _sf(m.get("vlr_unitario")) > 0:
+        if k not in vu_map and _sf(m.get("vlr_unitario")) > 0 and m.get("tiene_vu_costo_mo", True):
             vu_map[k] = _sf(m.get("vlr_unitario"))
+    for ck, m in (meta_cap_map or {}).items():
+        if ck not in vu_cap_map and _sf(m.get("vlr_unitario")) > 0 and m.get("tiene_vu_costo_mo", True):
+            vu_cap_map[ck] = _sf(m.get("vlr_unitario"))
     cant_act = csc.cantidades_actualizadas_sub(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
     )
@@ -1779,7 +1791,9 @@ def _enriquecer_ctx_corte_sub_conciliacion(
         cant_actualizadas=cant_act,
         cant_acum_anterior=cant_ant,
         vu_por_item=vu_map,
+        vu_por_cap_item=vu_cap_map,
         meta_por_item=meta_map,
+        meta_por_cap_item=meta_cap_map,
     )
     # Reaplicar sin_precio tras enriquecer
     for it in items:
@@ -1790,6 +1804,8 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
     ctx["items"] = items
     ctx["total_costo"] = total_costo if math.isfinite(total_costo) else 0.0
+    ctx["vu_por_item"] = vu_map
+    ctx["vu_por_cap_item"] = vu_cap_map
     ctx["items_sin_precio"] = [
         str(i.get("item_numero") or "")
         for i in items

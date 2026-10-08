@@ -54,6 +54,43 @@ export async function deletePrecioSub(precioId, token) {
   return res.json()
 }
 
+/**
+ * Desvincula ítems de la hoja Precios (Presupuesto y/o manuales) de este sub.
+ * @param {number} subId
+ * @param {number[]} listadoPrecioIds
+ * @param {string} token
+ */
+export async function desvincularItemsCobro(subId, listadoPrecioIds, token) {
+  const res = await fetch(`${API_BASE}/subcontratistas/${subId}/items-cobro/desvincular`, {
+    method: 'POST',
+    headers: authHeaders(token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ listado_precio_ids: listadoPrecioIds }),
+  })
+  if (!res.ok) await parseError(res)
+  return res.json()
+}
+
+/**
+ * Registra la exportación Excel y valida permiso de VU Cobro / crudo en servidor.
+ * @returns {{ ok: boolean, incluir_vu_cobro: boolean, modo_crudo: boolean, puede_incluir_vu_cobro: boolean, puede_exportar_crudo: boolean }}
+ */
+export async function registrarExportPreciosExcel(
+  subId,
+  { incluirVuCobro = false, modoCrudo = false } = {},
+  token,
+) {
+  const res = await fetch(`${API_BASE}/subcontratistas/${subId}/precios/export-excel-log`, {
+    method: 'POST',
+    headers: authHeaders(token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      incluir_vu_cobro: !!incluirVuCobro,
+      modo_crudo: !!modoCrudo,
+    }),
+  })
+  if (!res.ok) await parseError(res)
+  return res.json()
+}
+
 /** PUT AIU/IVA global del subcontratista. */
 export async function upsertTributosSub(subId, tributos, token) {
   const res = await fetch(`${API_BASE}/subcontratistas/${subId}/tributos`, {

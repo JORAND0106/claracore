@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../../apiBase'
+import CcConfirmModal from '../../components/CcConfirmModal'
 import {
   EMPTY_IMPUESTO,
   computeValorDespuesAiuIva,
@@ -9,12 +10,21 @@ import {
 } from '../../admin/catalogoInsumosTributos'
 import { fmtMoneda } from './subcontratistasDocsHelpers'
 import PreciosAiuIvaModal from './PreciosAiuIvaModal'
+import PreciosExportVuCobroModal from './PreciosExportVuCobroModal'
+import PreciosPasteConfirmModal from './PreciosPasteConfirmModal'
 import {
   bulkUpsertPreciosSub,
-  deletePrecioSub,
+  desvincularItemsCobro,
   fetchItemsCobroAsignados,
+  registrarExportPreciosExcel,
   upsertTributosSub,
 } from './subcontratistasItemsCobroApi'
+import {
+  applyVuCostoPastePlan,
+  buildVuCostoPastePlan,
+  esPasteColumnaVu,
+  parseClipboardColumnValues,
+} from './preciosSubcontratistaPaste'
 import {
   buildBulkPayload,
   filterListadoItems,
@@ -25,6 +35,11 @@ import {
   rowKey,
   uniqueCapitulos,
 } from './preciosSubcontratistaSheetHelpers'
+import {
+  MSG_CONFIRMAR_EXPORT_SIN_AIU,
+  validatePreciosExport,
+} from './preciosSubcontratistaExport'
+import { downloadPreciosSubcontratistaExcel } from './preciosSubcontratistaExportExcel'
 import { subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 import { tFrom } from '../../theme/adminPanelTheme'
 
@@ -37,7 +52,10 @@ export default function PreciosSubcontratistaSheet({
   token,
   subId,
   contratoId,
+  subcontratista = null,
   canEdit = true,
+  /** Solo internos con visión económica del contrato pueden pedir VU Cobro. */
+  puedeExportarVuCobro = false,
   onMsg,
 }) {
   const tTok = tFrom(theme)
@@ -55,7 +73,16 @@ export default function PreciosSubcontratistaSheet({
   const [acQuery, setAcQuery] = useState('')
   const [impuestoGlobal, setImpuestoGlobal] = useState({ ...EMPTY_IMPUESTO })
   const [aiuOpen, setAiuOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set())
+  const [confirmEliminarOpen, setConfirmEliminarOpen] = useState(false)
+  const [exportVuOpen, setExportVuOpen] = useState(false)
+  const [confirmAiuExportOpen, setConfirmAiuExportOpen] = useState(false)
+  const [exportPendingOpts, setExportPendingOpts] = useState(null) // { incluirVuCobro, modoCrudo }
+  const [pastePlan, setPastePlan] = useState(null)
   const wrapRef = useRef(null)
+  // Crudo: solo quien puede editar precios (servidor exige escritura; cargo sub → 403).
+  const puedeExportarCrudo = !!canEdit
 
   const loadSheet = useCallback(async () => {
     if (!subId) return
@@ -65,6 +92,7 @@ export default function PreciosSubcontratistaSheet({
       const data = await fetchItemsCobroAsignados(subId, token)
       const items = Array.isArray(data?.items) ? data.items : []
       setRows(items)
+      setSelectedKeys(new Set())
       const next = {}
       for (const it of items) {
         const key = rowKey(it)
@@ -283,14 +311,87 @@ export default function PreciosSubcontratistaSheet({
       cancelDraft(key)
       return
     }
-    if (!window.confirm('¿Eliminar este ítem agregado manualmente?')) return
+    setSelectedKeys(new Set([key]))
+    setConfirmEliminarOpen(true)
+  }
+
+  const filasSeleccionables = useMemo(
+    () => rows.filter((r) => !r._isDraft || r.listado_precio_id),
+    [rows],
+  )
+
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selectedKeys.has(rowKey(r))),
+    [rows, selectedKeys],
+  )
+
+  const allSelectableSelected = filasSeleccionables.length > 0
+    && filasSeleccionables.every((r) => selectedKeys.has(rowKey(r)))
+
+  const toggleSelectKey = (key) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (allSelectableSelected) {
+      setSelectedKeys(new Set())
+      return
+    }
+    setSelectedKeys(new Set(filasSeleccionables.map((r) => rowKey(r))))
+  }
+
+  const confirmarEliminarSeleccion = async () => {
+    if (!canEdit || !selectedRows.length) {
+      setConfirmEliminarOpen(false)
+      return
+    }
     setSaving(true)
     try {
-      await deletePrecioSub(row.precio_id, token)
-      onMsg?.({ type: 'success', text: 'Ítem manual eliminado.' })
+      // Borradores sin persistir: solo quitar de la UI
+      const draftsOnly = selectedRows.filter((r) => r._isDraft && !r.precio_id)
+      for (const r of draftsOnly) cancelDraft(rowKey(r))
+
+      const persistidos = selectedRows.filter((r) => !r._isDraft || r.precio_id)
+      const lpIds = [...new Set(
+        persistidos
+          .map((r) => Number(r.listado_precio_id))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      )]
+
+      let result = null
+      if (lpIds.length) {
+        result = await desvincularItemsCobro(subId, lpIds, token)
+      }
+
+      const nOk = (result?.eliminados || []).length + draftsOnly.length
+      const bloqueados = result?.bloqueados || []
+      if (bloqueados.length) {
+        const detalle = bloqueados
+          .slice(0, 5)
+          .map((b) => `${b.item_numero || b.listado_precio_id}: ${b.motivo}`)
+          .join(' · ')
+        onMsg?.({
+          type: bloqueados.length && !nOk ? 'error' : 'error',
+          text: nOk
+            ? `${nOk} eliminado(s). ${bloqueados.length} no se pudo(ieron): ${detalle}`
+            : `No se eliminó nada. ${detalle}`,
+        })
+      } else if (nOk) {
+        onMsg?.({
+          type: 'success',
+          text: result?.message || `${nOk} ítem(s) eliminado(s) de este subcontratista.`,
+        })
+      }
+      setConfirmEliminarOpen(false)
+      setSelectedKeys(new Set())
       await loadSheet()
     } catch (e) {
-      onMsg?.({ type: 'error', text: e.message || 'No se pudo eliminar el ítem.' })
+      onMsg?.({ type: 'error', text: e.message || 'No se pudieron eliminar los ítems.' })
     } finally {
       setSaving(false)
     }
@@ -301,6 +402,150 @@ export default function PreciosSubcontratistaSheet({
     const n = Number(v)
     if (!Number.isFinite(n)) return '—'
     return n.toLocaleString('es-CO', { maximumFractionDigits: 4 })
+  }
+
+  const ejecutarExportExcel = async ({
+    incluirVuCobro = false,
+    modoCrudo = false,
+    aiuConfirmado = false,
+  } = {}) => {
+    const crudo = !!modoCrudo && !!puedeExportarCrudo
+    const check = validatePreciosExport({
+      rows,
+      drafts,
+      impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+      incluirVuCobro: false,
+      modoCrudo: crudo,
+    })
+    if (!check.ok) {
+      onMsg?.({ type: 'error', text: check.message })
+      return
+    }
+    if (!crudo && check.faltaAiu && !aiuConfirmado) {
+      setExportPendingOpts({ incluirVuCobro: !!incluirVuCobro, modoCrudo: false })
+      setExportVuOpen(false)
+      setConfirmAiuExportOpen(true)
+      return
+    }
+    setConfirmAiuExportOpen(false)
+    setExportPendingOpts(null)
+    setExporting(true)
+    try {
+      const meta = await registrarExportPreciosExcel(
+        subId,
+        {
+          incluirVuCobro: !crudo && !!incluirVuCobro && !!puedeExportarVuCobro,
+          modoCrudo: crudo,
+        },
+        token,
+      )
+      const conCobro = !crudo && !!meta?.incluir_vu_cobro
+      const crudoOk = !!meta?.modo_crudo
+
+      let contratoMeta = {}
+      if (contratoId && token) {
+        try {
+          const rc = await fetch(`${API_BASE}/contratos/${contratoId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (rc.ok) {
+            const data = await rc.json()
+            contratoMeta = {
+              numero: data?.numero || '',
+              objeto: data?.objeto || '',
+              logo_contratista: data?.logo_contratista || '',
+              export_palette: data?.export_palette || null,
+            }
+          }
+        } catch {
+          /* sin contrato: exportación sigue con guiones / paleta por defecto */
+        }
+      }
+
+      const { filename } = await downloadPreciosSubcontratistaExcel({
+        subcontratista: {
+          razon_social: subcontratista?.razon_social || '',
+          nit: subcontratista?.nit || '',
+          objeto_contrato: subcontratista?.objeto_contrato || '',
+          nombre_contacto: subcontratista?.nombre_contacto || '',
+          telefono: subcontratista?.telefono || '',
+        },
+        contrato: contratoMeta,
+        rows,
+        drafts,
+        impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+        incluirVuCobro: conCobro,
+        modoCrudo: crudoOk,
+      })
+      const n = check.lineas.length
+      const suf = crudoOk
+        ? ' · en crudo (sin precios)'
+        : `${check.faltaAiu ? ' · sin AIU/IVA' : ''}${conCobro ? ' · con VU Cobro' : ''}`
+      onMsg?.({
+        type: 'success',
+        text: `Excel descargado: ${filename} (${n} ítem${n === 1 ? '' : 's'})${suf}.`,
+      })
+      setExportVuOpen(false)
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo generar el Excel de precios.' })
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const exportarExcel = () => {
+    // Abrir popup si puede elegir cobro y/o crudo; si no, exportar sin cobro directo.
+    if (puedeExportarVuCobro || puedeExportarCrudo) {
+      const checkBase = validatePreciosExport({
+        rows,
+        drafts,
+        impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+        modoCrudo: false,
+      })
+      const checkCrudo = puedeExportarCrudo
+        ? validatePreciosExport({
+          rows,
+          drafts,
+          impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+          modoCrudo: true,
+        })
+        : { ok: false }
+      if (!checkBase.ok && !checkCrudo.ok) {
+        onMsg?.({ type: 'error', text: checkBase.message || checkCrudo.message })
+        return
+      }
+      setExportVuOpen(true)
+      return
+    }
+    void ejecutarExportExcel({ incluirVuCobro: false, modoCrudo: false })
+  }
+
+  const onPasteVuCosto = (e, rowIndex) => {
+    if (!canEdit || saving) return
+    const text = e.clipboardData?.getData('text/plain') ?? e.clipboardData?.getData('text') ?? ''
+    if (!esPasteColumnaVu(text)) return
+    e.preventDefault()
+    const plan = buildVuCostoPastePlan({
+      rows,
+      drafts,
+      startIndex: rowIndex,
+      pastedTexts: parseClipboardColumnValues(text),
+    })
+    setPastePlan(plan)
+  }
+
+  const confirmarPasteVu = (plan) => {
+    if (!canEdit || !plan?.puedeAplicar) {
+      setPastePlan(null)
+      return
+    }
+    setDrafts((prev) => applyVuCostoPastePlan(prev, plan))
+    setPastePlan(null)
+    const n = plan.aplicaran.length
+    onMsg?.({
+      type: 'success',
+      text: `Pegados ${n} valor${n === 1 ? '' : 'es'} en VU Costo M.O. (pendientes de Guardar).`,
+    })
   }
 
   return (
@@ -323,12 +568,36 @@ export default function PreciosSubcontratistaSheet({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            style={S.btn('ghost', true)}
+            onClick={() => exportarExcel()}
+            disabled={exporting || saving || loading}
+            title="Descargar Excel de precios pactados (soporte contractual)"
+          >
+            {exporting ? 'Exportando…' : '⬇ Excel precios'}
+          </button>
+          {canEdit && (
+            <button
+              type="button"
+              style={{
+                ...S.btn('ghost', true),
+                color: selectedKeys.size ? (tTok.danger || '#dc2626') : tTok.textMuted,
+                borderColor: selectedKeys.size ? (tTok.danger || '#dc2626') : tTok.border,
+              }}
+              onClick={() => setConfirmEliminarOpen(true)}
+              disabled={exporting || saving || loading || selectedKeys.size === 0}
+              title="Quitar ítems seleccionados de este subcontratista"
+            >
+              Eliminar{selectedKeys.size ? ` (${selectedKeys.size})` : ''}
+            </button>
+          )}
           {canEdit && (
             <button
               type="button"
               style={S.btn('primary', true)}
               onClick={agregarItem}
-              disabled={saving || loading || listadoLoading}
+              disabled={saving || loading || listadoLoading || exporting}
             >
               + Agregar Ítem
             </button>
@@ -338,7 +607,7 @@ export default function PreciosSubcontratistaSheet({
               type="button"
               style={S.btn('ghost', true)}
               onClick={guardar}
-              disabled={saving || loading || invalid || !payload.length}
+              disabled={saving || loading || invalid || !payload.length || exporting}
             >
               {saving ? 'Guardando…' : `Guardar (${payload.length})`}
             </button>
@@ -397,27 +666,41 @@ export default function PreciosSubcontratistaSheet({
         <div style={{ ...ui.sheetWrap, maxHeight: 'min(560px, 58vh)' }}>
           <table style={ui.sheetTable}>
             <colgroup>
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '28%' }} />
+              {canEdit ? <col style={{ width: '4%' }} /> : null}
+              <col style={{ width: canEdit ? '9%' : '10%' }} />
+              <col style={{ width: canEdit ? '26%' : '28%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '14%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '15%' }} />
+              <col style={{ width: '14%' }} />
             </colgroup>
             <thead>
               <tr>
+                {canEdit && (
+                  <th style={{ ...ui.th, textAlign: 'center', width: 36 }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelectableSelected}
+                      disabled={saving || !filasSeleccionables.length}
+                      onChange={toggleSelectAll}
+                      title="Seleccionar todos"
+                      aria-label="Seleccionar todos"
+                    />
+                  </th>
+                )}
                 {['Ítem', 'Descripción', 'Und', 'Cantidad', 'VU Cobro', 'VU Costo M.O.', 'Con AIU/IVA'].map((h) => (
                   <th key={h} style={ui.th}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {rows.map((r, rowIndex) => {
                 const key = rowKey(r)
                 const d = drafts[key] || {}
                 const isManual = String(r.origen || '').toLowerCase() === 'manual' || r._isDraft
                 const cantEditable = !!r.cantidad_editable || !!r._isDraft
+                const selectable = !r._isDraft || !!r.listado_precio_id
                 const suggestions = (r._isDraft && acOpenKey === key)
                   ? filterListadoItems(listado, {
                     capitulo: r.capitulo,
@@ -429,6 +712,17 @@ export default function PreciosSubcontratistaSheet({
 
                 return (
                   <tr key={key}>
+                    {canEdit && (
+                      <td style={{ ...ui.td, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(key)}
+                          disabled={saving || !selectable}
+                          onChange={() => toggleSelectKey(key)}
+                          aria-label={`Seleccionar ítem ${r.item_numero || key}`}
+                        />
+                      </td>
+                    )}
                     <td style={{ ...ui.td, fontWeight: 700, color: tTok.primary, position: 'relative' }}>
                       {r._isDraft ? (
                         <div>
@@ -469,7 +763,7 @@ export default function PreciosSubcontratistaSheet({
                               }}
                               disabled={saving}
                               onClick={() => eliminarManual(r)}
-                              title={r._isDraft ? 'Descartar fila' : 'Eliminar ítem manual'}
+                              title={r._isDraft ? 'Descartar fila' : 'Eliminar ítem'}
                             >
                               {r._isDraft ? 'Descartar' : 'Eliminar'}
                             </button>
@@ -617,8 +911,9 @@ export default function PreciosSubcontratistaSheet({
                           disabled={saving}
                           value={d.vu_costo ?? ''}
                           placeholder="Antes AIU"
-                          title="Valor antes de AIU/IVA"
+                          title="Valor antes de AIU/IVA. Puede pegar una columna copiada desde Excel."
                           onChange={(e) => setDraftField(key, 'vu_costo', e.target.value)}
+                          onPaste={(e) => onPasteVuCosto(e, rowIndex)}
                         />
                       ) : (
                         <span style={{ display: 'block', textAlign: 'right', fontWeight: 700 }}>
@@ -651,6 +946,108 @@ export default function PreciosSubcontratistaSheet({
         onClose={() => setAiuOpen(false)}
         onSave={guardarAiuGlobal}
       />
+
+      <PreciosExportVuCobroModal
+        open={exportVuOpen}
+        theme={theme}
+        procesando={exporting}
+        puedeExportarVuCobro={puedeExportarVuCobro}
+        puedeExportarCrudo={puedeExportarCrudo}
+        onCancel={() => !exporting && setExportVuOpen(false)}
+        onConfirm={({ incluirVuCobro, modoCrudo }) => void ejecutarExportExcel({
+          incluirVuCobro,
+          modoCrudo,
+        })}
+      />
+
+      <PreciosPasteConfirmModal
+        open={!!pastePlan}
+        theme={theme}
+        plan={pastePlan}
+        onCancel={() => setPastePlan(null)}
+        onConfirm={confirmarPasteVu}
+      />
+
+      {confirmAiuExportOpen && (
+        <CcConfirmModal
+          theme={theme}
+          tipo="warn"
+          titulo="Exportar sin AIU/IVA"
+          confirmar="Sí, continuar"
+          cancelar="No"
+          procesando={exporting}
+          zIndex={100080}
+          onCancel={() => {
+            if (exporting) return
+            setConfirmAiuExportOpen(false)
+            setExportPendingOpts(null)
+          }}
+          onConfirm={() => void ejecutarExportExcel({
+            incluirVuCobro: !!exportPendingOpts?.incluirVuCobro,
+            modoCrudo: !!exportPendingOpts?.modoCrudo,
+            aiuConfirmado: true,
+          })}
+        >
+          <div style={{ lineHeight: 1.45 }}>
+            {MSG_CONFIRMAR_EXPORT_SIN_AIU}
+          </div>
+          <div style={{
+            marginTop: 10,
+            fontSize: 'var(--cc-caption)',
+            color: tTok.textMuted,
+            lineHeight: 1.4,
+          }}
+          >
+            El archivo se generará con los valores «con AIU/IVA» iguales a los de antes de AIU/IVA
+            hasta que configure el desglose del subcontratista.
+          </div>
+        </CcConfirmModal>
+      )}
+
+      {confirmEliminarOpen && (
+        <CcConfirmModal
+          theme={theme}
+          tipo="danger"
+          titulo="Eliminar ítems de Precios"
+          confirmar="Eliminar"
+          cancelar="Cancelar"
+          procesando={saving}
+          onCancel={() => !saving && setConfirmEliminarOpen(false)}
+          onConfirm={() => void confirmarEliminarSeleccion()}
+        >
+          <div style={{ marginBottom: 8 }}>
+            Se quitarán de{' '}
+            <strong>{subcontratista?.razon_social || `subcontratista #${subId}`}</strong>
+            {' '}los siguientes ítems. No se elimina el presupuesto ni el listado del contrato,
+            ni se afecta a otros subcontratistas.
+          </div>
+          <ul style={{
+            margin: '8px 0 0',
+            paddingLeft: 18,
+            maxHeight: 180,
+            overflow: 'auto',
+            fontSize: 'var(--cc-caption)',
+          }}
+          >
+            {selectedRows.map((r) => (
+              <li key={rowKey(r)} style={{ marginBottom: 4 }}>
+                <strong>{r.item_numero || '—'}</strong>
+                {' — '}
+                {r.descripcion || 'Sin descripción'}
+                {' '}
+                <span style={{ color: tTok.textMuted }}>
+                  ({String(r.origen || '').toLowerCase() === 'manual' || r._isDraft ? 'manual' : 'presupuesto'}
+                  {r.cantidad != null ? ` · cant. ${fmtCant(r.cantidad)}` : ''})
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 10, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+            Si algún ítem tiene cantidades en cortes enviados y conciliados, no se eliminará
+            y se informará el motivo.
+          </div>
+        </CcConfirmModal>
+      )}
     </div>
   )
 }

@@ -51,6 +51,7 @@ from subcontratista_visibilidad import (
     redactar_filas_economicos_contrato,
     resolver_filtro_subcontratista_solicitado,
     scope_subcontratista,
+    usuario_ve_valores_economicos_contrato,
     validar_vinculo_subcontratista_en_contrato,
 )
 from presupuesto_panel_validacion import (
@@ -1248,6 +1249,20 @@ class PresupuestoBulkSubcontratista(BaseModel):
     """Asigna subcontratista_id a registros de presupuesto (edición masiva)."""
     ids: List[int]
     subcontratista_id: int
+
+
+class PresupuestoSubRedistribucionPreview(BaseModel):
+    """Preview de asignación compartida / redistribución de saldo."""
+    ids: List[int]
+    subcontratista_id: int
+
+
+class PresupuestoSubRedistribucionAplicar(BaseModel):
+    """Confirma proporciones y aplica redistribución + asignaciones simples."""
+    ids: List[int]
+    subcontratista_id: int
+    proporciones: Optional[Dict[str, float]] = None
+    preview: Optional[dict] = None
 
 
 class PresupuestoBulkObservacion(BaseModel):
@@ -14631,23 +14646,8 @@ def bulk_nodos(contrato_id: int, body: PresupuestoBulkNodos, current_user=Depend
     return {"actualizados": len(ids_ok), **patch}
 
 
-@app.put("/presupuesto/{contrato_id}/bulk-subcontratista")
-def bulk_subcontratista(
-    contrato_id: int, body: PresupuestoBulkSubcontratista, current_user=Depends(get_current_user)
-):
-    """Asigna `subcontratista_id` en lote (edición masiva · Capítulo/Ítem).
-
-    Solo toca subcontratista_id (+ updated_at). No modifica validación ni sellado.
-    Los registros sellados se rechazan (misma regla que cap/ítem editable).
-    """
-    _require_contract_access(current_user, contrato_id)
-    if not body.ids:
-        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
-        current_user, contrato_id
-    ):
-        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
-    sub_id = int(body.subcontratista_id or 0)
+def _validar_sub_para_asignacion_ppto(contrato_id: int, sub_id: int):
+    """Valida subcontratista del contrato y activo. Retorna fila o HTTPException."""
     if sub_id <= 0:
         raise HTTPException(status_code=422, detail="subcontratista_id inválido.")
     sub_rows = (
@@ -14663,30 +14663,213 @@ def bulk_subcontratista(
         raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato.")
     if sub_rows[0].get("activo") is False:
         raise HTTPException(status_code=422, detail="El subcontratista está inactivo.")
+    return sub_rows[0]
+
+
+@app.post("/presupuesto/{contrato_id}/subcontratista-redistribucion/preview")
+def presupuesto_sub_redistribucion_preview(
+    contrato_id: int,
+    body: PresupuestoSubRedistribucionPreview,
+    current_user=Depends(get_current_user),
+):
+    """Preview de asignación compartida (popup de proporciones). Solo usuarios internos con edición."""
+    from presupuesto_sub_redistribucion import preview_asignacion_compartida
+
+    _require_contract_access(current_user, contrato_id)
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    # Usuarios subcontratista nunca ven este popup / datos de otros
+    from subcontratista_visibilidad import scope_from_user_dict
+    restricted, _forced = scope_from_user_dict(current_user)
+    if restricted:
+        raise HTTPException(status_code=403, detail="La redistribución solo está disponible para usuarios internos.")
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    sub_id = int(body.subcontratista_id or 0)
+    _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
     _reject_if_presupuesto_sellado(supabase, body.ids)
-    rows = (
-        supabase.table("presupuesto")
-        .select("id, contrato_id, id_pol, subcontratista_id")
-        .in_("id", body.ids)
-        .execute()
-        .data
-        or []
+    return preview_asignacion_compartida(
+        supabase,
+        contrato_id=int(contrato_id),
+        presupuesto_ids=body.ids,
+        nuevo_subcontratista_id=sub_id,
     )
-    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
-    if not ids_ok:
-        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
-    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
-    supabase.table("presupuesto").update(
-        {"subcontratista_id": sub_id, "updated_at": "now()"}
-    ).in_("id", ids_ok).execute()
+
+
+@app.post("/presupuesto/{contrato_id}/subcontratista-redistribucion/aplicar")
+def presupuesto_sub_redistribucion_aplicar(
+    contrato_id: int,
+    body: PresupuestoSubRedistribucionAplicar,
+    current_user=Depends(get_current_user),
+):
+    """Aplica asignación simple y/o redistribución confirmada en el popup."""
+    from presupuesto_sub_redistribucion import (
+        aplicar_asignacion_compartida,
+        preview_asignacion_compartida,
+    )
+
+    _require_contract_access(current_user, contrato_id)
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    from subcontratista_visibilidad import scope_from_user_dict
+    restricted, _forced = scope_from_user_dict(current_user)
+    if restricted:
+        raise HTTPException(status_code=403, detail="La redistribución solo está disponible para usuarios internos.")
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    sub_id = int(body.subcontratista_id or 0)
+    sub_row = _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+
+    preview = body.preview
+    if not isinstance(preview, dict) or not preview.get("mode"):
+        preview = preview_asignacion_compartida(
+            supabase,
+            contrato_id=int(contrato_id),
+            presupuesto_ids=body.ids,
+            nuevo_subcontratista_id=sub_id,
+        )
+    try:
+        result = aplicar_asignacion_compartida(
+            supabase,
+            contrato_id=int(contrato_id),
+            nuevo_subcontratista_id=sub_id,
+            proporciones=body.proporciones,
+            preview=preview,
+            usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     det_bulk = {
         "contrato_id": contrato_id,
-        "cantidad_registros": len(ids_ok),
+        "cantidad_registros": result.get("actualizados"),
         "subcontratista_id": sub_id,
-        "razon_social": sub_rows[0].get("razon_social"),
+        "razon_social": sub_row.get("razon_social"),
+        "mode": result.get("mode"),
+        "simples": result.get("simples"),
+        "redistribuidos": result.get("redistribuidos"),
+        "proporciones": body.proporciones,
     }
-    audit_filas = [(dict(r), {**dict(r), "subcontratista_id": sub_id}) for r in rows_ok]
-    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_sub_redistribucion",
+        str(contrato_id),
+        det_bulk,
+    )
+    return result
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-subcontratista")
+def bulk_subcontratista(
+    contrato_id: int, body: PresupuestoBulkSubcontratista, current_user=Depends(get_current_user)
+):
+    """Asigna subcontratista en lote (edición masiva · Capítulo/Ítem).
+
+    Si los registros ya tienen otros subcontratistas, responde
+    ``requires_redistribution: true`` + preview para que el cliente abra el popup.
+    Si todos están libres, asigna la cantidad completa al nuevo sub (tabla compartida).
+    """
+    from presupuesto_sub_redistribucion import (
+        aplicar_asignacion_compartida,
+        preview_asignacion_compartida,
+    )
+
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    sub_id = int(body.subcontratista_id or 0)
+    sub_row = _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+
+    # Si aún no existe la tabla de asignación compartida, fallback legado (exclusivo).
+    from presupuesto_sub_redistribucion import _table_exists as _ppto_sub_table_exists
+    if not _ppto_sub_table_exists(supabase, "presupuesto_sub_asignacion"):
+        rows = (
+            supabase.table("presupuesto")
+            .select("id, contrato_id, id_pol, subcontratista_id")
+            .in_("id", body.ids)
+            .execute()
+            .data
+            or []
+        )
+        ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+        if not ids_ok:
+            raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+        rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+        supabase.table("presupuesto").update(
+            {"subcontratista_id": sub_id, "updated_at": "now()"}
+        ).in_("id", ids_ok).execute()
+        det_bulk = {
+            "contrato_id": contrato_id,
+            "cantidad_registros": len(ids_ok),
+            "subcontratista_id": sub_id,
+            "razon_social": sub_row.get("razon_social"),
+            "mode": "legado_exclusivo",
+        }
+        audit_filas = [(dict(r), {**dict(r), "subcontratista_id": sub_id}) for r in rows_ok]
+        _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "PRESUPUESTO",
+            "presupuesto_bulk_subcontratista",
+            str(contrato_id),
+            det_bulk,
+        )
+        return {
+            "actualizados": len(ids_ok),
+            "subcontratista_id": sub_id,
+            "requires_redistribution": False,
+            "mode": "legado_exclusivo",
+        }
+
+    preview = preview_asignacion_compartida(
+        supabase,
+        contrato_id=int(contrato_id),
+        presupuesto_ids=body.ids,
+        nuevo_subcontratista_id=sub_id,
+    )
+    if preview.get("mode") == "bloqueado":
+        raise HTTPException(status_code=422, detail=preview.get("message") or "Asignación bloqueada.")
+    if preview.get("mode") == "redistribuir":
+        return {
+            "requires_redistribution": True,
+            "preview": preview,
+            "subcontratista_id": sub_id,
+            "razon_social": sub_row.get("razon_social"),
+        }
+
+    # mode == simple (o solo bloqueados parciales + simples)
+    try:
+        result = aplicar_asignacion_compartida(
+            supabase,
+            contrato_id=int(contrato_id),
+            nuevo_subcontratista_id=sub_id,
+            proporciones=preview.get("proporciones_default"),
+            preview=preview,
+            usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    det_bulk = {
+        "contrato_id": contrato_id,
+        "cantidad_registros": result.get("actualizados"),
+        "subcontratista_id": sub_id,
+        "razon_social": sub_row.get("razon_social"),
+        "mode": "simple",
+    }
     registrar_log(
         current_user,
         "EDITAR",
@@ -14695,7 +14878,12 @@ def bulk_subcontratista(
         str(contrato_id),
         det_bulk,
     )
-    return {"actualizados": len(ids_ok), "subcontratista_id": sub_id}
+    return {
+        "actualizados": result.get("actualizados"),
+        "subcontratista_id": sub_id,
+        "requires_redistribution": False,
+        "mode": "simple",
+    }
 
 
 @app.put("/presupuesto/{contrato_id}/bulk-observacion")
@@ -18990,9 +19178,60 @@ def _scope_subcontratista_usuario(current_user) -> Tuple[bool, Optional[int]]:
 
 
 def _presupuesto_q_visibilidad_usuario(q, current_user):
-    """Interventoría + aislamiento subcontratista sobre consultas de presupuesto."""
+    """Interventoría + aislamiento subcontratista sobre consultas de presupuesto.
+
+    Con asignación compartida, un registro puede tener varios subs y
+    ``subcontratista_id`` legado queda null: se filtra también por
+    ``presupuesto_sub_asignacion``.
+    """
     q = _presupuesto_q_visibilidad_interventoria(q, current_user)
     restricted, forced = _scope_subcontratista_usuario(current_user)
+    if not restricted:
+        return q
+    if forced is None:
+        return apply_subcontratista_filter_q(q, True, None)
+    try:
+        from presupuesto_sub_redistribucion import _table_exists as _psa_exists
+        if _psa_exists(supabase, "presupuesto_sub_asignacion"):
+            pids: List[int] = []
+            offset = 0
+            while True:
+                batch = (
+                    supabase.table("presupuesto_sub_asignacion")
+                    .select("presupuesto_id")
+                    .eq("subcontratista_id", int(forced))
+                    .order("id")
+                    .range(offset, offset + 999)
+                    .execute()
+                    .data
+                ) or []
+                for r in batch:
+                    try:
+                        pids.append(int(r["presupuesto_id"]))
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                if len(batch) < 1000:
+                    break
+                offset += 1000
+            if pids:
+                # Incluye legado (FK) + filas compartidas vía asignacion.
+                # PostgREST limita URL: trocear .in_ si hace falta → usar or con FK.
+                if len(pids) <= 200:
+                    id_list = ",".join(str(p) for p in pids)
+                    return q.or_(
+                        f"subcontratista_id.eq.{int(forced)},id.in.({id_list})"
+                    )
+                # Muchas filas: filtrar solo por id.in en chunks no es trivial en un
+                # único query builder; caer a FK legado + primer chunk (el resto
+                # sigue visible vía Precios/items-cobro que leen asignacion).
+                id_list = ",".join(str(p) for p in pids[:200])
+                return q.or_(
+                    f"subcontratista_id.eq.{int(forced)},id.in.({id_list})"
+                )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "visibilidad presupuesto vía asignacion compartida: %s", exc,
+        )
     return apply_subcontratista_filter_q(q, restricted, forced)
 
 
@@ -19506,6 +19745,7 @@ def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=De
 @app.get("/subcontratistas/{sub_id}/items-cobro-asignados")
 def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_user)):
     """Hoja unificada: ítems de Presupuesto (cant > 0) + filas manuales."""
+    from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
         build_precios_sheet,
@@ -19514,29 +19754,13 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
     sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=False)
     contrato_id = int(sub["contrato_id"])
 
-    ppto_rows: List[dict] = []
     try:
-        offset = 0
-        while True:
-            batch = (
-                supabase.table("presupuesto")
-                .select("capitulo, competencia, item, cant_total")
-                .eq("contrato_id", contrato_id)
-                .eq("subcontratista_id", int(sub_id))
-                .eq("tipo_ejecucion", "Presupuesto de Obra")
-                .eq("dado_de_baja", False)
-                .order("id")
-                .range(offset, offset + 999)
-                .execute()
-                .data
-            )
-            ppto_rows.extend(batch or [])
-            if len(batch or []) < 1000:
-                break
-            offset += 1000
+        ppto_rows = fetch_ppto_rows_cant_map_for_sub(
+            supabase, contrato_id=contrato_id, subcontratista_id=int(sub_id),
+        )
     except Exception as exc:
         logging.getLogger(__name__).warning(
-            "items-cobro-asignados: no se pudo leer presupuesto.subcontratista_id (sub=%s): %s",
+            "items-cobro-asignados: no se pudo leer asignación compartida (sub=%s): %s",
             sub_id,
             exc,
         )
@@ -19561,33 +19785,12 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
             break
         offset += 1000
 
-    try:
-        precios_rows = (
-            supabase.table("subcontratista_precios")
-            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual, tributos")
-            .eq("subcontratista_id", int(sub_id))
-            .execute()
-            .data
-        ) or []
-    except Exception:
-        try:
-            precios_rows = (
-                supabase.table("subcontratista_precios")
-                .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
-                .eq("subcontratista_id", int(sub_id))
-                .execute()
-                .data
-            ) or []
-        except Exception:
-            precios_rows = (
-                supabase.table("subcontratista_precios")
-                .select("id, listado_precio_id, precio_unitario_sub")
-                .eq("subcontratista_id", int(sub_id))
-                .execute()
-                .data
-            ) or []
+    from subcontratistas_items_cobro import (
+        fetch_subcontratista_precios_rows,
+        resolve_tributos_subcontratista,
+    )
 
-    from subcontratistas_items_cobro import resolve_tributos_subcontratista
+    precios_rows = fetch_subcontratista_precios_rows(supabase, int(sub_id))
 
     tributos_sub = {}
     try:
@@ -19608,7 +19811,19 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
 
     tributos = resolve_tributos_subcontratista(tributos_sub, precios_rows)
     items = build_precios_sheet(listado, cant_map, precios_rows)
-    return {"items": items, "total": len(items), "tributos": tributos}
+    # VU Cobro es economía del contrato: nunca al cargo subcontratista / operativos.
+    cargo = (current_user or {}).get("cargo_nombre")
+    rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
+    if not usuario_ve_valores_economicos_contrato(cargo, rol):
+        for it in items:
+            if isinstance(it, dict) and "vu_cobro" in it:
+                it["vu_cobro"] = None
+    return {
+        "items": items,
+        "total": len(items),
+        "tributos": tributos,
+        "puede_incluir_vu_cobro": bool(usuario_ve_valores_economicos_contrato(cargo, rol)),
+    }
 
 
 @app.put("/subcontratistas/{sub_id}/tributos")
@@ -19724,6 +19939,17 @@ def bulk_upsert_precios_sub(
     return {"ok": True, "insertados": insertados, "actualizados": actualizados, "total": len(payload)}
 
 
+class SubcontratistaItemsCobroDesvincular(BaseModel):
+    """Ítems de la hoja Precios a desvincular del subcontratista."""
+    listado_precio_ids: List[int]
+
+
+class SubcontratistaPreciosExportLog(BaseModel):
+    """Registro de exportación Excel de Precios (con/sin VU Cobro / en crudo)."""
+    incluir_vu_cobro: bool = False
+    modo_crudo: bool = False
+
+
 @app.delete("/subcontratistas/precios/{precio_id}")
 def eliminar_precio_sub(precio_id: int, current_user=Depends(get_current_user)):
     """Elimina solo filas de origen manual."""
@@ -19769,6 +19995,107 @@ def eliminar_precio_sub(precio_id: int, current_user=Depends(get_current_user)):
         {"listado_precio_id": row.get("listado_precio_id"), "origen": origen or "manual"},
     )
     return {"ok": True}
+
+
+@app.post("/subcontratistas/{sub_id}/items-cobro/desvincular")
+def desvincular_items_cobro_sub(
+    sub_id: int,
+    body: SubcontratistaItemsCobroDesvincular,
+    current_user=Depends(get_current_user),
+):
+    """
+    Quita ítems de la hoja Precios del subcontratista (Presupuesto y/o manuales).
+
+    No borra el ítem del presupuesto ni del listado del contrato ni afecta a otros
+    subcontratistas. Bloquea ítems con cantidades en cortes enviados/conciliados.
+    """
+    from subcontratistas_precios_desvincular import desvincular_items_cobro
+
+    sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=True)
+    contrato_id = int(sub["contrato_id"])
+    ids = [int(x) for x in (body.listado_precio_ids or []) if int(x) > 0]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para eliminar.")
+
+    result = desvincular_items_cobro(
+        supabase,
+        contrato_id=contrato_id,
+        subcontratista_id=int(sub_id),
+        listado_precio_ids=ids,
+        usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+    )
+    registrar_log(
+        current_user,
+        "ELIMINAR",
+        "SUBCONTRATISTAS",
+        "items_cobro_desvincular",
+        str(sub_id),
+        {
+            "contrato_id": contrato_id,
+            "subcontratista_id": int(sub_id),
+            "razon_social": sub.get("razon_social"),
+            "solicitados": ids,
+            "eliminados": result.get("eliminados"),
+            "bloqueados": result.get("bloqueados"),
+        },
+    )
+    return result
+
+
+@app.post("/subcontratistas/{sub_id}/precios/export-excel-log")
+def registrar_export_precios_excel_sub(
+    sub_id: int,
+    body: SubcontratistaPreciosExportLog,
+    current_user=Depends(get_current_user),
+):
+    """
+    Autoriza y registra la exportación Excel de Precios.
+
+    - VU Cobro: solo si el usuario ve economía del contrato; si no, se fuerza false.
+    - En crudo: solo personal administrativo con permiso de escritura (editar/crear).
+      Un usuario subcontratista no puede exportar en crudo.
+    """
+    solicitado_crudo = bool(getattr(body, "modo_crudo", False))
+    # Crudo exige escritura (misma regla que editar precios); bloquea cargo sub.
+    if solicitado_crudo:
+        sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=True)
+    else:
+        sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=False)
+
+    cargo = (current_user or {}).get("cargo_nombre")
+    rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
+    puede_cobro = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+    # Puede crudo = pasó escribir=True arriba (admin con crear/editar, no cargo sub)
+    puede_crudo = bool(solicitado_crudo)
+    crudo_efectivo = bool(solicitado_crudo and puede_crudo)
+    solicitado_cobro = bool(body.incluir_vu_cobro) and not crudo_efectivo
+    cobro_efectivo = bool(solicitado_cobro and puede_cobro)
+    det = {
+        "contrato_id": int(sub["contrato_id"]),
+        "subcontratista_id": int(sub_id),
+        "razon_social": sub.get("razon_social"),
+        "incluir_vu_cobro_solicitado": bool(body.incluir_vu_cobro),
+        "incluir_vu_cobro": cobro_efectivo,
+        "puede_incluir_vu_cobro": puede_cobro,
+        "modo_crudo_solicitado": solicitado_crudo,
+        "modo_crudo": crudo_efectivo,
+        "puede_exportar_crudo": True if solicitado_crudo else puede_cobro,
+    }
+    registrar_log(
+        current_user,
+        "EXPORTAR",
+        "SUBCONTRATISTAS",
+        "precios_excel_crudo" if crudo_efectivo else "precios_excel",
+        str(sub_id),
+        det,
+    )
+    return {
+        "ok": True,
+        "incluir_vu_cobro": cobro_efectivo,
+        "puede_incluir_vu_cobro": puede_cobro,
+        "modo_crudo": crudo_efectivo,
+        "puede_exportar_crudo": bool(solicitado_crudo) or puede_cobro,
+    }
 
 
 @app.get("/subcontratistas/{contrato_id}/alertas-corte")
@@ -33023,18 +33350,23 @@ def _sicoe_mover_registros_entre_actas_ejecutar(
 
 class MoverRegistrosEntreCortesPreviewBody(BaseModel):
     subcontratista_id: int
-    corte_origen_id: int
+    # None = registros del subcontratista sin corte asignado («Sin corte»).
+    corte_origen_id: Optional[int] = None
     corte_destino_id: int
 
 
 class MoverRegistrosEntreCortesBody(BaseModel):
     subcontratista_id: int
-    corte_origen_id: int
+    # None = origen «Sin corte» (registros con corte_id nulo).
+    corte_origen_id: Optional[int] = None
     corte_destino_id: int
     registro_ids: List[int]
     incluir_sellados: bool = False
     confirmacion_sellados: Optional[str] = None
     motivo: Optional[str] = None
+
+
+SICOE_CORTE_ORIGEN_SIN_CORTE_LABEL = "Sin corte"
 
 
 class ReasignarSubcontratistaBuscarBody(BaseModel):
@@ -33142,22 +33474,65 @@ def _sicoe_label_sub(meta: dict) -> str:
     return f"Subcontratista #{meta.get('id')}"
 
 
+def _sicoe_es_corte_origen_sin_corte(corte_origen_id: Optional[int]) -> bool:
+    return corte_origen_id is None
+
+
+def _sicoe_corte_origen_payload(origen: Optional[dict]) -> dict:
+    """Payload de corte origen para preview/resultado (incluye «Sin corte»)."""
+    if origen is None:
+        return {
+            "id": None,
+            "consecutivo": None,
+            "label": SICOE_CORTE_ORIGEN_SIN_CORTE_LABEL,
+            "sin_corte": True,
+        }
+    return {
+        "id": int(origen["id"]),
+        "consecutivo": origen.get("consecutivo"),
+        "label": _sicoe_label_corte(origen),
+        "sin_corte": False,
+    }
+
+
+def _sicoe_registro_en_corte_origen(
+    row: Optional[dict], sub_id: int, corte_origen_id: Optional[int]
+) -> bool:
+    if not row:
+        return False
+    try:
+        if int(row.get("subcontratista_id") or 0) != int(sub_id):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if _sicoe_es_corte_origen_sin_corte(corte_origen_id):
+        return row.get("corte_id") is None
+    try:
+        return int(row.get("corte_id") or 0) == int(corte_origen_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def _sicoe_validar_par_cortes_mover(
-    contrato_id: int, sub_id: int, origen_id: int, destino_id: int
-) -> Tuple[dict, dict, dict]:
-    if int(origen_id) == int(destino_id):
+    contrato_id: int, sub_id: int, origen_id: Optional[int], destino_id: int
+) -> Tuple[dict, Optional[dict], dict]:
+    """
+    Valida sub + par origen/destino.
+    origen_id=None → origen «Sin corte» (no exige fila en subcontratista_cortes).
+    """
+    if origen_id is not None and int(origen_id) == int(destino_id):
         raise HTTPException(
             status_code=422,
             detail="El corte de origen y el de destino deben ser distintos.",
         )
     sub = _sicoe_subcontratista_meta(contrato_id, sub_id)
-    origen = _sicoe_corte_meta(contrato_id, sub_id, origen_id)
     destino = _sicoe_corte_meta(contrato_id, sub_id, destino_id)
+    origen = None if origen_id is None else _sicoe_corte_meta(contrato_id, sub_id, origen_id)
     return sub, origen, destino
 
 
 def _sicoe_fetch_registros_corte_origen(
-    contrato_id: int, sub_id: int, corte_origen_id: int
+    contrato_id: int, sub_id: int, corte_origen_id: Optional[int]
 ) -> List[dict]:
     out: List[dict] = []
     off = 0
@@ -33167,19 +33542,20 @@ def _sicoe_fetch_registros_corte_origen(
         f"cantidad_total, bloqueado, subcontratista_id, corte_id, "
         f"contrato_id, {SICOE_SELECT_NIVELES_ESTADO}"
     )
+    sin_corte = _sicoe_es_corte_origen_sin_corte(corte_origen_id)
     while True:
         def _q(o=off):
-            return (
+            q = (
                 supabase.table("so_registros")
                 .select(campos)
                 .eq("contrato_id", int(contrato_id))
                 .eq("subcontratista_id", int(sub_id))
-                .eq("corte_id", int(corte_origen_id))
-                .order("id")
-                .range(o, o + page - 1)
-                .execute()
-                .data
             )
+            if sin_corte:
+                q = q.is_("corte_id", "null")
+            else:
+                q = q.eq("corte_id", int(corte_origen_id))
+            return q.order("id").range(o, o + page - 1).execute().data
 
         batch = supabase_execute(_q) or []
         out.extend(batch)
@@ -33218,7 +33594,7 @@ def _sicoe_preview_item_mover_corte(reg: dict, contrato_id: int) -> dict:
 def _sicoe_mover_registros_entre_cortes_ejecutar(
     contrato_id: int,
     sub_id: int,
-    corte_origen_id: int,
+    corte_origen_id: Optional[int],
     corte_destino_id: int,
     ids: List[int],
     current_user,
@@ -33238,6 +33614,8 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
     sub, origen, destino = _sicoe_validar_par_cortes_mover(
         contrato_id, sub_id, corte_origen_id, corte_destino_id
     )
+    sin_corte = _sicoe_es_corte_origen_sin_corte(corte_origen_id)
+    origen_payload = _sicoe_corte_origen_payload(origen)
 
     por_id: Dict[int, dict] = {}
     for chunk in _sicoe_chunks_int(ids_u, 200):
@@ -33269,8 +33647,7 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
     fuera = [
         i
         for i in ids_u
-        if int(por_id[i].get("subcontratista_id") or 0) != int(sub_id)
-        or int(por_id[i].get("corte_id") or 0) != int(corte_origen_id)
+        if not _sicoe_registro_en_corte_origen(por_id[i], sub_id, corte_origen_id)
     ]
     if fuera:
         raise HTTPException(
@@ -33301,16 +33678,17 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
             ch = list(chunk)
 
             def _mov(ids=ch):
-                return (
+                q = (
                     supabase.table("so_registros")
                     .update(patch)
                     .eq("contrato_id", int(contrato_id))
                     .eq("subcontratista_id", int(sub_id))
-                    .eq("corte_id", int(corte_origen_id))
-                    .in_("id", ids)
-                    .execute()
-                    .data
                 )
+                if sin_corte:
+                    q = q.is_("corte_id", "null")
+                else:
+                    q = q.eq("corte_id", int(corte_origen_id))
+                return q.in_("id", ids).execute().data
 
             supabase_execute(_mov)
     except Exception as ex:
@@ -33351,15 +33729,16 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
             "MOVER_CORTE_SUB",
             "SICOE",
             "corte",
-            str(corte_origen_id),
+            "sin_corte" if sin_corte else str(corte_origen_id),
             {
                 "accion": "mover_registros_entre_cortes",
                 "contrato_id": int(contrato_id),
                 "subcontratista_id": int(sub_id),
                 "subcontratista": _sicoe_label_sub(sub),
-                "corte_origen_id": int(corte_origen_id),
+                "corte_origen_id": None if sin_corte else int(corte_origen_id),
+                "corte_origen_sin_corte": bool(sin_corte),
                 "corte_destino_id": int(corte_destino_id),
-                "corte_origen_label": _sicoe_label_corte(origen),
+                "corte_origen_label": origen_payload["label"],
                 "corte_destino_label": _sicoe_label_corte(destino),
                 "movidos": len(movidos_ids),
                 "no_movidos": len(no_movidos),
@@ -33368,7 +33747,10 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
                 "motivo": (motivo or "").strip() or None,
                 "ids_movidos_muestra": movidos_ids[:50],
             },
-            valor_anterior={"corte_id": int(corte_origen_id), "ids": movidos_ids},
+            valor_anterior={
+                "corte_id": None if sin_corte else int(corte_origen_id),
+                "ids": movidos_ids,
+            },
             valor_nuevo={"corte_id": int(corte_destino_id), "ids": movidos_ids},
             severidad="AUDIT",
             alerta_generada=True,
@@ -33384,11 +33766,7 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
             "razon_social": sub.get("razon_social"),
             "label": _sicoe_label_sub(sub),
         },
-        "corte_origen": {
-            "id": int(origen["id"]),
-            "consecutivo": origen.get("consecutivo"),
-            "label": _sicoe_label_corte(origen),
-        },
+        "corte_origen": origen_payload,
         "corte_destino": {
             "id": int(destino["id"]),
             "consecutivo": destino.get("consecutivo"),
@@ -33399,7 +33777,7 @@ def _sicoe_mover_registros_entre_cortes_ejecutar(
                 "id": i,
                 "numero_registro": por_id[i].get("numero_registro"),
                 "sellado": _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id),
-                "corte_origen_id": int(corte_origen_id),
+                "corte_origen_id": None if sin_corte else int(corte_origen_id),
                 "corte_destino_id": int(corte_destino_id),
             }
             for i in movidos_ids
@@ -38311,7 +38689,7 @@ def _sicoe_fetch_regs_integridad(
 ) -> List[dict]:
     cols = (
         "id, numero_registro, capitulo, item_numero, cantidad_total, "
-        "vlr_unitario, costo_directo, acta_rpo_id"
+        "vlr_unitario, costo_directo, acta_rpo_id, reporte_id"
     )
     regs: List[dict] = []
     off = 0
@@ -38332,6 +38710,52 @@ def _sicoe_fetch_regs_integridad(
             break
         off += 1000
     return regs
+
+
+def _sicoe_adjuntar_numero_reporte(regs: List[dict]) -> None:
+    """Copia numero_reporte a cada registro (consulta por lotes, sin escribir)."""
+    ids: List[int] = []
+    seen = set()
+    for r in regs or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            i = int(r.get("reporte_id"))
+        except (TypeError, ValueError):
+            continue
+        if i not in seen:
+            seen.add(i)
+            ids.append(i)
+    if not ids:
+        return
+    numeros: dict = {}
+    for i in range(0, len(ids), 200):
+        chunk = ids[i : i + 200]
+
+        def _q(ch=chunk):
+            return (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte")
+                .in_("id", ch)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            if isinstance(row, dict) and row.get("id") is not None:
+                try:
+                    numeros[int(row["id"])] = row.get("numero_reporte")
+                except (TypeError, ValueError):
+                    continue
+    for r in regs or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            i = int(r.get("reporte_id"))
+        except (TypeError, ValueError):
+            continue
+        if i in numeros:
+            r["numero_reporte"] = numeros[i]
 
 
 def _sicoe_integridad_resumen_contrato(
@@ -38396,7 +38820,8 @@ def sicoe_integridad_listado(
     """
     Control de integridad registro ↔ listado (solo Administrador / Desarrollador).
 
-    Clasifica: afectan totales (sin cruce) vs valor guardado desactualizado.
+    No modifica datos. Devuelve una inconsistencia por tipo detectado; la vista
+    agrupa cada registro en un solo caso.
     """
     if not (_es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)):
         raise HTTPException(
@@ -38455,6 +38880,7 @@ def sicoe_integridad_listado(
         pass
 
     regs = _sicoe_fetch_regs_integridad(contrato_id, acta_id_filtro=acta_id_filtro)
+    _sicoe_adjuntar_numero_reporte(regs)
     incs = auditar_integridad_registros(regs, listado_idx)
     resumen = resumen_integridad(incs)
     detalle = [inconsistencia_con_caso(i) for i in incs]
@@ -43044,11 +43470,7 @@ def sicoe_mover_registros_entre_cortes_preview(
                 "razon_social": sub.get("razon_social"),
                 "label": _sicoe_label_sub(sub),
             },
-            "corte_origen": {
-                "id": int(origen["id"]),
-                "consecutivo": origen.get("consecutivo"),
-                "label": _sicoe_label_corte(origen),
-            },
+            "corte_origen": _sicoe_corte_origen_payload(origen),
             "corte_destino": {
                 "id": int(destino["id"]),
                 "consecutivo": destino.get("consecutivo"),

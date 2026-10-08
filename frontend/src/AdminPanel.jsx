@@ -7661,7 +7661,7 @@ const ADMIN_PANEL_TABS = [
   { id: "almacenamiento", label: "Almacenamiento Azure", soloDeveloper: true },
 ];
 
-export default function AdminPanel({ user, token, onClose, onContratosMutated, activeTheme, t: tProp }) {
+export default function AdminPanel({ user, token, onClose, onContratosMutated, activeTheme, t: tProp, onAbrirRegistro }) {
   const call = useApi(token, { maxRetries: 3, timeoutMs: 48000 });
   const [cargos, setCargos] = useState([]);
   const [contratos, setContratos] = useState([]);
@@ -7765,7 +7765,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
     "integridad-listado": {
       title: "Revisión vs listado de precios",
-      sub: "Registros por revisar: sin cruce (afectan totales) vs valores guardados desactualizados. Solo Admin/Desarrollador.",
+      sub: "Registros que no coinciden con el listado de precios. Solo consulta.",
     },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza el reset: genera contraseña PRO y la envía por correo con enlace" },
@@ -7901,7 +7901,9 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
           <div className="cc-admin-content-header" style={S.contentHeader(activeTheme, t)}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={S.contentTitle(activeTheme, t)}>{TITULOS[tab]?.title}</div>
-              {!adminCompact && <div style={S.contentSub(activeTheme, t)}>{TITULOS[tab]?.sub}</div>}
+              {(!adminCompact || tab === "integridad-listado") && TITULOS[tab]?.sub && (
+                <div style={S.contentSub(activeTheme, t)}>{TITULOS[tab]?.sub}</div>
+              )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
               {tab === "precios" && (
@@ -8000,6 +8002,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
                 contratos={contratosVisibles}
                 theme={t}
                 token={token}
+                onAbrirRegistro={onAbrirRegistro}
               />
             )}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={permsDevOAdmin || subPerms} theme={activeTheme} token={token} />}

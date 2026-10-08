@@ -133,6 +133,151 @@ def test_aplicar_precios_sub_marca_sin_precio():
     assert "2.1" in sin
 
 
+def test_vu_costo_mo_nunca_usa_vu_cobro_del_contrato():
+    """V. UNIT. del informe de subcontratista = solo mano de obra pactada."""
+    from corte_sub_conciliacion import vu_costo_mo_desde_fila_precios
+
+    # Con MO pactado: usa ese valor aunque exista VU Cobro del contrato
+    assert vu_costo_mo_desde_fila_precios({
+        "vu_costo_mo": 12_500,
+        "vu_cobro": 33_924,
+        "precio_unitario": 33_924,
+    }) == 12_500
+    # Sin MO: 0 (SIN PRECIO) — no caer al listado del contrato
+    assert vu_costo_mo_desde_fila_precios({
+        "vu_costo_mo": None,
+        "vu_cobro": 297_349,
+        "precio_unitario": 297_349,
+    }) == 0.0
+    assert vu_costo_mo_desde_fila_precios({
+        "vu_costo_mo": 0,
+        "vu_cobro": 1_007_517,
+    }) == 0.0
+    # Fila cruda de subcontratista_precios
+    assert vu_costo_mo_desde_fila_precios({
+        "precio_unitario_sub": 8_000,
+        "vu_cobro": 50_000,
+    }) == 8_000
+
+
+def test_item_key_normaliza_punto_final():
+    from corte_sub_conciliacion import item_key
+
+    assert item_key("1.1.") == "1.1"
+    assert item_key("1.1") == "1.1"
+    assert item_key("NP-05") == "NP-05"
+
+
+def test_fetch_precios_degrada_sin_columnas_origen():
+    """
+    Diagnóstico producción: select con origen/cantidad_manual falla (42703),
+    Tab Precios degrada y lee precio_unitario_sub; el Corte no debía quedarse vacío.
+    """
+    from subcontratistas_items_cobro import fetch_subcontratista_precios_rows
+
+    class _FakeQ:
+        def __init__(self, sb, sel):
+            self.sb = sb
+            self.sel = sel
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            if "origen" in self.sel or "cantidad_manual" in self.sel:
+                raise Exception(
+                    'column subcontratista_precios.origen does not exist'
+                )
+            class R:
+                data = [
+                    {"id": 1, "listado_precio_id": 10, "precio_unitario_sub": 12500},
+                ]
+            return R()
+
+    class _FakeSb:
+        def table(self, _name):
+            return self
+
+        def select(self, sel):
+            return _FakeQ(self, sel)
+
+    rows = fetch_subcontratista_precios_rows(_FakeSb(), 99)
+    assert len(rows) == 1
+    assert rows[0]["precio_unitario_sub"] == 12500
+
+
+def test_resolver_vu_por_capitulo_distingue_homonimos():
+    from corte_sub_conciliacion import (
+        aplicar_precios_sub_a_items,
+        resolver_vu_costo_mo_item,
+        valor_por_cantidad_vu,
+    )
+    from sicoe_valor_canonico import cap_item_key
+
+    by_item = {"1.1": 1000}  # ambiguo
+    by_cap = {
+        cap_item_key("1. ACTIVIDADES", "1.1."): 12_500,
+        cap_item_key("3. OBRAS", "1.1"): 99_000,
+    }
+    assert resolver_vu_costo_mo_item(
+        item_numero="1.1.", capitulo="1. ACTIVIDADES",
+        vu_por_item=by_item, vu_por_cap_item=by_cap,
+    ) == 12_500
+    assert resolver_vu_costo_mo_item(
+        item_numero="1.1", capitulo="3. OBRAS",
+        vu_por_item=by_item, vu_por_cap_item=by_cap,
+    ) == 99_000
+
+    items = [
+        {"item_numero": "1.1.", "capitulo": "1. ACTIVIDADES", "cantidad": 2},
+        {"item_numero": "9.9", "capitulo": "X", "cantidad": 1},
+    ]
+    out, sin = aplicar_precios_sub_a_items(items, by_item, vu_por_cap_item=by_cap)
+    assert out[0]["vlr_unitario_sub"] == 12_500
+    assert out[0]["costo_directo"] == valor_por_cantidad_vu(2, 12_500)
+    assert out[0]["sin_precio"] is False
+    assert out[1]["sin_precio"] is True
+    assert "9.9" in sin
+
+
+def test_enriquecer_no_inyecta_precio_contrato_en_vlr_unitario():
+    """Si falta VU Costo M.O., no rellenar V. UNIT. desde un vlr_unitario contractual."""
+    presente = [
+        {
+            "item_numero": "1.1",
+            "item_descripcion": "Exc",
+            "unidad": "M3",
+            "cantidad": 10,
+            "vlr_unitario_sub": 0,
+            # Simula valor contractual colado en el registro
+            "vlr_unitario": 33_924,
+            "capitulo": "I",
+        }
+    ]
+    items = enriquecer_items_bloques(
+        presente,
+        cant_actualizadas={"1.1": 100},
+        cant_acum_anterior={},
+        vu_por_item={},  # sin precio pactado del sub
+        meta_por_item={"1.1": {"descripcion": "Exc", "unidad": "M3", "vlr_unitario": 0}},
+    )
+    assert items[0]["vlr_unitario_sub"] == 0
+    assert items[0]["sin_precio"] is True
+    assert items[0]["valor_actualizadas"] == 0
+
+    # Con VU Costo M.O. pactado: ese manda, no el del contrato
+    items2 = enriquecer_items_bloques(
+        presente,
+        cant_actualizadas={"1.1": 100},
+        cant_acum_anterior={},
+        vu_por_item={"1.1": 12_500},
+        meta_por_item={"1.1": {"vlr_unitario": 12_500, "tiene_vu_costo_mo": True}},
+    )
+    assert items2[0]["vlr_unitario_sub"] == 12_500
+    assert items2[0]["valor_actualizadas"] == valor_por_cantidad_vu(100, 12_500)
+    assert items2[0].get("sin_precio") is False
+
+
 def test_calc_amortizacion_tope_por_saldo():
     from corte_sub_conciliacion import calc_amortizacion
 

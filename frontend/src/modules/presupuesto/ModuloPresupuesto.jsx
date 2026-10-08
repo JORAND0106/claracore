@@ -18,6 +18,7 @@ import { addMapboxGeolocateControl } from '../../mapboxSafe'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
+import PptoSubRedistribucionModal from './PptoSubRedistribucionModal'
 import PptoGraficosModal from './PptoGraficosModal'
 import PptoGruposGraficosModal from './PptoGruposGraficosModal'
 import PptoSincroSicoeLoteModal from './PptoSincroSicoeLoteModal'
@@ -336,6 +337,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
   const [competenciasEdicionMasiva, setCompetenciasEdicionMasiva] = useState([])
   const [subcontratistasEdicionMasiva, setSubcontratistasEdicionMasiva] = useState([])
+  const [redistribucionState, setRedistribucionState] = useState(null) // { preview, ids, subcontratistaId }
+  const [redistribucionAplicando, setRedistribucionAplicando] = useState(false)
 
   useEffect(() => {
     if (!modalEdicionMasiva || !contratoId) return
@@ -4327,12 +4330,83 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(err?.detail || 'No se pudo asignar el subcontratista.')
+      const detail = err?.detail
+      throw new Error(
+        typeof detail === 'string' ? detail : (detail?.msg || 'No se pudo asignar el subcontratista.'),
+      )
+    }
+    const data = await res.json().catch(() => ({}))
+    if (data?.requires_redistribution && data?.preview) {
+      // Popup de proporciones (solo presupuesto vivo).
+      if (ep.mode === 'version' || !ep.subRedistribucionAplicar) {
+        throw new Error(
+          'Estos registros ya tienen otros subcontratistas. '
+          + 'La redistribución de saldo solo está disponible en el presupuesto vivo.',
+        )
+      }
+      setRedistribucionState({
+        preview: data.preview,
+        ids,
+        subcontratistaId: sid,
+      })
+      // Señal especial para que el caller no muestre éxito prematuro.
+      const err = new Error('REDIS_PENDING')
+      err.code = 'REDIS_PENDING'
+      throw err
     }
     const idSet = new Set(ids.map((id) => String(id)))
     setRegistros((prev) => prev.map((r) => (
-      idSet.has(String(r.id)) ? { ...r, subcontratista_id: sid } : r
+      idSet.has(String(r.id))
+        ? {
+          ...r,
+          // Con un solo sub queda el id; con varios el backend deja null.
+          subcontratista_id: data?.mode === 'simple' ? sid : (r.subcontratista_id ?? sid),
+        }
+        : r
     )))
+  }
+
+  async function confirmarRedistribucionSub({ proporciones, preview }) {
+    if (!redistribucionState) return
+    const ep = pptoEp()
+    if (!ep.subRedistribucionAplicar) {
+      throw new Error('Redistribución no disponible en este modo.')
+    }
+    setRedistribucionAplicando(true)
+    try {
+      const res = await fetch(ep.subRedistribucionAplicar, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          ids: redistribucionState.ids,
+          subcontratista_id: redistribucionState.subcontratistaId,
+          proporciones,
+          preview,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        throw new Error(
+          typeof detail === 'string' ? detail : (detail?.msg || 'No se pudo aplicar la redistribución.'),
+        )
+      }
+      const data = await res.json().catch(() => ({}))
+      // Refrescar grilla: multi-asignación deja subcontratista_id null si hay varios.
+      const idSet = new Set((redistribucionState.ids || []).map((id) => String(id)))
+      const sid = redistribucionState.subcontratistaId
+      setRegistros((prev) => prev.map((r) => {
+        if (!idSet.has(String(r.id))) return r
+        const prevSid = Number(r.subcontratista_id || 0)
+        if (!prevSid || prevSid === sid) return { ...r, subcontratista_id: sid }
+        // Ya había otro: marcar como compartido (null) hasta el próximo reload.
+        return { ...r, subcontratista_id: null }
+      }))
+      setRedistribucionState(null)
+      return data
+    } finally {
+      setRedistribucionAplicando(false)
+    }
   }
 
   async function aplicarMasivoCapItem({
@@ -4431,11 +4505,27 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
     }
     if (tieneSub) {
+      // Incluye filas que ya tienen otro sub (compartidas) o ninguno.
+      // El backend decide simple vs redistribución; no filtramos por igualdad estricta
+      // cuando subcontratista_id es null (multi-asignación).
       const idsSub = idsEditables.filter((id) => {
         const r = registros.find((x) => x.id === id)
-        return r && Number(r.subcontratista_id || 0) !== sid
+        if (!r) return false
+        const cur = Number(r.subcontratista_id || 0)
+        // Si solo tiene este mismo sub (legado), omitir.
+        return cur !== sid
       })
-      if (idsSub.length) await aplicarSubcontratistaMasiva(idsSub, sid)
+      if (idsSub.length) {
+        try {
+          await aplicarSubcontratistaMasiva(idsSub, sid)
+        } catch (e) {
+          if (e?.code === 'REDIS_PENDING' || e?.message === 'REDIS_PENDING') {
+            // Popup abierto; el resto de la edición masiva puede continuar (obs).
+          } else {
+            throw e
+          }
+        }
+      }
     }
     if (obs) await aplicarObservacionMasiva(idsEditables, obs)
     return resumen
@@ -7533,6 +7623,20 @@ async function darDeBaja(id) {
         onApplyTramosCompetencia={aplicarMasivoTramosCompetencia}
         onApplyDepuracion={aplicarMasivoDepuracion}
         onApplyInterventoria={aplicarMasivoInterventoria}
+      />
+      <PptoSubRedistribucionModal
+        open={!!redistribucionState}
+        theme={t}
+        preview={redistribucionState?.preview}
+        aplicando={redistribucionAplicando}
+        onCancel={() => setRedistribucionState(null)}
+        onConfirm={async ({ proporciones, preview }) => {
+          try {
+            await confirmarRedistribucionSub({ proporciones, preview })
+          } catch (e) {
+            window.alert(e?.message || 'No se pudo aplicar la redistribución.')
+          }
+        }}
       />
       <PptoGraficosModal
         open={modalGraficos}

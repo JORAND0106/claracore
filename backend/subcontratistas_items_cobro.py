@@ -1,14 +1,57 @@
 """
 Ítems de cobro del subcontratista según cantidades asignadas en Presupuesto.
 
-Une `presupuesto.subcontratista_id` (cantidades) con `listado_precios` (VU Cobro)
-y `subcontratista_precios` (VU Costo M.O. ya pactado).
+Une cantidades de `presupuesto_sub_asignacion` (o legado `presupuesto.subcontratista_id`)
+con `listado_precios` (VU Cobro) y `subcontratista_precios` (VU Costo M.O. ya pactado).
 """
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+_log = logging.getLogger("subcontratistas_items_cobro")
+
+# Producción puede no tener aún origen/cantidad_manual (migración pendiente).
+# Misma degradación que el Tab Precios / almacen_mo_costo.
+_PRECIOS_SELECTS = (
+    "id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual, tributos",
+    "id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual",
+    "id, listado_precio_id, precio_unitario_sub, tributos",
+    "id, listado_precio_id, precio_unitario_sub",
+)
+
+
+def fetch_subcontratista_precios_rows(sb, subcontratista_id: int) -> List[dict]:
+    """
+    Lee ``subcontratista_precios`` del sub con degradación de columnas.
+
+    Fuente única para Tab Precios y Corte de subcontratista. Si se pide
+    ``origen``/``cantidad_manual`` y no existen en BD, no devolver lista vacía:
+    reintentar con el select mínimo (``precio_unitario_sub``).
+    """
+    last_exc: Optional[BaseException] = None
+    sid = int(subcontratista_id)
+    for sel in _PRECIOS_SELECTS:
+        try:
+            return (
+                sb.table("subcontratista_precios")
+                .select(sel)
+                .eq("subcontratista_id", sid)
+                .execute()
+                .data
+            ) or []
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc:
+        _log.warning(
+            "fetch_subcontratista_precios_rows sub=%s falló tras degradar selects: %s",
+            sid,
+            last_exc,
+        )
+    return []
 
 
 def norm_item_key(s: Optional[str]) -> str:

@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatCOP } from '../utils/formatCOP'
+import {
+  CASO_TODOS,
+  SIN_VALORIZAR,
+  TARJETAS_REVISION,
+  presentarRevisionListado,
+} from './revisionListadoPresentacion.js'
 
 const API = typeof window !== 'undefined' ? (window.__CC_API_BASE || '') : ''
 
 /**
- * Vista exclusiva Admin / Desarrollador: registros por revisar frente al listado.
- * Separa casos que afectan totales vs valores guardados desactualizados.
+ * Vista exclusiva Admin / Desarrollador. Solo consulta: no modifica datos.
  */
-export default function SeccionIntegridadListado({ call, contratos = [], theme, token }) {
+export default function SeccionIntegridadListado({
+  call,
+  contratos = [],
+  theme,
+  token,
+  onAbrirRegistro,
+}) {
   const [contratoId, setContratoId] = useState(() => {
     const first = contratos?.[0]?.id
     return first != null ? String(first) : ''
@@ -17,7 +28,7 @@ export default function SeccionIntegridadListado({ call, contratos = [], theme, 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [data, setData] = useState(null)
-  const [filtroCaso, setFiltroCaso] = useState('todos')
+  const [filtroCaso, setFiltroCaso] = useState(CASO_TODOS)
 
   useEffect(() => {
     if (!contratoId && contratos?.[0]?.id != null) {
@@ -60,32 +71,32 @@ export default function SeccionIntegridadListado({ call, contratos = [], theme, 
     }
   }, [actaRpo, call, contratoId, todoContrato, token])
 
+  const vista = useMemo(
+    () => presentarRevisionListado(data?.inconsistencias || [], data?.valor_canonico),
+    [data],
+  )
   const filas = useMemo(() => {
-    const all = data?.inconsistencias || []
-    if (filtroCaso === 'afectan_totales') {
-      return all.filter((r) => r.caso === 'afecta_totales')
-    }
-    if (filtroCaso === 'valor_guardado') {
-      return all.filter((r) => r.caso === 'valor_guardado_desactualizado')
-    }
-    return all
-  }, [data, filtroCaso])
+    if (filtroCaso === CASO_TODOS) return vista.filas
+    return vista.filas.filter((f) => f.caso === filtroCaso)
+  }, [vista, filtroCaso])
 
-  const resumen = data?.resumen || {}
-  const at = resumen.afectan_totales || {}
-  const st = resumen.valor_guardado_desactualizado || {}
+  const contratoSel = useMemo(
+    () => (contratos || []).find((c) => String(c.id) === String(contratoId)) || null,
+    [contratos, contratoId],
+  )
+
   const text = theme?.text || '#0f172a'
   const muted = theme?.textMuted || '#64748b'
   const border = theme?.border || '#e2e8f0'
   const bgCard = theme?.bgCard || '#fff'
 
+  const abrir = (fila) => {
+    if (typeof onAbrirRegistro !== 'function') return
+    onAbrirRegistro(contratoSel, fila.registro_id, fila.reporte_id)
+  }
+
   return (
     <div style={{ color: text, fontSize: 'var(--cc-sm)' }}>
-      <p style={{ color: muted, marginTop: 0, lineHeight: 1.45, maxWidth: 720 }}>
-        Registros por revisar frente al listado de precios. No modifica datos. Las cifras del Dashboard
-        usan VU del listado (regla única); los valores guardados desactualizados no cambian esos totales.
-      </p>
-
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 14 }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ color: muted, fontSize: 12 }}>Contrato</span>
@@ -141,119 +152,108 @@ export default function SeccionIntegridadListado({ call, contratos = [], theme, 
         </div>
       )}
 
-      {data?.aviso && (
+      {data && (
         <div
           style={{
-            padding: 12,
-            borderRadius: 8,
-            border: `1px solid ${border}`,
-            background: 'rgba(148,163,184,0.12)',
-            marginBottom: 12,
-            lineHeight: 1.4,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+            gap: 8,
+            marginBottom: 14,
           }}
         >
-          {data.aviso}
-          {data.valor_canonico != null && (
-            <div style={{ marginTop: 6, color: muted }}>
-              Valor canónico del filtro: <strong style={{ color: text }}>{formatCOP(data.valor_canonico)}</strong>
-            </div>
-          )}
-        </div>
-      )}
-
-      {data && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
-          <div style={{ padding: '10px 12px', borderRadius: 8, border: `1px solid ${border}`, minWidth: 180 }}>
-            <div style={{ fontSize: 11, color: muted, textTransform: 'uppercase' }}>Afectan totales</div>
-            <div style={{ fontWeight: 800, fontSize: 18 }}>{at.n_registros ?? 0}</div>
-            <div style={{ color: muted, fontSize: 12 }}>impacto ref. {formatCOP(at.impacto_plata || 0)}</div>
-          </div>
-          <div style={{ padding: '10px 12px', borderRadius: 8, border: `1px solid ${border}`, minWidth: 180 }}>
-            <div style={{ fontSize: 11, color: muted, textTransform: 'uppercase' }}>Valor guardado desact.</div>
-            <div style={{ fontWeight: 800, fontSize: 18 }}>{st.n_registros ?? 0}</div>
-            <div style={{ color: muted, fontSize: 12 }}>impacto ref. {formatCOP(st.impacto_plata || 0)}</div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-            {[
-              { id: 'todos', label: 'Todos' },
-              { id: 'afectan_totales', label: 'Afectan totales' },
-              { id: 'valor_guardado', label: 'Solo guardado' },
-            ].map((f) => (
+          {TARJETAS_REVISION.map((tarjeta) => {
+            const activa = filtroCaso === tarjeta.id
+            const bucket = tarjeta.id === CASO_TODOS ? null : vista.tarjetas[tarjeta.id]
+            const principal = tarjeta.id === CASO_TODOS
+              ? formatCOP(vista.tarjetas.valor_canonico)
+              : String(bucket?.n ?? 0)
+            return (
               <button
-                key={f.id}
+                key={tarjeta.id}
                 type="button"
-                onClick={() => setFiltroCaso(f.id)}
+                data-testid={`tarjeta-revision-${tarjeta.id}`}
+                aria-pressed={activa}
+                onClick={() => setFiltroCaso(tarjeta.id)}
                 style={{
-                  padding: '6px 10px',
-                  borderRadius: 6,
-                  border: `1px solid ${border}`,
-                  background: filtroCaso === f.id ? '#0f766e' : bgCard,
-                  color: filtroCaso === f.id ? '#fff' : text,
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: `1px solid ${activa ? '#0f766e' : border}`,
+                  boxShadow: activa ? 'inset 0 0 0 1px #0f766e' : 'none',
+                  background: activa ? 'rgba(15,118,110,0.08)' : bgCard,
+                  color: text,
                   cursor: 'pointer',
-                  fontWeight: 600,
+                  minWidth: 0,
                 }}
               >
-                {f.label}
+                <div style={{ fontSize: 11, color: muted, lineHeight: 1.3 }}>{tarjeta.label}</div>
+                <div style={{ fontWeight: 800, fontSize: 16, marginTop: 4, wordBreak: 'break-word' }}>{principal}</div>
+                {bucket && tarjeta.id !== 'sin_item' && (
+                  <div style={{ color: muted, fontSize: 12, marginTop: 2 }}>{formatCOP(bucket.impacto || 0)}</div>
+                )}
               </button>
-            ))}
-          </div>
+            )
+          })}
         </div>
       )}
 
       {data && (
         <div style={{ overflowX: 'auto', border: `1px solid ${border}`, borderRadius: 8 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880, fontSize: 12 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760, fontSize: 12 }}>
             <thead>
               <tr style={{ background: '#4472C4', color: '#fff' }}>
-                <th style={{ textAlign: 'left', padding: 8 }}>#</th>
+                <th style={{ textAlign: 'left', padding: 8 }}>Registro</th>
+                <th style={{ textAlign: 'left', padding: 8 }}>Reporte</th>
                 <th style={{ textAlign: 'left', padding: 8 }}>Ítem</th>
-                <th style={{ textAlign: 'left', padding: 8 }}>Capítulo</th>
                 <th style={{ textAlign: 'left', padding: 8 }}>Caso</th>
-                <th style={{ textAlign: 'left', padding: 8 }}>Tipo</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>Cant</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>VU guard.</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>VU listado</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>CD guard.</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>CD esp.</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>Impacto</th>
+                <th style={{ textAlign: 'right', padding: 8 }}>Cantidad</th>
+                <th style={{ textAlign: 'right', padding: 8 }}>Valor guardado</th>
+                <th style={{ textAlign: 'right', padding: 8 }}>Valor con listado</th>
+                <th style={{ textAlign: 'right', padding: 8 }}>Diferencia</th>
               </tr>
             </thead>
             <tbody>
               {filas.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={{ padding: 16, color: muted, textAlign: 'center' }}>
+                  <td colSpan={8} style={{ padding: 16, color: muted, textAlign: 'center' }}>
                     Sin registros en este filtro.
                   </td>
                 </tr>
               ) : (
-                filas.map((r, idx) => (
-                  <tr key={`${r.registro_id}-${r.tipo}-${idx}`} style={{ borderTop: `1px solid ${border}` }}>
-                    <td style={{ padding: 6 }}>{r.numero_registro ?? r.registro_id ?? '—'}</td>
-                    <td style={{ padding: 6 }}>{r.item_numero || '—'}</td>
-                    <td style={{ padding: 6, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {r.capitulo || '—'}
-                    </td>
+                filas.map((fila) => (
+                  <tr key={fila.registro_id ?? fila.numero_registro} style={{ borderTop: `1px solid ${border}` }}>
                     <td style={{ padding: 6 }}>
-                      {r.caso === 'afecta_totales' ? 'Afecta totales' : 'Guardado desact.'}
+                      <button
+                        type="button"
+                        data-testid={`revision-registro-${fila.numero_registro ?? fila.registro_id}`}
+                        onClick={() => abrir(fila)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          color: '#0f766e',
+                          fontWeight: 700,
+                          cursor: onAbrirRegistro ? 'pointer' : 'default',
+                          textDecoration: 'underline',
+                        }}
+                      >
+                        {fila.numero_registro ?? fila.registro_id ?? '—'}
+                      </button>
                     </td>
-                    <td style={{ padding: 6 }} title={r.detalle || ''}>
-                      {r.tipo}
-                    </td>
-                    <td style={{ padding: 6, textAlign: 'right' }}>{Number(r.cantidad_total || 0).toLocaleString('es-CO')}</td>
+                    <td style={{ padding: 6 }}>{fila.numero_reporte ?? '—'}</td>
+                    <td style={{ padding: 6 }}>{fila.item_numero || '—'}</td>
+                    <td style={{ padding: 6 }}>{fila.caso_label}</td>
                     <td style={{ padding: 6, textAlign: 'right' }}>
-                      {r.vu_guardado != null ? formatCOP(r.vu_guardado) : '—'}
+                      {fila.cantidad == null ? '—' : Number(fila.cantidad).toLocaleString('es-CO', { maximumFractionDigits: 2 })}
                     </td>
                     <td style={{ padding: 6, textAlign: 'right' }}>
-                      {r.vu_listado != null ? formatCOP(r.vu_listado) : '—'}
+                      {fila.sin_valorizar ? SIN_VALORIZAR : formatCOP(fila.valor_guardado)}
                     </td>
                     <td style={{ padding: 6, textAlign: 'right' }}>
-                      {r.cd_guardado != null ? formatCOP(r.cd_guardado) : '—'}
-                    </td>
-                    <td style={{ padding: 6, textAlign: 'right' }}>
-                      {r.cd_esperado != null ? formatCOP(r.cd_esperado) : '—'}
+                      {fila.sin_valorizar ? SIN_VALORIZAR : formatCOP(fila.valor_listado)}
                     </td>
                     <td style={{ padding: 6, textAlign: 'right', fontWeight: 700 }}>
-                      {formatCOP(r.impacto_plata || 0)}
+                      {fila.sin_valorizar ? SIN_VALORIZAR : formatCOP(fila.diferencia)}
                     </td>
                   </tr>
                 ))

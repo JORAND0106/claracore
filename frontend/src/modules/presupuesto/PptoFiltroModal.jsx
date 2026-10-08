@@ -14,6 +14,7 @@ import {
   pptoFiltroCascadeOpcionesParams,
   pptoFiltroValoresLista,
   pptoMergeItemsOpciones,
+  pptoMergeOpcionesFiltro,
   PPTO_ESTADOS_VALIDACION,
 } from './pptoFiltroCatalogo'
 import {
@@ -76,25 +77,21 @@ export default function PptoFiltroModal({
 
   const cascadeKey = useMemo(() => {
     const p = pptoFiltroCascadeOpcionesParams(draftF, tipoEjecucionActivo)
-    const tramos = pptoFiltroValoresLista(pptoFiltroDef('tramo'), draftF)
-    const calzadas = pptoFiltroValoresLista(pptoFiltroDef('calzada'), draftF)
-    return [
-      p.capitulo || '',
-      p.competencia || '',
-      tramos.join('\x1f'),
-      calzadas.join('\x1f'),
-    ].join('|')
+    // Solo capítulo/competencia: tramo/calzada no deben re-disparar la RPC
+    // (auto-filtro → un solo valor → Agregar bloqueado en select_multi).
+    return [p.capitulo || '', p.competencia || '', p.tipo_ejecucion || ''].join('|')
   }, [draftF, tipoEjecucionActivo])
 
   useEffect(() => {
     if (!open || !contratoId || !token) return
     let cancelled = false
+    const cascadeParams = pptoFiltroCascadeOpcionesParams(draftF, tipoEjecucionActivo)
+    const sinCascada = !cascadeParams.capitulo && !cascadeParams.competencia
     const timer = setTimeout(() => {
-      const cascadeParams = pptoFiltroCascadeOpcionesParams(draftF, tipoEjecucionActivo)
       fetchPresupuestoFiltrosOpciones(contratoId, token, cascadeParams)
         .then((data) => { if (!cancelled) setOpciones(data || {}) })
         .catch(() => {})
-    }, cascadeKey === '|||' ? 0 : 320)
+    }, sinCascada ? 0 : 320)
     return () => {
       cancelled = true
       clearTimeout(timer)
@@ -151,32 +148,37 @@ export default function PptoFiltroModal({
     const tramosGrilla = ubicacionFromGrilla('tramo')
     const calzadasGrilla = ubicacionFromGrilla('calzada')
     const infrasGrilla = ubicacionFromGrilla('infraestructura')
+    const competenciasGrilla = ubicacionFromGrilla('competencia')
+    const undsGrilla = ubicacionFromGrilla('und')
 
     const capitulosLp = [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
       .sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }))
-    const capitulos = capitulosLp.length ? capitulosLp : (base.capitulos || [])
+    // Unión de catálogos: evita que una cascada o grilla ya filtrada deje un solo valor
+    // y bloquee el «Agregar» de select_multi (capítulo, tramo, calzada, etc.).
     return {
       ...base,
-      capitulos,
+      capitulos: pptoMergeOpcionesFiltro(capitulosLp, base.capitulos),
       items_opciones,
       items: [],
-      tramos: tramosGrilla.length ? tramosGrilla : (base.tramos || []),
-      calzadas: calzadasGrilla.length ? calzadasGrilla : (base.calzadas || []),
-      infraestructuras: infrasGrilla.length ? infrasGrilla : (base.infraestructuras || []),
+      tramos: pptoMergeOpcionesFiltro(tramoOptions, tramosGrilla, base.tramos),
+      calzadas: pptoMergeOpcionesFiltro(calzadaOptions, calzadasGrilla, base.calzadas),
+      infraestructuras: pptoMergeOpcionesFiltro(infrasGrilla, base.infraestructuras),
+      competencias: pptoMergeOpcionesFiltro(competenciasGrilla, base.competencias),
+      unds: pptoMergeOpcionesFiltro(undsGrilla, base.unds),
     }
-  }, [opciones, listadoPrecios, registrosGrilla, draftF.cap, draftF.caps, draftF.competencia, draftF.competencias])
+  }, [opciones, listadoPrecios, registrosGrilla, draftF.cap, draftF.caps, draftF.competencia, draftF.competencias, tramoOptions, calzadaOptions])
 
   const opcionesResueltas = useMemo(
     () => ({
       ...opcionesConItems,
-      tramos: opcionesConItems.tramos || tramoOptions || [],
-      calzadas: opcionesConItems.calzadas || calzadaOptions || [],
+      tramos: opcionesConItems.tramos || [],
+      calzadas: opcionesConItems.calzadas || [],
       infraestructuras: opcionesConItems.infraestructuras || [],
       /** Catálogo fijo: la API solo devuelve valores distintos en BD (NULL no figura como «No Revisado»). */
       revisados: [...PPTO_ESTADOS_VALIDACION],
       pre_interv_estados: [...PPTO_ESTADOS_VALIDACION],
     }),
-    [opcionesConItems, tramoOptions, calzadaOptions],
+    [opcionesConItems],
   )
 
   const chipKeys = pptoFiltrosActivosKeys(draftF, [])
