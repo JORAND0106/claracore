@@ -16,8 +16,17 @@ import {
   buildPreciosExportFilename,
   deltaEsRojo,
   formulaTotalConAiuExcel,
+  roundCop,
   validatePreciosExport,
 } from './preciosSubcontratistaExport.js'
+
+/** Componentes del desglose AIU/IVA (una sola fila). */
+export const AIU_DESGLOSE_COMPONENTES = Object.freeze([
+  { key: 'administracion', nombre: 'Administración', abr: 'A' },
+  { key: 'imprevistos', nombre: 'Imprevistos', abr: 'Í' },
+  { key: 'utilidad', nombre: 'Utilidad', abr: 'U' },
+  { key: 'iva_sobre_utilidad', nombre: 'IVA sobre Utilidad', abr: 'IVA' },
+])
 
 /** Identificación de calidad del formato (sistema CCD ClaraCore). */
 export const PRECIOS_FORMATO_CALIDAD = Object.freeze({
@@ -30,6 +39,8 @@ export const PRECIOS_FORMATO_CALIDAD = Object.freeze({
 
 const FONT_DELTA_RED = { bold: true, size: 10, color: { argb: 'FFDC2626' }, name: 'Calibri' }
 const FONT_DELTA_GREEN = { bold: true, size: 10, color: { argb: 'FF15803D' }, name: 'Calibri' }
+/** Valores del desglose AIU: blanco + texto oscuro (no dependen de la paleta). */
+const FONT_AIU_VALUE = { size: 10, color: { argb: 'FF0F2942' }, name: 'Calibri' }
 
 const NUM_COP = '"$"#,##0'
 const NUM_QTY = '#,##0.00'
@@ -60,6 +71,8 @@ function pxToRowPoints(px) {
 function solidFill(argb) {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } }
 }
+
+const FILL_AIU_VALUE = solidFill('FFFFFFFF')
 
 function thinBorder(argb) {
   const edge = { style: 'thin', color: { argb } }
@@ -315,6 +328,82 @@ export function layoutPrimeraLineaDatos(cols) {
     objetoValueEnd: n - 2,
     numeroLabel: n - 1,
     numeroValue: n,
+  }
+}
+
+/**
+ * 4 pares etiqueta|valor uniformes para el desglose AIU/IVA (y similar Anticipo).
+ * Omite la columna oculta de fórmulas; agrega columnas auxiliares si hacen falta.
+ * @returns {{ pairs: { labelCol: number, valueStart: number, valueEnd: number }[], maxCol: number }}
+ */
+export function layoutAiuFooterPairs(cols, hiddenCol = null, pairCount = 4) {
+  const need = Math.max(2, Number(pairCount) || 4) * 2
+  const hidden = hiddenCol != null && Number(hiddenCol) > 0 ? Number(hiddenCol) : null
+  const usable = []
+  let c = 1
+  while (usable.length < need) {
+    if (hidden == null || c !== hidden) usable.push(c)
+    c += 1
+    if (c > need + 4 && usable.length < need) {
+      // seguridad: no bucle infinito
+      usable.push(c)
+      c += 1
+    }
+  }
+  // Si la tabla ya es ancha, repartir de forma uniforme sobre las visibles (sin hidden).
+  const tableUsable = []
+  for (let i = 1; i <= Math.max(cols, need); i += 1) {
+    if (hidden == null || i !== hidden) tableUsable.push(i)
+  }
+  const pool = tableUsable.length >= need ? tableUsable : usable
+  const pairs = []
+  let idx = 0
+  const nPairs = Math.max(2, Number(pairCount) || 4)
+  for (let g = 0; g < nPairs; g += 1) {
+    const remainingPairs = nPairs - g
+    const remainingCols = pool.length - idx
+    const take = Math.max(2, Math.floor(remainingCols / remainingPairs))
+    const slice = pool.slice(idx, idx + take)
+    idx += take
+    pairs.push({
+      labelCol: slice[0],
+      valueStart: slice[1] ?? slice[0],
+      valueEnd: slice[slice.length - 1],
+    })
+  }
+  const maxCol = Math.max(cols, pool[pool.length - 1] || cols, hidden || 0)
+  return { pairs, maxCol }
+}
+
+function escribirParEtiquetaValorFooter(ws, r, pair, label, value, {
+  theme,
+  border,
+  numFmt = null,
+  valueIsDash = false,
+}) {
+  const lab = ws.getCell(r, pair.labelCol)
+  lab.value = label
+  lab.fill = solidFill(theme.metaBg)
+  lab.font = { bold: true, size: 9, color: { argb: theme.metaText }, name: 'Calibri' }
+  lab.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
+  lab.border = border
+
+  if (pair.valueEnd > pair.valueStart) {
+    try { ws.mergeCells(r, pair.valueStart, r, pair.valueEnd) } catch { /* ignore */ }
+  }
+  for (let c = pair.valueStart; c <= pair.valueEnd; c += 1) {
+    const cell = ws.getCell(r, c)
+    cell.fill = FILL_AIU_VALUE
+    cell.font = FONT_AIU_VALUE
+    cell.border = border
+    cell.alignment = { vertical: 'middle', horizontal: 'right', wrapText: true }
+  }
+  const val = ws.getCell(r, pair.valueStart)
+  if (valueIsDash || value == null || value === '') {
+    val.value = '—'
+  } else {
+    val.value = value
+    if (numFmt) val.numFmt = numFmt
   }
 }
 
@@ -783,112 +872,162 @@ export async function buildPreciosSubcontratistaWorkbook({
     row.height = 22
   }
   r = totalsRowIdx + 1
+  let footerMeta = null
 
-  // ── AIU/IVA (no aplica al archivo en crudo) ─────────────────
-  if (!crudo) {
+  // ── AIU/IVA (1 fila) + Anticipo/% amortización (informativo) ─
+  // Aplica a todas las variantes (incl. crudo). Totales con fórmulas solo si no es crudo.
+  {
+    const hiddenCol = map.hiddenConAiu || null
+    const aiuLayout = layoutAiuFooterPairs(COLS, hiddenCol, 4)
+    const antLayout = layoutAiuFooterPairs(COLS, hiddenCol, 2)
+    const footerMaxCol = Math.max(COLS, aiuLayout.maxCol, antLayout.maxCol)
+
+    // Columnas auxiliares del pie (no alteran la tabla de ítems).
+    for (let c = COLS + 1; c <= footerMaxCol; c += 1) {
+      if (hiddenCol && c === hiddenCol) continue
+      const col = ws.getColumn(c)
+      if (!col.width || col.width < 12) col.width = 14
+    }
+
     r += 1
-    ws.mergeCells(r, 1, r, COLS)
+    ws.mergeCells(r, 1, r, Math.max(COLS, footerMaxCol))
     {
       const cell = ws.getCell(r, 1)
       cell.value = 'AIU / IVA pactado (único del subcontratista)'
       cell.fill = fillSection
       cell.font = FONT_SECTION
       cell.alignment = { vertical: 'middle' }
-      applyBorderRange(ws, r, 1, r, COLS, border)
+      applyBorderRange(ws, r, 1, r, Math.max(COLS, footerMaxCol), border)
       ws.getRow(r).height = 22
     }
     r += 1
 
-    const aiuLines = [
-      ['Administración (A)', aiu.administracion],
-      ['Imprevistos (Í)', aiu.imprevistos],
-      ['Utilidad (U)', aiu.utilidad],
-      ['IVA sobre Utilidad', aiu.iva_sobre_utilidad],
-    ]
-    for (const [lab, pts] of aiuLines) {
-      ws.mergeCells(r, 2, r, COLS)
-      ws.getCell(r, 1).value = lab
-      const valCell = ws.getCell(r, 2)
-      if (pts == null || !Number.isFinite(Number(pts))) {
-        valCell.value = '—'
-      } else {
-        valCell.value = Number(pts)
-        valCell.numFmt = NUM_PCT
-      }
-      ws.getCell(r, 1).font = FONT_META
-      valCell.font = FONT_BODY
-      ws.getCell(r, 1).fill = fillMeta
-      valCell.fill = fillMeta
-      applyBorderRange(ws, r, 1, r, COLS, border)
-      ws.getRow(r).height = 18
-      r += 1
+    // Una sola fila: Administración (A) | Imprevistos (Í) | Utilidad (U) | IVA sobre Utilidad
+    AIU_DESGLOSE_COMPONENTES.forEach((comp, i) => {
+      const pts = aiu?.[comp.key]
+      const has = pts != null && Number.isFinite(Number(pts))
+      escribirParEtiquetaValorFooter(
+        ws,
+        r,
+        aiuLayout.pairs[i],
+        `${comp.nombre} (${comp.abr})`,
+        has ? Number(pts) : null,
+        {
+          theme,
+          border,
+          numFmt: NUM_PCT,
+          valueIsDash: !has,
+        },
+      )
+    })
+    ws.getRow(r).height = Math.max(
+      22,
+      estimateWrappedRowHeight('IVA sobre Utilidad (IVA)', 14, { fontSize: 9, min: 22, max: 40 }),
+    )
+    const aiuDesgloseRowIdx = r
+    r += 1
+
+    // Anticipo (COP 0 dp) + % Amortización — informativos, no afectan totales
+    const anticipoRaw = subcontratista?.anticipo
+    const amortRaw = subcontratista?.amortizacion_pct
+    const anticipoOk = anticipoRaw != null && anticipoRaw !== '' && Number.isFinite(Number(anticipoRaw))
+    const amortOk = amortRaw != null && amortRaw !== '' && Number.isFinite(Number(amortRaw))
+    escribirParEtiquetaValorFooter(
+      ws,
+      r,
+      antLayout.pairs[0],
+      'Anticipo',
+      anticipoOk ? roundCop(Number(anticipoRaw)) : null,
+      { theme, border, numFmt: NUM_COP, valueIsDash: !anticipoOk },
+    )
+    escribirParEtiquetaValorFooter(
+      ws,
+      r,
+      antLayout.pairs[1],
+      '% de Amortización',
+      amortOk ? Number(amortRaw) : null,
+      { theme, border, numFmt: NUM_PCT, valueIsDash: !amortOk },
+    )
+    ws.getRow(r).height = 22
+    const anticipoRowIdx = r
+    r += 1
+
+    footerMeta = {
+      aiuDesgloseRowIdx,
+      anticipoRowIdx,
+      footerMaxCol,
+      aiuLayout,
+      antLayout,
     }
 
-    r += 1
-    const valueColStart = map.totalAntes
-    const totAiuLines = [
-      {
-        lab: 'Sumatoria antes de AIU/IVA',
-        formula: `${LtotalAntes}${totalsRowIdx}`,
-        result: totales.sumatoria_antes_aiu,
-        kind: 'money',
-      },
-    ]
-    if (conCobro) {
-      totAiuLines.unshift({
-        lab: 'Sumatoria a VU Cobro',
-        formula: `${LtotalCobro}${totalsRowIdx}`,
-        result: totales.sumatoria_vu_cobro,
+    // Totales con AIU/IVA (fórmulas) — no aplica al archivo en crudo
+    if (!crudo) {
+      r += 1
+      const valueColStart = map.totalAntes
+      const totAiuLines = [
+        {
+          lab: 'Sumatoria antes de AIU/IVA',
+          formula: `${LtotalAntes}${totalsRowIdx}`,
+          result: totales.sumatoria_antes_aiu,
+          kind: 'money',
+        },
+      ]
+      if (conCobro) {
+        totAiuLines.unshift({
+          lab: 'Sumatoria a VU Cobro',
+          formula: `${LtotalCobro}${totalsRowIdx}`,
+          result: totales.sumatoria_vu_cobro,
+          kind: 'money',
+        })
+        totAiuLines.push({
+          lab: 'Diferencia total (antes AIU − VU Cobro)',
+          formula: `${LdeltaValor}${totalsRowIdx}`,
+          result: totales.sumatoria_delta_valor_total,
+          kind: 'delta',
+        })
+      }
+      totAiuLines.push({
+        lab: 'Valor correspondiente al AIU/IVA',
+        formula: `ROUND(${Lhidden}${totalsRowIdx}-${LtotalAntes}${totalsRowIdx},0)`,
+        result: totales.valor_aiu_iva,
         kind: 'money',
       })
       totAiuLines.push({
-        lab: 'Diferencia total (antes AIU − VU Cobro)',
-        formula: `${LdeltaValor}${totalsRowIdx}`,
-        result: totales.sumatoria_delta_valor_total,
-        kind: 'delta',
+        lab: 'Total general con AIU/IVA',
+        formula: `${Lhidden}${totalsRowIdx}`,
+        result: totales.total_general_con_aiu,
+        kind: 'money',
+        grand: true,
+      })
+
+      totAiuLines.forEach((line) => {
+        const isGrand = !!line.grand
+        ws.mergeCells(r, 1, r, valueColStart - 1)
+        ws.getCell(r, 1).value = line.lab
+        ws.mergeCells(r, valueColStart, r, COLS)
+        const valCell = ws.getCell(r, valueColStart)
+        setFormula(
+          valCell,
+          line.formula,
+          line.result,
+          line.kind === 'delta' ? NUM_DELTA : NUM_COP,
+        )
+        if (line.kind === 'delta') {
+          valCell.font = deltaEsRojo(line.result) ? FONT_DELTA_RED : FONT_DELTA_GREEN
+        }
+        for (let c = 1; c <= COLS; c += 1) {
+          const cell = ws.getCell(r, c)
+          cell.fill = isGrand ? fillTotal : fillMeta
+          if (!(line.kind === 'delta' && c >= valueColStart)) {
+            cell.font = isGrand ? FONT_GRAND : FONT_META
+          }
+          cell.border = border
+          cell.alignment = { vertical: 'middle', horizontal: c >= valueColStart ? 'right' : 'left' }
+        }
+        ws.getRow(r).height = isGrand ? 24 : 20
+        r += 1
       })
     }
-    totAiuLines.push({
-      lab: 'Valor correspondiente al AIU/IVA',
-      formula: `ROUND(${Lhidden}${totalsRowIdx}-${LtotalAntes}${totalsRowIdx},0)`,
-      result: totales.valor_aiu_iva,
-      kind: 'money',
-    })
-    totAiuLines.push({
-      lab: 'Total general con AIU/IVA',
-      formula: `${Lhidden}${totalsRowIdx}`,
-      result: totales.total_general_con_aiu,
-      kind: 'money',
-      grand: true,
-    })
-
-    totAiuLines.forEach((line) => {
-      const isGrand = !!line.grand
-      ws.mergeCells(r, 1, r, valueColStart - 1)
-      ws.getCell(r, 1).value = line.lab
-      ws.mergeCells(r, valueColStart, r, COLS)
-      const valCell = ws.getCell(r, valueColStart)
-      setFormula(
-        valCell,
-        line.formula,
-        line.result,
-        line.kind === 'delta' ? NUM_DELTA : NUM_COP,
-      )
-      if (line.kind === 'delta') {
-        valCell.font = deltaEsRojo(line.result) ? FONT_DELTA_RED : FONT_DELTA_GREEN
-      }
-      for (let c = 1; c <= COLS; c += 1) {
-        const cell = ws.getCell(r, c)
-        cell.fill = isGrand ? fillTotal : fillMeta
-        if (!(line.kind === 'delta' && c >= valueColStart)) {
-          cell.font = isGrand ? FONT_GRAND : FONT_META
-        }
-        cell.border = border
-        cell.alignment = { vertical: 'middle', horizontal: c >= valueColStart ? 'right' : 'left' }
-      }
-      ws.getRow(r).height = isGrand ? 24 : 20
-      r += 1
-    })
   }
 
   // Pie
@@ -959,6 +1098,7 @@ export async function buildPreciosSubcontratistaWorkbook({
     formatoCalidad: { ...PRECIOS_FORMATO_CALIDAD },
     theme,
     hasLogo: logoImageId != null,
+    ...(footerMeta || {}),
   }
 
   return wb

@@ -469,6 +469,8 @@ export default function PreciosSubcontratistaSheet({
           objeto_contrato: subcontratista?.objeto_contrato || '',
           nombre_contacto: subcontratista?.nombre_contacto || '',
           telefono: subcontratista?.telefono || '',
+          anticipo: subcontratista?.anticipo ?? null,
+          amortizacion_pct: subcontratista?.amortizacion_pct ?? null,
         },
         contrato: contratoMeta,
         rows,
