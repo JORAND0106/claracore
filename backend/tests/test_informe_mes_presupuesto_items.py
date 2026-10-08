@@ -385,6 +385,85 @@ def test_vista_previa_pdf_y_excel_muestran_los_mismos_items():
         assert book_i.eval_cell("CC-MES-001", row, 7) == it["valor_actualizadas"]
 
 
+def test_el_archivo_real_cruza_2_1_guion_bajo_con_el_precio_de_2_1():
+    """El Excel del 7 oct 2026 pone en 2.1._ el precio y la cantidad de 2.1.
+
+    ``norm_item`` borra el sufijo ``._`` y por eso los trata como el mismo código.
+    El cuadro mensual compara el texto completo.
+    """
+    from sicoe_valor_canonico import norm_item
+
+    assert norm_item("2.1._") == norm_item("2.1") == "2.1"
+    assert norm_item("4.1._") == norm_item("4.1") == "4.1"
+    assert clave_item_exacta(CAP_PAV, "2.1._") != clave_item_exacta(CAP_PAV, "2.1")
+    assert clave_item_exacta(CAP_HORIZ, "4.1._") != clave_item_exacta(CAP_HORIZ, "4.1")
+
+    vu_subbase = 297349.0
+    cant_subbase = 1363.79
+    cant_41 = 11623.24
+    filas = [
+        _fila(CAP_PAV, "2.1", "SUBBASE GRANULAR", "M3", vu_subbase, cant_subbase, valor_por_cantidad_vu(cant_subbase, vu_subbase)),
+        _fila(CAP_PAV, "2.2", "BASE GRANULAR", "M3", 336064, 20, valor_por_cantidad_vu(20, 336064)),
+        _fila(CAP_PAV, "2.3", "ADOQUÍN", "M2", 7292, 30, valor_por_cantidad_vu(30, 7292)),
+        _fila(CAP_HORIZ, "4.1", "LÍNEA DE DEMARCACIÓN", "ML", 1800, cant_41, valor_por_cantidad_vu(cant_41, 1800)),
+        _fila(CAP_HORIZ, "4.2", "TACHAS", "UND", 22444, 449.24, valor_por_cantidad_vu(449.24, 22444)),
+        _fila(CAP_HORIZ, "4.3", "SEÑAL VERTICAL", "UND", 900, 36, valor_por_cantidad_vu(36, 900)),
+        _fila(CAP_HORIZ, "4.4", "POSTE", "UND", 700, 898.4, valor_por_cantidad_vu(898.4, 700)),
+    ]
+    registros = [
+        {"capitulo": CAP_SENAL, "item_numero": "2.1._", "item_descripcion": "Señal SR-30", "cantidad_total": 4, "vlr_unitario": 50000, "costo_directo": 200000},
+        {"capitulo": CAP_SENAL, "item_numero": "2.2._", "item_descripcion": "Señal Estrechamiento de Calzada", "cantidad_total": 1, "vlr_unitario": 100, "costo_directo": 100},
+        {"capitulo": CAP_SENAL, "item_numero": "2.3._", "item_descripcion": "Señal Obra en la Vía", "cantidad_total": 2, "vlr_unitario": 100, "costo_directo": 200},
+        {"capitulo": CAP_PMT, "item_numero": "4.1._", "item_descripcion": "Instalación inicial PMT", "cantidad_total": 1, "vlr_unitario": 5000000, "costo_directo": 5000000},
+        {"capitulo": CAP_PMT, "item_numero": "4.2._", "item_descripcion": "Transporte PMT", "cantidad_total": 1, "vlr_unitario": 7000000, "costo_directo": 7000000},
+        {"capitulo": CAP_PMT, "item_numero": "4.3._", "item_descripcion": "Mantenimiento PMT", "cantidad_total": 1, "vlr_unitario": 6000000, "costo_directo": 6000000},
+        {"capitulo": CAP_PMT, "item_numero": "4.4._", "item_descripcion": "Desmonte final PMT", "cantidad_total": 1, "vlr_unitario": 3000000, "costo_directo": 3000000},
+    ]
+    from informe_mes_items import sumar_cantidad_por_clave
+
+    cuadro = construir_cuadro_mensual(
+        filas,
+        cant_presente=sumar_cantidad_por_clave(registros),
+        listado_por_clave=indice_listado_exacto(
+            [
+                {
+                    "id": 1,
+                    "capitulo": CAP_SENAL,
+                    "item_numero": "2.1._",
+                    "descripcion": "Señal SR-30",
+                    "unidad": "Und",
+                    "precio_unitario": 50000,
+                    "especificacion_tecnica": "",
+                }
+            ]
+        ),
+    )
+    codigos = [it["item_numero"] for it in cuadro["items"]]
+    assert codigos == ["2.1", "2.2", "2.3", "4.1", "4.2", "4.3", "4.4"]
+    assert "2.1._" not in codigos
+    subbase = cuadro["items"][0]
+    assert subbase["item_numero"] == "2.1"
+    assert subbase["vlr_unitario"] == 297349
+    assert subbase["cant_actualizadas"] == 1363.79
+    assert subbase["item_descripcion"] == "SUBBASE GRANULAR"
+    assert subbase["cant_presente"] == 0
+    horiz = next(it for it in cuadro["items"] if it["item_numero"] == "4.1")
+    assert horiz["capitulo"] == CAP_HORIZ
+    assert horiz["cant_actualizadas"] == 11623.24
+    assert horiz["vlr_unitario"] == 1800
+    assert all(it["capitulo"] not in (CAP_SENAL, CAP_PMT) for it in cuadro["items"])
+    fuera = resumir_registros_fuera(registros, cuadro["claves"])
+    assert {(it["capitulo"], it["item_numero"]) for it in fuera["items"]} == {
+        (CAP_SENAL, "2.1._"),
+        (CAP_SENAL, "2.2._"),
+        (CAP_SENAL, "2.3._"),
+        (CAP_PMT, "4.1._"),
+        (CAP_PMT, "4.2._"),
+        (CAP_PMT, "4.3._"),
+        (CAP_PMT, "4.4._"),
+    }
+
+
 def _filas_item(ws):
     limite = next(
         r for r in range(9, ws.max_row + 1) if ws.cell(r, 1).value == "RESUMEN DE CONCILIACIÓN"
