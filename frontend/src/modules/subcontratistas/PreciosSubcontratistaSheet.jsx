@@ -441,12 +441,36 @@ export default function PreciosSubcontratistaSheet({
       )
       const conCobro = !crudo && !!meta?.incluir_vu_cobro
       const crudoOk = !!meta?.modo_crudo
+
+      let contratoMeta = {}
+      if (contratoId && token) {
+        try {
+          const rc = await fetch(`${API_BASE}/contratos/${contratoId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (rc.ok) {
+            const data = await rc.json()
+            contratoMeta = {
+              numero: data?.numero || '',
+              objeto: data?.objeto || '',
+              logo_contratista: data?.logo_contratista || '',
+              export_palette: data?.export_palette || null,
+            }
+          }
+        } catch {
+          /* sin contrato: exportación sigue con guiones / paleta por defecto */
+        }
+      }
+
       const { filename } = await downloadPreciosSubcontratistaExcel({
         subcontratista: {
           razon_social: subcontratista?.razon_social || '',
           nit: subcontratista?.nit || '',
           objeto_contrato: subcontratista?.objeto_contrato || '',
+          nombre_contacto: subcontratista?.nombre_contacto || '',
+          telefono: subcontratista?.telefono || '',
         },
+        contrato: contratoMeta,
         rows,
         drafts,
         impuesto: impuestoGlobal || EMPTY_IMPUESTO,
