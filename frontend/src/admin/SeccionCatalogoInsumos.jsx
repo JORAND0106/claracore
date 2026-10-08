@@ -698,6 +698,8 @@ function TributoModalShell({ open, title, onClose, onSave, t, children }) {
   )
 }
 
+const GRILLA_PAGE = 50
+
 export default function SeccionCatalogoInsumos({ token, user, perms, theme: themeMode, t: tProp, embedded = false }) {
   const { isMobile, isLandscapeMobile } = useClaraViewport()
   const compactCatalog = isMobile || isLandscapeMobile
@@ -887,6 +889,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [detalleCargando, setDetalleCargando] = useState(false)
   const [msg, setMsg] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState(null)
@@ -899,6 +903,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [modalRuleErrors, setModalRuleErrors] = useState([])
   const [previewAdjunto, setPreviewAdjunto] = useState(null) // { file, fileName }
   const csvRef = useRef(null)
+  const grillaReq = useRef(0)
+  const loadingRef = useRef(false)
+  const loadingMoreRef = useRef(false)
+  const rowsCountRef = useRef(0)
+  const totalRef = useRef(0)
+  const detalleReq = useRef(0)
+  const sentinelRef = useRef(null)
   const csvProvRef = useRef(null)
   const [csvPending, setCsvPending] = useState(null) // { file, kind: 'insumos'|'proveedores' }
   const [csvModo, setCsvModo] = useState('agregar')
@@ -1041,28 +1052,67 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return () => clearTimeout(tmr)
   }, [mainTab, loadProveedores, loadBiblioteca])
 
-  const load = useCallback(() => {
+  rowsCountRef.current = rows.length
+  totalRef.current = total
+
+  const loadPage = useCallback((offset, append) => {
     if (!api || !canVer) return
-    setLoading(true)
-    api.listInsumos(q, 100, 0)
+    const req = ++grillaReq.current
+    loadingRef.current = true
+    if (append) {
+      loadingMoreRef.current = true
+      setLoadingMore(true)
+    } else {
+      setRows([])
+      setLoading(true)
+    }
+    api.listInsumos(q, GRILLA_PAGE, offset)
       .then((r) => {
-        setRows(r.items || [])
+        if (req !== grillaReq.current) return
+        const items = r.items || []
+        setRows((prev) => (append ? [...prev, ...items] : items))
         setTotal(r.total || 0)
       })
-      .catch((e) => setMsg({ type: 'error', text: e.message }))
-      .finally(() => setLoading(false))
+      .catch((e) => {
+        if (req !== grillaReq.current) return
+        setMsg({ type: 'error', text: e.message })
+      })
+      .finally(() => {
+        if (req !== grillaReq.current) return
+        loadingRef.current = false
+        setLoading(false)
+        setLoadingMore(false)
+        loadingMoreRef.current = false
+      })
   }, [api, q, canVer])
 
-  useEffect(() => {
-    const tmr = setTimeout(load, 200)
-    return () => clearTimeout(tmr)
-  }, [load])
+  const load = useCallback(() => {
+    loadPage(0, false)
+  }, [loadPage])
+
+  const loadMore = useCallback(() => {
+    if (!api || !canVer) return
+    if (loadingRef.current || loadingMoreRef.current) return
+    const shown = rowsCountRef.current
+    const all = totalRef.current
+    if (!all || shown >= all) return
+    loadPage(shown, true)
+  }, [api, canVer, loadPage])
 
   useEffect(() => {
-    if (!api || !canVer) return
-    // Precarga directorio para que la pestaña Proveedores y el autocompletar tengan datos listos.
-    loadProveedores()
-  }, [api, canVer, loadProveedores])
+    const tmr = setTimeout(() => loadPage(0, false), 200)
+    return () => clearTimeout(tmr)
+  }, [loadPage])
+
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || mainTab !== 'insumos') return undefined
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMore()
+    }, { rootMargin: '240px' })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [loadMore, mainTab, rows.length, loading])
 
   useEffect(() => {
     if (!api || !canVer) return
@@ -1104,6 +1154,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   }, [bibByProv])
 
   const openNew = async () => {
+    detalleReq.current += 1
+    setDetalleCargando(false)
     setEditId(null)
     const nextForm = { ...EMPTY_FORM, cotizaciones_detalle: [] }
     setForm(nextForm)
@@ -1131,57 +1183,66 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
   }
 
-  const openEdit = async (row) => {
+  const openEdit = (row) => {
     if (!row) return
     const insumoId = row.insumo_id || row.id
+    const req = ++detalleReq.current
     setEditId(insumoId || null)
-    setBusy(true)
     setDupAlert(null)
     setModalFaltantes([])
+    setModalRuleErrors([])
     setSelectedParId(null)
     setMainTab('insumos')
     setUnidadModoCustom(false)
     setUnidadCustom('')
+    setConsumoNegociado(row.consumo_negociado || null)
 
-    let source = row
-    // Siempre hidratar detalle completo: el listado a veces trae proveedor incompleto
-    // (sin NIT/contactos) o solo el nombre "—" cuando falta el join.
-    if (api && insumoId) {
+    const directorioInicial = Array.isArray(proveedores) ? [...proveedores] : []
+    const preliminar = buildEditFormFromInsumoRow(row, { proveedoresDirectorio: directorioInicial })
+    setForm(preliminar)
+    formBaselineRef.current = snapshotForm(preliminar)
+    setModalOpen(true)
+
+    if (!api || !insumoId) {
+      setDetalleCargando(false)
+      return
+    }
+    setDetalleCargando(true)
+    ;(async () => {
+      let source = row
       try {
         const full = await api.getInsumo(insumoId)
         if (full && (full.insumo_id || full.id)) source = full
       } catch {
-        /* usar fila del listado */
+        /* conservar la fila de la grilla */
       }
-    }
-
-    let directorio = Array.isArray(proveedores) ? [...proveedores] : []
-    // Si el directorio local aún no cargó o está incompleto, buscar el proveedor por API.
-    let nextForm = buildEditFormFromInsumoRow(source, { proveedoresDirectorio: directorio })
-    if (api && nextForm.razon_social && proveedorContactsIncomplete(nextForm)) {
-      try {
-        const q = nextForm.nit || nextForm.razon_social
-        const found = await api.searchProveedores(q, 25)
-        if (Array.isArray(found) && found.length) {
-          directorio = [...directorio, ...found]
-          const prov = resolveProveedorFieldsForEdit(
-            source,
-            nextForm.cotizaciones_detalle || [],
-            directorio,
-          )
-          nextForm = { ...nextForm, ...prov }
+      if (req !== detalleReq.current) return
+      let directorio = directorioInicial
+      let nextForm = buildEditFormFromInsumoRow(source, { proveedoresDirectorio: directorio })
+      if (nextForm.razon_social && proveedorContactsIncomplete(nextForm)) {
+        try {
+          const qProv = nextForm.nit || nextForm.razon_social
+          const found = await api.searchProveedores(qProv, 25)
+          if (Array.isArray(found) && found.length) {
+            directorio = [...directorio, ...found]
+            const prov = resolveProveedorFieldsForEdit(
+              source,
+              nextForm.cotizaciones_detalle || [],
+              directorio,
+            )
+            nextForm = { ...nextForm, ...prov }
+          }
+        } catch {
+          /* conservar lo ya resuelto */
         }
-      } catch {
-        /* conservar lo ya resuelto */
       }
-    }
-
-    setForm(nextForm)
-    formBaselineRef.current = snapshotForm(nextForm)
-    setConsumoNegociado(source.consumo_negociado || row.consumo_negociado || null)
-    setModalRuleErrors(ganadoraRuleErrors(nextForm.cotizaciones_detalle || []))
-    setModalOpen(true)
-    setBusy(false)
+      if (req !== detalleReq.current) return
+      setForm(nextForm)
+      formBaselineRef.current = snapshotForm(nextForm)
+      setConsumoNegociado(source.consumo_negociado || row.consumo_negociado || null)
+      setModalRuleErrors(ganadoraRuleErrors(nextForm.cotizaciones_detalle || []))
+      setDetalleCargando(false)
+    })()
   }
 
   /** Abre el popup de edición desde un ítem de cotización en la pestaña Proveedores. */
@@ -1953,7 +2014,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <span style={{ fontSize: 'var(--cc-xs)', alignSelf: 'center', color: t.textMuted, fontWeight: 600 }}>{total} insumo(s)</span>
+        <span style={{ fontSize: 'var(--cc-xs)', alignSelf: 'center', color: t.textMuted, fontWeight: 600 }}>
+          {rows.length < total ? `${rows.length} de ${total}` : total} insumo(s)
+        </span>
       </div>
 
       <div style={sheetWrap} className="cc-almacen-table-scroll cc-catalogo-insumos-sheet">
@@ -2067,6 +2130,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           </tbody>
         </table>
       </div>
+      <div ref={sentinelRef} style={{ height: 1 }} />
+      {loadingMore && (
+        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, padding: '6px 2px' }}>Cargando más…</div>
+      )}
       </>
       )}
 
@@ -2303,6 +2370,11 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <h3 style={{ marginTop: 0, marginBottom: 12, color: t.text, fontSize: compactCatalog ? undefined : 'var(--cc-lg)' }}>
               {editId ? 'Editar insumo' : 'Nuevo insumo'}
             </h3>
+            {detalleCargando && (
+              <div style={{ marginTop: -6, marginBottom: 12, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                Cotizaciones, adjuntos e historial se están completando…
+              </div>
+            )}
 
             {dupAlert && (
               <div style={{ background: ui.warnBg, color: ui.warnText, padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 'var(--cc-sm)' }}>
@@ -3017,8 +3089,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
               <button type="button" style={btnSecondary} disabled={busy} onClick={requestCloseModal}>Cancelar</button>
-              <button type="button" style={btnPrimary} disabled={busy || (!canCrear && !editId) || (editId && !canEditar)} onClick={() => save()}>
-                {busy ? 'Guardando…' : 'Guardar'}
+              <button type="button" style={btnPrimary} disabled={busy || detalleCargando || (!canCrear && !editId) || (editId && !canEditar)} onClick={() => save()}>
+                {busy ? 'Guardando…' : detalleCargando ? 'Cargando detalle…' : 'Guardar'}
               </button>
             </div>
           </div>

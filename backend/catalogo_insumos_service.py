@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import re
 import unicodedata
 from datetime import date, datetime
@@ -38,11 +39,21 @@ from almacen_insumos_service import (
     tributos_tienen_datos,
 )
 from almacen_service import _sb, _to_float, _upload_soporte, download_soporte
+from catalogo_insumos_grilla import (
+    GRILLA_TABLA_SELECT,
+    GRILLA_VISTA_SELECT,
+    VISTA_GRILLA,
+    clamp_grilla_limit,
+    fila_grilla_catalogo,
+    vista_grilla_ausente,
+)
 from catalogo_insumos_codigo_lib import (
     codigo_insumo_patron,
     codigo_liberado_para_baja as _codigo_liberado_para_baja,
     compute_next_codigo_insumo,
 )
+
+_log = logging.getLogger("claracore.catalogo_insumos")
 
 # Límite fijo de 200 KB eliminado: rige la cuota por contrato (+ tope técnico en pdf_prepare).
 
@@ -1302,80 +1313,87 @@ def repair_insumos_proveedor_desde_ganadora(contrato_id: Optional[int] = None) -
     return {"ok": True, "repaired": repaired, "skipped": skipped, "total_null": len(rows)}
 
 
+def _aplicar_filtro_busqueda_grilla(query, q: str):
+    texto = (q or "").strip()
+    if not texto:
+        return query
+    return query.or_(f"codigo.ilike.%{texto}%,descripcion.ilike.%{texto}%")
+
+
+def _fetch_grilla_vista(sb, contrato_id: int, q: str, limit: int, offset: int):
+    query = (
+        sb.table(VISTA_GRILLA)
+        .select(GRILLA_VISTA_SELECT, count="exact")
+        .eq("contrato_id", int(contrato_id))
+        .order("codigo")
+    )
+    query = _aplicar_filtro_busqueda_grilla(query, q)
+    resp = query.range(offset, offset + limit - 1).execute()
+    rows = resp.data or []
+    total = resp.count if resp.count is not None else len(rows)
+    return rows, total
+
+
+def _fetch_grilla_tabla(sb, contrato_id: int, q: str, limit: int, offset: int):
+    """Mismas columnas que la vista, directo sobre la tabla, si la vista aún no existe."""
+    query = (
+        sb.table("almacen_insumo")
+        .select(GRILLA_TABLA_SELECT, count="exact")
+        .eq("contrato_id", int(contrato_id))
+        .eq("activo", True)
+        .order("codigo")
+    )
+    query = _aplicar_filtro_busqueda_grilla(query, q)
+    resp = query.range(offset, offset + limit - 1).execute()
+    rows = resp.data or []
+    total = resp.count if resp.count is not None else len(rows)
+    prov_ids = {r.get("proveedor_id") for r in rows if r.get("proveedor_id")}
+    nombres: Dict[int, str] = {}
+    if prov_ids:
+        provs = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", list(prov_ids))
+            .execute()
+            .data
+            or []
+        )
+        nombres = {
+            int(p["id"]): (p.get("razon_social") or "").strip()
+            for p in provs
+            if p.get("id") is not None
+        }
+    for row in rows:
+        pid = row.get("proveedor_id")
+        if pid in (None, ""):
+            row["proveedor_nombre"] = "—"
+            continue
+        try:
+            row["proveedor_nombre"] = nombres.get(int(pid)) or "—"
+        except (TypeError, ValueError):
+            row["proveedor_nombre"] = "—"
+    return rows, total
+
+
 def list_catalogo_insumos(
     contrato_id: int,
     q: str = "",
     limit: int = 50,
     offset: int = 0,
 ) -> Tuple[List[dict], int]:
+    """Primera página de la grilla. No trae cotizaciones, adjuntos ni negociado consumido."""
     sb = _sb()
     q = (q or "").strip()
-    query = (
-        sb.table("almacen_insumo")
-        .select("*", count="exact")
-        .eq("contrato_id", contrato_id)
-        .eq("activo", True)
-        .order("codigo")
-    )
-    if q:
-        query = query.or_(
-            f"codigo.ilike.%{q}%,descripcion.ilike.%{q}%"
-        )
-    resp = query.range(offset, offset + limit - 1).execute()
-    rows = resp.data or []
-    total = resp.count if resp.count is not None else len(rows)
-
-    prov_ids = {r.get("proveedor_id") for r in rows if r.get("proveedor_id")}
-    prov_map: Dict[int, dict] = {}
-    if prov_ids:
-        provs = (
-            sb.table("almacen_proveedor")
-            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
-            .in_("id", list(prov_ids))
-            .execute()
-            .data
-            or []
-        )
-        prov_map = {int(p["id"]): p for p in provs}
-
-    out = []
-    for row in rows:
-        pid = row.get("proveedor_id")
-        if pid in (None, ""):
-            detalle = cotizaciones_detalle_from_row(row)
-            resolved, detalle_fixed = _resolve_proveedor_id_for_payload(
-                contrato_id=int(contrato_id),
-                proveedor_id=None,
-                body={},
-                detalle=detalle,
-                existing=None,
-            )
-            if resolved:
-                try:
-                    sb.table("almacen_insumo").update({
-                        "proveedor_id": int(resolved),
-                        "cotizaciones_detalle": detalle_fixed,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }).eq("id", int(row["id"])).execute()
-                    row = {**row, "proveedor_id": int(resolved), "cotizaciones_detalle": detalle_fixed}
-                    pid = int(resolved)
-                    if pid not in prov_map:
-                        provs = (
-                            sb.table("almacen_proveedor")
-                            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
-                            .eq("id", pid)
-                            .limit(1)
-                            .execute()
-                            .data
-                            or []
-                        )
-                        if provs:
-                            prov_map[pid] = provs[0]
-                except Exception:
-                    pass
-        prov = prov_map.get(int(pid or 0), {})
-        out.append(_enrich_insumo_catalogo_row(row, prov))
-    return out, total
+    limit = clamp_grilla_limit(limit)
+    offset = max(0, int(offset or 0))
+    try:
+        rows, total = _fetch_grilla_vista(sb, contrato_id, q, limit, offset)
+    except Exception as exc:
+        if not vista_grilla_ausente(exc):
+            raise
+        _log.info("Vista %s no disponible; la grilla lee columnas escalares.", VISTA_GRILLA)
+        rows, total = _fetch_grilla_tabla(sb, contrato_id, q, limit, offset)
+    return [fila_grilla_catalogo(row) for row in rows], total
 
 
 def get_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
