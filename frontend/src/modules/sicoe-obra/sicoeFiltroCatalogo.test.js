@@ -180,3 +180,28 @@ describe('filtro Competencia (caja Ítem)', () => {
     assert.equal(p.get('competencia'), 'Alumbrado P.')
   })
 })
+
+describe('filtro Editado por', () => {
+  it('está en catálogo reporte como select_multi junto a subcontratista', () => {
+    const def = sicoeFiltroDef('editado_por')
+    assert.equal(def?.categoria, 'reporte')
+    assert.equal(def?.tipo, 'select_multi')
+    assert.equal(def?.campoFObraLista, 'editados_por')
+    assert.equal(def?.opcionesKey, 'editores_opts')
+  })
+
+  it('envía editado_por_filtro JSON a la API y round-trip filtros', () => {
+    const def = sicoeFiltroDef('editado_por')
+    const f = sicoeFiltrosToFSicoe({
+      editados_por: ['12', '34'],
+      _editadoPorLabels: { 12: 'Ana Pérez', 34: 'Luis Gómez' },
+    })
+    assert.equal(sicoeFiltroTieneValor(def, f), true)
+    const round = sicoeFSicoeToFiltros(f)
+    assert.deepEqual(round.editados_por, ['12', '34'])
+    assert.equal(round._editadoPorLabels['12'], 'Ana Pérez')
+    const p = new URLSearchParams()
+    sicoeAppendFSicoeToSearchParams(p, f)
+    assert.equal(p.get('editado_por_filtro'), JSON.stringify([12, 34]))
+  })
+})

@@ -4911,6 +4911,95 @@ def _sicoe_aplicar_filtro_usuario_registros_q(q, usuario_id: Optional[int], usua
     return q.eq("creado_por_reg", usuario_id)
 
 
+def _sicoe_normalize_editado_por_ids(
+    editado_por_filtro: Optional[str] = None,
+    editado_por: Optional[int] = None,
+) -> List[int]:
+    from sicoe_filtro_editado_por import normalize_editado_por_ids
+
+    return normalize_editado_por_ids(editado_por_filtro, editado_por)
+
+
+def _sicoe_aplicar_filtro_editado_por_registros_q(q, uids: Optional[List[int]]):
+    """Líneas: modificado_por_reg ∈ uids."""
+    if not uids:
+        return q
+    if len(uids) == 1:
+        return q.eq("modificado_por_reg", int(uids[0]))
+    return q.in_("modificado_por_reg", [int(x) for x in uids])
+
+
+def _sicoe_collect_reporte_ids_editado_por(contrato_id: int, uids: List[int]) -> List[int]:
+    """
+    Reportes cuyo encabezado fue editado por alguno de ``uids``
+    o que tienen al menos un registro con modificado_por_reg en ``uids``.
+    """
+    from sicoe_filtro_editado_por import union_reporte_ids
+
+    if not uids:
+        return []
+    uids_i = [int(x) for x in uids]
+    ids_rep: List[int] = []
+    off = 0
+    page = 1000
+    while True:
+        o = off
+
+        def _qr(o=o):
+            q = (
+                supabase.table("so_reportes")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+            )
+            if len(uids_i) == 1:
+                q = q.eq("modificado_por", uids_i[0])
+            else:
+                q = q.in_("modificado_por", uids_i)
+            return q.order("id").range(o, o + page - 1).execute().data
+
+        batch = supabase_execute(_qr) or []
+        for r in batch:
+            if r.get("id") is not None:
+                try:
+                    ids_rep.append(int(r["id"]))
+                except (TypeError, ValueError):
+                    pass
+        if len(batch) < page:
+            break
+        off += page
+        if off >= 50000:
+            break
+
+    ids_reg: List[int] = []
+    off = 0
+    while True:
+        o = off
+
+        def _qg(o=o):
+            q = (
+                supabase.table("so_registros")
+                .select("reporte_id")
+                .eq("contrato_id", int(contrato_id))
+            )
+            q = _sicoe_aplicar_filtro_editado_por_registros_q(q, uids_i)
+            return q.order("id").range(o, o + page - 1).execute().data
+
+        batch = supabase_execute(_qg) or []
+        for r in batch:
+            if r.get("reporte_id") is not None:
+                try:
+                    ids_reg.append(int(r["reporte_id"]))
+                except (TypeError, ValueError):
+                    pass
+        if len(batch) < page:
+            break
+        off += page
+        if off >= 50000:
+            break
+
+    return union_reporte_ids(ids_rep, ids_reg)
+
+
 def _sicoe_so_registros_q_linea_filtros_busqueda(
     q,
     *,
@@ -4949,6 +5038,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     usuario_accion: Optional[str] = None,
     ambito_fecha_registro: bool = True,
     reversion_modo: Optional[str] = None,
+    editado_por_ids: Optional[List[int]] = None,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
     items_eff = list(items) if items else []
@@ -5021,6 +5111,8 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = _sicoe_aplicar_filtro_fecha_q(q, col_f, fecha_desde, fecha_hasta)
     if ambito_fecha_registro and usuario_id is not None:
         q = _sicoe_aplicar_filtro_usuario_registros_q(q, usuario_id, usuario_accion)
+    if editado_por_ids:
+        q = _sicoe_aplicar_filtro_editado_por_registros_q(q, editado_por_ids)
     if reversion_modo:
         q = _so_reg_q_aplicar_filtro_reversion(q, reversion_modo)
     return q
@@ -20764,6 +20856,10 @@ def buscar_reportes_obra(
     fecha_hasta: Optional[str] = None,
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
+    editado_por_filtro: Optional[str] = Query(
+        None,
+        description="JSON array de usuario_id: reportes editados por ellos o con líneas editadas por ellos.",
+    ),
     pendiente_item: bool = Query(False),
     offset: int = 0,
     limit: int = 50,
@@ -20778,6 +20874,7 @@ def buscar_reportes_obra(
     )
     _filtro_fu_rep = _amb_fu == "reporte" and _tiene_fu
     _filtro_fu_reg = _amb_fu == "registro" and _tiene_fu
+    _editado_por_ids = _sicoe_normalize_editado_por_ids(editado_por_filtro)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     consulta_directa_identificador = (
         numero_reporte is not None or numero_registro is not None
@@ -20985,6 +21082,20 @@ def buscar_reportes_obra(
                     return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
             else:
                 reporte_ids_from_reg = list(ids_fu)
+        except Exception:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+
+    if _editado_por_ids:
+        try:
+            ids_ed = set(_sicoe_collect_reporte_ids_editado_por(contrato_id, _editado_por_ids))
+            if not ids_ed:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+            if reporte_ids_from_reg is not None:
+                reporte_ids_from_reg = [x for x in reporte_ids_from_reg if x in ids_ed]
+                if not reporte_ids_from_reg:
+                    return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+            else:
+                reporte_ids_from_reg = list(ids_ed)
         except Exception:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
@@ -23341,6 +23452,7 @@ def _sicoe_analisis_response_cache_key(
     fecha_hasta=None,
     usuario_id=None,
     usuario_accion=None,
+    editado_por_filtro=None,
     pendiente_item=False,
     formato=None,
 ) -> tuple:
@@ -23384,6 +23496,7 @@ def _sicoe_analisis_response_cache_key(
             "fecha_hasta": fecha_hasta,
             "usuario_id": usuario_id,
             "usuario_accion": usuario_accion,
+            "editado_por_filtro": editado_por_filtro,
             "pendiente_item": pendiente_item,
             "formato": formato,
         }.items()
@@ -23490,6 +23603,7 @@ def analisis_registros_obra(
     fecha_hasta: Optional[str] = None,
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
+    editado_por_filtro: Optional[str] = Query(None),
     pendiente_item: bool = Query(False),
     formato: Optional[str] = Query(
         None,
@@ -23499,6 +23613,7 @@ def analisis_registros_obra(
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
     _formato_mapa = (formato or "").strip().lower() == "mapa_calor"
+    _editado_por_ids_ana = _sicoe_normalize_editado_por_ids(editado_por_filtro)
     _analisis_cache_key = _sicoe_analisis_response_cache_key(
         contrato_id,
         current_user,
@@ -23537,6 +23652,7 @@ def analisis_registros_obra(
         fecha_hasta=fecha_hasta,
         usuario_id=usuario_id,
         usuario_accion=usuario_accion,
+        editado_por_filtro=editado_por_filtro,
         pendiente_item=pendiente_item,
         formato="mapa_calor" if _formato_mapa else None,
     )
@@ -23857,6 +23973,8 @@ def analisis_registros_obra(
                 q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
                 if _uid_fu is not None:
                     q = _sicoe_aplicar_filtro_usuario_registros_q(q, _uid_fu, _uacc_fu)
+            if _editado_por_ids_ana:
+                q = _sicoe_aplicar_filtro_editado_por_registros_q(q, _editado_por_ids_ana)
             return q
 
         if reg_ids_etiqueta_ana is not None:
@@ -24202,6 +24320,115 @@ def analisis_registros_obra(
     }
     _dashboard_response_cache_set(_analisis_cache_key, result)
     return result
+
+
+@app.get("/sicoe-obra/{contrato_id}/filtros/usuarios-editores")
+def filtros_usuarios_editores(contrato_id: int, current_user=Depends(get_current_user)):
+    """
+    Usuarios que han editado reportes (so_reportes.modificado_por) o registros
+    (so_registros.modificado_por_reg) del contrato activo — opciones del filtro «Editado por».
+    """
+    _require_contract_access(current_user, contrato_id)
+    cache_key = ("sicoe_filtros_usuarios_editores", int(contrato_id))
+    cached = _dashboard_response_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    uids: set = set()
+    page = 1000
+    off = 0
+    while True:
+        o = off
+
+        def _qr(o=o):
+            return (
+                supabase.table("so_reportes")
+                .select("modificado_por")
+                .eq("contrato_id", int(contrato_id))
+                .not_.is_("modificado_por", "null")
+                .order("id")
+                .range(o, o + page - 1)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_qr) or []
+        for r in batch:
+            try:
+                mid = r.get("modificado_por")
+                if mid is not None:
+                    uids.add(int(mid))
+            except (TypeError, ValueError):
+                pass
+        if len(batch) < page:
+            break
+        off += page
+        if off >= 50000:
+            break
+
+    off = 0
+    while True:
+        o = off
+
+        def _qg(o=o):
+            return (
+                supabase.table("so_registros")
+                .select("modificado_por_reg")
+                .eq("contrato_id", int(contrato_id))
+                .not_.is_("modificado_por_reg", "null")
+                .order("id")
+                .range(o, o + page - 1)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_qg) or []
+        for r in batch:
+            try:
+                mid = r.get("modificado_por_reg")
+                if mid is not None:
+                    uids.add(int(mid))
+            except (TypeError, ValueError):
+                pass
+        if len(batch) < page:
+            break
+        off += page
+        if off >= 50000:
+            break
+
+    if not uids:
+        _dashboard_response_cache_set(cache_key, [])
+        return []
+
+    ids_l = sorted(uids)
+    users: list = []
+    for i in range(0, len(ids_l), 200):
+        chunk = ids_l[i : i + 200]
+
+        def _qu(chunk=chunk):
+            return (
+                supabase.table("usuarios")
+                .select("id, nombre, apellidos, email, activo")
+                .in_("id", chunk)
+                .execute()
+                .data
+            )
+
+        users.extend(supabase_execute(_qu) or [])
+
+    out = []
+    for u in users:
+        try:
+            uid = int(u.get("id"))
+        except (TypeError, ValueError):
+            continue
+        nom = f"{(u.get('nombre') or '').strip()} {(u.get('apellidos') or '').strip()}".strip()
+        if not nom:
+            nom = (u.get("email") or "").strip() or f"Usuario {uid}"
+        out.append({"id": uid, "nombre": nom, "activo": bool(u.get("activo", True))})
+    out.sort(key=lambda x: (x["nombre"] or "").lower())
+    _dashboard_response_cache_set(cache_key, out)
+    return out
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/semanas")
@@ -24585,9 +24812,11 @@ def obtener_reporte(
     q_nodo: Optional[str] = Query(None),
     etiqueta_validacion: Optional[str] = Query(None),
     pendiente_item: bool = Query(False),
+    editado_por_filtro: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     items_detalle_norm = _normalize_items_filtro_list(items_filtro, item)
+    _editado_por_ids_det = _sicoe_normalize_editado_por_ids(editado_por_filtro)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     # Misma semántica que GET …/reportes/buscar: por N° reporte o N° registro no se cruzan capas/semana/acta.
     consulta_directa_identificador = (
@@ -24699,6 +24928,7 @@ def obtener_reporte(
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
                     reversion_modo=_rev_modo_det,
+                    editado_por_ids=_editado_por_ids_det or None,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
 
@@ -29666,6 +29896,7 @@ def sicoe_cantidades_por_item(
     fecha_hasta: Optional[str] = None,
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
+    editado_por_filtro: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     """
@@ -29680,6 +29911,7 @@ def sicoe_cantidades_por_item(
     items_ana = _normalize_items_filtro_list(items_filtro, item)
     caps_ana = _normalize_items_filtro_list(capitulos_filtro, capitulo)
     actas_rpo_ana = _normalize_actas_filtro_list(actas_filtro, acta_rpo)
+    _editado_por_ids_cpi = _sicoe_normalize_editado_por_ids(editado_por_filtro)
 
     tiene_criterio = any(
         [
@@ -29709,6 +29941,7 @@ def sicoe_cantidades_por_item(
             bool((fecha_desde or "").strip()),
             bool((fecha_hasta or "").strip()),
             usuario_id is not None,
+            bool(_editado_por_ids_cpi),
         ]
     )
     if not tiene_criterio:
@@ -29920,6 +30153,7 @@ def sicoe_cantidades_por_item(
             usuario_id=_uid if _tiene_fu and _amb == "registro" else None,
             usuario_accion=_uacc if _tiene_fu and _amb == "registro" else None,
             ambito_fecha_registro=_amb == "registro",
+            editado_por_ids=_editado_por_ids_cpi or None,
         )
 
     out_rows = _sicoe_analisis_fetch_registros_paginated(_build_q)

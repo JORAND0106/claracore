@@ -378,7 +378,17 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
     ? String(f[def.campoFObra] ?? '')
     : ''
 
-  const labelItem = (v) => (def.key === 'item' && itemLabels?.[v] ? itemLabels[v] : v)
+  const labelItem = (v) => {
+    if (def.key === 'item' && itemLabels?.[v]) return itemLabels[v]
+    const found = opts.find((o) => String(o.value) === String(v))
+    if (found?.descripcion) return found.descripcion
+    if (found?.label) return found.label
+    if (def.key === 'editado_por' && f?._editadoPorLabels?.[v]) return f._editadoPorLabels[v]
+    if (def.key === 'editado_por' && f?._editadoPorLabels?.[String(v)]) {
+      return f._editadoPorLabels[String(v)]
+    }
+    return v
+  }
 
   return (
     <div style={{ marginBottom: 0, minWidth: 0 }}>

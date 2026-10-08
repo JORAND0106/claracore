@@ -80,6 +80,7 @@ export const SICOE_FILTRO_CATALOGO = [
   { key: 'semana', label: 'Semana', tipo: 'autocomplete', categoria: 'reporte', campoFObra: 'semana', opcionesKey: 'semanas_opts' },
   { key: 'acta_rpo', label: 'Acta RPO', tipo: 'autocomplete', categoria: 'reporte', campoFObra: 'acta_rpo', opcionesKey: 'actas_opts' },
   { key: 'subcontratista_id', label: 'Subcontratista', tipo: 'select', categoria: 'reporte', campoFObra: 'subcontratista_id', opcionesKey: 'subcontratistas_opts' },
+  { key: 'editado_por', label: 'Editado por', tipo: 'select_multi', categoria: 'reporte', campoFObra: 'editado_por', campoFObraLista: 'editados_por', opcionesKey: 'editores_opts' },
   { key: 'estado', label: 'Estado del reporte', tipo: 'select', categoria: 'reporte', campoFObra: 'estado', opcionesKey: 'estados_reporte' },
   { key: 'capitulo', label: 'Capítulo', tipo: 'select', categoria: 'item', campoFObra: 'capitulo', opcionesKey: 'capitulos' },
   { key: 'competencia', label: 'Competencia', tipo: 'select', categoria: 'item', campoFObra: 'competencia', opcionesKey: 'competencias' },
@@ -118,6 +119,9 @@ export function sicoeFSicoeVacios() {
     semana: '',
     acta_rpo: '',
     subcontratista_id: '',
+    editado_por: '',
+    editados_por: [],
+    _editadoPorLabels: {},
     capitulo: '',
     competencia: '',
     item: '',
@@ -290,6 +294,12 @@ export function sicoeFiltroChipResumen(def, f, itemLabels = {}) {
     if (def.key === 'item') {
       return vals.map((v) => itemLabels[v] || v).join(', ')
     }
+    if (def.key === 'editado_por') {
+      const labels = f._editadoPorLabels || {}
+      const named = vals.map((v) => labels[v] || labels[String(v)] || `Usuario ${v}`)
+      if (named.length > 2) return `${named.slice(0, 2).join(', ')} +${named.length - 2}`
+      return named.join(', ')
+    }
     if (vals.length > 2) return `${vals.slice(0, 2).join(', ')} +${vals.length - 2}`
     return vals.join(', ')
   }
@@ -301,6 +311,9 @@ export function sicoeFiltroPatchLimpiar(def) {
   if (!def) return {}
   if (def.tipo === 'rango_numerico' || def.key === 'abs_inicio') {
     return { [def.campoFObra]: '', [def.campoFObraHasta]: '' }
+  }
+  if (def.key === 'editado_por') {
+    return { editado_por: '', editados_por: [], _editadoPorLabels: {} }
   }
   if (def.tipo === 'select_multi' && def.campoFObraLista) {
     return { [def.campoFObra]: '', [def.campoFObraLista]: [] }
@@ -326,6 +339,11 @@ export function sicoeFiltrosToFSicoe(filtros = {}, extras = {}) {
     semana: strVal(f.semana),
     acta_rpo: strVal(f.acta_rpo),
     subcontratista_id: strVal(f.subcontratista_id),
+    editado_por: '',
+    editados_por: [],
+    _editadoPorLabels: (f._editadoPorLabels && typeof f._editadoPorLabels === 'object')
+      ? { ...f._editadoPorLabels }
+      : {},
     capitulo: strVal(f.capitulo),
     competencia: strVal(f.competencia),
     item: items.length === 1 && !chips.length ? items[0] : '',
@@ -351,6 +369,14 @@ export function sicoeFiltrosToFSicoe(filtros = {}, extras = {}) {
     usuario_id: strVal(f.usuario_id),
     usuarioLabel: strVal(f.usuarioLabel),
     usuarioAccion: ['creo', 'edito', 'valido'].includes(f.usuarioAccion) ? f.usuarioAccion : 'creo',
+    ...(() => {
+      const edLista = Array.isArray(f.editados_por)
+        ? [...new Set(f.editados_por.map((x) => String(x ?? '').trim()).filter(Boolean))]
+        : (hasStr(f.editado_por) ? [strVal(f.editado_por)] : [])
+      if (!edLista.length) return {}
+      if (edLista.length === 1) return { editado_por: edLista[0], editados_por: edLista }
+      return { editado_por: '', editados_por: edLista }
+    })(),
   }
 }
 
@@ -358,12 +384,18 @@ export function sicoeFiltrosToFSicoe(filtros = {}, extras = {}) {
 export function sicoeFSicoeToFiltros(fSicoe = {}) {
   const f = { ...fSicoe }
   const itemsLista = sicoeFiltroValoresLista(sicoeFiltroDef('item'), f)
+  const editadosLista = sicoeFiltroValoresLista(sicoeFiltroDef('editado_por'), f)
   return {
     numero_reporte: strVal(f.numero_reporte),
     numero_registro: strVal(f.numero_registro),
     semana: strVal(f.semana),
     acta_rpo: strVal(f.acta_rpo),
     subcontratista_id: strVal(f.subcontratista_id),
+    editado_por: editadosLista.length === 1 ? editadosLista[0] : '',
+    editados_por: editadosLista,
+    _editadoPorLabels: (f._editadoPorLabels && typeof f._editadoPorLabels === 'object')
+      ? { ...f._editadoPorLabels }
+      : {},
     capitulo: strVal(f.capitulo),
     competencia: strVal(f.competencia),
     item: itemsLista.length === 1 && !(f.items?.length) ? itemsLista[0] : '',
@@ -431,6 +463,12 @@ export function sicoeAppendFSicoeToSearchParams(p, fSicoe, ctx = {}) {
     const acc = ['creo', 'edito', 'valido'].includes(fSicoe.usuarioAccion) ? fSicoe.usuarioAccion : 'creo'
     p.set('usuario_accion', acc)
   }
+  const editados = sicoeFiltroValoresLista(sicoeFiltroDef('editado_por'), fSicoe)
+    .map((x) => parseInt(String(x), 10))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  if (editados.length) {
+    p.set('editado_por_filtro', JSON.stringify(editados))
+  }
   sicoeAppendPanelChecksToSearchParams(p, ctx.panelBundle)
 }
 
@@ -463,6 +501,12 @@ export function sicoeFiltroSnapshot(bundle) {
   const b = bundle || {}
   const fSicoe = { ...sicoeFSicoeVacios(), ...(b.fSicoe || {}) }
   if (Array.isArray(fSicoe.items)) fSicoe.items = [...fSicoe.items]
+  if (Array.isArray(fSicoe.editados_por)) fSicoe.editados_por = [...fSicoe.editados_por]
+  if (fSicoe._editadoPorLabels && typeof fSicoe._editadoPorLabels === 'object') {
+    fSicoe._editadoPorLabels = { ...fSicoe._editadoPorLabels }
+  } else {
+    fSicoe._editadoPorLabels = {}
+  }
   return {
     fSicoe,
     itemsChips: Array.isArray(b.itemsChips) ? [...b.itemsChips] : sicoeItemsChipsFromFSicoe(fSicoe),
@@ -494,6 +538,10 @@ export function sicoeFiltroFromSnapshot(snap) {
     const base = sicoeFSicoeVacios()
     const fSicoe = { ...base, ...snap.fSicoe }
     fSicoe.items = Array.isArray(snap.fSicoe.items) ? [...snap.fSicoe.items] : []
+    fSicoe.editados_por = Array.isArray(snap.fSicoe.editados_por) ? [...snap.fSicoe.editados_por] : []
+    fSicoe._editadoPorLabels = (snap.fSicoe._editadoPorLabels && typeof snap.fSicoe._editadoPorLabels === 'object')
+      ? { ...snap.fSicoe._editadoPorLabels }
+      : {}
     return {
       fSicoe,
       itemsChips: Array.isArray(snap.itemsChips) ? [...snap.itemsChips] : sicoeItemsChipsFromFSicoe(fSicoe),
