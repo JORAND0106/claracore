@@ -9,9 +9,12 @@ import {
   descripcionItemPresupuesto,
   fusionarManoObraEnRentabilidad,
   hermanosMismoPresupuestoItem,
+  etiquetaProveedorLinea,
+  fmtFechaHoraCorta,
   itemPuedeAsignarInsumo,
   itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
+  motivoItemNoValidable,
   puedeAbrirRevisionLinea,
   rentabilidadDesdeAnalisis,
   textoLibreSolicitudItem,
@@ -84,6 +87,8 @@ export default function SolicitudLineaRevisionModal({
   })
 
   const puedeValidarLinea = itemPuedeValidar(item, sol, permisos)
+  const motivoLinea = motivoItemNoValidable(item, sol, permisos)
+  const justTxt = String(item?.observacion_residente || '').trim()
   const puedeCorregirPostOc = itemPuedeCorregirInsumoPostOc(item, sol, permisos)
   const puedeAsignarInsumo = itemPuedeAsignarInsumo(item, sol, permisos)
   const puedeEditarMapeo = puedeAsignarInsumo || puedeCorregirPostOc
@@ -415,6 +420,51 @@ export default function SolicitudLineaRevisionModal({
           </div>
         )}
 
+        <div style={{ fontSize: 'var(--cc-xs)', marginBottom: 10, color: ui.text }}>
+          Proveedor: <strong style={{ color: item?.sin_insumo || (!item?.insumo_id && !item?.es_recurrente) ? '#92400e' : ui.text }}>
+            {etiquetaProveedorLinea(item)}
+          </strong>
+        </div>
+        {justTxt && (
+          <div
+            data-testid="revision-linea-justificacion"
+            style={{
+              marginBottom: 12,
+              padding: '8px 10px',
+              borderRadius: 8,
+              background: '#fffbeb',
+              border: '1px solid #fcd34d',
+              fontSize: 'var(--cc-sm)',
+              lineHeight: 1.45,
+            }}
+          >
+            <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
+              {item?.supera_presupuesto ? 'Justificación (supera presupuesto)' : 'Justificación'}
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{justTxt}</div>
+            <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+              {[item?.justificacion_autor_nombre, fmtFechaHoraCorta(item?.justificacion_at)].filter(Boolean).join(' · ') || 'Sin autor registrado'}
+            </div>
+          </div>
+        )}
+        {!puedeValidarLinea && motivoLinea && (
+          <div
+            data-testid="motivo-item-no-validable"
+            style={{
+              marginBottom: 12,
+              padding: '8px 10px',
+              borderRadius: 8,
+              background: '#fffbeb',
+              border: '1px solid #fcd34d',
+              color: '#92400e',
+              fontSize: 'var(--cc-sm)',
+              lineHeight: 1.45,
+            }}
+          >
+            Aprobar ítem y rechazar ítem no están disponibles: {motivoLinea}
+          </div>
+        )}
+
         {puedeEditarMapeo ? (
           <>
             <div style={{ ...ui.sheetWrap, overflow: 'visible', marginBottom: 12 }} className="cc-almacen-table-scroll">
@@ -691,9 +741,11 @@ export default function SolicitudLineaRevisionModal({
                 </div>
               </>
             ) : (
-              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>
-                Esta línea ya no admite revisión (aprobada, rechazada o con OC).
-              </div>
+              !motivoLinea && (
+                <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>
+                  Esta línea ya no admite revisión (aprobada, rechazada o con OC).
+                </div>
+              )
             )}
             {verEconomicos && tablaRentabilidad && (
               <TablaRentabilidadAcumulada

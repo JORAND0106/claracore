@@ -21,8 +21,7 @@ function esContratistaGerencialUsuario(usuario) {
 }
 
 function solicitudPuedeValidar(sol, permisos) {
-  const esGerencial = Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
-  if (!permisos?.validar || !esGerencial) return false
+  if (!permisos?.validar) return false
   const tieneOc = Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
   if (sol?.estado === 'enviada' && !tieneOc) return true
   if (sol?.estado === 'aprobada' && tieneOc) {
@@ -35,6 +34,7 @@ function solicitudPuedeValidar(sol, permisos) {
 function puedeAbrirRevisionLinea(permisos) {
   return Boolean(
     permisos?.editar
+    || permisos?.validar
     || permisos?.esContratistaGerencial
     || permisos?.esDesarrollador,
   )
@@ -69,10 +69,11 @@ describe('flujo solicitud por rol', () => {
     assert.equal(esContratistaGerencialUsuario({ rol_nombre: 'Interventoría Gerencial' }), false)
   })
 
-  it('aprobación exige validar + gerencial + enviada', () => {
+  it('aprobación exige validar y enviada, con o sin rol gerencial', () => {
     const sol = { estado: 'enviada' }
-    assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: false }), false)
+    assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: false }), true)
     assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: true }), true)
+    assert.equal(solicitudPuedeValidar(sol, { validar: false, esContratistaGerencial: true }), false)
   })
 
   it('post-OC: gerencial valida líneas nuevas no incluidas en la OC', () => {
@@ -93,7 +94,7 @@ describe('flujo solicitud por rol', () => {
     assert.equal(puedeAbrirRevisionLinea({ esContratistaGerencial: true }), true)
     assert.equal(puedeAbrirRevisionLinea({ esDesarrollador: true }), true)
     assert.equal(puedeAbrirRevisionLinea({ editar: true, esContratistaGerencial: false }), true)
-    assert.equal(puedeAbrirRevisionLinea({ validar: true, esContratistaGerencial: false }), false)
+    assert.equal(puedeAbrirRevisionLinea({ validar: true, esContratistaGerencial: false }), true)
     assert.equal(puedeAbrirRevisionLinea({ crear: true }), false)
     assert.equal(puedeAbrirRevisionLinea({}), false)
   })

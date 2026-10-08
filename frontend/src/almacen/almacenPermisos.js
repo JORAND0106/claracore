@@ -92,10 +92,11 @@ export function esContratistaGerencialUsuario(usuario) {
   return false
 }
 
-/** Revisión Gerencial: permiso validar (Almacén) + rol Contratista Gerencial. */
+/** Aprobar solicitudes: basta Almacén · Validar. El rol gerencial no sustituye ni anula ese permiso. */
 export function puedeRevisarSolicitudGerencial(usuario, permisos) {
+  if (rolExcluidoAlmacen(usuario)) return false
   if (permisos?.esDesarrollador || esDesarrolladorUsuario(usuario)) return Boolean(permisos?.validar ?? true)
-  return Boolean(permisos?.validar && (permisos?.esContratistaGerencial || esContratistaGerencialUsuario(usuario)))
+  return Boolean(permisos?.validar)
 }
 
 export function permisoAlmacen(usuario, accion, contratoId) {

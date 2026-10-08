@@ -22,7 +22,9 @@ def test_routes_separan_entsal_de_almacen():
     assert "_require_almacen_o_entsal(current_user, \"ver\")" in routes
     # Crear insumo ya no exige Almacén·editar junto a CATINS
     assert 'require_permiso_almacen(current_user, "editar")\n    require_permiso_catalogo_insumos' not in routes
-    assert "require_contratista_gerencial_almacen" in routes
+    assert 'require_permiso_almacen(current_user, "validar")' in routes
+    assert "es_contratista_gerencial" in routes
+    assert "require_contratista_gerencial_almacen" not in routes
     assert "require_acceso_ui_modulo_almacen" in routes
 
 

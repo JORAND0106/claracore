@@ -102,12 +102,18 @@ def es_contratista_gerencial(current_user) -> bool:
 
 
 def require_contratista_gerencial_almacen(current_user) -> None:
-    """Gate duro para aprobar ítems, la solicitud y generar la OC (flujo Gerencial)."""
+    """Validar + Contratista Gerencial.
+
+    La aprobación de ítems, el rechazo y generar la OC ya no usan este gate:
+    bastan Almacén · validar y un estado que lo permita. El rol gerencial no
+    reemplaza ni anula Validar; solo participa en la visibilidad económica
+    (Operativo Gerencial) y en correcciones que sí lo exigen (post-OC, salidas).
+    """
     require_permiso_almacen(current_user, "validar")
     if not es_contratista_gerencial(current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo el rol Contratista Gerencial puede aprobar solicitudes de materiales.",
+            detail="Solo el rol Contratista Gerencial puede realizar esta acción.",
         )
 
 

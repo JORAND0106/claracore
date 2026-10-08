@@ -32,16 +32,13 @@ export function solicitudTieneLineasPendientesPostOc(sol) {
 }
 
 /**
- * Gerencial puede validar:
+ * Quien tiene Almacén · Validar puede aprobar:
  * - solicitud enviada sin OC, o
  * - solicitud con OC que tiene líneas nuevas (pendientes o aprobadas aún no sumadas).
+ * El rol gerencial no hace falta: solo agrega visibilidad de valores económicos.
  */
 export function solicitudPuedeValidar(sol, permisos) {
-  const esGerencial = Boolean(
-    permisos?.esContratistaGerencial
-    || permisos?.esDesarrollador,
-  )
-  if (!permisos?.validar || !esGerencial) return false
+  if (!permisos?.validar) return false
   if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
   if (
     sol?.estado === 'aprobada'
@@ -51,6 +48,44 @@ export function solicitudPuedeValidar(sol, permisos) {
     return true
   }
   return false
+}
+
+/**
+ * Motivo visible cuando hay permiso de Validar pero el estado no deja aprobar.
+ * Vacío si no hay permiso (no se explica una denegación de acceso como si fuera el estado)
+ * o si la acción sí está disponible.
+ */
+export function motivoAprobacionNoDisponible(sol, permisos) {
+  if (!permisos?.validar || !sol) return ''
+  if (solicitudPuedeValidar(sol, permisos)) return ''
+  const estado = String(sol.estado || '')
+  if (estado === 'borrador' || estado === '') {
+    return 'La solicitud está en borrador. Primero hay que solicitar aprobación para poder aprobar ítems o generar la orden de compra.'
+  }
+  if (estado === 'rechazada') {
+    return 'La solicitud fue rechazada. Hay que volver a solicitar aprobación antes de aprobar ítems o generar la orden de compra.'
+  }
+  if (estado === 'aprobada' && solicitudTieneOrdenCompra(sol) && !solicitudTieneLineasPendientesPostOc(sol)) {
+    return 'La solicitud ya fue aprobada y sus líneas están en la orden de compra.'
+  }
+  if (estado === 'aprobada') {
+    return 'La solicitud ya figura como aprobada. No hay líneas nuevas pendientes de sumar a la orden de compra.'
+  }
+  if (estado === 'enviada' && solicitudTieneOrdenCompra(sol)) {
+    return 'La solicitud ya tiene orden de compra. Las líneas nuevas se aprueban cuando queda en estado aprobada.'
+  }
+  return 'La aprobación no está disponible en el estado actual de la solicitud.'
+}
+
+/** Motivo de «Solicitar aprobación» cuando hay Crear o Editar pero el estado no lo permite. */
+export function motivoEnvioNoDisponible(sol, permisos) {
+  if (!permisos?.crear && !permisos?.editar) return ''
+  if (!sol?.id) return ''
+  const estado = sol.estado
+  if (estado == null || estado === '' || estado === 'borrador' || estado === 'rechazada') return ''
+  if (estado === 'enviada') return 'La solicitud ya fue enviada a aprobación.'
+  if (estado === 'aprobada') return 'La solicitud ya fue aprobada.'
+  return 'No se puede solicitar aprobación en el estado actual.'
 }
 
 /** Rechazo completo de la solicitud: solo antes de generar OC. */
@@ -64,12 +99,13 @@ export function solicitudPuedeRechazarCompleta(sol, permisos) {
 
 /**
  * Popup «Revisión de línea».
- * Editar (Almacén) asigna el insumo. Gerencial / Desarrollador lo abren para aprobar,
- * aunque no tengan Editar.
+ * Editar asigna el insumo. Validar lo abre para aprobar o rechazar,
+ * con o sin rol gerencial. Gerencial / Desarrollador también pueden abrirlo.
  */
 export function puedeAbrirRevisionLinea(permisos) {
   return Boolean(
     permisos?.editar
+    || permisos?.validar
     || permisos?.esContratistaGerencial
     || permisos?.esDesarrollador,
   )
@@ -99,6 +135,59 @@ export function itemPuedeValidar(item, sol, permisos) {
     && !item?.en_orden_compra
     && (item?.estado_validacion || 'pendiente') !== 'aprobado',
   )
+}
+
+/** Motivo cuando Validar no alcanza para aprobar o rechazar esta línea. */
+export function motivoItemNoValidable(item, sol, permisos) {
+  if (!permisos?.validar) return ''
+  if (itemPuedeValidar(item, sol, permisos)) return ''
+  const deSolicitud = motivoAprobacionNoDisponible(sol, permisos)
+  if (deSolicitud) return deSolicitud
+  if (item?.en_orden_compra) return 'Esta línea ya está en la orden de compra.'
+  if ((item?.estado_validacion || '') === 'aprobado') return 'Esta línea ya fue aprobada.'
+  if ((item?.estado_validacion || '') === 'rechazado') {
+    return 'Esta línea fue rechazada. Hay que corregirla y volver a solicitar aprobación.'
+  }
+  return 'Esta línea no admite aprobación en el estado actual.'
+}
+
+/** Proveedores distintos de las líneas, para ver cuántas OC se van a generar. */
+export function resumenProveedoresSolicitud(items) {
+  const keys = new Set()
+  const proveedores = []
+  let lineasSinInsumo = 0
+  for (const it of items || []) {
+    const sinInsumo = Boolean(it?.sin_insumo) || (!it?.insumo_id && !it?.es_recurrente)
+    if (sinInsumo) {
+      lineasSinInsumo += 1
+      continue
+    }
+    const nombre = it?.es_recurrente
+      ? 'Compra recurrente'
+      : (it?.proveedor_nombre || it?.proveedor_catalogo || 'Proveedor')
+    const key = String(it?.proveedor_id ?? nombre)
+    if (keys.has(key)) continue
+    keys.add(key)
+    proveedores.push(nombre)
+  }
+  return {
+    proveedores,
+    ocs_previstas: proveedores.length,
+    lineas_sin_insumo: lineasSinInsumo,
+  }
+}
+
+export function fmtFechaHoraCorta(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+export function etiquetaProveedorLinea(item) {
+  if (item?.es_recurrente) return 'Compra recurrente'
+  if (item?.sin_insumo || (!item?.insumo_id && !item?.es_recurrente)) return 'Sin insumo asignado'
+  return item?.proveedor_nombre || item?.proveedor_catalogo || 'Proveedor'
 }
 
 /** Puede reabrir OC para agregar insumos adicionales. */

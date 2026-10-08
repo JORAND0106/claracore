@@ -1,4 +1,4 @@
-"""Asignar insumo exige Editar; aprobar sigue en Validar + Contratista Gerencial."""
+"""Asignar insumo exige Editar; aprobar exige Validar, sin rol gerencial."""
 import ast
 from pathlib import Path
 
@@ -35,8 +35,10 @@ def test_ruta_mapear_exige_editar_y_aprobar_sigue_gerencial():
 
     validar = _fn(routes, "route_validar_item_solicitud")
     aprobar = _fn(routes, "route_aprobar_solicitud")
-    assert "require_contratista_gerencial_almacen" in validar
-    assert "require_contratista_gerencial_almacen" in aprobar
+    assert 'require_permiso_almacen(current_user, "validar")' in validar
+    assert 'require_permiso_almacen(current_user, "validar")' in aprobar
+    assert "require_contratista_gerencial_almacen" not in validar
+    assert "require_contratista_gerencial_almacen" not in aprobar
 
     corregir = _fn(routes, "route_corregir_insumo_post_oc")
     assert 'require_permiso_almacen(current_user, "editar")' in corregir

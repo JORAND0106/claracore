@@ -1,6 +1,6 @@
 /**
  * Asignar insumo en Revisión de línea depende de Editar.
- * Aprobar ítem / OC sigue en Validar + Contratista Gerencial.
+ * Aprobar ítem / OC exige Validar, con o sin rol gerencial.
  * node --test frontend/src/almacen/solicitudAsignarInsumoPermiso.test.js
  */
 import assert from 'node:assert/strict'
@@ -19,6 +19,7 @@ function solicitudTieneOrdenCompra(sol) {
 function puedeAbrirRevisionLinea(permisos) {
   return Boolean(
     permisos?.editar
+    || permisos?.validar
     || permisos?.esContratistaGerencial
     || permisos?.esDesarrollador,
   )
@@ -45,8 +46,7 @@ function itemPuedeCorregirInsumoPostOc(item, sol, permisos) {
 }
 
 function solicitudPuedeValidar(sol, permisos) {
-  const esGerencial = Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
-  if (!permisos?.validar || !esGerencial) return false
+  if (!permisos?.validar) return false
   if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
   return false
 }
@@ -61,7 +61,7 @@ describe('Asignar insumo — permiso Editar', () => {
   it('abre el popup con Editar, sin rol gerencial', () => {
     assert.equal(puedeAbrirRevisionLinea(editar), true)
     assert.equal(puedeAbrirRevisionLinea({ crear: true }), false)
-    assert.equal(puedeAbrirRevisionLinea({ validar: true }), false)
+    assert.equal(puedeAbrirRevisionLinea({ validar: true }), true)
     assert.equal(puedeAbrirRevisionLinea(validarGerencial), true)
   })
 
@@ -110,9 +110,9 @@ describe('Asignar insumo — permiso Editar', () => {
     )
   })
 
-  it('aprobar la solicitud sigue exigiendo Validar y gerencial', () => {
+  it('aprobar la solicitud exige Validar y no el rol gerencial', () => {
     assert.equal(solicitudPuedeValidar(solEnviada, editar), false)
-    assert.equal(solicitudPuedeValidar(solEnviada, { validar: true, esContratistaGerencial: false }), false)
+    assert.equal(solicitudPuedeValidar(solEnviada, { validar: true, esContratistaGerencial: false }), true)
     assert.equal(solicitudPuedeValidar(solEnviada, validarGerencial), true)
   })
 })
@@ -125,6 +125,7 @@ describe('Fuentes — asignación separada de la aprobación', () => {
       helpers.indexOf('export function itemPuedeAsignarInsumo'),
     )
     assert.match(abrir, /permisos\?\.editar/)
+    assert.match(abrir, /permisos\?\.validar/)
     assert.match(abrir, /esContratistaGerencial/)
     const asignar = helpers.slice(
       helpers.indexOf('export function itemPuedeAsignarInsumo'),
@@ -166,7 +167,7 @@ describe('Fuentes — asignación separada de la aprobación', () => {
     assert.match(detalle, /destacarSinInsumo=\{Boolean\(permisos\?\.editar\)\}/)
   })
 
-  it('el backend exige editar para mapear y gerencial para aprobar', () => {
+  it('el backend exige editar para mapear y validar para aprobar', () => {
     const routes = readFileSync(join(dir, '../../../backend/almacen_routes.py'), 'utf8')
     const mapear = routes.slice(
       routes.indexOf('def route_mapear_item_gerencial'),
@@ -184,12 +185,14 @@ describe('Fuentes — asignación separada de la aprobación', () => {
       routes.indexOf('def route_validar_item_solicitud'),
       routes.indexOf('def route_aprobar_todos_items'),
     )
-    assert.match(validar, /require_contratista_gerencial_almacen/)
+    assert.match(validar, /require_permiso_almacen\(current_user, "validar"\)/)
+    assert.doesNotMatch(validar, /require_contratista_gerencial_almacen/)
     const aprobar = routes.slice(
       routes.indexOf('def route_aprobar_solicitud'),
       routes.indexOf('def route_mapear_item_gerencial'),
     )
-    assert.match(aprobar, /require_contratista_gerencial_almacen/)
+    assert.match(aprobar, /require_permiso_almacen\(current_user, "validar"\)/)
+    assert.doesNotMatch(aprobar, /require_contratista_gerencial_almacen/)
     const corregir = routes.slice(
       routes.indexOf('def route_corregir_insumo_post_oc'),
       routes.indexOf('def route_validar_item_solicitud'),

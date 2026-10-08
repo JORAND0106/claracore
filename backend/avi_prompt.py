@@ -1427,7 +1427,7 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
    - validar: revisar solicitudes; config; bypass para Director de Obra / Administrador.
    - exportar: Excel inventario, PDF OC.
    - **Asignar insumo** en «Revisión de línea» (búsqueda, sugerencia y Guardar mapeo): permiso **editar** de Almacén. No exige rol gerencial. Quien no ve valores económicos no ve costo, cobro ni la tabla de rentabilidad.
-   - **Aprobar ítem / solicitud y generar OC**: validar + rol **Contratista Gerencial** (o Desarrollador). Esos botones no aparecen sin Validar.
+   - **Aprobar ítem / solicitud y generar OC**: basta permiso **validar** en Almacén, con o sin rol gerencial. El rol gerencial no reemplaza ni anula Validar; solo agrega visibilidad de valores económicos (Operativo Gerencial). Si el estado no permite aprobar (borrador, ya aprobada), la interfaz explica el motivo.
    - **Corregir insumo de una línea ya en OC**: editar + Contratista Gerencial, solo mientras esa OC no tenga una entrada registrada.
    - **Valores económicos** (VU cobro/costo, utilidad, rentabilidad): Operativo Gerencial, Residente Administrativo o Desarrollador.
    - **Editar cantidad de salida ya registrada**: solo Contratista Gerencial / Desarrollador.
@@ -1439,9 +1439,9 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
 
    ── A. SOLICITUDES ──
    LISTADO: consecutivo, estado (Borrador/Enviada/Aprobada/Rechazada), solicitante, materiales, OC, acciones.
-   Acciones: Nueva, Editar/Ver, Revisar (gerencial), Anular, clip PDF OC, 📜 trazabilidad,
+   Acciones: Nueva, Editar/Ver, Revisar (quien tiene Validar), Anular, clip PDF OC, 📜 trazabilidad,
    🗑 eliminación Dev (cascada).
-   Badge rojo de pendientes: solo validar + Contratista Gerencial/Desarrollador.
+   Badge rojo de pendientes: quien tiene Validar en Almacén.
    Filtros vía modal.
 
    FORMULARIO (por línea)

@@ -239,6 +239,23 @@ export default function SolicitudesPanel({
                     data-label="Título"
                     title={s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
                   >
+                    {Number(s.mensajes_no_leidos) > 0 && (
+                      <span
+                        data-testid="solicitud-lista-no-leidos"
+                        title={`${s.mensajes_no_leidos} mensaje(s) sin leer`}
+                        style={{
+                          marginLeft: 6,
+                          background: '#dc2626',
+                          color: '#fff',
+                          borderRadius: 10,
+                          padding: '0 6px',
+                          fontSize: 'var(--cc-xs)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {s.mensajes_no_leidos}
+                      </span>
+                    )}
                     {s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
                   </td>
                   <td
@@ -463,6 +480,11 @@ export default function SolicitudesPanel({
           token={token}
           t={t}
           contratoId={contratoId}
+          onMensajesLeidos={(n) => {
+            setLista((prev) => prev.map((s) => (
+              String(s.id) === String(detalleId) ? { ...s, mensajes_no_leidos: n } : s
+            )))
+          }}
           onClose={() => setDetalleId(null)}
           onUpdated={() => {
             setDetalleId(null)

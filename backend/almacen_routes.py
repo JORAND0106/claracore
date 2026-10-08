@@ -37,7 +37,6 @@ from almacen_permissions import (
     es_contratista_gerencial,
     puede_ver_valores_economicos_almacen,
     require_acceso_ui_modulo_almacen,
-    require_contratista_gerencial_almacen,
     require_crear_o_editar_almacen,
     require_editar_cantidad_salida_almacen,
     require_lectura_almacen,
@@ -63,6 +62,13 @@ from entradas_salidas_permissions import (
     tiene_permiso_entradas_salidas,
 )
 from catalogo_insumos_service import delete_insumo_catalogo
+from almacen_solicitud_mensajes import (
+    buscar_destinatarios_almacen,
+    contar_mensajes_no_leidos,
+    enviar_mensaje_solicitud,
+    listar_mensajes_solicitud,
+    redactar_valores_economicos,
+)
 from almacen_service import (
     add_cotizacion,
     agregar_lineas_post_oc,
@@ -320,6 +326,12 @@ class ValidarItemBody(BaseModel):
 
 class RechazarBody(BaseModel):
     motivo: str = Field(..., min_length=3)
+
+
+class MensajeSolicitudBody(BaseModel):
+    texto: str = Field(..., min_length=1, max_length=4000)
+    destinatario_ids: List[int] = Field(..., min_length=1)
+    solicitud_item_id: Optional[int] = None
 
 
 class EntradaItemBody(BaseModel):
@@ -689,6 +701,14 @@ def route_list_solicitudes(
         limit=limit,
         offset=offset,
     )
+    no_leidos = contar_mensajes_no_leidos(
+        contrato_id,
+        [it.get("id") for it in items if isinstance(it, dict)],
+        _uid(current_user),
+    )
+    for it in items:
+        if isinstance(it, dict) and it.get("id") is not None:
+            it["mensajes_no_leidos"] = no_leidos.get(int(it["id"]), 0)
     total = count_solicitudes(contrato_id, estado)
     return {
         "items": items,
@@ -730,7 +750,7 @@ def route_get_solicitud(
     require_lectura_almacen(current_user)
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
     try:
-        return get_solicitud(
+        sol = get_solicitud(
             contrato_id,
             solicitud_id,
             ver_economicos=ver_eco if not ligera else False,
@@ -739,6 +759,83 @@ def route_get_solicitud(
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    counts = contar_mensajes_no_leidos(contrato_id, [solicitud_id], _uid(current_user))
+    if isinstance(sol, dict):
+        sol["mensajes_no_leidos"] = counts.get(int(solicitud_id), 0)
+    return sol
+
+
+@router.get("/{contrato_id}/solicitudes/mensajes/destinatarios")
+def route_destinatarios_mensaje_solicitud(
+    contrato_id: int,
+    q: str = Query("", max_length=80),
+    current_user=Depends(get_current_user),
+):
+    """Usuarios con acceso a Almacén en el contrato, para el buzón. Exige Crear."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    return {"items": buscar_destinatarios_almacen(contrato_id, q)}
+
+
+@router.get("/{contrato_id}/solicitudes/{solicitud_id}/mensajes")
+def route_list_mensajes_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return listar_mensajes_solicitud(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/mensajes")
+def route_enviar_mensaje_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    body: MensajeSolicitudBody,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    try:
+        result = enviar_mensaje_solicitud(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            body.model_dump(),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    texto_log = redactar_valores_economicos(result.get("texto") or "")
+    linea_log = redactar_valores_economicos(result.get("linea_etiqueta") or "")
+    log_almacen(
+        current_user,
+        "MENSAJE_SOLICITUD",
+        "solicitud",
+        solicitud_id,
+        {
+            "mensaje_id": result.get("id"),
+            "destinatario_ids": result.get("destinatario_ids"),
+            "linea": linea_log or None,
+            "texto": texto_log,
+        },
+        valor_anterior=None,
+        valor_nuevo={
+            "mensaje_id": result.get("id"),
+            "texto": texto_log,
+            "destinatario_ids": result.get("destinatario_ids"),
+            "solicitud_item_id": result.get("solicitud_item_id"),
+        },
+    )
+    return result
 
 
 @router.post("/{contrato_id}/solicitudes")
@@ -844,7 +941,7 @@ def route_aprobar_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_contratista_gerencial_almacen(current_user)
+    require_permiso_almacen(current_user, "validar")
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = aprobar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
@@ -926,9 +1023,9 @@ def route_aprobar_items_bloque(
     body: AprobarBloqueBody,
     current_user=Depends(get_current_user),
 ):
-    """Aprueba varias líneas. Validar + Contratista Gerencial. Informa las que no aplican."""
+    """Aprueba varias líneas. Exige Almacén · validar. Informa las que no aplican."""
     _check_contrato(current_user, contrato_id)
-    require_contratista_gerencial_almacen(current_user)
+    require_permiso_almacen(current_user, "validar")
     try:
         result = aprobar_items_bloque(
             contrato_id,
@@ -992,7 +1089,7 @@ def route_validar_item_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_contratista_gerencial_almacen(current_user)
+    require_permiso_almacen(current_user, "validar")
     try:
         result = validar_item_solicitud(
             contrato_id,
@@ -1025,7 +1122,7 @@ def route_aprobar_todos_items(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_contratista_gerencial_almacen(current_user)
+    require_permiso_almacen(current_user, "validar")
     try:
         result = aprobar_todos_items_solicitud(contrato_id, solicitud_id, _uid(current_user))
         log_almacen(
@@ -1047,7 +1144,7 @@ def route_rechazar_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_contratista_gerencial_almacen(current_user)
+    require_permiso_almacen(current_user, "validar")
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = rechazar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.motivo)

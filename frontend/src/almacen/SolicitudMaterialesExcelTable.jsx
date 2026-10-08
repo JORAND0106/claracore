@@ -2,6 +2,8 @@ import { Fragment } from 'react'
 import {
   descripcionGrillaItem,
   estadoValidacionItem,
+  etiquetaProveedorLinea,
+  fmtFechaHoraCorta,
   fmtAbscisasLinea,
   saldoNegociadoItem,
   saldoPresupuestadoItem,
@@ -21,6 +23,7 @@ const COLS = [
   { key: 'cap', abbr: 'CAP.', tip: 'Capítulo de presupuesto', width: 64 },
   { key: 'item', abbr: 'ÍTEM', tip: 'Ítem de cobro', width: 64 },
   { key: 'desc', abbr: 'DESC.', tip: 'Descripción del material (texto libre o insumo mapeado)', width: 220 },
+  { key: 'prov', abbr: 'PROV.', tip: 'Proveedor del insumo asignado. Cada proveedor distinto genera una OC.', width: 150 },
   { key: 'abs', abbr: 'ABS.', tip: 'Abscisa inicial y final', width: 120 },
   { key: 'tramo', abbr: 'TRAMO', tip: 'Tramo de la ubicación', width: 88 },
   { key: 'pk', abbr: 'PK-ID', tip: 'Identificador PK del sector', width: 80 },
@@ -255,6 +258,14 @@ export default function SolicitudMaterialesExcelTable({
                 <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
                   <Trunc title={descTitle}>{desc}</Trunc>
                 </td>
+                <td style={{
+                  ...cellBase(ui),
+                  color: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? '#92400e' : undefined,
+                  fontWeight: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? 700 : 500,
+                }}
+                >
+                  <Trunc title={etiquetaProveedorLinea(it)}>{etiquetaProveedorLinea(it)}</Trunc>
+                </td>
                 <td style={cellBase(ui)}>
                   <Trunc title={absTxt}>{absTxt}</Trunc>
                 </td>
@@ -326,6 +337,34 @@ export default function SolicitudMaterialesExcelTable({
                   </td>
                 )}
               </tr>
+              {String(it.observacion_residente || '').trim() && (
+                <tr>
+                  <td
+                    colSpan={colSpan}
+                    style={{
+                      ...cellBase(ui),
+                      height: 'auto',
+                      maxHeight: 'none',
+                      lineHeight: 1.4,
+                      whiteSpace: 'normal',
+                      overflow: 'visible',
+                      background: '#fffbeb',
+                      padding: '6px 10px',
+                      fontSize: 'var(--cc-xs)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 2 }}>
+                      {it.supera_presupuesto ? 'Justificación (supera presupuesto)' : 'Justificación'}
+                    </div>
+                    <div style={{ color: ui.text, whiteSpace: 'pre-wrap' }}>
+                      {String(it.observacion_residente).trim()}
+                    </div>
+                    <div style={{ color: ui.textMuted, marginTop: 2 }}>
+                      {[it.justificacion_autor_nombre, fmtFechaHoraCorta(it.justificacion_at)].filter(Boolean).join(' · ') || 'Sin autor registrado'}
+                    </div>
+                  </td>
+                </tr>
+              )}
               </Fragment>
             )
           })}

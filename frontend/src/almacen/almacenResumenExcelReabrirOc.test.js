@@ -26,8 +26,7 @@ function solicitudTieneLineasPendientesPostOc(sol) {
 }
 
 function solicitudPuedeValidar(sol, permisos) {
-  const esGerencial = Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
-  if (!permisos?.validar || !esGerencial) return false
+  if (!permisos?.validar) return false
   if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
   if (
     sol?.estado === 'aprobada'
@@ -126,6 +125,7 @@ describe('Reabrir OC — helpers', () => {
     }
     assert.equal(solicitudTieneLineasPendientesPostOc(sol), true)
     assert.equal(solicitudPuedeValidar(sol, gerencial), true)
+    assert.equal(solicitudPuedeValidar(sol, { validar: true }), true)
     assert.equal(solicitudPuedeRechazarCompleta(sol, gerencial), false)
   })
 

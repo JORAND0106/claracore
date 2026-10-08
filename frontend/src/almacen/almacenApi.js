@@ -253,6 +253,25 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         headers: authHeaders(),
       }),
 
+    listMensajesSolicitud: (id) =>
+      fetchJson(`${base}/solicitudes/${id}/mensajes`, { headers: authHeaders() }),
+
+    enviarMensajeSolicitud: (id, body) =>
+      fetchJson(`${base}/solicitudes/${id}/mensajes`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }),
+
+    buscarDestinatariosMensaje: (q) => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      const qs = params.toString()
+      return fetchJson(`${base}/solicitudes/mensajes/destinatarios${qs ? `?${qs}` : ''}`, {
+        headers: authHeaders(),
+      })
+    },
+
     aprobarSolicitud: (id, body = {}) =>
       fetch(`${base}/solicitudes/${id}/aprobar`, {
         method: 'POST',
