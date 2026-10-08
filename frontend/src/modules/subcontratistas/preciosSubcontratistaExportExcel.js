@@ -9,6 +9,10 @@
 import ExcelJS from 'exceljs'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
 import {
+  dimensionesImagenBuffer,
+  excelPxToColWidth,
+} from '../presupuesto/presupuestoExportLogos.js'
+import {
   buildPreciosExportFilename,
   deltaEsRojo,
   formulaTotalConAiuExcel,
@@ -32,10 +36,26 @@ const NUM_QTY = '#,##0.00'
 const NUM_DELTA = '+#,##0;-#,##0;0'
 const NUM_PCT = '0.####" %"'
 
-const LOGO_WIDTH_PX = 112
-const LOGO_HEIGHT_PX = 44
-const HEADER_ROW_HEIGHT_LOGO = 52
+/** Ancho fijo del logo del contratista en el encabezado (5 cm @ 96 dpi). */
+export const LOGO_WIDTH_CM = 5
+export const LOGO_WIDTH_PX = Math.round((LOGO_WIDTH_CM * 96) / 2.54) // ≈ 189 px
+/** Padding interior en A1 para que el logo no roce el borde ni la sección B–D. */
+const LOGO_PAD_PX = 6
 const HEADER_ROW_HEIGHT_NO_LOGO = 36
+
+/** Ancho fijo; alto = ancho × (natH/natW). Sin deformar. */
+export function sizeLogoFixedWidth(natW, natH, widthPx = LOGO_WIDTH_PX) {
+  const width = Math.max(1, Math.round(Number(widthPx) || LOGO_WIDTH_PX))
+  const nw = Math.max(1, Number(natW) || width)
+  const nh = Math.max(1, Number(natH) || width)
+  const height = Math.max(1, Math.round(width * (nh / nw)))
+  return { width, height }
+}
+
+/** px → puntos tipográficos (altura de fila Excel). */
+function pxToRowPoints(px) {
+  return Math.max(1, Math.round(Number(px) * (72 / 96)))
+}
 
 function solidFill(argb) {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } }
@@ -123,21 +143,22 @@ function sumColWidths(widths, fromCol, toCol) {
 }
 
 /**
- * Carga logo (data URI o URL) al workbook. Devuelve imageId o null.
- * No falla la exportación si el logo falta o no se puede leer.
+ * Carga logo (data URI o URL) al workbook.
+ * @returns {Promise<{ imageId: number, natW: number|null, natH: number|null }|null>}
  */
 export async function prepararLogoPreciosWorkbook(wb, logoUrl) {
   if (!logoUrl || typeof logoUrl !== 'string') return null
   const raw = logoUrl.trim()
   if (!raw) return null
   try {
+    let buffer = null
+    let ext = 'png'
     if (raw.startsWith('data:image')) {
       const comma = raw.indexOf(',')
       if (comma < 0) return null
       const header = raw.slice(0, comma).toLowerCase()
       let b64 = raw.slice(comma + 1).replace(/\s+/g, '')
       if (!b64 || !header.includes('base64')) return null
-      let ext = 'png'
       const m = header.match(/^data:image\/([a-z0-9+.-]+)/i)
       if (m) {
         ext = m[1].toLowerCase()
@@ -146,19 +167,24 @@ export async function prepararLogoPreciosWorkbook(wb, logoUrl) {
         if (!['png', 'jpeg', 'gif'].includes(ext)) ext = 'png'
       }
       const binary = atob(b64)
-      const buffer = new Uint8Array(binary.length)
+      buffer = new Uint8Array(binary.length)
       for (let i = 0; i < binary.length; i += 1) buffer[i] = binary.charCodeAt(i)
-      return wb.addImage({ buffer, extension: ext })
+    } else {
+      const res = await fetch(raw, { mode: 'cors', credentials: 'omit' })
+      if (!res.ok) return null
+      const blob = await res.blob()
+      buffer = new Uint8Array(await blob.arrayBuffer())
+      if (!buffer.length) return null
+      if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
+      else if (blob.type.includes('gif')) ext = 'gif'
     }
-    const res = await fetch(raw, { mode: 'cors', credentials: 'omit' })
-    if (!res.ok) return null
-    const blob = await res.blob()
-    const buffer = new Uint8Array(await blob.arrayBuffer())
-    if (!buffer.length) return null
-    let ext = 'png'
-    if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpeg'
-    else if (blob.type.includes('gif') ) ext = 'gif'
-    return wb.addImage({ buffer, extension: ext })
+    const dims = dimensionesImagenBuffer(buffer)
+    const imageId = wb.addImage({ buffer, extension: ext })
+    return {
+      imageId,
+      natW: dims?.width ?? null,
+      natH: dims?.height ?? null,
+    }
   } catch {
     return null
   }
@@ -249,15 +275,22 @@ function nombreFormato(crudo, conCobro) {
   return PRECIOS_FORMATO_CALIDAD.nombre
 }
 
-function layoutEncabezado(cols) {
-  const leftSpan = cols >= 8 ? 2 : Math.min(2, Math.max(1, Math.floor(cols / 3)))
-  const rightSpan = cols >= 8 ? 3 : Math.min(2, Math.max(1, Math.floor(cols / 3)))
-  const titleStart = leftSpan + 1
-  const titleEnd = Math.max(titleStart, cols - rightSpan)
-  const rightStart = titleEnd + 1
-  return { leftSpan, titleStart, titleEnd, rightStart, rightSpan: cols - titleEnd }
+/**
+ * Encabezado fijo: A = logo | B:D = título | E…última = calidad.
+ * Aplica con ≥4 columnas visibles (6 sin cobro / 10 con cobro).
+ */
+export function layoutEncabezado(cols) {
+  const n = Math.max(4, Number(cols) || 4)
+  return {
+    leftCol: 1,
+    titleStart: 2,
+    titleEnd: 4,
+    rightStart: 5,
+    rightEnd: n,
+  }
 }
 
+/** Líneas 2 y 4 del bloque: mitad izquierda / mitad derecha. */
 function layoutDataSplit(cols) {
   const split = Math.max(2, Math.floor(cols / 2))
   return {
@@ -267,6 +300,21 @@ function layoutDataSplit(cols) {
     rightLabel: split + 1,
     rightValueStart: split + 2,
     rightValueEnd: cols,
+  }
+}
+
+/**
+ * Primera línea del bloque: A = etiqueta Objeto | B…(n-2) = objeto |
+ * penúltima = etiqueta Nº contrato | última = número.
+ */
+export function layoutPrimeraLineaDatos(cols) {
+  const n = Math.max(4, Number(cols) || 4)
+  return {
+    objetoLabel: 1,
+    objetoValueStart: 2,
+    objetoValueEnd: n - 2,
+    numeroLabel: n - 1,
+    numeroValue: n,
   }
 }
 
@@ -405,14 +453,31 @@ export async function buildPreciosSubcontratistaWorkbook({
     ws.getColumn(map.hiddenConAiu).width = 14
   }
 
-  let logoImageId = logoImageIdPrefetched
-  if (logoImageId == null) {
-    logoImageId = await prepararLogoPreciosWorkbook(wb, contrato?.logo_contratista)
+  let logoDesc = null
+  if (logoImageIdPrefetched != null && typeof logoImageIdPrefetched === 'object') {
+    logoDesc = logoImageIdPrefetched
+  } else if (typeof logoImageIdPrefetched === 'number') {
+    logoDesc = { imageId: logoImageIdPrefetched, natW: null, natH: null }
+  } else {
+    logoDesc = await prepararLogoPreciosWorkbook(wb, contrato?.logo_contratista)
   }
+  const logoImageId = logoDesc?.imageId ?? null
 
-  // ── Encabezado 3 secciones ──────────────────────────────────
+  // ── Encabezado 3 secciones: A | B:D | E…última ──────────────
   const lay = layoutEncabezado(COLS)
   const titulo = nombreFormato(crudo, conCobro)
+
+  // El logo mide 5 cm de ancho: la columna A se ensancha (no se reduce el logo).
+  let logoSize = null
+  if (logoImageId != null) {
+    logoSize = sizeLogoFixedWidth(logoDesc.natW, logoDesc.natH, LOGO_WIDTH_PX)
+    const colANeed = excelPxToColWidth(logoSize.width + LOGO_PAD_PX * 2)
+    const curA = Number(ws.getColumn(1).width) || map.widths[0] || 12
+    if (curA < colANeed) {
+      ws.getColumn(1).width = colANeed
+      map.widths[0] = colANeed
+    }
+  }
 
   styleRange(ws, 1, 1, COLS, {
     fill: fillTitle,
@@ -420,12 +485,13 @@ export async function buildPreciosSubcontratistaWorkbook({
     align: { vertical: 'middle', horizontal: 'center', wrapText: true },
   })
 
-  try { ws.mergeCells(1, 1, 1, lay.leftSpan) } catch { /* ignore */ }
+  // A1 (logo) — sin merge; B1:D1 título; E1:última calidad
   try { ws.mergeCells(1, lay.titleStart, 1, lay.titleEnd) } catch { /* ignore */ }
-  if (lay.rightStart <= COLS) {
-    try { ws.mergeCells(1, lay.rightStart, 1, COLS) } catch { /* ignore */ }
+  if (lay.rightStart <= lay.rightEnd) {
+    try { ws.mergeCells(1, lay.rightStart, 1, lay.rightEnd) } catch { /* ignore */ }
   }
 
+  ws.getCell(1, lay.leftCol).value = ''
   const titleCell = ws.getCell(1, lay.titleStart)
   titleCell.value = titulo
   titleCell.font = FONT_TITLE
@@ -441,31 +507,35 @@ export async function buildPreciosSubcontratistaWorkbook({
   calidadCell.font = FONT_CALIDAD
   calidadCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
 
-  if (logoImageId != null) {
+  const textHeaderH = Math.max(
+    HEADER_ROW_HEIGHT_NO_LOGO,
+    estimateWrappedRowHeight(titulo, sumColWidths(map.widths, lay.titleStart, lay.titleEnd), {
+      fontSize: 13,
+      min: HEADER_ROW_HEIGHT_NO_LOGO,
+      max: 72,
+    }),
+    estimateWrappedRowHeight(calidadTxt, sumColWidths(map.widths, lay.rightStart, lay.rightEnd), {
+      fontSize: 9,
+      min: HEADER_ROW_HEIGHT_NO_LOGO,
+      max: 72,
+    }),
+  )
+
+  if (logoImageId != null && logoSize) {
+    // Anclado en A1; ancho 5 cm, alto proporcional — no invade B–D ni calidad.
+    const padFrac = Math.min(0.08, LOGO_PAD_PX / Math.max(logoSize.width, 1))
     ws.addImage(logoImageId, {
-      tl: { col: 0.12, row: 0.12 },
-      ext: { width: LOGO_WIDTH_PX, height: LOGO_HEIGHT_PX },
+      tl: { col: padFrac, row: 0.08 },
+      ext: { width: logoSize.width, height: logoSize.height },
     })
-    ws.getRow(1).height = HEADER_ROW_HEIGHT_LOGO
+    ws.getRow(1).height = Math.max(textHeaderH, pxToRowPoints(logoSize.height + LOGO_PAD_PX * 2))
   } else {
-    ws.getCell(1, 1).value = ''
-    ws.getRow(1).height = Math.max(
-      HEADER_ROW_HEIGHT_NO_LOGO,
-      estimateWrappedRowHeight(titulo, sumColWidths(map.widths, lay.titleStart, lay.titleEnd), {
-        fontSize: 13,
-        min: HEADER_ROW_HEIGHT_NO_LOGO,
-        max: 64,
-      }),
-      estimateWrappedRowHeight(calidadTxt, sumColWidths(map.widths, lay.rightStart, COLS), {
-        fontSize: 8,
-        min: HEADER_ROW_HEIGHT_NO_LOGO,
-        max: 64,
-      }),
-    )
+    ws.getRow(1).height = textHeaderH
   }
 
   // ── Bloque de datos (4 líneas) ──────────────────────────────
   const split = layoutDataSplit(COLS)
+  const line1 = layoutPrimeraLineaDatos(COLS)
   const numContrato = dashOrValue(contrato?.numero ?? contrato?.numero_contrato)
   const objetoContrato = dashOrValue(contrato?.objeto)
   const razon = dashOrValue(subcontratista?.razon_social)
@@ -474,14 +544,14 @@ export async function buildPreciosSubcontratistaWorkbook({
   const contactoNombre = dashOrValue(subcontratista?.nombre_contacto)
   const contactoTel = dashOrValue(subcontratista?.telefono)
 
-  // Línea 1: Nº contrato | Objeto contrato contratista
+  // Línea 1: Objeto (A + B…n-2) | Número de contrato (penúltima + última)
   let h = escribirCeldaEtiquetaValor(
-    ws, 2, split.leftLabel, split.leftValueStart, split.leftValueEnd,
-    'Nº contrato', numContrato, theme, map.widths,
+    ws, 2, line1.objetoLabel, line1.objetoValueStart, line1.objetoValueEnd,
+    'Objeto del contrato', objetoContrato, theme, map.widths,
   )
   h = Math.max(h, escribirCeldaEtiquetaValor(
-    ws, 2, split.rightLabel, split.rightValueStart, split.rightValueEnd,
-    'Objeto del contrato', objetoContrato, theme, map.widths,
+    ws, 2, line1.numeroLabel, line1.numeroValue, line1.numeroValue,
+    'Número de contrato', numContrato, theme, map.widths,
   ))
   ws.getRow(2).height = h
 
