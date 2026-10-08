@@ -64,7 +64,7 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
   if (ctx.semana) pCap.set('semana', ctx.semana)
   if (ctx.subcontratista_id) pCap.set('subcontratista_id', ctx.subcontratista_id)
 
-  const [caps, tc, actas, subc, semanas, actasFiltro, comps] = await Promise.all([
+  const [caps, tc, actas, subc, semanas, actasFiltro, comps, editores] = await Promise.all([
     fetch(`${API}/sicoe-obra/${contratoId}/filtros/capitulos?${pCap}`, { headers: hdrs })
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []),
@@ -86,6 +86,9 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []),
     fetchSicoeCompetenciasCached(API, contratoId, token).catch(() => []),
+    fetch(`${API}/sicoe-obra/${contratoId}/filtros/usuarios-editores`, { headers: hdrs })
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => []),
   ])
 
   // Prefetch acotado (capítulo/acta/semana). La búsqueda libre de ítem sin capítulo
@@ -121,6 +124,7 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
     semanas: Array.isArray(semanas) ? semanas : [],
     actas: actasRpo,
     subcontratistas: Array.isArray(subc) ? subc : [],
+    editores: Array.isArray(editores) ? editores : [],
     items_opciones: Array.isArray(items)
       ? items.map((s) => ({
           item: s.item_numero ?? s.item,

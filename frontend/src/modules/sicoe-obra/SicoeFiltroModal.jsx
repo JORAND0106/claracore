@@ -156,9 +156,15 @@ export default function SicoeFiltroModal({
       value: String(s.id),
       label: s.nombre || String(s.id),
     }))
+    const editoresOpts = (opciones.editores || []).map((u) => {
+      const id = String(u.id ?? '').trim()
+      const nom = String(u.nombre || '').trim() || `Usuario ${id}`
+      return { value: id, label: nom, descripcion: nom }
+    }).filter((o) => o.value)
     return {
       ...opciones,
       subcontratistas_opts: subOpts,
+      editores_opts: editoresOpts,
       estados_reporte: estadosReporte.map((e) => ({ value: e, label: e })),
       etiquetas_validacion: etiquetasValidacion.map((e) => ({ value: e, label: e })),
       capitulos: (opciones.capitulos || []).map((c) => ({ value: c, label: c })),
@@ -669,7 +675,23 @@ export default function SicoeFiltroModal({
                               <PptoFiltroCampo
                                 def={def}
                                 f={draftF}
-                                onChange={(patch) => setDraftF((prev) => ({ ...prev, ...patch }))}
+                                onChange={(patch) => setDraftF((prev) => {
+                                  const next = { ...prev, ...patch }
+                                  if (def.key === 'editado_por') {
+                                    const vals = sicoeFiltroValoresLista(def, next)
+                                    const labels = { ...(prev._editadoPorLabels || {}) }
+                                    for (const o of opcionesResueltas.editores_opts || []) {
+                                      if (o?.value) labels[String(o.value)] = o.label || o.descripcion || String(o.value)
+                                    }
+                                    const pruned = {}
+                                    for (const v of vals) {
+                                      const k = String(v)
+                                      pruned[k] = labels[k] || prev._editadoPorLabels?.[k] || `Usuario ${k}`
+                                    }
+                                    next._editadoPorLabels = pruned
+                                  }
+                                  return next
+                                })}
                                 t={t}
                                 opciones={opcionesResueltas}
                                 itemLabels={itemLabels}
