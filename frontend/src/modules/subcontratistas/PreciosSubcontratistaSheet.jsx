@@ -747,6 +747,27 @@ export default function PreciosSubcontratistaSheet({
                       ) : (
                         <div>
                           {r.item_numero || '—'}
+                          {r.saldado ? (
+                            <span
+                              title="Participación saldada: cantidad fija en lo reconocido como ejecutado"
+                              style={{
+                                display: 'inline-block',
+                                marginLeft: 6,
+                                padding: '1px 6px',
+                                borderRadius: 4,
+                                fontSize: 'var(--cc-sm)',
+                                fontWeight: 700,
+                                letterSpacing: 0.02,
+                                textTransform: 'uppercase',
+                                background: tTok.warningBg || '#fff7ed',
+                                color: tTok.warningText || '#9a3412',
+                                border: `1px solid ${tTok.warningBorder || '#fdba74'}`,
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              Saldado
+                            </span>
+                          ) : null}
                           {canEdit && isManual && (
                             <button
                               type="button"

@@ -118,17 +118,51 @@ def aggregate_presupuesto_cant_map(
     return dict(out)
 
 
+def aggregate_presupuesto_saldado_map(
+    rows: Iterable[dict],
+) -> Dict[Tuple[str, str, str], bool]:
+    """
+    True si TODAS las filas con cantidad > 0 del ítem están saldadas.
+    False si hay mezcla o ninguna saldada.
+    """
+    totals: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    saldados: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    for r in rows or []:
+        it_k = norm_item_key(r.get("item"))
+        if not it_k:
+            continue
+        cap_k = norm_capitulo_key(r.get("capitulo") or "")
+        comp = (r.get("competencia") or "").strip()
+        try:
+            cant = float(r.get("cant_total") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        if cant <= 0:
+            continue
+        key = (cap_k, comp, it_k)
+        totals[key] += cant
+        if r.get("saldado"):
+            saldados[key] += cant
+    out: Dict[Tuple[str, str, str], bool] = {}
+    for key, tot in totals.items():
+        out[key] = tot > 0 and abs(saldados.get(key, 0.0) - tot) < 1e-9
+    return out
+
+
 def build_items_cobro_asignados(
     listado_items: Iterable[dict],
     cant_map: Dict[Tuple[str, str, str], float],
     precios_by_lp: Optional[Dict[int, dict]] = None,
+    saldado_map: Optional[Dict[Tuple[str, str, str], bool]] = None,
 ) -> List[dict]:
     """
     Filas desde Presupuesto: solo ítems del listado con cantidad > 0 asignada al sub.
 
     precios_by_lp: { listado_precio_id: { id, precio_unitario_sub, origen?, cantidad_manual? } }
+    saldado_map: marca ítems cuya participación del sub quedó saldada.
     """
     precios_by_lp = precios_by_lp or {}
+    saldado_map = saldado_map or {}
     rows: List[dict] = []
     for item in listado_items or []:
         try:
@@ -152,6 +186,12 @@ def build_items_cobro_asignados(
             vu_sub_n = float(vu_sub) if vu_sub is not None and vu_sub != "" else None
         except (TypeError, ValueError):
             vu_sub_n = None
+        cap_k = norm_capitulo_key(cap) if cap else ""
+        comp_f = (comp or "").strip()
+        it_k = norm_item_key(it)
+        saldado = bool(saldado_map.get((cap_k, comp_f, it_k))) if comp_f else any(
+            bool(v) for (ck, _cp, ik), v in saldado_map.items() if ck == cap_k and ik == it_k
+        )
         rows.append({
             "listado_precio_id": lp_id,
             "precio_id": prev.get("id"),
@@ -165,6 +205,7 @@ def build_items_cobro_asignados(
             "vu_costo_mo": vu_sub_n,
             "origen": "presupuesto",
             "cantidad_editable": False,
+            "saldado": saldado,
         })
 
     def _sort_key(r: dict) -> Tuple:
@@ -182,6 +223,7 @@ def build_precios_sheet(
     listado_items: Iterable[dict],
     cant_map: Dict[Tuple[str, str, str], float],
     precios_rows: Iterable[dict],
+    saldado_map: Optional[Dict[Tuple[str, str, str], bool]] = None,
 ) -> List[dict]:
     """
     Tabla unificada: filas de Presupuesto (cant > 0) + filas manuales persistidas.
@@ -201,7 +243,9 @@ def build_precios_sheet(
             continue
         precios_by_lp[lp] = pr
 
-    ppto_rows = build_items_cobro_asignados(listado_items, cant_map, precios_by_lp)
+    ppto_rows = build_items_cobro_asignados(
+        listado_items, cant_map, precios_by_lp, saldado_map=saldado_map,
+    )
     ppto_lp = {int(r["listado_precio_id"]) for r in ppto_rows}
 
     manual_rows: List[dict] = []

@@ -1258,10 +1258,12 @@ class PresupuestoSubRedistribucionPreview(BaseModel):
 
 
 class PresupuestoSubRedistribucionAplicar(BaseModel):
-    """Confirma proporciones y aplica redistribución + asignaciones simples."""
+    """Confirma proporciones / decisiones Mantener|Saldar y aplica redistribución."""
     ids: List[int]
     subcontratista_id: int
     proporciones: Optional[Dict[str, float]] = None
+    decisiones: Optional[Dict[str, str]] = None  # {sub_id: mantener|saldar}
+    confirmar_saldar_no_reconocidas: Optional[bool] = False
     preview: Optional[dict] = None
 
 
@@ -14833,9 +14835,20 @@ def presupuesto_sub_redistribucion_aplicar(
             proporciones=body.proporciones,
             preview=preview,
             usuario_id=(current_user or {}).get("id") or (current_user or {}).get("usuario_id"),
+            decisiones=body.decisiones,
+            confirmar_saldar_no_reconocidas=bool(body.confirmar_saldar_no_reconocidas),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        msg = str(exc)
+        if msg.startswith("CONFIRM_SALDAR_NO_RECONOCIDAS"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "CONFIRM_SALDAR_NO_RECONOCIDAS",
+                    "message": msg.split(":", 1)[-1].strip(),
+                },
+            ) from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
 
     det_bulk = {
         "contrato_id": contrato_id,
@@ -14846,6 +14859,10 @@ def presupuesto_sub_redistribucion_aplicar(
         "simples": result.get("simples"),
         "redistribuidos": result.get("redistribuidos"),
         "proporciones": body.proporciones,
+        "decisiones": body.decisiones or result.get("decisiones"),
+        "saldados": result.get("saldados"),
+        "participantes": result.get("participantes"),
+        "liberaciones_no_reconocidas": result.get("liberaciones_no_reconocidas"),
     }
     registrar_log(
         current_user,
@@ -14884,9 +14901,28 @@ def bulk_subcontratista(
     sub_row = _validar_sub_para_asignacion_ppto(contrato_id, sub_id)
     _reject_if_presupuesto_sellado(supabase, body.ids)
 
-    # Si aún no existe la tabla de asignación compartida, fallback legado (exclusivo).
-    from presupuesto_sub_redistribucion import _table_exists as _ppto_sub_table_exists
+    # Protección: sin tabla compartida NO se permite sobrescribir asignaciones ajenas.
+    from presupuesto_sub_redistribucion import (
+        _table_exists as _ppto_sub_table_exists,
+        filas_tienen_otro_sub,
+    )
     if not _ppto_sub_table_exists(supabase, "presupuesto_sub_asignacion"):
+        conflict = filas_tienen_otro_sub(
+            supabase,
+            contrato_id=int(contrato_id),
+            presupuesto_ids=body.ids,
+            nuevo_subcontratista_id=sub_id,
+        )
+        if conflict:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "No se puede reemplazar la asignación de otro subcontratista. "
+                    "La tabla presupuesto_sub_asignacion no está disponible; "
+                    "aplique la migración antes de reasignar registros que ya tienen subcontratista."
+                ),
+            )
+        # Solo registros libres: asignación exclusiva degradada (sin compartir).
         rows = (
             supabase.table("presupuesto")
             .select("id, contrato_id, id_pol, subcontratista_id")
@@ -14899,17 +14935,30 @@ def bulk_subcontratista(
         if not ids_ok:
             raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
         rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+        # Defensa extra: solo filas sin otro sub
+        ids_libres = [
+            int(r["id"]) for r in rows_ok
+            if not r.get("subcontratista_id") or int(r.get("subcontratista_id") or 0) == sub_id
+        ]
+        if not ids_libres:
+            raise HTTPException(
+                status_code=409,
+                detail="No se puede reemplazar la asignación de otro subcontratista.",
+            )
         supabase.table("presupuesto").update(
             {"subcontratista_id": sub_id, "updated_at": "now()"}
-        ).in_("id", ids_ok).execute()
+        ).in_("id", ids_libres).execute()
         det_bulk = {
             "contrato_id": contrato_id,
-            "cantidad_registros": len(ids_ok),
+            "cantidad_registros": len(ids_libres),
             "subcontratista_id": sub_id,
             "razon_social": sub_row.get("razon_social"),
-            "mode": "legado_exclusivo",
+            "mode": "legado_libre",
         }
-        audit_filas = [(dict(r), {**dict(r), "subcontratista_id": sub_id}) for r in rows_ok]
+        audit_filas = [
+            (dict(r), {**dict(r), "subcontratista_id": sub_id})
+            for r in rows_ok if int(r["id"]) in ids_libres
+        ]
         _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
         registrar_log(
             current_user,
@@ -14920,10 +14969,10 @@ def bulk_subcontratista(
             det_bulk,
         )
         return {
-            "actualizados": len(ids_ok),
+            "actualizados": len(ids_libres),
             "subcontratista_id": sub_id,
             "requires_redistribution": False,
-            "mode": "legado_exclusivo",
+            "mode": "legado_libre",
         }
 
     preview = preview_asignacion_compartida(
@@ -19840,6 +19889,7 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
     from presupuesto_sub_redistribucion import fetch_ppto_rows_cant_map_for_sub
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
+        aggregate_presupuesto_saldado_map,
         build_precios_sheet,
     )
 
@@ -19859,6 +19909,7 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
         return {"items": [], "total": 0, "aviso": "Sin columna de asignación en presupuesto o sin datos."}
 
     cant_map = aggregate_presupuesto_cant_map(ppto_rows)
+    saldado_map = aggregate_presupuesto_saldado_map(ppto_rows)
 
     listado: List[dict] = []
     offset = 0
@@ -19902,7 +19953,7 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
         tributos_sub = {}
 
     tributos = resolve_tributos_subcontratista(tributos_sub, precios_rows)
-    items = build_precios_sheet(listado, cant_map, precios_rows)
+    items = build_precios_sheet(listado, cant_map, precios_rows, saldado_map=saldado_map)
     # VU Cobro es economía del contrato: nunca al cargo subcontratista / operativos.
     cargo = (current_user or {}).get("cargo_nombre")
     rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")

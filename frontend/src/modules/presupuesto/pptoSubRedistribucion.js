@@ -1,6 +1,10 @@
 /**
  * Helpers puros — redistribución de cantidades compartidas entre subcontratistas.
+ * Incluye decisiones Mantener / Saldar sobre subcontratistas existentes.
  */
+
+export const DECISION_MANTENER = 'mantener'
+export const DECISION_SALDAR = 'saldar'
 
 export function proporcionesIguales(participanteIds = []) {
   const ids = [...new Set((participanteIds || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))]
@@ -58,8 +62,73 @@ export function cantidadTrasRedistribucion(ejecutado, proporcion, saldo) {
   const p = Number(proporcion) || 0
   const s = Number(saldo) || 0
   const raw = e + p * s
-  // Misma regla visual aproximada que la plataforma (2 dp si ≥0.10)
   const r2 = Math.round(raw * 100) / 100
   if (r2 >= 0.1) return r2
   return Math.round(raw * 1000) / 1000
+}
+
+/**
+ * Participantes (nuevo + mantenidos) y saldados a partir de decisiones.
+ * @returns {{ participantes: number[], saldados: number[] }}
+ */
+export function participantesDesdeDecisiones(existentesIds, nuevoId, decisiones = {}) {
+  const nuevo = Number(nuevoId)
+  const saldados = []
+  const mantenidos = []
+  for (const raw of existentesIds || []) {
+    const sid = Number(raw)
+    if (!Number.isFinite(sid) || sid <= 0 || sid === nuevo) continue
+    const d = String(decisiones[sid] ?? decisiones[String(sid)] ?? DECISION_MANTENER).toLowerCase()
+    if (d === DECISION_SALDAR) saldados.push(sid)
+    else mantenidos.push(sid)
+  }
+  const participantes = [...new Set([...mantenidos, ...(Number.isFinite(nuevo) && nuevo > 0 ? [nuevo] : [])])]
+    .sort((a, b) => a - b)
+  return { participantes, saldados: saldados.sort((a, b) => a - b) }
+}
+
+/**
+ * Cantidades finales por sub según decisiones.
+ * Saldados → ejecutado; participantes → ejecutado + prop × saldo.
+ */
+export function cantidadesTrasDecisiones(fila, props, decisiones, nuevoId) {
+  const exist = fila?.subs_existentes || []
+  const { participantes, saldados } = participantesDesdeDecisiones(exist, nuevoId, decisiones)
+  const saldo = Number(fila?.saldo) || 0
+  const out = {}
+  for (const sid of saldados) {
+    const info = fila?.ejecutados?.[sid] || fila?.ejecutados?.[String(sid)] || {}
+    out[sid] = Number(info.ejecutado) || 0
+  }
+  for (const sid of participantes) {
+    const info = fila?.ejecutados?.[sid] || fila?.ejecutados?.[String(sid)] || {}
+    const ejec = Number(info.ejecutado) || 0
+    const prop = Number(props[sid] ?? props[String(sid)]) || 0
+    out[sid] = cantidadTrasRedistribucion(ejec, prop, saldo)
+  }
+  return { cantidades: out, participantes, saldados }
+}
+
+/** Ítems donde al saldar se liberan cantidades no reconocidas como ejecutadas. */
+export function liberacionesAlSaldar(filas = [], decisiones = {}) {
+  const out = []
+  for (const f of filas || []) {
+    for (const sid of f.subs_existentes || []) {
+      const d = String(decisiones[sid] ?? decisiones[String(sid)] ?? '').toLowerCase()
+      if (d !== DECISION_SALDAR) continue
+      const info = f.ejecutados?.[sid] || f.ejecutados?.[String(sid)] || {}
+      const noRec = Number(info.cantidad_no_reconocida) || 0
+      if (noRec > 0) {
+        out.push({
+          presupuesto_id: f.presupuesto_id,
+          item: f.item,
+          tramo: f.tramo,
+          subcontratista_id: sid,
+          label: info.label || `#${sid}`,
+          cantidad_no_reconocida: noRec,
+        })
+      }
+    }
+  }
+  return out
 }
