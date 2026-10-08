@@ -37,6 +37,21 @@ jobs:
           python -m pip install -q -r requirements.txt
           PYTHONPATH=. python -c "import main; assert hasattr(main, 'app'); print('import ok')"
 
+      # DDL vía Postgres directo (PostgREST no puede ALTER). Requiere secreto
+      # SUPABASE_DB_URL en el repo. Si falta, se omite y el backend usa fallback
+      # JSON para bitacora_asistencia_rrhh_activa (el botón sigue funcionando).
+      - name: Apply critical DB migrations
+        working-directory: ./backend
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "${SUPABASE_DB_URL}" ]; then
+            echo "SUPABASE_DB_URL no configurado; se omite DDL (fallback en runtime)."
+            exit 0
+          fi
+          python -m pip install -q 'psycopg[binary]>=3.1.0'
+          PYTHONPATH=. python -m schema_migrations_runner --critical
+
       - name: Deploy backend package to Azure Web App
         uses: azure/webapps-deploy@v2
         with:

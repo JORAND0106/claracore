@@ -718,6 +718,143 @@ BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO = "ICCU-CTO-1574-2025"
 # Cache breve: columna bitacora_asistencia_rrhh_activa disponible en PostgREST.
 _FLAG_ASISTENCIA_RRHH_SCHEMA: Dict[str, Any] = {"ok": None, "ts": 0.0}
 
+# Fallback JSON en contratos.ccd_firma_config cuando la columna DDL aún no
+# existe en PostgREST. Clave reservada (no es un código FO-* de firmas CCD).
+_FLAG_ASISTENCIA_RRHH_FALLBACK_KEY = "_claracore_bitacora_asistencia_rrhh_activa"
+_FLAG_ASISTENCIA_RRHH_COL = "bitacora_asistencia_rrhh_activa"
+
+
+def _is_missing_asistencia_rrhh_col(exc: BaseException) -> bool:
+    text = str(exc or "")
+    low = text.lower()
+    if _FLAG_ASISTENCIA_RRHH_COL not in low:
+        return False
+    return "pgrst204" in low or "schema cache" in low or "could not find" in low or "42703" in low
+
+
+def _try_reload_postgrest_schema(sb) -> bool:
+    try:
+        sb.rpc("sicoe_reload_postgrest_schema").execute()
+        return True
+    except Exception:
+        pass
+    try:
+        sb.rpc("pg_notify", {"channel": "pgrst", "payload": "reload schema"}).execute()
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_asistencia_rrhh_column(sb) -> bool:
+    """
+    Asegura contratos.bitacora_asistencia_rrhh_activa.
+    1) Si PostgREST ya la ve → True.
+    2) Si hay SUPABASE_DB_URL → aplica la migración SQL + reload + re-chequeo.
+    3) Si no → False (usar fallback JSON).
+    """
+    cached = _FLAG_ASISTENCIA_RRHH_SCHEMA.get("ok")
+    ts = float(_FLAG_ASISTENCIA_RRHH_SCHEMA.get("ts") or 0)
+    if cached is True and (time.monotonic() - ts) < 300:
+        return True
+    if cached is False and (time.monotonic() - ts) < 30:
+        return False
+    try:
+        sb.table("contratos").select(_FLAG_ASISTENCIA_RRHH_COL).limit(1).execute()
+        _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
+        _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+        return True
+    except Exception as exc:
+        if not _is_missing_asistencia_rrhh_col(exc):
+            _log.warning("_ensure_asistencia_rrhh_column probe: %s", exc)
+            return False
+
+    # Columna ausente: intentar DDL si hay conexión Postgres.
+    try:
+        from schema_migrations_runner import ensure_critical_migrations
+
+        result = ensure_critical_migrations(
+            only=("20260925120000_bitacora_asistencia_rrhh_activa.sql",),
+        )
+        if result.get("ok"):
+            _try_reload_postgrest_schema(sb)
+            time.sleep(0.6)
+            try:
+                sb.table("contratos").select(_FLAG_ASISTENCIA_RRHH_COL).limit(1).execute()
+                _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
+                _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+                _log.info(
+                    "columna bitacora_asistencia_rrhh_activa disponible tras migración (%s)",
+                    result.get("applied"),
+                )
+                return True
+            except Exception as exc2:
+                _log.warning("columna aún no visible tras DDL: %s", exc2)
+        else:
+            _log.info(
+                "DDL bitacora_asistencia_rrhh_activa no aplicado: %s",
+                result.get("reason"),
+            )
+    except Exception as exc:
+        _log.warning("ensure_critical_migrations: %s", exc)
+
+    _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = False
+    _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+    return False
+
+
+def _leer_flag_asistencia_rrhh_fallback(sb, contrato_id: int) -> bool:
+    """Lee el flag desde ccd_firma_config (reservado) si la columna DDL falta."""
+    try:
+        rows = (
+            sb.table("contratos")
+            .select("ccd_firma_config")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("_leer_flag_asistencia_rrhh_fallback: %s", exc)
+        return False
+    if not rows:
+        return False
+    raw = rows[0].get("ccd_firma_config")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            raw = {}
+    if not isinstance(raw, dict):
+        return False
+    return bool(raw.get(_FLAG_ASISTENCIA_RRHH_FALLBACK_KEY))
+
+
+def _guardar_flag_asistencia_rrhh_fallback(sb, contrato_id: int, activa: bool) -> bool:
+    """Persiste el flag en ccd_firma_config sin tocar claves FO-* de firmas."""
+    cid = int(contrato_id)
+    rows = (
+        sb.table("contratos")
+        .select("ccd_firma_config")
+        .eq("id", cid)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    raw = rows[0].get("ccd_firma_config") if rows else {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    cfg = dict(raw)
+    cfg[_FLAG_ASISTENCIA_RRHH_FALLBACK_KEY] = bool(activa)
+    sb.table("contratos").update({"ccd_firma_config": cfg}).eq("id", cid).execute()
+    return bool(activa)
+
 
 def _contrato_numero(sb, contrato_id: int) -> str:
     try:
@@ -738,59 +875,66 @@ def _contrato_numero(sb, contrato_id: int) -> str:
 
 
 def _leer_flag_asistencia_rrhh_activa(sb, contrato_id: int) -> bool:
-    """Lee contratos.bitacora_asistencia_rrhh_activa (False si columna ausente)."""
-    import time
-
+    """Lee el flag del contrato exento (columna DDL o fallback JSON)."""
     cid = int(contrato_id)
-    cached = _FLAG_ASISTENCIA_RRHH_SCHEMA.get("ok")
-    ts = float(_FLAG_ASISTENCIA_RRHH_SCHEMA.get("ts") or 0)
-    if cached is False and (time.monotonic() - ts) < 60:
-        return False
-    try:
-        rows = (
-            sb.table("contratos")
-            .select("bitacora_asistencia_rrhh_activa")
-            .eq("id", cid)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
-        _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
-        if not rows:
-            return False
-        return bool(rows[0].get("bitacora_asistencia_rrhh_activa"))
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "bitacora_asistencia_rrhh_activa" in msg or "pgrst204" in msg or "42703" in msg:
-            _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = False
-            _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
-            _log.warning(
-                "columna bitacora_asistencia_rrhh_activa ausente; "
-                "aplicar backend/sql/bitacora_asistencia_rrhh_activa.sql (%s)",
-                exc,
+    if _ensure_asistencia_rrhh_column(sb):
+        try:
+            rows = (
+                sb.table("contratos")
+                .select(_FLAG_ASISTENCIA_RRHH_COL)
+                .eq("id", cid)
+                .limit(1)
+                .execute()
+                .data
+                or []
             )
+            if not rows:
+                return False
+            return bool(rows[0].get(_FLAG_ASISTENCIA_RRHH_COL))
+        except Exception as exc:
+            if _is_missing_asistencia_rrhh_col(exc):
+                _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = False
+                _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+                return _leer_flag_asistencia_rrhh_fallback(sb, cid)
+            _log.warning("_leer_flag_asistencia_rrhh_activa: %s", exc)
             return False
-        _log.warning("_leer_flag_asistencia_rrhh_activa: %s", exc)
-        return False
+    return _leer_flag_asistencia_rrhh_fallback(sb, cid)
 
 
 def set_asistencia_rrhh_activa(sb, contrato_id: int, activa: bool) -> bool:
-    """Persiste el toggle del contrato exento. Devuelve el valor guardado."""
+    """
+    Persiste el toggle del contrato exento.
+
+    Intenta la columna DDL (creándola vía SUPABASE_DB_URL si hace falta).
+    Si PostgREST aún no la ve, guarda en ccd_firma_config (fallback) para que
+    el botón Desarrollador no dependa de un SQL manual en el editor.
+    """
     cid = int(contrato_id)
     val = bool(activa)
+
+    if _ensure_asistencia_rrhh_column(sb):
+        try:
+            sb.table("contratos").update(
+                {_FLAG_ASISTENCIA_RRHH_COL: val}
+            ).eq("id", cid).execute()
+            _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
+            _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+            return val
+        except Exception as exc:
+            if not _is_missing_asistencia_rrhh_col(exc):
+                raise ValueError(
+                    f"No se pudo guardar {_FLAG_ASISTENCIA_RRHH_COL}. Detalle: {exc}"
+                ) from exc
+            _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = False
+            _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+            _try_reload_postgrest_schema(sb)
+
     try:
-        sb.table("contratos").update(
-            {"bitacora_asistencia_rrhh_activa": val}
-        ).eq("id", cid).execute()
-        _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
-        return val
+        return _guardar_flag_asistencia_rrhh_fallback(sb, cid, val)
     except Exception as exc:
         raise ValueError(
-            "No se pudo guardar bitacora_asistencia_rrhh_activa. "
-            "Ejecute backend/sql/bitacora_asistencia_rrhh_activa.sql en Supabase. "
-            f"Detalle: {exc}"
+            f"No se pudo guardar {_FLAG_ASISTENCIA_RRHH_COL} "
+            f"(ni columna ni fallback). Detalle: {exc}"
         ) from exc
 
 
