@@ -20,10 +20,18 @@ import {
   buildPreciosSubcontratistaWorkbook,
   colLetter,
   estimateWrappedRowHeight,
+  layoutEncabezado,
+  layoutPrimeraLineaDatos,
+  LOGO_WIDTH_PX,
   PRECIOS_FORMATO_CALIDAD,
   preciosExportColumnMap,
+  sizeLogoFixedWidth,
 } from './preciosSubcontratistaExportExcel.js'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
+
+/** PNG 2×1 px (proporción 2:1) para probar logo 5 cm sin deformar. */
+const PNG_2X1_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const LOGO_DATA_URI = `data:image/png;base64,${PNG_2X1_B64}`
 import { computeValorDespuesAiuIva } from '../../admin/catalogoInsumosTributos.js'
 
 const impuestoEjemplo = {
@@ -407,7 +415,11 @@ describe('preciosSubcontratistaExport', () => {
     const ws = loaded.getWorksheet('Precios pactados')
     assert.ok(ws)
     assert.equal(ws.getCell(3, 2).value, 'Constructora Demo S.A.S.')
-    assert.equal(ws.getCell(2, 2).value, 'CT-100')
+    // Línea 1: Objeto en B…(n-2); Número de contrato en últimas 2 cols
+    assert.equal(ws.getCell(2, 1).value, 'Objeto del contrato')
+    assert.equal(ws.getCell(2, 2).value, 'Construcción de redes')
+    assert.equal(ws.getCell(2, 5).value, 'Número de contrato')
+    assert.equal(ws.getCell(2, 6).value, 'CT-100')
 
     const hdr = meta.headerRowIdx
     const hVal = String(ws.getRow(hdr).getCell(6).value || '')
@@ -519,7 +531,23 @@ describe('preciosSubcontratistaExport', () => {
     assert.equal(resultOf(ws.getCell(totalsRow, map.deltaValor)), check.totales.sumatoria_delta_valor_total)
   })
 
-  it('encabezado 3 secciones, bloque datos, paleta contrato y altura por texto', async () => {
+  it('encabezado A|B-D|resto, línea 1 objeto/número, logo 5cm y paleta', async () => {
+    assert.deepEqual(layoutEncabezado(6), {
+      leftCol: 1, titleStart: 2, titleEnd: 4, rightStart: 5, rightEnd: 6,
+    })
+    assert.deepEqual(layoutEncabezado(10), {
+      leftCol: 1, titleStart: 2, titleEnd: 4, rightStart: 5, rightEnd: 10,
+    })
+    assert.deepEqual(layoutPrimeraLineaDatos(6), {
+      objetoLabel: 1, objetoValueStart: 2, objetoValueEnd: 4, numeroLabel: 5, numeroValue: 6,
+    })
+    assert.deepEqual(layoutPrimeraLineaDatos(10), {
+      objetoLabel: 1, objetoValueStart: 2, objetoValueEnd: 8, numeroLabel: 9, numeroValue: 10,
+    })
+    const sized = sizeLogoFixedWidth(200, 100, LOGO_WIDTH_PX)
+    assert.equal(sized.width, LOGO_WIDTH_PX)
+    assert.equal(sized.height, Math.round(LOGO_WIDTH_PX * 0.5))
+
     const paletteA = {
       encabezado: { bg: '#1B4F72', text: '#FFFFFF' },
       titulo_1: { bg: '#D4E6F1', text: '#1B4F72' },
@@ -559,6 +587,7 @@ describe('preciosSubcontratistaExport', () => {
           numero: `CT-PAL-${label}`,
           objeto: objetoLargo,
           export_palette: palette,
+          logo_contratista: label === 'A' ? LOGO_DATA_URI : '',
         },
         rows,
         drafts: {},
@@ -568,16 +597,20 @@ describe('preciosSubcontratistaExport', () => {
       })
       const meta = wb.preciosExportMeta
       const ws = wb.getWorksheet('Precios pactados')
+      const L1 = layoutPrimeraLineaDatos(6)
 
-      assert.match(String(ws.getCell(1, 3).value || ws.getCell(1, 2).value || ''), /PRECIOS DE MANO DE OBRA/)
+      // Título en B:D (master en col 2); calidad desde E
+      assert.match(String(ws.getCell(1, 2).value || ''), /PRECIOS DE MANO DE OBRA/)
       assert.match(String(ws.getCell(1, 5).value || ''), new RegExp(PRECIOS_FORMATO_CALIDAD.codigo))
       assert.match(String(ws.getCell(1, 5).value || ''), /Versión 1\.0/)
       assert.equal(ws.getCell(1, 1).fill.fgColor.argb, expected.title)
       assert.equal(ws.getCell(meta.headerRowIdx, 1).fill.fgColor.argb, expected.headerBg)
       assert.equal(ws.getCell(meta.totalsRowIdx, 1).fill.fgColor.argb, expected.totalBg)
 
-      assert.equal(ws.getCell(2, 2).value, `CT-PAL-${label}`)
-      assert.equal(ws.getCell(2, 5).value, objetoLargo)
+      assert.equal(ws.getCell(2, L1.objetoLabel).value, 'Objeto del contrato')
+      assert.equal(ws.getCell(2, L1.objetoValueStart).value, objetoLargo)
+      assert.equal(ws.getCell(2, L1.numeroLabel).value, 'Número de contrato')
+      assert.equal(ws.getCell(2, L1.numeroValue).value, `CT-PAL-${label}`)
       assert.equal(ws.getCell(3, 2).value, 'Sub Demo S.A.S.')
       assert.equal(ws.getCell(3, 5).value, '800111222-3')
       assert.match(String(ws.getCell(4, 1).value || ''), /Objeto del contrato \(subcontratista\)/)
@@ -587,12 +620,17 @@ describe('preciosSubcontratistaExport', () => {
       assert.ok(ws.getRow(2).height >= 28, `altura objeto contrato paleta ${label}`)
       assert.ok(ws.getRow(meta.firstDataRow).height >= 28, `altura descripción larga ${label}`)
       assert.equal(ws.getCell(meta.firstDataRow, 2).alignment.wrapText, true)
+      assert.equal(meta.hasLogo, label === 'A')
+      if (label === 'A') {
+        assert.ok(ws.getRow(1).height >= 40, 'fila encabezado contiene logo 5 cm')
+        assert.ok(Number(ws.getColumn(1).width) >= 20, 'columna A ensanchada al logo')
+      }
     }
 
     assert.ok(estimateWrappedRowHeight('corto', 40) <= 22)
     assert.ok(estimateWrappedRowHeight(descLarga, 34) > 28)
 
-    // Datos faltantes → guion, sin romper exportación
+    // Datos faltantes → guion, sin romper exportación (sin logo)
     const wbEmpty = await buildPreciosSubcontratistaWorkbook({
       subcontratista: {},
       contrato: {},
@@ -603,14 +641,16 @@ describe('preciosSubcontratistaExport', () => {
     })
     const wsE = wbEmpty.getWorksheet('Precios pactados')
     assert.equal(wsE.getCell(2, 2).value, '—')
+    assert.equal(wsE.getCell(2, 6).value, '—')
     assert.equal(wsE.getCell(3, 2).value, '—')
     assert.equal(wsE.getCell(5, 2).value, '—')
+    assert.equal(wbEmpty.preciosExportMeta.hasLogo, false)
 
-    // Crudo y con VU Cobro también llevan encabezado de calidad
-    for (const opts of [{ modoCrudo: true }, { incluirVuCobro: true }]) {
+    // Tres variantes: título B:D, calidad desde E, Nº en últimas 2 cols
+    for (const opts of [{ modoCrudo: true }, { incluirVuCobro: false }, { incluirVuCobro: true }]) {
       const wbV = await buildPreciosSubcontratistaWorkbook({
         subcontratista: { razon_social: 'X', nit: '1', objeto_contrato: 'y' },
-        contrato: { numero: 'N-1', objeto: 'O' },
+        contrato: { numero: 'N-1', objeto: 'Objeto variante de prueba' },
         rows: rowsDemo,
         drafts: {},
         impuesto: impuestoEjemplo,
@@ -619,10 +659,13 @@ describe('preciosSubcontratistaExport', () => {
       })
       const wsV = wbV.getWorksheet('Precios pactados')
       const cols = opts.incluirVuCobro ? 10 : 6
-      const titleCol = 3
-      const calidadCol = opts.incluirVuCobro ? 8 : 5
-      assert.match(String(wsV.getCell(1, titleCol).value || ''), /PRECIOS DE MANO DE OBRA/)
-      assert.match(String(wsV.getCell(1, calidadCol).value || ''), /CC-SUB-PRE/)
+      const L = layoutPrimeraLineaDatos(cols)
+      assert.match(String(wsV.getCell(1, 2).value || ''), /PRECIOS DE MANO DE OBRA/)
+      assert.match(String(wsV.getCell(1, 5).value || ''), /CC-SUB-PRE/)
+      assert.equal(wsV.getCell(2, L.objetoLabel).value, 'Objeto del contrato')
+      assert.equal(wsV.getCell(2, L.objetoValueStart).value, 'Objeto variante de prueba')
+      assert.equal(wsV.getCell(2, L.numeroLabel).value, 'Número de contrato')
+      assert.equal(wsV.getCell(2, L.numeroValue).value, 'N-1')
       assert.equal(wbV.preciosExportMeta.columnMap.cols, cols)
     }
   })
