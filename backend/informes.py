@@ -1960,52 +1960,53 @@ def _contexto_acta_mes_conciliacion(
     reg = fetch_registros_informe_cc_mes_por_acta(
         _sb, int(contrato_id), int(acta_id), nivel_aprobacion=nivel_aprobacion
     )
-    items_pres, _total_raw = aggregate_items_conciliacion(reg)
 
     cfg = amc.fetch_anticipo_amortizacion_contrato(_sb, int(contrato_id))
-    meta_map = amc.meta_listado_contrato(_sb, contrato_id=int(contrato_id))
+    # El índice normalizado sigue alimentando la auditoría de integridad.
+    # El cuadro de ítems no lo usa: esa clave colapsa 2.1 con 2.1._.
     meta_cap_item = amc.precios_vu_contrato_by_cap_item(_sb, contrato_id=int(contrato_id))
-    vu_map = {
-        k: amc._sf(v.get("vlr_unitario"))
-        for k, v in meta_map.items()
-        if amc._sf(v.get("vlr_unitario")) > 0
-    }
-    items_pres, sin_precio = amc.aplicar_precios_contrato_a_items(
-        items_pres, vu_map, meta_by_cap_item=meta_cap_item
+
+    from informe_mes_items import (
+        construir_cuadro_mensual,
+        fetch_listado_exacto,
+        fetch_presupuesto_obra_vigente,
+        resumir_registros_fuera,
+        sumar_cantidad_por_clave,
     )
 
-    # Total canónico independiente del agrupado por ítem (cap+ítem × VU listado).
-    from sicoe_valor_canonico import sum_valor_canonico
-
-    total_costo_canon = sum_valor_canonico(reg or [], meta_cap_item)
-
-    cant_act = amc.cantidades_actualizadas_contrato(_sb, contrato_id=int(contrato_id))
+    filas_ppto, version_ppto = fetch_presupuesto_obra_vigente(_sb, int(contrato_id))
+    listado_exacto = fetch_listado_exacto(_sb, int(contrato_id))
+    cant_pres = sumar_cantidad_por_clave(reg)
     previos = amc.actas_enviadas_anteriores(
         _sb, contrato_id=int(contrato_id), consecutivo_actual=consecutivo
     )
     prev_ids = [int(c["id"]) for c in previos if c.get("id") is not None]
-    cant_ant = amc.cantidades_por_item_actas(
-        _sb,
-        contrato_id=int(contrato_id),
-        acta_ids=prev_ids,
-        nivel_aprobacion=nivel_aprobacion,
+    cant_ant: Dict[Tuple[str, str], float] = {}
+    for aid in prev_ids:
+        prev_regs = fetch_registros_informe_cc_mes_por_acta(
+            _sb, int(contrato_id), int(aid), nivel_aprobacion=nivel_aprobacion
+        )
+        for clave, qty in sumar_cantidad_por_clave(prev_regs).items():
+            cant_ant[clave] = cant_ant.get(clave, 0.0) + qty
+    cuadro = construir_cuadro_mensual(
+        filas_ppto,
+        cant_presente=cant_pres,
+        cant_anterior=cant_ant,
+        listado_por_clave=listado_exacto,
+        claves_con_registros_acta=cant_pres.keys(),
     )
-    items = amc.enriquecer_items_bloques(
-        list(items_pres or []),
-        cant_actualizadas=cant_act,
-        cant_acum_anterior=cant_ant,
-        vu_por_item=vu_map,
-        meta_por_item=meta_map,
-    )
-    for it in items:
-        if _sf(it.get("vlr_unitario")) <= 0 and _sf(it.get("vlr_unitario_sub")) <= 0:
-            it["sin_precio"] = True
-    items = amc.filtrar_items_con_cantidades(items)
-    _aplicar_ficha_items(int(contrato_id), items, aplicar_vu=False)
-    _aplicar_norma_tecnica_desde_listado(items, meta_cap_item)
-    items = amc.sort_items_capitulo_item_asc(items)
-    # Total canónico: Σ ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem).
-    total_costo = float(total_costo_canon)
+    items = list(cuadro.get("items") or [])
+    fuera_presupuesto = resumir_registros_fuera(reg, cuadro.get("claves") or [])
+    sin_precio = [
+        str(it.get("item_numero") or "")
+        for it in items
+        if it.get("sin_precio") and str(it.get("item_numero") or "").strip()
+    ]
+    # Presente acta: solo ítems del presupuesto. El costo directo de Actualizadas
+    # es costo_directo_presupuesto (total del presupuesto vigente).
+    total_costo = float(sum(_sf(it.get("valor_presente")) for it in items))
+    if not math.isfinite(total_costo):
+        total_costo = 0.0
 
     tributos = amc.tributos_from_contrato(cfg.get("aiu"), cfg.get("iva"))
     aiu = amc.calc_aiu_desglose(total_costo, tributos)
@@ -2100,7 +2101,7 @@ def _contexto_acta_mes_conciliacion(
         "acta": acta,
         "items": items,
         "total_costo": total_costo if math.isfinite(total_costo) else 0.0,
-        "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
+        "regla_valor": "Ítems del presupuesto vigente; valor = ROUND0(ROUND(cant,2)×VU) del capítulo y código exactos",
         "integridad": {
             **_integ_ctx,
             "inconsistencias": [i.to_dict() for i in _incs_ctx[:200]],
@@ -2129,6 +2130,9 @@ def _contexto_acta_mes_conciliacion(
         "usuario_cargo": usuario_cargo,
         "nivel_aprobacion": nivel_aprobacion,
         "cfg_anticipo": cfg,
+        "presupuesto_version": version_ppto,
+        "costo_directo_presupuesto": cuadro.get("costo_directo_presupuesto"),
+        "registros_fuera_presupuesto": fuera_presupuesto,
     }
 
 
@@ -14171,7 +14175,11 @@ def _fill_corte_sub_001_excel_ws(
         c_e.alignment = Alignment(horizontal="right", vertical="center")
         c_e.number_format = _EXCEL_NUM_FMT_CANT
 
-        c_f = ws.cell(row=row, column=col_val_act, value=_excel_formula_valor_cant_vu(f"{L_cant_act}{row}", f"{L_vu}{row}"))
+        if it.get("valor_actualizadas_literal"):
+            valor_act_cell = float(round(_sf(it.get("valor_actualizadas")), 0))
+        else:
+            valor_act_cell = _excel_formula_valor_cant_vu(f"{L_cant_act}{row}", f"{L_vu}{row}")
+        c_f = ws.cell(row=row, column=col_val_act, value=valor_act_cell)
         c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
         c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = _EXCEL_NUM_FMT_MONEY
         act_valor_rows.append(row)
@@ -15070,7 +15078,17 @@ def _cc_sem_mes_integral_excel_bytes(
             registros = fetch_registros_memoria_conciliacion(
                 _sb, contrato_id, inum, semana_id=semana_id, item_exacto=True
             )
+            if cap:
+                registros = [
+                    r for r in (registros or [])
+                    if str(r.get("capitulo") or "").strip() == cap
+                    or not str(r.get("capitulo") or "").strip()
+                ] or registros
+            if not registros:
+                # Memoria vacía semanal: se conserva la hoja para no romper el vínculo.
+                registros = []
         else:
+            # Mensual: solo el capítulo y el código exactos. Sin registros, sin pestaña.
             registros = fetch_registros_memoria_cc_mes_alineado_acta(
                 _sb,
                 contrato_id,
@@ -15079,15 +15097,15 @@ def _cc_sem_mes_integral_excel_bytes(
                 item_exacto=True,
                 nivel_aprobacion=nivel_aprobacion,
             )
-        if cap:
-            registros = [
-                r for r in (registros or [])
-                if str(r.get("capitulo") or "").strip() == cap
-                or not str(r.get("capitulo") or "").strip()
-            ] or registros
-        if not registros:
-            # Memoria vacía: aún así crea hoja mínima para no romper el vínculo.
-            registros = []
+            if cap:
+                registros = [
+                    r for r in (registros or [])
+                    if str(r.get("capitulo") or "").strip() == cap
+                ]
+            else:
+                registros = []
+            if not registros:
+                continue
         item_info = _item_info_desde_registros(registros, inum) if registros else {
             "item_numero": inum,
             "item_descripcion": it.get("item_descripcion") or "",
