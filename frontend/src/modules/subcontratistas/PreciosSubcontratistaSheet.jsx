@@ -11,6 +11,7 @@ import {
 import { fmtMoneda } from './subcontratistasDocsHelpers'
 import PreciosAiuIvaModal from './PreciosAiuIvaModal'
 import PreciosExportVuCobroModal from './PreciosExportVuCobroModal'
+import PreciosPasteConfirmModal from './PreciosPasteConfirmModal'
 import {
   bulkUpsertPreciosSub,
   desvincularItemsCobro,
@@ -18,6 +19,12 @@ import {
   registrarExportPreciosExcel,
   upsertTributosSub,
 } from './subcontratistasItemsCobroApi'
+import {
+  applyVuCostoPastePlan,
+  buildVuCostoPastePlan,
+  esPasteColumnaVu,
+  parseClipboardColumnValues,
+} from './preciosSubcontratistaPaste'
 import {
   buildBulkPayload,
   filterListadoItems,
@@ -71,8 +78,11 @@ export default function PreciosSubcontratistaSheet({
   const [confirmEliminarOpen, setConfirmEliminarOpen] = useState(false)
   const [exportVuOpen, setExportVuOpen] = useState(false)
   const [confirmAiuExportOpen, setConfirmAiuExportOpen] = useState(false)
-  const [exportPendingOpts, setExportPendingOpts] = useState(null) // { incluirVuCobro }
+  const [exportPendingOpts, setExportPendingOpts] = useState(null) // { incluirVuCobro, modoCrudo }
+  const [pastePlan, setPastePlan] = useState(null)
   const wrapRef = useRef(null)
+  // Crudo: solo quien puede editar precios (servidor exige escritura; cargo sub → 403).
+  const puedeExportarCrudo = !!canEdit
 
   const loadSheet = useCallback(async () => {
     if (!subId) return
@@ -396,20 +406,23 @@ export default function PreciosSubcontratistaSheet({
 
   const ejecutarExportExcel = async ({
     incluirVuCobro = false,
+    modoCrudo = false,
     aiuConfirmado = false,
   } = {}) => {
+    const crudo = !!modoCrudo && !!puedeExportarCrudo
     const check = validatePreciosExport({
       rows,
       drafts,
       impuesto: impuestoGlobal || EMPTY_IMPUESTO,
-      incluirVuCobro: false, // validación base (ítems); cobro se aplica tras permiso servidor
+      incluirVuCobro: false,
+      modoCrudo: crudo,
     })
     if (!check.ok) {
       onMsg?.({ type: 'error', text: check.message })
       return
     }
-    if (check.faltaAiu && !aiuConfirmado) {
-      setExportPendingOpts({ incluirVuCobro: !!incluirVuCobro })
+    if (!crudo && check.faltaAiu && !aiuConfirmado) {
+      setExportPendingOpts({ incluirVuCobro: !!incluirVuCobro, modoCrudo: false })
       setExportVuOpen(false)
       setConfirmAiuExportOpen(true)
       return
@@ -418,13 +431,16 @@ export default function PreciosSubcontratistaSheet({
     setExportPendingOpts(null)
     setExporting(true)
     try {
-      // Servidor decide y registra: fuerza sin VU Cobro si el cargo no puede verlo.
       const meta = await registrarExportPreciosExcel(
         subId,
-        { incluirVuCobro: !!incluirVuCobro && !!puedeExportarVuCobro },
+        {
+          incluirVuCobro: !crudo && !!incluirVuCobro && !!puedeExportarVuCobro,
+          modoCrudo: crudo,
+        },
         token,
       )
-      const conCobro = !!meta?.incluir_vu_cobro
+      const conCobro = !crudo && !!meta?.incluir_vu_cobro
+      const crudoOk = !!meta?.modo_crudo
       const { filename } = await downloadPreciosSubcontratistaExcel({
         subcontratista: {
           razon_social: subcontratista?.razon_social || '',
@@ -435,11 +451,15 @@ export default function PreciosSubcontratistaSheet({
         drafts,
         impuesto: impuestoGlobal || EMPTY_IMPUESTO,
         incluirVuCobro: conCobro,
+        modoCrudo: crudoOk,
       })
       const n = check.lineas.length
+      const suf = crudoOk
+        ? ' · en crudo (sin precios)'
+        : `${check.faltaAiu ? ' · sin AIU/IVA' : ''}${conCobro ? ' · con VU Cobro' : ''}`
       onMsg?.({
         type: 'success',
-        text: `Excel descargado: ${filename} (${n} ítem${n === 1 ? '' : 's'})${check.faltaAiu ? ' · sin AIU/IVA' : ''}${conCobro ? ' · con VU Cobro' : ''}.`,
+        text: `Excel descargado: ${filename} (${n} ítem${n === 1 ? '' : 's'})${suf}.`,
       })
       setExportVuOpen(false)
     } catch (e) {
@@ -450,20 +470,58 @@ export default function PreciosSubcontratistaSheet({
   }
 
   const exportarExcel = () => {
-    const check = validatePreciosExport({
-      rows,
-      drafts,
-      impuesto: impuestoGlobal || EMPTY_IMPUESTO,
-    })
-    if (!check.ok) {
-      onMsg?.({ type: 'error', text: check.message })
-      return
-    }
-    if (puedeExportarVuCobro) {
+    // Abrir popup si puede elegir cobro y/o crudo; si no, exportar sin cobro directo.
+    if (puedeExportarVuCobro || puedeExportarCrudo) {
+      const checkBase = validatePreciosExport({
+        rows,
+        drafts,
+        impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+        modoCrudo: false,
+      })
+      const checkCrudo = puedeExportarCrudo
+        ? validatePreciosExport({
+          rows,
+          drafts,
+          impuesto: impuestoGlobal || EMPTY_IMPUESTO,
+          modoCrudo: true,
+        })
+        : { ok: false }
+      if (!checkBase.ok && !checkCrudo.ok) {
+        onMsg?.({ type: 'error', text: checkBase.message || checkCrudo.message })
+        return
+      }
       setExportVuOpen(true)
       return
     }
-    void ejecutarExportExcel({ incluirVuCobro: false })
+    void ejecutarExportExcel({ incluirVuCobro: false, modoCrudo: false })
+  }
+
+  const onPasteVuCosto = (e, rowIndex) => {
+    if (!canEdit || saving) return
+    const text = e.clipboardData?.getData('text/plain') ?? e.clipboardData?.getData('text') ?? ''
+    if (!esPasteColumnaVu(text)) return
+    e.preventDefault()
+    const plan = buildVuCostoPastePlan({
+      rows,
+      drafts,
+      startIndex: rowIndex,
+      pastedTexts: parseClipboardColumnValues(text),
+    })
+    setPastePlan(plan)
+  }
+
+  const confirmarPasteVu = (plan) => {
+    if (!canEdit || !plan?.puedeAplicar) {
+      setPastePlan(null)
+      return
+    }
+    setDrafts((prev) => applyVuCostoPastePlan(prev, plan))
+    setPastePlan(null)
+    const n = plan.aplicaran.length
+    onMsg?.({
+      type: 'success',
+      text: `Pegados ${n} valor${n === 1 ? '' : 'es'} en VU Costo M.O. (pendientes de Guardar).`,
+    })
   }
 
   return (
@@ -613,7 +671,7 @@ export default function PreciosSubcontratistaSheet({
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {rows.map((r, rowIndex) => {
                 const key = rowKey(r)
                 const d = drafts[key] || {}
                 const isManual = String(r.origen || '').toLowerCase() === 'manual' || r._isDraft
@@ -829,8 +887,9 @@ export default function PreciosSubcontratistaSheet({
                           disabled={saving}
                           value={d.vu_costo ?? ''}
                           placeholder="Antes AIU"
-                          title="Valor antes de AIU/IVA"
+                          title="Valor antes de AIU/IVA. Puede pegar una columna copiada desde Excel."
                           onChange={(e) => setDraftField(key, 'vu_costo', e.target.value)}
+                          onPaste={(e) => onPasteVuCosto(e, rowIndex)}
                         />
                       ) : (
                         <span style={{ display: 'block', textAlign: 'right', fontWeight: 700 }}>
@@ -868,8 +927,21 @@ export default function PreciosSubcontratistaSheet({
         open={exportVuOpen}
         theme={theme}
         procesando={exporting}
+        puedeExportarVuCobro={puedeExportarVuCobro}
+        puedeExportarCrudo={puedeExportarCrudo}
         onCancel={() => !exporting && setExportVuOpen(false)}
-        onConfirm={({ incluirVuCobro }) => void ejecutarExportExcel({ incluirVuCobro })}
+        onConfirm={({ incluirVuCobro, modoCrudo }) => void ejecutarExportExcel({
+          incluirVuCobro,
+          modoCrudo,
+        })}
+      />
+
+      <PreciosPasteConfirmModal
+        open={!!pastePlan}
+        theme={theme}
+        plan={pastePlan}
+        onCancel={() => setPastePlan(null)}
+        onConfirm={confirmarPasteVu}
       />
 
       {confirmAiuExportOpen && (
@@ -888,6 +960,7 @@ export default function PreciosSubcontratistaSheet({
           }}
           onConfirm={() => void ejecutarExportExcel({
             incluirVuCobro: !!exportPendingOpts?.incluirVuCobro,
+            modoCrudo: !!exportPendingOpts?.modoCrudo,
             aiuConfirmado: true,
           })}
         >

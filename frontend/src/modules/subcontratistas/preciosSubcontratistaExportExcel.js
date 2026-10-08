@@ -77,10 +77,32 @@ function setFormula(cell, formula, result, numFmt) {
 }
 
 /**
- * Mapa de columnas visibles según opción VU Cobro.
- * Índices 1-based. `hiddenConAiu` = columna oculta con total fila con AIU/IVA.
+ * Mapa de columnas visibles según opción VU Cobro / crudo.
+ * Índices 1-based. `hiddenConAiu` = columna oculta con total fila con AIU/IVA (no en crudo).
  */
-export function preciosExportColumnMap(incluirVuCobro) {
+export function preciosExportColumnMap(incluirVuCobro, { modoCrudo = false } = {}) {
+  if (modoCrudo) {
+    return {
+      conCobro: false,
+      modoCrudo: true,
+      cols: 6,
+      item: 1,
+      descripcion: 2,
+      und: 3,
+      cantidad: 4,
+      vuMo: 5,
+      totalAntes: 6,
+      headers: [
+        'Ítem',
+        'Descripción',
+        'Und',
+        'Cantidad',
+        'VU Costo M.O.',
+        'Valor Total\nAntes AIU/IVA',
+      ],
+      widths: [12, 42, 8, 12, 16, 18],
+    }
+  }
   if (incluirVuCobro) {
     return {
       conCobro: true,
@@ -144,13 +166,16 @@ export function buildPreciosSubcontratistaWorkbook({
   impuesto,
   generadoEn = new Date(),
   incluirVuCobro = false,
+  modoCrudo = false,
 } = {}) {
-  const conCobro = !!incluirVuCobro
+  const crudo = !!modoCrudo
+  const conCobro = !crudo && !!incluirVuCobro
   const check = validatePreciosExport({
     rows,
     drafts,
     impuesto,
     incluirVuCobro: conCobro,
+    modoCrudo: crudo,
   })
   if (!check.ok) {
     const err = new Error(check.message)
@@ -159,19 +184,23 @@ export function buildPreciosSubcontratistaWorkbook({
   }
   const { lineas, totales, aiu } = check
   const hoy = generadoEn instanceof Date ? generadoEn : new Date()
-  const map = preciosExportColumnMap(conCobro)
+  const map = preciosExportColumnMap(conCobro, { modoCrudo: crudo })
   const COLS = map.cols
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'ClaraCore'
   wb.created = hoy
   wb.modified = hoy
-  wb.title = conCobro
-    ? 'Precios pactados — Subcontratista (con VU Cobro)'
-    : 'Precios pactados — Subcontratista'
-  wb.description = conCobro
-    ? 'Soporte interno con VU Cobro y comparativo (no entregar al subcontratista)'
-    : 'Soporte contractual de ítems, cantidades y precios pactados'
+  wb.title = crudo
+    ? 'Precios en crudo — Subcontratista (diligenciar VU Costo M.O.)'
+    : conCobro
+      ? 'Precios pactados — Subcontratista (con VU Cobro)'
+      : 'Precios pactados — Subcontratista'
+  wb.description = crudo
+    ? 'Listado de ítems sin precios para diligenciar VU Costo M.O. en Excel'
+    : conCobro
+      ? 'Soporte interno con VU Cobro y comparativo (no entregar al subcontratista)'
+      : 'Soporte contractual de ítems, cantidades y precios pactados'
 
   const ws = wb.addWorksheet('Precios pactados', {
     views: [{ showGridLines: false, state: 'frozen', ySplit: 7 }],
@@ -187,15 +216,19 @@ export function buildPreciosSubcontratistaWorkbook({
   })
 
   map.widths.forEach((w, i) => { ws.getColumn(i + 1).width = w })
-  ws.getColumn(map.hiddenConAiu).hidden = true
-  ws.getColumn(map.hiddenConAiu).width = 14
+  if (map.hiddenConAiu) {
+    ws.getColumn(map.hiddenConAiu).hidden = true
+    ws.getColumn(map.hiddenConAiu).width = 14
+  }
 
   // ── Encabezado ──────────────────────────────────────────────
   ws.mergeCells(1, 1, 1, COLS)
   const title = ws.getCell(1, 1)
-  title.value = conCobro
-    ? 'CLARACORE — PRECIOS PACTADOS (USO INTERNO · CON VU COBRO)'
-    : 'CLARACORE — PRECIOS PACTADOS CON SUBCONTRATISTA'
+  title.value = crudo
+    ? 'CLARACORE — PRECIOS EN CRUDO (DILIGENCIAR VU COSTO M.O.)'
+    : conCobro
+      ? 'CLARACORE — PRECIOS PACTADOS (USO INTERNO · CON VU COBRO)'
+      : 'CLARACORE — PRECIOS PACTADOS CON SUBCONTRATISTA'
   title.fill = FILL_TITLE
   title.font = FONT_WHITE_BOLD
   title.alignment = { horizontal: 'center', vertical: 'middle' }
@@ -248,7 +281,7 @@ export function buildPreciosSubcontratistaWorkbook({
   const LtotalCobro = conCobro ? colLetter(map.totalVuCobro) : null
   const LdeltaCosto = conCobro ? colLetter(map.deltaCosto) : null
   const LdeltaValor = conCobro ? colLetter(map.deltaValor) : null
-  const Lhidden = colLetter(map.hiddenConAiu)
+  const Lhidden = map.hiddenConAiu ? colLetter(map.hiddenConAiu) : null
 
   for (const L of lineas) {
     const row = ws.getRow(r)
@@ -257,13 +290,20 @@ export function buildPreciosSubcontratistaWorkbook({
     row.getCell(map.und).value = L.und
     row.getCell(map.cantidad).value = L.cantidad
     row.getCell(map.cantidad).numFmt = NUM_QTY
-    row.getCell(map.vuMo).value = L.vu_costo_mo
+    // Crudo: VU vacío para diligenciar; resto: precio pactado
+    if (crudo) {
+      row.getCell(map.vuMo).value = null
+    } else {
+      row.getCell(map.vuMo).value = L.vu_costo_mo
+    }
     row.getCell(map.vuMo).numFmt = NUM_COP
 
     setFormula(
       row.getCell(map.totalAntes),
-      `ROUND(ROUND(${Lcant}${r},2)*ROUND(${LvuMo}${r},0),0)`,
-      L.total_antes_aiu,
+      crudo
+        ? `ROUND(ROUND(${Lcant}${r},2)*IF(${LvuMo}${r}="",0,ROUND(${LvuMo}${r},0)),0)`
+        : `ROUND(ROUND(${Lcant}${r},2)*ROUND(${LvuMo}${r},0),0)`,
+      crudo ? 0 : L.total_antes_aiu,
       NUM_COP,
     )
 
@@ -294,12 +334,14 @@ export function buildPreciosSubcontratistaWorkbook({
         : FONT_DELTA_GREEN
     }
 
-    setFormula(
-      row.getCell(map.hiddenConAiu),
-      formulaTotalConAiuExcel(`${Lcant}${r}`, `${LvuMo}${r}`, aiu),
-      L.total_con_aiu,
-      NUM_COP,
-    )
+    if (!crudo && map.hiddenConAiu) {
+      setFormula(
+        row.getCell(map.hiddenConAiu),
+        formulaTotalConAiuExcel(`${Lcant}${r}`, `${LvuMo}${r}`, aiu),
+        L.total_con_aiu,
+        NUM_COP,
+      )
+    }
 
     for (let c = 1; c <= COLS; c += 1) {
       const cell = row.getCell(c)
@@ -375,15 +417,17 @@ export function buildPreciosSubcontratistaWorkbook({
     setFormula(
       row.getCell(map.totalAntes),
       `SUM(${LtotalAntes}${firstDataRow}:${LtotalAntes}${lastDataRow})`,
-      totales.sumatoria_antes_aiu,
+      totales.sumatoria_antes_aiu || 0,
       NUM_COP,
     )
-    setFormula(
-      row.getCell(map.hiddenConAiu),
-      `SUM(${Lhidden}${firstDataRow}:${Lhidden}${lastDataRow})`,
-      totales.total_general_con_aiu,
-      NUM_COP,
-    )
+    if (!crudo && map.hiddenConAiu && Lhidden) {
+      setFormula(
+        row.getCell(map.hiddenConAiu),
+        `SUM(${Lhidden}${firstDataRow}:${Lhidden}${lastDataRow})`,
+        totales.total_general_con_aiu,
+        NUM_COP,
+      )
+    }
 
     for (let c = 1; c <= COLS; c += 1) {
       const cell = row.getCell(c)
@@ -399,133 +443,142 @@ export function buildPreciosSubcontratistaWorkbook({
   }
   r = totalsRowIdx + 1
 
-  // ── AIU/IVA ─────────────────────────────────────────────────
-  r += 1
-  ws.mergeCells(r, 1, r, COLS)
-  {
-    const cell = ws.getCell(r, 1)
-    cell.value = 'AIU / IVA pactado (único del subcontratista)'
-    cell.fill = FILL_SECTION
-    cell.font = FONT_SECTION
-    cell.alignment = { vertical: 'middle' }
-    applyBorderRange(ws, r, 1, r, COLS)
-    ws.getRow(r).height = 22
-  }
-  r += 1
-
-  const aiuLines = [
-    ['Administración (A)', aiu.administracion],
-    ['Imprevistos (Í)', aiu.imprevistos],
-    ['Utilidad (U)', aiu.utilidad],
-    ['IVA sobre Utilidad', aiu.iva_sobre_utilidad],
-  ]
-  for (const [lab, pts] of aiuLines) {
-    ws.mergeCells(r, 2, r, COLS)
-    ws.getCell(r, 1).value = lab
-    const valCell = ws.getCell(r, 2)
-    if (pts == null || !Number.isFinite(Number(pts))) {
-      valCell.value = '—'
-    } else {
-      valCell.value = Number(pts)
-      valCell.numFmt = NUM_PCT
-    }
-    ws.getCell(r, 1).font = FONT_META
-    valCell.font = FONT_BODY
-    ws.getCell(r, 1).fill = FILL_META
-    valCell.fill = FILL_META
-    applyBorderRange(ws, r, 1, r, COLS)
-    ws.getRow(r).height = 18
+  // ── AIU/IVA (no aplica al archivo en crudo) ─────────────────
+  if (!crudo) {
     r += 1
-  }
-
-  // ── Total general con AIU/IVA (fórmulas) ────────────────────
-  r += 1
-  const valueColStart = map.totalAntes
-  const totAiuLines = [
+    ws.mergeCells(r, 1, r, COLS)
     {
-      lab: 'Sumatoria antes de AIU/IVA',
-      formula: `${LtotalAntes}${totalsRowIdx}`,
-      result: totales.sumatoria_antes_aiu,
-      kind: 'money',
-    },
-  ]
-  if (conCobro) {
-    totAiuLines.unshift({
-      lab: 'Sumatoria a VU Cobro',
-      formula: `${LtotalCobro}${totalsRowIdx}`,
-      result: totales.sumatoria_vu_cobro,
+      const cell = ws.getCell(r, 1)
+      cell.value = 'AIU / IVA pactado (único del subcontratista)'
+      cell.fill = FILL_SECTION
+      cell.font = FONT_SECTION
+      cell.alignment = { vertical: 'middle' }
+      applyBorderRange(ws, r, 1, r, COLS)
+      ws.getRow(r).height = 22
+    }
+    r += 1
+
+    const aiuLines = [
+      ['Administración (A)', aiu.administracion],
+      ['Imprevistos (Í)', aiu.imprevistos],
+      ['Utilidad (U)', aiu.utilidad],
+      ['IVA sobre Utilidad', aiu.iva_sobre_utilidad],
+    ]
+    for (const [lab, pts] of aiuLines) {
+      ws.mergeCells(r, 2, r, COLS)
+      ws.getCell(r, 1).value = lab
+      const valCell = ws.getCell(r, 2)
+      if (pts == null || !Number.isFinite(Number(pts))) {
+        valCell.value = '—'
+      } else {
+        valCell.value = Number(pts)
+        valCell.numFmt = NUM_PCT
+      }
+      ws.getCell(r, 1).font = FONT_META
+      valCell.font = FONT_BODY
+      ws.getCell(r, 1).fill = FILL_META
+      valCell.fill = FILL_META
+      applyBorderRange(ws, r, 1, r, COLS)
+      ws.getRow(r).height = 18
+      r += 1
+    }
+
+    // ── Total general con AIU/IVA (fórmulas) ────────────────────
+    r += 1
+    const valueColStart = map.totalAntes
+    const totAiuLines = [
+      {
+        lab: 'Sumatoria antes de AIU/IVA',
+        formula: `${LtotalAntes}${totalsRowIdx}`,
+        result: totales.sumatoria_antes_aiu,
+        kind: 'money',
+      },
+    ]
+    if (conCobro) {
+      totAiuLines.unshift({
+        lab: 'Sumatoria a VU Cobro',
+        formula: `${LtotalCobro}${totalsRowIdx}`,
+        result: totales.sumatoria_vu_cobro,
+        kind: 'money',
+      })
+      totAiuLines.push({
+        lab: 'Diferencia total (antes AIU − VU Cobro)',
+        formula: `${LdeltaValor}${totalsRowIdx}`,
+        result: totales.sumatoria_delta_valor_total,
+        kind: 'delta',
+      })
+    }
+    totAiuLines.push({
+      lab: 'Valor correspondiente al AIU/IVA',
+      formula: `ROUND(${Lhidden}${totalsRowIdx}-${LtotalAntes}${totalsRowIdx},0)`,
+      result: totales.valor_aiu_iva,
       kind: 'money',
     })
     totAiuLines.push({
-      lab: 'Diferencia total (antes AIU − VU Cobro)',
-      formula: `${LdeltaValor}${totalsRowIdx}`,
-      result: totales.sumatoria_delta_valor_total,
-      kind: 'delta',
+      lab: 'Total general con AIU/IVA',
+      formula: `${Lhidden}${totalsRowIdx}`,
+      result: totales.total_general_con_aiu,
+      kind: 'money',
+      grand: true,
+    })
+
+    totAiuLines.forEach((line) => {
+      const isGrand = !!line.grand
+      ws.mergeCells(r, 1, r, valueColStart - 1)
+      ws.getCell(r, 1).value = line.lab
+      ws.mergeCells(r, valueColStart, r, COLS)
+      const valCell = ws.getCell(r, valueColStart)
+      setFormula(
+        valCell,
+        line.formula,
+        line.result,
+        line.kind === 'delta' ? NUM_DELTA : NUM_COP,
+      )
+      if (line.kind === 'delta') {
+        valCell.font = deltaEsRojo(line.result) ? FONT_DELTA_RED : FONT_DELTA_GREEN
+      }
+      for (let c = 1; c <= COLS; c += 1) {
+        const cell = ws.getCell(r, c)
+        cell.fill = isGrand ? FILL_TOTAL : FILL_META
+        if (!(line.kind === 'delta' && c >= valueColStart)) {
+          cell.font = isGrand ? FONT_GRAND : FONT_META
+        }
+        cell.border = BORDER_THIN
+        cell.alignment = { vertical: 'middle', horizontal: c >= valueColStart ? 'right' : 'left' }
+      }
+      ws.getRow(r).height = isGrand ? 24 : 20
+      r += 1
     })
   }
-  totAiuLines.push({
-    lab: 'Valor correspondiente al AIU/IVA',
-    formula: `ROUND(${Lhidden}${totalsRowIdx}-${LtotalAntes}${totalsRowIdx},0)`,
-    result: totales.valor_aiu_iva,
-    kind: 'money',
-  })
-  totAiuLines.push({
-    lab: 'Total general con AIU/IVA',
-    formula: `${Lhidden}${totalsRowIdx}`,
-    result: totales.total_general_con_aiu,
-    kind: 'money',
-    grand: true,
-  })
-
-  totAiuLines.forEach((line) => {
-    const isGrand = !!line.grand
-    ws.mergeCells(r, 1, r, valueColStart - 1)
-    ws.getCell(r, 1).value = line.lab
-    ws.mergeCells(r, valueColStart, r, COLS)
-    const valCell = ws.getCell(r, valueColStart)
-    setFormula(
-      valCell,
-      line.formula,
-      line.result,
-      line.kind === 'delta' ? NUM_DELTA : NUM_COP,
-    )
-    if (line.kind === 'delta') {
-      valCell.font = deltaEsRojo(line.result) ? FONT_DELTA_RED : FONT_DELTA_GREEN
-    }
-    for (let c = 1; c <= COLS; c += 1) {
-      const cell = ws.getCell(r, c)
-      cell.fill = isGrand ? FILL_TOTAL : FILL_META
-      if (!(line.kind === 'delta' && c >= valueColStart)) {
-        cell.font = isGrand ? FONT_GRAND : FONT_META
-      }
-      cell.border = BORDER_THIN
-      cell.alignment = { vertical: 'middle', horizontal: c >= valueColStart ? 'right' : 'left' }
-    }
-    ws.getRow(r).height = isGrand ? 24 : 20
-    r += 1
-  })
 
   // Pie
   r += 1
   ws.mergeCells(r, 1, r, COLS)
   {
-    const sinAiu = !aiu || (
+    const sinAiu = !crudo && (!aiu || (
       aiu.administracion == null
       && aiu.imprevistos == null
       && aiu.utilidad == null
       && aiu.iva_sobre_utilidad == null
-    )
-    const pie = [
-      'Documento generado por ClaraCore.',
-      conCobro
-        ? 'Incluye VU Cobro y comparativo (uso interno; no entregar al subcontratista).'
-        : 'No incluye VU Cobro (información interna).',
-      'Cantidades redondeadas a 2 decimales; montos COP a pesos enteros (fórmulas ROUND).',
-      'Los totales y diferencias son fórmulas: al editar cantidad o precio se recalculan.',
-      conCobro
-        ? '▲ Costo = VU Costo M.O. − VU Cobro; ▲ Valor Total = Total antes AIU − Total VU Cobro (rojo si el subcontratista es más caro).'
-        : null,
-    ].filter(Boolean)
+    ))
+    const pie = crudo
+      ? [
+        'Documento generado por ClaraCore.',
+        'Exportación en crudo: sin precios (ni del subcontratista ni VU Cobro del contrato).',
+        'Diligencie la columna VU Costo M.O.; el Valor Total Antes AIU/IVA y la fila Totales se recalculan con fórmulas ROUND.',
+        'Cantidades a 2 decimales; montos COP a pesos enteros.',
+      ]
+      : [
+        'Documento generado por ClaraCore.',
+        conCobro
+          ? 'Incluye VU Cobro y comparativo (uso interno; no entregar al subcontratista).'
+          : 'No incluye VU Cobro (información interna).',
+        'Cantidades redondeadas a 2 decimales; montos COP a pesos enteros (fórmulas ROUND).',
+        'Los totales y diferencias son fórmulas: al editar cantidad o precio se recalculan.',
+        conCobro
+          ? '▲ Costo = VU Costo M.O. − VU Cobro; ▲ Valor Total = Total antes AIU − Total VU Cobro (rojo si el subcontratista es más caro).'
+          : null,
+      ].filter(Boolean)
     if (sinAiu) {
       pie.push('AIU/IVA no configurado: el total con AIU/IVA coincide con la sumatoria antes de AIU/IVA.')
     }
@@ -533,7 +586,7 @@ export function buildPreciosSubcontratistaWorkbook({
   }
   ws.getCell(r, 1).font = { size: 8, italic: true, color: { argb: 'FF5A7A85' }, name: 'Calibri' }
   ws.getCell(r, 1).alignment = { wrapText: true, vertical: 'top' }
-  ws.getRow(r).height = conCobro ? 48 : 40
+  ws.getRow(r).height = crudo || conCobro ? 48 : 40
 
   ws.autoFilter = {
     from: { row: headerRowIdx, column: 1 },
@@ -541,14 +594,17 @@ export function buildPreciosSubcontratistaWorkbook({
   }
 
   ws.headerFooter = {
-    oddFooter: conCobro
-      ? '&LClaraCore — Precios (interno · VU Cobro)&RPágina &P de &N'
-      : '&LClaraCore — Precios pactados&RPágina &P de &N',
+    oddFooter: crudo
+      ? '&LClaraCore — Precios en crudo&RPágina &P de &N'
+      : conCobro
+        ? '&LClaraCore — Precios (interno · VU Cobro)&RPágina &P de &N'
+        : '&LClaraCore — Precios pactados&RPágina &P de &N',
   }
 
   // Metadatos útiles para pruebas / introspección
   wb.preciosExportMeta = {
     conCobro,
+    modoCrudo: crudo,
     headerRowIdx,
     firstDataRow,
     lastDataRow,
@@ -584,7 +640,9 @@ export async function workbookToXlsxBlob(wb) {
 export async function downloadPreciosSubcontratistaExcel(opts = {}) {
   const wb = buildPreciosSubcontratistaWorkbook(opts)
   const blob = await workbookToXlsxBlob(wb)
-  const filename = buildPreciosExportFilename(opts.subcontratista, opts.generadoEn)
+  const filename = buildPreciosExportFilename(opts.subcontratista, opts.generadoEn, {
+    modoCrudo: !!opts.modoCrudo,
+  })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

@@ -19945,8 +19945,9 @@ class SubcontratistaItemsCobroDesvincular(BaseModel):
 
 
 class SubcontratistaPreciosExportLog(BaseModel):
-    """Registro de exportación Excel de Precios (con/sin VU Cobro)."""
+    """Registro de exportación Excel de Precios (con/sin VU Cobro / en crudo)."""
     incluir_vu_cobro: bool = False
+    modo_crudo: bool = False
 
 
 @app.delete("/subcontratistas/precios/{precio_id}")
@@ -20050,35 +20051,50 @@ def registrar_export_precios_excel_sub(
     """
     Autoriza y registra la exportación Excel de Precios.
 
-    Si el usuario no puede ver economía del contrato (p. ej. cargo subcontratista),
-    fuerza ``incluir_vu_cobro=false`` aunque el cliente lo pida.
+    - VU Cobro: solo si el usuario ve economía del contrato; si no, se fuerza false.
+    - En crudo: solo personal administrativo con permiso de escritura (editar/crear).
+      Un usuario subcontratista no puede exportar en crudo.
     """
-    sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=False)
+    solicitado_crudo = bool(getattr(body, "modo_crudo", False))
+    # Crudo exige escritura (misma regla que editar precios); bloquea cargo sub.
+    if solicitado_crudo:
+        sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=True)
+    else:
+        sub = _require_acceso_precios_subcontratista(current_user, int(sub_id), escribir=False)
+
     cargo = (current_user or {}).get("cargo_nombre")
     rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
-    puede = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
-    solicitado = bool(body.incluir_vu_cobro)
-    efectivo = bool(solicitado and puede)
+    puede_cobro = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+    # Puede crudo = pasó escribir=True arriba (admin con crear/editar, no cargo sub)
+    puede_crudo = bool(solicitado_crudo)
+    crudo_efectivo = bool(solicitado_crudo and puede_crudo)
+    solicitado_cobro = bool(body.incluir_vu_cobro) and not crudo_efectivo
+    cobro_efectivo = bool(solicitado_cobro and puede_cobro)
     det = {
         "contrato_id": int(sub["contrato_id"]),
         "subcontratista_id": int(sub_id),
         "razon_social": sub.get("razon_social"),
-        "incluir_vu_cobro_solicitado": solicitado,
-        "incluir_vu_cobro": efectivo,
-        "puede_incluir_vu_cobro": puede,
+        "incluir_vu_cobro_solicitado": bool(body.incluir_vu_cobro),
+        "incluir_vu_cobro": cobro_efectivo,
+        "puede_incluir_vu_cobro": puede_cobro,
+        "modo_crudo_solicitado": solicitado_crudo,
+        "modo_crudo": crudo_efectivo,
+        "puede_exportar_crudo": True if solicitado_crudo else puede_cobro,
     }
     registrar_log(
         current_user,
         "EXPORTAR",
         "SUBCONTRATISTAS",
-        "precios_excel",
+        "precios_excel_crudo" if crudo_efectivo else "precios_excel",
         str(sub_id),
         det,
     )
     return {
         "ok": True,
-        "incluir_vu_cobro": efectivo,
-        "puede_incluir_vu_cobro": puede,
+        "incluir_vu_cobro": cobro_efectivo,
+        "puede_incluir_vu_cobro": puede_cobro,
+        "modo_crudo": crudo_efectivo,
+        "puede_exportar_crudo": bool(solicitado_crudo) or puede_cobro,
     }
 
 

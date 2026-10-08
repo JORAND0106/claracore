@@ -158,8 +158,36 @@ export function formatPctExport(pts) {
 }
 
 /**
+ * Filas para exportación «en crudo»: identificación + cantidad, VU Costo M.O. vacío.
+ * No incluye precios guardados ni VU Cobro del contrato.
+ */
+export function buildPreciosExportLineasCrudo(rows, drafts = {}) {
+  const out = []
+  for (const r of rows || []) {
+    const key = rowKey(r)
+    const d = drafts[key] || {}
+    const cantRaw = d.cantidad != null ? d.cantidad : r.cantidad
+    const cantParsed = parseNum(cantRaw)
+    if (cantParsed == null || Number.isNaN(cantParsed) || cantParsed < 0) continue
+    if (!r.listado_precio_id && !(r.item_numero || r.descripcion)) continue
+    if (r._isDraft && !(r.item_numero || r.descripcion)) continue
+
+    out.push({
+      item: String(r.item_numero || '').trim() || '—',
+      descripcion: String(r.descripcion || '').trim() || '—',
+      und: String(r.unidad || r.und || '').trim() || '—',
+      cantidad: roundQty(cantParsed),
+      vu_costo_mo: null,
+      total_antes_aiu: 0,
+    })
+  }
+  return out
+}
+
+/**
  * Valida antes de generar el archivo.
  * Sin ítems → bloquea. Sin AIU/IVA → ok con `faltaAiu: true` para que la UI confirme Sí/No.
+ * `modoCrudo`: listado sin precios (VU vacío) para diligenciar en Excel.
  * @returns {{ ok: true, lineas: object[], totales: object, aiu: object, faltaAiu: boolean }
  *   | { ok: false, message: string }}
  */
@@ -168,7 +196,28 @@ export function validatePreciosExport({
   drafts,
   impuesto,
   incluirVuCobro = false,
+  modoCrudo = false,
 } = {}) {
+  if (modoCrudo) {
+    const lineas = buildPreciosExportLineasCrudo(rows, drafts)
+    if (!lineas.length) {
+      return {
+        ok: false,
+        message:
+          'No hay ítems con cantidad para exportar en crudo. '
+          + 'La hoja de Precios debe tener al menos un ítem con cantidad.',
+      }
+    }
+    return {
+      ok: true,
+      faltaAiu: false,
+      modoCrudo: true,
+      incluirVuCobro: false,
+      lineas,
+      totales: { sumatoria_antes_aiu: 0 },
+      aiu: desgloseAiuIvaParaExport(impuesto),
+    }
+  }
   const conCobro = !!incluirVuCobro
   const lineas = buildPreciosExportLineas(rows, drafts, impuesto, conCobro)
   if (!lineas.length) {
@@ -183,6 +232,7 @@ export function validatePreciosExport({
   return {
     ok: true,
     faltaAiu,
+    modoCrudo: false,
     incluirVuCobro: conCobro,
     lineas,
     totales: sumarTotalesExport(lineas, conCobro),
@@ -204,11 +254,16 @@ export function slugFilenamePart(txt, max = 40) {
   return s || 'subcontratista'
 }
 
-export function buildPreciosExportFilename(subcontratista, generadoEn = new Date()) {
+export function buildPreciosExportFilename(
+  subcontratista,
+  generadoEn = new Date(),
+  { modoCrudo = false } = {},
+) {
   const d = generadoEn instanceof Date ? generadoEn : new Date()
   const fecha = d.toISOString().slice(0, 10)
   const slug = slugFilenamePart(subcontratista?.razon_social)
-  return `precios_pactados_${slug}_${fecha}.xlsx`
+  const prefix = modoCrudo ? 'precios_crudo' : 'precios_pactados'
+  return `${prefix}_${slug}_${fecha}.xlsx`
 }
 
 /**
