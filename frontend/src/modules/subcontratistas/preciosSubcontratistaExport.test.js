@@ -17,9 +17,11 @@ import {
   validatePreciosExport,
 } from './preciosSubcontratistaExport.js'
 import {
+  AIU_DESGLOSE_COMPONENTES,
   buildPreciosSubcontratistaWorkbook,
   colLetter,
   estimateWrappedRowHeight,
+  layoutAiuFooterPairs,
   layoutEncabezado,
   layoutPrimeraLineaDatos,
   LOGO_WIDTH_PX,
@@ -28,11 +30,11 @@ import {
   sizeLogoFixedWidth,
 } from './preciosSubcontratistaExportExcel.js'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
+import { computeValorDespuesAiuIva } from '../../admin/catalogoInsumosTributos.js'
 
 /** PNG 2×1 px (proporción 2:1) para probar logo 5 cm sin deformar. */
 const PNG_2X1_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 const LOGO_DATA_URI = `data:image/png;base64,${PNG_2X1_B64}`
-import { computeValorDespuesAiuIva } from '../../admin/catalogoInsumosTributos.js'
 
 const impuestoEjemplo = {
   administracion: '0.05',
@@ -668,6 +670,105 @@ describe('preciosSubcontratistaExport', () => {
       assert.equal(wsV.getCell(2, L.numeroValue).value, 'N-1')
       assert.equal(wbV.preciosExportMeta.columnMap.cols, cols)
     }
+  })
+
+  it('bloque AIU en una fila + Anticipo/% amortización (3 variantes)', async () => {
+    const lay6 = layoutAiuFooterPairs(6, 7, 4)
+    assert.equal(lay6.pairs.length, 4)
+    assert.equal(lay6.pairs[0].labelCol, 1)
+    // Columna 7 oculta (fórmulas): no se usa en el desglose
+    for (const p of lay6.pairs) {
+      assert.notEqual(p.labelCol, 7)
+      assert.notEqual(p.valueStart, 7)
+      assert.notEqual(p.valueEnd, 7)
+    }
+    const lay10 = layoutAiuFooterPairs(10, 11, 4)
+    assert.equal(lay10.pairs.length, 4)
+    assert.ok(lay10.pairs[3].valueEnd <= 10)
+
+    const check = validatePreciosExport({
+      rows: rowsDemo,
+      drafts: {},
+      impuesto: impuestoEjemplo,
+      incluirVuCobro: false,
+    })
+    const grandAntes = check.totales.total_general_con_aiu
+
+    for (const opts of [
+      { incluirVuCobro: false, modoCrudo: false },
+      { incluirVuCobro: true, modoCrudo: false },
+      { incluirVuCobro: false, modoCrudo: true },
+    ]) {
+      const wb = await buildPreciosSubcontratistaWorkbook({
+        subcontratista: {
+          razon_social: 'Demo',
+          nit: '1',
+          objeto_contrato: 'x',
+          anticipo: 1500000.4,
+          amortizacion_pct: 5,
+        },
+        contrato: { numero: 'N-1', objeto: 'O' },
+        rows: rowsDemo,
+        drafts: {},
+        impuesto: impuestoEjemplo,
+        generadoEn: new Date('2026-10-08T15:00:00Z'),
+        ...opts,
+      })
+      const meta = wb.preciosExportMeta
+      const ws = wb.getWorksheet('Precios pactados')
+      assert.ok(meta.aiuDesgloseRowIdx)
+      assert.ok(meta.anticipoRowIdx)
+      assert.equal(meta.anticipoRowIdx, meta.aiuDesgloseRowIdx + 1)
+
+      const aiuRow = meta.aiuDesgloseRowIdx
+      const pairs = meta.aiuLayout.pairs
+      assert.equal(pairs.length, 4)
+      AIU_DESGLOSE_COMPONENTES.forEach((comp, i) => {
+        const lab = String(ws.getCell(aiuRow, pairs[i].labelCol).value || '')
+        assert.match(lab, new RegExp(comp.nombre))
+        assert.match(lab, new RegExp(`\\(${comp.abr}\\)`))
+        const valCell = ws.getCell(aiuRow, pairs[i].valueStart)
+        assert.equal(valCell.value, check.lineas ? desgloseAiuIvaParaExport(impuestoEjemplo)[comp.key] : valCell.value)
+        assert.equal(valCell.fill.fgColor.argb, 'FFFFFFFF')
+        assert.equal(valCell.font.color.argb, 'FF0F2942')
+      })
+
+      const antPairs = meta.antLayout.pairs
+      assert.equal(ws.getCell(meta.anticipoRowIdx, antPairs[0].labelCol).value, 'Anticipo')
+      assert.equal(ws.getCell(meta.anticipoRowIdx, antPairs[0].valueStart).value, roundCop(1500000.4))
+      assert.equal(ws.getCell(meta.anticipoRowIdx, antPairs[1].labelCol).value, '% de Amortización')
+      assert.equal(ws.getCell(meta.anticipoRowIdx, antPairs[1].valueStart).value, 5)
+      assert.equal(
+        ws.getCell(meta.anticipoRowIdx, antPairs[0].valueStart).fill.fgColor.argb,
+        'FFFFFFFF',
+      )
+
+      if (!opts.modoCrudo) {
+        let foundGrand = false
+        ws.eachRow((row) => {
+          const lab = String(row.getCell(1).value || '')
+          if (lab.includes('Total general')) {
+            const map = meta.columnMap
+            assert.equal(resultOf(row.getCell(map.totalAntes)), grandAntes)
+            foundGrand = true
+          }
+        })
+        assert.equal(foundGrand, true)
+      }
+    }
+
+    // Sin anticipo / amortización → guion
+    const wbDash = await buildPreciosSubcontratistaWorkbook({
+      subcontratista: { razon_social: 'X', nit: '1', objeto_contrato: 'y' },
+      rows: rowsDemo,
+      drafts: {},
+      impuesto: impuestoEjemplo,
+      generadoEn: new Date('2026-10-08T15:00:00Z'),
+    })
+    const m = wbDash.preciosExportMeta
+    const wsD = wbDash.getWorksheet('Precios pactados')
+    assert.equal(wsD.getCell(m.anticipoRowIdx, m.antLayout.pairs[0].valueStart).value, '—')
+    assert.equal(wsD.getCell(m.anticipoRowIdx, m.antLayout.pairs[1].valueStart).value, '—')
   })
 
   it('recálculo vivo: al cambiar cantidad y precio las fórmulas coinciden con plataforma', async () => {
