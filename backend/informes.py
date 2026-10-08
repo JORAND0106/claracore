@@ -1967,15 +1967,15 @@ def _contexto_acta_mes_conciliacion(
     meta_cap_item = amc.precios_vu_contrato_by_cap_item(_sb, contrato_id=int(contrato_id))
 
     from informe_mes_items import (
+        clasificar_registros_excluidos,
         construir_cuadro_mensual,
-        fetch_listado_exacto,
-        fetch_presupuesto_obra_vigente,
-        resumir_registros_fuera,
+        fetch_cantidades_presupuesto_exactas,
+        fetch_listado_contrato,
         sumar_cantidad_por_clave,
     )
 
-    filas_ppto, version_ppto = fetch_presupuesto_obra_vigente(_sb, int(contrato_id))
-    listado_exacto = fetch_listado_exacto(_sb, int(contrato_id))
+    filas_listado = fetch_listado_contrato(_sb, int(contrato_id))
+    cantidades_listado = fetch_cantidades_presupuesto_exactas(_sb, int(contrato_id))
     cant_pres = sumar_cantidad_por_clave(reg)
     previos = amc.actas_enviadas_anteriores(
         _sb, contrato_id=int(contrato_id), consecutivo_actual=consecutivo
@@ -1989,21 +1989,22 @@ def _contexto_acta_mes_conciliacion(
         for clave, qty in sumar_cantidad_por_clave(prev_regs).items():
             cant_ant[clave] = cant_ant.get(clave, 0.0) + qty
     cuadro = construir_cuadro_mensual(
-        filas_ppto,
+        filas_listado,
+        cantidades_por_clave=cantidades_listado,
         cant_presente=cant_pres,
         cant_anterior=cant_ant,
-        listado_por_clave=listado_exacto,
         claves_con_registros_acta=cant_pres.keys(),
     )
     items = list(cuadro.get("items") or [])
-    fuera_presupuesto = resumir_registros_fuera(reg, cuadro.get("claves") or [])
+    excluidos = clasificar_registros_excluidos(
+        reg, filas_listado, cuadro.get("claves") or []
+    )
     sin_precio = [
         str(it.get("item_numero") or "")
         for it in items
         if it.get("sin_precio") and str(it.get("item_numero") or "").strip()
     ]
-    # Presente acta: solo ítems del presupuesto. El costo directo de Actualizadas
-    # es costo_directo_presupuesto (total del presupuesto vigente).
+    # Presente acta: solo ítems aprobados del listado, fuera de PMT.
     total_costo = float(sum(_sf(it.get("valor_presente")) for it in items))
     if not math.isfinite(total_costo):
         total_costo = 0.0
@@ -2101,7 +2102,7 @@ def _contexto_acta_mes_conciliacion(
         "acta": acta,
         "items": items,
         "total_costo": total_costo if math.isfinite(total_costo) else 0.0,
-        "regla_valor": "Ítems del presupuesto vigente; valor = ROUND0(ROUND(cant,2)×VU) del capítulo y código exactos",
+        "regla_valor": "Ítems aprobados del listado de precios, sin capítulos PMT; valor = ROUND0(ROUND(cant,2)×VU) del capítulo y código exactos",
         "integridad": {
             **_integ_ctx,
             "inconsistencias": [i.to_dict() for i in _incs_ctx[:200]],
@@ -2130,9 +2131,8 @@ def _contexto_acta_mes_conciliacion(
         "usuario_cargo": usuario_cargo,
         "nivel_aprobacion": nivel_aprobacion,
         "cfg_anticipo": cfg,
-        "presupuesto_version": version_ppto,
-        "costo_directo_presupuesto": cuadro.get("costo_directo_presupuesto"),
-        "registros_fuera_presupuesto": fuera_presupuesto,
+        "costo_directo_presupuesto": cuadro.get("costo_directo_actualizadas"),
+        "registros_excluidos_informe": excluidos,
     }
 
 
