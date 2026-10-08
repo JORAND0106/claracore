@@ -38689,7 +38689,7 @@ def _sicoe_fetch_regs_integridad(
 ) -> List[dict]:
     cols = (
         "id, numero_registro, capitulo, item_numero, cantidad_total, "
-        "vlr_unitario, costo_directo, acta_rpo_id"
+        "vlr_unitario, costo_directo, acta_rpo_id, reporte_id"
     )
     regs: List[dict] = []
     off = 0
@@ -38710,6 +38710,52 @@ def _sicoe_fetch_regs_integridad(
             break
         off += 1000
     return regs
+
+
+def _sicoe_adjuntar_numero_reporte(regs: List[dict]) -> None:
+    """Copia numero_reporte a cada registro (consulta por lotes, sin escribir)."""
+    ids: List[int] = []
+    seen = set()
+    for r in regs or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            i = int(r.get("reporte_id"))
+        except (TypeError, ValueError):
+            continue
+        if i not in seen:
+            seen.add(i)
+            ids.append(i)
+    if not ids:
+        return
+    numeros: dict = {}
+    for i in range(0, len(ids), 200):
+        chunk = ids[i : i + 200]
+
+        def _q(ch=chunk):
+            return (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte")
+                .in_("id", ch)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            if isinstance(row, dict) and row.get("id") is not None:
+                try:
+                    numeros[int(row["id"])] = row.get("numero_reporte")
+                except (TypeError, ValueError):
+                    continue
+    for r in regs or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            i = int(r.get("reporte_id"))
+        except (TypeError, ValueError):
+            continue
+        if i in numeros:
+            r["numero_reporte"] = numeros[i]
 
 
 def _sicoe_integridad_resumen_contrato(
@@ -38774,7 +38820,8 @@ def sicoe_integridad_listado(
     """
     Control de integridad registro ↔ listado (solo Administrador / Desarrollador).
 
-    Clasifica: afectan totales (sin cruce) vs valor guardado desactualizado.
+    No modifica datos. Devuelve una inconsistencia por tipo detectado; la vista
+    agrupa cada registro en un solo caso.
     """
     if not (_es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)):
         raise HTTPException(
@@ -38833,6 +38880,7 @@ def sicoe_integridad_listado(
         pass
 
     regs = _sicoe_fetch_regs_integridad(contrato_id, acta_id_filtro=acta_id_filtro)
+    _sicoe_adjuntar_numero_reporte(regs)
     incs = auditar_integridad_registros(regs, listado_idx)
     resumen = resumen_integridad(incs)
     detalle = [inconsistencia_con_caso(i) for i in incs]

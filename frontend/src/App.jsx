@@ -20349,6 +20349,19 @@ const [navReporteId, setNavReporteId] = useState(null)
     }
   }
 
+  async function abrirRegistroDesdeRevisionListado(contrato, registroId, reporteId) {
+    const rid = Number(registroId)
+    const rep = Number(reporteId)
+    if (!Number.isFinite(rid) || rid <= 0) return
+    if (contrato?.id != null && Number(usuario?.contrato_id) !== Number(contrato.id)) {
+      await onCambiarContrato(contrato)
+    }
+    if (Number.isFinite(rep) && rep > 0) setNavReporteId(rep)
+    setNavRegistroNumero(rid)
+    setShowAdmin(false)
+    setModuloActivo('sicoe_obra')
+  }
+
   async function abrirRegistroSicoeObraDesdePopup(registroId) {
     if (!registroId || !contratoIdDash) return
     try {
@@ -24802,6 +24815,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             void onRefreshContratos?.()
           }}
           onContratosMutated={() => { void onRefreshContratos?.() }}
+          onAbrirRegistro={abrirRegistroDesdeRevisionListado}
           activeTheme={activeTheme}
           t={t}
         />
