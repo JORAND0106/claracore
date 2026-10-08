@@ -79,12 +79,18 @@ def test_list_entradas_incluye_eventos_si_esquema_incompleto(monkeypatch):
         },
     ]
     sb = _FakeSb(rows, schema_error="no_both")
-    monkeypatch.setattr(svc, "migrar_eventos_legacy_contrato", lambda *a, **k: 0)
+    migrar_calls = []
+    monkeypatch.setattr(
+        svc, "migrar_eventos_legacy_contrato",
+        lambda *a, **k: migrar_calls.append(1) or 0,
+    )
     monkeypatch.setattr(svc, "asegurar_autocierre_entrada", lambda _sb, r, **k: r)
     monkeypatch.setattr(svc, "_list_usos_batch", lambda *a, **k: {})
     monkeypatch.setattr(svc, "_enrich_entrada", lambda _sb, r, **k: {**r, "eventos": r.get("eventos") or []})
 
     out = svc.list_entradas(sb, 1)
+    # Listado del calendario no debe migrar legacy (evita timeout → bitácora vacía).
+    assert migrar_calls == []
     tipos = {r["tipo"] for r in out}
     assert "diario" in tipos
     assert "evento" in tipos

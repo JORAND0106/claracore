@@ -5032,6 +5032,12 @@ def list_bandeja(
         visible_ids |= ids_usuarios_bajo_gestion(sb, user_id, contrato_id or (u or {}).get("contrato_id"))
 
     query = sb.table("seguimiento_item").select("*").order("fecha_vencimiento", nullsfirst=False).order("created_at", desc=True)
+    # Filtrar contrato en SQL ANTES del limit(800). Si solo se aísla en Python
+    # después del tope, con muchos ítems de otros contratos el calendario
+    # puede quedarse sin tareas/compromisos (y por tanto sin vencidos) del
+    # contrato activo, mientras actas/bitácora —ya filtradas en SQL— sí aparecen.
+    if contrato_id is not None:
+        query = query.eq("contrato_id", int(contrato_id))
     if origen in ("compromiso", "tarea"):
         query = query.eq("origen", origen)
     if estado:
