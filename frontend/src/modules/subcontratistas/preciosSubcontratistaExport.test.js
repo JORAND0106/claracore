@@ -21,12 +21,14 @@ import {
   buildPreciosSubcontratistaWorkbook,
   colLetter,
   estimateWrappedRowHeight,
+  FORMAT_GRID_MIN_COLS,
   layoutAiuFooterPairs,
   layoutEncabezado,
   layoutPrimeraLineaDatos,
   LOGO_WIDTH_PX,
   PRECIOS_FORMATO_CALIDAD,
   preciosExportColumnMap,
+  resolveFormatGrid,
   sizeLogoFixedWidth,
 } from './preciosSubcontratistaExportExcel.js'
 import { buildCompareExcelColors } from '../../utils/exportPalette.js'
@@ -416,52 +418,58 @@ describe('preciosSubcontratistaExport', () => {
     await loaded.xlsx.load(buf)
     const ws = loaded.getWorksheet('Precios pactados')
     assert.ok(ws)
+    const cmap = meta.columnMap
+    const L1 = layoutPrimeraLineaDatos(meta.gridCols)
     assert.equal(ws.getCell(3, 2).value, 'Constructora Demo S.A.S.')
-    // Línea 1: Objeto en B…(n-2); Número de contrato en últimas 2 cols
-    assert.equal(ws.getCell(2, 1).value, 'Objeto del contrato')
-    assert.equal(ws.getCell(2, 2).value, 'Construcción de redes')
-    assert.equal(ws.getCell(2, 5).value, 'Número de contrato')
-    assert.equal(ws.getCell(2, 6).value, 'CT-100')
+    assert.equal(ws.getCell(2, L1.objetoLabel).value, 'Objeto del contrato')
+    assert.equal(ws.getCell(2, L1.objetoValueStart).value, 'Construcción de redes')
+    assert.equal(ws.getCell(2, L1.numeroLabel).value, 'Número de contrato')
+    assert.equal(ws.getCell(2, L1.numeroValue).value, 'CT-100')
+    assert.equal(meta.gridCols, FORMAT_GRID_MIN_COLS)
+    assert.ok(meta.printArea.endsWith(`${colLetter(meta.gridCols)}`) || meta.printArea.includes(colLetter(meta.gridCols)))
 
     const hdr = meta.headerRowIdx
-    const hVal = String(ws.getRow(hdr).getCell(6).value || '')
+    const hVal = String(ws.getRow(hdr).getCell(cmap.totalAntes).value || '')
     assert.match(hVal, /Antes AIU/i)
     assert.ok(!/con AIU/i.test(hVal))
 
     const r0 = meta.firstDataRow
     const row0 = ws.getRow(r0)
-    assert.equal(row0.getCell(4).value, check.lineas[0].cantidad)
-    assert.equal(row0.getCell(5).value, check.lineas[0].vu_costo_mo)
+    const Lc = colLetter(cmap.cantidad)
+    const Lv = colLetter(cmap.vuMo)
+    const Lt = colLetter(cmap.totalAntes)
+    assert.equal(row0.getCell(cmap.cantidad).value, check.lineas[0].cantidad)
+    assert.equal(row0.getCell(cmap.vuMo).value, check.lineas[0].vu_costo_mo)
     assert.equal(
-      formulaOf(row0.getCell(6)),
-      `ROUND(ROUND(D${r0},2)*ROUND(E${r0},0),0)`,
+      formulaOf(row0.getCell(cmap.totalAntes)),
+      `ROUND(ROUND(${Lc}${r0},2)*ROUND(${Lv}${r0},0),0)`,
     )
-    assert.equal(resultOf(row0.getCell(6)), check.lineas[0].total_antes_aiu)
+    assert.equal(resultOf(row0.getCell(cmap.totalAntes)), check.lineas[0].total_antes_aiu)
 
-    const hidden = formulaOf(row0.getCell(7))
+    const hidden = formulaOf(row0.getCell(cmap.hiddenConAiu))
     assert.ok(hidden)
-    assert.match(hidden, new RegExp(`ROUND\\(ROUND\\(D${r0},2\\)`))
-    assert.equal(resultOf(row0.getCell(7)), check.lineas[0].total_con_aiu)
+    assert.match(hidden, new RegExp(`ROUND\\(ROUND\\(${Lc}${r0},2\\)`))
+    assert.equal(resultOf(row0.getCell(cmap.hiddenConAiu)), check.lineas[0].total_con_aiu)
 
     const totalsRow = meta.totalsRowIdx
     assert.equal(String(ws.getCell(totalsRow, 1).value), 'Totales')
     assert.equal(
-      formulaOf(ws.getCell(totalsRow, 6)),
-      `SUM(F${meta.firstDataRow}:F${meta.lastDataRow})`,
+      formulaOf(ws.getCell(totalsRow, cmap.totalAntes)),
+      `SUM(${Lt}${meta.firstDataRow}:${Lt}${meta.lastDataRow})`,
     )
-    assert.equal(resultOf(ws.getCell(totalsRow, 6)), check.totales.sumatoria_antes_aiu)
+    assert.equal(resultOf(ws.getCell(totalsRow, cmap.totalAntes)), check.totales.sumatoria_antes_aiu)
 
     let foundGrand = false
     ws.eachRow((row) => {
       const lab = String(row.getCell(1).value || '')
       if (lab.includes('Total general')) {
-        assert.equal(resultOf(row.getCell(6)), check.totales.total_general_con_aiu)
-        assert.ok(formulaOf(row.getCell(6)))
+        assert.equal(resultOf(row.getCell(cmap.totalAntes)), check.totales.total_general_con_aiu)
+        assert.ok(formulaOf(row.getCell(cmap.totalAntes)))
         foundGrand = true
       }
       if (lab.includes('Valor correspondiente')) {
-        assert.equal(resultOf(row.getCell(6)), check.totales.valor_aiu_iva)
-        assert.match(formulaOf(row.getCell(6)) || '', /ROUND\(/)
+        assert.equal(resultOf(row.getCell(cmap.totalAntes)), check.totales.valor_aiu_iva)
+        assert.match(formulaOf(row.getCell(cmap.totalAntes)) || '', /ROUND\(/)
       }
     })
     assert.equal(foundGrand, true)
@@ -599,7 +607,8 @@ describe('preciosSubcontratistaExport', () => {
       })
       const meta = wb.preciosExportMeta
       const ws = wb.getWorksheet('Precios pactados')
-      const L1 = layoutPrimeraLineaDatos(6)
+      const L1 = layoutPrimeraLineaDatos(meta.gridCols)
+      const split = Math.max(2, Math.floor(meta.gridCols / 2))
 
       // Título en B:D (master en col 2); calidad desde E
       assert.match(String(ws.getCell(1, 2).value || ''), /PRECIOS DE MANO DE OBRA/)
@@ -614,15 +623,17 @@ describe('preciosSubcontratistaExport', () => {
       assert.equal(ws.getCell(2, L1.numeroLabel).value, 'Número de contrato')
       assert.equal(ws.getCell(2, L1.numeroValue).value, `CT-PAL-${label}`)
       assert.equal(ws.getCell(3, 2).value, 'Sub Demo S.A.S.')
-      assert.equal(ws.getCell(3, 5).value, '800111222-3')
+      assert.equal(ws.getCell(3, split + 2).value, '800111222-3')
       assert.match(String(ws.getCell(4, 1).value || ''), /Objeto del contrato \(subcontratista\)/)
       assert.equal(ws.getCell(5, 2).value, 'Carlos Ruiz')
-      assert.equal(ws.getCell(5, 5).value, '3109876543')
+      assert.equal(ws.getCell(5, split + 2).value, '3109876543')
 
       assert.ok(ws.getRow(2).height >= 28, `altura objeto contrato paleta ${label}`)
       assert.ok(ws.getRow(meta.firstDataRow).height >= 28, `altura descripción larga ${label}`)
       assert.equal(ws.getCell(meta.firstDataRow, 2).alignment.wrapText, true)
       assert.equal(meta.hasLogo, label === 'A')
+      assert.equal(meta.footerMaxCol, meta.gridCols)
+      assert.ok(meta.aiuLayout.pairs.every((p) => p.valueEnd <= meta.gridCols))
       if (label === 'A') {
         assert.ok(ws.getRow(1).height >= 40, 'fila encabezado contiene logo 5 cm')
         assert.ok(Number(ws.getColumn(1).width) >= 20, 'columna A ensanchada al logo')
@@ -642,13 +653,14 @@ describe('preciosSubcontratistaExport', () => {
       generadoEn: new Date('2026-10-07T15:00:00Z'),
     })
     const wsE = wbEmpty.getWorksheet('Precios pactados')
+    const L1e = layoutPrimeraLineaDatos(wbEmpty.preciosExportMeta.gridCols)
     assert.equal(wsE.getCell(2, 2).value, '—')
-    assert.equal(wsE.getCell(2, 6).value, '—')
+    assert.equal(wsE.getCell(2, L1e.numeroValue).value, '—')
     assert.equal(wsE.getCell(3, 2).value, '—')
     assert.equal(wsE.getCell(5, 2).value, '—')
     assert.equal(wbEmpty.preciosExportMeta.hasLogo, false)
 
-    // Tres variantes: título B:D, calidad desde E, Nº en últimas 2 cols
+    // Tres variantes: mismo borde derecho = gridCols; AIU no se sale
     for (const opts of [{ modoCrudo: true }, { incluirVuCobro: false }, { incluirVuCobro: true }]) {
       const wbV = await buildPreciosSubcontratistaWorkbook({
         subcontratista: { razon_social: 'X', nit: '1', objeto_contrato: 'y' },
@@ -659,8 +671,9 @@ describe('preciosSubcontratistaExport', () => {
         generadoEn: new Date('2026-10-07T15:00:00Z'),
         ...opts,
       })
+      const metaV = wbV.preciosExportMeta
       const wsV = wbV.getWorksheet('Precios pactados')
-      const cols = opts.incluirVuCobro ? 10 : 6
+      const cols = metaV.gridCols
       const L = layoutPrimeraLineaDatos(cols)
       assert.match(String(wsV.getCell(1, 2).value || ''), /PRECIOS DE MANO DE OBRA/)
       assert.match(String(wsV.getCell(1, 5).value || ''), /CC-SUB-PRE/)
@@ -668,21 +681,33 @@ describe('preciosSubcontratistaExport', () => {
       assert.equal(wsV.getCell(2, L.objetoValueStart).value, 'Objeto variante de prueba')
       assert.equal(wsV.getCell(2, L.numeroLabel).value, 'Número de contrato')
       assert.equal(wsV.getCell(2, L.numeroValue).value, 'N-1')
-      assert.equal(wbV.preciosExportMeta.columnMap.cols, cols)
+      assert.equal(metaV.columnMap.cols, cols)
+      assert.equal(metaV.footerMaxCol, cols)
+      assert.ok(metaV.aiuLayout.pairs.every((p) => p.valueEnd <= cols))
+      assert.ok(String(metaV.printArea).startsWith('A1:'))
+      assert.ok(String(metaV.printArea).includes(colLetter(cols)))
     }
   })
 
   it('bloque AIU en una fila + Anticipo/% amortización (3 variantes)', async () => {
-    const lay6 = layoutAiuFooterPairs(6, 7, 4)
-    assert.equal(lay6.pairs.length, 4)
-    assert.equal(lay6.pairs[0].labelCol, 1)
-    // Columna 7 oculta (fórmulas): no se usa en el desglose
-    for (const p of lay6.pairs) {
-      assert.notEqual(p.labelCol, 7)
-      assert.notEqual(p.valueStart, 7)
-      assert.notEqual(p.valueEnd, 7)
+    const g6 = resolveFormatGrid(preciosExportColumnMap(false))
+    assert.equal(g6.gridCols, FORMAT_GRID_MIN_COLS)
+    assert.equal(g6.itemCols, 6)
+    assert.equal(g6.hiddenCol, FORMAT_GRID_MIN_COLS + 1)
+    assert.ok(g6.spans[2].end > g6.spans[2].start, 'extra cols absorbidas en Descripción')
+
+    const g10 = resolveFormatGrid(preciosExportColumnMap(true))
+    assert.equal(g10.gridCols, 10)
+    assert.equal(g10.hiddenCol, 11)
+
+    const lay8 = layoutAiuFooterPairs(8, 4)
+    assert.equal(lay8.pairs.length, 4)
+    assert.equal(lay8.pairs[0].labelCol, 1)
+    assert.equal(lay8.maxCol, 8)
+    for (const p of lay8.pairs) {
+      assert.ok(p.valueEnd <= 8)
     }
-    const lay10 = layoutAiuFooterPairs(10, 11, 4)
+    const lay10 = layoutAiuFooterPairs(10, 4)
     assert.equal(lay10.pairs.length, 4)
     assert.ok(lay10.pairs[3].valueEnd <= 10)
 
@@ -723,10 +748,17 @@ describe('preciosSubcontratistaExport', () => {
       const aiuRow = meta.aiuDesgloseRowIdx
       const pairs = meta.aiuLayout.pairs
       assert.equal(pairs.length, 4)
+      assert.equal(meta.footerMaxCol, meta.gridCols)
+      assert.ok(meta.printArea.includes(colLetter(meta.gridCols)))
       AIU_DESGLOSE_COMPONENTES.forEach((comp, i) => {
         const lab = String(ws.getCell(aiuRow, pairs[i].labelCol).value || '')
         assert.match(lab, new RegExp(comp.nombre))
         assert.match(lab, new RegExp(`\\(${comp.abr}\\)`))
+        assert.ok(
+          Number(ws.getColumn(pairs[i].labelCol).width) >= 14,
+          `etiqueta «${comp.nombre}» ancho ≥14 (variante ${JSON.stringify(opts)})`,
+        )
+        assert.ok(pairs[i].valueEnd <= meta.gridCols)
         const valCell = ws.getCell(aiuRow, pairs[i].valueStart)
         assert.equal(valCell.value, check.lineas ? desgloseAiuIvaParaExport(impuestoEjemplo)[comp.key] : valCell.value)
         assert.equal(valCell.fill.fgColor.argb, 'FFFFFFFF')
@@ -742,6 +774,17 @@ describe('preciosSubcontratistaExport', () => {
         ws.getCell(meta.anticipoRowIdx, antPairs[0].valueStart).fill.fgColor.argb,
         'FFFFFFFF',
       )
+      assert.ok(antPairs.every((p) => p.valueEnd <= meta.gridCols))
+
+      // Nada de contenido (salvo col oculta de fórmulas) a la derecha del borde
+      const hidden = meta.columnMap.hiddenConAiu
+      ws.eachRow({ includeEmpty: false }, (row) => {
+        row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+          if (colNumber > meta.gridCols && colNumber !== hidden) {
+            assert.fail(`celda fuera del formato en col ${colNumber}: ${cell.value}`)
+          }
+        })
+      })
 
       if (!opts.modoCrudo) {
         let foundGrand = false
