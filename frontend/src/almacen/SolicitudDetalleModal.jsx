@@ -9,12 +9,16 @@ import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
 import SolicitudMaterialesExcelTable from './SolicitudMaterialesExcelTable'
 import InsumoSearchTable from './InsumoSearchTable'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
+import SolicitudBuzon from './SolicitudBuzon'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
-import { solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
+import { puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
 import { resumenAccionBloque } from './solicitudTramoSeleccion'
 import {
   estadoValidacionItem,
+  motivoAprobacionNoDisponible,
+  motivoEnvioNoDisponible,
   puedeAbrirRevisionLinea,
+  resumenProveedoresSolicitud,
   solicitudOrdenesCompra,
   solicitudPuedeReabrirOc,
   solicitudPuedeRechazarCompleta,
@@ -44,6 +48,7 @@ export default function SolicitudDetalleModal({
   onUpdated,
   onEdit,
   onReabrirOc,
+  onMensajesLeidos,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -119,6 +124,13 @@ export default function SolicitudDetalleModal({
   const editable = Boolean(permisos?.editar && solicitudAlmacenEditable(sol))
   const puedeEditarTitulo = solicitudTituloEditable(permisos)
   const puedeValidar = solicitudPuedeValidar(sol, permisos)
+  const motivoAprobacion = motivoAprobacionNoDisponible(sol, permisos)
+  const puedeEnviar = puedeEnviarSolicitudAlmacen(permisos, sol)
+  const motivoEnvio = motivoEnvioNoDisponible(sol, permisos)
+  const resumenProveedores = useMemo(
+    () => resumenProveedoresSolicitud(items),
+    [items],
+  )
   const verEconomicos = permisos?.verEconomicos !== false
   const puedeAsignar = Boolean(permisos?.editar)
   const puedeSeleccionar = puedeAsignar || puedeValidar
@@ -173,6 +185,21 @@ export default function SolicitudDetalleModal({
       `${detalle}${extra}\n\nAsigne el insumo en la revisión de cada línea antes de aprobar.`
     )
   }, [itemsSinInsumo, tieneOc])
+
+  const enviarAprobacion = async () => {
+    if (!sol?.id) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.enviarSolicitud(sol.id)
+      onUpdated?.()
+      await reload({ silent: true })
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const intentarAprobarOc = () => {
     if (mensajeFaltaInsumoOc) {
@@ -387,6 +414,21 @@ export default function SolicitudDetalleModal({
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 2 }}>
                 {sol?.consecutivo ? `#${sol.consecutivo}` : ''}
                 {sol?.estado ? ` · ${ESTADO_SOLICITUD_LABEL[sol.estado]}` : ''}
+                {Number(sol?.mensajes_no_leidos) > 0 && (
+                  <span
+                    data-testid="solicitud-detalle-no-leidos"
+                    style={{
+                      marginLeft: 8,
+                      background: '#dc2626',
+                      color: '#fff',
+                      borderRadius: 10,
+                      padding: '1px 7px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {sol.mensajes_no_leidos} sin leer
+                  </span>
+                )}
                 {tieneOc && (() => {
                   const ocs = solicitudOrdenesCompra(sol)
                   if (ocs.length === 1) return ` · OC #${ocs[0].numero_oc}`
@@ -597,6 +639,29 @@ export default function SolicitudDetalleModal({
 
               {materialesOpen && (
                 <>
+                  <div
+                    data-testid="solicitud-resumen-proveedores"
+                    style={{
+                      marginBottom: 8,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      background: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      fontSize: 'var(--cc-xs)',
+                      lineHeight: 1.45,
+                      color: ui.text,
+                    }}
+                  >
+                    {resumenProveedores.ocs_previstas > 0
+                      ? `Se ${tieneOc ? 'relacionan' : 'generarían'} ${resumenProveedores.ocs_previstas} orden${resumenProveedores.ocs_previstas === 1 ? '' : 'es'} de compra: ${resumenProveedores.proveedores.join(', ')}.`
+                      : 'Todavía no hay proveedor en las líneas: falta asignar el insumo.'}
+                    {resumenProveedores.lineas_sin_insumo > 0 && (
+                      <span style={{ color: '#92400e', fontWeight: 700 }}>
+                        {' '}
+                        {resumenProveedores.lineas_sin_insumo} línea(s) sin insumo asignado.
+                      </span>
+                    )}
+                  </div>
                   {puedeSeleccionar && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                       {puedeAsignar && (
@@ -665,6 +730,17 @@ export default function SolicitudDetalleModal({
                     🔓 Reabrir OC
                   </button>
                 )}
+                {puedeEnviar && (
+                  <button
+                    type="button"
+                    style={ui.btnPrimary}
+                    disabled={busy}
+                    data-testid="detalle-solicitar-aprobacion"
+                    onClick={() => { void enviarAprobacion() }}
+                  >
+                    Solicitar aprobación
+                  </button>
+                )}
                 {puedeValidar && (
                   <>
                     <button type="button" style={ui.btnSecondary} disabled={busy} onClick={aprobarTodosItems}>
@@ -681,6 +757,31 @@ export default function SolicitudDetalleModal({
                   </>
                 )}
               </div>
+              {motivoEnvio && (
+                <div
+                  data-testid="motivo-envio-no-disponible"
+                  style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}
+                >
+                  Solicitar aprobación no está disponible: {motivoEnvio}
+                </div>
+              )}
+              {motivoAprobacion && (
+                <div
+                  data-testid="motivo-aprobacion-no-disponible"
+                  style={{
+                    marginTop: 8,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: '#fffbeb',
+                    border: '1px solid #fcd34d',
+                    color: '#92400e',
+                    fontSize: 'var(--cc-sm)',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Aprobar ítem, rechazar ítem y generar la OC no están disponibles: {motivoAprobacion}
+                </div>
+              )}
 
               {puedeRechazarCompleta && (
                 <>
@@ -706,6 +807,19 @@ export default function SolicitudDetalleModal({
                     </button>
                   </div>
                 </>
+              )}
+
+              {permisos?.ver && sol?.id != null && (
+                <SolicitudBuzon
+                  solicitudId={sol.id}
+                  items={items}
+                  puedeEnviar={Boolean(permisos?.crear)}
+                  noLeidosInicial={Number(sol.mensajes_no_leidos) || 0}
+                  onNoLeidos={(n) => {
+                    setSol((prev) => (prev ? { ...prev, mensajes_no_leidos: n } : prev))
+                    onMensajesLeidos?.(n)
+                  }}
+                />
               )}
             </>
           )}

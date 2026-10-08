@@ -57,6 +57,9 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "abscisa_inicial",
     "abscisa_final",
     "observacion_residente",
+    "justificacion_autor_id",
+    "justificacion_autor_nombre",
+    "justificacion_at",
     "numero_linea",
     "estado_validacion",
     "grupo_seleccion",
@@ -198,25 +201,83 @@ def _coerce_es_principal(v, default: bool = True) -> bool:
     return bool(v)
 
 
+def _nombre_usuario_id(sb, user_id: int) -> str:
+    if not user_id:
+        return ""
+    try:
+        names = _map_usuario_nombres(sb, [int(user_id)])
+        return names.get(int(user_id)) or ""
+    except Exception:
+        return ""
+
+
+def _aplicar_sello_justificacion(
+    row: dict,
+    prev: Optional[dict],
+    user_id: int,
+    autor_nombre: str,
+) -> None:
+    """Sella autor y fecha de la justificación de sobrepresupuesto. No pisa un texto igual."""
+    obs = (row.get("observacion_residente") or "").strip()
+    if not obs:
+        row["observacion_residente"] = None
+        row["justificacion_autor_id"] = None
+        row["justificacion_autor_nombre"] = None
+        row["justificacion_at"] = None
+        return
+    prev_obs = ((prev or {}).get("observacion_residente") or "").strip()
+    if prev and prev_obs == obs and (prev.get("justificacion_autor_nombre") or prev.get("justificacion_at")):
+        row["justificacion_autor_id"] = prev.get("justificacion_autor_id")
+        row["justificacion_autor_nombre"] = prev.get("justificacion_autor_nombre")
+        row["justificacion_at"] = prev.get("justificacion_at")
+        return
+    row["justificacion_autor_id"] = int(user_id) if user_id else None
+    row["justificacion_autor_nombre"] = (autor_nombre or "").strip() or None
+    row["justificacion_at"] = _now_iso()
+
+
+def _select_items_para_sync(sb, solicitud_id: int) -> List[dict]:
+    full = (
+        "id, estado_validacion, observacion_residente, "
+        "justificacion_autor_id, justificacion_autor_nombre, justificacion_at"
+    )
+    try:
+        return (
+            sb.table("almacen_solicitud_item")
+            .select(full)
+            .eq("solicitud_id", solicitud_id)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        text = str(exc).lower()
+        if _pgrst_unknown_column(exc) or "does not exist" in text or "pgrst" in text:
+            return (
+                sb.table("almacen_solicitud_item")
+                .select("id, estado_validacion")
+                .eq("solicitud_id", solicitud_id)
+                .execute()
+                .data
+                or []
+            )
+        raise
+
+
 def _sync_solicitud_items(
     sb,
     solicitud_id: int,
     estado: str,
     items: List[dict],
+    user_id: int = 0,
 ) -> None:
     """Upsert por id: actualiza existentes, inserta nuevos, elimina removidos.
 
     Evita delete-all + reinsert (lento y rompe ids/cotizaciones/estado_validacion).
     """
-    existing_rows = (
-        sb.table("almacen_solicitud_item")
-        .select("id, estado_validacion")
-        .eq("solicitud_id", solicitud_id)
-        .execute()
-        .data
-        or []
-    )
+    existing_rows = _select_items_para_sync(sb, solicitud_id)
     existing_ids = {int(r["id"]) for r in existing_rows if r.get("id")}
+    existing_by_id = {int(r["id"]): r for r in existing_rows if r.get("id")}
     existing_estado = {
         int(r["id"]): r.get("estado_validacion")
         for r in existing_rows
@@ -224,6 +285,9 @@ def _sync_solicitud_items(
     }
     keep_ids: set = set()
     to_insert: List[dict] = []
+    autor = ""
+    if user_id and any((it.get("observacion_residente") or "").strip() for it in items):
+        autor = _nombre_usuario_id(sb, user_id)
 
     for i, it in enumerate(items, start=1):
         row = _item_for_db_insert(it)
@@ -234,6 +298,13 @@ def _sync_solicitud_items(
             iid = int(raw_id) if raw_id is not None else None
         except (TypeError, ValueError):
             iid = None
+        if "observacion_residente" in it:
+            _aplicar_sello_justificacion(
+                row,
+                existing_by_id.get(iid) if iid else None,
+                user_id,
+                autor,
+            )
         if iid and iid in existing_ids:
             keep_ids.add(iid)
             # Conservar estado_validacion previo salvo que el payload lo traiga.
@@ -1249,7 +1320,11 @@ def _enrich_solicitud(
 
     # Ligera: no resolver validadores (N+1); el detalle completo sí puede.
     vpend = [] if ligera else validadores_pendientes
-    return _enrich_solicitud_usuarios(sb, sol, vpend)
+    sol = _enrich_solicitud_usuarios(sb, sol, vpend)
+    _attach_proveedor_lineas(sb, sol.get("items") or [])
+    sol["resumen_proveedores"] = _resumen_proveedores_solicitud(sol.get("items") or [])
+    _attach_justificacion_visible(sol)
+    return sol
 
 
 def _solicitud_tiene_orden_compra(sol: dict) -> bool:
@@ -2190,11 +2265,16 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
             sb.table("almacen_solicitud").update({"titulo": titulo_final}).eq("id", sid).execute()
     except Exception:
         _log.exception("No se pudo alinear título automático de solicitud %s", sid)
+    autor = ""
+    if any((it.get("observacion_residente") or "").strip() for it in items):
+        autor = _nombre_usuario_id(sb, user_id)
     rows = []
     for i, it in enumerate(items, start=1):
         row = _item_for_db_insert(it)
         row["solicitud_id"] = sid
         row["numero_linea"] = i
+        if "observacion_residente" in it:
+            _aplicar_sello_justificacion(row, None, user_id, autor)
         rows.append(row)
     try:
         _insert_solicitud_items_batch(sb, rows)
@@ -2319,6 +2399,88 @@ def _proveedor_de_item(
         return f"id:{pid_i}", pid_i, nombre
     nombre = (it.get("proveedor_catalogo") or "").strip() or "Proveedor catálogo"
     return f"nombre:{nombre.casefold()}", None, nombre
+
+
+def _clasificar_proveedor_linea(
+    it: dict,
+    cat_map: Dict[int, dict],
+    prov_nombres: Dict[int, str],
+) -> dict:
+    """Nombre de proveedor de la línea, alineado con la agrupación de OC."""
+    if it.get("es_recurrente"):
+        return {
+            "proveedor_nombre": "Compra recurrente",
+            "proveedor_id": None,
+            "proveedor_asignado": True,
+            "sin_insumo": False,
+        }
+    if not it.get("insumo_id"):
+        return {
+            "proveedor_nombre": None,
+            "proveedor_id": None,
+            "proveedor_asignado": False,
+            "sin_insumo": True,
+        }
+    _key, pid, nombre = _proveedor_de_item(it, cat_map, prov_nombres)
+    return {
+        "proveedor_nombre": nombre,
+        "proveedor_id": pid,
+        "proveedor_asignado": True,
+        "sin_insumo": False,
+    }
+
+
+def _attach_proveedor_lineas(sb, items: List[dict]) -> None:
+    """Proveedor por línea en el detalle (también en la carga ligera)."""
+    if not items:
+        return
+    try:
+        cat_map, prov_nombres = _proveedor_meta_batch(sb, items)
+    except Exception:
+        _log.exception("No se pudo resolver el proveedor de las líneas")
+        cat_map, prov_nombres = {}, {}
+    for it in items:
+        info = _clasificar_proveedor_linea(it, cat_map, prov_nombres)
+        it["proveedor_nombre"] = info["proveedor_nombre"]
+        it["proveedor_id"] = info["proveedor_id"]
+        it["proveedor_asignado"] = info["proveedor_asignado"]
+        it["sin_insumo"] = info["sin_insumo"]
+        if info["proveedor_nombre"] and not it.get("proveedor_catalogo"):
+            it["proveedor_catalogo"] = info["proveedor_nombre"]
+
+
+def _resumen_proveedores_solicitud(items: List[dict]) -> dict:
+    vistos: List[str] = []
+    keys: set = set()
+    sin = 0
+    for it in items or []:
+        if it.get("sin_insumo"):
+            sin += 1
+            continue
+        key = str(it.get("proveedor_id") if it.get("proveedor_id") is not None else (it.get("proveedor_nombre") or ""))
+        if not key or key in keys:
+            continue
+        keys.add(key)
+        vistos.append(it.get("proveedor_nombre") or "Proveedor")
+    return {
+        "proveedores": vistos,
+        "ocs_previstas": len(vistos),
+        "lineas_sin_insumo": sin,
+    }
+
+
+def _attach_justificacion_visible(sol: dict) -> None:
+    """Si el texto existe y aún no hay sello, usa al solicitante y la fecha de envío."""
+    autor = (sol.get("solicitante_nombre") or "").strip()
+    cuando = sol.get("enviada_at") or sol.get("created_at")
+    for it in sol.get("items") or []:
+        obs = (it.get("observacion_residente") or "").strip()
+        if not obs:
+            continue
+        if not (it.get("justificacion_autor_nombre") or "").strip() and autor:
+            it["justificacion_autor_nombre"] = autor
+        if not it.get("justificacion_at") and cuando:
+            it["justificacion_at"] = cuando
 
 
 def _agrupar_items_por_proveedor(
@@ -2882,7 +3044,7 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
         sb.table("almacen_solicitud").update(upd).eq("id", solicitud_id).execute()
     if "items" in body:
         items = _validate_items_payload(body["items"], contrato_id, user_id, exclude_solicitud_id=solicitud_id)
-        _sync_solicitud_items(sb, solicitud_id, estado, items)
+        _sync_solicitud_items(sb, solicitud_id, estado, items, user_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 

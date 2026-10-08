@@ -164,14 +164,16 @@ describe('cableado de la solicitud', () => {
     assert.match(excel, /AlmacenPkMapaSelector/)
   })
 
-  it('asignar en bloque exige editar y aprobar en bloque exige gerencial', () => {
+  it('asignar en bloque exige editar y aprobar en bloque exige validar', () => {
     const routes = readFileSync(join(dir, '../../../backend/almacen_routes.py'), 'utf8')
     const mapear = routes.slice(routes.indexOf('def route_mapear_items_bloque'))
     const aprobar = mapear.slice(mapear.indexOf('def route_aprobar_items_bloque'))
+    const soloAprobar = aprobar.slice(0, aprobar.indexOf('def route_corregir_insumo_post_oc'))
     const soloMapear = mapear.slice(0, mapear.indexOf('def route_aprobar_items_bloque'))
     assert.match(soloMapear, /require_permiso_almacen\(current_user, "editar"\)/)
     assert.doesNotMatch(soloMapear, /require_contratista_gerencial_almacen/)
-    assert.match(aprobar, /require_contratista_gerencial_almacen\(current_user\)/)
+    assert.match(soloAprobar, /require_permiso_almacen\(current_user, "validar"\)/)
+    assert.doesNotMatch(soloAprobar, /require_contratista_gerencial_almacen/)
   })
 
   it('la revisión muestra el grupo y la grilla permite selección', () => {
