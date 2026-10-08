@@ -119,6 +119,24 @@ def test_trazabilidad_reporta_sin_historial_campo():
     assert "Pendiente" in TRAZABILIDAD_PRECIOS_STATUS["detalle"] or "pendiente" in TRAZABILIDAD_PRECIOS_STATUS["detalle"].lower()
 
 
+def test_auditar_conserva_reporte_en_cada_inconsistencia():
+    listado = {cap_item_key("CAP1", "1.1"): {"vlr_unitario": 1000}}
+    regs = [{
+        "id": 4,
+        "numero_registro": 13,
+        "reporte_id": 36978,
+        "numero_reporte": 24,
+        "capitulo": "CAP1",
+        "item_numero": "1.1",
+        "cantidad_total": 2,
+        "vlr_unitario": 900,
+        "costo_directo": 1800,
+    }]
+    incs = auditar_integridad_registros(regs, listado)
+    assert incs
+    assert all(i.reporte_id == 36978 and i.numero_reporte == 24 for i in incs)
+
+
 def test_norm_item_strip_trailing_dots():
     from sicoe_valor_canonico import norm_item, cap_item_key
 

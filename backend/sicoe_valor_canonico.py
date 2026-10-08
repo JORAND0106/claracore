@@ -270,6 +270,8 @@ class InconsistenciaRegistro:
     cd_guardado: Optional[float] = None
     cd_esperado: Optional[float] = None
     impacto_plata: float = 0.0
+    reporte_id: Any = None
+    numero_reporte: Any = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -289,6 +291,8 @@ def auditar_integridad_registros(
             continue
         rid = reg.get("id")
         nro = reg.get("numero_registro")
+        reporte_id = reg.get("reporte_id")
+        numero_reporte = reg.get("numero_reporte")
         cap = norm_capitulo(reg.get("capitulo"))
         item = norm_item(reg.get("item_numero"))
         cant = _sf(reg.get("cantidad_total"))
@@ -310,6 +314,8 @@ def auditar_integridad_registros(
                     vu_guardado=vu_g_f,
                     cd_guardado=cd_g_f,
                     impacto_plata=abs(cd_g_f or 0.0),
+                    reporte_id=reporte_id,
+                    numero_reporte=numero_reporte,
                 )
             )
             continue
@@ -327,6 +333,8 @@ def auditar_integridad_registros(
                     vu_guardado=vu_g_f,
                     cd_guardado=cd_g_f,
                     impacto_plata=abs(cd_g_f or 0.0),
+                    reporte_id=reporte_id,
+                    numero_reporte=numero_reporte,
                 )
             )
 
@@ -347,6 +355,8 @@ def auditar_integridad_registros(
                         vu_guardado=vu_g_f,
                         cd_guardado=cd_g_f,
                         impacto_plata=abs(cd_g_f or 0.0),
+                        reporte_id=reporte_id,
+                        numero_reporte=numero_reporte,
                     )
                 )
             elif not any(
@@ -376,6 +386,8 @@ def auditar_integridad_registros(
                     cd_guardado=cd_g_f,
                     cd_esperado=cd_esp,
                     impacto_plata=impacto,
+                    reporte_id=reporte_id,
+                    numero_reporte=numero_reporte,
                 )
             )
 
@@ -394,6 +406,8 @@ def auditar_integridad_registros(
                     cd_guardado=cd_g_f,
                     cd_esperado=cd_esp,
                     impacto_plata=abs(cd_g_f - cd_esp),
+                    reporte_id=reporte_id,
+                    numero_reporte=numero_reporte,
                 )
             )
 
