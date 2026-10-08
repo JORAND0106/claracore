@@ -3574,10 +3574,11 @@ def list_entradas(
     """
     t0 = time.perf_counter()
     schema = bitacora_schema_eventos_disponible(sb)
-    try:
-        migrar_eventos_legacy_contrato(sb, contrato_id)
-    except Exception as exc:
-        _log.debug("list_entradas migrate: %s", exc)
+    # No migrar legacy en cada listado: la migración es costosa y, al
+    # timeoutar el GET del calendario, el frontend traga el error y deja
+    # la bitácora vacía (solo se ven actas). Los eventos independientes
+    # siguen visibles vía _evento_no_consolidado; migrar con el endpoint
+    # dedicado POST .../bitacora/migrar-eventos-legacy.
 
     query = (
         sb.table("seguimiento_bitacora_entrada")
