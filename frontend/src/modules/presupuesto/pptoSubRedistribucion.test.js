@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  DECISION_MANTENER,
+  DECISION_SALDAR,
   cantidadTrasRedistribucion,
+  cantidadesTrasDecisiones,
+  liberacionesAlSaldar,
+  participantesDesdeDecisiones,
   proporcionesIguales,
   sumProporciones,
   validarProporciones,
@@ -23,5 +28,59 @@ describe('pptoSubRedistribucion', () => {
   it('valida suma 1.00', () => {
     assert.equal(validarProporciones({ 1: 0.5, 2: 0.5 }, [1, 2]), null)
     assert.match(validarProporciones({ 1: 0.4, 2: 0.5 }, [1, 2]), /1\.00/)
+  })
+
+  it('saldar A → A=ejecutado, B recibe todo el saldo', () => {
+    const { participantes, saldados } = participantesDesdeDecisiones(
+      [1], 2, { 1: DECISION_SALDAR },
+    )
+    assert.deepEqual(participantes, [2])
+    assert.deepEqual(saldados, [1])
+    const fila = {
+      saldo: 60,
+      subs_existentes: [1],
+      ejecutados: {
+        1: { ejecutado: 40, cantidad_antes: 100, cantidad_no_reconocida: 60 },
+        2: { ejecutado: 0, cantidad_antes: 0, cantidad_no_reconocida: 0 },
+      },
+    }
+    const { cantidades } = cantidadesTrasDecisiones(
+      fila, { 2: 1 }, { 1: DECISION_SALDAR }, 2,
+    )
+    assert.equal(cantidades[1], 40)
+    assert.equal(cantidades[2], 60)
+  })
+
+  it('mantener 50/50', () => {
+    const fila = {
+      saldo: 60,
+      subs_existentes: [1],
+      ejecutados: {
+        1: { ejecutado: 40 },
+        2: { ejecutado: 0 },
+      },
+    }
+    const { cantidades } = cantidadesTrasDecisiones(
+      fila, { 1: 0.5, 2: 0.5 }, { 1: DECISION_MANTENER }, 2,
+    )
+    assert.equal(cantidades[1], 70)
+    assert.equal(cantidades[2], 30)
+  })
+
+  it('liberaciones al saldar lista no reconocidas', () => {
+    const libs = liberacionesAlSaldar(
+      [{
+        presupuesto_id: 9,
+        item: '1.01',
+        tramo: 'T1',
+        subs_existentes: [1],
+        ejecutados: {
+          1: { label: 'A', cantidad_no_reconocida: 15, ejecutado: 5 },
+        },
+      }],
+      { 1: DECISION_SALDAR },
+    )
+    assert.equal(libs.length, 1)
+    assert.equal(libs[0].cantidad_no_reconocida, 15)
   })
 })

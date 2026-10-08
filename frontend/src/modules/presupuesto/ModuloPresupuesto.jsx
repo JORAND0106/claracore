@@ -4366,7 +4366,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     )))
   }
 
-  async function confirmarRedistribucionSub({ proporciones, preview }) {
+  async function confirmarRedistribucionSub({
+    proporciones, decisiones, confirmar_saldar_no_reconocidas, preview,
+  }) {
     if (!redistribucionState) return
     const ep = pptoEp()
     if (!ep.subRedistribucionAplicar) {
@@ -4381,12 +4383,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
           ids: redistribucionState.ids,
           subcontratista_id: redistribucionState.subcontratistaId,
           proporciones,
+          decisiones: decisiones || {},
+          confirmar_saldar_no_reconocidas: !!confirmar_saldar_no_reconocidas,
           preview,
         }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         const detail = err?.detail
+        if (detail && typeof detail === 'object' && detail.code === 'CONFIRM_SALDAR_NO_RECONOCIDAS') {
+          throw new Error(detail.message || 'Debe confirmar el saldado con cantidades no reconocidas.')
+        }
         throw new Error(
           typeof detail === 'string' ? detail : (detail?.msg || 'No se pudo aplicar la redistribución.'),
         )

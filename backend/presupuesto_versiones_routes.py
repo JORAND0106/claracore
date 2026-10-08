@@ -26,6 +26,7 @@ from presupuesto_versiones_service import (
 )
 
 from presupuesto_version_biblioteca import (
+    _fetch_biblioteca_items_by_ids,
     bulk_insert_biblioteca,
     bulk_patch_biblioteca_ids,
     conteo_biblioteca,
@@ -773,6 +774,7 @@ def post_presupuesto_version_biblioteca_bulk_subcontratista(
     body: PresupuestoBulkSubcontratista,
     current_user=Depends(get_current_user),
 ):
+    """Asigna subcontratista en biblioteca. Nunca reemplaza otro sub ya asignado."""
     _require_contract_access(current_user, contrato_id)
     sub_id = int(body.subcontratista_id or 0)
     if sub_id <= 0:
@@ -790,6 +792,31 @@ def post_presupuesto_version_biblioteca_bulk_subcontratista(
         raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato.")
     if sub_rows[0].get("activo") is False:
         raise HTTPException(status_code=422, detail="El subcontratista está inactivo.")
+
+    # Regla de no reemplazo (biblioteca no tiene popup de redistribución).
+    try:
+        actuales = _fetch_biblioteca_items_by_ids(
+            supabase, contrato_id, version_id, body.ids or [],
+        ) or []
+    except Exception:
+        actuales = []
+    conflict = [
+        int(r.get("id") or 0)
+        for r in actuales
+        if r.get("subcontratista_id")
+        and int(r.get("subcontratista_id") or 0) > 0
+        and int(r.get("subcontratista_id") or 0) != sub_id
+    ]
+    conflict = [c for c in conflict if c > 0]
+    if conflict:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No se puede reemplazar la asignación de otro subcontratista en la biblioteca. "
+                "La redistribución de cantidades solo está disponible en el presupuesto vivo. "
+                f"Registros en conflicto: {conflict[:20]}."
+            ),
+        )
     return bulk_patch_biblioteca_ids(
         supabase, contrato_id, version_id, body.ids, {"subcontratista_id": sub_id}
     )
