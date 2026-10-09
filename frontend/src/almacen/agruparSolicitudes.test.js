@@ -20,6 +20,10 @@ test('la grilla resalta sin insumo y ofrece Agrupar solo con permiso de editar',
   assert.match(modal, /disabled=\{busy \|\| !puedeConfirmar\}/)
   assert.match(api, /solicitudes\/agrupar\/vista-previa/)
   assert.match(api, /solicitudes\/agrupar/)
+  assert.match(panel, /data-testid="deshacer-agrupar"/)
+  assert.match(api, /solicitudes\/agrupar\/deshacer/)
+  assert.match(panel, /Leyendo las solicitudes y sus proveedores/)
+  assert.match(panel, /Devolviendo las líneas a sus solicitudes/)
 })
 
 test('el nombre completo queda en el popup, el formulario y la OC', () => {

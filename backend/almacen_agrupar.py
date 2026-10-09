@@ -5,7 +5,11 @@ recalcula cuando cambia el proveedor del grupo o el estado.
 """
 from __future__ import annotations
 
+import json
 import logging
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -38,18 +42,43 @@ def format_titulo_grupo(consecutivo, created_at, proveedor: str, estado: str) ->
     return f"Solicitud #{num} - {fecha} - {prov} - {etiqueta_estado(estado)}"
 
 
+# Nombres que no identifican un proveedor. No agrupan líneas entre sí.
+_NOMBRES_SIN_PROVEEDOR = {
+    "proveedor",
+    "proveedor catálogo",
+    "proveedor catalogo",
+    "sin proveedor",
+    "sin proveedor seleccionado",
+    "sin proveedor asignado",
+}
+
+
+def _nombre_generico(nombre: str) -> bool:
+    return (nombre or "").strip().casefold() in _NOMBRES_SIN_PROVEEDOR
+
+
 def _proveedor_linea(it: dict) -> tuple:
-    pid = it.get("proveedor_seleccionado_id")
-    nombre = (it.get("proveedor_seleccionado_nombre") or it.get("proveedor_nombre") or "").strip()
+    """Proveedor efectivo de la línea.
+
+    Si ya se hidrató, es la misma regla que la columna Prov. y la OC:
+    el elegido en la revisión y, si no hay, el del insumo. Si no se hidrató,
+    queda el elegido en la línea (los tests y el plan puro).
+    """
+    if it.get("_proveedor_hidratado"):
+        pid = it.get("proveedor_efectivo_id")
+        nombre = (it.get("proveedor_efectivo_nombre") or "").strip()
+    else:
+        pid = it.get("proveedor_seleccionado_id")
+        nombre = (it.get("proveedor_seleccionado_nombre") or it.get("proveedor_nombre") or "").strip()
     try:
         pid_i = int(pid) if pid not in (None, "") else None
     except (TypeError, ValueError):
         pid_i = None
     if pid_i:
         return f"id:{pid_i}", (nombre or f"Proveedor {pid_i}")
-    if nombre:
+    if nombre and not _nombre_generico(nombre):
         return f"nombre:{nombre.casefold()}", nombre
-    return "sin_seleccion", "Sin proveedor seleccionado"
+    return "sin_proveedor", "Sin proveedor asignado"
 
 
 def bucket_de_linea(it: dict) -> dict:
@@ -306,6 +335,16 @@ def planificar_agrupacion(
 
     se_mueven = len(movimientos)
     sin_cambios = se_mueven == 0 and por_crear == 0 and not ajustes
+    en_grupos = sum(len(g.get("item_ids") or []) for g in filas)
+    lineas_congeladas = 0
+    for it in items or []:
+        try:
+            sid = int(it.get("solicitud_id") or 0)
+            iid = int(it.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if sid and iid and sid in congeladas:
+            lineas_congeladas += 1
     return {
         "grupos": filas,
         "vacias": vacias,
@@ -315,6 +354,10 @@ def planificar_agrupacion(
         "ajustes": ajustes,
         "sin_cambios": sin_cambios,
         "congeladas": len(congeladas),
+        "lineas_libres": len(items_libres),
+        "lineas_en_grupos": en_grupos,
+        "lineas_congeladas": lineas_congeladas,
+        "lineas_total": len(items_libres) + lineas_congeladas,
     }
 
 
@@ -451,6 +494,115 @@ def _liberar_bloqueo(sb, contrato_id: int, user_id: int) -> None:
             _log.warning("No se pudo soltar el bloqueo de agrupación: %s", exc)
 
 
+def _trozos(seq, n: int):
+    lista = list(seq or [])
+    paso = max(1, int(n))
+    for i in range(0, len(lista), paso):
+        yield lista[i:i + paso]
+
+
+def _paginar(make, page: int = 1000) -> List[dict]:
+    """Lee todas las filas. En producción pagina; el doble de pruebas no tiene range."""
+    out: List[dict] = []
+    start = 0
+    while start < 200000:
+        q = make()
+        ranger = getattr(q, "range", None)
+        if callable(ranger):
+            q = ranger(start, start + page - 1)
+        rows = q.execute().data or []
+        out.extend(rows)
+        if not callable(ranger) or len(rows) < page:
+            break
+        start += page
+    return out
+
+
+def _catalogo_proveedor_liviano(sb, items: List[dict]) -> tuple:
+    """proveedor_id del insumo y razón social. Sin PDFs ni JSON de cotizaciones."""
+    insumo_ids = []
+    explicitos = []
+    for it in items or []:
+        if it.get("insumo_id") and not it.get("es_recurrente"):
+            try:
+                insumo_ids.append(int(it["insumo_id"]))
+            except (TypeError, ValueError):
+                pass
+        if it.get("proveedor_seleccionado_id") not in (None, ""):
+            try:
+                explicitos.append(int(it["proveedor_seleccionado_id"]))
+            except (TypeError, ValueError):
+                pass
+    cat_map: Dict[int, dict] = {}
+    prov_ids = set(explicitos)
+    for chunk in _trozos(sorted(set(insumo_ids)), 120):
+        rows = (
+            sb.table("almacen_insumo")
+            .select("id, proveedor_id")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for row in rows:
+            try:
+                iid = int(row["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            pid = row.get("proveedor_id")
+            cat_map[iid] = {"proveedor_id": pid}
+            if pid not in (None, ""):
+                try:
+                    prov_ids.add(int(pid))
+                except (TypeError, ValueError):
+                    pass
+    prov_nombres: Dict[int, str] = {}
+    for chunk in _trozos(sorted(prov_ids), 120):
+        for row in (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            try:
+                prov_nombres[int(row["id"])] = (row.get("razon_social") or "").strip()
+            except (TypeError, ValueError, KeyError):
+                continue
+    return cat_map, prov_nombres
+
+
+def hidratar_proveedor_lineas(sb, items: List[dict]) -> None:
+    """Escribe en memoria el proveedor que ya muestran la columna Prov. y la OC.
+
+    No guarda el proveedor del insumo como si la persona lo hubiera elegido.
+    """
+    if not items:
+        return
+    try:
+        from almacen_service import _clasificar_proveedor_linea
+
+        cat_map, prov_nombres = _catalogo_proveedor_liviano(sb, items)
+    except Exception:
+        _log.exception("No se pudo resolver el proveedor del insumo")
+        return
+    for it in items:
+        info = _clasificar_proveedor_linea(it, cat_map, prov_nombres)
+        pid = info.get("proveedor_id")
+        nombre = (info.get("proveedor_nombre") or "").strip()
+        if info.get("sin_insumo"):
+            it["proveedor_efectivo_id"] = None
+            it["proveedor_efectivo_nombre"] = ""
+        elif pid or (nombre and not _nombre_generico(nombre)):
+            it["proveedor_efectivo_id"] = pid
+            it["proveedor_efectivo_nombre"] = nombre
+        else:
+            it["proveedor_efectivo_id"] = None
+            it["proveedor_efectivo_nombre"] = ""
+        it["_proveedor_hidratado"] = True
+
+
 def sincronizar_titulo_solicitud(sb, solicitud_id: int) -> Optional[str]:
     """Deja el nombre al día. No escribe si el proveedor y el estado no cambiaron el texto."""
     try:
@@ -492,6 +644,8 @@ def sincronizar_titulo_solicitud(sb, solicitud_id: int) -> Optional[str]:
                 return None
     if items and "insumo_id" not in items[0]:
         return None
+    if items:
+        hidratar_proveedor_lineas(sb, items)
     nuevo = titulo_para_solicitud(sol, items)
     if (sol.get("titulo") or "") == nuevo:
         return nuevo
@@ -504,14 +658,14 @@ def sincronizar_titulo_solicitud(sb, solicitud_id: int) -> Optional[str]:
 
 
 def _select_head(sb, contrato_id: int) -> List[dict]:
-    return (
-        sb.table("almacen_solicitud")
-        .select("id, contrato_id, consecutivo, titulo, estado, created_at, motivo_rechazo, validada_at")
-        .eq("contrato_id", int(contrato_id))
-        .execute()
-        .data
-        or []
-    )
+    def make():
+        return (
+            sb.table("almacen_solicitud")
+            .select("id, contrato_id, consecutivo, titulo, estado, created_at, motivo_rechazo, validada_at")
+            .eq("contrato_id", int(contrato_id))
+        )
+
+    return _paginar(make)
 
 
 def _select_items(sb, solicitud_ids: List[int]) -> List[dict]:
@@ -528,14 +682,14 @@ def _select_items(sb, solicitud_ids: List[int]) -> List[dict]:
     last = None
     for select in selects:
         try:
-            return (
-                sb.table("almacen_solicitud_item")
-                .select(select)
-                .in_("solicitud_id", solicitud_ids)
-                .execute()
-                .data
-                or []
-            )
+            rows: List[dict] = []
+            for chunk in _trozos(solicitud_ids, 120):
+                rows.extend(_paginar(lambda chunk=chunk, select=select: (
+                    sb.table("almacen_solicitud_item")
+                    .select(select)
+                    .in_("solicitud_id", chunk)
+                )))
+            return rows
         except Exception as exc:
             last = exc
             if not _objeto_ausente(exc):
@@ -543,6 +697,19 @@ def _select_items(sb, solicitud_ids: List[int]) -> List[dict]:
     if last:
         raise ValueError("No se pudieron leer las líneas de las solicitudes.") from last
     return []
+
+
+def _select_items_por_id(sb, item_ids: List[int]) -> List[dict]:
+    if not item_ids:
+        return []
+    rows: List[dict] = []
+    for chunk in _trozos(item_ids, 120):
+        rows.extend(_paginar(lambda chunk=chunk: (
+            sb.table("almacen_solicitud_item")
+            .select("id, solicitud_id, numero_linea, insumo_id, estado_validacion")
+            .in_("id", chunk)
+        )))
+    return rows
 
 
 def _ids_con_oc(sb, contrato_id: int) -> set:
@@ -557,42 +724,25 @@ def _ids_con_oc(sb, contrato_id: int) -> set:
     return {int(r["solicitud_id"]) for r in rows if r.get("solicitud_id")}
 
 
-def _anexar_totales(sb, plan: dict, items: List[dict], *, ver_economicos: bool) -> None:
+def _anexar_totales(plan: dict, items: List[dict], *, ver_economicos: bool) -> None:
+    """Suma cantidad × valor ya guardado en la línea. No vuelve a leer cotizaciones."""
     if not ver_economicos:
         for g in plan["grupos"]:
             g.pop("total", None)
         return
-    from almacen_service import (
-        _hidratar_proveedor_desde_cotizacion,
-        _ofertas_insumos_batch,
-        valor_linea_proveedor,
-    )
-
-    try:
-        _hidratar_proveedor_desde_cotizacion(sb, items)
-    except Exception:
-        _log.exception("No se pudo hidratar el proveedor para la vista previa")
-    insumo_ids = []
-    for it in items:
-        if it.get("insumo_id"):
-            try:
-                insumo_ids.append(int(it["insumo_id"]))
-            except (TypeError, ValueError):
-                pass
-    ofertas = _ofertas_insumos_batch(sb, insumo_ids) if insumo_ids else {}
     por_item: Dict[int, Optional[float]] = {}
     for it in items:
         try:
             iid = int(it.get("id") or 0)
         except (TypeError, ValueError):
             continue
-        of = None
-        if it.get("insumo_id"):
-            try:
-                of = ofertas.get(int(it["insumo_id"]))
-            except (TypeError, ValueError):
-                of = None
-        por_item[iid] = valor_linea_proveedor(it, of)
+        try:
+            cant = float(it.get("cantidad") or 0)
+            unit = float(it.get("valor_compra_unitario") or 0)
+        except (TypeError, ValueError):
+            por_item[iid] = None
+            continue
+        por_item[iid] = round(cant * unit, 2) if cant > 0 and unit > 0 else None
     for g in plan["grupos"]:
         total = 0.0
         alguno = False
@@ -725,9 +875,137 @@ def _mover_lineas_rpc(sb, filas: List[dict]) -> bool:
         return True
     except Exception as exc:
         if _rpc_ausente(exc):
-            _log.info("Sin función almacen_agrupar_mover_lineas; se mueven las líneas una a una.")
+            _log.info("Sin función almacen_agrupar_mover_lineas; se mueven las líneas en un solo lote.")
             return False
         raise
+
+
+def _upsert_lineas(sb, filas: List[dict]) -> None:
+    """Un upsert por lote. PostgREST solo actualiza id, solicitud y número."""
+    payload = []
+    for fila in filas or []:
+        item_id = fila.get("item_id") if fila.get("item_id") not in (None, "") else fila.get("id")
+        sid = fila.get("solicitud_id")
+        numero = fila.get("numero_linea")
+        if item_id in (None, "") or sid in (None, "") or not numero:
+            continue
+        payload.append({
+            "id": int(item_id),
+            "solicitud_id": int(sid),
+            "numero_linea": int(numero),
+        })
+    for chunk in _trozos(payload, 200):
+        (
+            sb.table("almacen_solicitud_item")
+            .upsert(chunk, on_conflict="id", default_to_null=False)
+            .execute()
+        )
+
+
+def _mover_lineas_bloque(sb, filas: List[dict]) -> None:
+    if not filas:
+        return
+    if _mover_lineas_rpc(sb, filas):
+        return
+    _upsert_lineas(sb, filas)
+
+
+def _reasignar_mensajes_bloque(sb, filas: List[dict]) -> None:
+    """Los mensajes que citan la línea siguen con ella. Una lectura y un update por destino."""
+    dest_por_item: Dict[int, int] = {}
+    for fila in filas or []:
+        try:
+            dest_por_item[int(fila["item_id"])] = int(fila["solicitud_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+    if not dest_por_item:
+        return
+    mensajes: List[dict] = []
+    try:
+        for chunk in _trozos(list(dest_por_item), 120):
+            mensajes.extend(
+                sb.table("almacen_solicitud_mensaje")
+                .select("id, solicitud_item_id")
+                .in_("solicitud_item_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+    except Exception as exc:
+        if _objeto_ausente(exc):
+            return
+        raise
+    por_dest: Dict[int, List[int]] = {}
+    for row in mensajes:
+        try:
+            mid = int(row["id"])
+            item_id = int(row["solicitud_item_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        dest = dest_por_item.get(item_id)
+        if dest:
+            por_dest.setdefault(dest, []).append(mid)
+    for dest, ids in por_dest.items():
+        for chunk in _trozos(ids, 120):
+            (
+                sb.table("almacen_solicitud_mensaje")
+                .update({"solicitud_id": int(dest)})
+                .in_("id", chunk)
+                .execute()
+            )
+            try:
+                (
+                    sb.table("almacen_solicitud_mensaje_destinatario")
+                    .update({"solicitud_id": int(dest)})
+                    .in_("mensaje_id", chunk)
+                    .execute()
+                )
+            except Exception as exc:
+                if not _objeto_ausente(exc):
+                    raise
+
+
+def _aplicar_cabeceras(sb, cambios: List[dict]) -> None:
+    if not cambios:
+        return
+
+    def uno(cambio: dict) -> None:
+        (
+            sb.table("almacen_solicitud")
+            .update(cambio["payload"])
+            .eq("id", int(cambio["solicitud_id"]))
+            .execute()
+        )
+
+    if len(cambios) < 24:
+        for cambio in cambios:
+            uno(cambio)
+        return
+    errores: List[BaseException] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futuros = [pool.submit(uno, cambio) for cambio in cambios]
+        for fut in as_completed(futuros):
+            exc = fut.exception()
+            if exc:
+                errores.append(exc)
+    if errores:
+        raise errores[0]
+
+
+def _restaurar_cabeceras(sb, antes: Dict[int, dict], tocadas: List[int]) -> None:
+    for sid in tocadas or []:
+        previo = antes.get(int(sid)) or {}
+        payload = {}
+        if "estado" in previo:
+            payload["estado"] = previo.get("estado")
+        if "titulo" in previo:
+            payload["titulo"] = previo.get("titulo")
+        if not payload:
+            continue
+        try:
+            sb.table("almacen_solicitud").update(payload).eq("id", int(sid)).execute()
+        except Exception:
+            _log.exception("No se pudo devolver el nombre de la solicitud %s", sid)
 
 
 def _reasignar_mensajes_linea(sb, item_id: int, dest_id: int) -> None:
@@ -792,20 +1070,119 @@ def vista_publica(plan: dict, *, ver_economicos: bool) -> dict:
         "congeladas": plan["congeladas"],
         "ver_economicos": ver_economicos,
         "resumen_accion": frase_accion_agrupar(plan),
+        "lineas_total": plan.get("lineas_total"),
     }
+
+
+def diagnostico_actual(
+    solicitudes: List[dict],
+    items: List[dict],
+    solicitudes_con_oc: Optional[set] = None,
+) -> dict:
+    """Estado actual: mezclas, vacías y títulos que no coinciden con el proveedor."""
+    congeladas = {int(x) for x in (solicitudes_con_oc or set()) if x}
+    por_sol: Dict[int, List[dict]] = {}
+    lineas_total = 0
+    for it in items or []:
+        try:
+            sid = int(it.get("solicitud_id") or 0)
+            iid = int(it.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not sid or not iid:
+            continue
+        lineas_total += 1
+        if sid in congeladas:
+            continue
+        por_sol.setdefault(sid, []).append(it)
+    por_id: Dict[int, dict] = {}
+    for sol in solicitudes or []:
+        try:
+            por_id[int(sol["id"])] = sol
+        except (TypeError, ValueError, KeyError):
+            continue
+    mezcladas = []
+    vacias = []
+    titulos = []
+    for sid, sol in por_id.items():
+        if sid in congeladas:
+            continue
+        its = por_sol.get(sid) or []
+        if not its:
+            vacias.append({
+                "solicitud_id": sid,
+                "consecutivo": sol.get("consecutivo"),
+                "titulo": sol.get("titulo") or "",
+            })
+            continue
+        vistos: List[str] = []
+        claves = set()
+        for it in its:
+            b = bucket_de_linea(it)
+            claves.add(b["clave"])
+            if b["proveedor"] not in vistos:
+                vistos.append(b["proveedor"])
+        if len(claves) > 1:
+            mezcladas.append({
+                "solicitud_id": sid,
+                "consecutivo": sol.get("consecutivo"),
+                "titulo": sol.get("titulo") or "",
+                "proveedores": vistos,
+            })
+        esperado = titulo_para_solicitud(sol, its)
+        if (sol.get("titulo") or "") != esperado:
+            titulos.append({
+                "solicitud_id": sid,
+                "consecutivo": sol.get("consecutivo"),
+                "titulo": sol.get("titulo") or "",
+                "esperado": esperado,
+            })
+    return {
+        "lineas_total": lineas_total,
+        "mezcladas": mezcladas,
+        "vacias": vacias,
+        "titulos_distintos": titulos,
+    }
+
+
+def frase_diagnostico(diag: dict) -> str:
+    n = len(diag.get("mezcladas") or [])
+    v = len(diag.get("vacias") or [])
+    t = len(diag.get("titulos_distintos") or [])
+    total = int(diag.get("lineas_total") or 0)
+    if n == 0 and t == 0:
+        extra = f" {v} solicitud(es) están vacías." if v else ""
+        return f"Ninguna solicitud libre mezcla proveedores.{extra} Hay {total} líneas en total."
+    return (
+        f"Hay {n} solicitud(es) con líneas de más de un proveedor, "
+        f"{v} vacía(s) y {t} con el nombre distinto al de sus líneas. "
+        f"El total de líneas es {total}."
+    )
 
 
 def vista_previa_agrupacion(contrato_id: int, *, ver_economicos: bool = False) -> dict:
     from almacen_service import _sb
 
+    t0 = time.perf_counter()
     sb = _sb()
     sols = _select_head(sb, contrato_id)
     ids = [int(s["id"]) for s in sols if s.get("id")]
     items = _select_items(sb, ids)
     oc_ids = _ids_con_oc(sb, contrato_id)
+    hidratar_proveedor_lineas(sb, items)
     plan = planificar_agrupacion(sols, items, oc_ids)
-    _anexar_totales(sb, plan, items, ver_economicos=ver_economicos)
-    return vista_publica(plan, ver_economicos=ver_economicos)
+    _anexar_totales(plan, items, ver_economicos=ver_economicos)
+    publica = vista_publica(plan, ver_economicos=ver_economicos)
+    diag = diagnostico_actual(sols, items, oc_ids)
+    publica["diagnostico"] = {
+        "mezcladas": diag["mezcladas"],
+        "vacias": diag["vacias"],
+        "titulos_distintos": diag["titulos_distintos"],
+        "lineas_total": diag["lineas_total"],
+    }
+    publica["diagnostico_texto"] = frase_diagnostico(diag)
+    publica["duracion_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    return publica
 
 
 def _crear_solicitud_vacia(sb, contrato_id: int, user_id: int) -> dict:
@@ -863,6 +1240,7 @@ def ejecutar_agrupacion(
     """Mueve líneas entre solicitudes existentes. Crea solo las que falten, si se confirmó."""
     from almacen_service import _sb
 
+    t0 = time.perf_counter()
     sb = _sb()
     sols = _select_head(sb, contrato_id)
     ids = [int(s["id"]) for s in sols if s.get("id")]
@@ -871,7 +1249,12 @@ def ejecutar_agrupacion(
     bloqueo = _adquirir_bloqueo(sb, contrato_id, user_id, elegibles)
     try:
         items = _select_items(sb, ids)
+        hidratar_proveedor_lineas(sb, items)
         plan = planificar_agrupacion(sols, items, oc_ids)
+        if plan["lineas_en_grupos"] != plan["lineas_libres"]:
+            raise ValueError(
+                "Agrupar se detuvo porque el conteo de líneas no cuadra. No se movió ninguna."
+            )
         tope = max(0, int(crear_hasta or 0))
         creadas: List[dict] = []
         while plan["por_crear"] > 0:
@@ -899,6 +1282,11 @@ def ejecutar_agrupacion(
             })
             sols.append(nueva)
             plan = planificar_agrupacion(sols, items, oc_ids)
+        if plan["lineas_en_grupos"] != plan["lineas_libres"]:
+            _descartar_solicitudes_creadas(sb, creadas)
+            raise ValueError(
+                "Agrupar se detuvo porque el conteo de líneas no cuadra. No se movió ninguna."
+            )
 
         if plan["sin_cambios"] and not creadas:
             publica = vista_publica(plan, ver_economicos=ver_economicos)
@@ -908,6 +1296,7 @@ def ejecutar_agrupacion(
                 "resumen": "Sin cambios. Las solicitudes ya estaban agrupadas.",
                 "movimientos": [],
                 "ajustes": [],
+                "duracion_ms": round((time.perf_counter() - t0) * 1000, 1),
             })
             return publica
 
@@ -949,20 +1338,8 @@ def ejecutar_agrupacion(
 
         movidos = []
         try:
-            uso_rpc = _mover_lineas_rpc(sb, filas_rpc)
-            if not uso_rpc:
-                for fila in filas_rpc:
-                    (
-                        sb.table("almacen_solicitud_item")
-                        .update({
-                            "solicitud_id": int(fila["solicitud_id"]),
-                            "numero_linea": int(fila["numero_linea"]),
-                        })
-                        .eq("id", int(fila["item_id"]))
-                        .execute()
-                    )
-            for fila in filas_rpc:
-                _reasignar_mensajes_linea(sb, int(fila["item_id"]), int(fila["solicitud_id"]))
+            _mover_lineas_bloque(sb, filas_rpc)
+            _reasignar_mensajes_bloque(sb, filas_rpc)
             for mov in plan["movimientos"]:
                 dest_id = mov["despues"].get("solicitud_id")
                 if not dest_id:
@@ -986,45 +1363,47 @@ def ejecutar_agrupacion(
             _descartar_solicitudes_creadas(sb, creadas)
             raise ValueError(mensaje_error_agrupar(exc)) from exc
 
+        cambios_cabecera = []
         try:
             for g in plan["grupos"]:
                 sid = g.get("solicitud_id")
                 if not sid:
                     continue
                 actual = por_id.get(int(sid)) or {}
-                if (actual.get("estado") or "") == g["estado"]:
-                    continue
-                payload = _payload_estado(g["estado"], user_id, actual)
-                sb.table("almacen_solicitud").update(payload).eq("id", int(sid)).execute()
-                actual.update(payload)
+                payload: Dict[str, Any] = {}
+                if (actual.get("estado") or "") != g["estado"]:
+                    payload.update(_payload_estado(g["estado"], user_id, actual))
+                titulo = g.get("titulo") or ""
+                if titulo and (actual.get("titulo") or "") != titulo:
+                    payload["titulo"] = titulo
+                if payload:
+                    cambios_cabecera.append({"solicitud_id": int(sid), "payload": payload})
+                    actual.update(payload)
 
             for vac in plan["vacias"]:
                 sid = int(vac["solicitud_id"])
                 actual = por_id.get(sid) or {}
-                if (actual.get("estado") or "") == "borrador" and not (actual.get("motivo_rechazo") or ""):
-                    continue
-                payload = _payload_estado("borrador", user_id, actual)
-                sb.table("almacen_solicitud").update(payload).eq("id", sid).execute()
-                actual.update(payload)
+                payload = {}
+                if (actual.get("estado") or "") != "borrador" or (actual.get("motivo_rechazo") or ""):
+                    payload.update(_payload_estado("borrador", user_id, actual))
+                titulo = vac.get("titulo") or ""
+                if titulo and (actual.get("titulo") or "") != titulo:
+                    payload["titulo"] = titulo
+                if payload:
+                    cambios_cabecera.append({"solicitud_id": sid, "payload": payload})
+                    actual.update(payload)
 
-            tocadas = set()
-            for g in plan["grupos"]:
-                if g.get("solicitud_id"):
-                    tocadas.add(int(g["solicitud_id"]))
-            for vac in plan["vacias"]:
-                tocadas.add(int(vac["solicitud_id"]))
-            for creada in creadas:
-                tocadas.add(int(creada["id"]))
+            _aplicar_cabeceras(sb, cambios_cabecera)
 
             ajustes = []
-            for sid in sorted(tocadas):
+            for cambio in cambios_cabecera:
+                sid = int(cambio["solicitud_id"])
                 previo = antes_cabecera.get(sid) or {}
+                actual = por_id.get(sid) or {}
                 titulo_antes = previo.get("titulo")
                 estado_antes = previo.get("estado")
-                nuevo = sincronizar_titulo_solicitud(sb, sid)
-                actual = por_id.get(sid) or {}
-                estado_despues = actual.get("estado") or estado_antes
-                titulo_despues = nuevo or titulo_antes
+                titulo_despues = actual.get("titulo") if "titulo" in (cambio["payload"]) else titulo_antes
+                estado_despues = actual.get("estado") if "estado" in cambio["payload"] else estado_antes
                 if titulo_despues != titulo_antes or estado_despues != estado_antes:
                     ajustes.append({
                         "solicitud_id": sid,
@@ -1056,7 +1435,7 @@ def ejecutar_agrupacion(
                     partes.append(f"{n_vac} solicitud(es) quedaron vacías y se conservan.")
                 resumen = " ".join(partes)
 
-            _anexar_totales(sb, plan, items, ver_economicos=ver_economicos)
+            _anexar_totales(plan, items, ver_economicos=ver_economicos)
             publica = vista_publica(plan, ver_economicos=ver_economicos)
             publica.update({
                 "creadas": n_new,
@@ -1068,11 +1447,489 @@ def ejecutar_agrupacion(
                 "movimientos": movidos,
                 "ajustes": ajustes,
                 "sin_cambios": n_mov == 0 and n_new == 0 and not ajustes,
+                "ejecucion_id": uuid.uuid4().hex,
+                "duracion_ms": round((time.perf_counter() - t0) * 1000, 1),
             })
             return publica
         except Exception as exc:
             _restaurar_lineas(sb, originales)
+            _restaurar_cabeceras(
+                sb,
+                antes_cabecera,
+                [int(c["solicitud_id"]) for c in cambios_cabecera],
+            )
             _descartar_solicitudes_creadas(sb, creadas)
             raise ValueError(mensaje_error_agrupar(exc)) from exc
+    finally:
+        _liberar_bloqueo(sb, contrato_id, user_id)
+
+
+def _como_dict(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _leer_logs_agrupar(sb, contrato_id: int) -> List[dict]:
+    try:
+        rows = (
+            sb.table("logs")
+            .select(
+                "id, accion, entidad_tipo, entidad_id, detalle, valor_anterior, "
+                "valor_nuevo, created_at, contrato_id"
+            )
+            .eq("modulo", "ALMACEN")
+            .eq("contrato_id", int(contrato_id))
+            .in_("accion", ["AGRUPAR", "AGRUPAR_DESHACER"])
+            .order("created_at", desc=True)
+            .limit(500)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        raise ValueError("No se pudo leer el historial de Agrupar.") from exc
+    rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    return rows
+
+
+def _cluster_ultima_ejecucion(rows: List[dict]) -> List[dict]:
+    """La última Agrupar. Con ejecucion_id, solo esa. Sin él, la ráfaga de los últimos 3 minutos."""
+    if not rows or (rows[0].get("accion") or "") != "AGRUPAR":
+        return []
+    eid = (_como_dict(rows[0].get("detalle")).get("ejecucion_id") or "").strip()
+    ancla = _parse_expira(rows[0].get("created_at"))
+    out = []
+    for row in rows:
+        if (row.get("accion") or "") != "AGRUPAR":
+            break
+        este = (_como_dict(row.get("detalle")).get("ejecucion_id") or "").strip()
+        if eid:
+            if este != eid:
+                break
+        else:
+            if este:
+                break
+            ts = _parse_expira(row.get("created_at"))
+            if ancla and ts and abs((ancla - ts).total_seconds()) > 180:
+                break
+        out.append(row)
+    return out
+
+
+def _etiqueta_solicitud(sol: Optional[dict], sid) -> str:
+    consec = (sol or {}).get("consecutivo")
+    if consec not in (None, ""):
+        return f"#{consec}"
+    return f"id {sid}"
+
+
+def _plan_deshacer(sb, contrato_id: int) -> dict:
+    """Qué devolvería Deshacer. No escribe."""
+    t0 = time.perf_counter()
+    rows = _leer_logs_agrupar(sb, contrato_id)
+
+    def cerrar(plan: dict) -> dict:
+        plan["duracion_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        return plan
+
+    vacio = {
+        "puede": False,
+        "bloqueos": [],
+        "lineas": 0,
+        "solicitudes": 0,
+        "creadas": [],
+        "ejemplos": [],
+        "movimientos": [],
+        "ajustes": [],
+        "ejecucion_origen": None,
+        "resumen": "No hay una agrupación registrada para deshacer.",
+    }
+    if not rows:
+        return cerrar(vacio)
+    if (rows[0].get("accion") or "") == "AGRUPAR_DESHACER":
+        vacio["resumen"] = (
+            "La última agrupación ya se deshizo. Solo se puede deshacer la más reciente."
+        )
+        return cerrar(vacio)
+    cluster = _cluster_ultima_ejecucion(rows)
+    if not cluster:
+        return cerrar(vacio)
+
+    eid = (_como_dict(cluster[0].get("detalle")).get("ejecucion_id") or "").strip() or None
+    movimientos = []
+    ajustes = []
+    creadas = []
+    vistos_items = set()
+    vistos_ajustes = set()
+    bloqueos: List[str] = []
+    for row in cluster:
+        tipo = (row.get("entidad_tipo") or "").strip()
+        det = _como_dict(row.get("detalle"))
+        antes = _como_dict(row.get("valor_anterior"))
+        despues = _como_dict(row.get("valor_nuevo"))
+        if tipo == "solicitud_item":
+            item_id = _numero_entero(row.get("entidad_id"))
+            if not item_id or item_id in vistos_items:
+                continue
+            vistos_items.add(item_id)
+            origen_sid = _numero_entero(antes.get("solicitud_id"))
+            origen_num = _numero_entero(antes.get("numero_linea"))
+            destino_sid = _numero_entero(despues.get("solicitud_id"))
+            destino_num = _numero_entero(despues.get("numero_linea"))
+            if not origen_sid or not origen_num or not destino_sid or not destino_num:
+                bloqueos.append(
+                    f"La línea {item_id} no tiene en el historial la solicitud y el número "
+                    "de origen y de destino. No se puede comprobar que sigue donde Agrupar "
+                    "la dejó, así que no se deshace nada."
+                )
+            movimientos.append({
+                "item_id": item_id,
+                "origen_sid": origen_sid,
+                "origen_num": origen_num,
+                "destino_sid": destino_sid,
+                "destino_num": destino_num,
+                "origen_titulo": antes.get("titulo"),
+                "origen_estado": antes.get("estado"),
+                "destino_titulo": despues.get("titulo"),
+                "destino_estado": despues.get("estado"),
+            })
+        elif tipo == "solicitud" and "creada" in (det.get("motivo") or "").lower():
+            cid = _numero_entero(despues.get("id")) or _numero_entero(row.get("entidad_id"))
+            if cid and cid not in creadas:
+                creadas.append(cid)
+        elif tipo == "solicitud":
+            sid = _numero_entero(row.get("entidad_id"))
+            if not sid or sid in vistos_ajustes:
+                continue
+            if "estado" not in antes and "titulo" not in antes:
+                continue
+            vistos_ajustes.add(sid)
+            ajustes.append({
+                "solicitud_id": sid,
+                "estado": antes.get("estado"),
+                "titulo": antes.get("titulo"),
+            })
+
+    sols = _select_head(sb, contrato_id)
+    por_sol = {int(s["id"]): s for s in sols if s.get("id")}
+
+    def etiqueta(sid) -> str:
+        return _etiqueta_solicitud(por_sol.get(int(sid)) if sid else None, sid)
+
+    tocadas = set()
+    for mov in movimientos:
+        if mov["origen_sid"]:
+            tocadas.add(int(mov["origen_sid"]))
+        if mov["destino_sid"]:
+            tocadas.add(int(mov["destino_sid"]))
+    for cid in creadas:
+        tocadas.add(int(cid))
+    for aj in ajustes:
+        tocadas.add(int(aj["solicitud_id"]))
+
+    oc_ids = _ids_con_oc(sb, contrato_id)
+    con_oc = sorted(tocadas & oc_ids)
+    if con_oc:
+        nombres = ", ".join(etiqueta(sid) for sid in con_oc)
+        bloqueos.append(
+            f"No se puede deshacer: la solicitud {nombres} ya tiene una orden de compra. "
+            "No se revierte una parte."
+        )
+
+    item_ids = [m["item_id"] for m in movimientos]
+    actuales = _select_items_por_id(sb, item_ids) if item_ids else []
+    por_item = {int(r["id"]): r for r in actuales if r.get("id")}
+    en_sols = _select_items(sb, list(tocadas)) if tocadas else []
+    restauran = {m["item_id"] for m in movimientos}
+    ocupante: Dict[tuple, int] = {}
+    for it in en_sols:
+        sid = _numero_entero(it.get("solicitud_id"))
+        num = _numero_entero(it.get("numero_linea"))
+        iid = _numero_entero(it.get("id"))
+        if sid and num and iid:
+            ocupante[(sid, num)] = iid
+
+    objetivos: Dict[tuple, int] = {}
+    for mov in movimientos:
+        it = por_item.get(mov["item_id"])
+        if not it:
+            bloqueos.append(f"La línea {mov['item_id']} ya no existe. No se deshace nada.")
+            continue
+        if not mov["destino_sid"] or not mov["destino_num"]:
+            continue
+        if (
+            _numero_entero(it.get("solicitud_id")) != int(mov["destino_sid"])
+            or _numero_entero(it.get("numero_linea")) != int(mov["destino_num"])
+        ):
+            bloqueos.append(
+                f"La línea {mov['item_id']} cambió después de agrupar: ahora está en la "
+                f"solicitud {etiqueta(it.get('solicitud_id'))}, línea {it.get('numero_linea')}. "
+                "No se deshace una parte."
+            )
+        if not mov["origen_sid"] or not mov["origen_num"]:
+            continue
+        key = (int(mov["origen_sid"]), int(mov["origen_num"]))
+        if key in objetivos:
+            bloqueos.append(
+                "Dos líneas volverían al mismo número. No se deshace nada."
+            )
+        else:
+            objetivos[key] = mov["item_id"]
+        occ = ocupante.get(key)
+        if occ and occ not in restauran:
+            bloqueos.append(
+                f"El número {mov['origen_num']} de la solicitud {etiqueta(mov['origen_sid'])} "
+                "ya lo usa otra línea que no salió de esta agrupación. No se deshace nada."
+            )
+
+    for cid in creadas:
+        quedan = [
+            it for it in en_sols
+            if _numero_entero(it.get("solicitud_id")) == int(cid)
+            and _numero_entero(it.get("id")) not in restauran
+        ]
+        if quedan:
+            bloqueos.append(
+                f"La solicitud {etiqueta(cid)} creada al agrupar tiene otras líneas. "
+                "No se deshace nada."
+            )
+        try:
+            msgs = (
+                sb.table("almacen_solicitud_mensaje")
+                .select("id, solicitud_item_id")
+                .eq("solicitud_id", int(cid))
+                .limit(20)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            if _objeto_ausente(exc):
+                msgs = []
+            else:
+                raise
+        ajenos = [
+            m for m in msgs
+            if _numero_entero(m.get("solicitud_item_id")) not in restauran
+        ]
+        if ajenos:
+            bloqueos.append(
+                f"La solicitud {etiqueta(cid)} creada al agrupar tiene mensajes que no "
+                "viajan con las líneas de esa ejecución. No se deshace nada."
+            )
+
+    # Quitar bloqueos repetidos, conservando el orden.
+    unicos = []
+    ya = set()
+    for texto in bloqueos:
+        if texto in ya:
+            continue
+        ya.add(texto)
+        unicos.append(texto)
+    bloqueos = unicos
+
+    ejemplos = []
+    for mov in movimientos[:12]:
+        ejemplos.append({
+            "item_id": mov["item_id"],
+            "desde": etiqueta(mov["destino_sid"]),
+            "hacia": etiqueta(mov["origen_sid"]),
+            "numero_actual": mov["destino_num"],
+            "numero_original": mov["origen_num"],
+        })
+    solicitudes_n = len({
+        *(m["origen_sid"] for m in movimientos if m["origen_sid"]),
+        *(m["destino_sid"] for m in movimientos if m["destino_sid"]),
+        *(a["solicitud_id"] for a in ajustes),
+    })
+    puede = not bloqueos and bool(movimientos or ajustes or creadas)
+    if bloqueos:
+        resumen = bloqueos[0] if len(bloqueos) == 1 else (
+            "No se puede deshacer esta agrupación. " + " ".join(bloqueos)
+        )
+    elif not puede:
+        resumen = "Esa agrupación no dejó movimientos que se puedan devolver."
+    else:
+        resumen = (
+            f"Se devolverían {len(movimientos)} línea(s) a su solicitud y número originales"
+            f" y se restaurarían {len(ajustes)} solicitud(es)."
+        )
+        if creadas:
+            resumen += (
+                f" Se eliminarían {len(creadas)} solicitud(es) creadas por esa agrupación."
+            )
+        resumen += " El total de líneas no cambia."
+    return cerrar({
+        "puede": puede,
+        "bloqueos": bloqueos,
+        "lineas": len(movimientos),
+        "solicitudes": solicitudes_n,
+        "creadas": [
+            {"id": cid, "consecutivo": (por_sol.get(cid) or {}).get("consecutivo")}
+            for cid in creadas
+        ],
+        "ejemplos": ejemplos,
+        "movimientos": movimientos,
+        "ajustes": ajustes,
+        "ejecucion_origen": eid,
+        "resumen": resumen,
+        "cabeceras_actuales": {
+            sid: {
+                "estado": (por_sol.get(sid) or {}).get("estado"),
+                "titulo": (por_sol.get(sid) or {}).get("titulo"),
+            }
+            for sid in tocadas
+            if sid in por_sol
+        },
+    })
+
+
+def vista_previa_deshacer(contrato_id: int) -> dict:
+    from almacen_service import _sb
+
+    plan = _plan_deshacer(_sb(), contrato_id)
+    return {
+        "puede": plan["puede"],
+        "bloqueos": plan["bloqueos"],
+        "lineas": plan["lineas"],
+        "solicitudes": plan["solicitudes"],
+        "creadas": plan["creadas"],
+        "ejemplos": plan["ejemplos"],
+        "ejecucion_origen": plan["ejecucion_origen"],
+        "resumen": plan["resumen"],
+        "duracion_ms": plan["duracion_ms"],
+    }
+
+
+def ejecutar_deshacer(contrato_id: int, user_id: int, *, confirmar: bool = False) -> dict:
+    """Devuelve la última Agrupar. Todo o nada, y solo si nada cambió después."""
+    if not confirmar:
+        raise ValueError("Confirme el resumen antes de deshacer la agrupación.")
+    from almacen_service import _sb
+
+    t0 = time.perf_counter()
+    sb = _sb()
+    plan = _plan_deshacer(sb, contrato_id)
+    if not plan["puede"]:
+        raise ValueError(plan["resumen"])
+    tocadas = []
+    for mov in plan["movimientos"]:
+        if mov["origen_sid"]:
+            tocadas.append(int(mov["origen_sid"]))
+        if mov["destino_sid"]:
+            tocadas.append(int(mov["destino_sid"]))
+    for creada in plan["creadas"]:
+        tocadas.append(int(creada["id"]))
+    bloqueo = _adquirir_bloqueo(sb, contrato_id, user_id, list(dict.fromkeys(tocadas)))
+    try:
+        plan = _plan_deshacer(sb, contrato_id)
+        if not plan["puede"]:
+            raise ValueError(plan["resumen"])
+        ida = [
+            {
+                "item_id": mov["item_id"],
+                "solicitud_id": mov["origen_sid"],
+                "numero_linea": mov["origen_num"],
+            }
+            for mov in plan["movimientos"]
+        ]
+        vuelta = [
+            {
+                "item_id": mov["item_id"],
+                "solicitud_id": mov["destino_sid"],
+                "numero_linea": mov["destino_num"],
+            }
+            for mov in plan["movimientos"]
+        ]
+        cabeceras = []
+        for aj in plan["ajustes"]:
+            payload: Dict[str, Any] = {}
+            if "estado" in aj:
+                payload["estado"] = aj.get("estado")
+            if "titulo" in aj:
+                payload["titulo"] = aj.get("titulo")
+            if payload:
+                cabeceras.append({"solicitud_id": int(aj["solicitud_id"]), "payload": payload})
+        try:
+            _mover_lineas_bloque(sb, ida)
+            _reasignar_mensajes_bloque(sb, ida)
+            _aplicar_cabeceras(sb, cabeceras)
+            for creada in plan["creadas"]:
+                cid = int(creada["id"])
+                quedan = _select_items(sb, [cid])
+                if quedan:
+                    raise ValueError(
+                        "La solicitud creada al agrupar no quedó vacía. No se deshace nada."
+                    )
+                sb.table("almacen_solicitud").delete().eq("id", cid).execute()
+        except Exception as exc:
+            try:
+                _mover_lineas_bloque(sb, vuelta)
+            except Exception:
+                _log.exception("No se pudieron devolver las líneas tras fallar Deshacer")
+            actuales = plan.get("cabeceras_actuales") or {}
+            _restaurar_cabeceras(
+                sb,
+                {int(k): v for k, v in actuales.items()},
+                [int(c["solicitud_id"]) for c in cabeceras],
+            )
+            if isinstance(exc, ValueError) and "No se deshace" in str(exc):
+                raise
+            raise ValueError(
+                "No se pudo deshacer la agrupación. No quedó ningún cambio aplicado."
+            ) from exc
+        n = len(plan["movimientos"])
+        resumen = (
+            f"Se devolvieron {n} línea(s) a su solicitud y número originales"
+            f" y se restauraron {len(plan['ajustes'])} solicitud(es)."
+        )
+        if plan["creadas"]:
+            resumen += f" Se eliminaron {len(plan['creadas'])} solicitud(es) creadas por Agrupar."
+        return {
+            "puede": True,
+            "deshecho": True,
+            "resumen": resumen,
+            "lineas": n,
+            "solicitudes": plan["solicitudes"],
+            "creadas": plan["creadas"],
+            "ejecucion_origen": plan["ejecucion_origen"],
+            "ejecucion_id": uuid.uuid4().hex,
+            "bloqueo_persistido": bloqueo,
+            "duracion_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "movimientos": [
+                {
+                    "item_id": mov["item_id"],
+                    "antes": {
+                        "solicitud_id": mov["destino_sid"],
+                        "numero_linea": mov["destino_num"],
+                        "titulo": mov.get("destino_titulo"),
+                        "estado": mov.get("destino_estado"),
+                    },
+                    "despues": {
+                        "solicitud_id": mov["origen_sid"],
+                        "numero_linea": mov["origen_num"],
+                        "titulo": mov.get("origen_titulo"),
+                        "estado": mov.get("origen_estado"),
+                    },
+                }
+                for mov in plan["movimientos"]
+            ],
+            "ajustes": [
+                {
+                    "solicitud_id": aj["solicitud_id"],
+                    "antes": (plan.get("cabeceras_actuales") or {}).get(aj["solicitud_id"])
+                    or (plan.get("cabeceras_actuales") or {}).get(str(aj["solicitud_id"])),
+                    "despues": {"estado": aj.get("estado"), "titulo": aj.get("titulo")},
+                }
+                for aj in plan["ajustes"]
+            ],
+        }
     finally:
         _liberar_bloqueo(sb, contrato_id, user_id)
