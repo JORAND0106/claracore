@@ -2,6 +2,7 @@
 -- por el fallback legado_exclusivo (antes de la corrección de no-reemplazo).
 --
 -- Ejecutar en Supabase SQL editor o psql. Revisar resultados antes de UPDATE.
+-- Nota: en algunos entornos logs.detalle es text; se castea a jsonb donde hace falta.
 
 -- 1) Operaciones legado_exclusivo / bulk-subcontratista en logs.
 --    Columnas reales: modulo, entidad_tipo, entidad_id (no existe "entidad").
@@ -20,11 +21,24 @@ SELECT
 FROM public.logs
 WHERE modulo = 'PRESUPUESTO'
   AND (
-    entidad_tipo IN ('presupuesto_bulk_subcontratista', 'presupuesto_sub_redistribucion', 'presupuesto')
+    entidad_tipo IN (
+      'presupuesto_bulk_subcontratista',
+      'presupuesto_sub_redistribucion',
+      'presupuesto'
+    )
     OR detalle::text ILIKE '%legado_exclusivo%'
     OR detalle::text ILIKE '%legado_libre%'
-    OR (detalle->>'mode') IN ('legado_exclusivo', 'legado_libre', 'simple', 'redistribuir')
     OR detalle::text ILIKE '%presupuesto_bulk_subcontratista%'
+    OR (
+      detalle IS NOT NULL
+      AND detalle::text <> ''
+      AND (detalle::jsonb ->> 'mode') IN (
+        'legado_exclusivo',
+        'legado_libre',
+        'simple',
+        'redistribuir'
+      )
+    )
   )
 ORDER BY created_at DESC
 LIMIT 200;
