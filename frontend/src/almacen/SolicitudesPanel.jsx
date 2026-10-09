@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import SolicitudFormModal from './SolicitudFormModal'
 import SolicitudDetalleModal from './SolicitudDetalleModal'
 import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
-import OrdenCompraPdfClip from './OrdenCompraPdfClip'
+import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
+import AgruparSolicitudesModal from './AgruparSolicitudesModal'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
   solicitudPuedeReabrirOc,
@@ -52,6 +53,10 @@ export default function SolicitudesPanel({
   const [eliminarDevBusy, setEliminarDevBusy] = useState(false)
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SOLICITUDES_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
+  const [agrupar, setAgrupar] = useState(null)
+  const [agruparBusy, setAgruparBusy] = useState(false)
+  const [agruparError, setAgruparError] = useState('')
+  const [agruparResumen, setAgruparResumen] = useState('')
 
   const PAGE_SIZE = 80
   const puedeEliminarDev = puedeEliminarSolicitudDesarrollador(permisos)
@@ -137,6 +142,35 @@ export default function SolicitudesPanel({
     }
   }
 
+  const abrirAgrupar = async () => {
+    setAgruparBusy(true)
+    setAgruparError('')
+    setAgruparResumen('')
+    try {
+      const vista = await api.vistaPreviaAgruparSolicitudes()
+      setAgrupar(vista)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setAgruparBusy(false)
+    }
+  }
+
+  const confirmarAgrupar = async (body) => {
+    setAgruparBusy(true)
+    setAgruparError('')
+    try {
+      const r = await api.agruparSolicitudes(body)
+      setAgrupar(r)
+      setAgruparResumen(r?.resumen || 'Listo.')
+      reload()
+    } catch (e) {
+      setAgruparError(e.message)
+    } finally {
+      setAgruparBusy(false)
+    }
+  }
+
   const formModalOpen = creating || editId
 
   const cerrarFormModal = () => {
@@ -162,6 +196,18 @@ export default function SolicitudesPanel({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {permisos?.editar && (
+            <button
+              type="button"
+              style={ui.btnSecondary}
+              data-testid="agrupar-solicitudes"
+              disabled={agruparBusy}
+              onClick={abrirAgrupar}
+              title="Reúne las solicitudes sin OC por proveedor"
+            >
+              Agrupar
+            </button>
+          )}
           <button
             type="button"
             style={ui.btnSecondary}
@@ -207,7 +253,7 @@ export default function SolicitudesPanel({
             <thead>
               <tr>
                 <th style={{ ...ui.th, width: 44 }}>#</th>
-                <th style={{ ...ui.th, width: '16%' }}>Título</th>
+                <th style={{ ...ui.th, width: '24%' }}>Título</th>
                 <th style={{ ...ui.th, width: 96 }}>Estado</th>
                 <th style={{ ...ui.th, width: '12%' }}>Solicitante</th>
                 <th style={{ ...ui.th, width: '12%' }}>Aprobación</th>
@@ -225,6 +271,10 @@ export default function SolicitudesPanel({
             <tbody>
               {listaFiltrada.map((s) => {
                 const nItems = s.items_count != null ? s.items_count : (s.items || []).length
+                const sinInsumo = Number(s.lineas_sin_insumo) > 0
+                const vacia = nItems === 0
+                const fondo = sinInsumo ? '#e7e5e4' : 'transparent'
+                const fondoHover = sinInsumo ? '#d6d3d1' : ui.accentSoft
                 const cellEllipsis = {
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -233,14 +283,20 @@ export default function SolicitudesPanel({
                 return (
                 <tr
                   key={s.id}
-                  style={{ cursor: 'pointer' }}
+                  data-testid={sinInsumo ? 'solicitud-sin-insumo' : undefined}
+                  data-lineas-sin-insumo={sinInsumo ? String(s.lineas_sin_insumo) : undefined}
+                  style={{
+                    cursor: 'pointer',
+                    background: fondo,
+                    boxShadow: sinInsumo ? 'inset 4px 0 0 #57534e' : undefined,
+                  }}
                   onClick={() => abrirDetalle(s)}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = fondoHover }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = fondo }}
                 >
                   <td style={ui.tdNum} data-label="#">{s.consecutivo}</td>
                   <td
-                    style={{ ...ui.td, fontWeight: 600, ...cellEllipsis }}
+                    style={{ ...ui.td, fontWeight: 600, whiteSpace: 'normal', lineHeight: 1.35 }}
                     data-label="Título"
                     title={s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
                   >
@@ -262,6 +318,40 @@ export default function SolicitudesPanel({
                       </span>
                     )}
                     {s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
+                    {vacia && (
+                      <span
+                        data-testid="solicitud-vacia"
+                        title="Esta solicitud quedó sin líneas al agrupar y se conserva"
+                        style={{
+                          marginLeft: 6,
+                          background: '#f5f5f4',
+                          color: '#44403c',
+                          border: '1px solid #a8a29e',
+                          borderRadius: 10,
+                          padding: '0 6px',
+                          fontSize: 'var(--cc-xs)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        Vacía
+                      </span>
+                    )}
+                    {sinInsumo && (
+                      <span
+                        title={`${s.lineas_sin_insumo} línea(s) sin insumo asignado`}
+                        style={{
+                          marginLeft: 6,
+                          background: '#57534e',
+                          color: '#fff',
+                          borderRadius: 10,
+                          padding: '0 6px',
+                          fontSize: 'var(--cc-xs)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        Sin insumo · {s.lineas_sin_insumo}
+                      </span>
+                    )}
                   </td>
                   <td
                     style={{
@@ -272,7 +362,9 @@ export default function SolicitudesPanel({
                     }}
                     data-label="Estado"
                   >
-                    {ESTADO_SOLICITUD_LABEL[s.estado]}
+                    {s.oc_parcial || (s.estado === 'enviada' && solicitudTieneOrdenCompra(s))
+                      ? 'OC parcial'
+                      : ESTADO_SOLICITUD_LABEL[s.estado]}
                   </td>
                   <td
                     style={{ ...ui.td, ...cellEllipsis }}
@@ -304,21 +396,12 @@ export default function SolicitudesPanel({
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="OC" onClick={(e) => e.stopPropagation()}>
                     {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && permisos?.exportar
                       && solicitudOrdenesCompra(s).length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                          {solicitudOrdenesCompra(s).map((oc) => (
-                            <OrdenCompraPdfClip
-                              key={oc.id}
-                              ordenCompra={oc}
-                              compact
-                              puedeExportar
-                              title={
-                                oc.proveedor_nombre
-                                  ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
-                                  : undefined
-                              }
-                            />
-                          ))}
-                        </div>
+                        <SolicitudOcsPdfButton
+                          solicitudId={s.id}
+                          ordenes={solicitudOrdenesCompra(s)}
+                          compact
+                          puedeExportar
+                        />
                       ) : '—'}
                   </td>
                   <td
@@ -444,6 +527,22 @@ export default function SolicitudesPanel({
         <div style={{ textAlign: 'center', marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           Mostrando {lista.length} de {totalCount} solicitudes
         </div>
+      )}
+
+      {agrupar && (
+        <AgruparSolicitudesModal
+          vista={agrupar}
+          verEconomicos={verEconomicos}
+          busy={agruparBusy}
+          error={agruparError}
+          resumen={agruparResumen}
+          onCancel={() => {
+            setAgrupar(null)
+            setAgruparError('')
+            setAgruparResumen('')
+          }}
+          onConfirm={confirmarAgrupar}
+        />
       )}
 
       {filtrosOpen && (

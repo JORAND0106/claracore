@@ -77,6 +77,22 @@ def _solicitud_editable(estado: str) -> bool:
     return estado in ("borrador", "enviada", "rechazada")
 
 
+def _exigir_agrupacion_libre(contrato_id: int, solicitud_id: int, user_id: int) -> None:
+    """Otro usuario no edita la solicitud mientras Agrupar la tiene tomada."""
+    from almacen_agrupar import exigir_solicitud_libre
+
+    exigir_solicitud_libre(_sb(), contrato_id, solicitud_id, user_id)
+
+
+def _sincronizar_titulo_solicitud(sb, solicitud_id: int) -> None:
+    from almacen_agrupar import sincronizar_titulo_solicitud
+
+    try:
+        sincronizar_titulo_solicitud(sb, int(solicitud_id))
+    except Exception:
+        _log.exception("No se pudo actualizar el nombre de la solicitud %s", solicitud_id)
+
+
 def _norm_pk_id(pk) -> str:
     return str(pk or "").strip()
 
@@ -1299,20 +1315,28 @@ def _enrich_solicitud(
         sol["ordenes_compra"] = oc_rows
         sol["orden_compra"] = oc_rows[0]
         sol["tiene_orden_compra"] = True
-        if sol.get("estado") != "aprobada":
-            sb.table("almacen_solicitud").update({
-                "estado": "aprobada",
-            }).eq("id", sid).execute()
-            sol["estado"] = "aprobada"
         oc_item_ids = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in oc_rows])
         for it in sol["items"]:
             if int(it.get("id") or 0) in oc_item_ids:
                 it["en_orden_compra"] = True
                 it["estado_validacion"] = "aprobado"
+        fuera = lineas_fuera_de_oc(sol.get("items") or [], oc_item_ids)
+        sol["oc_parcial"] = bool(fuera)
+        if fuera and sol.get("estado") == "aprobada":
+            sb.table("almacen_solicitud").update({
+                "estado": "enviada",
+            }).eq("id", sid).execute()
+            sol["estado"] = "enviada"
+        elif not fuera and sol.get("estado") not in ("aprobada", "rechazada", "borrador"):
+            sb.table("almacen_solicitud").update({
+                "estado": "aprobada",
+            }).eq("id", sid).execute()
+            sol["estado"] = "aprobada"
     else:
         sol["ordenes_compra"] = []
         sol["orden_compra"] = None
         sol["tiene_orden_compra"] = False
+        sol["oc_parcial"] = False
 
     # Flag de corrección post-OC: disponible si alguna OC con líneas aún no tiene entradas.
     if sol.get("ordenes_compra"):
@@ -1452,15 +1476,19 @@ def _fetch_solicitud_items_resumen(sb, ids: List[int], *, ver_economicos: bool) 
         return []
     selects = (
         [
-            "id, solicitud_id, cantidad, valor_compra_unitario, insumo_id, "
+            "id, solicitud_id, estado_validacion, cantidad, valor_compra_unitario, insumo_id, "
             "proveedor_seleccionado_id, proveedor_seleccionado_nombre, "
             "cotizacion_numero_seleccionada, cotizacion_seleccionada_id",
-            "id, solicitud_id, cantidad, valor_compra_unitario, insumo_id, "
+            "id, solicitud_id, estado_validacion, cantidad, valor_compra_unitario, insumo_id, "
             "cotizacion_seleccionada_id",
-            "id, solicitud_id, cantidad, valor_compra_unitario, insumo_id",
+            "id, solicitud_id, estado_validacion, cantidad, valor_compra_unitario, insumo_id",
         ]
         if ver_economicos
-        else ["id, solicitud_id"]
+        else [
+            "id, solicitud_id, estado_validacion, insumo_id",
+            "id, solicitud_id, estado_validacion",
+            "id, solicitud_id",
+        ]
     )
     last_exc: Optional[Exception] = None
     for select in selects:
@@ -1597,8 +1625,33 @@ def _list_solicitudes_resumen(
             oc_by_sol.setdefault(sid, []).append(oc)
 
     flat_ocs = [oc for lst in oc_by_sol.values() for oc in lst]
+    en_item_por_sol: Dict[int, set] = {}
     if flat_ocs:
         _enriquecer_ocs_estado_entrada_salida(sb, flat_ocs)
+        oc_id_to_sol = {
+            int(oc["id"]): int(oc["solicitud_id"])
+            for oc in flat_ocs
+            if oc.get("id") and oc.get("solicitud_id")
+        }
+        if oc_id_to_sol:
+            oci_rows = (
+                sb.table("almacen_orden_compra_item")
+                .select("orden_compra_id, solicitud_item_id")
+                .in_("orden_compra_id", list(oc_id_to_sol))
+                .execute()
+                .data
+                or []
+            )
+            for r in oci_rows:
+                sid_oc = oc_id_to_sol.get(int(r.get("orden_compra_id") or 0))
+                iid = r.get("solicitud_item_id")
+                if sid_oc and iid:
+                    en_item_por_sol.setdefault(sid_oc, set()).add(int(iid))
+    items_por_sol: Dict[int, List[dict]] = {}
+    for it in item_rows:
+        sid_it = int(it.get("solicitud_id") or 0)
+        if sid_it:
+            items_por_sol.setdefault(sid_it, []).append(it)
 
     user_ids = []
     for r in rows:
@@ -1616,6 +1669,7 @@ def _list_solicitudes_resumen(
         sol = dict(r)
         sid = int(sol["id"])
         sol["items_count"] = item_counts.get(sid, 0)
+        sol["lineas_sin_insumo"] = _contar_lineas_sin_insumo(items_por_sol.get(sid) or [])
         sol["items"] = []  # grilla usa items_count; detalle carga enrich completo
         if ver_economicos:
             sol["valor_solicitud"] = valores.get(sid)
@@ -1624,18 +1678,25 @@ def _list_solicitudes_resumen(
             sol["ordenes_compra"] = oc_list
             sol["orden_compra"] = oc_list[0]
             sol["tiene_orden_compra"] = True
-            if sol.get("estado") != "aprobada":
-                sol["estado"] = "aprobada"
             sol["estado_entrada"] = _rollup_estados_parcial_total(
                 [oc.get("estado_entrada") for oc in oc_list]
             )
             sol["estado_salida"] = _rollup_estados_parcial_total(
                 [oc.get("estado_salida") for oc in oc_list]
             )
+            enlazados = en_item_por_sol.get(sid) or set()
+            parcial = bool(enlazados) and bool(lineas_fuera_de_oc(
+                items_por_sol.get(sid) or [],
+                enlazados,
+            ))
+            sol["oc_parcial"] = parcial
+            if not parcial and sol.get("estado") != "rechazada":
+                sol["estado"] = "aprobada"
         else:
             sol["ordenes_compra"] = []
             sol["orden_compra"] = None
             sol["tiene_orden_compra"] = False
+            sol["oc_parcial"] = False
             sol["estado_entrada"] = None
             sol["estado_salida"] = None
         if sol.get("created_by"):
@@ -2295,6 +2356,7 @@ def mapear_item_solicitud_gerencial(
     from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
 
     sb = _sb()
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "borrador", "rechazada", "aprobada"):
         raise ValueError("No se puede mapear ítems en el estado actual de la solicitud.")
@@ -2414,6 +2476,7 @@ def mapear_item_solicitud_gerencial(
     _update_solicitud_item_row(sb, int(item_id), patch)
     if not return_solicitud:
         return {"ok": True, "item_id": int(item_id)}
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
@@ -2425,6 +2488,7 @@ def mapear_items_bloque(
     body: dict,
 ) -> dict:
     """Asigna el mismo insumo a varias líneas. Las que no se pueden mapear se informan."""
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     ids: List[int] = []
     for raw in item_ids or []:
@@ -2490,6 +2554,7 @@ def aprobar_items_bloque(
     Aprueba las líneas que cumplen las condiciones vigentes.
     Las que no, quedan sin aprobar y se listan con el motivo.
     """
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "aprobada"):
@@ -2571,6 +2636,7 @@ def aprobar_items_bloque(
         sb.table("almacen_solicitud_item").update({
             "estado_validacion": "aprobado",
         }).in_("id", ok_ids).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return {
         "solicitud": get_solicitud(contrato_id, solicitud_id, ligera=True),
         "resultados": resultados,
@@ -2587,6 +2653,7 @@ def corregir_insumo_item_post_oc(
     """Excepción: corregir insumo de un ítem ya en OC, solo si la OC no tiene entradas."""
     from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
 
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] != "aprobada":
@@ -2760,6 +2827,7 @@ def corregir_insumo_item_post_oc(
     except Exception:
         _log.exception("No se pudo regenerar PDF de OC %s tras corrección de insumo", oc_id)
 
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
@@ -2821,6 +2889,7 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         except Exception:
             _log.exception("No se pudo revertir solicitud %s tras fallo de ítems", sid)
         raise
+    _sincronizar_titulo_solicitud(sb, sid)
     # Respuesta ligera: el formulario no necesita contexto/rentabilidad por línea.
     return get_solicitud(contrato_id, sid, ligera=True)
 
@@ -3329,6 +3398,7 @@ def agregar_lineas_post_oc(
     No modifica ni elimina líneas ya incluidas en la Orden de Compra.
     """
     sb = _sb()
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol.get("estado") != "aprobada":
         raise ValueError("Solo se pueden agregar líneas a solicitudes con OC generada (aprobadas).")
@@ -3383,12 +3453,76 @@ def agregar_lineas_post_oc(
     return result
 
 
+def _ids_item_seleccion(body: Optional[dict]) -> Optional[set]:
+    """None = todas las líneas. Conjunto vacío = el usuario no marcó proveedores."""
+    if not body or "item_ids" not in body or body.get("item_ids") is None:
+        return None
+    out = set()
+    for raw in body.get("item_ids") or []:
+        try:
+            out.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _contar_lineas_sin_insumo(items: List[dict]) -> int:
+    """Cero si el listado no trajo insumo_id: no marcar toda la grilla por un esquema viejo."""
+    if not items or not any("insumo_id" in it for it in items):
+        return 0
+    return sum(1 for it in items if not it.get("insumo_id"))
+
+
+def lineas_fuera_de_oc(items: List[dict], en_oc_ids) -> List[dict]:
+    """Líneas que todavía no están en una OC y no fueron rechazadas."""
+    en = {int(x) for x in (en_oc_ids or []) if x}
+    fuera = []
+    for it in items or []:
+        iid = it.get("id")
+        if not iid:
+            continue
+        if (it.get("estado_validacion") or "pendiente") == "rechazado":
+            continue
+        if int(iid) not in en:
+            fuera.append(it)
+    return fuera
+
+
+def _aplicar_estado_tras_generar_oc(sb, solicitud_id: int, user_id: int, oc_ids: List[int]) -> str:
+    """Aprobada solo cuando no queda ningún proveedor sin OC."""
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id, estado_validacion")
+        .eq("solicitud_id", solicitud_id)
+        .execute()
+        .data
+        or []
+    )
+    en = _solicitud_item_ids_en_ocs(sb, oc_ids) if oc_ids else set()
+    if lineas_fuera_de_oc(items, en):
+        sb.table("almacen_solicitud").update({
+            "estado": "enviada",
+            "motivo_rechazo": None,
+        }).eq("id", solicitud_id).execute()
+        _sincronizar_titulo_solicitud(sb, solicitud_id)
+        return "enviada"
+    sb.table("almacen_solicitud").update({
+        "estado": "aprobada",
+        "validada_at": _now_iso(),
+        "validada_by": user_id,
+        "motivo_rechazo": None,
+    }).eq("id", solicitud_id).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
+    return "aprobada"
+
+
 def append_aprobados_a_oc(
     contrato_id: int,
     solicitud_id: int,
     user_id: int,
     *,
     aprobar_pendientes: bool = True,
+    item_ids: Optional[List[int]] = None,
 ) -> dict:
     """
     Suma líneas aprobadas pendientes a la(s) OC de la solicitud.
@@ -3401,6 +3535,9 @@ def append_aprobados_a_oc(
         raise ValueError("No hay Orden de Compra asociada a esta solicitud.")
     oc_ids = [int(o["id"]) for o in ocs]
     en_oc = _solicitud_item_ids_en_ocs(sb, oc_ids)
+    seleccion = None if item_ids is None else {int(x) for x in item_ids}
+    if seleccion is not None and not seleccion:
+        raise ValueError("Seleccione al menos un proveedor para generar la orden de compra.")
 
     if aprobar_pendientes:
         pending = (
@@ -3423,7 +3560,7 @@ def append_aprobados_a_oc(
         )
         ids_pend = [
             int(r["id"]) for r in (pending + null_pending)
-            if int(r["id"]) not in en_oc
+            if int(r["id"]) not in en_oc and (seleccion is None or int(r["id"]) in seleccion)
         ]
         if ids_pend:
             sb.table("almacen_solicitud_item").update({
@@ -3444,6 +3581,8 @@ def append_aprobados_a_oc(
     for it in fresh:
         iid = int(it["id"])
         if iid in en_oc:
+            continue
+        if seleccion is not None and iid not in seleccion:
             continue
         ev = it.get("estado_validacion") or "pendiente"
         if ev != "aprobado":
@@ -3539,12 +3678,10 @@ def append_aprobados_a_oc(
             ocs.append({**created, "_key": key})
         lineas_total += len(items_g)
 
-    sb.table("almacen_solicitud").update({
-        "estado": "aprobada",
-        "validada_at": _now_iso(),
-        "validada_by": user_id,
-        "motivo_rechazo": None,
-    }).eq("id", solicitud_id).execute()
+    todas = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    _aplicar_estado_tras_generar_oc(
+        sb, solicitud_id, user_id, [int(o["id"]) for o in todas],
+    )
 
     result = get_solicitud(contrato_id, solicitud_id, ligera=True)
     primaria = ocs_afectadas[0]
@@ -3574,16 +3711,14 @@ def _marcar_solicitud_aprobada_y_respuesta_ocs(
     ocs_creadas: List[dict],
 ) -> dict:
     sb = _sb()
-    sb.table("almacen_solicitud").update({
-        "estado": "aprobada",
-        "validada_at": _now_iso(),
-        "validada_by": user_id,
-        "motivo_rechazo": None,
-    }).eq("id", solicitud_id).execute()
-
     sb.table("almacen_solicitud_item").update({
         "estado_validacion": "aprobado",
     }).eq("solicitud_id", solicitud_id).in_("id", [int(it["id"]) for it in items_aprobados]).execute()
+
+    todas = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    _aplicar_estado_tras_generar_oc(
+        sb, solicitud_id, user_id, [int(o["id"]) for o in todas],
+    )
 
     result = get_solicitud(contrato_id, solicitud_id, ligera=True)
     primaria = ocs_creadas[0]
@@ -3596,6 +3731,7 @@ def _marcar_solicitud_aprobada_y_respuesta_ocs(
 
 
 def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: dict) -> dict:
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     head = (
         sb.table("almacen_solicitud")
@@ -3614,23 +3750,19 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
     if aprobada:
         if "items" in body:
             raise ValueError("La solicitud aprobada no permite editar ítems.")
-        # El título ya no es editable (se genera automáticamente); no hay cambios en aprobada.
+        # El nombre lo arma el grupo (proveedor y estado), no un texto libre.
+        _sincronizar_titulo_solicitud(sb, solicitud_id)
         return get_solicitud(contrato_id, solicitud_id, ligera=True)
     if not _solicitud_editable(estado):
         raise ValueError("La solicitud ya fue aprobada y no puede editarse.")
-    upd = {
-        "titulo": format_solicitud_titulo(
-            head[0].get("consecutivo"),
-            head[0].get("created_at"),
-        ),
-    }
     if "observaciones" in body:
-        upd["observaciones"] = (body.get("observaciones") or "").strip() or None
-    if upd:
-        sb.table("almacen_solicitud").update(upd).eq("id", solicitud_id).execute()
+        sb.table("almacen_solicitud").update({
+            "observaciones": (body.get("observaciones") or "").strip() or None,
+        }).eq("id", solicitud_id).execute()
     if "items" in body:
         items = _validate_items_payload(body["items"], contrato_id, user_id, exclude_solicitud_id=solicitud_id)
         _sync_solicitud_items(sb, solicitud_id, estado, items, user_id)
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
@@ -3664,6 +3796,7 @@ def add_cotizacion(
     )
     if not sol_rows or int(sol_rows[0].get("contrato_id") or 0) != contrato_id:
         raise ValueError("Ítem no pertenece a este contrato.")
+    _exigir_agrupacion_libre(contrato_id, int(item["solicitud_id"]), user_id)
     if sol_rows[0].get("estado") not in ("borrador", "enviada"):
         raise ValueError("No se pueden agregar cotizaciones en el estado actual.")
     vu = _to_float(body.get("valor_unitario"))
@@ -4036,6 +4169,7 @@ def _notificar_validadores(contrato_id: int, solicitud_id: int, consecutivo: int
 
 
 def enviar_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     rows = (
         sb.table("almacen_solicitud")
@@ -4075,6 +4209,7 @@ def enviar_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
         "estado_validacion": "pendiente",
     }).eq("solicitud_id", solicitud_id).execute()
     _notificar_validadores(contrato_id, solicitud_id, sol["consecutivo"], user_id)
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     sol["estado"] = "enviada"
     sol["enviada_at"] = enviada_at
     sol["motivo_rechazo"] = None
@@ -4091,6 +4226,7 @@ def validar_item_solicitud(
 ) -> dict:
     """Aprueba o rechaza un ítem individual (incluye líneas nuevas post-OC)."""
     sb = _sb()
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "aprobada"):
         raise ValueError("Solo se pueden validar ítems de solicitudes enviadas o reabiertas.")
@@ -4123,11 +4259,13 @@ def validar_item_solicitud(
         raise ValueError("Indique el motivo del rechazo del ítem.")
     upd = {"estado_validacion": nuevo}
     sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     """Marca como aprobados todos los ítems pendientes (excluye los ya en OC)."""
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "aprobada"):
@@ -4158,14 +4296,19 @@ def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: 
         sb.table("almacen_solicitud_item").update({
             "estado_validacion": "aprobado",
         }).in_("id", ids).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: Optional[dict] = None) -> dict:
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     body = body or {}
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     existing_ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    seleccion = _ids_item_seleccion(body)
+    if seleccion is not None and not seleccion:
+        raise ValueError("Seleccione al menos un proveedor para generar la orden de compra.")
 
     # Reapertura: ya hay OC(s) → agregar líneas nuevas (misma OC por proveedor o nueva).
     if existing_ocs:
@@ -4176,18 +4319,28 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             solicitud_id,
             user_id,
             aprobar_pendientes=bool(body.get("aprobar_todos_pendientes", True)),
+            item_ids=None if seleccion is None else list(seleccion),
         )
 
     if sol["estado"] != "enviada":
         raise ValueError("Solo se pueden aprobar solicitudes enviadas.")
 
     if body.get("aprobar_todos_pendientes", True):
-        sb.table("almacen_solicitud_item").update({
-            "estado_validacion": "aprobado",
-        }).eq("solicitud_id", solicitud_id).eq("estado_validacion", "pendiente").execute()
-        sb.table("almacen_solicitud_item").update({
-            "estado_validacion": "aprobado",
-        }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null").execute()
+        q_pend = (
+            sb.table("almacen_solicitud_item").update({
+                "estado_validacion": "aprobado",
+            }).eq("solicitud_id", solicitud_id).eq("estado_validacion", "pendiente")
+        )
+        q_null = (
+            sb.table("almacen_solicitud_item").update({
+                "estado_validacion": "aprobado",
+            }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null")
+        )
+        if seleccion is not None:
+            q_pend = q_pend.in_("id", list(seleccion))
+            q_null = q_null.in_("id", list(seleccion))
+        q_pend.execute()
+        q_null.execute()
 
     # Recargar ítems desde BD (pueden haberse mapeado tras el GET inicial)
     fresh_items = (
@@ -4204,6 +4357,8 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
     for it in fresh_items:
         ev = it.get("estado_validacion") or "pendiente"
         if ev != "aprobado":
+            continue
+        if seleccion is not None and int(it["id"]) not in seleccion:
             continue
         merged = dict(it)
         linea = merged.get("numero_linea") or merged.get("id")
@@ -4257,6 +4412,7 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
 
 
 def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo: str) -> dict:
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     head = _fetch_solicitud_head(contrato_id, solicitud_id)
     if head["estado"] != "enviada":
@@ -4270,11 +4426,13 @@ def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo
         "validada_by": user_id,
         "motivo_rechazo": motivo,
     }).eq("id", solicitud_id).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     """Anula una solicitud en borrador (elimina) o enviada (marca rechazada)."""
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     head = _fetch_solicitud_head(contrato_id, solicitud_id)
     estado = head.get("estado")
@@ -4290,6 +4448,7 @@ def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
         "validada_by": user_id,
         "motivo_rechazo": "Anulada por el solicitante.",
     }).eq("id", solicitud_id).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
@@ -4551,19 +4710,21 @@ def generar_y_guardar_pdf_oc(
             terminos = vig
             break
 
-    from almacen_orden_compra_pdf import generar_pdf_orden_compra
+    from almacen_orden_compra_pdf import generar_pdf_orden_compra, _pdf_desde_html
 
-    pdf_bytes = generar_pdf_orden_compra(
+    html = generar_pdf_orden_compra(
         contrato=contrato_rows[0],
         orden_compra=oc,
         solicitud=solicitud,
         aprobador_nombre=aprobador,
         aprobador_firma_url=oc.get("aprobador_firma_imagen_url"),
         solicitante_firma_url=oc.get("solicitante_firma_imagen_url"),
-        proveedores=proveedores,
+        proveedores=_proveedores_de_esta_oc(oc, proveedores),
         insumo_map=insumo_map,
         terminos=terminos,
+        solo_html=True,
     )
+    pdf_bytes = _pdf_desde_html(html)
     numero = oc.get("numero_oc") or oc_id
     nombre = f"OC-{numero}.pdf"
     blob_path = f"almacen-soportes/{contrato_id}/oc-pdf/{oc_id}/{_safe_filename(nombre)}"
@@ -4572,7 +4733,29 @@ def generar_y_guardar_pdf_oc(
         "pdf_blob_path": blob_path,
         "pdf_nombre": nombre,
     }).eq("id", oc_id).execute()
-    return {"pdf_blob_path": blob_path, "pdf_nombre": nombre, "pdf_bytes": pdf_bytes}
+    return {"pdf_blob_path": blob_path, "pdf_nombre": nombre, "pdf_bytes": pdf_bytes, "html": html}
+
+
+def _proveedores_de_esta_oc(oc: dict, candidatos: List[dict]) -> List[dict]:
+    """El bloque Para de cada hoja nombra solo al proveedor de esa OC."""
+    pid = oc.get("proveedor_id")
+    nombre = (oc.get("proveedor_nombre") or "").strip()
+    if pid not in (None, ""):
+        try:
+            pid_i = int(pid)
+        except (TypeError, ValueError):
+            pid_i = None
+        if pid_i is not None:
+            for p in candidatos or []:
+                try:
+                    if int(p.get("id")) == pid_i:
+                        return [p]
+                except (TypeError, ValueError):
+                    continue
+            return [{"id": pid_i, "razon_social": nombre or "Proveedor"}]
+    if nombre:
+        return [{"razon_social": nombre}]
+    return list(candidatos or [])
 
 
 def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, str]:
@@ -4599,6 +4782,33 @@ def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, 
     if not data:
         raise ValueError("El PDF de la Orden de Compra está vacío o no está disponible.")
     fname = oc.get("pdf_nombre") or fname
+    return data, fname
+
+
+def download_pdf_conjunto_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> tuple[bytes, str]:
+    """PDF de quien genera la OC: todas las órdenes de la solicitud, una por hoja.
+
+    El correo al proveedor sigue adjuntando solo el PDF de su propia OC.
+    """
+    from almacen_orden_compra_pdf import generar_pdf_varias_ordenes
+
+    sb = _sb()
+    heads = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    if not heads:
+        raise ValueError("Esta solicitud no tiene órdenes de compra.")
+    heads = sorted(heads, key=lambda o: (int(o.get("numero_oc") or 0), int(o.get("id") or 0)))
+    solicitud = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    htmls: List[str] = []
+    for head in heads:
+        oc = get_orden_compra(contrato_id, int(head["id"]), incluir_entradas=False)
+        saved = generar_y_guardar_pdf_oc(contrato_id, int(head["id"]), oc, solicitud, user_id)
+        html = saved.get("html") or ""
+        if not html:
+            raise ValueError(f"No se pudo armar el PDF de la OC {head.get('numero_oc') or head.get('id')}.")
+        htmls.append(html)
+    data = generar_pdf_varias_ordenes(htmls)
+    nums = [str(o.get("numero_oc") or o.get("id")) for o in heads]
+    fname = f"OC-{'-'.join(nums)}.pdf"
     return data, fname
 
 
