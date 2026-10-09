@@ -1,13 +1,15 @@
-"""Runner de migraciones: listado y ensure sin URL."""
+"""Runner de migraciones críticas."""
 from __future__ import annotations
 
 import schema_migrations_runner as runner
 
 
-def test_critical_migration_file_exists():
-    paths = runner.list_migration_files(only=runner.CRITICAL_MIGRATIONS)
-    names = {p.name for p in paths}
+def test_critical_includes_cierre_motivo_and_rrhh_flag():
+    names = set(runner.CRITICAL_MIGRATIONS)
+    assert "20261009010000_bitacora_cierre_motivo_automatico_atrasado.sql" in names
     assert "20260925120000_bitacora_asistencia_rrhh_activa.sql" in names
+    paths = runner.list_migration_files(only=runner.CRITICAL_MIGRATIONS)
+    assert {p.name for p in paths} == names
 
 
 def test_ensure_without_db_url(monkeypatch):

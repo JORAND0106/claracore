@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS public.seguimiento_bitacora_entrada (
                         CHECK (estado IN ('abierto', 'cerrado')),
   cerrado_en            timestamptz,
   cerrado_por           integer REFERENCES public.usuarios(id) ON DELETE SET NULL,
-  cierre_motivo         text CHECK (cierre_motivo IS NULL OR cierre_motivo IN ('manual', 'automatico_dia', 'creacion_evento')),
+  cierre_motivo         text CHECK (cierre_motivo IS NULL OR cierre_motivo IN ('manual', 'automatico_dia', 'automatico_atrasado', 'creacion_evento')),
   hora_inicio_labores   time,
   clima_codigo          integer,
   clima_temp_c          numeric(6, 2),

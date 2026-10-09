@@ -7,6 +7,7 @@ registra los aplicados en public.schema_migrations.
 
 Uso:
   SUPABASE_DB_URL=postgresql://... python -m schema_migrations_runner
+  SUPABASE_DB_URL=... python -m schema_migrations_runner --critical
   SUPABASE_DB_URL=... python -m schema_migrations_runner --only 20260925120000_bitacora_asistencia_rrhh_activa.sql
 """
 from __future__ import annotations
@@ -23,10 +24,10 @@ _log = logging.getLogger("claracore.schema_migrations")
 ROOT = Path(__file__).resolve().parent
 MIGRATIONS_DIR = ROOT / "migrations"
 
-# Migraciones críticas que el arranque / deploy deben asegurar aunque el
-# historial completo aún no se haya corrido (idempotentes con IF NOT EXISTS).
+# Migraciones críticas que el arranque / deploy deben asegurar (idempotentes).
 CRITICAL_MIGRATIONS = (
     "20260925120000_bitacora_asistencia_rrhh_activa.sql",
+    "20261009010000_bitacora_cierre_motivo_automatico_atrasado.sql",
 )
 
 _ENSURE_TABLE_SQL = """

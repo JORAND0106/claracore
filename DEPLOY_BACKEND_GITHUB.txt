@@ -43,12 +43,13 @@ PASO 4 — Variables de entorno (qué hacer, sin misterio)
     SECRET_KEY
     ALGORITHM          (ejemplo de valor: HS256)
 
-  Recomendado para migraciones DDL automáticas (columna bitacora_asistencia_rrhh_activa, etc.):
+  Recomendado para migraciones DDL automáticas (bitacora_asistencia_rrhh_activa,
+  cierre_motivo automatico_atrasado, etc.):
     SUPABASE_DB_URL    (URI postgres:// o postgresql:// del proyecto Supabase)
     También créala como secreto de GitHub Actions con el mismo nombre para que
     el workflow "Deploy backend on push" aplique backend/migrations críticas
-    antes de publicar. Sin ella el toggle Bitácora↔RRHH usa un fallback JSON
-    y no requiere SQL manual en el editor.
+    antes de publicar. Sin ella: el toggle RRHH usa fallback JSON y el
+    autocierre de Bitácora puede degradar a automatico_dia.
 
   Si en tu .env también tienes Cloudinary, Anthropic, etc., cópialas igual.
 

@@ -1335,6 +1335,50 @@ def _debe_autocerrar(entrada: dict, ahora: Optional[datetime] = None) -> bool:
     return now >= cierre
 
 
+# Motivos que la plataforma escribe en cierre_motivo (deben coincidir con el CHECK).
+CIERRE_MOTIVOS_VALIDOS = frozenset({
+    "manual",
+    "automatico_dia",
+    "automatico_atrasado",
+    "creacion_evento",
+})
+
+
+def _is_cierre_motivo_check_violation(exc: BaseException) -> bool:
+    text = str(exc or "")
+    low = text.lower()
+    return (
+        "cierre_motivo" in low
+        and (
+            "23514" in low
+            or "check constraint" in low
+            or "seguimiento_bitacora_entrada_cierre_motivo_check" in low
+        )
+    )
+
+
+def _ensure_cierre_motivo_constraint(sb) -> bool:
+    """Best-effort: amplia el CHECK vía SUPABASE_DB_URL si está disponible."""
+    try:
+        from schema_migrations_runner import ensure_critical_migrations
+
+        result = ensure_critical_migrations(
+            only=("20261009010000_bitacora_cierre_motivo_automatico_atrasado.sql",),
+        )
+        if result.get("ok"):
+            try:
+                sb.rpc("sicoe_reload_postgrest_schema").execute()
+            except Exception:
+                try:
+                    sb.rpc("pg_notify", {"channel": "pgrst", "payload": "reload schema"}).execute()
+                except Exception:
+                    pass
+            return True
+    except Exception as exc:
+        _log.debug("_ensure_cierre_motivo_constraint: %s", exc)
+    return False
+
+
 def _aplicar_cierre(sb, entrada_id: int, user_id: Optional[int], motivo: str) -> dict:
     payload = {
         "estado": "cerrado",
@@ -1362,8 +1406,31 @@ def asegurar_autocierre_entrada(sb, entrada: dict, *, user_id: Optional[int] = N
     if not _debe_autocerrar(entrada):
         return entrada
     motivo = "automatico_atrasado" if es_reporte_atrasado(entrada) else "automatico_dia"
-    closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, motivo)
-    return {**entrada, **closed}
+    try:
+        closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, motivo)
+        return {**entrada, **closed}
+    except Exception as exc:
+        if motivo != "automatico_atrasado" or not _is_cierre_motivo_check_violation(exc):
+            raise
+        # CHECK antiguo sin automatico_atrasado: ampliar constraint y reintentar.
+        _log.warning(
+            "cierre_motivo automatico_atrasado rechazado (CHECK); intentando migración DDL: %s",
+            exc,
+        )
+        _ensure_cierre_motivo_constraint(sb)
+        try:
+            closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, "automatico_atrasado")
+            return {**entrada, **closed}
+        except Exception as exc2:
+            if not _is_cierre_motivo_check_violation(exc2):
+                raise
+            # Último recurso: cerrar con automatico_dia para no tumbar el Libro digital.
+            _log.warning(
+                "reintento automatico_atrasado falló; cierre degradado a automatico_dia: %s",
+                exc2,
+            )
+            closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, "automatico_dia")
+            return {**entrada, **closed}
 
 
 def _fecha_creacion_bogota(entrada: dict) -> Optional[date]:

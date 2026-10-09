@@ -38,8 +38,8 @@ jobs:
           PYTHONPATH=. python -c "import main; assert hasattr(main, 'app'); print('import ok')"
 
       # DDL vía Postgres directo (PostgREST no puede ALTER). Requiere secreto
-      # SUPABASE_DB_URL en el repo. Si falta, se omite y el backend usa fallback
-      # JSON para bitacora_asistencia_rrhh_activa (el botón sigue funcionando).
+      # SUPABASE_DB_URL. Si falta, se omite: fallback JSON del toggle RRHH y
+      # autocierre degradado a automatico_dia si el CHECK aún es antiguo.
       - name: Apply critical DB migrations
         working-directory: ./backend
         env:
