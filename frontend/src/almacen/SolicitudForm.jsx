@@ -5,7 +5,7 @@ import SolicitudTramoAccordion from './SolicitudTramoAccordion'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import LineaResumenExcelTable from './LineaResumenExcelTable'
-import OrdenCompraPdfClip from './OrdenCompraPdfClip'
+import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
 import {
   coerceEsPrincipal,
   formatSolicitudTituloAuto,
@@ -819,20 +819,13 @@ export default function SolicitudForm({
             </span>
           )}
         </span>
-        {sol?.estado === 'aprobada' && solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar && (
+        {solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar && (
           <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, marginLeft: 8 }}>
-            {solicitudOrdenesCompra(sol).map((oc) => (
-              <OrdenCompraPdfClip
-                key={oc.id}
-                ordenCompra={oc}
-                puedeExportar
-                title={
-                  oc.proveedor_nombre
-                    ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
-                    : undefined
-                }
-              />
-            ))}
+            <SolicitudOcsPdfButton
+              solicitudId={sol.id}
+              ordenes={solicitudOrdenesCompra(sol)}
+              puedeExportar
+            />
           </div>
         )}
       </div>

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
-import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
 import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
+import OcProveedoresModal from './OcProveedoresModal'
+import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
-import OrdenCompraPdfClip from './OrdenCompraPdfClip'
+import { estadoProveedoresSolicitud, gruposProveedorPendientes } from './ocProveedoresSeleccion'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
 import SolicitudMaterialesExcelTable from './SolicitudMaterialesExcelTable'
@@ -61,7 +62,7 @@ export default function SolicitudDetalleModal({
   const [motivo, setMotivo] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [confirmAprobar, setConfirmAprobar] = useState(false)
+  const [selectorOc, setSelectorOc] = useState(false)
   const [selIds, setSelIds] = useState(() => new Set())
   const [asignar, setAsignar] = useState(null)
   const [insumoSel, setInsumoSel] = useState(null)
@@ -211,29 +212,39 @@ export default function SolicitudDetalleModal({
     }
   }
 
+  const gruposOc = useMemo(
+    () => gruposProveedorPendientes(items),
+    [items],
+  )
+  const proveedoresOc = useMemo(
+    () => estadoProveedoresSolicitud(items),
+    [items],
+  )
+
   const intentarAprobarOc = () => {
-    if (mensajeFaltaInsumoOc) {
-      setConfirmAprobar(false)
-      setError(mensajeFaltaInsumoOc)
+    setError('')
+    if (!gruposOc.grupos.length) {
+      setError(mensajeFaltaInsumoOc || 'No hay proveedores pendientes de generar.')
       return
     }
-    setError('')
-    setConfirmAprobar(true)
+    setSelectorOc(true)
   }
 
-  const ejecutarAprobar = async (aprobarTodosPendientes = true) => {
+  const ejecutarAprobar = async (itemIds) => {
     if (!sol) return
-    if (mensajeFaltaInsumoOc) {
-      setConfirmAprobar(false)
-      setError(mensajeFaltaInsumoOc)
+    if (!itemIds?.length) {
+      setError('Seleccione al menos un proveedor.')
       return
     }
     setBusy(true)
-    setOcProgreso(tieneOc ? 'Agregando líneas a la Orden de Compra…' : 'Generando orden de compra…')
+    setOcProgreso(tieneOc ? 'Generando las órdenes pendientes…' : 'Generando orden de compra…')
     setError('')
     try {
-      const r = await api.aprobarSolicitud(sol.id, { aprobar_todos_pendientes: aprobarTodosPendientes })
-      setConfirmAprobar(false)
+      const r = await api.aprobarSolicitud(sol.id, {
+        aprobar_todos_pendientes: true,
+        item_ids: itemIds,
+      })
+      setSelectorOc(false)
       onUpdated?.(r)
       const ocs = ordenesDeRespuestaAprobar(r)
       setSol(r)
@@ -402,7 +413,7 @@ export default function SolicitudDetalleModal({
         justifyContent: 'center',
         padding: compact ? 0 : 16,
       }}
-      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && onClose?.()}
+      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && !selectorOc && onClose?.()}
     >
       <div
         role="dialog"
@@ -426,7 +437,9 @@ export default function SolicitudDetalleModal({
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 2 }}>
                 {sol?.consecutivo ? `#${sol.consecutivo}` : ''}
-                {sol?.estado ? ` · ${ESTADO_SOLICITUD_LABEL[sol.estado]}` : ''}
+                {sol?.oc_parcial || (sol?.estado === 'enviada' && tieneOc)
+                  ? ' · OC parcial'
+                  : (sol?.estado ? ` · ${ESTADO_SOLICITUD_LABEL[sol.estado]}` : '')}
                 {Number(sol?.mensajes_no_leidos) > 0 && (
                   <span
                     data-testid="solicitud-detalle-no-leidos"
@@ -558,20 +571,36 @@ export default function SolicitudDetalleModal({
                 </div>
               )}
 
+              {proveedoresOc.length > 0 && (
+                <div
+                  data-testid="oc-proveedores-estado"
+                  style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, fontSize: 'var(--cc-xs)' }}
+                >
+                  {proveedoresOc.map((p) => (
+                    <span
+                      key={p.key}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: 6,
+                        background: p.estado === 'con_oc' ? '#ecfdf5' : '#fffbeb',
+                        color: p.estado === 'con_oc' ? '#065f46' : '#92400e',
+                      }}
+                    >
+                      {p.nombre}: {p.estado === 'con_oc' ? 'con OC' : 'pendiente de OC'}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {(tieneOc || (sol.estado === 'aprobada' && solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar)) && (
                 <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                  {sol.estado === 'aprobada' && permisos?.exportar && solicitudOrdenesCompra(sol).map((oc) => (
-                    <OrdenCompraPdfClip
-                      key={oc.id}
-                      ordenCompra={oc}
+                  {(sol.estado === 'aprobada' || sol.oc_parcial || sol.estado === 'enviada') && permisos?.exportar && (
+                    <SolicitudOcsPdfButton
+                      solicitudId={sol.id}
+                      ordenes={solicitudOrdenesCompra(sol)}
                       puedeExportar
-                      title={
-                        oc.proveedor_nombre
-                          ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
-                          : undefined
-                      }
                     />
-                  ))}
+                  )}
                   {tieneOc && (
                     <span style={{
                       padding: '4px 10px',
@@ -794,7 +823,7 @@ export default function SolicitudDetalleModal({
                     data-testid="detalle-generar-oc"
                     onClick={intentarAprobarOc}
                   >
-                    {tieneOc ? '✓ Agregar a la OC' : '✓ Aprobar y generar OC'}
+                    {tieneOc ? '✓ Generar OC pendientes' : '✓ Aprobar y generar OC'}
                   </button>
                 )}
               </div>
@@ -948,21 +977,15 @@ export default function SolicitudDetalleModal({
         </div>
       )}
 
-      {confirmAprobar && (
-        <CcConfirmModal
-          theme={modalTheme}
-          titulo={tieneOc ? 'Agregar a la Orden de Compra' : 'Aprobar solicitud'}
-          tipo="info"
-          confirmar={tieneOc ? 'Agregar a la OC' : 'Aprobar y generar OC'}
-          cancelar="Cancelar"
-          procesando={busy}
-          onCancel={() => !busy && setConfirmAprobar(false)}
-          onConfirm={() => ejecutarAprobar(true)}
-        >
-          {tieneOc
-            ? '¿Sumar a la Orden de Compra existente las líneas nuevas ya aprobadas? Las líneas previas de la OC no se modifican.'
-            : '¿Generar la Orden de Compra con los ítems aprobados? Los ítems pendientes se marcarán como aprobados; los rechazados no entrarán en la OC.'}
-        </CcConfirmModal>
+      {selectorOc && (
+        <OcProveedoresModal
+          grupos={gruposOc.grupos}
+          sinInsumoCount={gruposOc.sinInsumoCount}
+          verEconomicos={verEconomicos}
+          busy={busy}
+          onCancel={() => !busy && setSelectorOc(false)}
+          onConfirm={(ids) => { void ejecutarAprobar(ids) }}
+        />
       )}
 
       {expedienteOcId && (

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
-import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
 import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
+import OcProveedoresModal from './OcProveedoresModal'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
+import { gruposProveedorPendientes } from './ocProveedoresSeleccion'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import {
   ESTADO_SOLICITUD_LABEL,
@@ -35,7 +36,7 @@ export default function SolicitudRevisionModal({
   const [motivo, setMotivo] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [confirmAprobar, setConfirmAprobar] = useState(false)
+  const [selectorOc, setSelectorOc] = useState(false)
   const [expedienteOcId, setExpedienteOcId] = useState(null)
   const [avisoOc, setAvisoOc] = useState(null)
   const [loading, setLoading] = useState(!solicitudInicial)
@@ -49,14 +50,6 @@ export default function SolicitudRevisionModal({
     bgCard: ui.card?.background || '#fff',
   }
 
-  const modalTheme = useMemo(() => ({
-    primary: ui.accent,
-    bgCard: ui.card?.background || '#fff',
-    border: '#e2e8f0',
-    text: ui.text,
-    textMuted: ui.textMuted,
-  }), [ui])
-
   useEffect(() => {
     if (!solicitudId) return
     setLoading(true)
@@ -69,14 +62,23 @@ export default function SolicitudRevisionModal({
   const puedeValidar = permisos?.validar && sol?.estado === 'enviada'
   const puedeGenerarOc = Boolean(permisos?.puedeGenerarOc) && puedeValidar
 
-  const ejecutarAprobar = async () => {
+  const gruposOc = useMemo(
+    () => gruposProveedorPendientes(sol?.items || []),
+    [sol?.items],
+  )
+
+  const ejecutarAprobar = async (itemIds) => {
     if (!sol) return
+    if (!itemIds?.length) {
+      setError('Seleccione al menos un proveedor.')
+      return
+    }
     setBusy(true)
     setOcProgreso('Generando orden de compra…')
     setError('')
     try {
-      const r = await api.aprobarSolicitud(sol.id, {})
-      setConfirmAprobar(false)
+      const r = await api.aprobarSolicitud(sol.id, { aprobar_todos_pendientes: true, item_ids: itemIds })
+      setSelectorOc(false)
       onUpdated?.(r)
       const ocs = ordenesDeRespuestaAprobar(r)
       if (ocs.length) {
@@ -132,7 +134,7 @@ export default function SolicitudRevisionModal({
         justifyContent: 'center',
         padding: compact ? 0 : 16,
       }}
-      onClick={() => !busy && !avisoOc && !expedienteOcId && onClose?.()}
+      onClick={() => !busy && !avisoOc && !expedienteOcId && !selectorOc && onClose?.()}
     >
       <div
         role="dialog"
@@ -241,7 +243,7 @@ export default function SolicitudRevisionModal({
                   style={btnSuccessStyle(ui.btnPrimary)}
                   disabled={busy}
                   data-testid="revision-generar-oc"
-                  onClick={() => setConfirmAprobar(true)}
+                  onClick={() => setSelectorOc(true)}
                 >
                   ✓ Aprobar y generar OC
                 </button>
@@ -265,19 +267,15 @@ export default function SolicitudRevisionModal({
         )}
       </div>
 
-      {confirmAprobar && (
-        <CcConfirmModal
-          theme={modalTheme}
-          titulo="Aprobar solicitud"
-          tipo="info"
-          confirmar="Aprobar y generar OC"
-          cancelar="Cancelar"
-          procesando={busy}
-          onCancel={() => !busy && setConfirmAprobar(false)}
-          onConfirm={ejecutarAprobar}
-        >
-          ¿Aprobar solicitud #{sol?.consecutivo}? Se generará la Orden de Compra automáticamente.
-        </CcConfirmModal>
+      {selectorOc && (
+        <OcProveedoresModal
+          grupos={gruposOc.grupos}
+          sinInsumoCount={gruposOc.sinInsumoCount}
+          verEconomicos={permisos?.verEconomicos !== false}
+          busy={busy}
+          onCancel={() => !busy && setSelectorOc(false)}
+          onConfirm={(ids) => { void ejecutarAprobar(ids) }}
+        />
       )}
 
       {expedienteOcId && (
