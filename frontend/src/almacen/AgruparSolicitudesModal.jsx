@@ -11,6 +11,7 @@ export default function AgruparSolicitudesModal({
   busy = false,
   error = '',
   resumen = '',
+  fase = '',
   onCancel,
   onConfirm,
 }) {
@@ -54,12 +55,27 @@ export default function AgruparSolicitudesModal({
           {' '}
           Las solicitudes que ya tienen OC no se mueven.
         </p>
+        {vista?.diagnostico_texto && (
+          <p data-testid="agrupar-diagnostico" style={{ margin: '0 0 12px', color: ui.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+            {vista.diagnostico_texto}
+          </p>
+        )}
+        {busy && fase && (
+          <div data-testid="agrupar-progreso" style={{ margin: '0 0 12px', fontWeight: 700 }}>
+            {fase}
+          </div>
+        )}
 
         {error && <div style={{ color: '#dc2626', marginBottom: 10 }}>{error}</div>}
 
         {resumen ? (
           <div data-testid="agrupar-resumen" style={{ fontWeight: 700, marginBottom: 12 }}>
             {resumen}
+            {vista?.duracion_ms != null && (
+              <div data-testid="agrupar-duracion" style={{ fontWeight: 500, marginTop: 6 }}>
+                Tardó {vista.duracion_ms} ms.
+              </div>
+            )}
             {vista?.bloqueo_persistido === false && (
               <div style={{ fontWeight: 500, color: '#b45309', marginTop: 8 }}>
                 No quedó activo el bloqueo de edición: falta la tabla en la base.
@@ -179,7 +195,7 @@ export default function AgruparSolicitudesModal({
                 crear_hasta: porCrear,
               })}
             >
-              {busy ? 'Agrupando…' : 'Agrupar'}
+              {busy ? (fase || 'Agrupando…') : 'Agrupar'}
             </button>
           )}
         </div>

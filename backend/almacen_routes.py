@@ -45,7 +45,12 @@ from almacen_permissions import (
     require_permiso_almacen,
     tiene_permiso_almacen,
 )
-from almacen_agrupar import ejecutar_agrupacion, vista_previa_agrupacion
+from almacen_agrupar import (
+    ejecutar_agrupacion,
+    ejecutar_deshacer,
+    vista_previa_agrupacion,
+    vista_previa_deshacer,
+)
 from almacen_audit import (
     log_almacen,
     snapshot_devolucion,
@@ -333,6 +338,10 @@ class AprobarBody(BaseModel):
 class AgruparBody(BaseModel):
     confirmar_creacion: bool = False
     crear_hasta: int = 0
+
+
+class DeshacerAgruparBody(BaseModel):
+    confirmar: bool = False
 
 
 class ValidarItemBody(BaseModel):
@@ -812,13 +821,17 @@ def route_agrupar_solicitudes(
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    eid = result.get("ejecucion_id")
+    detalle_mov = {"motivo": "Agrupar solicitudes por proveedor"}
+    if eid:
+        detalle_mov["ejecucion_id"] = eid
     for mov in result.get("movimientos") or []:
         log_almacen(
             current_user,
             "AGRUPAR",
             "solicitud_item",
             mov.get("item_id"),
-            {"motivo": "Agrupar solicitudes por proveedor"},
+            detalle_mov,
             valor_anterior=mov.get("antes"),
             valor_nuevo=mov.get("despues"),
         )
@@ -828,7 +841,7 @@ def route_agrupar_solicitudes(
             "AGRUPAR",
             "solicitud",
             aj.get("solicitud_id"),
-            {"motivo": "Agrupar solicitudes por proveedor"},
+            detalle_mov,
             valor_anterior=aj.get("antes"),
             valor_nuevo=aj.get("despues"),
         )
@@ -838,9 +851,80 @@ def route_agrupar_solicitudes(
             "AGRUPAR",
             "solicitud",
             creada.get("id"),
-            {"motivo": "Solicitud creada porque faltaban grupos"},
+            {
+                "motivo": "Solicitud creada porque faltaban grupos",
+                **({"ejecucion_id": eid} if eid else {}),
+            },
             valor_anterior=None,
             valor_nuevo=creada,
+        )
+    return result
+
+
+@router.post("/{contrato_id}/solicitudes/agrupar/deshacer/vista-previa")
+def route_vista_previa_deshacer(contrato_id: int, current_user=Depends(get_current_user)):
+    """Qué devolvería Deshacer de la última Agrupar. No escribe."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        return vista_previa_deshacer(contrato_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/agrupar/deshacer")
+def route_deshacer_agrupar(
+    contrato_id: int,
+    body: DeshacerAgruparBody,
+    current_user=Depends(get_current_user),
+):
+    """Revierte por completo la última Agrupar, si nada cambió después."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        result = ejecutar_deshacer(
+            contrato_id,
+            _uid(current_user),
+            confirmar=bool(body.confirmar),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    eid = result.get("ejecucion_id")
+    origen = result.get("ejecucion_origen")
+    detalle = {"motivo": "Deshacer la última agrupación"}
+    if eid:
+        detalle["ejecucion_id"] = eid
+    if origen:
+        detalle["ejecucion_deshecha"] = origen
+    for mov in result.get("movimientos") or []:
+        log_almacen(
+            current_user,
+            "AGRUPAR_DESHACER",
+            "solicitud_item",
+            mov.get("item_id"),
+            detalle,
+            valor_anterior=mov.get("antes"),
+            valor_nuevo=mov.get("despues"),
+        )
+    for aj in result.get("ajustes") or []:
+        log_almacen(
+            current_user,
+            "AGRUPAR_DESHACER",
+            "solicitud",
+            aj.get("solicitud_id"),
+            detalle,
+            valor_anterior=aj.get("antes"),
+            valor_nuevo=aj.get("despues"),
+        )
+    for creada in result.get("creadas") or []:
+        log_almacen(
+            current_user,
+            "AGRUPAR_DESHACER",
+            "solicitud",
+            creada.get("id"),
+            {**detalle, "motivo": "Solicitud creada por Agrupar, eliminada al deshacer"},
+            valor_anterior=creada,
+            valor_nuevo=None,
         )
     return result
 

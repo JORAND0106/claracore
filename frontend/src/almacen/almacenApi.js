@@ -236,6 +236,19 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body || {}),
       }),
 
+    vistaPreviaDeshacerAgrupar: () =>
+      fetchJson(`${base}/solicitudes/agrupar/deshacer/vista-previa`, {
+        method: 'POST',
+        headers: authHeaders(),
+      }),
+
+    deshacerAgrupar: () =>
+      fetchJson(`${base}/solicitudes/agrupar/deshacer`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ confirmar: true }),
+      }),
+
     getSolicitud: (id, { ligera = false } = {}) => {
       const q = ligera ? '?ligera=1' : ''
       return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: authHeaders() })
