@@ -176,3 +176,115 @@ def test_list_solicitudes_resumen_estado_entrada_salida(monkeypatch):
     out2 = _list_solicitudes_resumen(_FakeSb(store), rows, contrato_id=1)
     assert out2[0]["estado_entrada"] == "total"
     assert out2[0]["estado_salida"] == "total"
+
+
+def test_resumen_oculta_valor_sin_visibilidad_economica(monkeypatch):
+    import almacen_service as svc
+
+    monkeypatch.setattr(svc, "_map_usuario_nombres", lambda sb, ids: {})
+    store = {
+        "almacen_solicitud_item": [
+            {"id": 1, "solicitud_id": 10, "cantidad": 2, "valor_compra_unitario": 100, "insumo_id": 7},
+        ],
+        "almacen_orden_compra": [],
+    }
+    rows = [{
+        "id": 10,
+        "contrato_id": 1,
+        "estado": "enviada",
+        "created_by": None,
+        "validada_by": None,
+        "consecutivo": 1,
+        "titulo": "Sin cifras",
+        "created_at": "2026-01-01",
+    }]
+    out = _list_solicitudes_resumen(_FakeSb(store), rows, contrato_id=1)
+    assert "valor_solicitud" not in out[0]
+    assert out[0]["items_count"] == 1
+
+
+def test_resumen_valor_solicitud_usa_proveedor_elegido_o_ganadora(monkeypatch):
+    import almacen_service as svc
+
+    monkeypatch.setattr(svc, "_map_usuario_nombres", lambda sb, ids: {})
+    store = {
+        "almacen_solicitud_item": [
+            {
+                "id": 1,
+                "solicitud_id": 10,
+                "cantidad": 2,
+                "insumo_id": 100,
+                "valor_compra_unitario": 119,
+                "proveedor_seleccionado_id": 5,
+                "proveedor_seleccionado_nombre": "Aceros del Sur",
+                "cotizacion_numero_seleccionada": "C-9",
+            },
+            {
+                "id": 2,
+                "solicitud_id": 10,
+                "cantidad": 1,
+                "insumo_id": 100,
+                "valor_compra_unitario": 10,
+            },
+            {
+                "id": 3,
+                "solicitud_id": 11,
+                "cantidad": 4,
+                "insumo_id": None,
+                "valor_compra_unitario": 25,
+            },
+        ],
+        "almacen_insumo": [{
+            "id": 100,
+            "cotizaciones_detalle": [
+                {
+                    "tipo": "insumo",
+                    "proveedor": "Ferretería Norte",
+                    "proveedor_id": 4,
+                    "numero": "C-1",
+                    "valor": 100,
+                    "es_ganadora": True,
+                    "impuesto": {"iva": "19"},
+                },
+                {
+                    "tipo": "insumo",
+                    "proveedor": "Aceros del Sur",
+                    "proveedor_id": 5,
+                    "numero": "C-9",
+                    "valor": 80,
+                    "es_ganadora": False,
+                    "impuesto": {"iva": "19"},
+                },
+            ],
+        }],
+        "almacen_orden_compra": [],
+    }
+    rows = [
+        {
+            "id": 10,
+            "contrato_id": 1,
+            "estado": "enviada",
+            "created_by": None,
+            "validada_by": None,
+            "consecutivo": 1,
+            "titulo": "Con cifras",
+            "created_at": "2026-01-01",
+        },
+        {
+            "id": 11,
+            "contrato_id": 1,
+            "estado": "enviada",
+            "created_by": None,
+            "validada_by": None,
+            "consecutivo": 2,
+            "titulo": "Sin insumo",
+            "created_at": "2026-01-02",
+        },
+    ]
+    out = _list_solicitudes_resumen(
+        _FakeSb(store), rows, contrato_id=1, ver_economicos=True,
+    )
+    # 2 × 95 (elegida) + 1 × 119 (ganadora) = 309
+    assert out[0]["valor_solicitud"] == 309
+    # Sin cotización de catálogo: cantidad × costo guardado.
+    assert out[1]["valor_solicitud"] == 100

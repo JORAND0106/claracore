@@ -21,13 +21,15 @@ function normRol(txt) {
 
 function puedeVerValoresEconomicosAlmacen(usuario) {
   const rol = normRol(usuario?.rol_nombre || usuario?.rol)
+  const cargo = normRol(usuario?.cargo_nombre || usuario?.cargo)
+  if (rol === 'desarrollador' || cargo === 'desarrollador') return true
   if (rol.includes('intervent')) return false
   if (rol === 'contratista gerencial' || rol === 'gerencia contratista') return true
   if (rol.includes('contrat') && rol.includes('gerencial')) return true
   return rol === 'administrativo'
 }
 
-describe('Valores económicos: gerencia contratista y rol Administrativo', () => {
+describe('Valores económicos: gerencia contratista, Administrativo y desarrollador', () => {
   it('helpers de regla económica', () => {
     assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Contratista Gerencial' }), true)
     assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Gerencia Contratista' }), true)
@@ -40,17 +42,23 @@ describe('Valores económicos: gerencia contratista y rol Administrativo', () =>
       }),
       false,
     )
-    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Desarrollador' }), false)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Desarrollador' }), true)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ cargo: 'Desarrollador', rol: 'Operativo Campo' }), true)
     assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Interventoría Gerencial' }), false)
   })
 
   it('frontend y backend documentan la regla económica', () => {
     const fe = readFileSync(join(dir, 'almacenPermisos.js'), 'utf8')
-    assert.match(fe, /esGerenciaContratistaRol/)
-    assert.match(fe, /esRolAdministrativo/)
-    assert.match(fe, /puedeVerValoresEconomicosAlmacen/)
+    const eco = fe.slice(
+      fe.indexOf('export function puedeVerValoresEconomicosAlmacen'),
+      fe.indexOf('export function esContratistaGerencialUsuario'),
+    )
+    assert.match(eco, /esDesarrolladorUsuario\(usuario\)/)
+    assert.match(eco, /esGerenciaContratistaRol/)
+    assert.match(eco, /esRolAdministrativo/)
     assert.doesNotMatch(fe, /if \(esDesarrolladorUsuario\(usuario\)\) return true\n {2}if \(esOperativoGerencialUsuario/)
     const be = readFileSync(join(dir, '../../../backend/almacen_permissions.py'), 'utf8')
+    assert.match(be, /es_desarrollador_almacen/)
     assert.match(be, /es_gerencia_contratista_rol/)
     assert.match(be, /es_rol_administrativo/)
     assert.match(be, /puede_ver_valores_economicos_almacen/)

@@ -76,12 +76,21 @@ def es_rol_administrativo(current_user) -> bool:
     return _norm_rol(current_user) == "administrativo"
 
 
+def es_desarrollador_almacen(current_user) -> bool:
+    """Rol o cargo Desarrollador: acceso total, también a las cifras en dinero."""
+    if _norm_rol(current_user) == "desarrollador":
+        return True
+    return _cargo_norm(current_user) == "desarrollador"
+
+
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
     """
-    Cifras en dinero solo para roles de tipo gerencia contratista y para el rol
-    Administrativo. El cargo, los permisos por función y el rol Desarrollador
-    no otorgan ni quitan esta visibilidad.
+    Cifras en dinero para gerencia contratista, el rol Administrativo y Desarrollador.
+    Desarrollador las ve siempre, sin depender de los permisos por función.
+    Los demás roles ven solo cantidades.
     """
+    if es_desarrollador_almacen(current_user):
+        return True
     if es_gerencia_contratista_rol(current_user):
         return True
     if es_rol_administrativo(current_user):
@@ -111,8 +120,8 @@ def require_contratista_gerencial_almacen(current_user) -> None:
 
     La aprobación de ítems, el rechazo y generar la OC ya no usan este gate:
     bastan Almacén · validar y un estado que lo permita. El rol no reemplaza
-    ni anula Validar. La visibilidad de valores la definen solo gerencia
-    contratista y el rol Administrativo. Este gate sigue en correcciones
+    ni anula Validar. La visibilidad de valores la definen gerencia
+    contratista, el rol Administrativo y Desarrollador. Este gate sigue en correcciones
     post-OC y en la cantidad de salidas.
     """
     require_permiso_almacen(current_user, "validar")

@@ -41,9 +41,11 @@ def test_operativo_gerencial_no_ve_valores():
     assert puede_ver_valores_economicos_almacen(u) is False
 
 
-def test_desarrollador_no_ve_valores_por_ser_desarrollador():
-    u = {"rol": "Desarrollador", "cargo": "Dev"}
-    assert puede_ver_valores_economicos_almacen(u) is False
+def test_desarrollador_ve_todos_los_valores():
+    por_rol = {"rol": "Desarrollador", "cargo": "Dev"}
+    por_cargo = {"rol": "Operativo Campo", "cargo_nombre": "Desarrollador"}
+    assert puede_ver_valores_economicos_almacen(por_rol) is True
+    assert puede_ver_valores_economicos_almacen(por_cargo) is True
 
 
 def test_interventoria_gerencial_no_cuenta_como_gerencia_contratista():

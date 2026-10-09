@@ -19,6 +19,7 @@ import {
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtFechaAlmacenCorta,
+  fmtMoney,
   formatEstadoOcMovimiento,
   puedeAnularSolicitud,
   textoAprobacionSolicitud,
@@ -33,6 +34,7 @@ export default function SolicitudesPanel({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const verEconomicos = permisos?.verEconomicos === true
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -210,6 +212,9 @@ export default function SolicitudesPanel({
                 <th style={{ ...ui.th, width: '12%' }}>Solicitante</th>
                 <th style={{ ...ui.th, width: '12%' }}>Aprobación</th>
                 <th style={{ ...ui.th, textAlign: 'right', width: 56 }}>Ítems</th>
+                {verEconomicos && (
+                  <th style={{ ...ui.th, textAlign: 'right', width: 120 }}>Valor</th>
+                )}
                 <th style={{ ...ui.th, width: 96 }}>Fecha</th>
                 <th style={{ ...ui.th, width: 56 }}>OC</th>
                 <th style={{ ...ui.th, width: 92 }} title="Entrada vs cantidad de la OC">Entrada</th>
@@ -284,6 +289,15 @@ export default function SolicitudesPanel({
                     {textoAprobacionSolicitud(s)}
                   </td>
                   <td style={ui.tdNum} data-label="Ítems">{nItems}</td>
+                  {verEconomicos && (
+                    <td
+                      style={{ ...ui.tdNum, whiteSpace: 'nowrap' }}
+                      data-label="Valor"
+                      data-testid="solicitud-lista-valor"
+                    >
+                      {s.valor_solicitud == null ? '—' : fmtMoney(s.valor_solicitud)}
+                    </td>
+                  )}
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="Fecha">
                     {fmtFechaAlmacenCorta(s.created_at)}
                   </td>
