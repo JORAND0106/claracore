@@ -38,15 +38,15 @@ jobs:
           PYTHONPATH=. python -c "import main; assert hasattr(main, 'app'); print('import ok')"
 
       # DDL vía Postgres directo (PostgREST no puede ALTER). Requiere secreto
-      # SUPABASE_DB_URL. Si falta, se omite; el autocierre degrada a
-      # automatico_dia si el CHECK aún no admite automatico_atrasado.
+      # SUPABASE_DB_URL. Si falta, se omite: fallback JSON del toggle RRHH y
+      # autocierre degradado a automatico_dia si el CHECK aún es antiguo.
       - name: Apply critical DB migrations
         working-directory: ./backend
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           if [ -z "${SUPABASE_DB_URL}" ]; then
-            echo "SUPABASE_DB_URL no configurado; se omite DDL (runtime degradado)."
+            echo "SUPABASE_DB_URL no configurado; se omite DDL (fallback en runtime)."
             exit 0
           fi
           python -m pip install -q 'psycopg[binary]>=3.1.0'

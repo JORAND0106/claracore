@@ -347,7 +347,7 @@ app = FastAPI(title="ClaraCore API")
 
 @app.on_event("startup")
 def _startup_ensure_critical_schema():
-    """Aplica DDL crítico (cierre_motivo, flags Bitácora) si hay SUPABASE_DB_URL."""
+    """Aplica DDL crítico (RRHH flag, cierre_motivo Bitácora) si hay SUPABASE_DB_URL."""
     try:
         from schema_migrations_runner import ensure_critical_migrations
 

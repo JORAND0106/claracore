@@ -18,3 +18,4 @@ def test_ensure_without_db_url(monkeypatch):
     out = runner.ensure_critical_migrations()
     assert out["ok"] is False
     assert out["reason"] == "missing_SUPABASE_DB_URL"
+    assert out["applied"] == []

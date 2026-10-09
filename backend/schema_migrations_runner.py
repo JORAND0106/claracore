@@ -8,6 +8,7 @@ registra los aplicados en public.schema_migrations.
 Uso:
   SUPABASE_DB_URL=postgresql://... python -m schema_migrations_runner
   SUPABASE_DB_URL=... python -m schema_migrations_runner --critical
+  SUPABASE_DB_URL=... python -m schema_migrations_runner --only 20260925120000_bitacora_asistencia_rrhh_activa.sql
 """
 from __future__ import annotations
 
@@ -84,6 +85,7 @@ def apply_sql_files(db_url: str, paths: List[Path], *, record: bool = True) -> L
                     (name,),
                 )
             applied.append(name)
+        # Asegura refresh de PostgREST aunque el SQL individual no lo traiga.
         try:
             conn.execute("NOTIFY pgrst, 'reload schema'")
         except Exception as exc:
@@ -116,8 +118,17 @@ def ensure_critical_migrations(*, only: Optional[Iterable[str]] = None) -> dict:
 def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Aplica migraciones SQL vía SUPABASE_DB_URL")
-    p.add_argument("--only", action="append", default=[], help="Solo estos filenames")
-    p.add_argument("--critical", action="store_true", help="Solo CRITICAL_MIGRATIONS")
+    p.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="Solo estos filenames (repetible). Default: todas las de migrations/",
+    )
+    p.add_argument(
+        "--critical",
+        action="store_true",
+        help="Solo las migraciones CRITICAL_MIGRATIONS",
+    )
     args = p.parse_args(argv)
     db = _db_url()
     if not db:
