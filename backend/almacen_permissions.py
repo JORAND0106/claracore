@@ -61,25 +61,30 @@ def es_residente_administrativo(current_user) -> bool:
     return _cargo_norm(current_user) == "residente administrativo"
 
 
+def es_gerencia_contratista_rol(current_user) -> bool:
+    """Rol de tipo gerencia contratista. No incluye el bypass de Desarrollador."""
+    rol = _norm_rol(current_user)
+    if "intervent" in rol:
+        return False
+    if rol in ("contratista gerencial", "gerencia contratista"):
+        return True
+    return "contrat" in rol and "gerencial" in rol
+
+
+def es_rol_administrativo(current_user) -> bool:
+    """Rol de plataforma Administrativo (no el cargo)."""
+    return _norm_rol(current_user) == "administrativo"
+
+
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
     """
-    Costos/cobros/utilidad/rentabilidad visibles solo para:
-    - rol Operativo Gerencial, o
-    - cargo Residente Administrativo (excepción, cualquier rol).
-    Desarrollador (plataforma) conserva acceso técnico.
+    Cifras en dinero solo para roles de tipo gerencia contratista y para el rol
+    Administrativo. El cargo, los permisos por función y el rol Desarrollador
+    no otorgan ni quitan esta visibilidad.
     """
-    try:
-        from main import _es_desarrollador
-
-        if _es_desarrollador(current_user):
-            return True
-    except Exception:
-        pass
-    if _norm_rol(current_user) == "desarrollador":
+    if es_gerencia_contratista_rol(current_user):
         return True
-    if es_operativo_gerencial(current_user):
-        return True
-    if es_residente_administrativo(current_user):
+    if es_rol_administrativo(current_user):
         return True
     return False
 
@@ -105,9 +110,10 @@ def require_contratista_gerencial_almacen(current_user) -> None:
     """Validar + Contratista Gerencial.
 
     La aprobación de ítems, el rechazo y generar la OC ya no usan este gate:
-    bastan Almacén · validar y un estado que lo permita. El rol gerencial no
-    reemplaza ni anula Validar; solo participa en la visibilidad económica
-    (Operativo Gerencial) y en correcciones que sí lo exigen (post-OC, salidas).
+    bastan Almacén · validar y un estado que lo permita. El rol no reemplaza
+    ni anula Validar. La visibilidad de valores la definen solo gerencia
+    contratista y el rol Administrativo. Este gate sigue en correcciones
+    post-OC y en la cantidad de salidas.
     """
     require_permiso_almacen(current_user, "validar")
     if not es_contratista_gerencial(current_user):

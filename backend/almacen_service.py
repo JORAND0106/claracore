@@ -60,6 +60,9 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "justificacion_autor_id",
     "justificacion_autor_nombre",
     "justificacion_at",
+    "proveedor_seleccionado_id",
+    "proveedor_seleccionado_nombre",
+    "cotizacion_numero_seleccionada",
     "numero_linea",
     "estado_validacion",
     "grupo_seleccion",
@@ -973,10 +976,24 @@ def _enrich_solicitud_usuarios(sb, sol: dict, validadores_pendientes: Optional[L
     return sol
 
 
+def _attach_valor_compra_linea(it: dict, cat_map: Optional[Dict[int, dict]] = None) -> None:
+    """Cantidad × oferta del proveedor elegido (o la ganadora si aún no hay elección)."""
+    cant = _to_float(it.get("cantidad"))
+    unit = _to_float(it.get("valor_compra_unitario"))
+    if unit <= 0 and it.get("insumo_id") and cat_map:
+        cat = cat_map.get(int(it["insumo_id"])) or {}
+        unit = _to_float(cat.get("valor_compra_referencia"))
+    if cant > 0 and unit > 0:
+        it["valor_compra_linea"] = round(cant * unit, 2)
+    else:
+        it["valor_compra_linea"] = None
+
+
 def _strip_economics_item(it: dict) -> None:
     it.pop("analisis_valor", None)
     it.pop("analisis_rentabilidad", None)
     it.pop("valor_compra_unitario", None)
+    it.pop("valor_compra_linea", None)
     it.pop("vlr_unitario_cobro", None)
     ctx = it.get("contexto_negociado")
     if isinstance(ctx, dict):
@@ -1060,6 +1077,7 @@ def _enrich_solicitud(
                     it["capitulo"] = pr.get("capitulo")
                 if not it.get("item"):
                     it["item"] = pr.get("item")
+            _attach_valor_compra_linea(it)
             if not ver_economicos:
                 _strip_economics_item(it)
         _attach_repartos_to_items(sb, items)
@@ -1230,6 +1248,7 @@ def _enrich_solicitud(
                 vlr,
                 cobro_motivo=motivo,
             )
+            _attach_valor_compra_linea(it, cot_map)
             if not ver_economicos:
                 _strip_economics_item(it)
 
@@ -1760,6 +1779,356 @@ def _costo_al_mapear(body: dict, existing: dict, resolved: dict, insumo_id):
     return resolved.get("valor_compra_unitario")
 
 
+def ofertas_proveedor_desde_row(row: dict, prov_nombres: Optional[Dict[int, str]] = None) -> List[dict]:
+    """
+    Proveedores con cotización para un insumo.
+    ``valor`` es el precio unitario con IVA/AIU incluido.
+    """
+    from catalogo_insumos_service import (
+        _valor_oferta_despues_impuesto,
+        cotizaciones_detalle_from_row,
+    )
+
+    prov_nombres = prov_nombres or {}
+    detalle = cotizaciones_detalle_from_row(row or {})
+    if (
+        len(detalle) == 1
+        and detalle[0].get("id") == "legacy-ganadora"
+        and not detalle[0].get("proveedor_id")
+        and row.get("proveedor_id") not in (None, "")
+    ):
+        try:
+            detalle[0]["proveedor_id"] = int(row["proveedor_id"])
+        except (TypeError, ValueError):
+            pass
+    ofertas: List[dict] = []
+    for c in detalle:
+        if (c.get("tipo") or "insumo") != "insumo":
+            continue
+        pid = c.get("proveedor_id")
+        try:
+            pid_i = int(pid) if pid not in (None, "") else None
+        except (TypeError, ValueError):
+            pid_i = None
+        nombre = (c.get("proveedor") or "").strip()
+        if pid_i and not nombre:
+            nombre = (prov_nombres.get(pid_i) or "").strip()
+        base = c.get("valor")
+        if base in (None, "") and c.get("es_ganadora") and row.get("valor_compra_referencia") not in (None, ""):
+            valor = _to_float(row.get("valor_compra_referencia"))
+        else:
+            valor = _valor_oferta_despues_impuesto(
+                base,
+                impuesto_lado=c.get("impuesto"),
+                tributos_row=row.get("tributos"),
+                tipo_impuesto=row.get("tipo_impuesto"),
+                impuesto_porcentaje=row.get("impuesto_porcentaje"),
+                impuestos=row.get("impuestos"),
+            )
+        if not nombre and pid_i is None and not c.get("numero") and valor <= 0:
+            continue
+        ofertas.append({
+            "proveedor_id": pid_i,
+            "proveedor_nombre": nombre or (f"Proveedor {pid_i}" if pid_i else "Proveedor"),
+            "numero": (c.get("numero") or "").strip() or None,
+            "es_ganadora": bool(c.get("es_ganadora")),
+            "valor": valor,
+        })
+    if not ofertas and row.get("proveedor_id") not in (None, ""):
+        try:
+            pid_i = int(row["proveedor_id"])
+        except (TypeError, ValueError):
+            pid_i = None
+        if pid_i:
+            valor = _to_float(row.get("valor_compra_referencia"))
+            if valor <= 0:
+                valor = _to_float(row.get("costo_base"))
+            ofertas.append({
+                "proveedor_id": pid_i,
+                "proveedor_nombre": (prov_nombres.get(pid_i) or "").strip() or f"Proveedor {pid_i}",
+                "numero": (row.get("cotizacion_numero") or "").strip() or None,
+                "es_ganadora": True,
+                "valor": valor,
+            })
+    if ofertas and not any(o.get("es_ganadora") for o in ofertas):
+        ofertas[0]["es_ganadora"] = True
+    return ofertas
+
+
+def oferta_ganadora(ofertas: List[dict]) -> Optional[dict]:
+    for o in ofertas or []:
+        if o.get("es_ganadora"):
+            return o
+    return ofertas[0] if ofertas else None
+
+
+def elegir_oferta_proveedor(
+    ofertas: List[dict],
+    *,
+    proveedor_id=None,
+    nombre: Optional[str] = None,
+    numero: Optional[str] = None,
+) -> Optional[dict]:
+    """La cotización pedida, o la ganadora si no hay coincidencia."""
+    if not ofertas:
+        return None
+    num = (numero or "").strip()
+    nom = (nombre or "").strip().casefold()
+    pid = None
+    if proveedor_id not in (None, ""):
+        try:
+            pid = int(proveedor_id)
+        except (TypeError, ValueError):
+            pid = None
+    if pid is None and not nom and not num:
+        return oferta_ganadora(ofertas)
+
+    def _score(o: dict) -> int:
+        s = 0
+        if num and (o.get("numero") or "") == num:
+            s += 4
+        if pid is not None and o.get("proveedor_id") == pid:
+            s += 2
+        if nom and (o.get("proveedor_nombre") or "").strip().casefold() == nom:
+            s += 1
+        return s
+
+    ranked = sorted(ofertas, key=_score, reverse=True)
+    if _score(ranked[0]) > 0:
+        return ranked[0]
+    return oferta_ganadora(ofertas)
+
+
+def _fila_insumo_para_ofertas(sb, insumo_id: int) -> Optional[dict]:
+    selects = [
+        "id, contrato_id, cotizaciones_detalle, cotizacion_numero, cotizacion_fecha, "
+        "cotizacion_vigencia, costo_base, proveedor_id, valor_compra_referencia, "
+        "tributos, tipo_impuesto, impuesto_porcentaje, impuestos",
+        "id, contrato_id, cotizaciones_detalle, cotizacion_numero, costo_base, "
+        "proveedor_id, valor_compra_referencia",
+        "id, contrato_id, cotizacion_numero, costo_base, proveedor_id, valor_compra_referencia",
+    ]
+    last_exc: Optional[Exception] = None
+    for select in selects:
+        try:
+            rows = (
+                sb.table("almacen_insumo")
+                .select(select)
+                .eq("id", int(insumo_id))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            return rows[0] if rows else None
+        except Exception as exc:
+            last_exc = exc
+            col = _pgrst_unknown_column(exc)
+            if not col:
+                break
+    if last_exc:
+        _log.warning("No se pudieron leer las cotizaciones del insumo %s: %s", insumo_id, last_exc)
+    return None
+
+
+def listar_ofertas_proveedor_insumo(
+    contrato_id: int,
+    insumo_id: int,
+    *,
+    ver_economicos: bool = False,
+) -> List[dict]:
+    """Cotizaciones del insumo. Sin visibilidad económica se omiten las cifras."""
+    sb = _sb()
+    row = _fila_insumo_para_ofertas(sb, insumo_id)
+    if not row or int(row.get("contrato_id") or 0) != int(contrato_id):
+        raise ValueError("Insumo no encontrado.")
+    ofertas = ofertas_proveedor_desde_row(row)
+    faltan = [
+        int(o["proveedor_id"])
+        for o in ofertas
+        if o.get("proveedor_id") and str(o.get("proveedor_nombre") or "").startswith("Proveedor ")
+    ]
+    if faltan:
+        nombres: Dict[int, str] = {}
+        for r in (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", sorted(set(faltan)))
+            .execute()
+            .data
+            or []
+        ):
+            nombres[int(r["id"])] = (r.get("razon_social") or "").strip()
+        if nombres:
+            ofertas = ofertas_proveedor_desde_row(row, nombres)
+    out: List[dict] = []
+    for o in ofertas:
+        item = {
+            "proveedor_id": o.get("proveedor_id"),
+            "proveedor_nombre": o.get("proveedor_nombre"),
+            "numero": o.get("numero"),
+            "es_ganadora": bool(o.get("es_ganadora")),
+        }
+        if ver_economicos:
+            item["valor"] = o.get("valor")
+        out.append(item)
+    return out
+
+
+def _resolver_proveedor_mapeo(sb, body: dict, existing: dict, insumo_id) -> dict:
+    """
+    Proveedor a guardar en la línea.
+    Si cambia el insumo o no hay selección, queda la cotización ganadora.
+    El costo de esa oferta se aplica cuando el cliente no envía cifra.
+    """
+    row = _fila_insumo_para_ofertas(sb, int(insumo_id)) or {}
+    ofertas = ofertas_proveedor_desde_row(row)
+    pide = any(
+        body.get(k) not in (None, "")
+        for k in (
+            "proveedor_seleccionado_id",
+            "proveedor_seleccionado_nombre",
+            "cotizacion_numero_seleccionada",
+        )
+    )
+    insumo_cambio = not _mismo_insumo_linea(existing, insumo_id)
+    tenia = bool(
+        existing.get("proveedor_seleccionado_id")
+        or (existing.get("proveedor_seleccionado_nombre") or "").strip()
+    )
+    if pide:
+        oferta = elegir_oferta_proveedor(
+            ofertas,
+            proveedor_id=body.get("proveedor_seleccionado_id"),
+            nombre=body.get("proveedor_seleccionado_nombre"),
+            numero=body.get("cotizacion_numero_seleccionada"),
+        )
+    elif insumo_cambio or not tenia:
+        oferta = oferta_ganadora(ofertas)
+    else:
+        oferta = None
+    if not oferta:
+        return {"aplicar": False}
+    prev_id = existing.get("proveedor_seleccionado_id")
+    prev_num = (existing.get("cotizacion_numero_seleccionada") or "").strip()
+    prev_nom = (existing.get("proveedor_seleccionado_nombre") or "").strip().casefold()
+    nuevo_id = oferta.get("proveedor_id")
+    nuevo_num = (oferta.get("numero") or "").strip()
+    nuevo_nom = (oferta.get("proveedor_nombre") or "").strip().casefold()
+    distinta = insumo_cambio or not tenia
+    if not distinta:
+        if (prev_id or None) != (nuevo_id or None):
+            distinta = True
+        elif prev_num != nuevo_num or prev_nom != nuevo_nom:
+            distinta = True
+    return {
+        "aplicar": True,
+        "proveedor_seleccionado_id": nuevo_id,
+        "proveedor_seleccionado_nombre": oferta.get("proveedor_nombre"),
+        "cotizacion_numero_seleccionada": oferta.get("numero"),
+        "valor": oferta.get("valor"),
+        "forzar_costo": body.get("valor_compra_unitario") is None and (pide or insumo_cambio or not tenia) and distinta,
+    }
+
+
+def _persistir_cotizacion_elegida(sb, item_id: int, existing: dict, sel: dict) -> Optional[int]:
+    """
+    Guarda el proveedor elegido en almacen_cotizacion (tabla ya existente)
+    y devuelve su id para cotizacion_seleccionada_id.
+    """
+    if not sel.get("aplicar"):
+        return None
+    nombre = (sel.get("proveedor_seleccionado_nombre") or "").strip() or "Proveedor"
+    valor = max(_to_float(sel.get("valor")), 0.0)
+    numero = (sel.get("cotizacion_numero_seleccionada") or "").strip() or None
+    payload = {
+        "proveedor_nombre": nombre,
+        "valor_unitario": valor,
+        "observaciones": numero,
+    }
+    pid = sel.get("proveedor_seleccionado_id")
+    if pid not in (None, ""):
+        try:
+            payload["proveedor_id"] = int(pid)
+        except (TypeError, ValueError):
+            pass
+    prev = existing.get("cotizacion_seleccionada_id")
+    if prev:
+        data = dict(payload)
+        for _ in range(4):
+            try:
+                sb.table("almacen_cotizacion").update(data).eq("id", int(prev)).eq(
+                    "solicitud_item_id", int(item_id)
+                ).execute()
+                return int(prev)
+            except Exception as exc:
+                col = _pgrst_unknown_column(exc)
+                if col and col in data:
+                    data.pop(col, None)
+                    continue
+                _log.warning("No se pudo actualizar la cotización elegida %s: %s", prev, exc)
+                break
+    row = {"solicitud_item_id": int(item_id), **payload}
+    for _ in range(4):
+        try:
+            ins = sb.table("almacen_cotizacion").insert(row).execute().data or []
+            if ins and ins[0].get("id"):
+                return int(ins[0]["id"])
+            return None
+        except Exception as exc:
+            col = _pgrst_unknown_column(exc)
+            if col and col in row and col != "solicitud_item_id":
+                row.pop(col, None)
+                continue
+            _log.warning("No se pudo crear la cotización elegida de la línea %s: %s", item_id, exc)
+            return None
+    return None
+
+
+def _hidratar_proveedor_desde_cotizacion(sb, items: List[dict]) -> None:
+    """Si el esquema aún no tiene las columnas nuevas, el nombre sale de la cotización elegida."""
+    need = [
+        it for it in items or []
+        if it.get("cotizacion_seleccionada_id")
+        and not (it.get("proveedor_seleccionado_nombre") or "").strip()
+    ]
+    if not need:
+        return
+    ids = sorted({int(it["cotizacion_seleccionada_id"]) for it in need})
+    rows: List[dict] = []
+    selects = [
+        "id, proveedor_id, proveedor_nombre, observaciones",
+        "id, proveedor_nombre, observaciones",
+    ]
+    for select in selects:
+        try:
+            rows = (
+                sb.table("almacen_cotizacion")
+                .select(select)
+                .in_("id", ids)
+                .execute()
+                .data
+                or []
+            )
+            break
+        except Exception as exc:
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudo leer la cotización elegida: %s", exc)
+                return
+    by_id = {int(r["id"]): r for r in rows if r.get("id")}
+    for it in need:
+        cot = by_id.get(int(it["cotizacion_seleccionada_id"]))
+        if not cot:
+            continue
+        nombre = (cot.get("proveedor_nombre") or "").strip()
+        if nombre:
+            it["proveedor_seleccionado_nombre"] = nombre
+        if cot.get("proveedor_id") and not it.get("proveedor_seleccionado_id"):
+            it["proveedor_seleccionado_id"] = cot.get("proveedor_id")
+        if cot.get("observaciones") and not it.get("cotizacion_numero_seleccionada"):
+            it["cotizacion_numero_seleccionada"] = cot.get("observaciones")
+
+
 def _cobro_al_mapear(override_cobro, existing: dict, resolved: dict, insumo_id):
     if override_cobro is not None and override_cobro > 0:
         return override_cobro
@@ -1869,6 +2238,11 @@ def mapear_item_solicitud_gerencial(
         refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0,
     )
 
+    sel = _resolver_proveedor_mapeo(sb, body, existing, insumo_id)
+    costo_body = dict(body)
+    if sel.get("forzar_costo") and _to_float(sel.get("valor")) > 0:
+        costo_body["valor_compra_unitario"] = sel.get("valor")
+    cot_sel_id = _persistir_cotizacion_elegida(sb, int(item_id), existing, sel)
     patch = {
         "insumo_id": resolved.get("insumo_id"),
         "listado_precio_id": resolved.get("listado_precio_id"),
@@ -1876,7 +2250,7 @@ def mapear_item_solicitud_gerencial(
         "descripcion_solicitada": desc_sol or resolved.get("material_descripcion"),
         "unidad": resolved.get("unidad") or existing.get("unidad"),
         "cantidad": cantidad,
-        "valor_compra_unitario": _costo_al_mapear(body, existing, resolved, insumo_id),
+        "valor_compra_unitario": _costo_al_mapear(costo_body, existing, resolved, insumo_id),
         "vlr_unitario_cobro": _cobro_al_mapear(override_cobro, existing, resolved, insumo_id),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
@@ -1886,12 +2260,18 @@ def mapear_item_solicitud_gerencial(
             default=True,
         ),
     }
+    if sel.get("aplicar"):
+        patch["proveedor_seleccionado_id"] = sel.get("proveedor_seleccionado_id")
+        patch["proveedor_seleccionado_nombre"] = sel.get("proveedor_seleccionado_nombre")
+        patch["cotizacion_numero_seleccionada"] = sel.get("cotizacion_numero_seleccionada")
+    if cot_sel_id:
+        patch["cotizacion_seleccionada_id"] = cot_sel_id
     if patch["valor_compra_unitario"] is not None and _to_float(patch["valor_compra_unitario"]) < 0:
         raise ValueError("El costo de compra no puede ser negativo.")
     if patch["vlr_unitario_cobro"] is not None and _to_float(patch["vlr_unitario_cobro"]) < 0:
         raise ValueError("El valor de cobro no puede ser negativo.")
 
-    sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
+    _update_solicitud_item_row(sb, int(item_id), patch)
     if not return_solicitud:
         return {"ok": True, "item_id": int(item_id)}
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
@@ -2160,7 +2540,12 @@ def corregir_insumo_item_post_oc(
         refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0,
     )
 
-    vu = _costo_al_mapear(body, existing, resolved, insumo_id)
+    sel = _resolver_proveedor_mapeo(sb, body, existing, insumo_id)
+    costo_body = dict(body)
+    if sel.get("forzar_costo") and _to_float(sel.get("valor")) > 0:
+        costo_body["valor_compra_unitario"] = sel.get("valor")
+    cot_sel_id = _persistir_cotizacion_elegida(sb, int(item_id), existing, sel)
+    vu = _costo_al_mapear(costo_body, existing, resolved, insumo_id)
     if vu is None or _to_float(vu) <= 0:
         raise ValueError("Defina el costo de compra unitario del insumo corregido.")
 
@@ -2182,7 +2567,13 @@ def corregir_insumo_item_post_oc(
         # Conservar aprobación: quien corrige tiene autoridad de aprobar.
         "estado_validacion": existing.get("estado_validacion") or "aprobado",
     }
-    sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
+    if sel.get("aplicar"):
+        patch["proveedor_seleccionado_id"] = sel.get("proveedor_seleccionado_id")
+        patch["proveedor_seleccionado_nombre"] = sel.get("proveedor_seleccionado_nombre")
+        patch["cotizacion_numero_seleccionada"] = sel.get("cotizacion_numero_seleccionada")
+    if cot_sel_id:
+        patch["cotizacion_seleccionada_id"] = cot_sel_id
+    _update_solicitud_item_row(sb, int(item_id), patch)
 
     oci = (
         sb.table("almacen_orden_compra_item")
@@ -2195,8 +2586,12 @@ def corregir_insumo_item_post_oc(
         or []
     )
     if oci:
-        proveedor = oci[0].get("proveedor_nombre") or "Proveedor catálogo"
-        if resolved.get("insumo_id"):
+        proveedor = (
+            (patch.get("proveedor_seleccionado_nombre") or "").strip()
+            or oci[0].get("proveedor_nombre")
+            or "Proveedor catálogo"
+        )
+        if not patch.get("proveedor_seleccionado_nombre") and resolved.get("insumo_id"):
             cat = _cotizaciones_catalogo_insumo(sb, int(resolved["insumo_id"])) or {}
             if cat.get("proveedor_id"):
                 prow = (
@@ -2360,6 +2755,11 @@ def _proveedor_meta_batch(
         cat = it.get("cotizaciones_catalogo") or {}
         if cat.get("proveedor_id"):
             prov_ids.add(int(cat["proveedor_id"]))
+        if it.get("proveedor_seleccionado_id"):
+            try:
+                prov_ids.add(int(it["proveedor_seleccionado_id"]))
+            except (TypeError, ValueError):
+                pass
     prov_nombres: Dict[int, str] = {}
     if prov_ids:
         for r in (
@@ -2385,6 +2785,17 @@ def _proveedor_de_item(
     """
     if it.get("es_recurrente"):
         return "recurrente", None, "Compra recurrente"
+    sel_nom = (it.get("proveedor_seleccionado_nombre") or "").strip()
+    sel_id = it.get("proveedor_seleccionado_id")
+    if sel_id not in (None, "") or sel_nom:
+        try:
+            pid_i = int(sel_id) if sel_id not in (None, "") else None
+        except (TypeError, ValueError):
+            pid_i = None
+        if pid_i:
+            nombre = prov_nombres.get(pid_i) or sel_nom or "Proveedor"
+            return f"id:{pid_i}", pid_i, nombre
+        return f"nombre:{sel_nom.casefold()}", None, sel_nom or "Proveedor"
     cat = it.get("cotizaciones_catalogo") or {}
     if not cat and it.get("insumo_id"):
         cat = cat_map.get(int(it["insumo_id"])) or {}
@@ -2434,6 +2845,10 @@ def _attach_proveedor_lineas(sb, items: List[dict]) -> None:
     """Proveedor por línea en el detalle (también en la carga ligera)."""
     if not items:
         return
+    try:
+        _hidratar_proveedor_desde_cotizacion(sb, items)
+    except Exception:
+        _log.exception("No se pudo hidratar el proveedor elegido")
     try:
         cat_map, prov_nombres = _proveedor_meta_batch(sb, items)
     except Exception:

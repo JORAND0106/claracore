@@ -71,15 +71,26 @@ export function esResidenteAdministrativoUsuario(usuario) {
   return cargo === 'residente administrativo'
 }
 
+/** Rol de tipo gerencia contratista, sin el bypass de Desarrollador. */
+export function esGerenciaContratistaRol(usuario) {
+  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
+  if (rol.includes('intervent')) return false
+  if (rol === 'contratista gerencial' || rol === 'gerencia contratista') return true
+  return rol.includes('contrat') && rol.includes('gerencial')
+}
+
+/** Rol de plataforma Administrativo (no el cargo). */
+export function esRolAdministrativo(usuario) {
+  return normRol(usuario?.rol_nombre || usuario?.rol) === 'administrativo'
+}
+
 /**
- * Costos/cobros/utilidad/rentabilidad: solo Operativo Gerencial (rol)
- * o cargo Residente Administrativo (excepción).
- * Desarrollador (plataforma) conserva acceso vía esDesarrolladorUsuario en App.
+ * Cifras en dinero: solo gerencia contratista y el rol Administrativo.
+ * Cargo, permisos por función y Desarrollador no cambian esta visibilidad.
  */
 export function puedeVerValoresEconomicosAlmacen(usuario) {
-  if (esDesarrolladorUsuario(usuario)) return true
-  if (esOperativoGerencialUsuario(usuario)) return true
-  if (esResidenteAdministrativoUsuario(usuario)) return true
+  if (esGerenciaContratistaRol(usuario)) return true
+  if (esRolAdministrativo(usuario)) return true
   return false
 }
 

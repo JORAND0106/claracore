@@ -3,6 +3,7 @@ import PresupuestoItemSelector, { normPptoItem } from './PresupuestoItemSelector
 import {
   AlmacenFieldLabel,
   AlmacenHelpIcon,
+  fmtCant,
   fmtFechaAlmacenCorta,
   fmtMoney,
   useAlmacenApi,
@@ -53,6 +54,7 @@ const INVENTARIO_COLS = [
     tip: 'Valor entradas — Valor financiero de las entradas registradas al almacén.',
     align: 'right',
     ecoOnly: false,
+    qtyKey: 'entradas',
   },
   {
     key: 'v_sal',
@@ -60,6 +62,7 @@ const INVENTARIO_COLS = [
     tip: 'Valor salidas — Valor financiero despachado a obra (salidas netas de devoluciones).',
     align: 'right',
     ecoOnly: false,
+    qtyKey: 'salidas',
   },
   {
     key: 'stock',
@@ -67,13 +70,14 @@ const INVENTARIO_COLS = [
     tip: 'Stock — Valor financiero del saldo en almacén (entradas − salidas).',
     align: 'right',
     ecoOnly: false,
+    qtyKey: 'saldo',
   },
   {
     key: 's_cons',
     abbr: 'S.CONS.',
     tip: 'Saldo por consumir — Valor negociado acumulado − valor de entradas ya registradas.',
     align: 'right',
-    ecoOnly: false,
+    ecoOnly: true,
   },
 ]
 
@@ -110,6 +114,11 @@ function fmtMoneyOrDash(v, hideEco) {
   const n = Number(v)
   if (!Number.isFinite(n)) return '—'
   return fmtMoney(n)
+}
+
+function fmtCantidadOValor(money, qty, verEconomicos) {
+  if (!verEconomicos) return fmtCant(qty)
+  return fmtMoneyOrDash(money, false)
 }
 
 function fmtPctOrDash(v, hideEco) {
@@ -405,7 +414,7 @@ export default function InventarioPanel({
   }
 
   const filtroActivo = Boolean(filtroCap || filtroItem || q.trim())
-  const colSpan = verEconomicos ? 9 : 5
+  const colSpan = verEconomicos ? 9 : 4
 
   return (
     <div>
@@ -577,21 +586,34 @@ export default function InventarioPanel({
             >
               <thead>
                 <tr>
-                  {INVENTARIO_COLS.filter((c) => !c.ecoOnly || verEconomicos).map((col) => (
+                  {INVENTARIO_COLS.filter((c) => !c.ecoOnly || verEconomicos).map((col) => {
+                    const shown = !verEconomicos && col.qtyKey
+                      ? {
+                        ...col,
+                        abbr: col.key === 'v_ent' ? 'ENT.' : col.key === 'v_sal' ? 'SAL.' : 'STOCK',
+                        tip: col.key === 'v_ent'
+                          ? 'Cantidad de entradas al almacén.'
+                          : col.key === 'v_sal'
+                            ? 'Cantidad de salidas a obra.'
+                            : 'Cantidad en almacén (entradas − salidas).',
+                      }
+                      : col
+                    return (
                     <ColHeader
-                      key={col.key}
-                      abbr={col.abbr}
-                      tip={col.tip}
-                      align={col.align}
+                      key={shown.key}
+                      abbr={shown.abbr}
+                      tip={shown.tip}
+                      align={shown.align}
                       style={{
                         ...th,
-                        textAlign: col.align,
-                        width: col.key === 'jerarquia'
+                        textAlign: shown.align,
+                        width: shown.key === 'jerarquia'
                           ? (compact ? '34%' : '38%')
                           : undefined,
                       }}
                     />
-                  ))}
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -682,12 +704,12 @@ function FragmentCapitulo({
         {verEconomicos && <td style={num}>—</td>}
         {verEconomicos && <td style={num}>—</td>}
         {verEconomicos && <td style={num}>—</td>}
-        <td style={num}>{fmtMoneyOrDash(cap.valor_entradas, hideEco)}</td>
-        <td style={num}>{fmtMoneyOrDash(cap.valor_salidas, hideEco)}</td>
+        <td style={num}>{fmtCantidadOValor(cap.valor_entradas, cap.entradas, verEconomicos)}</td>
+        <td style={num}>{fmtCantidadOValor(cap.valor_salidas, cap.salidas, verEconomicos)}</td>
         <td style={{ ...num, fontWeight: 700 }}>
-          {fmtMoneyOrDash(cap.valor_stock ?? cap.stock, hideEco)}
+          {fmtCantidadOValor(cap.valor_stock ?? cap.stock, cap.saldo, verEconomicos)}
         </td>
-        <td style={num}>{fmtMoneyOrDash(cap.saldo_por_consumir, hideEco)}</td>
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(cap.saldo_por_consumir, hideEco)}</td>}
       </tr>
 
       {capOpen && items.map((it) => {
@@ -771,12 +793,12 @@ function FragmentItem({
             {fmtPctOrDash(it.rentabilidad_pct, hideEco)}
           </td>
         )}
-        <td style={num}>{fmtMoneyOrDash(it.valor_entradas, hideEco)}</td>
-        <td style={num}>{fmtMoneyOrDash(it.valor_salidas, hideEco)}</td>
+        <td style={num}>{fmtCantidadOValor(it.valor_entradas, it.entradas, verEconomicos)}</td>
+        <td style={num}>{fmtCantidadOValor(it.valor_salidas, it.salidas, verEconomicos)}</td>
         <td style={{ ...num, fontWeight: 700 }}>
-          {fmtMoneyOrDash(it.valor_stock ?? it.stock, hideEco)}
+          {fmtCantidadOValor(it.valor_stock ?? it.stock, it.saldo, verEconomicos)}
         </td>
-        <td style={num}>{fmtMoneyOrDash(it.saldo_por_consumir, hideEco)}</td>
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(it.saldo_por_consumir, hideEco)}</td>}
       </tr>
 
       {itemOpen && (it.insumos || []).map((ins) => {
@@ -897,17 +919,19 @@ function FragmentInsumo({
         {verEconomicos && <td style={num}>—</td>}
         {verEconomicos && <td style={num}>—</td>}
         <td style={num}>
-          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.valor_entradas, hideEco)}
+          {ins.es_mo ? 'N/A' : fmtCantidadOValor(ins.valor_entradas, ins.entradas, verEconomicos)}
         </td>
         <td style={num}>
-          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.valor_salidas, hideEco)}
+          {ins.es_mo ? 'N/A' : fmtCantidadOValor(ins.valor_salidas, ins.salidas, verEconomicos)}
         </td>
         <td style={{ ...num, fontWeight: 600 }}>
-          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.valor_stock ?? ins.stock, hideEco)}
+          {ins.es_mo ? 'N/A' : fmtCantidadOValor(ins.valor_stock ?? ins.stock, ins.saldo, verEconomicos)}
         </td>
-        <td style={{ ...num, fontWeight: 600 }}>
-          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.saldo_por_consumir, hideEco)}
-        </td>
+        {verEconomicos && (
+          <td style={{ ...num, fontWeight: 600 }}>
+            {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.saldo_por_consumir, hideEco)}
+          </td>
+        )}
       </tr>
 
       {insOpen && ocs.map((oc) => {
@@ -942,10 +966,10 @@ function FragmentInsumo({
             )}
             {verEconomicos && <td style={numOc}>—</td>}
             {verEconomicos && <td style={numOc}>—</td>}
-            <td style={numOc}>{fmtMoneyOrDash(oc.valor_entradas, hideEco)}</td>
-            <td style={numOc}>{fmtMoneyOrDash(oc.valor_salidas, hideEco)}</td>
-            <td style={numOc}>{fmtMoneyOrDash(oc.valor_stock ?? oc.saldo, hideEco)}</td>
-            <td style={numOc}>—</td>
+            <td style={numOc}>{fmtCantidadOValor(oc.valor_entradas, oc.entradas, verEconomicos)}</td>
+            <td style={numOc}>{fmtCantidadOValor(oc.valor_salidas, oc.salidas, verEconomicos)}</td>
+            <td style={numOc}>{fmtCantidadOValor(oc.valor_stock ?? oc.saldo, oc.saldo, verEconomicos)}</td>
+            {verEconomicos && <td style={numOc}>—</td>}
           </tr>
         )
       })}

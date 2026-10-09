@@ -19,6 +19,7 @@ import {
   motivoEnvioNoDisponible,
   puedeAbrirRevisionLinea,
   resumenProveedoresSolicitud,
+  totalesCompraSolicitud,
   solicitudOrdenesCompra,
   solicitudPuedeReabrirOc,
   solicitudPuedeRechazarCompleta,
@@ -28,6 +29,7 @@ import {
 import {
   ESTADO_SOLICITUD_LABEL,
   almacenFormModalDialogStyle,
+  fmtMoney,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
@@ -127,11 +129,15 @@ export default function SolicitudDetalleModal({
   const motivoAprobacion = motivoAprobacionNoDisponible(sol, permisos)
   const puedeEnviar = puedeEnviarSolicitudAlmacen(permisos, sol)
   const motivoEnvio = motivoEnvioNoDisponible(sol, permisos)
+  const verEconomicos = permisos?.verEconomicos !== false
   const resumenProveedores = useMemo(
     () => resumenProveedoresSolicitud(items),
     [items],
   )
-  const verEconomicos = permisos?.verEconomicos !== false
+  const totalesCompra = useMemo(
+    () => (verEconomicos ? totalesCompraSolicitud(items) : null),
+    [items, verEconomicos],
+  )
   const puedeAsignar = Boolean(permisos?.editar)
   const puedeSeleccionar = puedeAsignar || puedeValidar
   const puedeRechazarCompleta = solicitudPuedeRechazarCompleta(sol, permisos)
@@ -708,8 +714,35 @@ export default function SolicitudDetalleModal({
                   onRowClick={(it) => {
                     if (it?.id != null) setRevisionItemId(it.id)
                   }}
-                  onMapClick={(it) => setMapaItem(it)}
+                  verEconomicos={verEconomicos}
+                  token={token}
+                  contratoId={contratoId}
+                  t={t}
                 />
+                {verEconomicos && totalesCompra?.alguna && (
+                  <div
+                    data-testid="solicitud-totales-compra"
+                    style={{
+                      marginTop: 8,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      background: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      fontSize: 'var(--cc-sm)',
+                    }}
+                  >
+                    {totalesCompra.grupos.length > 1 && totalesCompra.grupos.map((g) => (
+                      <div key={g.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                        <span>{g.nombre}</span>
+                        <strong>{fmtMoney(g.total)}</strong>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontWeight: 800 }}>
+                      <span>{totalesCompra.grupos.length > 1 ? 'Total general' : 'Total de la solicitud'}</span>
+                      <span>{fmtMoney(totalesCompra.total)}</span>
+                    </div>
+                  </div>
+                )}
                 </>
               )}
 
@@ -854,7 +887,7 @@ export default function SolicitudDetalleModal({
               Asignar insumo
             </div>
             <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', marginBottom: 12 }}>
-              El mismo insumo se aplica a {asignar.ids.length} línea(s). Cada una se puede revisar después.
+              El mismo insumo se aplica a {asignar.ids.length} línea(s), con la cotización ganadora. El proveedor se puede cambiar después en cada línea.
             </div>
             <InsumoSearchTable
               value={insumoSel}
@@ -928,6 +961,7 @@ export default function SolicitudDetalleModal({
         <ExpedienteCompraModal
           ocId={expedienteOcId}
           token={token}
+          verEconomicos={verEconomicos}
           onClose={() => {
             setExpedienteOcId(null)
             onClose?.()

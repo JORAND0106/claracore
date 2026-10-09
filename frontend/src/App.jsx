@@ -20995,7 +20995,7 @@ const [navReporteId, setNavReporteId] = useState(null)
   const puedeEditarAlmacen = esDeveloper || almacenPerm.editar
   const puedeValidarAlmacen = esDeveloper || almacenPerm.validar
   const puedeExportarAlmacen = esDeveloper || almacenPerm.exportar
-  const almacenVerEconomicos = esDeveloper || almacenAcceso.verEconomicos
+  const almacenVerEconomicos = almacenAcceso.verEconomicos
   const seguimientoAcceso = accesoSeguimiento(usuario, usuario?.contrato_id)
   // Seguimiento abierto a todos los roles de obra; Contador sigue fuera (flujo contable).
   // Borrado definitivo se controla con seguimientoAcceso.eliminar / esDesarrollador.
