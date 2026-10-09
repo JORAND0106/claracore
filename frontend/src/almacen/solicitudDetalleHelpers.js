@@ -107,9 +107,29 @@ export function puedeAbrirRevisionLinea(permisos) {
     permisos?.editar
     || permisos?.validar
     || permisos?.esContratistaGerencial
-    || permisos?.esDesarrollador,
+    || permisos?.esDesarrollador
+    || permisos?.esCargoAdministrador,
   )
 }
+
+/**
+ * Cambiar el proveedor de una línea ya aprobada.
+ * Basta gerencia contratista, cargo Administrador o desarrollador.
+ * Si la línea está en una OC, la pantalla igual muestra el campo y explica por qué no se puede.
+ */
+export function puedeCambiarProveedorLineaAprobada(item, permisos) {
+  if (!item?.id) return false
+  if ((item.estado_validacion || '') !== 'aprobado') return false
+  return Boolean(
+    permisos?.esContratistaGerencial
+    || permisos?.esDesarrollador
+    || permisos?.esCargoAdministrador,
+  )
+}
+
+export const MOTIVO_PROVEEDOR_EN_OC = (
+  'Esta línea ya hace parte de una orden de compra generada. El proveedor no se puede cambiar.'
+)
 
 /**
  * Asignar el insumo del catálogo (búsqueda y Guardar mapeo).

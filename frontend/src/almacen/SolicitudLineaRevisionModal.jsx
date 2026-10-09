@@ -16,8 +16,10 @@ import {
   itemPuedeAsignarInsumo,
   itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
+  MOTIVO_PROVEEDOR_EN_OC,
   motivoItemNoValidable,
   puedeAbrirRevisionLinea,
+  puedeCambiarProveedorLineaAprobada,
   rentabilidadDesdeAnalisis,
   textoLibreSolicitudItem,
   totalesCompraSolicitud,
@@ -143,6 +145,8 @@ export default function SolicitudLineaRevisionModal({
   const puedeCorregirPostOc = itemPuedeCorregirInsumoPostOc(item, sol, permisos)
   const puedeAsignarInsumo = itemPuedeAsignarInsumo(item, sol, permisos)
   const puedeEditarMapeo = puedeAsignarInsumo || puedeCorregirPostOc
+  const puedeCambiarProveedor = puedeCambiarProveedorLineaAprobada(item, permisos) && !puedeEditarMapeo
+  const proveedorBloqueadoOc = Boolean(puedeCambiarProveedor && item?.en_orden_compra)
   const verEconomicos = permisos?.verEconomicos !== false
   const puedeAbrir = puedeAbrirRevisionLinea(permisos)
 
@@ -350,6 +354,28 @@ export default function SolicitudLineaRevisionModal({
       onClose?.()
     } catch (e) {
       setError(e.message || 'No se pudo validar el ítem.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const guardarProveedor = async () => {
+    if (!puedeCambiarProveedor || proveedorBloqueadoOc) return
+    if (!draft.proveedor?.proveedor_id && !draft.proveedor?.proveedor_nombre) {
+      setError('Elija un proveedor de la lista de este insumo.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.cambiarProveedorLinea(sol.id, item.id, {
+        proveedor_seleccionado_id: draft.proveedor?.proveedor_id || null,
+        proveedor_seleccionado_nombre: draft.proveedor?.proveedor_nombre || null,
+        cotizacion_numero_seleccionada: draft.proveedor?.numero || null,
+      })
+      onUpdated?.(r)
+    } catch (e) {
+      setError(e.message || 'No se pudo cambiar el proveedor.')
     } finally {
       setBusy(false)
     }
@@ -779,11 +805,27 @@ export default function SolicitudLineaRevisionModal({
                         {item.material_descripcion || '—'}
                       </span>
                     </td>
-                    <td style={td}>
-                      <span style={{ fontSize: 'var(--cc-xs)' }}>
-                        {etiquetaProveedorLinea(item)}
-                        {item.cotizacion_numero_seleccionada ? ` · Cot. ${item.cotizacion_numero_seleccionada}` : ''}
-                      </span>
+                    <td style={{ ...td, overflow: 'visible' }}>
+                      {puedeCambiarProveedor ? (
+                        <ProveedorOfertaField
+                          insumoId={item.insumo_id}
+                          value={draft.proveedor}
+                          disabled={busy || proveedorBloqueadoOc || !item.insumo_id}
+                          verEconomicos={verEconomicos}
+                          onChange={(oferta) => setDraft((d) => ({
+                            ...d,
+                            proveedor: oferta,
+                            valor_compra_unitario: verEconomicos && oferta?.valor != null && oferta.valor !== ''
+                              ? String(oferta.valor)
+                              : d.valor_compra_unitario,
+                          }))}
+                        />
+                      ) : (
+                        <span style={{ fontSize: 'var(--cc-xs)' }}>
+                          {etiquetaProveedorLinea(item)}
+                          {item.cotizacion_numero_seleccionada ? ` · Cot. ${item.cotizacion_numero_seleccionada}` : ''}
+                        </span>
+                      )}
                     </td>
                     <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                       {fmtCant(item.cantidad)}{item.unidad ? ` ${item.unidad}` : ''}
@@ -849,6 +891,42 @@ export default function SolicitudLineaRevisionModal({
                   </button>
                 </div>
               </>
+            ) : puedeCambiarProveedor ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {proveedorBloqueadoOc ? (
+                  <div
+                    data-testid="revision-proveedor-oc"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      background: '#fffbeb',
+                      border: '1px solid #fcd34d',
+                      color: '#92400e',
+                      fontSize: 'var(--cc-sm)',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {MOTIVO_PROVEEDOR_EN_OC}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                    La línea sigue aprobada. No hace falta aprobarla de nuevo.
+                  </div>
+                )}
+                {!proveedorBloqueadoOc && (
+                  <div>
+                    <button
+                      type="button"
+                      style={{ ...ui.btnPrimary, padding: '10px 16px' }}
+                      disabled={busy}
+                      data-testid="revision-guardar-proveedor"
+                      onClick={() => { void guardarProveedor() }}
+                    >
+                      {busy ? 'Guardando…' : 'Guardar proveedor'}
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               !motivoLinea && (
                 <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>

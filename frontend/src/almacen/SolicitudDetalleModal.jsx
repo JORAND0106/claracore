@@ -70,6 +70,7 @@ export default function SolicitudDetalleModal({
   const [cobroBloque, setCobroBloque] = useState('')
   const [expedienteOcId, setExpedienteOcId] = useState(null)
   const [avisoOc, setAvisoOc] = useState(null)
+  const [mensajesAbiertos, setMensajesAbiertos] = useState(false)
   const [loading, setLoading] = useState(!initialSeed)
   const [loadingSaldos, setLoadingSaldos] = useState(true)
   const [tituloDraft, setTituloDraft] = useState(initialSeed?.titulo || '')
@@ -413,7 +414,7 @@ export default function SolicitudDetalleModal({
         justifyContent: 'center',
         padding: compact ? 0 : 16,
       }}
-      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && !selectorOc && onClose?.()}
+      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && !selectorOc && !mensajesAbiertos && onClose?.()}
     >
       <div
         role="dialog"
@@ -494,6 +495,21 @@ export default function SolicitudDetalleModal({
               )}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+              {permisos?.ver && sol?.id != null && (
+                <SolicitudBuzon
+                  solicitudId={sol.id}
+                  consecutivo={sol.consecutivo}
+                  titulo={tituloDisplay}
+                  items={items}
+                  puedeEnviar={Boolean(permisos?.crear)}
+                  noLeidosInicial={Number(sol.mensajes_no_leidos) || 0}
+                  onOpenChange={setMensajesAbiertos}
+                  onNoLeidos={(n) => {
+                    setSol((prev) => (prev ? { ...prev, mensajes_no_leidos: n } : prev))
+                    onMensajesLeidos?.(n)
+                  }}
+                />
+              )}
               {sol?.id != null && (
                 <AlmacenTrazabilidadButton
                   token={token}
@@ -884,18 +900,6 @@ export default function SolicitudDetalleModal({
                 </>
               )}
 
-              {permisos?.ver && sol?.id != null && (
-                <SolicitudBuzon
-                  solicitudId={sol.id}
-                  items={items}
-                  puedeEnviar={Boolean(permisos?.crear)}
-                  noLeidosInicial={Number(sol.mensajes_no_leidos) || 0}
-                  onNoLeidos={(n) => {
-                    setSol((prev) => (prev ? { ...prev, mensajes_no_leidos: n } : prev))
-                    onMensajesLeidos?.(n)
-                  }}
-                />
-              )}
             </>
           )}
         </div>

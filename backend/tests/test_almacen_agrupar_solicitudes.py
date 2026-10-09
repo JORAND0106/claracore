@@ -4,9 +4,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from almacen_agrupar import (
+    asignar_numeros_destino,
     exigir_solicitud_libre,
     ejecutar_agrupacion,
     format_titulo_grupo,
+    mensaje_error_agrupar,
     planificar_agrupacion,
     vista_publica,
 )
@@ -358,3 +360,118 @@ def test_ejecutar_dos_veces_no_reescribe_lineas(monkeypatch):
     assert not any(op == "update" and tabla == "almacen_solicitud_item" for op, tabla, *_ in posteriores)
     assert not any(op == "update" and tabla == "almacen_solicitud" for op, tabla, *_ in posteriores)
     assert not any(op == "insert" and tabla == "almacen_solicitud" for op, tabla, *_ in posteriores)
+
+
+def test_lineas_con_el_mismo_numero_reciben_el_siguiente_libre(monkeypatch):
+    db = {
+        "_seq": 50,
+        "almacen_solicitud": [
+            {**_sol(1, 1), "contrato_id": 3},
+            {**_sol(2, 2), "contrato_id": 3},
+        ],
+        "almacen_solicitud_item": [
+            {**_lin(1, 1, insumo=10, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+            {**_lin(2, 2, insumo=11, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+        ],
+        "almacen_orden_compra": [],
+        "almacen_agrupacion_bloqueo": [],
+    }
+    log = []
+
+    class SB:
+        def table(self, name):
+            q = _Mem(db, log)
+            q.table = name
+            return q
+
+    monkeypatch.setattr("almacen_service._sb", lambda: SB())
+    monkeypatch.setattr("almacen_service._now_iso", lambda: "2026-03-13T15:00:00+00:00")
+
+    primero = ejecutar_agrupacion(3, 7, ver_economicos=False)
+    assert primero["creadas"] == 0
+    assert primero["se_mueven"] == 1
+    mov = primero["movimientos"][0]
+    assert mov["antes"]["solicitud_id"] == 2
+    assert mov["antes"]["numero_linea"] == 1
+    assert mov["despues"]["numero_linea"] == 2
+    assert mov["despues"]["solicitud_id"] == 1
+    por_sol = {}
+    for it in db["almacen_solicitud_item"]:
+        por_sol.setdefault(it["solicitud_id"], set()).add(it["numero_linea"])
+    assert len(por_sol[1]) == 2
+    assert db["almacen_solicitud_item"][0]["numero_linea"] == 1
+
+    segundo = ejecutar_agrupacion(3, 7, ver_economicos=False)
+    assert segundo["sin_cambios"] is True
+    assert len(db["almacen_solicitud"]) == 2
+
+
+def test_si_falla_a_mitad_no_deja_lineas_movidas(monkeypatch):
+    db = {
+        "_seq": 80,
+        "almacen_solicitud": [
+            {**_sol(1, 1), "contrato_id": 3},
+            {**_sol(2, 2), "contrato_id": 3},
+            {**_sol(3, 3), "contrato_id": 3},
+        ],
+        "almacen_solicitud_item": [
+            {**_lin(1, 1, insumo=10, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+            {**_lin(2, 2, insumo=11, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+            {**_lin(3, 3, insumo=12, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+        ],
+        "almacen_orden_compra": [],
+        "almacen_agrupacion_bloqueo": [],
+    }
+    log = []
+    updates = {"n": 0}
+
+    class SB:
+        def table(self, name):
+            q = _Mem(db, log)
+            q.table = name
+            original = q.execute
+
+            def execute():
+                if q.op == "update" and q.table == "almacen_solicitud_item" and q.payload and "numero_linea" in q.payload:
+                    updates["n"] += 1
+                    if updates["n"] == 2:
+                        raise RuntimeError(
+                            'duplicate key value violates unique constraint "idx_almacen_solicitud_item_linea"'
+                        )
+                return original()
+
+            q.execute = execute
+            return q
+
+    monkeypatch.setattr("almacen_service._sb", lambda: SB())
+    monkeypatch.setattr("almacen_service._now_iso", lambda: "2026-03-13T15:00:00+00:00")
+
+    with pytest.raises(ValueError) as exc:
+        ejecutar_agrupacion(3, 7, ver_economicos=False)
+    texto = str(exc.value)
+    assert "idx_almacen" not in texto
+    assert "duplicate" not in texto.lower()
+    assert "No quedó ningún movimiento" in texto or "No se pudo agrupar" in texto
+    lugares = {it["id"]: (it["solicitud_id"], it["numero_linea"]) for it in db["almacen_solicitud_item"]}
+    assert lugares[1] == (1, 1)
+    assert lugares[2] == (2, 1)
+    assert lugares[3] == (3, 1)
+
+
+def test_mensaje_de_agrupar_no_repite_la_base():
+    bruto = RuntimeError('duplicate key value violates unique constraint "idx_almacen_solicitud_item_linea"')
+    texto = mensaje_error_agrupar(bruto)
+    assert "idx_" not in texto
+    assert "duplicate" not in texto.lower()
+    movs = [
+        {"item_id": 1, "antes": {}, "despues": {"solicitud_id": 9}},
+        {"item_id": 2, "antes": {}, "despues": {"solicitud_id": 9}},
+    ]
+    items = [
+        {"id": 1, "solicitud_id": 9, "numero_linea": 1},
+        {"id": 2, "solicitud_id": 4, "numero_linea": 1},
+        {"id": 3, "solicitud_id": 9, "numero_linea": 2},
+    ]
+    asignar_numeros_destino(items, movs)
+    assert movs[0]["despues"]["numero_linea"] == 3
+    assert movs[1]["despues"]["numero_linea"] == 4

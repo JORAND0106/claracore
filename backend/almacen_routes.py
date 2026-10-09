@@ -36,6 +36,7 @@ from almacen_insumos_service import (
 from almacen_permissions import (
     es_contratista_gerencial,
     puede_ver_valores_economicos_almacen,
+    require_cambiar_proveedor_linea_aprobada,
     require_acceso_ui_modulo_almacen,
     require_crear_o_editar_almacen,
     require_generar_orden_compra_almacen,
@@ -70,6 +71,7 @@ from almacen_solicitud_mensajes import (
     enviar_mensaje_solicitud,
     listar_mensajes_solicitud,
     redactar_valores_economicos,
+    reintentar_aviso_mensaje,
 )
 from almacen_service import (
     add_cotizacion,
@@ -119,6 +121,7 @@ from almacen_service import (
     count_solicitudes,
     list_usuarios_receptor_obra,
     salidas_devolvibles_por_pk,
+    cambiar_proveedor_linea_aprobada,
     mapear_item_solicitud_gerencial,
     mapear_items_bloque,
     aprobar_items_bloque,
@@ -347,6 +350,16 @@ class MensajeSolicitudBody(BaseModel):
     solicitud_item_id: Optional[int] = None
     asunto: Optional[str] = None
     linea_etiqueta: Optional[str] = None
+
+
+class ReintentarAvisoBody(BaseModel):
+    destinatario_ids: Optional[List[int]] = None
+
+
+class CambiarProveedorLineaBody(BaseModel):
+    proveedor_seleccionado_id: Optional[int] = None
+    proveedor_seleccionado_nombre: Optional[str] = None
+    cotizacion_numero_seleccionada: Optional[str] = None
 
 
 class ReenviarOcBody(BaseModel):
@@ -915,6 +928,19 @@ def route_enviar_mensaje_solicitud(
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    if result.get("avisos_fallidos"):
+        log_almacen(
+            current_user,
+            "MENSAJE_SOLICITUD_AVISO",
+            "solicitud",
+            solicitud_id,
+            {
+                "mensaje_id": result.get("id"),
+                "avisos_fallidos": result.get("avisos_fallidos"),
+            },
+            valor_anterior=None,
+            valor_nuevo={"avisos_fallidos": result.get("avisos_fallidos")},
+        )
     texto_log = redactar_valores_economicos(result.get("texto") or "")
     linea_log = redactar_valores_economicos(result.get("linea_etiqueta") or "")
     log_almacen(
@@ -935,6 +961,39 @@ def route_enviar_mensaje_solicitud(
             "destinatario_ids": result.get("destinatario_ids"),
             "solicitud_item_id": result.get("solicitud_item_id"),
         },
+    )
+    return result
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/mensajes/{mensaje_id}/reintentar-aviso")
+def route_reintentar_aviso_mensaje(
+    contrato_id: int,
+    solicitud_id: int,
+    mensaje_id: int,
+    body: ReintentarAvisoBody = ReintentarAvisoBody(),
+    current_user=Depends(get_current_user),
+):
+    """Reintenta el aviso interno si algún destinatario no lo recibió."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    try:
+        result = reintentar_aviso_mensaje(
+            contrato_id,
+            solicitud_id,
+            mensaje_id,
+            _uid(current_user),
+            solo_ids=body.destinatario_ids,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    log_almacen(
+        current_user,
+        "MENSAJE_SOLICITUD_AVISO",
+        "solicitud",
+        solicitud_id,
+        {"mensaje_id": mensaje_id, "reintento": True, "avisos_fallidos": result.get("avisos_fallidos")},
+        valor_anterior=None,
+        valor_nuevo=result,
     )
     return result
 
@@ -1087,6 +1146,48 @@ def route_mapear_item_gerencial(
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.patch("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/proveedor")
+def route_cambiar_proveedor_linea_aprobada(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    body: CambiarProveedorLineaBody,
+    current_user=Depends(get_current_user),
+):
+    """Cambia el proveedor de una línea aprobada. La línea sigue aprobada."""
+    _check_contrato(current_user, contrato_id)
+    require_cambiar_proveedor_linea_aprobada(current_user)
+    try:
+        payload = body.model_dump(exclude_none=True)
+        ver_eco = puede_ver_valores_economicos_almacen(current_user)
+        result, meta = cambiar_proveedor_linea_aprobada(
+            contrato_id,
+            solicitud_id,
+            item_id,
+            _uid(current_user),
+            payload,
+            ver_economicos=ver_eco,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    if meta.get("cambio"):
+        antes = dict(meta.get("antes") or {})
+        despues = dict(meta.get("despues") or {})
+        if not ver_eco:
+            antes.pop("valor_compra_unitario", None)
+            despues.pop("valor_compra_unitario", None)
+        log_almacen(
+            current_user,
+            "CAMBIAR_PROVEEDOR_LINEA",
+            "solicitud_item",
+            item_id,
+            {"solicitud_id": solicitud_id, "item_id": item_id},
+            valor_anterior=antes,
+            valor_nuevo=despues,
+        )
+    return result
 
 
 @router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/mapear-bloque")

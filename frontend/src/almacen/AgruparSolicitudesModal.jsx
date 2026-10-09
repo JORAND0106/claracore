@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { ESTADO_SOLICITUD_LABEL, fmtMoney, useAlmacenTheme } from './almacenShared'
 
 /**
@@ -16,11 +16,14 @@ export default function AgruparSolicitudesModal({
 }) {
   const ui = useAlmacenTheme()
   const [aceptaCrear, setAceptaCrear] = useState(false)
+  const [abiertos, setAbiertos] = useState({})
   const grupos = vista?.grupos || []
   const vacias = vista?.vacias || []
   const porCrear = Number(vista?.por_crear) || 0
   const sinCambios = Boolean(vista?.sin_cambios)
   const puedeConfirmar = !sinCambios && !resumen && (porCrear === 0 || aceptaCrear)
+  const frase = vista?.resumen_accion
+    || 'Reúne las líneas sin orden de compra en la solicitud de cada proveedor. No crea solicitudes nuevas salvo que lo confirme.'
 
   return (
     <div
@@ -46,9 +49,10 @@ export default function AgruparSolicitudesModal({
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 800, marginBottom: 6 }}>
           Agrupar solicitudes por proveedor
         </div>
-        <p style={{ margin: '0 0 12px', color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>
-          Las líneas sin orden de compra se reúnen por proveedor. Las solicitudes que ya tienen OC
-          no se mueven. Las que queden sin líneas se conservan, marcadas como vacías.
+        <p data-testid="agrupar-resumen-accion" style={{ margin: '0 0 12px', color: ui.text, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+          {frase}
+          {' '}
+          Las solicitudes que ya tienen OC no se mueven.
         </p>
 
         {error && <div style={{ color: '#dc2626', marginBottom: 10 }}>{error}</div>}
@@ -72,31 +76,60 @@ export default function AgruparSolicitudesModal({
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
               <thead>
                 <tr>
-                  <th style={ui.th}>Solicitud</th>
-                  <th style={ui.th}>Proveedor</th>
-                  <th style={ui.th}>Estado</th>
-                  <th style={{ ...ui.th, textAlign: 'right' }}>Líneas</th>
+                  <th style={ui.th}>Destino</th>
+                  <th style={{ ...ui.th, textAlign: 'right' }}>Quedarán</th>
                   <th style={{ ...ui.th, textAlign: 'right' }}>Se mueven</th>
-                  {verEconomicos && <th style={{ ...ui.th, textAlign: 'right' }}>Total</th>}
+                  <th style={ui.th} />
                 </tr>
               </thead>
               <tbody>
-                {grupos.map((g) => (
-                  <tr key={`${g.proveedor}-${g.estado}-${g.consecutivo || 'nueva'}`}>
-                    <td style={ui.td}>
-                      {g.crear ? 'Nueva' : `Solicitud #${g.consecutivo}`}
-                    </td>
-                    <td style={ui.td}>{g.proveedor}</td>
-                    <td style={ui.td}>{g.estado_label || ESTADO_SOLICITUD_LABEL[g.estado] || g.estado}</td>
-                    <td style={{ ...ui.td, textAlign: 'right' }}>{g.lineas}</td>
-                    <td style={{ ...ui.td, textAlign: 'right' }}>{g.se_mueven}</td>
-                    {verEconomicos && (
-                      <td style={{ ...ui.td, textAlign: 'right' }} data-testid="agrupar-total">
-                        {g.total == null ? '—' : fmtMoney(g.total)}
-                      </td>
-                    )}
-                  </tr>
-                ))}
+                {grupos.map((g) => {
+                  const clave = `${g.proveedor}-${g.estado}-${g.consecutivo || 'nueva'}`
+                  const abierto = Boolean(abiertos[clave])
+                  const detalle = g.lineas_detalle || []
+                  return (
+                    <Fragment key={clave}>
+                      <tr>
+                        <td style={ui.td}>
+                          <div style={{ fontWeight: 700 }}>{g.proveedor}</div>
+                          <div style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+                            {g.crear ? 'Solicitud nueva' : `Solicitud #${g.consecutivo}`}
+                            {' · '}
+                            {g.estado_label || ESTADO_SOLICITUD_LABEL[g.estado] || g.estado}
+                            {verEconomicos && g.total != null ? ` · ${fmtMoney(g.total)}` : ''}
+                          </div>
+                        </td>
+                        <td style={{ ...ui.td, textAlign: 'right' }}>{g.lineas}</td>
+                        <td style={{ ...ui.td, textAlign: 'right' }}>{g.se_mueven}</td>
+                        <td style={ui.td}>
+                          {detalle.length > 0 && (
+                            <button
+                              type="button"
+                              data-testid="agrupar-ver-lineas"
+                              style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0 }}
+                              onClick={() => setAbiertos((prev) => ({ ...prev, [clave]: !prev[clave] }))}
+                            >
+                              {abierto ? 'Ocultar líneas' : 'Ver líneas'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {abierto && (
+                        <tr>
+                          <td style={ui.td} colSpan={4}>
+                            {detalle.map((ln) => (
+                              <div key={ln.item_id} style={{ fontSize: 'var(--cc-xs)', marginBottom: 4 }}>
+                                {ln.numero_linea != null ? `Línea ${ln.numero_linea}` : 'Línea'}
+                                {ln.descripcion ? ` · ${ln.descripcion}` : ''}
+                                {ln.se_mueve ? ` · se mueve desde #${ln.desde ?? '—'}` : ' · ya está aquí'}
+                              </div>
+                            ))}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
 
