@@ -97,6 +97,33 @@ def puede_generar_orden_compra_almacen(current_user) -> bool:
     return es_cargo_administrador(current_user)
 
 
+def puede_cambiar_proveedor_linea_aprobada(current_user) -> bool:
+    """Cambiar el proveedor de una línea ya aprobada.
+
+    Basta una condición: gerencia contratista, cargo Administrador o desarrollador.
+    No cambia quién ve los valores económicos.
+    """
+    if rol_excluido_almacen(current_user):
+        return False
+    if es_desarrollador_almacen(current_user):
+        return True
+    if es_cargo_administrador(current_user):
+        return True
+    return es_gerencia_contratista_rol(current_user)
+
+
+def require_cambiar_proveedor_linea_aprobada(current_user) -> None:
+    if puede_cambiar_proveedor_linea_aprobada(current_user):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Solo gerencia contratista, el cargo Administrador o el desarrollador "
+            "pueden cambiar el proveedor de una línea aprobada."
+        ),
+    )
+
+
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
     """
     Cifras en dinero para gerencia contratista, el rol Administrativo y Desarrollador.

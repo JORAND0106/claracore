@@ -2480,6 +2480,101 @@ def mapear_item_solicitud_gerencial(
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
+def cambiar_proveedor_linea_aprobada(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    user_id: int,
+    body: dict,
+    *,
+    ver_economicos: bool = False,
+) -> tuple:
+    """Cambia el proveedor de una línea aprobada. No vuelve a pedir aprobación ni toca el insumo."""
+    sb = _sb()
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
+    if sol.get("estado") not in ("enviada", "borrador", "rechazada", "aprobada"):
+        raise ValueError("No se puede cambiar el proveedor en el estado actual de la solicitud.")
+
+    item_rows = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("id", int(item_id))
+        .eq("solicitud_id", int(solicitud_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not item_rows:
+        raise ValueError("Ítem de solicitud no encontrado.")
+    existing = item_rows[0]
+    if (existing.get("estado_validacion") or "") != "aprobado":
+        raise ValueError("Solo se puede cambiar el proveedor de una línea que ya está aprobada.")
+    if not existing.get("insumo_id"):
+        raise ValueError("Esta línea no tiene insumo. Asigne el insumo antes de elegir proveedor.")
+
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    if ocs:
+        en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+        if int(item_id) in en_oc:
+            raise ValueError(
+                "Esta línea ya hace parte de una orden de compra generada. "
+                "El proveedor no se puede cambiar."
+            )
+
+    sel = _resolver_proveedor_mapeo(sb, body, existing, existing.get("insumo_id"))
+    if not sel.get("aplicar"):
+        raise ValueError("Elija un proveedor de la lista de este insumo.")
+
+    antes = {
+        "proveedor_seleccionado_id": existing.get("proveedor_seleccionado_id"),
+        "proveedor_seleccionado_nombre": existing.get("proveedor_seleccionado_nombre"),
+        "cotizacion_numero_seleccionada": existing.get("cotizacion_numero_seleccionada"),
+        "valor_compra_unitario": existing.get("valor_compra_unitario"),
+        "estado_validacion": existing.get("estado_validacion"),
+    }
+    despues = {
+        "proveedor_seleccionado_id": sel.get("proveedor_seleccionado_id"),
+        "proveedor_seleccionado_nombre": sel.get("proveedor_seleccionado_nombre"),
+        "cotizacion_numero_seleccionada": sel.get("cotizacion_numero_seleccionada"),
+        "valor_compra_unitario": sel.get("valor") if sel.get("valor") not in (None, "") else existing.get("valor_compra_unitario"),
+        "estado_validacion": "aprobado",
+    }
+    mismo = (
+        (antes.get("proveedor_seleccionado_id") or None) == (despues.get("proveedor_seleccionado_id") or None)
+        and (antes.get("proveedor_seleccionado_nombre") or "").strip().casefold()
+        == (despues.get("proveedor_seleccionado_nombre") or "").strip().casefold()
+        and (antes.get("cotizacion_numero_seleccionada") or "").strip()
+        == (despues.get("cotizacion_numero_seleccionada") or "").strip()
+    )
+    if mismo:
+        return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_economicos, ligera=True), {
+            "cambio": False,
+            "antes": antes,
+            "despues": despues,
+        }
+
+    cot_sel_id = _persistir_cotizacion_elegida(sb, int(item_id), existing, sel)
+    patch = {
+        "proveedor_seleccionado_id": despues["proveedor_seleccionado_id"],
+        "proveedor_seleccionado_nombre": despues["proveedor_seleccionado_nombre"],
+        "cotizacion_numero_seleccionada": despues["cotizacion_numero_seleccionada"],
+        "valor_compra_unitario": despues["valor_compra_unitario"],
+    }
+    if cot_sel_id:
+        patch["cotizacion_seleccionada_id"] = cot_sel_id
+    if patch["valor_compra_unitario"] is not None and _to_float(patch["valor_compra_unitario"]) < 0:
+        raise ValueError("El costo de compra no puede ser negativo.")
+    _update_solicitud_item_row(sb, int(item_id), patch)
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
+    return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_economicos, ligera=True), {
+        "cambio": True,
+        "antes": antes,
+        "despues": despues,
+    }
+
+
 def mapear_items_bloque(
     contrato_id: int,
     solicitud_id: int,

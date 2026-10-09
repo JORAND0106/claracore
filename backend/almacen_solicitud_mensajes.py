@@ -298,6 +298,17 @@ def listar_mensajes_solicitud(
         if not ver_economicos:
             texto = redactar_valores_economicos(texto)
             etiqueta = redactar_valores_economicos(etiqueta)
+        avisos_pendientes = []
+        if int(m.get("remitente_id") or 0) == int(user_id):
+            for d in dests:
+                did = int(d.get("destinatario_id") or 0)
+                if not did or did == int(user_id):
+                    continue
+                if "aviso_at" in d and not d.get("aviso_at"):
+                    avisos_pendientes.append({
+                        "id": did,
+                        "nombre": d.get("destinatario_nombre") or f"Usuario #{did}",
+                    })
         items.append({
             "id": mid,
             "remitente_id": m.get("remitente_id"),
@@ -309,6 +320,7 @@ def listar_mensajes_solicitud(
             "linea_etiqueta": etiqueta or None,
             "es_destinatario": es_dest,
             "leido_para_mi": (not es_dest) or bool(leido_antes.get(mid)),
+            "avisos_pendientes": avisos_pendientes,
             "destinatarios": [
                 {
                     "id": int(d["destinatario_id"]),
@@ -323,12 +335,28 @@ def listar_mensajes_solicitud(
     return {"items": items, "mensajes_no_leidos": 0, "disponible": True}
 
 
-def _notificar_mensaje(sb, contrato_id, solicitud_id, consecutivo, remitente_id, remitente_nombre, dest_ids) -> None:
-    rows = []
+def decidir_cierre_envio(dest_ids, remitente_id, ok_ids) -> str:
+    """ok, parcial o revertir. Revertir si nadie distinto del remitente recibió el aviso."""
+    externos = [int(d) for d in dest_ids if int(d) != int(remitente_id)]
+    ok = {int(i) for i in (ok_ids or [])}
+    if not externos:
+        return "ok"
+    avisados = [d for d in externos if d in ok]
+    if not avisados:
+        return "revertir"
+    if len(avisados) < len(externos):
+        return "parcial"
+    return "ok"
+
+
+def _notificar_mensaje(sb, contrato_id, solicitud_id, consecutivo, remitente_id, remitente_nombre, dest_ids) -> dict:
+    """Aviso dentro de la plataforma, uno por destinatario. Devuelve quién lo recibió."""
+    ok: List[int] = []
+    fallidos: List[dict] = []
     for did in dest_ids:
         if int(did) == int(remitente_id):
             continue
-        rows.append({
+        row = {
             "remitente_id": int(remitente_id),
             "remitente_nombre": remitente_nombre or "ClaraCore",
             "destinatario_id": int(did),
@@ -345,13 +373,108 @@ def _notificar_mensaje(sb, contrato_id, solicitud_id, consecutivo, remitente_id,
             "leido": False,
             "oculto_destinatario": False,
             "oculto_remitente": False,
-        })
-    if not rows:
+        }
+        try:
+            sb.table("notificaciones").insert(row).execute()
+            ok.append(int(did))
+        except Exception as exc:
+            _log.warning("aviso de mensaje solicitud %s a %s: %s", solicitud_id, did, exc)
+            fallidos.append({"id": int(did)})
+    return {"ok": ok, "fallidos": fallidos}
+
+
+def _marcar_aviso(sb, mensaje_id: int, dest_ids: List[int]) -> None:
+    if not dest_ids:
         return
     try:
-        sb.table("notificaciones").insert(rows).execute()
+        (
+            sb.table("almacen_solicitud_mensaje_destinatario")
+            .update({"aviso_at": _now()})
+            .eq("mensaje_id", int(mensaje_id))
+            .in_("destinatario_id", [int(i) for i in dest_ids])
+            .execute()
+        )
     except Exception as exc:
-        _log.warning("aviso de mensaje solicitud %s: %s", solicitud_id, exc)
+        low = str(exc).lower()
+        if _ausente(exc) or "aviso_at" in low or "42703" in low or "column" in low:
+            return
+        _log.warning("no se pudo marcar el aviso del mensaje %s: %s", mensaje_id, exc)
+
+
+def reintentar_aviso_mensaje(
+    contrato_id: int,
+    solicitud_id: int,
+    mensaje_id: int,
+    user_id: int,
+    solo_ids: Optional[List[int]] = None,
+) -> dict:
+    """Reintenta el aviso interno de un mensaje que ya quedó enviado."""
+    sb = _sb()
+    sol = _solicitud_head(sb, contrato_id, solicitud_id)
+    rows = (
+        sb.table("almacen_solicitud_mensaje")
+        .select("id, remitente_id, remitente_nombre")
+        .eq("id", int(mensaje_id))
+        .eq("solicitud_id", int(solicitud_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Mensaje no encontrado.")
+    mensaje = rows[0]
+    if int(mensaje.get("remitente_id") or 0) != int(user_id):
+        raise ValueError("Solo quien envió el mensaje puede reintentar el aviso.")
+    dests = (
+        sb.table("almacen_solicitud_mensaje_destinatario")
+        .select("*")
+        .eq("mensaje_id", int(mensaje_id))
+        .execute()
+        .data
+        or []
+    )
+    pendientes = []
+    for d in dests:
+        did = int(d.get("destinatario_id") or 0)
+        if not did or did == int(user_id):
+            continue
+        if "aviso_at" in d and d.get("aviso_at"):
+            continue
+        pendientes.append(did)
+    if solo_ids:
+        pedidas = {int(i) for i in solo_ids}
+        pendientes = [d for d in pendientes if d in pedidas]
+    if not pendientes:
+        return {"id": int(mensaje_id), "avisos_ok": [], "avisos_fallidos": []}
+    aviso = _notificar_mensaje(
+        sb,
+        contrato_id,
+        solicitud_id,
+        sol.get("consecutivo") or solicitud_id,
+        user_id,
+        mensaje.get("remitente_nombre") or "Usuario",
+        pendientes,
+    )
+    nombres = {
+        int(d["destinatario_id"]): d.get("destinatario_nombre") or f"Usuario #{d.get('destinatario_id')}"
+        for d in dests if d.get("destinatario_id")
+    }
+    for fallo in aviso["fallidos"]:
+        fallo["nombre"] = nombres.get(int(fallo["id"])) or f"Usuario #{fallo['id']}"
+    if aviso["ok"]:
+        _marcar_aviso(sb, int(mensaje_id), aviso["ok"])
+    if aviso["fallidos"] and not aviso["ok"]:
+        quienes = ", ".join(f["nombre"] for f in aviso["fallidos"])
+        raise ValueError(
+            f"Sigue sin poder avisarse a {quienes}. El mensaje ya está en la conversación. Intente de nuevo."
+        )
+    return {
+        "id": int(mensaje_id),
+        "avisos_ok": aviso["ok"],
+        "avisos_fallidos": aviso["fallidos"],
+    }
 
 
 def enviar_mensaje_solicitud(
@@ -449,10 +572,25 @@ def enviar_mensaje_solicitud(
             "leido_at": _now() if did == int(user_id) else None,
         })
     sb.table("almacen_solicitud_mensaje_destinatario").insert(dest_rows).execute()
-    _notificar_mensaje(
+    aviso = _notificar_mensaje(
         sb, contrato_id, solicitud_id, sol.get("consecutivo") or solicitud_id,
         user_id, remitente_nombre, dest_ids,
     )
+    nombres = {u["id"]: u["nombre"] for u in permitidos.values()}
+    for fallo in aviso["fallidos"]:
+        fallo["nombre"] = nombres.get(int(fallo["id"])) or f"Usuario #{fallo['id']}"
+    cierre = decidir_cierre_envio(dest_ids, user_id, aviso["ok"])
+    if cierre == "revertir":
+        try:
+            sb.table("almacen_solicitud_mensaje").delete().eq("id", mid).execute()
+        except Exception as exc:
+            _log.warning("no se pudo retirar el mensaje sin aviso %s: %s", mid, exc)
+        quienes = ", ".join(f["nombre"] for f in aviso["fallidos"]) or "los destinatarios"
+        raise ValueError(
+            f"No se pudo avisar a {quienes}. El mensaje no quedó enviado. Intente de nuevo."
+        )
+    if aviso["ok"]:
+        _marcar_aviso(sb, mid, aviso["ok"])
     return {
         "id": mid,
         "solicitud_id": int(solicitud_id),
@@ -465,4 +603,6 @@ def enviar_mensaje_solicitud(
         "linea_etiqueta": linea_etiqueta,
         "destinatario_ids": dest_ids,
         "consecutivo": sol.get("consecutivo"),
+        "avisos_ok": aviso["ok"],
+        "avisos_fallidos": aviso["fallidos"],
     }

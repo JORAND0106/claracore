@@ -6,7 +6,7 @@ import EntradasPanel from './EntradasPanel'
 import InventarioPanel from './InventarioPanel'
 import SalidasPanel from './SalidasPanel'
 import SolicitudesPanel from './SolicitudesPanel'
-import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
+import { esCargoAdministrador, puedeCrearSolicitudAlmacen } from './almacenPermisos'
 import {
   AlmacenProviders,
   buildAlmacenCssVars,
@@ -67,11 +67,12 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
     exportar: Boolean(permisos?.exportar),
     esContratistaGerencial: Boolean(permisos?.esContratistaGerencial),
     esDesarrollador: Boolean(permisos?.esDesarrollador),
+    esCargoAdministrador: esCargoAdministrador(usuario),
     contratoId: permisos?.contratoId,
     userId: permisos?.userId,
     verEconomicos: permisos?.verEconomicos,
     puedeGenerarOc: permisos?.puedeGenerarOc === true,
-  }), [permisos])
+  }), [permisos, usuario])
 
   const puedeVerCatalogo = Boolean(permisos?.verCatalogo)
   const puedeVerEntsal = Boolean(permisos?.verEntradasSalidas)

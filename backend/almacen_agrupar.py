@@ -211,16 +211,27 @@ def planificar_agrupacion(
         dest = asignacion.get(g["clave"])
         dest_id = int(dest["id"]) if dest else None
         se_mueven = 0
+        detalle = []
         for it in g["items"]:
             origen = int(it["solicitud_id"])
-            if dest_id is None or origen != dest_id:
+            origen_sol = por_id.get(origen) or {}
+            se_mueve = dest_id is None or origen != dest_id
+            desc = (it.get("descripcion_solicitada") or it.get("material_descripcion") or "").strip()
+            detalle.append({
+                "item_id": int(it["id"]),
+                "numero_linea": it.get("numero_linea"),
+                "descripcion": desc[:90],
+                "se_mueve": se_mueve,
+                "desde": origen_sol.get("consecutivo"),
+            })
+            if se_mueve:
                 se_mueven += 1
-                origen_sol = por_id.get(origen) or {}
                 movimientos.append({
                     "item_id": int(it["id"]),
                     "estado_validacion": it.get("estado_validacion"),
                     "antes": {
                         "solicitud_id": origen,
+                        "numero_linea": it.get("numero_linea"),
                         "consecutivo": origen_sol.get("consecutivo"),
                         "titulo": origen_sol.get("titulo"),
                         "estado": origen_sol.get("estado"),
@@ -263,6 +274,7 @@ def planificar_agrupacion(
             "crear": dest is None,
             "titulo": titulo,
             "item_ids": [int(it["id"]) for it in g["items"]],
+            "lineas_detalle": detalle,
         })
 
     vacias = []
@@ -506,12 +518,12 @@ def _select_items(sb, solicitud_ids: List[int]) -> List[dict]:
     if not solicitud_ids:
         return []
     selects = (
-        "id, solicitud_id, insumo_id, estado_validacion, proveedor_seleccionado_id, "
-        "proveedor_seleccionado_nombre, cantidad, valor_compra_unitario, "
+        "id, solicitud_id, numero_linea, descripcion_solicitada, insumo_id, estado_validacion, "
+        "proveedor_seleccionado_id, proveedor_seleccionado_nombre, cantidad, valor_compra_unitario, "
         "cotizacion_numero_seleccionada, cotizacion_seleccionada_id",
-        "id, solicitud_id, insumo_id, estado_validacion, proveedor_seleccionado_id, "
+        "id, solicitud_id, numero_linea, insumo_id, estado_validacion, proveedor_seleccionado_id, "
         "proveedor_seleccionado_nombre, cantidad, valor_compra_unitario",
-        "id, solicitud_id, insumo_id, estado_validacion",
+        "id, solicitud_id, numero_linea, insumo_id, estado_validacion",
     )
     last = None
     for select in selects:
@@ -593,6 +605,158 @@ def _anexar_totales(sb, plan: dict, items: List[dict], *, ver_economicos: bool) 
         g["total"] = round(total, 2) if alguno else None
 
 
+def frase_accion_agrupar(plan: dict) -> str:
+    """Una o dos frases: qué hará Agrupar, sin el detalle de cada línea."""
+    if plan.get("sin_cambios"):
+        return "Ejecutar de nuevo no cambia nada: las solicitudes ya están agrupadas."
+    n = int(plan.get("se_mueven") or 0)
+    destinos = sum(1 for g in plan.get("grupos") or [] if int(g.get("se_mueven") or 0) > 0)
+    frase = f"Se mueven {n} línea(s) hacia {destinos} destino(s)."
+    por_crear = int(plan.get("por_crear") or 0)
+    if por_crear:
+        frase += (
+            f" Faltan {por_crear} solicitud(es); solo se crean si lo confirma, ninguna de más."
+        )
+    else:
+        frase += " No se crea ninguna solicitud nueva."
+    return frase
+
+
+def mensaje_error_agrupar(exc: BaseException) -> str:
+    """Texto para la persona. Nunca el mensaje crudo de la base."""
+    low = str(exc or "").lower()
+    if any(tok in low for tok in ("23505", "duplicate key", "idx_almacen_solicitud_item_linea", "unique")):
+        return (
+            "No se pudo agrupar porque una línea iba a repetir el número dentro de la solicitud "
+            "de destino. No quedó ningún movimiento aplicado. Intente de nuevo."
+        )
+    if isinstance(exc, ValueError):
+        texto = str(exc).strip()
+        if texto and not any(tok in low for tok in ("pgrst", "postgres", "sql", "constraint", "column")):
+            return texto
+    return (
+        "No se pudo agrupar las solicitudes. No quedó ningún movimiento aplicado. Intente de nuevo."
+    )
+
+
+def _numero_entero(raw) -> Optional[int]:
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def asignar_numeros_destino(items: List[dict], movimientos: List[dict]) -> None:
+    """Cada línea que cambia de solicitud recibe el siguiente número libre en el destino.
+
+    Los números que ya existen se reservan, también los de líneas que saldrán:
+    así el update no choca con el índice único (solicitud_id, numero_linea).
+    """
+    ocupados: Dict[int, set] = {}
+    for it in items or []:
+        sid = _numero_entero(it.get("solicitud_id"))
+        num = _numero_entero(it.get("numero_linea"))
+        if sid and num and num > 0:
+            ocupados.setdefault(sid, set()).add(num)
+    for mov in movimientos or []:
+        dest = _numero_entero((mov.get("despues") or {}).get("solicitud_id"))
+        if not dest:
+            continue
+        usados = ocupados.setdefault(dest, set())
+        n = 1
+        while n in usados:
+            n += 1
+            if n > 100000:
+                raise ValueError("No hay un número de línea libre en la solicitud de destino.")
+        usados.add(n)
+        antes = mov.setdefault("antes", {})
+        antes.setdefault("numero_linea", None)
+        mov.setdefault("despues", {})["numero_linea"] = n
+
+
+def _rpc_ausente(exc: BaseException) -> bool:
+    low = str(exc or "").lower()
+    if "pgrst202" in low or "could not find the function" in low or "42883" in low:
+        return True
+    return "function" in low and "does not exist" in low
+
+
+def _restaurar_lineas(sb, originales: List[dict]) -> None:
+    for row in originales or []:
+        item_id = row.get("item_id")
+        if not item_id or row.get("solicitud_id") in (None, ""):
+            continue
+        payload: Dict[str, Any] = {"solicitud_id": int(row["solicitud_id"])}
+        numero = _numero_entero(row.get("numero_linea"))
+        if numero:
+            payload["numero_linea"] = numero
+        try:
+            (
+                sb.table("almacen_solicitud_item")
+                .update(payload)
+                .eq("id", int(item_id))
+                .execute()
+            )
+            _reasignar_mensajes_linea(sb, int(item_id), int(row["solicitud_id"]))
+        except Exception:
+            _log.exception("No se pudo devolver la línea %s a su solicitud", item_id)
+
+
+def _descartar_solicitudes_creadas(sb, creadas: List[dict]) -> None:
+    for creada in creadas or []:
+        sid = creada.get("id")
+        if not sid:
+            continue
+        try:
+            sb.table("almacen_solicitud").delete().eq("id", int(sid)).execute()
+        except Exception:
+            _log.exception("No se pudo descartar la solicitud creada %s", sid)
+
+
+def _mover_lineas_rpc(sb, filas: List[dict]) -> bool:
+    """True si la función de la base movió todo en una sola transacción."""
+    rpc = getattr(sb, "rpc", None)
+    if not callable(rpc) or not filas:
+        return False
+    try:
+        rpc("almacen_agrupar_mover_lineas", {"p_moves": filas}).execute()
+        return True
+    except Exception as exc:
+        if _rpc_ausente(exc):
+            _log.info("Sin función almacen_agrupar_mover_lineas; se mueven las líneas una a una.")
+            return False
+        raise
+
+
+def _reasignar_mensajes_linea(sb, item_id: int, dest_id: int) -> None:
+    """Los mensajes que citan la línea siguen con ella, en la solicitud de destino."""
+    try:
+        rows = (
+            sb.table("almacen_solicitud_mensaje")
+            .select("id")
+            .eq("solicitud_item_id", int(item_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _objeto_ausente(exc):
+            return
+        raise
+    if not rows:
+        return
+    ids = [int(r["id"]) for r in rows if r.get("id")]
+    sb.table("almacen_solicitud_mensaje").update(
+        {"solicitud_id": int(dest_id)}
+    ).eq("solicitud_item_id", int(item_id)).execute()
+    if ids:
+        sb.table("almacen_solicitud_mensaje_destinatario").update(
+            {"solicitud_id": int(dest_id)}
+        ).in_("mensaje_id", ids).execute()
+
+
 def vista_publica(plan: dict, *, ver_economicos: bool) -> dict:
     grupos = []
     for g in plan["grupos"]:
@@ -606,6 +770,7 @@ def vista_publica(plan: dict, *, ver_economicos: bool) -> dict:
             "consecutivo": g["consecutivo"],
             "crear": g["crear"],
             "titulo": g["titulo"],
+            "lineas_detalle": g.get("lineas_detalle") or [],
         }
         if ver_economicos:
             fila["total"] = g.get("total")
@@ -626,6 +791,7 @@ def vista_publica(plan: dict, *, ver_economicos: bool) -> dict:
         "sin_cambios": plan["sin_cambios"],
         "congeladas": plan["congeladas"],
         "ver_economicos": ver_economicos,
+        "resumen_accion": frase_accion_agrupar(plan),
     }
 
 
@@ -715,6 +881,7 @@ def ejecutar_agrupacion(
                     "la creación solo de las que hagan falta."
                 )
             if len(creadas) >= tope:
+                _descartar_solicitudes_creadas(sb, creadas)
                 raise ValueError(
                     "La cantidad de grupos cambió. Abra de nuevo la vista previa y confirme."
                 )
@@ -749,114 +916,163 @@ def ejecutar_agrupacion(
             sid: {"estado": sol.get("estado"), "titulo": sol.get("titulo")}
             for sid, sol in por_id.items()
         }
-        movidos = []
+        por_item = {int(it["id"]): it for it in items if it.get("id")}
         for mov in plan["movimientos"]:
-            dest_id = mov["despues"].get("solicitud_id")
-            if not dest_id:
+            it = por_item.get(int(mov["item_id"])) or {}
+            mov.setdefault("antes", {})["numero_linea"] = it.get("numero_linea")
+            mov["antes"]["solicitud_id"] = it.get("solicitud_id") or mov["antes"].get("solicitud_id")
+        try:
+            asignar_numeros_destino(items, plan["movimientos"])
+        except ValueError:
+            _descartar_solicitudes_creadas(sb, creadas)
+            raise
+
+        originales = []
+        for mov in plan["movimientos"]:
+            it = por_item.get(int(mov["item_id"])) or {}
+            originales.append({
+                "item_id": int(mov["item_id"]),
+                "solicitud_id": it.get("solicitud_id"),
+                "numero_linea": it.get("numero_linea"),
+            })
+        filas_rpc = []
+        for mov in plan["movimientos"]:
+            dest_id = (mov.get("despues") or {}).get("solicitud_id")
+            numero = (mov.get("despues") or {}).get("numero_linea")
+            if not dest_id or not numero:
                 continue
-            (
-                sb.table("almacen_solicitud_item")
-                .update({"solicitud_id": int(dest_id)})
-                .eq("id", int(mov["item_id"]))
-                .execute()
-            )
-            dest = por_id.get(int(dest_id)) or {}
-            despues = dict(mov["despues"])
-            despues["consecutivo"] = dest.get("consecutivo")
-            despues["titulo"] = format_titulo_grupo(
-                dest.get("consecutivo"),
-                dest.get("created_at"),
-                mov["despues"].get("proveedor") or "",
-                mov["despues"].get("estado") or dest.get("estado") or "",
-            )
-            movidos.append({
-                "item_id": mov["item_id"],
-                "antes": mov["antes"],
-                "despues": despues,
+            filas_rpc.append({
+                "item_id": int(mov["item_id"]),
+                "solicitud_id": int(dest_id),
+                "numero_linea": int(numero),
             })
 
-        for g in plan["grupos"]:
-            sid = g.get("solicitud_id")
-            if not sid:
-                continue
-            actual = por_id.get(int(sid)) or {}
-            if (actual.get("estado") or "") == g["estado"]:
-                continue
-            payload = _payload_estado(g["estado"], user_id, actual)
-            sb.table("almacen_solicitud").update(payload).eq("id", int(sid)).execute()
-            actual.update(payload)
-
-        for vac in plan["vacias"]:
-            sid = int(vac["solicitud_id"])
-            actual = por_id.get(sid) or {}
-            if (actual.get("estado") or "") == "borrador" and not (actual.get("motivo_rechazo") or ""):
-                continue
-            payload = _payload_estado("borrador", user_id, actual)
-            sb.table("almacen_solicitud").update(payload).eq("id", sid).execute()
-            actual.update(payload)
-
-        tocadas = set()
-        for g in plan["grupos"]:
-            if g.get("solicitud_id"):
-                tocadas.add(int(g["solicitud_id"]))
-        for vac in plan["vacias"]:
-            tocadas.add(int(vac["solicitud_id"]))
-        for creada in creadas:
-            tocadas.add(int(creada["id"]))
-
-        ajustes = []
-        for sid in sorted(tocadas):
-            previo = antes_cabecera.get(sid) or {}
-            titulo_antes = previo.get("titulo")
-            estado_antes = previo.get("estado")
-            nuevo = sincronizar_titulo_solicitud(sb, sid)
-            actual = por_id.get(sid) or {}
-            estado_despues = actual.get("estado") or estado_antes
-            titulo_despues = nuevo or titulo_antes
-            if titulo_despues != titulo_antes or estado_despues != estado_antes:
-                ajustes.append({
-                    "solicitud_id": sid,
-                    "antes": {"estado": estado_antes, "titulo": titulo_antes},
-                    "despues": {"estado": estado_despues, "titulo": titulo_despues},
+        movidos = []
+        try:
+            uso_rpc = _mover_lineas_rpc(sb, filas_rpc)
+            if not uso_rpc:
+                for fila in filas_rpc:
+                    (
+                        sb.table("almacen_solicitud_item")
+                        .update({
+                            "solicitud_id": int(fila["solicitud_id"]),
+                            "numero_linea": int(fila["numero_linea"]),
+                        })
+                        .eq("id", int(fila["item_id"]))
+                        .execute()
+                    )
+            for fila in filas_rpc:
+                _reasignar_mensajes_linea(sb, int(fila["item_id"]), int(fila["solicitud_id"]))
+            for mov in plan["movimientos"]:
+                dest_id = mov["despues"].get("solicitud_id")
+                if not dest_id:
+                    continue
+                dest = por_id.get(int(dest_id)) or {}
+                despues = dict(mov["despues"])
+                despues["consecutivo"] = dest.get("consecutivo")
+                despues["titulo"] = format_titulo_grupo(
+                    dest.get("consecutivo"),
+                    dest.get("created_at"),
+                    mov["despues"].get("proveedor") or "",
+                    mov["despues"].get("estado") or dest.get("estado") or "",
+                )
+                movidos.append({
+                    "item_id": mov["item_id"],
+                    "antes": mov["antes"],
+                    "despues": despues,
                 })
+        except Exception as exc:
+            _restaurar_lineas(sb, originales)
+            _descartar_solicitudes_creadas(sb, creadas)
+            raise ValueError(mensaje_error_agrupar(exc)) from exc
 
-        for mov in movidos:
-            dest_id = mov["despues"].get("solicitud_id")
-            if not dest_id:
-                continue
-            titulo = None
-            for aj in ajustes:
-                if int(aj["solicitud_id"]) == int(dest_id):
-                    titulo = (aj["despues"] or {}).get("titulo")
-            if titulo:
-                mov["despues"]["titulo"] = titulo
+        try:
+            for g in plan["grupos"]:
+                sid = g.get("solicitud_id")
+                if not sid:
+                    continue
+                actual = por_id.get(int(sid)) or {}
+                if (actual.get("estado") or "") == g["estado"]:
+                    continue
+                payload = _payload_estado(g["estado"], user_id, actual)
+                sb.table("almacen_solicitud").update(payload).eq("id", int(sid)).execute()
+                actual.update(payload)
 
-        n_mov = len(movidos)
-        n_new = len(creadas)
-        n_vac = len(plan["vacias"])
-        if n_mov == 0 and n_new == 0 and not ajustes:
-            resumen = "Sin cambios. Las solicitudes ya estaban agrupadas."
-        else:
-            partes = [f"Se movieron {n_mov} línea(s)."]
-            if n_new:
-                partes.append(f"Se crearon {n_new} solicitud(es), solo las que faltaban.")
-            if n_vac:
-                partes.append(f"{n_vac} solicitud(es) quedaron vacías y se conservan.")
-            resumen = " ".join(partes)
+            for vac in plan["vacias"]:
+                sid = int(vac["solicitud_id"])
+                actual = por_id.get(sid) or {}
+                if (actual.get("estado") or "") == "borrador" and not (actual.get("motivo_rechazo") or ""):
+                    continue
+                payload = _payload_estado("borrador", user_id, actual)
+                sb.table("almacen_solicitud").update(payload).eq("id", sid).execute()
+                actual.update(payload)
 
-        _anexar_totales(sb, plan, items, ver_economicos=ver_economicos)
-        publica = vista_publica(plan, ver_economicos=ver_economicos)
-        publica.update({
-            "creadas": n_new,
-            "creadas_detalle": [
-                {"id": c["id"], "consecutivo": c["consecutivo"]} for c in creadas
-            ],
-            "bloqueo_persistido": bloqueo,
-            "resumen": resumen,
-            "movimientos": movidos,
-            "ajustes": ajustes,
-            "sin_cambios": n_mov == 0 and n_new == 0 and not ajustes,
-        })
-        return publica
+            tocadas = set()
+            for g in plan["grupos"]:
+                if g.get("solicitud_id"):
+                    tocadas.add(int(g["solicitud_id"]))
+            for vac in plan["vacias"]:
+                tocadas.add(int(vac["solicitud_id"]))
+            for creada in creadas:
+                tocadas.add(int(creada["id"]))
+
+            ajustes = []
+            for sid in sorted(tocadas):
+                previo = antes_cabecera.get(sid) or {}
+                titulo_antes = previo.get("titulo")
+                estado_antes = previo.get("estado")
+                nuevo = sincronizar_titulo_solicitud(sb, sid)
+                actual = por_id.get(sid) or {}
+                estado_despues = actual.get("estado") or estado_antes
+                titulo_despues = nuevo or titulo_antes
+                if titulo_despues != titulo_antes or estado_despues != estado_antes:
+                    ajustes.append({
+                        "solicitud_id": sid,
+                        "antes": {"estado": estado_antes, "titulo": titulo_antes},
+                        "despues": {"estado": estado_despues, "titulo": titulo_despues},
+                    })
+
+            for mov in movidos:
+                dest_id = mov["despues"].get("solicitud_id")
+                if not dest_id:
+                    continue
+                titulo = None
+                for aj in ajustes:
+                    if int(aj["solicitud_id"]) == int(dest_id):
+                        titulo = (aj["despues"] or {}).get("titulo")
+                if titulo:
+                    mov["despues"]["titulo"] = titulo
+
+            n_mov = len(movidos)
+            n_new = len(creadas)
+            n_vac = len(plan["vacias"])
+            if n_mov == 0 and n_new == 0 and not ajustes:
+                resumen = "Sin cambios. Las solicitudes ya estaban agrupadas."
+            else:
+                partes = [f"Se movieron {n_mov} línea(s)."]
+                if n_new:
+                    partes.append(f"Se crearon {n_new} solicitud(es), solo las que faltaban.")
+                if n_vac:
+                    partes.append(f"{n_vac} solicitud(es) quedaron vacías y se conservan.")
+                resumen = " ".join(partes)
+
+            _anexar_totales(sb, plan, items, ver_economicos=ver_economicos)
+            publica = vista_publica(plan, ver_economicos=ver_economicos)
+            publica.update({
+                "creadas": n_new,
+                "creadas_detalle": [
+                    {"id": c["id"], "consecutivo": c["consecutivo"]} for c in creadas
+                ],
+                "bloqueo_persistido": bloqueo,
+                "resumen": resumen,
+                "movimientos": movidos,
+                "ajustes": ajustes,
+                "sin_cambios": n_mov == 0 and n_new == 0 and not ajustes,
+            })
+            return publica
+        except Exception as exc:
+            _restaurar_lineas(sb, originales)
+            _descartar_solicitudes_creadas(sb, creadas)
+            raise ValueError(mensaje_error_agrupar(exc)) from exc
     finally:
         _liberar_bloqueo(sb, contrato_id, user_id)
