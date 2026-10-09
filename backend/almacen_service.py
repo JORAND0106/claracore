@@ -1390,7 +1390,9 @@ def list_solicitudes(
         q = q.range(off, off + lim - 1)
     rows = q.execute().data or []
     if resumen:
-        return _list_solicitudes_resumen(sb, rows, contrato_id)
+        return _list_solicitudes_resumen(
+            sb, rows, contrato_id, ver_economicos=ver_economicos,
+        )
     validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
     out = []
     for r in rows:
@@ -1418,26 +1420,162 @@ def count_solicitudes(contrato_id: int, estado: Optional[str] = None) -> int:
     return len(resp.data or [])
 
 
-def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[dict]:
-    """Enriquecimiento mínimo para la grilla: conteo de ítems, OC y nombres."""
+def valor_unitario_linea_proveedor(it: dict, ofertas: Optional[List[dict]] = None) -> float:
+    """Precio unitario con IVA del proveedor elegido, o de la cotización ganadora."""
+    unit = 0.0
+    if ofertas:
+        sel = elegir_oferta_proveedor(
+            ofertas,
+            proveedor_id=it.get("proveedor_seleccionado_id"),
+            nombre=it.get("proveedor_seleccionado_nombre"),
+            numero=it.get("cotizacion_numero_seleccionada"),
+        )
+        if sel:
+            unit = _to_float(sel.get("valor"))
+    if unit <= 0:
+        unit = _to_float(it.get("valor_compra_unitario"))
+    return unit
+
+
+def valor_linea_proveedor(it: dict, ofertas: Optional[List[dict]] = None) -> Optional[float]:
+    """Cantidad × valor con IVA del proveedor elegido (o de la ganadora)."""
+    cant = _to_float(it.get("cantidad"))
+    unit = valor_unitario_linea_proveedor(it, ofertas)
+    if cant <= 0 or unit <= 0:
+        return None
+    return round(cant * unit, 2)
+
+
+def _fetch_solicitud_items_resumen(sb, ids: List[int], *, ver_economicos: bool) -> List[dict]:
+    """Ítems del listado. Con visibilidad económica trae lo necesario para el total."""
+    if not ids:
+        return []
+    selects = (
+        [
+            "id, solicitud_id, cantidad, valor_compra_unitario, insumo_id, "
+            "proveedor_seleccionado_id, proveedor_seleccionado_nombre, "
+            "cotizacion_numero_seleccionada, cotizacion_seleccionada_id",
+            "id, solicitud_id, cantidad, valor_compra_unitario, insumo_id, "
+            "cotizacion_seleccionada_id",
+            "id, solicitud_id, cantidad, valor_compra_unitario, insumo_id",
+        ]
+        if ver_economicos
+        else ["id, solicitud_id"]
+    )
+    last_exc: Optional[Exception] = None
+    for select in selects:
+        try:
+            return (
+                sb.table("almacen_solicitud_item")
+                .select(select)
+                .in_("solicitud_id", ids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            last_exc = exc
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudieron leer los ítems del listado: %s", exc)
+                return []
+    if last_exc:
+        _log.warning("Ítems del listado sin columnas de valor: %s", last_exc)
+    return []
+
+
+def _ofertas_insumos_batch(sb, insumo_ids: List[int]) -> Dict[int, List[dict]]:
+    """Cotizaciones (con IVA) de los insumos del listado, una consulta."""
+    ids = sorted({int(x) for x in insumo_ids if x})
+    if not ids:
+        return {}
+    selects = [
+        "id, cotizaciones_detalle, cotizacion_numero, costo_base, proveedor_id, "
+        "valor_compra_referencia, tributos, tipo_impuesto, impuesto_porcentaje, impuestos",
+        "id, cotizaciones_detalle, cotizacion_numero, costo_base, proveedor_id, "
+        "valor_compra_referencia",
+        "id, cotizacion_numero, costo_base, proveedor_id, valor_compra_referencia",
+    ]
+    rows: List[dict] = []
+    for select in selects:
+        try:
+            rows = (
+                sb.table("almacen_insumo")
+                .select(select)
+                .in_("id", ids)
+                .execute()
+                .data
+                or []
+            )
+            break
+        except Exception as exc:
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudieron leer las cotizaciones del listado: %s", exc)
+                return {}
+    out: Dict[int, List[dict]] = {}
+    for row in rows:
+        if not row.get("id"):
+            continue
+        try:
+            out[int(row["id"])] = ofertas_proveedor_desde_row(row)
+        except Exception:
+            _log.exception("Cotización ilegible del insumo %s", row.get("id"))
+    return out
+
+
+def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
+    """Total de cada solicitud: suma de cantidad × oferta del proveedor de la línea."""
+    try:
+        _hidratar_proveedor_desde_cotizacion(sb, items)
+    except Exception:
+        _log.exception("No se pudo hidratar el proveedor para el valor del listado")
+    insumo_ids = [int(it["insumo_id"]) for it in items if it.get("insumo_id")]
+    ofertas_map = _ofertas_insumos_batch(sb, insumo_ids) if insumo_ids else {}
+    totals: Dict[int, float] = {}
+    vistos: set = set()
+    for it in items:
+        try:
+            sid = int(it.get("solicitud_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not sid:
+            continue
+        vistos.add(sid)
+        iid = it.get("insumo_id")
+        ofertas = None
+        if iid:
+            try:
+                ofertas = ofertas_map.get(int(iid))
+            except (TypeError, ValueError):
+                ofertas = None
+        valor = valor_linea_proveedor(it, ofertas)
+        if valor is None:
+            continue
+        totals[sid] = round(totals.get(sid, 0.0) + valor, 2)
+    return {sid: totals.get(sid) for sid in vistos}
+
+
+def _list_solicitudes_resumen(
+    sb,
+    rows: List[dict],
+    contrato_id: int,
+    *,
+    ver_economicos: bool = False,
+) -> List[dict]:
+    """Enriquecimiento mínimo para la grilla: conteo de ítems, OC, nombres y, si aplica, valor."""
     if not rows:
         return []
     ids = [int(r["id"]) for r in rows if r.get("id")]
     item_counts: Dict[int, int] = {i: 0 for i in ids}
+    item_rows: List[dict] = []
+    valores: Dict[int, Optional[float]] = {}
     if ids:
-        # Una sola consulta de ítems (solo ids) en lugar de enriquecer cada solicitud.
-        item_rows = (
-            sb.table("almacen_solicitud_item")
-            .select("id, solicitud_id")
-            .in_("solicitud_id", ids)
-            .execute()
-            .data
-            or []
-        )
+        item_rows = _fetch_solicitud_items_resumen(sb, ids, ver_economicos=ver_economicos)
         for it in item_rows:
             sid = int(it.get("solicitud_id") or 0)
             if sid in item_counts:
                 item_counts[sid] += 1
+        if ver_economicos:
+            valores = _valores_por_solicitud(sb, item_rows)
 
     oc_by_sol: Dict[int, List[dict]] = {}
     if ids:
@@ -1479,6 +1617,8 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
         sid = int(sol["id"])
         sol["items_count"] = item_counts.get(sid, 0)
         sol["items"] = []  # grilla usa items_count; detalle carga enrich completo
+        if ver_economicos:
+            sol["valor_solicitud"] = valores.get(sid)
         oc_list = oc_by_sol.get(sid) or []
         if oc_list:
             sol["ordenes_compra"] = oc_list

@@ -85,10 +85,12 @@ export function esRolAdministrativo(usuario) {
 }
 
 /**
- * Cifras en dinero: solo gerencia contratista y el rol Administrativo.
- * Cargo, permisos por función y Desarrollador no cambian esta visibilidad.
+ * Cifras en dinero: gerencia contratista, rol Administrativo y Desarrollador.
+ * Desarrollador las ve siempre, sin depender de los permisos por función.
+ * Los demás roles ven solo cantidades.
  */
 export function puedeVerValoresEconomicosAlmacen(usuario) {
+  if (esDesarrolladorUsuario(usuario)) return true
   if (esGerenciaContratistaRol(usuario)) return true
   if (esRolAdministrativo(usuario)) return true
   return false

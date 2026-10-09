@@ -12,6 +12,7 @@ import {
   hermanosMismoPresupuestoItem,
   etiquetaProveedorLinea,
   fmtFechaHoraCorta,
+  itemsConBorradorProveedor,
   itemPuedeAsignarInsumo,
   itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
@@ -19,17 +20,65 @@ import {
   puedeAbrirRevisionLinea,
   rentabilidadDesdeAnalisis,
   textoLibreSolicitudItem,
+  totalesCompraSolicitud,
+  valorCompraLinea,
 } from './solicitudDetalleHelpers'
 import {
   AlmacenHelpIcon,
   almacenFormModalDialogStyle,
   fmtCant,
+  fmtMoney,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
 } from './almacenShared'
 
 const LINEA_MODAL_WIDTH = 'min(1622px, 100%)'
+
+function EconomiaRevisionLinea({ verEconomicos, valorLinea, totales }) {
+  if (!verEconomicos) return null
+  const grupos = totales?.grupos || []
+  if (valorLinea == null && !totales?.alguna) return null
+  const fila = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 12,
+    fontSize: 'var(--cc-sm)',
+  }
+  return (
+    <div
+      data-testid="revision-linea-economia"
+      style={{
+        marginBottom: 12,
+        padding: '8px 10px',
+        borderRadius: 8,
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
+      }}
+    >
+      {valorLinea != null && (
+        <div data-testid="revision-linea-valor" style={{ ...fila, fontWeight: 700, marginBottom: totales?.alguna ? 8 : 0 }}>
+          <span>Valor de la línea</span>
+          <span>{fmtMoney(valorLinea)}</span>
+        </div>
+      )}
+      {totales?.alguna && (
+        <div data-testid="revision-linea-resumen-proveedor">
+          {grupos.map((g) => (
+            <div key={g.key} style={{ ...fila, marginBottom: 4 }}>
+              <span>{g.nombre}</span>
+              <strong>{fmtMoney(g.total)}</strong>
+            </div>
+          ))}
+          <div style={{ ...fila, fontWeight: 800, marginTop: 4 }}>
+            <span>Total general</span>
+            <span>{fmtMoney(totales.total)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function ExcelHeader({ abbr, tip, style, align = 'left' }) {
   return (
@@ -145,6 +194,16 @@ export default function SolicitudLineaRevisionModal({
     ].filter(Boolean)
     return parts.join(' · ')
   }, [item])
+
+  const economiaLinea = useMemo(() => {
+    if (!verEconomicos || !item) return null
+    const overlay = itemsConBorradorProveedor(sol?.items, item, draft)
+    const actual = overlay.find((it) => String(it?.id) === String(item.id))
+    return {
+      valorLinea: valorCompraLinea(actual),
+      totales: totalesCompraSolicitud(overlay),
+    }
+  }, [verEconomicos, sol?.items, item, draft])
 
   const tablaRentabilidad = useMemo(() => {
     if (!item) return null
@@ -595,6 +654,12 @@ export default function SolicitudLineaRevisionModal({
               </table>
             </div>
 
+            <EconomiaRevisionLinea
+              verEconomicos={verEconomicos}
+              valorLinea={economiaLinea?.valorLinea}
+              totales={economiaLinea?.totales}
+            />
+
             {verEconomicos && tablaRentabilidad && (
               <div style={{ marginBottom: 12 }}>
                 <TablaRentabilidadAcumulada
@@ -737,6 +802,11 @@ export default function SolicitudLineaRevisionModal({
                 </tbody>
               </table>
             </div>
+            <EconomiaRevisionLinea
+              verEconomicos={verEconomicos}
+              valorLinea={economiaLinea?.valorLinea}
+              totales={economiaLinea?.totales}
+            />
             {puedeValidarLinea ? (
               <>
                 <div style={{ marginBottom: 12 }}>
