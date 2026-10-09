@@ -83,6 +83,20 @@ def es_desarrollador_almacen(current_user) -> bool:
     return _cargo_norm(current_user) == "desarrollador"
 
 
+def es_cargo_administrador(current_user) -> bool:
+    """Cargo Administrador. No incluye el rol Administrativo ni Residente Administrativo."""
+    return _cargo_norm(current_user) == "administrador"
+
+
+def puede_generar_orden_compra_almacen(current_user) -> bool:
+    """Generar la OC: cargo Administrador o rol/cargo Desarrollador. No cambia la visibilidad económica."""
+    if rol_excluido_almacen(current_user):
+        return False
+    if es_desarrollador_almacen(current_user):
+        return True
+    return es_cargo_administrador(current_user)
+
+
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
     """
     Cifras en dinero para gerencia contratista, el rol Administrativo y Desarrollador.
@@ -305,6 +319,23 @@ def es_rol_receptor_obra(rol_nombre: str, rol_id: int | None = None) -> bool:
     if rol == "contratista" or (rol.startswith("contratista") and "gerencial" not in rol):
         return True
     return False
+
+
+def require_generar_orden_compra_almacen(current_user) -> None:
+    """La generación de la OC no se autoriza solo con Validar."""
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if not puede_generar_orden_compra_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Solo el cargo Administrador o el rol Desarrollador pueden generar "
+                "la orden de compra."
+            ),
+        )
 
 
 def require_permiso_almacen(current_user, accion: AlmacenAccion) -> None:

@@ -70,6 +70,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
     contratoId: permisos?.contratoId,
     userId: permisos?.userId,
     verEconomicos: permisos?.verEconomicos,
+    puedeGenerarOc: permisos?.puedeGenerarOc === true,
   }), [permisos])
 
   const puedeVerCatalogo = Boolean(permisos?.verCatalogo)

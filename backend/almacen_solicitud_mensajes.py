@@ -386,6 +386,12 @@ def enviar_mensaje_solicitud(
     nombres = _map_usuario_nombres(sb, [user_id])
     remitente_nombre = nombres.get(int(user_id)) or permitidos.get(int(user_id), {}).get("nombre") or f"Usuario #{user_id}"
 
+    asunto = (body.get("asunto") or "").strip()
+    if asunto and not texto.lower().startswith(asunto.lower()):
+        texto = f"{asunto}\n\n{texto}"
+        if len(texto) > 4000:
+            texto = texto[:4000]
+
     linea_numero = None
     linea_etiqueta = None
     item_id = body.get("solicitud_item_id")
@@ -405,6 +411,9 @@ def enviar_mensaje_solicitud(
         item_id = int(item_id)
     else:
         item_id = None
+        etiqueta_libre = (body.get("linea_etiqueta") or "").strip()
+        if etiqueta_libre:
+            linea_etiqueta = etiqueta_libre[:180]
 
     payload = {
         "contrato_id": int(contrato_id),

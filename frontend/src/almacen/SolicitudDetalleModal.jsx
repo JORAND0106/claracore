@@ -3,6 +3,8 @@ import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
+import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
+import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
@@ -66,6 +68,7 @@ export default function SolicitudDetalleModal({
   const [costoBloque, setCostoBloque] = useState('')
   const [cobroBloque, setCobroBloque] = useState('')
   const [expedienteOcId, setExpedienteOcId] = useState(null)
+  const [avisoOc, setAvisoOc] = useState(null)
   const [loading, setLoading] = useState(!initialSeed)
   const [loadingSaldos, setLoadingSaldos] = useState(true)
   const [tituloDraft, setTituloDraft] = useState(initialSeed?.titulo || '')
@@ -126,6 +129,7 @@ export default function SolicitudDetalleModal({
   const editable = Boolean(permisos?.editar && solicitudAlmacenEditable(sol))
   const puedeEditarTitulo = solicitudTituloEditable(permisos)
   const puedeValidar = solicitudPuedeValidar(sol, permisos)
+  const puedeGenerarOc = Boolean(permisos?.puedeGenerarOc) && puedeValidar
   const motivoAprobacion = motivoAprobacionNoDisponible(sol, permisos)
   const puedeEnviar = puedeEnviarSolicitudAlmacen(permisos, sol)
   const motivoEnvio = motivoEnvioNoDisponible(sol, permisos)
@@ -231,12 +235,15 @@ export default function SolicitudDetalleModal({
       const r = await api.aprobarSolicitud(sol.id, { aprobar_todos_pendientes: aprobarTodosPendientes })
       setConfirmAprobar(false)
       onUpdated?.(r)
-      const ocs = Array.isArray(r.ordenes_compra_generadas) && r.ordenes_compra_generadas.length
-        ? r.ordenes_compra_generadas
-        : (r.orden_compra_generada || r.orden_compra ? [r.orden_compra_generada || r.orden_compra] : [])
-      if (ocs[0]?.id) {
+      const ocs = ordenesDeRespuestaAprobar(r)
+      setSol(r)
+      if (ocs.length) {
+        setAvisoOc({
+          sol: r,
+          ocs,
+          envios: Array.isArray(r.envios_oc) ? r.envios_oc : [],
+        })
         setExpedienteOcId(ocs[0].id)
-        setSol(r)
       } else {
         onClose?.()
       }
@@ -395,7 +402,7 @@ export default function SolicitudDetalleModal({
         justifyContent: 'center',
         padding: compact ? 0 : 16,
       }}
-      onClick={() => !busy && !revisionItem && !mapaItem && onClose?.()}
+      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && onClose?.()}
     >
       <div
         role="dialog"
@@ -775,19 +782,20 @@ export default function SolicitudDetalleModal({
                   </button>
                 )}
                 {puedeValidar && (
-                  <>
-                    <button type="button" style={ui.btnSecondary} disabled={busy} onClick={aprobarTodosItems}>
-                      ✓ Aprobar todos los ítems
-                    </button>
-                    <button
-                      type="button"
-                      style={btnSuccessStyle(ui.btnPrimary)}
-                      disabled={busy}
-                      onClick={intentarAprobarOc}
-                    >
-                      {tieneOc ? '✓ Agregar a la OC' : '✓ Aprobar y generar OC'}
-                    </button>
-                  </>
+                  <button type="button" style={ui.btnSecondary} disabled={busy} onClick={aprobarTodosItems}>
+                    ✓ Aprobar todos los ítems
+                  </button>
+                )}
+                {puedeGenerarOc && (
+                  <button
+                    type="button"
+                    style={btnSuccessStyle(ui.btnPrimary)}
+                    disabled={busy}
+                    data-testid="detalle-generar-oc"
+                    onClick={intentarAprobarOc}
+                  >
+                    {tieneOc ? '✓ Agregar a la OC' : '✓ Aprobar y generar OC'}
+                  </button>
                 )}
               </div>
               {motivoEnvio && (
@@ -962,10 +970,22 @@ export default function SolicitudDetalleModal({
           ocId={expedienteOcId}
           token={token}
           verEconomicos={verEconomicos}
+          puedeReenviar={Boolean(permisos?.puedeGenerarOc)}
           onClose={() => {
             setExpedienteOcId(null)
             onClose?.()
           }}
+        />
+      )}
+
+      {avisoOc && (
+        <OcGeneradaMensajeModal
+          solicitudId={avisoOc.sol?.id || sol?.id}
+          sol={avisoOc.sol}
+          ocs={avisoOc.ocs}
+          envios={avisoOc.envios}
+          onEnviado={() => onUpdated?.()}
+          onClose={() => setAvisoOc(null)}
         />
       )}
 

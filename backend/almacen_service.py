@@ -3273,29 +3273,49 @@ def _crear_oc_con_items(
     }
 
 
-def _lanzar_pdfs_oc(
+def _envios_oc_respuesta(envios) -> List[dict]:
+    return envios if isinstance(envios, list) else []
+
+
+def _regenerar_pdfs_oc(
     contrato_id: int,
     solicitud_id: int,
     user_id: int,
     ocs: List[dict],
 ) -> None:
-    """Regenera PDF de una o varias OC en segundo plano."""
-    oc_ids = [int(o["id"]) for o in ocs if o.get("id")]
-
-    def _run() -> None:
+    """Actualiza el PDF de OC que ya existían (líneas agregadas). No reenvía el correo."""
+    if not ocs:
+        return
+    try:
+        sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    except Exception as exc:
+        _log.warning("PDF de OC existentes, solicitud %s: %s", solicitud_id, exc)
+        return
+    for oc in ocs:
+        oc_id = oc.get("id")
+        if not oc_id:
+            continue
         try:
-            sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
-            for oc_id in oc_ids:
-                try:
-                    oc_full = get_orden_compra(contrato_id, oc_id)
-                    generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, sol_pdf, user_id)
-                except Exception as exc:
-                    _log.warning("PDF OC %s no generado: %s", oc_id, exc)
+            oc_full = get_orden_compra(contrato_id, int(oc_id), incluir_entradas=False)
+            generar_y_guardar_pdf_oc(contrato_id, int(oc_id), oc_full, sol_pdf, user_id)
         except Exception as exc:
-            _log.warning("PDF OCs solicitud %s: %s", solicitud_id, exc)
+            _log.warning("PDF OC %s no regenerado: %s", oc_id, exc)
 
-    if oc_ids:
-        threading.Thread(target=_run, daemon=True).start()
+
+def _lanzar_pdfs_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    ocs: List[dict],
+) -> List[dict]:
+    """Genera el PDF y lo envía al correo de la cotización. No corre en segundo plano."""
+    from almacen_oc_email import publicar_envios_oc
+
+    try:
+        return publicar_envios_oc(contrato_id, solicitud_id, user_id, ocs)
+    except Exception as exc:
+        _log.warning("Envío de OCs solicitud %s: %s", solicitud_id, exc)
+        return []
 
 
 def agregar_lineas_post_oc(
@@ -3533,7 +3553,16 @@ def append_aprobados_a_oc(
     result["ocs_creadas"] = ocs_creadas
     result["lineas_agregadas_oc"] = lineas_total
 
-    _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_afectadas)
+    nuevas = {int(o["id"]) for o in ocs_creadas if o.get("id")}
+    _regenerar_pdfs_oc(
+        contrato_id,
+        solicitud_id,
+        user_id,
+        [o for o in ocs_afectadas if int(o.get("id") or 0) not in nuevas],
+    )
+    result["envios_oc"] = _envios_oc_respuesta(
+        _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_creadas)
+    )
     return result
 
 
@@ -3560,7 +3589,9 @@ def _marcar_solicitud_aprobada_y_respuesta_ocs(
     primaria = ocs_creadas[0]
     result["orden_compra_generada"] = primaria
     result["ordenes_compra_generadas"] = ocs_creadas
-    _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_creadas)
+    result["envios_oc"] = _envios_oc_respuesta(
+        _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_creadas)
+    )
     return result
 
 
@@ -4445,6 +4476,9 @@ def get_orden_compra(contrato_id: int, oc_id: int, *, incluir_entradas: bool = T
     else:
         oc["entradas"] = []
     oc["tiene_pdf_oc"] = bool(oc.get("pdf_blob_path"))
+    from almacen_oc_email import listar_envios_oc
+
+    oc["envios"] = listar_envios_oc(sb, oc_id)
     return oc
 
 
@@ -4538,7 +4572,7 @@ def generar_y_guardar_pdf_oc(
         "pdf_blob_path": blob_path,
         "pdf_nombre": nombre,
     }).eq("id", oc_id).execute()
-    return {"pdf_blob_path": blob_path, "pdf_nombre": nombre}
+    return {"pdf_blob_path": blob_path, "pdf_nombre": nombre, "pdf_bytes": pdf_bytes}
 
 
 def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, str]:

@@ -3,6 +3,8 @@ import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
+import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
+import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import {
   ESTADO_SOLICITUD_LABEL,
@@ -35,6 +37,7 @@ export default function SolicitudRevisionModal({
   const [error, setError] = useState('')
   const [confirmAprobar, setConfirmAprobar] = useState(false)
   const [expedienteOcId, setExpedienteOcId] = useState(null)
+  const [avisoOc, setAvisoOc] = useState(null)
   const [loading, setLoading] = useState(!solicitudInicial)
   const [ocProgreso, setOcProgreso] = useState('')
 
@@ -64,6 +67,7 @@ export default function SolicitudRevisionModal({
   }, [api, solicitudId])
 
   const puedeValidar = permisos?.validar && sol?.estado === 'enviada'
+  const puedeGenerarOc = Boolean(permisos?.puedeGenerarOc) && puedeValidar
 
   const ejecutarAprobar = async () => {
     if (!sol) return
@@ -74,10 +78,13 @@ export default function SolicitudRevisionModal({
       const r = await api.aprobarSolicitud(sol.id, {})
       setConfirmAprobar(false)
       onUpdated?.(r)
-      const ocs = Array.isArray(r.ordenes_compra_generadas) && r.ordenes_compra_generadas.length
-        ? r.ordenes_compra_generadas
-        : (r.orden_compra_generada || r.orden_compra ? [r.orden_compra_generada || r.orden_compra] : [])
-      if (ocs[0]?.id) {
+      const ocs = ordenesDeRespuestaAprobar(r)
+      if (ocs.length) {
+        setAvisoOc({
+          sol: r,
+          ocs,
+          envios: Array.isArray(r.envios_oc) ? r.envios_oc : [],
+        })
         setExpedienteOcId(ocs[0].id)
       } else {
         onClose?.()
@@ -125,7 +132,7 @@ export default function SolicitudRevisionModal({
         justifyContent: 'center',
         padding: compact ? 0 : 16,
       }}
-      onClick={() => !busy && onClose?.()}
+      onClick={() => !busy && !avisoOc && !expedienteOcId && onClose?.()}
     >
       <div
         role="dialog"
@@ -228,14 +235,17 @@ export default function SolicitudRevisionModal({
               />
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                style={btnSuccessStyle(ui.btnPrimary)}
-                disabled={busy}
-                onClick={() => setConfirmAprobar(true)}
-              >
-                ✓ Aprobar y generar OC
-              </button>
+              {puedeGenerarOc && (
+                <button
+                  type="button"
+                  style={btnSuccessStyle(ui.btnPrimary)}
+                  disabled={busy}
+                  data-testid="revision-generar-oc"
+                  onClick={() => setConfirmAprobar(true)}
+                >
+                  ✓ Aprobar y generar OC
+                </button>
+              )}
               <button
                 type="button"
                 style={{ ...ui.btnPrimary, background: '#dc2626' }}
@@ -275,10 +285,22 @@ export default function SolicitudRevisionModal({
           ocId={expedienteOcId}
           token={token}
           verEconomicos={permisos?.verEconomicos !== false}
+          puedeReenviar={Boolean(permisos?.puedeGenerarOc)}
           onClose={() => {
             setExpedienteOcId(null)
             onClose?.()
           }}
+        />
+      )}
+
+      {avisoOc && (
+        <OcGeneradaMensajeModal
+          solicitudId={avisoOc.sol?.id || sol?.id}
+          sol={avisoOc.sol}
+          ocs={avisoOc.ocs}
+          envios={avisoOc.envios}
+          onEnviado={() => onUpdated?.()}
+          onClose={() => setAvisoOc(null)}
         />
       )}
 
