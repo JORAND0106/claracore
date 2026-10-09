@@ -253,6 +253,7 @@ import {
   sicoeNombreSubcontratistaRegistro,
   sicoeSubcontratistaIdDeRegistro,
 } from './modules/sicoe-obra/sicoeRegistroSubcontratista'
+import { sicoeFiltrarRegistrosParaSub } from './modules/sicoe-obra/sicoeSubcontratistaRegistros'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { permisosTopografia, usuarioPuedeEditarRegistrosSicoe } from './utils/permisosContrato'
 import { SICOE_ALERTA_SYNC_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
@@ -2431,7 +2432,11 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
     (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
   const esSubcontratista = esSubRol || cargo.includes('subcontratista')
 
-  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico || esSubcontratista)
+  // Contrato principal: oculto a operativos/apoyo/sub. El sub ve solo precios propios
+  // (backend overlay en detalle; flag economia_subcontratista / precio_fuente).
+  const verValoresEconomicosContrato = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico || esSubcontratista)
+  const verValoresEconomicosSub = !!esSubcontratista
+  const verValoresEconomicos = verValoresEconomicosContrato || verValoresEconomicosSub
 
   const rolIdRaw = usuario?.rol_id
   const rid = rolIdRaw != null && String(rolIdRaw).trim() !== '' ? parseInt(String(rolIdRaw), 10) : NaN
@@ -2579,6 +2584,7 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
     esSubcontratista,
     esSoloComentarista,
     verValoresEconomicos,
+    verValoresEconomicosSub,
     rolOrigen,
     esInterventoria: esInterventoriaSicoe,
     puedePrevalidarAntesInterv,
@@ -4506,6 +4512,41 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'var(--cc-label)', color:t.textMuted }}>
             {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
+            {/* Objeto de pago al sub: permanente para quien edita/valida (no para cargo subcontratista). */}
+            {(puedeEditar || nivelInfo.puedeValidar) && !nivelInfo.esSubcontratista && (() => {
+              const activo = !!registro.nivel2_objeto_pago_sub
+              const bloq = !!registro.bloqueado
+              const sinItem = !String(registro.item_numero || '').trim()
+              const disabled = bloq || sinItem
+              const tip = disabled
+                ? (bloq
+                  ? 'Registro sellado: no se puede cambiar el objeto de pago'
+                  : 'Asigne un ítem antes de marcar objeto de pago')
+                : (activo
+                  ? 'Sí: objeto de pago al subcontratista (clic para quitar)'
+                  : 'No: no es objeto de pago al subcontratista (clic para marcar)')
+              return (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => !disabled && actualizarObjetoPagoSub(!activo)}
+                  title={tip}
+                  aria-label={tip}
+                  aria-pressed={activo}
+                  style={{
+                    width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    borderRadius: 8, cursor: disabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled ? 0.45 : 1,
+                    background: activo ? '#8B5CF622' : 'transparent',
+                    border: `1.5px solid ${activo ? '#8B5CF6' : t.border}`,
+                    color: activo ? '#8B5CF6' : t.textMuted,
+                    fontSize: 'var(--cc-md)', fontWeight: 800, padding: 0, lineHeight: 1,
+                  }}
+                >
+                  {activo ? '💰' : '🚫'}
+                </button>
+              )
+            })()}
             {puedeEliminarRegistroReporte && typeof onDevEliminarRegistro === 'function' && (
               <button type="button" disabled={devEliminando} onClick={() => onDevEliminarRegistro(registro.id)}
                 title="Eliminar este registro de la base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)"
@@ -5485,17 +5526,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 )
               })}
             </div>
-            {nv === 2 && (
-              <div style={{ marginTop: excel ? 6 : 12, display:'flex', alignItems:'center', gap:'8px' }}>
-                <input type="checkbox" id={`obj-pago-sub-${registro.id}`}
-                  checked={!!registro.nivel2_objeto_pago_sub}
-                  disabled={bloqueado || sinItemAsignado}
-                  onChange={e => actualizarObjetoPagoSub(e.target.checked)}
-                  style={{ width:'16px', height:'16px', accentColor:'#8B5CF6', cursor: (bloqueado || sinItemAsignado) ? 'not-allowed' : 'pointer' }} />
-                <label htmlFor={`obj-pago-sub-${registro.id}`}
-                  style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.text, cursor: (bloqueado || sinItemAsignado) ? 'not-allowed' : 'pointer' }}>
-                  Objeto de pago al subcontratista
-                </label>
+            {nv === 2 && !nivelInfo.esSubcontratista && (
+              <div style={{ marginTop: excel ? 6 : 12, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                Objeto de pago al subcontratista: use el botón {registro.nivel2_objeto_pago_sub ? '💰' : '🚫'} del encabezado del registro.
               </div>
             )}
           </div>
@@ -6281,8 +6314,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const subIdEnCarpeta   = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
   const registrosVisibles = nivelInfo.esSubcontratista
-    ? registrosMostrados.filter(r => r.nivel2_objeto_pago_sub === true &&
-        (subIdEnCarpeta === null || r.subcontratista_id === subIdEnCarpeta))
+    ? sicoeFiltrarRegistrosParaSub(registrosMostrados, subIdEnCarpeta, reporte || repoProp)
     : registrosMostrados
 
   // Ítems asignados únicos — cada uno genera un tab (solo desde registros de la vista actual).

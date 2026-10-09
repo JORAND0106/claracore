@@ -5063,6 +5063,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     ambito_fecha_registro: bool = True,
     reversion_modo: Optional[str] = None,
     editado_por_ids: Optional[List[int]] = None,
+    solo_objeto_pago_sub: bool = False,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
     items_eff = list(items) if items else []
@@ -5070,6 +5071,8 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         items_eff = [str(item).strip()]
     if numero_registro is not None:
         q = q.eq("numero_registro", numero_registro)
+    if solo_objeto_pago_sub:
+        q = q.eq("nivel2_objeto_pago_sub", True)
     q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
     # La cantidad real de la línea vive en cantidad_total (la columna `cantidad`
     # quedó casi vacía/legada); es además la que muestra el panel. Filtrar por
@@ -5194,6 +5197,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
     reversion_modo: Optional[str] = None,
+    solo_objeto_pago_sub: bool = False,
 ) -> set:
     """
     reporte_id tales que existe al menos una fila en so_registros que cumple todos
@@ -5214,16 +5218,16 @@ def _sicoe_collect_reporte_ids_misma_linea(
     # Acta del modal = filtro en línea (so_registros.acta_rpo_id), igual que panel /analisis.
     # No reescribir a cabecera so_reportes: eso dejaba panel con filas y grilla en 0
     # cuando el acta está en la línea y no en la cabecera del reporte.
-    _reg_fu: Dict[str, Any] = {}
+    _reg_fu: Dict[str, Any] = {"solo_objeto_pago_sub": bool(solo_objeto_pago_sub)}
     if filtro_fecha_usuario_registro:
-        _reg_fu = {
+        _reg_fu.update({
             "fecha_desde": fecha_desde,
             "fecha_hasta": fecha_hasta,
             "tipo_fecha": tipo_fecha,
             "usuario_id": usuario_id,
             "usuario_accion": usuario_accion,
             "ambito_fecha_registro": True,
-        }
+        })
     ids: set = set()
     capas_ok = bool(capas_v) and not reversion_modo
     if (
@@ -5272,6 +5276,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 usuario_id=usuario_id,
                 usuario_accion=usuario_accion,
                 reversion_modo=reversion_modo,
+                solo_objeto_pago_sub=solo_objeto_pago_sub,
             )
         return merged
 
@@ -20942,6 +20947,8 @@ def buscar_reportes_obra(
     _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
     # Aislamiento: cargo subcontratista solo ve su propio subcontratista_id
     subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
+    _sub_restricto_buscar, _sub_forced_buscar = _scope_subcontratista_usuario(current_user)
+    _mostrar_costo_sub_buscar = bool(_sub_restricto_buscar and _sub_forced_buscar)
     _amb_fu, _tip_fu, _fd_fu, _fh_fu, _uid_fu, _uacc_fu, _tiene_fu = _sicoe_parse_filtros_fecha_usuario(
         ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
     )
@@ -21114,6 +21121,7 @@ def buscar_reportes_obra(
             usuario_id=_uid_fu,
             usuario_accion=_uacc_fu,
             reversion_modo=_rev_modo,
+            solo_objeto_pago_sub=_sub_restricto_buscar,
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
@@ -21396,7 +21404,12 @@ def buscar_reportes_obra(
 
                 def _reg_estados_q_base(reg_id_filter: Optional[List[int]] = None):
                     q = supabase.table("so_registros")\
-                        .select("reporte_id, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO + ", sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
+                        .select(
+                            "reporte_id, costo_directo, cantidad_total, "
+                            + SICOE_SELECT_NIVELES_ESTADO
+                            + ", sub_estado, semana_id, acta_rpo_id, item_numero, capitulo,"
+                            " subcontratista_id, tramo, margen, nivel2_objeto_pago_sub"
+                        )\
                         .in_("reporte_id", _rb_l)
                     if reg_id_filter is not None:
                         q = q.in_("id", reg_id_filter)
@@ -21413,6 +21426,8 @@ def buscar_reportes_obra(
                         q = _apply_capitulos_to_so_registros_q(q, caps_buscar_norm)
                     if subcontratista_id is not None:
                         q = q.eq("subcontratista_id", subcontratista_id)
+                    if _sub_restricto_buscar:
+                        q = q.eq("nivel2_objeto_pago_sub", True)
                     q = _apply_item_patterns_to_so_registros_q(q, items_buscar_norm, items_buscar_op)
                     if tramo:
                         q = q.eq("tramo", tramo)
@@ -21479,6 +21494,21 @@ def buscar_reportes_obra(
                 cmx_aggr = _get_nivel_maximo_contrato(contrato_id)
                 cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
                 costo_map = {}
+                _vu_item_sub = {}
+                _vu_cap_sub = {}
+                if _mostrar_costo_sub_buscar and _sub_forced_buscar:
+                    try:
+                        from corte_sub_conciliacion import precios_vu_sub_maps
+
+                        _vu_item_sub, _vu_cap_sub = precios_vu_sub_maps(
+                            supabase,
+                            contrato_id=int(contrato_id),
+                            subcontratista_id=int(_sub_forced_buscar),
+                        )
+                    except Exception as _exc_vu_b:
+                        logging.getLogger(__name__).warning(
+                            "buscar precios sub %s: %s", _sub_forced_buscar, _exc_vu_b
+                        )
                 for reg in reg_estados:
                     rid = reg.get("reporte_id")
                     if rid in cargo_map:
@@ -21487,7 +21517,23 @@ def buscar_reportes_obra(
                         cargo_map[rid]["n3"].append(reg.get(cmx_aggr) or "No Revisado")
                         cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
                         cargo_map[rid]["count"] += 1
-                        costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
+                        if _mostrar_costo_sub_buscar:
+                            from corte_sub_conciliacion import (
+                                resolver_vu_costo_mo_item,
+                                valor_por_cantidad_vu,
+                            )
+
+                            vu_l = resolver_vu_costo_mo_item(
+                                item_numero=reg.get("item_numero"),
+                                capitulo=reg.get("capitulo"),
+                                vu_por_item=_vu_item_sub,
+                                vu_por_cap_item=_vu_cap_sub,
+                            )
+                            costo_map[rid] = costo_map.get(rid, 0.0) + float(
+                                valor_por_cantidad_vu(reg.get("cantidad_total"), vu_l) if vu_l > 0 else 0
+                            )
+                        else:
+                            costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
                 cap_por_rep: dict = {}
                 for reg in reg_estados:
                     rid = reg.get("reporte_id")
@@ -21505,7 +21551,7 @@ def buscar_reportes_obra(
                     r["nivel3_estados"] = list(set(m.get("n3", [])))
                     r["sub_estados"]    = list(set(m.get("sub", [])))
                     r["num_registros"] = m.get("count", 0)
-                    if not _ocultar_costo_rep:
+                    if (not _ocultar_costo_rep) or _mostrar_costo_sub_buscar:
                         r["costo_directo_validacion"] = round(costo_map.get(r["id"], 0.0), 0)
                     caps = cap_por_rep.get(r["id"], set())
                     if caps:
@@ -21514,7 +21560,7 @@ def buscar_reportes_obra(
             for r in rows:
                 r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []
                 r["num_registros"] = 0
-            if not _ocultar_costo_rep:
+            if (not _ocultar_costo_rep) or _mostrar_costo_sub_buscar:
                 for r in rows:
                     r["costo_directo_validacion"] = 0.0
 
@@ -23686,6 +23732,8 @@ def analisis_registros_obra(
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
     _formato_mapa = (formato or "").strip().lower() == "mapa_calor"
+    subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
+    _sub_restricto_ana, _sub_forced_ana = _scope_subcontratista_usuario(current_user)
     _editado_por_ids_ana = _sicoe_normalize_editado_por_ids(editado_por_filtro)
     _analisis_cache_key = _sicoe_analisis_response_cache_key(
         contrato_id,
@@ -24048,6 +24096,8 @@ def analisis_registros_obra(
                     q = _sicoe_aplicar_filtro_usuario_registros_q(q, _uid_fu, _uacc_fu)
             if _editado_por_ids_ana:
                 q = _sicoe_aplicar_filtro_editado_por_registros_q(q, _editado_por_ids_ana)
+            if _sub_restricto_ana:
+                q = q.eq("nivel2_objeto_pago_sub", True)
             return q
 
         if reg_ids_etiqueta_ana is not None:
@@ -24888,6 +24938,9 @@ def obtener_reporte(
     editado_por_filtro: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    # Aislamiento cargo subcontratista: solo su sub + objeto de pago.
+    subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
+    _sub_restricto, _sub_forced = _scope_subcontratista_usuario(current_user)
     items_detalle_norm = _normalize_items_filtro_list(items_filtro, item)
     _editado_por_ids_det = _sicoe_normalize_editado_por_ids(editado_por_filtro)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
@@ -25002,6 +25055,7 @@ def obtener_reporte(
                     contrato_id=contrato_id,
                     reversion_modo=_rev_modo_det,
                     editado_por_ids=_editado_por_ids_det or None,
+                    solo_objeto_pago_sub=_sub_restricto,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
 
@@ -25049,6 +25103,37 @@ def obtener_reporte(
         r["calzada"]        = r.get("calzada") or pk.get("calzada")
     else:
         r["pk_id_valor"] = None
+
+    if _sub_restricto:
+        from sicoe_subcontratista_registros import (
+            aplicar_precios_propios_sub_a_registros,
+            filtrar_registros_para_sub,
+        )
+        if _sub_forced is None:
+            regs_raw = []
+        else:
+            regs_raw = filtrar_registros_para_sub(regs_raw or [], _sub_forced, r)
+            try:
+                from corte_sub_conciliacion import precios_vu_sub_maps
+
+                vu_item, vu_cap = precios_vu_sub_maps(
+                    supabase,
+                    contrato_id=int(contrato_id),
+                    subcontratista_id=int(_sub_forced),
+                )
+                regs_raw = aplicar_precios_propios_sub_a_registros(
+                    regs_raw,
+                    vu_por_item=vu_item,
+                    vu_por_cap_item=vu_cap,
+                )
+            except Exception as _exc_sub_vu:
+                logging.getLogger(__name__).warning(
+                    "obtener_reporte precios sub %s: %s", _sub_forced, _exc_sub_vu
+                )
+                regs_raw = aplicar_precios_propios_sub_a_registros(regs_raw or [])
+        r["economia_subcontratista"] = True
+        r["subcontratista_scope_id"] = _sub_forced
+
     # Si aplicar_filtros_busqueda=true, registros coinciden con la misma semántica AND que la grilla/panel.
     if ligero:
         for reg in regs_raw:
@@ -29981,6 +30066,9 @@ def sicoe_cantidades_por_item(
     _require_contract_access(current_user, contrato_id)
     from dashboard_costo_agregado import costo_agregado_cant_vu, listado_vu_for_cap_item
 
+    subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
+    _sub_restricto_cpi, _sub_forced_cpi = _scope_subcontratista_usuario(current_user)
+
     items_ana = _normalize_items_filtro_list(items_filtro, item)
     caps_ana = _normalize_items_filtro_list(capitulos_filtro, capitulo)
     actas_rpo_ana = _normalize_actas_filtro_list(actas_filtro, acta_rpo)
@@ -30227,6 +30315,7 @@ def sicoe_cantidades_por_item(
             usuario_accion=_uacc if _tiene_fu and _amb == "registro" else None,
             ambito_fecha_registro=_amb == "registro",
             editado_por_ids=_editado_por_ids_cpi or None,
+            solo_objeto_pago_sub=_sub_restricto_cpi,
         )
 
     out_rows = _sicoe_analisis_fetch_registros_paginated(_build_q)
