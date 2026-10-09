@@ -84,6 +84,18 @@ export function esRolAdministrativo(usuario) {
   return normRol(usuario?.rol_nombre || usuario?.rol) === 'administrativo'
 }
 
+/** Cargo Administrador. No incluye el rol Administrativo ni Residente Administrativo. */
+export function esCargoAdministrador(usuario) {
+  return normRol(usuario?.cargo_nombre || usuario?.cargo) === 'administrador'
+}
+
+/** Generar la OC: cargo Administrador o rol/cargo Desarrollador. */
+export function puedeGenerarOrdenCompraAlmacen(usuario) {
+  if (rolExcluidoAlmacen(usuario)) return false
+  if (esDesarrolladorUsuario(usuario)) return true
+  return esCargoAdministrador(usuario)
+}
+
 /**
  * Cifras en dinero: gerencia contratista, rol Administrativo y Desarrollador.
  * Desarrollador las ve siempre, sin depender de los permisos por función.
@@ -197,6 +209,7 @@ export function accesoAlmacen(usuario, contratoId) {
     catalogo,
     entradasSalidas,
     verEconomicos: !bloqueado && puedeVerValoresEconomicosAlmacen(usuario),
+    puedeGenerarOc: !bloqueado && puedeGenerarOrdenCompraAlmacen(usuario),
     esContratistaGerencial: esGerencial,
   }
 }

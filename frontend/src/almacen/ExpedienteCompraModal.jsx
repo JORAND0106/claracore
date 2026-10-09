@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
-import { fmtCant, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { fmtCant, fmtFechaAlmacen, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
-export default function ExpedienteCompraModal({ ocId, token, onClose, verEconomicos = true }) {
+export default function ExpedienteCompraModal({
+  ocId,
+  token,
+  onClose,
+  verEconomicos = true,
+  puedeReenviar = false,
+}) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
+  const [avisoEnvio, setAvisoEnvio] = useState('')
+  const [correoRetry, setCorreoRetry] = useState('')
   const [facturaFile, setFacturaFile] = useState(null)
   const [busy, setBusy] = useState(false)
 
@@ -26,6 +34,26 @@ export default function ExpedienteCompraModal({ ocId, token, onClose, verEconomi
         URL.revokeObjectURL(u)
       })
       .catch(() => setError('No se pudo descargar el archivo.'))
+  }
+
+  const reenviarCorreo = async () => {
+    setBusy(true)
+    setError('')
+    setAvisoEnvio('')
+    try {
+      const correo = correoRetry.trim()
+      const r = await api.reenviarOcCorreo(ocId, correo ? { correo } : {})
+      const exp = await api.getExpediente(ocId)
+      setData(exp)
+      const base = r?.detalle || (r?.resultado === 'enviado' ? 'Correo enviado.' : 'Sigue pendiente de envío.')
+      setAvisoEnvio(r?.persistido === false
+        ? `${base} El registro de envío no quedó guardado en la base de datos.`
+        : base)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const subirFactura = async () => {
@@ -109,6 +137,69 @@ export default function ExpedienteCompraModal({ ocId, token, onClose, verEconomi
                   ))}
                 </tbody>
               </table>
+            </section>
+
+            <section style={{ marginBottom: 16 }} data-testid="oc-envios">
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>✉️ Envío al proveedor</div>
+              <div style={{ fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
+                Estado: {oc?.envio_estado === 'enviado'
+                  ? 'enviado'
+                  : (oc?.envio_estado === 'pendiente' ? 'pendiente de envío' : 'sin registro de envío')}
+                {oc?.envio_correo ? ` · ${oc.envio_correo}` : ''}
+              </div>
+              {(oc?.envios || []).length === 0 ? (
+                <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>
+                  No hay intentos de envío registrados en esta orden.
+                </div>
+              ) : (
+                <table style={{ width: '100%', fontSize: 'var(--cc-sm)' }}>
+                  <thead>
+                    <tr>
+                      <th style={ui.th}>Fecha</th>
+                      <th style={ui.th}>Destinatario</th>
+                      <th style={ui.th}>Quién</th>
+                      <th style={ui.th}>Resultado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(oc.envios || []).map((ev) => (
+                      <tr key={ev.id || `${ev.created_at}-${ev.destinatario}`}>
+                        <td style={ui.td}>{fmtFechaAlmacen(ev.created_at) || '—'}</td>
+                        <td style={ui.td}>{ev.destinatario || '—'}</td>
+                        <td style={ui.td}>{ev.disparado_por_nombre || '—'}</td>
+                        <td style={ui.td}>
+                          {ev.resultado || '—'}
+                          {ev.detalle ? ` · ${ev.detalle}` : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {puedeReenviar && oc?.envio_estado !== 'enviado' && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+                  <input
+                    style={{ ...ui.input, flex: 1, minWidth: 180 }}
+                    value={correoRetry}
+                    placeholder="Correo para reintentar (opcional)"
+                    aria-label="Correo para reintentar el envío"
+                    disabled={busy}
+                    onChange={(e) => setCorreoRetry(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    style={ui.btnPrimary}
+                    data-testid="oc-reenviar-correo"
+                    disabled={busy}
+                    onClick={() => { void reenviarCorreo() }}
+                  >
+                    {busy ? 'Enviando…' : 'Reintentar envío'}
+                  </button>
+                </div>
+              )}
+              {avisoEnvio && (
+                <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: ui.text }}>{avisoEnvio}</div>
+              )}
             </section>
 
             <section style={{ marginBottom: 16 }}>

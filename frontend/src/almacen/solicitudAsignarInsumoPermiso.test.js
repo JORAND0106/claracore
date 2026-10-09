@@ -158,13 +158,21 @@ describe('Fuentes — asignación separada de la aprobación', () => {
     assert.match(antesDeAprobar, /puedeValidarLinea &&/)
   })
 
-  it('el detalle no muestra Aprobar y generar OC sin Validar', () => {
+  it('generar la OC exige el cargo autorizado; aprobar ítems sigue con Validar', () => {
     const detalle = readFileSync(join(dir, 'SolicitudDetalleModal.jsx'), 'utf8')
     const idx = detalle.indexOf('Aprobar y generar OC')
     assert.ok(idx > 0)
     const around = detalle.slice(Math.max(0, idx - 700), idx)
-    assert.match(around, /puedeValidar &&/)
+    assert.match(around, /puedeGenerarOc &&/)
+    assert.match(detalle, /data-testid="detalle-generar-oc"/)
+    assert.match(detalle, /data-testid="oc-generada-mensaje"|OcGeneradaMensajeModal/)
+    const todos = detalle.indexOf('Aprobar todos los ítems')
+    assert.ok(todos > 0)
+    assert.match(detalle.slice(Math.max(0, todos - 400), todos), /puedeValidar &&/)
     assert.match(detalle, /destacarSinInsumo=\{Boolean\(permisos\?\.editar\)\}/)
+    const linea = readFileSync(join(dir, 'SolicitudLineaRevisionModal.jsx'), 'utf8')
+    assert.match(linea, /Aprobar ítem/)
+    assert.doesNotMatch(linea, /Aprobar y generar OC/)
   })
 
   it('el backend exige editar para mapear y validar para aprobar', () => {
@@ -192,7 +200,14 @@ describe('Fuentes — asignación separada de la aprobación', () => {
       routes.indexOf('def route_mapear_item_gerencial'),
     )
     assert.match(aprobar, /require_permiso_almacen\(current_user, "validar"\)/)
+    assert.match(aprobar, /require_generar_orden_compra_almacen/)
     assert.doesNotMatch(aprobar, /require_contratista_gerencial_almacen/)
+    const reenviar = routes.slice(
+      routes.indexOf('def route_reenviar_oc_correo'),
+      routes.indexOf('def route_proximo_numero_disposicion'),
+    )
+    assert.match(reenviar, /require_permiso_almacen\(current_user, "validar"\)/)
+    assert.match(reenviar, /require_generar_orden_compra_almacen/)
     const corregir = routes.slice(
       routes.indexOf('def route_corregir_insumo_post_oc'),
       routes.indexOf('def route_validar_item_solicitud'),

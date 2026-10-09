@@ -38,6 +38,7 @@ from almacen_permissions import (
     puede_ver_valores_economicos_almacen,
     require_acceso_ui_modulo_almacen,
     require_crear_o_editar_almacen,
+    require_generar_orden_compra_almacen,
     require_editar_cantidad_salida_almacen,
     require_lectura_almacen,
     require_permiso_almacen,
@@ -336,6 +337,12 @@ class MensajeSolicitudBody(BaseModel):
     texto: str = Field(..., min_length=1, max_length=4000)
     destinatario_ids: List[int] = Field(..., min_length=1)
     solicitud_item_id: Optional[int] = None
+    asunto: Optional[str] = None
+    linea_etiqueta: Optional[str] = None
+
+
+class ReenviarOcBody(BaseModel):
+    correo: Optional[str] = None
 
 
 class EntradaItemBody(BaseModel):
@@ -962,6 +969,7 @@ def route_aprobar_solicitud(
 ):
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "validar")
+    require_generar_orden_compra_almacen(current_user)
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = aprobar_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
@@ -1396,6 +1404,30 @@ def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get
     except Exception as exc:
         _log.exception("Error descargando PDF OC %s contrato %s", oc_id, contrato_id)
         raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+
+
+@router.post("/{contrato_id}/ordenes-compra/{oc_id}/enviar-correo")
+def route_reenviar_oc_correo(
+    contrato_id: int,
+    oc_id: int,
+    body: ReenviarOcBody = ReenviarOcBody(),
+    current_user=Depends(get_current_user),
+):
+    """Reintenta el correo de la OC o lo envía a un correo corregido. No regenera la orden."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "validar")
+    require_generar_orden_compra_almacen(current_user)
+    try:
+        from almacen_oc_email import enviar_oc_por_correo
+
+        return enviar_oc_por_correo(
+            contrato_id,
+            oc_id,
+            _uid(current_user),
+            correo_override=(body.correo or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.get("/{contrato_id}/entradas/proximo-numero-disposicion")

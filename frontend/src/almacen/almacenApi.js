@@ -467,6 +467,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
     getExpediente: (ocId) =>
       fetch(`${base}/expedientes/${ocId}`, { headers: authHeaders() }).then(parseJson),
 
+    reenviarOcCorreo: (ocId, body = {}) =>
+      fetch(`${base}/ordenes-compra/${ocId}/enviar-correo`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
     listInsumosPorProveedor: (proveedorId, q = '') =>
       fetch(`${base}/proveedores/${proveedorId}/insumos?q=${encodeURIComponent(q)}`, {
         headers: authHeaders(),
