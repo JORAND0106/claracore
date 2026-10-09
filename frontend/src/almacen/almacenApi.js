@@ -223,6 +223,19 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         .then(parseJson)
         .then((r) => Number(r?.proximo) || null),
 
+    vistaPreviaAgruparSolicitudes: () =>
+      fetchJson(`${base}/solicitudes/agrupar/vista-previa`, {
+        method: 'POST',
+        headers: authHeaders(),
+      }),
+
+    agruparSolicitudes: (body) =>
+      fetchJson(`${base}/solicitudes/agrupar`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }),
+
     getSolicitud: (id, { ligera = false } = {}) => {
       const q = ligera ? '?ligera=1' : ''
       return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: authHeaders() })

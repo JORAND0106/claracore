@@ -115,7 +115,11 @@ export default function ExpedienteCompraModal({
             <section style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>📄 Orden de compra</div>
               <div style={{ fontSize: 'var(--cc-sm)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span>Solicitud #{sol?.consecutivo} · Estado: {oc?.estado}</span>
+                <span data-testid="expediente-solicitud-nombre" style={{ whiteSpace: 'normal' }}>
+                  {sol?.titulo?.trim() || `Solicitud #${sol?.consecutivo}`}
+                  {' · Estado OC: '}
+                  {oc?.estado}
+                </span>
                 {sol?.id && (
                   <button
                     type="button"
