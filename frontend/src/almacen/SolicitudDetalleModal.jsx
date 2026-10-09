@@ -464,15 +464,17 @@ export default function SolicitudDetalleModal({
               </div>
               {puedeEditarTitulo ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    style={{ ...ui.input, flex: 1, minWidth: 200, fontWeight: 700, fontSize: 'var(--cc-title)' }}
+                  <textarea
+                    rows={2}
+                    data-testid="solicitud-titulo"
+                    style={{ ...ui.input, flex: 1, minWidth: 200, width: '100%', fontWeight: 700, fontSize: 'var(--cc-title)', resize: 'vertical', whiteSpace: 'pre-wrap' }}
                     value={tituloDraft}
                     disabled={busy || guardandoTitulo}
                     placeholder={tituloDisplay}
                     onChange={(e) => setTituloDraft(e.target.value)}
                     onBlur={() => { void guardarTitulo() }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault()
                         void guardarTitulo()
                       }
@@ -483,7 +485,10 @@ export default function SolicitudDetalleModal({
                   )}
                 </div>
               ) : (
-                <div style={{ fontSize: 'var(--cc-title)', fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div
+                  data-testid="solicitud-titulo"
+                  style={{ fontSize: 'var(--cc-title)', fontWeight: 800, whiteSpace: 'normal', lineHeight: 1.35 }}
+                >
                   {tituloDisplay}
                 </div>
               )}

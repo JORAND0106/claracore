@@ -185,6 +185,7 @@ def test_resumen_oculta_valor_sin_visibilidad_economica(monkeypatch):
     store = {
         "almacen_solicitud_item": [
             {"id": 1, "solicitud_id": 10, "cantidad": 2, "valor_compra_unitario": 100, "insumo_id": 7},
+            {"id": 2, "solicitud_id": 10, "cantidad": 1, "insumo_id": None},
         ],
         "almacen_orden_compra": [],
     }
@@ -200,7 +201,8 @@ def test_resumen_oculta_valor_sin_visibilidad_economica(monkeypatch):
     }]
     out = _list_solicitudes_resumen(_FakeSb(store), rows, contrato_id=1)
     assert "valor_solicitud" not in out[0]
-    assert out[0]["items_count"] == 1
+    assert out[0]["items_count"] == 2
+    assert out[0]["lineas_sin_insumo"] == 1
 
 
 def test_resumen_valor_solicitud_usa_proveedor_elegido_o_ganadora(monkeypatch):

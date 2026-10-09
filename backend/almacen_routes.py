@@ -44,6 +44,7 @@ from almacen_permissions import (
     require_permiso_almacen,
     tiene_permiso_almacen,
 )
+from almacen_agrupar import ejecutar_agrupacion, vista_previa_agrupacion
 from almacen_audit import (
     log_almacen,
     snapshot_devolucion,
@@ -324,6 +325,11 @@ class AprobarBody(BaseModel):
     cotizaciones_seleccionadas: Optional[List[CotizacionSeleccionBody]] = None
     aprobar_todos_pendientes: bool = True
     item_ids: Optional[List[int]] = None
+
+
+class AgruparBody(BaseModel):
+    confirmar_creacion: bool = False
+    crear_hasta: int = 0
 
 
 class ValidarItemBody(BaseModel):
@@ -758,6 +764,72 @@ def route_count_solicitudes(
     _check_contrato(current_user, contrato_id)
     require_lectura_almacen(current_user)
     return {"count": count_solicitudes(contrato_id, estado)}
+
+
+@router.post("/{contrato_id}/solicitudes/agrupar/vista-previa")
+def route_vista_previa_agrupar(contrato_id: int, current_user=Depends(get_current_user)):
+    """Cómo quedarían las solicitudes al agrupar por proveedor. No escribe."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        return vista_previa_agrupacion(
+            contrato_id,
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/agrupar")
+def route_agrupar_solicitudes(
+    contrato_id: int,
+    body: AgruparBody,
+    current_user=Depends(get_current_user),
+):
+    """Mueve líneas entre solicitudes ya existentes. Crea solo las que falten, si se confirmó."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        result = ejecutar_agrupacion(
+            contrato_id,
+            _uid(current_user),
+            confirmar_creacion=bool(body.confirmar_creacion),
+            crear_hasta=int(body.crear_hasta or 0),
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    for mov in result.get("movimientos") or []:
+        log_almacen(
+            current_user,
+            "AGRUPAR",
+            "solicitud_item",
+            mov.get("item_id"),
+            {"motivo": "Agrupar solicitudes por proveedor"},
+            valor_anterior=mov.get("antes"),
+            valor_nuevo=mov.get("despues"),
+        )
+    for aj in result.get("ajustes") or []:
+        log_almacen(
+            current_user,
+            "AGRUPAR",
+            "solicitud",
+            aj.get("solicitud_id"),
+            {"motivo": "Agrupar solicitudes por proveedor"},
+            valor_anterior=aj.get("antes"),
+            valor_nuevo=aj.get("despues"),
+        )
+    for creada in result.get("creadas_detalle") or []:
+        log_almacen(
+            current_user,
+            "AGRUPAR",
+            "solicitud",
+            creada.get("id"),
+            {"motivo": "Solicitud creada porque faltaban grupos"},
+            valor_anterior=None,
+            valor_nuevo=creada,
+        )
+    return result
 
 
 @router.get("/{contrato_id}/solicitudes/proximo-consecutivo")

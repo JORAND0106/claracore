@@ -30,6 +30,7 @@ CRITICAL_MIGRATIONS = (
     "20261009010000_bitacora_cierre_motivo_automatico_atrasado.sql",
     "20261009140000_almacen_solicitud_proveedor_seleccionado.sql",
     "20261009160000_almacen_oc_envio.sql",
+    "20261009190000_almacen_agrupacion_bloqueo.sql",
 )
 
 _ENSURE_TABLE_SQL = """

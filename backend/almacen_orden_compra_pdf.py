@@ -255,7 +255,7 @@ def _header_contratista(contrato: dict) -> str:
     <td class="hdr-oc">
       <div class="oc-label">Orden de compra</div>
       <div class="oc-numero">N.° {_esc(contrato.get('_numero_oc') or '—')}</div>
-      <div class="oc-ref">Solicitud N.° {_esc(contrato.get('_numero_sol') or '—')}</div>
+      <div class="oc-ref">{_esc((contrato.get('_titulo_sol') or '').strip() or f"Solicitud N.° {contrato.get('_numero_sol') or '—'}")}</div>
     </td>
   </tr>
 </table>"""
@@ -277,9 +277,11 @@ def generar_pdf_orden_compra(
 ):
     numero_oc = orden_compra.get("numero_oc") or "—"
     numero_sol = solicitud.get("consecutivo") or "—"
+    titulo_sol = (solicitud.get("titulo") or "").strip()
     contrato_hdr = dict(contrato)
     contrato_hdr["_numero_oc"] = numero_oc
     contrato_hdr["_numero_sol"] = numero_sol
+    contrato_hdr["_titulo_sol"] = titulo_sol
 
     sol_items = {int(it["id"]): it for it in (solicitud.get("items") or []) if it.get("id")}
     lineas, _tot = _lineas_y_totales(
@@ -344,7 +346,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
 .hdr-oc {{ width: 40%; text-align: right; }}
 .oc-label {{ font-size: 9pt; text-transform: uppercase; color: #64748b; letter-spacing: 0.3pt; }}
 .oc-numero {{ font-size: 16pt; font-weight: bold; color: {_COLOR_FRANJA}; margin-top: 2pt; }}
-.oc-ref {{ font-size: 8pt; color: #64748b; margin-top: 2pt; }}
+.oc-ref {{ font-size: 8pt; color: #334155; margin-top: 2pt; font-weight: 600; white-space: normal; word-wrap: break-word; }}
 .blocks {{ width: 100%; border-collapse: collapse; margin-bottom: 8pt; }}
 .blocks td {{ border: 1px solid {_COLOR_BORDE}; padding: 6pt 8pt; vertical-align: top; width: 50%; font-size: 8pt; }}
 .block-lbl {{ font-size: 7.5pt; font-weight: bold; text-transform: uppercase; color: {_COLOR_FRANJA}; margin-bottom: 4pt; }}

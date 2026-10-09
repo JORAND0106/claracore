@@ -803,7 +803,7 @@ export default function SolicitudForm({
     <div style={rootStyle} className={`cc-almacen-form-root${embedded ? ' cc-almacen-form-root--embedded' : ''}`}>
       {!embedded && (
       <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <span>
+        <span data-testid="solicitud-form-titulo" style={{ whiteSpace: 'normal' }}>
           {solicitudId
             ? (sol?.titulo?.trim() || tituloAuto || `Solicitud #${sol?.consecutivo || '…'}`)
             : 'Nueva solicitud de insumos'}
