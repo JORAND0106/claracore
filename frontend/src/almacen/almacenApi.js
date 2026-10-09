@@ -108,6 +108,9 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
     listPreciosInsumoProveedor: (insumoId) =>
       fetch(`${base}/insumos/${insumoId}/precios-proveedor`, { headers: authHeaders() }).then(parseJsonList),
 
+    listOfertasProveedorInsumo: (insumoId) =>
+      fetch(`${base}/insumos/${insumoId}/ofertas-proveedor`, { headers: authHeaders() }).then(parseJson),
+
     searchProveedores: (q = '') =>
       fetch(`${base}/proveedores/search?q=${encodeURIComponent(q)}`, { headers: authHeaders() }).then(parseJsonList),
 

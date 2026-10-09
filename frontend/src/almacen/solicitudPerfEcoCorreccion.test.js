@@ -1,5 +1,5 @@
 /**
- * Perf progresiva, eco Operativo Gerencial / Residente Admin, corrección post-OC.
+ * Perf progresiva, visibilidad económica por rol, corrección post-OC.
  * node --test frontend/src/almacen/solicitudPerfEcoCorreccion.test.js
  */
 import { describe, it } from 'node:test'
@@ -19,49 +19,45 @@ function normRol(txt) {
     .replace(/\s+/g, ' ')
 }
 
-function esOperativoGerencialUsuario(usuario) {
-  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
-  if (rol === 'operativo gerencial') return true
-  if (rol.includes('operativo') && rol.includes('gerencial') && !rol.includes('intervent')) return true
-  return false
-}
-
-function esResidenteAdministrativoUsuario(usuario) {
-  const cargo = normRol(usuario?.cargo_nombre || usuario?.cargo)
-  return cargo === 'residente administrativo'
-}
-
 function puedeVerValoresEconomicosAlmacen(usuario) {
-  if (esOperativoGerencialUsuario(usuario)) return true
-  if (esResidenteAdministrativoUsuario(usuario)) return true
-  return false
+  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
+  if (rol.includes('intervent')) return false
+  if (rol === 'contratista gerencial' || rol === 'gerencia contratista') return true
+  if (rol.includes('contrat') && rol.includes('gerencial')) return true
+  return rol === 'administrativo'
 }
 
-describe('Valores económicos: Operativo Gerencial o Residente Administrativo', () => {
+describe('Valores económicos: gerencia contratista y rol Administrativo', () => {
   it('helpers de regla económica', () => {
-    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Operativo Gerencial' }), true)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Contratista Gerencial' }), true)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Gerencia Contratista' }), true)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Administrativo', cargo: 'Residente' }), true)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Operativo Gerencial' }), false)
     assert.equal(
       puedeVerValoresEconomicosAlmacen({
         rol: 'Operativo Campo',
         cargo: 'Residente Administrativo',
       }),
-      true,
+      false,
     )
-    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Contratista Gerencial' }), false)
-    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Operativo Campo' }), false)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Desarrollador' }), false)
+    assert.equal(puedeVerValoresEconomicosAlmacen({ rol: 'Interventoría Gerencial' }), false)
   })
 
-  it('frontend y backend documentan la regla económica nueva', () => {
+  it('frontend y backend documentan la regla económica', () => {
     const fe = readFileSync(join(dir, 'almacenPermisos.js'), 'utf8')
-    assert.match(fe, /esOperativoGerencialUsuario/)
-    assert.match(fe, /esResidenteAdministrativoUsuario/)
+    assert.match(fe, /esGerenciaContratistaRol/)
+    assert.match(fe, /esRolAdministrativo/)
     assert.match(fe, /puedeVerValoresEconomicosAlmacen/)
-    assert.doesNotMatch(fe, /return esContratistaGerencialUsuario\(usuario\)/)
+    assert.doesNotMatch(fe, /if \(esDesarrolladorUsuario\(usuario\)\) return true\n {2}if \(esOperativoGerencialUsuario/)
     const be = readFileSync(join(dir, '../../../backend/almacen_permissions.py'), 'utf8')
-    assert.match(be, /es_operativo_gerencial/)
-    assert.match(be, /es_residente_administrativo/)
+    assert.match(be, /es_gerencia_contratista_rol/)
+    assert.match(be, /es_rol_administrativo/)
     assert.match(be, /puede_ver_valores_economicos_almacen/)
     assert.doesNotMatch(be, /return es_contratista_gerencial\(current_user\)/)
+    const app = readFileSync(join(dir, '../App.jsx'), 'utf8')
+    assert.match(app, /const almacenVerEconomicos = almacenAcceso\.verEconomicos/)
+    assert.doesNotMatch(app, /almacenVerEconomicos = esDeveloper \|\| almacenAcceso\.verEconomicos/)
   })
 })
 

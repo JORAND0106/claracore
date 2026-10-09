@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { fmtCant, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
-export default function ExpedienteCompraModal({ ocId, token, onClose }) {
+export default function ExpedienteCompraModal({ ocId, token, onClose, verEconomicos = true }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const [data, setData] = useState(null)
@@ -95,7 +95,7 @@ export default function ExpedienteCompraModal({ ocId, token, onClose }) {
                     <th style={ui.th}>Material</th>
                     <th style={ui.th}>Proveedor</th>
                     <th style={ui.th}>Cant.</th>
-                    <th style={ui.th}>V. unit.</th>
+                    {verEconomicos && <th style={ui.th}>V. unit.</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -104,7 +104,7 @@ export default function ExpedienteCompraModal({ ocId, token, onClose }) {
                       <td style={ui.td}>{it.material_descripcion}</td>
                       <td style={ui.td}>{it.proveedor_nombre}</td>
                       <td style={ui.td}>{fmtCant(it.cantidad)}</td>
-                      <td style={ui.td}>{fmtMoney(it.valor_unitario)}</td>
+                      {verEconomicos && <td style={ui.td}>{fmtMoney(it.valor_unitario)}</td>}
                     </tr>
                   ))}
                 </tbody>

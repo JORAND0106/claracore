@@ -229,6 +229,38 @@ export function textoLibreSolicitudItem(item) {
   return String(item?.descripcion_solicitada || item?.material_descripcion || '').trim()
 }
 
+/** Cantidad × valor ofertado (IVA incluido) del proveedor elegido, o de la ganadora. */
+export function valorCompraLinea(item) {
+  const directo = Number(item?.valor_compra_linea)
+  if (Number.isFinite(directo) && directo > 0) return directo
+  const cant = Number(item?.cantidad)
+  const unit = Number(item?.valor_compra_unitario)
+  if (Number.isFinite(cant) && cant > 0 && Number.isFinite(unit) && unit > 0) {
+    return Math.round(cant * unit)
+  }
+  return null
+}
+
+/** Subtotal por proveedor y total de la solicitud. Solo tiene sentido si hay cifras. */
+export function totalesCompraSolicitud(items) {
+  const grupos = []
+  const index = new Map()
+  let total = 0
+  for (const it of items || []) {
+    const valor = valorCompraLinea(it)
+    if (valor == null) continue
+    total += valor
+    const nombre = it.proveedor_nombre || it.proveedor_catalogo || 'Proveedor'
+    const key = it.proveedor_id != null ? `id:${it.proveedor_id}` : String(nombre)
+    if (!index.has(key)) {
+      index.set(key, grupos.length)
+      grupos.push({ key, nombre, total: 0 })
+    }
+    grupos[index.get(key)].total += valor
+  }
+  return { grupos, total, alguna: grupos.length > 0 }
+}
+
 /** Descripción a mostrar en grilla: catálogo si ya mapeado, si no texto libre. */
 export function descripcionGrillaItem(item) {
   if (item?.insumo_id && item?.material_descripcion) {

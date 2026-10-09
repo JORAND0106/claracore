@@ -274,6 +274,7 @@ export default function SolicitudRevisionModal({
         <ExpedienteCompraModal
           ocId={expedienteOcId}
           token={token}
+          verEconomicos={permisos?.verEconomicos !== false}
           onClose={() => {
             setExpedienteOcId(null)
             onClose?.()

@@ -1427,9 +1427,9 @@ INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
    - validar: revisar solicitudes; config; bypass para Director de Obra / Administrador.
    - exportar: Excel inventario, PDF OC.
    - **Asignar insumo** en «Revisión de línea» (búsqueda, sugerencia y Guardar mapeo): permiso **editar** de Almacén. No exige rol gerencial. Quien no ve valores económicos no ve costo, cobro ni la tabla de rentabilidad.
-   - **Aprobar ítem / solicitud y generar OC**: basta permiso **validar** en Almacén, con o sin rol gerencial. El rol gerencial no reemplaza ni anula Validar; solo agrega visibilidad de valores económicos (Operativo Gerencial). Si el estado no permite aprobar (borrador, ya aprobada), la interfaz explica el motivo.
+   - **Aprobar ítem / solicitud y generar OC**: basta permiso **validar** en Almacén, con o sin rol gerencial. El rol no reemplaza ni anula Validar. Si el estado no permite aprobar (borrador, ya aprobada), la interfaz explica el motivo.
    - **Corregir insumo de una línea ya en OC**: editar + Contratista Gerencial, solo mientras esa OC no tenga una entrada registrada.
-   - **Valores económicos** (VU cobro/costo, utilidad, rentabilidad): Operativo Gerencial, Residente Administrativo o Desarrollador.
+   - **Valores económicos** (VU cobro/costo, utilidad, rentabilidad, valor de compra y totales): solo roles de tipo gerencia contratista y el rol Administrativo. Los demás ven cantidades, sin cifras. El cargo y los permisos por función no cambian esa visibilidad.
    - **Editar cantidad de salida ya registrada**: solo Contratista Gerencial / Desarrollador.
    - **Eliminación permanente en cascada de una solicitud**: solo **Desarrollador**.
    - Catálogo (crear/eliminar insumos): permiso CATINS, no ALMACEN.

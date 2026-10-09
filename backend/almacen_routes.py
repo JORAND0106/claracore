@@ -102,6 +102,7 @@ from almacen_service import (
     get_salida,
     get_solicitud,
     get_transportador_por_placa,
+    listar_ofertas_proveedor_insumo,
     list_entradas,
     list_inventario,
     list_movimientos,
@@ -235,6 +236,9 @@ class MapearItemGerencialBody(BaseModel):
     valor_compra_unitario: Optional[float] = Field(None, ge=0)
     vlr_unitario_cobro: Optional[float] = Field(None, ge=0)
     es_recurrente: Optional[bool] = None
+    proveedor_seleccionado_id: Optional[int] = None
+    proveedor_seleccionado_nombre: Optional[str] = None
+    cotizacion_numero_seleccionada: Optional[str] = None
 
 
 class MapearBloqueBody(BaseModel):
@@ -468,6 +472,22 @@ def route_create_insumo_json(contrato_id: int, body: InsumoCreateBody, current_u
             **body.model_dump(),
             "impuestos": [i.model_dump() if hasattr(i, "model_dump") else i for i in (body.impuestos or [])],
         })
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/insumos/{insumo_id}/ofertas-proveedor")
+def route_ofertas_proveedor_insumo(contrato_id: int, insumo_id: int, current_user=Depends(get_current_user)):
+    """Proveedores con cotización del insumo. Las cifras solo si el rol las puede ver."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_almacen(current_user)
+    try:
+        ofertas = listar_ofertas_proveedor_insumo(
+            contrato_id,
+            insumo_id,
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+        return {"ofertas": ofertas}
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -753,7 +773,7 @@ def route_get_solicitud(
         sol = get_solicitud(
             contrato_id,
             solicitud_id,
-            ver_economicos=ver_eco if not ligera else False,
+            ver_economicos=ver_eco,
             ligera=ligera,
             include_rentabilidad=bool(ver_eco and not ligera),
         )

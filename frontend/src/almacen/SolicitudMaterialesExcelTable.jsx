@@ -1,14 +1,15 @@
-import { Fragment } from 'react'
+import { Fragment, useState } from 'react'
+import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import {
   descripcionGrillaItem,
   estadoValidacionItem,
   etiquetaProveedorLinea,
-  fmtFechaHoraCorta,
   fmtAbscisasLinea,
   saldoNegociadoItem,
   saldoPresupuestadoItem,
+  valorCompraLinea,
 } from './solicitudDetalleHelpers'
-import { AlmacenHelpIcon, fmtCant, useAlmacenTheme } from './almacenShared'
+import { AlmacenHelpIcon, fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
 
 const ESTADO_COLOR = {
   pendiente: '#d97706',
@@ -19,18 +20,14 @@ const ESTADO_COLOR = {
 const ROW_H = 36
 
 const COLS = [
-  { key: 'num', abbr: '#', tip: 'Número de línea', width: 40, align: 'right' },
-  { key: 'cap', abbr: 'CAP.', tip: 'Capítulo de presupuesto', width: 64 },
-  { key: 'item', abbr: 'ÍTEM', tip: 'Ítem de cobro', width: 64 },
-  { key: 'desc', abbr: 'DESC.', tip: 'Descripción del material (texto libre o insumo mapeado)', width: 220 },
-  { key: 'prov', abbr: 'PROV.', tip: 'Proveedor del insumo asignado. Cada proveedor distinto genera una OC.', width: 150 },
-  { key: 'abs', abbr: 'ABS.', tip: 'Abscisa inicial y final', width: 120 },
-  { key: 'tramo', abbr: 'TRAMO', tip: 'Tramo de la ubicación', width: 88 },
-  { key: 'pk', abbr: 'PK-ID', tip: 'Identificador PK del sector', width: 80 },
-  { key: 'cant', abbr: 'CANT.', tip: 'Cantidad solicitada', width: 80, align: 'right' },
-  { key: 'sneg', abbr: 'S.NEG.', tip: 'Saldo negociado con el proveedor', width: 78, align: 'right' },
-  { key: 'sppto', abbr: 'S.PPTO.', tip: 'Saldo presupuestado disponible en el PK-ID', width: 84, align: 'right' },
-  { key: 'mapa', abbr: 'MAPA', tip: 'Ver ubicación en el mapa', width: 56, align: 'center' },
+  { key: 'cap', abbr: 'CAP.', tip: 'Capítulo de presupuesto', width: 110 },
+  { key: 'item', abbr: 'ÍTEM', tip: 'Ítem y descripción. El texto completo aparece al pasar el cursor.', width: 240 },
+  { key: 'cod', abbr: 'INSUMO', tip: 'Código del insumo asignado en la revisión de línea', width: 120 },
+  { key: 'prov', abbr: 'PROV.', tip: 'Proveedor elegido en la revisión de línea', width: 150 },
+  { key: 'valor', abbr: 'VALOR', tip: 'Valor de la compra: cantidad por el valor ofertado, con IVA incluido', width: 120, align: 'right' },
+  { key: 'ubi', abbr: 'UBIC.', tip: 'Abscisa, tramo, PK-ID y mapa', width: 64, align: 'center' },
+  { key: 'saldos', abbr: 'SALDOS', tip: 'Saldo negociado y saldo de presupuesto, en cantidades', width: 72, align: 'center' },
+  { key: 'est', abbr: 'EST.', tip: 'Estado de la línea: Aprobado, Rechazado o Pendiente', width: 88 },
 ]
 
 function cellBase(ui, { align = 'left', mono = false } = {}) {
@@ -93,9 +90,54 @@ function ColHeader({ abbr, tip, style, align = 'left' }) {
   )
 }
 
+function textoItemDescripcion(it) {
+  const item = String(it?.item || '').trim()
+  const desc = String(it?.item_descripcion || it?.descripcion_item || descripcionGrillaItem(it) || '').trim()
+  if (item && desc && !desc.startsWith(item)) return `${item} — ${desc}`
+  return desc || item || '—'
+}
+
+function PanelLinea({ titulo, onClose, children }) {
+  const ui = useAlmacenTheme()
+  return (
+    <div
+      role="dialog"
+      aria-label={titulo}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100060,
+        background: 'rgba(15,23,42,0.35)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(520px, 100%)',
+          background: '#fff',
+          borderRadius: 12,
+          padding: 16,
+          boxShadow: '0 16px 40px #0003',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <strong>{titulo}</strong>
+          <button type="button" style={ui.btnSecondary} onClick={onClose} aria-label="Cerrar panel">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 /**
- * Grilla tipo Excel de materiales de una solicitud (revisión Gerencial).
- * Encabezados abreviados con (?), filas de altura fija y truncamiento.
+ * Grilla reducida de materiales de una solicitud.
+ * Ubicación y saldos viven en paneles; el valor de compra sigue la visibilidad del rol.
  */
 export default function SolicitudMaterialesExcelTable({
   items = [],
@@ -103,16 +145,25 @@ export default function SolicitudMaterialesExcelTable({
   puedeValidar = false,
   destacarSinInsumo = false,
   onRowClick,
-  onMapClick,
   puedeSeleccionar = false,
   seleccion,
   onToggleLinea,
   puedeAsignar = false,
   onAsignarGrupo,
   onAprobarGrupo,
+  verEconomicos = false,
+  token,
+  contratoId,
+  t,
 }) {
   const ui = useAlmacenTheme()
   const thBase = { ...ui.th, fontSize: 'var(--cc-xs)' }
+  const [panel, setPanel] = useState(null)
+  const cols = COLS.map((c) => (
+    c.key === 'valor' && !verEconomicos
+      ? { ...c, abbr: 'CANT.', tip: 'Cantidad pedida. Este rol no ve valores en dinero.' }
+      : c
+  ))
 
   if (!items.length) {
     return (
@@ -122,254 +173,257 @@ export default function SolicitudMaterialesExcelTable({
     )
   }
 
-  const minWidth = COLS.reduce((acc, c) => acc + c.width, 0)
-    + (puedeValidar ? 78 : 0)
-    + (puedeSeleccionar ? 36 : 0)
-  const colSpan = COLS.length + (puedeValidar ? 1 : 0) + (puedeSeleccionar ? 1 : 0)
+  const minWidth = cols.reduce((acc, c) => acc + c.width, 0) + (puedeSeleccionar ? 36 : 0)
+  const colSpan = cols.length + (puedeSeleccionar ? 1 : 0)
+  const panelItem = panel ? items.find((it) => it.id === panel.id) || panel.item : null
 
   return (
-    <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
-      <table style={{ ...ui.sheetTable, minWidth, tableLayout: 'fixed' }}>
-        <colgroup>
-          {puedeSeleccionar && <col style={{ width: 36 }} />}
-          {COLS.map((c) => (
-            <col key={c.key} style={{ width: c.width }} />
-          ))}
-          {puedeValidar && <col style={{ width: 78 }} />}
-        </colgroup>
-        <thead>
-          <tr>
-            {puedeSeleccionar && (
-              <ColHeader abbr="" tip="Seleccionar líneas para asignar o aprobar en bloque" style={thBase} />
-            )}
-            {COLS.map((c) => (
-              <ColHeader
-                key={c.key}
-                abbr={c.abbr}
-                tip={c.tip}
-                align={c.align || 'left'}
-                style={thBase}
-              />
+    <>
+      <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
+        <table style={{ ...ui.sheetTable, minWidth, tableLayout: 'fixed' }}>
+          <colgroup>
+            {puedeSeleccionar && <col style={{ width: 36 }} />}
+            {cols.map((c) => (
+              <col key={c.key} style={{ width: c.width }} />
             ))}
-            {puedeValidar && (
-              <ColHeader
-                abbr="EST."
-                tip="Estado de validación del ítem"
-                style={thBase}
-              />
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((it, idx) => {
-            const saldoNeg = saldoNegociadoItem(it)
-            const saldoPpto = saldoPresupuestadoItem(it)
-            const ev = estadoValidacionItem(it, sol)
-            const und = it.unidad || it.contexto_presupuesto?.unidad || ''
-            const desc = descripcionGrillaItem(it)
-            const faltaInsumo = !it.insumo_id && (puedeValidar || destacarSinInsumo)
-            const descTitle = faltaInsumo ? `${desc} (sin mapear)` : desc
-            const absTxt = fmtAbscisasLinea(it)
-            const tramoTxt = it.tramo || it.contexto_presupuesto?.tramo || '—'
-            const cantTxt = `${fmtCant(it.cantidad)}${und ? ` ${und}` : ''}`
-            const grupoId = String(it.grupo_seleccion || '').trim()
-            const prevGrupo = String(items[idx - 1]?.grupo_seleccion || '').trim()
-            const muestraGrupo = grupoId && grupoId !== prevGrupo
-            const grupoItems = muestraGrupo
-              ? items.filter((row) => String(row.grupo_seleccion || '').trim() === grupoId)
-              : []
-            const marcada = Boolean(it.id != null && seleccion?.has(it.id))
-            return (
-              <Fragment key={it.id ?? `row-${idx}`}>
-                {muestraGrupo && (
-                  <tr>
-                    <td
-                      colSpan={colSpan}
-                      style={{
-                        ...cellBase(ui),
-                        background: ui.accentSoft,
-                        fontWeight: 700,
-                        fontSize: 'var(--cc-xs)',
-                        height: 'auto',
-                        maxHeight: 'none',
-                        lineHeight: 1.35,
-                        whiteSpace: 'normal',
-                        overflow: 'visible',
-                        padding: '6px 8px',
-                      }}
-                    >
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', width: '100%' }}>
-                        <span title={it.grupo_etiqueta || 'Grupo de la misma selección'}>
-                          {it.grupo_etiqueta || 'Grupo'}
-                          {' '}
-                          ({grupoItems.length})
+          </colgroup>
+          <thead>
+            <tr>
+              {puedeSeleccionar && (
+                <ColHeader abbr="" tip="Seleccionar líneas para asignar o aprobar en bloque" style={thBase} />
+              )}
+              {cols.map((c) => (
+                <ColHeader
+                  key={c.key}
+                  abbr={c.abbr}
+                  tip={c.tip}
+                  align={c.align || 'left'}
+                  style={thBase}
+                />
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it, idx) => {
+              const ev = estadoValidacionItem(it, sol)
+              const desc = textoItemDescripcion(it)
+              const faltaInsumo = !it.insumo_id && (puedeValidar || destacarSinInsumo)
+              const tieneJust = Boolean(String(it.observacion_residente || '').trim())
+              const codigo = it.insumo_codigo || (it.insumo_id ? '—' : 'Sin asignar')
+              const prov = etiquetaProveedorLinea(it)
+              const und = it.unidad || it.contexto_presupuesto?.unidad || ''
+              const cantTxt = `${fmtCant(it.cantidad)}${und ? ` ${und}` : ''}`
+              const valor = verEconomicos ? valorCompraLinea(it) : null
+              const valorTxt = verEconomicos ? (valor == null ? '—' : fmtMoney(valor)) : cantTxt
+              const grupoId = String(it.grupo_seleccion || '').trim()
+              const prevGrupo = String(items[idx - 1]?.grupo_seleccion || '').trim()
+              const muestraGrupo = grupoId && grupoId !== prevGrupo
+              const grupoItems = muestraGrupo
+                ? items.filter((row) => String(row.grupo_seleccion || '').trim() === grupoId)
+                : []
+              const marcada = Boolean(it.id != null && seleccion?.has(it.id))
+              return (
+                <Fragment key={it.id ?? `row-${idx}`}>
+                  {muestraGrupo && (
+                    <tr>
+                      <td
+                        colSpan={colSpan}
+                        style={{
+                          ...cellBase(ui),
+                          background: ui.accentSoft,
+                          fontWeight: 700,
+                          fontSize: 'var(--cc-xs)',
+                          height: 'auto',
+                          maxHeight: 'none',
+                          lineHeight: 1.35,
+                          whiteSpace: 'normal',
+                          overflow: 'visible',
+                          padding: '6px 8px',
+                        }}
+                      >
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', width: '100%' }}>
+                          <span title={it.grupo_etiqueta || 'Grupo de la misma selección'}>
+                            {it.grupo_etiqueta || 'Grupo'}
+                            {' '}
+                            ({grupoItems.length})
+                          </span>
+                          {puedeAsignar && onAsignarGrupo && (
+                            <button
+                              type="button"
+                              style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24 }}
+                              onClick={() => onAsignarGrupo(grupoId, grupoItems)}
+                            >
+                              Asignar insumo
+                            </button>
+                          )}
+                          {puedeValidar && onAprobarGrupo && (
+                            <button
+                              type="button"
+                              style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24 }}
+                              onClick={() => onAprobarGrupo(grupoId, grupoItems)}
+                            >
+                              Aprobar grupo
+                            </button>
+                          )}
                         </span>
-                        {puedeAsignar && onAsignarGrupo && (
-                          <button
-                            type="button"
-                            style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24 }}
-                            onClick={() => onAsignarGrupo(grupoId, grupoItems)}
-                          >
-                            Asignar insumo
-                          </button>
+                      </td>
+                    </tr>
+                  )}
+                  <tr
+                    style={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_H }}
+                    onClick={() => onRowClick?.(it, idx)}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                  >
+                    {puedeSeleccionar && (
+                      <td
+                        style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={marcada}
+                          disabled={it.id == null}
+                          aria-label={`Seleccionar línea ${it.numero_linea ?? idx + 1}`}
+                          onChange={(e) => onToggleLinea?.(it.id, e.target.checked)}
+                        />
+                      </td>
+                    )}
+                    <td style={cellBase(ui)}>
+                      <Trunc title={it.capitulo || '—'}>{it.capitulo || '—'}</Trunc>
+                    </td>
+                    <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' }}>
+                        {tieneJust && (
+                          <span
+                            data-testid="linea-tiene-justificacion"
+                            title="Justificación"
+                            aria-label="Justificación"
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: 99,
+                              background: '#d97706',
+                              flex: '0 0 auto',
+                            }}
+                          />
                         )}
-                        {puedeValidar && onAprobarGrupo && (
-                          <button
-                            type="button"
-                            style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24 }}
-                            onClick={() => onAprobarGrupo(grupoId, grupoItems)}
-                          >
-                            Aprobar grupo
-                          </button>
-                        )}
+                        <Trunc title={desc}>{desc}</Trunc>
                       </span>
                     </td>
-                  </tr>
-                )}
-              <tr
-                style={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_H }}
-                onClick={() => onRowClick?.(it, idx)}
-                onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-              >
-                {puedeSeleccionar && (
-                  <td
-                    style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={marcada}
-                      disabled={it.id == null}
-                      aria-label={`Seleccionar línea ${it.numero_linea ?? idx + 1}`}
-                      onChange={(e) => onToggleLinea?.(it.id, e.target.checked)}
-                    />
-                  </td>
-                )}
-                <td style={cellBase(ui, { align: 'right', mono: true })}>
-                  <Trunc>{it.numero_linea ?? idx + 1}</Trunc>
-                </td>
-                <td style={cellBase(ui)}>
-                  <Trunc title={it.capitulo || '—'}>{it.capitulo || '—'}</Trunc>
-                </td>
-                <td style={cellBase(ui)}>
-                  <Trunc title={it.item || '—'}>{it.item || '—'}</Trunc>
-                </td>
-                <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
-                  <Trunc title={descTitle}>{desc}</Trunc>
-                </td>
-                <td style={{
-                  ...cellBase(ui),
-                  color: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? '#92400e' : undefined,
-                  fontWeight: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? 700 : 500,
-                }}
-                >
-                  <Trunc title={etiquetaProveedorLinea(it)}>{etiquetaProveedorLinea(it)}</Trunc>
-                </td>
-                <td style={cellBase(ui)}>
-                  <Trunc title={absTxt}>{absTxt}</Trunc>
-                </td>
-                <td style={cellBase(ui)}>
-                  <Trunc title={tramoTxt}>{tramoTxt}</Trunc>
-                </td>
-                <td style={cellBase(ui)}>
-                  <Trunc title={it.pk_id || '—'}>{it.pk_id || '—'}</Trunc>
-                </td>
-                <td style={cellBase(ui, { align: 'right', mono: true })}>
-                  <Trunc title={cantTxt}>{cantTxt}</Trunc>
-                </td>
-                <td style={{
-                  ...cellBase(ui, { align: 'right', mono: true }),
-                  color: saldoNeg == null
-                    ? ui.textMuted
-                    : saldoNeg < 0
-                      ? 'var(--cc-color-danger)'
-                      : 'var(--cc-color-positive)',
-                }}
-                >
-                  <Trunc>{saldoNeg == null ? '—' : fmtCant(saldoNeg)}</Trunc>
-                </td>
-                <td style={{
-                  ...cellBase(ui, { align: 'right', mono: true }),
-                  color: saldoPpto == null
-                    ? ui.textMuted
-                    : saldoPpto < 0
-                      ? 'var(--cc-color-danger)'
-                      : 'var(--cc-color-positive)',
-                }}
-                >
-                  <Trunc>{saldoPpto == null ? '—' : fmtCant(saldoPpto)}</Trunc>
-                </td>
-                <td
-                  style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <button
-                    type="button"
-                    title="Ver ubicación en mapa"
-                    aria-label="Ver ubicación en mapa"
-                    disabled={!it.pk_id}
-                    onClick={() => onMapClick?.(it)}
-                    style={{
-                      ...ui.btnSecondary,
-                      padding: '2px 6px',
-                      minHeight: 0,
-                      height: 26,
-                      lineHeight: '22px',
-                      fontSize: 'var(--cc-sm)',
-                      opacity: it.pk_id ? 1 : 0.4,
-                    }}
-                  >
-                    🗺️
-                  </button>
-                </td>
-                {puedeValidar && (
-                  <td style={{
-                    ...cellBase(ui),
-                    color: ESTADO_COLOR[ev || 'pendiente'],
-                    fontWeight: 700,
-                    fontSize: 'var(--cc-xs)',
-                  }}
-                  >
-                    <Trunc>
-                      {ev === 'aprobado' ? 'Aprobado' : ev === 'rechazado' ? 'Rechazado' : 'Pendiente'}
-                    </Trunc>
-                  </td>
-                )}
-              </tr>
-              {String(it.observacion_residente || '').trim() && (
-                <tr>
-                  <td
-                    colSpan={colSpan}
-                    style={{
+                    <td style={cellBase(ui)}>
+                      <Trunc title={codigo}>{codigo}</Trunc>
+                    </td>
+                    <td style={{
                       ...cellBase(ui),
-                      height: 'auto',
-                      maxHeight: 'none',
-                      lineHeight: 1.4,
-                      whiteSpace: 'normal',
-                      overflow: 'visible',
-                      background: '#fffbeb',
-                      padding: '6px 10px',
+                      color: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? '#92400e' : undefined,
+                      fontWeight: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? 700 : 500,
+                    }}
+                    >
+                      <Trunc title={prov}>{prov}</Trunc>
+                    </td>
+                    <td style={cellBase(ui, { align: 'right', mono: true })}>
+                      <Trunc title={valorTxt}>{valorTxt}</Trunc>
+                    </td>
+                    <td
+                      style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        title="Ubicación"
+                        aria-label="Ver ubicación"
+                        data-testid="linea-btn-ubicacion"
+                        onClick={() => setPanel({ tipo: 'ubicacion', id: it.id, item: it })}
+                        style={{ ...ui.btnSecondary, padding: '2px 6px', minHeight: 0, height: 26, lineHeight: '22px' }}
+                      >
+                        📍
+                      </button>
+                    </td>
+                    <td
+                      style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        title="Saldos"
+                        aria-label="Ver saldos"
+                        data-testid="linea-btn-saldos"
+                        onClick={() => setPanel({ tipo: 'saldos', id: it.id, item: it })}
+                        style={{ ...ui.btnSecondary, padding: '2px 6px', minHeight: 0, height: 26, lineHeight: '22px' }}
+                      >
+                        Σ
+                      </button>
+                    </td>
+                    <td style={{
+                      ...cellBase(ui),
+                      color: ESTADO_COLOR[ev || 'pendiente'],
+                      fontWeight: 700,
                       fontSize: 'var(--cc-xs)',
                     }}
-                  >
-                    <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 2 }}>
-                      {it.supera_presupuesto ? 'Justificación (supera presupuesto)' : 'Justificación'}
-                    </div>
-                    <div style={{ color: ui.text, whiteSpace: 'pre-wrap' }}>
-                      {String(it.observacion_residente).trim()}
-                    </div>
-                    <div style={{ color: ui.textMuted, marginTop: 2 }}>
-                      {[it.justificacion_autor_nombre, fmtFechaHoraCorta(it.justificacion_at)].filter(Boolean).join(' · ') || 'Sin autor registrado'}
-                    </div>
-                  </td>
-                </tr>
-              )}
-              </Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+                    >
+                      <Trunc>
+                        {ev === 'aprobado' ? 'Aprobado' : ev === 'rechazado' ? 'Rechazado' : 'Pendiente'}
+                      </Trunc>
+                    </td>
+                  </tr>
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      {panel?.tipo === 'ubicacion' && panelItem && (
+        <PanelLinea titulo="Ubicación de la línea" onClose={() => setPanel(null)}>
+          <dl style={{ margin: 0, fontSize: 'var(--cc-sm)', display: 'grid', gridTemplateColumns: '110px 1fr', gap: '6px 8px' }}>
+            <dt style={{ color: ui.textMuted }}>Abscisa</dt>
+            <dd style={{ margin: 0 }}>{fmtAbscisasLinea(panelItem)}</dd>
+            <dt style={{ color: ui.textMuted }}>Tramo</dt>
+            <dd style={{ margin: 0 }}>{panelItem.tramo || panelItem.contexto_presupuesto?.tramo || '—'}</dd>
+            <dt style={{ color: ui.textMuted }}>PK-ID</dt>
+            <dd style={{ margin: 0 }}>{panelItem.pk_id || '—'}</dd>
+          </dl>
+          <div style={{ marginTop: 12 }} data-testid="linea-panel-mapa">
+            {panelItem.pk_id ? (
+              <AlmacenItemMapaPreview
+                t={t}
+                token={token}
+                contratoId={contratoId}
+                pkLabel={panelItem.pk_label || panelItem.pk_id}
+                height={220}
+                interactive
+                showBasemapToggle
+              />
+            ) : (
+              <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>Esta línea no tiene PK-ID para mostrar el mapa.</div>
+            )}
+          </div>
+        </PanelLinea>
+      )}
+      {panel?.tipo === 'saldos' && panelItem && (
+        <PanelLinea titulo="Saldos de la línea" onClose={() => setPanel(null)}>
+          <SaldosContenido item={panelItem} />
+        </PanelLinea>
+      )}
+    </>
+  )
+}
+
+function SaldosContenido({ item }) {
+  const ui = useAlmacenTheme()
+  const neg = saldoNegociadoItem(item)
+  const ppto = saldoPresupuestadoItem(item)
+  const und = item.unidad || item.contexto_presupuesto?.unidad || ''
+  const fila = (label, valor) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 0', borderBottom: `1px solid ${ui.textMuted}22` }}>
+      <span>{label}</span>
+      <strong>{valor == null ? '—' : `${fmtCant(valor)}${und ? ` ${und}` : ''}`}</strong>
+    </div>
+  )
+  return (
+    <div data-testid="linea-panel-saldos" style={{ fontSize: 'var(--cc-sm)' }}>
+      {fila('Saldo negociado', neg)}
+      {fila('Saldo de presupuesto', ppto)}
     </div>
   )
 }

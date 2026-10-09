@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import InsumoSearchTable from './InsumoSearchTable'
+import ProveedorOfertaField from './ProveedorOfertaField'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
@@ -81,6 +82,7 @@ export default function SolicitudLineaRevisionModal({
   const [mapaOpen, setMapaOpen] = useState(false)
   const [draft, setDraft] = useState({
     insumo: null,
+    proveedor: null,
     cantidad: '',
     valor_compra_unitario: '',
     vlr_unitario_cobro: '',
@@ -109,6 +111,14 @@ export default function SolicitudLineaRevisionModal({
           unidad: item.unidad,
           valor_compra_referencia: item.valor_compra_unitario,
           tiene_precio_compra: Number(item.valor_compra_unitario) > 0,
+        }
+        : null,
+      proveedor: item.insumo_id && (item.proveedor_nombre || item.proveedor_seleccionado_nombre || item.proveedor_id)
+        ? {
+          insumo_id: item.insumo_id,
+          proveedor_id: item.proveedor_seleccionado_id || item.proveedor_id || null,
+          proveedor_nombre: item.proveedor_seleccionado_nombre || item.proveedor_nombre || '',
+          numero: item.cotizacion_numero_seleccionada || null,
         }
         : null,
       cantidad: item.cantidad != null ? String(item.cantidad) : '',
@@ -232,7 +242,10 @@ export default function SolicitudLineaRevisionModal({
       insumo_id: Number(draft.insumo.insumo_id),
       cantidad: cant,
     }
-    if (costo > 0) body.valor_compra_unitario = costo
+    if (verEconomicos && costo > 0) body.valor_compra_unitario = costo
+    if (draft.proveedor?.proveedor_id) body.proveedor_seleccionado_id = Number(draft.proveedor.proveedor_id)
+    if (draft.proveedor?.proveedor_nombre) body.proveedor_seleccionado_nombre = draft.proveedor.proveedor_nombre
+    if (draft.proveedor?.numero) body.cotizacion_numero_seleccionada = draft.proveedor.numero
     // Solo enviar VU cobro si el usuario ingresó un valor > 0.
     // Enviar 0 bloqueaba la resolución automática desde el listado/presupuesto.
     const cobroNum = draft.vlr_unitario_cobro !== '' && draft.vlr_unitario_cobro != null
@@ -468,10 +481,11 @@ export default function SolicitudLineaRevisionModal({
         {puedeEditarMapeo ? (
           <>
             <div style={{ ...ui.sheetWrap, overflow: 'visible', marginBottom: 12 }} className="cc-almacen-table-scroll">
-              <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 920 : 640, tableLayout: 'fixed' }}>
+              <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 1120 : 860, tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: 220 }} />
-                  <col style={{ width: 280 }} />
+                  <col style={{ width: 200 }} />
+                  <col style={{ width: 240 }} />
+                  <col style={{ width: 200 }} />
                   <col style={{ width: 88 }} />
                   {verEconomicos && <col style={{ width: 110 }} />}
                   {verEconomicos && <col style={{ width: 110 }} />}
@@ -480,6 +494,7 @@ export default function SolicitudLineaRevisionModal({
                   <tr>
                     <ExcelHeader abbr="DESC. CONTRATISTA" tip="Descripción del material solicitada por el Contratista" style={th} />
                     <ExcelHeader abbr="INSUMO" tip="Insumo del catálogo administrativo" style={th} />
+                    <ExcelHeader abbr="PROVEEDOR" tip="Proveedor de la cotización a comprar. Por defecto la ganadora; se puede elegir otra." style={th} />
                     <ExcelHeader abbr="CANT." tip="Cantidad solicitada" style={th} align="right" />
                     {verEconomicos && (
                       <ExcelHeader abbr="COSTO" tip="Costo de compra unitario" style={th} align="right" />
@@ -516,8 +531,24 @@ export default function SolicitudLineaRevisionModal({
                         onChange={(ins) => setDraft((d) => ({
                           ...d,
                           insumo: ins,
-                          valor_compra_unitario: ins?.tiene_precio_compra
+                          proveedor: null,
+                          valor_compra_unitario: verEconomicos && ins?.tiene_precio_compra
                             ? String(ins.valor_compra_referencia ?? '')
+                            : (verEconomicos ? d.valor_compra_unitario : ''),
+                        }))}
+                      />
+                    </td>
+                    <td style={{ ...td, overflow: 'visible' }}>
+                      <ProveedorOfertaField
+                        insumoId={draft.insumo?.insumo_id}
+                        value={draft.proveedor}
+                        disabled={busy || !draft.insumo?.insumo_id}
+                        verEconomicos={verEconomicos}
+                        onChange={(oferta) => setDraft((d) => ({
+                          ...d,
+                          proveedor: oferta,
+                          valor_compra_unitario: verEconomicos && oferta?.valor != null && oferta.valor !== ''
+                            ? String(oferta.valor)
                             : d.valor_compra_unitario,
                         }))}
                       />
@@ -659,9 +690,10 @@ export default function SolicitudLineaRevisionModal({
         ) : (
           <>
             <div style={{ ...ui.sheetWrap, marginBottom: 10 }} className="cc-almacen-table-scroll">
-              <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 560 : 360, tableLayout: 'fixed' }}>
+              <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 720 : 520, tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: 280 }} />
+                  <col style={{ width: 220 }} />
+                  <col style={{ width: 180 }} />
                   <col style={{ width: 100 }} />
                   {verEconomicos && <col style={{ width: 100 }} />}
                   {verEconomicos && <col style={{ width: 100 }} />}
@@ -669,6 +701,7 @@ export default function SolicitudLineaRevisionModal({
                 <thead>
                   <tr>
                     <ExcelHeader abbr="INSUMO" tip="Insumo asignado" style={th} />
+                    <ExcelHeader abbr="PROVEEDOR" tip="Proveedor elegido para la compra" style={th} />
                     <ExcelHeader abbr="CANT." tip="Cantidad" style={th} align="right" />
                     {verEconomicos && <ExcelHeader abbr="COSTO" tip="Costo de compra" style={th} align="right" />}
                     {verEconomicos && <ExcelHeader abbr="COBRO" tip="Valor de cobro" style={th} align="right" />}
@@ -679,6 +712,12 @@ export default function SolicitudLineaRevisionModal({
                     <td style={td}>
                       <span title={item.material_descripcion || ''} style={{ fontSize: 'var(--cc-xs)' }}>
                         {item.material_descripcion || '—'}
+                      </span>
+                    </td>
+                    <td style={td}>
+                      <span style={{ fontSize: 'var(--cc-xs)' }}>
+                        {etiquetaProveedorLinea(item)}
+                        {item.cotizacion_numero_seleccionada ? ` · Cot. ${item.cotizacion_numero_seleccionada}` : ''}
                       </span>
                     </td>
                     <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
