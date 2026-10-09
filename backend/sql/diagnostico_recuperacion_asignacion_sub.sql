@@ -3,20 +3,27 @@
 --
 -- Ejecutar en Supabase SQL editor o psql. Revisar resultados antes de UPDATE.
 
--- 1) Operaciones legado_exclusivo registradas en logs (si existe la tabla).
+-- 1) Operaciones legado_exclusivo / bulk-subcontratista en logs.
+--    Columnas reales: modulo, entidad_tipo, entidad_id (no existe "entidad").
 SELECT
   id,
   created_at,
   usuario_id,
+  usuario_nombre,
   accion,
-  entidad,
-  entidad_id AS contrato_id,
-  detalle
+  modulo,
+  entidad_tipo,
+  entidad_id,
+  detalle,
+  valor_anterior,
+  valor_nuevo
 FROM public.logs
-WHERE entidad = 'PRESUPUESTO'
+WHERE modulo = 'PRESUPUESTO'
   AND (
-    detalle::text ILIKE '%legado_exclusivo%'
-    OR (detalle->>'mode') = 'legado_exclusivo'
+    entidad_tipo IN ('presupuesto_bulk_subcontratista', 'presupuesto_sub_redistribucion', 'presupuesto')
+    OR detalle::text ILIKE '%legado_exclusivo%'
+    OR detalle::text ILIKE '%legado_libre%'
+    OR (detalle->>'mode') IN ('legado_exclusivo', 'legado_libre', 'simple', 'redistribuir')
     OR detalle::text ILIKE '%presupuesto_bulk_subcontratista%'
   )
 ORDER BY created_at DESC
