@@ -41,7 +41,7 @@ export function solicitudPuedeValidar(sol, permisos) {
   if (!permisos?.validar) return false
   if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
   if (
-    sol?.estado === 'aprobada'
+    (sol?.estado === 'aprobada' || sol?.estado === 'enviada')
     && solicitudTieneOrdenCompra(sol)
     && solicitudTieneLineasPendientesPostOc(sol)
   ) {

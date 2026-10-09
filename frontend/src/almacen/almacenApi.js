@@ -404,6 +404,35 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       setTimeout(() => URL.revokeObjectURL(url), 120000)
     },
 
+    async openSolicitudOcsPdf(solicitudId) {
+      const res = await fetch(`${base}/solicitudes/${solicitudId}/ordenes-compra/pdf`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) {
+        let msg = `Error ${res.status}`
+        try {
+          const data = await res.json()
+          const d = data.detail
+          msg = typeof d === 'string' ? d : JSON.stringify(d)
+        } catch {
+          const txt = await res.text().catch(() => '')
+          if (txt) msg = txt.slice(0, 240)
+        }
+        throw new Error(msg)
+      }
+      const blob = await res.blob()
+      if (!blob?.size) throw new Error('El PDF está vacío o no está disponible.')
+      const url = URL.createObjectURL(blob)
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `OC-solicitud-${solicitudId}.pdf`
+        a.click()
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120000)
+    },
+
     listEntradas: () =>
       fetch(`${base}/entradas`, { headers: authHeaders() }).then(parseJsonList),
 

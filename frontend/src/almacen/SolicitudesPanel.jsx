@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import SolicitudFormModal from './SolicitudFormModal'
 import SolicitudDetalleModal from './SolicitudDetalleModal'
 import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
-import OrdenCompraPdfClip from './OrdenCompraPdfClip'
+import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
   solicitudPuedeReabrirOc,
@@ -272,7 +272,9 @@ export default function SolicitudesPanel({
                     }}
                     data-label="Estado"
                   >
-                    {ESTADO_SOLICITUD_LABEL[s.estado]}
+                    {s.oc_parcial || (s.estado === 'enviada' && solicitudTieneOrdenCompra(s))
+                      ? 'OC parcial'
+                      : ESTADO_SOLICITUD_LABEL[s.estado]}
                   </td>
                   <td
                     style={{ ...ui.td, ...cellEllipsis }}
@@ -304,21 +306,12 @@ export default function SolicitudesPanel({
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="OC" onClick={(e) => e.stopPropagation()}>
                     {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && permisos?.exportar
                       && solicitudOrdenesCompra(s).length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                          {solicitudOrdenesCompra(s).map((oc) => (
-                            <OrdenCompraPdfClip
-                              key={oc.id}
-                              ordenCompra={oc}
-                              compact
-                              puedeExportar
-                              title={
-                                oc.proveedor_nombre
-                                  ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
-                                  : undefined
-                              }
-                            />
-                          ))}
-                        </div>
+                        <SolicitudOcsPdfButton
+                          solicitudId={s.id}
+                          ordenes={solicitudOrdenesCompra(s)}
+                          compact
+                          puedeExportar
+                        />
                       ) : '—'}
                   </td>
                   <td

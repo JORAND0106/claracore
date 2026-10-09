@@ -114,8 +114,22 @@ export default function ExpedienteCompraModal({
           <>
             <section style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>📄 Orden de compra</div>
-              <div style={{ fontSize: 'var(--cc-sm)' }}>
-                Solicitud #{sol?.consecutivo} · Estado: {oc?.estado}
+              <div style={{ fontSize: 'var(--cc-sm)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span>Solicitud #{sol?.consecutivo} · Estado: {oc?.estado}</span>
+                {sol?.id && (
+                  <button
+                    type="button"
+                    style={ui.btnSecondary}
+                    data-testid="expediente-ocs-pdf"
+                    onClick={() => {
+                      api.openSolicitudOcsPdf(sol.id).catch((err) => {
+                        setError(err.message || 'No se pudo abrir el PDF de las órdenes de compra.')
+                      })
+                    }}
+                  >
+                    PDF de las OC
+                  </button>
+                )}
               </div>
               <table style={{ width: '100%', marginTop: 8, fontSize: 'var(--cc-sm)' }}>
                 <thead>

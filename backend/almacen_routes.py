@@ -86,6 +86,7 @@ from almacen_service import (
     create_solicitud,
     delete_cotizacion,
     download_disposicion_pdf,
+    download_pdf_conjunto_solicitud,
     download_pdf_oc,
     download_salida_pdf,
     download_soporte,
@@ -322,6 +323,7 @@ class AprobarBody(BaseModel):
     fecha_compromiso: Optional[str] = None
     cotizaciones_seleccionadas: Optional[List[CotizacionSeleccionBody]] = None
     aprobar_todos_pendientes: bool = True
+    item_ids: Optional[List[int]] = None
 
 
 class ValidarItemBody(BaseModel):
@@ -1385,6 +1387,30 @@ def route_download_factura(contrato_id: int, oc_id: int, current_user=Depends(ge
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/solicitudes/{solicitud_id}/ordenes-compra/pdf")
+def route_download_pdf_ocs_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    """PDF con todas las OC de la solicitud, una por hoja. No es el correo al proveedor."""
+    _check_contrato(current_user, contrato_id)
+    _require_almacen_o_entsal(current_user, "exportar")
+    try:
+        data, fname = download_pdf_conjunto_solicitud(contrato_id, solicitud_id, _uid(current_user))
+        safe_name = fname.replace('"', "'")
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.exception("Error descargando PDF de OCs solicitud %s", solicitud_id)
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
 
 
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/download")
