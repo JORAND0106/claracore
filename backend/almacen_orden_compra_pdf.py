@@ -255,7 +255,7 @@ def _header_contratista(contrato: dict) -> str:
     <td class="hdr-oc">
       <div class="oc-label">Orden de compra</div>
       <div class="oc-numero">N.° {_esc(contrato.get('_numero_oc') or '—')}</div>
-      <div class="oc-ref">Solicitud N.° {_esc(contrato.get('_numero_sol') or '—')}</div>
+      <div class="oc-ref">{_esc((contrato.get('_titulo_sol') or '').strip() or f"Solicitud N.° {contrato.get('_numero_sol') or '—'}")}</div>
     </td>
   </tr>
 </table>"""
@@ -273,12 +273,15 @@ def generar_pdf_orden_compra(
     insumo_map: Optional[Dict[int, dict]] = None,
     puntos_entrega: Optional[List[str]] = None,
     terminos: str = "",
-) -> bytes:
+    solo_html: bool = False,
+):
     numero_oc = orden_compra.get("numero_oc") or "—"
     numero_sol = solicitud.get("consecutivo") or "—"
+    titulo_sol = (solicitud.get("titulo") or "").strip()
     contrato_hdr = dict(contrato)
     contrato_hdr["_numero_oc"] = numero_oc
     contrato_hdr["_numero_sol"] = numero_sol
+    contrato_hdr["_titulo_sol"] = titulo_sol
 
     sol_items = {int(it["id"]): it for it in (solicitud.get("items") or []) if it.get("id")}
     lineas, _tot = _lineas_y_totales(
@@ -343,7 +346,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
 .hdr-oc {{ width: 40%; text-align: right; }}
 .oc-label {{ font-size: 9pt; text-transform: uppercase; color: #64748b; letter-spacing: 0.3pt; }}
 .oc-numero {{ font-size: 16pt; font-weight: bold; color: {_COLOR_FRANJA}; margin-top: 2pt; }}
-.oc-ref {{ font-size: 8pt; color: #64748b; margin-top: 2pt; }}
+.oc-ref {{ font-size: 8pt; color: #334155; margin-top: 2pt; font-weight: 600; white-space: normal; word-wrap: break-word; }}
 .blocks {{ width: 100%; border-collapse: collapse; margin-bottom: 8pt; }}
 .blocks td {{ border: 1px solid {_COLOR_BORDE}; padding: 6pt 8pt; vertical-align: top; width: 50%; font-size: 8pt; }}
 .block-lbl {{ font-size: 7.5pt; font-weight: bold; text-transform: uppercase; color: {_COLOR_FRANJA}; margin-bottom: 4pt; }}
@@ -364,8 +367,9 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
 .firma-line {{ border-top: 1px solid #334155; margin: 0 8pt; padding-top: 4pt; font-size: 8pt; }}
 .firma-fecha {{ font-size: 7.5pt; color: #64748b; margin-top: 2pt; }}
 .footer {{ margin-top: 10pt; font-size: 7pt; color: #94a3b8; text-align: center; }}
+.oc-hoja-nueva {{ page-break-before: always; break-before: page; }}
 </style></head><body>
-
+<section class="oc-hoja">
 {_header_contratista(contrato_hdr)}
 
 <table class="blocks"><tr>
@@ -410,8 +414,44 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
 </tr></table>
 
 <div class="footer">Documento generado por ClaraCore — Almacén de Obra · Contrato {_esc(contrato.get('numero') or '')}</div>
+</section>
 </body></html>"""
+    if solo_html:
+        return doc
+    return _pdf_desde_html(doc)
+
+
+def html_varias_ordenes(documentos: List[str]) -> str:
+    """Une varias OC en un solo HTML. Cada una, desde la segunda, empieza en hoja nueva."""
+    if not documentos:
+        raise ValueError("No hay órdenes de compra para el PDF.")
+    if len(documentos) == 1:
+        return documentos[0]
+    head, sep, rest = documentos[0].partition("<body>")
+    if not sep:
+        raise ValueError("No se pudo armar el PDF de las órdenes de compra.")
+    first_body, sep2, _tail = rest.partition("</body>")
+    if not sep2:
+        raise ValueError("No se pudo armar el PDF de las órdenes de compra.")
+    extras = []
+    for doc in documentos[1:]:
+        _h, s, body = doc.partition("<body>")
+        if not s:
+            continue
+        body, s2, _t = body.partition("</body>")
+        if not s2:
+            continue
+        extras.append(body.replace('class="oc-hoja"', 'class="oc-hoja oc-hoja-nueva"', 1))
+    return f"{head}<body>{first_body}{''.join(extras)}</body></html>"
+
+
+def _pdf_desde_html(doc: str) -> bytes:
     pdf = to_pdf_bytes(doc, landscape=False)
     if not pdf or len(pdf) < 100:
         raise ValueError("No se pudo generar el PDF de la Orden de Compra.")
     return pdf
+
+
+def generar_pdf_varias_ordenes(documentos_html: List[str]) -> bytes:
+    """PDF para quien genera: todas las OC, una por hoja. No es el adjunto de cada proveedor."""
+    return _pdf_desde_html(html_varias_ordenes(documentos_html))

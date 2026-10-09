@@ -5,7 +5,7 @@ import SolicitudTramoAccordion from './SolicitudTramoAccordion'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import LineaResumenExcelTable from './LineaResumenExcelTable'
-import OrdenCompraPdfClip from './OrdenCompraPdfClip'
+import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
 import {
   coerceEsPrincipal,
   formatSolicitudTituloAuto,
@@ -803,7 +803,7 @@ export default function SolicitudForm({
     <div style={rootStyle} className={`cc-almacen-form-root${embedded ? ' cc-almacen-form-root--embedded' : ''}`}>
       {!embedded && (
       <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <span>
+        <span data-testid="solicitud-form-titulo" style={{ whiteSpace: 'normal' }}>
           {solicitudId
             ? (sol?.titulo?.trim() || tituloAuto || `Solicitud #${sol?.consecutivo || '…'}`)
             : 'Nueva solicitud de insumos'}
@@ -819,20 +819,13 @@ export default function SolicitudForm({
             </span>
           )}
         </span>
-        {sol?.estado === 'aprobada' && solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar && (
+        {solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar && (
           <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, marginLeft: 8 }}>
-            {solicitudOrdenesCompra(sol).map((oc) => (
-              <OrdenCompraPdfClip
-                key={oc.id}
-                ordenCompra={oc}
-                puedeExportar
-                title={
-                  oc.proveedor_nombre
-                    ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
-                    : undefined
-                }
-              />
-            ))}
+            <SolicitudOcsPdfButton
+              solicitudId={sol.id}
+              ordenes={solicitudOrdenesCompra(sol)}
+              puedeExportar
+            />
           </div>
         )}
       </div>

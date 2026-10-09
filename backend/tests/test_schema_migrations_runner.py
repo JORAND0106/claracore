@@ -9,6 +9,7 @@ def test_critical_includes_cierre_motivo_and_rrhh_flag():
     assert "20261009010000_bitacora_cierre_motivo_automatico_atrasado.sql" in names
     assert "20261009140000_almacen_solicitud_proveedor_seleccionado.sql" in names
     assert "20261009160000_almacen_oc_envio.sql" in names
+    assert "20261009190000_almacen_agrupacion_bloqueo.sql" in names
     assert "20260925120000_bitacora_asistencia_rrhh_activa.sql" in names
     paths = runner.list_migration_files(only=runner.CRITICAL_MIGRATIONS)
     assert {p.name for p in paths} == names

@@ -223,6 +223,19 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         .then(parseJson)
         .then((r) => Number(r?.proximo) || null),
 
+    vistaPreviaAgruparSolicitudes: () =>
+      fetchJson(`${base}/solicitudes/agrupar/vista-previa`, {
+        method: 'POST',
+        headers: authHeaders(),
+      }),
+
+    agruparSolicitudes: (body) =>
+      fetchJson(`${base}/solicitudes/agrupar`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }),
+
     getSolicitud: (id, { ligera = false } = {}) => {
       const q = ligera ? '?ligera=1' : ''
       return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: authHeaders() })
@@ -399,6 +412,35 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         const a = document.createElement('a')
         a.href = url
         a.download = `OC-${ocId}.pdf`
+        a.click()
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120000)
+    },
+
+    async openSolicitudOcsPdf(solicitudId) {
+      const res = await fetch(`${base}/solicitudes/${solicitudId}/ordenes-compra/pdf`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) {
+        let msg = `Error ${res.status}`
+        try {
+          const data = await res.json()
+          const d = data.detail
+          msg = typeof d === 'string' ? d : JSON.stringify(d)
+        } catch {
+          const txt = await res.text().catch(() => '')
+          if (txt) msg = txt.slice(0, 240)
+        }
+        throw new Error(msg)
+      }
+      const blob = await res.blob()
+      if (!blob?.size) throw new Error('El PDF está vacío o no está disponible.')
+      const url = URL.createObjectURL(blob)
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `OC-solicitud-${solicitudId}.pdf`
         a.click()
       }
       setTimeout(() => URL.revokeObjectURL(url), 120000)
