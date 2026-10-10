@@ -51,12 +51,17 @@ export default function AgruparSolicitudesModal({
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 800, marginBottom: 6 }}>
           Agrupar solicitudes por proveedor
         </div>
+        {error && (
+          <div data-testid="agrupar-error" style={{ color: '#dc2626', fontWeight: 700, margin: '0 0 12px', lineHeight: 1.45 }}>
+            {error}
+          </div>
+        )}
         <p data-testid="agrupar-resumen-accion" style={{ margin: '0 0 12px', color: ui.text, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
           {frase}
           {' '}
           Las solicitudes que ya tienen OC no se mueven.
         </p>
-        {completados > 0 && (
+        {completados > 0 && !error && (
           <p data-testid="agrupar-proveedores-completados" style={{ margin: '0 0 12px', color: ui.text, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
             Se guardó el proveedor en {completados} línea(s) que ya tenían insumo.
             El movimiento de líneas espera su confirmación.
@@ -72,8 +77,6 @@ export default function AgruparSolicitudesModal({
             {fase}
           </div>
         )}
-
-        {error && <div style={{ color: '#dc2626', marginBottom: 10 }}>{error}</div>}
 
         {resumen ? (
           <div data-testid="agrupar-resumen" style={{ fontWeight: 700, marginBottom: 12 }}>

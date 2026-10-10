@@ -678,16 +678,46 @@ def _select_items_por_id(sb, item_ids: List[int]) -> List[dict]:
     return rows
 
 
-def _ids_con_oc(sb, contrato_id: int) -> set:
-    rows = (
-        sb.table("almacen_orden_compra")
-        .select("solicitud_id")
-        .eq("contrato_id", int(contrato_id))
-        .execute()
-        .data
-        or []
-    )
-    return {int(r["solicitud_id"]) for r in rows if r.get("solicitud_id")}
+def _ids_con_oc(sb, contrato_id: int, solicitud_ids: Optional[List[int]] = None) -> set:
+    """Solicitudes con OC. También las busca por id, no solo por contrato.
+
+    La grilla muestra Reabrir OC con la orden ligada a la solicitud. Si esa
+    orden no trae el mismo contrato_id, Agrupar igual no debe moverla.
+    """
+    encontrados = set()
+
+    def tomar(rows) -> None:
+        for row in rows or []:
+            if row.get("solicitud_id") in (None, ""):
+                continue
+            try:
+                encontrados.add(int(row["solicitud_id"]))
+            except (TypeError, ValueError):
+                continue
+
+    consultas = [
+        lambda: (
+            sb.table("almacen_orden_compra")
+            .select("solicitud_id")
+            .eq("contrato_id", int(contrato_id))
+        )
+    ]
+    ids = [int(x) for x in (solicitud_ids or []) if x]
+    for chunk in _trozos(ids, 120):
+        consultas.append(
+            lambda chunk=chunk: (
+                sb.table("almacen_orden_compra")
+                .select("solicitud_id")
+                .in_("solicitud_id", list(chunk))
+            )
+        )
+    for make in consultas:
+        try:
+            tomar(make().execute().data or [])
+        except Exception as exc:
+            if not _objeto_ausente(exc):
+                raise
+    return encontrados
 
 
 def _anexar_totales(plan: dict, items: List[dict], *, ver_economicos: bool) -> None:
@@ -738,21 +768,45 @@ def frase_accion_agrupar(plan: dict) -> str:
     return frase
 
 
+def _texto_excepcion(exc: BaseException) -> str:
+    partes = [str(exc or "")]
+    for attr in ("message", "details", "hint", "code"):
+        val = getattr(exc, attr, None)
+        if val not in (None, ""):
+            partes.append(str(val))
+    return " ".join(partes)
+
+
+def _es_choque_numero(exc: BaseException) -> bool:
+    low = _texto_excepcion(exc).lower()
+    return any(tok in low for tok in ("23505", "duplicate key", "idx_almacen_solicitud_item_linea", "unique"))
+
+
+def _motivo_publico(exc: BaseException) -> str:
+    texto = (getattr(exc, "message", None) or str(exc) or "").strip()
+    texto = " ".join(texto.split())
+    if texto.startswith("{") and getattr(exc, "message", None):
+        texto = " ".join(str(exc.message).split())
+    return texto[:220]
+
+
 def mensaje_error_agrupar(exc: BaseException) -> str:
-    """Texto para la persona. Nunca el mensaje crudo de la base."""
-    low = str(exc or "").lower()
-    if any(tok in low for tok in ("23505", "duplicate key", "idx_almacen_solicitud_item_linea", "unique")):
+    """Texto para la persona. El choque de números se traduce; el resto deja el motivo."""
+    if _es_choque_numero(exc):
         return (
             "No se pudo agrupar porque una línea iba a repetir el número dentro de la solicitud "
             "de destino. No quedó ningún movimiento aplicado. Intente de nuevo."
         )
     if isinstance(exc, ValueError):
         texto = str(exc).strip()
+        low = texto.lower()
         if texto and not any(tok in low for tok in ("pgrst", "postgres", "sql", "constraint", "column")):
             return texto
-    return (
-        "No se pudo agrupar las solicitudes. No quedó ningún movimiento aplicado. Intente de nuevo."
-    )
+    motivo = _motivo_publico(exc)
+    base = "No se pudo agrupar las solicitudes. No quedó ningún movimiento aplicado."
+    if not motivo:
+        return base + " Intente de nuevo."
+    return f"{base} Motivo: {motivo}"
 
 
 def _numero_entero(raw) -> Optional[int]:
@@ -832,7 +886,7 @@ def _descartar_solicitudes_creadas(sb, creadas: List[dict]) -> None:
 
 
 def _mover_lineas_rpc(sb, filas: List[dict]) -> bool:
-    """True si la función de la base movió todo en una sola transacción."""
+    """True si la función de la base movió todo. Si falla, no dejó filas a medias."""
     rpc = getattr(sb, "rpc", None)
     if not callable(rpc) or not filas:
         return False
@@ -840,29 +894,34 @@ def _mover_lineas_rpc(sb, filas: List[dict]) -> bool:
         rpc("almacen_agrupar_mover_lineas", {"p_moves": filas}).execute()
         return True
     except Exception as exc:
-        if _rpc_ausente(exc):
-            _log.info("Sin función almacen_agrupar_mover_lineas; se mueven las líneas en un solo lote.")
-            return False
-        raise
+        # La función va en una sola transacción: si responde error, no dejó filas a medias.
+        _log.warning("La función de mover líneas no aplicó (%s). Se usa UPDATE.", exc)
+        return False
 
 
-def _upsert_lineas(sb, filas: List[dict]) -> None:
-    """Mueve cada línea con UPDATE. El upsert parcial choca con columnas obligatorias."""
+def _aplicar_update_linea(sb, item_id: int, payload: dict) -> None:
+    sb.table("almacen_solicitud_item").update(payload).eq("id", int(item_id)).execute()
+
+
+def _mover_lineas_update(sb, filas: List[dict]) -> None:
+    """Aparta el número y después mueve. Así no choca el índice (solicitud, número)."""
+    preparados = []
     for fila in filas or []:
         item_id = fila.get("item_id") if fila.get("item_id") not in (None, "") else fila.get("id")
         sid = fila.get("solicitud_id")
         numero = fila.get("numero_linea")
         if item_id in (None, "") or sid in (None, "") or not numero:
             continue
-        (
-            sb.table("almacen_solicitud_item")
-            .update({
-                "solicitud_id": int(sid),
-                "numero_linea": int(numero),
-            })
-            .eq("id", int(item_id))
-            .execute()
-        )
+        preparados.append((int(item_id), int(sid), int(numero)))
+    for i, (item_id, _sid, _numero) in enumerate(preparados, start=1):
+        # Número alto y temporal. El índice único es (solicitud, número):
+        # apartar primero deja libre el número viejo antes de ocupar el nuevo.
+        _aplicar_update_linea(sb, item_id, {"numero_linea": 1_500_000_000 + i})
+    for item_id, sid, numero in preparados:
+        _aplicar_update_linea(sb, item_id, {
+            "solicitud_id": sid,
+            "numero_linea": numero,
+        })
 
 
 def _mover_lineas_bloque(sb, filas: List[dict]) -> None:
@@ -870,7 +929,7 @@ def _mover_lineas_bloque(sb, filas: List[dict]) -> None:
         return
     if _mover_lineas_rpc(sb, filas):
         return
-    _upsert_lineas(sb, filas)
+    _mover_lineas_update(sb, filas)
 
 
 def _reasignar_mensajes_bloque(sb, filas: List[dict]) -> None:
@@ -1131,7 +1190,7 @@ def vista_previa_agrupacion(contrato_id: int, *, ver_economicos: bool = False) -
     sols = _select_head(sb, contrato_id)
     ids = [int(s["id"]) for s in sols if s.get("id")]
     items = _select_items(sb, ids)
-    oc_ids = _ids_con_oc(sb, contrato_id)
+    oc_ids = _ids_con_oc(sb, contrato_id, ids)
     completados = hidratar_proveedor_lineas(sb, items, estricto=True)
     plan = planificar_agrupacion(sols, items, oc_ids)
     _anexar_totales(plan, items, ver_economicos=ver_economicos)
@@ -1215,7 +1274,7 @@ def ejecutar_agrupacion(
     sb = _sb()
     sols = _select_head(sb, contrato_id)
     ids = [int(s["id"]) for s in sols if s.get("id")]
-    oc_ids = _ids_con_oc(sb, contrato_id)
+    oc_ids = _ids_con_oc(sb, contrato_id, ids)
     elegibles = [i for i in ids if i not in oc_ids]
     bloqueo = _adquirir_bloqueo(sb, contrato_id, user_id, elegibles)
     try:
@@ -1607,7 +1666,7 @@ def _plan_deshacer(sb, contrato_id: int) -> dict:
     for aj in ajustes:
         tocadas.add(int(aj["solicitud_id"]))
 
-    oc_ids = _ids_con_oc(sb, contrato_id)
+    oc_ids = _ids_con_oc(sb, contrato_id, list(tocadas))
     con_oc = sorted(tocadas & oc_ids)
     if con_oc:
         nombres = ", ".join(etiqueta(sid) for sid in con_oc)

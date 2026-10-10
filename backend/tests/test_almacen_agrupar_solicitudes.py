@@ -486,6 +486,7 @@ def test_si_falla_a_mitad_no_deja_lineas_movidas(monkeypatch):
                     q.op == "update"
                     and q.table == "almacen_solicitud_item"
                     and "solicitud_id" in (q.payload or {})
+                    and updates["n"] == 0
                 )
                 if mueve:
                     updates["n"] += 1
@@ -975,3 +976,83 @@ def test_mensaje_de_agrupar_no_repite_la_base():
     asignar_numeros_destino(items, movs)
     assert movs[0]["despues"]["numero_linea"] == 3
     assert movs[1]["despues"]["numero_linea"] == 4
+    otro = RuntimeError("null value in column presupuesto_id violates not-null constraint")
+    aviso = mensaje_error_agrupar(otro)
+    assert "No quedó ningún movimiento" in aviso
+    assert "Motivo:" in aviso
+    assert "presupuesto_id" in aviso
+
+
+def test_mover_aparta_el_numero_antes_de_ocupar_el_destino():
+    db = {
+        "almacen_solicitud_item": [
+            {"id": 1, "solicitud_id": 5, "numero_linea": 1},
+            {"id": 2, "solicitud_id": 5, "numero_linea": 2},
+        ],
+    }
+    log = []
+
+    class SB:
+        def rpc(self, _name, _params):
+            class R:
+                def execute(_self):
+                    raise RuntimeError(
+                        'duplicate key value violates unique constraint "idx_almacen_solicitud_item_linea"'
+                    )
+            return R()
+
+        def table(self, name):
+            q = _Mem(db, log)
+            q.table = name
+            original = q.execute
+
+            def execute():
+                result = original()
+                vistos = {}
+                for row in db["almacen_solicitud_item"]:
+                    clave = (row.get("solicitud_id"), row.get("numero_linea"))
+                    if clave in vistos:
+                        raise RuntimeError("duplicate key")
+                    vistos[clave] = row["id"]
+                return result
+
+            q.execute = execute
+            return q
+
+    from almacen_agrupar import _mover_lineas_bloque
+
+    _mover_lineas_bloque(SB(), [
+        {"item_id": 1, "solicitud_id": 8, "numero_linea": 1},
+        {"item_id": 2, "solicitud_id": 8, "numero_linea": 2},
+    ])
+    por_id = {row["id"]: row for row in db["almacen_solicitud_item"]}
+    assert (por_id[1]["solicitud_id"], por_id[1]["numero_linea"]) == (8, 1)
+    assert (por_id[2]["solicitud_id"], por_id[2]["numero_linea"]) == (8, 2)
+    assert any(
+        x[0] == "update" and (x[2] or {}).get("numero_linea", 0) >= 1_500_000_000
+        for x in log
+    )
+
+
+def test_oc_con_otro_contrato_no_recibe_lineas(monkeypatch):
+    db = {
+        "_seq": 50,
+        "almacen_solicitud": [
+            {**_sol(1, 1), "contrato_id": 3},
+            {**_sol(2, 2), "contrato_id": 3},
+        ],
+        "almacen_solicitud_item": [
+            {**_lin(1, 1, insumo=10, ev="pendiente", pid=5, nombre="Aceros"), "numero_linea": 1},
+            {**_lin(2, 2, insumo=11, ev="pendiente", pid=5, nombre="Aceros"), "numero_linea": 1},
+        ],
+        "almacen_orden_compra": [{"id": 9, "contrato_id": 99, "solicitud_id": 2}],
+        "almacen_agrupacion_bloqueo": [],
+    }
+    monkeypatch.setattr("almacen_service._sb", lambda: _sb_de(db, []))
+    from almacen_agrupar import vista_previa_agrupacion
+
+    vista = vista_previa_agrupacion(3)
+    assert vista["congeladas"] == 1
+    assert db["almacen_solicitud_item"][0]["solicitud_id"] == 1
+    assert db["almacen_solicitud_item"][1]["solicitud_id"] == 2
+    assert all(g.get("consecutivo") != 2 or g.get("se_mueven") == 0 for g in vista["grupos"])
