@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { descripcionCompletaLinea, previewPalabras } from './solicitudDetalleHelpers.js'
 
 function solicitudTieneOrdenCompra(sol) {
   if (sol?.tiene_orden_compra) return true
@@ -159,7 +160,7 @@ describe('el popup cablea la cadena de estados y el buzón', () => {
     const panel = readFileSync(join(dir, 'SolicitudesPanel.jsx'), 'utf8')
     assert.match(detalle, /detalle-solicitar-aprobacion/)
     assert.match(detalle, /motivo-aprobacion-no-disponible/)
-    assert.match(detalle, /motivo-envio-no-disponible/)
+    assert.doesNotMatch(detalle, /Solicitar aprobación no está disponible/)
     assert.match(detalle, /SolicitudBuzon/)
     assert.match(detalle, /solicitud-resumen-proveedores/)
     assert.match(tabla, /etiquetaProveedorLinea/)
@@ -170,8 +171,41 @@ describe('el popup cablea la cadena de estados y el buzón', () => {
       /esContratistaGerencial/,
     )
     assert.match(tabla, /Justificación/)
+    assert.match(tabla, /previewPalabras/)
+    assert.match(tabla, /linea-justificacion/)
+    assert.match(tabla, /descripcionCompletaLinea/)
+    assert.doesNotMatch(tabla, /abbr: 'INSUMO'/)
+    assert.match(detalle, /cc-title-tooltip-hide/)
+    assert.doesNotMatch(panel, /title=\{s\.titulo/)
     assert.match(buzon, /Buscar por nombre o cargo/)
     assert.match(buzon, /puedeEnviar && disponible/)
     assert.match(panel, /solicitud-lista-no-leidos/)
+  })
+})
+
+describe('grilla del popup', () => {
+  it('deja tres palabras de la justificación y el resto para el tooltip', () => {
+    assert.deepEqual(previewPalabras(''), { visible: '', completo: '' })
+    assert.deepEqual(previewPalabras('Falta en obra'), { visible: 'Falta en obra', completo: 'Falta en obra' })
+    assert.deepEqual(
+      previewPalabras('Se pide dotación porque el personal nuevo llega el lunes'),
+      {
+        visible: 'Se pide dotación…',
+        completo: 'Se pide dotación porque el personal nuevo llega el lunes',
+      },
+    )
+  })
+
+  it('arma la descripción completa del ítem sin repetir el código', () => {
+    const texto = descripcionCompletaLinea({
+      item: 'CC-1614-073',
+      item_descripcion: 'Pantalón drill con reflectivo',
+      insumo_id: 9,
+      material_descripcion: 'Pantalón drill con reflectivo',
+      insumo_codigo: 'CC-1614-073',
+    })
+    assert.match(texto, /CC-1614-073/)
+    assert.match(texto, /Pantalón drill con reflectivo/)
+    assert.equal(texto.split('Pantalón drill con reflectivo').length, 2)
   })
 })

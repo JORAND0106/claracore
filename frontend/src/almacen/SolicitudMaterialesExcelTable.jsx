@@ -1,10 +1,11 @@
 import { Fragment, useState } from 'react'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import {
-  descripcionGrillaItem,
+  descripcionCompletaLinea,
   estadoValidacionItem,
   etiquetaProveedorLinea,
   fmtAbscisasLinea,
+  previewPalabras,
   saldoNegociadoItem,
   saldoPresupuestadoItem,
   valorCompraLinea,
@@ -21,8 +22,8 @@ const ROW_H = 36
 
 const COLS = [
   { key: 'cap', abbr: 'CAP.', tip: 'Capítulo de presupuesto', width: 110 },
-  { key: 'item', abbr: 'ÍTEM', tip: 'Ítem y descripción. El texto completo aparece al pasar el cursor.', width: 240 },
-  { key: 'cod', abbr: 'INSUMO', tip: 'Código del insumo asignado en la revisión de línea', width: 120 },
+  { key: 'item', abbr: 'ÍTEM', tip: 'Ítem y descripción. El texto completo aparece al pasar el cursor.', width: 280 },
+  { key: 'just', abbr: 'JUST.', tip: 'Justificación. Se ven las primeras palabras; el texto completo aparece al pasar el cursor.', width: 150 },
   { key: 'prov', abbr: 'PROV.', tip: 'Proveedor elegido en la revisión de línea', width: 150 },
   { key: 'valor', abbr: 'VALOR', tip: 'Valor de la compra: cantidad por el valor ofertado, con IVA incluido', width: 120, align: 'right' },
   { key: 'ubi', abbr: 'UBIC.', tip: 'Abscisa, tramo, PK-ID y mapa', width: 64, align: 'center' },
@@ -90,11 +91,8 @@ function ColHeader({ abbr, tip, style, align = 'left' }) {
   )
 }
 
-function textoItemDescripcion(it) {
-  const item = String(it?.item || '').trim()
-  const desc = String(it?.item_descripcion || it?.descripcion_item || descripcionGrillaItem(it) || '').trim()
-  if (item && desc && !desc.startsWith(item)) return `${item} — ${desc}`
-  return desc || item || '—'
+function textoItemVisible(it) {
+  return descripcionCompletaLinea(it) || '—'
 }
 
 function PanelLinea({ titulo, onClose, children }) {
@@ -206,10 +204,9 @@ export default function SolicitudMaterialesExcelTable({
           <tbody>
             {items.map((it, idx) => {
               const ev = estadoValidacionItem(it, sol)
-              const desc = textoItemDescripcion(it)
+              const desc = textoItemVisible(it)
               const faltaInsumo = !it.insumo_id && (puedeValidar || destacarSinInsumo)
-              const tieneJust = Boolean(String(it.observacion_residente || '').trim())
-              const codigo = it.insumo_codigo || (it.insumo_id ? '—' : 'Sin asignar')
+              const just = previewPalabras(it.observacion_residente, 3)
               const prov = etiquetaProveedorLinea(it)
               const und = it.unidad || it.contexto_presupuesto?.unidad || ''
               const cantTxt = `${fmtCant(it.cantidad)}${und ? ` ${und}` : ''}`
@@ -293,26 +290,12 @@ export default function SolicitudMaterialesExcelTable({
                       <Trunc title={it.capitulo || '—'}>{it.capitulo || '—'}</Trunc>
                     </td>
                     <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' }}>
-                        {tieneJust && (
-                          <span
-                            data-testid="linea-tiene-justificacion"
-                            title="Justificación"
-                            aria-label="Justificación"
-                            style={{
-                              width: 8,
-                              height: 8,
-                              borderRadius: 99,
-                              background: '#d97706',
-                              flex: '0 0 auto',
-                            }}
-                          />
-                        )}
-                        <Trunc title={desc}>{desc}</Trunc>
-                      </span>
+                      <Trunc title={desc}>{desc}</Trunc>
                     </td>
-                    <td style={cellBase(ui)}>
-                      <Trunc title={codigo}>{codigo}</Trunc>
+                    <td style={cellBase(ui)} data-testid="linea-justificacion">
+                      {just.completo
+                        ? <Trunc title={just.completo}>{just.visible}</Trunc>
+                        : <Trunc>—</Trunc>}
                     </td>
                     <td style={{
                       ...cellBase(ui),

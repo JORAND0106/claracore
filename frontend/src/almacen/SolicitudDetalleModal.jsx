@@ -19,7 +19,6 @@ import { resumenAccionBloque } from './solicitudTramoSeleccion'
 import {
   estadoValidacionItem,
   motivoAprobacionNoDisponible,
-  motivoEnvioNoDisponible,
   puedeAbrirRevisionLinea,
   resumenProveedoresSolicitud,
   totalesCompraSolicitud,
@@ -80,6 +79,12 @@ export default function SolicitudDetalleModal({
   const [revisionItemId, setRevisionItemId] = useState(null)
   const [ocProgreso, setOcProgreso] = useState('')
 
+  // El título de la fila queda en un tooltip institucional. Al abrir el popup
+  // ese recuadro se queda encima de la grilla y se corta. Se cierra al montar.
+  useEffect(() => {
+    document.dispatchEvent(new Event('cc-title-tooltip-hide'))
+  }, [])
+
   // initialTab legado (pestaña por ítem) → abrir modal de revisión de esa línea
   useEffect(() => {
     if (!puedeAbrirRevisionLinea(permisos)) return
@@ -134,7 +139,6 @@ export default function SolicitudDetalleModal({
   const puedeGenerarOc = Boolean(permisos?.puedeGenerarOc) && puedeValidar
   const motivoAprobacion = motivoAprobacionNoDisponible(sol, permisos)
   const puedeEnviar = puedeEnviarSolicitudAlmacen(permisos, sol)
-  const motivoEnvio = motivoEnvioNoDisponible(sol, permisos)
   const verEconomicos = permisos?.verEconomicos !== false
   const resumenProveedores = useMemo(
     () => resumenProveedoresSolicitud(items),
@@ -848,14 +852,6 @@ export default function SolicitudDetalleModal({
                   </button>
                 )}
               </div>
-              {motivoEnvio && (
-                <div
-                  data-testid="motivo-envio-no-disponible"
-                  style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}
-                >
-                  Solicitar aprobación no está disponible: {motivoEnvio}
-                </div>
-              )}
               {motivoAprobacion && (
                 <div
                   data-testid="motivo-aprobacion-no-disponible"
