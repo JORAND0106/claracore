@@ -2035,25 +2035,59 @@ def ofertas_proveedor_desde_row(row: dict, prov_nombres: Optional[Dict[int, str]
             "es_ganadora": bool(c.get("es_ganadora")),
             "valor": valor,
         })
-    if not ofertas and row.get("proveedor_id") not in (None, ""):
-        try:
-            pid_i = int(row["proveedor_id"])
-        except (TypeError, ValueError):
-            pid_i = None
-        if pid_i:
-            valor = _to_float(row.get("valor_compra_referencia"))
-            if valor <= 0:
-                valor = _to_float(row.get("costo_base"))
-            ofertas.append({
-                "proveedor_id": pid_i,
-                "proveedor_nombre": (prov_nombres.get(pid_i) or "").strip() or f"Proveedor {pid_i}",
-                "numero": (row.get("cotizacion_numero") or "").strip() or None,
-                "es_ganadora": True,
-                "valor": valor,
-            })
+    _completar_oferta_con_proveedor_columna(ofertas, row, prov_nombres)
     if ofertas and not any(o.get("es_ganadora") for o in ofertas):
         ofertas[0]["es_ganadora"] = True
     return ofertas
+
+
+def _oferta_tiene_proveedor_util(oferta: dict) -> bool:
+    if not oferta:
+        return False
+    if oferta.get("proveedor_id") not in (None, ""):
+        return True
+    nombre = (oferta.get("proveedor_nombre") or "").strip().casefold()
+    if not nombre:
+        return False
+    return nombre not in {
+        "proveedor",
+        "proveedor catálogo",
+        "proveedor catalogo",
+        "sin proveedor",
+        "sin proveedor seleccionado",
+        "sin proveedor asignado",
+        "varios proveedores",
+    }
+
+
+def _completar_oferta_con_proveedor_columna(ofertas: List[dict], row: dict, prov_nombres: Dict[int, str]) -> None:
+    """El proveedor_id del insumo es el mismo que muestra Prov. cuando la cotización no lo trae."""
+    if row.get("proveedor_id") in (None, ""):
+        return
+    try:
+        pid_i = int(row["proveedor_id"])
+    except (TypeError, ValueError):
+        return
+    nombre_col = (prov_nombres.get(pid_i) or "").strip()
+    if any(_oferta_tiene_proveedor_util(o) for o in ofertas):
+        for oferta in ofertas:
+            if oferta.get("proveedor_id") not in (None, ""):
+                continue
+            nombre_of = (oferta.get("proveedor_nombre") or "").strip()
+            if nombre_col and nombre_of.casefold() == nombre_col.casefold():
+                oferta["proveedor_id"] = pid_i
+                oferta["proveedor_nombre"] = nombre_col
+        return
+    valor = _to_float(row.get("valor_compra_referencia"))
+    if valor <= 0:
+        valor = _to_float(row.get("costo_base"))
+    ofertas.append({
+        "proveedor_id": pid_i,
+        "proveedor_nombre": nombre_col or f"Proveedor {pid_i}",
+        "numero": (row.get("cotizacion_numero") or "").strip() or None,
+        "es_ganadora": True,
+        "valor": valor,
+    })
 
 
 def oferta_ganadora(ofertas: List[dict]) -> Optional[dict]:
@@ -2070,6 +2104,7 @@ _NOMBRES_SIN_PROVEEDOR_GUARDADO = {
     "sin proveedor",
     "sin proveedor seleccionado",
     "sin proveedor asignado",
+    "varios proveedores",
 }
 
 

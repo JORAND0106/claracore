@@ -50,6 +50,7 @@ _NOMBRES_SIN_PROVEEDOR = {
     "sin proveedor",
     "sin proveedor seleccionado",
     "sin proveedor asignado",
+    "varios proveedores",
 }
 
 
@@ -77,6 +78,20 @@ def _proveedor_linea(it: dict) -> tuple:
     if nombre and not _nombre_generico(nombre):
         return f"nombre:{nombre.casefold()}", nombre
     return "sin_proveedor", "Sin proveedor asignado"
+
+
+def contar_insumos_sin_proveedor(items: List[dict]) -> int:
+    """Líneas con insumo cuyo proveedor sigue sin poder leerse."""
+    n = 0
+    for it in items or []:
+        if not it.get("insumo_id") or it.get("es_recurrente"):
+            continue
+        if (it.get("estado_validacion") or "").strip() == "rechazado":
+            continue
+        clave, _etiqueta = _proveedor_linea(it)
+        if clave == "sin_proveedor":
+            n += 1
+    return n
 
 
 def bucket_de_linea(it: dict) -> dict:
@@ -1123,6 +1138,13 @@ def vista_previa_agrupacion(contrato_id: int, *, ver_economicos: bool = False) -
     _anexar_totales(plan, items, ver_economicos=ver_economicos)
     publica = vista_publica(plan, ver_economicos=ver_economicos)
     publica["proveedores_completados"] = completados
+    sin_reconocer = contar_insumos_sin_proveedor(items)
+    publica["lineas_sin_reconocer"] = sin_reconocer
+    if sin_reconocer and publica.get("sin_cambios"):
+        publica["resumen_accion"] = (
+            f"Hay {sin_reconocer} línea(s) con insumo cuyo proveedor no se pudo leer. "
+            "Esas solicitudes no se pueden separar todavía."
+        )
     diag = diagnostico_actual(sols, items, oc_ids)
     publica["diagnostico"] = {
         "mezcladas": diag["mezcladas"],

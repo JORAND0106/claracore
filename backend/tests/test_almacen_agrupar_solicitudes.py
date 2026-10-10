@@ -517,6 +517,132 @@ def _sb_de(db, log):
     return SB()
 
 
+def test_agrupar_separa_el_monton_aunque_la_cotizacion_no_traiga_proveedor(monkeypatch):
+    """La versión anterior dejó #5 en Varios proveedores y #7 en Sin proveedor seleccionado.
+
+    Prov. muestra el proveedor del insumo. La cotización guardada no trae ese dato.
+    Agrupar tiene que leerlo, guardar la línea y moverla.
+    """
+    basura = [{
+        "tipo": "insumo",
+        "numero": "C-1",
+        "valor": 10,
+        "es_ganadora": True,
+        "proveedor": "",
+    }]
+    fenix = "DISTRIBUIDORA DOTACIONES EPP FENIX SAS"
+    titan = "TITAN MANUFACTURAS DE CEMENTO"
+    king = "KINGNOVA S.A.S."
+    items = [
+        {
+            "id": 1, "solicitud_id": 5, "numero_linea": 1, "insumo_id": 100,
+            "estado_validacion": "pendiente",
+            "proveedor_seleccionado_id": None, "proveedor_seleccionado_nombre": "",
+            "cantidad": 1, "valor_compra_unitario": 80, "descripcion_solicitada": "CC-1614-073",
+        },
+        {
+            "id": 2, "solicitud_id": 5, "numero_linea": 2, "insumo_id": 101,
+            "estado_validacion": "pendiente",
+            "proveedor_seleccionado_id": None, "proveedor_seleccionado_nombre": "Sin proveedor seleccionado",
+            "cantidad": 1, "valor_compra_unitario": 14, "descripcion_solicitada": "CC-1614-001",
+        },
+        {
+            "id": 3, "solicitud_id": 7, "numero_linea": 1, "insumo_id": 100,
+            "estado_validacion": "aprobado",
+            "proveedor_seleccionado_id": None, "proveedor_seleccionado_nombre": "",
+            "cantidad": 1, "valor_compra_unitario": 187, "descripcion_solicitada": "CC-1614-068",
+        },
+        {
+            "id": 4, "solicitud_id": 7, "numero_linea": 2, "insumo_id": 102,
+            "estado_validacion": "aprobado",
+            "proveedor_seleccionado_id": None, "proveedor_seleccionado_nombre": "",
+            "cantidad": 1, "valor_compra_unitario": 398, "descripcion_solicitada": "CC-1614-075",
+        },
+        {
+            "id": 5, "solicitud_id": 8, "numero_linea": 1, "insumo_id": 100,
+            "estado_validacion": "pendiente",
+            "proveedor_seleccionado_id": 1, "proveedor_seleccionado_nombre": fenix,
+            "cantidad": 1, "valor_compra_unitario": 169, "descripcion_solicitada": "CC-1614-076",
+        },
+    ]
+    db = {
+        "_seq": 20,
+        "almacen_solicitud": [
+            {**_sol(5, 5, "enviada", "Solicitud #5 - 01/10/2026 - Varios proveedores - Enviada"), "contrato_id": 3, "created_at": "2026-10-01T19:38:00+00:00"},
+            {**_sol(7, 7, "aprobada", "Solicitud #7 - 01/10/2026 - Sin proveedor seleccionado - Aprobada"), "contrato_id": 3, "created_at": "2026-10-01T19:51:00+00:00"},
+            {**_sol(8, 8, "enviada", f"Solicitud #8 - 06/10/2026 - {fenix} - Enviada"), "contrato_id": 3, "created_at": "2026-10-06T14:45:00+00:00"},
+        ],
+        "almacen_solicitud_item": items,
+        "almacen_insumo": [
+            {"id": 100, "proveedor_id": 1, "cotizaciones_detalle": basura, "cotizacion_numero": "C-1"},
+            {"id": 101, "proveedor_id": 2, "cotizaciones_detalle": basura, "cotizacion_numero": "C-2"},
+            {"id": 102, "proveedor_id": 3, "cotizaciones_detalle": basura, "cotizacion_numero": "C-3"},
+        ],
+        "almacen_proveedor": [
+            {"id": 1, "razon_social": fenix},
+            {"id": 2, "razon_social": titan},
+            {"id": 3, "razon_social": king},
+        ],
+        "almacen_orden_compra": [],
+        "almacen_agrupacion_bloqueo": [],
+    }
+    log = []
+    monkeypatch.setattr("almacen_service._sb", lambda: _sb_de(db, log))
+    monkeypatch.setattr("almacen_service._now_iso", lambda: "2026-10-10T00:30:00+00:00")
+    from almacen_agrupar import vista_previa_agrupacion
+
+    antes = len(db["almacen_solicitud_item"])
+    vista = vista_previa_agrupacion(3, ver_economicos=False)
+    assert vista["sin_cambios"] is False
+    assert vista["se_mueven"] > 0
+    assert vista["por_crear"] == 1
+    assert vista["lineas_sin_reconocer"] == 0
+    nombres = {g["proveedor"] for g in vista["grupos"]}
+    assert fenix in nombres
+    assert titan in nombres
+    assert king in nombres
+    assert "Sin proveedor seleccionado" not in nombres
+    assert "Varios proveedores" not in nombres
+    assert "Sin proveedor asignado" not in nombres
+    linea1 = next(it for it in db["almacen_solicitud_item"] if it["id"] == 1)
+    assert linea1["proveedor_seleccionado_id"] == 1
+    assert linea1["proveedor_seleccionado_nombre"] == fenix
+
+    hecho = ejecutar_agrupacion(
+        3, 7, ver_economicos=False, confirmar_creacion=True, crear_hasta=vista["por_crear"],
+    )
+    assert len(db["almacen_solicitud_item"]) == antes
+    assert sorted(it["id"] for it in db["almacen_solicitud_item"]) == [1, 2, 3, 4, 5]
+    por_sol = {}
+    for it in db["almacen_solicitud_item"]:
+        por_sol.setdefault(it["solicitud_id"], []).append(it)
+    for lineas in por_sol.values():
+        proveedores = {it.get("proveedor_seleccionado_id") for it in lineas}
+        estados = {
+            "aprobada" if (it.get("estado_validacion") or "") == "aprobado" else "enviada"
+            for it in lineas
+        }
+        assert len(proveedores) == 1
+        assert len(estados) == 1
+    fenix_pend = [it for it in db["almacen_solicitud_item"] if it["id"] in (1, 5)]
+    assert len({it["solicitud_id"] for it in fenix_pend}) == 1
+    assert fenix_pend[0]["solicitud_id"] == 8
+    titulos = " | ".join(s.get("titulo") or "" for s in db["almacen_solicitud"])
+    assert "Sin proveedor seleccionado" not in titulos
+    assert "Varios proveedores" not in titulos
+    assert fenix in titulos
+    assert titan in titulos
+    assert king in titulos
+    aprobadas = [s for s in db["almacen_solicitud"] if s.get("estado") == "aprobada" and fenix in (s.get("titulo") or "")]
+    assert len(aprobadas) == 1
+
+    segundo = ejecutar_agrupacion(3, 7, ver_economicos=False)
+    assert segundo["sin_cambios"] is True
+    assert segundo["se_mueven"] == 0
+    assert len(db["almacen_solicitud_item"]) == antes
+    assert hecho["lineas_total"] == antes
+
+
 def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     """La solicitud #5: Prov. lleno y proveedor_seleccionado vacío. Agrupa por el insumo."""
     proveedores = [

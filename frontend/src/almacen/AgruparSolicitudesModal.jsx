@@ -92,7 +92,9 @@ export default function AgruparSolicitudesModal({
           </div>
         ) : sinCambios ? (
           <div data-testid="agrupar-sin-cambios" style={{ marginBottom: 12 }}>
-            Ejecutar de nuevo no cambia nada: las solicitudes ya están agrupadas.
+            {Number(vista?.lineas_sin_reconocer) > 0
+              ? `Hay ${vista.lineas_sin_reconocer} línea(s) con insumo cuyo proveedor no se pudo leer. No se movió ninguna.`
+              : 'Ejecutar de nuevo no cambia nada: las solicitudes ya están agrupadas.'}
           </div>
         ) : (
           <>

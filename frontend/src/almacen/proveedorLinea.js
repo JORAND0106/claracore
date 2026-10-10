@@ -5,6 +5,7 @@ const NOMBRES_SIN_PROVEEDOR = new Set([
   'sin proveedor',
   'sin proveedor seleccionado',
   'sin proveedor asignado',
+  'varios proveedores',
 ])
 
 function nombreProveedorUtil(nombre) {
