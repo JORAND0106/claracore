@@ -482,7 +482,12 @@ def test_si_falla_a_mitad_no_deja_lineas_movidas(monkeypatch):
             original = q.execute
 
             def execute():
-                if q.op == "upsert" and q.table == "almacen_solicitud_item":
+                mueve = (
+                    q.op == "update"
+                    and q.table == "almacen_solicitud_item"
+                    and "solicitud_id" in (q.payload or {})
+                )
+                if mueve:
                     updates["n"] += 1
                     raise RuntimeError(
                         'duplicate key value violates unique constraint "idx_almacen_solicitud_item_linea"'
@@ -742,7 +747,8 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     linea36 = next(it for it in db["almacen_solicitud_item"] if it["id"] == 36)
     assert linea36["proveedor_seleccionado_id"] == 3
     assert linea36["proveedor_seleccionado_nombre"] == "PAVCO ( Wavin )"
-    assert any(x[0] == "upsert" and x[1] == "almacen_solicitud_item" for x in log)
+    assert any(x[0] == "update" and x[1] == "almacen_solicitud_item" for x in log)
+    assert not any(x[0] == "upsert" and x[1] == "almacen_solicitud_item" for x in log)
     assert "más de un proveedor" in (vista.get("diagnostico_texto") or "")
     selects_item = [x for x in log if x[0] == "select" and x[1] == "almacen_solicitud_item"]
     assert len(selects_item) == 1
@@ -779,8 +785,11 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     assert "PAVCO ( Wavin )" in titulos
     pavco = [s for s in db["almacen_solicitud"] if "PAVCO ( Wavin )" in (s.get("titulo") or "")]
     assert {s.get("estado") for s in pavco} == {"enviada", "aprobada"}
-    assert not any(x[0] == "update" and x[1] == "almacen_solicitud_item" for x in log)
-    assert any(x[0] == "upsert" and x[1] == "almacen_solicitud_item" for x in log)
+    assert any(
+        x[0] == "update" and x[1] == "almacen_solicitud_item" and "solicitud_id" in (x[2] or {})
+        for x in log
+    )
+    assert not any(x[0] == "upsert" and x[1] == "almacen_solicitud_item" for x in log)
     conservada = next(it for it in db["almacen_solicitud_item"] if it["id"] == 1)
     assert conservada["insumo_id"] == 100
     assert conservada["descripcion_solicitada"] == "Material 1"
@@ -789,7 +798,8 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     consultas_aplicar = {}
     for op, tabla, *_resto in log:
         consultas_aplicar[(op, tabla)] = consultas_aplicar.get((op, tabla), 0) + 1
-    assert consultas_aplicar.get(("upsert", "almacen_solicitud_item"), 0) == 1
+    assert consultas_aplicar.get(("upsert", "almacen_solicitud_item"), 0) == 0
+    assert consultas_aplicar.get(("update", "almacen_solicitud_item"), 0) >= 1
     assert consultas_aplicar.get(("select", "almacen_solicitud_item"), 0) <= 2
 
     segundo = ejecutar_agrupacion(3, 7, ver_economicos=True)

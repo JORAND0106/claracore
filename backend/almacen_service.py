@@ -2295,16 +2295,26 @@ def completar_proveedor_guardado(sb, items: List[dict]) -> int:
 
 
 def _upsert_proveedor_guardado(sb, cambios: List[dict]) -> None:
-    con_valor = [c for c in cambios if "valor_compra_unitario" in c]
-    sin_valor = [c for c in cambios if "valor_compra_unitario" not in c]
-    for lote in (sin_valor, con_valor):
-        for i in range(0, len(lote), 200):
-            chunk = lote[i:i + 200]
-            if not chunk:
-                continue
-            sb.table("almacen_solicitud_item").upsert(
-                chunk, on_conflict="id", default_to_null=False,
-            ).execute()
+    """Actualiza la línea que ya existe.
+
+    Un upsert solo con el proveedor arma un INSERT incompleto. Postgres exige
+    solicitud, presupuesto, descripción, unidad y cantidad, y rechaza la fila
+    antes de llegar al conflicto por id. Por eso Agrupar decía que no pudo
+    guardar el proveedor y no movía nada.
+    """
+    for cambio in cambios or []:
+        item_id = cambio.get("id")
+        if item_id in (None, ""):
+            continue
+        payload = {k: v for k, v in cambio.items() if k != "id"}
+        if not payload:
+            continue
+        (
+            sb.table("almacen_solicitud_item")
+            .update(payload)
+            .eq("id", int(item_id))
+            .execute()
+        )
 
 
 def elegir_oferta_proveedor(

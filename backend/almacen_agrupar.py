@@ -547,9 +547,11 @@ def hidratar_proveedor_lineas(sb, items: List[dict], *, estricto: bool = False) 
     except Exception as exc:
         _log.exception("No se pudo guardar el proveedor del insumo")
         if estricto:
+            motivo = " ".join(str(exc or "").split())[:220]
             raise ValueError(
                 "No se pudo guardar el proveedor de las líneas que ya tenían insumo. "
                 "No se movió ninguna línea."
+                + (f" Motivo: {motivo}" if motivo else "")
             ) from exc
     for it in items:
         pid = it.get("proveedor_seleccionado_id")
@@ -845,23 +847,20 @@ def _mover_lineas_rpc(sb, filas: List[dict]) -> bool:
 
 
 def _upsert_lineas(sb, filas: List[dict]) -> None:
-    """Un upsert por lote. PostgREST solo actualiza id, solicitud y número."""
-    payload = []
+    """Mueve cada línea con UPDATE. El upsert parcial choca con columnas obligatorias."""
     for fila in filas or []:
         item_id = fila.get("item_id") if fila.get("item_id") not in (None, "") else fila.get("id")
         sid = fila.get("solicitud_id")
         numero = fila.get("numero_linea")
         if item_id in (None, "") or sid in (None, "") or not numero:
             continue
-        payload.append({
-            "id": int(item_id),
-            "solicitud_id": int(sid),
-            "numero_linea": int(numero),
-        })
-    for chunk in _trozos(payload, 200):
         (
             sb.table("almacen_solicitud_item")
-            .upsert(chunk, on_conflict="id", default_to_null=False)
+            .update({
+                "solicitud_id": int(sid),
+                "numero_linea": int(numero),
+            })
+            .eq("id", int(item_id))
             .execute()
         )
 
