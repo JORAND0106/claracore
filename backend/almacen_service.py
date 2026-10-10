@@ -4583,7 +4583,7 @@ def validar_item_solicitud(
             raise ValueError("Esta línea ya forma parte de la Orden de Compra.")
         if sol["estado"] != "aprobada" and sol["estado"] != "enviada":
             raise ValueError("Estado de solicitud no válido para validar ítems.")
-    elif sol["estado"] != "enviada":
+    elif sol["estado"] not in ("enviada", "aprobada"):
         raise ValueError("Solo se pueden validar ítems de solicitudes enviadas.")
     accion = _norm(accion)
     if accion not in ("aprobar", "rechazar"):
@@ -4668,7 +4668,7 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             item_ids=None if seleccion is None else list(seleccion),
         )
 
-    if sol["estado"] != "enviada":
+    if sol["estado"] not in ("enviada", "aprobada"):
         raise ValueError("Solo se pueden aprobar solicitudes enviadas.")
 
     if body.get("aprobar_todos_pendientes", True):

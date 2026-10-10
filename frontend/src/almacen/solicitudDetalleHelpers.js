@@ -43,6 +43,8 @@ export function solicitudTieneLineasPendientesPostOc(sol) {
 export function solicitudPuedeValidar(sol, permisos) {
   if (!permisos?.validar) return false
   if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
+  // Agrupar no cierra la solicitud: puede figurar aprobada y seguir sin OC.
+  if (sol?.estado === 'aprobada' && !solicitudTieneOrdenCompra(sol)) return true
   if (
     (sol?.estado === 'aprobada' || sol?.estado === 'enviada')
     && solicitudTieneOrdenCompra(sol)
