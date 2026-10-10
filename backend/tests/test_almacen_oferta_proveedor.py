@@ -110,19 +110,25 @@ class _Tabla:
         self.ids = list(vals)
         return self
 
-    def upsert(self, payload, on_conflict=None, **_k):
-        self.op = "upsert"
+    def update(self, payload):
+        self.op = "update"
         self.payload = payload
-        self.on_conflict = on_conflict
         return self
+
+    def eq(self, col, val):
+        self.eq_col = col
+        self.eq_val = val
+        return self
+
+    def upsert(self, payload, on_conflict=None, **_k):
+        raise AssertionError("el proveedor se guarda con update, no con upsert parcial")
 
     def execute(self):
         filas = self.db.setdefault(self.nombre, [])
-        if self.op == "upsert":
-            for payload in self.payload:
-                fila = next(r for r in filas if r.get("id") == payload.get("id"))
-                fila.update(payload)
-            return _Resp(list(self.payload))
+        if self.op == "update":
+            fila = next(r for r in filas if r.get(self.eq_col) == self.eq_val)
+            fila.update(self.payload)
+            return _Resp([dict(fila)])
         if self.ids is None:
             return _Resp(list(filas))
         return _Resp([r for r in filas if r.get("id") in self.ids])
