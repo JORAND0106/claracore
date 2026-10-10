@@ -8,6 +8,7 @@ import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
   construirRentabilidadPorInsumos,
   descripcionItemPresupuesto,
+  detalleSectorLinea,
   fusionarManoObraEnRentabilidad,
   hermanosMismoPresupuestoItem,
   etiquetaProveedorLinea,
@@ -21,6 +22,7 @@ import {
   puedeAbrirRevisionLinea,
   puedeCambiarProveedorLineaAprobada,
   rentabilidadDesdeAnalisis,
+  sectoresMismoInsumo,
   textoLibreSolicitudItem,
   totalesCompraSolicitud,
   valorCompraLinea,
@@ -123,6 +125,7 @@ export default function SolicitudLineaRevisionModal({
   t,
   onClose,
   onUpdated,
+  onSeleccionarSector,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -187,6 +190,7 @@ export default function SolicitudLineaRevisionModal({
   }, [item?.id, item?.insumo_id, item?.cantidad, item?.valor_compra_unitario, item?.vlr_unitario_cobro, item?.material_descripcion])
 
   const descItem = useMemo(() => descripcionItemPresupuesto(item), [item])
+  const sectores = useMemo(() => sectoresMismoInsumo(sol?.items, item), [sol?.items, item])
 
   const metaLinea = useMemo(() => {
     if (!item) return ''
@@ -443,7 +447,9 @@ export default function SolicitudLineaRevisionModal({
         >
           <div style={{ minWidth: 0, flex: 1 }}>
             <div id="solicitud-linea-revision-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
-              Revisión de línea {item.numero_linea != null ? `#${item.numero_linea}` : ''}
+              {sectores.length > 1
+                ? `Revisión del insumo · ${sectores.length} sectores`
+                : `Revisión de línea ${item.numero_linea != null ? `#${item.numero_linea}` : ''}`}
             </div>
             {metaLinea && (
               <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
@@ -515,6 +521,65 @@ export default function SolicitudLineaRevisionModal({
           }}
           >
             {error}
+          </div>
+        )}
+
+        {sectores.length > 1 && (
+          <div data-testid="revision-sectores" style={{ marginBottom: 14 }}>
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>Dónde se pidió</div>
+            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+              Afuera esta solicitud muestra la cantidad y el valor sumados. Aquí está cada sector. La fila marcada es la que se revisa.
+            </div>
+            <div style={{ ...ui.sheetWrap, overflow: 'auto' }} className="cc-almacen-table-scroll">
+              <table style={{ ...ui.sheetTable, minWidth: 720, tableLayout: 'fixed' }}>
+                <thead>
+                  <tr>
+                    <ExcelHeader abbr="ÍTEM" tip="Capítulo e ítem de presupuesto de ese sector" style={th} />
+                    <ExcelHeader abbr="LUGAR" tip="Tramo y costado" style={th} />
+                    <ExcelHeader abbr="ABSCISA" tip="Abscisa inicial y final" style={th} />
+                    <ExcelHeader abbr="PK" tip="PK-ID del sector" style={th} />
+                    <ExcelHeader abbr="CANT." tip="Cantidad pedida en ese sector" style={th} align="right" />
+                    {verEconomicos && (
+                      <ExcelHeader abbr="VALOR" tip="Costo de la cantidad pedida en ese sector" style={th} align="right" />
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sectores.map((sec) => {
+                    const det = detalleSectorLinea(sec)
+                    const activo = String(sec.id) === String(item.id)
+                    const valorSec = valorCompraLinea(sec)
+                    return (
+                      <tr
+                        key={sec.id ?? `${det.pk}-${det.abscisa}`}
+                        data-testid="revision-sector"
+                        onClick={() => {
+                          if (!activo) onSeleccionarSector?.(sec)
+                        }}
+                        style={{
+                          cursor: activo ? 'default' : 'pointer',
+                          background: activo ? ui.accentSoft : 'transparent',
+                          fontWeight: activo ? 700 : 500,
+                        }}
+                      >
+                        <td style={td}>{det.capitulo} · {det.item}</td>
+                        <td style={td}>{det.lugar}</td>
+                        <td style={td}>{det.abscisa}</td>
+                        <td style={td}>{det.pk}</td>
+                        <td style={{ ...td, textAlign: 'right' }}>
+                          {fmtCant(det.cantidad)}{det.unidad ? ` ${det.unidad}` : ''}
+                        </td>
+                        {verEconomicos && (
+                          <td style={{ ...td, textAlign: 'right' }}>
+                            {valorSec == null ? '—' : fmtMoney(valorSec)}
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 

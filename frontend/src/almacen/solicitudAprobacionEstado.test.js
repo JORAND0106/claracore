@@ -163,7 +163,7 @@ describe('el popup cablea la cadena de estados y el buzón', () => {
     assert.doesNotMatch(detalle, /Solicitar aprobación no está disponible/)
     assert.match(detalle, /SolicitudBuzon/)
     assert.match(detalle, /solicitud-resumen-proveedores/)
-    assert.match(tabla, /etiquetaProveedorLinea/)
+    assert.match(tabla, /fila\.proveedor/)
     const helpers = readFileSync(join(dir, 'solicitudDetalleHelpers.js'), 'utf8')
     assert.match(helpers, /if \(!permisos\?\.validar\) return false/)
     assert.doesNotMatch(
@@ -173,7 +173,7 @@ describe('el popup cablea la cadena de estados y el buzón', () => {
     assert.match(tabla, /Justificación/)
     assert.match(tabla, /previewPalabras/)
     assert.match(tabla, /linea-justificacion/)
-    assert.match(tabla, /descripcionCompletaLinea/)
+    assert.match(tabla, /descripcionFilaInsumo/)
     assert.doesNotMatch(tabla, /abbr: 'INSUMO'/)
     assert.match(detalle, /cc-title-tooltip-hide/)
     assert.doesNotMatch(panel, /title=\{s\.titulo/)

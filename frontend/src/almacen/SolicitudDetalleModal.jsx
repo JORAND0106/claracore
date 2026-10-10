@@ -1036,6 +1036,9 @@ export default function SolicitudDetalleModal({
           contratoId={contratoId}
           t={t}
           onClose={() => setRevisionItemId(null)}
+          onSeleccionarSector={(it) => {
+            if (it?.id != null) setRevisionItemId(it.id)
+          }}
           onUpdated={(r) => {
             setSol(r)
           }}

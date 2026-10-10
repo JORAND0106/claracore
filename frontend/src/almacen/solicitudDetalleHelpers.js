@@ -4,8 +4,9 @@
 
 import { fmtMetrosAbscisa, parseAbscisaMetros } from './almacenAbscisa.js'
 import { nombreProveedorGuardado } from './proveedorLinea.js'
+import { valorCompraLinea } from './solicitudValorCompra.js'
 
-export { nombreProveedorGuardado }
+export { nombreProveedorGuardado, valorCompraLinea }
 
 export function solicitudTieneOrdenCompra(sol) {
   if (sol?.tiene_orden_compra) return true
@@ -255,8 +256,112 @@ export function textoLibreSolicitudItem(item) {
 export {
   itemsConBorradorProveedor,
   totalesCompraSolicitud,
-  valorCompraLinea,
 } from './solicitudValorCompra.js'
+
+function textosUnicos(valores) {
+  const limpios = []
+  for (const raw of valores) {
+    const s = String(raw || '').replace(/\s+/g, ' ').trim()
+    if (!s || limpios.includes(s)) continue
+    limpios.push(s)
+  }
+  return limpios
+}
+
+/**
+ * Líneas del mismo insumo se ven como una sola fila en el popup de la solicitud.
+ * Sin insumo, cada línea sigue sola: todavía no hay con qué sumar.
+ */
+export function agruparLineasMismoInsumo(items) {
+  const filas = []
+  const porInsumo = new Map()
+  ;(items || []).forEach((it, idx) => {
+    const id = it?.insumo_id
+    if (id == null || id === '') {
+      filas.push({ key: `linea:${it?.id ?? idx}`, items: [it] })
+      return
+    }
+    const key = `insumo:${id}`
+    const previa = porInsumo.get(key)
+    if (!previa) {
+      const fila = { key, items: [it] }
+      porInsumo.set(key, fila)
+      filas.push(fila)
+      return
+    }
+    previa.items.push(it)
+  })
+  return filas.map(completarFilaInsumo)
+}
+
+export function completarFilaInsumo(fila) {
+  const lineas = fila?.items || []
+  const cantidad = lineas.reduce((acc, it) => acc + (Number(it?.cantidad) || 0), 0)
+  const unidades = textosUnicos(lineas.map((it) => it?.unidad || it?.contexto_presupuesto?.unidad))
+  let valor = 0
+  let conValor = false
+  for (const it of lineas) {
+    const v = valorCompraLinea(it)
+    if (v != null) {
+      valor += v
+      conValor = true
+    }
+  }
+  const capitulos = textosUnicos(lineas.map((it) => it?.capitulo))
+  const proveedores = textosUnicos(lineas.map((it) => etiquetaProveedorLinea(it)))
+  const justos = textosUnicos(lineas.map((it) => it?.observacion_residente))
+  return {
+    key: fila?.key,
+    items: lineas,
+    cantidad,
+    unidad: unidades.length === 1 ? unidades[0] : '',
+    valor: conValor ? valor : null,
+    capitulo: capitulos.length === 1 ? capitulos[0] : (capitulos.length ? 'Varios' : '—'),
+    capituloTitulo: capitulos.length > 1 ? capitulos.join(' · ') : (capitulos[0] || '—'),
+    proveedor: proveedores.length === 1 ? proveedores[0] : 'Varios proveedores',
+    proveedorTitulo: proveedores.join(' · ') || '—',
+    justificacion: justos.length <= 1 ? (justos[0] || '') : justos.join('\n'),
+    variasJustificaciones: justos.length > 1,
+  }
+}
+
+export function estadoFilaInsumo(items, sol) {
+  const estados = (items || []).map((it) => estadoValidacionItem(it, sol) || 'pendiente')
+  const uniq = [...new Set(estados)]
+  if (uniq.length <= 1) return uniq[0] || 'pendiente'
+  return 'varios'
+}
+
+export function descripcionFilaInsumo(fila) {
+  const lineas = fila?.items || []
+  if (lineas.length <= 1) return descripcionCompletaLinea(lineas[0])
+  const nombre = descripcionGrillaItem(lineas[0])
+  return nombre && nombre !== '—' ? nombre : descripcionCompletaLinea(lineas[0])
+}
+
+/** Hermanas del mismo insumo, en el orden de la solicitud. */
+export function sectoresMismoInsumo(items, item) {
+  if (!item) return []
+  if (item.insumo_id == null || item.insumo_id === '') return [item]
+  const id = String(item.insumo_id)
+  const hermanos = (items || []).filter((it) => String(it?.insumo_id || '') === id)
+  return hermanos.length ? hermanos : [item]
+}
+
+/** Dónde se pidió esa línea: tramo, costado, abscisa y PK. */
+export function detalleSectorLinea(item) {
+  const tramo = String(item?.tramo || item?.contexto_presupuesto?.tramo || '').trim()
+  const costado = String(item?.costado || '').trim()
+  return {
+    lugar: [tramo, costado].filter(Boolean).join(' · ') || '—',
+    abscisa: fmtAbscisasLinea(item),
+    pk: String(item?.pk_id || '').trim() || '—',
+    capitulo: String(item?.capitulo || '').trim() || '—',
+    item: String(item?.item || '').trim() || '—',
+    cantidad: Number(item?.cantidad) || 0,
+    unidad: String(item?.unidad || item?.contexto_presupuesto?.unidad || '').trim(),
+  }
+}
 
 /**
  * Primeras palabras visibles y el texto completo para un tooltip.
