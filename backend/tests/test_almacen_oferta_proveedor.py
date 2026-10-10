@@ -136,6 +136,23 @@ class _SB:
         return _Tabla(self.db, nombre)
 
 
+def test_oferta_usa_el_proveedor_del_insumo_si_la_cotizacion_no_lo_trae():
+    basura = [{
+        "tipo": "insumo",
+        "numero": "C-1",
+        "valor": 10,
+        "es_ganadora": True,
+        "proveedor": "",
+    }]
+    ofertas = svc.ofertas_proveedor_desde_row(
+        {"proveedor_id": 1, "cotizaciones_detalle": basura, "cotizacion_numero": "C-1"},
+        {1: "DISTRIBUIDORA DOTACIONES EPP FENIX SAS"},
+    )
+    elegido = svc._oferta_por_defecto(ofertas)
+    assert elegido["proveedor_id"] == 1
+    assert elegido["proveedor_nombre"] == "DISTRIBUIDORA DOTACIONES EPP FENIX SAS"
+
+
 def test_completar_guarda_la_unica_o_la_ganadora_y_no_pisa():
     detalle = [
         {
