@@ -1047,6 +1047,7 @@ def _enrich_solicitud(
     ver_economicos: bool = True,
     ligera: bool = False,
     include_rentabilidad: bool = False,
+    precios_fijados: Optional[set] = None,
 ) -> dict:
     sid = sol["id"]
     items = (
@@ -1059,6 +1060,18 @@ def _enrich_solicitud(
         .data
         or []
     )
+    # Antes de la OC la cotización vigente manda: se persiste para que la grilla
+    # no siga mostrando el precio con el que se creó la línea.
+    try:
+        oc_rows_precio = _fetch_ocs_de_solicitud(sb, int(sol["contrato_id"]), int(sid))
+        ids_oc = (
+            _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in oc_rows_precio if o.get("id")])
+            if oc_rows_precio
+            else set()
+        )
+        sincronizar_precios_sin_oc(sb, items, ids_oc, omitir_ids=precios_fijados)
+    except Exception:
+        _log.exception("No se pudo sincronizar el precio vigente de la solicitud %s", sid)
     if ligera:
         insumo_ids = sorted({int(it["insumo_id"]) for it in items if it.get("insumo_id")})
         insumo_codigos: Dict[int, str] = {}
@@ -1716,6 +1729,7 @@ def get_solicitud(
     ver_economicos: bool = True,
     ligera: bool = False,
     include_rentabilidad: bool = False,
+    precios_fijados: Optional[set] = None,
 ) -> dict:
     sb = _sb()
     rows = (
@@ -1736,6 +1750,7 @@ def get_solicitud(
         ver_economicos=ver_economicos,
         ligera=ligera,
         include_rentabilidad=include_rentabilidad,
+        precios_fijados=precios_fijados,
     )
 
 
@@ -1968,13 +1983,26 @@ def _mismo_insumo_linea(existing: dict, insumo_id) -> bool:
         return False
 
 
-def _costo_al_mapear(body: dict, existing: dict, resolved: dict, insumo_id):
+def _costo_al_mapear(body: dict, existing: dict, resolved: dict, insumo_id, oferta_valor=None):
     """
     Costo enviado gana. Si el cliente no lo manda (no ve cifras) y el insumo no cambia,
     se conserva el costo ya guardado. Si el insumo cambia, se usa el del catálogo.
+
+    Si llega la cotización vigente y el cliente reenvía el precio ya guardado (o no
+    manda cifra), se usa esa cotización. Un costo escrito a mano, distinto del de la
+    línea, se conserva.
     """
-    if body.get("valor_compra_unitario") is not None:
-        return _to_float(body["valor_compra_unitario"])
+    oferta = _to_float(oferta_valor) if oferta_valor not in (None, "") else 0.0
+    enviado = body.get("valor_compra_unitario")
+    if oferta > 0:
+        if enviado is None:
+            return oferta
+        guardado = existing.get("valor_compra_unitario")
+        if guardado not in (None, "") and abs(_to_float(enviado) - _to_float(guardado)) <= 0.009:
+            return oferta
+        return _to_float(enviado)
+    if enviado is not None:
+        return _to_float(enviado)
     if _mismo_insumo_linea(existing, insumo_id) and existing.get("valor_compra_unitario") not in (None, ""):
         return existing.get("valor_compra_unitario")
     return resolved.get("valor_compra_unitario")
@@ -2121,6 +2149,110 @@ def linea_sin_proveedor_guardado(it: dict) -> bool:
     if it.get("proveedor_seleccionado_id") not in (None, ""):
         return False
     return not _nombre_proveedor_util(it.get("proveedor_seleccionado_nombre") or "")
+
+
+def _valor_oferta_de_linea(it: dict, ofertas: List[dict]) -> Optional[float]:
+    """Precio vigente de la cotización elegida, o de la única/ganadora si no hay elección."""
+    if not ofertas:
+        return None
+    oferta = None
+    if (
+        it.get("proveedor_seleccionado_id") not in (None, "")
+        or (it.get("proveedor_seleccionado_nombre") or "").strip()
+        or (it.get("cotizacion_numero_seleccionada") or "").strip()
+    ):
+        oferta = elegir_oferta_proveedor(
+            ofertas,
+            proveedor_id=it.get("proveedor_seleccionado_id"),
+            nombre=it.get("proveedor_seleccionado_nombre"),
+            numero=it.get("cotizacion_numero_seleccionada"),
+        )
+    if oferta is None:
+        oferta = _oferta_por_defecto(ofertas)
+    if not oferta:
+        return None
+    valor = _to_float(oferta.get("valor"))
+    return valor if valor > 0 else None
+
+
+def sincronizar_precios_sin_oc(sb, items: List[dict], ids_en_oc: set, omitir_ids: Optional[set] = None) -> int:
+    """
+    Mientras la línea no esté en una OC, el precio sigue la cotización vigente.
+    Las líneas ya compradas, las recurrentes y un costo recién escrito a mano no se tocan.
+    """
+    oc = set()
+    for raw in ids_en_oc or set():
+        try:
+            oc.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    omitir = set()
+    for raw in omitir_ids or set():
+        try:
+            omitir.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    candidatos = []
+    for it in items or []:
+        if it.get("es_recurrente"):
+            continue
+        if not it.get("id") or not it.get("insumo_id"):
+            continue
+        try:
+            item_id = int(it["id"])
+        except (TypeError, ValueError):
+            continue
+        if item_id in oc or item_id in omitir:
+            continue
+        candidatos.append(it)
+    if not candidatos:
+        return 0
+    try:
+        rows = _filas_insumo_para_ofertas(sb, [int(it["insumo_id"]) for it in candidatos])
+    except Exception:
+        _log.exception("No se pudo leer el precio vigente de los insumos")
+        return 0
+    by_id: Dict[int, dict] = {}
+    prov_ids: List[int] = []
+    for row in rows:
+        try:
+            by_id[int(row["id"])] = row
+        except (TypeError, ValueError, KeyError):
+            continue
+        if row.get("proveedor_id") not in (None, ""):
+            try:
+                prov_ids.append(int(row["proveedor_id"]))
+            except (TypeError, ValueError):
+                pass
+    nombres: Dict[int, str] = {}
+    if prov_ids:
+        try:
+            nombres = _nombres_proveedor(sb, prov_ids)
+        except Exception:
+            nombres = {}
+    n = 0
+    for it in candidatos:
+        try:
+            row = by_id.get(int(it["insumo_id"]))
+        except (TypeError, ValueError):
+            continue
+        if not row:
+            continue
+        valor = _valor_oferta_de_linea(it, ofertas_proveedor_desde_row(row, nombres))
+        if valor is None or valor <= 0:
+            continue
+        if abs(_to_float(it.get("valor_compra_unitario")) - valor) <= 0.009:
+            continue
+        try:
+            sb.table("almacen_solicitud_item").update({
+                "valor_compra_unitario": valor,
+            }).eq("id", int(it["id"])).execute()
+        except Exception:
+            _log.exception("No se pudo actualizar el precio de la línea %s", it.get("id"))
+            continue
+        it["valor_compra_unitario"] = valor
+        n += 1
+    return n
 
 
 def _oferta_por_defecto(ofertas: List[dict]) -> Optional[dict]:
@@ -2706,7 +2838,13 @@ def mapear_item_solicitud_gerencial(
         "descripcion_solicitada": desc_sol or resolved.get("material_descripcion"),
         "unidad": resolved.get("unidad") or existing.get("unidad"),
         "cantidad": cantidad,
-        "valor_compra_unitario": _costo_al_mapear(costo_body, existing, resolved, insumo_id),
+        "valor_compra_unitario": _costo_al_mapear(
+            costo_body,
+            existing,
+            resolved,
+            insumo_id,
+            oferta_valor=sel.get("valor") if sel.get("aplicar") else None,
+        ),
         "vlr_unitario_cobro": _cobro_al_mapear(override_cobro, existing, resolved, insumo_id),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
@@ -2731,7 +2869,16 @@ def mapear_item_solicitud_gerencial(
     if not return_solicitud:
         return {"ok": True, "item_id": int(item_id)}
     _sincronizar_titulo_solicitud(sb, solicitud_id)
-    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+    # Un costo escrito a mano, distinto de la cotización, no se pisa en esta respuesta.
+    oferta = sel.get("valor") if sel.get("aplicar") else None
+    fijados = None
+    if (
+        oferta not in (None, "")
+        and _to_float(oferta) > 0
+        and abs(_to_float(patch["valor_compra_unitario"]) - _to_float(oferta)) > 0.009
+    ):
+        fijados = {int(item_id)}
+    return get_solicitud(contrato_id, solicitud_id, ligera=True, precios_fijados=fijados)
 
 
 def cambiar_proveedor_linea_aprobada(
@@ -2802,7 +2949,12 @@ def cambiar_proveedor_linea_aprobada(
         and (antes.get("cotizacion_numero_seleccionada") or "").strip()
         == (despues.get("cotizacion_numero_seleccionada") or "").strip()
     )
-    if mismo:
+    valor_nuevo = _to_float(sel.get("valor")) if sel.get("valor") not in (None, "") else 0.0
+    precio_cambio = (
+        valor_nuevo > 0
+        and abs(valor_nuevo - _to_float(antes.get("valor_compra_unitario"))) > 0.009
+    )
+    if mismo and not precio_cambio:
         return get_solicitud(contrato_id, solicitud_id, ver_economicos=ver_economicos, ligera=True), {
             "cambio": False,
             "antes": antes,

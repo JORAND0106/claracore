@@ -61,3 +61,27 @@ def test_costo_enviado_o_insumo_nuevo_usa_el_valor_explicito_o_el_catalogo():
     assert h["_costo_al_mapear"]({}, existing, resolved, 9) == 900
     assert h["_cobro_al_mapear"](3200, existing, resolved, 9) == 3200
     assert h["_cobro_al_mapear"](None, existing, resolved, 9) == 1000
+
+
+def test_reguardar_el_precio_viejo_toma_la_cotizacion_vigente():
+    h = _helpers()
+    existing = {"insumo_id": 4, "valor_compra_unitario": 1800, "vlr_unitario_cobro": 2500}
+    resolved = {"valor_compra_unitario": 900, "vlr_unitario_cobro": 1000}
+    assert h["_costo_al_mapear"](
+        {"valor_compra_unitario": 1800}, existing, resolved, 4, oferta_valor=80,
+    ) == 80
+    assert h["_costo_al_mapear"]({}, existing, resolved, 4, oferta_valor=80) == 80
+    assert h["_costo_al_mapear"](
+        {"valor_compra_unitario": 700}, existing, resolved, 4, oferta_valor=80,
+    ) == 700
+    assert h["_costo_al_mapear"](
+        {"valor_compra_unitario": 1800}, existing, resolved, 4, oferta_valor=None,
+    ) == 1800
+
+
+def test_mapear_usa_la_cotizacion_vigente_y_la_correccion_post_oc_no():
+    src = (ROOT / "almacen_service.py").read_text(encoding="utf-8")
+    mapear = _fn(src, "mapear_item_solicitud_gerencial")
+    assert "oferta_valor=" in mapear
+    corregir = _fn(src, "corregir_insumo_item_post_oc")
+    assert "oferta_valor" not in corregir

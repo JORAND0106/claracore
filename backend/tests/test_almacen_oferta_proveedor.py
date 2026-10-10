@@ -244,6 +244,74 @@ def test_completar_guarda_la_unica_o_la_ganadora_y_no_pisa():
     assert svc.completar_proveedor_guardado(_SB(db), items) == 0
 
 
+def test_precio_sin_oc_sigue_la_cotizacion_y_la_oc_queda_congelada():
+    detalle = [
+        {
+            "tipo": "insumo",
+            "proveedor": "Ganadora",
+            "proveedor_id": 1,
+            "numero": "C-1",
+            "valor": 100,
+            "es_ganadora": True,
+        },
+        {
+            "tipo": "insumo",
+            "proveedor": "Ferretería",
+            "proveedor_id": 2,
+            "numero": "C-2",
+            "valor": 80,
+            "es_ganadora": False,
+        },
+    ]
+    items = [
+        {
+            "id": 1,
+            "insumo_id": 10,
+            "proveedor_seleccionado_id": 2,
+            "proveedor_seleccionado_nombre": "Ferretería",
+            "cotizacion_numero_seleccionada": "C-2",
+            "valor_compra_unitario": 100,
+        },
+        {
+            "id": 2,
+            "insumo_id": 10,
+            "proveedor_seleccionado_id": 2,
+            "proveedor_seleccionado_nombre": "Ferretería",
+            "valor_compra_unitario": 100,
+        },
+        {
+            "id": 3,
+            "insumo_id": 10,
+            "es_recurrente": True,
+            "valor_compra_unitario": 100,
+        },
+        {
+            "id": 4,
+            "insumo_id": 10,
+            "valor_compra_unitario": 50,
+        },
+    ]
+    db = {
+        "almacen_insumo": [{"id": 10, "cotizaciones_detalle": detalle, "proveedor_id": 1}],
+        "almacen_proveedor": [
+            {"id": 1, "razon_social": "Ganadora"},
+            {"id": 2, "razon_social": "Ferretería"},
+        ],
+        "almacen_solicitud_item": [dict(it) for it in items],
+    }
+    n = svc.sincronizar_precios_sin_oc(_SB(db), items, {2})
+    assert n == 2
+    assert items[0]["valor_compra_unitario"] == 80
+    assert items[1]["valor_compra_unitario"] == 100
+    assert items[2]["valor_compra_unitario"] == 100
+    assert items[3]["valor_compra_unitario"] == 100
+    guardadas = {r["id"]: r for r in db["almacen_solicitud_item"]}
+    assert guardadas[1]["valor_compra_unitario"] == 80
+    assert guardadas[2]["valor_compra_unitario"] == 100
+    assert svc.sincronizar_precios_sin_oc(_SB(db), items, {2}) == 0
+    assert svc.sincronizar_precios_sin_oc(_SB(db), items, {2}, omitir_ids={1}) == 0
+
+
 def test_valor_compra_linea_usa_cantidad_por_oferta():
     it = {"cantidad": 3, "valor_compra_unitario": 119}
     svc._attach_valor_compra_linea(it)
