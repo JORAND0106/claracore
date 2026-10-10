@@ -116,7 +116,10 @@ def bucket_de_linea(it: dict) -> dict:
         return {
             "clave": f"aprobada:{clave_p}",
             "proveedor": etiqueta,
+            # El título distingue las líneas ya aprobadas. La cabecera sigue
+            # enviada: aprobada en la solicitud significa que la OC ya se generó.
             "estado": "aprobada",
+            "estado_cabecera": "enviada",
             "orden": (0, etiqueta.casefold()),
         }
     return {
@@ -125,6 +128,18 @@ def bucket_de_linea(it: dict) -> dict:
         "estado": "enviada",
         "orden": (1, etiqueta.casefold()),
     }
+
+
+def _linea_agrupable(it: dict) -> bool:
+    """Solo pendiente o aprobado, y que no esté ya en una orden de compra."""
+    if not it or it.get("en_orden_compra"):
+        return False
+    ev = (it.get("estado_validacion") or "").strip()
+    return ev in ("", "pendiente", "aprobado")
+
+
+def _cabecera_grupo(g: dict) -> str:
+    return g.get("estado_cabecera") or g.get("estado") or "enviada"
 
 
 def estado_abierto(lineas: List[dict]) -> str:
@@ -184,6 +199,8 @@ def planificar_agrupacion(
     libres.sort(key=_sort_sol)
     por_id = {int(s["id"]): s for s in libres if s.get("id")}
 
+    anclas = set()
+    n_ancla = 0
     items_libres = []
     for it in items or []:
         try:
@@ -192,6 +209,11 @@ def planificar_agrupacion(
         except (TypeError, ValueError):
             continue
         if not sid or not iid or sid in congeladas or sid not in por_id:
+            continue
+        if not _linea_agrupable(it):
+            # Rechazada o ya comprada: se queda. Esa solicitud no recibe otras líneas.
+            anclas.add(sid)
+            n_ancla += 1
             continue
         row = dict(it)
         row["solicitud_id"] = sid
@@ -209,6 +231,7 @@ def planificar_agrupacion(
     for g in grupos.values():
         if g["clave"] == "sin_insumo" or str(g["clave"]).startswith("pendiente:"):
             g["estado"] = estado_abierto(g["items"])
+            g["estado_cabecera"] = g["estado"]
 
     por_sol: Dict[int, List[dict]] = {}
     for it in items_libres:
@@ -217,6 +240,8 @@ def planificar_agrupacion(
     candidatos: Dict[str, List[dict]] = {}
     for sol in libres:
         sid = int(sol["id"])
+        if sid in anclas:
+            continue
         its = por_sol.get(sid) or []
         if not its:
             continue
@@ -235,7 +260,7 @@ def planificar_agrupacion(
 
     restantes = [g for g in grupos.values() if g["clave"] not in asignacion]
     restantes.sort(key=lambda g: g["orden"])
-    huecos = [s for s in libres if int(s["id"]) not in usadas]
+    huecos = [s for s in libres if int(s["id"]) not in usadas and int(s["id"]) not in anclas]
     por_crear = 0
     for g in restantes:
         if huecos:
@@ -290,12 +315,13 @@ def planificar_agrupacion(
             titulo = format_titulo_grupo(
                 dest.get("consecutivo"), dest.get("created_at"), g["proveedor"], g["estado"],
             )
-            if (dest.get("estado") or "") != g["estado"]:
+            cabecera = _cabecera_grupo(g)
+            if (dest.get("estado") or "") != cabecera:
                 ajustes.append({
                     "solicitud_id": dest_id,
                     "campo": "estado",
                     "antes": dest.get("estado"),
-                    "despues": g["estado"],
+                    "despues": cabecera,
                 })
             if (dest.get("titulo") or "") != titulo:
                 ajustes.append({
@@ -308,6 +334,7 @@ def planificar_agrupacion(
             "clave": g["clave"],
             "proveedor": g["proveedor"],
             "estado": g["estado"],
+            "estado_cabecera": _cabecera_grupo(g),
             "estado_label": etiqueta_estado(g["estado"]),
             "lineas": len(g["items"]),
             "se_mueven": se_mueven,
@@ -322,7 +349,7 @@ def planificar_agrupacion(
     vacias = []
     for sol in libres:
         sid = int(sol["id"])
-        if sid in usadas:
+        if sid in usadas or sid in anclas:
             continue
         titulo = format_titulo_grupo(sol.get("consecutivo"), sol.get("created_at"), "Vacía", "borrador")
         if (sol.get("estado") or "") != "borrador":
@@ -370,7 +397,7 @@ def planificar_agrupacion(
         "lineas_libres": len(items_libres),
         "lineas_en_grupos": en_grupos,
         "lineas_congeladas": lineas_congeladas,
-        "lineas_total": len(items_libres) + lineas_congeladas,
+        "lineas_total": len(items_libres) + lineas_congeladas + n_ancla,
     }
 
 
@@ -676,6 +703,53 @@ def _select_items_por_id(sb, item_ids: List[int]) -> List[dict]:
             .in_("id", chunk)
         )))
     return rows
+
+
+def _marcar_lineas_en_oc(sb, items: List[dict]) -> None:
+    """Marca las líneas que ya están en una OC para que Agrupar no las mueva.
+
+    La solicitud cerrada se congela por su id. Esta marca cubre la línea
+    aunque la orden no traiga ese solicitud_id: no se puede volver a comprar.
+    """
+    ids = []
+    for it in items or []:
+        try:
+            iid = int(it.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if iid:
+            ids.append(iid)
+    if not ids:
+        return
+    encontrados = set()
+    for chunk in _trozos(ids, 120):
+        try:
+            rows = (
+                sb.table("almacen_orden_compra_item")
+                .select("solicitud_item_id")
+                .in_("solicitud_item_id", list(chunk))
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            if _objeto_ausente(exc):
+                return
+            raise
+        for row in rows:
+            try:
+                encontrados.add(int(row.get("solicitud_item_id") or 0))
+            except (TypeError, ValueError):
+                continue
+    if not encontrados:
+        return
+    for it in items:
+        try:
+            iid = int(it.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if iid in encontrados:
+            it["en_orden_compra"] = True
 
 
 def _ids_con_oc(sb, contrato_id: int, solicitud_ids: Optional[List[int]] = None) -> set:
@@ -1192,6 +1266,7 @@ def vista_previa_agrupacion(contrato_id: int, *, ver_economicos: bool = False) -
     items = _select_items(sb, ids)
     oc_ids = _ids_con_oc(sb, contrato_id, ids)
     completados = hidratar_proveedor_lineas(sb, items, estricto=True)
+    _marcar_lineas_en_oc(sb, items)
     plan = planificar_agrupacion(sols, items, oc_ids)
     _anexar_totales(plan, items, ver_economicos=ver_economicos)
     publica = vista_publica(plan, ver_economicos=ver_economicos)
@@ -1280,6 +1355,7 @@ def ejecutar_agrupacion(
     try:
         items = _select_items(sb, ids)
         completados = hidratar_proveedor_lineas(sb, items, estricto=True)
+        _marcar_lineas_en_oc(sb, items)
         plan = planificar_agrupacion(sols, items, oc_ids)
         if plan["lineas_en_grupos"] != plan["lineas_libres"]:
             raise ValueError(
@@ -1402,8 +1478,9 @@ def ejecutar_agrupacion(
                     continue
                 actual = por_id.get(int(sid)) or {}
                 payload: Dict[str, Any] = {}
-                if (actual.get("estado") or "") != g["estado"]:
-                    payload.update(_payload_estado(g["estado"], user_id, actual))
+                cabecera = _cabecera_grupo(g)
+                if (actual.get("estado") or "") != cabecera:
+                    payload.update(_payload_estado(cabecera, user_id, actual))
                 titulo = g.get("titulo") or ""
                 if titulo and (actual.get("titulo") or "") != titulo:
                     payload["titulo"] = titulo

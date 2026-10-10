@@ -21,6 +21,7 @@ function solicitudTieneLineasPendientesPostOc(sol) {
 function solicitudPuedeValidar(sol, permisos) {
   if (!permisos?.validar) return false
   if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
+  if (sol?.estado === 'aprobada' && !solicitudTieneOrdenCompra(sol)) return true
   if (sol?.estado === 'aprobada' && solicitudTieneOrdenCompra(sol) && solicitudTieneLineasPendientesPostOc(sol)) return true
   return false
 }
@@ -117,6 +118,9 @@ describe('aprobación con Validar, sin rol gerencial', () => {
     }
     assert.match(motivoAprobacionNoDisponible(borrador, validar), /borrador/i)
     assert.match(motivoAprobacionNoDisponible(aprobada, validar), /orden de compra/i)
+    const aprobadaSinOc = { id: 4, estado: 'aprobada', tiene_orden_compra: false, orden_compra: null }
+    assert.equal(solicitudPuedeValidar(aprobadaSinOc, validar), true)
+    assert.equal(motivoAprobacionNoDisponible(aprobadaSinOc, validar), '')
     assert.equal(motivoAprobacionNoDisponible(borrador, { ver: true }), '')
     assert.match(motivoEnvioNoDisponible(enviada, { crear: true }), /ya fue enviada/i)
     assert.equal(motivoEnvioNoDisponible(borrador, { crear: true }), '')

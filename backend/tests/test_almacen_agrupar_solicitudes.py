@@ -58,7 +58,7 @@ def _aplicar(sols, items, oc):
         it["solicitud_id"] = mov["despues"]["solicitud_id"]
     for g in plan["grupos"]:
         dest = por[int(g["solicitud_id"])]
-        dest["estado"] = g["estado"]
+        dest["estado"] = g.get("estado_cabecera") or g["estado"]
         dest["titulo"] = format_titulo_grupo(
             dest["consecutivo"], dest["created_at"], g["proveedor"], g["estado"],
         )
@@ -91,16 +91,16 @@ def test_reune_por_proveedor_y_estado_aunque_el_insumo_cambie():
         "aprobada:id:2",
         "pendiente:id:2",
         "sin_insumo",
-        "rechazadas",
     }
     assert por_clave["aprobada:id:1"]["item_ids"] == [1, 2]
     assert por_clave["pendiente:id:1"]["item_ids"] == [3]
     assert por_clave["aprobada:id:2"]["item_ids"] == [4]
     assert por_clave["pendiente:id:2"]["item_ids"] == [5, 6]
     assert por_clave["sin_insumo"]["item_ids"] == [7, 8]
-    assert por_clave["rechazadas"]["item_ids"] == [9]
+    assert all(9 not in g["item_ids"] for g in plan["grupos"])
     assert por_clave["pendiente:id:1"]["estado"] == "enviada"
     assert por_clave["aprobada:id:1"]["estado"] == "aprobada"
+    assert por_clave["aprobada:id:1"]["estado_cabecera"] == "enviada"
     segundo = _aplicar(sols, items, set())
     assert segundo["sin_cambios"] is True
     assert segundo["se_mueven"] == 0
@@ -117,14 +117,33 @@ def test_separa_aprobadas_pendientes_sin_insumo_y_rechazadas():
     ]
     plan = planificar_agrupacion(sols, items, set())
     por_clave = {g["clave"]: g for g in plan["grupos"]}
-    assert set(por_clave) == {"aprobada:id:5", "pendiente:id:6", "sin_insumo", "rechazadas"}
+    assert set(por_clave) == {"aprobada:id:5", "pendiente:id:6", "sin_insumo"}
     assert por_clave["aprobada:id:5"]["item_ids"] == [1, 5]
     assert por_clave["aprobada:id:5"]["estado"] == "aprobada"
+    assert por_clave["aprobada:id:5"]["estado_cabecera"] == "enviada"
     assert por_clave["pendiente:id:6"]["estado"] == "enviada"
     assert por_clave["sin_insumo"]["proveedor"] == "Sin proveedor"
-    assert por_clave["rechazadas"]["item_ids"] == [4]
-    assert 4 not in por_clave["aprobada:id:5"]["item_ids"]
+    assert all(4 not in g["item_ids"] for g in plan["grupos"])
     assert plan["por_crear"] == 0
+
+
+def test_linea_ya_en_oc_no_se_mueve_ni_su_solicitud_recibe_mas():
+    sols = [_sol(1, 1), _sol(2, 2)]
+    comprada = _lin(1, 1, insumo=10, ev="aprobado", pid=5, nombre="Aceros")
+    comprada["en_orden_compra"] = True
+    items = [
+        comprada,
+        _lin(2, 1, insumo=11, ev="aprobado", pid=5, nombre="Aceros"),
+        _lin(3, 2, insumo=12, ev="aprobado", pid=5, nombre="Aceros"),
+    ]
+    plan = planificar_agrupacion(sols, items, set())
+    assert all(1 not in g["item_ids"] for g in plan["grupos"])
+    assert all(g["solicitud_id"] != 1 for g in plan["grupos"])
+    grupo = next(g for g in plan["grupos"] if 3 in g["item_ids"])
+    assert grupo["item_ids"] == [2, 3]
+    assert grupo["solicitud_id"] == 2
+    assert grupo["estado_cabecera"] == "enviada"
+    assert plan["lineas_total"] == 3
 
 
 def test_la_solicitud_con_oc_no_entra():
@@ -169,8 +188,8 @@ def test_agrupar_dos_veces_no_cambia_la_segunda():
     assert any(t.endswith("Aceros - Aprobada") for t in titulos)
     assert any(t.endswith("Canteras - Enviada") for t in titulos)
     assert any(t.endswith("Sin proveedor - Borrador") for t in titulos)
-    assert any(t.endswith("Rechazadas - Rechazada") for t in titulos)
     por_item = {int(it["id"]): int(it["solicitud_id"]) for it in items}
+    assert por_item[4] == 2
     assert por_item[4] != por_item[1]
     assert por_item[3] != por_item[2]
 
@@ -399,7 +418,8 @@ def test_ejecutar_dos_veces_no_reescribe_lineas(monkeypatch):
     assert primero["creadas"] == 0
     assert primero["bloqueo_persistido"] is True
     assert any(it["solicitud_id"] == 2 and it["id"] == 2 for it in db["almacen_solicitud_item"])
-    assert db["almacen_solicitud"][0]["estado"] == "aprobada"
+    assert db["almacen_solicitud"][0]["estado"] == "enviada"
+    assert "Aprobada" in (db["almacen_solicitud"][0]["titulo"] or "")
     assert "Aceros" in (db["almacen_solicitud"][0]["titulo"] or "")
     assert "Canteras" in (db["almacen_solicitud"][1]["titulo"] or "")
 
@@ -639,8 +659,9 @@ def test_agrupar_separa_el_monton_aunque_la_cotizacion_no_traiga_proveedor(monke
     assert fenix in titulos
     assert titan in titulos
     assert king in titulos
-    aprobadas = [s for s in db["almacen_solicitud"] if s.get("estado") == "aprobada" and fenix in (s.get("titulo") or "")]
+    aprobadas = [s for s in db["almacen_solicitud"] if "Aprobada" in (s.get("titulo") or "") and fenix in (s.get("titulo") or "")]
     assert len(aprobadas) == 1
+    assert aprobadas[0]["estado"] == "enviada"
 
     segundo = ejecutar_agrupacion(3, 7, ver_economicos=False)
     assert segundo["sin_cambios"] is True
@@ -738,9 +759,9 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     assert "FERRETERIA VILLA ALVAREZ SAS" in nombres
     assert "TITAN MANUFACTURAS DE CEMENTO" in nombres
     assert "Sin proveedor" in nombres
-    assert "Rechazadas" in nombres
+    assert "Rechazadas" not in nombres
     assert vista["lineas_total"] == antes
-    assert sum(g["lineas"] for g in vista["grupos"]) == antes
+    assert sum(g["lineas"] for g in vista["grupos"]) == antes - 1
     assert vista["proveedores_completados"] == 35
     linea1 = next(it for it in db["almacen_solicitud_item"] if it["id"] == 1)
     assert linea1["proveedor_seleccionado_id"] == 1
@@ -785,7 +806,9 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     assert "Sin proveedor seleccionado" not in titulos
     assert "PAVCO ( Wavin )" in titulos
     pavco = [s for s in db["almacen_solicitud"] if "PAVCO ( Wavin )" in (s.get("titulo") or "")]
-    assert {s.get("estado") for s in pavco} == {"enviada", "aprobada"}
+    assert {s.get("estado") for s in pavco} == {"enviada"}
+    assert any("Aprobada" in (s.get("titulo") or "") for s in pavco)
+    assert any("Enviada" in (s.get("titulo") or "") for s in pavco)
     assert any(
         x[0] == "update" and x[1] == "almacen_solicitud_item" and "solicitud_id" in (x[2] or {})
         for x in log
@@ -1056,3 +1079,38 @@ def test_oc_con_otro_contrato_no_recibe_lineas(monkeypatch):
     assert db["almacen_solicitud_item"][0]["solicitud_id"] == 1
     assert db["almacen_solicitud_item"][1]["solicitud_id"] == 2
     assert all(g.get("consecutivo") != 2 or g.get("se_mueven") == 0 for g in vista["grupos"])
+
+
+def test_linea_comprada_no_se_agrupa_aunque_la_oc_no_traiga_la_solicitud(monkeypatch):
+    db = {
+        "_seq": 50,
+        "almacen_solicitud": [
+            {**_sol(1, 1), "contrato_id": 3},
+            {**_sol(2, 2), "contrato_id": 3},
+        ],
+        "almacen_solicitud_item": [
+            {**_lin(1, 1, insumo=10, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+            {**_lin(2, 1, insumo=11, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 2},
+            {**_lin(3, 2, insumo=12, ev="aprobado", pid=5, nombre="Aceros"), "numero_linea": 1},
+        ],
+        "almacen_orden_compra": [],
+        "almacen_orden_compra_item": [
+            {"id": 1, "orden_compra_id": 9, "solicitud_item_id": 1},
+        ],
+        "almacen_agrupacion_bloqueo": [],
+    }
+    monkeypatch.setattr("almacen_service._sb", lambda: _sb_de(db, []))
+    from almacen_agrupar import vista_previa_agrupacion
+
+    vista = vista_previa_agrupacion(3)
+    assert vista["congeladas"] == 0
+
+    def ids_de(g):
+        return [d["item_id"] for d in g.get("lineas_detalle") or []]
+
+    assert all(1 not in ids_de(g) for g in vista["grupos"])
+    assert all(g.get("solicitud_id") != 1 for g in vista["grupos"])
+    destino = next(g for g in vista["grupos"] if 3 in ids_de(g))
+    assert ids_de(destino) == [2, 3]
+    assert destino["solicitud_id"] == 2
+    assert destino["estado"] == "aprobada"
