@@ -2,7 +2,10 @@
  * Helpers de validación / etiquetas para solicitudes de almacén.
  */
 
-import { fmtMetrosAbscisa, parseAbscisaMetros } from './almacenAbscisa'
+import { fmtMetrosAbscisa, parseAbscisaMetros } from './almacenAbscisa.js'
+import { nombreProveedorGuardado } from './proveedorLinea.js'
+
+export { nombreProveedorGuardado }
 
 export function solicitudTieneOrdenCompra(sol) {
   if (sol?.tiene_orden_compra) return true
@@ -182,10 +185,9 @@ export function resumenProveedoresSolicitud(items) {
       lineasSinInsumo += 1
       continue
     }
-    const nombre = it?.es_recurrente
-      ? 'Compra recurrente'
-      : (it?.proveedor_nombre || it?.proveedor_catalogo || 'Proveedor')
-    const key = String(it?.proveedor_id ?? nombre)
+    const nombre = nombreProveedorGuardado(it)
+    const pid = it?.proveedor_id ?? it?.proveedor_seleccionado_id
+    const key = pid != null && pid !== '' ? `id:${pid}` : nombre
     if (keys.has(key)) continue
     keys.add(key)
     proveedores.push(nombre)
@@ -205,9 +207,8 @@ export function fmtFechaHoraCorta(iso) {
 }
 
 export function etiquetaProveedorLinea(item) {
-  if (item?.es_recurrente) return 'Compra recurrente'
   if (item?.sin_insumo || (!item?.insumo_id && !item?.es_recurrente)) return 'Sin insumo asignado'
-  return item?.proveedor_nombre || item?.proveedor_catalogo || 'Proveedor'
+  return nombreProveedorGuardado(item)
 }
 
 /** Puede reabrir OC para agregar insumos adicionales. */

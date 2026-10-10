@@ -5,9 +5,9 @@ import almacen_orden_compra_pdf as pdf
 import almacen_service as svc
 
 
-def test_proveedor_de_item_recurrente_y_catalogo():
+def test_proveedor_de_item_recurrente_y_guardado():
     cat_map = {10: {"proveedor_id": 5}}
-    prov_nombres = {5: "Acme SAS"}
+    prov_nombres = {5: "Acme SAS", 8: "Pepito Pérez"}
     key, pid, nombre = svc._proveedor_de_item(
         {"es_recurrente": True}, cat_map, prov_nombres,
     )
@@ -18,9 +18,22 @@ def test_proveedor_de_item_recurrente_y_catalogo():
     key2, pid2, nombre2 = svc._proveedor_de_item(
         {"insumo_id": 10, "es_recurrente": False}, cat_map, prov_nombres,
     )
-    assert key2 == "id:5"
-    assert pid2 == 5
-    assert nombre2 == "Acme SAS"
+    assert key2 == "sin_proveedor"
+    assert pid2 is None
+    assert nombre2 == ""
+
+    key3, pid3, nombre3 = svc._proveedor_de_item(
+        {
+            "es_recurrente": True,
+            "proveedor_seleccionado_id": 8,
+            "proveedor_seleccionado_nombre": "Pepito Pérez",
+        },
+        cat_map,
+        prov_nombres,
+    )
+    assert key3 == "id:8"
+    assert pid3 == 8
+    assert nombre3 == "Pepito Pérez"
 
 
 def test_oc_match_proveedor_por_id_y_nombre():

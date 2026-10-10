@@ -1,7 +1,8 @@
 /**
  * Valor de compra de una línea y resumen por proveedor.
- * Cantidad × valor con IVA del proveedor elegido, o de la cotización ganadora.
+ * Cantidad × valor con IVA del proveedor guardado en la línea.
  */
+import { nombreProveedorGuardado } from './proveedorLinea.js'
 
 export function valorCompraLinea(item) {
   const directo = Number(item?.valor_compra_linea)
@@ -23,8 +24,9 @@ export function totalesCompraSolicitud(items) {
     const valor = valorCompraLinea(it)
     if (valor == null) continue
     total += valor
-    const nombre = it.proveedor_nombre || it.proveedor_catalogo || 'Proveedor'
-    const key = it.proveedor_id != null && it.proveedor_id !== '' ? `id:${it.proveedor_id}` : String(nombre)
+    const nombre = nombreProveedorGuardado(it)
+    const pid = it.proveedor_id ?? it.proveedor_seleccionado_id
+    const key = pid != null && pid !== '' ? `id:${pid}` : String(nombre)
     if (!index.has(key)) {
       index.set(key, grupos.length)
       grupos.push({ key, nombre, total: 0 })
@@ -67,7 +69,7 @@ export function itemsConBorradorProveedor(items, item, draft) {
       valor_compra_unitario: Number.isFinite(unit) && unit > 0 ? unit : it?.valor_compra_unitario,
       valor_compra_linea: valor,
       proveedor_id: tienePid ? pid : (nombre ? null : it?.proveedor_id),
-      proveedor_nombre: nombre || it?.proveedor_nombre || it?.proveedor_catalogo || 'Proveedor',
+      proveedor_nombre: nombre || it?.proveedor_nombre || it?.proveedor_seleccionado_nombre || 'Sin proveedor',
     }
   })
 }

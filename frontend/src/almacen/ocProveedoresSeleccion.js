@@ -2,17 +2,17 @@
  * Proveedores que pueden entrar en una OC y los que ya tienen orden.
  * El total usa el valor con IVA de la línea (cantidad × valor unitario de compra).
  */
+import { nombreProveedorGuardado } from './proveedorLinea.js'
 import { valorCompraLinea } from './solicitudValorCompra.js'
 
 function nombreProveedor(it) {
-  if (it?.es_recurrente) return 'Compra recurrente'
-  return it?.proveedor_nombre || it?.proveedor_catalogo || 'Proveedor'
+  return nombreProveedorGuardado(it)
 }
 
 function claveProveedor(it) {
-  if (it?.es_recurrente) return 'recurrente'
-  const pid = it?.proveedor_id
+  const pid = it?.proveedor_id ?? it?.proveedor_seleccionado_id
   if (pid != null && pid !== '') return `id:${pid}`
+  if (it?.es_recurrente && nombreProveedor(it) === 'Compra recurrente') return 'recurrente'
   return `nombre:${nombreProveedor(it).trim().toLowerCase()}`
 }
 

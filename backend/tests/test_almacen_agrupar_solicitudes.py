@@ -69,6 +69,43 @@ def _aplicar(sols, items, oc):
     return planificar_agrupacion(sols, items, oc)
 
 
+def test_reune_por_proveedor_y_estado_aunque_el_insumo_cambie():
+    """Pepito y Pancracio, cada uno con aprobadas y pendientes, de insumos distintos."""
+    sols = [_sol(1, 1), _sol(2, 2), _sol(3, 3), _sol(4, 4), _sol(5, 5), _sol(6, 6)]
+    items = [
+        _lin(1, 1, insumo=10, ev="aprobado", pid=1, nombre="Pepito Pérez"),
+        _lin(2, 2, insumo=11, ev="aprobado", pid=1, nombre="Pepito Pérez"),
+        _lin(3, 1, insumo=12, ev="pendiente", pid=1, nombre="Pepito Pérez"),
+        _lin(4, 3, insumo=20, ev="aprobado", pid=2, nombre="Pancracio Pardo"),
+        _lin(5, 4, insumo=21, ev="pendiente", pid=2, nombre="Pancracio Pardo"),
+        _lin(6, 2, insumo=22, ev="pendiente", pid=2, nombre="Pancracio Pardo"),
+        _lin(7, 5, insumo=None, ev="pendiente"),
+        _lin(8, 6, insumo=None, ev="aprobado"),
+        _lin(9, 3, insumo=30, ev="rechazado", pid=1, nombre="Pepito Pérez"),
+    ]
+    plan = planificar_agrupacion(sols, items, set())
+    por_clave = {g["clave"]: g for g in plan["grupos"]}
+    assert set(por_clave) == {
+        "aprobada:id:1",
+        "pendiente:id:1",
+        "aprobada:id:2",
+        "pendiente:id:2",
+        "sin_insumo",
+        "rechazadas",
+    }
+    assert por_clave["aprobada:id:1"]["item_ids"] == [1, 2]
+    assert por_clave["pendiente:id:1"]["item_ids"] == [3]
+    assert por_clave["aprobada:id:2"]["item_ids"] == [4]
+    assert por_clave["pendiente:id:2"]["item_ids"] == [5, 6]
+    assert por_clave["sin_insumo"]["item_ids"] == [7, 8]
+    assert por_clave["rechazadas"]["item_ids"] == [9]
+    assert por_clave["pendiente:id:1"]["estado"] == "enviada"
+    assert por_clave["aprobada:id:1"]["estado"] == "aprobada"
+    segundo = _aplicar(sols, items, set())
+    assert segundo["sin_cambios"] is True
+    assert segundo["se_mueven"] == 0
+
+
 def test_separa_aprobadas_pendientes_sin_insumo_y_rechazadas():
     sols = [_sol(1, 1), _sol(2, 2), _sol(3, 3), _sol(4, 4)]
     items = [
@@ -572,6 +609,14 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     assert "Rechazadas" in nombres
     assert vista["lineas_total"] == antes
     assert sum(g["lineas"] for g in vista["grupos"]) == antes
+    assert vista["proveedores_completados"] == 35
+    linea1 = next(it for it in db["almacen_solicitud_item"] if it["id"] == 1)
+    assert linea1["proveedor_seleccionado_id"] == 1
+    assert linea1["proveedor_seleccionado_nombre"] == "DISTRIBUIDORA DOTACIONES EPP FENIX SAS"
+    linea36 = next(it for it in db["almacen_solicitud_item"] if it["id"] == 36)
+    assert linea36["proveedor_seleccionado_id"] == 3
+    assert linea36["proveedor_seleccionado_nombre"] == "PAVCO ( Wavin )"
+    assert any(x[0] == "upsert" and x[1] == "almacen_solicitud_item" for x in log)
     assert "más de un proveedor" in (vista.get("diagnostico_texto") or "")
     selects_item = [x for x in log if x[0] == "select" and x[1] == "almacen_solicitud_item"]
     assert len(selects_item) == 1
@@ -588,19 +633,26 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
     for it in db["almacen_solicitud_item"]:
         por_sol.setdefault(it["solicitud_id"], []).append(it)
     for sid, lineas in por_sol.items():
-        claves = set()
+        proveedores = set()
+        estados = set()
         for it in lineas:
-            ins = it.get("insumo_id")
-            if not ins:
-                claves.add("sin")
-            elif (it.get("estado_validacion") or "") == "rechazado":
-                claves.add("rechazo")
+            ev = (it.get("estado_validacion") or "")
+            if ev == "rechazado":
+                proveedores.add("rechazadas")
+                estados.add("rechazada")
+            elif not it.get("insumo_id"):
+                proveedores.add("sin_insumo")
+                estados.add("sin_insumo")
             else:
-                claves.add(ins)
-        assert len(claves) == 1, sid
+                proveedores.add(it.get("proveedor_seleccionado_id") or "sin")
+                estados.add("aprobada" if ev == "aprobado" else "enviada")
+        assert len(proveedores) == 1, sid
+        assert len(estados) == 1, sid
     titulos = " | ".join(s.get("titulo") or "" for s in db["almacen_solicitud"])
     assert "Sin proveedor seleccionado" not in titulos
     assert "PAVCO ( Wavin )" in titulos
+    pavco = [s for s in db["almacen_solicitud"] if "PAVCO ( Wavin )" in (s.get("titulo") or "")]
+    assert {s.get("estado") for s in pavco} == {"enviada", "aprobada"}
     assert not any(x[0] == "update" and x[1] == "almacen_solicitud_item" for x in log)
     assert any(x[0] == "upsert" and x[1] == "almacen_solicitud_item" for x in log)
     conservada = next(it for it in db["almacen_solicitud_item"] if it["id"] == 1)
@@ -616,6 +668,7 @@ def test_proveedor_de_catalogo_si_la_linea_no_lo_eligio(monkeypatch):
 
     segundo = ejecutar_agrupacion(3, 7, ver_economicos=True)
     assert segundo["sin_cambios"] is True
+    assert segundo["proveedores_completados"] == 0
     assert len(db["almacen_solicitud_item"]) == antes
 
     # Deshacer desde el log que escribiría la ruta.
