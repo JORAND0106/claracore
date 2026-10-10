@@ -258,6 +258,19 @@ export {
   valorCompraLinea,
 } from './solicitudValorCompra.js'
 
+/**
+ * Primeras palabras visibles y el texto completo para un tooltip.
+ * n = 3 deja dos o tres palabras en la celda.
+ */
+export function previewPalabras(texto, n = 3) {
+  const completo = String(texto || '').replace(/\s+/g, ' ').trim()
+  if (!completo) return { visible: '', completo: '' }
+  const palabras = completo.split(' ')
+  const max = Math.max(1, Number(n) || 3)
+  if (palabras.length <= max) return { visible: completo, completo }
+  return { visible: `${palabras.slice(0, max).join(' ')}…`, completo }
+}
+
 /** Descripción a mostrar en grilla: catálogo si ya mapeado, si no texto libre. */
 export function descripcionGrillaItem(item) {
   if (item?.insumo_id && item?.material_descripcion) {
@@ -542,6 +555,30 @@ function formatAbscisaValor(val) {
   const m = parseAbscisaMetros(val)
   if (m != null) return fmtMetrosAbscisa(m) || s
   return s
+}
+
+/**
+ * Texto completo del ítem para el tooltip de la grilla.
+ * Reúne código, actividad y material sin repetir el mismo fragmento.
+ */
+export function descripcionCompletaLinea(item) {
+  if (!item) return ''
+  const partes = []
+  const push = (raw) => {
+    const s = String(raw || '').replace(/\s+/g, ' ').trim()
+    if (!s || s === '—') return
+    const i = partes.findIndex((p) => p === s || p.includes(s) || s.includes(p))
+    if (i >= 0) {
+      if (s.length > partes[i].length) partes[i] = s
+      return
+    }
+    partes.push(s)
+  }
+  push(item.item)
+  push(item.item_descripcion || item.descripcion_item)
+  push(descripcionItemPresupuesto(item))
+  push(descripcionGrillaItem(item))
+  return partes.join(' — ')
 }
 
 /** Descripción del ítem de cobro (actividad del presupuesto). */

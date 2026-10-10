@@ -352,7 +352,6 @@ export default function SolicitudesPanel({
                   <td
                     style={{ ...ui.td, fontWeight: 600, whiteSpace: 'normal', lineHeight: 1.35 }}
                     data-label="Título"
-                    title={s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
                   >
                     {Number(s.mensajes_no_leidos) > 0 && (
                       <span

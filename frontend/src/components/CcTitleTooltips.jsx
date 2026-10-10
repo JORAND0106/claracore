@@ -330,11 +330,13 @@ export default function CcTitleTooltips() {
       placeNearAnchor(activeEl)
     }
 
+    const onHideRequest = () => hide()
     const onKey = (e) => { if (e.key === 'Escape') hide() }
     const onResize = () => {
       if (activeEl && tip.style.display === 'block') placeNearAnchor(activeEl)
     }
 
+    document.addEventListener('cc-title-tooltip-hide', onHideRequest)
     document.addEventListener('pointermove', onPointerMove, true)
     document.addEventListener('pointerover', onPointerOver, true)
     document.addEventListener('pointerout', onPointerOut, true)
@@ -348,6 +350,7 @@ export default function CcTitleTooltips() {
       hide()
       themeObserver.disconnect()
       titleObserver.disconnect()
+      document.removeEventListener('cc-title-tooltip-hide', onHideRequest)
       document.removeEventListener('pointermove', onPointerMove, true)
       document.removeEventListener('pointerover', onPointerOver, true)
       document.removeEventListener('pointerout', onPointerOut, true)
