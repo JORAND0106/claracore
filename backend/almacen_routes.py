@@ -788,18 +788,39 @@ def route_count_solicitudes(
     return {"count": count_solicitudes(contrato_id, estado)}
 
 
+def _log_proveedores_completados(current_user, contrato_id: int, result: dict) -> None:
+    """El completado no es un movimiento de Agrupar: Deshacer no lo revierte."""
+    n = int((result or {}).get("proveedores_completados") or 0)
+    if n <= 0:
+        return
+    log_almacen(
+        current_user,
+        "COMPLETAR_PROVEEDOR",
+        "solicitud",
+        contrato_id,
+        {
+            "motivo": "Proveedor guardado desde la cotización del insumo",
+            "lineas": n,
+        },
+        valor_anterior=None,
+        valor_nuevo={"lineas": n},
+    )
+
+
 @router.post("/{contrato_id}/solicitudes/agrupar/vista-previa")
 def route_vista_previa_agrupar(contrato_id: int, current_user=Depends(get_current_user)):
-    """Cómo quedarían las solicitudes al agrupar por proveedor. No escribe."""
+    """Cómo quedarían las solicitudes. Guarda el proveedor que faltaba; no mueve líneas."""
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
-        return vista_previa_agrupacion(
+        result = vista_previa_agrupacion(
             contrato_id,
             ver_economicos=puede_ver_valores_economicos_almacen(current_user),
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    _log_proveedores_completados(current_user, contrato_id, result)
+    return result
 
 
 @router.post("/{contrato_id}/solicitudes/agrupar")
@@ -821,8 +842,9 @@ def route_agrupar_solicitudes(
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    _log_proveedores_completados(current_user, contrato_id, result)
     eid = result.get("ejecucion_id")
-    detalle_mov = {"motivo": "Agrupar solicitudes por proveedor"}
+    detalle_mov = {"motivo": "Agrupar solicitudes por proveedor y estado"}
     if eid:
         detalle_mov["ejecucion_id"] = eid
     for mov in result.get("movimientos") or []:

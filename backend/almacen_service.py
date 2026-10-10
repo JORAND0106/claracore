@@ -2063,6 +2063,215 @@ def oferta_ganadora(ofertas: List[dict]) -> Optional[dict]:
     return ofertas[0] if ofertas else None
 
 
+_NOMBRES_SIN_PROVEEDOR_GUARDADO = {
+    "proveedor",
+    "proveedor catálogo",
+    "proveedor catalogo",
+    "sin proveedor",
+    "sin proveedor seleccionado",
+    "sin proveedor asignado",
+}
+
+
+def _nombre_proveedor_util(nombre: str) -> bool:
+    return (nombre or "").strip().casefold() not in _NOMBRES_SIN_PROVEEDOR_GUARDADO and bool((nombre or "").strip())
+
+
+def linea_sin_proveedor_guardado(it: dict) -> bool:
+    """Tiene insumo y todavía no tiene un proveedor escrito en la línea."""
+    if not it or not it.get("insumo_id") or it.get("es_recurrente"):
+        return False
+    if it.get("id") in (None, ""):
+        return False
+    if it.get("proveedor_seleccionado_id") not in (None, ""):
+        return False
+    return not _nombre_proveedor_util(it.get("proveedor_seleccionado_nombre") or "")
+
+
+def _oferta_por_defecto(ofertas: List[dict]) -> Optional[dict]:
+    """Una sola cotización, o la ganadora si hay varias."""
+    utiles = [
+        o for o in (ofertas or [])
+        if o.get("proveedor_id") not in (None, "") or _nombre_proveedor_util(o.get("proveedor_nombre") or "")
+    ]
+    if not utiles:
+        return None
+    if len(utiles) == 1:
+        return utiles[0]
+    return oferta_ganadora(utiles)
+
+
+def _filas_insumo_para_ofertas(sb, insumo_ids: List[int]) -> List[dict]:
+    ids = sorted({int(x) for x in insumo_ids if x})
+    if not ids:
+        return []
+    selects = (
+        "id, cotizaciones_detalle, cotizacion_numero, costo_base, proveedor_id, "
+        "valor_compra_referencia, tributos, tipo_impuesto, impuesto_porcentaje, impuestos",
+        "id, cotizaciones_detalle, cotizacion_numero, costo_base, proveedor_id, valor_compra_referencia",
+        "id, cotizacion_numero, costo_base, proveedor_id, valor_compra_referencia",
+        "id, proveedor_id",
+    )
+    ultimo = None
+    for select in selects:
+        try:
+            rows: List[dict] = []
+            for i in range(0, len(ids), 120):
+                chunk = ids[i:i + 120]
+                rows.extend(
+                    sb.table("almacen_insumo")
+                    .select(select)
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+            return rows
+        except Exception as exc:
+            ultimo = exc
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudieron leer las cotizaciones para guardar el proveedor: %s", exc)
+                return []
+    if ultimo:
+        _log.warning("Cotizaciones de insumo sin columnas esperadas: %s", ultimo)
+    return []
+
+
+def _nombres_proveedor(sb, ids: List[int]) -> Dict[int, str]:
+    limpios = sorted({int(x) for x in ids if x})
+    nombres: Dict[int, str] = {}
+    for i in range(0, len(limpios), 120):
+        chunk = limpios[i:i + 120]
+        for row in (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            try:
+                nombres[int(row["id"])] = (row.get("razon_social") or "").strip()
+            except (TypeError, ValueError, KeyError):
+                continue
+    return nombres
+
+
+def _payload_proveedor_guardado(it: dict) -> dict:
+    return {
+        "id": int(it["id"]),
+        "proveedor_seleccionado_id": it.get("proveedor_seleccionado_id"),
+        "proveedor_seleccionado_nombre": (it.get("proveedor_seleccionado_nombre") or "").strip() or None,
+        "cotizacion_numero_seleccionada": it.get("cotizacion_numero_seleccionada"),
+    }
+
+
+def completar_proveedor_guardado(sb, items: List[dict]) -> int:
+    """Escribe en la línea la cotización única o la ganadora.
+
+    Solo toca líneas con insumo y sin proveedor guardado. La segunda pasada no escribe.
+    Si la línea ya tenía una cotización elegida, se conserva esa y no la ganadora.
+    """
+    candidatos = [it for it in (items or []) if linea_sin_proveedor_guardado(it)]
+    if not candidatos:
+        return 0
+    try:
+        _hidratar_proveedor_desde_cotizacion(sb, candidatos)
+    except Exception:
+        _log.exception("No se pudo leer la cotización ya elegida en la línea")
+    desde_cotizacion = []
+    pendientes = []
+    for it in candidatos:
+        if linea_sin_proveedor_guardado(it):
+            pendientes.append(it)
+        else:
+            desde_cotizacion.append(_payload_proveedor_guardado(it))
+    if not pendientes and not desde_cotizacion:
+        return 0
+    if not pendientes:
+        _upsert_proveedor_guardado(sb, desde_cotizacion)
+        return len(desde_cotizacion)
+    insumo_ids = []
+    for it in pendientes:
+        try:
+            insumo_ids.append(int(it["insumo_id"]))
+        except (TypeError, ValueError):
+            continue
+    filas = _filas_insumo_para_ofertas(sb, insumo_ids)
+    por_insumo = {}
+    pids = []
+    for row in filas:
+        try:
+            por_insumo[int(row["id"])] = row
+        except (TypeError, ValueError, KeyError):
+            continue
+        if row.get("proveedor_id") not in (None, ""):
+            try:
+                pids.append(int(row["proveedor_id"]))
+            except (TypeError, ValueError):
+                pass
+    nombres = _nombres_proveedor(sb, pids) if pids else {}
+    ofertas_por_insumo: Dict[int, List[dict]] = {}
+    faltan = []
+    for iid, row in por_insumo.items():
+        ofs = ofertas_proveedor_desde_row(row, nombres)
+        ofertas_por_insumo[iid] = ofs
+        for oferta in ofs:
+            pid = oferta.get("proveedor_id")
+            if pid and not _nombre_proveedor_util(oferta.get("proveedor_nombre") or ""):
+                try:
+                    faltan.append(int(pid))
+                except (TypeError, ValueError):
+                    pass
+    if faltan:
+        nombres.update(_nombres_proveedor(sb, faltan))
+        for iid, row in por_insumo.items():
+            ofertas_por_insumo[iid] = ofertas_proveedor_desde_row(row, nombres)
+
+    cambios = []
+    for it in pendientes:
+        try:
+            iid = int(it["insumo_id"])
+            payload_id = int(it["id"])
+        except (TypeError, ValueError):
+            continue
+        if payload_id <= 0:
+            continue
+        oferta = _oferta_por_defecto(ofertas_por_insumo.get(iid) or [])
+        if not oferta:
+            continue
+        pid = oferta.get("proveedor_id")
+        nombre = (oferta.get("proveedor_nombre") or "").strip()
+        if pid in (None, "") and not _nombre_proveedor_util(nombre):
+            continue
+        it["proveedor_seleccionado_id"] = pid
+        it["proveedor_seleccionado_nombre"] = nombre
+        it["cotizacion_numero_seleccionada"] = oferta.get("numero")
+        payload = _payload_proveedor_guardado(it)
+        if _to_float(it.get("valor_compra_unitario")) <= 0 and _to_float(oferta.get("valor")) > 0:
+            it["valor_compra_unitario"] = oferta.get("valor")
+            payload["valor_compra_unitario"] = oferta.get("valor")
+        cambios.append(payload)
+    cambios = desde_cotizacion + cambios
+    if not cambios:
+        return 0
+    _upsert_proveedor_guardado(sb, cambios)
+    return len(cambios)
+
+
+def _upsert_proveedor_guardado(sb, cambios: List[dict]) -> None:
+    con_valor = [c for c in cambios if "valor_compra_unitario" in c]
+    sin_valor = [c for c in cambios if "valor_compra_unitario" not in c]
+    for lote in (sin_valor, con_valor):
+        for i in range(0, len(lote), 200):
+            chunk = lote[i:i + 200]
+            if not chunk:
+                continue
+            sb.table("almacen_solicitud_item").upsert(
+                chunk, on_conflict="id", default_to_null=False,
+            ).execute()
+
+
 def elegir_oferta_proveedor(
     ofertas: List[dict],
     *,
@@ -3087,33 +3296,21 @@ def _proveedor_de_item(
     Clave de agrupación + id + nombre de proveedor para un ítem de solicitud.
     Una OC = un proveedor; recurrentes van juntos bajo clave 'recurrente'.
     """
-    if it.get("es_recurrente"):
-        return "recurrente", None, "Compra recurrente"
     sel_nom = (it.get("proveedor_seleccionado_nombre") or "").strip()
     sel_id = it.get("proveedor_seleccionado_id")
-    if sel_id not in (None, "") or sel_nom:
+    if sel_id not in (None, "") or _nombre_proveedor_util(sel_nom):
         try:
             pid_i = int(sel_id) if sel_id not in (None, "") else None
         except (TypeError, ValueError):
             pid_i = None
         if pid_i:
-            nombre = prov_nombres.get(pid_i) or sel_nom or "Proveedor"
+            nombre = prov_nombres.get(pid_i) or sel_nom or f"Proveedor {pid_i}"
             return f"id:{pid_i}", pid_i, nombre
-        return f"nombre:{sel_nom.casefold()}", None, sel_nom or "Proveedor"
-    cat = it.get("cotizaciones_catalogo") or {}
-    if not cat and it.get("insumo_id"):
-        cat = cat_map.get(int(it["insumo_id"])) or {}
-    pid = cat.get("proveedor_id")
-    if pid:
-        pid_i = int(pid)
-        nombre = (
-            prov_nombres.get(pid_i)
-            or (it.get("proveedor_catalogo") or "").strip()
-            or "Proveedor catálogo"
-        )
-        return f"id:{pid_i}", pid_i, nombre
-    nombre = (it.get("proveedor_catalogo") or "").strip() or "Proveedor catálogo"
-    return f"nombre:{nombre.casefold()}", None, nombre
+        if _nombre_proveedor_util(sel_nom):
+            return f"nombre:{sel_nom.casefold()}", None, sel_nom
+    if it.get("es_recurrente"):
+        return "recurrente", None, "Compra recurrente"
+    return "sin_proveedor", None, ""
 
 
 def _clasificar_proveedor_linea(
@@ -3121,8 +3318,16 @@ def _clasificar_proveedor_linea(
     cat_map: Dict[int, dict],
     prov_nombres: Dict[int, str],
 ) -> dict:
-    """Nombre de proveedor de la línea, alineado con la agrupación de OC."""
-    if it.get("es_recurrente"):
+    """Nombre de proveedor de la línea. Solo el dato guardado en la línea."""
+    _key, pid, nombre = _proveedor_de_item(it, cat_map, prov_nombres)
+    if _key not in ("sin_proveedor", "recurrente"):
+        return {
+            "proveedor_nombre": nombre or None,
+            "proveedor_id": pid,
+            "proveedor_asignado": True,
+            "sin_insumo": False,
+        }
+    if _key == "recurrente":
         return {
             "proveedor_nombre": "Compra recurrente",
             "proveedor_id": None,
@@ -3136,11 +3341,10 @@ def _clasificar_proveedor_linea(
             "proveedor_asignado": False,
             "sin_insumo": True,
         }
-    _key, pid, nombre = _proveedor_de_item(it, cat_map, prov_nombres)
     return {
-        "proveedor_nombre": nombre,
-        "proveedor_id": pid,
-        "proveedor_asignado": True,
+        "proveedor_nombre": None,
+        "proveedor_id": None,
+        "proveedor_asignado": False,
         "sin_insumo": False,
     }
 
@@ -3154,18 +3358,16 @@ def _attach_proveedor_lineas(sb, items: List[dict]) -> None:
     except Exception:
         _log.exception("No se pudo hidratar el proveedor elegido")
     try:
-        cat_map, prov_nombres = _proveedor_meta_batch(sb, items)
+        completar_proveedor_guardado(sb, items)
     except Exception:
-        _log.exception("No se pudo resolver el proveedor de las líneas")
-        cat_map, prov_nombres = {}, {}
+        _log.exception("No se pudo guardar el proveedor de las líneas que ya tenían insumo")
+    cat_map, prov_nombres = {}, {}
     for it in items:
         info = _clasificar_proveedor_linea(it, cat_map, prov_nombres)
         it["proveedor_nombre"] = info["proveedor_nombre"]
         it["proveedor_id"] = info["proveedor_id"]
         it["proveedor_asignado"] = info["proveedor_asignado"]
         it["sin_insumo"] = info["sin_insumo"]
-        if info["proveedor_nombre"] and not it.get("proveedor_catalogo"):
-            it["proveedor_catalogo"] = info["proveedor_nombre"]
 
 
 def _resumen_proveedores_solicitud(items: List[dict]) -> dict:
@@ -3212,7 +3414,11 @@ def _agrupar_items_por_proveedor(
     """
     if not items:
         return []
-    cat_map, prov_nombres = _proveedor_meta_batch(sb, items)
+    try:
+        completar_proveedor_guardado(sb, items)
+    except Exception:
+        _log.exception("No se pudo guardar el proveedor antes de armar la orden de compra")
+    cat_map, prov_nombres = {}, {}
     grupos: Dict[str, dict] = {}
     orden: List[str] = []
     for it in items:

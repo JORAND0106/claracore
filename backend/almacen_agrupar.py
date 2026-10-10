@@ -58,11 +58,9 @@ def _nombre_generico(nombre: str) -> bool:
 
 
 def _proveedor_linea(it: dict) -> tuple:
-    """Proveedor efectivo de la línea.
+    """Proveedor guardado en la línea.
 
-    Si ya se hidrató, es la misma regla que la columna Prov. y la OC:
-    el elegido en la revisión y, si no hay, el del insumo. Si no se hidrató,
-    queda el elegido en la línea (los tests y el plan puro).
+    Agrupar, el título, Prov. y la OC leen este mismo dato. No se calcula otro.
     """
     if it.get("_proveedor_hidratado"):
         pid = it.get("proveedor_efectivo_id")
@@ -518,89 +516,40 @@ def _paginar(make, page: int = 1000) -> List[dict]:
     return out
 
 
-def _catalogo_proveedor_liviano(sb, items: List[dict]) -> tuple:
-    """proveedor_id del insumo y razón social. Sin PDFs ni JSON de cotizaciones."""
-    insumo_ids = []
-    explicitos = []
-    for it in items or []:
-        if it.get("insumo_id") and not it.get("es_recurrente"):
-            try:
-                insumo_ids.append(int(it["insumo_id"]))
-            except (TypeError, ValueError):
-                pass
-        if it.get("proveedor_seleccionado_id") not in (None, ""):
-            try:
-                explicitos.append(int(it["proveedor_seleccionado_id"]))
-            except (TypeError, ValueError):
-                pass
-    cat_map: Dict[int, dict] = {}
-    prov_ids = set(explicitos)
-    for chunk in _trozos(sorted(set(insumo_ids)), 120):
-        rows = (
-            sb.table("almacen_insumo")
-            .select("id, proveedor_id")
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
-        )
-        for row in rows:
-            try:
-                iid = int(row["id"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            pid = row.get("proveedor_id")
-            cat_map[iid] = {"proveedor_id": pid}
-            if pid not in (None, ""):
-                try:
-                    prov_ids.add(int(pid))
-                except (TypeError, ValueError):
-                    pass
-    prov_nombres: Dict[int, str] = {}
-    for chunk in _trozos(sorted(prov_ids), 120):
-        for row in (
-            sb.table("almacen_proveedor")
-            .select("id, razon_social")
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
-        ):
-            try:
-                prov_nombres[int(row["id"])] = (row.get("razon_social") or "").strip()
-            except (TypeError, ValueError, KeyError):
-                continue
-    return cat_map, prov_nombres
+def hidratar_proveedor_lineas(sb, items: List[dict], *, estricto: bool = False) -> int:
+    """Guarda el proveedor que faltaba y deja en memoria solo ese dato.
 
-
-def hidratar_proveedor_lineas(sb, items: List[dict]) -> None:
-    """Escribe en memoria el proveedor que ya muestran la columna Prov. y la OC.
-
-    No guarda el proveedor del insumo como si la persona lo hubiera elegido.
+    ``estricto`` hace fallar Agrupar si el guardado no se pudo escribir.
+    El nombre de una sola solicitud sigue aunque esa escritura falle.
     """
     if not items:
-        return
+        return 0
+    n = 0
     try:
-        from almacen_service import _clasificar_proveedor_linea
+        from almacen_service import completar_proveedor_guardado
 
-        cat_map, prov_nombres = _catalogo_proveedor_liviano(sb, items)
-    except Exception:
-        _log.exception("No se pudo resolver el proveedor del insumo")
-        return
+        n = int(completar_proveedor_guardado(sb, items) or 0)
+    except Exception as exc:
+        _log.exception("No se pudo guardar el proveedor del insumo")
+        if estricto:
+            raise ValueError(
+                "No se pudo guardar el proveedor de las líneas que ya tenían insumo. "
+                "No se movió ninguna línea."
+            ) from exc
     for it in items:
-        info = _clasificar_proveedor_linea(it, cat_map, prov_nombres)
-        pid = info.get("proveedor_id")
-        nombre = (info.get("proveedor_nombre") or "").strip()
-        if info.get("sin_insumo"):
-            it["proveedor_efectivo_id"] = None
-            it["proveedor_efectivo_nombre"] = ""
-        elif pid or (nombre and not _nombre_generico(nombre)):
+        pid = it.get("proveedor_seleccionado_id")
+        nombre = (it.get("proveedor_seleccionado_nombre") or "").strip()
+        if pid not in (None, "") or (nombre and not _nombre_generico(nombre)):
             it["proveedor_efectivo_id"] = pid
             it["proveedor_efectivo_nombre"] = nombre
+        elif it.get("es_recurrente"):
+            it["proveedor_efectivo_id"] = None
+            it["proveedor_efectivo_nombre"] = "Compra recurrente"
         else:
             it["proveedor_efectivo_id"] = None
             it["proveedor_efectivo_nombre"] = ""
         it["_proveedor_hidratado"] = True
+    return n
 
 
 def sincronizar_titulo_solicitud(sb, solicitud_id: int) -> Optional[str]:
@@ -1169,10 +1118,11 @@ def vista_previa_agrupacion(contrato_id: int, *, ver_economicos: bool = False) -
     ids = [int(s["id"]) for s in sols if s.get("id")]
     items = _select_items(sb, ids)
     oc_ids = _ids_con_oc(sb, contrato_id)
-    hidratar_proveedor_lineas(sb, items)
+    completados = hidratar_proveedor_lineas(sb, items, estricto=True)
     plan = planificar_agrupacion(sols, items, oc_ids)
     _anexar_totales(plan, items, ver_economicos=ver_economicos)
     publica = vista_publica(plan, ver_economicos=ver_economicos)
+    publica["proveedores_completados"] = completados
     diag = diagnostico_actual(sols, items, oc_ids)
     publica["diagnostico"] = {
         "mezcladas": diag["mezcladas"],
@@ -1249,7 +1199,7 @@ def ejecutar_agrupacion(
     bloqueo = _adquirir_bloqueo(sb, contrato_id, user_id, elegibles)
     try:
         items = _select_items(sb, ids)
-        hidratar_proveedor_lineas(sb, items)
+        completados = hidratar_proveedor_lineas(sb, items, estricto=True)
         plan = planificar_agrupacion(sols, items, oc_ids)
         if plan["lineas_en_grupos"] != plan["lineas_libres"]:
             raise ValueError(
@@ -1296,6 +1246,7 @@ def ejecutar_agrupacion(
                 "resumen": "Sin cambios. Las solicitudes ya estaban agrupadas.",
                 "movimientos": [],
                 "ajustes": [],
+                "proveedores_completados": completados,
                 "duracion_ms": round((time.perf_counter() - t0) * 1000, 1),
             })
             return publica
@@ -1448,6 +1399,7 @@ def ejecutar_agrupacion(
                 "ajustes": ajustes,
                 "sin_cambios": n_mov == 0 and n_new == 0 and not ajustes,
                 "ejecucion_id": uuid.uuid4().hex,
+                "proveedores_completados": completados,
                 "duracion_ms": round((time.perf_counter() - t0) * 1000, 1),
             })
             return publica

@@ -36,7 +36,7 @@ def test_sello_se_limpia_si_desaparece_el_texto():
     assert row["justificacion_autor_nombre"] is None
 
 
-def test_proveedor_de_linea_sin_insumo_y_por_catalogo():
+def test_proveedor_de_linea_sin_insumo_y_guardado():
     sin = svc._clasificar_proveedor_linea({"es_recurrente": False}, {}, {})
     assert sin["sin_insumo"] is True
     assert sin["proveedor_nombre"] is None
@@ -47,7 +47,20 @@ def test_proveedor_de_linea_sin_insumo_y_por_catalogo():
 
     cat = {8: {"proveedor_id": 4}}
     nombres = {4: "Ferretería Norte"}
-    asignado = svc._clasificar_proveedor_linea({"insumo_id": 8}, cat, nombres)
+    sin_guardar = svc._clasificar_proveedor_linea({"insumo_id": 8}, cat, nombres)
+    assert sin_guardar["proveedor_nombre"] is None
+    assert sin_guardar["proveedor_asignado"] is False
+    assert sin_guardar["sin_insumo"] is False
+
+    asignado = svc._clasificar_proveedor_linea(
+        {
+            "insumo_id": 8,
+            "proveedor_seleccionado_id": 4,
+            "proveedor_seleccionado_nombre": "Ferretería Norte",
+        },
+        {},
+        {},
+    )
     assert asignado["proveedor_nombre"] == "Ferretería Norte"
     assert asignado["proveedor_id"] == 4
     assert asignado["sin_insumo"] is False

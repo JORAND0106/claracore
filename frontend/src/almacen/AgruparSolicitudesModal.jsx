@@ -24,7 +24,8 @@ export default function AgruparSolicitudesModal({
   const sinCambios = Boolean(vista?.sin_cambios)
   const puedeConfirmar = !sinCambios && !resumen && (porCrear === 0 || aceptaCrear)
   const frase = vista?.resumen_accion
-    || 'Reúne las líneas sin orden de compra en la solicitud de cada proveedor. No crea solicitudes nuevas salvo que lo confirme.'
+    || 'Reúne las líneas con insumo por proveedor y estado. No crea solicitudes nuevas salvo que lo confirme.'
+  const completados = Number(vista?.proveedores_completados) || 0
 
   return (
     <div
@@ -55,6 +56,12 @@ export default function AgruparSolicitudesModal({
           {' '}
           Las solicitudes que ya tienen OC no se mueven.
         </p>
+        {completados > 0 && (
+          <p data-testid="agrupar-proveedores-completados" style={{ margin: '0 0 12px', color: ui.text, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+            Se guardó el proveedor en {completados} línea(s) que ya tenían insumo.
+            El movimiento de líneas espera su confirmación.
+          </p>
+        )}
         {vista?.diagnostico_texto && (
           <p data-testid="agrupar-diagnostico" style={{ margin: '0 0 12px', color: ui.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
             {vista.diagnostico_texto}
