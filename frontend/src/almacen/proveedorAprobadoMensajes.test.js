@@ -40,3 +40,14 @@ test('los mensajes de la solicitud abren en su popup y pueden reintentar el avis
   assert.match(api, /reintentar-aviso/)
   assert.match(api, /items\/\$\{itemId\}\/proveedor/)
 })
+
+test('el listado de proveedores se dibuja por delante del popup', () => {
+  const field = readFileSync(join(dir, 'ProveedorOfertaField.jsx'), 'utf8')
+  const modal = readFileSync(join(dir, 'SolicitudLineaRevisionModal.jsx'), 'utf8')
+  assert.match(field, /createPortal/)
+  assert.match(field, /position: 'fixed'/)
+  assert.match(field, /revision-linea-proveedor-lista/)
+  assert.match(field, /zIndex: 100080/)
+  assert.match(modal, /zIndex: 100035/)
+  assert.doesNotMatch(field, /position: 'absolute'/)
+})
