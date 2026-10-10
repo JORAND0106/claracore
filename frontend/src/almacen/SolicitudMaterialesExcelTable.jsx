@@ -1,14 +1,13 @@
 import { Fragment, useState } from 'react'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import {
-  descripcionCompletaLinea,
-  estadoValidacionItem,
-  etiquetaProveedorLinea,
-  fmtAbscisasLinea,
+  agruparLineasMismoInsumo,
+  descripcionFilaInsumo,
+  detalleSectorLinea,
+  estadoFilaInsumo,
   previewPalabras,
   saldoNegociadoItem,
   saldoPresupuestadoItem,
-  valorCompraLinea,
 } from './solicitudDetalleHelpers'
 import { AlmacenHelpIcon, fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
 
@@ -16,6 +15,7 @@ const ESTADO_COLOR = {
   pendiente: '#d97706',
   aprobado: '#059669',
   rechazado: '#dc2626',
+  varios: '#64748b',
 }
 
 const ROW_H = 36
@@ -25,7 +25,7 @@ const COLS = [
   { key: 'item', abbr: 'ÍTEM', tip: 'Ítem y descripción. El texto completo aparece al pasar el cursor.', width: 280 },
   { key: 'just', abbr: 'JUST.', tip: 'Justificación. Se ven las primeras palabras; el texto completo aparece al pasar el cursor.', width: 150 },
   { key: 'prov', abbr: 'PROV.', tip: 'Proveedor elegido en la revisión de línea', width: 150 },
-  { key: 'valor', abbr: 'VALOR', tip: 'Valor de la compra: cantidad por el valor ofertado, con IVA incluido', width: 120, align: 'right' },
+  { key: 'valor', abbr: 'CANT. / VALOR', tip: 'Cantidad pedida junto al valor de esa cantidad, con IVA incluido', width: 220, align: 'right' },
   { key: 'ubi', abbr: 'UBIC.', tip: 'Abscisa, tramo, PK-ID y mapa', width: 64, align: 'center' },
   { key: 'saldos', abbr: 'SALDOS', tip: 'Saldo negociado y saldo de presupuesto, en cantidades', width: 72, align: 'center' },
   { key: 'est', abbr: 'EST.', tip: 'Estado de la línea: Aprobado, Rechazado o Pendiente', width: 88 },
@@ -91,8 +91,17 @@ function ColHeader({ abbr, tip, style, align = 'left' }) {
   )
 }
 
-function textoItemVisible(it) {
-  return descripcionCompletaLinea(it) || '—'
+function textoCantidadJuntoValor(cantidad, unidad, valor, verEconomicos) {
+  const cant = `${fmtCant(cantidad)}${unidad ? ` ${unidad}` : ''}`
+  if (!verEconomicos || valor == null) return cant
+  return `${cant} · ${fmtMoney(valor)}`
+}
+
+function etiquetaEstado(ev) {
+  if (ev === 'aprobado') return 'Aprobado'
+  if (ev === 'rechazado') return 'Rechazado'
+  if (ev === 'varios') return 'Varios'
+  return 'Pendiente'
 }
 
 function PanelLinea({ titulo, onClose, children }) {
@@ -159,9 +168,10 @@ export default function SolicitudMaterialesExcelTable({
   const [panel, setPanel] = useState(null)
   const cols = COLS.map((c) => (
     c.key === 'valor' && !verEconomicos
-      ? { ...c, abbr: 'CANT.', tip: 'Cantidad pedida. Este rol no ve valores en dinero.' }
+      ? { ...c, abbr: 'CANT.', tip: 'Cantidad pedida. Este rol no ve valores en dinero.', width: 120 }
       : c
   ))
+  const filas = agruparLineasMismoInsumo(items)
 
   if (!items.length) {
     return (
@@ -173,7 +183,7 @@ export default function SolicitudMaterialesExcelTable({
 
   const minWidth = cols.reduce((acc, c) => acc + c.width, 0) + (puedeSeleccionar ? 36 : 0)
   const colSpan = cols.length + (puedeSeleccionar ? 1 : 0)
-  const panelItem = panel ? items.find((it) => it.id === panel.id) || panel.item : null
+  const panelItems = panel?.items || []
 
   return (
     <>
@@ -202,25 +212,29 @@ export default function SolicitudMaterialesExcelTable({
             </tr>
           </thead>
           <tbody>
-            {items.map((it, idx) => {
-              const ev = estadoValidacionItem(it, sol)
-              const desc = textoItemVisible(it)
-              const faltaInsumo = !it.insumo_id && (puedeValidar || destacarSinInsumo)
-              const just = previewPalabras(it.observacion_residente, 3)
-              const prov = etiquetaProveedorLinea(it)
-              const und = it.unidad || it.contexto_presupuesto?.unidad || ''
-              const cantTxt = `${fmtCant(it.cantidad)}${und ? ` ${und}` : ''}`
-              const valor = verEconomicos ? valorCompraLinea(it) : null
-              const valorTxt = verEconomicos ? (valor == null ? '—' : fmtMoney(valor)) : cantTxt
+            {filas.map((fila, idx) => {
+              const it = fila.items[0]
+              const ev = estadoFilaInsumo(fila.items, sol)
+              const desc = descripcionFilaInsumo(fila) || '—'
+              const descTitulo = fila.items.length > 1
+                ? `${desc} — pedido en ${fila.items.length} sectores`
+                : desc
+              const faltaInsumo = fila.items.length === 1 && !it.insumo_id && (puedeValidar || destacarSinInsumo)
+              const just = fila.variasJustificaciones
+                ? { visible: 'Varias…', completo: fila.justificacion }
+                : previewPalabras(fila.justificacion, 3)
+              const sinInsumo = fila.items.length === 1 && (it.sin_insumo || (!it.insumo_id && !it.es_recurrente))
+              const cantValor = textoCantidadJuntoValor(fila.cantidad, fila.unidad, fila.valor, verEconomicos)
               const grupoId = String(it.grupo_seleccion || '').trim()
-              const prevGrupo = String(items[idx - 1]?.grupo_seleccion || '').trim()
+              const prevGrupo = String(filas[idx - 1]?.items?.[0]?.grupo_seleccion || '').trim()
               const muestraGrupo = grupoId && grupoId !== prevGrupo
               const grupoItems = muestraGrupo
                 ? items.filter((row) => String(row.grupo_seleccion || '').trim() === grupoId)
                 : []
-              const marcada = Boolean(it.id != null && seleccion?.has(it.id))
+              const ids = fila.items.map((row) => row.id).filter((id) => id != null)
+              const marcada = ids.length > 0 && ids.every((id) => seleccion?.has(id))
               return (
-                <Fragment key={it.id ?? `row-${idx}`}>
+                <Fragment key={fila.key}>
                   {muestraGrupo && (
                     <tr>
                       <td
@@ -268,6 +282,7 @@ export default function SolicitudMaterialesExcelTable({
                   )}
                   <tr
                     style={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_H }}
+                    data-testid={fila.items.length > 1 ? 'linea-grupo-insumo' : 'linea-solicitud'}
                     onClick={() => onRowClick?.(it, idx)}
                     onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
@@ -280,17 +295,20 @@ export default function SolicitudMaterialesExcelTable({
                         <input
                           type="checkbox"
                           checked={marcada}
-                          disabled={it.id == null}
+                          disabled={ids.length === 0}
                           aria-label={`Seleccionar línea ${it.numero_linea ?? idx + 1}`}
-                          onChange={(e) => onToggleLinea?.(it.id, e.target.checked)}
+                          onChange={(e) => {
+                            const checked = e.target.checked
+                            ids.forEach((id) => onToggleLinea?.(id, checked))
+                          }}
                         />
                       </td>
                     )}
                     <td style={cellBase(ui)}>
-                      <Trunc title={it.capitulo || '—'}>{it.capitulo || '—'}</Trunc>
+                      <Trunc title={fila.capituloTitulo}>{fila.capitulo}</Trunc>
                     </td>
                     <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
-                      <Trunc title={desc}>{desc}</Trunc>
+                      <Trunc title={descTitulo}>{desc}</Trunc>
                     </td>
                     <td style={cellBase(ui)} data-testid="linea-justificacion">
                       {just.completo
@@ -299,14 +317,14 @@ export default function SolicitudMaterialesExcelTable({
                     </td>
                     <td style={{
                       ...cellBase(ui),
-                      color: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? '#92400e' : undefined,
-                      fontWeight: (it.sin_insumo || (!it.insumo_id && !it.es_recurrente)) ? 700 : 500,
+                      color: sinInsumo ? '#92400e' : undefined,
+                      fontWeight: sinInsumo ? 700 : 500,
                     }}
                     >
-                      <Trunc title={prov}>{prov}</Trunc>
+                      <Trunc title={fila.proveedorTitulo}>{fila.proveedor}</Trunc>
                     </td>
-                    <td style={cellBase(ui, { align: 'right', mono: true })}>
-                      <Trunc title={valorTxt}>{valorTxt}</Trunc>
+                    <td style={cellBase(ui, { align: 'right', mono: true })} data-testid="linea-cant-valor">
+                      <Trunc title={cantValor}>{cantValor}</Trunc>
                     </td>
                     <td
                       style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
@@ -317,7 +335,7 @@ export default function SolicitudMaterialesExcelTable({
                         title="Ubicación"
                         aria-label="Ver ubicación"
                         data-testid="linea-btn-ubicacion"
-                        onClick={() => setPanel({ tipo: 'ubicacion', id: it.id, item: it })}
+                        onClick={() => setPanel({ tipo: 'ubicacion', items: fila.items })}
                         style={{ ...ui.btnSecondary, padding: '2px 6px', minHeight: 0, height: 26, lineHeight: '22px' }}
                       >
                         📍
@@ -332,7 +350,7 @@ export default function SolicitudMaterialesExcelTable({
                         title="Saldos"
                         aria-label="Ver saldos"
                         data-testid="linea-btn-saldos"
-                        onClick={() => setPanel({ tipo: 'saldos', id: it.id, item: it })}
+                        onClick={() => setPanel({ tipo: 'saldos', items: fila.items })}
                         style={{ ...ui.btnSecondary, padding: '2px 6px', minHeight: 0, height: 26, lineHeight: '22px' }}
                       >
                         Σ
@@ -345,8 +363,8 @@ export default function SolicitudMaterialesExcelTable({
                       fontSize: 'var(--cc-xs)',
                     }}
                     >
-                      <Trunc>
-                        {ev === 'aprobado' ? 'Aprobado' : ev === 'rechazado' ? 'Rechazado' : 'Pendiente'}
+                      <Trunc title={ev === 'varios' ? 'Hay sectores en estados distintos' : etiquetaEstado(ev)}>
+                        {etiquetaEstado(ev)}
                       </Trunc>
                     </td>
                   </tr>
@@ -356,36 +374,62 @@ export default function SolicitudMaterialesExcelTable({
           </tbody>
         </table>
       </div>
-      {panel?.tipo === 'ubicacion' && panelItem && (
-        <PanelLinea titulo="Ubicación de la línea" onClose={() => setPanel(null)}>
-          <dl style={{ margin: 0, fontSize: 'var(--cc-sm)', display: 'grid', gridTemplateColumns: '110px 1fr', gap: '6px 8px' }}>
-            <dt style={{ color: ui.textMuted }}>Abscisa</dt>
-            <dd style={{ margin: 0 }}>{fmtAbscisasLinea(panelItem)}</dd>
-            <dt style={{ color: ui.textMuted }}>Tramo</dt>
-            <dd style={{ margin: 0 }}>{panelItem.tramo || panelItem.contexto_presupuesto?.tramo || '—'}</dd>
-            <dt style={{ color: ui.textMuted }}>PK-ID</dt>
-            <dd style={{ margin: 0 }}>{panelItem.pk_id || '—'}</dd>
-          </dl>
-          <div style={{ marginTop: 12 }} data-testid="linea-panel-mapa">
-            {panelItem.pk_id ? (
-              <AlmacenItemMapaPreview
-                t={t}
-                token={token}
-                contratoId={contratoId}
-                pkLabel={panelItem.pk_label || panelItem.pk_id}
-                height={220}
-                interactive
-                showBasemapToggle
-              />
-            ) : (
-              <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>Esta línea no tiene PK-ID para mostrar el mapa.</div>
-            )}
+      {panel?.tipo === 'ubicacion' && panelItems.length > 0 && (
+        <PanelLinea
+          titulo={panelItems.length > 1 ? 'Dónde se pidió' : 'Ubicación de la línea'}
+          onClose={() => setPanel(null)}
+        >
+          <div data-testid="linea-panel-sectores" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {panelItems.map((row) => {
+              const sector = detalleSectorLinea(row)
+              return (
+                <dl
+                  key={row.id ?? sector.pk}
+                  style={{ margin: 0, fontSize: 'var(--cc-sm)', display: 'grid', gridTemplateColumns: '110px 1fr', gap: '6px 8px' }}
+                >
+                  <dt style={{ color: ui.textMuted }}>Lugar</dt>
+                  <dd style={{ margin: 0 }}>{sector.lugar}</dd>
+                  <dt style={{ color: ui.textMuted }}>Abscisa</dt>
+                  <dd style={{ margin: 0 }}>{sector.abscisa}</dd>
+                  <dt style={{ color: ui.textMuted }}>PK-ID</dt>
+                  <dd style={{ margin: 0 }}>{sector.pk}</dd>
+                  <dt style={{ color: ui.textMuted }}>Cantidad</dt>
+                  <dd style={{ margin: 0 }}>{fmtCant(sector.cantidad)}{sector.unidad ? ` ${sector.unidad}` : ''}</dd>
+                </dl>
+              )
+            })}
           </div>
+          {panelItems.length === 1 && (
+            <div style={{ marginTop: 12 }} data-testid="linea-panel-mapa">
+              {panelItems[0].pk_id ? (
+                <AlmacenItemMapaPreview
+                  t={t}
+                  token={token}
+                  contratoId={contratoId}
+                  pkLabel={panelItems[0].pk_label || panelItems[0].pk_id}
+                  height={220}
+                  interactive
+                  showBasemapToggle
+                />
+              ) : (
+                <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>Esta línea no tiene PK-ID para mostrar el mapa.</div>
+              )}
+            </div>
+          )}
         </PanelLinea>
       )}
-      {panel?.tipo === 'saldos' && panelItem && (
-        <PanelLinea titulo="Saldos de la línea" onClose={() => setPanel(null)}>
-          <SaldosContenido item={panelItem} />
+      {panel?.tipo === 'saldos' && panelItems.length > 0 && (
+        <PanelLinea titulo={panelItems.length > 1 ? 'Saldos por sector' : 'Saldos de la línea'} onClose={() => setPanel(null)}>
+          {panelItems.map((row) => (
+            <div key={row.id ?? row.pk_id} style={{ marginBottom: panelItems.length > 1 ? 12 : 0 }}>
+              {panelItems.length > 1 && (
+                <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', marginBottom: 4 }}>
+                  {detalleSectorLinea(row).lugar} · {detalleSectorLinea(row).pk}
+                </div>
+              )}
+              <SaldosContenido item={row} />
+            </div>
+          ))}
         </PanelLinea>
       )}
     </>
