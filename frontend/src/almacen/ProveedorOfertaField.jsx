@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 /**
@@ -14,9 +15,11 @@ export default function ProveedorOfertaField({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const inputRef = useRef(null)
   const [ofertas, setOfertas] = useState([])
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState(null)
 
   useEffect(() => {
     if (!insumoId) {
@@ -63,6 +66,35 @@ export default function ProveedorOfertaField({
     setOpen(false)
   }
 
+  const updateMenuPos = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const width = Math.max(rect.width, 220)
+    const estimated = Math.min(180, 36 + filtradas.length * 44)
+    const spaceBelow = window.innerHeight - rect.bottom
+    const openUp = spaceBelow < estimated + 8 && rect.top > estimated + 8
+    setMenuPos({
+      top: openUp ? Math.max(8, rect.top - estimated - 2) : rect.bottom + 2,
+      left: rect.left,
+      width,
+    })
+  }, [filtradas.length])
+
+  useLayoutEffect(() => {
+    if (!open || unica) {
+      setMenuPos(null)
+      return undefined
+    }
+    updateMenuPos()
+    window.addEventListener('scroll', updateMenuPos, true)
+    window.addEventListener('resize', updateMenuPos)
+    return () => {
+      window.removeEventListener('scroll', updateMenuPos, true)
+      window.removeEventListener('resize', updateMenuPos)
+    }
+  }, [open, unica, updateMenuPos])
+
   const etiquetaValor = (o) => {
     if (!verEconomicos || o?.valor == null || o.valor === '') return null
     return fmtMoney(o.valor)
@@ -71,6 +103,7 @@ export default function ProveedorOfertaField({
   return (
     <div style={{ position: 'relative', minWidth: 0 }} data-testid="revision-linea-proveedor">
       <input
+        ref={inputRef}
         style={{ ...ui.input, width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: 'var(--cc-xs)', height: 30 }}
         value={q}
         disabled={disabled || !insumoId}
@@ -93,17 +126,19 @@ export default function ProveedorOfertaField({
           ].filter(Boolean).join(' · ')}
         </div>
       )}
-      {open && !unica && (
+      {open && !unica && menuPos && typeof document !== 'undefined' && createPortal(
         <div
+          data-testid="revision-linea-proveedor-lista"
           style={{
-            position: 'absolute',
-            zIndex: 5,
-            left: 0,
-            right: 0,
-            top: 32,
+            position: 'fixed',
+            zIndex: 100080,
+            top: menuPos.top,
+            left: menuPos.left,
+            width: menuPos.width,
             maxHeight: 180,
             overflowY: 'auto',
-            background: '#fff',
+            background: ui.card?.background || '#fff',
+            color: ui.text,
             border: `1px solid ${ui.textMuted}44`,
             borderRadius: 6,
             boxShadow: '0 8px 20px #0002',
@@ -125,6 +160,7 @@ export default function ProveedorOfertaField({
                 border: 'none',
                 borderBottom: `1px solid ${ui.textMuted}22`,
                 background: 'transparent',
+                color: ui.text,
                 cursor: 'pointer',
                 fontSize: 'var(--cc-xs)',
               }}
@@ -139,7 +175,8 @@ export default function ProveedorOfertaField({
               </div>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
