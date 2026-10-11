@@ -69,9 +69,11 @@ from pk_ids_csv import (
 from azure_blob_storage import (
     blob_exists,
     blob_path_from_url,
+    delete_blob,
     download_blob_bytes,
     path_ayuda_mapa_doc,
     path_ayuda_mapa_imagen,
+    path_ayuda_mapa_video,
     path_firma,
     path_guia_bloque,
     path_inicio_novedad,
@@ -81,6 +83,14 @@ from azure_blob_storage import (
     path_validacion_adjunto,
     sicoe_blob_path,
     upload_blob,
+)
+from mapa_capacitacion_video import (
+    ACCEPT_CONTENT_TYPES,
+    MAX_UPLOAD_BYTES,
+    VOLUMEN_FONDO_DEFAULT,
+    clamp_volumen,
+    listar_pistas_aprobadas,
+    procesar_video_con_musica,
 )
 from usuarios_notif_elegibilidad import (
     filtrar_usuarios_para_notificaciones_automaticas,
@@ -6238,7 +6248,13 @@ _MAPA_NAVEGACION_ID_LEGACY = {
 
 
 def _mapa_navegacion_entrada_vacia() -> Dict[str, Any]:
-    return {"descripcion": "", "imagenes": [], "videoUrl": ""}
+    return {
+        "descripcion": "",
+        "imagenes": [],
+        "videoUrl": "",
+        "videoMusicId": "",
+        "videoUpdatedAt": None,
+    }
 
 
 def _mapa_navegacion_normalizar_entrada(src: Any) -> Dict[str, Any]:
@@ -6259,6 +6275,8 @@ def _mapa_navegacion_normalizar_entrada(src: Any) -> Dict[str, Any]:
         "descripcion": str(src.get("descripcion") or "").strip(),
         "imagenes": imgs,
         "videoUrl": str(src.get("videoUrl") or src.get("video_url") or "").strip(),
+        "videoMusicId": str(src.get("videoMusicId") or src.get("video_music_id") or "").strip(),
+        "videoUpdatedAt": src.get("videoUpdatedAt") or src.get("video_updated_at") or None,
     }
 
 
@@ -6268,6 +6286,16 @@ def _mapa_navegacion_entrada_pendiente(entrada: Dict[str, Any]) -> bool:
         and not (entrada.get("imagenes") or [])
         and not str(entrada.get("videoUrl") or "").strip()
     )
+
+
+def _mapa_navegacion_borrar_video_blob(video_url: str) -> None:
+    path = blob_path_from_url(video_url) or ""
+    if not path or "mapa-videos/" not in path:
+        return
+    try:
+        delete_blob(path, account_storage=False)
+    except Exception as exc:
+        _log_api.warning("ayuda mapa borrar video blob %s: %s", path, exc)
 
 
 def _mapa_navegacion_contenido_vacio() -> Dict[str, Any]:
@@ -6389,6 +6417,128 @@ async def ayuda_mapa_navegacion_imagen(
     contents = await file.read()
     url = _ayuda_mapa_subir_imagen(contents, file.content_type)
     return {"url": url}
+
+
+@app.get("/ayuda/mapa-navegacion/pistas")
+def ayuda_mapa_navegacion_pistas(current_user=Depends(get_current_user)):
+    """Catálogo de pistas de música aprobadas (libre de derechos / síntesis ClaraCore)."""
+    _ = current_user
+    return {
+        "pistas": listar_pistas_aprobadas(),
+        "volumen_default": VOLUMEN_FONDO_DEFAULT,
+    }
+
+
+@app.post("/ayuda/mapa-navegacion/video")
+async def ayuda_mapa_navegacion_video_upload(
+    tema_id: str = Form(...),
+    pista_id: str = Form(...),
+    volumen: float = Form(VOLUMEN_FONDO_DEFAULT),
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """
+    Carga un video de capacitación, lo comprime, mezcla una pista aprobada y
+    lo asocia a la tarjeta (tema_id). Solo Desarrollador.
+    """
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede cargar videos del mapa")
+    tid = str(tema_id or "").strip()
+    if tid not in _MAPA_NAVEGACION_MODULOS_IDS:
+        raise HTTPException(status_code=400, detail="tema_id no pertenece al catálogo del mapa")
+
+    filename = file.filename or "video.mp4"
+    ct = (file.content_type or "").split(";")[0].strip().lower()
+    if ct and ct not in ACCEPT_CONTENT_TYPES and not ct.startswith("video/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Formato no admitido. Use MP4, MOV, M4V o WebM (grabación de pantalla / iPad).",
+        )
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Archivo vacío.")
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El video supera el máximo de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+        )
+
+    try:
+        processed = procesar_video_con_musica(
+            contents,
+            filename=filename,
+            content_type=ct,
+            pista_id=pista_id,
+            volumen=clamp_volumen(volumen),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _log_api.warning("ayuda mapa procesar video: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo comprimir/mezclar el video. Intente de nuevo o con un archivo más corto.",
+        ) from exc
+
+    nombre = f"{uuid.uuid4().hex[:16]}.mp4"
+    blob_path = path_ayuda_mapa_video(tid, nombre)
+    try:
+        url = upload_blob(blob_path, processed, "video/mp4", overwrite=True, account_storage=False)
+    except Exception as exc:
+        _log_api.warning("ayuda mapa upload video %s: %s", blob_path, exc)
+        raise HTTPException(status_code=503, detail="No se pudo guardar el video en Azure Blob Storage.") from exc
+
+    # Publica la asociación en el documento del mapa (reemplaza URL anterior).
+    doc = _mapa_navegacion_leer_blob() or _mapa_navegacion_contenido_vacio()
+    prev = doc["modulos"].get(tid) or _mapa_navegacion_entrada_vacia()
+    old_url = str(prev.get("videoUrl") or "").strip()
+    if old_url and old_url != url:
+        _mapa_navegacion_borrar_video_blob(old_url)
+    doc["modulos"][tid] = {
+        **prev,
+        "videoUrl": url,
+        "videoMusicId": str(pista_id or "").strip().lower(),
+        "videoUpdatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    doc = _mapa_navegacion_escribir_blob(doc)
+    return {
+        "ok": True,
+        "url": url,
+        "tema_id": tid,
+        "pista_id": str(pista_id or "").strip().lower(),
+        "bytes": len(processed),
+        "contenido": doc,
+    }
+
+
+@app.delete("/ayuda/mapa-navegacion/video/{tema_id}")
+def ayuda_mapa_navegacion_video_delete(
+    tema_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Elimina el video asociado a una tarjeta. Solo Desarrollador."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede eliminar videos del mapa")
+    tid = str(tema_id or "").strip()
+    if tid not in _MAPA_NAVEGACION_MODULOS_IDS:
+        raise HTTPException(status_code=400, detail="tema_id no pertenece al catálogo del mapa")
+
+    doc = _mapa_navegacion_leer_blob() or _mapa_navegacion_contenido_vacio()
+    prev = doc["modulos"].get(tid) or _mapa_navegacion_entrada_vacia()
+    old_url = str(prev.get("videoUrl") or "").strip()
+    if old_url:
+        _mapa_navegacion_borrar_video_blob(old_url)
+    doc["modulos"][tid] = {
+        **prev,
+        "videoUrl": "",
+        "videoMusicId": "",
+        "videoUpdatedAt": None,
+    }
+    doc = _mapa_navegacion_escribir_blob(doc)
+    return {"ok": True, "tema_id": tid, "contenido": doc}
 
 
 # Listado ligero: SOLO columnas presentes en cualquier despliegue. Si pides columnas que aún no existen
