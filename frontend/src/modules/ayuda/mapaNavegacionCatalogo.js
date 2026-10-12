@@ -95,12 +95,20 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     orden: 7,
   },
   {
+    id: 'sicoe_asigna_item_cobro',
+    nombre: 'Asigna el ítem de cobro',
+    resumen: 'Asignación del ítem al registro y alertas de traslapo, vacíos y ubicación.',
+    icono: '🏷️',
+    grupo: 'sicoe_obra',
+    orden: 8,
+  },
+  {
     id: 'sicoe_visualiza_filtra',
     nombre: 'Visualiza y filtra tus registros',
     resumen: 'Vista por Reportes o Cantidades, filtros y panel dinámico SICOE.',
     icono: '🔍',
     grupo: 'sicoe_obra',
-    orden: 8,
+    orden: 9,
   },
   {
     id: 'sicoe_consulta_valida',
@@ -108,7 +116,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Consulta de registros y validación individual o masiva.',
     icono: '✅',
     grupo: 'sicoe_obra',
-    orden: 9,
+    orden: 10,
   },
   {
     id: 'sicoe_descarga_plantillas',
@@ -116,7 +124,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Descarga de información y plantillas de exportación.',
     icono: '📤',
     grupo: 'sicoe_obra',
-    orden: 10,
+    orden: 11,
   },
 
   // ── Informes ──────────────────────────────────────────────────────────────
@@ -126,7 +134,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Biblioteca de informes, tipos de formato y descarga.',
     icono: '📚',
     grupo: 'informes',
-    orden: 11,
+    orden: 12,
   },
   {
     id: 'informes_firmas_personalizacion',
@@ -134,7 +142,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Asignación de firmas, personalización de formatos y firma de documentos.',
     icono: '✍️',
     grupo: 'informes',
-    orden: 12,
+    orden: 13,
   },
 
   // ── Almacén ───────────────────────────────────────────────────────────────
@@ -144,7 +152,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Crear insumo y descargar/cargar plantillas.',
     icono: '📦',
     grupo: 'almacen',
-    orden: 13,
+    orden: 14,
   },
   {
     id: 'almacen_solicita_aprueba',
@@ -152,7 +160,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Nueva solicitud, borrador, aprobación de insumos y generación de OC.',
     icono: '🧾',
     grupo: 'almacen',
-    orden: 14,
+    orden: 15,
   },
   {
     id: 'almacen_mueve_obra',
@@ -160,7 +168,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Entradas, despachador, devoluciones y salidas.',
     icono: '🚚',
     grupo: 'almacen',
-    orden: 15,
+    orden: 16,
   },
   {
     id: 'almacen_consulta_inventario',
@@ -168,7 +176,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Inventario de materiales en almacén.',
     icono: '📊',
     grupo: 'almacen',
-    orden: 16,
+    orden: 17,
   },
 
   // ── Seguimiento ───────────────────────────────────────────────────────────
@@ -178,7 +186,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Calendario y nueva tarea.',
     icono: '📅',
     grupo: 'seguimiento',
-    orden: 17,
+    orden: 18,
   },
   {
     id: 'seg_constancia_digital',
@@ -186,7 +194,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Nueva acta, bitácora de obra y libro digital.',
     icono: '📓',
     grupo: 'seguimiento',
-    orden: 18,
+    orden: 19,
   },
 
   // ── Topografía ────────────────────────────────────────────────────────────
@@ -196,7 +204,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Biblioteca de puntos y creación de un nuevo punto.',
     icono: '📍',
     grupo: 'topografia',
-    orden: 19,
+    orden: 20,
   },
   {
     id: 'topo_poligonales_nivelacion',
@@ -204,7 +212,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Crear poligonal y circuito de nivelación.',
     icono: '📏',
     grupo: 'topografia',
-    orden: 20,
+    orden: 21,
   },
   {
     id: 'topo_diseno_entrega',
@@ -212,7 +220,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Estructura de diseño / diseño geométrico y carteras de vía.',
     icono: '🛣️',
     grupo: 'topografia',
-    orden: 21,
+    orden: 22,
   },
 ]
 

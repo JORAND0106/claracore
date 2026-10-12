@@ -10,6 +10,7 @@ IDS = frozenset({
     "ppto_autocad_graficos",
     "ppto_exporta_cierra",
     "sicoe_crear_reporte_registros",
+    "sicoe_asigna_item_cobro",
     "sicoe_visualiza_filtra",
     "sicoe_consulta_valida",
     "sicoe_descarga_plantillas",
@@ -96,8 +97,9 @@ def normalizar(raw):
     return base
 
 
-def test_mapa_navegacion_tiene_21_temas():
-    assert len(IDS) == 21
+def test_mapa_navegacion_tiene_22_temas():
+    assert len(IDS) == 22
+    assert "sicoe_asigna_item_cobro" in IDS
 
 
 def test_mapa_navegacion_normalizar_contrato():
@@ -113,7 +115,7 @@ def test_mapa_navegacion_normalizar_contrato():
         },
     })
     assert out["version"] == 2
-    assert len(out["modulos"]) == 21
+    assert len(out["modulos"]) == 22
     assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Crear reporte"
     assert out["modulos"]["sicoe_crear_reporte_registros"]["imagenes"] == [
         {"url": "https://x.png", "caption": "A"},

@@ -25,7 +25,7 @@ const NOMBRES_MODULO = [
 const CONTEO_POR_MODULO = {
   dashboard: 1,
   presupuesto: 5,
-  sicoe_obra: 4,
+  sicoe_obra: 5,
   informes: 2,
   almacen: 4,
   seguimiento: 2,
@@ -41,10 +41,10 @@ describe('mapaNavegacionCatalogo', () => {
     )
   })
 
-  it('agrupa 21 temas temáticos con ids únicos', () => {
-    assert.equal(MAPA_NAVEGACION_SUBTEMAS.length, 21)
+  it('agrupa 22 temas temáticos con ids únicos', () => {
+    assert.equal(MAPA_NAVEGACION_SUBTEMAS.length, 22)
     const ids = MAPA_NAVEGACION_SUBTEMAS.map((m) => m.id)
-    assert.equal(new Set(ids).size, 21)
+    assert.equal(new Set(ids).size, 22)
     const seccionIds = new Set(MAPA_NAVEGACION_SECCIONES.map((s) => s.id))
     for (const m of MAPA_NAVEGACION_SUBTEMAS) {
       assert.ok(seccionIds.has(m.grupo), `${m.id} grupo inválido`)
@@ -65,9 +65,32 @@ describe('mapaNavegacionCatalogo', () => {
     assert.equal(porId.ppto_arranca_versiona, 'Arranca y versiona tu presupuesto')
     assert.equal(porId.ppto_edita_consulta, 'Edita, consulta y valida registros')
     assert.equal(porId.sicoe_crear_reporte_registros, 'Crea tu reporte de cantidades')
+    assert.equal(porId.sicoe_asigna_item_cobro, 'Asigna el ítem de cobro')
     assert.equal(porId.almacen_mueve_obra, 'Mueve materiales en obra')
     assert.equal(porId.topo_diseno_entrega, 'Del diseño a la entrega')
     assert.equal(MAPA_SUBTEMA_CAPACITACION_RC, 'sicoe_crear_reporte_registros')
+  })
+
+  it('coloca Asigna el ítem de cobro en segunda posición de SICOE Obra', () => {
+    const sicoe = MAPA_NAVEGACION_SUBTEMAS.filter((m) => m.grupo === 'sicoe_obra')
+      .slice()
+      .sort((a, b) => a.orden - b.orden)
+    assert.equal(sicoe.length, 5)
+    assert.deepEqual(
+      sicoe.map((m) => m.id),
+      [
+        'sicoe_crear_reporte_registros',
+        'sicoe_asigna_item_cobro',
+        'sicoe_visualiza_filtra',
+        'sicoe_consulta_valida',
+        'sicoe_descarga_plantillas',
+      ],
+    )
+    assert.equal(
+      sicoe[1].resumen,
+      'Asignación del ítem al registro y alertas de traslapo, vacíos y ubicación.',
+    )
+    assert.ok(String(sicoe[1].icono || '').trim())
   })
 })
 
@@ -115,7 +138,7 @@ describe('fusionarMapaNavegacion', () => {
         },
       },
     })
-    assert.equal(vista.modulos.length, 21)
+    assert.equal(vista.modulos.length, 22)
     assert.equal(vista.grupos.length, 7)
     assert.deepEqual(vista.grupos.map((g) => g.label), NOMBRES_MODULO)
     const dash = vista.modulos.find((m) => m.id === 'dash_leer_indicadores')
@@ -123,19 +146,26 @@ describe('fusionarMapaNavegacion', () => {
     assert.equal(dash.contenidoPendiente, false)
     assert.ok(dash.resumen)
     const sicoe = vista.grupos.find((g) => g.id === 'sicoe_obra')
-    assert.equal(sicoe.modulos.length, 4)
+    assert.equal(sicoe.modulos.length, 5)
     assert.ok(sicoe.modulos.some((m) => m.id === MAPA_SUBTEMA_CAPACITACION_RC))
+    assert.equal(sicoe.modulos[1].id, 'sicoe_asigna_item_cobro')
+    assert.equal(sicoe.modulos[1].videoUrl, '')
   })
 })
 
 describe('contenidoEditableCompleto', () => {
-  it('garantiza las 21 claves del catálogo', () => {
+  it('garantiza las 22 claves del catálogo', () => {
     const doc = contenidoEditableCompleto({
-      modulos: { seg_constancia_digital: { descripcion: 'x' } },
+      modulos: {
+        seg_constancia_digital: { descripcion: 'x' },
+        sicoe_visualiza_filtra: { videoUrl: 'https://cdn/existente.mp4' },
+      },
     })
-    assert.equal(Object.keys(doc.modulos).length, 21)
+    assert.equal(Object.keys(doc.modulos).length, 22)
     assert.equal(doc.modulos.seg_constancia_digital.descripcion, 'x')
     assert.equal(doc.modulos.dash_leer_indicadores.descripcion, '')
     assert.equal(doc.modulos.sicoe_crear_reporte_registros.videoUrl, '')
+    assert.equal(doc.modulos.sicoe_asigna_item_cobro.videoUrl, '')
+    assert.equal(doc.modulos.sicoe_visualiza_filtra.videoUrl, 'https://cdn/existente.mp4')
   })
 })
