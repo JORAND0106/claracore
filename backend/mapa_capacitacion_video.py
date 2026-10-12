@@ -3,6 +3,9 @@ Procesamiento de videos de capacitación del mapa (compresión + música de fond
 
 Las pistas en assets/mapa_musica/ son síntesis procedurales propias de ClaraCore
 (licencia comercial interna). No se acepta música subida por el usuario.
+
+En Azure App Service (Oryx Python) ffmpeg/ffprobe NO vienen instalados: el deploy
+los empaqueta en backend/bin/ y startup.sh puede instalarlos en /home/site/tools.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _log = logging.getLogger("claracore.mapa_video")
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "mapa_musica"
+_LOCAL_BIN_DIR = Path(__file__).resolve().parent / "bin"
 
 # Volumen de fondo por defecto (moderado, no distrae).
 VOLUMEN_FONDO_DEFAULT = 0.18
@@ -71,6 +75,42 @@ MAPA_PISTAS_APROBADAS: List[Dict[str, Any]] = [
 ]
 
 
+def _candidate_bin_dirs() -> List[Path]:
+    env_home = (os.environ.get("FFMPEG_HOME") or "").strip()
+    dirs: List[Path] = []
+    if env_home:
+        dirs.append(Path(env_home))
+    dirs.extend([
+        _LOCAL_BIN_DIR,
+        Path("/home/site/wwwroot/bin"),
+        Path("/home/site/tools/ffmpeg"),
+    ])
+    # Deduplicar conservando orden
+    seen = set()
+    out: List[Path] = []
+    for d in dirs:
+        key = str(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return out
+
+
+def resolver_binario(nombre: str) -> Optional[str]:
+    """Resuelve ffmpeg/ffprobe desde binarios empaquetados o el PATH del sistema."""
+    for d in _candidate_bin_dirs():
+        cand = d / nombre
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    found = shutil.which(nombre)
+    return found
+
+
+def ffmpeg_disponible() -> bool:
+    return bool(resolver_binario("ffmpeg") and resolver_binario("ffprobe"))
+
+
 def listar_pistas_aprobadas() -> List[Dict[str, Any]]:
     out = []
     for p in MAPA_PISTAS_APROBADAS:
@@ -104,6 +144,64 @@ def clamp_volumen(v: Any) -> float:
     return max(VOLUMEN_FONDO_MIN, min(VOLUMEN_FONDO_MAX, x))
 
 
+def mensaje_error_procesamiento(exc: BaseException) -> str:
+    """Traduce excepciones técnicas a un motivo concreto para el Desarrollador."""
+    raw = str(exc or "").strip()
+    low = raw.lower()
+    if isinstance(exc, subprocess.TimeoutExpired) or "timed out" in low or "timeout" in low:
+        return (
+            "El procesamiento tardó demasiado en el servidor. "
+            "Pruebe con un video más corto o vuelva a intentar en unos minutos."
+        )
+    if "no space left" in low or "enospc" in low:
+        return (
+            "El servidor se quedó sin espacio temporal al procesar el video. "
+            "Intente de nuevo en unos minutos o con un archivo más corto."
+        )
+    if "ffmpeg/ffprobe no están disponibles" in raw or (
+        ("ffmpeg" in low or "ffprobe" in low) and ("no encontr" in low or "not found" in low or "no están" in low)
+    ):
+        return (
+            "El servidor no tiene la herramienta de compresión de video (ffmpeg). "
+            "Un administrador debe redesplegar el backend con ffmpeg empaquetado."
+        )
+    if "pista" in low and ("no está" in low or "no encontrada" in low):
+        return raw
+    if "supera el máximo" in low or "archivo de video vacío" in low:
+        return raw
+    if "ffmpeg falló" in low or "ffmpeg" in low:
+        # Extraer pista útil del stderr sin volcar todo el log.
+        hint = raw
+        for marker in (
+            "Invalid data found",
+            "does not contain any stream",
+            "No such file",
+            "Permission denied",
+            "Conversion failed",
+            "Error opening input",
+            "Unknown encoder",
+            "Cannot find a matching stream",
+        ):
+            if marker.lower() in low:
+                return (
+                    f"No se pudo procesar este archivo de video ({marker}). "
+                    "Exporte de nuevo a MP4 (H.264) desde Canva o el iPad e intente otra vez."
+                )
+        # Truncar detalle técnico
+        short = hint.replace("\n", " ").strip()
+        if len(short) > 280:
+            short = short[:277] + "…"
+        return f"Falló la compresión o la mezcla de música: {short}"
+    if "no generó un video válido" in low:
+        return "El procesamiento terminó pero no generó un video válido. Intente con otro archivo MP4."
+    if raw:
+        short = raw.replace("\n", " ").strip()
+        if len(short) > 240:
+            short = short[:237] + "…"
+        return f"No se pudo procesar el video: {short}"
+    return "No se pudo comprimir ni mezclar el video. Intente de nuevo."
+
+
 def _run(cmd: List[str], timeout: int = 600) -> None:
     proc = subprocess.run(
         cmd,
@@ -118,15 +216,19 @@ def _run(cmd: List[str], timeout: int = 600) -> None:
 
 
 def _ffprobe_json(path: str) -> Dict[str, Any]:
+    ffprobe = resolver_binario("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffmpeg/ffprobe no están disponibles en el servidor.")
     cmd = [
-        "ffprobe", "-v", "error",
+        ffprobe, "-v", "error",
         "-print_format", "json",
         "-show_format", "-show_streams",
         path,
     ]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if proc.returncode != 0:
-        raise RuntimeError("No se pudo leer el video con ffprobe.")
+        err = (proc.stderr or b"").decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(f"No se pudo leer el video con ffprobe: {err or 'archivo ilegible'}")
     return json.loads(proc.stdout.decode("utf-8") or "{}")
 
 
@@ -183,7 +285,9 @@ def procesar_video_con_musica(
     vol = clamp_volumen(volumen)
     ext = extension_permitida(filename, content_type)
 
-    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+    ffmpeg = resolver_binario("ffmpeg")
+    ffprobe = resolver_binario("ffprobe")
+    if not ffmpeg or not ffprobe:
         raise RuntimeError("ffmpeg/ffprobe no están disponibles en el servidor.")
 
     with tempfile.TemporaryDirectory(prefix="mapa_cap_") as tmp:
@@ -198,14 +302,24 @@ def procesar_video_con_musica(
         except Exception as exc:
             _log.warning("ffprobe audio check: %s", exc)
 
+        # Duración del video para acotar la música (evita buffers infinitos con -stream_loop).
+        dur = 0.0
+        try:
+            dur = duracion_segundos(str(src))
+        except Exception as exc:
+            _log.warning("ffprobe duración: %s", exc)
+        if dur <= 0:
+            dur = 1.0
+        # Margen mínimo para fade-out / contenedor.
+        dur_out = max(dur, 0.5)
+
         # Compresión orientada a grabaciones de pantalla: límite de ancho + CRF
         # que preserva texto; fps acotado; yuv420p + AAC para Safari.
         video_filters = (
-            "scale='min(1280,iw)':-2:flags=lanczos,"
+            "scale=w='min(1280,iw)':h=-2:flags=lanczos,"
             "fps=20"
         )
 
-        # -stream_loop -1 cicla la pista si el video es más largo.
         if has_audio:
             filter_complex = (
                 f"[0:a]volume=0.05,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[va];"
@@ -219,8 +333,10 @@ def procesar_video_con_musica(
                 f"afade=t=in:st=0:d=1.2[aout]"
             )
 
+        # -stream_loop -1 cicla la pista; -t limita la salida a la duración del video
+        # (más fiable que solo -shortest con filter_complex + loop infinito).
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg, "-y",
             "-i", str(src),
             "-stream_loop", "-1",
             "-i", str(pista_path),
@@ -235,7 +351,7 @@ def procesar_video_con_musica(
             "-c:a", "aac",
             "-b:a", "128k",
             "-movflags", "+faststart",
-            "-shortest",
+            "-t", f"{dur_out:.3f}",
             str(out),
         ]
         _run(cmd, timeout=900)

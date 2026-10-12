@@ -16,6 +16,29 @@
 set -e
 PORT="${PORT:-8000}"
 WORKERS="${WEB_CONCURRENCY:-1}"
+
+# ffmpeg/ffprobe: necesarios para comprimir y mezclar videos del mapa de capacitaciones.
+# Azure App Service (Oryx Python) no los incluye. Preferir binarios empaquetados en
+# el deploy (wwwroot/bin); si faltan, instalar una vez en /home/site/tools (persistente).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WWWROOT_BIN="${SCRIPT_DIR}/bin"
+TOOLS_FFMPEG="${FFMPEG_HOME:-/home/site/tools/ffmpeg}"
+if [[ -x "${WWWROOT_BIN}/ffmpeg" && -x "${WWWROOT_BIN}/ffprobe" ]]; then
+  export PATH="${WWWROOT_BIN}:$PATH"
+elif [[ -x "${TOOLS_FFMPEG}/ffmpeg" && -x "${TOOLS_FFMPEG}/ffprobe" ]]; then
+  export PATH="${TOOLS_FFMPEG}:$PATH"
+elif [[ -x /usr/bin/ffmpeg && -x /usr/bin/ffprobe ]]; then
+  :
+else
+  echo "startup: ffmpeg no encontrado; intentando descarga estática en ${TOOLS_FFMPEG}"
+  mkdir -p "${TOOLS_FFMPEG}"
+  if FFMPEG_DEST_DIR="${TOOLS_FFMPEG}" bash "${SCRIPT_DIR}/scripts/fetch_ffmpeg_static.sh"; then
+    export PATH="${TOOLS_FFMPEG}:$PATH"
+  else
+    echo "startup: ADVERTENCIA — no se pudo instalar ffmpeg; la carga de videos del mapa fallará" >&2
+  fi
+fi
+
 exec gunicorn main:app \
   --workers "${WORKERS}" \
   --worker-class uvicorn.workers.UvicornWorker \

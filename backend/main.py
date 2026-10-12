@@ -89,7 +89,9 @@ from mapa_capacitacion_video import (
     MAX_UPLOAD_BYTES,
     VOLUMEN_FONDO_DEFAULT,
     clamp_volumen,
+    ffmpeg_disponible,
     listar_pistas_aprobadas,
+    mensaje_error_procesamiento,
     procesar_video_con_musica,
 )
 from usuarios_notif_elegibilidad import (
@@ -6426,6 +6428,7 @@ def ayuda_mapa_navegacion_pistas(current_user=Depends(get_current_user)):
     return {
         "pistas": listar_pistas_aprobadas(),
         "volumen_default": VOLUMEN_FONDO_DEFAULT,
+        "ffmpeg_disponible": ffmpeg_disponible(),
     }
 
 
@@ -6477,11 +6480,11 @@ async def ayuda_mapa_navegacion_video_upload(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        _log_api.warning("ayuda mapa procesar video: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail="No se pudo comprimir/mezclar el video. Intente de nuevo o con un archivo más corto.",
-        ) from exc
+        detalle = mensaje_error_procesamiento(exc)
+        _log_api.warning("ayuda mapa procesar video: %s | usuario=%s", exc, detalle)
+        # 503 si falta la herramienta del servidor; 422 si el archivo no se pudo procesar.
+        status = 503 if "herramienta de compresión" in detalle else 500
+        raise HTTPException(status_code=status, detail=detalle) from exc
 
     nombre = f"{uuid.uuid4().hex[:16]}.mp4"
     blob_path = path_ayuda_mapa_video(tid, nombre)
