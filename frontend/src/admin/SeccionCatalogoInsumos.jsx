@@ -27,6 +27,7 @@ import CatalogoCotizacionAutocomplete from './CatalogoCotizacionAutocomplete'
 import {
   applyCaptureToPar,
   applyPdfReplace,
+  destinoPreviewCotizacion,
   backfillGanadoraProveedor,
   buildParFromCapture,
   collectPdfFilesFromPares,
@@ -191,15 +192,15 @@ function IconEye() {
   )
 }
 
-function AttachmentPreviewModal({ file, fileName, onClose, ui, t }) {
+function AttachmentPreviewModal({ file, fileName, loading, error, onClose, ui, t }) {
   const url = useMemo(() => {
-    if (!file) return null
+    if (!file || loading) return null
     try {
       return URL.createObjectURL(file)
     } catch {
       return null
     }
-  }, [file])
+  }, [file, loading])
 
   useEffect(() => () => {
     if (url) URL.revokeObjectURL(url)
@@ -208,10 +209,14 @@ function AttachmentPreviewModal({ file, fileName, onClose, ui, t }) {
   const name = file?.name || fileName || 'Adjunto'
   const isPdf = (file?.type || '').includes('pdf') || /\.pdf$/i.test(name)
   const isImage = (file?.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(name)
+  const aviso = error || (!loading && !url
+    ? 'No se puede previsualizar esta cotización. El archivo no está disponible. Vuelva a adjuntarlo.'
+    : '')
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 10040, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+      data-testid="cotizacion-preview-modal"
+      style={{ position: 'fixed', inset: 0, zIndex: 100200, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
       onClick={onClose}
     >
       <div
@@ -223,8 +228,10 @@ function AttachmentPreviewModal({ file, fileName, onClose, ui, t }) {
           <button type="button" onClick={onClose} style={{ border: `1px solid ${t.border}`, background: t.inputBg, color: t.text, borderRadius: 8, padding: '6px 10px', cursor: 'pointer' }}>Cerrar</button>
         </div>
         <div style={{ flex: 1, minHeight: 0, background: ui.dark ? '#0a1628' : '#f1f5f9' }}>
-          {!url ? (
-            <div style={{ padding: 24, color: t.textMuted }}>No hay archivo local para previsualizar. Adjunte el PDF o imagen con el clip.</div>
+          {loading ? (
+            <div style={{ padding: 24, color: t.text }}>Abriendo la cotización…</div>
+          ) : aviso ? (
+            <div data-testid="cotizacion-preview-aviso" style={{ padding: 24, color: t.text, lineHeight: 1.45 }}>{aviso}</div>
           ) : isPdf ? (
             <iframe title={name} src={url} style={{ width: '100%', height: '100%', border: 'none' }} />
           ) : isImage ? (
@@ -232,7 +239,7 @@ function AttachmentPreviewModal({ file, fileName, onClose, ui, t }) {
               <img src={url} alt={name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
             </div>
           ) : (
-            <div style={{ padding: 24, color: t.textMuted }}>Tipo de archivo no previsualizable en plataforma. Adjunto: {name}</div>
+            <div style={{ padding: 24, color: t.text }}>No se puede mostrar este tipo de archivo. Adjunto: {name}</div>
           )}
         </div>
       </div>
@@ -312,10 +319,13 @@ function CotizacionClipBtn({ file, fileName, pdfHistorial, onPick, onPreview, t,
       {label ? (
         <button
           type="button"
-          title="Ver adjunto vigente (sin descargar)"
+          data-testid="cotizacion-preview-ojo"
+          title="Ver adjunto vigente"
           aria-label="Ver adjunto"
-          disabled={disabled || !file}
-          onClick={() => onPreview?.({ file, fileName: label })}
+          onClick={(e) => {
+            e.stopPropagation()
+            onPreview?.({ file, fileName: label })
+          }}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -326,9 +336,8 @@ function CotizacionClipBtn({ file, fileName, pdfHistorial, onPick, onPreview, t,
             borderRadius: 6,
             border: `1px solid ${t.border}`,
             background: t.inputBg,
-            color: file ? t.primary : t.textMuted,
-            cursor: (!file || disabled) ? 'not-allowed' : 'pointer',
-            opacity: file ? 1 : 0.45,
+            color: t.primary,
+            cursor: 'pointer',
             flexShrink: 0,
           }}
         >
@@ -901,7 +910,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [historial, setHistorial] = useState(null)
   const [modalFaltantes, setModalFaltantes] = useState([])
   const [modalRuleErrors, setModalRuleErrors] = useState([])
-  const [previewAdjunto, setPreviewAdjunto] = useState(null) // { file, fileName }
+  const [previewAdjunto, setPreviewAdjunto] = useState(null) // { file, fileName, loading, error }
+  const previewSeq = useRef(0)
   const csvRef = useRef(null)
   const grillaReq = useRef(0)
   const loadingRef = useRef(false)
@@ -944,6 +954,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setConsumoNegociado(null)
     setModalFaltantes([])
     setModalRuleErrors([])
+    previewSeq.current += 1
     setPreviewAdjunto(null)
     setSelectedParId(null)
     formBaselineRef.current = snapshotForm(EMPTY_FORM)
@@ -1418,6 +1429,43 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       }
       return next
     })
+  }
+
+  const cerrarPreviewCotizacion = () => {
+    previewSeq.current += 1
+    setPreviewAdjunto(null)
+  }
+
+  const abrirPreviewCotizacion = async ({ file, fileName, prefer }) => {
+    const seq = ++previewSeq.current
+    const destino = destinoPreviewCotizacion({ file, fileName, insumoId: editId })
+    if (destino.modo === 'local') {
+      setPreviewAdjunto({ file, fileName: destino.nombre, loading: false, error: '' })
+      return
+    }
+    if (destino.modo !== 'guardada' || !api) {
+      setPreviewAdjunto({
+        file: null,
+        fileName: destino.nombre,
+        loading: false,
+        error: destino.mensaje || 'No se puede previsualizar esta cotización. El archivo no está disponible. Vuelva a adjuntarlo.',
+      })
+      return
+    }
+    setPreviewAdjunto({ file: null, fileName: destino.nombre, loading: true, error: '' })
+    try {
+      const got = await api.previewCotizacionGuardada(editId, destino.nombre, { prefer })
+      if (previewSeq.current !== seq) return
+      setPreviewAdjunto({ file: got, fileName: got?.name || destino.nombre, loading: false, error: '' })
+    } catch (err) {
+      if (previewSeq.current !== seq) return
+      setPreviewAdjunto({
+        file: null,
+        fileName: destino.nombre,
+        loading: false,
+        error: err?.message || 'No se pudo abrir el PDF de esta cotización.',
+      })
+    }
   }
 
   const assignPdfToLado = (pairId, lado, file) => {
@@ -3031,7 +3079,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                   fileName={par.insumo?.pdf_nombre}
                                   pdfHistorial={par.insumo?.pdf_historial}
                                   onPick={(file) => assignPdfToLado(par.id, 'insumo', file)}
-                                  onPreview={setPreviewAdjunto}
+                                  onPreview={(payload) => abrirPreviewCotizacion({
+                                    ...payload,
+                                    prefer: par.es_ganadora ? 'ganadora' : 'soporte',
+                                  })}
                                 />
                                 {win && par.insumo?.pdf && (
                                   <IconActionBtn title={ocrBusy ? 'OCR…' : 'OCR'} disabled={ocrBusy || busy} t={t} onClick={() => runOcr(par.id)}>
@@ -3063,7 +3114,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                 fileName={par.no_previsto?.pdf_nombre}
                                 pdfHistorial={par.no_previsto?.pdf_historial}
                                 onPick={(file) => assignPdfToLado(par.id, 'no_previsto', file)}
-                                onPreview={setPreviewAdjunto}
+                                onPreview={(payload) => abrirPreviewCotizacion({ ...payload, prefer: 'soporte' })}
                                 dropHint="Arrastre el PDF de No Previsto aquí"
                               />
                             </td>
@@ -3101,7 +3152,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         <AttachmentPreviewModal
           file={previewAdjunto.file}
           fileName={previewAdjunto.fileName}
-          onClose={() => setPreviewAdjunto(null)}
+          loading={previewAdjunto.loading}
+          error={previewAdjunto.error}
+          onClose={cerrarPreviewCotizacion}
           ui={ui}
           t={t}
         />

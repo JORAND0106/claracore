@@ -38,7 +38,7 @@ from almacen_insumos_service import (
     sync_proveedor_contacto,
     tributos_tienen_datos,
 )
-from almacen_service import _sb, _to_float, _upload_soporte, download_soporte
+from almacen_service import _safe_filename, _sb, _to_float, _upload_soporte, download_soporte
 from catalogo_insumos_grilla import (
     GRILLA_TABLA_SELECT,
     GRILLA_VISTA_SELECT,
@@ -859,6 +859,133 @@ def resolve_cotizacion_by_numero(
         "pdf": pdf,
         "source_insumo_id": best.get("insumo_id"),
     }
+
+
+_MSG_PDF_COTIZACION_NO_DISPONIBLE = (
+    "No se encontró el PDF de esta cotización. "
+    "Vuelva a adjuntarlo si el archivo ya no está disponible."
+)
+
+
+def _nombres_cotizacion_equivalentes(pedido: str, guardado: str) -> bool:
+    """El JSON guarda el nombre original; el blob guarda el nombre saneado."""
+    a = (pedido or "").strip()
+    b = (guardado or "").strip()
+    if not a or not b:
+        return False
+    if a.casefold() == b.casefold():
+        return True
+    safe_a = _safe_filename(a)
+    safe_b = _safe_filename(b)
+    return (
+        safe_a.casefold() == b.casefold()
+        or a.casefold() == safe_b.casefold()
+        or safe_a.casefold() == safe_b.casefold()
+    )
+
+
+def resolver_blob_cotizacion_insumo(
+    row: Optional[dict],
+    soportes: Optional[list],
+    nombre: str,
+    *,
+    prefer: str = "soporte",
+) -> dict:
+    """
+    Ubica el blob de una cotización del insumo por el nombre que ve el usuario.
+
+    La cotización ganadora de insumo vive en el propio insumo. El resto
+    (otras filas y todo No Previsto) vive en almacen_insumo_cotizacion_soporte.
+    """
+    pedido = (nombre or "").strip()
+    if not pedido:
+        raise ValueError(_MSG_PDF_COTIZACION_NO_DISPONIBLE)
+
+    ganadora = None
+    if row and row.get("soporte_pdf_blob_path") and _nombres_cotizacion_equivalentes(
+        pedido, row.get("soporte_pdf_nombre") or ""
+    ):
+        ganadora = {
+            "kind": "ganadora",
+            "blob_path": row["soporte_pdf_blob_path"],
+            "nombre": (row.get("soporte_pdf_nombre") or pedido).strip() or pedido,
+        }
+
+    candidatos = [
+        s for s in (soportes or [])
+        if s and s.get("blob_path") and _nombres_cotizacion_equivalentes(pedido, s.get("nombre") or "")
+    ]
+    soporte = None
+    if candidatos:
+        best = max(candidatos, key=lambda s: int(s.get("id") or 0))
+        soporte = {
+            "kind": "soporte",
+            "blob_path": best["blob_path"],
+            "nombre": (best.get("nombre") or pedido).strip() or pedido,
+            "soporte_id": int(best["id"]) if best.get("id") not in (None, "") else None,
+        }
+
+    if (prefer or "").strip().lower() == "ganadora" and ganadora:
+        return ganadora
+    if soporte:
+        return soporte
+    if ganadora:
+        return ganadora
+    raise ValueError(_MSG_PDF_COTIZACION_NO_DISPONIBLE)
+
+
+def _filename_header(nombre: str) -> str:
+    """Los encabezados HTTP van en latin-1; un nombre con tildes no puede romper la vista."""
+    raw = (nombre or "cotizacion.pdf").replace('"', "").replace("\\", "").replace("\r", "").replace("\n", "").strip()
+    raw = raw or "cotizacion.pdf"
+    try:
+        raw.encode("latin-1")
+        return raw
+    except UnicodeEncodeError:
+        ascii_name = raw.encode("ascii", "ignore").decode("ascii").strip(" .") or "cotizacion"
+        if raw.lower().endswith(".pdf") and not ascii_name.lower().endswith(".pdf"):
+            ascii_name = f"{ascii_name}.pdf"
+        return ascii_name or "cotizacion.pdf"
+
+
+def download_cotizacion_pdf_de_insumo(
+    contrato_id: int,
+    insumo_id: int,
+    nombre: str,
+    *,
+    prefer: str = "soporte",
+) -> Tuple[bytes, str, str]:
+    """Descarga el PDF de una fila del insumo. Quien puede ver el insumo puede abrirlo."""
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select("id, contrato_id, soporte_pdf_blob_path, soporte_pdf_nombre")
+        .eq("id", int(insumo_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Insumo no encontrado.")
+    soportes = (
+        sb.table("almacen_insumo_cotizacion_soporte")
+        .select("id, insumo_id, nombre, blob_path")
+        .eq("insumo_id", int(insumo_id))
+        .execute()
+        .data
+        or []
+    )
+    located = resolver_blob_cotizacion_insumo(rows[0], soportes, nombre, prefer=prefer)
+    try:
+        data, mime = download_soporte(located["blob_path"])
+    except Exception as exc:
+        raise ValueError(_MSG_PDF_COTIZACION_NO_DISPONIBLE) from exc
+    if not data:
+        raise ValueError(_MSG_PDF_COTIZACION_NO_DISPONIBLE)
+    nombre_out = _filename_header(located.get("nombre") or nombre or "cotizacion.pdf")
+    return data, mime or "application/pdf", nombre_out
 
 
 def download_cotizacion_pdf(

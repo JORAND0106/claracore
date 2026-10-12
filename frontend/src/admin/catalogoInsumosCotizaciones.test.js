@@ -28,8 +28,12 @@ import {
   validateCaptureForEnviar,
   validateGuardarInsumo,
   applyPdfReplace,
+  destinoPreviewCotizacion,
   fileFromDataTransfer,
+  MENSAJE_PREVIEW_SIN_ARCHIVO,
+  MENSAJE_PREVIEW_SIN_GUARDAR,
 } from './catalogoInsumosCotizaciones.js'
+import { readFileSync } from 'node:fs'
 
 const baseCapture = {
   razon_social: 'A',
@@ -586,5 +590,45 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     })
     assert.equal(updated.insumo.pdf?.name, 'cot-ins.pdf')
     assert.equal(updated.no_previsto.pdf?.name, 'cot-np.pdf')
+  })
+})
+
+describe('previsualización del PDF de cotización', () => {
+  it('abre el archivo local antes de guardar', () => {
+    const file = new File([new Uint8Array([1])], 'nueva.pdf', { type: 'application/pdf' })
+    const destino = destinoPreviewCotizacion({ file, fileName: 'otra.pdf', insumoId: 9 })
+    assert.equal(destino.modo, 'local')
+    assert.equal(destino.nombre, 'nueva.pdf')
+  })
+
+  it('pide el PDF guardado al reabrir el insumo', () => {
+    const destino = destinoPreviewCotizacion({ file: null, fileName: 'Mi cotizacion.pdf', insumoId: 12 })
+    assert.equal(destino.modo, 'guardada')
+    assert.equal(destino.nombre, 'Mi cotizacion.pdf')
+    assert.equal(destino.insumoId, 12)
+  })
+
+  it('avisa si solo hay nombre y el insumo todavía no existe', () => {
+    const destino = destinoPreviewCotizacion({ fileName: 'borrador.pdf' })
+    assert.equal(destino.modo, 'ausente')
+    assert.equal(destino.mensaje, MENSAJE_PREVIEW_SIN_GUARDAR)
+  })
+
+  it('avisa si no hay archivo ni nombre', () => {
+    const destino = destinoPreviewCotizacion({})
+    assert.equal(destino.modo, 'ausente')
+    assert.equal(destino.mensaje, MENSAJE_PREVIEW_SIN_ARCHIVO)
+  })
+
+  it('el ojo no queda inhabilitado por falta de File y cubre ambos lados', () => {
+    const ui = readFileSync(new URL('./SeccionCatalogoInsumos.jsx', import.meta.url), 'utf8')
+    const api = readFileSync(new URL('./catalogoInsumosApi.js', import.meta.url), 'utf8')
+    assert.equal(ui.includes('disabled={disabled || !file}'), false)
+    assert.equal(ui.includes('data-testid="cotizacion-preview-ojo"'), true)
+    assert.equal(ui.includes("prefer: par.es_ganadora ? 'ganadora' : 'soporte'"), true)
+    assert.equal(ui.includes("prefer: 'soporte'"), true)
+    assert.equal(ui.includes('zIndex: 100200'), true)
+    assert.equal(ui.includes('cotizacion-preview-aviso'), true)
+    assert.equal(api.includes('/cotizacion-pdf?'), true)
   })
 })
