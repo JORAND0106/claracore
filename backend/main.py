@@ -6172,6 +6172,7 @@ _MAPA_NAVEGACION_MODULOS_IDS = frozenset({
     "ppto_exporta_cierra",
     # SICOE Obra
     "sicoe_crear_reporte_registros",
+    "sicoe_asigna_item_cobro",
     "sicoe_visualiza_filtra",
     "sicoe_consulta_valida",
     "sicoe_descarga_plantillas",
