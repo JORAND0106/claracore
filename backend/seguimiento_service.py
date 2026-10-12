@@ -3898,6 +3898,12 @@ def actualizar_estado_gestion(
         if not fv:
             raise ValueError("Indique la nueva fecha de vencimiento para reprogramar")
         hoy = _now_bogota().date()
+        try:
+            from seguimiento_tarea_partes import marcar_reprogramacion, asegurar_fecha_inicial
+            asegurar_fecha_inicial(sb, item)
+            marcar_reprogramacion(sb, item, fv)
+        except Exception as exc:
+            _log.warning("flags reprogramación item=%s: %s", item_id, exc)
         patch = {
             "estado_gestion": "reprogramado",
             "fecha_vencimiento": fv.isoformat(),
@@ -3924,6 +3930,12 @@ def actualizar_estado_gestion(
             "fecha_vencimiento": fv.isoformat(),
             "fecha_anterior": item.get("fecha_vencimiento"),
         })
+        if item.get("padre_id"):
+            try:
+                from seguimiento_tarea_partes import sincronizar_madre_desde_partes
+                sincronizar_madre_desde_partes(sb, int(item["padre_id"]))
+            except Exception:
+                pass
         return get_item(sb, item_id)
 
     patch = {"estado_gestion": estado, "updated_at": _now_utc().isoformat()}
@@ -3954,6 +3966,20 @@ def actualizar_estado_gestion(
     # Primera acción de gestión sobre un compromiso del acta → hora de inicio.
     if (item.get("origen") or "").strip().lower() == "compromiso" and item.get("acta_id"):
         _maybe_set_acta_hora_inicio(sb, int(item["acta_id"]))
+    # Calificación automática al cerrar/vencer (no recalifica si ya hay nota).
+    if estado in ("cumplido", "parcial", "vencido"):
+        try:
+            from seguimiento_tarea_partes import aplicar_calificacion_si_corresponde, asegurar_fecha_inicial
+            asegurar_fecha_inicial(sb, item)
+            aplicar_calificacion_si_corresponde(sb, int(item_id))
+        except Exception as exc:
+            _log.warning("calificación item=%s: %s", item_id, exc)
+    if item.get("padre_id"):
+        try:
+            from seguimiento_tarea_partes import sincronizar_madre_desde_partes
+            sincronizar_madre_desde_partes(sb, int(item["padre_id"]))
+        except Exception:
+            pass
     return get_item(sb, item_id)
 
 
@@ -4532,6 +4558,7 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
         "contrato_id": int(contrato_id),
         "fecha_vencimiento": fv.isoformat() if fv else None,
         "hora_vencimiento": hora,
+        "fecha_vencimiento_inicial": fv.isoformat() if fv else None,
         "consecutivo": consec,
         "relacion_destinatario": relacion,
         "referido_a_id": referido_id,
@@ -4540,10 +4567,28 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
         "imagenes": imagenes,
         "updated_at": _now_utc().isoformat(),
     }
-    ins = sb.table("seguimiento_item").insert(row).execute().data
+    try:
+        ins = sb.table("seguimiento_item").insert(row).execute().data
+    except Exception as exc:
+        if "fecha_vencimiento_inicial" in str(exc).lower():
+            row.pop("fecha_vencimiento_inicial", None)
+            ins = sb.table("seguimiento_item").insert(row).execute().data
+        else:
+            raise
     if not ins:
         raise ValueError("No se pudo crear la tarea")
     item = ins[0]
+    # Si el cliente envía partes[] al crear, materializarlas (madre sin checklist).
+    partes_in = data.get("partes") if isinstance(data.get("partes"), list) else []
+    if partes_in:
+        try:
+            from seguimiento_tarea_partes import crear_parte
+            for p in partes_in:
+                if not isinstance(p, dict):
+                    continue
+                crear_parte(sb, int(item["id"]), p, user_id, current_user=None)
+        except Exception as exc:
+            _log.warning("crear partes iniciales tarea=%s: %s", item.get("id"), exc)
     _registrar_evento(
         sb,
         int(item["id"]),
@@ -4845,6 +4890,18 @@ def actualizar_estado_asignado(
     _notificar_delegante_cumplido_total(
         sb, item_after, actor_id=user_id, prev_estado=prev_global, new_estado=new_global,
     )
+    if new_global in ("cumplido", "parcial", "vencido"):
+        try:
+            from seguimiento_tarea_partes import aplicar_calificacion_si_corresponde
+            aplicar_calificacion_si_corresponde(sb, int(item_id))
+        except Exception as exc:
+            _log.warning("calificación tras asignado item=%s: %s", item_id, exc)
+    if item.get("padre_id"):
+        try:
+            from seguimiento_tarea_partes import sincronizar_madre_desde_partes
+            sincronizar_madre_desde_partes(sb, int(item["padre_id"]))
+        except Exception:
+            pass
     return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
@@ -4935,6 +4992,16 @@ def get_item_detalle(
 ) -> dict:
     item = get_item(sb, item_id)
     iid = int(item["id"])
+    # Migración lazy: checklist legado → partes (sin perder contenido).
+    if (item.get("origen") or "") == "tarea" and not item.get("padre_id"):
+        libres0 = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+        ck0 = libres0.get("checklist") if isinstance((libres0 or {}).get("checklist"), list) else []
+        if ck0:
+            try:
+                from seguimiento_tarea_partes import migrar_checklist_a_partes
+                item = migrar_checklist_a_partes(sb, iid) or item
+            except Exception as exc:
+                _log.warning("migración checklist→partes item=%s: %s", iid, exc)
     item["comentarios"] = (
         sb.table("seguimiento_item_comentario")
         .select("*")
@@ -4989,19 +5056,21 @@ def get_item_detalle(
             item["acta"] = None
             item["puede_ver_acta"] = False
     if item.get("origen") == "tarea":
-        # Migración suave: descripción legacy → checklist de un ítem
+        try:
+            from seguimiento_tarea_partes import enriquecer_item_con_partes, listar_excepciones_item
+            item = enriquecer_item_con_partes(sb, item)
+            item["excepciones_calificacion"] = listar_excepciones_item(sb, iid)
+        except Exception as exc:
+            _log.warning("enriquecer partes item=%s: %s", iid, exc)
         libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
-        if not libres.get("checklist") and (item.get("descripcion") or "").strip():
-            libres["checklist"] = _normalizar_checklist_tarea([{
-                "texto": item.get("descripcion"),
-                "fecha": item.get("fecha_vencimiento"),
-                "hora": item.get("hora_vencimiento"),
-                "estado_gestion": item.get("estado_gestion") or "abierto",
-            }])
-        pct, _est = _avance_desde_checklist(libres.get("checklist") or [])
-        libres["avance_pct"] = pct
-        item["campos_libres"] = libres
-        item["avance_pct"] = pct
+        # Compat: si aún queda checklist legado (migración falló), conservar avance.
+        if libres.get("checklist") and not item.get("partes"):
+            pct, _est = _avance_desde_checklist(libres.get("checklist") or [])
+            libres["avance_pct"] = pct
+            item["campos_libres"] = libres
+            item["avance_pct"] = pct
+        elif item.get("avance_partes"):
+            item["avance_pct"] = item["avance_partes"].get("avance_pct")
         item = _enrich_tarea_media(item)
     return _enrich_evidencias_media(item)
 
@@ -5674,6 +5743,13 @@ def actualizar_fecha_compromiso(
         "hora_vencimiento": hora,
         "updated_at": _now_utc().isoformat(),
     }
+    try:
+        from seguimiento_tarea_partes import marcar_reprogramacion, asegurar_fecha_inicial
+        asegurar_fecha_inicial(sb, item)
+        # Equivalencia calificación: cambio de fecha del compromiso = reprogramación.
+        marcar_reprogramacion(sb, item, fv)
+    except Exception as exc:
+        _log.warning("flags reprogramación compromiso=%s: %s", item_id, exc)
     sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
     _registrar_evento(
         sb,

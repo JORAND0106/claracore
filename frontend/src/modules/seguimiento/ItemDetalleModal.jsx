@@ -8,12 +8,14 @@ import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import { seedChecklistFromItem } from './TareaChecklistEditor'
 import TareaExcelLayout from './TareaExcelLayout.jsx'
+import TareaMadrePartesView from './TareaMadrePartesView.jsx'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { ESTADOS_GESTION, ORIGEN_COLOR, fmtFecha, fmtFechaHora } from './seguimientoTheme'
 import { asignacionesDe, destinatarioLabel, esAsignadoFormal, miEstadoEnAsignaciones } from './tareaAsignaciones'
 import { calcularAvanceTarea } from './tareaAvance'
 import { aplicarMigracionLegadoChecklist } from './tareaChecklistMigracion'
+import { esMadreConPartes, fmtNota, partesDe } from './tareaMadrePartes'
 import { fechaVencimientoEfectiva, nivelVencimientoItem, tipoLaborLabel } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
@@ -48,6 +50,11 @@ export default function ItemDetalleModal({
   const [fechaEditDirty, setFechaEditDirty] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [evSlideIdx, setEvSlideIdx] = useState(0)
+  const [excMotivo, setExcMotivo] = useState('')
+  const [excBusy, setExcBusy] = useState(false)
+  const [parteTitulo, setParteTitulo] = useState('')
+  const [showAddParte, setShowAddParte] = useState(false)
+  const [viewItemId, setViewItemId] = useState(itemId)
 
   const applyItem = (d) => {
     setItem(d)
@@ -65,10 +72,11 @@ export default function ItemDetalleModal({
     }
   }
 
-  const reload = async () => {
+  const reload = async (idOverride = null) => {
+    const id = idOverride != null ? idOverride : viewItemId
     setLoading(true)
     try {
-      const d = await api.getItem(itemId)
+      const d = await api.getItem(id)
       applyItem(d)
       setEstadoSel('')
       // PDF del acta: NO se carga aquí (cuello de botella ~15s). Solo bajo demanda.
@@ -113,10 +121,14 @@ export default function ItemDetalleModal({
   }
 
   useEffect(() => {
-    reload()
+    setViewItemId(itemId)
+  }, [itemId])
+
+  useEffect(() => {
+    reload(viewItemId)
     return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemId])
+  }, [viewItemId])
 
   const wide = item?.origen === 'tarea'
 
@@ -163,8 +175,14 @@ export default function ItemDetalleModal({
   const due = fechaVencimientoEfectiva(item)
   const nivel = nivelVencimientoItem(item)
   const avance = esTarea ? calcularAvanceTarea(checklist.length ? checklist : item) : null
-  const tieneChecklist = esTarea && (checklist.length > 0 || (item.campos_libres?.checklist || []).length > 0)
+  const partes = esTarea ? partesDe(item) : []
+  const esMadre = esTarea && esMadreConPartes(item)
+  const tieneChecklist = esTarea && !esMadre
+    && (checklist.length > 0 || (item.campos_libres?.checklist || []).length > 0)
   const puedeEditarTarea = esTarea && permisos?.editar && (soyCreador || soyResponsable || esDev)
+  const notaLabel = fmtNota(item.calificacion_nota)
+  const excepciones = Array.isArray(item.excepciones_calificacion) ? item.excepciones_calificacion : []
+  const excPendiente = excepciones.find((x) => x.estado === 'pendiente')
   const estadosDisponibles = ESTADOS_GESTION.filter((x) => {
     if (x.value === 'reprogramado') return esTarea
     return true
@@ -357,8 +375,90 @@ export default function ItemDetalleModal({
 
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', marginBottom: 8 }}>{error}</div>}
 
+      {notaLabel && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px', borderRadius: 8,
+          border: `1px solid ${t.border}`, background: `${t.primary}12`,
+          fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 700,
+        }}
+        >
+          Nota de cumplimiento: {notaLabel}
+          {item.calificacion_resultado_pct != null && (
+            <span style={{ fontWeight: 500, color: t.textMuted, marginLeft: 8 }}>
+              (resultado {Math.round(item.calificacion_resultado_pct)}% · tope fecha {Math.round(item.calificacion_tope_fecha_pct)}%)
+            </span>
+          )}
+        </div>
+      )}
+
       {esTarea ? (
         <section style={{ marginTop: 4 }}>
+          {esMadre ? (
+            <>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text, marginBottom: 6 }}>
+                {item.titulo}
+              </div>
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+                Destinatarios madre: {destinatarioLabel(item)} · Estado: {item.estado_gestion || '—'}
+              </div>
+              <TareaMadrePartesView
+                t={t}
+                partes={partes}
+                promedioNota={item.calificacion_promedio_partes}
+                compact={viewportCompact}
+                canAgregar={puedeEditarTarea}
+                onAgregarParte={() => setShowAddParte(true)}
+                onAbrirParte={(p) => {
+                  if (p?.id) setViewItemId(p.id)
+                }}
+              />
+              {showAddParte && puedeEditarTarea && (
+                <div style={{
+                  marginTop: 10, padding: 10, borderRadius: 8,
+                  border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+                }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: t.text }}>Nueva parte</div>
+                  <input
+                    value={parteTitulo}
+                    onChange={(e) => setParteTitulo(e.target.value)}
+                    placeholder="Título de la parte"
+                    style={{
+                      width: '100%', boxSizing: 'border-box', marginBottom: 8,
+                      padding: '8px 10px', borderRadius: 6, border: `1px solid ${t.border}`,
+                      background: t.bgCard, color: t.text, fontSize: 'var(--cc-sm)',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      disabled={busy || !parteTitulo.trim()}
+                      style={primary(t)}
+                      onClick={async () => {
+                        setBusy(true)
+                        setError('')
+                        try {
+                          await api.crearParte(item.id, { titulo: parteTitulo.trim() })
+                          setParteTitulo('')
+                          setShowAddParte(false)
+                          await reload()
+                          onChanged?.()
+                        } catch (e) {
+                          setError(e.message || 'No se pudo crear la parte')
+                        } finally {
+                          setBusy(false)
+                        }
+                      }}
+                    >
+                      Crear
+                    </button>
+                    <button type="button" style={ghost(t)} onClick={() => setShowAddParte(false)}>Cancelar</button>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
             {puedeEditarTarea && checklistDirty && (
               <button type="button" disabled={busy} style={primary(t)} onClick={guardarChecklist}>
@@ -457,9 +557,64 @@ export default function ItemDetalleModal({
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
                   Se marca Cumplida en bandeja solo al 100% (cancelados excluidos). Estado por sub-ítem.
                 </div>
-              ) : null)
+              ) : (
+                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
+                  Puede convertir esta tarea en «tarea madre» agregando partes desde «+» tras migrar, o con el botón Agregar parte si ya es madre.
+                </div>
+              ))
             }
           />
+          {puedeEditarTarea && !tieneChecklist && (
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                title="Agregar parte (convierte en tarea madre)"
+                aria-label="Agregar parte"
+                disabled={busy}
+                style={ghost(t)}
+                onClick={() => setShowAddParte(true)}
+              >
+                + Agregar parte
+              </button>
+              {showAddParte && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input
+                    value={parteTitulo}
+                    onChange={(e) => setParteTitulo(e.target.value)}
+                    placeholder="Título de la parte"
+                    style={{
+                      flex: 1, minWidth: 160, padding: '8px 10px', borderRadius: 6,
+                      border: `1px solid ${t.border}`, background: t.bgCard, color: t.text,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !parteTitulo.trim()}
+                    style={primary(t)}
+                    onClick={async () => {
+                      setBusy(true)
+                      setError('')
+                      try {
+                        await api.crearParte(item.id, { titulo: parteTitulo.trim() })
+                        setParteTitulo('')
+                        setShowAddParte(false)
+                        await reload()
+                        onChanged?.()
+                      } catch (e) {
+                        setError(e.message || 'No se pudo crear la parte')
+                      } finally {
+                        setBusy(false)
+                      }
+                    }}
+                  >
+                    Crear parte
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+            </>
+          )}
         </section>
       ) : (
         <p style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--cc-body)', color: t.text }}>
@@ -749,6 +904,116 @@ export default function ItemDetalleModal({
               </div>
             )
           })()}
+        </section>
+      )}
+
+      {/* Excepción por causa de tercero (tope de fecha 100% si se aprueba) */}
+      {(esTarea || esCompromiso)
+        && soyResponsable
+        && !esMadre
+        && item.calificacion_nota == null
+        && !(esTarea && (!item.relacion_destinatario || item.relacion_destinatario === 'referencia')
+          && Number(item.asignado_a_id) === Number(item.created_by))
+        && (esCompromiso ? Number(item.asignado_a_id) !== Number(item.solicitante_id || item.created_by) : item.relacion_destinatario === 'asignacion')
+        && (
+        <section style={{ margin: '14px 0' }}>
+          <h4 style={h4(t)}>Excepción por causa de un tercero</h4>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+            Si el retraso lo causó un tercero y documenta el soporte, quien asignó puede aprobar
+            para que el tope de fecha se mantenga en 100%.
+          </div>
+          {excPendiente ? (
+            <div style={{ fontSize: 'var(--cc-sm)', color: t.text }}>
+              Solicitud pendiente: {excPendiente.motivo}
+            </div>
+          ) : (
+            <>
+              <textarea
+                value={excMotivo}
+                onChange={(e) => setExcMotivo(e.target.value)}
+                rows={2}
+                placeholder="Describa la causa del tercero…"
+                style={{ ...inp(t), width: '100%', boxSizing: 'border-box', resize: 'vertical' }}
+              />
+              <button
+                type="button"
+                disabled={excBusy || excMotivo.trim().length < 8}
+                style={{ ...primary(t), marginTop: 8 }}
+                title="Solicitar excepción"
+                onClick={async () => {
+                  setExcBusy(true)
+                  setError('')
+                  try {
+                    await api.solicitarExcepcionTercero(item.id, {
+                      motivo: excMotivo.trim(),
+                      soporte_nombre: 'soporte-declarado.txt',
+                      soporte_blob_path: `local/excepcion/${item.id}/${Date.now()}`,
+                      soporte_mime: 'text/plain',
+                    })
+                    setExcMotivo('')
+                    await reload()
+                    onChanged?.()
+                  } catch (e) {
+                    setError(e.message || 'No se pudo solicitar la excepción')
+                  } finally {
+                    setExcBusy(false)
+                  }
+                }}
+              >
+                Solicitar excepción
+              </button>
+            </>
+          )}
+        </section>
+      )}
+      {excepciones.some((x) => x.estado === 'pendiente') && soyCreador && (
+        <section style={{ margin: '14px 0' }}>
+          <h4 style={h4(t)}>Aprobar / rechazar excepción</h4>
+          {excepciones.filter((x) => x.estado === 'pendiente').map((x) => (
+            <div key={x.id} style={{ marginBottom: 8, fontSize: 'var(--cc-sm)', color: t.text }}>
+              <div style={{ marginBottom: 6 }}>{x.motivo}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={excBusy}
+                  style={primary(t)}
+                  onClick={async () => {
+                    setExcBusy(true)
+                    try {
+                      await api.decidirExcepcion(x.id, { aprobar: true })
+                      await reload()
+                      onChanged?.()
+                    } catch (e) {
+                      setError(e.message || 'No se pudo aprobar')
+                    } finally {
+                      setExcBusy(false)
+                    }
+                  }}
+                >
+                  Aprobar
+                </button>
+                <button
+                  type="button"
+                  disabled={excBusy}
+                  style={ghost(t)}
+                  onClick={async () => {
+                    setExcBusy(true)
+                    try {
+                      await api.decidirExcepcion(x.id, { aprobar: false })
+                      await reload()
+                      onChanged?.()
+                    } catch (e) {
+                      setError(e.message || 'No se pudo rechazar')
+                    } finally {
+                      setExcBusy(false)
+                    }
+                  }}
+                >
+                  Rechazar
+                </button>
+              </div>
+            </div>
+          ))}
         </section>
       )}
 

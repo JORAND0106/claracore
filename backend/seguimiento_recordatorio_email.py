@@ -207,7 +207,7 @@ def collect_items_para_fecha(
             .select(
                 "id, origen, titulo, tema, estado_gestion, fecha_vencimiento, hora_vencimiento, "
                 "asignado_a_id, asignado_a_nombre, created_by, solicitante_id, contrato_id, "
-                "campos_libres, consecutivo"
+                "campos_libres, consecutivo, padre_id"
             )
             .eq("fecha_vencimiento", fecha_s)
             .limit(2000)
@@ -219,6 +219,21 @@ def collect_items_para_fecha(
         _log.warning("recordatorio email query items: %s", exc)
         rows = []
 
+    # Madre con partes: no recordatorio propio (las partes ya avisan).
+    madres_con_partes: Set[int] = set()
+    try:
+        padre_ids = []
+        for it in rows:
+            try:
+                pid = it.get("padre_id")
+                if pid is not None:
+                    padre_ids.append(int(pid))
+            except (TypeError, ValueError):
+                pass
+        madres_con_partes = set(padre_ids)
+    except Exception:
+        madres_con_partes = set()
+
     for item in rows:
         est = str(item.get("estado_gestion") or "").strip().lower()
         if est in ESTADOS_CERRADOS:
@@ -227,11 +242,28 @@ def collect_items_para_fecha(
             iid = int(item["id"])
         except (TypeError, ValueError, KeyError):
             continue
+        # Si es madre (tiene hijos en el mismo lote o flag), no duplicar aviso.
+        if iid in madres_con_partes:
+            continue
+        # Si el ítem es madre potencial sin padre_id, comprobar hijos vía campos.
+        if not item.get("padre_id") and (item.get("origen") or "") == "tarea":
+            libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+            if libres and libres.get("es_madre_partes"):
+                continue
         origen = "compromiso" if item.get("origen") == "compromiso" else "tarea"
         titulo = (item.get("titulo") or item.get("tema") or f"#{item.get('consecutivo') or iid}").strip()
         hora = _fmt_hora(item.get("hora_vencimiento"))
         asignados = _ids_asignados(item)
+        # Notificados: preferir campos_libres de parte; checklist legado aún soportado.
         notificados = _ids_notificados(item) if origen == "tarea" else set()
+        if origen == "tarea":
+            libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+            try:
+                nid = int((libres or {}).get("notificar_a_id") or 0)
+            except (TypeError, ValueError):
+                nid = 0
+            if nid > 0:
+                notificados.add(nid)
         user_ids |= asignados | notificados
         # Placeholder; nombre del delegante se resuelve después
         base = dict(

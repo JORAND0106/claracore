@@ -162,6 +162,19 @@ export function createSeguimientoApi(contratoId, token) {
       send('POST', `/seguimiento/items/${itemId}/reasignar-responsable`, body),
     updateCompromiso: (itemId, body) =>
       send('PATCH', `/seguimiento/items/${itemId}/compromiso`, body),
+    crearParte: (padreId, body) => send('POST', `/seguimiento/tareas/${padreId}/partes`, body),
+    migrarPartes: (itemId) => send('POST', `/seguimiento/tareas/${itemId}/migrar-partes`, {}),
+    calificacionConfig: () => get('/seguimiento/calificacion/config'),
+    cumplimientoPersona: (usuarioId = null) => {
+      const q = new URLSearchParams()
+      if (usuarioId != null) q.set('usuario_id', String(usuarioId))
+      const qs = q.toString()
+      return get(`/seguimiento/${cid}/cumplimiento${qs ? `?${qs}` : ''}`)
+    },
+    solicitarExcepcionTercero: (itemId, body) =>
+      send('POST', `/seguimiento/items/${itemId}/excepcion-tercero`, body),
+    decidirExcepcion: (excepcionId, body) =>
+      send('POST', `/seguimiento/excepciones/${excepcionId}/decidir`, body),
     deleteItem: (itemId) => send('DELETE', `/seguimiento/items/${itemId}`),
     comentar: (itemId, mensaje) => send('POST', `/seguimiento/items/${itemId}/comentarios`, { mensaje }),
     patchFechaCompromiso: (itemId, body) =>
