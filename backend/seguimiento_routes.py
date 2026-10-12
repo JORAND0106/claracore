@@ -238,6 +238,24 @@ class DestinatarioTareaBody(BaseModel):
     asignado_a_nombre: Optional[str] = None
 
 
+class TareaParteBody(BaseModel):
+    titulo: Optional[str] = None
+    texto: Optional[str] = None
+    descripcion: Optional[str] = None
+    fecha_vencimiento: Optional[str] = None
+    fecha: Optional[str] = None
+    hora_vencimiento: Optional[str] = None
+    hora: Optional[str] = None
+    estado_gestion: Optional[str] = "abierto"
+    asignado_a_id: Optional[int] = None
+    asignado_a_nombre: Optional[str] = None
+    notas: Optional[str] = None
+    enlace: Optional[str] = None
+    notificar_a_id: Optional[int] = None
+    notificar_a_nombre: Optional[str] = None
+    relacion_notificacion: Optional[str] = None
+
+
 class TareaCreateBody(BaseModel):
     titulo: str = Field(..., min_length=1)
     descripcion: Optional[str] = None
@@ -255,6 +273,19 @@ class TareaCreateBody(BaseModel):
     referido_a_nombre: Optional[str] = None
     relacion_destinatario: Optional[str] = None
     contrato_id: Optional[int] = None
+    partes: Optional[List[TareaParteBody]] = None
+
+
+class ExcepcionTerceroBody(BaseModel):
+    motivo: str = Field(..., min_length=8)
+    soporte_nombre: Optional[str] = None
+    soporte_blob_path: Optional[str] = None
+    soporte_mime: Optional[str] = None
+
+
+class DecidirExcepcionBody(BaseModel):
+    aprobar: bool
+    decision_nota: Optional[str] = None
 
 
 class TareaUpdateBody(BaseModel):
@@ -630,6 +661,111 @@ def route_update_tarea(item_id: int, body: TareaUpdateBody, current_user=Depends
             body.model_dump(exclude_unset=True),
             _uid(current_user),
             current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/tareas/{item_id}/partes")
+def route_crear_parte(item_id: int, body: TareaParteBody, current_user=Depends(get_current_user)):
+    """Agrega una parte (tarea completa) a una tarea madre."""
+    require_permiso_seguimiento(current_user, "crear")
+    try:
+        from seguimiento_tarea_partes import crear_parte
+        row = crear_parte(
+            supabase,
+            item_id,
+            body.model_dump(exclude_unset=True),
+            _uid(current_user),
+            current_user=current_user,
+        )
+        registrar_log(current_user, "CREAR", "SEGUIMIENTO", "seguimiento_tarea_parte", str(row["id"]), {
+            "padre_id": item_id,
+        })
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except HTTPException:
+        raise
+
+
+@router.post("/tareas/{item_id}/migrar-partes")
+def route_migrar_partes(item_id: int, current_user=Depends(get_current_user)):
+    """Convierte checklist legado en partes (idempotente)."""
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        from seguimiento_tarea_partes import migrar_checklist_a_partes
+        return migrar_checklist_a_partes(supabase, item_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except HTTPException:
+        raise
+
+
+@router.get("/calificacion/config")
+def route_calificacion_config(current_user=Depends(get_current_user)):
+    require_permiso_seguimiento(current_user, "ver")
+    from seguimiento_calificacion import get_calificacion_config
+    return get_calificacion_config()
+
+
+@router.get("/{contrato_id}/cumplimiento")
+def route_cumplimiento_persona(
+    contrato_id: int,
+    usuario_id: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Vista de cumplimiento por persona (promedio de notas cerradas/vencidas)."""
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    from seguimiento_tarea_partes import listar_cumplimiento_persona
+    return {
+        "contrato_id": contrato_id,
+        "personas": listar_cumplimiento_persona(
+            supabase, contrato_id, usuario_id=usuario_id,
+        ),
+    }
+
+
+@router.post("/items/{item_id}/excepcion-tercero")
+def route_solicitar_excepcion(
+    item_id: int,
+    body: ExcepcionTerceroBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        from seguimiento_tarea_partes import solicitar_excepcion_tercero
+        row = solicitar_excepcion_tercero(
+            supabase,
+            item_id,
+            _uid(current_user),
+            motivo=body.motivo,
+            soporte_nombre=body.soporte_nombre,
+            soporte_blob_path=body.soporte_blob_path,
+            soporte_mime=body.soporte_mime,
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/excepciones/{excepcion_id}/decidir")
+def route_decidir_excepcion(
+    excepcion_id: int,
+    body: DecidirExcepcionBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        from seguimiento_tarea_partes import decidir_excepcion_tercero
+        return decidir_excepcion_tercero(
+            supabase,
+            excepcion_id,
+            _uid(current_user),
+            current_user,
+            aprobar=bool(body.aprobar),
+            decision_nota=body.decision_nota or "",
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

@@ -7,7 +7,10 @@ import { accesoBitacora } from './bitacoraPermisos'
 import ExternosDepuracionModal from './ExternosDepuracionModal'
 import MaquinariaCatalogoModal from './MaquinariaCatalogoModal'
 import LibroDigitalVista, { LibroDigitalSelector } from './LibroDigitalVista'
+import CumplimientoPersonaPanel from './CumplimientoPersonaPanel'
+import ItemDetalleModal from './ItemDetalleModal'
 import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
+import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { useSeguimientoCompact } from './seguimientoShared'
 
@@ -36,6 +39,12 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const [libroModo, setLibroModo] = useState(null) // 'actas' | 'bitacora' | null
   const [externosDepuracionOpen, setExternosDepuracionOpen] = useState(false)
   const [maquinariaCatalogoOpen, setMaquinariaCatalogoOpen] = useState(false)
+  const [cumplimientoOpen, setCumplimientoOpen] = useState(false)
+  const [detalleCumplimientoId, setDetalleCumplimientoId] = useState(null)
+  const apiCumplimiento = useMemo(
+    () => (token && cid != null ? createSeguimientoApi(cid, token) : null),
+    [cid, token],
+  )
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
@@ -96,6 +105,30 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             contratoId={cid}
             esDesarrollador={Boolean(permisosBitacora?.esDesarrollador)}
           />
+          {permisos?.ver && (
+            <button
+              type="button"
+              onClick={() => setCumplimientoOpen((v) => !v)}
+              title="Ver cumplimiento por persona"
+              aria-label="Cumplimiento por persona"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: cumplimientoOpen ? `${t.primary}22` : (t.bgCard || t.bg || 'transparent'),
+                color: t.text,
+                fontWeight: 700,
+                fontSize: 'var(--cc-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              <span aria-hidden>%</span>
+              <span>Cumplimiento</span>
+            </button>
+          )}
           {permisos?.editar && (
             <button
               type="button"
@@ -186,6 +219,29 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         refreshKey={calKey}
         showFilters
       />
+
+      {cumplimientoOpen && apiCumplimiento && (
+        <div style={{ marginTop: 16 }}>
+          <CumplimientoPersonaPanel
+            t={t}
+            api={apiCumplimiento}
+            contratoId={cid}
+            onAbrirItem={(id) => setDetalleCumplimientoId(id)}
+          />
+        </div>
+      )}
+
+      {detalleCumplimientoId && apiCumplimiento && (
+        <ItemDetalleModal
+          t={t}
+          api={apiCumplimiento}
+          itemId={detalleCumplimientoId}
+          usuario={usuario}
+          permisos={permisos}
+          onClose={() => setDetalleCumplimientoId(null)}
+          onChanged={() => setCalKey((n) => n + 1)}
+        />
+      )}
 
       <LibroDigitalSelector
         t={t}

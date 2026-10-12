@@ -114,6 +114,18 @@ function titleWithIcon(icon, text) {
 export function bandejaItemToEvent(item) {
   if (!item?.id) return null
   const origen = item.origen === 'compromiso' ? 'compromiso' : 'tarea'
+  // Madre con partes: no evento propio (las partes ya ocupan el calendario).
+  if (
+    origen === 'tarea'
+    && !item.padre_id
+    && (
+      item.es_madre_partes
+      || item.campos_libres?.es_madre_partes
+      || (Array.isArray(item.partes) && item.partes.length > 0)
+    )
+  ) {
+    return null
+  }
   const meta = CALENDARIO_KIND[origen]
   const due = fechaVencimientoEfectiva(item)
   const start = buildStart(due.fecha, due.hora)
