@@ -256,6 +256,9 @@ export function serializeOrdenItems(items = []) {
       if (nombre) row.expositor_nombre = nombre
       const uid = x.expositor_usuario_id
       if (uid != null && Number(uid) > 0) row.expositor_usuario_id = Number(uid)
+      // Clave estable para reordenar / realinear Temas tras recargar
+      const k = String(x.key || x._key || '').trim()
+      if (k) row.key = k
       return row
     })
 }

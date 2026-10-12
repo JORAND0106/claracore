@@ -1046,6 +1046,41 @@ def route_list_actas(
     )
 
 
+@router.get("/{contrato_id}/actas/tipos")
+def route_list_tipos_acta(contrato_id: int, current_user=Depends(get_current_user)):
+    """Builtins (Interna/Externa) + tipos personalizados del contrato."""
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    from seguimiento_tipo_acta import list_tipos_acta_contrato
+
+    return {"tipos": list_tipos_acta_contrato(supabase, contrato_id)}
+
+
+class TipoActaCustomBody(BaseModel):
+    nombre: str = Field(..., min_length=1, max_length=80)
+
+
+@router.post("/{contrato_id}/actas/tipos")
+def route_upsert_tipo_acta(
+    contrato_id: int,
+    body: TipoActaCustomBody,
+    current_user=Depends(get_current_user),
+):
+    """Registra un tipo personalizado (opción Otro) sin duplicados."""
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    from seguimiento_tipo_acta import list_tipos_acta_contrato, upsert_tipo_custom
+
+    try:
+        row = upsert_tipo_custom(supabase, contrato_id, body.nombre)
+        return {
+            "tipo": row,
+            "tipos": list_tipos_acta_contrato(supabase, contrato_id),
+        }
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/actas/proximo-consecutivo")
 def route_proximo_consecutivo(contrato_id: int, current_user=Depends(get_current_user)):
     require_permiso_seguimiento(current_user, "ver")
