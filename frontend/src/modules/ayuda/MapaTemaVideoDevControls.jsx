@@ -1,15 +1,28 @@
 /**
  * Controles de Desarrollador para cargar / reemplazar / eliminar video
  * de una tarjeta del mapa (solo íconos + tooltip).
+ * Carga directa: sin compresión ni música en servidor. Máximo 150 MB.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { API_BASE } from '../../apiBase'
 import { MAPA_NAVEGACION_API_URL } from './mapaNavegacionCatalogo'
 
 const ACCEPT_VIDEO = 'video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.m4v,.webm'
+const MAX_UPLOAD_MB = 150
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 function getToken(tokenProp) {
   return tokenProp || localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+}
+
+function detalleErrorApi(data, fallback) {
+  const d = data?.detail ?? data?.message
+  if (typeof d === 'string' && d.trim()) return d
+  if (Array.isArray(d) && d.length) {
+    const parts = d.map((x) => (typeof x === 'string' ? x : x?.msg)).filter(Boolean)
+    if (parts.length) return parts.join(' ')
+  }
+  return fallback
 }
 
 function iconBtnStyle(t, danger = false) {
@@ -46,54 +59,61 @@ export default function MapaTemaVideoDevControls({
   token,
   onContenidoActualizado,
 }) {
-  const [open, setOpen] = useState(false)
-  const [pistas, setPistas] = useState([])
-  const [pistaId, setPistaId] = useState('aurora')
-  const [volumen, setVolumen] = useState(0.18)
-  const [fase, setFase] = useState('') // '' | 'subiendo' | 'procesando' | 'listo' | 'error'
+  const [fase, setFase] = useState('') // '' | 'subiendo' | 'listo' | 'error'
   const [progreso, setProgreso] = useState(0)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
-  const [ffmpegOk, setFfmpegOk] = useState(true)
+  const [confirmReplace, setConfirmReplace] = useState(false)
+  const pendingFileRef = useRef(null)
   const fileRef = useRef(null)
   const xhrRef = useRef(null)
 
   const tieneVideo = !!String(tema?.videoUrl || '').trim()
 
-  useEffect(() => {
-    if (!open) return undefined
-    let cancelled = false
-    const tok = getToken(token)
-    fetch(`${API_BASE}${MAPA_NAVEGACION_API_URL}/pistas`, {
-      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return
-        const list = Array.isArray(data?.pistas) ? data.pistas.filter((p) => p.disponible !== false) : []
-        setPistas(list)
-        if (list.length && !list.some((p) => p.id === pistaId)) {
-          setPistaId(list[0].id)
-        }
-        if (typeof data?.volumen_default === 'number') {
-          setVolumen(data.volumen_default)
-        }
-        if (typeof data?.ffmpeg_disponible === 'boolean') {
-          setFfmpegOk(data.ffmpeg_disponible)
-          if (!data.ffmpeg_disponible) {
-            setMsg('El servidor aún no tiene la herramienta de compresión de video. Espere el redespliegue o contacte a un administrador.')
-          }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setPistas([])
-      })
-    return () => { cancelled = true }
-  }, [open, token, pistaId])
-
   function detenerXhr() {
     try { xhrRef.current?.abort?.() } catch { /* ignore */ }
     xhrRef.current = null
+  }
+
+  function resetMsg() {
+    setMsg('')
+    setFase('')
+    setProgreso(0)
+  }
+
+  function elegirArchivo() {
+    resetMsg()
+    fileRef.current?.click()
+  }
+
+  function onArchivoElegido(file) {
+    if (!file || !tema?.id) return
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setFase('error')
+      setMsg(
+        `El video supera el máximo permitido de ${MAX_UPLOAD_MB} MB. `
+        + 'Comprímalo antes de subirlo e intente de nuevo.',
+      )
+      return
+    }
+    if (tieneVideo) {
+      pendingFileRef.current = file
+      setConfirmReplace(true)
+      return
+    }
+    subirArchivo(file)
+  }
+
+  function confirmarReemplazo(si) {
+    setConfirmReplace(false)
+    const file = pendingFileRef.current
+    pendingFileRef.current = null
+    if (!si || !file) {
+      setMsg('Carga cancelada. Se conservó el video existente.')
+      setFase('')
+      return
+    }
+    subirArchivo(file)
   }
 
   function subirArchivo(file) {
@@ -105,8 +125,6 @@ export default function MapaTemaVideoDevControls({
     const tok = getToken(token)
     const fd = new FormData()
     fd.append('tema_id', tema.id)
-    fd.append('pista_id', pistaId)
-    fd.append('volumen', String(volumen))
     fd.append('file', file, file.name || 'capacitacion.mp4')
 
     const xhr = new XMLHttpRequest()
@@ -115,9 +133,7 @@ export default function MapaTemaVideoDevControls({
     if (tok) xhr.setRequestHeader('Authorization', `Bearer ${tok}`)
     xhr.upload.onprogress = (ev) => {
       if (!ev.lengthComputable) return
-      const pct = Math.min(92, Math.round((ev.loaded / ev.total) * 85))
-      setProgreso(pct)
-      if (pct >= 80) setFase('procesando')
+      setProgreso(Math.min(99, Math.round((ev.loaded / ev.total) * 100)))
     }
     xhr.onload = () => {
       xhrRef.current = null
@@ -127,25 +143,19 @@ export default function MapaTemaVideoDevControls({
       if (xhr.status >= 200 && xhr.status < 300 && data?.ok) {
         setFase('listo')
         setProgreso(100)
-        setMsg('Video publicado con música de fondo.')
+        setMsg('Video guardado.')
         if (data.contenido) onContenidoActualizado?.(data.contenido)
-        window.setTimeout(() => {
-          setOpen(false)
-          setFase('')
-          setProgreso(0)
-          setMsg('')
-        }, 900)
+        window.setTimeout(() => resetMsg(), 1200)
         return
       }
       setFase('error')
-      const detail = data?.detail || data?.message || xhr.statusText || 'Error al procesar'
-      setMsg(typeof detail === 'string' ? detail : 'No se pudo cargar el video.')
+      setMsg(detalleErrorApi(data, `No se pudo cargar el video (error ${xhr.status}).`))
     }
     xhr.onerror = () => {
       xhrRef.current = null
       setBusy(false)
       setFase('error')
-      setMsg('Error de red al subir el video.')
+      setMsg('Error de red al subir el video. Verifique la conexión e intente de nuevo.')
     }
     xhr.onabort = () => {
       xhrRef.current = null
@@ -154,20 +164,7 @@ export default function MapaTemaVideoDevControls({
       setProgreso(0)
       setMsg('Carga cancelada.')
     }
-    setFase('subiendo')
-    // Tras completar la subida el servidor comprime+mezcla; marcamos procesando
-    // cuando el upload llegue al final.
-    xhr.addEventListener('loadstart', () => setFase('subiendo'))
     xhr.send(fd)
-    // Heurística: cuando upload llega a 100%, el servidor aún procesa.
-    const prev = xhr.upload.onprogress
-    xhr.upload.onprogress = (ev) => {
-      prev?.(ev)
-      if (ev.lengthComputable && ev.loaded >= ev.total) {
-        setFase('procesando')
-        setProgreso((p) => Math.max(p, 88))
-      }
-    }
   }
 
   async function eliminarVideo() {
@@ -182,10 +179,12 @@ export default function MapaTemaVideoDevControls({
         headers: tok ? { Authorization: `Bearer ${tok}` } : {},
       })
       const data = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(data?.detail || data?.message || 'No se pudo eliminar')
+      if (!r.ok) throw new Error(detalleErrorApi(data, 'No se pudo eliminar'))
       if (data.contenido) onContenidoActualizado?.(data.contenido)
       setMsg('Video eliminado.')
+      setFase('')
     } catch (e) {
+      setFase('error')
       setMsg(e.message || 'No se pudo eliminar el video.')
     } finally {
       setBusy(false)
@@ -195,7 +194,7 @@ export default function MapaTemaVideoDevControls({
   return (
     <>
       <div
-        style={{ display: 'flex', gap: 6, alignItems: 'center' }}
+        style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
@@ -204,7 +203,7 @@ export default function MapaTemaVideoDevControls({
           title={tieneVideo ? 'Reemplazar video de capacitación' : 'Cargar video de capacitación'}
           aria-label={tieneVideo ? 'Reemplazar video de capacitación' : 'Cargar video de capacitación'}
           disabled={busy}
-          onClick={() => { setOpen(true); setMsg('') }}
+          onClick={elegirArchivo}
           style={iconBtnStyle(t)}
         >
           {tieneVideo ? '🔄' : '⬆'}
@@ -221,19 +220,91 @@ export default function MapaTemaVideoDevControls({
             🗑
           </button>
         ) : null}
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept={ACCEPT_VIDEO}
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (f) onArchivoElegido(f)
+          }}
+        />
       </div>
 
-      {open && (
+      {(fase === 'subiendo' || fase === 'listo' || fase === 'error' || msg) ? (
+        <div
+          style={{
+            marginTop: 6,
+            width: '100%',
+            minWidth: 120,
+            maxWidth: 220,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {fase === 'subiendo' ? (
+            <div>
+              <div style={{
+                height: 6,
+                borderRadius: 99,
+                background: t.border,
+                overflow: 'hidden',
+              }}
+              >
+                <div style={{
+                  width: `${progreso}%`,
+                  height: '100%',
+                  background: t.primary,
+                  transition: 'width 160ms ease',
+                }}
+                />
+              </div>
+              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
+                Subiendo… {progreso}%
+              </div>
+            </div>
+          ) : null}
+          {msg ? (
+            <div style={{
+              fontSize: 'var(--cc-caption)',
+              color: fase === 'error' ? '#dc2626' : t.textMuted,
+              lineHeight: 1.35,
+            }}
+            >
+              {msg}
+            </div>
+          ) : null}
+          {fase === 'subiendo' ? (
+            <button
+              type="button"
+              onClick={() => { detenerXhr(); setBusy(false); setFase(''); setProgreso(0); setMsg('Carga cancelada.') }}
+              style={{
+                marginTop: 4,
+                border: 'none',
+                background: 'transparent',
+                color: t.primary,
+                cursor: 'pointer',
+                fontSize: 'var(--cc-caption)',
+                padding: 0,
+                textDecoration: 'underline',
+              }}
+            >
+              Cancelar
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {confirmReplace ? (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Cargar video de capacitación"
+          aria-label="Confirmar reemplazo de video"
           onClick={(e) => {
             e.stopPropagation()
-            if (!busy) {
-              detenerXhr()
-              setOpen(false)
-            }
+            confirmarReemplazo(false)
           }}
           style={{
             position: 'fixed',
@@ -249,7 +320,7 @@ export default function MapaTemaVideoDevControls({
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: 'min(440px, 96vw)',
+              width: 'min(380px, 96vw)',
               borderRadius: 14,
               background: t.bgCard,
               border: `1px solid ${t.border}`,
@@ -257,138 +328,55 @@ export default function MapaTemaVideoDevControls({
               padding: 16,
               display: 'flex',
               flexDirection: 'column',
-              gap: 12,
+              gap: 14,
               color: t.text,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)' }}>
-                  {tieneVideo ? 'Reemplazar video' : 'Cargar video'}
-                </div>
-                <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
-                  {tema?.nombre}
-                </div>
-              </div>
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)' }}>
+              ¿Desea reemplazar el video?
+            </div>
+            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
+              {tema?.nombre
+                ? `La tarjeta «${tema.nombre}» ya tiene un video. Si continúa, se reemplazará por el nuevo.`
+                : 'Esta tarjeta ya tiene un video. Si continúa, se reemplazará por el nuevo.'}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
                 type="button"
-                title="Cerrar"
-                aria-label="Cerrar"
-                disabled={busy}
-                onClick={() => { detenerXhr(); setOpen(false) }}
-                style={iconBtnStyle(t)}
-              >
-                ✕
-              </button>
-            </div>
-
-            <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-              Se admite MP4 / MOV / M4V / WebM (grabación de pantalla o iPad).
-              El servidor comprime el video y mezcla una pista aprobada (libre de derechos).
-            </p>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
-              Música de fondo
-              <select
-                value={pistaId}
-                disabled={busy}
-                onChange={(e) => setPistaId(e.target.value)}
+                onClick={() => confirmarReemplazo(false)}
                 style={{
-                  padding: '10px 12px',
+                  minHeight: 40,
+                  minWidth: 72,
                   borderRadius: 8,
                   border: `1px solid ${t.border}`,
                   background: t.bg,
                   color: t.text,
-                  fontSize: 16,
+                  fontWeight: 700,
+                  cursor: 'pointer',
                 }}
               >
-                {(pistas.length ? pistas : [{ id: 'aurora', nombre: 'Aurora suave' }]).map((p) => (
-                  <option key={p.id} value={p.id}>{p.nombre}</option>
-                ))}
-              </select>
-            </label>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
-              Volumen de fondo ({Math.round(volumen * 100)}%)
-              <input
-                type="range"
-                min={0.05}
-                max={0.35}
-                step={0.01}
-                value={volumen}
-                disabled={busy}
-                onChange={(e) => setVolumen(Number(e.target.value))}
-              />
-            </label>
-
-            <input
-              ref={fileRef}
-              type="file"
-              accept={ACCEPT_VIDEO}
-              hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                e.target.value = ''
-                if (f) subirArchivo(f)
-              }}
-            />
-
-            <button
-              type="button"
-              disabled={busy || !ffmpegOk}
-              onClick={() => fileRef.current?.click()}
-              style={{
-                background: t.primary,
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                padding: '12px 14px',
-                fontWeight: 800,
-                fontSize: 'var(--cc-sm)',
-                cursor: (busy || !ffmpegOk) ? 'not-allowed' : 'pointer',
-                opacity: (busy || !ffmpegOk) ? 0.65 : 1,
-                minHeight: 44,
-              }}
-            >
-              {busy
-                ? (fase === 'procesando' ? 'Comprimiendo y mezclando…' : 'Subiendo…')
-                : (tieneVideo ? 'Elegir video de reemplazo' : 'Elegir video')}
-            </button>
-
-            {(fase === 'subiendo' || fase === 'procesando') && (
-              <div>
-                <div style={{
-                  height: 8,
-                  borderRadius: 99,
-                  background: t.border,
-                  overflow: 'hidden',
-                }}>
-                  <div style={{
-                    width: `${progreso}%`,
-                    height: '100%',
-                    background: t.primary,
-                    transition: 'width 200ms ease',
-                  }} />
-                </div>
-                <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 6 }}>
-                  {fase === 'procesando'
-                    ? 'Procesando en el servidor (compresión + música)…'
-                    : `Subiendo… ${progreso}%`}
-                </div>
-              </div>
-            )}
-
-            {msg ? (
-              <div style={{
-                fontSize: 'var(--cc-caption)',
-                color: fase === 'error' ? '#dc2626' : t.textMuted,
-              }}>
-                {msg}
-              </div>
-            ) : null}
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => confirmarReemplazo(true)}
+                style={{
+                  minHeight: 40,
+                  minWidth: 72,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: t.primary,
+                  color: '#fff',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí
+              </button>
+            </div>
           </div>
         </div>
-      )}
+      ) : null}
     </>
   )
 }

@@ -29,8 +29,9 @@ VOLUMEN_FONDO_DEFAULT = 0.18
 VOLUMEN_FONDO_MIN = 0.05
 VOLUMEN_FONDO_MAX = 0.35
 
-# Límite de subida cruda (iPad screen recordings pueden ser grandes).
-MAX_UPLOAD_BYTES = 220 * 1024 * 1024
+# Límite de subida directa (sin compresión en servidor).
+MAX_UPLOAD_BYTES = 150 * 1024 * 1024
+MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // (1024 * 1024)
 
 ACCEPT_CONTENT_TYPES = frozenset({
     "video/mp4",
@@ -264,6 +265,27 @@ def extension_permitida(filename: str, content_type: Optional[str]) -> str:
     return ".mp4"
 
 
+def content_type_video(filename: str, content_type: Optional[str]) -> str:
+    """Content-Type a persistir en blob según archivo / cabecera del cliente."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct.startswith("video/"):
+        return ct
+    ext = extension_permitida(filename, content_type)
+    return {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".m4v": "video/x-m4v",
+        ".webm": "video/webm",
+    }.get(ext, "video/mp4")
+
+
+def mensaje_limite_tamano() -> str:
+    return (
+        f"El video supera el máximo permitido de {MAX_UPLOAD_MB} MB. "
+        "Comprímalo antes de subirlo e intente de nuevo."
+    )
+
+
 def procesar_video_con_musica(
     video_bytes: bytes,
     *,
@@ -279,7 +301,7 @@ def procesar_video_con_musica(
     if not video_bytes:
         raise ValueError("Archivo de video vacío.")
     if len(video_bytes) > MAX_UPLOAD_BYTES:
-        raise ValueError(f"El video supera el máximo de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+        raise ValueError(mensaje_limite_tamano())
 
     _, pista_path = resolver_pista(pista_id)
     vol = clamp_volumen(volumen)
