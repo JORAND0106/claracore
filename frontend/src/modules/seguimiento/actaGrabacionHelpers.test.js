@@ -354,6 +354,7 @@ describe('createGrabacionSessionController', () => {
 
   it('arma checkpoint, dispara auto CP y procesa tramo final al detener', async () => {
     const origins = []
+    const chunkTypes = []
     const api = {
       async iniciarGrabacion() {
         return { sesion: { id: 77 }, segundos_restantes: 1000 }
@@ -367,8 +368,9 @@ describe('createGrabacionSessionController', () => {
       async grabacionLiveStatus() {
         return { stt_disponible: true, checkpoint_auto_segundos: 300 }
       },
-      async grabacionChunk() {
-        return { transcripcion_chars: 120, temas_escucha_activa: true }
+      async grabacionChunk(_id, blob) {
+        chunkTypes.push(String(blob?.type || ''))
+        return { transcripcion_chars: 120, delta_chars: 40, temas_escucha_activa: true }
       },
       async grabacionCheckpointTemas() {
         return { temas_escucha_activa: true, checkpoint_chars: 0 }
@@ -397,16 +399,59 @@ describe('createGrabacionSessionController', () => {
         this.onstop?.()
       }
     }
+    /** AudioContext mínimo: emite un buffer de PCM al conectar el processor. */
+    function makeFakeAudioCtx() {
+      const ctx = {
+        sampleRate: 16000,
+        state: 'running',
+        destination: {},
+        resume: async () => { ctx.state = 'running' },
+        createMediaStreamSource() {
+          return {
+            connect(node) { this._next = node },
+            disconnect() {},
+          }
+        },
+        createGain() {
+          return {
+            gain: { value: 1 },
+            connect() {},
+            disconnect() {},
+          }
+        },
+        createScriptProcessor() {
+          const node = {
+            onaudioprocess: null,
+            connect() {
+              // Varios frames (>0.4 s @ 16 kHz) para superar el mínimo del streamer.
+              if (typeof node.onaudioprocess === 'function') {
+                for (let n = 0; n < 4; n += 1) {
+                  const data = new Float32Array(4096)
+                  for (let i = 0; i < data.length; i += 1) data[i] = Math.sin((i + n) / 20) * 0.2
+                  node.onaudioprocess({
+                    inputBuffer: { getChannelData: () => data },
+                  })
+                }
+              }
+            },
+            disconnect() { node.onaudioprocess = null },
+          }
+          return node
+        },
+      }
+      return ctx
+    }
     const temas = []
     const ctrl = createGrabacionSessionController({
       api,
       heartbeatMs: 60_000,
       checkpointAutoMs: 40,
+      chunkIntervalMs: 30,
       openStreams: async () => ({
-        micStream: { getTracks: () => [], getAudioTracks: () => [] },
+        micStream: { getTracks: () => [], getAudioTracks: () => [{ readyState: 'live' }] },
         displayStream: null,
-        mixedStream: { getTracks: () => [], getAudioTracks: () => [] },
-        audioCtx: null,
+        mixedStream: { getTracks: () => [], getAudioTracks: () => [{ readyState: 'live' }] },
+        audioCtx: makeFakeAudioCtx(),
         tabAudioOk: false,
         mimeType: 'audio/webm',
       }),
@@ -418,6 +463,7 @@ describe('createGrabacionSessionController', () => {
     const arm = await ctrl.armTemasCheckpoint()
     assert.equal(arm.ok, true)
     assert.equal(ctrl.isTemasCheckpointArmed(), true)
+    assert.equal(ctrl.getLiveMode(), 'azure')
     await new Promise((r) => setTimeout(r, 200))
     assert.ok(origins.includes('auto'), `esperaba auto en ${JSON.stringify(origins)}`)
     await ctrl.actualizarTemas({ origen: 'manual' })
@@ -425,5 +471,7 @@ describe('createGrabacionSessionController', () => {
     await ctrl.stop({ motivo: 'usuario' })
     assert.ok(origins.includes('final'), `esperaba final en ${JSON.stringify(origins)}`)
     assert.ok(temas.length >= 1)
+    // STT debe haber enviado WAV (no WebM del MediaRecorder).
+    assert.ok(chunkTypes.some((t) => /wav/i.test(t)), `esperaba chunks wav, got ${JSON.stringify(chunkTypes)}`)
   })
 })

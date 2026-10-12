@@ -11,10 +11,13 @@ from acta_grabacion_live_service import (
     MAX_TRAMO_INTENTOS,
     MSG_SCHEMA_LIVE,
     TRAMO_MIN_CHARS,
+    _azure_stt_content_type,
     _cola_desde_tramos,
     _decode_cola_tema,
+    _detalle_error_sintesis,
     _encode_cola_con_tema,
     _is_missing_live_column_error,
+    _is_wav_bytes,
     _merge_temas_por_clave,
     _normalize_temas,
     _parse_temas_json,
@@ -140,6 +143,47 @@ def test_speech_status_sin_clave(monkeypatch):
     assert st["acepta_transcripcion_cliente"] is False
     assert st["checkpoint_auto_segundos"] == 300
     assert "AZURE" in (st["detalle"] or "").upper()
+
+
+def _minimal_wav(num_samples: int = 1600) -> bytes:
+    import struct
+    data = struct.pack("<" + "h" * num_samples, *([0] * num_samples))
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + len(data),
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        16000,
+        32000,
+        2,
+        16,
+        b"data",
+        len(data),
+    )
+    return header + data
+
+
+def test_azure_stt_content_type_solo_wav_u_ogg():
+    wav = _minimal_wav()
+    assert _is_wav_bytes(wav)
+    assert "wav" in _azure_stt_content_type(wav, "audio/wav")
+    assert _azure_stt_content_type(b"OggS????", "audio/ogg; codecs=opus").startswith("audio/ogg")
+    # WebM / desconocido → vacío (requiere conversión o rechazo)
+    assert _azure_stt_content_type(b"\x1aE\xdf\xa3webm", "audio/webm") == ""
+    assert _azure_stt_content_type(b"nope", "audio/webm;codecs=opus") == ""
+
+
+def test_detalle_error_sintesis_explica_punto_de_falla():
+    msg = _detalle_error_sintesis(RuntimeError("credit balance too low"), model="claude-haiku-4-5")
+    assert "No se pudo sintetizar los temas con IA" in msg
+    assert "créditos" in msg.lower() or "saldo" in msg.lower()
+    msg2 = _detalle_error_sintesis(RuntimeError("not_found_error: model xyz"), model="bad-model")
+    assert "modelo no disponible" in msg2.lower()
+    assert "bad-model" in msg2
 
 
 class _Resp:
