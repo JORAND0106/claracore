@@ -762,7 +762,7 @@ function ActionPanel({
       pdfUrlRef.current = url
       setPdfUrl(url)
     } catch (e) {
-      setLocalErr(e.message || 'No se pudo generar el PDF')
+      setLocalErr(e.message || 'No se pudo generar el PDF del acta. Intente de nuevo.')
     } finally {
       setPdfBusy(false)
     }

@@ -1489,10 +1489,17 @@ def route_pdf_acta(
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     except Exception as exc:
+        # Detalle técnico solo en logs; el usuario ve un aviso breve institucional.
         _log.exception("pdf acta %s: %s", acta_id, exc)
-        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar el PDF del acta. Intente de nuevo o contacte a soporte.",
+        ) from exc
     if not pdf:
-        raise HTTPException(status_code=500, detail="El PDF generado está vacío")
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar el PDF del acta. Intente de nuevo o contacte a soporte.",
+        )
     return StreamingResponse(
         io.BytesIO(pdf),
         media_type="application/pdf",

@@ -131,17 +131,28 @@ export function createSeguimientoApi(contratoId, token) {
         ...(sig ? { signal: sig } : {}),
       })
       if (!res.ok) {
-        let detail = `No se pudo generar el PDF (${res.status})`
+        // Mensaje breve para el usuario; no reenviar jerga técnica del backend.
+        let detail = 'No se pudo generar el PDF del acta. Intente de nuevo.'
         try {
           const j = await res.json()
-          if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+          const raw = typeof j?.detail === 'string' ? j.detail : ''
+          // Solo aceptar avisos cortos institucionales (sin stack / LayoutError / etc.).
+          if (
+            raw
+            && raw.length <= 160
+            && !/LayoutError|Splitting|BlockBox|Traceback|Exception|xhtml2pdf|reportlab/i.test(raw)
+          ) {
+            detail = raw
+          }
         } catch { /* ignore */ }
         const err = new Error(detail)
         err.status = res.status
         throw err
       }
       const buf = await res.arrayBuffer()
-      if (!buf || buf.byteLength < 20) throw new Error('El PDF generado está vacío')
+      if (!buf || buf.byteLength < 20) {
+        throw new Error('No se pudo generar el PDF del acta. Intente de nuevo.')
+      }
       return new Blob([buf], { type: 'application/pdf' })
     },
     listBandeja: (params = {}) => {
