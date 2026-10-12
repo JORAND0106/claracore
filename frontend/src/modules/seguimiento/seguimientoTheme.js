@@ -42,9 +42,20 @@ export function labelEstadoActa(estado) {
   return ACTA_ESTADOS.find((x) => x.value === e)?.label || estado || '—'
 }
 
-export function labelTipoActa(tipo) {
-  const t = String(tipo || '').toLowerCase()
-  return ACTA_TIPOS.find((x) => x.value === t)?.label || (tipo || '—')
+export function labelTipoActa(tipo, customTipos = []) {
+  const raw = String(tipo || '').trim()
+  if (!raw) return '—'
+  const t = raw.toLowerCase()
+  if (t === 'interna') return 'Interna'
+  if (t === 'externa') return 'Externa'
+  const hit = ACTA_TIPOS.find((x) => x.value && x.value === t)
+  if (hit) return hit.label
+  const custom = (Array.isArray(customTipos) ? customTipos : []).find((x) => {
+    const v = String(x?.value || x?.nombre || x || '').trim()
+    return v.toLowerCase() === t
+  })
+  if (custom) return String(custom.label || custom.nombre || custom.value || custom).trim() || raw
+  return raw
 }
 
 export function numeroActaLabel(consecutivo) {

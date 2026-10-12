@@ -10,7 +10,8 @@ import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
 import BitacoraExportRangoBar from './BitacoraExportRangoBar'
 import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
-import { ACTA_TIPOS, ESTADOS } from './seguimientoTheme'
+import { ESTADOS } from './seguimientoTheme'
+import { buildTipoActaOptions } from './tipoActaNorm'
 import { hoyBogotaDate } from './vencimientoLevels'
 import {
   CALENDARIO_KIND,
@@ -79,6 +80,20 @@ export default function SeguimientoCalendario({
   const [reloadTick, setReloadTick] = useState(0)
   const [dayMenu, setDayMenu] = useState(null)
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [tiposActaOpts, setTiposActaOpts] = useState(() => buildTipoActaOptions([], { includeTodos: true, includeOtro: false }))
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await api.listTiposActa?.()
+        if (cancelled) return
+        const custom = Array.isArray(r?.tipos) ? r.tipos.filter((t) => !t.builtin) : []
+        setTiposActaOpts(buildTipoActaOptions(custom, { includeTodos: true, includeOtro: false }))
+      } catch { /* opcional */ }
+    })()
+    return () => { cancelled = true }
+  }, [api])
 
   const load = useCallback(async () => {
     const { start, end } = rangeRef.current
@@ -467,7 +482,7 @@ export default function SeguimientoCalendario({
                     || filtros.origen === 'compromiso'
                     || String(filtros.origen).startsWith('bitacora')}
                 >
-                  {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+                  {tiposActaOpts.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
                 </select>
               </Filter>
               <Filter t={t} label="Desde" className="cc-seguim-filter">

@@ -983,7 +983,7 @@ def proximo_consecutivo(sb, contrato_id: int) -> int:
 
 
 ACTA_ESTADOS = frozenset({"borrador", "realizada", "firmada"})
-ACTA_TIPOS = frozenset({"interna", "externa"})
+ACTA_TIPOS = frozenset({"interna", "externa"})  # builtins; personalizados vía seguimiento_tipo_acta
 ITEM_ESTADOS = frozenset({
     "abierto", "en_progreso", "cumplido", "parcial", "vencido", "cancelado", "reprogramado",
 })
@@ -1324,11 +1324,30 @@ def _ensure_asignado_externo_column(sb) -> bool:
     return _schema_has(sb, "asignado_externo_id", force=True)
 
 
-def _norm_tipo_acta(raw) -> str:
-    t = (raw or "interna").strip().lower()
-    if t not in ACTA_TIPOS:
-        raise ValueError("El tipo de acta debe ser Interna o Externa")
-    return t
+def _norm_tipo_acta(raw, *, custom_nombres: Optional[List[str]] = None) -> str:
+    """Normaliza tipo de acta: builtins interna/externa o personalizado del contrato."""
+    from seguimiento_tipo_acta import normalize_tipo_acta_value
+
+    try:
+        return normalize_tipo_acta_value(raw, custom_nombres=custom_nombres)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(str(exc) or "Tipo de acta no válido") from exc
+
+
+def _resolver_tipo_acta_para_contrato(sb, contrato_id: int, raw) -> str:
+    """Normaliza y, si es personalizado, lo registra en el catálogo del contrato."""
+    from seguimiento_tipo_acta import BUILTIN_TIPOS, list_tipos_custom, norm_tipo_key, upsert_tipo_custom
+
+    customs = [str(r.get("nombre") or "") for r in list_tipos_custom(sb, int(contrato_id))]
+    tipo = _norm_tipo_acta(raw, custom_nombres=customs)
+    if norm_tipo_key(tipo) not in BUILTIN_TIPOS:
+        upsert_tipo_custom(sb, int(contrato_id), tipo)
+        # Releer canónico por si ya existía con otra capitalización
+        customs2 = [str(r.get("nombre") or "") for r in list_tipos_custom(sb, int(contrato_id))]
+        tipo = _norm_tipo_acta(tipo, custom_nombres=customs2)
+    return tipo
 
 
 def _norm_estado_acta(raw, *, default: str = "borrador") -> str:
@@ -1493,6 +1512,10 @@ def _normalize_orden_items_for_storage(orden) -> Any:
                 row["expositor_usuario_id"] = int(exp_id)
         except (TypeError, ValueError):
             pass
+        # Clave estable FE para reordenar puntos sin perder vínculo con Temas
+        key = (it.get("key") or it.get("_key") or "").strip()
+        if key:
+            row["key"] = key[:80]
         out.append(row)
     return out
 
@@ -1835,24 +1858,25 @@ def list_actas(
             # Filtrar ambos valores canónicos en memoria si hay mapeo legacy
         except ValueError:
             estado_db = None
-    # Solo filtrar tipo en SQL si la columna existe
-    if tipo_acta and _schema_has(sb, "tipo_acta"):
-        try:
-            query = query.eq("tipo_acta", _norm_tipo_acta(tipo_acta))
-        except ValueError:
-            pass
+    # Tipo: filtrar en memoria por nombre_norm (builtins + personalizados; sin depender de casing).
     if fecha_desde:
         query = query.gte("fecha_reunion", str(fecha_desde)[:10])
     if fecha_hasta:
         query = query.lte("fecha_reunion", str(fecha_hasta)[:10])
     rows = query.limit(500).execute().data or []
     out = [_enrich_acta_row(dict(r)) for r in rows]
+    if tipo_acta:
+        from seguimiento_tipo_acta import norm_tipo_key
+
+        want_k = norm_tipo_key(tipo_acta)
+        if want_k:
+            out = [
+                r for r in out
+                if norm_tipo_key(r.get("tipo_acta") or "interna") == want_k
+            ]
     if estado:
         want = _norm_estado_acta(estado)
         out = [r for r in out if _norm_estado_acta(r.get("estado") or "borrador") == want]
-    if tipo_acta:
-        want_t = _norm_tipo_acta(tipo_acta)
-        out = [r for r in out if _norm_tipo_acta(r.get("tipo_acta") or "interna") == want_t]
     if user_id is not None:
         anexar_flags_acceso_actas(sb, out, int(user_id), current_user)
         # Por defecto: solo actas en las que participa (elaborador/creador/asistente).
@@ -2078,20 +2102,17 @@ def compromisos_abiertos_contrato(
                 or []
             )
         actas_map = {int(a["id"]): _enrich_acta_row(dict(a)) for a in arows}
-    want_tipo = None
-    if tipo_acta:
-        try:
-            want_tipo = _norm_tipo_acta(tipo_acta)
-        except ValueError:
-            want_tipo = None
+    from seguimiento_tipo_acta import norm_tipo_key
+
+    want_tipo_k = norm_tipo_key(tipo_acta) if tipo_acta else None
     out: List[dict] = []
     for r in rows:
         libres = r.get("campos_libres") if isinstance(r.get("campos_libres"), dict) else {}
         if libres.get("archivado_revision") is True or libres.get("archivado_revision") == "true":
             continue
         a = actas_map.get(int(r["acta_id"])) if r.get("acta_id") else None
-        origen_tipo = _norm_tipo_acta((a or {}).get("tipo_acta") or "interna")
-        if want_tipo and origen_tipo != want_tipo:
+        origen_tipo_k = norm_tipo_key((a or {}).get("tipo_acta") or "interna")
+        if want_tipo_k and origen_tipo_k != want_tipo_k:
             continue
         # Solo compromisos de actas anteriores a la que se está leyendo.
         if excluir_acta_id is not None and a:
@@ -2103,7 +2124,7 @@ def compromisos_abiertos_contrato(
         r["acta_consecutivo"] = a.get("consecutivo") if a else None
         r["acta_fecha"] = a.get("fecha_reunion") if a else None
         r["acta_numero"] = f"Acta Nº {a['consecutivo']}" if a and a.get("consecutivo") is not None else None
-        r["acta_tipo"] = origen_tipo if a else None
+        r["acta_tipo"] = (a.get("tipo_acta") if a else None) or None
         r["acta_elaborador_id"] = a.get("elaborador_id") if a else None
         r["acta_elaborador_nombre"] = a.get("elaborador_nombre") if a else None
         out.append(r)
@@ -2137,7 +2158,7 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     elab = _usuario_row(sb, int(elaborador_id))
     if not elab:
         raise ValueError("El elaborador debe ser un usuario registrado del contrato")
-    tipo = _norm_tipo_acta(data.get("tipo_acta"))
+    tipo = _resolver_tipo_acta_para_contrato(sb, contrato_id, data.get("tipo_acta"))
     estado = _estado_para_db(sb, data.get("estado") or "borrador")
     has_tipo = _schema_has(sb, "tipo_acta")
     orden_txt = _serialize_orden_del_dia(
@@ -2259,7 +2280,7 @@ def update_acta(
             patch[k] = (data.get(k) or "").strip() or None
     tipo = None
     if "tipo_acta" in data and data.get("tipo_acta"):
-        tipo = _norm_tipo_acta(data.get("tipo_acta"))
+        tipo = _resolver_tipo_acta_para_contrato(sb, contrato_id, data.get("tipo_acta"))
     elif acta.get("tipo_acta"):
         tipo = _norm_tipo_acta(acta.get("tipo_acta"))
     has_tipo = _schema_has(sb, "tipo_acta")

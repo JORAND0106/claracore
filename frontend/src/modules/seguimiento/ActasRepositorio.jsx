@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ACTA_ESTADOS,
-  ACTA_TIPOS,
   fmtFecha,
   labelEstadoActa,
   labelTipoActa,
   numeroActaLabel,
 } from './seguimientoTheme'
+import { buildTipoActaOptions } from './tipoActaNorm'
 
 export const MSG_ACTA_ACCESO_RESTRINGIDO =
   'No tiene acceso a esta acta. Solo el elaborador, el creador, los asistentes registrados y los roles Administrador o Desarrollador pueden consultarla.'
@@ -35,6 +35,25 @@ export default function ActasRepositorio({
     fecha_hasta: '',
     q: '',
   })
+  const [tiposCustom, setTiposCustom] = useState([])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await api.listTiposActa?.()
+        if (cancelled) return
+        const list = Array.isArray(r?.tipos) ? r.tipos.filter((t) => !t.builtin) : []
+        setTiposCustom(list)
+      } catch { /* opcional */ }
+    })()
+    return () => { cancelled = true }
+  }, [api])
+
+  const tipoOptions = useMemo(
+    () => buildTipoActaOptions(tiposCustom, { includeTodos: true, includeOtro: false }),
+    [tiposCustom],
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -85,7 +104,7 @@ export default function ActasRepositorio({
         </Field>
         <Field t={t} label="Tipo" className="cc-seguim-filter">
           <select value={filtros.tipo_acta} onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))} style={{ ...inp(t), width: '100%' }}>
-            {ACTA_TIPOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+            {tipoOptions.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
           </select>
         </Field>
         <Field t={t} label="Desde" className="cc-seguim-filter">
@@ -168,7 +187,7 @@ export default function ActasRepositorio({
                     <td data-label="Consecutivo" style={td}>{a.consecutivo ?? '—'}</td>
                     <td data-label="Número de acta" style={{ ...td, fontWeight: 700, color: t.text }}>{numeroActaLabel(a.consecutivo)}</td>
                     <td data-label="Fecha" style={td}>{fmtFecha(a.fecha_reunion)}</td>
-                    <td data-label="Tipo" style={td}>{labelTipoActa(a.tipo_acta || 'interna')}</td>
+                    <td data-label="Tipo" style={td}>{labelTipoActa(a.tipo_acta || 'interna', tiposCustom)}</td>
                     <td data-label="Ubicación" style={{ ...td, maxWidth: 220 }}>{a.ubicacion || '—'}</td>
                     <td data-label="Elaborador" style={td}>{a.elaborador_nombre || '—'}</td>
                     <td data-label="Estado" style={td}>

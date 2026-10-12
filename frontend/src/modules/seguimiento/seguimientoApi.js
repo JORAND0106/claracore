@@ -101,6 +101,8 @@ export function createSeguimientoApi(contratoId, token) {
       return get(`/seguimiento/${cid}/compromisos-abiertos${qs ? `?${qs}` : ''}`)
     },
     getActa: (actaId) => get(`/seguimiento/${cid}/actas/${actaId}`),
+    listTiposActa: () => get(`/seguimiento/${cid}/actas/tipos`),
+    upsertTipoActa: (nombre) => send('POST', `/seguimiento/${cid}/actas/tipos`, { nombre }),
     createActa: (body) => send('POST', `/seguimiento/${cid}/actas`, body),
     updateActa: (actaId, body) => send('PUT', `/seguimiento/${cid}/actas/${actaId}`, body),
     recalcularGestionObra: (actaId, body = {}) =>

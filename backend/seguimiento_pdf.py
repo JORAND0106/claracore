@@ -234,9 +234,11 @@ def _encabezado_oficial_html(
     En ambos casos la meta (Acta No., Fecha, Hora, Cto. Interventoría) va a la derecha.
     """
     titulo = _titulo_seguimiento_contrato(contrato, acta)
-    tipo_raw = str(acta.get("tipo_acta") or "").lower()
-    es_externa = tipo_raw == "externa"
-    tipo_lbl = {"interna": "Interna", "externa": "Externa"}.get(tipo_raw, "")
+    from seguimiento_tipo_acta import display_tipo_acta, norm_tipo_key
+
+    tipo_raw = str(acta.get("tipo_acta") or "").strip()
+    es_externa = norm_tipo_key(tipo_raw) == "externa"
+    tipo_lbl = display_tipo_acta(tipo_raw)
     consec = acta.get("consecutivo") or "—"
     dia, mes, anio = _fecha_partes_dia_mes_anio(acta.get("fecha_reunion"))
     hora_ini = _esc((acta.get("hora_inicio") or "").strip() or "—")
@@ -246,7 +248,7 @@ def _encabezado_oficial_html(
     tipo_line = (
         f'<div style="font-size:5.5pt;color:#475569;margin-top:1pt;line-height:1.1;">'
         f"Acta {_esc(tipo_lbl)}</div>"
-        if tipo_lbl else ""
+        if tipo_lbl and tipo_lbl != "—" else ""
     )
 
     # Tabla lateral en 4 filas (Fecha y Hora en una sola fila cada una) → menos altura.
@@ -720,8 +722,10 @@ def generar_pdf_acta(
     compromisos_previos = compromisos_previos or []
     firma_by_asistente = {int(f["asistente_id"]): f for f in firmas if f.get("asistente_id") is not None}
 
-    tipo_raw = str((acta or {}).get("tipo_acta") or "").lower()
-    es_externa = tipo_raw == "externa"
+    from seguimiento_tipo_acta import norm_tipo_key as _norm_tipo_key_pdf
+
+    tipo_raw = str((acta or {}).get("tipo_acta") or "").strip()
+    es_externa = _norm_tipo_key_pdf(tipo_raw) == "externa"
     logo_contratista = _logo_cell(
         (contrato or {}).get("logo_contratista"),
         "Logo contratista",

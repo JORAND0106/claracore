@@ -43,6 +43,13 @@ import {
   numeroActaLabel,
 } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
+import {
+  TIPO_ACTA_OTRO,
+  buildTipoActaOptions,
+  isBuiltinTipoActa,
+  normTipoActaKey,
+} from './tipoActaNorm'
+import { moverPuntoOrdenYTemas } from './ordenDiaReorder'
 
 const TABS_ACTA = [
   { id: 'encabezado', label: 'Encabezado' },
@@ -365,6 +372,9 @@ export default function ActaEditor({
   })
   const [flujoTabs, setFlujoTabs] = useState(() => flujoInicialNuevaActa())
   const [gestionObra, setGestionObra] = useState(null)
+  const [tiposActaCustom, setTiposActaCustom] = useState([])
+  const [tipoSelect, setTipoSelect] = useState('interna')
+  const [tipoOtroNombre, setTipoOtroNombre] = useState('')
   const [claraIdx, setClaraIdx] = useState(null)
   /** Índice de idea cuyo editor de esquema está abierto. */
   const [esquemaIdeaIdx, setEsquemaIdeaIdx] = useState(null)
@@ -582,6 +592,39 @@ export default function ActaEditor({
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      try {
+        const r = await apiRef.current?.listTiposActa?.()
+        if (cancelled || !r) return
+        const list = Array.isArray(r?.tipos) ? r.tipos : []
+        setTiposActaCustom(list.filter((t) => !t?.builtin && t?.value && !isBuiltinTipoActa(t.value)))
+      } catch { /* catálogo opcional */ }
+    })()
+    return () => { cancelled = true }
+  }, [api])
+
+  useEffect(() => {
+    const tipo = String(form.tipo_acta || 'interna').trim() || 'interna'
+    if (isBuiltinTipoActa(tipo)) {
+      setTipoSelect(tipo.toLowerCase())
+      setTipoOtroNombre('')
+      return
+    }
+    const inCustom = tiposActaCustom.some(
+      (t) => normTipoActaKey(t.value || t.nombre) === normTipoActaKey(tipo),
+    )
+    if (inCustom) {
+      setTipoSelect(tipo)
+      setTipoOtroNombre('')
+    } else if (tipo && !isBuiltinTipoActa(tipo)) {
+      // Tipo personalizado aún no en catálogo local: mostrarlo como opción directa
+      setTipoSelect(tipo)
+      setTipoOtroNombre('')
+    }
+  }, [form.tipo_acta, tiposActaCustom])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
       const client = apiRef.current
       if (skipServerHydrateRef.current) {
         skipServerHydrateRef.current = false
@@ -751,10 +794,19 @@ export default function ActaEditor({
     })
   }
 
+  const resolveTipoActaPayload = (formSrc = form) => {
+    if (tipoSelect === TIPO_ACTA_OTRO) {
+      const nom = String(tipoOtroNombre || '').trim()
+      if (!nom) throw new Error('Indique el nombre del nuevo tipo de acta')
+      return nom
+    }
+    return String(formSrc.tipo_acta || tipoSelect || 'interna').trim() || 'interna'
+  }
+
   const buildPayload = (extra = {}, formSrc = form, flujoSrc = flujoTabs) => ({
     fecha_reunion: formSrc.fecha_reunion,
     ubicacion: formSrc.ubicacion,
-    tipo_acta: formSrc.tipo_acta || 'interna',
+    tipo_acta: resolveTipoActaPayload(formSrc),
     orden_del_dia: serializeOrdenItems(formSrc.orden_items || []),
     flujo_tabs: mergeFlujoProgress(flujoInicialNuevaActa(), flujoSrc),
     elaborador_id: formSrc.elaborador_id,
@@ -1011,6 +1063,18 @@ export default function ActaEditor({
         null,
         { flujoOverride: avance.flujo, reservaOrdenOnly },
       )
+      if (row?.tipo_acta) {
+        setForm((f) => (f.tipo_acta === row.tipo_acta ? f : { ...f, tipo_acta: row.tipo_acta }))
+        setTipoSelect(
+          isBuiltinTipoActa(row.tipo_acta) ? String(row.tipo_acta).toLowerCase() : row.tipo_acta,
+        )
+        setTipoOtroNombre('')
+      }
+      try {
+        const tip = await api.listTiposActa?.()
+        const list = Array.isArray(tip?.tipos) ? tip.tipos : []
+        setTiposActaCustom(list.filter((t) => !t?.builtin && t?.value && !isBuiltinTipoActa(t.value)))
+      } catch { /* ignore */ }
       // El avance local manda: si el backend aún no persistió flujo_tabs, no se pierde el progreso.
       const flujoMerged = mergeFlujoProgress(avance.flujo, row.flujo_tabs)
       setFlujoTabs(flujoMerged)
@@ -1260,7 +1324,7 @@ export default function ActaEditor({
             {consecutivo != null ? numeroActaLabel(consecutivo) : 'Nueva acta de reunión'}
           </div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta)}
+            {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta, tiposActaCustom)}
             {sellada ? ' · sellada (solo lectura)' : ''}
             {!sellada && encabezadoGuardado && soloLectura && !puedeEditarOrden ? ' · solo lectura (elaborador exclusivo)' : ''}
             {!sellada && encabezadoGuardado && soloLectura && puedeEditarOrden ? ' · puede reservar puntos del orden del día' : ''}
@@ -1422,13 +1486,43 @@ export default function ActaEditor({
           <Field t={t} label="Tipo de acta *">
             <select
               disabled={soloLectura}
-              value={form.tipo_acta || 'interna'}
-              onChange={(e) => setField('tipo_acta', e.target.value)}
+              value={tipoSelect}
+              onChange={(e) => {
+                const v = e.target.value
+                setTipoSelect(v)
+                if (v === TIPO_ACTA_OTRO) {
+                  setTipoOtroNombre('')
+                  return
+                }
+                setTipoOtroNombre('')
+                setField('tipo_acta', v)
+              }}
               style={inp(t)}
             >
-              <option value="interna">Interna</option>
-              <option value="externa">Externa</option>
+              {buildTipoActaOptions(
+                [
+                  ...tiposActaCustom,
+                  // Si el acta ya tiene un tipo personalizado, incluirlo aunque aún no esté en catálogo
+                  ...(form.tipo_acta && !isBuiltinTipoActa(form.tipo_acta)
+                    ? [{ value: form.tipo_acta, label: form.tipo_acta }]
+                    : []),
+                ],
+                { includeOtro: !soloLectura },
+              ).map((opt) => (
+                <option key={opt.value || 'x'} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
+            {tipoSelect === TIPO_ACTA_OTRO && !soloLectura && (
+              <input
+                type="text"
+                value={tipoOtroNombre}
+                placeholder="Nombre del nuevo tipo…"
+                maxLength={80}
+                onChange={(e) => setTipoOtroNombre(e.target.value)}
+                style={{ ...inp(t), marginTop: 6 }}
+                aria-label="Nombre del nuevo tipo de acta"
+              />
+            )}
           </Field>
           <Field t={t} label="Ubicación">
             {soloLectura ? (
@@ -1494,7 +1588,9 @@ export default function ActaEditor({
               key={it.key ?? idx}
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'auto minmax(160px, 1.4fr) minmax(160px, 1fr) auto',
+                gridTemplateColumns: soloLecturaOrden
+                  ? 'auto minmax(160px, 1.4fr) minmax(160px, 1fr)'
+                  : 'auto minmax(140px, 1.4fr) minmax(140px, 1fr) auto auto',
                 gap: 8,
                 alignItems: 'center',
               }}
@@ -1565,8 +1661,60 @@ export default function ActaEditor({
                 />
               )}
               {!soloLecturaOrden && (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    title="Subir punto"
+                    aria-label="Subir punto"
+                    disabled={idx === 0}
+                    style={{
+                      ...iconBtnOrden(t),
+                      opacity: idx === 0 ? 0.35 : 1,
+                      cursor: idx === 0 ? 'default' : 'pointer',
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setForm((f) => {
+                        const moved = moverPuntoOrdenYTemas(
+                          f.orden_items, f.ideas, idx, idx - 1,
+                          { newRowKey: (p) => newRowKey(p || 'idea') },
+                        )
+                        return { ...f, ...moved }
+                      })
+                    }}
+                  >
+                    <IconChevronUp />
+                  </button>
+                  <button
+                    type="button"
+                    title="Bajar punto"
+                    aria-label="Bajar punto"
+                    disabled={idx >= (form.orden_items || []).length - 1}
+                    style={{
+                      ...iconBtnOrden(t),
+                      opacity: idx >= (form.orden_items || []).length - 1 ? 0.35 : 1,
+                      cursor: idx >= (form.orden_items || []).length - 1 ? 'default' : 'pointer',
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setForm((f) => {
+                        const moved = moverPuntoOrdenYTemas(
+                          f.orden_items, f.ideas, idx, idx + 1,
+                          { newRowKey: (p) => newRowKey(p || 'idea') },
+                        )
+                        return { ...f, ...moved }
+                      })
+                    }}
+                  >
+                    <IconChevronDown />
+                  </button>
+                </div>
+              )}
+              {!soloLecturaOrden && (
                 <button
                   type="button"
+                  title="Quitar punto"
+                  aria-label="Quitar punto"
                   style={ghost(t)}
                   onClick={() => patchList('orden_items', (list) => list.filter((_, i) => i !== idx))}
                 >
@@ -1967,7 +2115,7 @@ export default function ActaEditor({
       {tab === 'compromisos' && (
       <section style={card(t)}>
         <h3 style={h3(t)}>
-          Compromisos abiertos de actas {form.tipo_acta === 'externa' ? 'externas' : 'internas'} anteriores
+          Compromisos abiertos de actas «{labelTipoActa(form.tipo_acta, tiposActaCustom)}» anteriores
         </h3>
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
           Exclusivamente compromisos arrastrados de actas anteriores del mismo tipo.
@@ -1980,7 +2128,7 @@ export default function ActaEditor({
           t={t}
           api={api}
           items={previos}
-          emptyMessage={`No hay compromisos abiertos previos de actas ${form.tipo_acta === 'externa' ? 'externas' : 'internas'}.`}
+          emptyMessage={`No hay compromisos abiertos previos de actas «${labelTipoActa(form.tipo_acta, tiposActaCustom)}».`}
           showActaOrigen
           permitirArchivar
           onEditCompromiso={abrirEditarCompromiso}
@@ -2558,6 +2706,41 @@ function ghost(t) {
 }
 
 /** Botón-icono compacto (mismo criterio visual que el editor de esquema). */
+function iconBtnOrden(t) {
+  return {
+    border: `1px solid ${t.border}`,
+    borderRadius: 8,
+    width: 36,
+    height: 36,
+    minWidth: 36,
+    minHeight: 36,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: t.bgCard || t.bg || 'transparent',
+    color: t.text,
+    padding: 0,
+    WebkitTapHighlightColor: 'transparent',
+    touchAction: 'manipulation',
+  }
+}
+
+function IconChevronUp() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m18 15-6-6-6 6" />
+    </svg>
+  )
+}
+
+function IconChevronDown() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  )
+}
+
 function iconBtn(t) {
   return {
     width: 34,

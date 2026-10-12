@@ -103,10 +103,12 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
       return String(row?.titulo || '').trim().toLowerCase() === titulo.toLowerCase()
     })
     if (hit >= 0) {
+      const itemKey = String(p.key || p._key || '').trim() || null
       list[hit] = {
         ...list[hit],
         _claveGrabacion: clave,
         _desdeOrdenDia: true,
+        _ordenItemKey: itemKey || list[hit]._ordenItemKey || null,
         _temaAbierto: !!list[hit]._temaAbierto,
         quien_dijo: String(list[hit].quien_dijo || p.expositor_nombre || '').trim(),
         titulo: list[hit].titulo || titulo,
@@ -123,12 +125,14 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
     const titulo = String(p.texto || p.titulo || '').trim()
     const expositor = String(p.expositor_nombre || '').trim()
     const idx = byClave.get(clave)
+    const itemKey = String(p.key || p._key || '').trim() || null
     if (idx != null) {
       const prev = list[idx]
       const next = {
         ...prev,
         _claveGrabacion: clave,
         _desdeOrdenDia: true,
+        _ordenItemKey: itemKey || prev._ordenItemKey || null,
         titulo: prev.titulo || titulo,
         quien_dijo: prev.quien_dijo || expositor,
         _temaAbierto: !!prev._temaAbierto,
@@ -137,6 +141,7 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
         next.titulo !== prev.titulo
         || next.quien_dijo !== prev.quien_dijo
         || prev._claveGrabacion !== clave
+        || prev._ordenItemKey !== next._ordenItemKey
         || !prev._desdeOrdenDia
       ) {
         list[idx] = next
@@ -149,6 +154,7 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
       _key: makeKey('idea'),
       _claveGrabacion: clave,
       _desdeOrdenDia: true,
+      _ordenItemKey: itemKey,
       _temaAbierto: false,
       titulo,
       quien_dijo: expositor,
