@@ -155,12 +155,28 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     orden: 14,
   },
   {
-    id: 'almacen_solicita_aprueba',
-    nombre: 'Solicita y aprueba materiales',
-    resumen: 'Nueva solicitud, borrador, aprobación de insumos y generación de OC.',
-    icono: '🧾',
+    id: 'almacen_solicita_materiales',
+    nombre: 'Solicita tus materiales',
+    resumen: 'Nueva solicitud por tramo y PK-ID, borrador y solicitud de aprobación.',
+    icono: '📝',
     grupo: 'almacen',
     orden: 15,
+  },
+  {
+    id: 'almacen_asigna_insumo_proveedor',
+    nombre: 'Asigna el insumo y el proveedor',
+    resumen: 'Asignación del insumo del catálogo y elección del proveedor, línea por línea o en bloque.',
+    icono: '🔗',
+    grupo: 'almacen',
+    orden: 16,
+  },
+  {
+    id: 'almacen_aprueba_genera_oc',
+    nombre: 'Aprueba insumos y genera la orden de compra',
+    resumen: 'Aprobación de líneas, individual o en bloque, y generación de la OC por proveedor.',
+    icono: '🛒',
+    grupo: 'almacen',
+    orden: 17,
   },
   {
     id: 'almacen_mueve_obra',
@@ -168,7 +184,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Entradas, despachador, devoluciones y salidas.',
     icono: '🚚',
     grupo: 'almacen',
-    orden: 16,
+    orden: 18,
   },
   {
     id: 'almacen_consulta_inventario',
@@ -176,7 +192,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Inventario de materiales en almacén.',
     icono: '📊',
     grupo: 'almacen',
-    orden: 17,
+    orden: 19,
   },
 
   // ── Seguimiento ───────────────────────────────────────────────────────────
@@ -186,7 +202,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Calendario y nueva tarea.',
     icono: '📅',
     grupo: 'seguimiento',
-    orden: 18,
+    orden: 20,
   },
   {
     id: 'seg_constancia_digital',
@@ -194,7 +210,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Nueva acta, bitácora de obra y libro digital.',
     icono: '📓',
     grupo: 'seguimiento',
-    orden: 19,
+    orden: 21,
   },
 
   // ── Topografía ────────────────────────────────────────────────────────────
@@ -204,7 +220,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Biblioteca de puntos y creación de un nuevo punto.',
     icono: '📍',
     grupo: 'topografia',
-    orden: 20,
+    orden: 22,
   },
   {
     id: 'topo_poligonales_nivelacion',
@@ -212,7 +228,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Crear poligonal y circuito de nivelación.',
     icono: '📏',
     grupo: 'topografia',
-    orden: 21,
+    orden: 23,
   },
   {
     id: 'topo_diseno_entrega',
@@ -220,7 +236,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Estructura de diseño / diseño geométrico y carteras de vía.',
     icono: '🛣️',
     grupo: 'topografia',
-    orden: 22,
+    orden: 24,
   },
 ]
 
@@ -275,8 +291,10 @@ export const MAPA_NAVEGACION_ID_LEGACY = {
 
   almacen_crear_insumo: 'almacen_catalogo_insumos',
   almacen_plantillas: 'almacen_catalogo_insumos',
-  almacen_solicitud_borrador_aprobacion: 'almacen_solicita_aprueba',
-  almacen_aprobacion_oc: 'almacen_solicita_aprueba',
+  // Tarjeta unificada anterior → primera de las tres (conserva video/contenido).
+  almacen_solicita_aprueba: 'almacen_solicita_materiales',
+  almacen_solicitud_borrador_aprobacion: 'almacen_solicita_materiales',
+  almacen_aprobacion_oc: 'almacen_aprueba_genera_oc',
   almacen_entradas: 'almacen_mueve_obra',
   almacen_despachador: 'almacen_mueve_obra',
   almacen_devoluciones: 'almacen_mueve_obra',
