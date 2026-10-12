@@ -45,7 +45,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-08-05.1-tema-richtext"
+PDF_ACTA_TEMPLATE_VERSION = "2026-10-12.1-pdf-split-fix"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -447,8 +447,10 @@ def _idea_imagenes_html(imagenes: Optional[list]) -> str:
             continue
         w_pt, h_pt = _fit_image_in_box_pt(uri)
         nombre = _esc((im or {}).get("nombre") or "Esquema")
+        # Sin page-break-inside:avoid: dentro de la celda de sección xhtml2pdf
+        # falla con KeepTogether/Splitting. La caja ya tiene altura fija acotada.
         blocks.append(
-            f'<div style="margin:6pt 0 4pt;text-align:center;page-break-inside:avoid;">'
+            f'<div style="margin:6pt 0 4pt;text-align:center;">'
             f'<div style="width:{_IDEA_IMG_BOX_W_PT}pt;height:{_IDEA_IMG_BOX_H_PT}pt;'
             f'border:0.4pt solid {_BORDE_SUAVE};margin:0 auto;text-align:center;'
             f'line-height:{_IDEA_IMG_BOX_H_PT}pt;overflow:hidden;">'
@@ -470,14 +472,34 @@ def _box_row(cells_html: str) -> str:
 
 
 def _section(title: str, body: str, *, bordered: bool = True) -> str:
-    """Sección con encabezado oscuro. bordered=False suaviza el marco (acta interna)."""
-    border = f"border:1pt solid {_BORDE};" if bordered else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    """Sección con encabezado oscuro. bordered=False suaviza el marco (acta interna).
+
+    Importante (xhtml2pdf): no usar un ``div`` wrapper con encabezado + cuerpo
+    como únicos hijos (BlockBox de 2 flowables). Con tablas TipTap o bloques
+    altos eso dispara Splitting error(n==2) y el PDF no se genera.
+
+    Usamos una tabla de 2 filas (título / cuerpo): mismo aspecto (barra oscura +
+    marco) y xhtml2pdf sí puede partir el contenido entre páginas.
+    Tampoco poner ``page-break-inside:avoid`` dentro del cuerpo (p. ej. firmas
+    o esquemas): dentro de celdas provoca KeepTogether.draw / Splitting.
+    """
+    border = (
+        f"border:1pt solid {_BORDE};"
+        if bordered
+        else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    )
+    head_border = (
+        f"border-bottom:1pt solid {_BORDE};"
+        if bordered
+        else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    )
     return (
-        f'<div class="sec" style="{border}margin:6pt 0 0;page-break-inside:auto;">'
-        f'<div style="background:{_BG_H};border-bottom:1pt solid {_BORDE};'
-        f'padding:4pt 6pt;font-size:9pt;font-weight:700;color:{_FG_H};">{_esc(title)}</div>'
-        f'<div style="padding:6pt;font-size:9pt;">{body}</div>'
-        f"</div>"
+        f'<table class="sec" width="100%" cellspacing="0" cellpadding="0" '
+        f'style="{border}margin:6pt 0 0;border-collapse:collapse;">'
+        f'<tr><td style="background:{_BG_H};{head_border}'
+        f'padding:4pt 6pt;font-size:9pt;font-weight:700;color:{_FG_H};">{_esc(title)}</td></tr>'
+        f'<tr><td style="padding:6pt;font-size:9pt;">{body}</td></tr>'
+        f"</table>"
     )
 
 
@@ -642,7 +664,9 @@ def generar_pdf_acta(
     if not apartados_html:
         apartados_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin apartados adicionales.</div>"
 
-    # Firmas en 2 columnas: Nombre | Cargo | Empresa | Email | Firma
+    # Firmas en 2 columnas: Nombre | Cargo | Empresa | Email | Firma.
+    # Una sola tabla 2-col con todas las firmas no pagina bien en xhtml2pdf
+    # (Splitting error). Emparejamos de a dos en mini-tablas; mismo aspecto.
     firma_blocks = []
     for a in asistentes or []:
         fr = None
@@ -678,23 +702,21 @@ def generar_pdf_acta(
             f"{firma_img}</div>"
         )
 
-    firmas_left = ""
-    firmas_right = ""
-    for i, block in enumerate(firma_blocks):
-        if i % 2 == 0:
-            firmas_left += block
-        else:
-            firmas_right += block
     if not firma_blocks:
-        firmas_left = "<div style='color:#94a3b8;font-size:9pt;'>Sin firmantes.</div>"
-
-    firmas_html = (
-        f"<table width='100%' cellspacing='0' cellpadding='0'>"
-        f"<tr>"
-        f"<td style='width:50%;vertical-align:top;padding-right:8pt;'>{firmas_left}</td>"
-        f"<td style='width:50%;vertical-align:top;padding-left:8pt;'>{firmas_right}</td>"
-        f"</tr></table>"
-    )
+        firmas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin firmantes.</div>"
+    else:
+        pairs = []
+        for i in range(0, len(firma_blocks), 2):
+            left = firma_blocks[i]
+            right = firma_blocks[i + 1] if i + 1 < len(firma_blocks) else ""
+            pairs.append(
+                f"<table width='100%' cellspacing='0' cellpadding='0'>"
+                f"<tr>"
+                f"<td style='width:50%;vertical-align:top;padding-right:8pt;'>{left}</td>"
+                f"<td style='width:50%;vertical-align:top;padding-left:8pt;'>{right}</td>"
+                f"</tr></table>"
+            )
+        firmas_html = "".join(pairs)
 
     prox_parts = []
     if acta.get("proxima_fecha"):
@@ -716,7 +738,9 @@ def generar_pdf_acta(
 @page {{ size: letter portrait; margin: 12mm 10mm; }}
 body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9pt; }}
 .pdf-idea {{ page-break-inside: auto; }}
-.pdf-firma {{ page-break-inside: avoid; }}
+/* Evitar page-break-inside:avoid en firmas/esquemas dentro de celdas:
+   xhtml2pdf lanza Splitting error / KeepTogether.draw y el PDF no sale. */
+.pdf-firma {{ page-break-inside: auto; }}
 .sec {{ page-break-inside: auto; }}
 </style></head><body>
 {header_block}
