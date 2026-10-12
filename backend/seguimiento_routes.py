@@ -1329,7 +1329,7 @@ def route_get_acta(contrato_id: int, acta_id: int, current_user=Depends(get_curr
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     try:
-        acta = get_acta(supabase, acta_id, contrato_id)
+        acta = get_acta(supabase, acta_id, contrato_id, current_user=current_user)
         assert_puede_ver_acta(supabase, acta, _uid(current_user), current_user)
         acta["puede_abrir"] = True
         acta["acceso_restringido"] = False

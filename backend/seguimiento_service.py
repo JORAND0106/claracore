@@ -1973,7 +1973,45 @@ def _filtrar_actas_por_keywords(sb, rows: List[dict], q: str) -> List[dict]:
     return out
 
 
-def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
+def _mask_gestion_obra_valores(acta: dict, current_user: Optional[dict] = None) -> dict:
+    """Oculta valor de solicitudes de almacén si el rol no tiene visibilidad económica."""
+    go = acta.get("gestion_obra")
+    if not isinstance(go, dict):
+        return acta
+    ver = False
+    try:
+        from almacen_permissions import puede_ver_valores_economicos_almacen
+        ver = bool(puede_ver_valores_economicos_almacen(current_user))
+    except Exception:
+        ver = False
+    go = dict(go)
+    go["ver_valores_almacen"] = ver
+    datos = dict(go.get("datos") or {}) if isinstance(go.get("datos"), dict) else {}
+    al = dict(datos.get("almacen") or {}) if isinstance(datos.get("almacen"), dict) else {}
+    al["ver_valores"] = ver
+    if not ver:
+        sols = []
+        for s in al.get("solicitudes") or []:
+            if isinstance(s, dict):
+                s2 = dict(s)
+                s2.pop("valor", None)
+                sols.append(s2)
+            else:
+                sols.append(s)
+        al["solicitudes"] = sols
+    datos["almacen"] = al
+    go["datos"] = datos
+    acta["gestion_obra"] = go
+    return acta
+
+
+def get_acta(
+    sb,
+    acta_id: int,
+    contrato_id: Optional[int] = None,
+    *,
+    current_user: Optional[dict] = None,
+) -> dict:
     q = sb.table("seguimiento_acta").select("*").eq("id", int(acta_id))
     if contrato_id is not None:
         q = q.eq("contrato_id", int(contrato_id))
@@ -2012,6 +2050,8 @@ def get_acta(sb, acta_id: int, contrato_id: Optional[int] = None) -> dict:
     acta["firmas"] = (
         sb.table("seguimiento_firma_registro").select("*").eq("acta_id", aid).execute().data or []
     )
+    if current_user is not None:
+        acta = _mask_gestion_obra_valores(acta, current_user)
     return acta
 
 
@@ -2378,14 +2418,28 @@ def recalcular_gestion_obra_acta(
     if not d0 or not d1:
         d0, d1 = rango_semana_anterior(acta.get("fecha_reunion"))
     obs = merge_observaciones(prev.get("observaciones") if conservar_observaciones else None, None)
-    snap = build_snapshot(sb, int(contrato_id), d0, d1, observaciones=obs)
+    ver_eco = False
+    try:
+        from almacen_permissions import puede_ver_valores_economicos_almacen
+        ver_eco = bool(puede_ver_valores_economicos_almacen(current_user))
+    except Exception:
+        ver_eco = False
+    # Congelar valores si el elaborador/editor puede verlos; el PDF nunca los muestra.
+    snap = build_snapshot(
+        sb, int(contrato_id), d0, d1,
+        observaciones=obs,
+        ver_economicos=True,  # guardar valor en snapshot; se oculta por rol al servir
+    )
+    snap["ver_valores_almacen"] = ver_eco
+    if isinstance(snap.get("datos"), dict) and isinstance(snap["datos"].get("almacen"), dict):
+        snap["datos"]["almacen"]["ver_valores"] = ver_eco
     _persist_acta_row(
         sb,
         {"gestion_obra": snap, "updated_at": _now_utc().isoformat()},
         acta_id=acta_id,
         contrato_id=contrato_id,
     )
-    return get_acta(sb, acta_id, contrato_id)
+    return get_acta(sb, acta_id, contrato_id, current_user=current_user)
 
 
 def _norm_email(raw: Optional[str]) -> Optional[str]:

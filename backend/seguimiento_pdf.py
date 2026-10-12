@@ -45,7 +45,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-10-12.3-gestion-obra"
+PDF_ACTA_TEMPLATE_VERSION = "2026-10-12.4-gestion-obra-dia"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -552,7 +552,7 @@ def _titulo_tema_fallback(texto: str) -> str:
 
 
 def _gestion_obra_pdf_html(acta: dict) -> str:
-    """HTML ejecutivo del consolidado Gestión de obra (tablas + observaciones)."""
+    """HTML ejecutivo del consolidado Gestión de obra (por día; sin valores de almacén)."""
     go = acta.get("gestion_obra") if isinstance(acta.get("gestion_obra"), dict) else None
     if not go or not isinstance(go.get("datos"), dict):
         return (
@@ -579,13 +579,44 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             for lab in labels
         )
         body = ""
-        for r in (rows or [])[:60]:
+        for r in (rows or [])[:80]:
             tds = "".join(
                 f"<td style='padding:2.5pt 4pt;border:0.4pt solid #e2e8f0;font-size:8pt;'>"
                 f"{_esc((r or {}).get(k))}</td>"
                 for k in keys
             )
             body += f"<tr>{tds}</tr>"
+        return (
+            f"<table width='100%' cellspacing='0' cellpadding='0' "
+            f"style='border-collapse:collapse;margin:0 0 6pt;'>"
+            f"<tr>{th}</tr>{body}</table>"
+        )
+
+    def _matrix(label_col: str, dias: list, rows: list) -> str:
+        if not rows:
+            return ""
+        labels = [label_col] + [str(d)[5:] for d in dias] + ["Total"]
+        th = "".join(
+            f"<th style='padding:2pt 3pt;border:0.4pt solid #cbd5e1;text-align:center;"
+            f"background:{_BG_H};color:{_FG_H};font-size:7.5pt;'>{_esc(lab)}</th>"
+            for lab in labels
+        )
+        body = ""
+        for r in rows[:40]:
+            cells = [str(r.get("label") or "")]
+            por = r.get("por_dia") or {}
+            for d in dias:
+                v = por.get(d)
+                cells.append("" if v in (None, 0, 0.0) else str(v))
+            cells.append(str(r.get("total") if r.get("total") is not None else ""))
+            body += "<tr>" + "".join(
+                (
+                    f"<td style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
+                    f"text-align:{'left' if i == 0 else 'right'};'>"
+                    f"{_esc(c) or '—'}</td>"
+                )
+                for i, c in enumerate(cells)
+            ) + "</tr>"
         return (
             f"<table width='100%' cellspacing='0' cellpadding='0' "
             f"style='border-collapse:collapse;margin:0 0 6pt;'>"
@@ -610,11 +641,27 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
     if not pj.get("disponible"):
         b1 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(pj.get('mensaje') or 'Sin datos.')}</div>"
     else:
-        pers = (pj.get("personal") or {}).get("filas") or []
-        maq = (pj.get("maquinaria") or {}).get("filas") or []
-        b1 = _tbl_keys(
-            ["Empresa", "Cargo", "Cant."], ["empresa", "cargo", "cantidad"], pers,
-        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin personal consolidado.</div>"
+        dias = pj.get("dias") or []
+        b1 = ""
+        for emp in (pj.get("personal") or {}).get("empresas") or []:
+            b1 += (
+                f"<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>"
+                f"{_esc(emp.get('empresa'))} · total { _esc(emp.get('total')) }</div>"
+            )
+            b1 += _matrix(
+                "Cargo",
+                dias,
+                [
+                    {"label": f.get("cargo"), "por_dia": f.get("por_dia"), "total": f.get("total")}
+                    for f in (emp.get("filas") or [])
+                ],
+            )
+        if not b1:
+            # compat filas planas
+            pers = (pj.get("personal") or {}).get("filas") or pj.get("filas") or []
+            b1 = _tbl_keys(
+                ["Empresa", "Cargo", "Cant."], ["empresa", "cargo", "cantidad"], pers,
+            ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin personal consolidado.</div>"
         aus = pj.get("ausentismo") or {}
         jor = pj.get("jornada") or {}
         extra = []
@@ -633,21 +680,43 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             + " · ".join(_esc(x) for x in extra)
             + "</div>"
         )
-        if maq:
-            b1 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Maquinaria / transporte</div>"
-            b1 += _tbl_keys(["Equipo", "Cant."], ["equipo", "cantidad"], maq)
+        maq_filas = (pj.get("maquinaria") or {}).get("filas") or []
+        if maq_filas:
+            b1 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Maquinaria</div>"
+            if isinstance(maq_filas[0], dict) and "por_dia" in maq_filas[0]:
+                b1 += _matrix(
+                    "Equipo",
+                    dias,
+                    [
+                        {"label": f.get("equipo"), "por_dia": f.get("por_dia"), "total": f.get("total")}
+                        for f in maq_filas
+                    ],
+                )
+            else:
+                b1 += _tbl_keys(["Equipo", "Cant."], ["equipo", "cantidad"], maq_filas)
     parts.append(_block("1. Personal y jornada", b1, obs.get("personal_jornada") or ""))
 
-    # 2 Cantidades
+    # 2 Cantidades (estilo informe: tramo / capítulo / ítem; sin dinero)
     co = datos.get("cantidades_obra") or {}
     if not co.get("disponible"):
         b2 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(co.get('mensaje') or 'Sin cantidades.')}</div>"
     else:
-        b2 = _tbl_keys(
-            ["Tramo", "Ítem", "Und", "Cantidad"],
-            ["tramo", "item", "unidad", "cantidad"],
-            co.get("filas") or [],
-        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
+        b2 = ""
+        for tr in co.get("tramos") or []:
+            b2 += f"<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Tramo: {_esc(tr.get('tramo'))}</div>"
+            for cap in tr.get("capitulos") or []:
+                b2 += f"<div style='font-size:8pt;color:#475569;margin:2pt 0;'>Capítulo {_esc(cap.get('capitulo'))}</div>"
+                b2 += _tbl_keys(
+                    ["Ítem", "Descripción", "Und", "Cantidad"],
+                    ["item_numero", "item_descripcion", "unidad", "cantidad"],
+                    cap.get("items") or [],
+                )
+        if not b2:
+            b2 = _tbl_keys(
+                ["Tramo", "Capítulo", "Ítem", "Descripción", "Und", "Cantidad"],
+                ["tramo", "capitulo", "item_numero", "item_descripcion", "unidad", "cantidad"],
+                co.get("filas") or [],
+            ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
     parts.append(_block("2. Cantidades de obra", b2, obs.get("cantidades_obra") or ""))
 
     # 3 Actividades
@@ -662,16 +731,28 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
         ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
     parts.append(_block("3. Actividades adicionales", b3, obs.get("actividades") or ""))
 
-    # 4 Almacén
+    # 4 Almacén — SIN columna valor (PDF lo leen todos los asistentes)
     al = datos.get("almacen") or {}
     if not al.get("disponible"):
         b4 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(al.get('mensaje') or 'Sin almacén.')}</div>"
     else:
         b4 = _tbl_keys(
-            ["Tipo", "Fecha", "Estado", "Ref."],
-            ["tipo", "fecha", "estado", "ref"],
-            al.get("filas") or [],
-        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
+            ["Fecha", "Solicitante", "Insumos", "Estado"],
+            ["fecha", "solicitante", "insumos_resumen", "estado"],
+            al.get("solicitudes") or [],
+        )
+        if al.get("entradas"):
+            b4 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Entradas</div>"
+            b4 += _tbl_keys(
+                ["Fecha", "Estado", "Ref."], ["fecha", "estado", "ref"], al.get("entradas") or [],
+            )
+        if al.get("salidas"):
+            b4 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Salidas</div>"
+            b4 += _tbl_keys(
+                ["Fecha", "Estado", "Ref."], ["fecha", "estado", "ref"], al.get("salidas") or [],
+            )
+        if not b4:
+            b4 = "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
     parts.append(_block("4. Almacén", b4, obs.get("almacen") or ""))
 
     # 5 Programación
