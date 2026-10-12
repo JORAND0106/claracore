@@ -115,7 +115,7 @@ export default function ItemDetalleModal({
         return URL.createObjectURL(blob)
       })
     } catch (e) {
-      setPdfError(e.message || 'No se pudo generar el PDF del acta')
+      setPdfError(e.message || 'No se pudo generar el PDF del acta. Intente de nuevo.')
     } finally {
       setPdfBusy(false)
     }

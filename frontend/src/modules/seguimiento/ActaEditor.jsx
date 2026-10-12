@@ -110,6 +110,10 @@ function friendlyFetchError(e, fallback = 'Error de red') {
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
     return 'No se pudo conectar con el servidor. Verifique su conexión e intente de nuevo.'
   }
+  // No mostrar jerga técnica de generación PDF (LayoutError, BlockBox, etc.).
+  if (/LayoutError|Splitting error|BlockBox|xhtml2pdf|reportlab|KeepTogether/i.test(msg)) {
+    return fallback || 'No se pudo generar el PDF del acta. Intente de nuevo.'
+  }
   return msg || fallback
 }
 
@@ -1133,7 +1137,7 @@ export default function ActaEditor({
         setOkMsg(`Vista previa generada (${guardadas} idea${guardadas === 1 ? '' : 's'} central${guardadas === 1 ? '' : 'es'}). Deslice el PDF si hay varias páginas.`)
       }
     } catch (e) {
-      setError(friendlyFetchError(e, 'No se pudo generar PDF'))
+      setError(friendlyFetchError(e, 'No se pudo generar el PDF del acta. Intente de nuevo.'))
     } finally {
       setPdfBusy(false)
     }
@@ -1175,7 +1179,7 @@ export default function ActaEditor({
       if (revokeAfter) URL.revokeObjectURL(url)
       setOkMsg('Descarga del PDF iniciada.')
     } catch (e) {
-      setError(friendlyFetchError(e, 'No se pudo descargar el PDF'))
+      setError(friendlyFetchError(e, 'No se pudo descargar el PDF del acta. Intente de nuevo.'))
     } finally {
       setPdfBusy(false)
     }
