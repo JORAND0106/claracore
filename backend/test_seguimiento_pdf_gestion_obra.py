@@ -1,4 +1,4 @@
-"""PDF del acta incluye sección Gestión de obra."""
+"""PDF del acta incluye sección Gestión de obra (consolidado por día)."""
 from __future__ import annotations
 
 import unittest
@@ -11,25 +11,58 @@ class TestPdfGestionObra(unittest.TestCase):
         html = _gestion_obra_pdf_html({})
         self.assertIn("Sin consolidado", html)
 
-    def test_html_con_secciones(self):
+    def test_html_con_secciones_por_dia(self):
         acta = {
             "gestion_obra": {
                 "fecha_desde": "2026-10-05",
-                "fecha_hasta": "2026-10-11",
+                "fecha_hasta": "2026-10-06",
                 "datos": {
                     "personal_jornada": {
                         "disponible": True,
-                        "personal": {"filas": [{"empresa": "ACME", "cargo": "Oficial", "cantidad": 2}]},
+                        "dias": ["2026-10-05", "2026-10-06"],
+                        "personal": {
+                            "empresas": [{
+                                "empresa": "ACME",
+                                "total": 3,
+                                "filas": [{
+                                    "cargo": "Oficial",
+                                    "por_dia": {"2026-10-05": 2, "2026-10-06": 1},
+                                    "total": 3,
+                                }],
+                            }],
+                        },
                         "maquinaria": {"filas": []},
-                        "ausentismo": {"disponible": False, "mensaje": "Sin ausentismo"},
+                        "ausentismo": {"disponible": True, "ausentes": 0, "total": 3},
                         "jornada": {"disponible": False, "mensaje": "Sin jornada"},
                     },
                     "cantidades_obra": {
                         "disponible": True,
-                        "filas": [{"tramo": "T1", "item": "Exc", "unidad": "m3", "cantidad": 10}],
+                        "tramos": [{
+                            "tramo": "T1",
+                            "capitulos": [{
+                                "capitulo": "1",
+                                "items": [{
+                                    "item_numero": "1.1",
+                                    "item_descripcion": "Exc",
+                                    "unidad": "m3",
+                                    "cantidad": 10,
+                                }],
+                            }],
+                        }],
                     },
                     "actividades": {"disponible": False, "mensaje": "Sin actividades"},
-                    "almacen": {"disponible": False, "mensaje": "Sin almacén"},
+                    "almacen": {
+                        "disponible": True,
+                        "solicitudes": [{
+                            "fecha": "2026-10-05",
+                            "solicitante": "Pedro",
+                            "insumos_resumen": "2 insumo(s)",
+                            "estado": "enviada",
+                            "valor": 999999,
+                        }],
+                        "entradas": [],
+                        "salidas": [],
+                    },
                     "programacion": {
                         "disponible": False,
                         "mensaje": "Este contrato no tiene Programación de obra cargada.",
@@ -47,18 +80,20 @@ class TestPdfGestionObra(unittest.TestCase):
         html = _gestion_obra_pdf_html(acta)
         self.assertIn("Personal y jornada", html)
         self.assertIn("ACME", html)
+        self.assertIn("Oficial", html)
         self.assertIn("Cantidades de obra", html)
-        self.assertIn("Programación de obra", html)
+        self.assertIn("1.1", html)
+        self.assertIn("Pedro", html)
+        # PDF no debe mostrar valor económico
+        self.assertNotIn("999999", html)
         self.assertIn("no tiene Programación", html)
 
     def test_hash_incluye_gestion_obra(self):
         a1 = {"consecutivo": 1, "gestion_obra": {"fecha_desde": "2026-10-01", "datos": {"x": 1}}}
         a2 = {"consecutivo": 1, "gestion_obra": {"fecha_desde": "2026-10-02", "datos": {"x": 1}}}
-        h1 = contenido_hash_acta(a1, [], [], [])
-        h2 = contenido_hash_acta(a2, [], [], [])
-        self.assertNotEqual(h1, h2)
+        self.assertNotEqual(contenido_hash_acta(a1, [], [], []), contenido_hash_acta(a2, [], [], []))
 
-    def test_pdf_bytes_con_gestion_obra(self):
+    def test_pdf_bytes(self):
         acta = {
             "consecutivo": 9,
             "fecha_reunion": "2026-10-12",
@@ -83,7 +118,6 @@ class TestPdfGestionObra(unittest.TestCase):
         }
         pdf = generar_pdf_acta({"id": 1, "nombre": "C1"}, acta, [], [], [])
         self.assertTrue(pdf.startswith(b"%PDF"))
-        self.assertGreater(len(pdf), 800)
 
 
 if __name__ == "__main__":

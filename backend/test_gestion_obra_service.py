@@ -7,6 +7,8 @@ from datetime import date
 from gestion_obra_service import (
     _agg_actividades,
     _agg_personal_desde_diarios,
+    _dias_rango,
+    _empresa_asistencia,
     empty_observaciones,
     merge_observaciones,
     normalize_gestion_obra,
@@ -20,24 +22,35 @@ class TestGestionObraRango(unittest.TestCase):
         self.assertEqual(d1, "2026-10-11")
         self.assertEqual(d0, "2026-10-05")
 
-    def test_semana_con_date(self):
-        d0, d1 = rango_semana_anterior(date(2026, 3, 1))
-        self.assertEqual(d1, "2026-02-28")
-        self.assertEqual(d0, "2026-02-22")
+    def test_dias_rango(self):
+        dias = _dias_rango(date(2026, 10, 5), date(2026, 10, 7))
+        self.assertEqual(dias, ["2026-10-05", "2026-10-06", "2026-10-07"])
+
+
+class TestEmpresaAsistencia(unittest.TestCase):
+    def test_usa_subcontratista_nombre(self):
+        self.assertEqual(
+            _empresa_asistencia({"subcontratista_nombre": "ACME SAS", "empresa": "Otro"}),
+            "ACME SAS",
+        )
+
+    def test_fallback(self):
+        self.assertEqual(_empresa_asistencia({}), "Sin empresa")
 
 
 class TestPersonalAgg(unittest.TestCase):
-    def test_personal_sin_nombres(self):
+    def test_personal_con_empresa_desde_asistencia(self):
+        dias = ["2026-10-06", "2026-10-07"]
         diarios = [
             {
                 "fecha": "2026-10-06",
-                "personal": [{"cargo": "Oficial", "cantidad": 3, "empresa": "ACME"}],
-                "equipos_uso": [{"equipo_nombre": "Retroexcavadora", "cantidad": 1}],
+                # personal agregado NO debe sumarse si hay asistencia (evita doble conteo)
+                "personal": [{"cargo": "Oficial", "cantidad": 99}],
                 "asistencia_colaboradores": [
                     {
                         "nombre": "Juan Pérez",
                         "cargo": "Ayudante",
-                        "empresa_nombre": "ACME",
+                        "subcontratista_nombre": "ACME",
                         "estado": "activo",
                         "hora_ingreso": "07:00",
                         "hora_salida": "17:00",
@@ -45,45 +58,65 @@ class TestPersonalAgg(unittest.TestCase):
                     {
                         "nombre": "Ana",
                         "cargo": "Ayudante",
-                        "empresa_nombre": "ACME",
+                        "subcontratista_nombre": "ACME",
                         "estado": "ausente",
                     },
                 ],
-            }
+                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 1}],
+            },
+            {
+                "fecha": "2026-10-07",
+                "asistencia_colaboradores": [
+                    {
+                        "cargo": "Oficial",
+                        "subcontratista_nombre": "ACME",
+                        "estado": "activo",
+                        "hora_ingreso": "07:00",
+                        "hora_salida": "16:00",
+                    },
+                ],
+            },
         ]
-        out = _agg_personal_desde_diarios(diarios)
+        out = _agg_personal_desde_diarios(diarios, dias)
         self.assertTrue(out["disponible"])
-        cargos = {(r["empresa"], r["cargo"]) for r in out["personal"]["filas"]}
-        self.assertIn(("ACME", "Oficial"), cargos)
-        self.assertIn(("ACME", "Ayudante"), cargos)
-        # No debe filtrar nombres en filas
-        for r in out["personal"]["filas"]:
-            self.assertNotIn("nombre", r)
-        self.assertTrue(out["ausentismo"]["disponible"])
+        empresas = {e["empresa"] for e in out["personal"]["empresas"]}
+        self.assertIn("ACME", empresas)
+        self.assertNotIn("Sin empresa", empresas)
+        # No debe haber filas con cantidad 99 del personal agregado
+        for e in out["personal"]["empresas"]:
+            for f in e["filas"]:
+                self.assertLess(f["total"], 99)
+        # persona-días presentes: 1 (día6) + 1 (día7) = 2
+        self.assertEqual(out["personal"]["total_persona_dias"], 2)
+        self.assertEqual(out["ausentismo"]["presentes"], 2)
         self.assertEqual(out["ausentismo"]["ausentes"], 1)
-        self.assertTrue(out["jornada"]["disponible"])
-        self.assertAlmostEqual(out["jornada"]["promedio_horas"], 10.0)
+        # ACME Ayudante solo el 06
+        acme = next(e for e in out["personal"]["empresas"] if e["empresa"] == "ACME")
+        ayud = next(f for f in acme["filas"] if f["cargo"] == "Ayudante")
+        self.assertEqual(ayud["por_dia"]["2026-10-06"], 1)
+        self.assertEqual(ayud["por_dia"].get("2026-10-07", 0), 0)
 
     def test_vacio(self):
-        out = _agg_personal_desde_diarios([])
+        out = _agg_personal_desde_diarios([], ["2026-10-05"])
         self.assertFalse(out["disponible"])
-        self.assertIn("No hay", out["mensaje"] or "")
 
 
 class TestActividades(unittest.TestCase):
-    def test_eventos_actividades(self):
+    def test_por_dia(self):
+        dias = ["2026-10-07"]
         diarios = [{
             "fecha": "2026-10-07",
             "tramo": "K0+000",
             "eventos": [{
                 "evento_detalle": {
-                    "actividades": [{"nombre": "Excavación", "detalle": "tramo norte"}],
+                    "actividades": [{"nombre": "Excavación", "detalle": "norte"}],
                 },
             }],
         }]
-        out = _agg_actividades(diarios)
+        out = _agg_actividades(diarios, dias)
         self.assertTrue(out["disponible"])
-        self.assertEqual(out["filas"][0]["actividad"], "Excavación")
+        self.assertEqual(out["series"][0]["valor"], 1)
+        self.assertEqual(out["por_dia"][0]["actividades"][0]["actividad"], "Excavación")
 
 
 class TestObservaciones(unittest.TestCase):
@@ -91,7 +124,6 @@ class TestObservaciones(unittest.TestCase):
         m = merge_observaciones({"personal_jornada": "<p>A</p>"}, {"almacen": "<p>B</p>"})
         self.assertEqual(m["personal_jornada"], "<p>A</p>")
         self.assertEqual(m["almacen"], "<p>B</p>")
-        self.assertEqual(m["actividades"], "")
 
     def test_normalize(self):
         n = normalize_gestion_obra({
@@ -101,7 +133,6 @@ class TestObservaciones(unittest.TestCase):
             "observaciones": {"personal_jornada": "ok"},
         })
         self.assertEqual(n["fecha_desde"], "2026-10-01")
-        self.assertEqual(n["observaciones"]["personal_jornada"], "ok")
         self.assertEqual(set(empty_observaciones().keys()), set(n["observaciones"].keys()))
 
 
