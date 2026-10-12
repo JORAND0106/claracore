@@ -1,7 +1,8 @@
 """
 Grabación en vivo → STT (Azure Speech sobre audio real) + síntesis de Temas (Claude).
 
-- Fuente de verdad: audio de MediaRecorder → Azure Speech (no Web Speech del navegador).
+- Fuente de verdad: PCM/WAV 16 kHz del AudioContext mezclado → Azure Speech REST.
+  (MediaRecorder WebM solo para descarga local; Azure short-audio no acepta WebM.)
 - Checkpoints de Temas: automáticos (~5 min en cliente), manuales (Actualizar) y al detener.
 - Cada tramo se registra con estado (listo/error) para reintento sin perder orden.
 - Continuidad: cola del tramo anterior + temas previos para unificar ideas partidas.
@@ -138,7 +139,7 @@ def speech_status() -> dict:
         "sintesis_con_ia": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
         "checkpoint_auto_segundos": 300,
         "detalle": None if azure else (
-            "Configure AZURE_SPEECH_KEY para transcribir el audio real de la reunión. "
+            "Configure AZURE_SPEECH_KEY para transcribir el audio real (WAV/PCM 16 kHz). "
             "El reconocimiento del navegador ya no se usa para Temas."
         ),
     }
@@ -239,16 +240,95 @@ def tramo_desde_checkpoint(transcripcion: str, checkpoint_chars: int) -> str:
     return text[cp:].strip()
 
 
+def _is_wav_bytes(audio_bytes: bytes) -> bool:
+    return bool(audio_bytes) and len(audio_bytes) >= 12 and audio_bytes[0:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE"
+
+
+def _is_ogg_bytes(audio_bytes: bytes) -> bool:
+    return bool(audio_bytes) and audio_bytes[0:4] == b"OggS"
+
+
+def _azure_stt_content_type(audio_bytes: bytes, content_type: str = "") -> str:
+    """
+    Azure Speech REST short-audio solo acepta:
+      - audio/wav; codecs=audio/pcm; samplerate=16000
+      - audio/ogg; codecs=opus
+    WebM del MediaRecorder NO es válido y produce NoMatch / vacío.
+    """
+    ct_raw = (content_type or "").strip().lower()
+    if _is_wav_bytes(audio_bytes) or "wav" in ct_raw or "pcm" in ct_raw:
+        return "audio/wav; codecs=audio/pcm; samplerate=16000"
+    if _is_ogg_bytes(audio_bytes) or ("ogg" in ct_raw and "opus" in ct_raw):
+        return "audio/ogg; codecs=opus"
+    # Desconocido: intentar como WAV si el cliente afirma wav; si no, marcar inválido.
+    if ct_raw.startswith("audio/wav"):
+        return "audio/wav; codecs=audio/pcm; samplerate=16000"
+    return ""
+
+
+def _convert_audio_to_wav_pcm16(audio_bytes: bytes) -> bytes:
+    """Convierte WebM/otros a WAV PCM 16 kHz mono con ffmpeg (si está disponible)."""
+    if not audio_bytes:
+        return b""
+    if _is_wav_bytes(audio_bytes):
+        return audio_bytes
+    try:
+        from mapa_capacitacion_video import resolver_binario
+    except Exception:
+        resolver_binario = None  # type: ignore
+    ffmpeg = None
+    if callable(resolver_binario):
+        try:
+            ffmpeg = resolver_binario("ffmpeg")
+        except Exception:
+            ffmpeg = None
+    if not ffmpeg:
+        import shutil
+        ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return b""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="acta-stt-") as tmp:
+        src = Path(tmp) / "in.bin"
+        dst = Path(tmp) / "out.wav"
+        src.write_bytes(audio_bytes)
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(src),
+                    "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                    str(dst),
+                ],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        except Exception as exc:
+            _log.warning("ffmpeg convert STT falló: %s", exc)
+            return b""
+        if proc.returncode != 0 or not dst.is_file():
+            err = (proc.stderr or b"").decode("utf-8", errors="replace")[:200]
+            _log.warning("ffmpeg STT rc=%s: %s", proc.returncode, err)
+            return b""
+        return dst.read_bytes()
+
+
 async def transcribe_audio_azure(
     audio_bytes: bytes,
-    content_type: str = "audio/webm",
+    content_type: str = "audio/wav",
     *,
     raise_on_error: bool = False,
-) -> str:
+) -> dict:
     """
-    Transcribe un fragmento de audio real (MediaRecorder) con Azure AI Speech.
-    Modo conversation / español; adecuado para reuniones con varios interlocutores.
+    Transcribe un fragmento de audio real con Azure AI Speech (REST short-audio).
+    Espera WAV/PCM 16 kHz mono (preferido) u OGG/Opus. Si llega WebM, intenta
+    convertir con ffmpeg. Devuelve {text, status, content_type, converted}.
     """
+    empty = {"text": "", "status": "", "content_type": "", "converted": False}
     key = (os.getenv("AZURE_SPEECH_KEY") or "").strip()
     if not key:
         if raise_on_error:
@@ -256,11 +336,31 @@ async def transcribe_audio_azure(
                 status_code=503,
                 detail="AZURE_SPEECH_KEY no configurada. No se puede transcribir el audio real.",
             )
-        return ""
+        return {**empty, "status": "no_key"}
     if not audio_bytes:
-        return ""
+        return empty
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         raise HTTPException(status_code=413, detail="Chunk de audio demasiado grande.")
+
+    payload = audio_bytes
+    converted = False
+    ct = _azure_stt_content_type(payload, content_type)
+    if not ct:
+        wav = _convert_audio_to_wav_pcm16(payload)
+        if wav:
+            payload = wav
+            converted = True
+            ct = "audio/wav; codecs=audio/pcm; samplerate=16000"
+        else:
+            msg = (
+                "Formato de audio no soportado por Azure Speech REST "
+                f"(recibido: {(content_type or 'desconocido')[:60]}). "
+                "Se requiere WAV/PCM 16 kHz o OGG/Opus."
+            )
+            _log.warning(msg)
+            if raise_on_error:
+                raise HTTPException(status_code=415, detail=msg)
+            return {**empty, "status": "unsupported_format", "content_type": content_type or ""}
 
     region = (os.getenv("AZURE_SPEECH_REGION") or "eastus").strip() or "eastus"
     language = (os.getenv("AZURE_SPEECH_LANGUAGE") or "es-CO").strip() or "es-CO"
@@ -268,7 +368,6 @@ async def transcribe_audio_azure(
         f"https://{region}.stt.speech.microsoft.com/"
         "speech/recognition/conversation/cognitiveservices/v1"
     )
-    ct = (content_type or "audio/webm").split(";")[0].strip() or "audio/webm"
     headers = {
         "Ocp-Apim-Subscription-Key": key,
         "Content-Type": ct,
@@ -281,13 +380,18 @@ async def transcribe_audio_azure(
     }
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
-            res = await client.post(url, params=params, headers=headers, content=audio_bytes)
+            res = await client.post(url, params=params, headers=headers, content=payload)
         if res.status_code >= 400:
             msg = f"Azure STT HTTP {res.status_code}: {(res.text or '')[:240]}"
             _log.warning(msg)
             if raise_on_error:
                 raise HTTPException(status_code=502, detail="No se pudo transcribir el audio con Azure Speech.")
-            return ""
+            return {
+                "text": "",
+                "status": f"http_{res.status_code}",
+                "content_type": ct,
+                "converted": converted,
+            }
         data = res.json() if res.content else {}
         # detailed → NBest[0].Display; simple → DisplayText
         text = str(data.get("DisplayText") or data.get("Text") or "").strip()
@@ -298,19 +402,24 @@ async def transcribe_audio_azure(
         status = str(data.get("RecognitionStatus") or "")
         if status and status not in ("Success", "InitialSilenceTimeout", "EndOfDictation") and not text:
             _log.warning("Azure STT RecognitionStatus=%s", status)
-            if raise_on_error and status not in ("NoMatch", "InitialSilenceTimeout"):
+            if raise_on_error and status not in ("NoMatch", "InitialSilenceTimeout", "BabbleTimeout"):
                 raise HTTPException(
                     status_code=502,
                     detail=f"Azure Speech no reconoció el audio ({status}).",
                 )
-        return text
+        return {
+            "text": text,
+            "status": status or ("Success" if text else "empty"),
+            "content_type": ct,
+            "converted": converted,
+        }
     except HTTPException:
         raise
     except Exception as exc:
         _log.warning("Azure STT falló: %s", exc)
         if raise_on_error:
             raise HTTPException(status_code=502, detail="No se pudo transcribir el audio con Azure Speech.") from exc
-        return ""
+        return {**empty, "status": "exception", "content_type": ct, "converted": converted}
 
 
 def _parse_temas_json(raw: str) -> list[dict]:
@@ -453,7 +562,18 @@ async def sintetizar_temas(
             txt = getattr(block, "text", None)
             if txt:
                 parts.append(txt)
-        out = _normalize_temas(_parse_temas_json("\n".join(parts)))
+        raw_txt = "\n".join(parts)
+        out = _normalize_temas(_parse_temas_json(raw_txt))
+        if not out and raw_txt.strip():
+            # La API respondió pero el JSON no fue usable: reintento con mensaje claro.
+            _log.warning("Síntesis sin JSON usable (len=%s)", len(raw_txt))
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "No se pudo sintetizar los temas con IA: la respuesta del modelo "
+                    "no trajo JSON de temas válido. El tramo queda pendiente para reintento."
+                ),
+            )
         if clave_activa and out:
             # Forzar clave activa por si el modelo inventó otra.
             forced = []
@@ -478,11 +598,46 @@ async def sintetizar_temas(
         _log.error("Síntesis de temas falló: %s", exc)
         raise HTTPException(
             status_code=502,
-            detail=(
-                "No se pudo sintetizar los temas con IA. "
-                "El tramo queda pendiente para reintento (el audio/transcripción no se pierde)."
-            ),
+            detail=_detalle_error_sintesis(exc, model=model),
         ) from exc
+
+
+def _detalle_error_sintesis(exc: BaseException, *, model: str = "") -> str:
+    """Traduce el fallo de Anthropic a un mensaje accionable (punto exacto: síntesis Claude)."""
+    msg = str(exc) or ""
+    low = msg.lower()
+    base = (
+        "No se pudo sintetizar los temas con IA "
+        "(falló la llamada a Claude sobre el tramo transcrito). "
+        "El tramo queda pendiente para reintento; la transcripción no se pierde."
+    )
+    if (
+        "credit balance" in low
+        or "too low to access" in low
+        or "purchase credits" in low
+        or ("billing" in low and "upgrade" in low)
+    ):
+        return (
+            f"{base} Causa: créditos/saldo insuficientes en Anthropic. "
+            "Revise Plans & Billing y ANTHROPIC_API_KEY."
+        )
+    if "not_found_error" in low and "model" in low:
+        return (
+            f"{base} Causa: modelo no disponible "
+            f"(configurado: «{model or 'claude-haiku-4-5'}»). "
+            "Defina ACTA_GRABACION_IA_MODEL o ANTHROPIC_MODEL."
+        )
+    if "rate" in low and "limit" in low:
+        return f"{base} Causa: límite de tasa de Anthropic; reintente en unos segundos."
+    if "timeout" in low or "timed out" in low:
+        return f"{base} Causa: tiempo de espera agotado al llamar a Anthropic."
+    if "authentication" in low or "invalid api key" in low or "unauthorized" in low:
+        return f"{base} Causa: ANTHROPIC_API_KEY inválida o sin permiso."
+    # Truncar detalle técnico para la UI
+    extra = msg.strip().replace("\n", " ")[:220]
+    if extra:
+        return f"{base} Detalle: {extra}"
+    return base
 
 
 def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict]:
@@ -779,16 +934,29 @@ async def ingest_audio_chunk(
             "schema_live_ok": False,
         }
 
-    text = await transcribe_audio_azure(audio_bytes, content_type=content_type)
+    stt = await transcribe_audio_azure(audio_bytes, content_type=content_type)
+    text = str((stt or {}).get("text") or "").strip()
     if not text:
-        return _live_payload(sesion, sintetizado=False, delta="")
-    return await ingest_transcript_delta(
+        payload = _live_payload(sesion, sintetizado=False, delta="")
+        payload["stt_status"] = (stt or {}).get("status") or "empty"
+        payload["stt_content_type"] = (stt or {}).get("content_type") or ""
+        if (stt or {}).get("status") == "unsupported_format":
+            payload["detalle"] = (
+                "El audio enviado no es WAV/PCM ni OGG/Opus (Azure Speech REST). "
+                "El cliente debe enviar PCM 16 kHz del AudioContext, no WebM del MediaRecorder."
+            )
+        return payload
+    out = await ingest_transcript_delta(
         sb,
         contrato_id,
         sesion_id,
         usuario_id,
         text,
     )
+    out["stt_status"] = (stt or {}).get("status") or "Success"
+    out["stt_content_type"] = (stt or {}).get("content_type") or ""
+    out["stt_converted"] = bool((stt or {}).get("converted"))
+    return out
 
 
 def armar_checkpoint_temas(

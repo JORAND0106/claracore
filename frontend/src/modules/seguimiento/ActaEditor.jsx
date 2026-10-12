@@ -1882,10 +1882,15 @@ export default function ActaEditor({
                 await grabacionCtrlRef.current.armTemasCheckpoint?.()
               }
               const payload = await grabacionCtrlRef.current.actualizarTemas({ origen: 'manual' })
+              const detalle = String(payload?.detalle || '')
+              const falloSintesis = /no se pudo sintetizar/i.test(detalle)
+                || ((payload?.tramos_resumen?.error || 0) > 0 && !payload?.sintetizado)
               if (payload?.sintetizado) {
-                setOkMsg(payload?.detalle || 'Temas actualizados desde el audio (checkpoint avanzado).')
+                setOkMsg(detalle || 'Temas actualizados desde el audio (checkpoint avanzado).')
+              } else if (falloSintesis) {
+                setError(detalle || 'No se pudo sintetizar los temas con IA. Pulse Reintentar tramo.')
               } else {
-                setOkMsg(payload?.detalle || 'Sin audio nuevo suficiente desde el último checkpoint.')
+                setOkMsg(detalle || 'Sin audio nuevo suficiente desde el último checkpoint.')
               }
             } catch (e) {
               setError(friendlyFetchError(e, 'No se pudieron actualizar los Temas'))

@@ -94,7 +94,7 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
   return changed ? list : ideasActuales
 }
 
-/** Acumula blobs de MediaRecorder y emite un lote cada `intervalMs`. */
+/** Acumula blobs de MediaRecorder y emite un lote cada `intervalMs` (legado). */
 export function createAudioBatcher({ intervalMs = 15000, onBatch } = {}) {
   let buf = []
   let timer = null
@@ -144,9 +144,179 @@ export function createAudioBatcher({ intervalMs = 15000, onBatch } = {}) {
   }
 }
 
+/** Azure Speech REST (short audio) solo acepta WAV/PCM 16 kHz mono u OGG/Opus — no WebM. */
+export const AZURE_STT_SAMPLE_RATE = 16000
+export const AZURE_STT_WAV_CONTENT_TYPE = 'audio/wav; codecs=audio/pcm; samplerate=16000'
+
 /**
- * Web Speech API continua (fallback si no hay Azure Speech).
- * Devuelve { stop } o null si no está disponible.
+ * Re-muestrea Float32 mono a `targetRate` con interpolación lineal.
+ */
+export function resampleFloat32Mono(input, inputRate, targetRate = AZURE_STT_SAMPLE_RATE) {
+  const src = input instanceof Float32Array ? input : new Float32Array(input || [])
+  const inRate = Number(inputRate) || 0
+  const outRate = Number(targetRate) || AZURE_STT_SAMPLE_RATE
+  if (!src.length || inRate <= 0 || outRate <= 0) return new Float32Array(0)
+  if (Math.abs(inRate - outRate) < 0.5) return src
+  const outLen = Math.max(1, Math.round(src.length * (outRate / inRate)))
+  const out = new Float32Array(outLen)
+  const ratio = inRate / outRate
+  for (let i = 0; i < outLen; i += 1) {
+    const pos = i * ratio
+    const i0 = Math.floor(pos)
+    const i1 = Math.min(i0 + 1, src.length - 1)
+    const frac = pos - i0
+    out[i] = src[i0] * (1 - frac) + src[i1] * frac
+  }
+  return out
+}
+
+/**
+ * Codifica muestras Float32 [-1,1] a WAV PCM 16-bit LE mono.
+ */
+export function encodeWavPcm16(float32Samples, sampleRate = AZURE_STT_SAMPLE_RATE) {
+  const samples = float32Samples instanceof Float32Array
+    ? float32Samples
+    : new Float32Array(float32Samples || [])
+  const rate = Math.max(1, Math.floor(Number(sampleRate) || AZURE_STT_SAMPLE_RATE))
+  const numSamples = samples.length
+  const dataBytes = numSamples * 2
+  const buffer = new ArrayBuffer(44 + dataBytes)
+  const view = new DataView(buffer)
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i += 1) view.setUint8(offset + i, str.charCodeAt(i))
+  }
+  writeStr(0, 'RIFF')
+  view.setUint32(4, 36 + dataBytes, true)
+  writeStr(8, 'WAVE')
+  writeStr(12, 'fmt ')
+  view.setUint32(16, 16, true) // PCM chunk size
+  view.setUint16(20, 1, true) // PCM
+  view.setUint16(22, 1, true) // mono
+  view.setUint32(24, rate, true)
+  view.setUint32(28, rate * 2, true) // byte rate
+  view.setUint16(32, 2, true) // block align
+  view.setUint16(34, 16, true) // bits
+  writeStr(36, 'data')
+  view.setUint32(40, dataBytes, true)
+  let offset = 44
+  for (let i = 0; i < numSamples; i += 1) {
+    let s = samples[i]
+    if (s > 1) s = 1
+    else if (s < -1) s = -1
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+    offset += 2
+  }
+  return new Blob([buffer], { type: AZURE_STT_WAV_CONTENT_TYPE })
+}
+
+function concatFloat32(chunks) {
+  const total = chunks.reduce((n, c) => n + (c?.length || 0), 0)
+  const out = new Float32Array(total)
+  let off = 0
+  for (const c of chunks) {
+    if (!c?.length) continue
+    out.set(c, off)
+    off += c.length
+  }
+  return out
+}
+
+/**
+ * Captura PCM del MediaStream mezclado (AudioContext) y emite WAV 16 kHz
+ * cada `intervalMs` para Azure Speech — sin tocar MediaRecorder ni la descarga.
+ */
+export function createPcmWavStreamer({
+  audioCtx,
+  mediaStream,
+  intervalMs = 15000,
+  targetSampleRate = AZURE_STT_SAMPLE_RATE,
+  onBatch,
+  /** Mínimo de samples a 16 kHz (~0.4 s) para no mandar silencio vacío. */
+  minSamples = 6400,
+} = {}) {
+  if (!audioCtx || !mediaStream?.getAudioTracks?.()?.length) return null
+
+  let closed = false
+  let chunks = []
+  let timer = null
+  let source = null
+  let processor = null
+  let mute = null
+  const inputRate = Number(audioCtx.sampleRate) || 48000
+
+  const flush = async () => {
+    if (closed || !chunks.length) return
+    const raw = concatFloat32(chunks)
+    chunks = []
+    if (!raw.length) return
+    const resampled = resampleFloat32Mono(raw, inputRate, targetSampleRate)
+    if (resampled.length < minSamples) return
+    const blob = encodeWavPcm16(resampled, targetSampleRate)
+    if (!blob || blob.size < 100) return
+    try {
+      await onBatch?.(blob)
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  try {
+    if (audioCtx.state === 'suspended') {
+      Promise.resolve(audioCtx.resume?.()).catch(() => { /* ignore */ })
+    }
+    source = audioCtx.createMediaStreamSource(mediaStream)
+    // ScriptProcessor: amplio soporte; el grafo se mantiene vivo vía gain=0.
+    const bufferSize = 4096
+    processor = audioCtx.createScriptProcessor(bufferSize, 1, 1)
+    mute = audioCtx.createGain()
+    mute.gain.value = 0
+    processor.onaudioprocess = (ev) => {
+      if (closed) return
+      try {
+        const input = ev.inputBuffer.getChannelData(0)
+        chunks.push(new Float32Array(input))
+      } catch {
+        /* ignore */
+      }
+    }
+    source.connect(processor)
+    processor.connect(mute)
+    mute.connect(audioCtx.destination)
+  } catch {
+    try { source?.disconnect?.() } catch { /* ignore */ }
+    try { processor?.disconnect?.() } catch { /* ignore */ }
+    return null
+  }
+
+  timer = setInterval(() => {
+    flush().catch(() => { /* ignore */ })
+  }, Math.max(1000, Number(intervalMs) || 15000))
+
+  return {
+    async flush() {
+      await flush()
+    },
+    stop() {
+      closed = true
+      if (timer) {
+        clearInterval(timer)
+        timer = null
+      }
+      chunks = []
+      try { processor.onaudioprocess = null } catch { /* ignore */ }
+      try { processor?.disconnect?.() } catch { /* ignore */ }
+      try { source?.disconnect?.() } catch { /* ignore */ }
+      try { mute?.disconnect?.() } catch { /* ignore */ }
+      processor = null
+      source = null
+      mute = null
+    },
+  }
+}
+
+/**
+ * @deprecated No usar para Temas: incompleto en reuniones largas.
+ * Se conserva solo por compatibilidad de tests/legado.
  */
 export function startWebSpeechTranscript({ lang = 'es-CO', onDelta, onError } = {}) {
   const SR = typeof window !== 'undefined'

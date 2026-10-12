@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { mergeTemasGrabacionViva } from './actaGrabacionLive.js'
+import {
+  AZURE_STT_SAMPLE_RATE,
+  encodeWavPcm16,
+  mergeTemasGrabacionViva,
+  resampleFloat32Mono,
+} from './actaGrabacionLive.js'
 
 describe('mergeTemasGrabacionViva', () => {
   it('inserta temas sintetizados sin tocar compromisos', () => {
@@ -52,5 +57,28 @@ describe('mergeTemasGrabacionViva', () => {
     ], { newRowKey: () => 'i2' })
     assert.equal(next.length, 2)
     assert.equal(next[1]._claveGrabacion, 't2')
+  })
+})
+
+describe('PCM/WAV para Azure Speech', () => {
+  it('re-muestrea a 16 kHz preservando duración aproximada', () => {
+    const inputRate = 48000
+    const seconds = 1
+    const input = new Float32Array(inputRate * seconds)
+    for (let i = 0; i < input.length; i += 1) input[i] = Math.sin(i / 40)
+    const out = resampleFloat32Mono(input, inputRate, AZURE_STT_SAMPLE_RATE)
+    assert.equal(out.length, AZURE_STT_SAMPLE_RATE)
+  })
+
+  it('encodeWavPcm16 genera cabecera RIFF/WAVE y tamaño coherente', async () => {
+    const samples = new Float32Array(AZURE_STT_SAMPLE_RATE) // 1 s
+    samples[0] = 0.5
+    samples[1] = -0.5
+    const blob = encodeWavPcm16(samples, AZURE_STT_SAMPLE_RATE)
+    assert.match(String(blob.type), /wav/i)
+    const buf = Buffer.from(await blob.arrayBuffer())
+    assert.equal(buf.toString('ascii', 0, 4), 'RIFF')
+    assert.equal(buf.toString('ascii', 8, 12), 'WAVE')
+    assert.equal(buf.length, 44 + samples.length * 2)
   })
 })

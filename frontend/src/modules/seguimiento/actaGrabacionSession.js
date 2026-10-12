@@ -11,7 +11,7 @@ import {
   segundosAReclamar,
   stopMediaStream,
 } from './actaGrabacionHelpers.js'
-import { createAudioBatcher } from './actaGrabacionLive.js'
+import { createPcmWavStreamer } from './actaGrabacionLive.js'
 
 /** Tope para no dejar Detener colgado si MediaRecorder no dispara onstop. */
 export const RECORDER_STOP_TIMEOUT_MS = 4000
@@ -56,11 +56,12 @@ export function createGrabacionSessionController({
   let mimeType = ''
   let handles = null
   let stopping = false
-  let audioBatcher = null
+  let pcmStreamer = null
   let liveMode = 'none' // azure | none
   let liveStarted = false
   let temasCheckpointArmed = false
   let temasBusy = false
+  let sttEmptyStreak = 0
 
   const emitState = (patch) => {
     try { onState?.(patch) } catch { /* ignore */ }
@@ -85,9 +86,9 @@ export function createGrabacionSessionController({
   }
 
   const stopLivePipeline = async () => {
-    try { await audioBatcher?.flush?.() } catch { /* ignore */ }
-    try { audioBatcher?.stop?.() } catch { /* ignore */ }
-    audioBatcher = null
+    try { await pcmStreamer?.flush?.() } catch { /* ignore */ }
+    try { pcmStreamer?.stop?.() } catch { /* ignore */ }
+    pcmStreamer = null
     liveStarted = false
   }
 
@@ -173,18 +174,48 @@ export function createGrabacionSessionController({
     }
 
     if (sttAzure && typeof api.grabacionChunk === 'function') {
-      liveMode = 'azure'
-      audioBatcher = createAudioBatcher({
+      // WAV/PCM 16 kHz desde el AudioContext mezclado (Azure no acepta WebM).
+      // MediaRecorder sigue solo para la descarga local — no se interrumpe.
+      const streamer = createPcmWavStreamer({
+        audioCtx: handles?.audioCtx,
+        mediaStream: handles?.mixedStream,
         intervalMs: chunkIntervalMs,
         onBatch: async (blob) => {
           if (closed || stopping || !sesionId) return
           try {
             const payload = await api.grabacionChunk(sesionId, blob)
+            const delta = Number(payload?.delta_chars || 0)
+            if (delta > 0) sttEmptyStreak = 0
+            else {
+              sttEmptyStreak += 1
+              // Varios lotes sin texto: avisar sin tumbar la grabación.
+              if (sttEmptyStreak === 4) {
+                onError?.(
+                  payload?.detalle
+                  || 'Azure Speech no está devolviendo texto del audio. Verifique micrófono/pestaña y la clave AZURE_SPEECH_KEY.',
+                )
+              }
+            }
             applyLivePayload(payload, { applyTemas: false })
           } catch (e) {
             onError?.(e?.message || 'No se pudo transcribir el audio con Azure Speech')
           }
         },
+      })
+      if (streamer) {
+        liveMode = 'azure'
+        pcmStreamer = streamer
+        emitState({ liveMode })
+        return liveMode
+      }
+      liveMode = 'none'
+      onLiveInfo?.({
+        stt_disponible: true,
+        acepta_transcripcion_cliente: false,
+        detalle: (
+          'No se pudo capturar PCM del audio mezclado para Azure Speech. '
+          + 'Use un navegador Chromium reciente con AudioContext.'
+        ),
       })
       emitState({ liveMode })
       return liveMode
@@ -254,7 +285,7 @@ export function createGrabacionSessionController({
     temasBusy = true
     emitState({ temasBusy: true })
     try {
-      try { await audioBatcher?.flush?.() } catch { /* ignore */ }
+      try { await pcmStreamer?.flush?.() } catch { /* ignore */ }
       const payload = await api.grabacionActualizarTemas(sesionId, {
         origen,
         tema_clave_activa: typeof getTemaClaveActiva === 'function' ? getTemaClaveActiva() : null,
@@ -325,10 +356,10 @@ export function createGrabacionSessionController({
 
     chunks = []
     recorder = createRecorder(handles.mixedStream, mimeType)
+    // Solo acumula para descarga local; STT usa PCM/WAV en paralelo.
     recorder.ondataavailable = (ev) => {
       if (ev.data && ev.data.size > 0) {
         chunks.push(ev.data)
-        audioBatcher?.push(ev.data, mimeType || ev.data.type)
       }
     }
     recorder.start(1000)
@@ -462,7 +493,8 @@ export function createGrabacionSessionController({
   function dispose() {
     clearTimers()
     clearAutoCheckpoint()
-    try { audioBatcher?.stop?.() } catch { /* ignore */ }
+    try { pcmStreamer?.stop?.() } catch { /* ignore */ }
+    pcmStreamer = null
     cleanupMedia()
     closed = true
   }
