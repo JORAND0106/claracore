@@ -9,9 +9,9 @@ import MapaTemaVideoDevControls from './MapaTemaVideoDevControls'
 export const MAPA_MODULO_CAPACITACION_RC = MAPA_SUBTEMA_CAPACITACION_RC
 
 /**
- * Vista del mapa interactivo: 7 íconos de módulo; al clic se expanden
+ * Vista del Manual de uso: 7 íconos de módulo; al clic se expanden
  * tarjetas de temas. Clic en tarjeta abre el video (o la capacitación RC).
- * Misma fuente para ícono de inicio y pestaña Mapa de Clara.
+ * Misma fuente para ícono de inicio y pestaña Manual de uso de Clara.
  */
 export default function MapaNavegacionVista({
   t,
@@ -63,7 +63,7 @@ export default function MapaNavegacionVista({
   if (cargando) {
     return (
       <div style={{ padding: compact ? 12 : 20, color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-        Cargando mapa de funcionalidades…
+        Cargando manual de uso…
       </div>
     )
   }
@@ -98,7 +98,7 @@ export default function MapaNavegacionVista({
           color: t.text,
           lineHeight: 1.25,
         }}>
-          Mapa de funcionalidades ClaraCore
+          Manual de uso ClaraCore
         </div>
         <p style={{
           margin: 0,
@@ -120,7 +120,7 @@ export default function MapaNavegacionVista({
 
       <div
         role="tablist"
-        aria-label="Módulos del mapa"
+        aria-label="Módulos del manual de uso"
         style={{
           display: 'grid',
           gridTemplateColumns: compact
@@ -384,7 +384,7 @@ export default function MapaNavegacionVista({
                   {videoTema.nombre}
                 </div>
                 <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
-                  {videoTema.descripcion || videoTema.resumen || 'Capacitación del mapa de funcionalidades'}
+                  {videoTema.descripcion || videoTema.resumen || 'Capacitación del manual de uso'}
                 </div>
               </div>
               <button

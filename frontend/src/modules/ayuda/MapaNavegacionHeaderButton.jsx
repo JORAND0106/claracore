@@ -1,6 +1,7 @@
 /**
- * Acceso al mapa panorámico desde la barra superior (junto a Clara).
+ * Acceso al Manual de uso desde la barra superior (junto a Clara).
  * Visualmente alineado con AVITriggerButton (mismo tamaño táctil y marco).
+ * El ícono y el módulo interno (mapa_navegacion) no cambian.
  */
 export default function MapaNavegacionHeaderButton({ t, active = false, onClick }) {
   const primary = t?.primary || '#0077B6'
@@ -8,8 +9,8 @@ export default function MapaNavegacionHeaderButton({ t, active = false, onClick 
   const textColor = t?.text || '#1e293b'
   const borderColor = active ? '#00B4C6' : primary
   const title = active
-    ? 'Mapa panorámico de navegación (activo)'
-    : 'Abrir mapa panorámico de navegación'
+    ? 'Manual de uso (activo)'
+    : 'Abrir manual de uso'
 
   return (
     <button
@@ -24,14 +25,15 @@ export default function MapaNavegacionHeaderButton({ t, active = false, onClick 
         color: textColor,
         border: `2px solid ${borderColor}`,
         borderRadius: '12px',
-        padding: '5px 8px 6px',
+        padding: '5px 6px 6px',
         cursor: 'pointer',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         gap: '2px',
-        minWidth: '44px',
+        minWidth: '52px',
+        maxWidth: '64px',
         minHeight: '44px',
         lineHeight: 1,
         flexShrink: 0,
@@ -44,14 +46,17 @@ export default function MapaNavegacionHeaderButton({ t, active = false, onClick 
       <span aria-hidden style={{ fontSize: '20px', lineHeight: 1 }}>🧭</span>
       <span
         style={{
-          fontSize: '9px',
+          fontSize: '8px',
           fontWeight: 700,
           color: primary,
-          letterSpacing: '0.02em',
-          lineHeight: 1,
+          letterSpacing: '0.01em',
+          lineHeight: 1.15,
+          textAlign: 'center',
+          whiteSpace: 'normal',
+          maxWidth: '56px',
         }}
       >
-        Mapa
+        Manual de uso
       </span>
     </button>
   )
