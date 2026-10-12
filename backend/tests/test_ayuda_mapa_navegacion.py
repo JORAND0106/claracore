@@ -33,7 +33,13 @@ LEGACY = {
 
 
 def _entrada_vacia():
-    return {"descripcion": "", "imagenes": [], "videoUrl": ""}
+    return {
+        "descripcion": "",
+        "imagenes": [],
+        "videoUrl": "",
+        "videoMusicId": "",
+        "videoUpdatedAt": None,
+    }
 
 
 def _normalizar_entrada(src):
@@ -51,6 +57,8 @@ def _normalizar_entrada(src):
         "descripcion": str(src.get("descripcion") or "").strip(),
         "imagenes": imgs,
         "videoUrl": str(src.get("videoUrl") or src.get("video_url") or "").strip(),
+        "videoMusicId": str(src.get("videoMusicId") or src.get("video_music_id") or "").strip(),
+        "videoUpdatedAt": src.get("videoUpdatedAt") or src.get("video_updated_at") or None,
     }
 
 

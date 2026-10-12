@@ -297,6 +297,8 @@ export default function ModuloMapaNavegacion({
 
   const esDev = (usuario?.cargo_nombre || '').trim().toLowerCase() === 'desarrollador'
   const puedeEditar = showEditor && esDev
+  // Carga de videos: Desarrollador en ambos accesos (inicio y Clara).
+  const puedeGestionarVideos = esDev
 
   const recargar = useCallback(async () => {
     setCargando(true)
@@ -423,6 +425,14 @@ export default function ModuloMapaNavegacion({
         cargando={cargando}
         error={error}
         fuente={fuente}
+        puedeGestionarVideos={puedeGestionarVideos}
+        token={token}
+        onContenidoActualizado={(doc) => {
+          const full = contenidoEditableCompleto(doc)
+          setContenido(full)
+          setFuente('API (publicado)')
+          if (editando) setDraft(full)
+        }}
       />
     </div>
   )

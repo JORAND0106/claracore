@@ -12,6 +12,8 @@ import {
  *   descripcion?: string,
  *   imagenes?: MapaImagen[],
  *   videoUrl?: string,
+ *   videoMusicId?: string,
+ *   videoUpdatedAt?: string|null,
  * }} MapaContenidoSubtema
  * @typedef {{
  *   version?: number,
@@ -22,7 +24,7 @@ import {
 
 function normalizarEntradaContenido(val) {
   if (!val || typeof val !== 'object') {
-    return { descripcion: '', imagenes: [], videoUrl: '' }
+    return { descripcion: '', imagenes: [], videoUrl: '', videoMusicId: '', videoUpdatedAt: null }
   }
   const imagenes = Array.isArray(val.imagenes)
     ? val.imagenes
@@ -36,6 +38,8 @@ function normalizarEntradaContenido(val) {
     descripcion: String(val.descripcion || '').trim(),
     imagenes,
     videoUrl: String(val.videoUrl || val.video_url || '').trim(),
+    videoMusicId: String(val.videoMusicId || val.video_music_id || '').trim(),
+    videoUpdatedAt: val.videoUpdatedAt || val.video_updated_at || null,
   }
 }
 
@@ -96,6 +100,8 @@ export function fusionarMapaNavegacion(contenidoRaw) {
       descripcion: c.descripcion || '',
       imagenes: Array.isArray(c.imagenes) ? c.imagenes : [],
       videoUrl: c.videoUrl || '',
+      videoMusicId: c.videoMusicId || '',
+      videoUpdatedAt: c.videoUpdatedAt || null,
       contenidoPendiente: contenidoPendienteDe(c),
     }
   }).sort((a, b) => a.orden - b.orden)
@@ -123,7 +129,13 @@ export function contenidoVacioDesdeCatalogo() {
   /** @type {Record<string, MapaContenidoSubtema>} */
   const modulos = {}
   for (const m of MAPA_NAVEGACION_SUBTEMAS) {
-    modulos[m.id] = { descripcion: '', imagenes: [], videoUrl: '' }
+    modulos[m.id] = {
+      descripcion: '',
+      imagenes: [],
+      videoUrl: '',
+      videoMusicId: '',
+      videoUpdatedAt: null,
+    }
   }
   return { version: 1, updated_at: null, modulos }
 }

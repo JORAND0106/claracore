@@ -275,6 +275,12 @@ def path_ayuda_mapa_imagen(nombre: str) -> str:
     return f"ayuda/mapa-pantallazos/{nombre}"
 
 
+def path_ayuda_mapa_video(tema_id: str, nombre: str) -> str:
+    """Video de capacitación procesado (comprimido + música) por tema del mapa."""
+    tid = "".join(c for c in (tema_id or "tema") if c.isalnum() or c in ("_", "-"))[:80] or "tema"
+    return f"ayuda/mapa-videos/{tid}/{nombre}"
+
+
 def sicoe_blob_path(contrato_id: int, subcarpeta: str, public_id: str, ext: str = ".jpg") -> str:
     """Mapea subcarpeta + public_id (p. ej. fotos, foto_123) al path Azure."""
     sub = (subcarpeta or "").strip().lower()

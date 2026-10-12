@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   MAPA_SUBTEMA_CAPACITACION_RC,
 } from './mapaNavegacionCatalogo'
 import CapacitacionReporteCantidadesWalkthrough from './CapacitacionReporteCantidadesWalkthrough'
+import MapaTemaVideoDevControls from './MapaTemaVideoDevControls'
 
 /** @deprecated usar MAPA_SUBTEMA_CAPACITACION_RC */
 export const MAPA_MODULO_CAPACITACION_RC = MAPA_SUBTEMA_CAPACITACION_RC
@@ -19,6 +20,9 @@ export default function MapaNavegacionVista({
   cargando = false,
   error = '',
   fuente = '',
+  puedeGestionarVideos = false,
+  token = '',
+  onContenidoActualizado,
 }) {
   const [moduloActivoId, setModuloActivoId] = useState(null)
   const [videoTema, setVideoTema] = useState(null)
@@ -45,6 +49,16 @@ export default function MapaNavegacionVista({
     }
     setVideoTema(tema)
   }
+
+  // Si el Desarrollador reemplaza el video mientras el modal está abierto, refrescar URL.
+  useEffect(() => {
+    if (!videoTema?.id) return
+    const fresh = grupos.flatMap((g) => g.modulos || []).find((m) => m.id === videoTema.id)
+    if (!fresh) return
+    if (fresh.videoUrl !== videoTema.videoUrl || fresh.videoMusicId !== videoTema.videoMusicId) {
+      setVideoTema(fresh)
+    }
+  }, [grupos, videoTema])
 
   if (cargando) {
     return (
@@ -230,67 +244,84 @@ export default function MapaNavegacionVista({
               )
               const disponible = esCapRc || !!mod.videoUrl
               return (
-                <button
+                <div
                   key={mod.id}
-                  type="button"
-                  onClick={() => abrirCapacitacion(mod)}
-                  aria-label={`${mod.nombre}. Abrir capacitación`}
                   style={{
+                    position: 'relative',
                     display: 'flex',
                     flexDirection: 'column',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    textAlign: 'left',
-                    padding: compact ? '12px' : '14px',
-                    minHeight: compact ? 120 : 136,
                     borderRadius: 12,
                     border: `1px solid ${t.border}`,
                     background: t.bg,
-                    color: t.text,
-                    cursor: 'pointer',
-                    transition: 'border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease',
-                    boxShadow: 'none',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = t.primary
-                    e.currentTarget.style.boxShadow = `0 4px 14px ${t.primary}22`
-                    e.currentTarget.style.transform = 'translateY(-1px)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = t.border
-                    e.currentTarget.style.boxShadow = 'none'
-                    e.currentTarget.style.transform = 'none'
+                    overflow: 'hidden',
+                    minHeight: compact ? 120 : 136,
                   }}
                 >
-                  <span aria-hidden style={{ fontSize: 28, lineHeight: 1 }}>
-                    {mod.icono || moduloActivo.icono}
-                  </span>
-                  <span style={{
-                    fontWeight: 800,
-                    fontSize: 'var(--cc-sm)',
-                    lineHeight: 1.3,
-                    color: t.text,
-                  }}>
-                    {mod.nombre}
-                  </span>
-                  <span style={{
-                    fontSize: 'var(--cc-caption)',
-                    color: t.textMuted,
-                    lineHeight: 1.4,
-                    flex: 1,
-                  }}>
-                    {desc}
-                  </span>
-                  <span style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: disponible ? t.primary : t.textMuted,
-                  }}>
-                    {esCapRc
-                      ? '▶ Abrir capacitación interactiva'
-                      : (mod.videoUrl ? '▶ Abrir video' : 'Video pendiente')}
-                  </span>
-                </button>
+                  {puedeGestionarVideos ? (
+                    <div style={{
+                      position: 'absolute',
+                      top: 8,
+                      right: 8,
+                      zIndex: 2,
+                    }}>
+                      <MapaTemaVideoDevControls
+                        t={t}
+                        tema={mod}
+                        token={token}
+                        onContenidoActualizado={onContenidoActualizado}
+                      />
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => abrirCapacitacion(mod)}
+                    aria-label={`${mod.nombre}. ${disponible ? 'Abrir capacitación' : 'Video pendiente'}`}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      textAlign: 'left',
+                      padding: compact ? '12px' : '14px',
+                      paddingRight: puedeGestionarVideos ? 86 : (compact ? 12 : 14),
+                      flex: 1,
+                      minHeight: compact ? 120 : 136,
+                      border: 'none',
+                      background: 'transparent',
+                      color: t.text,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: 28, lineHeight: 1 }}>
+                      {mod.icono || moduloActivo.icono}
+                    </span>
+                    <span style={{
+                      fontWeight: 800,
+                      fontSize: 'var(--cc-sm)',
+                      lineHeight: 1.3,
+                      color: t.text,
+                    }}>
+                      {mod.nombre}
+                    </span>
+                    <span style={{
+                      fontSize: 'var(--cc-caption)',
+                      color: t.textMuted,
+                      lineHeight: 1.4,
+                      flex: 1,
+                    }}>
+                      {desc}
+                    </span>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: disponible ? t.primary : t.textMuted,
+                    }}>
+                      {esCapRc
+                        ? '▶ Abrir capacitación interactiva'
+                        : (mod.videoUrl ? '▶ Abrir video' : 'Sin video aún')}
+                    </span>
+                  </button>
+                </div>
               )
             })}
           </div>
