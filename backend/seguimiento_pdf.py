@@ -45,7 +45,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-10-12.1-pdf-split-fix"
+PDF_ACTA_TEMPLATE_VERSION = "2026-10-12.3-gestion-obra"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -143,6 +143,22 @@ def contenido_hash_acta(acta: dict, asistentes: list, ideas: list, apartados: li
         ]))
     for ap in apartados or []:
         parts.append("|".join([str(ap.get("titulo") or ""), str(ap.get("contenido") or "")]))
+    go = acta.get("gestion_obra")
+    if isinstance(go, dict):
+        parts.append(str(go.get("fecha_desde") or ""))
+        parts.append(str(go.get("fecha_hasta") or ""))
+        parts.append(str(go.get("snapshot_at") or ""))
+        obs = go.get("observaciones") if isinstance(go.get("observaciones"), dict) else {}
+        for k in (
+            "personal_jornada", "cantidades_obra", "actividades", "almacen", "programacion",
+        ):
+            parts.append(str(obs.get(k) or ""))
+        # Datos congelados (resumen estable para el hash)
+        try:
+            import json as _json
+            parts.append(_json.dumps(go.get("datos") or {}, sort_keys=True, default=str)[:8000])
+        except Exception:
+            parts.append(str(go.get("datos") or "")[:8000])
     raw = "\n".join(parts).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
@@ -533,6 +549,162 @@ def _titulo_tema_fallback(texto: str) -> str:
     return t
 
 
+def _gestion_obra_pdf_html(acta: dict) -> str:
+    """HTML ejecutivo del consolidado Gestión de obra (tablas + observaciones)."""
+    go = acta.get("gestion_obra") if isinstance(acta.get("gestion_obra"), dict) else None
+    if not go or not isinstance(go.get("datos"), dict):
+        return (
+            "<div style='color:#94a3b8;font-size:9pt;'>"
+            "Sin consolidado de Gestión de obra para este acta."
+            "</div>"
+        )
+    datos = go.get("datos") or {}
+    obs = go.get("observaciones") if isinstance(go.get("observaciones"), dict) else {}
+    d0 = _esc(go.get("fecha_desde") or "")
+    d1 = _esc(go.get("fecha_hasta") or "")
+    parts = [
+        f"<div style='font-size:8.5pt;color:#475569;margin:0 0 6pt;'>"
+        f"Rango: <b>{d0}</b> → <b>{d1}</b>"
+        f"</div>"
+    ]
+
+    def _tbl_keys(labels: list, keys: list, rows: list) -> str:
+        if not rows:
+            return ""
+        th = "".join(
+            f"<th style='padding:3pt 4pt;border:0.4pt solid #cbd5e1;text-align:left;"
+            f"background:{_BG_H};color:{_FG_H};font-size:8pt;'>{_esc(lab)}</th>"
+            for lab in labels
+        )
+        body = ""
+        for r in (rows or [])[:60]:
+            tds = "".join(
+                f"<td style='padding:2.5pt 4pt;border:0.4pt solid #e2e8f0;font-size:8pt;'>"
+                f"{_esc((r or {}).get(k))}</td>"
+                for k in keys
+            )
+            body += f"<tr>{tds}</tr>"
+        return (
+            f"<table width='100%' cellspacing='0' cellpadding='0' "
+            f"style='border-collapse:collapse;margin:0 0 6pt;'>"
+            f"<tr>{th}</tr>{body}</table>"
+        )
+
+    def _block(title: str, body: str, obs_html: str) -> str:
+        obs_block = ""
+        if (obs_html or "").strip():
+            obs_block = (
+                f"<div style='margin:4pt 0 0;padding:4pt 6pt;border:0.4pt dashed #94a3b8;"
+                f"font-size:8pt;'><b>Observaciones:</b> {_render_tema_texto_pdf(obs_html)}</div>"
+            )
+        return (
+            f"<div style='margin:0 0 10pt;'>"
+            f"<div style='font-size:9pt;font-weight:700;margin:0 0 4pt;color:{_COLOR};'>"
+            f"{_esc(title)}</div>{body}{obs_block}</div>"
+        )
+
+    # 1 Personal
+    pj = datos.get("personal_jornada") or {}
+    if not pj.get("disponible"):
+        b1 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(pj.get('mensaje') or 'Sin datos.')}</div>"
+    else:
+        pers = (pj.get("personal") or {}).get("filas") or []
+        maq = (pj.get("maquinaria") or {}).get("filas") or []
+        b1 = _tbl_keys(
+            ["Empresa", "Cargo", "Cant."], ["empresa", "cargo", "cantidad"], pers,
+        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin personal consolidado.</div>"
+        aus = pj.get("ausentismo") or {}
+        jor = pj.get("jornada") or {}
+        extra = []
+        if aus.get("disponible"):
+            extra.append(
+                f"Ausentismo: {aus.get('ausentes') or 0} ausentes / {aus.get('total') or 0} registros"
+            )
+        else:
+            extra.append(aus.get("mensaje") or "Ausentismo: no registrado")
+        if jor.get("disponible"):
+            extra.append(f"Jornada: promedio {jor.get('promedio_horas')} h")
+        else:
+            extra.append(jor.get("mensaje") or "Jornada: no registrada")
+        b1 += (
+            f"<div style='font-size:8pt;color:#475569;margin:2pt 0 4pt;'>"
+            + " · ".join(_esc(x) for x in extra)
+            + "</div>"
+        )
+        if maq:
+            b1 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Maquinaria / transporte</div>"
+            b1 += _tbl_keys(["Equipo", "Cant."], ["equipo", "cantidad"], maq)
+    parts.append(_block("1. Personal y jornada", b1, obs.get("personal_jornada") or ""))
+
+    # 2 Cantidades
+    co = datos.get("cantidades_obra") or {}
+    if not co.get("disponible"):
+        b2 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(co.get('mensaje') or 'Sin cantidades.')}</div>"
+    else:
+        b2 = _tbl_keys(
+            ["Tramo", "Ítem", "Und", "Cantidad"],
+            ["tramo", "item", "unidad", "cantidad"],
+            co.get("filas") or [],
+        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
+    parts.append(_block("2. Cantidades de obra", b2, obs.get("cantidades_obra") or ""))
+
+    # 3 Actividades
+    ac = datos.get("actividades") or {}
+    if not ac.get("disponible"):
+        b3 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(ac.get('mensaje') or 'Sin actividades.')}</div>"
+    else:
+        b3 = _tbl_keys(
+            ["Fecha", "Tramo", "Actividad", "Detalle"],
+            ["fecha", "tramo", "actividad", "detalle"],
+            ac.get("filas") or [],
+        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
+    parts.append(_block("3. Actividades adicionales", b3, obs.get("actividades") or ""))
+
+    # 4 Almacén
+    al = datos.get("almacen") or {}
+    if not al.get("disponible"):
+        b4 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(al.get('mensaje') or 'Sin almacén.')}</div>"
+    else:
+        b4 = _tbl_keys(
+            ["Tipo", "Fecha", "Estado", "Ref."],
+            ["tipo", "fecha", "estado", "ref"],
+            al.get("filas") or [],
+        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
+    parts.append(_block("4. Almacén", b4, obs.get("almacen") or ""))
+
+    # 5 Programación
+    pr = datos.get("programacion") or {}
+    if not pr.get("disponible"):
+        b5 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(pr.get('mensaje') or 'Sin programación.')}</div>"
+    else:
+        pct = pr.get("ejecutado_pct")
+        pct_s = f"{int(round(float(pct)))}%" if pct is not None else "—"
+        b5 = f"<div style='font-size:8.5pt;margin:0 0 4pt;'>Avance: <b>{_esc(pct_s)}</b></div>"
+        b5 += _tbl_keys(
+            ["Capítulo", "%"],
+            ["capitulo", "ejecutado_pct"],
+            [
+                {
+                    **r,
+                    "ejecutado_pct": (
+                        f"{int(round(float(r.get('ejecutado_pct'))))}%"
+                        if r.get("ejecutado_pct") is not None else "—"
+                    ),
+                }
+                for r in (pr.get("filas") or [])
+            ],
+        )
+        if pr.get("alertas"):
+            b5 += (
+                "<ul style='margin:4pt 0 0;padding-left:14pt;font-size:8pt;color:#64748b;'>"
+                + "".join(f"<li>{_esc(a)}</li>" for a in (pr.get("alertas") or [])[:10])
+                + "</ul>"
+            )
+    parts.append(_block("5. Programación de obra", b5, obs.get("programacion") or ""))
+
+    return "".join(parts)
+
+
 def generar_pdf_acta(
     contrato: dict,
     acta: dict,
@@ -752,6 +924,7 @@ body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9
     _comp_table(compromisos_previos, "No hay compromisos abiertos de actas anteriores."),
     bordered=sec_border,
 )}
+{_section("Gestión de obra", _gestion_obra_pdf_html(acta), bordered=sec_border)}
 {_section(f"TEMAS TRATADOS EN PRESENTE ACTA ({n_ideas})", ideas_html, bordered=sec_border)}
 {_section(
     "Compromisos generados",

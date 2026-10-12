@@ -1001,6 +1001,8 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "acta_horas_reunion": None,
     "idea_titulo": None,
     "idea_imagenes": None,
+    "acta_flujo_tabs": None,
+    "acta_gestion_obra": None,
 }
 
 
@@ -1060,6 +1062,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "acta_flujo_tabs":
             sb.table("seguimiento_acta").select("id,flujo_tabs").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "acta_gestion_obra":
+            sb.table("seguimiento_acta").select("id,gestion_obra").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
@@ -1091,6 +1096,8 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         ):
             _SCHEMA_CAPS[cap] = False
         elif cap == "acta_flujo_tabs" and _is_missing_column_error(exc, "flujo_tabs"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "acta_gestion_obra" and _is_missing_column_error(exc, "gestion_obra"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "contacto_externo" and (
             "seguimiento_contacto_externo" in msg
@@ -1444,6 +1451,22 @@ def _ensure_acta_flujo_tabs_column(sb) -> bool:
     return _schema_has(sb, "acta_flujo_tabs", force=True)
 
 
+def _ensure_acta_gestion_obra_column(sb) -> bool:
+    """Confirma columna gestion_obra; reintenta tras reload de schema PostgREST."""
+    if _schema_has(sb, "acta_gestion_obra"):
+        return True
+    _SCHEMA_CAPS["acta_gestion_obra"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "acta_gestion_obra", force=True)
+
+
 def _normalize_orden_items_for_storage(orden) -> Any:
     """Conserva texto/hecho/expositor en checklist; deja texto libre intacto."""
     if not isinstance(orden, list):
@@ -1774,6 +1797,10 @@ def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_
                         flujo if isinstance(flujo, dict) else _norm_flujo_tabs(flujo),
                         tipo_acta=attempt.get("tipo_acta"),
                     )
+                changed = True
+            if "gestion_obra" in attempt and _is_missing_column_error(exc, "gestion_obra"):
+                _SCHEMA_CAPS["acta_gestion_obra"] = False
+                attempt.pop("gestion_obra", None)
                 changed = True
             if not changed:
                 raise
@@ -2287,6 +2314,56 @@ def update_acta(
         _sync_ideas(sb, acta_id, data.get("ideas") or [])
     if "apartados" in data:
         _sync_apartados(sb, acta_id, data.get("apartados") or [])
+    if "gestion_obra" in data and _ensure_acta_gestion_obra_column(sb):
+        from gestion_obra_service import normalize_gestion_obra
+
+        go = normalize_gestion_obra(data.get("gestion_obra"))
+        if go is not None:
+            patch_go = {"gestion_obra": go, "updated_at": _now_utc().isoformat()}
+            _persist_acta_row(sb, patch_go, acta_id=acta_id, contrato_id=contrato_id)
+    return get_acta(sb, acta_id, contrato_id)
+
+
+def recalcular_gestion_obra_acta(
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    *,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    user_id: int,
+    current_user: Optional[dict] = None,
+    conservar_observaciones: bool = True,
+) -> dict:
+    """Recalcula el consolidado de Gestión de obra y lo persiste en el acta (si no está sellada)."""
+    from gestion_obra_service import (
+        acta_esta_sellada,
+        build_snapshot,
+        merge_observaciones,
+        normalize_gestion_obra,
+        rango_semana_anterior,
+    )
+
+    acta = get_acta(sb, acta_id, contrato_id)
+    _assert_puede_editar_acta(acta, user_id, current_user)
+    if acta_esta_sellada(acta):
+        raise ValueError("El acta ya está sellada: el consolidado de Gestión de obra no se recalcula.")
+    if not _ensure_acta_gestion_obra_column(sb):
+        raise ValueError("Falta la columna gestion_obra. Aplique la migración correspondiente.")
+
+    prev = normalize_gestion_obra(acta.get("gestion_obra")) or {}
+    d0 = (fecha_desde or prev.get("fecha_desde") or "")[:10]
+    d1 = (fecha_hasta or prev.get("fecha_hasta") or "")[:10]
+    if not d0 or not d1:
+        d0, d1 = rango_semana_anterior(acta.get("fecha_reunion"))
+    obs = merge_observaciones(prev.get("observaciones") if conservar_observaciones else None, None)
+    snap = build_snapshot(sb, int(contrato_id), d0, d1, observaciones=obs)
+    _persist_acta_row(
+        sb,
+        {"gestion_obra": snap, "updated_at": _now_utc().isoformat()},
+        acta_id=acta_id,
+        contrato_id=contrato_id,
+    )
     return get_acta(sb, acta_id, contrato_id)
 
 

@@ -2,10 +2,12 @@
  * Flujo secuencial de pestañas del editor de actas.
  *
  * Aplica SOLO en el primer diligenciamiento (acta nueva con flujo v>=1, aún no liberada):
- *   encabezado → orden → asistentes → compromisos → ideas → Vista previa
+ *   encabezado → orden → asistentes → compromisos → Gestión de obra → ideas → Vista previa
  *
- * Al guardar Temas (ideas) se marca `liberado` y todo el documento queda
- * editable. Actas legacy (sin `v`, sin hitos, o `{}`) se tratan como liberadas.
+ * «Gestión de obra» no bloquea el avance: Ideas se habilita con el hito de
+ * compromisos (igual que antes). Al guardar Temas (ideas) se marca `liberado`
+ * y todo el documento queda editable. Actas legacy (sin `v`, sin hitos, o `{}`)
+ * se tratan como liberadas.
  */
 
 export const FLUJO_TAB_KEYS = ['orden', 'asistentes', 'compromisos', 'ideas']
@@ -16,6 +18,8 @@ export const TAB_REQUIERE_FLUJO = {
   orden: null, // solo encabezado guardado (actaId)
   asistentes: 'orden',
   compromisos: 'asistentes',
+  // Gestión de obra: visible tras compromisos, sin ser requisito de Ideas.
+  gestion_obra: 'compromisos',
   ideas: 'compromisos',
   apartados: 'ideas',
   acciones: 'ideas',
@@ -178,7 +182,9 @@ export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } 
 
   // Edición libre: no aplicar gate de compromisos ni forzar hitos.
   if (flujo.liberado) {
-    const orderLibre = ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']
+    const orderLibre = [
+      'encabezado', 'orden', 'asistentes', 'compromisos', 'gestion_obra', 'ideas', 'apartados', 'acciones',
+    ]
     const idxL = orderLibre.indexOf(tabId)
     const nextLibre = idxL >= 0 && idxL < orderLibre.length - 1 ? orderLibre[idxL + 1] : null
     return { ok: true, flujo, nextTab: nextLibre, error: null }
@@ -202,11 +208,15 @@ export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } 
     flujo.liberado = true
   }
 
-  const order = ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']
+  const order = [
+    'encabezado', 'orden', 'asistentes', 'compromisos', 'gestion_obra', 'ideas', 'apartados', 'acciones',
+  ]
   const idx = order.indexOf(tabId)
   let nextTab = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null
   // Tras Temas: ir a Vista previa (acciones); apartados también quedan libres por liberado.
   if (tabId === 'ideas') nextTab = 'acciones'
+  // Gestión de obra no marca hito ni bloquea: al guardar sugiere pasar a Ideas.
+  if (tabId === 'gestion_obra') nextTab = 'ideas'
   return { ok: true, flujo, nextTab, error: null }
 }
 
