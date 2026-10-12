@@ -597,7 +597,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
           </button>
         </div>
 
-        {/* ── Pestañas Chat | Mapa ─────────────────────────────────────────────── */}
+        {/* ── Pestañas Chat | Manual de uso ───────────────────────────────────── */}
         {!vistaFeedback && (
           <div
             role="tablist"
@@ -613,7 +613,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal', children 
           >
             {[
               { id: 'chat', label: 'Chat' },
-              { id: 'mapa', label: 'Mapa' },
+              { id: 'mapa', label: 'Manual de uso' },
             ].map((tab) => {
               const activo = panelTab === tab.id
               return (

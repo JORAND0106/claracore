@@ -73,7 +73,7 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
       gap: 12,
     }}>
       <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-sm)' }}>
-        Editar contenido del mapa (Desarrollador)
+        Editar contenido del manual de uso (Desarrollador)
       </div>
       <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
         Actualiza descripción, video y pantallazos por subtema sin tocar código. Al guardar se publica
@@ -309,7 +309,7 @@ export default function ModuloMapaNavegacion({
       setContenido(full)
       setFuente(f)
     } catch (e) {
-      setError(e.message || 'No se pudo cargar el mapa de navegación.')
+      setError(e.message || 'No se pudo cargar el manual de uso.')
       setContenido(contenidoEditableCompleto(null))
       setFuente('')
     } finally {
