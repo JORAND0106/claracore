@@ -97,6 +97,8 @@ export default function SolicitudFormExcelTable({
   onAbrirTramos,
   onAddRow,
   onRemoveRow,
+  /** Líneas ya guardadas solo se eliminan con permiso Eliminar. */
+  puedeEliminarLinea = false,
   /** Si true, la fila no se edita ni elimina (líneas ya en OC). */
   isRowLocked,
 }) {
@@ -326,15 +328,20 @@ export default function SolicitudFormExcelTable({
                     >
                       +
                     </button>
-                    <button
-                      type="button"
-                      title={locked ? 'No se puede eliminar: ya está en la OC' : 'Eliminar fila'}
-                      disabled={rowDisabled || items.length <= 1}
-                      onClick={() => onRemoveRow(idx)}
-                      style={iconBtn({ color: '#dc2626', borderColor: '#dc262666' })}
-                    >
-                      −
-                    </button>
+                    {(!it?.id || puedeEliminarLinea) && (
+                      <button
+                        type="button"
+                        data-testid="eliminar-fila-solicitud"
+                        title={it?.en_orden_compra || locked
+                          ? 'Esta línea está en una orden de compra'
+                          : 'Eliminar fila'}
+                        disabled={busy || (!it?.id && items.length <= 1)}
+                        onClick={() => onRemoveRow(idx)}
+                        style={iconBtn({ color: '#dc2626', borderColor: '#dc262666' })}
+                      >
+                        −
+                      </button>
+                    )}
                   </td>
                 </tr>
                 )

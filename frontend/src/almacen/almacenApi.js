@@ -382,6 +382,18 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         headers: authHeaders(),
       }).then(parseJson),
 
+    eliminarSolicitud: (id) =>
+      fetch(`${base}/solicitudes/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      }).then(parseJson),
+
+    eliminarLineaSolicitud: (itemId) =>
+      fetch(`${base}/solicitudes/items/${itemId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      }).then(parseJson),
+
     addCotizacion: (itemId, body) =>
       fetch(`${base}/solicitudes/items/${itemId}/cotizaciones`, {
         method: 'POST',

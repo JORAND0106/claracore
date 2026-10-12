@@ -2130,6 +2130,109 @@ def map_ocr_to_cotizacion(ocr_result: dict) -> dict:
     return out
 
 
+def _ids_de(rows: list, key: str = "id") -> List[int]:
+    out = []
+    for row in rows or []:
+        raw = row.get(key) if isinstance(row, dict) else None
+        if raw in (None, ""):
+            continue
+        try:
+            out.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def dependencias_insumo(sb, contrato_id: int, insumo_id: int) -> dict:
+    """Solicitudes, OC, entradas o salidas que impiden dar de baja el insumo."""
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id, solicitud_id")
+        .eq("insumo_id", int(insumo_id))
+        .execute()
+        .data
+        or []
+    )
+    item_ids = _ids_de(items)
+    solicitudes = bool(item_ids)
+    ordenes = False
+    if item_ids:
+        oc_items = (
+            sb.table("almacen_orden_compra_item")
+            .select("id, solicitud_item_id")
+            .in_("solicitud_item_id", item_ids)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        ordenes = bool(oc_items)
+    entradas = (
+        sb.table("almacen_entrada")
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .eq("insumo_id", int(insumo_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    tiene_entradas = bool(entradas)
+    tiene_salidas = False
+    entrada_ids = _ids_de(entradas)
+    ei_ids: List[int] = []
+    if entrada_ids:
+        ei_rows = (
+            sb.table("almacen_entrada_item")
+            .select("id")
+            .in_("entrada_id", entrada_ids)
+            .execute()
+            .data
+            or []
+        )
+        ei_ids.extend(_ids_de(ei_rows))
+    if item_ids and ordenes:
+        oc_lineas = (
+            sb.table("almacen_orden_compra_item")
+            .select("id")
+            .in_("solicitud_item_id", item_ids)
+            .execute()
+            .data
+            or []
+        )
+        oc_item_ids = _ids_de(oc_lineas)
+        if oc_item_ids:
+            ei_oc = (
+                sb.table("almacen_entrada_item")
+                .select("id, entrada_id")
+                .in_("orden_compra_item_id", oc_item_ids)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if ei_oc:
+                tiene_entradas = True
+                ei_ids.extend(_ids_de(ei_oc))
+    if ei_ids:
+        salidas = (
+            sb.table("almacen_salida")
+            .select("id")
+            .in_("entrada_item_id", ei_ids)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        tiene_salidas = bool(salidas)
+    return {
+        "solicitudes": solicitudes,
+        "ordenes": ordenes,
+        "entradas": tiene_entradas,
+        "salidas": tiene_salidas,
+    }
+
+
 def _insumo_en_solicitudes_abiertas(sb, contrato_id: int, insumo_id: int) -> bool:
     items = (
         sb.table("almacen_solicitud_item")
@@ -2160,10 +2263,12 @@ def _insumo_en_solicitudes_abiertas(sb, contrato_id: int, insumo_id: int) -> boo
 
 def delete_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
     """Desactiva un insumo del catálogo (soft delete) y libera su código."""
+    from almacen_eliminar_reglas import motivo_insumo_con_dependencias, registro_completo
+
     sb = _sb()
     rows = (
         sb.table("almacen_insumo")
-        .select("id, codigo, activo")
+        .select("*")
         .eq("id", insumo_id)
         .eq("contrato_id", contrato_id)
         .limit(1)
@@ -2176,16 +2281,172 @@ def delete_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
     row = rows[0]
     if not row.get("activo", True):
         raise ValueError("El insumo ya está inactivo.")
-    if _insumo_en_solicitudes_abiertas(sb, contrato_id, insumo_id):
-        raise ValueError(
-            "No se puede eliminar: el insumo está en solicitudes en borrador o enviadas."
-        )
+    deps = dependencias_insumo(sb, contrato_id, insumo_id)
+    motivo = motivo_insumo_con_dependencias(**deps)
+    if motivo:
+        raise ValueError(motivo)
     codigo_original = row.get("codigo")
     sb.table("almacen_insumo").update({
         "activo": False,
         "codigo": _codigo_liberado_para_baja(row),
     }).eq("id", insumo_id).execute()
-    return {"ok": True, "insumo_id": insumo_id, "codigo": codigo_original}
+    return {
+        "ok": True,
+        "insumo_id": insumo_id,
+        "codigo": codigo_original,
+        "registro": registro_completo(row),
+    }
+
+
+def _indice_cotizacion(detalle: List[dict], cotizacion_id: str, tipo: str, numero: str) -> Optional[int]:
+    cid = str(cotizacion_id or "").strip()
+    if cid:
+        for i, row in enumerate(detalle):
+            if str(row.get("id") or "") == cid:
+                return i
+    tipo_n = (tipo or "").strip().lower()
+    num = (numero or "").strip()
+    if tipo_n and num:
+        for i, row in enumerate(detalle):
+            if (row.get("tipo") or "insumo") == tipo_n and (row.get("numero") or "").strip() == num:
+                return i
+    return None
+
+
+def _borrar_blob_de_cotizacion(sb, insumo: dict, nombre: str, *, prefer: str) -> None:
+    from azure_blob_storage import delete_blob_private
+
+    pedido = (nombre or "").strip()
+    if not pedido:
+        return
+    soportes = (
+        sb.table("almacen_insumo_cotizacion_soporte")
+        .select("id, insumo_id, nombre, blob_path")
+        .eq("insumo_id", int(insumo["id"]))
+        .execute()
+        .data
+        or []
+    )
+    try:
+        located = resolver_blob_cotizacion_insumo(insumo, soportes, pedido, prefer=prefer)
+    except ValueError:
+        return
+    path = (located.get("blob_path") or "").strip()
+    if path:
+        try:
+            delete_blob_private(path)
+        except Exception:
+            pass
+    if located.get("kind") == "ganadora":
+        sb.table("almacen_insumo").update({
+            "soporte_pdf_blob_path": None,
+            "soporte_pdf_nombre": None,
+        }).eq("id", int(insumo["id"])).execute()
+        insumo["soporte_pdf_blob_path"] = None
+        insumo["soporte_pdf_nombre"] = None
+    elif located.get("soporte_id"):
+        sb.table("almacen_insumo_cotizacion_soporte").delete().eq(
+            "id", int(located["soporte_id"]),
+        ).execute()
+
+
+def _costo_desde_ganadora(row: dict, detalle: List[dict]) -> dict:
+    update: Dict[str, Any] = {"cotizaciones_detalle": detalle}
+    gan = _ganadora_insumo_detalle(detalle)
+    if not gan:
+        update["cotizacion_numero"] = None
+        update["cotizacion_fecha"] = None
+        update["cotizacion_vigencia"] = None
+        return update
+    _sync_legacy_cotizacion_from_detalle(update, detalle)
+    if gan.get("valor") is None:
+        return update
+    gan_costo = float(round(max(float(gan["valor"]), 0.0)))
+    update["costo_base"] = gan_costo
+    tributos = row.get("tributos")
+    if tributos_tienen_datos(tributos):
+        update["valor_compra_referencia"] = compute_valor_despues_aiu_iva(gan_costo, tributos)
+    else:
+        update["valor_compra_referencia"] = compute_costo_total_insumo(
+            gan_costo,
+            row.get("tipo_impuesto"),
+            row.get("impuesto_porcentaje"),
+            row.get("impuestos"),
+        )
+    cantidad = row.get("cantidad_negociada")
+    try:
+        cantidad_n = float(cantidad) if cantidad not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        cantidad_n = 0.0
+    ref = float(update.get("valor_compra_referencia") or 0)
+    if cantidad_n > 0 and ref > 0:
+        update["valor_negociado_total"] = float(round(cantidad_n * ref))
+    if gan.get("proveedor_id"):
+        update["proveedor_id"] = int(gan["proveedor_id"])
+    return update
+
+
+def eliminar_cotizacion_de_insumo(
+    contrato_id: int,
+    insumo_id: int,
+    cotizacion_id: str = "",
+    *,
+    tipo: str = "",
+    numero: str = "",
+    solo_adjunto: bool = False,
+) -> dict:
+    """Quita una cotización del insumo, o solo su PDF. La ganadora con líneas asignadas no se toca."""
+    from almacen_eliminar_reglas import motivo_cotizacion_ganadora, registro_completo
+
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select("*")
+        .eq("id", int(insumo_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Insumo no encontrado.")
+    row = rows[0]
+    detalle = [dict(item) for item in cotizaciones_detalle_from_row(row)]
+    idx = _indice_cotizacion(detalle, cotizacion_id, tipo, numero)
+    if idx is None:
+        raise ValueError("No se encontró esa cotización en el insumo.")
+    cot = detalle[idx]
+    lineas = dependencias_insumo(sb, contrato_id, int(insumo_id)).get("solicitudes")
+    motivo = motivo_cotizacion_ganadora(
+        bool(cot.get("es_ganadora")),
+        bool(lineas),
+        solo_adjunto=solo_adjunto,
+    )
+    if motivo:
+        raise ValueError(motivo)
+    prefer = "ganadora" if cot.get("es_ganadora") else "soporte"
+    nombre_pdf = cot.get("pdf_nombre") or ""
+    registro = registro_completo(cot)
+    if solo_adjunto:
+        if not (nombre_pdf or "").strip():
+            raise ValueError("Esta cotización no tiene un archivo adjunto.")
+        _borrar_blob_de_cotizacion(sb, row, nombre_pdf, prefer=prefer)
+        detalle[idx]["pdf_nombre"] = None
+        detalle[idx]["pdf_historial"] = []
+    else:
+        _borrar_blob_de_cotizacion(sb, row, nombre_pdf, prefer=prefer)
+        detalle.pop(idx)
+        detalle = apply_auto_ganadora_detalle(detalle)
+    update = _costo_desde_ganadora(row, detalle)
+    sb.table("almacen_insumo").update(update).eq("id", int(insumo_id)).execute()
+    return {
+        "ok": True,
+        "insumo_id": int(insumo_id),
+        "cotizacion_id": cot.get("id"),
+        "solo_adjunto": bool(solo_adjunto),
+        "registro": registro,
+    }
 
 
 def clear_catalogo_insumos(contrato_id: int) -> int:

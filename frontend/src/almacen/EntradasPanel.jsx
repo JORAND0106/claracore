@@ -80,7 +80,7 @@ export default function EntradasPanel({
   const ui = useAlmacenTheme()
   const verAlertas = puedeVerAlertasEntrada(permisos)
   const puedeEntrada = puedeRegistrarEntradaAlmacen(permisos)
-  const puedeEliminar = Boolean(permisos?.editar)
+  const puedeEliminar = Boolean(permisos?.eliminar)
   const [lista, setLista] = useState([])
   const [creating, setCreating] = useState(false)
   const [despachadorOpen, setDespachadorOpen] = useState(false)
@@ -89,6 +89,7 @@ export default function EntradasPanel({
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
   const [eliminarTarget, setEliminarTarget] = useState(null)
+  const [eliminarAviso, setEliminarAviso] = useState('')
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_ENTRADAS_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
 
@@ -108,13 +109,14 @@ export default function EntradasPanel({
     const entrada = eliminarTarget
     setEliminandoId(entrada.id)
     setError('')
+    setEliminarAviso('')
     try {
       await api.deleteEntrada(entrada.id)
       if (detalleId === entrada.id) setDetalleId(null)
       setEliminarTarget(null)
       await reload()
     } catch (err) {
-      setError(err.message)
+      setEliminarAviso(err.message)
     } finally {
       setEliminandoId(null)
     }
@@ -450,7 +452,11 @@ export default function EntradasPanel({
           confirmar="Eliminar"
           cancelar="Cancelar"
           procesando={eliminandoId === eliminarTarget.id}
-          onCancel={() => !eliminandoId && setEliminarTarget(null)}
+          onCancel={() => {
+            if (eliminandoId) return
+            setEliminarTarget(null)
+            setEliminarAviso('')
+          }}
           onConfirm={ejecutarEliminar}
         >
           {(() => {
@@ -460,8 +466,11 @@ export default function EntradasPanel({
               <>
                 ¿Eliminar la entrada {nEnt}{doc}?
                 <div style={{ marginTop: 10, color: 'inherit', opacity: 0.9 }}>
-                  Si era el último consecutivo, ese número quedará disponible para el siguiente registro.
+                  Se revierte el ingreso y el saldo de la orden de compra. Si era el último consecutivo, ese número queda disponible. Si hay salidas que consumen este stock, no se eliminará.
                 </div>
+                {eliminarAviso && (
+                  <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>
+                )}
               </>
             )
           })()}

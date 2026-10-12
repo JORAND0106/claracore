@@ -21,6 +21,7 @@ from catalogo_insumos_service import (
     delete_proveedor_catalogo,
     download_cotizacion_pdf,
     download_cotizacion_pdf_de_insumo,
+    eliminar_cotizacion_de_insumo,
     find_duplicados,
     get_almacen_config,
     get_csv_template,
@@ -445,6 +446,44 @@ async def route_create_insumo(
         raise _http_value_error(exc) from exc
 
 
+@router.delete("/{contrato_id}/insumos/{insumo_id}/cotizaciones/{cotizacion_id}")
+def route_eliminar_cotizacion_insumo(
+    contrato_id: int,
+    insumo_id: int,
+    cotizacion_id: str,
+    tipo: str = "",
+    numero: str = "",
+    solo_adjunto: bool = False,
+    current_user=Depends(get_current_user),
+):
+    """Quita una cotización del insumo, o solo su PDF. Requiere Eliminar en Catálogo."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "eliminar")
+    try:
+        result = eliminar_cotizacion_de_insumo(
+            contrato_id,
+            insumo_id,
+            cotizacion_id,
+            tipo=tipo,
+            numero=numero,
+            solo_adjunto=solo_adjunto,
+        )
+        registrar_log(
+            current_user,
+            "ELIMINAR",
+            "CATALOGO_INSUMOS",
+            "almacen_insumo_cotizacion",
+            f"{insumo_id}:{cotizacion_id}",
+            {"solo_adjunto": bool(solo_adjunto), "tipo": tipo or None},
+            valor_anterior=result.get("registro"),
+            valor_nuevo={"deleted": not solo_adjunto, "adjunto_quitado": bool(solo_adjunto)},
+        )
+        result.pop("registro", None)
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.delete("/{contrato_id}/insumos/{insumo_id}")
 def route_delete_insumo(contrato_id: int, insumo_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -454,7 +493,10 @@ def route_delete_insumo(contrato_id: int, insumo_id: int, current_user=Depends(g
         registrar_log(
             current_user, "ELIMINAR", "CATALOGO_INSUMOS", "almacen_insumo", str(insumo_id),
             {"codigo": result.get("codigo")},
+            valor_anterior=result.get("registro"),
+            valor_nuevo={"deleted": True, "id": insumo_id},
         )
+        result.pop("registro", None)
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc

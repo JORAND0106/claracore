@@ -18,7 +18,8 @@ def test_sql_y_funciones_requeridas_entsal():
 def test_routes_separan_entsal_de_almacen():
     routes = (ROOT / "almacen_routes.py").read_text(encoding="utf-8")
     assert "require_permiso_entradas_salidas(current_user, \"crear\")" in routes
-    assert "require_permiso_entradas_salidas(current_user, \"editar\")" in routes
+    assert "require_permiso_entradas_salidas(current_user, \"eliminar\")" in routes
+    assert "require_editar_cantidad_salida_almacen(current_user)" in routes
     assert "_require_almacen_o_entsal(current_user, \"ver\")" in routes
     # Crear insumo ya no exige Almacén·editar junto a CATINS
     assert 'require_permiso_almacen(current_user, "editar")\n    require_permiso_catalogo_insumos' not in routes

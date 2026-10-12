@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcConfirmModal from '../components/CcConfirmModal'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
@@ -31,6 +32,7 @@ import {
 import {
   ESTADO_SOLICITUD_LABEL,
   almacenFormModalDialogStyle,
+  fmtCant,
   fmtMoney,
   useAlmacenApi,
   useAlmacenCompact,
@@ -77,6 +79,10 @@ export default function SolicitudDetalleModal({
   const [materialesOpen, setMaterialesOpen] = useState(true)
   const [mapaItem, setMapaItem] = useState(null)
   const [revisionItemId, setRevisionItemId] = useState(null)
+  const [eliminarCandidatas, setEliminarCandidatas] = useState(null)
+  const [eliminarLinea, setEliminarLinea] = useState(null)
+  const [eliminarLineaAviso, setEliminarLineaAviso] = useState('')
+  const [eliminarLineaBusy, setEliminarLineaBusy] = useState(false)
   const [ocProgreso, setOcProgreso] = useState('')
 
   // El título de la fila queda en un tooltip institucional. Al abrir el popup
@@ -757,6 +763,14 @@ export default function SolicitudDetalleModal({
                   items={items}
                   sol={sol}
                   puedeValidar={puedeValidar}
+                  puedeEliminar={Boolean(permisos?.eliminar)}
+                  onEliminarLinea={(lineas) => {
+                    const lista = (lineas || []).filter((it) => it?.id != null)
+                    if (!lista.length) return
+                    setEliminarLineaAviso('')
+                    if (lista.length === 1) setEliminarLinea(lista[0])
+                    else setEliminarCandidatas(lista)
+                  }}
                   destacarSinInsumo={Boolean(permisos?.editar)}
                   puedeSeleccionar={puedeSeleccionar}
                   puedeAsignar={puedeAsignar}
@@ -1015,6 +1029,94 @@ export default function SolicitudDetalleModal({
           onEnviado={() => onUpdated?.()}
           onClose={() => setAvisoOc(null)}
         />
+      )}
+
+      {eliminarCandidatas && (
+        <CcConfirmModal
+          theme={t}
+          tipo="info"
+          titulo="Elija la línea"
+          confirmar="Cerrar"
+          soloConfirmar
+          onConfirm={() => setEliminarCandidatas(null)}
+          onCancel={() => setEliminarCandidatas(null)}
+        >
+          <div style={{ marginBottom: 8 }}>
+            Esta fila reúne varios sectores. Se elimina una línea a la vez.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {eliminarCandidatas.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                style={ui.btnSecondary}
+                onClick={() => {
+                  setEliminarCandidatas(null)
+                  setEliminarLineaAviso('')
+                  setEliminarLinea(it)
+                }}
+              >
+                {`Línea ${it.numero_linea ?? it.id}${it.tramo ? ` · ${it.tramo}` : ''}${it.pk_id ? ` · ${it.pk_id}` : ''} · ${fmtCant(it.cantidad)}${it.unidad ? ` ${it.unidad}` : ''}`}
+              </button>
+            ))}
+          </div>
+        </CcConfirmModal>
+      )}
+
+      {eliminarLinea && (
+        <CcConfirmModal
+          theme={t}
+          tipo={eliminarLinea.en_orden_compra ? 'warn' : 'danger'}
+          titulo={eliminarLinea.en_orden_compra ? 'No se puede eliminar la línea' : 'Eliminar línea'}
+          confirmar={eliminarLinea.en_orden_compra ? 'Entendido' : 'Eliminar'}
+          cancelar="Cancelar"
+          soloConfirmar={Boolean(eliminarLinea.en_orden_compra)}
+          procesando={eliminarLineaBusy}
+          onCancel={() => {
+            if (eliminarLineaBusy) return
+            setEliminarLinea(null)
+            setEliminarLineaAviso('')
+          }}
+          onConfirm={async () => {
+            if (eliminarLinea.en_orden_compra) {
+              setEliminarLinea(null)
+              return
+            }
+            setEliminarLineaBusy(true)
+            setEliminarLineaAviso('')
+            try {
+              await api.eliminarLineaSolicitud(eliminarLinea.id)
+              setEliminarLinea(null)
+              await reload({ silent: true, full: true })
+              onUpdated?.()
+            } catch (e) {
+              setEliminarLineaAviso(e.message || String(e))
+            } finally {
+              setEliminarLineaBusy(false)
+            }
+          }}
+        >
+          {eliminarLinea.en_orden_compra
+            ? 'No se puede eliminar esta línea porque ya está incluida en una orden de compra.'
+            : (
+              <>
+                {`¿Eliminar la línea ${eliminarLinea.numero_linea ?? eliminarLinea.id} de la solicitud?`}
+                <div style={{ marginTop: 10, opacity: 0.9 }}>
+                  {[eliminarLinea.material_descripcion || eliminarLinea.descripcion_solicitada, eliminarLinea.pk_id]
+                    .filter(Boolean)
+                    .join(' · ') || 'Esta línea'}
+                  {` · ${fmtCant(eliminarLinea.cantidad)}${eliminarLinea.unidad ? ` ${eliminarLinea.unidad}` : ''}`}
+                  . Dejará de formar parte de la solicitud y los totales se actualizarán.
+                  {verEconomicos && eliminarLinea.valor_compra_unitario
+                    ? ` Costo unitario ${fmtMoney(eliminarLinea.valor_compra_unitario)}.`
+                    : ''}
+                </div>
+              </>
+            )}
+          {eliminarLineaAviso && (
+            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarLineaAviso}</div>
+          )}
+        </CcConfirmModal>
       )}
 
       {mapaItem && (

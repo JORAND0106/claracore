@@ -303,20 +303,44 @@ def _sync_solicitud_items(
         if r.get("id")
     }
     keep_ids: set = set()
-    to_insert: List[dict] = []
-    autor = ""
-    if user_id and any((it.get("observacion_residente") or "").strip() for it in items):
-        autor = _nombre_usuario_id(sb, user_id)
-
+    planned: List[tuple] = []
     for i, it in enumerate(items, start=1):
-        row = _item_for_db_insert(it)
-        row["solicitud_id"] = solicitud_id
-        row["numero_linea"] = i
         raw_id = it.get("id")
         try:
             iid = int(raw_id) if raw_id is not None else None
         except (TypeError, ValueError):
             iid = None
+        if iid and iid in existing_ids:
+            keep_ids.add(iid)
+        planned.append((i, it, iid))
+
+    # Rechazar la baja antes de escribir: Guardar no elimina líneas persistidas.
+    to_delete = existing_ids - keep_ids
+    if to_delete:
+        from almacen_eliminar_reglas import MOTIVO_LINEA_AL_GUARDAR, MOTIVO_LINEA_OC
+
+        ocs = (
+            sb.table("almacen_orden_compra")
+            .select("id")
+            .eq("solicitud_id", int(solicitud_id))
+            .execute()
+            .data
+            or []
+        )
+        en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+        if to_delete & en_oc:
+            raise ValueError(MOTIVO_LINEA_OC)
+        raise ValueError(MOTIVO_LINEA_AL_GUARDAR)
+
+    to_insert: List[dict] = []
+    autor = ""
+    if user_id and any((it.get("observacion_residente") or "").strip() for it in items):
+        autor = _nombre_usuario_id(sb, user_id)
+
+    for i, it, iid in planned:
+        row = _item_for_db_insert(it)
+        row["solicitud_id"] = solicitud_id
+        row["numero_linea"] = i
         if "observacion_residente" in it:
             _aplicar_sello_justificacion(
                 row,
@@ -325,7 +349,6 @@ def _sync_solicitud_items(
                 autor,
             )
         if iid and iid in existing_ids:
-            keep_ids.add(iid)
             # Conservar estado_validacion previo salvo que el payload lo traiga.
             if "estado_validacion" not in row or row.get("estado_validacion") is None:
                 prev = existing_estado.get(iid)
@@ -337,13 +360,6 @@ def _sync_solicitud_items(
                 row["estado_validacion"] = "pendiente"
             to_insert.append(row)
 
-    to_delete = existing_ids - keep_ids
-    if to_delete:
-        # Borrar de a chunks por si hay muchas líneas removidas.
-        ids = sorted(to_delete)
-        for j in range(0, len(ids), 80):
-            chunk = ids[j: j + 80]
-            sb.table("almacen_solicitud_item").delete().in_("id", chunk).execute()
     if to_insert:
         _insert_solicitud_items_batch(sb, to_insert)
     _sync_solicitud_item_repartos(sb, solicitud_id, items)
@@ -4929,7 +4945,7 @@ def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo
 
 
 def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
-    """Anula una solicitud en borrador (elimina) o enviada (marca rechazada)."""
+    """Anula una solicitud enviada (marca rechazada). Un borrador se elimina aparte, con permiso Eliminar."""
     _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     head = _fetch_solicitud_head(contrato_id, solicitud_id)
@@ -4937,9 +4953,10 @@ def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
     if estado not in ("borrador", "enviada"):
         raise ValueError("Solo se pueden anular solicitudes en borrador o enviadas.")
     if estado == "borrador":
-        sb.table("almacen_solicitud_item").delete().eq("solicitud_id", solicitud_id).execute()
-        sb.table("almacen_solicitud").delete().eq("id", solicitud_id).execute()
-        return {"ok": True, "deleted": True, "id": solicitud_id}
+        raise ValueError(
+            "Anular no elimina un borrador. "
+            "Eliminar la solicitud requiere el permiso Eliminar."
+        )
     sb.table("almacen_solicitud").update({
         "estado": "rechazada",
         "validada_at": _now_iso(),
@@ -5031,6 +5048,131 @@ def eliminar_solicitud_desarrollador(contrato_id: int, solicitud_id: int, curren
     sb.table("almacen_solicitud_item").delete().eq("solicitud_id", solicitud_id).execute()
     sb.table("almacen_solicitud").delete().eq("id", solicitud_id).eq("contrato_id", contrato_id).execute()
     return {"ok": True, "deleted": True, "id": solicitud_id}
+
+
+def _borrar_hijos_solicitud(sb, solicitud_id: int) -> None:
+    """Mensajes y líneas de esta solicitud. La orden de compra no se toca."""
+    for tabla, col in (
+        ("almacen_solicitud_mensaje_destinatario", "solicitud_id"),
+        ("almacen_solicitud_mensaje", "solicitud_id"),
+    ):
+        try:
+            sb.table(tabla).delete().eq(col, int(solicitud_id)).execute()
+        except Exception:
+            pass
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id")
+        .eq("solicitud_id", int(solicitud_id))
+        .execute()
+        .data
+        or []
+    )
+    for it in items:
+        iid = it.get("id")
+        if iid is None:
+            continue
+        try:
+            sb.table("almacen_cotizacion").delete().eq("solicitud_item_id", int(iid)).execute()
+        except Exception:
+            pass
+    sb.table("almacen_solicitud_item").delete().eq("solicitud_id", int(solicitud_id)).execute()
+
+
+def eliminar_solicitud(contrato_id: int, solicitud_id: int) -> dict:
+    """Baja de una solicitud sin orden de compra. Exige permiso Eliminar en la ruta."""
+    from almacen_eliminar_reglas import MOTIVO_SOLICITUD_OC, registro_completo
+
+    sb = _sb()
+    rows = (
+        sb.table("almacen_solicitud")
+        .select("*")
+        .eq("id", int(solicitud_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Solicitud no encontrada.")
+    head = rows[0]
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("solicitud_id", int(solicitud_id))
+        .execute()
+        .data
+        or []
+    )
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, int(solicitud_id))
+    if ocs:
+        raise ValueError(MOTIVO_SOLICITUD_OC)
+    registro = registro_completo({"solicitud": head, "items": items})
+    _borrar_hijos_solicitud(sb, int(solicitud_id))
+    sb.table("almacen_solicitud").delete().eq("id", int(solicitud_id)).eq(
+        "contrato_id", int(contrato_id),
+    ).execute()
+    _invalidar_graficos_inventario(contrato_id)
+    return {
+        "ok": True,
+        "id": int(solicitud_id),
+        "consecutivo": head.get("consecutivo"),
+        "registro": registro,
+    }
+
+
+def eliminar_linea_solicitud(contrato_id: int, item_id: int) -> dict:
+    """Baja de una línea que no está en una orden de compra."""
+    from almacen_eliminar_reglas import MOTIVO_LINEA_OC, registro_completo
+
+    sb = _sb()
+    rows = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Línea de solicitud no encontrada.")
+    item = rows[0]
+    sol_id = int(item.get("solicitud_id") or 0)
+    head = (
+        sb.table("almacen_solicitud")
+        .select("id, contrato_id, consecutivo")
+        .eq("id", sol_id)
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not head:
+        raise ValueError("Línea de solicitud no encontrada.")
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, sol_id)
+    en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+    if int(item_id) in en_oc:
+        raise ValueError(MOTIVO_LINEA_OC)
+    try:
+        sb.table("almacen_cotizacion").delete().eq("solicitud_item_id", int(item_id)).execute()
+    except Exception:
+        pass
+    sb.table("almacen_solicitud_item").delete().eq("id", int(item_id)).execute()
+    try:
+        _sincronizar_titulo_solicitud(sb, sol_id)
+    except Exception:
+        pass
+    _invalidar_graficos_inventario(contrato_id)
+    return {
+        "ok": True,
+        "id": int(item_id),
+        "solicitud_id": sol_id,
+        "consecutivo": head[0].get("consecutivo"),
+        "registro": registro_completo(item),
+    }
 
 
 def list_ordenes_compra(contrato_id: int) -> List[dict]:
@@ -6856,9 +6998,8 @@ def eliminar_entrada(
             or []
         )
         if salidas:
-            raise ValueError(
-                "No se puede eliminar la entrada porque ya tiene salidas de material registradas contra ella."
-            )
+            from almacen_eliminar_reglas import MOTIVO_ENTRADA_SALIDAS
+            raise ValueError(MOTIVO_ENTRADA_SALIDAS)
 
     numero_entrada = int(ent.get("numero_entrada") or 0)
     numero_doc_raw = (ent.get("numero_documento") or "").strip()

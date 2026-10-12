@@ -33,12 +33,13 @@ export default function DevolucionesListModal({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
-  const puedeEliminar = Boolean(permisos?.editar)
+  const puedeEliminar = Boolean(permisos?.eliminar)
   const puedeCrear = Boolean(permisos?.crear)
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [eliminarTarget, setEliminarTarget] = useState(null)
+  const [eliminarAviso, setEliminarAviso] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
   const [nuevaOpen, setNuevaOpen] = useState(false)
 
@@ -70,13 +71,14 @@ export default function DevolucionesListModal({
     const target = eliminarTarget
     setEliminandoId(target.id)
     setError('')
+    setEliminarAviso('')
     try {
       await api.deleteDevolucion(target.id)
       setEliminarTarget(null)
       await reload()
       onChanged?.({ salidaId: target.salida_id, devolucionId: target.id })
     } catch (err) {
-      setError(err.message || String(err))
+      setEliminarAviso(err.message || String(err))
     } finally {
       setEliminandoId(null)
     }
@@ -260,7 +262,11 @@ export default function DevolucionesListModal({
           cancelar="Cancelar"
           procesando={eliminandoId === eliminarTarget.id}
           zIndex={2147483200}
-          onCancel={() => !eliminandoId && setEliminarTarget(null)}
+          onCancel={() => {
+            if (eliminandoId) return
+            setEliminarTarget(null)
+            setEliminarAviso('')
+          }}
           onConfirm={ejecutarEliminar}
         >
           ¿Eliminar la devolución {formatDevolucionNumero(eliminarTarget)}
@@ -270,6 +276,9 @@ export default function DevolucionesListModal({
             Se revertirá el saldo en inventario y la cantidad neta de la salida quedará
             como si esta devolución no hubiera existido.
           </div>
+          {eliminarAviso && (
+            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>
+          )}
         </CcConfirmModal>
       )}
     </>

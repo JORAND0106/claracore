@@ -362,7 +362,7 @@ export const ESTADO_SOLICITUD_COLOR = {
 }
 
 export function puedeAnularSolicitud(s, permisos) {
-  if (!s || !['borrador', 'enviada'].includes(s.estado)) return false
+  if (!s || s.estado !== 'enviada') return false
   const uid = permisos?.userId
   const esCreador = uid != null && Number(s.created_by) === Number(uid)
   if (esCreador) return Boolean(permisos?.crear || permisos?.editar)
