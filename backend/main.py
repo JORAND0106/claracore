@@ -6188,7 +6188,9 @@ _MAPA_NAVEGACION_MODULOS_IDS = frozenset({
     "almacen_consulta_inventario",
     # Seguimiento
     "seg_tareas_calendario",
-    "seg_constancia_digital",
+    "seg_actas_reunion",
+    "seg_bitacora_obra",
+    "seg_libro_digital",
     # Topografía
     "topo_administra_puntos",
     "topo_poligonales_nivelacion",
@@ -6242,9 +6244,11 @@ _MAPA_NAVEGACION_ID_LEGACY = {
     "almacen_inventario": "almacen_consulta_inventario",
     "seg_calendario": "seg_tareas_calendario",
     "seg_nueva_tarea": "seg_tareas_calendario",
-    "seg_nueva_acta": "seg_constancia_digital",
-    "seg_bitacora": "seg_constancia_digital",
-    "seg_libro_digital": "seg_constancia_digital",
+    # Tarjeta unificada «Deja constancia…» → primera de las tres (actas).
+    "seg_constancia_digital": "seg_actas_reunion",
+    "seg_nueva_acta": "seg_actas_reunion",
+    "seg_bitacora": "seg_bitacora_obra",
+    # seg_libro_digital es ahora id de catálogo (contenido previo bajo esa clave se conserva).
     "topo_biblioteca_puntos": "topo_administra_puntos",
     "topo_crear_punto": "topo_administra_puntos",
     "topo_crear_poligonal": "topo_poligonales_nivelacion",

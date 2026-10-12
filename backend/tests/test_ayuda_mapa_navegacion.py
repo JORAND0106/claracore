@@ -23,7 +23,9 @@ IDS = frozenset({
     "almacen_mueve_obra",
     "almacen_consulta_inventario",
     "seg_tareas_calendario",
-    "seg_constancia_digital",
+    "seg_actas_reunion",
+    "seg_bitacora_obra",
+    "seg_libro_digital",
     "topo_administra_puntos",
     "topo_poligonales_nivelacion",
     "topo_diseno_entrega",
@@ -33,6 +35,7 @@ LEGACY = {
     "reporte_cantidades": "sicoe_crear_reporte_registros",
     "dash_resumen_desviaciones": "dash_leer_indicadores",
     "almacen_solicita_aprueba": "almacen_solicita_materiales",
+    "seg_constancia_digital": "seg_actas_reunion",
 }
 
 
@@ -100,12 +103,14 @@ def normalizar(raw):
     return base
 
 
-def test_mapa_navegacion_tiene_24_temas():
-    assert len(IDS) == 24
+def test_mapa_navegacion_tiene_26_temas():
+    assert len(IDS) == 26
     assert "sicoe_asigna_item_cobro" in IDS
     assert "almacen_solicita_materiales" in IDS
-    assert "almacen_asigna_insumo_proveedor" in IDS
-    assert "almacen_aprueba_genera_oc" in IDS
+    assert "seg_actas_reunion" in IDS
+    assert "seg_bitacora_obra" in IDS
+    assert "seg_libro_digital" in IDS
+    assert "seg_constancia_digital" not in IDS
     assert "almacen_solicita_aprueba" not in IDS
 
 
@@ -122,7 +127,7 @@ def test_mapa_navegacion_normalizar_contrato():
         },
     })
     assert out["version"] == 2
-    assert len(out["modulos"]) == 24
+    assert len(out["modulos"]) == 26
     assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Crear reporte"
     assert out["modulos"]["sicoe_crear_reporte_registros"]["imagenes"] == [
         {"url": "https://x.png", "caption": "A"},
@@ -145,6 +150,13 @@ def test_mapa_navegacion_migra_legacy_a_grupos():
                 "descripcion": "Legacy solicita/aprueba",
                 "videoUrl": "https://cdn/legacy-almacen.mp4",
             },
+            "seg_constancia_digital": {
+                "descripcion": "Legacy constancia",
+                "videoUrl": "https://cdn/legacy-constancia.mp4",
+            },
+            "seg_tareas_calendario": {
+                "videoUrl": "https://cdn/seg-tareas.mp4",
+            },
         },
     })
     assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Legacy RC"
@@ -153,3 +165,8 @@ def test_mapa_navegacion_migra_legacy_a_grupos():
     assert out["modulos"]["almacen_asigna_insumo_proveedor"]["videoUrl"] == ""
     assert out["modulos"]["almacen_aprueba_genera_oc"]["videoUrl"] == ""
     assert out["modulos"]["dash_leer_indicadores"]["descripcion"] == "Legacy dash"
+    assert out["modulos"]["seg_actas_reunion"]["videoUrl"] == "https://cdn/legacy-constancia.mp4"
+    assert out["modulos"]["seg_actas_reunion"]["descripcion"] == "Legacy constancia"
+    assert out["modulos"]["seg_tareas_calendario"]["videoUrl"] == "https://cdn/seg-tareas.mp4"
+    assert out["modulos"]["seg_bitacora_obra"]["videoUrl"] == ""
+    assert out["modulos"]["seg_libro_digital"]["videoUrl"] == ""
