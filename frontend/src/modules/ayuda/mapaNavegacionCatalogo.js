@@ -198,19 +198,35 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
   // ── Seguimiento ───────────────────────────────────────────────────────────
   {
     id: 'seg_tareas_calendario',
-    nombre: 'Organiza tareas y calendario',
-    resumen: 'Calendario y nueva tarea.',
+    nombre: 'Organiza tus tareas y tu calendario',
+    resumen: 'Crear, asignar y dar seguimiento a tareas, con calendario.',
     icono: '📅',
     grupo: 'seguimiento',
     orden: 20,
   },
   {
-    id: 'seg_constancia_digital',
-    nombre: 'Deja constancia: actas, bitácora y libro digital',
-    resumen: 'Nueva acta, bitácora de obra y libro digital.',
-    icono: '📓',
+    id: 'seg_actas_reunion',
+    nombre: 'Realiza tus actas de reunión',
+    resumen: 'Orden del día, asistentes, compromisos, temas con redacción asistida, vista previa y firma.',
+    icono: '📋',
     grupo: 'seguimiento',
     orden: 21,
+  },
+  {
+    id: 'seg_bitacora_obra',
+    nombre: 'Registra la bitácora de obra',
+    resumen: 'Registro diario de personal, maquinaria, materiales y actividades.',
+    icono: '📓',
+    grupo: 'seguimiento',
+    orden: 22,
+  },
+  {
+    id: 'seg_libro_digital',
+    nombre: 'Consulta el libro digital',
+    resumen: 'Uso y consulta del libro digital de la obra.',
+    icono: '📖',
+    grupo: 'seguimiento',
+    orden: 23,
   },
 
   // ── Topografía ────────────────────────────────────────────────────────────
@@ -220,7 +236,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Biblioteca de puntos y creación de un nuevo punto.',
     icono: '📍',
     grupo: 'topografia',
-    orden: 22,
+    orden: 24,
   },
   {
     id: 'topo_poligonales_nivelacion',
@@ -228,7 +244,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Crear poligonal y circuito de nivelación.',
     icono: '📏',
     grupo: 'topografia',
-    orden: 23,
+    orden: 25,
   },
   {
     id: 'topo_diseno_entrega',
@@ -236,7 +252,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
     resumen: 'Estructura de diseño / diseño geométrico y carteras de vía.',
     icono: '🛣️',
     grupo: 'topografia',
-    orden: 24,
+    orden: 26,
   },
 ]
 
@@ -303,9 +319,11 @@ export const MAPA_NAVEGACION_ID_LEGACY = {
 
   seg_calendario: 'seg_tareas_calendario',
   seg_nueva_tarea: 'seg_tareas_calendario',
-  seg_nueva_acta: 'seg_constancia_digital',
-  seg_bitacora: 'seg_constancia_digital',
-  seg_libro_digital: 'seg_constancia_digital',
+  // Tarjeta unificada «Deja constancia…» → primera de las tres (actas).
+  seg_constancia_digital: 'seg_actas_reunion',
+  seg_nueva_acta: 'seg_actas_reunion',
+  seg_bitacora: 'seg_bitacora_obra',
+  // seg_libro_digital es ahora id de catálogo (contenido previo bajo esa clave se conserva).
 
   topo_biblioteca_puntos: 'topo_administra_puntos',
   topo_crear_punto: 'topo_administra_puntos',

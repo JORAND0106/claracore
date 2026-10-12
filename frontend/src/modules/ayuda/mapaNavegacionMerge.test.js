@@ -28,7 +28,7 @@ const CONTEO_POR_MODULO = {
   sicoe_obra: 5,
   informes: 2,
   almacen: 6,
-  seguimiento: 2,
+  seguimiento: 4,
   topografia: 3,
 }
 
@@ -41,10 +41,10 @@ describe('mapaNavegacionCatalogo', () => {
     )
   })
 
-  it('agrupa 24 temas temáticos con ids únicos', () => {
-    assert.equal(MAPA_NAVEGACION_SUBTEMAS.length, 24)
+  it('agrupa 26 temas temáticos con ids únicos', () => {
+    assert.equal(MAPA_NAVEGACION_SUBTEMAS.length, 26)
     const ids = MAPA_NAVEGACION_SUBTEMAS.map((m) => m.id)
-    assert.equal(new Set(ids).size, 24)
+    assert.equal(new Set(ids).size, 26)
     const seccionIds = new Set(MAPA_NAVEGACION_SECCIONES.map((s) => s.id))
     for (const m of MAPA_NAVEGACION_SUBTEMAS) {
       assert.ok(seccionIds.has(m.grupo), `${m.id} grupo inválido`)
@@ -70,6 +70,10 @@ describe('mapaNavegacionCatalogo', () => {
     assert.equal(porId.almacen_asigna_insumo_proveedor, 'Asigna el insumo y el proveedor')
     assert.equal(porId.almacen_aprueba_genera_oc, 'Aprueba insumos y genera la orden de compra')
     assert.equal(porId.almacen_mueve_obra, 'Mueve materiales en obra')
+    assert.equal(porId.seg_tareas_calendario, 'Organiza tus tareas y tu calendario')
+    assert.equal(porId.seg_actas_reunion, 'Realiza tus actas de reunión')
+    assert.equal(porId.seg_bitacora_obra, 'Registra la bitácora de obra')
+    assert.equal(porId.seg_libro_digital, 'Consulta el libro digital')
     assert.equal(porId.topo_diseno_entrega, 'Del diseño a la entrega')
     assert.equal(MAPA_SUBTEMA_CAPACITACION_RC, 'sicoe_crear_reporte_registros')
   })
@@ -128,6 +132,41 @@ describe('mapaNavegacionCatalogo', () => {
     assert.equal(iconos.size, 6)
     assert.ok(!MAPA_NAVEGACION_SUBTEMAS.some((m) => m.id === 'almacen_solicita_aprueba'))
   })
+
+  it('divide Seguimiento en cuatro temas (tareas, actas, bitácora, libro)', () => {
+    const seg = MAPA_NAVEGACION_SUBTEMAS.filter((m) => m.grupo === 'seguimiento')
+      .slice()
+      .sort((a, b) => a.orden - b.orden)
+    assert.equal(seg.length, 4)
+    assert.deepEqual(
+      seg.map((m) => m.id),
+      [
+        'seg_tareas_calendario',
+        'seg_actas_reunion',
+        'seg_bitacora_obra',
+        'seg_libro_digital',
+      ],
+    )
+    assert.equal(
+      seg[0].resumen,
+      'Crear, asignar y dar seguimiento a tareas, con calendario.',
+    )
+    assert.equal(
+      seg[1].resumen,
+      'Orden del día, asistentes, compromisos, temas con redacción asistida, vista previa y firma.',
+    )
+    assert.equal(
+      seg[2].resumen,
+      'Registro diario de personal, maquinaria, materiales y actividades.',
+    )
+    assert.equal(
+      seg[3].resumen,
+      'Uso y consulta del libro digital de la obra.',
+    )
+    const iconos = new Set(seg.map((m) => m.icono))
+    assert.equal(iconos.size, 4)
+    assert.ok(!MAPA_NAVEGACION_SUBTEMAS.some((m) => m.id === 'seg_constancia_digital'))
+  })
 })
 
 describe('normalizarContenidoMapa', () => {
@@ -135,7 +174,7 @@ describe('normalizarContenidoMapa', () => {
     const n = normalizarContenidoMapa({
       version: 2,
       modulos: {
-        seg_constancia_digital: {
+        seg_actas_reunion: {
           descripcion: '  Actas  ',
           imagenes: [
             { url: ' https://x/a.png ', caption: ' Portada ' },
@@ -147,11 +186,11 @@ describe('normalizarContenidoMapa', () => {
       },
     })
     assert.equal(n.version, 2)
-    assert.equal(n.modulos.seg_constancia_digital.descripcion, 'Actas')
-    assert.deepEqual(n.modulos.seg_constancia_digital.imagenes, [
+    assert.equal(n.modulos.seg_actas_reunion.descripcion, 'Actas')
+    assert.deepEqual(n.modulos.seg_actas_reunion.imagenes, [
       { url: 'https://x/a.png', caption: 'Portada' },
     ])
-    assert.equal(n.modulos.seg_constancia_digital.videoUrl, 'https://cdn/video.mp4')
+    assert.equal(n.modulos.seg_actas_reunion.videoUrl, 'https://cdn/video.mp4')
   })
 
   it('migra contenido legacy de subtemas sueltos a grupos temáticos', () => {
@@ -173,6 +212,21 @@ describe('normalizarContenidoMapa', () => {
     assert.equal(migrado.almacen_solicita_materiales.videoUrl, 'https://cdn/almacen-solicita.mp4')
     assert.equal(migrado.almacen_solicita_materiales.descripcion, 'Solicitud unificada')
   })
+
+  it('migra video de seg_constancia_digital a Realiza tus actas de reunión', () => {
+    const migrado = migrarIdsContenidoMapa({
+      seg_constancia_digital: {
+        descripcion: 'Constancia unificada',
+        videoUrl: 'https://cdn/seg-constancia.mp4',
+      },
+      seg_tareas_calendario: {
+        videoUrl: 'https://cdn/seg-tareas.mp4',
+      },
+    })
+    assert.equal(migrado.seg_actas_reunion.videoUrl, 'https://cdn/seg-constancia.mp4')
+    assert.equal(migrado.seg_actas_reunion.descripcion, 'Constancia unificada')
+    assert.equal(migrado.seg_tareas_calendario.videoUrl, 'https://cdn/seg-tareas.mp4')
+  })
 })
 
 describe('fusionarMapaNavegacion', () => {
@@ -185,7 +239,7 @@ describe('fusionarMapaNavegacion', () => {
         },
       },
     })
-    assert.equal(vista.modulos.length, 24)
+    assert.equal(vista.modulos.length, 26)
     assert.equal(vista.grupos.length, 7)
     assert.deepEqual(vista.grupos.map((g) => g.label), NOMBRES_MODULO)
     const dash = vista.modulos.find((m) => m.id === 'dash_leer_indicadores')
@@ -202,20 +256,31 @@ describe('fusionarMapaNavegacion', () => {
     assert.equal(almacen.modulos[1].id, 'almacen_solicita_materiales')
     assert.equal(almacen.modulos[2].id, 'almacen_asigna_insumo_proveedor')
     assert.equal(almacen.modulos[3].id, 'almacen_aprueba_genera_oc')
+    const seg = vista.grupos.find((g) => g.id === 'seguimiento')
+    assert.equal(seg.modulos.length, 4)
+    assert.equal(seg.modulos[0].id, 'seg_tareas_calendario')
+    assert.equal(seg.modulos[1].id, 'seg_actas_reunion')
+    assert.equal(seg.modulos[2].id, 'seg_bitacora_obra')
+    assert.equal(seg.modulos[3].id, 'seg_libro_digital')
   })
 })
 
 describe('contenidoEditableCompleto', () => {
-  it('garantiza las 24 claves del catálogo', () => {
+  it('garantiza las 26 claves del catálogo', () => {
     const doc = contenidoEditableCompleto({
       modulos: {
-        seg_constancia_digital: { descripcion: 'x' },
+        seg_constancia_digital: { descripcion: 'x', videoUrl: 'https://cdn/legacy-constancia.mp4' },
         sicoe_visualiza_filtra: { videoUrl: 'https://cdn/existente.mp4' },
         almacen_solicita_aprueba: { videoUrl: 'https://cdn/legacy-almacen.mp4' },
+        seg_tareas_calendario: { videoUrl: 'https://cdn/seg-tareas.mp4' },
       },
     })
-    assert.equal(Object.keys(doc.modulos).length, 24)
-    assert.equal(doc.modulos.seg_constancia_digital.descripcion, 'x')
+    assert.equal(Object.keys(doc.modulos).length, 26)
+    assert.equal(doc.modulos.seg_actas_reunion.descripcion, 'x')
+    assert.equal(doc.modulos.seg_actas_reunion.videoUrl, 'https://cdn/legacy-constancia.mp4')
+    assert.equal(doc.modulos.seg_tareas_calendario.videoUrl, 'https://cdn/seg-tareas.mp4')
+    assert.equal(doc.modulos.seg_bitacora_obra.videoUrl, '')
+    assert.equal(doc.modulos.seg_libro_digital.videoUrl, '')
     assert.equal(doc.modulos.dash_leer_indicadores.descripcion, '')
     assert.equal(doc.modulos.sicoe_crear_reporte_registros.videoUrl, '')
     assert.equal(doc.modulos.sicoe_asigna_item_cobro.videoUrl, '')
