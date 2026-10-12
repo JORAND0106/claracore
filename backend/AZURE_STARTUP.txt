@@ -25,3 +25,10 @@ CLARACORE — Azure App Service (backend), checklist sin rodeos
 
 6) MÉTRICAS QUE VISTE (5xx + picos Data In)
    - Coincide con arranque pesado o picos de tráfico. Quitar pip del startup es el primer cambio obligatorio.
+
+6) FFMPEG (videos del mapa de capacitaciones)
+   - App Service Python/Oryx NO trae ffmpeg.
+   - El deploy (deploy-backend-on-push.yml) empaqueta binarios estáticos en backend/bin/.
+   - startup.sh también intenta instalarlos en /home/site/tools/ffmpeg si faltan.
+   - Startup Command recomendado: bash startup.sh
+

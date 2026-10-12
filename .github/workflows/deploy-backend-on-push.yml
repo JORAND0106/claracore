@@ -52,6 +52,12 @@ jobs:
           python -m pip install -q 'psycopg[binary]>=3.1.0'
           PYTHONPATH=. python -m schema_migrations_runner --critical
 
+      # Azure App Service (Oryx Python) no incluye ffmpeg. Sin estos binarios, la
+      # carga de videos del mapa falla con "No se pudo comprimir/mezclar…".
+      - name: Empaquetar ffmpeg estático (mapa capacitaciones)
+        working-directory: ./backend
+        run: bash scripts/fetch_ffmpeg_static.sh
+
       - name: Deploy backend package to Azure Web App
         uses: azure/webapps-deploy@v2
         with:

@@ -10,7 +10,9 @@ from mapa_capacitacion_video import (
     ACCEPT_EXTENSIONS,
     clamp_volumen,
     extension_permitida,
+    ffmpeg_disponible,
     listar_pistas_aprobadas,
+    mensaje_error_procesamiento,
     procesar_video_con_musica,
     resolver_pista,
 )
@@ -53,6 +55,26 @@ def test_extension_ipad_y_mov():
     assert ".mov" in ACCEPT_EXTENSIONS
 
 
+def test_ffmpeg_disponible_en_entorno_de_prueba():
+    assert ffmpeg_disponible() is True
+
+
+def test_mensaje_error_sin_ffmpeg():
+    msg = mensaje_error_procesamiento(
+        RuntimeError("ffmpeg/ffprobe no están disponibles en el servidor.")
+    )
+    assert "herramienta de compresión" in msg
+    assert "ffmpeg" in msg.lower() or "compresión" in msg
+
+
+def test_mensaje_error_ffmpeg_fallo_archivo():
+    msg = mensaje_error_procesamiento(
+        RuntimeError("ffmpeg falló (1): Invalid data found when processing input")
+    )
+    assert "Invalid data found" in msg
+    assert "MP4" in msg or "Canva" in msg or "iPad" in msg
+
+
 def test_procesar_video_mezcla_audio():
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "in.mp4"
@@ -80,3 +102,30 @@ def test_procesar_video_mezcla_audio():
             check=True,
         )
         assert b"audio" in probe.stdout
+
+
+def test_procesar_video_con_pista_audio_existente():
+    """Canva suele exportar MP4 con pista de audio (aunque sea silencio)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "canva.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", "color=c=blue:s=1280x720:d=2",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(src),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        out = procesar_video_con_musica(
+            src.read_bytes(),
+            filename="canva.mp4",
+            content_type="video/mp4",
+            pista_id="brisa",
+            volumen=0.18,
+        )
+        assert len(out) > 2000

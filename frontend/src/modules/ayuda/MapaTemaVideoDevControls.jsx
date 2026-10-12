@@ -54,6 +54,7 @@ export default function MapaTemaVideoDevControls({
   const [progreso, setProgreso] = useState(0)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [ffmpegOk, setFfmpegOk] = useState(true)
   const fileRef = useRef(null)
   const xhrRef = useRef(null)
 
@@ -76,6 +77,12 @@ export default function MapaTemaVideoDevControls({
         }
         if (typeof data?.volumen_default === 'number') {
           setVolumen(data.volumen_default)
+        }
+        if (typeof data?.ffmpeg_disponible === 'boolean') {
+          setFfmpegOk(data.ffmpeg_disponible)
+          if (!data.ffmpeg_disponible) {
+            setMsg('El servidor aún no tiene la herramienta de compresión de video. Espere el redespliegue o contacte a un administrador.')
+          }
         }
       })
       .catch(() => {
@@ -328,7 +335,7 @@ export default function MapaTemaVideoDevControls({
 
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || !ffmpegOk}
               onClick={() => fileRef.current?.click()}
               style={{
                 background: t.primary,
@@ -338,8 +345,8 @@ export default function MapaTemaVideoDevControls({
                 padding: '12px 14px',
                 fontWeight: 800,
                 fontSize: 'var(--cc-sm)',
-                cursor: busy ? 'wait' : 'pointer',
-                opacity: busy ? 0.75 : 1,
+                cursor: (busy || !ffmpegOk) ? 'not-allowed' : 'pointer',
+                opacity: (busy || !ffmpegOk) ? 0.65 : 1,
                 minHeight: 44,
               }}
             >
