@@ -40,7 +40,7 @@ export default function SalidasPanel({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
-  const puedeEliminar = Boolean(permisos?.editar)
+  const puedeEliminar = Boolean(permisos?.eliminar)
   const puedeEditarCantidad = puedeEditarCantidadSalidaAlmacen(permisos)
   const contratoId = permisos?.contratoId
   const [lista, setLista] = useState(() => readSalidasCache(contratoId) || [])
@@ -48,6 +48,7 @@ export default function SalidasPanel({
   const [error, setError] = useState('')
   const [eliminandoId, setEliminandoId] = useState(null)
   const [eliminarTarget, setEliminarTarget] = useState(null)
+  const [eliminarAviso, setEliminarAviso] = useState('')
   const [editCantidadTarget, setEditCantidadTarget] = useState(null)
   const [editCantidadValor, setEditCantidadValor] = useState('')
   const [editCantidadError, setEditCantidadError] = useState('')
@@ -243,6 +244,7 @@ export default function SalidasPanel({
     const salida = eliminarTarget
     setEliminandoId(salida.id)
     setError('')
+    setEliminarAviso('')
     try {
       await api.deleteSalida(salida.id)
       setEliminarTarget(null)
@@ -251,7 +253,7 @@ export default function SalidasPanel({
       notifySalidaMutated()
     } catch (err) {
       const msg = err.message || String(err)
-      setError(msg)
+      setEliminarAviso(msg)
       if (/devoluci/i.test(msg) && salida?.id) {
         setDevolucionesSalidaId(salida.id)
       }
@@ -542,11 +544,22 @@ export default function SalidasPanel({
           titulo="Eliminar salida"
           confirmar="Eliminar"
           cancelar="Cancelar"
-          onCancel={() => setEliminarTarget(null)}
+          onCancel={() => {
+            if (eliminandoId) return
+            setEliminarTarget(null)
+            setEliminarAviso('')
+          }}
           onConfirm={ejecutarEliminar}
+          procesando={eliminandoId === eliminarTarget.id}
         >
-          ¿Eliminar la salida {formatSalidaNumero(eliminarTarget)}?
-          Se revertirá el movimiento de inventario asociado.
+          ¿Eliminar la salida {formatSalidaNumero(eliminarTarget)}
+          {eliminarTarget.material_descripcion ? ` · ${eliminarTarget.material_descripcion}` : ''}?
+          <div style={{ marginTop: 10, opacity: 0.9 }}>
+            Esta salida es el despacho hacia obra. Al eliminarla, esa cantidad vuelve al stock de la entrada. Si tiene devoluciones, primero hay que quitarlas.
+          </div>
+          {eliminarAviso && (
+            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>
+          )}
         </CcConfirmModal>
       )}
     </div>

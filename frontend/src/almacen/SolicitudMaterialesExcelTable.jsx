@@ -158,6 +158,8 @@ export default function SolicitudMaterialesExcelTable({
   puedeAsignar = false,
   onAsignarGrupo,
   onAprobarGrupo,
+  puedeEliminar = false,
+  onEliminarLinea,
   verEconomicos = false,
   token,
   contratoId,
@@ -181,8 +183,8 @@ export default function SolicitudMaterialesExcelTable({
     )
   }
 
-  const minWidth = cols.reduce((acc, c) => acc + c.width, 0) + (puedeSeleccionar ? 36 : 0)
-  const colSpan = cols.length + (puedeSeleccionar ? 1 : 0)
+  const minWidth = cols.reduce((acc, c) => acc + c.width, 0) + (puedeSeleccionar ? 36 : 0) + (puedeEliminar ? 72 : 0)
+  const colSpan = cols.length + (puedeSeleccionar ? 1 : 0) + (puedeEliminar ? 1 : 0)
   const panelItems = panel?.items || []
 
   return (
@@ -191,6 +193,7 @@ export default function SolicitudMaterialesExcelTable({
         <table style={{ ...ui.sheetTable, minWidth, tableLayout: 'fixed' }}>
           <colgroup>
             {puedeSeleccionar && <col style={{ width: 36 }} />}
+            {puedeEliminar && <col style={{ width: 72 }} />}
             {cols.map((c) => (
               <col key={c.key} style={{ width: c.width }} />
             ))}
@@ -199,6 +202,9 @@ export default function SolicitudMaterialesExcelTable({
             <tr>
               {puedeSeleccionar && (
                 <ColHeader abbr="" tip="Seleccionar líneas para asignar o aprobar en bloque" style={thBase} />
+              )}
+              {puedeEliminar && (
+                <ColHeader abbr="" tip="Eliminar una línea. Requiere el permiso Eliminar." style={thBase} />
               )}
               {cols.map((c) => (
                 <ColHeader
@@ -302,6 +308,22 @@ export default function SolicitudMaterialesExcelTable({
                             ids.forEach((id) => onToggleLinea?.(id, checked))
                           }}
                         />
+                      </td>
+                    )}
+                    {puedeEliminar && (
+                      <td
+                        style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          data-testid="eliminar-linea-solicitud"
+                          title="Eliminar línea"
+                          onClick={() => onEliminarLinea?.(fila.items)}
+                          style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24, color: '#b91c1c' }}
+                        >
+                          Eliminar
+                        </button>
                       </td>
                     )}
                     <td style={cellBase(ui)}>

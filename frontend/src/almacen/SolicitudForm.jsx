@@ -190,6 +190,10 @@ export default function SolicitudForm({
   const [modalExitoEnvio, setModalExitoEnvio] = useState(null)
   const [sol, setSol] = useState(null)
   const [confirmAnular, setConfirmAnular] = useState(false)
+  const [lineaAEliminar, setLineaAEliminar] = useState(null)
+  const [lineaBloqueada, setLineaBloqueada] = useState(false)
+  const [eliminarLineaAviso, setEliminarLineaAviso] = useState('')
+  const [eliminarLineaBusy, setEliminarLineaBusy] = useState(false)
   const [proximoConsecutivo, setProximoConsecutivo] = useState(null)
 
   /** Id efectivo: tras el primer guardado `sol.id` existe aunque el padre aún no haya pasado solicitudId. */
@@ -575,8 +579,7 @@ export default function SolicitudForm({
 
   const isRowLocked = (it) => Boolean(modoReabrirOc && it?.id)
 
-  const removeItem = (idx) => {
-    if (isRowLocked(items[idx])) return
+  const quitarFilaLocal = (idx) => {
     markDirty()
     setItems((prev) => {
       if (modoReabrirOc) {
@@ -589,6 +592,50 @@ export default function SolicitudForm({
       if (prev.length <= 1) return [emptyItem()]
       return prev.filter((_, i) => i !== idx)
     })
+  }
+
+  const removeItem = (idx) => {
+    const it = items[idx]
+    if (!it) return
+    if (it.en_orden_compra || isRowLocked(it)) {
+      setLineaBloqueada(true)
+      setLineaAEliminar(it)
+      setEliminarLineaAviso('')
+      return
+    }
+    if (it.id) {
+      setLineaBloqueada(false)
+      setLineaAEliminar(it)
+      setEliminarLineaAviso('')
+      return
+    }
+    quitarFilaLocal(idx)
+  }
+
+  const confirmarEliminarLinea = async () => {
+    const it = lineaAEliminar
+    if (!it || lineaBloqueada) {
+      setLineaAEliminar(null)
+      return
+    }
+    const idx = items.findIndex((row) => row === it || (it.id != null && row.id === it.id))
+    if (!it.id) {
+      if (idx >= 0) quitarFilaLocal(idx)
+      setLineaAEliminar(null)
+      return
+    }
+    setEliminarLineaBusy(true)
+    setEliminarLineaAviso('')
+    try {
+      await api.eliminarLineaSolicitud(it.id)
+      if (idx >= 0) quitarFilaLocal(idx)
+      setLineaAEliminar(null)
+    } catch (e) {
+      setEliminarLineaAviso(e.message || String(e))
+      if (/orden de compra/i.test(e.message || '')) setLineaBloqueada(true)
+    } finally {
+      setEliminarLineaBusy(false)
+    }
   }
 
   const addItemAt = (idx) => {
@@ -1002,6 +1049,7 @@ export default function SolicitudForm({
             onAbrirTramos={abrirTramos}
             onAddRow={addItemAt}
             onRemoveRow={removeItem}
+            puedeEliminarLinea={Boolean(permisos?.eliminar)}
             isRowLocked={(it) => isRowLocked(it)}
           />
           {tramoFlow != null && items[tramoFlow] && (
@@ -1095,6 +1143,44 @@ export default function SolicitudForm({
         )}
       </div>
 
+      {lineaAEliminar && (
+        <CcConfirmModal
+          theme={theme}
+          tipo={lineaBloqueada ? 'warn' : 'danger'}
+          titulo={lineaBloqueada ? 'No se puede eliminar la línea' : 'Eliminar línea'}
+          confirmar={lineaBloqueada ? 'Entendido' : 'Eliminar'}
+          cancelar="Cancelar"
+          soloConfirmar={lineaBloqueada}
+          procesando={eliminarLineaBusy}
+          onCancel={() => {
+            if (eliminarLineaBusy) return
+            setLineaAEliminar(null)
+            setEliminarLineaAviso('')
+          }}
+          onConfirm={lineaBloqueada ? () => setLineaAEliminar(null) : confirmarEliminarLinea}
+        >
+          {lineaBloqueada
+            ? 'No se puede eliminar esta línea porque ya está incluida en una orden de compra.'
+            : (
+              <>
+                {`¿Eliminar la línea${lineaAEliminar.numero_linea ? ` ${lineaAEliminar.numero_linea}` : ''} de la solicitud?`}
+                <div style={{ marginTop: 10, opacity: 0.9 }}>
+                  {[lineaAEliminar.material_descripcion || lineaAEliminar.descripcion_solicitada, lineaAEliminar.pk_id]
+                    .filter(Boolean)
+                    .join(' · ') || 'Esta línea'}
+                  {lineaAEliminar.cantidad != null && lineaAEliminar.cantidad !== ''
+                    ? ` · ${fmtCant(lineaAEliminar.cantidad)}${lineaAEliminar.unidad ? ` ${lineaAEliminar.unidad}` : ''}`
+                    : ''}
+                  . Dejará de formar parte de la solicitud y los totales se actualizarán.
+                </div>
+              </>
+            )}
+          {eliminarLineaAviso && !lineaBloqueada && (
+            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarLineaAviso}</div>
+          )}
+        </CcConfirmModal>
+      )}
+
       {confirmAnular && sol && (
         <CcConfirmModal
           theme={theme}
@@ -1106,9 +1192,7 @@ export default function SolicitudForm({
           onCancel={() => !busy && setConfirmAnular(false)}
           onConfirm={anularSolicitud}
         >
-          {sol.estado === 'borrador'
-            ? `¿Eliminar la solicitud #${sol.consecutivo} en borrador? Esta acción no se puede deshacer.`
-            : `¿Anular la solicitud #${sol.consecutivo} enviada? Quedará marcada como rechazada.`}
+          {`¿Anular la solicitud #${sol.consecutivo} enviada? Quedará marcada como rechazada.`}
         </CcConfirmModal>
       )}
 

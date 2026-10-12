@@ -69,6 +69,7 @@ from entradas_salidas_permissions import (
     tiene_alguna_accion_entradas_salidas,
     tiene_permiso_entradas_salidas,
 )
+from almacen_eliminar_reglas import registro_completo
 from catalogo_insumos_service import delete_insumo_catalogo
 from almacen_solicitud_mensajes import (
     buscar_destinatarios_almacen,
@@ -99,7 +100,9 @@ from almacen_service import (
     download_salida_pdf,
     download_soporte,
     eliminar_entrada,
+    eliminar_linea_solicitud,
     eliminar_salida,
+    eliminar_solicitud,
     eliminar_solicitud_desarrollador,
     update_salida_cantidad,
     entradas_disponibles_por_pk,
@@ -548,7 +551,10 @@ def route_delete_insumo(contrato_id: int, insumo_id: int, current_user=Depends(g
         registrar_log(
             current_user, "ELIMINAR", "ALMACEN", "almacen_insumo", str(insumo_id),
             {"codigo": result.get("codigo")},
+            valor_anterior=result.get("registro"),
+            valor_nuevo={"deleted": True, "id": insumo_id},
         )
+        result.pop("registro", None)
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -1498,6 +1504,52 @@ def route_anular_solicitud(
         raise _http_value_error(exc) from exc
 
 
+@router.delete("/{contrato_id}/solicitudes/items/{item_id}")
+def route_eliminar_linea_solicitud(
+    contrato_id: int,
+    item_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Elimina una línea que no está en una orden de compra. Solo permiso Eliminar."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "eliminar")
+    try:
+        result = eliminar_linea_solicitud(contrato_id, item_id)
+        log_almacen(
+            current_user, "ELIMINAR", "solicitud_item", item_id,
+            {"solicitud_id": result.get("solicitud_id")},
+            valor_anterior=result.get("registro"),
+            valor_nuevo={"deleted": True, "id": item_id},
+        )
+        result.pop("registro", None)
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/solicitudes/{solicitud_id}")
+def route_eliminar_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Elimina una solicitud sin líneas en orden de compra. Solo permiso Eliminar."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "eliminar")
+    try:
+        result = eliminar_solicitud(contrato_id, solicitud_id)
+        log_almacen(
+            current_user, "ELIMINAR", "solicitud", solicitud_id,
+            {"consecutivo": result.get("consecutivo")},
+            valor_anterior=result.get("registro"),
+            valor_nuevo={"deleted": True, "id": solicitud_id},
+        )
+        result.pop("registro", None)
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.delete("/{contrato_id}/solicitudes/{solicitud_id}/desarrollador")
 def route_eliminar_solicitud_desarrollador(
     contrato_id: int,
@@ -1878,10 +1930,16 @@ async def route_create_entrada(
 @router.delete("/{contrato_id}/entradas/{entrada_id}")
 def route_eliminar_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_entradas_salidas(current_user, "editar")
+    require_permiso_entradas_salidas(current_user, "eliminar")
     try:
         prev = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
         result = eliminar_entrada(contrato_id, entrada_id, ent_prefetched=prev)
+        log_almacen(
+            current_user, "ELIMINAR", "entrada", entrada_id,
+            {"numero_entrada": prev.get("numero_entrada")},
+            valor_anterior=registro_completo(prev),
+            valor_nuevo={"deleted": True, "id": entrada_id},
+        )
         for it in prev.get("items") or []:
             ei_id = it.get("id")
             if ei_id is None:
@@ -2080,14 +2138,14 @@ def route_update_salida_cantidad(
 @router.delete("/{contrato_id}/salidas/{salida_id}")
 def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_entradas_salidas(current_user, "editar")
+    require_permiso_entradas_salidas(current_user, "eliminar")
     try:
         prev = get_salida(contrato_id, salida_id)
         result = eliminar_salida(contrato_id, salida_id, sal_prefetched=prev)
         log_almacen(
             current_user, "ELIMINAR", "salida", salida_id,
             {"numero_salida": prev.get("numero_salida")},
-            valor_anterior=snapshot_salida(prev),
+            valor_anterior=registro_completo(prev),
             valor_nuevo={"deleted": True, "id": salida_id},
         )
         ei_id = prev.get("entrada_item_id")
@@ -2200,7 +2258,7 @@ def route_eliminar_devolucion(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_entradas_salidas(current_user, "editar")
+    require_permiso_entradas_salidas(current_user, "eliminar")
     try:
         prev = get_devolucion(contrato_id, devolucion_id)
         salida_id = prev.get("salida_id")
@@ -2222,7 +2280,7 @@ def route_eliminar_devolucion(
                 "entrada_item_id": prev.get("entrada_item_id"),
                 "numero_devolucion": prev.get("numero_devolucion"),
             },
-            valor_anterior=snapshot_devolucion(prev),
+            valor_anterior=registro_completo(prev),
             valor_nuevo={"deleted": True, "id": devolucion_id},
         )
         if sal_antes is not None and salida_id is not None:

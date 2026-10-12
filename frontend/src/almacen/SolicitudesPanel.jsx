@@ -28,7 +28,7 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
-import { puedeCrearSolicitudAlmacen, puedeEliminarSolicitudDesarrollador } from './almacenPermisos'
+import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 
 export default function SolicitudesPanel({
@@ -50,8 +50,9 @@ export default function SolicitudesPanel({
   const [detalleTab, setDetalleTab] = useState('portada')
   const [anularTarget, setAnularTarget] = useState(null)
   const [anularBusy, setAnularBusy] = useState(false)
-  const [eliminarDevTarget, setEliminarDevTarget] = useState(null)
-  const [eliminarDevBusy, setEliminarDevBusy] = useState(false)
+  const [eliminarTarget, setEliminarTarget] = useState(null)
+  const [eliminarBusy, setEliminarBusy] = useState(false)
+  const [eliminarAviso, setEliminarAviso] = useState('')
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SOLICITUDES_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
   const [agrupar, setAgrupar] = useState(null)
@@ -64,7 +65,7 @@ export default function SolicitudesPanel({
   const [deshacerResumen, setDeshacerResumen] = useState('')
 
   const PAGE_SIZE = 80
-  const puedeEliminarDev = puedeEliminarSolicitudDesarrollador(permisos)
+  const puedeEliminar = Boolean(permisos?.eliminar)
 
   const listaFiltrada = useMemo(
     () => filterSolicitudesLista(lista, filtros),
@@ -133,17 +134,19 @@ export default function SolicitudesPanel({
     }
   }
 
-  const ejecutarEliminarDev = async () => {
-    if (!eliminarDevTarget) return
-    setEliminarDevBusy(true)
+  const ejecutarEliminar = async () => {
+    if (!eliminarTarget) return
+    setEliminarBusy(true)
+    setEliminarAviso('')
     try {
-      await api.eliminarSolicitudDesarrollador(eliminarDevTarget.id)
-      setEliminarDevTarget(null)
+      await api.eliminarSolicitud(eliminarTarget.id)
+      setEliminarTarget(null)
+      if (detalleId === eliminarTarget.id) setDetalleId(null)
       reload()
     } catch (e) {
-      setError(e.message)
+      setEliminarAviso(e.message)
     } finally {
-      setEliminarDevBusy(false)
+      setEliminarBusy(false)
     }
   }
 
@@ -520,7 +523,7 @@ export default function SolicitudesPanel({
                           Reabrir OC
                         </button>
                       )}
-                      {puedeEliminarDev && (
+                      {puedeEliminar && (
                         <button
                           type="button"
                           style={{
@@ -531,8 +534,12 @@ export default function SolicitudesPanel({
                             color: '#7c2d12',
                             borderColor: '#7c2d1266',
                           }}
-                          title="Eliminación permanente (solo Desarrollador)"
-                          onClick={() => setEliminarDevTarget(s)}
+                          title="Eliminar solicitud"
+                          data-testid="eliminar-solicitud"
+                          onClick={() => {
+                            setEliminarAviso('')
+                            setEliminarTarget(s)
+                          }}
                         >
                           Eliminar
                         </button>
@@ -700,24 +707,32 @@ export default function SolicitudesPanel({
           onCancel={() => !anularBusy && setAnularTarget(null)}
           onConfirm={ejecutarAnular}
         >
-          {anularTarget.estado === 'borrador'
-            ? `¿Eliminar la solicitud #${anularTarget.consecutivo} en borrador? Esta acción no se puede deshacer.`
-            : `¿Anular la solicitud #${anularTarget.consecutivo} enviada? Quedará marcada como rechazada.`}
+          {`¿Anular la solicitud #${anularTarget.consecutivo} enviada? Quedará marcada como rechazada.`}
         </CcConfirmModal>
       )}
 
-      {eliminarDevTarget && (
+      {eliminarTarget && (
         <CcConfirmModal
           theme={t}
           tipo="danger"
-          titulo="Eliminar solicitud (Desarrollador)"
-          confirmar="Eliminar permanentemente"
+          titulo="Eliminar solicitud"
+          confirmar="Eliminar"
           cancelar="Cancelar"
-          procesando={eliminarDevBusy}
-          onCancel={() => !eliminarDevBusy && setEliminarDevTarget(null)}
-          onConfirm={ejecutarEliminarDev}
+          procesando={eliminarBusy}
+          onCancel={() => {
+            if (eliminarBusy) return
+            setEliminarTarget(null)
+            setEliminarAviso('')
+          }}
+          onConfirm={ejecutarEliminar}
         >
-          {`¿Eliminar permanentemente la solicitud #${eliminarDevTarget.consecutivo} y todos sus datos asociados (OC, entradas, salidas)? Esta acción es irreversible y solo está disponible para Desarrollador.`}
+          {`¿Eliminar la solicitud #${eliminarTarget.consecutivo}${eliminarTarget.titulo ? ` · ${eliminarTarget.titulo}` : ''}?`}
+          <div style={{ marginTop: 10, opacity: 0.9 }}>
+            Se quitan la solicitud y sus líneas. Los totales del listado se actualizan. Si alguna línea ya está en una orden de compra, no se elimina nada.
+          </div>
+          {eliminarAviso && (
+            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>
+          )}
         </CcConfirmModal>
       )}
     </div>

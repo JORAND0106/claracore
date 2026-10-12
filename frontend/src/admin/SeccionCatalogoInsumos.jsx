@@ -3,6 +3,7 @@ import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { useClaraViewport } from '../useClaraViewport'
 import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
 import { esDesarrolladorUsuario } from '../utils/permisosContrato'
+import { puedeVerValoresEconomicosAlmacen } from '../almacen/almacenPermisos'
 import { permisosCatalogoInsumos } from './catalogoInsumosPermisos'
 import {
   EMPTY_IMPUESTO,
@@ -926,6 +927,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [unidadModoCustom, setUnidadModoCustom] = useState(false)
   const [unidadCustom, setUnidadCustom] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [deleteAviso, setDeleteAviso] = useState('')
+  const [bajaCotizacion, setBajaCotizacion] = useState(null)
   const [deleteProvConfirm, setDeleteProvConfirm] = useState(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [confirmRevocarGanadora, setConfirmRevocarGanadora] = useState(null)
@@ -1031,6 +1034,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const canCrear = permsEfectivos?.crear
   const canEditar = permsEfectivos?.editar
   const canEliminar = permsEfectivos?.eliminar
+  const verEconomicos = puedeVerValoresEconomicosAlmacen(user)
   const canVer = permsEfectivos?.ver
 
   const loadProveedores = useCallback(() => {
@@ -1908,13 +1912,82 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const confirmDeleteInsumo = async () => {
     if (!api || !deleteConfirm) return
     setBusy(true)
+    setDeleteAviso('')
     try {
       await api.deleteInsumo(deleteConfirm.insumo_id || deleteConfirm.id)
       setMsg({ type: 'success', text: `Insumo «${deleteConfirm.codigo}» eliminado del catálogo.` })
       setDeleteConfirm(null)
       load()
     } catch (e) {
-      setMsg({ type: 'error', text: e.message })
+      setDeleteAviso(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const quitarCotizacionLocal = (pairId, lado, soloAdjunto) => {
+    setForm((f) => {
+      let list = (f.cotizaciones_detalle || []).map((p) => {
+        if (p.id !== pairId) return p
+        const actual = p[lado] || {}
+        const nextLado = soloAdjunto
+          ? { ...actual, pdf: null, pdf_nombre: '', pdf_historial: [] }
+          : {
+            ...actual,
+            proveedor: '',
+            valor: '',
+            numero: '',
+            fecha: '',
+            vigencia: '',
+            impuesto_etiqueta: '',
+            pdf: null,
+            pdf_nombre: '',
+            pdf_historial: [],
+          }
+        const next = { ...p, [lado]: nextLado }
+        if (lado === 'insumo' && !soloAdjunto) next.es_ganadora = false
+        return next
+      }).filter((p) => {
+        const ins = p.insumo || {}
+        const np = p.no_previsto || {}
+        const tiene = (lado) => (lado.proveedor || '').trim()
+          || (lado.numero || '').trim()
+          || (lado.valor !== '' && lado.valor != null)
+          || (lado.pdf_nombre || '').trim()
+          || lado.pdf
+        return tiene(ins) || tiene(np) || p.es_ganadora
+      })
+      list = ensureGanadora(list)
+      return { ...f, cotizaciones_detalle: list, ...syncLegacyFromGanadora(list) }
+    })
+  }
+
+  const confirmarBajaCotizacion = async () => {
+    const baja = bajaCotizacion
+    if (!baja) return
+    const { par, lado, soloAdjunto } = baja
+    const ladoObj = par?.[lado] || {}
+    const cotizacionId = lado === 'no_previsto' ? `${par.id}-np` : `${par.id}-insumo`
+    setBusy(true)
+    setDeleteAviso('')
+    try {
+      if (editId && api) {
+        await api.eliminarCotizacionInsumo(editId, cotizacionId, {
+          tipo: lado === 'no_previsto' ? 'no_previsto' : 'insumo',
+          numero: ladoObj.numero || '',
+          soloAdjunto,
+        })
+      }
+      quitarCotizacionLocal(par.id, lado, soloAdjunto)
+      setBajaCotizacion(null)
+    } catch (e) {
+      const msg = e.message || String(e)
+      if (/no se encontró/i.test(msg)) {
+        quitarCotizacionLocal(par.id, lado, soloAdjunto)
+        setBajaCotizacion(null)
+      } else {
+        setDeleteAviso(msg)
+      }
     } finally {
       setBusy(false)
     }
@@ -3084,6 +3157,36 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                     prefer: par.es_ganadora ? 'ganadora' : 'soporte',
                                   })}
                                 />
+                                {canEliminar && ((par.insumo?.numero || '').trim() || (par.insumo?.pdf_nombre || '').trim() || par.insumo?.pdf || (par.insumo?.valor !== '' && par.insumo?.valor != null)) && (
+                                  <button
+                                    type="button"
+                                    data-testid="cotizacion-eliminar"
+                                    title="Eliminar cotización de insumo"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setDeleteAviso('')
+                                      setBajaCotizacion({ par, lado: 'insumo', soloAdjunto: false })
+                                    }}
+                                    style={{ border: `1px solid ${t.border}`, background: t.inputBg, color: '#b91c1c', borderRadius: 6, padding: '4px 6px', cursor: 'pointer', fontSize: 11 }}
+                                  >
+                                    Eliminar
+                                  </button>
+                                )}
+                                {canEliminar && ((par.insumo?.pdf_nombre || '').trim() || par.insumo?.pdf) && (
+                                  <button
+                                    type="button"
+                                    data-testid="cotizacion-quitar-pdf"
+                                    title="Quitar solo el PDF"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setDeleteAviso('')
+                                      setBajaCotizacion({ par, lado: 'insumo', soloAdjunto: true })
+                                    }}
+                                    style={{ border: `1px solid ${t.border}`, background: t.inputBg, color: t.textMuted, borderRadius: 6, padding: '4px 6px', cursor: 'pointer', fontSize: 11 }}
+                                  >
+                                    PDF
+                                  </button>
+                                )}
                                 {win && par.insumo?.pdf && (
                                   <IconActionBtn title={ocrBusy ? 'OCR…' : 'OCR'} disabled={ocrBusy || busy} t={t} onClick={() => runOcr(par.id)}>
                                     <IconOcrScan />
@@ -3117,6 +3220,35 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                 onPreview={(payload) => abrirPreviewCotizacion({ ...payload, prefer: 'soporte' })}
                                 dropHint="Arrastre el PDF de No Previsto aquí"
                               />
+                              {canEliminar && ((par.no_previsto?.numero || '').trim() || (par.no_previsto?.pdf_nombre || '').trim() || par.no_previsto?.pdf || (par.no_previsto?.valor !== '' && par.no_previsto?.valor != null)) && (
+                                <button
+                                  type="button"
+                                  data-testid="cotizacion-eliminar-np"
+                                  title="Eliminar cotización de no previsto"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setDeleteAviso('')
+                                    setBajaCotizacion({ par, lado: 'no_previsto', soloAdjunto: false })
+                                  }}
+                                  style={{ border: `1px solid ${t.border}`, background: t.inputBg, color: '#b91c1c', borderRadius: 6, padding: '4px 6px', cursor: 'pointer', fontSize: 11 }}
+                                >
+                                  Eliminar
+                                </button>
+                              )}
+                              {canEliminar && ((par.no_previsto?.pdf_nombre || '').trim() || par.no_previsto?.pdf) && (
+                                <button
+                                  type="button"
+                                  title="Quitar solo el PDF de no previsto"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setDeleteAviso('')
+                                    setBajaCotizacion({ par, lado: 'no_previsto', soloAdjunto: true })
+                                  }}
+                                  style={{ border: `1px solid ${t.border}`, background: t.inputBg, color: t.textMuted, borderRadius: 6, padding: '4px 6px', cursor: 'pointer', fontSize: 11 }}
+                                >
+                                  PDF
+                                </button>
+                              )}
                             </td>
                           </tr>
                         )
@@ -3318,11 +3450,52 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           confirmar="Eliminar"
           cancelar="Cancelar"
           procesando={busy}
-          onCancel={() => !busy && setDeleteConfirm(null)}
+          onCancel={() => {
+            if (busy) return
+            setDeleteConfirm(null)
+            setDeleteAviso('')
+          }}
           onConfirm={confirmDeleteInsumo}
         >
           ¿Eliminar «{deleteConfirm.codigo}» — {deleteConfirm.descripcion}?
-          {' '}El insumo dejará de estar disponible en solicitudes de almacén.
+          {' '}El insumo dejará de estar disponible para nuevas solicitudes. Si ya tiene solicitudes, órdenes de compra, entradas o salidas, no se eliminará.
+          {deleteAviso && (
+            <span style={{ display: 'block', marginTop: 8, color: '#991b1b' }}>{deleteAviso}</span>
+          )}
+        </CcConfirmModal>
+      )}
+
+      {bajaCotizacion && (
+        <CcConfirmModal
+          theme={ui.confirmTheme}
+          tipo="danger"
+          titulo={bajaCotizacion.soloAdjunto ? 'Quitar archivo de la cotización' : 'Eliminar cotización'}
+          confirmar={bajaCotizacion.soloAdjunto ? 'Quitar archivo' : 'Eliminar'}
+          cancelar="Cancelar"
+          procesando={busy}
+          onCancel={() => {
+            if (busy) return
+            setBajaCotizacion(null)
+            setDeleteAviso('')
+          }}
+          onConfirm={confirmarBajaCotizacion}
+        >
+          {bajaCotizacion.soloAdjunto
+            ? `Se quitará el archivo ${bajaCotizacion.par?.[bajaCotizacion.lado]?.pdf_nombre || bajaCotizacion.par?.[bajaCotizacion.lado]?.pdf?.name || 'adjunto'} de la cotización ${bajaCotizacion.lado === 'no_previsto' ? 'de no previsto' : 'de insumo'}. La cotización permanece.`
+            : (
+              <>
+                {`Se eliminará la cotización ${bajaCotizacion.lado === 'no_previsto' ? 'de no previsto' : 'de insumo'}${bajaCotizacion.par?.[bajaCotizacion.lado]?.numero ? ` ${bajaCotizacion.par[bajaCotizacion.lado].numero}` : ''}${bajaCotizacion.par?.[bajaCotizacion.lado]?.proveedor ? ` de ${bajaCotizacion.par[bajaCotizacion.lado].proveedor}` : ''}.`}
+                {verEconomicos && bajaCotizacion.par?.[bajaCotizacion.lado]?.valor !== '' && bajaCotizacion.par?.[bajaCotizacion.lado]?.valor != null && (
+                  <span>{` Valor ${fmtMoney(bajaCotizacion.par[bajaCotizacion.lado].valor)}.`}</span>
+                )}
+                <span style={{ display: 'block', marginTop: 8 }}>
+                  También se quita su archivo. Si es la ganadora y el insumo ya tiene líneas en solicitudes, no se eliminará. El precio del insumo pasa a la cotización que quede como ganadora.
+                </span>
+              </>
+            )}
+          {deleteAviso && (
+            <span style={{ display: 'block', marginTop: 8, color: '#991b1b' }}>{deleteAviso}</span>
+          )}
         </CcConfirmModal>
       )}
 

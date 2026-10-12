@@ -48,6 +48,18 @@ export function createCatalogoInsumosApi(contratoId, token) {
     deleteInsumo: (insumoId) =>
       fetch(`${base}/insumos/${insumoId}`, { method: 'DELETE', headers: headers(token) }).then(parseJson),
 
+    eliminarCotizacionInsumo: (insumoId, cotizacionId, { tipo = '', numero = '', soloAdjunto = false } = {}) => {
+      const params = new URLSearchParams()
+      if (tipo) params.set('tipo', tipo)
+      if (numero) params.set('numero', numero)
+      if (soloAdjunto) params.set('solo_adjunto', 'true')
+      const q = params.toString() ? `?${params}` : ''
+      return fetch(
+        `${base}/insumos/${insumoId}/cotizaciones/${encodeURIComponent(cotizacionId)}${q}`,
+        { method: 'DELETE', headers: headers(token) },
+      ).then(parseJson)
+    },
+
     listProveedores: (q = '', limit = 100, offset = 0) =>
       fetch(`${base}/proveedores?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`, {
         headers: headers(token),

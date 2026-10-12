@@ -31,6 +31,10 @@ def _cargo_permiso_catalogo(current_user, accion: CatalogoInsumosAccion) -> bool
 
         if _es_desarrollador(current_user):
             return True
+        from almacen_permissions import rol_excluido_almacen
+
+        if rol_excluido_almacen(current_user):
+            return False
         urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
         u = urows[0] if urows else None
         if not u or u.get("cargo_id") is None:
@@ -62,10 +66,18 @@ def _cargo_permiso_catalogo(current_user, accion: CatalogoInsumosAccion) -> bool
 
 
 def tiene_permiso_catalogo_insumos(current_user, accion: CatalogoInsumosAccion) -> bool:
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        return False
     return _cargo_permiso_catalogo(current_user, accion)
 
 
 def tiene_alguna_accion_catalogo_insumos(current_user) -> bool:
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        return False
     for accion in _ACCIONES:
         if _cargo_permiso_catalogo(current_user, accion):  # type: ignore[arg-type]
             return True
@@ -73,6 +85,13 @@ def tiene_alguna_accion_catalogo_insumos(current_user) -> bool:
 
 
 def require_permiso_catalogo_insumos(current_user, accion: CatalogoInsumosAccion) -> None:
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
     if not _cargo_permiso_catalogo(current_user, accion):
         raise HTTPException(
             status_code=403,
