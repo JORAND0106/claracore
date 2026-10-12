@@ -88,11 +88,11 @@ from mapa_capacitacion_video import (
     ACCEPT_CONTENT_TYPES,
     MAX_UPLOAD_BYTES,
     VOLUMEN_FONDO_DEFAULT,
-    clamp_volumen,
+    content_type_video,
+    extension_permitida,
     ffmpeg_disponible,
     listar_pistas_aprobadas,
-    mensaje_error_procesamiento,
-    procesar_video_con_musica,
+    mensaje_limite_tamano,
 )
 from usuarios_notif_elegibilidad import (
     filtrar_usuarios_para_notificaciones_automaticas,
@@ -6435,14 +6435,12 @@ def ayuda_mapa_navegacion_pistas(current_user=Depends(get_current_user)):
 @app.post("/ayuda/mapa-navegacion/video")
 async def ayuda_mapa_navegacion_video_upload(
     tema_id: str = Form(...),
-    pista_id: str = Form(...),
-    volumen: float = Form(VOLUMEN_FONDO_DEFAULT),
     file: UploadFile = File(...),
     current_user=Depends(get_current_user),
 ):
     """
-    Carga un video de capacitación, lo comprime, mezcla una pista aprobada y
-    lo asocia a la tarjeta (tema_id). Solo Desarrollador.
+    Carga un video de capacitación tal cual (sin compresión ni música) y lo
+    asocia a la tarjeta (tema_id). Solo Desarrollador. Máximo 150 MB.
     """
     if not _es_desarrollador(current_user):
         raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede cargar videos del mapa")
@@ -6462,37 +6460,20 @@ async def ayuda_mapa_navegacion_video_upload(
     if not contents:
         raise HTTPException(status_code=400, detail="Archivo vacío.")
     if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"El video supera el máximo de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
-        )
+        raise HTTPException(status_code=400, detail=mensaje_limite_tamano())
 
-    try:
-        processed = procesar_video_con_musica(
-            contents,
-            filename=filename,
-            content_type=ct,
-            pista_id=pista_id,
-            volumen=clamp_volumen(volumen),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        detalle = mensaje_error_procesamiento(exc)
-        _log_api.warning("ayuda mapa procesar video: %s | usuario=%s", exc, detalle)
-        # 503 si falta la herramienta del servidor; 422 si el archivo no se pudo procesar.
-        status = 503 if "herramienta de compresión" in detalle else 500
-        raise HTTPException(status_code=status, detail=detalle) from exc
-
-    nombre = f"{uuid.uuid4().hex[:16]}.mp4"
+    ext = extension_permitida(filename, ct)
+    blob_ct = content_type_video(filename, ct)
+    nombre = f"{uuid.uuid4().hex[:16]}{ext}"
     blob_path = path_ayuda_mapa_video(tid, nombre)
     try:
-        url = upload_blob(blob_path, processed, "video/mp4", overwrite=True, account_storage=False)
+        url = upload_blob(blob_path, contents, blob_ct, overwrite=True, account_storage=False)
     except Exception as exc:
         _log_api.warning("ayuda mapa upload video %s: %s", blob_path, exc)
-        raise HTTPException(status_code=503, detail="No se pudo guardar el video en Azure Blob Storage.") from exc
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo guardar el video en el almacenamiento: {str(exc)[:200]}",
+        ) from exc
 
     # Publica la asociación en el documento del mapa (reemplaza URL anterior).
     doc = _mapa_navegacion_leer_blob() or _mapa_navegacion_contenido_vacio()
@@ -6503,7 +6484,7 @@ async def ayuda_mapa_navegacion_video_upload(
     doc["modulos"][tid] = {
         **prev,
         "videoUrl": url,
-        "videoMusicId": str(pista_id or "").strip().lower(),
+        "videoMusicId": "",
         "videoUpdatedAt": datetime.now(timezone.utc).isoformat(),
     }
     doc = _mapa_navegacion_escribir_blob(doc)
@@ -6511,8 +6492,7 @@ async def ayuda_mapa_navegacion_video_upload(
         "ok": True,
         "url": url,
         "tema_id": tid,
-        "pista_id": str(pista_id or "").strip().lower(),
-        "bytes": len(processed),
+        "bytes": len(contents),
         "contenido": doc,
     }
 
