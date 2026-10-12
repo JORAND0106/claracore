@@ -1,17 +1,22 @@
 import { useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import TareaExcelLayout from './TareaExcelLayout.jsx'
-import { newChecklistItem } from './TareaChecklistEditor'
+import {
+  fechaVencimientoDesdePartes,
+  newParteItem,
+  partesToPayload,
+} from './tareaPartesForm'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'
 import { calcularAvanceTarea } from './tareaAvance'
-import { calcularNivelVencimiento, fechaVencimientoEfectiva } from './vencimientoLevels'
+import { calcularNivelVencimiento } from './vencimientoLevels'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimientoCompact } from './seguimientoShared'
 
 /**
- * Formulario de nueva tarea (misma grilla Excel de dos niveles que la vista/edición):
- * - Personal o delegada a uno/varios usuarios (asignación formal colectiva).
- * - Referencia sigue siendo un solo destinatario (fuera del multi-cumplimiento).
+ * Formulario de nueva tarea:
+ * - Simple por defecto (solo título).
+ * - Puede convertirse en madre agregándole partes (cada una con responsable, fecha, etc.).
+ * - Personal o delegada a uno/varios usuarios (asignación formal colectiva a nivel madre).
  */
 export default function TareaFormModal({
   t, api, usuario, usuarios = [], onClose, onCreated,
@@ -21,9 +26,9 @@ export default function TareaFormModal({
   const viewportCompactHook = useSeguimientoCompact()
   const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const [titulo, setTitulo] = useState('')
-  const [checklist, setChecklist] = useState(() => {
+  const [partes, setPartes] = useState(() => {
     const f = fechaInicial ? String(fechaInicial).slice(0, 10) : ''
-    return f ? [newChecklistItem({ fecha: f })] : []
+    return f ? [newParteItem({ fecha: f })] : []
   })
   const [destinoTipo, setDestinoTipo] = useState('personal') // 'personal' | 'delegar'
   const [destUsers, setDestUsers] = useState([])
@@ -31,37 +36,19 @@ export default function TareaFormModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const duePreview = fechaVencimientoEfectiva({ origen: 'tarea', campos_libres: { checklist } })
+  const duePreview = fechaVencimientoDesdePartes(partes)
   const nivelPreview = duePreview.fecha
     ? calcularNivelVencimiento({
       fechaVencimiento: duePreview.fecha,
       fechaCreacion: new Date().toISOString().slice(0, 10),
     })
     : null
-  const avance = calcularAvanceTarea(checklist)
-
-  const uploadPendientes = async (rowId, items) => {
-    for (const it of items) {
-      if (it.imagen?.pending && it.imagen?.data_uri) {
-        await api.pegarImagenTarea(rowId, {
-          nombre: it.imagen.nombre || `checklist-${it.id}.png`,
-          data_base64: it.imagen.data_uri,
-          mime_type: it.imagen.mime_type || 'image/png',
-          destino: 'checklist',
-          checklist_id: it.id,
-        })
-      }
-      if (it.esquema?.pending && it.esquema?.data_uri) {
-        await api.pegarImagenTarea(rowId, {
-          nombre: it.esquema.nombre || `esquema-${it.id}.png`,
-          data_base64: it.esquema.data_uri,
-          mime_type: 'image/png',
-          destino: 'checklist_esquema',
-          checklist_id: it.id,
-        })
-      }
-    }
-  }
+  const avance = calcularAvanceTarea(
+    partes.map((p) => ({
+      estado_gestion: p.estado_gestion,
+      hecho: p.estado_gestion === 'cumplido',
+    })),
+  )
 
   const addDest = (u) => {
     if (!u) return
@@ -79,32 +66,29 @@ export default function TareaFormModal({
     setBusy(true)
     setError('')
     try {
-      const checklistClean = checklist.map((it) => ({
-        id: it.id,
-        texto: it.texto || '',
-        hecho: !!it.hecho,
-        estado_gestion: it.estado_gestion || (it.hecho ? 'cumplido' : 'abierto'),
-        fecha: it.fecha || null,
-        hora: it.hora || null,
-        notas: it.notas || '',
-        enlace: it.enlace || '',
-        comentarios: Array.isArray(it.comentarios) ? it.comentarios : [],
-        ...(it.notificar_a_id ? {
-          notificar_a_id: it.notificar_a_id,
-          notificar_a_nombre: it.notificar_a_nombre || '',
-          relacion_notificacion: it.relacion_notificacion || 'referencia',
-          notificar_a: it.notificar_a || {
-            id: it.notificar_a_id,
-            nombre: it.notificar_a_nombre || '',
-            relacion: it.relacion_notificacion || 'referencia',
-          },
-        } : {}),
-      }))
+      const personal = destinoTipo !== 'delegar'
+      const partesPayload = partesToPayload(partes, { personal, creador: usuario })
+      if (partes.length > 0 && partesPayload.length === 0) {
+        setError('Indique el título de cada parte')
+        setBusy(false)
+        return
+      }
+      if (!personal && partesPayload.length > 0) {
+        const sinResp = partesPayload.some((p) => !p.asignado_a_id)
+        if (sinResp) {
+          setError('Asigne un responsable a cada parte')
+          setBusy(false)
+          return
+        }
+      }
       const payload = {
         titulo: titulo.trim(),
         fecha_vencimiento: duePreview.fecha || null,
         hora_vencimiento: duePreview.hora || null,
-        campos_libres: { checklist: checklistClean },
+        campos_libres: {},
+      }
+      if (partesPayload.length > 0) {
+        payload.partes = partesPayload
       }
       if (destinoTipo === 'delegar' && destUsers.length && relacion) {
         payload.relacion_destinatario = relacion
@@ -112,24 +96,10 @@ export default function TareaFormModal({
           id: u.id,
           nombre: nombreUser(u),
         }))
-        // Compat legado (primer destinatario)
         payload.destinatario_id = destUsers[0].id
         payload.referido_a_nombre = nombreUser(destUsers[0])
       }
       const row = await api.crearTarea(payload)
-      await uploadPendientes(row.id, checklist)
-      // Notificaciones por sub-ítem (columna Notificar a) tras crear la tarea
-      for (const it of checklist) {
-        if (!it.notificar_a_id || !it.relacion_notificacion) continue
-        try {
-          await api.destinarItem(row.id, {
-            destinatario_id: it.notificar_a_id,
-            destinatario_nombre: it.notificar_a_nombre || '',
-            relacion_destinatario: it.relacion_notificacion,
-            checklist_id: it.id,
-          })
-        } catch { /* ignore per-item notify failures */ }
-      }
       onCreated?.(row)
       onClose?.()
     } catch (e) {
@@ -146,12 +116,19 @@ export default function TareaFormModal({
       return
     }
     if (destinoTipo === 'delegar') {
-      if (!destUsers.length) {
-        setError('Seleccione al menos un destinatario o marque la tarea como personal')
+      // Con partes asignadas a responsables, la madre no exige destinatarios propios.
+      const partesConResp = partes.filter((p) => p.asignado_a_id)
+      if (!destUsers.length && partesConResp.length === 0) {
+        setError('Seleccione destinatario(s) o asigne responsables a las partes')
         return
       }
-      setError('')
-      setAskModo(true)
+      if (destUsers.length) {
+        setError('')
+        setAskModo(true)
+        return
+      }
+      // Solo responsables en partes → crear sin relación madre
+      await crearConModo(null)
       return
     }
     await crearConModo(null)
@@ -259,10 +236,13 @@ export default function TareaFormModal({
               ))}
             </div>
           )}
+          <span style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.3 }}>
+            O asigne responsables distintos en cada parte.
+          </span>
         </>
       ) : (
         <span style={{ fontSize: 10, color: t.textMuted, lineHeight: 1.3 }}>
-          Queda en su bandeja
+          Queda en su bandeja · las partes son suyas
         </span>
       )}
     </div>
@@ -295,7 +275,7 @@ export default function TareaFormModal({
                 Nueva tarea
               </div>
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, lineHeight: 1.4 }}>
-                Fila de tarea + checklist en grilla. Puede guardar solo con el título.
+                Simple por defecto. Agregue partes con + para crear una tarea madre. Puede guardar solo con el título.
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -310,22 +290,26 @@ export default function TareaFormModal({
             t={t}
             mode="create"
             defaultExpanded
+            secondLevel="partes"
             titulo={titulo}
             onTituloChange={setTitulo}
             destinatariosNode={destinatariosNode}
             cumplimientoLabel={cumplimientoPreview}
             avance={avance}
-            checklist={checklist}
-            onChecklistChange={setChecklist}
-            checklistUsuario={usuario}
-            checklistUsuarios={usuarios}
+            partes={partes}
+            onPartesChange={setPartes}
+            partesUsuarios={usuarios}
+            showParteResponsable={destinoTipo === 'delegar'}
             canNotificar
+            partesDefaultFecha={fechaInicial ? String(fechaInicial).slice(0, 10) : ''}
             footerBeforeChecklist={
               destinoTipo === 'delegar' ? (
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 8, lineHeight: 1.4 }}>
                   {multi
-                    ? 'Con varios destinatarios la tarea solo queda Cumplida cuando todos confirmen su parte (asignación formal).'
-                    : 'Al guardar se preguntará si es asignación formal o solo referencia.'}
+                    ? 'Con varios destinatarios a nivel madre, la tarea solo queda Cumplida cuando todos confirmen (asignación formal).'
+                    : destUsers.length
+                      ? 'Al guardar se preguntará si es asignación formal o solo referencia.'
+                      : 'Asigne un responsable en cada parte; al abrir la madre verá la carpeta con avance.'}
                 </div>
               ) : null
             }
