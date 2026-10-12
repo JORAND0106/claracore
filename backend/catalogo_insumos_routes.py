@@ -20,6 +20,7 @@ from catalogo_insumos_service import (
     delete_insumo_catalogo,
     delete_proveedor_catalogo,
     download_cotizacion_pdf,
+    download_cotizacion_pdf_de_insumo,
     find_duplicados,
     get_almacen_config,
     get_csv_template,
@@ -205,6 +206,33 @@ def route_soportes(contrato_id: int, insumo_id: int, current_user=Depends(get_cu
         return list_cotizaciones_soporte(contrato_id, insumo_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/insumos/{insumo_id}/cotizacion-pdf")
+def route_preview_cotizacion_insumo(
+    contrato_id: int,
+    insumo_id: int,
+    nombre: str = "",
+    prefer: str = "soporte",
+    current_user=Depends(get_current_user),
+):
+    """Previsualiza el PDF de cualquier fila (ganadora, perdedora o no previsto)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    try:
+        data, mime, fname = download_cotizacion_pdf_de_insumo(
+            contrato_id,
+            insumo_id,
+            nombre,
+            prefer=prefer,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    headers = {
+        "Content-Disposition": f'inline; filename="{fname}"',
+        "X-Filename": fname,
+    }
+    return StreamingResponse(io.BytesIO(data), media_type=mime or "application/pdf", headers=headers)
 
 
 @router.post("/{contrato_id}/check-duplicado")

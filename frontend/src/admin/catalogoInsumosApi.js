@@ -84,6 +84,22 @@ export function createCatalogoInsumosApi(contratoId, token) {
       return fetch(`${base}/cotizaciones/by-numero?${params}`, { headers: headers(token) }).then(parseJson)
     },
 
+    previewCotizacionGuardada: async (insumoId, nombre, { prefer } = {}) => {
+      const params = new URLSearchParams()
+      params.set('nombre', nombre || '')
+      if (prefer) params.set('prefer', prefer)
+      const res = await fetch(`${base}/insumos/${insumoId}/cotizacion-pdf?${params}`, { headers: headers(token) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        const detail = data.detail || data.message
+        throw new Error(typeof detail === 'string' ? detail : `No se pudo abrir el PDF de esta cotización (${res.status}).`)
+      }
+      const blob = await res.blob()
+      const headerName = res.headers.get('X-Filename') || nombre || 'cotizacion.pdf'
+      const mime = blob.type || 'application/pdf'
+      return new File([blob], headerName, { type: mime })
+    },
+
     downloadCotizacionPdf: async ({ kind, source_insumo_id, soporte_id, nombre } = {}) => {
       const params = new URLSearchParams()
       params.set('kind', kind || '')

@@ -547,6 +547,26 @@ export function detalleVisibleDesdeInsumoRow(row) {
   return gan ? [gan] : []
 }
 
+export const MENSAJE_PREVIEW_SIN_ARCHIVO =
+  'No se puede previsualizar esta cotización. El archivo no está disponible. Vuelva a adjuntarlo.'
+
+export const MENSAJE_PREVIEW_SIN_GUARDAR =
+  'Esta cotización aún no está guardada y no hay un archivo local para previsualizar. Adjúntela de nuevo.'
+
+/**
+ * Decide cómo abrir el ojo: archivo recién cargado, PDF ya guardado, o aviso claro.
+ * @returns {{ modo: 'local'|'guardada'|'ausente', nombre: string, insumoId?: *, mensaje?: string }}
+ */
+export function destinoPreviewCotizacion({ file, fileName, insumoId } = {}) {
+  const nombre = String(file?.name || fileName || '').trim()
+  if (file) return { modo: 'local', nombre }
+  if (nombre && insumoId != null && String(insumoId) !== '') {
+    return { modo: 'guardada', nombre, insumoId }
+  }
+  if (nombre) return { modo: 'ausente', nombre, mensaje: MENSAJE_PREVIEW_SIN_GUARDAR }
+  return { modo: 'ausente', nombre: '', mensaje: MENSAJE_PREVIEW_SIN_ARCHIVO }
+}
+
 /** Archivos a enviar: { ganadora: File|null, soportes: File[] } */
 export function collectPdfFilesFromPares(pares) {
   const list = pares || []
