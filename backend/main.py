@@ -6181,7 +6181,9 @@ _MAPA_NAVEGACION_MODULOS_IDS = frozenset({
     "informes_firmas_personalizacion",
     # Almacén
     "almacen_catalogo_insumos",
-    "almacen_solicita_aprueba",
+    "almacen_solicita_materiales",
+    "almacen_asigna_insumo_proveedor",
+    "almacen_aprueba_genera_oc",
     "almacen_mueve_obra",
     "almacen_consulta_inventario",
     # Seguimiento
@@ -6229,8 +6231,10 @@ _MAPA_NAVEGACION_ID_LEGACY = {
     "informes_firma_documentos": "informes_firmas_personalizacion",
     "almacen_crear_insumo": "almacen_catalogo_insumos",
     "almacen_plantillas": "almacen_catalogo_insumos",
-    "almacen_solicitud_borrador_aprobacion": "almacen_solicita_aprueba",
-    "almacen_aprobacion_oc": "almacen_solicita_aprueba",
+    # Tarjeta unificada anterior → primera de las tres (conserva video/contenido).
+    "almacen_solicita_aprueba": "almacen_solicita_materiales",
+    "almacen_solicitud_borrador_aprobacion": "almacen_solicita_materiales",
+    "almacen_aprobacion_oc": "almacen_aprueba_genera_oc",
     "almacen_entradas": "almacen_mueve_obra",
     "almacen_despachador": "almacen_mueve_obra",
     "almacen_devoluciones": "almacen_mueve_obra",

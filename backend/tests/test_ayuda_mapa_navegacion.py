@@ -17,7 +17,9 @@ IDS = frozenset({
     "informes_biblioteca_formatos",
     "informes_firmas_personalizacion",
     "almacen_catalogo_insumos",
-    "almacen_solicita_aprueba",
+    "almacen_solicita_materiales",
+    "almacen_asigna_insumo_proveedor",
+    "almacen_aprueba_genera_oc",
     "almacen_mueve_obra",
     "almacen_consulta_inventario",
     "seg_tareas_calendario",
@@ -30,6 +32,7 @@ IDS = frozenset({
 LEGACY = {
     "reporte_cantidades": "sicoe_crear_reporte_registros",
     "dash_resumen_desviaciones": "dash_leer_indicadores",
+    "almacen_solicita_aprueba": "almacen_solicita_materiales",
 }
 
 
@@ -97,9 +100,13 @@ def normalizar(raw):
     return base
 
 
-def test_mapa_navegacion_tiene_22_temas():
-    assert len(IDS) == 22
+def test_mapa_navegacion_tiene_24_temas():
+    assert len(IDS) == 24
     assert "sicoe_asigna_item_cobro" in IDS
+    assert "almacen_solicita_materiales" in IDS
+    assert "almacen_asigna_insumo_proveedor" in IDS
+    assert "almacen_aprueba_genera_oc" in IDS
+    assert "almacen_solicita_aprueba" not in IDS
 
 
 def test_mapa_navegacion_normalizar_contrato():
@@ -115,7 +122,7 @@ def test_mapa_navegacion_normalizar_contrato():
         },
     })
     assert out["version"] == 2
-    assert len(out["modulos"]) == 22
+    assert len(out["modulos"]) == 24
     assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Crear reporte"
     assert out["modulos"]["sicoe_crear_reporte_registros"]["imagenes"] == [
         {"url": "https://x.png", "caption": "A"},
@@ -134,7 +141,15 @@ def test_mapa_navegacion_migra_legacy_a_grupos():
             "dash_resumen_desviaciones": {
                 "descripcion": "Legacy dash",
             },
+            "almacen_solicita_aprueba": {
+                "descripcion": "Legacy solicita/aprueba",
+                "videoUrl": "https://cdn/legacy-almacen.mp4",
+            },
         },
     })
     assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Legacy RC"
+    assert out["modulos"]["almacen_solicita_materiales"]["videoUrl"] == "https://cdn/legacy-almacen.mp4"
+    assert out["modulos"]["almacen_solicita_materiales"]["descripcion"] == "Legacy solicita/aprueba"
+    assert out["modulos"]["almacen_asigna_insumo_proveedor"]["videoUrl"] == ""
+    assert out["modulos"]["almacen_aprueba_genera_oc"]["videoUrl"] == ""
     assert out["modulos"]["dash_leer_indicadores"]["descripcion"] == "Legacy dash"
