@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Plus } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
@@ -459,16 +460,41 @@ export default function ItemDetalleModal({
             </>
           ) : (
             <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-            {puedeEditarTarea && checklistDirty && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6, gap: 8, alignItems: 'center' }}>
+            {puedeEditarTarea && checklistDirty && tieneChecklist && (
               <button type="button" disabled={busy} style={primary(t)} onClick={guardarChecklist}>
-                {busy ? 'Guardando…' : 'Guardar checklist'}
+                {busy ? 'Guardando…' : 'Guardar'}
+              </button>
+            )}
+            {puedeEditarTarea && !tieneChecklist && (
+              <button
+                type="button"
+                title="Agregar parte (convierte en tarea madre)"
+                aria-label="Agregar parte"
+                disabled={busy}
+                onClick={() => setShowAddParte(true)}
+                style={{
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  width: 32,
+                  height: 32,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: t.bgCard || 'transparent',
+                  color: t.text,
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <Plus size={16} />
               </button>
             )}
           </div>
           <TareaExcelLayout
             t={t}
             mode="view"
+            secondLevel={tieneChecklist ? 'checklist' : 'none'}
             defaultExpanded={tieneChecklist}
             titulo={item.titulo || ''}
             tituloReadOnly
@@ -551,66 +577,55 @@ export default function ItemDetalleModal({
               multiAsignacion ? (
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
                   Solo pasa a Cumplida cuando todos confirman su parte.
-                  {tieneChecklist ? ' Estado y reprogramación se gestionan en cada sub-ítem.' : ''}
                 </div>
-              ) : (tieneChecklist ? (
+              ) : (!tieneChecklist ? (
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-                  Se marca Cumplida en bandeja solo al 100% (cancelados excluidos). Estado por sub-ítem.
+                  Tarea simple. Use + para agregarle partes y convertirla en tarea madre.
                 </div>
-              ) : (
-                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-                  Puede convertir esta tarea en «tarea madre» agregando partes desde «+» tras migrar, o con el botón Agregar parte si ya es madre.
-                </div>
-              ))
+              ) : null)
             }
           />
-          {puedeEditarTarea && !tieneChecklist && (
-            <div style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                title="Agregar parte (convierte en tarea madre)"
-                aria-label="Agregar parte"
-                disabled={busy}
-                style={ghost(t)}
-                onClick={() => setShowAddParte(true)}
-              >
-                + Agregar parte
-              </button>
-              {showAddParte && (
-                <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <input
-                    value={parteTitulo}
-                    onChange={(e) => setParteTitulo(e.target.value)}
-                    placeholder="Título de la parte"
-                    style={{
-                      flex: 1, minWidth: 160, padding: '8px 10px', borderRadius: 6,
-                      border: `1px solid ${t.border}`, background: t.bgCard, color: t.text,
-                    }}
-                  />
-                  <button
-                    type="button"
-                    disabled={busy || !parteTitulo.trim()}
-                    style={primary(t)}
-                    onClick={async () => {
-                      setBusy(true)
-                      setError('')
-                      try {
-                        await api.crearParte(item.id, { titulo: parteTitulo.trim() })
-                        setParteTitulo('')
-                        setShowAddParte(false)
-                        await reload()
-                        onChanged?.()
-                      } catch (e) {
-                        setError(e.message || 'No se pudo crear la parte')
-                      } finally {
-                        setBusy(false)
-                      }
-                    }}
-                  >
-                    Crear parte
-                  </button>
-                </div>
-              )}
+          {showAddParte && puedeEditarTarea && !tieneChecklist && (
+            <div style={{
+              marginTop: 8, padding: 10, borderRadius: 8,
+              border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+            }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: t.text }}>Nueva parte</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <input
+                  value={parteTitulo}
+                  onChange={(e) => setParteTitulo(e.target.value)}
+                  placeholder="Título de la parte"
+                  style={{
+                    flex: 1, minWidth: 160, padding: '8px 10px', borderRadius: 6,
+                    border: `1px solid ${t.border}`, background: t.bgCard, color: t.text,
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={busy || !parteTitulo.trim()}
+                  style={primary(t)}
+                  onClick={async () => {
+                    setBusy(true)
+                    setError('')
+                    try {
+                      await api.crearParte(item.id, { titulo: parteTitulo.trim() })
+                      setParteTitulo('')
+                      setShowAddParte(false)
+                      await reload()
+                      onChanged?.()
+                    } catch (e) {
+                      setError(e.message || 'No se pudo crear la parte')
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  Crear parte
+                </button>
+                <button type="button" style={ghost(t)} onClick={() => setShowAddParte(false)}>Cancelar</button>
+              </div>
             </div>
           )}
             </>

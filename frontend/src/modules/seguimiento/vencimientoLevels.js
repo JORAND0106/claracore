@@ -85,17 +85,33 @@ export function fechaBaseNivel(item) {
 }
 
 /**
- * Para tareas personales: vencimiento efectivo = sub-ítem de checklist
- * con fecha más próxima. Compromisos y fallback: fecha_vencimiento del ítem.
+ * Para tareas: vencimiento efectivo = parte (o checklist legado) con fecha más próxima.
+ * Compromisos y fallback: fecha_vencimiento del ítem.
  */
 export function fechaVencimientoEfectiva(item) {
   if (!item) return { fecha: null, hora: null }
   if (item.origen === 'tarea') {
+    const partes = Array.isArray(item.partes) ? item.partes : []
+    let best = null
+    for (const p of partes) {
+      const f = parseDateOnly(p?.fecha_vencimiento || p?.fecha)
+      if (!f) continue
+      const hora = p?.hora_vencimiento || p?.hora
+      const ts = f.getTime() + _horaMs(hora)
+      if (!best || ts < best.ts) {
+        best = {
+          ts,
+          fecha: String(p.fecha_vencimiento || p.fecha).slice(0, 10),
+          hora: hora ? String(hora).slice(0, 5) : null,
+        }
+      }
+    }
+    if (best) return { fecha: best.fecha, hora: best.hora }
+
     const libres = item.campos_libres && typeof item.campos_libres === 'object'
       ? item.campos_libres
       : {}
     const checklist = Array.isArray(libres.checklist) ? libres.checklist : []
-    let best = null
     for (const it of checklist) {
       const f = parseDateOnly(it?.fecha)
       if (!f) continue

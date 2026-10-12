@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import TareaChecklistEditor from './TareaChecklistEditor'
+import TareaPartesFormEditor from './TareaPartesFormEditor'
 import { labelAvance } from './tareaAvance'
 import { debeMostrarChecklist, puedeExpandirChecklist } from './tareaExcelLayout.js'
 import { tareaSheetStyles } from './tareaSheetStyles'
@@ -7,11 +8,13 @@ import { tareaSheetStyles } from './tareaSheetStyles'
 /**
  * Organización en dos niveles tipo Excel para crear / ver / editar una tarea:
  * 1) Fila Tarea · Destinatarios · Cumplimiento · % Avance
- * 2) Checklist de sub-ítems (se despliega al hacer clic en la fila, o siempre en creación).
+ * 2) Partes (crear/editar) o checklist legado (solo vista si aún no migró).
  */
 export default function TareaExcelLayout({
   t,
   mode = 'view', // 'view' | 'create'
+  /** 'partes' (nuevo) | 'checklist' (legado) | 'none' */
+  secondLevel = null,
   titulo = '',
   onTituloChange,
   tituloReadOnly = false,
@@ -30,35 +33,53 @@ export default function TareaExcelLayout({
   canNotificar = false,
   onNotificarSubitem = null,
   notificarBusy = false,
-  /** Forzar checklist visible (p. ej. al crear, o tras «Agregar»). */
+  partes = [],
+  onPartesChange,
+  partesUsuarios = [],
+  showParteResponsable = false,
+  partesDefaultFecha = '',
+  /** Forzar segundo nivel visible (p. ej. al crear). */
   defaultExpanded = null,
   headerExtra = null,
   footerBeforeChecklist = null,
 }) {
   const ui = tareaSheetStyles(t)
-  const hasItems = Array.isArray(checklist) && checklist.length > 0
-  const canExpand = puedeExpandirChecklist({
-    mode,
-    checklistLength: checklist?.length || 0,
-    checklistDisabled,
-  })
+  const level = secondLevel
+    || (mode === 'create' ? 'partes' : (Array.isArray(checklist) && checklist.length > 0 ? 'checklist' : 'none'))
+
+  const itemsLen = level === 'partes'
+    ? (Array.isArray(partes) ? partes.length : 0)
+    : (Array.isArray(checklist) ? checklist.length : 0)
+  const hasItems = itemsLen > 0
+  const levelDisabled = level === 'checklist' ? checklistDisabled : false
+
+  const canExpand = level === 'none'
+    ? false
+    : puedeExpandirChecklist({
+      mode,
+      checklistLength: itemsLen,
+      checklistDisabled: levelDisabled,
+    })
   const initialExpanded = defaultExpanded != null
     ? !!defaultExpanded
     : (mode === 'create' || hasItems)
   const [expanded, setExpanded] = useState(initialExpanded)
 
   const pctLabel = labelAvance(avance)
-  const showChecklist = debeMostrarChecklist({
+  const showSecond = level !== 'none' && debeMostrarChecklist({
     mode,
     expanded,
-    checklistLength: checklist?.length || 0,
-    checklistDisabled,
+    checklistLength: itemsLen,
+    checklistDisabled: levelDisabled,
   })
 
   const toggle = () => {
     if (!canExpand && !expanded) return
     setExpanded((v) => !v)
   }
+
+  const hideLabel = level === 'partes' ? 'Ocultar partes' : 'Ocultar checklist'
+  const showLabel = level === 'partes' ? 'Mostrar partes' : 'Mostrar checklist'
 
   return (
     <div className="cc-seguim-tarea-excel">
@@ -79,25 +100,27 @@ export default function TareaExcelLayout({
             <tr
               onClick={toggle}
               style={{ cursor: canExpand ? 'pointer' : 'default' }}
-              title={canExpand ? (expanded ? 'Ocultar checklist' : 'Ver checklist') : undefined}
+              title={canExpand ? (expanded ? hideLabel : showLabel) : undefined}
             >
               <td style={ui.tdTarea} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <button
-                    type="button"
-                    aria-expanded={showChecklist}
-                    aria-label={showChecklist ? 'Ocultar checklist' : 'Mostrar checklist'}
-                    disabled={!canExpand}
-                    onClick={toggle}
-                    style={{
-                      ...ui.iconBtn,
-                      opacity: canExpand ? 1 : 0.35,
-                      fontWeight: 800,
-                      minWidth: 18,
-                    }}
-                  >
-                    {showChecklist ? '▾' : '▸'}
-                  </button>
+                  {level !== 'none' && (
+                    <button
+                      type="button"
+                      aria-expanded={showSecond}
+                      aria-label={showSecond ? hideLabel : showLabel}
+                      disabled={!canExpand}
+                      onClick={toggle}
+                      style={{
+                        ...ui.iconBtn,
+                        opacity: canExpand ? 1 : 0.35,
+                        fontWeight: 800,
+                        minWidth: 18,
+                      }}
+                    >
+                      {showSecond ? '▾' : '▸'}
+                    </button>
+                  )}
                   {tituloReadOnly ? (
                     <span style={{
                       ...ui.cellInp,
@@ -156,18 +179,40 @@ export default function TareaExcelLayout({
         </table>
       </div>
 
-      {!showChecklist && hasItems && (
-        <div style={ui.expandHint}>Clic en la fila para ver el checklist ({checklist.length} sub-ítem{checklist.length === 1 ? '' : 's'}).</div>
+      {!showSecond && hasItems && level === 'partes' && (
+        <div style={ui.expandHint}>
+          Clic en la fila para ver las partes ({itemsLen} parte{itemsLen === 1 ? '' : 's'}).
+        </div>
       )}
-      {!showChecklist && mode === 'create' && !hasItems && (
-        <div style={ui.expandHint}>Clic en ▸ para abrir el checklist e agregar sub-ítems.</div>
+      {!showSecond && hasItems && level === 'checklist' && (
+        <div style={ui.expandHint}>
+          Clic en la fila para ver el contenido ({itemsLen} ítem{itemsLen === 1 ? '' : 's'}).
+        </div>
+      )}
+      {!showSecond && mode === 'create' && !hasItems && level === 'partes' && (
+        <div style={ui.expandHint}>Clic en ▸ para abrir y agregar partes (opcional).</div>
       )}
 
       {footerBeforeChecklist}
 
-      {showChecklist && (
+      {showSecond && level === 'partes' && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ ...ui.sectionTitle, marginBottom: 6 }}>Checklist de sub-ítems</div>
+          <TareaPartesFormEditor
+            t={t}
+            value={partes}
+            onChange={onPartesChange}
+            disabled={false}
+            usuarios={partesUsuarios}
+            showResponsable={showParteResponsable}
+            canNotificar={canNotificar}
+            defaultFecha={partesDefaultFecha}
+          />
+        </div>
+      )}
+
+      {showSecond && level === 'checklist' && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ ...ui.sectionTitle, marginBottom: 6 }}>Contenido</div>
           <TareaChecklistEditor
             t={t}
             value={checklist}
