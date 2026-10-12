@@ -68,10 +68,23 @@ describe('actaFlujoTabs', () => {
   it('liberado / legacy desbloquea todas las pestañas', () => {
     for (const flujo of [{ liberado: true }, {}]) {
       const ctx = { encabezadoGuardado: true, flujo }
-      for (const id of ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']) {
+      for (const id of [
+        'encabezado', 'orden', 'asistentes', 'compromisos', 'gestion_obra', 'ideas', 'apartados', 'acciones',
+      ]) {
         assert.equal(tabDesbloqueada(id, ctx), true, `${JSON.stringify(flujo)} ${id}`)
       }
     }
+  })
+
+  it('Gestión de obra no bloquea Ideas (ambos tras compromisos)', () => {
+    const flujo = { v: 1, orden: true, asistentes: true, compromisos: true }
+    const ctx = { encabezadoGuardado: true, flujo }
+    assert.equal(tabDesbloqueada('gestion_obra', ctx), true)
+    assert.equal(tabDesbloqueada('ideas', ctx), true)
+    const avance = avanceTrasGuardar('gestion_obra', flujo)
+    assert.equal(avance.ok, true)
+    assert.equal(avance.nextTab, 'ideas')
+    assert.equal(avance.flujo.ideas, false)
   })
 
   it('bloquea avance desde compromisos si hay abiertos (solo si no liberado)', () => {
@@ -94,7 +107,7 @@ describe('actaFlujoTabs', () => {
     })
     assert.equal(ok.ok, true)
     assert.equal(ok.flujo.compromisos, true)
-    assert.equal(ok.nextTab, 'ideas')
+    assert.equal(ok.nextTab, 'gestion_obra')
 
     const libre = avanceTrasGuardar('compromisos', { liberado: true }, { compromisPrevios: items })
     assert.equal(libre.ok, true)

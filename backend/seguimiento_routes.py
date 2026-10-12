@@ -161,6 +161,7 @@ class ActaCreateBody(BaseModel):
     proxima_hora: Optional[str] = None
     proxima_lugar: Optional[str] = None
     flujo_tabs: Optional[Any] = None
+    gestion_obra: Optional[Any] = None
 
 
 class ActaUpdateBody(BaseModel):
@@ -178,6 +179,13 @@ class ActaUpdateBody(BaseModel):
     proxima_hora: Optional[str] = None
     proxima_lugar: Optional[str] = None
     flujo_tabs: Optional[Any] = None
+    gestion_obra: Optional[Any] = None
+
+
+class GestionObraRecalcBody(BaseModel):
+    fecha_desde: Optional[str] = None
+    fecha_hasta: Optional[str] = None
+    conservar_observaciones: Optional[bool] = True
 
 
 class IdeaTextoBody(BaseModel):
@@ -1313,6 +1321,38 @@ def route_update_acta(
             current_user=current_user,
         )
         registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_acta", str(acta_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/actas/{acta_id}/gestion-obra/recalcular")
+def route_recalcular_gestion_obra(
+    contrato_id: int,
+    acta_id: int,
+    body: Optional[GestionObraRecalcBody] = None,
+    current_user=Depends(get_current_user),
+):
+    """Recalcula el consolidado de Gestión de obra para el rango indicado."""
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    from seguimiento_service import recalcular_gestion_obra_acta
+
+    payload = body.model_dump(exclude_unset=True) if body is not None else {}
+    try:
+        row = recalcular_gestion_obra_acta(
+            supabase,
+            contrato_id,
+            acta_id,
+            fecha_desde=payload.get("fecha_desde"),
+            fecha_hasta=payload.get("fecha_hasta"),
+            user_id=_uid(current_user),
+            current_user=current_user,
+            conservar_observaciones=payload.get("conservar_observaciones", True),
+        )
+        registrar_log(
+            current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_acta_gestion_obra", str(acta_id), {},
+        )
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc

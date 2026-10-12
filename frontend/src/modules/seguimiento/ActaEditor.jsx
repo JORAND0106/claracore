@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
+import ActaGestionObraPanel from './ActaGestionObraPanel'
 import ActaGrabacionBar from './ActaGrabacionBar'
 import ActaGrabacionConsentModal from './ActaGrabacionConsentModal'
 import ActaTemasTable, { TemaAdjuntosPanel } from './ActaTemasTable'
@@ -48,6 +49,7 @@ const TABS_ACTA = [
   { id: 'orden', label: 'Orden del día' },
   { id: 'asistentes', label: 'Asistentes' },
   { id: 'compromisos', label: 'Compromisos abiertos' },
+  { id: 'gestion_obra', label: 'Gestión de obra' },
   { id: 'ideas', label: 'Temas y Compromisos' },
   { id: 'apartados', label: 'Apartados' },
   { id: 'acciones', label: 'Vista previa y acciones' },
@@ -358,6 +360,7 @@ export default function ActaEditor({
     proxima_lugar: '',
   })
   const [flujoTabs, setFlujoTabs] = useState(() => flujoInicialNuevaActa())
+  const [gestionObra, setGestionObra] = useState(null)
   const [claraIdx, setClaraIdx] = useState(null)
   /** Índice de idea cuyo editor de esquema está abierto. */
   const [esquemaIdeaIdx, setEsquemaIdeaIdx] = useState(null)
@@ -647,6 +650,7 @@ export default function ActaEditor({
             proxima_lugar: a.proxima_lugar || '',
           })
           setFlujoTabs(parseFlujoTabs(a.flujo_tabs))
+          setGestionObra(a.gestion_obra && typeof a.gestion_obra === 'object' ? a.gestion_obra : null)
           setActaCompromisos(Array.isArray(a.compromisos) ? a.compromisos : [])
           hydratedActaIdRef.current = a.id
           try {
@@ -798,6 +802,7 @@ export default function ActaEditor({
         titulo: a.titulo || '',
         contenido: a.contenido || '',
       })),
+    ...(gestionObra ? { gestion_obra: gestionObra } : {}),
     ...extra,
   })
 
@@ -833,6 +838,9 @@ export default function ActaEditor({
       ideas: mergeIdeaIds(f.ideas, row.ideas),
       apartados: mergeApartadoIds(f.apartados, row.apartados),
     }))
+    if (row.gestion_obra && typeof row.gestion_obra === 'object') {
+      setGestionObra(row.gestion_obra)
+    }
     return row
   }
 
@@ -1986,6 +1994,33 @@ export default function ActaEditor({
             } catch { /* ignore */ }
           }}
         />
+      </section>
+      )}
+
+      {tab === 'gestion_obra' && (
+      <section style={card(t)}>
+        <ActaGestionObraPanel
+          t={t}
+          api={api}
+          actaId={localActaId}
+          fechaReunion={form.fecha_reunion}
+          value={gestionObra}
+          soloLectura={soloLectura}
+          viewportCompact={viewportCompact}
+          onChange={(next) => setGestionObra(next)}
+        />
+        {!soloLectura && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+            <button
+              type="button"
+              disabled={saving}
+              style={primary(t)}
+              onClick={() => guardar()}
+            >
+              {saving ? 'Guardando…' : 'Guardar y continuar'}
+            </button>
+          </div>
+        )}
       </section>
       )}
 
