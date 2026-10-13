@@ -2530,12 +2530,12 @@ select.cc-dashboard-acta-select--light option {
   width: 100%;
   gap: 12px;
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--cc-text-muted, #64748b) 28%, transparent);
+  border: 1px solid var(--cc-almacen-border, color-mix(in srgb, var(--cc-text-muted, #64748b) 28%, transparent));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--cc-accent-soft, #e2e8f0) 45%, transparent);
+  background: color-mix(in srgb, var(--cc-almacen-accent, #2563eb) 14%, var(--cc-almacen-bg-card, transparent));
   cursor: pointer;
   text-align: left;
-  color: inherit;
+  color: var(--cc-almacen-text, inherit);
 }
 
 .cc-almacen-rentabilidad-toggle:hover {
