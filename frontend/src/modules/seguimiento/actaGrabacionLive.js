@@ -4,7 +4,11 @@
  * Respeta título/expositor de temas pre-creados (Orden del Día / manual).
  */
 
-import { htmlToPlainText, plainTextToHtml } from './richTextUtils.js'
+import {
+  appendSintesisTemaHtml,
+  isRichTextEmpty,
+  sintesisPlainToHtml,
+} from './richTextUtils.js'
 import {
   isClaveOrdenDia,
   isClaveSuelta,
@@ -83,7 +87,8 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
     const textoPlano = String(tema?.texto || '').trim()
     if (!textoPlano && !titulo) return
     const quien = String(tema?.interviniente || '').trim()
-    const html = textoPlano ? plainTextToHtml(textoPlano) : ''
+    // Síntesis → HTML tipográfico (intro + <ol>) compatible con el popup.
+    const html = textoPlano ? sintesisPlainToHtml(textoPlano) : ''
     let idxExistente = byClave.has(clave) ? byClave.get(clave) : null
     if (idxExistente == null && titulo) {
       const byTitle = idxPorTituloOdManual(list, titulo)
@@ -96,32 +101,31 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
     const idx = idxExistente
     if (idx != null) {
       const prev = list[idx]
-      if (prev?._editadoUsuario) return
-      const prevPlain = htmlToPlainText(prev.texto || '').trim()
-      // Si el expositor/moderador ya escribió y la IA trae texto distinto, no pisar:
-      // solo anexar cuando el previo es borrador o vacío.
+      // Nunca reemplazar lo escrito/corregido: anexar numerales nuevos al final.
       let nextTexto = prev.texto || ''
       if (html) {
-        if (!prevPlain || prev.texto_es_borrador) {
+        if (isRichTextEmpty(prev.texto)) {
           nextTexto = html
-        } else if (!prevPlain.includes(textoPlano) && !textoPlano.includes(prevPlain)) {
-          nextTexto = `${String(prev.texto || '').trim()}${html}`
-        } else if (textoPlano.includes(prevPlain) && textoPlano.length > prevPlain.length) {
-          nextTexto = html
+        } else {
+          nextTexto = appendSintesisTemaHtml(prev.texto, textoPlano)
         }
       }
+      const lockMeta = protegerMeta || !!prev._editadoUsuario
       const next = {
         ...prev,
         _claveGrabacion: String(prev._claveGrabacion || clave).trim() || clave,
         _desdeGrabacion: true,
-        titulo: protegerMeta
+        titulo: lockMeta
           ? (prev.titulo || titulo || '')
           : (titulo || prev.titulo || ''),
         texto: nextTexto,
-        quien_dijo: protegerMeta
+        quien_dijo: lockMeta
           ? (prev.quien_dijo || quien || '')
           : (quien || prev.quien_dijo || ''),
-        ...(prev.texto_es_borrador && html ? { texto_es_borrador: true } : {}),
+        // Si el usuario ya editó, conservar el candado; si era borrador IA, sigue borrador.
+        ...(prev._editadoUsuario
+          ? { _editadoUsuario: true, texto_es_borrador: false }
+          : (prev.texto_es_borrador && html ? { texto_es_borrador: true } : {})),
       }
       if (isClaveSuelta(clave)) next._ideaSuelta = true
       if (

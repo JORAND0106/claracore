@@ -31,6 +31,22 @@ TRAMO_MIN_CHARS = 40
 COLA_OVERLAP_CHARS = 600
 MAX_TEMAS = 12
 MAX_TRAMO_INTENTOS = 5
+# Tope de texto de tema tras anexar varios tramos (formato numerado).
+MAX_TEMA_TEXTO_CHARS = 12_000
+
+# Formato de síntesis (campo «texto»): intro + numerales. Misma extensión conceptual
+# que antes; solo cambia la estructura. Compromisos siguen siendo manuales.
+FORMATO_TEXTO_SINTESIS = (
+    "FORMATO OBLIGATORIO del campo «texto» (texto plano con saltos de línea):\n"
+    "1) Una primera frase corta que diga de qué trató el tema o el tramo.\n"
+    "2) Después, una lista numerada (1. 2. 3. …) en la que cada numeral es una idea, "
+    "decisión, observación o asunto distinto, en el orden en que se trató.\n"
+    "3) Cada numeral: una o dos frases completas, con nombres, datos, cifras y fechas dichas.\n"
+    "4) Mismo nivel de síntesis de siempre: no alargues ni acortes el contenido; "
+    "no inventes, no agregues opiniones y no omitas puntos relevantes.\n"
+    "5) Si en el tramo solo hubo UNA idea, escribe un solo párrafo sin lista numerada.\n"
+    "6) NO generes compromisos ni tareas (siguen siendo manuales).\n"
+)
 
 _LIVE_COLS = (
     "transcripcion",
@@ -176,6 +192,129 @@ def _assert_sesion_activa(sesion: dict, contrato_id: int, usuario_id: int) -> No
         raise HTTPException(status_code=409, detail="La sesión de grabación ya no está activa.")
 
 
+_ITEM_LINE_RE = re.compile(
+    r"^\s*(?:(\d+)[\.\)]\s+|[-*•]\s+)(.+?)\s*$",
+    re.UNICODE,
+)
+
+
+def parse_sintesis_estructura(texto: str) -> Tuple[str, List[str]]:
+    """Separa intro + ítems numerados/viñeta desde texto plano o HTML simple."""
+    raw = str(texto or "").strip()
+    if not raw:
+        return "", []
+    # HTML TipTap → líneas aproximadas (li → "1. " para no perder ítems)
+    if re.search(r"</?[a-zA-Z]", raw):
+        raw = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+        raw = re.sub(r"(?i)</p\s*>", "\n", raw)
+        raw = re.sub(r"(?i)</li\s*>", "\n", raw)
+        raw = re.sub(r"(?i)<li[^>]*>", "\n1. ", raw)
+        raw = re.sub(r"<[^>]+>", "", raw)
+        raw = (
+            raw.replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", '"')
+        )
+    lines = [ln.strip() for ln in raw.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    lines = [ln for ln in lines if ln]
+    if not lines:
+        return "", []
+    intro_parts: List[str] = []
+    items: List[str] = []
+    seen_item = False
+    for ln in lines:
+        m = _ITEM_LINE_RE.match(ln)
+        if m:
+            seen_item = True
+            body = (m.group(2) or "").strip()
+            if body:
+                items.append(body)
+            continue
+        if not seen_item:
+            intro_parts.append(ln)
+        elif items:
+            # Continuación del último ítem (sin número al inicio)
+            items[-1] = f"{items[-1]} {ln}".strip()
+        else:
+            intro_parts.append(ln)
+    intro = " ".join(intro_parts).strip()
+    return intro, items
+
+
+def format_sintesis_plain(intro: str, items: List[str]) -> str:
+    """Reconstruye texto plano tipográfico (intro + 1. 2. 3.)."""
+    intro_n = (intro or "").strip()
+    clean_items = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if not clean_items:
+        return intro_n
+    body = "\n".join(f"{i}. {it}" for i, it in enumerate(clean_items, start=1))
+    if not intro_n:
+        return body
+    return f"{intro_n}\n\n{body}"
+
+
+def _norm_item_key(s: str) -> str:
+    t = re.sub(r"\s+", " ", str(s or "").strip().lower())
+    t = re.sub(r"^[0-9]+[\.\)]\s*", "", t)
+    return t
+
+
+def append_texto_sintesis_tema(previo: str, nuevo: str) -> str:
+    """
+    Une síntesis de un tramo nuevo al texto ya guardado.
+
+    - Conserva intro e ítems previos (incl. correcciones).
+    - Agrega solo ítems nuevos al final, con numeración continua.
+    - Si «nuevo» ya incluye todo el previo (reescritura), se usa el nuevo normalizado.
+    """
+    prev = str(previo or "").strip()
+    new = str(nuevo or "").strip()
+    if not new:
+        return prev[:MAX_TEMA_TEXTO_CHARS]
+    if not prev:
+        intro, items = parse_sintesis_estructura(new)
+        out = format_sintesis_plain(intro, items) or new
+        return out[:MAX_TEMA_TEXTO_CHARS]
+
+    prev_key = _norm_item_key(prev)
+    new_key = _norm_item_key(new)
+    if new_key and new_key in prev_key and len(new_key) >= 24:
+        return prev[:MAX_TEMA_TEXTO_CHARS]
+    if prev_key and prev_key in new_key and len(new) > len(prev) + 20:
+        intro, items = parse_sintesis_estructura(new)
+        out = format_sintesis_plain(intro, items) or new
+        return out[:MAX_TEMA_TEXTO_CHARS]
+
+    p_intro, p_items = parse_sintesis_estructura(prev)
+    n_intro, n_items = parse_sintesis_estructura(new)
+    if not n_items and n_intro:
+        # Un solo párrafo en el tramo nuevo → un ítem más (si ya había lista o intro).
+        n_items = [n_intro]
+        n_intro = ""
+
+    existing = {_norm_item_key(x) for x in p_items}
+    if p_intro:
+        existing.add(_norm_item_key(p_intro))
+    added = [it for it in n_items if _norm_item_key(it) not in existing]
+    intro = p_intro or n_intro
+    if not p_items and not added and n_intro and _norm_item_key(n_intro) not in existing:
+        # Prev era un párrafo; nuevo también sin lista distinta → anexar como 2.º ítem.
+        merged_items = [p_intro] if p_intro else []
+        if n_intro and _norm_item_key(n_intro) not in {_norm_item_key(x) for x in merged_items}:
+            merged_items.append(n_intro)
+        intro = ""
+        out = format_sintesis_plain(intro, merged_items) if len(merged_items) > 1 else (merged_items[0] if merged_items else prev)
+        return out[:MAX_TEMA_TEXTO_CHARS]
+
+    merged_items = list(p_items) + added
+    if not merged_items and intro:
+        return intro[:MAX_TEMA_TEXTO_CHARS]
+    out = format_sintesis_plain(intro, merged_items)
+    return (out or prev)[:MAX_TEMA_TEXTO_CHARS]
+
+
 def _normalize_temas(raw: Any) -> list[dict]:
     if isinstance(raw, str):
         try:
@@ -190,17 +329,23 @@ def _normalize_temas(raw: Any) -> list[dict]:
             continue
         clave = str(item.get("clave") or f"t{i + 1}").strip()[:40] or f"t{i + 1}"
         titulo = str(item.get("titulo") or "").strip()[:120]
-        texto = str(item.get("texto") or "").strip()[:4000]
+        texto = str(item.get("texto") or "").strip()[:MAX_TEMA_TEXTO_CHARS]
         inter = item.get("interviniente")
         interviniente = str(inter).strip()[:120] if inter else None
         if not titulo and not texto:
             continue
         if not titulo and texto:
-            titulo = texto.split(".")[0].strip()[:72] or f"Tema {i + 1}"
+            intro, _items = parse_sintesis_estructura(texto)
+            seed = intro or texto
+            # Evitar título "1" cuando el texto empieza por lista.
+            seed = re.sub(r"^\s*\d+[\.\)]\s*", "", seed).strip()
+            titulo = seed.split(".")[0].strip()[:72] or f"Tema {i + 1}"
         out.append({
             "clave": clave,
             "titulo": titulo,
-            "texto": texto or titulo,
+            # No rellenar texto con el título: temas OD/manual llegan con texto vacío
+            # y deben conservar vacío hasta la primera síntesis (si no, se anexaría mal).
+            "texto": texto,
             "interviniente": interviniente or None,
         })
     return out
@@ -659,7 +804,8 @@ async def sintetizar_temas(
         "Eres Clara, redactora de actas de obra pública en ClaraCore. "
         "Tu salida es SOLO JSON válido, sin markdown ni explicaciones. "
         "Priorizas un informe ejecutivo coherente: ideas, decisiones y puntos relevantes. "
-        "Nunca inventas compromisos ni tareas."
+        "Nunca inventas compromisos ni tareas. "
+        "El campo «texto» sigue el formato tipográfico con frase inicial y numerales."
     )
     if clave_activa:
         user = (
@@ -667,13 +813,15 @@ async def sintetizar_temas(
             f"TEMA ACTIVO (obligatorio): toda la síntesis de este tramo debe ir en la clave "
             f"«{clave_activa}».\n"
             "- Conserva el título e interviniente del tema previo con esa clave.\n"
-            "- Amplía/refina SOLO el campo «texto» con las ideas centrales del tramo.\n"
+            "- En «texto» escribe SOLO el contenido NUEVO de este tramo (no reescribas ni "
+            "repegas el texto ya sintetizado del tema; el sistema lo anexará al final).\n"
             "- No crees claves nuevas. Si la clave no existe en previos, créala con esa clave exacta.\n"
-            "- Continuidad: si la cola del tramo anterior deja una idea inconclusa, únela en el mismo tema.\n\n"
+            "- Continuidad: si la cola del tramo anterior deja una idea inconclusa, únela en este tramo.\n\n"
+            f"{FORMATO_TEXTO_SINTESIS}\n"
             f"Formato exacto:\n"
             f'{{"temas":[{{"clave":"{clave_activa}","titulo":"…","texto":"…","interviniente":null}}]}}\n'
             f"Máximo 1 tema en la respuesta (la clave activa). Español formal.\n\n"
-            f"Temas previos (contexto):\n{prev_json}\n\n"
+            f"Temas previos (contexto; NO los copies al texto):\n{prev_json}\n\n"
             f"Cola del tramo anterior:\n{cola or '(inicio / sin cola)'}\n\n"
             f"Tramo nuevo a analizar:\n{texto}"
         )
@@ -683,6 +831,7 @@ async def sintetizar_temas(
             "Sintetiza como IDEAS SUELTAS/GENERALES (sin asociar a un punto del orden):\n"
             "- Usa claves nuevas con prefijo «suelta-» (suelta-1, suelta-2, …).\n"
             "- Si continúas una idea suelta previa, reutiliza su clave suelta-*.\n"
+            "- En «texto» escribe SOLO lo nuevo del tramo (el sistema anexa al texto previo).\n"
         )
         if claves_od:
             bloque_sueltas += (
@@ -695,14 +844,15 @@ async def sintetizar_temas(
             f"{bloque_sueltas}\n"
             "CONTINUIDAD ENTRE TRAMOS (obligatorio):\n"
             "- Si la COLA DEL TRAMO ANTERIOR deja una idea inconclusa y el tramo nuevo la continúa, "
-            "REUTILIZA la misma 'clave' del tema previo (si es suelta-*) y completa/refina el texto.\n"
+            "REUTILIZA la misma 'clave' del tema previo (si es suelta-*).\n"
             "- No omitas contenido sustancial del tramo nuevo.\n"
             "- Frases partidas en el corte: únelas en el tema correspondiente.\n\n"
+            f"{FORMATO_TEXTO_SINTESIS}\n"
             f"Formato exacto:\n"
             f'{{"temas":[{{"clave":"suelta-1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
             f"Máximo {MAX_TEMAS} temas. Español formal. "
             f"'interviniente' solo si se identifica con claridad; si no, null.\n\n"
-            f"Temas previos (contexto a reutilizar por clave):\n{prev_json}\n\n"
+            f"Temas previos (contexto; NO copies su texto):\n{prev_json}\n\n"
             f"Cola del tramo anterior (solo continuidad; no la dupliques como tema nuevo):\n"
             f"{cola or '(inicio de reunión / sin cola)'}\n\n"
             f"Tramo nuevo a analizar:\n{texto}"
@@ -711,8 +861,9 @@ async def sintetizar_temas(
         user = (
             "Analiza la transcripción parcial de una reunión y sintetiza las IDEAS CENTRALES "
             "como Temas del acta. NO hagas dictado literal. NO inventes compromisos ni tareas. "
-            "Si hay temas previos, reutiliza su 'clave' y refínalos cuando la conversación los desarrolle; "
+            "Si hay temas previos, reutiliza su 'clave' y aporta SOLO lo nuevo de la conversación; "
             "agrega claves nuevas solo para ideas nuevas.\n\n"
+            f"{FORMATO_TEXTO_SINTESIS}\n"
             f"Formato exacto:\n"
             f'{{"temas":[{{"clave":"t1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
             f"Máximo {MAX_TEMAS} temas. Español formal. "
@@ -884,16 +1035,30 @@ def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict
         k = _remap_clave_legacy_a_od(k_raw, conocidos)
         t = {**t, "clave": k}
         if k in by_clave:
-            merged = {**by_clave[k], **t}
+            prev_row = by_clave[k]
+            merged = {**prev_row, **t}
+            # Anexar síntesis nueva al final (numeración continua); no reemplazar lo ya escrito.
+            prev_txt = str(prev_row.get("texto") or "").strip()
+            new_txt = str(t.get("texto") or "").strip()
+            if new_txt:
+                merged["texto"] = append_texto_sintesis_tema(prev_txt, new_txt)
+            elif prev_txt:
+                merged["texto"] = prev_txt
             # No pisar título/interviniente de temas pre-creados (od-/manual-) con vacío.
             if str(k).startswith(("od-", "manual-")):
-                if by_clave[k].get("titulo") and not (t.get("titulo") or "").strip():
-                    merged["titulo"] = by_clave[k]["titulo"]
-                if by_clave[k].get("interviniente") and not t.get("interviniente"):
-                    merged["interviniente"] = by_clave[k]["interviniente"]
+                if prev_row.get("titulo") and not (t.get("titulo") or "").strip():
+                    merged["titulo"] = prev_row["titulo"]
+                if prev_row.get("interviniente") and not t.get("interviniente"):
+                    merged["interviniente"] = prev_row["interviniente"]
             by_clave[k] = merged
         else:
-            by_clave[k] = dict(t)
+            # Primera síntesis de la clave: normalizar numerales.
+            row = dict(t)
+            raw_txt = str(row.get("texto") or "").strip()
+            if raw_txt:
+                intro, items = parse_sintesis_estructura(raw_txt)
+                row["texto"] = format_sintesis_plain(intro, items) or raw_txt
+            by_clave[k] = row
             order.append(k)
             conocidos.add(k.lower())
     return _normalize_temas([by_clave[k] for k in order if k in by_clave])

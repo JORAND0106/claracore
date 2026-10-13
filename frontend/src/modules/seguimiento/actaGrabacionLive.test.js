@@ -26,7 +26,7 @@ describe('mergeTemasGrabacionViva', () => {
     assert.equal(next[0].quien_dijo, 'Ana')
   })
 
-  it('actualiza por clave y respeta edición manual', () => {
+  it('actualiza por clave y respeta edición manual anexando', () => {
     const ideas = [{
       _key: 'i1',
       _claveGrabacion: 't1',
@@ -39,12 +39,42 @@ describe('mergeTemasGrabacionViva', () => {
       { clave: 't1', titulo: 'Nuevo', texto: 'Texto nuevo', interviniente: null },
     ])
     assert.equal(updated[0].titulo, 'Nuevo')
+    assert.match(updated[0].texto, /Viejo/)
+    assert.match(updated[0].texto, /Texto nuevo/)
 
-    const locked = [{ ...ideas[0], _editadoUsuario: true, titulo: 'Manual' }]
+    const locked = [{
+      ...ideas[0],
+      _editadoUsuario: true,
+      titulo: 'Manual',
+      texto: '<p>Corregido a mano.</p>',
+    }]
     const kept = mergeTemasGrabacionViva(locked, [
-      { clave: 't1', titulo: 'IA', texto: 'No debe pisar', interviniente: null },
+      {
+        clave: 't1',
+        titulo: 'IA',
+        texto: 'Se añadió un punto.\n\n1. Dato nuevo del tramo.',
+        interviniente: null,
+      },
     ])
     assert.equal(kept[0].titulo, 'Manual')
+    assert.match(kept[0].texto, /Corregido a mano/)
+    assert.match(kept[0].texto, /Dato nuevo del tramo/)
+    assert.equal(kept[0]._editadoUsuario, true)
+  })
+
+  it('guarda síntesis como lista numerada HTML', () => {
+    const ideas = [{ _key: 'i1', texto: '<p></p>', titulo: '', quien_dijo: '', imagenes: [] }]
+    const next = mergeTemasGrabacionViva(ideas, [
+      {
+        clave: 'od-1',
+        titulo: 'Drenaje',
+        texto: 'Se trató el drenaje temporal.\n\n1. Refuerzo antes del viernes.\n2. Seguimiento de Ramírez.',
+        interviniente: null,
+      },
+    ], { newRowKey: () => 'k1' })
+    assert.match(next[0].texto, /<ol>/)
+    assert.match(next[0].texto, /<li><p>Refuerzo antes del viernes\.<\/p><\/li>/)
+    assert.match(next[0].texto, /Ramírez/)
   })
 
   it('agrega tema nuevo sin borrar existentes', () => {
