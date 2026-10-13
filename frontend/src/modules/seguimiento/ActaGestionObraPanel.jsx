@@ -193,7 +193,7 @@ export default function ActaGestionObraPanel({
         </div>
       )}
 
-      <InformePaneliblePanel
+      <InformeDesplegablePanel
         t={t}
         informe={snap?.informe}
         abierto={detalleAbierto}
