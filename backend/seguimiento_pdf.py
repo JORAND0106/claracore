@@ -675,11 +675,20 @@ def generar_pdf_acta(
         ),
     )
     ideas_html = ""
-    for idx, idea in enumerate(ideas_sorted, start=1):
-        num = int(idea.get("orden") if idea.get("orden") is not None else idx - 1) + 1
+    tema_num = 0
+    for idea in ideas_sorted:
+        clave = str(idea.get("clave_grabacion") or "").strip()
+        es_suelta = bool(re.match(r"^suelta-", clave, re.I))
         titulo_tema = (idea.get("titulo") or "").strip()
-        if not titulo_tema:
-            titulo_tema = _titulo_tema_fallback(idea.get("texto") or "") or f"Tema {num}"
+        if es_suelta:
+            if not titulo_tema:
+                titulo_tema = "Idea general"
+            label = f"Idea general: {_esc(titulo_tema)}" if titulo_tema != "Idea general" else "Idea general"
+        else:
+            tema_num += 1
+            if not titulo_tema:
+                titulo_tema = _titulo_tema_fallback(idea.get("texto") or "") or f"Tema {tema_num}"
+            label = f"Tema {tema_num}: {_esc(titulo_tema)}"
         quien = (idea.get("quien_dijo") or idea.get("interviniente") or "").strip()
         quien_line = (
             f"<div style='font-size:8pt;color:#475569;margin:1pt 0 3pt;'>"
@@ -690,7 +699,7 @@ def generar_pdf_acta(
         ideas_html += (
             f"<div class='pdf-idea' style='margin:0 0 8pt;padding-bottom:6pt;"
             f"border-bottom:0.4pt solid {_BORDE_SUAVE};'>"
-            f"<div style='font-size:9pt;font-weight:700;'>Tema {num}: {_esc(titulo_tema)}</div>"
+            f"<div style='font-size:9pt;font-weight:700;'>{label}</div>"
             f"{quien_line}"
             f"{_render_tema_texto_pdf(idea.get('texto') or '')}"
             f"{imgs_html}"

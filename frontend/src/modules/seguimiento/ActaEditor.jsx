@@ -902,8 +902,12 @@ export default function ActaEditor({
         usuario_id: a.usuario_id && Number(a.usuario_id) > 0 ? Number(a.usuario_id) : null,
       })),
     ideas: (formSrc.ideas || [])
+      // Conservar temas OD/manual aunque aún no tengan texto (evita cascarones
+      // sin clave al reabrir y textos huérfanos en filas aparte).
       .filter((i) => !isRichTextEmpty(i.texto) || (i.quien_dijo || '').trim() || i.id
-        || normalizeIdeaImagenes(i.imagenes).length)
+        || normalizeIdeaImagenes(i.imagenes).length
+        || String(i.titulo || '').trim()
+        || String(i._claveGrabacion || i.clave_grabacion || '').trim())
       .map((i, idx) => {
         const quien = (i.quien_dijo || i.interviniente || '').trim() || null
         // Solo refs ya persistidas; las pending se suben tras guardar.

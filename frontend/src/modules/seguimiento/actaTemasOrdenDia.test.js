@@ -7,6 +7,7 @@ import {
   cerrarTemaEnIdeas,
   claveOrdenDia,
   claveTemaActivo,
+  reunirTextosIdeasConTemas,
   seedIdeasFromOrdenDia,
   temasBaseDesdeIdeas,
 } from './actaTemasOrdenDia.js'
@@ -149,5 +150,46 @@ describe('actaTemasOrdenDia', () => {
     assert.equal(base[0].clave, 'od-1')
     assert.equal(base[0].interviniente, 'Ana')
     assert.equal(claveOrdenDia(3), 'od-3')
+  })
+
+  it('reúne texto huérfano tN con el tema OD del mismo título', () => {
+    const ideas = [
+      { id: 1, _claveGrabacion: 'od-1', titulo: 'Presentacion', texto: '', quien_dijo: 'A' },
+      { id: 2, _claveGrabacion: 'od-2', titulo: 'Videos', texto: '', quien_dijo: 'A' },
+      { id: 3, _claveGrabacion: 't2', titulo: 'Videos', texto: '<p>Resumen de videos</p>', quien_dijo: '' },
+      { id: 4, _claveGrabacion: 'suelta-1', titulo: '', texto: '<p>Idea libre</p>', quien_dijo: '' },
+    ]
+    const { ideas: next, reporte } = reunirTextosIdeasConTemas(ideas, { withReport: true })
+    assert.equal(next.length, 3)
+    assert.equal(next[1]._claveGrabacion, 'od-2')
+    assert.match(next[1].texto, /Resumen de videos/)
+    assert.equal(next[2]._claveGrabacion, 'suelta-1')
+    assert.equal(next[2].titulo, 'Idea general')
+    assert.equal(reporte.unidos.length, 1)
+    assert.equal(reporte.unidos[0].motivo, 'titulo_identico')
+  })
+
+  it('seed al reabrir une texto separado al tema OD (caso Acta 18)', () => {
+    const orden = [
+      { texto: 'Presentacion Módulo Actas', expositor_nombre: 'Dev' },
+      { texto: 'Videos Capacitación', expositor_nombre: 'Dev' },
+      { texto: 'Tercer punto', expositor_nombre: 'Dev' },
+      { texto: 'Cuarto punto', expositor_nombre: 'Dev' },
+    ]
+    const loaded = [
+      { id: 1, titulo: 'Presentacion Módulo Actas', texto: '', quien_dijo: 'Dev', clave_grabacion: 'od-1', _claveGrabacion: 'od-1' },
+      { id: 2, titulo: 'Videos Capacitación', texto: '', quien_dijo: 'Dev', clave_grabacion: 'od-2', _claveGrabacion: 'od-2' },
+      { id: 3, titulo: 'Tercer punto', texto: '', quien_dijo: 'Dev', clave_grabacion: 'od-3', _claveGrabacion: 'od-3' },
+      { id: 4, titulo: 'Cuarto punto', texto: '', quien_dijo: 'Dev', clave_grabacion: 'od-4', _claveGrabacion: 'od-4' },
+      { id: 5, titulo: 'Videos Capacitación', texto: '<p>Texto videos</p>', quien_dijo: '', _claveGrabacion: 't2' },
+      { id: 6, titulo: 'Tercer punto', texto: '<p>Texto tres</p>', quien_dijo: '', _claveGrabacion: 't3' },
+      { id: 7, titulo: 'Cuarto punto', texto: '<p>Texto cuatro</p>', quien_dijo: '', _claveGrabacion: 't4' },
+    ]
+    const next = seedIdeasFromOrdenDia(orden, loaded, { newRowKey: () => 'x' })
+    assert.equal(next.length, 4)
+    assert.match(next[1].texto, /Texto videos/)
+    assert.match(next[2].texto, /Texto tres/)
+    assert.match(next[3].texto, /Texto cuatro/)
+    assert.equal(next[0].texto || '', '')
   })
 })
