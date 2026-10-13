@@ -45,7 +45,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-10-12.4-gestion-obra-dia"
+PDF_ACTA_TEMPLATE_VERSION = "2026-10-13.1-gestion-obra-ntc"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -552,352 +552,53 @@ def _titulo_tema_fallback(texto: str) -> str:
 
 
 def _gestion_obra_pdf_html(acta: dict) -> str:
-    """HTML compacto: encabezado + informe redactado + detalle por sección."""
-    go = acta.get("gestion_obra") if isinstance(acta.get("gestion_obra"), dict) else None
-    if not go or not isinstance(go.get("datos"), dict):
-        return (
-            "<div style='color:#94a3b8;font-size:9pt;'>"
-            "Sin consolidado de Gestión de obra para este acta."
-            "</div>"
-        )
-    datos = go.get("datos") or {}
-    obs = go.get("observaciones") if isinstance(go.get("observaciones"), dict) else {}
-    d0 = _esc(go.get("fecha_desde") or "")
-    d1 = _esc(go.get("fecha_hasta") or "")
-    informe = go.get("informe") if isinstance(go.get("informe"), dict) else None
-    if not informe:
-        try:
-            from gestion_obra_service import build_informe_redactado
-            informe = build_informe_redactado(
-                datos, go.get("fecha_desde") or "", go.get("fecha_hasta") or "",
-                ver_valores_cantidades=bool(go.get("ver_valores_cantidades")),
-                ver_valores_almacen=bool(go.get("ver_valores_almacen")),
-            )
-        except Exception:
-            informe = None
+    """Cuerpo de Gestión de obra (sin marco). Ver ``_gestion_obra_section_html``."""
+    from gestion_obra_pdf import render_gestion_obra_pdf_html
+    return render_gestion_obra_pdf_html(acta, render_rich=_render_tema_texto_pdf)
 
-    parts = [
-        "<div class='go-head' style='margin:0 0 8pt;padding:6pt 8pt;"
-        "border:0.6pt solid #cbd5e1;background:#f8fafc;'>"
-        "<div style='font-size:10pt;font-weight:700;color:#0f172a;margin:0 0 2pt;'>"
-        "Gestión de obra</div>"
-        f"<div style='font-size:8.5pt;color:#475569;'>Período: <b>{d0}</b> → <b>{d1}</b></div>"
-        "</div>"
-    ]
-    if informe:
-        tit = _esc(informe.get("titulo") or "Informe de gestión de obra")
-        parts.append(
-            f"<div class='go-informe' style='margin:0 0 10pt;'>"
-            f"<div style='font-size:9pt;font-weight:700;margin:0 0 4pt;color:#0f172a;'>{tit}</div>"
-        )
-        for p in informe.get("parrafos") or []:
-            if not isinstance(p, dict):
-                continue
-            parts.append(
-                f"<div style='margin:0 0 5pt;'>"
-                f"<div style='font-size:8pt;font-weight:700;color:#334155;margin:0 0 1pt;'>"
-                f"{_esc(p.get('titulo') or '')}</div>"
-                f"<div style='font-size:8pt;color:#1e293b;line-height:1.35;'>"
-                f"{_esc(p.get('texto') or '')}</div></div>"
-            )
-        parts.append("</div>")
-        parts.append(
-            "<div style='font-size:8pt;font-weight:700;color:#64748b;margin:0 0 6pt;"
-            "border-top:0.4pt solid #e2e8f0;padding-top:4pt;'>Detalle del consolidado</div>"
-        )
 
-    def _tbl_keys(labels: list, keys: list, rows: list) -> str:
-        if not rows:
-            return ""
-        th = "".join(
-            f"<th style='padding:3pt 4pt;border:0.4pt solid #cbd5e1;text-align:left;"
-            f"background:{_BG_H};color:{_FG_H};font-size:8pt;'>{_esc(lab)}</th>"
-            for lab in labels
-        )
-        body = ""
-        for r in (rows or [])[:80]:
-            tds = "".join(
-                f"<td style='padding:2.5pt 4pt;border:0.4pt solid #e2e8f0;font-size:8pt;'>"
-                f"{_esc((r or {}).get(k))}</td>"
-                for k in keys
-            )
-            body += f"<tr>{tds}</tr>"
-        return (
-            f"<table class='go-table' width='100%' cellspacing='0' cellpadding='0' "
-            f"style='border-collapse:collapse;margin:0 0 5pt;'>"
-            f"<thead><tr>{th}</tr></thead><tbody>{body}</tbody></table>"
-        )
+def _gestion_obra_section_html(acta: dict, *, bordered: bool = True) -> str:
+    """Sección Gestión de obra fuera de una celda única.
 
-    def _matrix(label_col: str, dias: list, rows: list, *, last_col: str = "Máx. diario") -> str:
-        if not rows:
-            return ""
-        labels = [label_col] + [str(d)[5:] for d in dias] + [last_col]
-        th = "".join(
-            f"<th style='padding:2pt 3pt;border:0.4pt solid #cbd5e1;text-align:center;"
-            f"background:{_BG_H};color:{_FG_H};font-size:7.5pt;'>{_esc(lab)}</th>"
-            for lab in labels
-        )
-        body = ""
-        for r in rows[:40]:
-            por = r.get("por_dia") or {}
-            aus = r.get("ausencias_por_dia") or {}
-            max_d = r.get("max_diario")
-            if max_d is None:
-                max_d = r.get("total")
-            tds = (
-                f"<td style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
-                f"text-align:left;{'font-weight:700;' if r.get('es_total_dia') else ''}'>"
-                f"{_esc(r.get('label')) or '—'}</td>"
-            )
-            for d in dias:
-                v = por.get(d)
-                n_aus = 0
-                try:
-                    n_aus = int(aus.get(d) or 0)
-                except (TypeError, ValueError):
-                    n_aus = 0
-                bg = "background:#fde68a;" if n_aus > 0 else ""
-                title = f" title='{n_aus} ausencia(s)'" if n_aus > 0 else ""
-                cell = "" if v in (None, 0, 0.0) else str(v)
-                tds += (
-                    f"<td{title} style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
-                    f"text-align:right;{bg}'>{_esc(cell) or '—'}</td>"
-                )
-            tds += (
-                f"<td style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
-                f"text-align:right;font-weight:700;'>{_esc(max_d) if max_d is not None else '—'}</td>"
-            )
-            body += f"<tr>{tds}</tr>"
-        return (
-            f"<table class='go-table' width='100%' cellspacing='0' cellpadding='0' "
-            f"style='border-collapse:collapse;margin:0 0 5pt;'>"
-            f"<thead><tr>{th}</tr></thead><tbody>{body}</tbody></table>"
-        )
-
-    def _money(n) -> str:
-        try:
-            from contrato_numero_letras import formato_pesos_cop
-            return f"$ {formato_pesos_cop(n)}"
-        except Exception:
-            try:
-                return f"$ {int(round(float(n))):,}".replace(",", ".")
-            except (TypeError, ValueError):
-                return "—"
-
-    def _block(title: str, body: str, obs_html: str) -> str:
-        obs_block = ""
-        if (obs_html or "").strip():
-            obs_block = (
-                f"<div style='margin:4pt 0 0;padding:4pt 6pt;border:0.4pt dashed #94a3b8;"
-                f"font-size:8pt;'><b>Observaciones:</b> {_render_tema_texto_pdf(obs_html)}</div>"
-            )
-        return (
-            f"<div class='go-sec' style='margin:0 0 8pt;'>"
-            f"<div class='go-sec-title' style='font-size:9pt;font-weight:700;margin:0 0 3pt;"
-            f"color:{_COLOR};page-break-after:avoid;'>"
-            f"{_esc(title)}</div>{body}{obs_block}</div>"
-        )
-
-    # 1 Personal
-    pj = datos.get("personal_jornada") or {}
-    if not pj.get("disponible"):
-        b1 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(pj.get('mensaje') or 'Sin datos.')}</div>"
-    else:
-        dias = pj.get("dias") or []
-        b1 = ""
-        for emp in (pj.get("personal") or {}).get("empresas") or []:
-            mx = emp.get("max_diario")
-            if mx is None:
-                mx = emp.get("total")
-            b1 += (
-                f"<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>"
-                f"{_esc(emp.get('empresa'))} · máx. diario {_esc(mx)}</div>"
-            )
-            b1 += _matrix(
-                "Cargo",
-                dias,
-                [
-                    {
-                        "label": f.get("cargo"),
-                        "por_dia": f.get("por_dia"),
-                        "max_diario": f.get("max_diario", f.get("total")),
-                        "ausencias_por_dia": f.get("ausencias_por_dia"),
-                        "es_total_dia": f.get("es_total_dia"),
-                    }
-                    for f in (emp.get("filas") or [])
-                ],
-            )
-        if not b1:
-            pers = (pj.get("personal") or {}).get("filas") or pj.get("filas") or []
-            b1 = _tbl_keys(
-                ["Empresa", "Cargo", "Cant."], ["empresa", "cargo", "cantidad"], pers,
-            ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin personal consolidado.</div>"
-        if pj.get("convencion_ausentismo"):
-            b1 += (
-                f"<div style='font-size:7.5pt;color:#475569;margin:2pt 0;'>"
-                f"<span style='background:#fde68a;padding:0 4pt;'>■</span> "
-                f"{_esc(pj.get('convencion_ausentismo'))}</div>"
-            )
-        aus = pj.get("ausentismo") or {}
-        jor = pj.get("jornada") or {}
-        extra = []
-        if aus.get("disponible"):
-            extra.append(f"Ausentismo: {aus.get('ausentes') or 0} ausencia(s) en el rango")
-        else:
-            extra.append(aus.get("mensaje") or "Ausentismo: no registrado")
-        if jor.get("disponible"):
-            extra.append(f"Jornada: promedio {jor.get('promedio_horas')} h")
-        else:
-            extra.append(jor.get("mensaje") or "Jornada: no registrada")
-        b1 += (
-            f"<div style='font-size:8pt;color:#475569;margin:2pt 0 4pt;'>"
-            + " · ".join(_esc(x) for x in extra)
-            + "</div>"
-        )
-        maq_filas = (pj.get("maquinaria") or {}).get("filas") or []
-        if maq_filas:
-            b1 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Maquinaria</div>"
-            if isinstance(maq_filas[0], dict) and "por_dia" in maq_filas[0]:
-                b1 += _matrix(
-                    "Equipo",
-                    dias,
-                    [
-                        {
-                            "label": f.get("equipo"),
-                            "por_dia": f.get("por_dia"),
-                            "max_diario": f.get("max_diario", f.get("total")),
-                        }
-                        for f in maq_filas
-                    ],
-                )
-            else:
-                b1 += _tbl_keys(["Equipo", "Cant."], ["equipo", "cantidad"], maq_filas)
-    parts.append(_block("1. Personal y jornada", b1, obs.get("personal_jornada") or ""))
-
-    # 2 Cantidades (estilo informe; valores según visibilidad de quien genera el PDF)
-    co = datos.get("cantidades_obra") or {}
-    ver_cant = bool(co.get("ver_valores") if "ver_valores" in co else go.get("ver_valores_cantidades"))
-    if not co.get("disponible"):
-        b2 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(co.get('mensaje') or 'Sin cantidades.')}</div>"
-    else:
-        b2 = ""
-        for tr in co.get("tramos") or []:
-            b2 += f"<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Tramo: {_esc(tr.get('tramo'))}</div>"
-            for cap in tr.get("capitulos") or []:
-                b2 += f"<div style='font-size:8pt;color:#475569;margin:2pt 0;'>Capítulo {_esc(cap.get('capitulo'))}</div>"
-                items_fmt = []
-                for it in cap.get("items") or []:
-                    row = dict(it or {})
-                    if ver_cant:
-                        row["vlr_unitario"] = _money(row.get("vlr_unitario")) if row.get("vlr_unitario") is not None else "—"
-                        row["valor_total"] = _money(row.get("valor_total")) if row.get("valor_total") is not None else "—"
-                    items_fmt.append(row)
-                if ver_cant:
-                    b2 += _tbl_keys(
-                        ["Ítem", "Descripción", "Und", "Cantidad", "Vlr. unitario", "Valor total"],
-                        ["item_numero", "item_descripcion", "unidad", "cantidad", "vlr_unitario", "valor_total"],
-                        items_fmt,
-                    )
-                    if cap.get("subtotal_valor") is not None:
-                        b2 += (
-                            f"<div style='font-size:8pt;text-align:right;margin:0 0 4pt;'>"
-                            f"Subtotal capítulo: <b>{_esc(_money(cap.get('subtotal_valor')))}</b></div>"
-                        )
-                else:
-                    b2 += _tbl_keys(
-                        ["Ítem", "Descripción", "Und", "Cantidad"],
-                        ["item_numero", "item_descripcion", "unidad", "cantidad"],
-                        items_fmt,
-                    )
-        if ver_cant and co.get("total_general_valor") is not None:
-            b2 += (
-                f"<div style='font-size:8.5pt;text-align:right;font-weight:700;margin:4pt 0;'>"
-                f"Total general: {_esc(_money(co.get('total_general_valor')))}</div>"
-            )
-        if co.get("registros_sin_item"):
-            b2 += (
-                f"<div style='font-size:7.5pt;color:#64748b;'>"
-                f"{_esc(co.get('registros_sin_item'))} registro(s) sin ítem asignado; no se valoran.</div>"
-            )
-        if not b2:
-            b2 = "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
-    parts.append(_block("2. Cantidades de obra", b2, obs.get("cantidades_obra") or ""))
-
-    # 3 Actividades
-    ac = datos.get("actividades") or {}
-    if not ac.get("disponible"):
-        b3 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(ac.get('mensaje') or 'Sin actividades.')}</div>"
-    else:
-        b3 = _tbl_keys(
-            ["Fecha", "Tramo", "Actividad", "Detalle"],
-            ["fecha", "tramo", "actividad", "detalle"],
-            ac.get("filas") or [],
-        ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
-    parts.append(_block("3. Actividades adicionales", b3, obs.get("actividades") or ""))
-
-    # 4 Almacén — valor solo si quien genera el PDF tiene visibilidad económica
-    al = datos.get("almacen") or {}
-    ver_alm = bool(al.get("ver_valores") if "ver_valores" in al else go.get("ver_valores_almacen"))
-    if not al.get("disponible"):
-        b4 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(al.get('mensaje') or 'Sin almacén.')}</div>"
-    else:
-        sols_fmt = []
-        for s in al.get("solicitudes") or []:
-            if not isinstance(s, dict):
-                continue
-            row = dict(s)
-            if ver_alm and row.get("valor") is not None:
-                row["valor"] = _money(row.get("valor"))
-            elif ver_alm:
-                row["valor"] = "—"
-            sols_fmt.append(row)
-        if ver_alm:
-            b4 = _tbl_keys(
-                ["Fecha", "Solicitante", "Insumos", "Valor", "Estado"],
-                ["fecha", "solicitante", "insumos_resumen", "valor", "estado"],
-                sols_fmt,
-            )
-        else:
-            b4 = _tbl_keys(
-                ["Fecha", "Solicitante", "Insumos", "Estado"],
-                ["fecha", "solicitante", "insumos_resumen", "estado"],
-                sols_fmt,
-            )
-        if al.get("entradas"):
-            b4 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Entradas</div>"
-            b4 += _tbl_keys(
-                ["Fecha", "Estado", "Ref."], ["fecha", "estado", "ref"], al.get("entradas") or [],
-            )
-        if al.get("salidas"):
-            b4 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Salidas</div>"
-            b4 += _tbl_keys(
-                ["Fecha", "Estado", "Ref."], ["fecha", "estado", "ref"], al.get("salidas") or [],
-            )
-        if not b4:
-            b4 = "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
-    parts.append(_block("4. Almacén", b4, obs.get("almacen") or ""))
-
-    # 5 Programación — solo módulo Programación (sin % SICOE/presupuesto)
-    pr = datos.get("programacion") or {}
-    if not pr.get("disponible"):
-        b5 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(pr.get('mensaje') or 'Sin programación.')}</div>"
-    else:
-        b5 = "<div style='font-size:8.5pt;margin:0 0 4pt;'>Programación cargada</div>"
-        if pr.get("versiones"):
-            b5 += _tbl_keys(
-                ["Nº", "Tipo", "Estado"],
-                ["numero", "tipo", "estado"],
-                pr.get("versiones") or [],
-            )
-        alertas = pr.get("alertas") or []
-        if alertas:
-            b5 += "<ul style='margin:4pt 0 0;padding-left:14pt;font-size:8pt;'>"
-            for a in alertas[:15]:
-                b5 += f"<li>{_esc(a)}</li>"
-            b5 += "</ul>"
-    parts.append(_block("5. Programación de obra", b5, obs.get("programacion") or ""))
-
-    return "".join(parts)
+    xhtml2pdf, si mete todo el consolidado en la celda de ``_section``, no parte
+    el contenido y lo *escala* (tipografía ~4 pt). El encabezado va en su propia
+    tabla; el cuerpo fluye como bloques hermanos y puede continuar de página.
+    """
+    border = (
+        f"border:1pt solid {_BORDE};"
+        if bordered
+        else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    )
+    head_border = (
+        f"border-bottom:1pt solid {_BORDE};"
+        if bordered
+        else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    )
+    body_border = (
+        f"border-left:1pt solid {_BORDE};border-right:1pt solid {_BORDE};"
+        f"border-bottom:1pt solid {_BORDE};"
+        if bordered
+        else ""
+    )
+    head = (
+        f'<table width="100%" cellspacing="0" cellpadding="0" '
+        f'style="{border}margin:6pt 0 0;border-collapse:collapse;">'
+        f'<tr><td style="background:{_BG_H};{head_border}'
+        f'padding:4pt 6pt;font-size:9pt;font-weight:700;color:{_FG_H};">'
+        f"Gestión de obra</td></tr></table>"
+    )
+    body = _gestion_obra_pdf_html(acta)
+    # Crítico: el cuerpo NO debe ir dentro de una celda de tabla. Si lo hace,
+    # xhtml2pdf escala tipografía a ~4 pt. Fluye como bloques hermanos.
+    frame = (
+        f"padding:6pt;{body_border}"
+        if body_border
+        else "padding:6pt 0;"
+    )
+    return (
+        f"{head}"
+        f'<div style="{frame}">{body}</div>'
+    )
 
 
 def generar_pdf_acta(
@@ -1108,8 +809,7 @@ def generar_pdf_acta(
 body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9pt; }}
 .pdf-idea {{ page-break-inside: auto; }}
 .go-table thead {{ display: table-header-group; }}
-.go-sec-title {{ page-break-after: avoid; }}
-.go-informe {{ page-break-inside: auto; }}
+table thead {{ display: table-header-group; }}
 /* Evitar page-break-inside:avoid en firmas/esquemas dentro de celdas:
    xhtml2pdf lanza Splitting error / KeepTogether.draw y el PDF no sale. */
 .pdf-firma {{ page-break-inside: auto; }}
@@ -1124,7 +824,7 @@ body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9
     _comp_table(compromisos_previos, "No hay compromisos abiertos de actas anteriores."),
     bordered=sec_border,
 )}
-{_section("Gestión de obra", _gestion_obra_pdf_html(acta), bordered=sec_border)}
+{_gestion_obra_section_html(acta, bordered=sec_border)}
 {_section(f"TEMAS TRATADOS EN PRESENTE ACTA ({n_ideas})", ideas_html, bordered=sec_border)}
 {_section(
     "Compromisos generados",
