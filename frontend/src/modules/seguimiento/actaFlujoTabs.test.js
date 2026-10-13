@@ -22,7 +22,8 @@ describe('actaFlujoTabs', () => {
       compromisos: false,
       ideas: false,
       liberado: false,
-      v: 1,
+      v: 2,
+      temas_escritura_expositor: true,
     })
     assert.equal(parseFlujoTabs({}).liberado, true)
     assert.equal(parseFlujoTabs('{}').liberado, true)
@@ -31,6 +32,8 @@ describe('actaFlujoTabs', () => {
     assert.equal(parseFlujoTabs({ v: 1, orden: true, ideas: true }).liberado, true)
     assert.equal(flujoLiberado({}), true)
     assert.equal(flujoLiberado({ v: 1 }), false)
+    assert.equal(flujoLiberado({ v: 2 }), false)
+    assert.equal(parseFlujoTabs({ v: 2 }).temas_escritura_expositor, true)
   })
 
   it('mergeFlujoProgress no regresa hitos si el server viene vacío', () => {
@@ -39,8 +42,8 @@ describe('actaFlujoTabs', () => {
     const mergedOk = mergeFlujoProgress(local, {})
     assert.equal(mergedOk.orden, true)
     assert.equal(mergedOk.liberado, false)
-    assert.equal(mergedOk.v, 1)
-    const mergedVer = mergeFlujoProgress(local, { v: 1 })
+    assert.equal(mergedOk.v, 2)
+    const mergedVer = mergeFlujoProgress(local, { v: 2 })
     assert.equal(mergedVer.orden, true)
     assert.equal(mergedVer.liberado, false)
   })
@@ -116,7 +119,7 @@ describe('actaFlujoTabs', () => {
   it('guardar Orden avanza a Asistentes; Temas libera a Vista previa', () => {
     const a = avanceTrasGuardar('orden', flujoInicialNuevaActa())
     assert.equal(a.flujo.orden, true)
-    assert.equal(a.flujo.v, 1)
+    assert.equal(a.flujo.v, 2)
     assert.equal(a.nextTab, 'asistentes')
     assert.equal(
       tabDesbloqueada('asistentes', { encabezadoGuardado: true, flujo: a.flujo }),
@@ -154,7 +157,8 @@ describe('actaFlujoTabs', () => {
   })
 
   it('emptyFlujoTabs null inicia secuencia; {} es legacy', () => {
-    assert.equal(emptyFlujoTabs(null).v, 1)
+    assert.equal(emptyFlujoTabs(null).v, 2)
+    assert.equal(emptyFlujoTabs(null).temas_escritura_expositor, true)
     assert.equal(emptyFlujoTabs(null).liberado, false)
     assert.equal(emptyFlujoTabs({}).liberado, true)
   })

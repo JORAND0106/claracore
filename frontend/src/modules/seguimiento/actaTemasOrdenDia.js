@@ -104,6 +104,7 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
     })
     if (hit >= 0) {
       const itemKey = String(p.key || p._key || '').trim() || null
+      const expId = p.expositor_usuario_id ?? p.expositor_id ?? null
       list[hit] = {
         ...list[hit],
         _claveGrabacion: clave,
@@ -112,6 +113,9 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
         _temaAbierto: !!list[hit]._temaAbierto,
         quien_dijo: String(list[hit].quien_dijo || p.expositor_nombre || '').trim(),
         titulo: list[hit].titulo || titulo,
+        expositor_usuario_id: list[hit].expositor_usuario_id ?? (
+          expId != null && Number(expId) > 0 ? Number(expId) : null
+        ),
       }
       byClave.set(clave, hit)
       changed = true
@@ -126,6 +130,8 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
     const expositor = String(p.expositor_nombre || '').trim()
     const idx = byClave.get(clave)
     const itemKey = String(p.key || p._key || '').trim() || null
+    const expIdRaw = p.expositor_usuario_id ?? p.expositor_id ?? null
+    const expId = expIdRaw != null && Number(expIdRaw) > 0 ? Number(expIdRaw) : null
     if (idx != null) {
       const prev = list[idx]
       const next = {
@@ -135,11 +141,13 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
         _ordenItemKey: itemKey || prev._ordenItemKey || null,
         titulo: prev.titulo || titulo,
         quien_dijo: prev.quien_dijo || expositor,
+        expositor_usuario_id: prev.expositor_usuario_id ?? expId,
         _temaAbierto: !!prev._temaAbierto,
       }
       if (
         next.titulo !== prev.titulo
         || next.quien_dijo !== prev.quien_dijo
+        || next.expositor_usuario_id !== prev.expositor_usuario_id
         || prev._claveGrabacion !== clave
         || prev._ordenItemKey !== next._ordenItemKey
         || !prev._desdeOrdenDia
@@ -158,7 +166,9 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
       _temaAbierto: false,
       titulo,
       quien_dijo: expositor,
+      expositor_usuario_id: expId,
       texto: '',
+      texto_es_borrador: false,
       imagenes: [],
     }
     list.push(row)

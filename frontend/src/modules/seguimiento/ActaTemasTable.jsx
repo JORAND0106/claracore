@@ -79,6 +79,10 @@ export default function ActaTemasTable({
   t,
   ideas = [],
   soloLectura = false,
+  /** (idea) => bool — si se pasa, habilita edición por tema aunque soloLectura sea true en otros. */
+  canEditarIdea = null,
+  /** Abrir/Cerrar tema durante grabación: solo quien modera (elaborador). */
+  puedeAbrirCerrarTema = null,
   canCrearCompromiso = false,
   saving = false,
   viewportCompact = false,
@@ -95,6 +99,11 @@ export default function ActaTemasTable({
   onAgregarTema,
   grabacionActiva = false,
 }) {
+  const editaIdea = (idea) => {
+    if (typeof canEditarIdea === 'function') return !!canEditarIdea(idea)
+    return !soloLectura
+  }
+  const puedeAbrirCerrar = puedeAbrirCerrarTema == null ? !soloLectura : !!puedeAbrirCerrarTema
   const tramosList = Array.isArray(tramos) ? tramos : []
   const hayError = tramosList.some((tr) => (tr?.estado || '') === 'error')
   const hayProcesando = tramosList.some((tr) => (tr?.estado || '') === 'procesando')
@@ -224,6 +233,8 @@ export default function ActaTemasTable({
                 const empty = isRichTextEmpty(idea.texto)
                 const abierto = !!idea._temaAbierto
                 const esSuelta = !!idea._ideaSuelta || /^suelta-/i.test(String(idea._claveGrabacion || ''))
+                const puedeEsta = editaIdea(idea)
+                const esBorrador = !!idea.texto_es_borrador
                 return (
                   <tr
                     key={idea._key || idea.id || `idea-${idx}`}
@@ -235,7 +246,7 @@ export default function ActaTemasTable({
                       cursor: 'pointer',
                     }}
                     onClick={() => onOpenTema?.(idx)}
-                    title="Abrir diligenciamiento del tema"
+                    title={puedeEsta ? 'Abrir diligenciamiento del tema' : 'Ver tema (solo lectura)'}
                   >
                     <td data-label="#" style={{ ...td, fontWeight: 700, color: t.textMuted }}>{n}</td>
                     <td data-label="Estado" style={td} onClick={(e) => e.stopPropagation()}>
@@ -252,6 +263,32 @@ export default function ActaTemasTable({
                       >
                         {abierto ? 'Abierto' : (esSuelta ? 'Idea general' : 'Cerrado')}
                       </span>
+                      {esBorrador && (
+                        <span style={{
+                          display: 'inline-block',
+                          marginLeft: 6,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: '2px 6px',
+                          borderRadius: 6,
+                          color: t.textMuted,
+                          border: `1px dashed ${t.border}`,
+                        }}
+                        >
+                          Borrador IA
+                        </span>
+                      )}
+                      {!puedeEsta && (
+                        <span style={{
+                          display: 'inline-block',
+                          marginLeft: 6,
+                          fontSize: 10,
+                          color: t.textMuted,
+                        }}
+                        >
+                          Solo lectura
+                        </span>
+                      )}
                     </td>
                     <td data-label="Interviniente" style={td}>
                       <span style={{ color: t.text }}>
@@ -298,7 +335,7 @@ export default function ActaTemasTable({
                     </td>
                     <td data-label="Acciones" style={{ ...td, whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {!soloLectura && !esSuelta && (
+                        {puedeAbrirCerrar && !esSuelta && (
                           abierto ? (
                             <button
                               type="button"
@@ -324,13 +361,13 @@ export default function ActaTemasTable({
                         <button
                           type="button"
                           style={iconBtn(t)}
-                          title="Redactar / editar tema"
-                          aria-label="Editar tema"
+                          title={puedeEsta ? 'Redactar / editar tema' : 'Ver tema (solo lectura)'}
+                          aria-label={puedeEsta ? 'Editar tema' : 'Ver tema'}
                           onClick={() => onOpenTema?.(idx)}
                         >
                           <IconEdit />
                         </button>
-                        {canCrearCompromiso && !soloLectura && (
+                        {canCrearCompromiso && puedeEsta && (
                           <button
                             type="button"
                             style={iconBtn(t)}

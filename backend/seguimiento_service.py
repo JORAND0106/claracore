@@ -1371,10 +1371,15 @@ _FLUJO_TAB_KEYS = ("orden", "asistentes", "compromisos", "ideas")
 
 
 def _flujo_inicial_nueva_acta(raw=None) -> dict:
-    """Flujo para actas nuevas: versionado (v=1), secuencial, no liberado."""
+    """Flujo para actas nuevas: v=2 (escritura por expositor), secuencial, no liberado.
+
+    ``v >= 2`` / ``temas_escritura_expositor`` activa la política de escritura por
+    tema. Actas creadas antes (v=1 o sin versión) conservan edición solo elaborador.
+    """
     out = {k: False for k in _FLUJO_TAB_KEYS}
     out["liberado"] = False
-    out["v"] = 1
+    out["v"] = 2
+    out["temas_escritura_expositor"] = True
     if isinstance(raw, dict):
         for k in _FLUJO_TAB_KEYS:
             if raw.get(k):
@@ -1394,6 +1399,7 @@ def _norm_flujo_tabs(raw) -> dict:
     out = {k: False for k in _FLUJO_TAB_KEYS}
     out["liberado"] = False
     out["v"] = None
+    out["temas_escritura_expositor"] = False
 
     if raw is None or raw == "" or raw == {}:
         out["liberado"] = True
@@ -1425,6 +1431,8 @@ def _norm_flujo_tabs(raw) -> dict:
             out["v"] = int(raw.get("v"))
         except (TypeError, ValueError):
             out["v"] = 1
+    if raw.get("temas_escritura_expositor") or (out["v"] is not None and out["v"] >= 2):
+        out["temas_escritura_expositor"] = True
     if raw.get("liberado") or out.get("ideas"):
         out["liberado"] = True
     elif out["v"] is None and not any(out[k] for k in _FLUJO_TAB_KEYS):
@@ -1451,6 +1459,11 @@ def _merge_flujo_tabs(prev, incoming) -> dict:
             base["v"] = base.get("v") or 1
     elif base.get("v") is None and not base.get("liberado"):
         base["v"] = 1
+    # No degradar la política una vez activada en el acta.
+    if incoming.get("temas_escritura_expositor") or base.get("temas_escritura_expositor"):
+        base["temas_escritura_expositor"] = True
+    elif base.get("v") is not None and int(base["v"] or 0) >= 2:
+        base["temas_escritura_expositor"] = True
     return base
 
 
@@ -1679,10 +1692,14 @@ def _assert_puede_editar_acta(
     *,
     permitir_revertir_dev: bool = False,
     nuevo_estado: Optional[str] = None,
+    permitir_expositor: bool = False,
 ) -> None:
     """
     Solo el elaborador edita el contenido mientras el acta esté en borrador.
     Sellada (realizada/firmada): nadie edita; el Desarrollador puede revertir a borrador.
+
+    Con ``permitir_expositor`` y política v>=2, un expositor de algún tema también
+    puede pasar (el filtrado fino ocurre en ``_sync_ideas`` / ``update_idea``).
     """
     es_dev = es_desarrollador_seguimiento(current_user)
     sellada = _acta_esta_sellada(acta)
@@ -1701,8 +1718,24 @@ def _assert_puede_editar_acta(
     if es_dev:
         return
     elab = acta.get("elaborador_id")
-    if elab is None or int(elab) != int(user_id):
-        raise ValueError("Solo el elaborador del acta puede editar su contenido")
+    if elab is not None and int(elab) == int(user_id):
+        return
+    if permitir_expositor:
+        from seguimiento_tema_escritura import (
+            acta_usa_escritura_expositor,
+            usuario_puede_guardar_algun_tema,
+        )
+        if acta_usa_escritura_expositor(acta):
+            ideas = acta.get("ideas") if isinstance(acta.get("ideas"), list) else []
+            if usuario_puede_guardar_algun_tema(
+                acta, ideas, int(user_id), es_desarrollador=False,
+            ):
+                return
+    raise ValueError(
+        "Solo el elaborador del acta (o el expositor de su tema) puede editar ese contenido"
+        if permitir_expositor
+        else "Solo el elaborador del acta puede editar su contenido"
+    )
 
 
 def _es_patch_reserva_orden(data: dict) -> bool:
@@ -2336,6 +2369,7 @@ def update_acta(
     acta = get_acta(sb, acta_id, contrato_id)
     nuevo_estado_raw = data.get("estado") if "estado" in data else None
     solo_reserva_orden = False
+    solo_temas_expositor = False
     try:
         _assert_puede_editar_acta(
             acta,
@@ -2343,12 +2377,20 @@ def update_acta(
             current_user,
             permitir_revertir_dev=True,
             nuevo_estado=nuevo_estado_raw,
+            permitir_expositor=True,
         )
     except ValueError:
         if not _es_patch_reserva_orden(data):
             raise
         _assert_puede_reservar_orden_acta(sb, acta, user_id, current_user)
         solo_reserva_orden = True
+    # Expositor (no elaborador): solo puede tocar ideas propias.
+    if not solo_reserva_orden and not es_desarrollador_seguimiento(current_user):
+        elab = acta.get("elaborador_id")
+        if elab is None or int(elab) != int(user_id):
+            from seguimiento_tema_escritura import acta_usa_escritura_expositor
+            if acta_usa_escritura_expositor(acta):
+                solo_temas_expositor = True
     # Si es solo revertir (dev): permitir únicamente el cambio de estado a borrador.
     if _acta_esta_sellada(acta):
         patch = {
@@ -2388,6 +2430,18 @@ def update_acta(
                     orden_base, merged, tipo_acta=tipo_res,
                 )
         _persist_acta_row(sb, patch_res, acta_id=acta_id, contrato_id=contrato_id)
+        return get_acta(sb, acta_id, contrato_id)
+
+    if solo_temas_expositor:
+        # Expositor: únicamente ideas propias (texto/borrador/imágenes/interviniente).
+        if "ideas" not in data:
+            raise ValueError("Como expositor solo puede guardar los temas de su cargo")
+        _sync_ideas(
+            sb, acta_id, data.get("ideas") or [],
+            user_id=int(user_id),
+            current_user=current_user,
+            acta=acta,
+        )
         return get_acta(sb, acta_id, contrato_id)
 
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
@@ -2450,7 +2504,12 @@ def update_acta(
     if "asistentes" in data:
         _sync_asistentes(sb, acta_id, data.get("asistentes") or [], contrato_id=int(contrato_id))
     if "ideas" in data:
-        _sync_ideas(sb, acta_id, data.get("ideas") or [])
+        _sync_ideas(
+            sb, acta_id, data.get("ideas") or [],
+            user_id=int(user_id),
+            current_user=current_user,
+            acta=acta,
+        )
     if "apartados" in data:
         _sync_apartados(sb, acta_id, data.get("apartados") or [])
     if "gestion_obra" in data and _ensure_acta_gestion_obra_column(sb):
@@ -3610,14 +3669,42 @@ def _sync_asistentes(sb, acta_id: int, asistentes: list, *, contrato_id: Optiona
                 raise
 
 
-def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
+def _sync_ideas(
+    sb,
+    acta_id: int,
+    ideas: list,
+    *,
+    user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
+    acta: Optional[dict] = None,
+) -> None:
     """Actualiza ideas por id cuando existe; inserta nuevas; elimina ausentes.
 
     Persiste siempre quien_dijo (Interviniente). Si PostgREST no ve la columna,
     falla con error explícito — nunca hace silent-drop del valor.
+
+    Con política de escritura por expositor, un expositor (no elaborador) solo
+    actualiza sus temas: no inserta ni borra los ajenos.
     """
-    existing = sb.table("seguimiento_acta_idea").select("id").eq("acta_id", int(acta_id)).execute().data or []
+    existing_full = (
+        sb.table("seguimiento_acta_idea").select("*").eq("acta_id", int(acta_id)).execute().data or []
+    )
+    existing = existing_full
     keep_ids: Set[int] = set()
+    skip_deletes = False
+    es_dev = es_desarrollador_seguimiento(current_user)
+    if user_id is not None and acta is not None:
+        from seguimiento_tema_escritura import filtrar_ideas_para_sync
+        filt = filtrar_ideas_para_sync(
+            acta, ideas, existing_full, int(user_id), es_desarrollador=es_dev,
+        )
+        ideas = filt.get("ideas") or []
+        skip_deletes = bool(filt.get("skip_deletes"))
+        if filt.get("expositor_only") and filt.get("forbidden") and not ideas:
+            raise ValueError(
+                "No puede modificar temas de los que no es expositor. "
+                "Solo el elaborador o el expositor asignado pueden escribir en cada tema."
+            )
     _require_idea_quien_dijo(sb)
 
     def _write_update(payload: dict, iid: int) -> None:
@@ -3709,6 +3796,17 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
         # Solo actualiza imagenes si el cliente envía la clave (permite borrar/reordenar).
         if include_imagenes and "imagenes" in idea:
             payload["imagenes"] = _normalizar_imagenes_idea(idea.get("imagenes"))
+        # expositor_usuario_id + texto_es_borrador (columnas nuevas; tolerar ausencia)
+        if "expositor_usuario_id" in idea or "expositor_id" in idea:
+            try:
+                exp_raw = idea.get("expositor_usuario_id", idea.get("expositor_id"))
+                payload["expositor_usuario_id"] = (
+                    int(exp_raw) if exp_raw not in (None, "", 0, "0") else None
+                )
+            except (TypeError, ValueError):
+                payload["expositor_usuario_id"] = None
+        if "texto_es_borrador" in idea:
+            payload["texto_es_borrador"] = bool(idea.get("texto_es_borrador"))
         if iid:
             keep_ids.add(int(iid))
             try:
@@ -3721,6 +3819,10 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                 elif include_imagenes and "imagenes" in payload and _is_missing_column_error(exc, "imagenes"):
                     _SCHEMA_CAPS["idea_imagenes"] = False
                     payload.pop("imagenes", None)
+                    _write_update(payload, int(iid))
+                elif _is_missing_column_error(exc, "expositor_usuario_id") or _is_missing_column_error(exc, "texto_es_borrador"):
+                    payload.pop("expositor_usuario_id", None)
+                    payload.pop("texto_es_borrador", None)
                     _write_update(payload, int(iid))
                 else:
                     raise
@@ -3735,6 +3837,10 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                 row["titulo"] = titulo
             if include_imagenes and "imagenes" in idea:
                 row["imagenes"] = _normalizar_imagenes_idea(idea.get("imagenes"))
+            if "expositor_usuario_id" in payload:
+                row["expositor_usuario_id"] = payload.get("expositor_usuario_id")
+            if "texto_es_borrador" in payload:
+                row["texto_es_borrador"] = payload.get("texto_es_borrador")
             try:
                 inserted = _write_insert(row)
             except Exception as exc:
@@ -3746,10 +3852,16 @@ def _sync_ideas(sb, acta_id: int, ideas: list) -> None:
                     _SCHEMA_CAPS["idea_imagenes"] = False
                     row.pop("imagenes", None)
                     inserted = _write_insert(row)
+                elif _is_missing_column_error(exc, "expositor_usuario_id") or _is_missing_column_error(exc, "texto_es_borrador"):
+                    row.pop("expositor_usuario_id", None)
+                    row.pop("texto_es_borrador", None)
+                    inserted = _write_insert(row)
                 else:
                     raise
             if inserted and inserted.get("id") is not None:
                 keep_ids.add(int(inserted["id"]))
+    if skip_deletes:
+        return
     for e in existing:
         if int(e["id"]) not in keep_ids:
             # No borrar ideas con compromisos ligados
@@ -3835,11 +3947,30 @@ def update_idea(
             raise ValueError("Idea no pertenece al contrato")
         acta = get_acta(sb, int(idea_row["acta_id"]), contrato_id)
     if user_id is not None:
-        _assert_puede_editar_acta(acta, int(user_id), current_user)
-    upd = sb.table("seguimiento_acta_idea").update({
+        _assert_puede_editar_acta(
+            acta, int(user_id), current_user, permitir_expositor=True,
+        )
+        from seguimiento_tema_escritura import puede_editar_tema
+        if not puede_editar_tema(
+            acta, idea_row, int(user_id), current_user,
+            es_desarrollador=es_desarrollador_seguimiento(current_user),
+        ):
+            raise ValueError(
+                "Solo el expositor de este tema o el elaborador del acta pueden editarlo"
+            )
+    patch_idea = {
         "texto": sanitize_tema_html(texto),
         "updated_at": _now_utc().isoformat(),
-    }).eq("id", int(idea_id)).execute().data
+        "texto_es_borrador": False,
+    }
+    try:
+        upd = sb.table("seguimiento_acta_idea").update(patch_idea).eq("id", int(idea_id)).execute().data
+    except Exception as exc:
+        if _is_missing_column_error(exc, "texto_es_borrador"):
+            patch_idea.pop("texto_es_borrador", None)
+            upd = sb.table("seguimiento_acta_idea").update(patch_idea).eq("id", int(idea_id)).execute().data
+        else:
+            raise
     _touch_acta_hora_fin(sb, int(idea_row["acta_id"]))
     return (upd or [idea_row])[0]
 
@@ -3909,9 +4040,23 @@ def crear_compromiso_desde_idea(
     user_id: int,
     current_user: Optional[dict] = None,
 ) -> dict:
-    """Crea uno o varios compromisos (uno por asignado). Solo elaborador (o Dev) en acta no sellada."""
+    """Crea uno o varios compromisos (uno por asignado). Elaborador, Dev o expositor del tema."""
     acta = get_acta(sb, acta_id, contrato_id)
-    _assert_puede_editar_acta(acta, user_id, current_user)
+    _assert_puede_editar_acta(acta, user_id, current_user, permitir_expositor=True)
+    idea_rows = (
+        sb.table("seguimiento_acta_idea").select("*").eq("id", int(idea_id)).eq("acta_id", int(acta_id)).limit(1).execute().data
+        or []
+    )
+    if not idea_rows:
+        raise ValueError("Tema no encontrado en esta acta")
+    from seguimiento_tema_escritura import puede_editar_tema
+    if not puede_editar_tema(
+        acta, idea_rows[0], int(user_id), current_user,
+        es_desarrollador=es_desarrollador_seguimiento(current_user),
+    ):
+        raise ValueError(
+            "Solo el expositor de este tema o el elaborador del acta pueden crear compromisos desde él"
+        )
     asignados = data.get("asignados") or []
     if not asignados and data.get("asignado_a_id"):
         asignados = [{
@@ -4651,7 +4796,15 @@ def adjuntar_imagen_idea_base64(
         raise ValueError("Idea no encontrada")
     idea = rows[0]
     acta = get_acta(sb, int(idea["acta_id"]), contrato_id)
-    _assert_puede_editar_acta(acta, int(user_id), current_user)
+    _assert_puede_editar_acta(acta, int(user_id), current_user, permitir_expositor=True)
+    from seguimiento_tema_escritura import puede_editar_tema
+    if not puede_editar_tema(
+        acta, idea, int(user_id), current_user,
+        es_desarrollador=es_desarrollador_seguimiento(current_user),
+    ):
+        raise ValueError(
+            "Solo el expositor de este tema o el elaborador del acta pueden adjuntar imágenes"
+        )
 
     raw = data_b64 or ""
     if "," in raw and raw.strip().startswith("data:"):
@@ -5704,9 +5857,26 @@ def actualizar_compromiso(
     acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
     if not es_desarrollador_seguimiento(current_user):
         elab = acta.get("elaborador_id")
-        if elab is None or int(elab) != int(user_id):
+        ok = elab is not None and int(elab) == int(user_id)
+        if not ok and item.get("idea_id"):
+            from seguimiento_tema_escritura import puede_editar_tema
+            idea_rows = (
+                sb.table("seguimiento_acta_idea")
+                .select("*")
+                .eq("id", int(item["idea_id"]))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if idea_rows and puede_editar_tema(
+                acta, idea_rows[0], int(user_id), current_user, es_desarrollador=False,
+            ):
+                ok = True
+        if not ok:
             raise ValueError(
-                "Solo el elaborador del acta o el Desarrollador pueden editar el compromiso"
+                "Solo el elaborador del acta, el expositor del tema o el Desarrollador "
+                "pueden editar el compromiso"
             )
 
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}

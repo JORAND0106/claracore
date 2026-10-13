@@ -21,6 +21,8 @@ export default function TemaEditorModal({
   ideaIdx,
   soloLectura = false,
   canCrearCompromiso = false,
+  /** Solo elaborador / Dev quitan temas; el expositor no. */
+  canQuitarTema = false,
   saving = false,
   asistenteOpciones = [],
   viewportCompact = false,
@@ -60,6 +62,25 @@ export default function TemaEditorModal({
           <div style={{ fontWeight: 700, fontSize: 'var(--cc-title)', color: t.text }}>
             Tema {(idea?.orden != null ? Number(idea.orden) : ideaIdx) + 1}
             {idea?.titulo ? `: ${idea.titulo}` : ''}
+            {idea?.texto_es_borrador ? (
+              <span style={{
+                marginLeft: 10,
+                fontSize: 12,
+                fontWeight: 600,
+                color: t.textMuted,
+                border: `1px dashed ${t.border}`,
+                borderRadius: 6,
+                padding: '2px 8px',
+              }}
+              >
+                Borrador IA
+              </span>
+            ) : null}
+            {soloLectura ? (
+              <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color: t.textMuted }}>
+                (solo lectura)
+              </span>
+            ) : null}
           </div>
           <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>
         </div>
@@ -170,7 +191,7 @@ export default function TemaEditorModal({
                 Generar compromiso
               </button>
             )}
-            {!soloLectura && (
+            {!soloLectura && canQuitarTema && (
               <button
                 type="button"
                 style={{ ...ghost(t), color: 'var(--cc-color-danger,#b91c1c)', borderColor: 'var(--cc-color-danger,#b91c1c)' }}
