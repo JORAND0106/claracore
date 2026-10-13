@@ -15,6 +15,16 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './segu
 
 const CHART_COLORS = ['#2563eb', '#0f766e', '#b45309', '#7c3aed', '#be123c', '#0369a1', '#15803d', '#a16207']
 
+/** Debe coincidir con SCHEMA_VERSION del backend (gestion_obra_service). */
+const GESTION_OBRA_SCHEMA_VERSION = 2
+
+function snapshotObsoleto(snap) {
+  if (!snap || typeof snap !== 'object') return true
+  if (!snap.datos || typeof snap.datos !== 'object') return true
+  const v = Number(snap.schema_version || 0)
+  return !Number.isFinite(v) || v < GESTION_OBRA_SCHEMA_VERSION
+}
+
 /**
  * TAB Gestión de obra: consolidado por día (gráfico + tabla ejecutiva).
  */
@@ -41,6 +51,7 @@ export default function ActaGestionObraPanel({
     () => ({ ...emptyObservacionesGestionObra(), ...(snap?.observaciones || {}) }),
     [snap],
   )
+  const stale = snapshotObsoleto(snap)
 
   useEffect(() => {
     if (snap?.fecha_desde && snap?.fecha_hasta) {
@@ -66,7 +77,12 @@ export default function ActaGestionObraPanel({
         fecha_hasta: d1,
         conservar_observaciones: true,
       })
-      onChange?.(row?.gestion_obra || null)
+      const next = row?.gestion_obra || null
+      if (!next || typeof next !== 'object') {
+        setError('El servidor no devolvió el consolidado. Verifique la migración de gestion_obra.')
+        return
+      }
+      onChange?.(next)
     } catch (e) {
       setError(e?.message || 'No se pudo calcular el consolidado')
     } finally {
@@ -74,12 +90,16 @@ export default function ActaGestionObraPanel({
     }
   }, [api, actaId, onChange])
 
+  // Al abrir (o si el snapshot es de una versión anterior), recalcular con lógica vigente.
   useEffect(() => {
-    if (!actaId || soloLectura || snap?.datos) return
-    const r = rangoSemanaAnterior(fechaReunion)
+    if (!actaId || soloLectura) return
+    if (!stale) return
+    const r = (snap?.fecha_desde && snap?.fecha_hasta)
+      ? { fecha_desde: String(snap.fecha_desde).slice(0, 10), fecha_hasta: String(snap.fecha_hasta).slice(0, 10) }
+      : rangoSemanaAnterior(fechaReunion)
     recalcular(r.fecha_desde, r.fecha_hasta)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actaId])
+  }, [actaId, soloLectura, stale])
 
   const aplicarRango = () => {
     if (!desde || !hasta) {
@@ -142,6 +162,11 @@ export default function ActaGestionObraPanel({
 
       {error && <div style={{ color: 'var(--cc-color-danger,#b91c1c)', fontSize: 'var(--cc-sm)' }}>{error}</div>}
       {busy && <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Calculando consolidado…</div>}
+      {!busy && stale && !soloLectura && !error && (
+        <div style={{ fontSize: 11, color: t.textMuted }}>
+          El consolidado guardado es anterior a la lógica vigente; se está renovando…
+        </div>
+      )}
       {snap?.snapshot_at && (
         <div style={{ fontSize: 11, color: t.textMuted }}>
           Datos al {String(snap.snapshot_at).slice(0, 19).replace('T', ' ')} UTC
@@ -268,7 +293,11 @@ function PersonalJornadaBlock({ t, data, viewportCompact }) {
           <DayMatrixTable
             t={t}
             dias={dias}
-            rows={(maq.filas || []).map((f) => ({ label: f.equipo, por_dia: f.por_dia, total: f.total }))}
+            rows={(maq.filas || []).map((f) => ({
+              label: f.equipo,
+              por_dia: f.por_dia || {},
+              total: f.total != null ? f.total : f.cantidad,
+            }))}
             labelCol="Equipo"
             compact={viewportCompact}
           />
@@ -332,10 +361,30 @@ function ActividadesBlock({ t, data }) {
   if (!data || data.disponible === false) {
     return <EmptyMsg t={t} text={data?.mensaje || 'Sin actividades adicionales en Bitácora.'} />
   }
+  let porDia = Array.isArray(data.por_dia) ? data.por_dia : []
+  // Compat: snapshots viejos solo traían filas planas
+  if (!porDia.length && Array.isArray(data.filas) && data.filas.length) {
+    const byFecha = {}
+    for (const f of data.filas) {
+      const fecha = String(f.fecha || '').slice(0, 10)
+      if (!fecha) continue
+      if (!byFecha[fecha]) byFecha[fecha] = { fecha, cantidad: 0, actividades: [] }
+      byFecha[fecha].actividades.push({
+        actividad: f.actividad || '',
+        detalle: f.detalle || '',
+        tramo: f.tramo || '',
+      })
+      byFecha[fecha].cantidad += 1
+    }
+    porDia = Object.values(byFecha).sort((a, b) => a.fecha.localeCompare(b.fecha))
+  }
+  const series = (Array.isArray(data.series) && data.series.length)
+    ? data.series
+    : porDia.map((d) => ({ nombre: String(d.fecha).slice(5), valor: d.cantidad || 0 }))
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <MiniChart t={t} series={data.series || []} title="Actividades por día" />
-      {(data.por_dia || []).map((d) => (
+      <MiniChart t={t} series={series} title="Actividades por día" />
+      {porDia.map((d) => (
         <div key={d.fecha} style={{ border: `1px solid ${t.border}`, borderRadius: 8, padding: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6, color: t.text }}>
             {d.fecha}
@@ -360,13 +409,28 @@ function AlmacenBlock({ t, data, verValores }) {
   if (!data || data.disponible === false) {
     return <EmptyMsg t={t} text={data?.mensaje || 'Sin movimientos de almacén en el rango.'} />
   }
-  const seriesDia = (data.series_por_dia || []).map((r) => ({
+  let seriesDia = (data.series_por_dia || []).map((r) => ({
     nombre: String(r.fecha || '').slice(5),
     creadas: r.creadas || 0,
     gestionadas: r.gestionadas || 0,
     aprobadas: r.aprobadas || 0,
     pendientes: r.pendientes || 0,
   }))
+  // Compat: armar gráfico desde filas si el snapshot viejo no traía series_por_dia
+  if (!seriesDia.length && Array.isArray(data.solicitudes) && data.solicitudes.length) {
+    const by = {}
+    for (const s of data.solicitudes) {
+      const f = String(s.fecha || '').slice(0, 10)
+      if (!f) continue
+      if (!by[f]) by[f] = { nombre: f.slice(5), creadas: 0, gestionadas: 0, aprobadas: 0, pendientes: 0 }
+      by[f].creadas += 1
+      const est = String(s.estado || '').toLowerCase()
+      if (est === 'enviada') by[f].gestionadas += 1
+      if (est === 'aprobada') by[f].aprobadas += 1
+      if (est === 'borrador' || est === 'enviada') by[f].pendientes += 1
+    }
+    seriesDia = Object.keys(by).sort().map((k) => by[k])
+  }
   const cols = [
     { key: 'fecha', label: 'Fecha' },
     { key: 'solicitante', label: 'Solicitante' },
@@ -492,12 +556,17 @@ function DayMatrixTable({ t, dias = [], rows = [], labelCol = 'Concepto', compac
           {rows.map((r, i) => (
             <tr key={i}>
               <td style={td(t, 'left')}>{r.label}</td>
-              {dias.map((d) => (
-                <td key={d} style={td(t, 'right')}>
-                  {r.por_dia?.[d] ? String(r.por_dia[d]) : '—'}
-                </td>
-              ))}
-              <td style={{ ...td(t, 'right'), fontWeight: 700 }}>{r.total ?? '—'}</td>
+              {dias.map((d) => {
+                const v = r.por_dia?.[d]
+                return (
+                  <td key={d} style={td(t, 'right')}>
+                    {v != null && v !== '' && Number(v) !== 0 ? String(v) : '—'}
+                  </td>
+                )
+              })}
+              <td style={{ ...td(t, 'right'), fontWeight: 700 }}>
+                {r.total != null && r.total !== '' ? String(r.total) : '—'}
+              </td>
             </tr>
           ))}
         </tbody>

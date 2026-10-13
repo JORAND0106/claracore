@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 
 from gestion_obra_service import (
+    SCHEMA_VERSION,
     _agg_actividades,
     _agg_personal_desde_diarios,
+    _agg_programacion,
+    _bogota_day_bounds_utc,
     _dias_rango,
     _empresa_asistencia,
+    _fecha_bogota,
     empty_observaciones,
     merge_observaciones,
     normalize_gestion_obra,
     rango_semana_anterior,
+    snapshot_esta_obsoleto,
 )
 
 
@@ -129,11 +134,86 @@ class TestObservaciones(unittest.TestCase):
         n = normalize_gestion_obra({
             "fecha_desde": "2026-10-01",
             "fecha_hasta": "2026-10-07",
+            "schema_version": SCHEMA_VERSION,
             "datos": {"x": 1},
             "observaciones": {"personal_jornada": "ok"},
         })
         self.assertEqual(n["fecha_desde"], "2026-10-01")
+        self.assertEqual(n["schema_version"], SCHEMA_VERSION)
         self.assertEqual(set(empty_observaciones().keys()), set(n["observaciones"].keys()))
+
+    def test_snapshot_obsoleto(self):
+        self.assertTrue(snapshot_esta_obsoleto(None))
+        self.assertTrue(snapshot_esta_obsoleto({"datos": {}}))
+        self.assertTrue(snapshot_esta_obsoleto({"schema_version": 1, "datos": {}}))
+        self.assertFalse(snapshot_esta_obsoleto({
+            "schema_version": SCHEMA_VERSION, "datos": {"personal_jornada": {}},
+        }))
+
+
+class TestBogotaFechas(unittest.TestCase):
+    def test_bounds_cubre_tarde_bogota(self):
+        start, end = _bogota_day_bounds_utc("2026-10-06", "2026-10-12")
+        # 12 oct 23:59 Bogotá = 13 oct ~05:00 UTC
+        self.assertTrue(end.startswith("2026-10-13") or "2026-10-13" in end)
+        self.assertTrue(start.startswith("2026-10-06"))
+
+    def test_fecha_bogota_desde_utc_noche(self):
+        # 13 oct 00:30 UTC = 12 oct 19:30 Bogotá
+        dt = datetime(2026, 10, 13, 0, 30, tzinfo=timezone.utc)
+        self.assertEqual(_fecha_bogota(dt), "2026-10-12")
+        self.assertEqual(_fecha_bogota("2026-10-13T00:30:00+00:00"), "2026-10-12")
+
+
+class TestProgramacionSinVersiones(unittest.TestCase):
+    def test_sin_prog_versiones_vacio(self):
+        class _Q:
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, *_a, **_k):
+                return self
+
+            def limit(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                class R:
+                    data = []
+                return R()
+
+        class _Sb:
+            def table(self, name):
+                self.name = name
+                return _Q()
+
+        out = _agg_programacion(_Sb(), 1)
+        self.assertFalse(out["disponible"])
+        self.assertIn("no tiene Programación", out["mensaje"])
+
+
+class TestMaquinariaPorDia(unittest.TestCase):
+    def test_tabla_equipo_por_dia(self):
+        dias = ["2026-10-06", "2026-10-07"]
+        diarios = [
+            {
+                "fecha": "2026-10-06",
+                "asistencia_colaboradores": [],
+                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 2}],
+            },
+            {
+                "fecha": "2026-10-07",
+                "asistencia_colaboradores": [],
+                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 1}],
+            },
+        ]
+        # Sin asistencia: usa personal vacío → disponible por maquinaria
+        out = _agg_personal_desde_diarios(diarios, dias)
+        filas = out["maquinaria"]["filas"]
+        self.assertEqual(len(filas), 1)
+        self.assertEqual(filas[0]["total"], 3)
+        self.assertEqual(filas[0]["por_dia"]["2026-10-06"], 2)
+        self.assertEqual(filas[0]["por_dia"]["2026-10-07"], 1)
 
 
 if __name__ == "__main__":

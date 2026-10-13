@@ -1823,6 +1823,14 @@ def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_
                 changed = True
             if "gestion_obra" in attempt and _is_missing_column_error(exc, "gestion_obra"):
                 _SCHEMA_CAPS["acta_gestion_obra"] = False
+                # Si el patch solo trae gestion_obra (+ updated_at), no silenciar:
+                # el recálculo debe fallar con mensaje claro (migración pendiente).
+                other = {k for k in attempt.keys() if k not in ("gestion_obra", "updated_at")}
+                if not other:
+                    raise ValueError(
+                        "Falta la columna gestion_obra. "
+                        "Aplique la migración 20261012220000_seguimiento_acta_gestion_obra.sql."
+                    ) from exc
                 attempt.pop("gestion_obra", None)
                 changed = True
             if not changed:
@@ -2433,13 +2441,23 @@ def recalcular_gestion_obra_acta(
     snap["ver_valores_almacen"] = ver_eco
     if isinstance(snap.get("datos"), dict) and isinstance(snap["datos"].get("almacen"), dict):
         snap["datos"]["almacen"]["ver_valores"] = ver_eco
+    stamp = snap.get("snapshot_at")
     _persist_acta_row(
         sb,
         {"gestion_obra": snap, "updated_at": _now_utc().isoformat()},
         acta_id=acta_id,
         contrato_id=contrato_id,
     )
-    return get_acta(sb, acta_id, contrato_id, current_user=current_user)
+    fresh = get_acta(sb, acta_id, contrato_id, current_user=current_user)
+    go = fresh.get("gestion_obra") if isinstance(fresh.get("gestion_obra"), dict) else None
+    if not go or (stamp and go.get("snapshot_at") != stamp):
+        raise ValueError(
+            "No se pudo guardar el consolidado de Gestión de obra. "
+            "Verifique que la columna gestion_obra exista "
+            "(migración 20261012220000_seguimiento_acta_gestion_obra.sql) "
+            "y vuelva a pulsar actualizar."
+        )
+    return fresh
 
 
 def _norm_email(raw: Optional[str]) -> Optional[str]:
