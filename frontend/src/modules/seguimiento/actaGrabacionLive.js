@@ -148,6 +148,77 @@ export function createAudioBatcher({ intervalMs = 15000, onBatch } = {}) {
 export const AZURE_STT_SAMPLE_RATE = 16000
 export const AZURE_STT_WAV_CONTENT_TYPE = 'audio/wav; codecs=audio/pcm; samplerate=16000'
 
+/** Umbral RMS (0..1) por debajo del cual el lote se considera silencio. */
+export const STT_SILENCE_RMS = 0.004
+
+/** Causas que sí merecen aviso rojo (configuración / red / permiso real). */
+const CAUSAS_STT_CRITICAS = new Set([
+  'sin_clave',
+  'auth_rechazada',
+  'region_invalida',
+  'formato_invalido',
+  'error_red',
+  'http_error',
+  'sin_permiso',
+])
+
+/**
+ * True si la causa STT debe mostrarse como error rojo.
+ * Silencio o sin reconocimiento no son críticos por sí solos.
+ */
+export function esCausaSttCritica(causa) {
+  return CAUSAS_STT_CRITICAS.has(String(causa || '').trim().toLowerCase())
+}
+
+/**
+ * ¿Hay alguna pista de audio viva (micrófono o pestaña)?
+ * Un track ended/muted sí indica micrófono caído.
+ */
+export function hayPistaAudioViva(handles = {}) {
+  const streams = [handles?.micStream, handles?.displayStream].filter(Boolean)
+  return streams.some((s) => (
+    s?.getAudioTracks?.()?.some((t) => (
+      t && t.readyState === 'live' && t.enabled !== false
+    ))
+  ))
+}
+
+/**
+ * Clasifica un lote vacío: crítico (rojo) vs neutro (silencio normal).
+ * Nunca marca sin_audio como crítico si ya hubo caracteres o el mic sigue vivo.
+ */
+export function clasificarAvisoSttVacio({
+  causa = '',
+  rms = 0,
+  charsAcumulados = 0,
+  micVivo = true,
+} = {}) {
+  const c = String(causa || '').trim().toLowerCase()
+    || ((Number(rms) || 0) < STT_SILENCE_RMS ? 'sin_audio' : 'sin_reconocimiento')
+  if (esCausaSttCritica(c)) {
+    return { nivel: 'error', causa: c, mensaje: mensajeSttUsuario({ stt_causa: c }) }
+  }
+  // Micrófono realmente caído (sin pistas vivas) y sin transcripción previa.
+  if ((c === 'sin_audio' || c === 'sin_permiso') && !micVivo && !(Number(charsAcumulados) > 0)) {
+    return {
+      nivel: 'error',
+      causa: 'sin_audio',
+      mensaje: mensajeSttUsuario({ stt_causa: 'sin_audio' }),
+    }
+  }
+  // Ya hubo voz o el mic sigue activo: silencio / NoMatch = estado neutro, no rojo.
+  if (c === 'sin_audio' || c === 'sin_reconocimiento') {
+    return {
+      nivel: 'neutro',
+      causa: c,
+      mensaje: Number(charsAcumulados) > 0 || micVivo
+        ? 'Sin voz en este momento'
+        : mensajeSttUsuario({ stt_causa: c }),
+    }
+  }
+  return { nivel: 'neutro', causa: c, mensaje: mensajeSttUsuario({ stt_causa: c }) }
+}
+
 /**
  * Mensaje breve al usuario según la causa STT (sin jerga ni nombres de variables/claves).
  */
@@ -155,6 +226,7 @@ export function mensajeSttUsuario(payload = {}) {
   const causa = String(payload?.stt_causa || payload?.causa || '').trim().toLowerCase()
   const map = {
     sin_audio: 'No se detectó sonido del micrófono. Revise el permiso y que el micrófono esté activo.',
+    sin_permiso: 'No hay permiso para usar el micrófono. Actívelo en el navegador e intente de nuevo.',
     sin_clave: 'La transcripción no está configurada en el servidor. Avise a soporte.',
     auth_rechazada: 'El servicio de voz rechazó la configuración. Avise a soporte.',
     region_invalida: 'El servicio de voz no responde en esta región. Avise a soporte.',

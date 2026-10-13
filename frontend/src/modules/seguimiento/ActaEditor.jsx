@@ -564,16 +564,39 @@ export default function ActaEditor({
           })
           // No forzar cambio de pestaña: el usuario ya está en Temas al pulsar Actualizar.
         },
-        onLiveInfo: (info) => setGrabacionLiveInfo((prev) => {
-          const next = { ...(prev || {}), ...(info || {}) }
-          // Los chunks STT no traen tramos: conservar el último estado visible.
-          if (info && !Object.prototype.hasOwnProperty.call(info, 'tramos')) {
-            if (prev?.tramos) next.tramos = prev.tramos
-            if (prev?.tramos_resumen) next.tramos_resumen = prev.tramos_resumen
+        onLiveInfo: (info) => {
+          // Si vuelve a transcribir, quitar el aviso rojo falso de micrófono.
+          if (Number(info?.delta_chars || 0) > 0 || info?.stt_estado === 'transcribiendo') {
+            setError((prevErr) => (
+              /micrófono|No se detectó sonido|no se reconoció voz/i.test(String(prevErr || ''))
+                ? ''
+                : prevErr
+            ))
           }
-          return next
-        }),
-        onError: (msg) => setError(msg || 'Error de grabación'),
+          setGrabacionLiveInfo((prev) => {
+            const next = { ...(prev || {}), ...(info || {}) }
+            // Los chunks STT no traen tramos: conservar el último estado visible.
+            if (info && !Object.prototype.hasOwnProperty.call(info, 'tramos')) {
+              if (prev?.tramos) next.tramos = prev.tramos
+              if (prev?.tramos_resumen) next.tramos_resumen = prev.tramos_resumen
+            }
+            // Conservar contador de caracteres si el payload del checkpoint no lo trae.
+            if (
+              info
+              && !Object.prototype.hasOwnProperty.call(info, 'transcripcion_chars')
+              && prev?.transcripcion_chars != null
+            ) {
+              next.transcripcion_chars = prev.transcripcion_chars
+            }
+            return next
+          })
+        },
+        onError: (msg) => {
+          const text = String(msg || 'Error de grabación')
+          // Silencio normal no debe pintar el banner rojo (defensa en UI).
+          if (/^Sin voz en este momento$/i.test(text.trim())) return
+          setError(text)
+        },
         onDownloaded: ({ filename, auto }) => {
           setOkMsg(
             auto
@@ -1449,6 +1472,9 @@ export default function ActaEditor({
                 ? `, ${grabacionLiveInfo.tramos_resumen.procesando} en proceso`
                 : '')
             : ''}
+          {grabacionLiveInfo?.stt_aviso
+            ? ` · ${String(grabacionLiveInfo.stt_aviso)}`
+            : ''}
           {' · Compromisos siguen siendo manuales'}
         </div>
       )}
@@ -2048,6 +2074,7 @@ export default function ActaEditor({
           onAbrirTema={async (idx) => {
             const prevOpen = indexTemaAbierto(form.ideas)
             // Si había otro abierto: sintetizar su tramo antes de cambiar.
+            // No detiene ni reinicia la captura STT: solo asocia el tramo al tema previo.
             if (
               prevOpen >= 0
               && prevOpen !== idx
@@ -2066,6 +2093,12 @@ export default function ActaEditor({
               ...prev,
               ideas: abrirTemaEnIdeas(prev.ideas, idx),
             }))
+            // Limpiar aviso rojo de micrófono residual: Abrir tema no corta el audio.
+            setError((prevErr) => (
+              /micrófono|No se detectó sonido|no se reconoció voz/i.test(String(prevErr || ''))
+                ? ''
+                : prevErr
+            ))
             setOkMsg('Tema abierto: el audio se asociará a este punto hasta que lo cierre.')
           }}
           onCerrarTema={async (idx) => {
