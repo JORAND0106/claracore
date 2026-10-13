@@ -200,29 +200,92 @@ def construir_messages(
 
 # ── Error Anthropic → HTTPException ──────────────────────────────────────────
 
-def _traducir_error_anthropic(exc: BaseException) -> None:
+def mensaje_error_anthropic_usuario(
+    exc: BaseException,
+    *,
+    producto: str = "Clara",
+    model: str | None = None,
+) -> str:
     """
-    Registra el error técnico en el log y lanza siempre HTTP 502 con mensaje amable.
-    El usuario nunca ve detalles internos de Anthropic.
+    Aviso breve para la UI (sin jerga ni nombres de variables/claves).
+    El detalle técnico solo va al log.
     """
-    _log.error("AVI Anthropic error: %s", exc)
-    low = str(exc).lower()
-
+    low = str(exc or "").lower()
+    nombre = (producto or "Clara").strip() or "Clara"
     if (
         "credit balance" in low
         or "too low to access" in low
         or "purchase credits" in low
         or ("billing" in low and "upgrade" in low)
     ):
-        _log.error("AVI: saldo insuficiente en cuenta Anthropic.")
-
+        return (
+            f"No se pudo usar {nombre}: la cuenta de IA no tiene saldo. "
+            "Avise a soporte."
+        )
+    if "authentication" in low or "invalid api key" in low or "unauthorized" in low or "permission" in low:
+        return (
+            f"No se pudo usar {nombre}: la clave de IA fue rechazada. "
+            "Avise a soporte."
+        )
     if "not_found_error" in low and "model" in low:
-        _log.error("AVI: modelo '%s' no encontrado en Anthropic.", AVI_MODEL)
+        return (
+            f"No se pudo usar {nombre}: el modelo de IA no está disponible. "
+            "Avise a soporte."
+        )
+    if "rate" in low and "limit" in low:
+        return (
+            f"No se pudo usar {nombre}: el servicio de IA está ocupado. "
+            "Espere unos segundos e intente de nuevo."
+        )
+    if "timeout" in low or "timed out" in low:
+        return (
+            f"No se pudo usar {nombre}: el servicio de IA no respondió a tiempo. "
+            "Intente de nuevo."
+        )
+    if "unexpected keyword argument" in low:
+        return (
+            f"No se pudo usar {nombre} por un ajuste interno de la IA. "
+            "Intente de nuevo. Si continúa, avise a soporte."
+        )
+    return f"{nombre} no pudo responder en este momento. Intente de nuevo en un momento."
 
+
+def _traducir_error_anthropic(
+    exc: BaseException,
+    *,
+    producto: str = "AVI",
+    model: str | None = None,
+) -> None:
+    """
+    Registra el error técnico en el log y lanza siempre HTTP 502 con mensaje amable.
+    El usuario nunca ve detalles internos de Anthropic.
+    """
+    _log.error(
+        "%s Anthropic error (model=%s): %s",
+        (producto or "AVI"),
+        model or AVI_MODEL,
+        str(exc).replace("\n", " ")[:500],
+    )
     raise HTTPException(
         status_code=502,
-        detail="AVI no está disponible en este momento. Intenta en un momentico.",
+        detail=mensaje_error_anthropic_usuario(exc, producto=producto, model=model),
     )
+
+
+def texto_desde_respuesta_anthropic(resp: Any) -> str:
+    """
+    Une los bloques de texto de la respuesta.
+
+    Modelos recientes (p. ej. claude-haiku-5-5) pueden devolver ThinkingBlock u
+    otros bloques sin atributo ``text`` antes del TextBlock. Tomar content[0].text
+    directo provoca AttributeError y el aviso genérico de «no disponible».
+    """
+    parts: list[str] = []
+    for block in getattr(resp, "content", None) or []:
+        txt = getattr(block, "text", None)
+        if txt:
+            parts.append(str(txt))
+    return "\n".join(parts).strip()
 
 
 # ── Llamada a la API de Anthropic ────────────────────────────────────────────
@@ -255,6 +318,8 @@ async def llamar_avi(
     messages, tiene_imagen = construir_messages(mensaje, historial, imagen_base64)
     system_blocks = build_avi_system_blocks(modulo_actual)
 
+    # Clara/actas usa clave y modelo propios; el resto de la plataforma, AVI general.
+    producto_ui = "Clara" if override_key or override_model else "AVI"
     try:
         resp = await client.messages.create(
             model=use_model,
@@ -266,13 +331,33 @@ async def llamar_avi(
     except HTTPException:
         raise
     except Exception as exc:
-        _traducir_error_anthropic(exc)
+        _traducir_error_anthropic(exc, producto=producto_ui, model=use_model)
+        raise  # unreachable; mantiene el tipado claro
 
-    texto = resp.content[0].text if resp.content else ""
-    tokens_in = resp.usage.input_tokens
-    tokens_out = resp.usage.output_tokens
+    texto = texto_desde_respuesta_anthropic(resp)
+    if not texto:
+        tipos = [
+            getattr(b, "type", None) or type(b).__name__
+            for b in (getattr(resp, "content", None) or [])
+        ]
+        _log.error(
+            "%s Anthropic sin texto usable (model=%s stop=%s blocks=%s)",
+            producto_ui,
+            use_model,
+            getattr(resp, "stop_reason", None),
+            tipos,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"{producto_ui} no pudo responder en este momento. "
+                "Intente de nuevo en un momento."
+            ),
+        )
+    tokens_in = getattr(getattr(resp, "usage", None), "input_tokens", 0) or 0
+    tokens_out = getattr(getattr(resp, "usage", None), "output_tokens", 0) or 0
 
-    return texto, tiene_imagen, tokens_in, tokens_out
+    return texto, tiene_imagen, int(tokens_in), int(tokens_out)
 
 
 # ── Registro asíncrono best-effort ───────────────────────────────────────────

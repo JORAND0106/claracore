@@ -6988,11 +6988,14 @@ async def redaccion_asistida_clara(
 
         key, key_source = resolve_acta_anthropic_key()
         if not key:
+            _log.error(
+                "Clara acta: sin clave (configure ACTA_ANTHROPIC_API_KEY o ANTHROPIC_API_KEY)"
+            )
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "No hay clave Anthropic para actas. "
-                    "Configure ACTA_ANTHROPIC_API_KEY (o ANTHROPIC_API_KEY como respaldo)."
+                    "No se pudo usar Clara: no hay clave de IA configurada para actas. "
+                    "Avise a soporte."
                 ),
             )
         avi_kwargs = {

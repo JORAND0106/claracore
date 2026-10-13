@@ -842,7 +842,12 @@ async def route_redaccion_clara(body: RedaccionClaraBody, current_user=Depends(g
         raise
     except Exception as exc:
         _log.exception("redaccion-clara: %s", exc)
-        raise HTTPException(status_code=502, detail="Clara no está disponible en este momento.") from exc
+        try:
+            from avi_service import mensaje_error_anthropic_usuario
+            detail = mensaje_error_anthropic_usuario(exc, producto="Clara")
+        except Exception:
+            detail = "Clara no pudo responder en este momento. Intente de nuevo en un momento."
+        raise HTTPException(status_code=502, detail=detail) from exc
 
 
 # ── Cron vencimientos ──────────────────────────────────────────────────────
