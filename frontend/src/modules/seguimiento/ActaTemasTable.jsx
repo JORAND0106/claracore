@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { htmlToPlainText, isRichTextEmpty } from './richTextUtils'
 import { isClaveSuelta } from './actaTemasOrdenDia'
+import TemaProseHtml from './TemaProseHtml'
+import { temaRichProseCss } from './temaRichProseCss'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
@@ -113,6 +115,7 @@ export default function ActaTemasTable({
 
   return (
     <div className="cc-seguim-temas-table">
+      <style>{temaRichProseCss(t, { variant: 'readonly' })}</style>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
         {!soloLectura && hayError && (
           <button
@@ -321,14 +324,20 @@ export default function ActaTemasTable({
                       <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>
                         {tituloVisible}
                       </div>
-                      {plano && plano !== tituloVisible && (
-                        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
-                          {expandido ? plano : truncate(plano, 140)}
+                      {!empty && plano && plano !== tituloVisible && (
+                        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
+                          <TemaProseHtml
+                            t={{ ...t, text: t.textMuted }}
+                            html={idea.texto}
+                            clamp={!expandido && plano.length > 140}
+                            injectCss={false}
+                            style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}
+                          />
                           {plano.length > 140 && (
                             <button
                               type="button"
                               style={{
-                                marginLeft: 6,
+                                marginTop: 4,
                                 border: 'none',
                                 background: 'transparent',
                                 color: t.primary,

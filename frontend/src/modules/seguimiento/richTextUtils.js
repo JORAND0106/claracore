@@ -28,25 +28,27 @@ export function escapeHtml(s) {
     .replace(/"/g, '&quot;')
 }
 
-/** Texto plano para compromisos / Clara (sin etiquetas). */
+/** Texto plano para compromisos / Clara / tooltips (sin etiquetas). */
 export function htmlToPlainText(html) {
   const s = String(html ?? '')
   if (!s) return ''
   if (!looksLikeHtml(s)) return s
-  if (typeof document !== 'undefined') {
-    const el = document.createElement('div')
-    el.innerHTML = s
-    return (el.innerText || el.textContent || '').replace(/\u00a0/g, ' ').trim()
-  }
+  // Regex (no textContent): evita "equipo.El recurso" al pegar bloques adyacentes.
   return s
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
     .replace(/<\/li>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/td>/gi, '\t')
+    .replace(/<\/th>/gi, '\t')
     .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }

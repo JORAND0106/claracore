@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { plainTextToHtml } from './richTextUtils'
 import { EnsureEditableAfterTable } from './temaEnsureEditableAfterTable.js'
 import { scrollEditorCaretIntoView } from './temaEditorScroll.js'
+import { temaRichProseCss } from './temaRichProseCss'
 import { applyColumnWidthPx, currentCellColWidth } from './temaTableWidth'
 
 /**
@@ -403,127 +404,5 @@ function box(t) {
 }
 
 function editorCss(t, minHeight) {
-  return `
-.tema-rich-prose {
-  min-height: ${minHeight}px;
-  padding: 10px 12px;
-  outline: none;
-  color: ${t.text};
-  font-size: var(--cc-input, 14px);
-  line-height: 1.45;
-  word-break: break-word;
-}
-.tema-rich-prose p { margin: 0 0 0.55em; }
-.tema-rich-prose p:last-child { margin-bottom: 0; }
-.tema-rich-prose ul {
-  margin: 0.35em 0 0.55em;
-  padding-left: 1.35em;
-  list-style-type: disc;
-}
-.tema-rich-prose ul ul { list-style-type: circle; }
-.tema-rich-prose ul ul ul { list-style-type: square; }
-.tema-rich-prose ol {
-  list-style: none;
-  margin: 0.35em 0 0.55em;
-  padding-left: 0;
-  counter-reset: item;
-}
-.tema-rich-prose ol > li {
-  display: block;
-  position: relative;
-  counter-increment: item;
-  margin: 0.15em 0;
-  padding-left: 2.1em;
-}
-.tema-rich-prose ol > li::before {
-  content: counters(item, ".") ".";
-  position: absolute;
-  left: 0;
-  top: 0;
-  font-weight: 700;
-  color: ${t.primary || '#0f766e'};
-  white-space: nowrap;
-}
-.tema-rich-prose ol ol {
-  margin-top: 0.15em;
-  margin-bottom: 0.15em;
-}
-.tema-rich-prose li p { margin: 0; display: inline; }
-.tema-rich-prose li > p { display: block; }
-.tema-rich-prose strong { font-weight: 700; }
-.tema-rich-prose em { font-style: italic; }
-.tema-rich-prose u { text-decoration: underline; }
-.tema-rich-prose p.is-editor-empty:first-child::before {
-  content: attr(data-placeholder);
-  float: left;
-  color: ${t.textMuted || '#94a3b8'};
-  pointer-events: none;
-  height: 0;
-}
-.tema-rich-prose .is-empty::before {
-  color: ${t.textMuted || '#94a3b8'};
-  content: attr(data-placeholder);
-  float: left;
-  height: 0;
-  pointer-events: none;
-}
-.tema-rich-prose .tableWrapper {
-  overflow-x: auto;
-  margin: 0.5em 0;
-}
-.tema-rich-prose table.tema-rich-table,
-.tema-rich-prose table {
-  border-collapse: collapse;
-  width: auto;
-  max-width: 100%;
-  table-layout: fixed;
-  margin: 0;
-}
-.tema-rich-prose th,
-.tema-rich-prose td {
-  border: 1px solid ${t.border || '#cbd5e1'};
-  padding: 6px 8px;
-  vertical-align: top;
-  min-width: 40px;
-  position: relative;
-  background: ${t.bgCard || '#fff'};
-}
-.tema-rich-prose th {
-  font-weight: 700;
-  background: ${t.bg || '#f8fafc'};
-}
-.tema-rich-prose .column-resize-handle {
-  position: absolute;
-  right: -2px;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  background: ${t.primary || '#2563eb'};
-  opacity: 0.35;
-  cursor: col-resize;
-  pointer-events: auto;
-  z-index: 2;
-}
-.tema-rich-prose.resize-cursor {
-  cursor: col-resize;
-}
-/* Gapcursor: permite colocar el caret antes/después de tablas */
-.tema-rich-prose .ProseMirror-gapcursor {
-  display: none;
-  pointer-events: none;
-  position: absolute;
-}
-.tema-rich-prose .ProseMirror-gapcursor:after {
-  content: '';
-  display: block;
-  position: absolute;
-  top: -2px;
-  width: 20px;
-  border-top: 1px solid ${t.text || '#0f172a'};
-  animation: tema-rich-gapcursor-blink 1.1s steps(2, start) infinite;
-}
-@keyframes tema-rich-gapcursor-blink {
-  to { visibility: hidden; }
-}
-`
+  return temaRichProseCss(t, { minHeight, variant: 'editor' })
 }
