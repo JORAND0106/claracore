@@ -232,20 +232,32 @@ async def llamar_avi(
     modulo_actual: str,
     historial: list[dict],
     imagen_base64: str | None,
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
 ) -> tuple[str, bool, int, int]:
     """
     Llama a Claude Haiku con prompt caching en el system prompt.
 
     Retorna (respuesta_texto, tiene_imagen, tokens_input, tokens_output).
     Lanza HTTPException 400 si la imagen es inválida, 502 si Anthropic falla.
+
+    ``api_key`` / ``model`` opcionales: usados p. ej. por Clara dentro de actas
+    (ACTA_ANTHROPIC_API_KEY + claude-haiku-5-5). Sin ellos, AVI general.
     """
-    client = _get_avi_client()
+    override_key = (api_key or "").strip() or None
+    override_model = (model or "").strip() or None
+    if override_key:
+        client = anthropic.AsyncAnthropic(api_key=override_key)
+    else:
+        client = _get_avi_client()
+    use_model = override_model or AVI_MODEL
     messages, tiene_imagen = construir_messages(mensaje, historial, imagen_base64)
     system_blocks = build_avi_system_blocks(modulo_actual)
 
     try:
         resp = await client.messages.create(
-            model=AVI_MODEL,
+            model=use_model,
             max_tokens=AVI_MAX_TOKENS,
             system=system_blocks,      # type: ignore[arg-type]
             messages=messages,         # type: ignore[arg-type]
