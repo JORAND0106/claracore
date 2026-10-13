@@ -16,6 +16,10 @@ export function isClaveSuelta(clave) {
   return /^suelta-/i.test(String(clave || '').trim())
 }
 
+export function isClaveManual(clave) {
+  return /^manual-/i.test(String(clave || '').trim())
+}
+
 export function ideaTemaAbierto(idea) {
   return !!(idea && idea._temaAbierto)
 }
@@ -31,6 +35,19 @@ export function claveTemaActivo(ideas = []) {
   if (idx < 0) return null
   const k = String(ideas[idx]?._claveGrabacion || '').trim()
   return k || null
+}
+
+/**
+ * Tema sin título, texto, adjuntos ni audio (candidato a duplicado vacío).
+ * No considera compromisos (eso lo valida el servidor en limpieza).
+ */
+export function ideaSinContenido(idea) {
+  if (!idea || typeof idea !== 'object') return true
+  const titulo = String(idea.titulo || '').trim()
+  const texto = String(idea.texto || '').replace(/<[^>]+>/g, '').replace(/\u00a0/g, ' ').trim()
+  const imgs = Array.isArray(idea.imagenes) ? idea.imagenes.filter(Boolean) : []
+  const hasAudio = !!(idea.audio_url || idea.audio_blob_path || idea._audioTema)
+  return !titulo && !texto && imgs.length === 0 && !hasAudio
 }
 
 /**
@@ -60,15 +77,18 @@ function soloIdeasVaciasPlaceholder(list) {
   if (list.length !== 1) return false
   const row = list[0]
   if (row?._claveGrabacion || row?.id || row?._desdeOrdenDia) return false
-  const titulo = String(row?.titulo || '').trim()
-  const texto = String(row?.texto || '').replace(/<[^>]+>/g, '').trim()
-  return !titulo && !texto
+  return ideaSinContenido(row)
+}
+
+function makeManualClave(seed) {
+  const raw = String(seed || Date.now().toString(36)).replace(/[^a-zA-Z0-9_-]/g, '')
+  return `manual-${raw.slice(-14) || Date.now().toString(36)}`
 }
 
 /**
  * Pre-crea un tema cerrado por cada punto del Orden del Día.
- * No duplica si ya hay claves od-* / _desdeOrdenDia.
- * Conserva ideas sueltas/manuales existentes.
+ * Idempotente: no duplica; reclama filas vacías huérfanas; orden = orden del día.
+ * Si sobra un tema od-* con contenido (punto eliminado), lo conserva como manual-*.
  */
 export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { newRowKey } = {}) {
   const puntos = (Array.isArray(ordenItems) ? ordenItems : [])
@@ -81,84 +101,76 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
     return Array.isArray(ideasActuales) ? ideasActuales : []
   }
 
-  let list = Array.isArray(ideasActuales) ? [...ideasActuales] : []
-  if (soloIdeasVaciasPlaceholder(list)) {
-    list = []
+  let pool = Array.isArray(ideasActuales) ? [...ideasActuales] : []
+  if (soloIdeasVaciasPlaceholder(pool)) {
+    pool = []
   }
 
-  const byClave = new Map()
-  list.forEach((row, idx) => {
-    const k = String(row?._claveGrabacion || '').trim()
-    if (k) byClave.set(k, idx)
-  })
+  const used = new Set()
+  const takeMatch = (pred) => {
+    const idx = pool.findIndex((row, i) => !used.has(i) && pred(row))
+    if (idx < 0) return null
+    used.add(idx)
+    return pool[idx]
+  }
 
-  // Reatachar por título si se cargó del servidor sin _claveGrabacion
+  const matched = []
   let changed = false
-  puntos.forEach((p, i) => {
-    const clave = claveOrdenDia(i + 1)
-    if (byClave.has(clave)) return
-    const titulo = String(p.texto || p.titulo || '').trim()
-    const hit = list.findIndex((row) => {
-      if (row?._claveGrabacion) return false
-      return String(row?.titulo || '').trim().toLowerCase() === titulo.toLowerCase()
-    })
-    if (hit >= 0) {
-      const itemKey = String(p.key || p._key || '').trim() || null
-      const expId = p.expositor_usuario_id ?? p.expositor_id ?? null
-      list[hit] = {
-        ...list[hit],
-        _claveGrabacion: clave,
-        _desdeOrdenDia: true,
-        _ordenItemKey: itemKey || list[hit]._ordenItemKey || null,
-        _temaAbierto: !!list[hit]._temaAbierto,
-        quien_dijo: String(list[hit].quien_dijo || p.expositor_nombre || '').trim(),
-        titulo: list[hit].titulo || titulo,
-        expositor_usuario_id: list[hit].expositor_usuario_id ?? (
-          expId != null && Number(expId) > 0 ? Number(expId) : null
-        ),
-      }
-      byClave.set(clave, hit)
-      changed = true
-    }
-  })
-
-  const seeded = []
 
   puntos.forEach((p, i) => {
     const clave = claveOrdenDia(i + 1)
     const titulo = String(p.texto || p.titulo || '').trim()
     const expositor = String(p.expositor_nombre || '').trim()
-    const idx = byClave.get(clave)
     const itemKey = String(p.key || p._key || '').trim() || null
     const expIdRaw = p.expositor_usuario_id ?? p.expositor_id ?? null
     const expId = expIdRaw != null && Number(expIdRaw) > 0 ? Number(expIdRaw) : null
-    if (idx != null) {
-      const prev = list[idx]
+    const tituloLc = titulo.toLowerCase()
+
+    let idea =
+      (itemKey
+        ? takeMatch((row) => String(row?._ordenItemKey || '').trim() === itemKey)
+        : null)
+      || takeMatch((row) => String(row?._claveGrabacion || '').trim() === clave)
+      || takeMatch((row) => {
+        const t = String(row?.titulo || '').trim().toLowerCase()
+        if (!t || t !== tituloLc) return false
+        const k = String(row?._claveGrabacion || '').trim()
+        return !k || isClaveOrdenDia(k)
+      })
+      // Reclamar filas vacías huérfanas (típico: se guardaron solo con interviniente, sin título/clave).
+      || takeMatch((row) => {
+        if (!ideaSinContenido(row)) return false
+        const k = String(row?._claveGrabacion || '').trim()
+        if (k && !isClaveOrdenDia(k)) return false
+        return true
+      })
+
+    if (idea) {
       const next = {
-        ...prev,
+        ...idea,
         _claveGrabacion: clave,
         _desdeOrdenDia: true,
-        _ordenItemKey: itemKey || prev._ordenItemKey || null,
-        titulo: prev.titulo || titulo,
-        quien_dijo: prev.quien_dijo || expositor,
-        expositor_usuario_id: prev.expositor_usuario_id ?? expId,
-        _temaAbierto: !!prev._temaAbierto,
+        _ordenItemKey: itemKey || idea._ordenItemKey || null,
+        titulo: String(idea.titulo || '').trim() || titulo,
+        quien_dijo: String(idea.quien_dijo || '').trim() || expositor,
+        expositor_usuario_id: idea.expositor_usuario_id ?? expId,
+        _temaAbierto: !!idea._temaAbierto,
       }
       if (
-        next.titulo !== prev.titulo
-        || next.quien_dijo !== prev.quien_dijo
-        || next.expositor_usuario_id !== prev.expositor_usuario_id
-        || prev._claveGrabacion !== clave
-        || prev._ordenItemKey !== next._ordenItemKey
-        || !prev._desdeOrdenDia
+        next.titulo !== idea.titulo
+        || next.quien_dijo !== idea.quien_dijo
+        || next.expositor_usuario_id !== idea.expositor_usuario_id
+        || idea._claveGrabacion !== clave
+        || idea._ordenItemKey !== next._ordenItemKey
+        || !idea._desdeOrdenDia
       ) {
-        list[idx] = next
         changed = true
       }
-      seeded.push(list[idx])
+      matched.push(next)
       return
     }
-    const row = {
+
+    matched.push({
       _key: makeKey('idea'),
       _claveGrabacion: clave,
       _desdeOrdenDia: true,
@@ -170,12 +182,34 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
       texto: '',
       texto_es_borrador: false,
       imagenes: [],
-    }
-    list.push(row)
-    byClave.set(clave, list.length - 1)
-    seeded.push(row)
+    })
     changed = true
   })
+
+  const rest = []
+  pool.forEach((row, i) => {
+    if (used.has(i)) return
+    const k = String(row?._claveGrabacion || '').trim()
+    // Vacío sin vínculo útil → no conservar (evita 4 filas fantasma + 4 reales).
+    if (ideaSinContenido(row) && (!k || isClaveOrdenDia(k))) {
+      changed = true
+      return
+    }
+    // Punto eliminado del OD pero el tema ya tiene contenido → conservar como manual.
+    if (isClaveOrdenDia(k)) {
+      rest.push({
+        ...row,
+        _claveGrabacion: makeManualClave(row.id || row._key || k),
+        _desdeOrdenDia: false,
+        _ordenItemKey: null,
+      })
+      changed = true
+      return
+    }
+    rest.push(row)
+  })
+
+  let list = [...matched, ...rest]
 
   // Garantizar un solo tema abierto
   let openSeen = false
@@ -220,7 +254,7 @@ export function agregarTemaManual(ideas = [], { titulo = '', quien_dijo = '', ne
     ? newRowKey
     : () => `idea-${Date.now().toString(36)}`
   const key = makeKey('idea')
-  const clave = `manual-${String(key).replace(/[^a-zA-Z0-9_-]/g, '').slice(-12) || Date.now().toString(36)}`
+  const clave = makeManualClave(key)
   const row = {
     _key: key,
     _claveGrabacion: clave,

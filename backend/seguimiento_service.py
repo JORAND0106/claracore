@@ -1001,6 +1001,7 @@ _SCHEMA_CAPS: Dict[str, Optional[bool]] = {
     "acta_horas_reunion": None,
     "idea_titulo": None,
     "idea_imagenes": None,
+    "idea_clave_grabacion": None,
     "acta_flujo_tabs": None,
     "acta_gestion_obra": None,
 }
@@ -1050,6 +1051,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "idea_imagenes":
             sb.table("seguimiento_acta_idea").select("id,imagenes").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "idea_clave_grabacion":
+            sb.table("seguimiento_acta_idea").select("id,clave_grabacion").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "asignado_externo_id":
             sb.table("seguimiento_item").select("id,asignado_externo_id").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
@@ -1081,6 +1085,8 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "idea_titulo" and _is_missing_column_error(exc, "titulo"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "idea_imagenes" and _is_missing_column_error(exc, "imagenes"):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "idea_clave_grabacion" and _is_missing_column_error(exc, "clave_grabacion"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "asignado_externo_id" and _is_missing_column_error(exc, "asignado_externo_id"):
             _SCHEMA_CAPS[cap] = False
@@ -1253,6 +1259,21 @@ def _ensure_idea_imagenes_column(sb) -> bool:
         except Exception:
             pass
     return _schema_has(sb, "idea_imagenes", force=True)
+
+
+def _ensure_idea_clave_grabacion_column(sb) -> bool:
+    if _schema_has(sb, "idea_clave_grabacion"):
+        return True
+    _SCHEMA_CAPS["idea_clave_grabacion"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "idea_clave_grabacion", force=True)
 
 
 def _normalizar_imagenes_idea(raw) -> List[dict]:
@@ -3785,6 +3806,8 @@ def _sync_ideas(
         orden = int(idea.get("orden") if idea.get("orden") is not None else i)
         include_titulo = _ensure_idea_titulo_column(sb)
         include_imagenes = _ensure_idea_imagenes_column(sb)
+        include_clave = _ensure_idea_clave_grabacion_column(sb)
+        clave_raw = (idea.get("clave_grabacion") or idea.get("_claveGrabacion") or "").strip() or None
         payload = {
             "texto": texto,
             "orden": orden,
@@ -3796,6 +3819,8 @@ def _sync_ideas(
         # Solo actualiza imagenes si el cliente envía la clave (permite borrar/reordenar).
         if include_imagenes and "imagenes" in idea:
             payload["imagenes"] = _normalizar_imagenes_idea(idea.get("imagenes"))
+        if include_clave and ("clave_grabacion" in idea or "_claveGrabacion" in idea or clave_raw):
+            payload["clave_grabacion"] = clave_raw
         # expositor_usuario_id + texto_es_borrador (columnas nuevas; tolerar ausencia)
         if "expositor_usuario_id" in idea or "expositor_id" in idea:
             try:
@@ -3820,6 +3845,10 @@ def _sync_ideas(
                     _SCHEMA_CAPS["idea_imagenes"] = False
                     payload.pop("imagenes", None)
                     _write_update(payload, int(iid))
+                elif include_clave and "clave_grabacion" in payload and _is_missing_column_error(exc, "clave_grabacion"):
+                    _SCHEMA_CAPS["idea_clave_grabacion"] = False
+                    payload.pop("clave_grabacion", None)
+                    _write_update(payload, int(iid))
                 elif _is_missing_column_error(exc, "expositor_usuario_id") or _is_missing_column_error(exc, "texto_es_borrador"):
                     payload.pop("expositor_usuario_id", None)
                     payload.pop("texto_es_borrador", None)
@@ -3837,6 +3866,8 @@ def _sync_ideas(
                 row["titulo"] = titulo
             if include_imagenes and "imagenes" in idea:
                 row["imagenes"] = _normalizar_imagenes_idea(idea.get("imagenes"))
+            if include_clave and clave_raw:
+                row["clave_grabacion"] = clave_raw
             if "expositor_usuario_id" in payload:
                 row["expositor_usuario_id"] = payload.get("expositor_usuario_id")
             if "texto_es_borrador" in payload:
@@ -3851,6 +3882,10 @@ def _sync_ideas(
                 elif include_imagenes and "imagenes" in row and _is_missing_column_error(exc, "imagenes"):
                     _SCHEMA_CAPS["idea_imagenes"] = False
                     row.pop("imagenes", None)
+                    inserted = _write_insert(row)
+                elif include_clave and "clave_grabacion" in row and _is_missing_column_error(exc, "clave_grabacion"):
+                    _SCHEMA_CAPS["idea_clave_grabacion"] = False
+                    row.pop("clave_grabacion", None)
                     inserted = _write_insert(row)
                 elif _is_missing_column_error(exc, "expositor_usuario_id") or _is_missing_column_error(exc, "texto_es_borrador"):
                     row.pop("expositor_usuario_id", None)
