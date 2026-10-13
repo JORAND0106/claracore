@@ -13,7 +13,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from catalogo_insumos_permissions import require_permiso_catalogo_insumos
+from catalogo_insumos_permissions import (
+    require_permiso_catalogo_insumos,
+    tiene_permiso_catalogo_insumos,
+)
 from catalogo_insumos_service import (
     check_cotizacion_numero_incongruencia,
     create_insumo_catalogo,
@@ -40,6 +43,7 @@ from catalogo_insumos_service import (
     resolve_cotizacion_by_numero,
     suggest_cotizaciones_numero,
     update_insumo_catalogo,
+    uso_insumo_catalogo,
 )
 from almacen_insumos_service import normalize_tributos, search_proveedores
 from main import _require_contract_access, get_current_user, registrar_log
@@ -61,6 +65,26 @@ def _http_value_error(exc: ValueError) -> HTTPException:
     if "no encontrad" in msg.lower():
         return HTTPException(status_code=404, detail=msg)
     return HTTPException(status_code=400, detail=msg)
+
+
+def _registrar_edicion_insumo(current_user, accion: str, insumo_id, codigo: str, result: dict) -> dict:
+    cambios = {}
+    if isinstance(result, dict):
+        cambios = result.pop("_cambios_identidad", None) or {}
+    detalle = {"codigo": codigo}
+    if cambios.get("campos"):
+        detalle["campos"] = cambios["campos"]
+    registrar_log(
+        current_user,
+        accion,
+        "CATALOGO_INSUMOS",
+        "almacen_insumo",
+        str(insumo_id),
+        detalle,
+        valor_anterior=cambios.get("anterior"),
+        valor_nuevo=cambios.get("nuevo"),
+    )
+    return result
 
 
 def _check_contrato(current_user, contrato_id: int) -> None:
@@ -90,6 +114,7 @@ class InsumoCatalogoJsonBody(BaseModel):
     cotizacion_vigencia: Optional[str] = None
     cotizaciones_detalle: Optional[List[Dict[str, Any]]] = None
     force_update_id: Optional[int] = None
+    confirmar_cambio_identidad: Optional[bool] = None
 
 
 def _parse_tributos_form(raw: Optional[str]) -> Dict[str, Any]:
@@ -177,6 +202,32 @@ def route_repair_proveedor_ganadora(contrato_id: int, current_user=Depends(get_c
     _check_contrato(current_user, contrato_id)
     require_permiso_catalogo_insumos(current_user, "editar")
     return repair_insumos_proveedor_desde_ganadora(contrato_id)
+
+
+@router.get("/{contrato_id}/insumos/{insumo_id}/uso")
+def route_uso_insumo(
+    contrato_id: int,
+    insumo_id: int,
+    unidad: str = "",
+    rendimiento: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """Dónde está en uso el insumo. El mensaje no incluye cifras en dinero."""
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_catalogo_insumos(current_user, "ver")
+        or tiene_permiso_catalogo_insumos(current_user, "editar")
+    ):
+        require_permiso_catalogo_insumos(current_user, "ver")
+    try:
+        return uso_insumo_catalogo(
+            contrato_id,
+            insumo_id,
+            unidad=unidad,
+            rendimiento=rendimiento,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.get("/{contrato_id}/insumos/{insumo_id}")
@@ -390,6 +441,7 @@ async def route_create_insumo(
     requiere_cotizacion: Optional[str] = Form("true"),
     cantidad_negociada: Optional[float] = Form(None),
     valor_negociado_total: Optional[float] = Form(None),
+    confirmar_cambio_identidad: Optional[str] = Form(None),
     force_update_id: Optional[int] = Form(None),
     cotizacion_ganadora_pdf: Optional[UploadFile] = File(None),
     cotizaciones_soporte: List[UploadFile] = File(default=[]),
@@ -419,6 +471,7 @@ async def route_create_insumo(
         "requiere_cotizacion": requiere_cotizacion,
         "cantidad_negociada": cantidad_negociada,
         "valor_negociado_total": valor_negociado_total,
+        "confirmar_cambio_identidad": confirmar_cambio_identidad,
     }
     ganadora = None
     if cotizacion_ganadora_pdf and cotizacion_ganadora_pdf.filename:
@@ -435,13 +488,15 @@ async def route_create_insumo(
             ganadora_pdf=ganadora,
             soporte_pdfs=soportes or None,
             force_update_id=force_update_id,
+            current_user=current_user,
         )
-        registrar_log(
-            current_user, "CREAR" if not force_update_id else "EDITAR",
-            "CATALOGO_INSUMOS", "almacen_insumo", str(result.get("insumo_id") or result.get("id")),
-            {"codigo": codigo},
+        return _registrar_edicion_insumo(
+            current_user,
+            "CREAR" if not force_update_id else "EDITAR",
+            result.get("insumo_id") or result.get("id"),
+            codigo,
+            result,
         )
-        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -527,6 +582,7 @@ async def route_update_insumo(
     requiere_cotizacion: Optional[str] = Form("true"),
     cantidad_negociada: Optional[float] = Form(None),
     valor_negociado_total: Optional[float] = Form(None),
+    confirmar_cambio_identidad: Optional[str] = Form(None),
     cotizacion_ganadora_pdf: Optional[UploadFile] = File(None),
     cotizaciones_soporte: List[UploadFile] = File(default=[]),
     current_user=Depends(get_current_user),
@@ -555,6 +611,7 @@ async def route_update_insumo(
         "requiere_cotizacion": requiere_cotizacion,
         "cantidad_negociada": cantidad_negociada,
         "valor_negociado_total": valor_negociado_total,
+        "confirmar_cambio_identidad": confirmar_cambio_identidad,
     }
     ganadora = None
     if cotizacion_ganadora_pdf and cotizacion_ganadora_pdf.filename:
@@ -570,12 +627,9 @@ async def route_update_insumo(
             contrato_id, insumo_id, _uid(current_user), body,
             ganadora_pdf=ganadora,
             soporte_pdfs=soportes or None,
+            current_user=current_user,
         )
-        registrar_log(
-            current_user, "EDITAR", "CATALOGO_INSUMOS", "almacen_insumo", str(insumo_id),
-            {"codigo": codigo},
-        )
-        return result
+        return _registrar_edicion_insumo(current_user, "EDITAR", insumo_id, codigo, result)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -592,6 +646,7 @@ def route_create_insumo_json(
         return create_insumo_catalogo(
             contrato_id, _uid(current_user), body.model_dump(),
             force_update_id=body.force_update_id,
+            current_user=current_user,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

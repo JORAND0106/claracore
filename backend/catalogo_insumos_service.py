@@ -1952,6 +1952,348 @@ def _save_soporte_pdfs(
     return count
 
 
+# Mismo listado que frontend/src/utils/unidadesListadoPrecios.jsx (sin texto libre).
+UNIDADES_INSUMO = frozenset({
+    "CM", "GL", "HORA", "KG", "KM-CARRIL", "LT", "M", "M2", "M3", "M3-KM",
+    "ML", "TON", "TRAMO", "UN", "UN/ME", "UND",
+})
+
+
+def _norm_unidad_insumo(raw: Any) -> str:
+    return (str(raw or "").strip().upper())
+
+
+def unidad_insumo_para_guardar(nueva: Any, existente: Any = None) -> str:
+    """Unidad del listado. Conserva una unidad histórica que ya no está en el listado si no cambia."""
+    nueva_n = _norm_unidad_insumo(nueva)
+    exist_raw = str(existente or "").strip()
+    exist_n = _norm_unidad_insumo(exist_raw)
+    if not nueva_n:
+        raise ValueError("La unidad del insumo es obligatoria.")
+    if nueva_n in UNIDADES_INSUMO:
+        return nueva_n
+    if exist_n and nueva_n == exist_n:
+        return exist_raw
+    raise ValueError(
+        "La unidad debe elegirse del listado de la plataforma. No se admite texto libre."
+    )
+
+
+def rendimiento_insumo_para_guardar(raw: Any) -> Optional[float]:
+    """Vacío o número mayor o igual a cero. Rechaza texto."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool) or isinstance(raw, (bytes, bytearray)):
+        raise ValueError("El rendimiento solo acepta valores numéricos.")
+    if isinstance(raw, (int, float)):
+        numero = float(raw)
+    else:
+        texto = str(raw).strip().replace(",", ".")
+        if not re.fullmatch(r"\d+(\.\d+)?", texto):
+            raise ValueError("El rendimiento solo acepta valores numéricos.")
+        numero = float(texto)
+    if numero < 0 or numero != numero or numero in (float("inf"), float("-inf")):
+        raise ValueError("El rendimiento solo acepta valores numéricos.")
+    return numero
+
+
+def _mismo_rendimiento(antes: Any, despues: Any) -> bool:
+    if antes in (None, "") and despues in (None, ""):
+        return True
+    try:
+        if antes in (None, "") or despues in (None, ""):
+            return False
+        return abs(float(antes) - float(despues)) < 1e-9
+    except (TypeError, ValueError):
+        return str(antes) == str(despues)
+
+
+def _fmt_rendimiento(raw: Any) -> str:
+    if raw in (None, ""):
+        return "vacío"
+    try:
+        numero = float(raw)
+    except (TypeError, ValueError):
+        return str(raw)
+    if abs(numero - round(numero)) < 1e-9:
+        return str(int(round(numero)))
+    texto = f"{numero:.4f}".rstrip("0").rstrip(".")
+    return texto
+
+
+def _lista_uso(partes: List[str]) -> str:
+    if not partes:
+        return ""
+    if len(partes) == 1:
+        return partes[0]
+    if len(partes) == 2:
+        return f"{partes[0]} y {partes[1]}"
+    return ", ".join(partes[:-1]) + f" y {partes[-1]}"
+
+
+def mensaje_cambio_unidad_rendimiento(
+    *,
+    unidad_antes: Any,
+    unidad_despues: Any,
+    rendimiento_antes: Any,
+    rendimiento_despues: Any,
+    solicitudes: int = 0,
+    ordenes: int = 0,
+    entradas: int = 0,
+    salidas: int = 0,
+) -> str:
+    """Explica el cambio y el uso. No incluye cifras en dinero."""
+    cambios = []
+    if _norm_unidad_insumo(unidad_antes) != _norm_unidad_insumo(unidad_despues):
+        cambios.append(f"la unidad de {unidad_antes or '—'} a {unidad_despues}")
+    if not _mismo_rendimiento(rendimiento_antes, rendimiento_despues):
+        cambios.append(
+            f"el rendimiento de {_fmt_rendimiento(rendimiento_antes)} "
+            f"a {_fmt_rendimiento(rendimiento_despues)}"
+        )
+    que = _lista_uso(cambios) or "la unidad o el rendimiento"
+    uso = []
+    if solicitudes:
+        uso.append(f"{solicitudes} solicitud" + ("es" if solicitudes != 1 else ""))
+    if ordenes:
+        uso.append(f"{ordenes} " + ("orden de compra" if ordenes == 1 else "órdenes de compra"))
+    if entradas:
+        uso.append(f"{entradas} entrada" + ("s" if entradas != 1 else ""))
+    if salidas:
+        uso.append(f"{salidas} salida" + ("s" if salidas != 1 else ""))
+    donde = _lista_uso(uso)
+    return (
+        f"Va a cambiar {que}. Este insumo está en uso en {donde}. "
+        "Las órdenes de compra ya emitidas, las entradas y las salidas conservan la unidad "
+        "con la que se generaron. El cambio aplica de ahora en adelante en el catálogo, "
+        "en todas las cotizaciones, en las solicitudes que aún no tienen orden de compra "
+        "y en el inventario. Los precios ya registrados no cambian."
+    )
+
+
+def resumen_uso_insumo(sb, contrato_id: int, insumo_id: int) -> dict:
+    """Cuántas solicitudes, OC, entradas y salidas usan el insumo. Sin valores en dinero."""
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id, solicitud_id")
+        .eq("insumo_id", int(insumo_id))
+        .execute()
+        .data
+        or []
+    )
+    item_ids = _ids_de(items)
+    solicitudes = len({int(r["solicitud_id"]) for r in items if r.get("solicitud_id")})
+    ordenes = 0
+    oc_item_ids: List[int] = []
+    if item_ids:
+        oc_items = (
+            sb.table("almacen_orden_compra_item")
+            .select("id, orden_compra_id, solicitud_item_id")
+            .in_("solicitud_item_id", item_ids)
+            .execute()
+            .data
+            or []
+        )
+        ordenes = len({int(r["orden_compra_id"]) for r in oc_items if r.get("orden_compra_id")})
+        oc_item_ids = _ids_de(oc_items)
+    entradas = (
+        sb.table("almacen_entrada")
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .eq("insumo_id", int(insumo_id))
+        .execute()
+        .data
+        or []
+    )
+    entrada_ids = set(_ids_de(entradas))
+    if oc_item_ids:
+        ei_oc = (
+            sb.table("almacen_entrada_item")
+            .select("id, entrada_id")
+            .in_("orden_compra_item_id", oc_item_ids)
+            .execute()
+            .data
+            or []
+        )
+        entrada_ids.update(int(r["entrada_id"]) for r in ei_oc if r.get("entrada_id"))
+    ei_ids: List[int] = []
+    if entrada_ids:
+        ei_rows = (
+            sb.table("almacen_entrada_item")
+            .select("id")
+            .in_("entrada_id", list(entrada_ids))
+            .execute()
+            .data
+            or []
+        )
+        ei_ids = _ids_de(ei_rows)
+    salidas = 0
+    if ei_ids:
+        salidas_rows = (
+            sb.table("almacen_salida")
+            .select("id")
+            .in_("entrada_item_id", ei_ids)
+            .execute()
+            .data
+            or []
+        )
+        salidas = len(_ids_de(salidas_rows))
+    n_entradas = len(entrada_ids)
+    return {
+        "solicitudes": solicitudes,
+        "ordenes": ordenes,
+        "entradas": n_entradas,
+        "salidas": salidas,
+        "en_uso": bool(solicitudes or ordenes or n_entradas or salidas),
+    }
+
+
+def uso_insumo_catalogo(
+    contrato_id: int,
+    insumo_id: int,
+    *,
+    unidad: str = "",
+    rendimiento: Optional[str] = None,
+) -> dict:
+    """Uso del insumo y, si cambian unidad o rendimiento, el texto de confirmación."""
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select("id, unidad, rendimiento")
+        .eq("id", int(insumo_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Insumo no encontrado.")
+    existing = rows[0]
+    uso = resumen_uso_insumo(sb, contrato_id, insumo_id)
+    mensaje = None
+    proponer = bool(str(unidad or "").strip()) or rendimiento is not None
+    if proponer:
+        unidad_nueva = unidad_insumo_para_guardar(
+            str(unidad or "").strip() or existing.get("unidad"),
+            existing.get("unidad"),
+        )
+        rend_raw = existing.get("rendimiento") if rendimiento is None else rendimiento
+        rend_nuevo = rendimiento_insumo_para_guardar(rend_raw)
+        cambio = (
+            _norm_unidad_insumo(existing.get("unidad")) != _norm_unidad_insumo(unidad_nueva)
+            or not _mismo_rendimiento(existing.get("rendimiento"), rend_nuevo)
+        )
+        if uso.get("en_uso") and cambio:
+            mensaje = mensaje_cambio_unidad_rendimiento(
+                unidad_antes=existing.get("unidad"),
+                unidad_despues=unidad_nueva,
+                rendimiento_antes=existing.get("rendimiento"),
+                rendimiento_despues=rend_nuevo,
+                solicitudes=int(uso.get("solicitudes") or 0),
+                ordenes=int(uso.get("ordenes") or 0),
+                entradas=int(uso.get("entradas") or 0),
+                salidas=int(uso.get("salidas") or 0),
+            )
+    return {**uso, "mensaje": mensaje}
+
+
+def propagar_unidad_solicitudes_sin_oc(sb, insumo_id: int, unidad: str) -> int:
+    """Actualiza la unidad de líneas que aún no están en una orden de compra."""
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id")
+        .eq("insumo_id", int(insumo_id))
+        .execute()
+        .data
+        or []
+    )
+    ids = _ids_de(items)
+    if not ids:
+        return 0
+    oc_items = (
+        sb.table("almacen_orden_compra_item")
+        .select("solicitud_item_id")
+        .in_("solicitud_item_id", ids)
+        .execute()
+        .data
+        or []
+    )
+    en_oc = {int(r["solicitud_item_id"]) for r in oc_items if r.get("solicitud_item_id")}
+    libres = [iid for iid in ids if iid not in en_oc]
+    for iid in libres:
+        sb.table("almacen_solicitud_item").update({"unidad": unidad}).eq("id", iid).execute()
+    return len(libres)
+
+
+def _invalidar_vistas_insumo(contrato_id: int) -> None:
+    try:
+        from almacen_inventario_arbol import invalidar_cache_inventario_arbol
+        invalidar_cache_inventario_arbol(contrato_id)
+    except Exception:
+        pass
+    try:
+        from almacen_service import _invalidar_graficos_inventario
+        _invalidar_graficos_inventario(contrato_id)
+    except Exception:
+        pass
+
+
+def evaluar_cambio_unidad_rendimiento(
+    sb,
+    contrato_id: int,
+    existing: dict,
+    body: dict,
+    *,
+    motivo: str = "",
+    current_user=None,
+) -> dict:
+    """Valida unidad y rendimiento. Pide confirmación si el insumo ya está en uso."""
+    unidad = unidad_insumo_para_guardar(body.get("unidad") or existing.get("unidad"), existing.get("unidad"))
+    if "rendimiento" in body:
+        rendimiento = rendimiento_insumo_para_guardar(body.get("rendimiento"))
+    else:
+        rendimiento = rendimiento_insumo_para_guardar(existing.get("rendimiento"))
+    unidad_antes = existing.get("unidad") or ""
+    rend_antes = existing.get("rendimiento")
+    cambio_unidad = _norm_unidad_insumo(unidad_antes) != _norm_unidad_insumo(unidad)
+    cambio_rend = not _mismo_rendimiento(rend_antes, rendimiento)
+    detalle = cotizaciones_detalle_from_row(existing)
+    if detalle:
+        nueva_desc = (body.get("descripcion") or "").strip()
+        vieja_desc = (existing.get("descripcion") or "").strip()
+        if nueva_desc and nueva_desc.casefold() != vieja_desc.casefold():
+            raise ValueError("La descripción del insumo no se puede modificar.")
+    if (cambio_unidad or cambio_rend) and current_user is not None:
+        from catalogo_insumos_permissions import require_permiso_catalogo_insumos
+        require_permiso_catalogo_insumos(current_user, "editar")
+    uso = {"solicitudes": 0, "ordenes": 0, "entradas": 0, "salidas": 0, "en_uso": False}
+    if (cambio_unidad or cambio_rend) and not str(motivo or "").startswith("import"):
+        uso = resumen_uso_insumo(sb, contrato_id, int(existing["id"]))
+        confirmado = _parse_bool(body.get("confirmar_cambio_identidad"), default=False)
+        if uso.get("en_uso") and not confirmado:
+            raise ValueError(mensaje_cambio_unidad_rendimiento(
+                unidad_antes=unidad_antes,
+                unidad_despues=unidad,
+                rendimiento_antes=rend_antes,
+                rendimiento_despues=rendimiento,
+                solicitudes=int(uso.get("solicitudes") or 0),
+                ordenes=int(uso.get("ordenes") or 0),
+                entradas=int(uso.get("entradas") or 0),
+                salidas=int(uso.get("salidas") or 0),
+            ))
+    return {
+        "unidad": unidad,
+        "rendimiento": rendimiento,
+        "cambio_unidad": cambio_unidad,
+        "cambio_rendimiento": cambio_rend,
+        "uso": uso,
+        "anterior": {"unidad": unidad_antes, "rendimiento": rend_antes},
+        "nuevo": {"unidad": unidad, "rendimiento": rendimiento},
+        "campos": [c for c, flag in (("unidad", cambio_unidad), ("rendimiento", cambio_rend)) if flag],
+    }
+
+
 def create_insumo_catalogo(
     contrato_id: int,
     user_id: int,
@@ -1959,6 +2301,7 @@ def create_insumo_catalogo(
     ganadora_pdf: Optional[Tuple[bytes, str, str]] = None,
     soporte_pdfs: Optional[List[Tuple[bytes, str, str]]] = None,
     force_update_id: Optional[int] = None,
+    current_user=None,
 ) -> dict:
     if force_update_id:
         return update_insumo_catalogo(
@@ -1966,6 +2309,7 @@ def create_insumo_catalogo(
             ganadora_pdf=ganadora_pdf,
             soporte_pdfs=soporte_pdfs,
             motivo="actualizacion_precio_duplicado",
+            current_user=current_user,
         )
     sb = _sb()
     payload = _build_insumo_payload(body, contrato_id, user_id)
@@ -2011,6 +2355,7 @@ def update_insumo_catalogo(
     ganadora_pdf: Optional[Tuple[bytes, str, str]] = None,
     soporte_pdfs: Optional[List[Tuple[bytes, str, str]]] = None,
     motivo: str = "edicion",
+    current_user=None,
 ) -> dict:
     sb = _sb()
     existing_rows = (
@@ -2026,8 +2371,20 @@ def update_insumo_catalogo(
     if not existing_rows:
         raise ValueError("Insumo no encontrado.")
     existing = existing_rows[0]
+    identidad = evaluar_cambio_unidad_rendimiento(
+        sb, contrato_id, existing, body, motivo=motivo, current_user=current_user,
+    )
+    body = {
+        **body,
+        "unidad": identidad["unidad"],
+        "rendimiento": identidad["rendimiento"],
+    }
+    if cotizaciones_detalle_from_row(existing):
+        body["descripcion"] = existing.get("descripcion")
     _snapshot_historial(existing, contrato_id, user_id, motivo)
     payload = _build_insumo_payload(body, contrato_id, user_id, codigo_fijo=existing.get("codigo"))
+    payload["unidad"] = identidad["unidad"]
+    payload["rendimiento"] = identidad["rendimiento"]
     if body.get("requiere_cotizacion") is None and "requiere_cotizacion" not in body:
         payload["requiere_cotizacion"] = existing.get("requiere_cotizacion", True)
 
@@ -2098,7 +2455,18 @@ def update_insumo_catalogo(
         _save_ganadora_pdf(contrato_id, insumo_id, *ganadora_pdf)
     if soporte_pdfs:
         _save_soporte_pdfs(contrato_id, insumo_id, user_id, soporte_pdfs)
-    return get_insumo(contrato_id, insumo_id)
+    if identidad["cambio_unidad"]:
+        propagar_unidad_solicitudes_sin_oc(sb, insumo_id, identidad["unidad"])
+    if identidad["cambio_unidad"] or identidad["cambio_rendimiento"]:
+        _invalidar_vistas_insumo(contrato_id)
+    result = get_insumo(contrato_id, insumo_id)
+    if identidad["campos"]:
+        result["_cambios_identidad"] = {
+            "campos": identidad["campos"],
+            "anterior": identidad["anterior"],
+            "nuevo": identidad["nuevo"],
+        }
+    return result
 
 
 def map_ocr_to_cotizacion(ocr_result: dict) -> dict:

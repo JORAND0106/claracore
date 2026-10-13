@@ -43,6 +43,8 @@ import {
   ladoHasImpuesto,
   pickGanadora,
   resolveProveedorFieldsForSave,
+  formConIdentidadPropagada,
+  identidadInsumoDifiere,
   sanitizeRendimientoInput,
   setGanadoraPar,
   syncLegacyFromGanadora,
@@ -927,12 +929,14 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [unidadModoCustom, setUnidadModoCustom] = useState(false)
   const [unidadCustom, setUnidadCustom] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  const [confirmIdentidad, setConfirmIdentidad] = useState(null)
   const [deleteAviso, setDeleteAviso] = useState('')
   const [bajaCotizacion, setBajaCotizacion] = useState(null)
   const [deleteProvConfirm, setDeleteProvConfirm] = useState(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [confirmRevocarGanadora, setConfirmRevocarGanadora] = useState(null)
   const formBaselineRef = useRef('')
+  const pendingIdentidadRef = useRef(null)
   const [mainTab, setMainTab] = useState('insumos')
   const [proveedores, setProveedores] = useState([])
   const [provTotal, setProvTotal] = useState(0)
@@ -1036,6 +1040,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const canEliminar = permsEfectivos?.eliminar
   const verEconomicos = puedeVerValoresEconomicosAlmacen(user)
   const canVer = permsEfectivos?.ver
+  const identidadSoloLectura = Boolean(editId && !canEditar)
+  const puedeAbrirInsumo = Boolean(canVer || canEditar)
 
   const loadProveedores = useCallback(() => {
     if (!api || !canVer) return
@@ -1528,22 +1534,60 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     impuesto_np: { ...EMPTY_IMPUESTO },
   })
 
+  const baselineForm = () => {
+    try {
+      return JSON.parse(formBaselineRef.current || '{}')
+    } catch {
+      return {}
+    }
+  }
+
+  const pedirConfirmacionIdentidad = async (src, continuar) => {
+    if (!editId || !api) return true
+    if (!identidadInsumoDifiere(src, baselineForm())) return true
+    let uso
+    try {
+      uso = await api.usoInsumo(editId, {
+        unidad: src.unidad || '',
+        rendimiento: src.rendimiento ?? '',
+      })
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'No se pudo verificar el uso del insumo.' })
+      return false
+    }
+    if (uso?.en_uso && uso?.mensaje) {
+      pendingIdentidadRef.current = continuar
+      setConfirmIdentidad({ mensaje: String(uso.mensaje) })
+      return false
+    }
+    return true
+  }
+
+  const ofrecerConfirmacionDesdeError = (err, continuar) => {
+    const text = String(err?.message || '')
+    if (!/está en uso|Va a cambiar/i.test(text)) return false
+    pendingIdentidadRef.current = continuar
+    setConfirmIdentidad({ mensaje: text })
+    return true
+  }
+
   const enviarOActualizarCotizacion = async () => {
-    const pares = form.cotizaciones_detalle || []
-    const { faltantes, coherencia } = validateCaptureForEnviar(form, pares)
+    const formListo = formConIdentidadPropagada(form)
+    const pares = formListo.cotizaciones_detalle || []
+    const { faltantes, coherencia } = validateCaptureForEnviar(formListo, pares)
     const all = [...faltantes, ...coherencia]
     if (all.length) {
       setModalFaltantes(all)
       setModalRuleErrors([])
       return
     }
-    const opts = impuestoOptsFromForm(form)
+    const opts = impuestoOptsFromForm(formListo)
     const wasUpdate = !!selectedParId
 
     let list
     if (selectedParId) {
       list = pares.map((p) => (
-        p.id === selectedParId ? applyCaptureToPar(p, form, opts) : p
+        p.id === selectedParId ? applyCaptureToPar(p, formListo, opts) : p
       ))
       list = ensureGanadora(list)
       await persistCotizacionEnTabla(list, { wasUpdate })
@@ -1552,7 +1596,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
     // Nueva cotización: si ya hay ganadora vigente, pedir confirmación de revocación.
     if (hasGanadoraVigente(pares)) {
-      list = buildParFromCapture(form, pares, { ...opts, makeGanadora: false })
+      list = buildParFromCapture(formListo, pares, { ...opts, makeGanadora: false })
       setConfirmRevocarGanadora({
         pendingList: list,
         newParId: list[list.length - 1]?.id,
@@ -1561,7 +1605,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       return
     }
 
-    list = buildParFromCapture(form, pares, { ...opts, makeGanadora: true })
+    list = buildParFromCapture(formListo, pares, { ...opts, makeGanadora: true })
     await persistCotizacionEnTabla(list, { wasUpdate: false })
   }
 
@@ -1569,6 +1613,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     wasUpdate = false,
     clearCantidadNegociada = false,
     revocada = false,
+    yaConfirmado = false,
   } = {}) => {
     let list = ensureGanadora(listIn)
     // Si la captura corresponde a la ganadora, asegurar proveedor_id en ese par.
@@ -1579,13 +1624,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setModalRuleErrors(ganadoraRuleErrors(list))
     setSelectedParId(null)
     // Persistencia usa proveedor de la ganadora; la UI sí limpia el panel de captura.
-    const formForSave = {
+    const formForSave = formConIdentidadPropagada({
       ...form,
       cotizaciones_detalle: list,
       ...legacy,
       ...provSave,
       ...(clearCantidadNegociada ? { cantidad_negociada: '' } : {}),
-    }
+    })
     const cleared = clearCaptureAfterSend()
     const nextForm = {
       ...formForSave,
@@ -1626,9 +1671,21 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         })
         return
       }
+      if (!yaConfirmado) {
+        const ok = await pedirConfirmacionIdentidad(
+          formForSave,
+          () => persistCotizacionEnTabla(listIn, {
+            wasUpdate,
+            clearCantidadNegociada,
+            revocada,
+            yaConfirmado: true,
+          }),
+        )
+        if (!ok) return
+      }
       setBusy(true)
       try {
-        const fd = buildFormData(null, formForSave)
+        const fd = buildFormData(null, formForSave, { confirmarIdentidad: yaConfirmado })
         await api.updateInsumoForm(editId, fd)
         formBaselineRef.current = snapshotForm(nextForm)
         setMsg({
@@ -1638,6 +1695,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         load()
         loadProveedores()
       } catch (e) {
+        if (ofrecerConfirmacionDesdeError(e, () => persistCotizacionEnTabla(listIn, {
+          wasUpdate,
+          clearCantidadNegociada,
+          revocada,
+          yaConfirmado: true,
+        }))) return
         setMsg({ type: 'error', text: e.message })
       } finally {
         setBusy(false)
@@ -1737,7 +1800,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return r.hay_duplicado ? r.duplicados[0] : null
   }
 
-  const buildFormData = (forceUpdateId, formOverride = null) => {
+  const buildFormData = (forceUpdateId, formOverride = null, { confirmarIdentidad = false } = {}) => {
     const src = formOverride || form
     const pares = src.cotizaciones_detalle || []
     const gan = pickGanadora(pares)
@@ -1770,6 +1833,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fd.append('requiere_cotizacion', src.requiere_cotizacion ? 'true' : 'false')
     if (src.cantidad_negociada !== '') fd.append('cantidad_negociada', String(src.cantidad_negociada))
     if (forceUpdateId) fd.append('force_update_id', String(forceUpdateId))
+    if (confirmarIdentidad) fd.append('confirmar_cambio_identidad', 'true')
     const { ganadora, soportes } = collectPdfFilesFromPares(pares)
     if (ganadora) fd.append('cotizacion_ganadora_pdf', ganadora)
     soportes.forEach((f) => fd.append('cotizaciones_soporte', f))
@@ -1813,9 +1877,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return [...new Set(alerts)]
   }
 
-  const save = async (forceUpdateId = null) => {
+  const save = async (forceUpdateId = null, { yaConfirmado = false } = {}) => {
     if (!api) return
-    const { faltantes, ruleErrors } = validateGuardarInsumo(form, {
+    const formListo = formConIdentidadPropagada(form)
+    const { faltantes, ruleErrors } = validateGuardarInsumo(formListo, {
       editId,
     })
     const incongruencias = await collectIncongruenciaNumeroAlerts()
@@ -1824,6 +1889,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setModalRuleErrors(allRules)
     if (faltantes.length || allRules.length) {
       return
+    }
+    if (editId && !forceUpdateId && !yaConfirmado) {
+      const ok = await pedirConfirmacionIdentidad(
+        formListo,
+        () => save(forceUpdateId, { yaConfirmado: true }),
+      )
+      if (!ok) return
     }
     setBusy(true)
     try {
@@ -1835,7 +1907,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           return
         }
       }
-      const fd = buildFormData(forceUpdateId)
+      const fd = buildFormData(forceUpdateId, formListo, { confirmarIdentidad: yaConfirmado })
       if (editId && !forceUpdateId) {
         await api.updateInsumoForm(editId, fd)
       } else {
@@ -1848,6 +1920,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       loadProveedores()
       if (mainTab === 'proveedores') loadBiblioteca()
     } catch (e) {
+      if (editId && ofrecerConfirmacionDesdeError(e, () => save(forceUpdateId, { yaConfirmado: true }))) return
       setMsg({ type: 'error', text: e.message })
     } finally {
       setBusy(false)
@@ -2198,7 +2271,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               const zebra = sheetZebra(ui, idx)
               const tipoTrib = tipoTributoCortoDesdeRow(r)
               const vtLabel = valorTributarioLabelDesdeRow(r)
-              const openOnClick = canEditar
+              const openOnClick = puedeAbrirInsumo
               const cantNeg = r.cantidad_negociada
               return (
                 <tr
@@ -2207,7 +2280,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   onMouseEnter={(e) => { if (openOnClick) e.currentTarget.style.background = ui.cardSubtle || `${t.primary}14` }}
                   onMouseLeave={(e) => { e.currentTarget.style.background = zebra }}
                   style={{ background: zebra, cursor: openOnClick ? 'pointer' : 'default' }}
-                  title={openOnClick ? 'Clic para editar el insumo y sus cotizaciones' : undefined}
+                  title={openOnClick ? (canEditar ? 'Clic para editar el insumo y sus cotizaciones' : 'Clic para consultar el insumo') : undefined}
                 >
                     <td style={{ ...tdMuted, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.proveedor_nombre || ''}>{r.proveedor_nombre || '—'}</td>
                     <td style={tdCodigo} title={r.codigo || ''}>{r.codigo}</td>
@@ -2230,6 +2303,11 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         {canEditar && (
                           <IconActionBtn title="Editar insumo" t={t} onClick={() => openEdit(r)}>
                             <IconEditRow />
+                          </IconActionBtn>
+                        )}
+                        {canVer && !canEditar && (
+                          <IconActionBtn title="Consultar insumo" t={t} onClick={() => openEdit(r)}>
+                            <IconEye />
                           </IconActionBtn>
                         )}
                         {canEliminar && (
@@ -2489,7 +2567,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             data-testid="catalogo-insumo-modal"
           >
             <h3 style={{ marginTop: 0, marginBottom: 12, color: t.text, fontSize: compactCatalog ? undefined : 'var(--cc-lg)' }}>
-              {editId ? 'Editar insumo' : 'Nuevo insumo'}
+              {editId ? (canEditar ? 'Editar insumo' : 'Consultar insumo') : 'Nuevo insumo'}
             </h3>
             {detalleCargando && (
               <div style={{ marginTop: -6, marginBottom: 12, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
@@ -2597,9 +2675,11 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             </div>
 
             <SheetSectionTitle t={t} ui={ui}>2. Insumo (captura de cotización)</SheetSectionTitle>
-            {((form.cotizaciones_detalle || []).length > 0) && (
+            {(identidadSoloLectura || (form.cotizaciones_detalle || []).length > 0) && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-                Descripción, unidad y rendimiento quedan fijos según la primera cotización enviada. Cambie de proveedor y valores, luego pulse <strong>Enviar</strong>.
+                {identidadSoloLectura
+                  ? 'La descripción, la unidad y el rendimiento están en solo lectura. Para modificar la unidad o el rendimiento se requiere el permiso Editar de Catálogo de Insumos.'
+                  : <>La descripción queda fija. Con permiso de Editar, la unidad y el rendimiento se actualizan en todas las cotizaciones de este insumo. Luego pulse <strong>Enviar</strong> o <strong>Guardar</strong>.</>}
               </div>
             )}
             <div style={{
@@ -2659,12 +2739,21 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       />
                     </td>
                     <td style={{ ...td, overflow: 'visible', minWidth: 0 }}>
-                      {(form.cotizaciones_detalle || []).length > 0 ? (
-                        <input style={{ ...idBlockInp, opacity: 0.9, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }} value={form.unidad} readOnly />
+                      {identidadSoloLectura ? (
+                        <input
+                          data-testid="unidad-insumo"
+                          style={{ ...idBlockInp, opacity: 0.9, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
+                          value={form.unidad}
+                          readOnly
+                          disabled
+                          title="Solo lectura. Requiere permiso Editar de Catálogo de Insumos."
+                        />
                       ) : (
                         <UnidadSelector
+                          selectTestId="unidad-insumo"
+                          permitirCustom={!editId}
                           value={form.unidad}
-                          onChange={(v) => setForm({ ...form, unidad: v })}
+                          onChange={(v) => setForm((f) => formConIdentidadPropagada({ ...f, unidad: v }))}
                           selectStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
                           inputStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
                           btnPrimary={btnPrimary}
@@ -2678,13 +2767,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     </td>
                     <td style={{ ...td, overflow: 'visible' }}>
                       <input
+                        data-testid="rendimiento-insumo"
                         style={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
                         inputMode="decimal"
                         value={form.rendimiento}
-                        readOnly={(form.cotizaciones_detalle || []).length > 0}
+                        readOnly={identidadSoloLectura}
+                        disabled={identidadSoloLectura}
                         placeholder="0"
-                        title="Solo numérico"
-                        onChange={(e) => setForm({ ...form, rendimiento: sanitizeRendimientoInput(e.target.value) })}
+                        title={identidadSoloLectura ? 'Solo lectura. Requiere permiso Editar de Catálogo de Insumos.' : 'Solo numérico'}
+                        onChange={(e) => setForm((f) => formConIdentidadPropagada({
+                          ...f,
+                          rendimiento: sanitizeRendimientoInput(e.target.value),
+                        }))}
                       />
                     </td>
                     <td style={{ ...td, overflow: 'visible', minWidth: 200 }}>
@@ -2698,7 +2792,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           textOverflow: 'clip',
                         }}
                         value={form.descripcion}
-                        readOnly={(form.cotizaciones_detalle || []).length > 0}
+                        readOnly={(form.cotizaciones_detalle || []).length > 0 || identidadSoloLectura}
+                        disabled={(form.cotizaciones_detalle || []).length > 0 || identidadSoloLectura}
                         onChange={(e) => setForm({ ...form, descripcion: e.target.value.toUpperCase() })}
                       />
                     </td>
@@ -2972,7 +3067,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-              <button type="button" style={btnPrimary} disabled={busy} onClick={enviarOActualizarCotizacion}>
+              <button type="button" style={btnPrimary} disabled={busy || identidadSoloLectura} onClick={enviarOActualizarCotizacion}>
                 {selectedParId ? 'Actualizar tabla' : 'Enviar cotización a la tabla'}
               </button>
               <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
@@ -2985,7 +3080,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <SheetSectionTitle
               t={t}
               ui={ui}
-              helpTitle="Descripción, unidad y rendimiento son comunes a la fila. Cada grupo conserva solo sus columnas de costo. Pulse una fila para cargarla en los paneles de costos. Al agregar una cotización adicional se le pregunta si debe revocar a la ganadora vigente. Arrastre el PDF o use el clip."
+              helpTitle="La descripción es común y no se edita cuando ya hay cotizaciones. La unidad y el rendimiento, con permiso de Editar, se actualizan en todas las cotizaciones. Cada grupo conserva solo sus columnas de costo. Pulse una fila para cargarla en los paneles de costos. Al agregar una cotización adicional se le pregunta si debe revocar a la ganadora vigente. Arrastre el PDF o use el clip."
             >
               3. Tabla comparativa de cotizaciones
             </SheetSectionTitle>
@@ -3383,6 +3478,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             </div>
           </div>
         </div>
+      )}
+
+      {confirmIdentidad && (
+        <CcConfirmModal
+          theme={ui.confirmTheme}
+          tipo="warn"
+          titulo="Cambiar unidad o rendimiento"
+          confirmar="Guardar cambio"
+          cancelar="Cancelar"
+          zIndex={100150}
+          procesando={busy}
+          onCancel={() => {
+            if (busy) return
+            pendingIdentidadRef.current = null
+            setConfirmIdentidad(null)
+            setMsg({ type: 'error', text: 'No se guardó el cambio de unidad o rendimiento.' })
+          }}
+          onConfirm={() => {
+            const continuar = pendingIdentidadRef.current
+            pendingIdentidadRef.current = null
+            setConfirmIdentidad(null)
+            if (continuar) continuar()
+          }}
+        >
+          {confirmIdentidad.mensaje}
+        </CcConfirmModal>
       )}
 
       {confirmDiscard && (
