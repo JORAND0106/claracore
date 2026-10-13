@@ -29,6 +29,37 @@ _log = logging.getLogger("uvicorn.error")
 AVI_MODEL = "claude-haiku-4-5-20251001"
 AVI_MAX_TOKENS = 1024
 
+# Clara en actas (redacción de temas/compromisos): respuestas largas sin truncar.
+# AVI chat sigue en AVI_MAX_TOKENS; síntesis de grabación tiene su propio tope.
+def clara_acta_max_tokens() -> int:
+    try:
+        return max(1024, int(os.getenv("CLARA_ACTA_MAX_TOKENS", "8192")))
+    except ValueError:
+        return 8192
+
+
+def clara_acta_max_input_chars() -> int:
+    """Tope de entrada con holgura para devolver el texto completo (≈ 3 chars/token)."""
+    try:
+        env = int(os.getenv("CLARA_ACTA_MAX_INPUT_CHARS", "0") or "0")
+    except ValueError:
+        env = 0
+    if env > 0:
+        return max(2000, env)
+    # ~2.5 chars/token de salida + margen: entrada no debe superar lo que cabe en una respuesta.
+    return max(8000, int(clara_acta_max_tokens() * 2.5))
+
+
+CLARA_ACTA_SYSTEM = (
+    "Eres Clara, asistente de redacción de actas de obra pública en ClaraCore. "
+    "Cumple la instrucción del usuario al pie de la letra. "
+    "Si pide organizar, numerar o formatear sin cambiar ni sintetizar, conserva "
+    "TODAS las frases, datos, cifras y nombres; solo cambia la estructura "
+    "(por ejemplo numerales o viñetas). "
+    "Devuelve únicamente el texto pedido, sin preámbulos, sin comillas y sin explicaciones."
+)
+
+
 # Default 50; configurable con AVI_DAILY_LIMIT en .env
 def _avi_daily_limit() -> int:
     try:
@@ -250,6 +281,29 @@ def mensaje_error_anthropic_usuario(
     return f"{nombre} no pudo responder en este momento. Intente de nuevo en un momento."
 
 
+def _fmt_miles(n: int) -> str:
+    return f"{max(0, int(n)):,}".replace(",", ".")
+
+
+def mensaje_texto_demasiado_largo(*, producto: str = "Clara", limite_chars: int) -> str:
+    nombre = (producto or "Clara").strip() or "Clara"
+    return (
+        f"No se pudo usar {nombre}: el texto supera el límite de {_fmt_miles(limite_chars)} "
+        f"caracteres por llamada. Divida el tema en partes más cortas."
+    )
+
+
+def mensaje_respuesta_truncada(*, producto: str = "Clara", max_tokens: int) -> str:
+    """Aviso amable; el tope técnico (tokens) solo va al log."""
+    nombre = (producto or "Clara").strip() or "Clara"
+    approx_chars = max(1000, int(max_tokens or 0) * 2)
+    return (
+        f"No se pudo usar {nombre}: la respuesta se cortó porque el texto es demasiado "
+        f"largo para una sola llamada (capacidad aprox. {_fmt_miles(approx_chars)} caracteres). "
+        f"Divida el tema o acórtelo un poco."
+    )
+
+
 def _traducir_error_anthropic(
     exc: BaseException,
     *,
@@ -298,6 +352,9 @@ async def llamar_avi(
     *,
     api_key: str | None = None,
     model: str | None = None,
+    max_tokens: int | None = None,
+    system: Any | None = None,
+    producto: str | None = None,
 ) -> tuple[str, bool, int, int]:
     """
     Llama a Claude Haiku con prompt caching en el system prompt.
@@ -307,6 +364,9 @@ async def llamar_avi(
 
     ``api_key`` / ``model`` opcionales: usados p. ej. por Clara dentro de actas
     (ACTA_ANTHROPIC_API_KEY + claude-haiku-5-5). Sin ellos, AVI general.
+
+    ``max_tokens`` / ``system`` opcionales: Clara en actas usa tope alto y un
+    system corto (no el FAQ de AVI) para textos largos de tema.
     """
     override_key = (api_key or "").strip() or None
     override_model = (model or "").strip() or None
@@ -315,15 +375,26 @@ async def llamar_avi(
     else:
         client = _get_avi_client()
     use_model = override_model or AVI_MODEL
+    try:
+        use_max_tokens = int(max_tokens) if max_tokens is not None else AVI_MAX_TOKENS
+    except (TypeError, ValueError):
+        use_max_tokens = AVI_MAX_TOKENS
+    use_max_tokens = max(256, use_max_tokens)
     messages, tiene_imagen = construir_messages(mensaje, historial, imagen_base64)
-    system_blocks = build_avi_system_blocks(modulo_actual)
+    if system is None:
+        system_blocks = build_avi_system_blocks(modulo_actual)
+    else:
+        system_blocks = system
 
     # Clara/actas usa clave y modelo propios; el resto de la plataforma, AVI general.
-    producto_ui = "Clara" if override_key or override_model else "AVI"
+    if producto and str(producto).strip():
+        producto_ui = str(producto).strip()
+    else:
+        producto_ui = "Clara" if override_key or override_model else "AVI"
     try:
         resp = await client.messages.create(
             model=use_model,
-            max_tokens=AVI_MAX_TOKENS,
+            max_tokens=use_max_tokens,
             system=system_blocks,      # type: ignore[arg-type]
             messages=messages,         # type: ignore[arg-type]
             extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
@@ -335,18 +406,32 @@ async def llamar_avi(
         raise  # unreachable; mantiene el tipado claro
 
     texto = texto_desde_respuesta_anthropic(resp)
+    stop_reason = getattr(resp, "stop_reason", None)
+    tokens_in = getattr(getattr(resp, "usage", None), "input_tokens", 0) or 0
+    tokens_out = getattr(getattr(resp, "usage", None), "output_tokens", 0) or 0
+    tipos = [
+        getattr(b, "type", None) or type(b).__name__
+        for b in (getattr(resp, "content", None) or [])
+    ]
+
     if not texto:
-        tipos = [
-            getattr(b, "type", None) or type(b).__name__
-            for b in (getattr(resp, "content", None) or [])
-        ]
         _log.error(
-            "%s Anthropic sin texto usable (model=%s stop=%s blocks=%s)",
+            "%s Anthropic sin texto usable (model=%s stop=%s max_tokens=%s "
+            "tokens_out=%s blocks=%s)",
             producto_ui,
             use_model,
-            getattr(resp, "stop_reason", None),
+            stop_reason,
+            use_max_tokens,
+            tokens_out,
             tipos,
         )
+        if stop_reason == "max_tokens":
+            raise HTTPException(
+                status_code=502,
+                detail=mensaje_respuesta_truncada(
+                    producto=producto_ui, max_tokens=use_max_tokens
+                ),
+            )
         raise HTTPException(
             status_code=502,
             detail=(
@@ -354,8 +439,25 @@ async def llamar_avi(
                 "Intente de nuevo en un momento."
             ),
         )
-    tokens_in = getattr(getattr(resp, "usage", None), "input_tokens", 0) or 0
-    tokens_out = getattr(getattr(resp, "usage", None), "output_tokens", 0) or 0
+
+    if stop_reason == "max_tokens":
+        # Respuesta incompleta: no devolver texto a medias como si estuviera listo.
+        _log.error(
+            "%s Anthropic respuesta truncada (model=%s max_tokens=%s "
+            "tokens_out=%s out_chars=%s blocks=%s)",
+            producto_ui,
+            use_model,
+            use_max_tokens,
+            tokens_out,
+            len(texto),
+            tipos,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=mensaje_respuesta_truncada(
+                producto=producto_ui, max_tokens=use_max_tokens
+            ),
+        )
 
     return texto, tiene_imagen, int(tokens_in), int(tokens_out)
 

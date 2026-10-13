@@ -222,7 +222,8 @@ export function createSeguimientoApi(contratoId, token) {
     }),
     updateTarea: (itemId, body) => send('PUT', `/seguimiento/tareas/${itemId}`, body),
     pegarImagenTarea: (itemId, body) => send('POST', `/seguimiento/tareas/${itemId}/imagen`, body),
-    redaccionClara: (body) => send('POST', '/seguimiento/redaccion-clara', body, 120000),
+    // Textos largos de tema (~varios miles de caracteres) pueden tardar >2 min.
+    redaccionClara: (body) => send('POST', '/seguimiento/redaccion-clara', body, 180000),
 
     // ── Grabación de reuniones (cupo diario / contrato) ─────────────────────
     grabacionCupo: () => get(`/seguimiento/${cid}/grabacion/cupo`),

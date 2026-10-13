@@ -6973,7 +6973,14 @@ async def redaccion_asistida_clara(
     Modos de acta (redaccion / compromiso / titulo_tema): ACTA_ANTHROPIC_API_KEY
     y modelo de actas (default claude-haiku-5-5). pie_foto y demás: AVI general.
     """
-    from avi_service import llamar_avi, verificar_y_registrar_uso
+    from avi_service import (
+        CLARA_ACTA_SYSTEM,
+        clara_acta_max_input_chars,
+        clara_acta_max_tokens,
+        llamar_avi,
+        mensaje_texto_demasiado_largo,
+        verificar_y_registrar_uso,
+    )
 
     restantes = await verificar_y_registrar_uso(str(usuario_id), sb)
     modo_n = (modo or "redaccion").strip().lower()
@@ -6998,18 +7005,44 @@ async def redaccion_asistida_clara(
                     "Avise a soporte."
                 ),
             )
+        max_tok = clara_acta_max_tokens()
+        # Títulos cortos no necesitan el tope alto de redacción de tema.
+        if modo_n == "titulo_tema":
+            max_tok = min(max_tok, 1024)
         avi_kwargs = {
             "api_key": key,
             "model": resolve_acta_anthropic_model(),
+            "max_tokens": max_tok,
+            "system": CLARA_ACTA_SYSTEM,
+            "producto": "Clara",
         }
-        _log.debug(
-            "Clara acta: modo=%s key_source=%s model=%s",
-            modo_n, key_source, avi_kwargs["model"],
+        _log.info(
+            "Clara acta: modo=%s key_source=%s model=%s max_tokens=%s input_chars=%s",
+            modo_n,
+            key_source,
+            avi_kwargs["model"],
+            max_tok,
+            len(texto or ""),
         )
+
+    if modo_n in ("redaccion", "compromiso"):
+        from fastapi import HTTPException
+
+        limite = clara_acta_max_input_chars()
+        if len(texto or "") > limite:
+            _log.error(
+                "Clara acta: texto demasiado largo chars=%s limite=%s modo=%s",
+                len(texto or ""),
+                limite,
+                modo_n,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=mensaje_texto_demasiado_largo(producto="Clara", limite_chars=limite),
+            )
 
     if modo_n == "titulo_tema":
         prompt = (
-            "Eres asistente de actas de obra pública (ClaraCore). "
             "A partir del texto de una idea central, genera ÚNICAMENTE un título corto "
             "institucional en español (entre 4 y 12 palabras), formal y descriptivo, "
             "sin numeración, sin comillas, sin dos puntos al final y sin explicaciones.\n\n"
@@ -7047,17 +7080,20 @@ async def redaccion_asistida_clara(
 
     if modo_n == "compromiso":
         prompt = (
-            "Estoy redactando un compromiso de un acta de reunión de obra pública en ClaraCore. "
-            "Devuélveme ÚNICAMENTE el texto mejorado del compromiso (español formal, concreto, "
-            "accionable y listo para asignar), sin preámbulos, sin comillas y sin explicaciones.\n\n"
+            "Trabaja sobre el texto de un compromiso de acta. "
+            "Aplica la instrucción del usuario. "
+            "Si la instrucción pide no cambiar ni sintetizar, conserva todo el contenido. "
+            "Devuelve ÚNICAMENTE el texto final, sin preámbulos ni comillas.\n\n"
             f"Texto actual:\n{texto or '(vacío)'}\n\n"
             f"Instrucción:\n{instruccion or 'Mejora claridad, precisión y formalidad.'}"
         )
     else:
         prompt = (
-            "Estoy redactando una idea central de un acta de reunión de obra pública en ClaraCore. "
-            "Devuélveme ÚNICAMENTE el texto mejorado (español formal, claro y listo para el acta), "
-            "sin preámbulos, sin comillas y sin explicaciones.\n\n"
+            "Trabaja sobre el texto de un tema de acta. "
+            "Aplica la instrucción del usuario al pie de la letra. "
+            "Si pide organizar por numerales u otro formato sin cambiar ni sintetizar, "
+            "conserva todas las frases, datos y nombres; solo cambia la estructura. "
+            "Devuelve ÚNICAMENTE el texto final, sin preámbulos ni comillas.\n\n"
             f"Texto actual:\n{texto or '(vacío)'}\n\n"
             f"Instrucción:\n{instruccion or 'Mejora claridad, precisión y formalidad.'}"
         )
