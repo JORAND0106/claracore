@@ -112,6 +112,13 @@ describe('actaFlujoTabs', () => {
     assert.equal(ok.flujo.compromisos, true)
     assert.equal(ok.nextTab, 'gestion_obra')
 
+    const sinGo = avanceTrasGuardar('compromisos', { v: 1, orden: true, asistentes: true }, {
+      compromisPrevios: [{ estado_gestion: 'en_progreso' }],
+      incluirGestionObra: false,
+    })
+    assert.equal(sinGo.ok, true)
+    assert.equal(sinGo.nextTab, 'ideas')
+
     const libre = avanceTrasGuardar('compromisos', { liberado: true }, { compromisPrevios: items })
     assert.equal(libre.ok, true)
   })

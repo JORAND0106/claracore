@@ -22,6 +22,11 @@ def norm_tipo_key(raw: Optional[str]) -> str:
     return s.casefold()
 
 
+def acta_incluye_gestion_obra(tipo_acta: Optional[str]) -> bool:
+    """TAB/PDF de Gestión de obra solo para Interna y Externa (tipos originales)."""
+    return norm_tipo_key(tipo_acta) in BUILTIN_TIPOS
+
+
 def display_tipo_acta(raw: Optional[str]) -> str:
     t = (raw or "").strip()
     if not t:

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   TIPO_ACTA_OTRO,
+  actaIncluyeGestionObra,
   buildTipoActaOptions,
+  isBuiltinTipoActa,
   labelTipoActaValue,
   normTipoActaKey,
 } from './tipoActaNorm.js'
@@ -11,6 +13,14 @@ describe('tipoActaNorm', () => {
   it('normTipoActaKey ignora mayúsculas y tildes', () => {
     assert.equal(normTipoActaKey('Comité'), normTipoActaKey('COMITE'))
     assert.equal(normTipoActaKey('Técnico'), normTipoActaKey('tecnico'))
+  })
+
+  it('Gestión de obra solo en Interna/Externa', () => {
+    assert.equal(actaIncluyeGestionObra('interna'), true)
+    assert.equal(actaIncluyeGestionObra('Externa'), true)
+    assert.equal(actaIncluyeGestionObra('Capacitación'), false)
+    assert.equal(actaIncluyeGestionObra('Otro'), false)
+    assert.equal(isBuiltinTipoActa('Capacitación'), false)
   })
 
   it('buildTipoActaOptions incluye builtins, custom y Otro sin duplicar', () => {

@@ -2534,12 +2534,17 @@ def update_acta(
     if "apartados" in data:
         _sync_apartados(sb, acta_id, data.get("apartados") or [])
     if "gestion_obra" in data and _ensure_acta_gestion_obra_column(sb):
-        from gestion_obra_service import normalize_gestion_obra
+        from seguimiento_tipo_acta import acta_incluye_gestion_obra
+        # Solo persistir consolidado en Interna/Externa. En otros tipos no se
+        # calcula/guarda; tampoco se borra lo ya guardado (reaparece si vuelve el tipo).
+        tipo_eff = data.get("tipo_acta") if "tipo_acta" in data else acta.get("tipo_acta")
+        if acta_incluye_gestion_obra(tipo_eff):
+            from gestion_obra_service import normalize_gestion_obra
 
-        go = normalize_gestion_obra(data.get("gestion_obra"))
-        if go is not None:
-            patch_go = {"gestion_obra": go, "updated_at": _now_utc().isoformat()}
-            _persist_acta_row(sb, patch_go, acta_id=acta_id, contrato_id=contrato_id)
+            go = normalize_gestion_obra(data.get("gestion_obra"))
+            if go is not None:
+                patch_go = {"gestion_obra": go, "updated_at": _now_utc().isoformat()}
+                _persist_acta_row(sb, patch_go, acta_id=acta_id, contrato_id=contrato_id)
     return get_acta(sb, acta_id, contrato_id)
 
 
@@ -2567,6 +2572,11 @@ def recalcular_gestion_obra_acta(
     _assert_puede_editar_acta(acta, user_id, current_user)
     if acta_esta_sellada(acta):
         raise ValueError("El acta ya está sellada: el consolidado de Gestión de obra no se recalcula.")
+    from seguimiento_tipo_acta import acta_incluye_gestion_obra
+    if not acta_incluye_gestion_obra(acta.get("tipo_acta")):
+        raise ValueError(
+            "Gestión de obra solo aplica a actas de tipo Interna o Externa."
+        )
     if not _ensure_acta_gestion_obra_column(sb):
         raise ValueError("Falta la columna gestion_obra. Aplique la migración correspondiente.")
 

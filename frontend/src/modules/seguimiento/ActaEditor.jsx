@@ -51,6 +51,7 @@ import {
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 import {
   TIPO_ACTA_OTRO,
+  actaIncluyeGestionObra,
   buildTipoActaOptions,
   isBuiltinTipoActa,
   normTipoActaKey,
@@ -463,6 +464,10 @@ export default function ActaEditor({
   const temaEditSoloLectura = temaEditIdx != null
     ? !puedeEditarEsteTema(form.ideas[temaEditIdx])
     : soloLectura
+  const incluyeGestionObra = actaIncluyeGestionObra(form.tipo_acta)
+  const tabsActaVisibles = TABS_ACTA.filter(
+    (tb) => tb.id !== 'gestion_obra' || incluyeGestionObra,
+  )
   const flujoCtx = { encabezadoGuardado, flujo: flujoTabs }
   const isTabLocked = (tabId) => !tabDesbloqueada(tabId, flujoCtx)
   const secuencialActivo = encabezadoGuardado && !flujoLiberado(flujoTabs)
@@ -908,18 +913,25 @@ export default function ActaEditor({
     return () => { cancelled = true }
   }, [form.tipo_acta, localActaId, loading])
 
+  // Al cambiar el tipo, mostrar u ocultar Gestión de obra de inmediato (sin borrar datos).
+  useEffect(() => {
+    if (tab === 'gestion_obra' && !actaIncluyeGestionObra(form.tipo_acta)) {
+      setTab('ideas')
+    }
+  }, [form.tipo_acta, tab])
+
   useEffect(() => {
     if (!encabezadoGuardado && tab !== 'encabezado') setTab('encabezado')
-    else if (encabezadoGuardado && isTabLocked(tab)) {
+    else if (encabezadoGuardado && (isTabLocked(tab) || (tab === 'gestion_obra' && !incluyeGestionObra))) {
       // Si el flujo aún no habilita la pestaña actual, volver a la más avanzada abierta.
-      const order = TABS_ACTA.map((t) => t.id)
+      const order = tabsActaVisibles.map((t) => t.id)
       let fallback = 'encabezado'
       for (const id of order) {
         if (tabDesbloqueada(id, flujoCtx)) fallback = id
       }
       if (fallback !== tab) setTab(fallback)
     }
-  }, [encabezadoGuardado, tab, flujoTabs])
+  }, [encabezadoGuardado, tab, flujoTabs, incluyeGestionObra])
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   /** Actualiza listas del formulario con updater funcional (evita carreras stale al agregar/seleccionar). */
@@ -1012,7 +1024,10 @@ export default function ActaEditor({
         titulo: a.titulo || '',
         contenido: a.contenido || '',
       })),
-    ...(gestionObra ? { gestion_obra: gestionObra } : {}),
+    // Solo enviar consolidado en Interna/Externa (no borrar datos si el tipo cambia).
+    ...(actaIncluyeGestionObra(resolveTipoActaPayload(formSrc)) && gestionObra
+      ? { gestion_obra: gestionObra }
+      : {}),
     ...extra,
   })
 
@@ -1209,7 +1224,10 @@ export default function ActaEditor({
       if (!form.elaborador_id && !(!puedeEditar && puedeEditarOrden && tab === 'orden')) {
         throw new Error('El elaborador es obligatorio')
       }
-      const avance = avanceTrasGuardar(tab, flujoTabs, { compromisPrevios: previos })
+      const avance = avanceTrasGuardar(tab, flujoTabs, {
+        compromisPrevios: previos,
+        incluirGestionObra: actaIncluyeGestionObra(form.tipo_acta),
+      })
       if (!avance.ok) {
         throw new Error(avance.error || 'No se puede avanzar desde esta pestaña')
       }
@@ -1560,7 +1578,7 @@ export default function ActaEditor({
       )}
 
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        {TABS_ACTA.map((tb) => {
+        {tabsActaVisibles.map((tb) => {
           const locked = isTabLocked(tb.id)
           const label = tb.id === 'compromisos' && previos.length > 0
             ? `${tb.label} (${previos.length})`
@@ -2329,7 +2347,7 @@ export default function ActaEditor({
       </section>
       )}
 
-      {tab === 'gestion_obra' && (
+      {tab === 'gestion_obra' && incluyeGestionObra && (
       <section style={card(t)}>
         <ActaGestionObraPanel
           t={t}

@@ -563,7 +563,13 @@ def _gestion_obra_section_html(acta: dict, *, bordered: bool = True) -> str:
     xhtml2pdf, si mete todo el consolidado en la celda de ``_section``, no parte
     el contenido y lo *escala* (tipografía ~4 pt). El encabezado va en su propia
     tabla; el cuerpo fluye como bloques hermanos y puede continuar de página.
+
+    Vacío (sin huecos) si el tipo de acta no es Interna/Externa.
     """
+    from seguimiento_tipo_acta import acta_incluye_gestion_obra
+
+    if not acta_incluye_gestion_obra((acta or {}).get("tipo_acta")):
+        return ""
     border = (
         f"border:1pt solid {_BORDE};"
         if bordered
