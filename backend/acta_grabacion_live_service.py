@@ -136,13 +136,18 @@ def speech_status() -> dict:
         "region": region if azure else None,
         # Temas largos requieren Azure sobre el audio real; Web Speech queda deprecado.
         "acepta_transcripcion_cliente": False,
-        "sintesis_con_ia": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+        "sintesis_con_ia": _acta_sintesis_ia_disponible(),
         "checkpoint_auto_segundos": 300,
         "detalle": None if azure else (
             "Configure AZURE_SPEECH_KEY para transcribir el audio real (WAV/PCM 16 kHz). "
             "El reconocimiento del navegador ya no se usa para Temas."
         ),
     }
+
+
+def _acta_sintesis_ia_disponible() -> bool:
+    from acta_anthropic import acta_anthropic_configured
+    return acta_anthropic_configured()
 
 
 def _now_iso() -> str:
@@ -454,20 +459,25 @@ async def sintetizar_temas(
     cola_previa: str = "",
     tema_clave_activa: Optional[str] = None,
 ) -> list[dict]:
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    from acta_anthropic import resolve_acta_anthropic_key, resolve_acta_anthropic_model
+
+    api_key, key_source = resolve_acta_anthropic_key()
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY no está configurada.")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "No hay clave Anthropic para actas. "
+                "Configure ACTA_ANTHROPIC_API_KEY (o ANTHROPIC_API_KEY como respaldo)."
+            ),
+        )
     texto = (transcripcion or "").strip()
     if len(texto) < TRAMO_MIN_CHARS:
         return _normalize_temas(temas_previos)
 
     import anthropic
 
-    model = (
-        os.getenv("ACTA_GRABACION_IA_MODEL")
-        or os.getenv("ANTHROPIC_MODEL")
-        or "claude-haiku-4-5"
-    ).strip()
+    model = resolve_acta_anthropic_model()
+    _log.debug("síntesis temas actas: key_source=%s model=%s", key_source, model)
     prev_json = json.dumps(temas_previos or [], ensure_ascii=False)
     if len(texto) > 14_000:
         texto = texto[-14_000:]
@@ -619,12 +629,12 @@ def _detalle_error_sintesis(exc: BaseException, *, model: str = "") -> str:
     ):
         return (
             f"{base} Causa: créditos/saldo insuficientes en Anthropic. "
-            "Revise Plans & Billing y ANTHROPIC_API_KEY."
+            "Revise Plans & Billing y ACTA_ANTHROPIC_API_KEY."
         )
     if "not_found_error" in low and "model" in low:
         return (
             f"{base} Causa: modelo no disponible "
-            f"(configurado: «{model or 'claude-haiku-4-5'}»). "
+            f"(configurado: «{model or 'claude-haiku-5-5'}»). "
             "Defina ACTA_GRABACION_IA_MODEL o ANTHROPIC_MODEL."
         )
     if "rate" in low and "limit" in low:
@@ -632,7 +642,7 @@ def _detalle_error_sintesis(exc: BaseException, *, model: str = "") -> str:
     if "timeout" in low or "timed out" in low:
         return f"{base} Causa: tiempo de espera agotado al llamar a Anthropic."
     if "authentication" in low or "invalid api key" in low or "unauthorized" in low:
-        return f"{base} Causa: ANTHROPIC_API_KEY inválida o sin permiso."
+        return f"{base} Causa: clave Anthropic de actas inválida o sin permiso."
     # Truncar detalle técnico para la UI
     extra = msg.strip().replace("\n", " ")[:220]
     if extra:

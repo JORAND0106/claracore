@@ -6763,11 +6763,42 @@ async def redaccion_asistida_clara(
     *,
     modo: str = "redaccion",
 ) -> dict:
-    """Usa el stack AVI/Clara con prompt de redacción o de título institucional."""
+    """Usa el stack AVI/Clara con prompt de redacción o de título institucional.
+
+    Modos de acta (redaccion / compromiso / titulo_tema): ACTA_ANTHROPIC_API_KEY
+    y modelo de actas (default claude-haiku-5-5). pie_foto y demás: AVI general.
+    """
     from avi_service import llamar_avi, verificar_y_registrar_uso
 
     restantes = await verificar_y_registrar_uso(str(usuario_id), sb)
     modo_n = (modo or "redaccion").strip().lower()
+    # Distinción por modo: el endpoint de seguimiento sirve actas y también pie_foto
+    # de presupuesto; solo los modos de tema/compromiso usan la clave de actas.
+    modos_acta = frozenset({"redaccion", "compromiso", "titulo_tema"})
+    avi_kwargs: Dict[str, Any] = {}
+    if modo_n in modos_acta:
+        from fastapi import HTTPException
+
+        from acta_anthropic import resolve_acta_anthropic_key, resolve_acta_anthropic_model
+
+        key, key_source = resolve_acta_anthropic_key()
+        if not key:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "No hay clave Anthropic para actas. "
+                    "Configure ACTA_ANTHROPIC_API_KEY (o ANTHROPIC_API_KEY como respaldo)."
+                ),
+            )
+        avi_kwargs = {
+            "api_key": key,
+            "model": resolve_acta_anthropic_model(),
+        }
+        _log.debug(
+            "Clara acta: modo=%s key_source=%s model=%s",
+            modo_n, key_source, avi_kwargs["model"],
+        )
+
     if modo_n == "titulo_tema":
         prompt = (
             "Eres asistente de actas de obra pública (ClaraCore). "
@@ -6782,6 +6813,7 @@ async def redaccion_asistida_clara(
             modulo_actual="seguimiento",
             historial=hist,
             imagen_base64=None,
+            **avi_kwargs,
         )
         titulo = _limpiar_titulo_tema(respuesta or "") or titulo_tema_desde_texto(texto)
         return {"titulo": titulo, "texto": titulo, "mensajes_restantes_hoy": restantes}
@@ -6827,6 +6859,7 @@ async def redaccion_asistida_clara(
         modulo_actual="seguimiento",
         historial=hist,
         imagen_base64=None,
+        **avi_kwargs,
     )
     return {"texto": (respuesta or "").strip(), "mensajes_restantes_hoy": restantes}
 
