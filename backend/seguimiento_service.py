@@ -2064,6 +2064,21 @@ def _mask_gestion_obra_valores(acta: dict, current_user: Optional[dict] = None) 
         co["tramos"] = tramos
     datos["cantidades_obra"] = co
     go["datos"] = datos
+    # Informe redactado según visibilidad (datos ya enmascarados)
+    try:
+        from gestion_obra_service import build_informe_redactado
+        go["informe"] = build_informe_redactado(
+            datos, go.get("fecha_desde") or "", go.get("fecha_hasta") or "",
+            ver_valores_cantidades=ver_cant,
+            ver_valores_almacen=ver_alm,
+        )
+    except Exception:
+        if not ver_alm or not ver_cant:
+            # Fallback: variante guardada sin dinero
+            if isinstance(go.get("informe_sin_valores"), dict):
+                go["informe"] = go.get("informe_sin_valores")
+    if not (ver_alm and ver_cant):
+        go.pop("informe_sin_valores", None)
     acta["gestion_obra"] = go
     return acta
 

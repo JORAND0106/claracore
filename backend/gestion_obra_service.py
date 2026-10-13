@@ -18,7 +18,12 @@ _log = logging.getLogger("claracore.seguimiento.gestion_obra")
 BOGOTA = ZoneInfo("America/Bogota")
 
 # Bump cuando cambia la forma del snapshot; el FE fuerza recálculo si es menor.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+_MESES_ES = (
+    "ene.", "feb.", "mar.", "abr.", "may.", "jun.",
+    "jul.", "ago.", "sept.", "oct.", "nov.", "dic.",
+)
 
 SECCIONES = (
     "personal_jornada",
@@ -1088,6 +1093,360 @@ def _agg_programacion(sb, contrato_id: int) -> dict:
     }
 
 
+def _fmt_fecha_corta(raw) -> str:
+    d = _parse_date(raw)
+    if not d:
+        return str(raw or "")[:10]
+    return f"{d.day} {_MESES_ES[d.month - 1]} {d.year}"
+
+
+def _fmt_periodo(fecha_desde, fecha_hasta) -> str:
+    d0 = _parse_date(fecha_desde)
+    d1 = _parse_date(fecha_hasta)
+    if not d0 or not d1:
+        return f"{fecha_desde} → {fecha_hasta}"
+    if d0.year == d1.year and d0.month == d1.month:
+        return f"{d0.day} → {d1.day} {_MESES_ES[d0.month - 1]} {d0.year}"
+    if d0.year == d1.year:
+        return (
+            f"{d0.day} {_MESES_ES[d0.month - 1]} → "
+            f"{d1.day} {_MESES_ES[d1.month - 1]} {d0.year}"
+        )
+    return f"{_fmt_fecha_corta(d0)} → {_fmt_fecha_corta(d1)}"
+
+
+def _money_txt(n) -> str:
+    try:
+        from contrato_numero_letras import formato_pesos_cop
+        return f"$ {formato_pesos_cop(n)}"
+    except Exception:
+        try:
+            return f"$ {int(round(float(n))):,}".replace(",", ".")
+        except (TypeError, ValueError):
+            return "—"
+
+
+def _num(n) -> str:
+    try:
+        x = float(n)
+    except (TypeError, ValueError):
+        return str(n)
+    if abs(x - round(x)) < 1e-9:
+        return str(int(round(x)))
+    return f"{x:.2f}".rstrip("0").rstrip(".")
+
+
+def build_informe_redactado(
+    datos: Optional[dict],
+    fecha_desde: str,
+    fecha_hasta: str,
+    *,
+    ver_valores_cantidades: bool = False,
+    ver_valores_almacen: bool = False,
+) -> dict:
+    """
+    Redacción ejecutiva a partir del consolidado. Solo afirma lo presente en ``datos``.
+    Sin causas, juicios ni cifras inventadas.
+    """
+    datos = datos if isinstance(datos, dict) else {}
+    periodo = _fmt_periodo(fecha_desde, fecha_hasta)
+    titulo = f"Informe de gestión de obra · {periodo}"
+    parrafos: List[dict] = []
+
+    # 1 Personal y jornada
+    pj = datos.get("personal_jornada") if isinstance(datos.get("personal_jornada"), dict) else {}
+    if not pj.get("disponible"):
+        parrafos.append({
+            "id": "personal_jornada",
+            "titulo": "Personal y jornada",
+            "texto": str(pj.get("mensaje") or "Sin datos de personal en el período."),
+        })
+    else:
+        empresas = (pj.get("personal") or {}).get("empresas") or []
+        parts_emp = []
+        day_totals: Dict[str, float] = defaultdict(float)
+        for e in empresas:
+            if not isinstance(e, dict):
+                continue
+            mx = e.get("max_diario")
+            if mx is None:
+                mx = e.get("total")
+            try:
+                mx_f = float(mx or 0)
+            except (TypeError, ValueError):
+                mx_f = 0.0
+            nom = str(e.get("empresa") or "Empresa").strip() or "Empresa"
+            parts_emp.append(f"{nom} (máx. {_num(mx_f)})")
+            tiene_total = False
+            for f in e.get("filas") or []:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("es_total_dia"):
+                    tiene_total = True
+                    for d, v in (f.get("por_dia") or {}).items():
+                        try:
+                            day_totals[d] += float(v or 0)
+                        except (TypeError, ValueError):
+                            pass
+            if not tiene_total:
+                for f in e.get("filas") or []:
+                    if not isinstance(f, dict) or f.get("es_total_dia"):
+                        continue
+                    for d, v in (f.get("por_dia") or {}).items():
+                        try:
+                            day_totals[d] += float(v or 0)
+                        except (TypeError, ValueError):
+                            pass
+        max_global = max(day_totals.values()) if day_totals else 0.0
+        txt = (
+            f"El máximo de personas en un solo día del período fue {_num(max_global)}"
+        )
+        if parts_emp:
+            txt += ", por empresa: " + "; ".join(parts_emp[:8])
+            if len(parts_emp) > 8:
+                txt += f" y {len(parts_emp) - 8} más"
+            txt += "."
+        else:
+            txt += "."
+        aus = pj.get("ausentismo") if isinstance(pj.get("ausentismo"), dict) else {}
+        n_aus = int(aus.get("ausentes") or 0) if aus.get("disponible") else 0
+        if aus.get("disponible"):
+            # Detalle días/cargos con ausencia
+            detalle_aus = []
+            for e in empresas:
+                for f in e.get("filas") or []:
+                    if not isinstance(f, dict) or f.get("es_total_dia"):
+                        continue
+                    for d, n in (f.get("ausencias_por_dia") or {}).items():
+                        try:
+                            ni = int(n)
+                        except (TypeError, ValueError):
+                            continue
+                        if ni > 0:
+                            dp = _parse_date(d)
+                            dlab = (
+                                f"{dp.day} {_MESES_ES[dp.month - 1]}"
+                                if dp else str(d)[5:]
+                            )
+                            detalle_aus.append(
+                                f"{dlab} · {f.get('cargo') or 'cargo'} ({ni})"
+                            )
+            if n_aus > 0:
+                txt += f" Se registraron {n_aus} ausencia(s)"
+                if detalle_aus:
+                    txt += ": " + "; ".join(detalle_aus[:12])
+                    if len(detalle_aus) > 12:
+                        txt += f" y {len(detalle_aus) - 12} más"
+                txt += "."
+            else:
+                txt += " No se registraron ausencias según la regla de días laborales del período."
+        jor = pj.get("jornada") if isinstance(pj.get("jornada"), dict) else {}
+        if jor.get("disponible") and jor.get("promedio_horas") is not None:
+            txt += (
+                f" La jornada promedio fue de {_num(jor.get('promedio_horas'))} h "
+                f"({int(jor.get('registros') or 0)} registro(s) con ingreso/salida)."
+            )
+        maq = pj.get("maquinaria") if isinstance(pj.get("maquinaria"), dict) else {}
+        filas_maq = maq.get("filas") or []
+        if filas_maq:
+            n_eq = len(filas_maq)
+            # Constancia: días con cantidad > 0 / días del rango con algún equipo
+            dias_r = pj.get("dias") or []
+            detalles_m = []
+            for f in filas_maq[:6]:
+                if not isinstance(f, dict):
+                    continue
+                por = f.get("por_dia") or {}
+                dias_uso = sum(1 for v in por.values() if float(v or 0) > 0)
+                mx = f.get("max_diario")
+                if mx is None:
+                    mx = f.get("total")
+                detalles_m.append(
+                    f"{f.get('equipo') or 'Equipo'} (máx. {_num(mx)}"
+                    + (f", {dias_uso} día(s)" if dias_r else "")
+                    + ")"
+                )
+            txt += f" Maquinaria: {n_eq} equipo(s)"
+            if detalles_m:
+                txt += " — " + "; ".join(detalles_m)
+                if n_eq > 6:
+                    txt += f" y {n_eq - 6} más"
+            txt += "."
+        parrafos.append({
+            "id": "personal_jornada",
+            "titulo": "Personal y jornada",
+            "texto": txt,
+        })
+
+    # 2 Cantidades
+    co = datos.get("cantidades_obra") if isinstance(datos.get("cantidades_obra"), dict) else {}
+    ver_c = bool(ver_valores_cantidades or co.get("ver_valores"))
+    if not co.get("disponible"):
+        parrafos.append({
+            "id": "cantidades_obra",
+            "titulo": "Cantidades de obra",
+            "texto": str(co.get("mensaje") or "Sin cantidades reportadas en el período."),
+        })
+    else:
+        n_items = 0
+        caps_peso: List[Tuple[str, float, float]] = []  # (label, cant, valor)
+        for tr in co.get("tramos") or []:
+            if not isinstance(tr, dict):
+                continue
+            for cap in tr.get("capitulos") or []:
+                if not isinstance(cap, dict):
+                    continue
+                cant_sum = 0.0
+                for it in cap.get("items") or []:
+                    if not isinstance(it, dict):
+                        continue
+                    n_items += 1
+                    try:
+                        cant_sum += float(it.get("cantidad") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                val = cap.get("subtotal_valor")
+                try:
+                    val_f = float(val) if val is not None else 0.0
+                except (TypeError, ValueError):
+                    val_f = 0.0
+                label = f"{tr.get('tramo') or ''} / {cap.get('capitulo') or ''}".strip(" /")
+                caps_peso.append((label, cant_sum, val_f))
+        txt = f"Se reportaron cantidades en {n_items} ítem(s) del período"
+        if ver_c and co.get("total_general_valor") is not None:
+            txt += f", por un valor total de {_money_txt(co.get('total_general_valor'))}"
+        txt += "."
+        if caps_peso:
+            if ver_c:
+                top = sorted(caps_peso, key=lambda x: -x[2])[:3]
+                top = [x for x in top if x[2] > 0] or sorted(caps_peso, key=lambda x: -x[1])[:3]
+                partes = []
+                for lab, cant, val in top:
+                    if ver_c and val > 0:
+                        partes.append(f"{lab} ({_money_txt(val)})")
+                    else:
+                        partes.append(f"{lab} (cant. {_num(cant)})")
+            else:
+                top = sorted(caps_peso, key=lambda x: -x[1])[:3]
+                partes = [f"{lab} (cant. {_num(cant)})" for lab, cant, _v in top]
+            if partes:
+                txt += " Capítulos de mayor peso: " + "; ".join(partes) + "."
+        if co.get("registros_sin_item"):
+            txt += (
+                f" {int(co.get('registros_sin_item'))} registro(s) sin ítem asignado "
+                "no se valoraron."
+            )
+        parrafos.append({
+            "id": "cantidades_obra",
+            "titulo": "Cantidades de obra",
+            "texto": txt,
+        })
+
+    # 3 Actividades
+    ac = datos.get("actividades") if isinstance(datos.get("actividades"), dict) else {}
+    if not ac.get("disponible"):
+        parrafos.append({
+            "id": "actividades",
+            "titulo": "Actividades adicionales",
+            "texto": str(ac.get("mensaje") or "Sin actividades adicionales en el período."),
+        })
+    else:
+        por_dia = ac.get("por_dia") or []
+        total_act = sum(int(d.get("cantidad") or 0) for d in por_dia if isinstance(d, dict))
+        if not total_act and ac.get("filas"):
+            total_act = len(ac.get("filas") or [])
+        n_dias = len(por_dia) if por_dia else len({
+            str(f.get("fecha") or "")[:10] for f in (ac.get("filas") or []) if isinstance(f, dict)
+        })
+        parrafos.append({
+            "id": "actividades",
+            "titulo": "Actividades adicionales",
+            "texto": (
+                f"Se reportaron {total_act} actividad(es) adicional(es) "
+                f"en {n_dias} día(s) del período."
+            ),
+        })
+
+    # 4 Almacén
+    al = datos.get("almacen") if isinstance(datos.get("almacen"), dict) else {}
+    ver_a = bool(ver_valores_almacen or al.get("ver_valores"))
+    if not al.get("disponible"):
+        parrafos.append({
+            "id": "almacen",
+            "titulo": "Almacén",
+            "texto": str(al.get("mensaje") or "Sin movimientos de almacén en el período."),
+        })
+    else:
+        sols = [s for s in (al.get("solicitudes") or []) if isinstance(s, dict)]
+        creadas = len(sols)
+        by_est: Dict[str, int] = defaultdict(int)
+        for s in sols:
+            by_est[str(s.get("estado") or "").strip().lower()] += 1
+        # También desde series_por_dia si está
+        gestionadas = by_est.get("enviada", 0)
+        aprobadas = by_est.get("aprobada", 0)
+        pendientes = by_est.get("borrador", 0) + by_est.get("enviada", 0)
+        rechazadas = by_est.get("rechazada", 0)
+        if al.get("series_por_dia"):
+            gestionadas = sum(int(r.get("gestionadas") or 0) for r in al["series_por_dia"])
+            aprobadas = sum(int(r.get("aprobadas") or 0) for r in al["series_por_dia"])
+            pendientes = sum(int(r.get("pendientes") or 0) for r in al["series_por_dia"])
+            creadas = sum(int(r.get("creadas") or 0) for r in al["series_por_dia"]) or creadas
+        n_ent = len(al.get("entradas") or [])
+        n_sal = len(al.get("salidas") or [])
+        txt = (
+            f"Almacén: {creadas} solicitud(es) creada(s); "
+            f"{gestionadas} gestionada(s) (enviada); "
+            f"{aprobadas} aprobada(s); "
+            f"{pendientes} pendiente(s); "
+            f"{rechazadas} rechazada(s). "
+            f"Entradas: {n_ent}; salidas: {n_sal}."
+        )
+        if ver_a:
+            vals = [s.get("valor") for s in sols if s.get("valor") is not None]
+            if vals:
+                try:
+                    suma = sum(float(v) for v in vals)
+                    txt += f" Valor de las solicitudes con monto: {_money_txt(suma)}."
+                except (TypeError, ValueError):
+                    pass
+        parrafos.append({"id": "almacen", "titulo": "Almacén", "texto": txt})
+
+    # 5 Programación
+    pr = datos.get("programacion") if isinstance(datos.get("programacion"), dict) else {}
+    if not pr.get("disponible"):
+        parrafos.append({
+            "id": "programacion",
+            "titulo": "Programación de obra",
+            "texto": str(
+                pr.get("mensaje")
+                or "Este contrato no tiene Programación de obra cargada."
+            ),
+        })
+    else:
+        n_ver = len(pr.get("versiones") or [])
+        n_al = len(pr.get("alertas") or [])
+        txt = "Hay Programación de obra cargada"
+        if n_ver:
+            txt += f" ({n_ver} versión(es))"
+        txt += "."
+        if n_al:
+            txt += f" El módulo reporta {n_al} alerta(s) de desviación."
+        else:
+            txt += " Sin alertas de desviación reportadas por el módulo."
+        parrafos.append({
+            "id": "programacion",
+            "titulo": "Programación de obra",
+            "texto": txt,
+        })
+
+    return {
+        "titulo": titulo,
+        "periodo": periodo,
+        "parrafos": parrafos,
+    }
+
+
 def build_snapshot(
     sb,
     contrato_id: int,
@@ -1136,19 +1495,34 @@ def build_snapshot(
             if k in observaciones and observaciones[k] is not None:
                 obs[k] = str(observaciones[k])
 
+    datos = {
+        "personal_jornada": personal,
+        "cantidades_obra": cantidades,
+        "actividades": actividades,
+        "almacen": almacen,
+        "programacion": programacion,
+    }
+    # Guardar informe con valores (quien no los ve recibe versión enmascarada al servir).
+    informe = build_informe_redactado(
+        datos, d0.isoformat(), d1.isoformat(),
+        ver_valores_cantidades=True,
+        ver_valores_almacen=True,
+    )
+    informe_sin_valores = build_informe_redactado(
+        datos, d0.isoformat(), d1.isoformat(),
+        ver_valores_cantidades=False,
+        ver_valores_almacen=False,
+    )
+
     return {
         "schema_version": SCHEMA_VERSION,
         "fecha_desde": d0.isoformat(),
         "fecha_hasta": d1.isoformat(),
         "snapshot_at": _now_iso(),
         "ver_valores_almacen": bool(ver_economicos),
-        "datos": {
-            "personal_jornada": personal,
-            "cantidades_obra": cantidades,
-            "actividades": actividades,
-            "almacen": almacen,
-            "programacion": programacion,
-        },
+        "datos": datos,
+        "informe": informe,
+        "informe_sin_valores": informe_sin_valores,
         "observaciones": obs,
     }
 
@@ -1179,7 +1553,13 @@ def normalize_gestion_obra(raw) -> Optional[dict]:
         "fecha_hasta": str(raw.get("fecha_hasta") or "")[:10] or None,
         "snapshot_at": raw.get("snapshot_at"),
         "ver_valores_almacen": bool(raw.get("ver_valores_almacen")),
+        "ver_valores_cantidades": bool(raw.get("ver_valores_cantidades")),
         "datos": raw.get("datos") if isinstance(raw.get("datos"), dict) else {},
+        "informe": raw.get("informe") if isinstance(raw.get("informe"), dict) else None,
+        "informe_sin_valores": (
+            raw.get("informe_sin_valores")
+            if isinstance(raw.get("informe_sin_valores"), dict) else None
+        ),
         "observaciones": merge_observaciones(None, raw.get("observaciones")),
     }
     return out
