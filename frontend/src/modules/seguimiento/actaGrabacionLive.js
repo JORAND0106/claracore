@@ -4,8 +4,49 @@
  * Respeta título/expositor de temas pre-creados (Orden del Día / manual).
  */
 
-import { plainTextToHtml } from './richTextUtils.js'
-import { isClaveOrdenDia, isClaveSuelta } from './actaTemasOrdenDia.js'
+import { htmlToPlainText, plainTextToHtml } from './richTextUtils.js'
+import {
+  isClaveOrdenDia,
+  isClaveSuelta,
+  reunirTextosIdeasConTemas,
+} from './actaTemasOrdenDia.js'
+
+function idxTemaAbierto(list) {
+  return (Array.isArray(list) ? list : []).findIndex((r) => r?._temaAbierto)
+}
+
+function idxPorTituloOdManual(list, titulo) {
+  const t = String(titulo || '').trim().toLowerCase()
+  if (!t) return -1
+  const hits = []
+  ;(Array.isArray(list) ? list : []).forEach((row, idx) => {
+    const k = String(row?._claveGrabacion || '').trim()
+    if (!(isClaveOrdenDia(k) || String(k).startsWith('manual-') || row?._desdeOrdenDia)) return
+    if (String(row?.titulo || '').trim().toLowerCase() === t) hits.push(idx)
+  })
+  return hits.length === 1 ? hits[0] : -1
+}
+
+/**
+ * Resuelve la clave destino para un tema sintetizado.
+ * Nunca inventa t1/t2 si ya hay temas OD: eso separaba el texto del tema al guardar.
+ */
+export function resolverClaveTemaSintesis(tema, ideasActuales = [], indiceFallback = 0) {
+  const raw = String(tema?.clave || '').trim()
+  if (raw) return raw
+  const open = idxTemaAbierto(ideasActuales)
+  if (open >= 0) {
+    const k = String(ideasActuales[open]?._claveGrabacion || '').trim()
+    if (k) return k
+  }
+  const byTitle = idxPorTituloOdManual(ideasActuales, tema?.titulo)
+  if (byTitle >= 0) {
+    const k = String(ideasActuales[byTitle]?._claveGrabacion || '').trim()
+    if (k) return k
+  }
+  // Sin tema abierto ni título coincidente → idea general (no tN huérfano).
+  return `suelta-${Math.max(1, Number(indiceFallback) + 1)}`
+}
 
 export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = [], { newRowKey } = {}) {
   const list = Array.isArray(ideasActuales) ? [...ideasActuales] : []
@@ -24,14 +65,26 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
 
   let changed = false
   temas.forEach((tema, i) => {
-    const clave = String(tema?.clave || `t${i + 1}`).trim()
+    let clave = resolverClaveTemaSintesis(tema, list, i)
     if (!clave) return
+    // Si la IA devolvió tN pero hay un OD con el mismo título, unir ahí.
+    if (!isClaveOrdenDia(clave) && !isClaveSuelta(clave) && !String(clave).startsWith('manual-')) {
+      const byTitle = idxPorTituloOdManual(list, tema?.titulo)
+      if (byTitle >= 0) {
+        const kOd = String(list[byTitle]?._claveGrabacion || '').trim()
+        if (kOd) clave = kOd
+      }
+    }
     const titulo = String(tema?.titulo || '').trim()
-    const textoPlano = String(tema?.texto || titulo || '').trim()
+    const textoPlano = String(tema?.texto || '').trim()
     if (!textoPlano && !titulo) return
     const quien = String(tema?.interviniente || '').trim()
-    const html = plainTextToHtml(textoPlano)
-    const idxExistente = byClave.get(clave)
+    const html = textoPlano ? plainTextToHtml(textoPlano) : ''
+    let idxExistente = byClave.has(clave) ? byClave.get(clave) : null
+    if (idxExistente == null && titulo) {
+      const byTitle = idxPorTituloOdManual(list, titulo)
+      if (byTitle >= 0) idxExistente = byTitle
+    }
     const protegerMeta = isClaveOrdenDia(clave)
       || String(clave).startsWith('manual-')
       || !!(idxExistente != null && list[idxExistente]?._desdeOrdenDia)
@@ -40,25 +93,41 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
     if (idx != null) {
       const prev = list[idx]
       if (prev?._editadoUsuario) return
+      const prevPlain = htmlToPlainText(prev.texto || '').trim()
+      // Si el expositor/moderador ya escribió y la IA trae texto distinto, no pisar:
+      // solo anexar cuando el previo es borrador o vacío.
+      let nextTexto = prev.texto || ''
+      if (html) {
+        if (!prevPlain || prev.texto_es_borrador) {
+          nextTexto = html
+        } else if (!prevPlain.includes(textoPlano) && !textoPlano.includes(prevPlain)) {
+          nextTexto = `${String(prev.texto || '').trim()}${html}`
+        } else if (textoPlano.includes(prevPlain) && textoPlano.length > prevPlain.length) {
+          nextTexto = html
+        }
+      }
       const next = {
         ...prev,
-        _claveGrabacion: clave,
+        _claveGrabacion: String(prev._claveGrabacion || clave).trim() || clave,
         _desdeGrabacion: true,
         titulo: protegerMeta
           ? (prev.titulo || titulo || '')
           : (titulo || prev.titulo || ''),
-        texto: html,
+        texto: nextTexto,
         quien_dijo: protegerMeta
           ? (prev.quien_dijo || quien || '')
           : (quien || prev.quien_dijo || ''),
+        ...(prev.texto_es_borrador && html ? { texto_es_borrador: true } : {}),
       }
       if (isClaveSuelta(clave)) next._ideaSuelta = true
       if (
         next.titulo !== prev.titulo
         || next.texto !== prev.texto
         || next.quien_dijo !== prev.quien_dijo
+        || next._claveGrabacion !== prev._claveGrabacion
       ) {
         list[idx] = next
+        byClave.set(next._claveGrabacion, idx)
         changed = true
       }
       return
@@ -77,21 +146,25 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
       _desdeGrabacion: true,
       _temaAbierto: false,
       _ideaSuelta: isClaveSuelta(clave),
-      texto: html,
+      texto: html || '<p></p>',
       quien_dijo: quien,
       titulo: titulo || (isClaveSuelta(clave) ? 'Idea general' : ''),
       imagenes: [],
+      texto_es_borrador: true,
     }
     if (onlyEmpty) {
       list[0] = { ...list[0], ...row, _key: list[0]._key || row._key }
+      byClave.set(clave, 0)
     } else {
       list.push(row)
+      byClave.set(clave, list.length - 1)
     }
-    byClave.set(clave, onlyEmpty ? 0 : list.length - 1)
     changed = true
   })
 
-  return changed ? list : ideasActuales
+  if (!changed) return ideasActuales
+  // Por si quedaron tN huérfanos con título OD, reunirlos.
+  return reunirTextosIdeasConTemas(list)
 }
 
 /** Acumula blobs de MediaRecorder y emite un lote cada `intervalMs` (legado). */

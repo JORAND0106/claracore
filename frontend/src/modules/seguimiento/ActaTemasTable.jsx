@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { htmlToPlainText, isRichTextEmpty } from './richTextUtils'
+import { isClaveSuelta } from './actaTemasOrdenDia'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
@@ -108,6 +109,7 @@ export default function ActaTemasTable({
   const hayError = tramosList.some((tr) => (tr?.estado || '') === 'error')
   const hayProcesando = tramosList.some((tr) => (tr?.estado || '') === 'procesando')
   const hayAbierto = ideas.some((idea) => !!idea?._temaAbierto)
+  const [textoExpandido, setTextoExpandido] = useState({})
 
   return (
     <div className="cc-seguim-temas-table">
@@ -225,19 +227,30 @@ export default function ActaTemasTable({
             </thead>
             <tbody>
               {ideas.map((idea, idx) => {
-                const n = (idea.orden != null && idea.orden !== '' ? Number(idea.orden) : idx) + 1
                 const titulo = String(idea.titulo || '').trim()
                 const plano = htmlToPlainText(idea.texto || '')
-                const preview = titulo || truncate(plano, 100)
                 const imgs = Array.isArray(idea.imagenes) ? idea.imagenes : []
                 const empty = isRichTextEmpty(idea.texto)
                 const abierto = !!idea._temaAbierto
-                const esSuelta = !!idea._ideaSuelta || /^suelta-/i.test(String(idea._claveGrabacion || ''))
+                const esSuelta = !!idea._ideaSuelta
+                  || isClaveSuelta(idea._claveGrabacion)
+                  || /^suelta-/i.test(String(idea._claveGrabacion || ''))
                 const puedeEsta = editaIdea(idea)
                 const esBorrador = !!idea.texto_es_borrador
+                // Números únicos solo para temas OD/manual; ideas generales no usan Nº de tema.
+                const nTema = esSuelta
+                  ? null
+                  : ideas.slice(0, idx + 1).filter((x) => !(
+                    x._ideaSuelta || isClaveSuelta(x._claveGrabacion)
+                  )).length
+                const expandKey = idea._key || idea.id || `idea-${idx}`
+                const expandido = !!textoExpandido[expandKey]
+                const tituloVisible = esSuelta
+                  ? (titulo || 'Idea general')
+                  : (titulo || truncate(plano, 80))
                 return (
                   <tr
-                    key={idea._key || idea.id || `idea-${idx}`}
+                    key={expandKey}
                     style={{
                       borderTop: `1px solid ${t.border}`,
                       background: abierto
@@ -248,7 +261,9 @@ export default function ActaTemasTable({
                     onClick={() => onOpenTema?.(idx)}
                     title={puedeEsta ? 'Abrir diligenciamiento del tema' : 'Ver tema (solo lectura)'}
                   >
-                    <td data-label="#" style={{ ...td, fontWeight: 700, color: t.textMuted }}>{n}</td>
+                    <td data-label="#" style={{ ...td, fontWeight: 700, color: t.textMuted }}>
+                      {esSuelta ? '—' : nTema}
+                    </td>
                     <td data-label="Estado" style={td} onClick={(e) => e.stopPropagation()}>
                       <span style={{
                         display: 'inline-block',
@@ -295,11 +310,44 @@ export default function ActaTemasTable({
                         {String(idea.quien_dijo || '').trim() || '—'}
                       </span>
                     </td>
-                    <td data-label="Tema" style={{ ...td, maxWidth: 340 }} title={plano || titulo}>
-                      <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>{preview}</div>
-                      {titulo && plano && plano !== titulo && (
-                        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
-                          {truncate(plano, 80)}
+                    <td
+                      data-label="Tema"
+                      style={{ ...td, maxWidth: 420 }}
+                      title={plano || tituloVisible}
+                      onClick={(e) => {
+                        if (plano && plano.length > 140) e.stopPropagation()
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>
+                        {tituloVisible}
+                      </div>
+                      {plano && plano !== tituloVisible && (
+                        <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                          {expandido ? plano : truncate(plano, 140)}
+                          {plano.length > 140 && (
+                            <button
+                              type="button"
+                              style={{
+                                marginLeft: 6,
+                                border: 'none',
+                                background: 'transparent',
+                                color: t.primary,
+                                cursor: 'pointer',
+                                fontSize: 'var(--cc-xs)',
+                                fontWeight: 700,
+                                padding: 0,
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setTextoExpandido((prev) => ({
+                                  ...prev,
+                                  [expandKey]: !prev[expandKey],
+                                }))
+                              }}
+                            >
+                              {expandido ? 'Ver menos' : 'Ver más'}
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>

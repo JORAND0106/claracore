@@ -63,6 +63,54 @@ describe('mergeTemasGrabacionViva', () => {
     assert.equal(next.length, 2)
     assert.equal(next[1]._claveGrabacion, 't2')
   })
+
+  it('fusiona síntesis tN en el tema OD del mismo título (no crea fila aparte)', () => {
+    const ideas = [
+      {
+        _key: 'od1',
+        _claveGrabacion: 'od-1',
+        _desdeOrdenDia: true,
+        titulo: 'Avance de obra',
+        texto: '',
+        quien_dijo: 'Ana',
+        imagenes: [],
+      },
+      {
+        _key: 'od2',
+        _claveGrabacion: 'od-2',
+        _desdeOrdenDia: true,
+        titulo: 'Videos',
+        texto: '',
+        quien_dijo: 'Ana',
+        imagenes: [],
+      },
+    ]
+    const next = mergeTemasGrabacionViva(ideas, [
+      { clave: 't2', titulo: 'Videos', texto: 'Resumen del punto de videos.', interviniente: null },
+    ], { newRowKey: () => 'x' })
+    assert.equal(next.length, 2)
+    assert.equal(next[1]._claveGrabacion, 'od-2')
+    assert.match(next[1].texto, /Resumen del punto de videos/)
+    assert.equal(next[1].titulo, 'Videos')
+  })
+
+  it('sin clave ni tema abierto crea idea general (suelta), no tN', () => {
+    const ideas = [{
+      _key: 'od1',
+      _claveGrabacion: 'od-1',
+      _desdeOrdenDia: true,
+      titulo: 'OD',
+      texto: '',
+      quien_dijo: '',
+      imagenes: [],
+    }]
+    const next = mergeTemasGrabacionViva(ideas, [
+      { titulo: 'Algo distinto', texto: 'Comentario libre', interviniente: null },
+    ], { newRowKey: () => 's1' })
+    assert.equal(next.length, 2)
+    assert.match(next[1]._claveGrabacion, /^suelta-/)
+    assert.equal(next[1].titulo, 'Algo distinto')
+  })
 })
 
 describe('PCM/WAV para Azure Speech', () => {
