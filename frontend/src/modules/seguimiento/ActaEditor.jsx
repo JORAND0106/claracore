@@ -173,6 +173,9 @@ function mergeIdeaIds(local = [], server = []) {
     const serverImgs = normalizeIdeaImagenes(match.imagenes)
     const expServer = match.expositor_usuario_id ?? match.expositor_id
     const expLocal = row.expositor_usuario_id ?? row.expositor_id
+    const claveServer = String(match.clave_grabacion || '').trim()
+    const claveLocal = String(row._claveGrabacion || row.clave_grabacion || '').trim()
+    const clave = claveLocal || claveServer
     return {
       ...row,
       id: match.id,
@@ -187,6 +190,10 @@ function mergeIdeaIds(local = [], server = []) {
       texto_es_borrador: match.texto_es_borrador != null
         ? !!match.texto_es_borrador
         : !!row.texto_es_borrador,
+      ...(clave ? {
+        _claveGrabacion: clave,
+        _desdeOrdenDia: /^od-\d+$/i.test(clave),
+      } : {}),
     }
   })
   return [...merged].sort((a, b) => {
@@ -706,6 +713,7 @@ export default function ActaEditor({
                   })
                   .map((x, i) => {
                     const expId = x.expositor_usuario_id ?? x.expositor_id ?? null
+                    const clave = String(x.clave_grabacion || x._claveGrabacion || '').trim()
                     return {
                       _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
                       id: x.id,
@@ -718,6 +726,10 @@ export default function ActaEditor({
                         ? Number(expId)
                         : null,
                       texto_es_borrador: !!x.texto_es_borrador,
+                      ...(clave ? {
+                        _claveGrabacion: clave,
+                        _desdeOrdenDia: /^od-\d+$/i.test(clave),
+                      } : {}),
                     }
                   })
                 : [emptyIdea()]
@@ -883,6 +895,7 @@ export default function ActaEditor({
             ...(im.url && !im.blob_path ? { url: im.url } : {}),
           }))
         const expId = i.expositor_usuario_id ?? i.expositor_id ?? null
+        const clave = String(i._claveGrabacion || i.clave_grabacion || '').trim() || null
         return {
           id: i.id || undefined,
           texto: i.texto || '',
@@ -894,6 +907,7 @@ export default function ActaEditor({
           imagenes,
           expositor_usuario_id: expId != null && Number(expId) > 0 ? Number(expId) : null,
           texto_es_borrador: !!i.texto_es_borrador,
+          ...(clave ? { clave_grabacion: clave } : {}),
         }
       }),
     apartados: (formSrc.apartados || [])
@@ -1764,7 +1778,16 @@ export default function ActaEditor({
                   title="Quitar punto"
                   aria-label="Quitar punto"
                   style={ghost(t)}
-                  onClick={() => patchList('orden_items', (list) => list.filter((_, i) => i !== idx))}
+                  onClick={() => {
+                    setForm((prev) => {
+                      const nextOrden = (prev.orden_items || []).filter((_, i) => i !== idx)
+                      // Realinea od-*: no pierde temas con contenido; quita vacíos huérfanos.
+                      const nextIdeas = seedIdeasFromOrdenDia(nextOrden, prev.ideas, {
+                        newRowKey: (p) => newRowKey(p || 'idea'),
+                      })
+                      return { ...prev, orden_items: nextOrden, ideas: nextIdeas }
+                    })
+                  }}
                 >
                   ✕
                 </button>
