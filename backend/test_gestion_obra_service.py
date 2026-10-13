@@ -13,6 +13,7 @@ from gestion_obra_service import (
     _dias_rango,
     _empresa_asistencia,
     _fecha_bogota,
+    build_informe_redactado,
     empty_observaciones,
     merge_observaciones,
     normalize_gestion_obra,
@@ -192,6 +193,100 @@ class TestBogotaFechas(unittest.TestCase):
     def test_fecha_bogota_desde_utc_noche(self):
         dt = datetime(2026, 10, 13, 0, 30, tzinfo=timezone.utc)
         self.assertEqual(_fecha_bogota(dt), "2026-10-12")
+
+
+class TestInformeRedactado(unittest.TestCase):
+    def _datos_base(self):
+        return {
+            "personal_jornada": {
+                "disponible": True,
+                "dias": ["2026-10-05", "2026-10-06", "2026-10-07"],
+                "personal": {
+                    "empresas": [{
+                        "empresa": "OC Ingeniería",
+                        "max_diario": 4,
+                        "filas": [
+                            {
+                                "cargo": "Maestro",
+                                "por_dia": {"2026-10-05": 3, "2026-10-06": 4, "2026-10-07": 3},
+                                "max_diario": 4,
+                                "ausencias_por_dia": {"2026-10-07": 1},
+                            },
+                            {
+                                "cargo": "Total del día",
+                                "es_total_dia": True,
+                                "por_dia": {"2026-10-05": 3, "2026-10-06": 4, "2026-10-07": 3},
+                                "max_diario": 4,
+                            },
+                        ],
+                    }],
+                },
+                "ausentismo": {"disponible": True, "ausentes": 1},
+                "jornada": {"disponible": True, "promedio_horas": 9, "registros": 10},
+                "maquinaria": {
+                    "filas": [{
+                        "equipo": "Retro",
+                        "max_diario": 1,
+                        "por_dia": {"2026-10-05": 1, "2026-10-06": 1},
+                    }],
+                },
+            },
+            "cantidades_obra": {
+                "disponible": True,
+                "tramos": [{
+                    "tramo": "T1",
+                    "capitulos": [{
+                        "capitulo": "1. Exc",
+                        "items": [{"item_numero": "1.1", "cantidad": 10, "valor_total": 1000}],
+                        "subtotal_valor": 1000,
+                    }],
+                }],
+                "total_general_valor": 1000,
+            },
+            "actividades": {
+                "disponible": True,
+                "por_dia": [{"fecha": "2026-10-06", "cantidad": 2}],
+            },
+            "almacen": {
+                "disponible": True,
+                "solicitudes": [{"estado": "enviada", "valor": 500}],
+                "series_por_dia": [{
+                    "creadas": 1, "gestionadas": 1, "aprobadas": 0, "pendientes": 1,
+                }],
+                "entradas": [],
+                "salidas": [],
+            },
+            "programacion": {
+                "disponible": False,
+                "mensaje": "Este contrato no tiene Programación de obra cargada.",
+            },
+        }
+
+    def test_cifras_verificables(self):
+        inf = build_informe_redactado(
+            self._datos_base(), "2026-10-05", "2026-10-11",
+            ver_valores_cantidades=True, ver_valores_almacen=True,
+        )
+        self.assertIn("oct.", inf["titulo"])
+        pers = next(p for p in inf["parrafos"] if p["id"] == "personal_jornada")
+        self.assertIn("máximo de personas", pers["texto"])
+        self.assertIn("4", pers["texto"])
+        self.assertIn("1 ausencia", pers["texto"])
+        self.assertIn("Maestro", pers["texto"])
+        cant = next(p for p in inf["parrafos"] if p["id"] == "cantidades_obra")
+        self.assertIn("$", cant["texto"])
+        prog = next(p for p in inf["parrafos"] if p["id"] == "programacion")
+        self.assertIn("no tiene Programación", prog["texto"])
+
+    def test_sin_valores_economicos(self):
+        inf = build_informe_redactado(
+            self._datos_base(), "2026-10-05", "2026-10-11",
+            ver_valores_cantidades=False, ver_valores_almacen=False,
+        )
+        cant = next(p for p in inf["parrafos"] if p["id"] == "cantidades_obra")
+        self.assertNotIn("valor total", cant["texto"].lower())
+        alm = next(p for p in inf["parrafos"] if p["id"] == "almacen")
+        self.assertNotIn("$", alm["texto"])
 
 
 class TestProgramacionSinCarga(unittest.TestCase):

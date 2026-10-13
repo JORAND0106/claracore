@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { MessageSquareText, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageSquareText, RefreshCw } from 'lucide-react'
 import {
   Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
@@ -21,7 +21,7 @@ const CHART_COLORS = ['#2563eb', '#0f766e', '#b45309', '#7c3aed', '#be123c', '#0
 const AUSENCIA_BG = 'rgba(245, 158, 11, 0.28)'
 
 /** Debe coincidir con SCHEMA_VERSION del backend (gestion_obra_service). */
-const GESTION_OBRA_SCHEMA_VERSION = 3
+const GESTION_OBRA_SCHEMA_VERSION = 4
 
 function snapshotObsoleto(snap) {
   if (!snap || typeof snap !== 'object') return true
@@ -51,6 +51,7 @@ export default function ActaGestionObraPanel({
   const [obsSeccion, setObsSeccion] = useState(null)
   const [obsDraft, setObsDraft] = useState('')
   const [solicitudDetalleId, setSolicitudDetalleId] = useState(null)
+  const [detalleAbierto, setDetalleAbierto] = useState(false)
 
   const snap = value && typeof value === 'object' ? value : null
   const datos = snap?.datos && typeof snap.datos === 'object' ? snap.datos : {}
@@ -139,6 +140,8 @@ export default function ActaGestionObraPanel({
       fecha_desde: desde || snap?.fecha_desde,
       fecha_hasta: hasta || snap?.fecha_hasta,
       datos: snap?.datos || {},
+      informe: snap?.informe || null,
+      informe_sin_valores: snap?.informe_sin_valores || null,
       observaciones: { ...observaciones, [obsSeccion]: obsDraft },
       snapshot_at: snap?.snapshot_at || null,
     }
@@ -190,36 +193,43 @@ export default function ActaGestionObraPanel({
         </div>
       )}
 
-      <SectionCard t={t} title="1. Personal y jornada" onObs={!soloLectura ? () => abrirObs('personal_jornada') : null} hasObs={!isRichTextEmpty(observaciones.personal_jornada)}>
-        <PersonalJornadaBlock t={t} data={datos.personal_jornada} viewportCompact={viewportCompact} />
-        <ObsPreview t={t} html={observaciones.personal_jornada} />
-      </SectionCard>
+      <InformePaneliblePanel
+        t={t}
+        informe={snap?.informe}
+        abierto={detalleAbierto}
+        onToggle={() => setDetalleAbierto((v) => !v)}
+      >
+        <SectionCard t={t} title="1. Personal y jornada" onObs={!soloLectura ? () => abrirObs('personal_jornada') : null} hasObs={!isRichTextEmpty(observaciones.personal_jornada)}>
+          <PersonalJornadaBlock t={t} data={datos.personal_jornada} viewportCompact={viewportCompact} />
+          <ObsPreview t={t} html={observaciones.personal_jornada} />
+        </SectionCard>
 
-      <SectionCard t={t} title="2. Cantidades de obra" onObs={!soloLectura ? () => abrirObs('cantidades_obra') : null} hasObs={!isRichTextEmpty(observaciones.cantidades_obra)}>
-        <CantidadesBlock t={t} data={datos.cantidades_obra} verValores={verValoresCant} />
-        <ObsPreview t={t} html={observaciones.cantidades_obra} />
-      </SectionCard>
+        <SectionCard t={t} title="2. Cantidades de obra" onObs={!soloLectura ? () => abrirObs('cantidades_obra') : null} hasObs={!isRichTextEmpty(observaciones.cantidades_obra)}>
+          <CantidadesBlock t={t} data={datos.cantidades_obra} verValores={verValoresCant} />
+          <ObsPreview t={t} html={observaciones.cantidades_obra} />
+        </SectionCard>
 
-      <SectionCard t={t} title="3. Actividades adicionales" onObs={!soloLectura ? () => abrirObs('actividades') : null} hasObs={!isRichTextEmpty(observaciones.actividades)}>
-        <ActividadesBlock t={t} data={datos.actividades} />
-        <ObsPreview t={t} html={observaciones.actividades} />
-      </SectionCard>
+        <SectionCard t={t} title="3. Actividades adicionales" onObs={!soloLectura ? () => abrirObs('actividades') : null} hasObs={!isRichTextEmpty(observaciones.actividades)}>
+          <ActividadesBlock t={t} data={datos.actividades} />
+          <ObsPreview t={t} html={observaciones.actividades} />
+        </SectionCard>
 
-      <SectionCard t={t} title="4. Almacén" onObs={!soloLectura ? () => abrirObs('almacen') : null} hasObs={!isRichTextEmpty(observaciones.almacen)}>
-        <AlmacenBlock
-          t={t}
-          data={datos.almacen}
-          verValores={verValoresAlm}
-          puedeAbrir={puedeAbrirSolicitud}
-          onAbrirSolicitud={(id) => setSolicitudDetalleId(id)}
-        />
-        <ObsPreview t={t} html={observaciones.almacen} />
-      </SectionCard>
+        <SectionCard t={t} title="4. Almacén" onObs={!soloLectura ? () => abrirObs('almacen') : null} hasObs={!isRichTextEmpty(observaciones.almacen)}>
+          <AlmacenBlock
+            t={t}
+            data={datos.almacen}
+            verValores={verValoresAlm}
+            puedeAbrir={puedeAbrirSolicitud}
+            onAbrirSolicitud={(id) => setSolicitudDetalleId(id)}
+          />
+          <ObsPreview t={t} html={observaciones.almacen} />
+        </SectionCard>
 
-      <SectionCard t={t} title="5. Programación de obra" onObs={!soloLectura ? () => abrirObs('programacion') : null} hasObs={!isRichTextEmpty(observaciones.programacion)}>
-        <ProgramacionBlock t={t} data={datos.programacion} />
-        <ObsPreview t={t} html={observaciones.programacion} />
-      </SectionCard>
+        <SectionCard t={t} title="5. Programación de obra" onObs={!soloLectura ? () => abrirObs('programacion') : null} hasObs={!isRichTextEmpty(observaciones.programacion)}>
+          <ProgramacionBlock t={t} data={datos.programacion} />
+          <ObsPreview t={t} html={observaciones.programacion} />
+        </SectionCard>
+      </InformeDesplegablePanel>
 
       {obsSeccion && (
         <div
@@ -264,6 +274,74 @@ export default function ActaGestionObraPanel({
             onUpdated={() => setSolicitudDetalleId(null)}
           />
         </AlmacenProviders>
+      )}
+    </div>
+  )
+}
+
+function InformeDesplegablePanel({ t, informe, abierto, onToggle, children }) {
+  const parrafos = Array.isArray(informe?.parrafos) ? informe.parrafos : []
+  const titulo = informe?.titulo || 'Informe de gestión de obra'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        style={{
+          border: `1px solid ${t.border}`,
+          borderRadius: 10,
+          background: t.bgCard || t.bg,
+          overflow: 'hidden',
+        }}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={abierto}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            textAlign: 'left',
+            border: 'none',
+            background: `${t.primary}0d`,
+            color: t.text,
+            cursor: 'pointer',
+            padding: '12px 14px',
+            minHeight: 48,
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
+          <span style={{ marginTop: 2, flexShrink: 0, color: t.primary }}>
+            {abierto ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 6 }}>{titulo}</div>
+            {parrafos.length === 0 ? (
+              <div style={{ fontSize: 12, color: t.textMuted }}>
+                El informe se genera al calcular el consolidado del período.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {parrafos.map((p) => (
+                  <div key={p.id || p.titulo} style={{ fontSize: 12, lineHeight: 1.45, color: t.text }}>
+                    <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 2, fontSize: 11 }}>
+                      {p.titulo}
+                    </div>
+                    <div>{p.texto}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: t.primary, marginTop: 10, fontWeight: 600 }}>
+              {abierto ? 'Ocultar detalle (gráficos y tablas)' : 'Ver detalle (gráficos y tablas)'}
+            </div>
+          </span>
+        </button>
+      </div>
+      {abierto && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {children}
+        </div>
       )}
     </div>
   )

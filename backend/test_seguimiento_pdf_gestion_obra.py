@@ -82,6 +82,8 @@ class TestPdfGestionObra(unittest.TestCase):
             }
         }
         html = _gestion_obra_pdf_html(acta)
+        self.assertIn("Informe de gestión de obra", html)
+        self.assertIn("Detalle del consolidado", html)
         self.assertIn("Personal y jornada", html)
         self.assertIn("ACME", html)
         self.assertIn("máx. diario", html)

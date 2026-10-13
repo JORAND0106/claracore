@@ -552,7 +552,7 @@ def _titulo_tema_fallback(texto: str) -> str:
 
 
 def _gestion_obra_pdf_html(acta: dict) -> str:
-    """HTML ejecutivo del consolidado Gestión de obra (por día; sin valores de almacén)."""
+    """HTML compacto: encabezado + informe redactado + detalle por sección."""
     go = acta.get("gestion_obra") if isinstance(acta.get("gestion_obra"), dict) else None
     if not go or not isinstance(go.get("datos"), dict):
         return (
@@ -564,11 +564,47 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
     obs = go.get("observaciones") if isinstance(go.get("observaciones"), dict) else {}
     d0 = _esc(go.get("fecha_desde") or "")
     d1 = _esc(go.get("fecha_hasta") or "")
+    informe = go.get("informe") if isinstance(go.get("informe"), dict) else None
+    if not informe:
+        try:
+            from gestion_obra_service import build_informe_redactado
+            informe = build_informe_redactado(
+                datos, go.get("fecha_desde") or "", go.get("fecha_hasta") or "",
+                ver_valores_cantidades=bool(go.get("ver_valores_cantidades")),
+                ver_valores_almacen=bool(go.get("ver_valores_almacen")),
+            )
+        except Exception:
+            informe = None
+
     parts = [
-        f"<div style='font-size:8.5pt;color:#475569;margin:0 0 6pt;'>"
-        f"Rango: <b>{d0}</b> → <b>{d1}</b>"
-        f"</div>"
+        "<div class='go-head' style='margin:0 0 8pt;padding:6pt 8pt;"
+        "border:0.6pt solid #cbd5e1;background:#f8fafc;'>"
+        "<div style='font-size:10pt;font-weight:700;color:#0f172a;margin:0 0 2pt;'>"
+        "Gestión de obra</div>"
+        f"<div style='font-size:8.5pt;color:#475569;'>Período: <b>{d0}</b> → <b>{d1}</b></div>"
+        "</div>"
     ]
+    if informe:
+        tit = _esc(informe.get("titulo") or "Informe de gestión de obra")
+        parts.append(
+            f"<div class='go-informe' style='margin:0 0 10pt;'>"
+            f"<div style='font-size:9pt;font-weight:700;margin:0 0 4pt;color:#0f172a;'>{tit}</div>"
+        )
+        for p in informe.get("parrafos") or []:
+            if not isinstance(p, dict):
+                continue
+            parts.append(
+                f"<div style='margin:0 0 5pt;'>"
+                f"<div style='font-size:8pt;font-weight:700;color:#334155;margin:0 0 1pt;'>"
+                f"{_esc(p.get('titulo') or '')}</div>"
+                f"<div style='font-size:8pt;color:#1e293b;line-height:1.35;'>"
+                f"{_esc(p.get('texto') or '')}</div></div>"
+            )
+        parts.append("</div>")
+        parts.append(
+            "<div style='font-size:8pt;font-weight:700;color:#64748b;margin:0 0 6pt;"
+            "border-top:0.4pt solid #e2e8f0;padding-top:4pt;'>Detalle del consolidado</div>"
+        )
 
     def _tbl_keys(labels: list, keys: list, rows: list) -> str:
         if not rows:
@@ -587,9 +623,9 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             )
             body += f"<tr>{tds}</tr>"
         return (
-            f"<table width='100%' cellspacing='0' cellpadding='0' "
-            f"style='border-collapse:collapse;margin:0 0 6pt;'>"
-            f"<tr>{th}</tr>{body}</table>"
+            f"<table class='go-table' width='100%' cellspacing='0' cellpadding='0' "
+            f"style='border-collapse:collapse;margin:0 0 5pt;'>"
+            f"<thead><tr>{th}</tr></thead><tbody>{body}</tbody></table>"
         )
 
     def _matrix(label_col: str, dias: list, rows: list, *, last_col: str = "Máx. diario") -> str:
@@ -633,9 +669,9 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             )
             body += f"<tr>{tds}</tr>"
         return (
-            f"<table width='100%' cellspacing='0' cellpadding='0' "
-            f"style='border-collapse:collapse;margin:0 0 6pt;'>"
-            f"<tr>{th}</tr>{body}</table>"
+            f"<table class='go-table' width='100%' cellspacing='0' cellpadding='0' "
+            f"style='border-collapse:collapse;margin:0 0 5pt;'>"
+            f"<thead><tr>{th}</tr></thead><tbody>{body}</tbody></table>"
         )
 
     def _money(n) -> str:
@@ -656,8 +692,9 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
                 f"font-size:8pt;'><b>Observaciones:</b> {_render_tema_texto_pdf(obs_html)}</div>"
             )
         return (
-            f"<div style='margin:0 0 10pt;'>"
-            f"<div style='font-size:9pt;font-weight:700;margin:0 0 4pt;color:{_COLOR};'>"
+            f"<div class='go-sec' style='margin:0 0 8pt;'>"
+            f"<div class='go-sec-title' style='font-size:9pt;font-weight:700;margin:0 0 3pt;"
+            f"color:{_COLOR};page-break-after:avoid;'>"
             f"{_esc(title)}</div>{body}{obs_block}</div>"
         )
 
@@ -1070,6 +1107,9 @@ def generar_pdf_acta(
 @page {{ size: letter portrait; margin: 12mm 10mm; }}
 body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9pt; }}
 .pdf-idea {{ page-break-inside: auto; }}
+.go-table thead {{ display: table-header-group; }}
+.go-sec-title {{ page-break-after: avoid; }}
+.go-informe {{ page-break-inside: auto; }}
 /* Evitar page-break-inside:avoid en firmas/esquemas dentro de celdas:
    xhtml2pdf lanza Splitting error / KeepTogether.draw y el PDF no sale. */
 .pdf-firma {{ page-break-inside: auto; }}
