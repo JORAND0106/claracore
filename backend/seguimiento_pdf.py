@@ -592,10 +592,10 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             f"<tr>{th}</tr>{body}</table>"
         )
 
-    def _matrix(label_col: str, dias: list, rows: list) -> str:
+    def _matrix(label_col: str, dias: list, rows: list, *, last_col: str = "Máx. diario") -> str:
         if not rows:
             return ""
-        labels = [label_col] + [str(d)[5:] for d in dias] + ["Total"]
+        labels = [label_col] + [str(d)[5:] for d in dias] + [last_col]
         th = "".join(
             f"<th style='padding:2pt 3pt;border:0.4pt solid #cbd5e1;text-align:center;"
             f"background:{_BG_H};color:{_FG_H};font-size:7.5pt;'>{_esc(lab)}</th>"
@@ -603,25 +603,50 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
         )
         body = ""
         for r in rows[:40]:
-            cells = [str(r.get("label") or "")]
             por = r.get("por_dia") or {}
+            aus = r.get("ausencias_por_dia") or {}
+            max_d = r.get("max_diario")
+            if max_d is None:
+                max_d = r.get("total")
+            tds = (
+                f"<td style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
+                f"text-align:left;{'font-weight:700;' if r.get('es_total_dia') else ''}'>"
+                f"{_esc(r.get('label')) or '—'}</td>"
+            )
             for d in dias:
                 v = por.get(d)
-                cells.append("" if v in (None, 0, 0.0) else str(v))
-            cells.append(str(r.get("total") if r.get("total") is not None else ""))
-            body += "<tr>" + "".join(
-                (
-                    f"<td style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
-                    f"text-align:{'left' if i == 0 else 'right'};'>"
-                    f"{_esc(c) or '—'}</td>"
+                n_aus = 0
+                try:
+                    n_aus = int(aus.get(d) or 0)
+                except (TypeError, ValueError):
+                    n_aus = 0
+                bg = "background:#fde68a;" if n_aus > 0 else ""
+                title = f" title='{n_aus} ausencia(s)'" if n_aus > 0 else ""
+                cell = "" if v in (None, 0, 0.0) else str(v)
+                tds += (
+                    f"<td{title} style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
+                    f"text-align:right;{bg}'>{_esc(cell) or '—'}</td>"
                 )
-                for i, c in enumerate(cells)
-            ) + "</tr>"
+            tds += (
+                f"<td style='padding:2pt 3pt;border:0.4pt solid #e2e8f0;font-size:7.5pt;"
+                f"text-align:right;font-weight:700;'>{_esc(max_d) if max_d is not None else '—'}</td>"
+            )
+            body += f"<tr>{tds}</tr>"
         return (
             f"<table width='100%' cellspacing='0' cellpadding='0' "
             f"style='border-collapse:collapse;margin:0 0 6pt;'>"
             f"<tr>{th}</tr>{body}</table>"
         )
+
+    def _money(n) -> str:
+        try:
+            from contrato_numero_letras import formato_pesos_cop
+            return f"$ {formato_pesos_cop(n)}"
+        except Exception:
+            try:
+                return f"$ {int(round(float(n))):,}".replace(",", ".")
+            except (TypeError, ValueError):
+                return "—"
 
     def _block(title: str, body: str, obs_html: str) -> str:
         obs_block = ""
@@ -644,31 +669,43 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
         dias = pj.get("dias") or []
         b1 = ""
         for emp in (pj.get("personal") or {}).get("empresas") or []:
+            mx = emp.get("max_diario")
+            if mx is None:
+                mx = emp.get("total")
             b1 += (
                 f"<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>"
-                f"{_esc(emp.get('empresa'))} · total { _esc(emp.get('total')) }</div>"
+                f"{_esc(emp.get('empresa'))} · máx. diario {_esc(mx)}</div>"
             )
             b1 += _matrix(
                 "Cargo",
                 dias,
                 [
-                    {"label": f.get("cargo"), "por_dia": f.get("por_dia"), "total": f.get("total")}
+                    {
+                        "label": f.get("cargo"),
+                        "por_dia": f.get("por_dia"),
+                        "max_diario": f.get("max_diario", f.get("total")),
+                        "ausencias_por_dia": f.get("ausencias_por_dia"),
+                        "es_total_dia": f.get("es_total_dia"),
+                    }
                     for f in (emp.get("filas") or [])
                 ],
             )
         if not b1:
-            # compat filas planas
             pers = (pj.get("personal") or {}).get("filas") or pj.get("filas") or []
             b1 = _tbl_keys(
                 ["Empresa", "Cargo", "Cant."], ["empresa", "cargo", "cantidad"], pers,
             ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin personal consolidado.</div>"
+        if pj.get("convencion_ausentismo"):
+            b1 += (
+                f"<div style='font-size:7.5pt;color:#475569;margin:2pt 0;'>"
+                f"<span style='background:#fde68a;padding:0 4pt;'>■</span> "
+                f"{_esc(pj.get('convencion_ausentismo'))}</div>"
+            )
         aus = pj.get("ausentismo") or {}
         jor = pj.get("jornada") or {}
         extra = []
         if aus.get("disponible"):
-            extra.append(
-                f"Ausentismo: {aus.get('ausentes') or 0} ausentes / {aus.get('total') or 0} registros"
-            )
+            extra.append(f"Ausentismo: {aus.get('ausentes') or 0} ausencia(s) en el rango")
         else:
             extra.append(aus.get("mensaje") or "Ausentismo: no registrado")
         if jor.get("disponible"):
@@ -688,7 +725,11 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
                     "Equipo",
                     dias,
                     [
-                        {"label": f.get("equipo"), "por_dia": f.get("por_dia"), "total": f.get("total")}
+                        {
+                            "label": f.get("equipo"),
+                            "por_dia": f.get("por_dia"),
+                            "max_diario": f.get("max_diario", f.get("total")),
+                        }
                         for f in maq_filas
                     ],
                 )
@@ -696,8 +737,9 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
                 b1 += _tbl_keys(["Equipo", "Cant."], ["equipo", "cantidad"], maq_filas)
     parts.append(_block("1. Personal y jornada", b1, obs.get("personal_jornada") or ""))
 
-    # 2 Cantidades (estilo informe: tramo / capítulo / ítem; sin dinero)
+    # 2 Cantidades (estilo informe; valores según visibilidad de quien genera el PDF)
     co = datos.get("cantidades_obra") or {}
+    ver_cant = bool(co.get("ver_valores") if "ver_valores" in co else go.get("ver_valores_cantidades"))
     if not co.get("disponible"):
         b2 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(co.get('mensaje') or 'Sin cantidades.')}</div>"
     else:
@@ -706,17 +748,42 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             b2 += f"<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Tramo: {_esc(tr.get('tramo'))}</div>"
             for cap in tr.get("capitulos") or []:
                 b2 += f"<div style='font-size:8pt;color:#475569;margin:2pt 0;'>Capítulo {_esc(cap.get('capitulo'))}</div>"
-                b2 += _tbl_keys(
-                    ["Ítem", "Descripción", "Und", "Cantidad"],
-                    ["item_numero", "item_descripcion", "unidad", "cantidad"],
-                    cap.get("items") or [],
-                )
+                items_fmt = []
+                for it in cap.get("items") or []:
+                    row = dict(it or {})
+                    if ver_cant:
+                        row["vlr_unitario"] = _money(row.get("vlr_unitario")) if row.get("vlr_unitario") is not None else "—"
+                        row["valor_total"] = _money(row.get("valor_total")) if row.get("valor_total") is not None else "—"
+                    items_fmt.append(row)
+                if ver_cant:
+                    b2 += _tbl_keys(
+                        ["Ítem", "Descripción", "Und", "Cantidad", "Vlr. unitario", "Valor total"],
+                        ["item_numero", "item_descripcion", "unidad", "cantidad", "vlr_unitario", "valor_total"],
+                        items_fmt,
+                    )
+                    if cap.get("subtotal_valor") is not None:
+                        b2 += (
+                            f"<div style='font-size:8pt;text-align:right;margin:0 0 4pt;'>"
+                            f"Subtotal capítulo: <b>{_esc(_money(cap.get('subtotal_valor')))}</b></div>"
+                        )
+                else:
+                    b2 += _tbl_keys(
+                        ["Ítem", "Descripción", "Und", "Cantidad"],
+                        ["item_numero", "item_descripcion", "unidad", "cantidad"],
+                        items_fmt,
+                    )
+        if ver_cant and co.get("total_general_valor") is not None:
+            b2 += (
+                f"<div style='font-size:8.5pt;text-align:right;font-weight:700;margin:4pt 0;'>"
+                f"Total general: {_esc(_money(co.get('total_general_valor')))}</div>"
+            )
+        if co.get("registros_sin_item"):
+            b2 += (
+                f"<div style='font-size:7.5pt;color:#64748b;'>"
+                f"{_esc(co.get('registros_sin_item'))} registro(s) sin ítem asignado; no se valoran.</div>"
+            )
         if not b2:
-            b2 = _tbl_keys(
-                ["Tramo", "Capítulo", "Ítem", "Descripción", "Und", "Cantidad"],
-                ["tramo", "capitulo", "item_numero", "item_descripcion", "unidad", "cantidad"],
-                co.get("filas") or [],
-            ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
+            b2 = "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
     parts.append(_block("2. Cantidades de obra", b2, obs.get("cantidades_obra") or ""))
 
     # 3 Actividades
@@ -731,16 +798,34 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
         ) or "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
     parts.append(_block("3. Actividades adicionales", b3, obs.get("actividades") or ""))
 
-    # 4 Almacén — SIN columna valor (PDF lo leen todos los asistentes)
+    # 4 Almacén — valor solo si quien genera el PDF tiene visibilidad económica
     al = datos.get("almacen") or {}
+    ver_alm = bool(al.get("ver_valores") if "ver_valores" in al else go.get("ver_valores_almacen"))
     if not al.get("disponible"):
         b4 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(al.get('mensaje') or 'Sin almacén.')}</div>"
     else:
-        b4 = _tbl_keys(
-            ["Fecha", "Solicitante", "Insumos", "Estado"],
-            ["fecha", "solicitante", "insumos_resumen", "estado"],
-            al.get("solicitudes") or [],
-        )
+        sols_fmt = []
+        for s in al.get("solicitudes") or []:
+            if not isinstance(s, dict):
+                continue
+            row = dict(s)
+            if ver_alm and row.get("valor") is not None:
+                row["valor"] = _money(row.get("valor"))
+            elif ver_alm:
+                row["valor"] = "—"
+            sols_fmt.append(row)
+        if ver_alm:
+            b4 = _tbl_keys(
+                ["Fecha", "Solicitante", "Insumos", "Valor", "Estado"],
+                ["fecha", "solicitante", "insumos_resumen", "valor", "estado"],
+                sols_fmt,
+            )
+        else:
+            b4 = _tbl_keys(
+                ["Fecha", "Solicitante", "Insumos", "Estado"],
+                ["fecha", "solicitante", "insumos_resumen", "estado"],
+                sols_fmt,
+            )
         if al.get("entradas"):
             b4 += "<div style='font-size:8pt;font-weight:700;margin:4pt 0 2pt;'>Entradas</div>"
             b4 += _tbl_keys(
@@ -755,34 +840,24 @@ def _gestion_obra_pdf_html(acta: dict) -> str:
             b4 = "<div style='color:#94a3b8;font-size:8.5pt;'>Sin filas.</div>"
     parts.append(_block("4. Almacén", b4, obs.get("almacen") or ""))
 
-    # 5 Programación
+    # 5 Programación — solo módulo Programación (sin % SICOE/presupuesto)
     pr = datos.get("programacion") or {}
     if not pr.get("disponible"):
         b5 = f"<div style='color:#94a3b8;font-size:8.5pt;'>{_esc(pr.get('mensaje') or 'Sin programación.')}</div>"
     else:
-        pct = pr.get("ejecutado_pct")
-        pct_s = f"{int(round(float(pct)))}%" if pct is not None else "—"
-        b5 = f"<div style='font-size:8.5pt;margin:0 0 4pt;'>Avance: <b>{_esc(pct_s)}</b></div>"
-        b5 += _tbl_keys(
-            ["Capítulo", "%"],
-            ["capitulo", "ejecutado_pct"],
-            [
-                {
-                    **r,
-                    "ejecutado_pct": (
-                        f"{int(round(float(r.get('ejecutado_pct'))))}%"
-                        if r.get("ejecutado_pct") is not None else "—"
-                    ),
-                }
-                for r in (pr.get("filas") or [])
-            ],
-        )
-        if pr.get("alertas"):
-            b5 += (
-                "<ul style='margin:4pt 0 0;padding-left:14pt;font-size:8pt;color:#64748b;'>"
-                + "".join(f"<li>{_esc(a)}</li>" for a in (pr.get("alertas") or [])[:10])
-                + "</ul>"
+        b5 = "<div style='font-size:8.5pt;margin:0 0 4pt;'>Programación cargada</div>"
+        if pr.get("versiones"):
+            b5 += _tbl_keys(
+                ["Nº", "Tipo", "Estado"],
+                ["numero", "tipo", "estado"],
+                pr.get("versiones") or [],
             )
+        alertas = pr.get("alertas") or []
+        if alertas:
+            b5 += "<ul style='margin:4pt 0 0;padding-left:14pt;font-size:8pt;'>"
+            for a in alertas[:15]:
+                b5 += f"<li>{_esc(a)}</li>"
+            b5 += "</ul>"
     parts.append(_block("5. Programación de obra", b5, obs.get("programacion") or ""))
 
     return "".join(parts)

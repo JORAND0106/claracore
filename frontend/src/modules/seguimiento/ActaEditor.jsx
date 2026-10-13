@@ -2154,6 +2154,7 @@ export default function ActaEditor({
         <ActaGestionObraPanel
           t={t}
           api={api}
+          usuario={usuario}
           actaId={localActaId}
           fechaReunion={form.fecha_reunion}
           value={gestionObra}
