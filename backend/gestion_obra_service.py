@@ -11,8 +11,14 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 _log = logging.getLogger("claracore.seguimiento.gestion_obra")
+
+BOGOTA = ZoneInfo("America/Bogota")
+
+# Bump cuando cambia la forma del snapshot; el FE fuerza recálculo si es menor.
+SCHEMA_VERSION = 2
 
 SECCIONES = (
     "personal_jornada",
@@ -80,6 +86,41 @@ def _plain(html: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _bogota_day_bounds_utc(fecha_desde: str, fecha_hasta: str) -> Tuple[str, str]:
+    """Inicio/fin del rango en America/Bogota, expresados como ISO UTC (timestamptz)."""
+    d0 = _parse_date(fecha_desde)
+    d1 = _parse_date(fecha_hasta)
+    if not d0 or not d1:
+        raise ValueError("Rango de fechas inválido")
+    start = datetime(d0.year, d0.month, d0.day, 0, 0, 0, 0, tzinfo=BOGOTA)
+    end = datetime(d1.year, d1.month, d1.day, 23, 59, 59, 999999, tzinfo=BOGOTA)
+    return (
+        start.astimezone(timezone.utc).isoformat(),
+        end.astimezone(timezone.utc).isoformat(),
+    )
+
+
+def _fecha_bogota(raw) -> Optional[str]:
+    """YYYY-MM-DD en America/Bogota desde date o timestamptz."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, datetime):
+        dt = raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+        return dt.astimezone(BOGOTA).date().isoformat()
+    if isinstance(raw, date):
+        return raw.isoformat()
+    s = str(raw).strip()
+    if len(s) >= 10 and s[4] == "-" and "T" not in s[:11] and " " not in s[:11]:
+        return s[:10]
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(BOGOTA).date().isoformat()
+    except ValueError:
+        return s[:10] if len(s) >= 10 else None
+
+
 def _empresa_asistencia(row: dict) -> str:
     """Misma regla que Bitácora FE: subcontratista_nombre (snapshot RRHH)."""
     for k in ("subcontratista_nombre", "empresa_nombre", "empresa", "entidad"):
@@ -87,6 +128,66 @@ def _empresa_asistencia(row: dict) -> str:
         if n:
             return n
     return "Sin empresa"
+
+
+def _enrich_diarios_empresa_rrhh(sb, contrato_id: int, diarios: List[dict]) -> List[dict]:
+    """
+    Rellena subcontratista_nombre vacío desde el catálogo RRHH (solo lectura).
+    list_entradas no re-enriquece; filas viejas pueden quedar sin empresa en JSON.
+    """
+    if not diarios:
+        return diarios
+    needs = False
+    for d in diarios:
+        for a in d.get("asistencia_colaboradores") or []:
+            if isinstance(a, dict) and a.get("rrhh_trabajador_id") is not None:
+                if _empresa_asistencia(a) == "Sin empresa":
+                    needs = True
+                    break
+        if needs:
+            break
+    if not needs:
+        return diarios
+
+    by_id: Dict[int, dict] = {}
+    try:
+        from rrhh_service import list_trabajadores
+        todos = list_trabajadores(sb, int(contrato_id)) or []
+        for t in todos:
+            try:
+                by_id[int(t["id"])] = t
+            except (TypeError, ValueError, KeyError):
+                continue
+    except Exception as exc:
+        _log.warning("gestion_obra enrich RRHH empresas: %s", exc)
+        return diarios
+
+    for d in diarios:
+        asis = d.get("asistencia_colaboradores")
+        if not isinstance(asis, list):
+            continue
+        for a in asis:
+            if not isinstance(a, dict):
+                continue
+            if _empresa_asistencia(a) != "Sin empresa":
+                continue
+            tid = a.get("rrhh_trabajador_id")
+            try:
+                tid_i = int(tid)
+            except (TypeError, ValueError):
+                continue
+            trab = by_id.get(tid_i)
+            if not trab:
+                continue
+            nombre = str(trab.get("empresa_nombre") or "").strip()
+            if nombre:
+                a["subcontratista_nombre"] = nombre
+                if trab.get("empresa_subcontratista_id") is not None:
+                    try:
+                        a["subcontratista_id"] = int(trab["empresa_subcontratista_id"])
+                    except (TypeError, ValueError):
+                        pass
+    return diarios
 
 
 def _es_ausente(estado: str) -> bool:
@@ -385,15 +486,23 @@ def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict
     """
     Cantidades SICOE por fecha de creación del reporte (cualquier estado),
     agrupadas por tramo → capítulo → ítem (estilo informe mensual, solo cantidad del período).
+
+    El filtro de fechas usa límites America/Bogota convertidos a UTC, igual que la
+    grilla SICOE («F. Crea.») percibida por el usuario.
     """
+    try:
+        start_utc, end_utc = _bogota_day_bounds_utc(fecha_desde, fecha_hasta)
+    except ValueError:
+        return _msg_sin("Rango de fechas inválido para consultar SICOE Obra.")
+
     try:
         reps = (
             sb.table("so_reportes")
             .select("id,created_at,tramo,capitulo,estado")
             .eq("contrato_id", int(contrato_id))
-            .gte("created_at", f"{fecha_desde}T00:00:00")
-            .lte("created_at", f"{fecha_hasta}T23:59:59.999")
-            .limit(1000)
+            .gte("created_at", start_utc)
+            .lte("created_at", end_utc)
+            .limit(2000)
             .execute()
             .data
             or []
@@ -407,7 +516,7 @@ def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict
 
     rep_meta = {
         int(r["id"]): {
-            "fecha": str(r.get("created_at") or "")[:10],
+            "fecha": _fecha_bogota(r.get("created_at")) or str(r.get("created_at") or "")[:10],
             "tramo": str(r.get("tramo") or "").strip(),
             "capitulo": str(r.get("capitulo") or "").strip(),
         }
@@ -415,25 +524,31 @@ def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict
     }
     ids = list(rep_meta.keys())
     rows: List[dict] = []
-    # Chunk IN queries
+    # Selects resilientes: algunas BD omiten columnas opcionales.
+    select_vars = (
+        "id,reporte_id,item_numero,item_descripcion,unidad,cantidad_total,tramo,capitulo",
+        "id,reporte_id,item_numero,item_descripcion,unidad,cantidad_total",
+        "id,reporte_id,item_numero,unidad,cantidad_total",
+    )
+
+    def _fetch_registros(chunk_ids: List[int]) -> List[dict]:
+        for sel in select_vars:
+            for with_contrato in (True, False):
+                try:
+                    q = sb.table("so_registros").select(sel).in_("reporte_id", chunk_ids)
+                    if with_contrato:
+                        q = q.eq("contrato_id", int(contrato_id))
+                    return q.limit(5000).execute().data or []
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if "column" in msg or "pgrst" in msg or "42703" in msg:
+                        continue
+                    _log.warning("gestion_obra sicoe registros: %s", exc)
+                    return []
+        return []
+
     for i in range(0, len(ids), 80):
-        chunk_ids = ids[i:i + 80]
-        try:
-            chunk = (
-                sb.table("so_registros")
-                .select(
-                    "id,reporte_id,item_numero,item_descripcion,unidad,cantidad_total,tramo,capitulo"
-                )
-                .eq("contrato_id", int(contrato_id))
-                .in_("reporte_id", chunk_ids)
-                .limit(5000)
-                .execute()
-                .data
-                or []
-            )
-            rows.extend(chunk)
-        except Exception as exc:
-            _log.warning("gestion_obra sicoe registros: %s", exc)
+        rows.extend(_fetch_registros(ids[i:i + 80]))
 
     if not rows:
         return _msg_sin("No hay cantidades reportadas en SICOE Obra en el rango seleccionado.")
@@ -516,6 +631,21 @@ def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict
     }
 
 
+def _insumos_resumen_solicitud(s: dict) -> str:
+    """Resumen breve: título de la solicitud o conteo de ítems."""
+    titulo = str(s.get("titulo") or "").strip()
+    if titulo:
+        return titulo[:80] + ("…" if len(titulo) > 80 else "")
+    n = s.get("items_count")
+    if n is None or n == "":
+        return "—"
+    try:
+        n_i = int(n)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{n_i} insumo(s)"
+
+
 def _agg_almacen(
     sb,
     contrato_id: int,
@@ -530,16 +660,67 @@ def _agg_almacen(
     entradas_f = []
     salidas_f = []
     try:
-        from almacen_service import list_solicitudes, list_entradas, list_salidas
-    except Exception:
-        list_solicitudes = list_entradas = list_salidas = None  # type: ignore
+        start_utc, end_utc = _bogota_day_bounds_utc(fecha_desde, fecha_hasta)
+    except ValueError:
+        start_utc = f"{d0}T00:00:00+00:00"
+        end_utc = f"{d1}T23:59:59.999999+00:00"
 
-    def _in_range(raw) -> bool:
-        s = str(raw or "")[:10]
+    def _in_range_bogota(raw) -> bool:
+        s = _fecha_bogota(raw)
         return bool(s) and d0 <= s <= d1
 
+    # Solicitudes del rango por created_at (Bogotá→UTC), enriquecidas como la grilla.
     try:
-        if list_solicitudes:
+        from almacen_service import (
+            _SOLICITUD_LIST_SELECT,
+            _list_solicitudes_resumen,
+            list_entradas,
+            list_salidas,
+        )
+        raw_sols = (
+            sb.table("almacen_solicitud")
+            .select(_SOLICITUD_LIST_SELECT)
+            .eq("contrato_id", int(contrato_id))
+            .gte("created_at", start_utc)
+            .lte("created_at", end_utc)
+            .order("created_at", desc=True)
+            .limit(500)
+            .execute()
+            .data
+            or []
+        )
+        sols = _list_solicitudes_resumen(
+            sb, raw_sols, int(contrato_id), ver_economicos=bool(ver_economicos),
+        )
+        for s in sols:
+            if not isinstance(s, dict):
+                continue
+            f_raw = s.get("created_at") or s.get("fecha") or s.get("fecha_solicitud")
+            f = _fecha_bogota(f_raw)
+            if not f or not (d0 <= f <= d1):
+                continue
+            estado = str(s.get("estado") or "").strip().lower()
+            row = {
+                "fecha": f,
+                "estado": estado,
+                "solicitante": str(s.get("solicitante_nombre") or "").strip() or "—",
+                "insumos_resumen": _insumos_resumen_solicitud(s),
+                "items_count": s.get("items_count"),
+                "ref": s.get("consecutivo") or s.get("numero") or s.get("id"),
+            }
+            if ver_economicos and s.get("valor_solicitud") is not None:
+                try:
+                    row["valor"] = float(s.get("valor_solicitud"))
+                except (TypeError, ValueError):
+                    row["valor"] = None
+            else:
+                row["valor"] = None
+            solicitudes_f.append(row)
+    except Exception as exc:
+        _log.warning("gestion_obra almacen solicitudes: %s", exc)
+        # Fallback: listado completo filtrado en cliente
+        try:
+            from almacen_service import list_solicitudes
             sols = list_solicitudes(
                 int(contrato_id), limit=200, ver_economicos=bool(ver_economicos),
             ) or []
@@ -548,19 +729,16 @@ def _agg_almacen(
             for s in sols:
                 if not isinstance(s, dict):
                     continue
-                f = s.get("created_at") or s.get("fecha") or s.get("fecha_solicitud")
-                if not _in_range(f):
+                f_raw = s.get("created_at") or s.get("fecha") or s.get("fecha_solicitud")
+                if not _in_range_bogota(f_raw):
                     continue
+                f = _fecha_bogota(f_raw) or str(f_raw)[:10]
                 estado = str(s.get("estado") or "").strip().lower()
                 row = {
-                    "fecha": str(f)[:10],
+                    "fecha": f,
                     "estado": estado,
                     "solicitante": str(s.get("solicitante_nombre") or "").strip() or "—",
-                    "insumos_resumen": (
-                        f"{s.get('items_count')} insumo(s)"
-                        if s.get("items_count") not in (None, "")
-                        else "—"
-                    ),
+                    "insumos_resumen": _insumos_resumen_solicitud(s),
                     "items_count": s.get("items_count"),
                     "ref": s.get("consecutivo") or s.get("numero") or s.get("id"),
                 }
@@ -572,8 +750,13 @@ def _agg_almacen(
                 else:
                     row["valor"] = None
                 solicitudes_f.append(row)
-    except Exception as exc:
-        _log.warning("gestion_obra almacen solicitudes: %s", exc)
+        except Exception as exc2:
+            _log.warning("gestion_obra almacen solicitudes fallback: %s", exc2)
+
+    try:
+        from almacen_service import list_entradas, list_salidas
+    except Exception:
+        list_entradas = list_salidas = None  # type: ignore
 
     try:
         if list_entradas:
@@ -583,10 +766,10 @@ def _agg_almacen(
             for e in ents:
                 if not isinstance(e, dict):
                     continue
-                f = e.get("fecha_entrada") or e.get("fecha") or e.get("created_at")
-                if _in_range(f):
+                f_raw = e.get("fecha_entrada") or e.get("fecha") or e.get("created_at")
+                if _in_range_bogota(f_raw):
                     entradas_f.append({
-                        "fecha": str(f)[:10],
+                        "fecha": _fecha_bogota(f_raw) or str(f_raw)[:10],
                         "estado": e.get("estado") or "",
                         "ref": e.get("consecutivo") or e.get("numero") or e.get("id"),
                     })
@@ -601,10 +784,10 @@ def _agg_almacen(
             for s in sals:
                 if not isinstance(s, dict):
                     continue
-                f = s.get("fecha_hora_salida") or s.get("fecha") or s.get("created_at")
-                if _in_range(f):
+                f_raw = s.get("fecha_hora_salida") or s.get("fecha") or s.get("created_at")
+                if _in_range_bogota(f_raw):
                     salidas_f.append({
-                        "fecha": str(f)[:10],
+                        "fecha": _fecha_bogota(f_raw) or str(f_raw)[:10],
                         "estado": s.get("estado") or "",
                         "ref": s.get("consecutivo") or s.get("numero_salida") or s.get("id"),
                     })
@@ -674,9 +857,11 @@ def _agg_almacen(
 
 
 def _agg_programacion(sb, contrato_id: int) -> dict:
-    """Solo módulo Programación de obra; vacío si el contrato no tiene programación cargada."""
+    """Solo módulo Programación de obra; vacío si el contrato no tiene programación cargada.
+
+    No se usa el % ejecutado de SICOE/Presupuesto cuando no hay ``prog_versiones``.
+    """
     try:
-        # Detectar si hay versiones/cargas de programación
         vers = (
             sb.table("prog_versiones")
             .select("id")
@@ -686,10 +871,13 @@ def _agg_programacion(sb, contrato_id: int) -> dict:
             .data
             or []
         )
-    except Exception:
-        vers = None
+    except Exception as exc:
+        _log.warning("gestion_obra programacion versiones: %s", exc)
+        return _msg_sin(
+            "Este contrato no tiene Programación de obra cargada, o no fue posible consultarla."
+        )
 
-    if vers is not None and len(vers) == 0:
+    if not vers:
         return _msg_sin("Este contrato no tiene Programación de obra cargada.")
 
     try:
@@ -785,6 +973,7 @@ def build_snapshot(
     except Exception as exc:
         _log.warning("gestion_obra bitacora: %s", exc)
 
+    diarios = _enrich_diarios_empresa_rrhh(sb, int(contrato_id), diarios)
     personal = _agg_personal_desde_diarios(diarios, dias)
     actividades = _agg_actividades(diarios, dias)
     cantidades = _agg_sicoe(sb, contrato_id, d0.isoformat(), d1.isoformat())
@@ -801,6 +990,7 @@ def build_snapshot(
                 obs[k] = str(observaciones[k])
 
     return {
+        "schema_version": SCHEMA_VERSION,
         "fecha_desde": d0.isoformat(),
         "fecha_hasta": d1.isoformat(),
         "snapshot_at": _now_iso(),
@@ -832,7 +1022,12 @@ def merge_observaciones(existing: Optional[dict], patch: Optional[dict]) -> dict
 def normalize_gestion_obra(raw) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
+    try:
+        schema_v = int(raw.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        schema_v = 0
     out = {
+        "schema_version": schema_v,
         "fecha_desde": str(raw.get("fecha_desde") or "")[:10] or None,
         "fecha_hasta": str(raw.get("fecha_hasta") or "")[:10] or None,
         "snapshot_at": raw.get("snapshot_at"),
@@ -841,6 +1036,16 @@ def normalize_gestion_obra(raw) -> Optional[dict]:
         "observaciones": merge_observaciones(None, raw.get("observaciones")),
     }
     return out
+
+
+def snapshot_esta_obsoleto(raw) -> bool:
+    """True si falta el consolidado o su schema es anterior al vigente."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("datos"), dict):
+        return True
+    try:
+        return int(raw.get("schema_version") or 0) < SCHEMA_VERSION
+    except (TypeError, ValueError):
+        return True
 
 
 def acta_esta_sellada(acta: dict) -> bool:
