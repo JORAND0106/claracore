@@ -33,7 +33,7 @@ SECCIONES = (
     "programacion",
 )
 
-# Equiparación de estados de solicitud Almacén → buckets del gráfico diario.
+# Equiparación de estados de solicitud Almacén a buckets del gráfico diario.
 # borrador/enviada = pendientes de cierre; enviada también se cuenta como «gestionada»
 # (ya salió del borrador y está en trámite); aprobada = aprobadas; rechazada queda
 # fuera de las cuatro series pedidas pero se lista en la tabla.
@@ -242,10 +242,10 @@ def _agg_personal_desde_diarios(diarios: List[dict], dias: List[str]) -> dict:
     Cifras = cantidad real de personas/máquinas (máximo diario), nunca suma de días.
     Ausentismo: persona que asistió en otro día laboral del rango y falta ese día.
     """
-    # (empresa, cargo, fecha) → cantidad presentes
+    # (empresa, cargo, fecha) a cantidad presentes
     personal_dia: Dict[Tuple[str, str, str], float] = defaultdict(float)
     maq_dia: Dict[Tuple[str, str], float] = defaultdict(float)
-    # persona_key → historial
+    # persona_key a historial
     personas: Dict[str, dict] = {}
     jornada_horas: List[float] = []
     tiene_asistencia = False
@@ -572,7 +572,7 @@ def _agg_actividades(diarios: List[dict], dias: List[str]) -> dict:
 def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict:
     """
     Cantidades SICOE por fecha de creación del reporte (cualquier estado),
-    agrupadas por tramo → capítulo → ítem (estilo informe mensual, solo cantidad del período).
+    agrupadas por tramo a capítulo a ítem (estilo informe mensual, solo cantidad del período).
 
     El filtro de fechas usa límites America/Bogota convertidos a UTC, igual que la
     grilla SICOE («F. Crea.») percibida por el usuario.
@@ -654,7 +654,7 @@ def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict
     except Exception as exc:
         _log.warning("gestion_obra sicoe listado: %s", exc)
 
-    # (tramo, capitulo, item_numero) → acumula cantidades crudas; valora una sola vez
+    # (tramo, capitulo, item_numero) a acumula cantidades crudas; valora una sola vez
     agg: Dict[Tuple[str, str, str], dict] = {}
     sin_item = 0
     for r in rows:
@@ -724,7 +724,7 @@ def _agg_sicoe(sb, contrato_id: int, fecha_desde: str, fecha_hasta: str) -> dict
         by_tramo[f["tramo"]] += float(f["cantidad"] or 0)
     series = [{"nombre": k, "valor": round(v, 2)} for k, v in sorted(by_tramo.items(), key=lambda x: -x[1])]
 
-    # Tramo → capítulos → ítems + subtotal capítulo (suma valores por ítem ya valorados)
+    # Tramo a capítulos a ítems + subtotal capítulo (suma valores por ítem ya valorados)
     # Regla: por ítem se suma cant primero y se multiplica una vez; el subtotal suma esos valores.
     por_tramo: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for f in filas:
@@ -1104,15 +1104,15 @@ def _fmt_periodo(fecha_desde, fecha_hasta) -> str:
     d0 = _parse_date(fecha_desde)
     d1 = _parse_date(fecha_hasta)
     if not d0 or not d1:
-        return f"{fecha_desde} → {fecha_hasta}"
+        return f"{fecha_desde} a {fecha_hasta}"
     if d0.year == d1.year and d0.month == d1.month:
-        return f"{d0.day} → {d1.day} {_MESES_ES[d0.month - 1]} {d0.year}"
+        return f"{d0.day} a {d1.day} {_MESES_ES[d0.month - 1]} {d0.year}"
     if d0.year == d1.year:
         return (
-            f"{d0.day} {_MESES_ES[d0.month - 1]} → "
+            f"{d0.day} {_MESES_ES[d0.month - 1]} a "
             f"{d1.day} {_MESES_ES[d1.month - 1]} {d0.year}"
         )
-    return f"{_fmt_fecha_corta(d0)} → {_fmt_fecha_corta(d1)}"
+    return f"{_fmt_fecha_corta(d0)} a {_fmt_fecha_corta(d1)}"
 
 
 def _money_txt(n) -> str:
