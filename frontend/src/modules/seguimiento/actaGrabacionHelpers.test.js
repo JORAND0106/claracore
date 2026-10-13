@@ -474,4 +474,109 @@ describe('createGrabacionSessionController', () => {
     // STT debe haber enviado WAV (no WebM del MediaRecorder).
     assert.ok(chunkTypes.some((t) => /wav/i.test(t)), `esperaba chunks wav, got ${JSON.stringify(chunkTypes)}`)
   })
+
+  it('Abrir/actualizar tema no corta el pipeline STT (liveMode sigue azure)', async () => {
+    const errors = []
+    const api = {
+      async iniciarGrabacion() {
+        return { sesion: { id: 92 }, segundos_restantes: 1000 }
+      },
+      async reclamarGrabacion() {
+        return { claimed: 0, debe_cerrar: false }
+      },
+      async finalizarGrabacion() {
+        return { claimed: 0 }
+      },
+      async grabacionLiveStatus() {
+        return { stt_disponible: true }
+      },
+      async grabacionChunk() {
+        return { transcripcion_chars: 50, delta_chars: 10 }
+      },
+      async grabacionCheckpointTemas() {
+        return { temas_escucha_activa: true, checkpoint_chars: 0 }
+      },
+      async grabacionActualizarTemas() {
+        return {
+          sintetizado: true,
+          temas_escucha_activa: true,
+          temas: [{ clave: 'od-1', titulo: 'Tema', texto: 'Texto', interviniente: null }],
+          tramos_resumen: { listo: 1, error: 0, procesando: 0, pendiente: 0 },
+        }
+      },
+    }
+    class FakeRecorder {
+      constructor() {
+        this.state = 'inactive'
+        this.mimeType = 'audio/webm'
+        this.ondataavailable = null
+        this.onstop = null
+      }
+      start() { this.state = 'recording' }
+      stop() {
+        this.state = 'inactive'
+        this.onstop?.()
+      }
+    }
+    function makeFakeAudioCtx() {
+      const ctx = {
+        sampleRate: 16000,
+        state: 'running',
+        destination: {},
+        resume: async () => { ctx.state = 'running' },
+        createMediaStreamSource() {
+          return { connect() {}, disconnect() {} }
+        },
+        createGain() {
+          return { gain: { value: 1 }, connect() {}, disconnect() {} }
+        },
+        createScriptProcessor() {
+          const node = {
+            onaudioprocess: null,
+            connect() {
+              if (typeof node.onaudioprocess === 'function') {
+                for (let n = 0; n < 4; n += 1) {
+                  const data = new Float32Array(4096)
+                  for (let i = 0; i < data.length; i += 1) data[i] = Math.sin((i + n) / 20) * 0.2
+                  node.onaudioprocess({
+                    inputBuffer: { getChannelData: () => data },
+                  })
+                }
+              }
+            },
+            disconnect() { node.onaudioprocess = null },
+          }
+          return node
+        },
+      }
+      return ctx
+    }
+    const ctrl = createGrabacionSessionController({
+      api,
+      heartbeatMs: 60_000,
+      checkpointAutoMs: 60_000,
+      chunkIntervalMs: 30,
+      openStreams: async () => ({
+        micStream: { getTracks: () => [], getAudioTracks: () => [{ readyState: 'live', enabled: true }] },
+        displayStream: null,
+        mixedStream: { getTracks: () => [], getAudioTracks: () => [{ readyState: 'live' }] },
+        audioCtx: makeFakeAudioCtx(),
+        tabAudioOk: false,
+        mimeType: 'audio/webm',
+      }),
+      createRecorder: () => new FakeRecorder(),
+      download: () => true,
+      onError: (m) => { errors.push(m) },
+    })
+    await ctrl.start({ includeTabAudio: false })
+    await ctrl.armTemasCheckpoint()
+    assert.equal(ctrl.getLiveMode(), 'azure')
+    // Simula Abrir/Cerrar tema: checkpoint manual sin reiniciar captura.
+    await ctrl.actualizarTemas({ origen: 'manual' })
+    assert.equal(ctrl.getLiveMode(), 'azure')
+    assert.equal(ctrl.getSesionId(), 92)
+    const micErr = errors.filter((e) => /micrófono|No se detectó sonido/i.test(String(e || '')))
+    assert.equal(micErr.length, 0, `sin aviso falso de mic: ${JSON.stringify(micErr)}`)
+    await ctrl.stop({ motivo: 'usuario' })
+  })
 })

@@ -3,8 +3,11 @@ import { describe, it } from 'node:test'
 
 import {
   AZURE_STT_SAMPLE_RATE,
+  clasificarAvisoSttVacio,
   encodeWavPcm16,
+  esCausaSttCritica,
   float32Rms,
+  hayPistaAudioViva,
   mergeTemasGrabacionViva,
   mensajeSttUsuario,
   resampleFloat32Mono,
@@ -97,9 +100,78 @@ describe('mensajeSttUsuario', () => {
     assert.match(mensajeSttUsuario({ stt_causa: 'sin_audio' }), /micrófono/i)
     assert.match(mensajeSttUsuario({ stt_causa: 'auth_rechazada' }), /soporte/i)
     assert.match(mensajeSttUsuario({ stt_causa: 'sin_reconocimiento' }), /voz/i)
-    const all = ['sin_audio', 'auth_rechazada', 'sin_reconocimiento', 'sin_clave']
+    assert.match(mensajeSttUsuario({ stt_causa: 'sin_permiso' }), /permiso/i)
+    const all = ['sin_audio', 'auth_rechazada', 'sin_reconocimiento', 'sin_clave', 'sin_permiso']
       .map((c) => mensajeSttUsuario({ stt_causa: c }))
       .join(' ')
     assert.doesNotMatch(all, /AZURE_SPEECH_KEY|Ocp-Apim|subscription/i)
+  })
+})
+
+describe('esCausaSttCritica / hayPistaAudioViva', () => {
+  it('distingue críticas de silencio', () => {
+    assert.equal(esCausaSttCritica('auth_rechazada'), true)
+    assert.equal(esCausaSttCritica('sin_audio'), false)
+    assert.equal(esCausaSttCritica('sin_reconocimiento'), false)
+  })
+
+  it('detecta pistas de audio vivas', () => {
+    assert.equal(hayPistaAudioViva({
+      micStream: { getAudioTracks: () => [{ readyState: 'live', enabled: true }] },
+    }), true)
+    assert.equal(hayPistaAudioViva({
+      micStream: { getAudioTracks: () => [{ readyState: 'ended', enabled: true }] },
+    }), false)
+  })
+})
+
+describe('clasificarAvisoSttVacio', () => {
+  it('no marca silencio como error si ya hubo caracteres o el mic sigue vivo', () => {
+    const conChars = clasificarAvisoSttVacio({
+      causa: 'sin_audio',
+      rms: 0,
+      charsAcumulados: 978,
+      micVivo: true,
+    })
+    assert.equal(conChars.nivel, 'neutro')
+    assert.match(conChars.mensaje, /Sin voz/i)
+
+    const micVivoSinChars = clasificarAvisoSttVacio({
+      causa: 'sin_audio',
+      rms: 0.001,
+      charsAcumulados: 0,
+      micVivo: true,
+    })
+    assert.equal(micVivoSinChars.nivel, 'neutro')
+
+    const sinRecon = clasificarAvisoSttVacio({
+      causa: 'sin_reconocimiento',
+      rms: 0.05,
+      charsAcumulados: 100,
+      micVivo: true,
+    })
+    assert.equal(sinRecon.nivel, 'neutro')
+  })
+
+  it('sí marca error si el mic está muerto y no hubo transcripción', () => {
+    const muerto = clasificarAvisoSttVacio({
+      causa: 'sin_audio',
+      rms: 0,
+      charsAcumulados: 0,
+      micVivo: false,
+    })
+    assert.equal(muerto.nivel, 'error')
+    assert.match(muerto.mensaje, /micrófono/i)
+  })
+
+  it('marca críticas auth/clave como error', () => {
+    assert.equal(
+      clasificarAvisoSttVacio({ causa: 'auth_rechazada', micVivo: true }).nivel,
+      'error',
+    )
+    assert.equal(
+      clasificarAvisoSttVacio({ causa: 'sin_clave', micVivo: true }).nivel,
+      'error',
+    )
   })
 })

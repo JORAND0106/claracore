@@ -11,7 +11,12 @@ import {
   segundosAReclamar,
   stopMediaStream,
 } from './actaGrabacionHelpers.js'
-import { createPcmWavStreamer, mensajeSttUsuario } from './actaGrabacionLive.js'
+import {
+  clasificarAvisoSttVacio,
+  createPcmWavStreamer,
+  hayPistaAudioViva,
+  mensajeSttUsuario,
+} from './actaGrabacionLive.js'
 
 /** Tope para no dejar Detener colgado si MediaRecorder no dispara onstop. */
 export const RECORDER_STOP_TIMEOUT_MS = 4000
@@ -62,6 +67,8 @@ export function createGrabacionSessionController({
   let temasCheckpointArmed = false
   let temasBusy = false
   let sttEmptyStreak = 0
+  /** Caracteres STT ya vistos en esta sesión (para no marcar silencio como error). */
+  let sttCharsSeen = 0
 
   const emitState = (patch) => {
     try { onState?.(patch) } catch { /* ignore */ }
@@ -192,14 +199,42 @@ export function createGrabacionSessionController({
               samples: meta?.samples,
             })
             const delta = Number(payload?.delta_chars || 0)
-            if (delta > 0) sttEmptyStreak = 0
-            else {
-              sttEmptyStreak += 1
-              // Varios lotes sin texto: avisar sin tumbar la grabación.
-              if (sttEmptyStreak === 4) {
-                onError?.(mensajeSttUsuario(payload) || mensajeSttUsuario({
-                  stt_causa: (Number(meta?.rms) || 0) < 0.004 ? 'sin_audio' : 'sin_reconocimiento',
-                }))
+            const chars = Number(payload?.transcripcion_chars || 0)
+            if (chars > sttCharsSeen) sttCharsSeen = chars
+            if (delta > 0) {
+              sttEmptyStreak = 0
+              // Quitar aviso neutro de silencio cuando vuelve a haber voz.
+              applyLivePayload({
+                ...(payload || {}),
+                stt_estado: 'transcribiendo',
+                stt_aviso: '',
+              }, { applyTemas: false })
+              return
+            }
+            // Durante checkpoint/síntesis no contar silencio: Abrir/Cerrar tema
+            // hace flush y puede coincidir con pausas naturales de habla.
+            if (temasBusy) {
+              applyLivePayload(payload, { applyTemas: false })
+              return
+            }
+            sttEmptyStreak += 1
+            if (sttEmptyStreak === 4) {
+              const aviso = clasificarAvisoSttVacio({
+                causa: payload?.stt_causa || payload?.causa,
+                rms: meta?.rms,
+                charsAcumulados: sttCharsSeen,
+                micVivo: hayPistaAudioViva(handles),
+              })
+              if (aviso.nivel === 'error') {
+                onError?.(aviso.mensaje)
+              } else {
+                // Silencio normal o sin voz clara: estado neutro, nunca rojo.
+                applyLivePayload({
+                  ...(payload || {}),
+                  stt_estado: 'silencio',
+                  stt_aviso: aviso.mensaje || 'Sin voz en este momento',
+                }, { applyTemas: false })
+                return
               }
             }
             applyLivePayload(payload, { applyTemas: false })
@@ -290,6 +325,8 @@ export function createGrabacionSessionController({
       await startLivePipeline()
     }
     temasBusy = true
+    // Abrir/Cerrar tema no debe reiniciar captura ni disparar falso aviso de mic.
+    sttEmptyStreak = 0
     emitState({ temasBusy: true })
     try {
       try { await pcmStreamer?.flush?.() } catch { /* ignore */ }
