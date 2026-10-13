@@ -9,6 +9,7 @@ import {
   saldoNegociadoItem,
   saldoPresupuestadoItem,
 } from './solicitudDetalleHelpers'
+import { almacenContraste } from './almacenContraste'
 import { AlmacenHelpIcon, fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
 
 const ESTADO_COLOR = {
@@ -126,7 +127,9 @@ function PanelLinea({ titulo, onClose, children }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(520px, 100%)',
-          background: '#fff',
+          background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+          color: ui.text,
+          border: ui.card?.border || '1px solid var(--cc-almacen-border, #e2e8f0)',
           borderRadius: 12,
           padding: 16,
           boxShadow: '0 16px 40px #0003',
@@ -166,6 +169,7 @@ export default function SolicitudMaterialesExcelTable({
   t,
 }) {
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const thBase = { ...ui.th, fontSize: 'var(--cc-xs)' }
   const [panel, setPanel] = useState(null)
   const cols = COLS.map((c) => (
@@ -329,7 +333,7 @@ export default function SolicitudMaterialesExcelTable({
                     <td style={cellBase(ui)}>
                       <Trunc title={fila.capituloTitulo}>{fila.capitulo}</Trunc>
                     </td>
-                    <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? '#92400e' : undefined }}>
+                    <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? contraste.warnText : undefined }}>
                       <Trunc title={descTitulo}>{desc}</Trunc>
                     </td>
                     <td style={cellBase(ui)} data-testid="linea-justificacion">
@@ -339,7 +343,7 @@ export default function SolicitudMaterialesExcelTable({
                     </td>
                     <td style={{
                       ...cellBase(ui),
-                      color: sinInsumo ? '#92400e' : undefined,
+                      color: sinInsumo ? contraste.warnText : undefined,
                       fontWeight: sinInsumo ? 700 : 500,
                     }}
                     >

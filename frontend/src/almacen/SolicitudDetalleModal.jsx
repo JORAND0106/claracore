@@ -15,6 +15,7 @@ import InsumoSearchTable from './InsumoSearchTable'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import SolicitudBuzon from './SolicitudBuzon'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import { puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
 import { resumenAccionBloque } from './solicitudTramoSeleccion'
 import {
@@ -58,6 +59,7 @@ export default function SolicitudDetalleModal({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const compact = useAlmacenCompact()
   const [sol, setSol] = useState(() => (initialSeed ? { ...initialSeed, items: initialSeed.items || [] } : null))
   const [motivo, setMotivo] = useState('')
@@ -551,10 +553,7 @@ export default function SolicitudDetalleModal({
           )}
           {error && (
             <div style={{
-              color: '#991b1b',
-              background: '#fef2f2',
-              border: '1px solid #fecaca',
-              borderRadius: 8,
+              ...estiloAvisoAlmacen(contraste, 'danger'),
               padding: '10px 12px',
               marginBottom: 12,
               fontSize: 'var(--cc-sm)',
@@ -575,13 +574,13 @@ export default function SolicitudDetalleModal({
               )}
               {puedeValidar && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, fontSize: 'var(--cc-xs)' }}>
-                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#fef3c7', color: '#92400e' }}>
+                  <span style={estiloAvisoAlmacen(contraste, 'warn', { compact: true })}>
                     Pendientes: {resumenValidacion.pendiente}
                   </span>
-                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#ecfdf5', color: '#065f46' }}>
+                  <span style={estiloAvisoAlmacen(contraste, 'ok', { compact: true })}>
                     Aprobados: {resumenValidacion.aprobado}
                   </span>
-                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#fef2f2', color: '#991b1b' }}>
+                  <span style={estiloAvisoAlmacen(contraste, 'danger', { compact: true })}>
                     Rechazados: {resumenValidacion.rechazado}
                   </span>
                 </div>
@@ -589,13 +588,9 @@ export default function SolicitudDetalleModal({
 
               {sol.motivo_rechazo && (
                 <div style={{
+                  ...estiloAvisoAlmacen(contraste, 'danger'),
                   fontSize: 'var(--cc-xs)',
-                  color: '#991b1b',
                   marginBottom: 10,
-                  padding: '6px 10px',
-                  borderRadius: 6,
-                  background: 'color-mix(in srgb, #dc2626 8%, var(--cc-almacen-bg-card, #fff))',
-                  border: '1px solid color-mix(in srgb, #dc2626 20%, transparent)',
                 }}
                 >
                   Motivo de rechazo: {sol.motivo_rechazo}
@@ -611,10 +606,7 @@ export default function SolicitudDetalleModal({
                     <span
                       key={p.key}
                       style={{
-                        padding: '3px 8px',
-                        borderRadius: 6,
-                        background: p.estado === 'con_oc' ? '#ecfdf5' : '#fffbeb',
-                        color: p.estado === 'con_oc' ? '#065f46' : '#92400e',
+                        ...estiloAvisoAlmacen(contraste, p.estado === 'con_oc' ? 'ok' : 'warn', { compact: true }),
                       }}
                     >
                       {p.nombre}: {p.estado === 'con_oc' ? 'con OC' : 'pendiente de OC'}
@@ -634,10 +626,8 @@ export default function SolicitudDetalleModal({
                   )}
                   {tieneOc && (
                     <span style={{
+                      ...estiloAvisoAlmacen(contraste, 'ok', { compact: true }),
                       padding: '4px 10px',
-                      borderRadius: 6,
-                      background: '#ecfdf5',
-                      color: '#065f46',
                       fontSize: 'var(--cc-xs)',
                       fontWeight: 600,
                     }}
@@ -715,21 +705,17 @@ export default function SolicitudDetalleModal({
                   <div
                     data-testid="solicitud-resumen-proveedores"
                     style={{
+                      ...estiloAvisoAlmacen(contraste, 'panel'),
                       marginBottom: 8,
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
                       fontSize: 'var(--cc-xs)',
                       lineHeight: 1.45,
-                      color: ui.text,
                     }}
                   >
                     {resumenProveedores.ocs_previstas > 0
                       ? `Se ${tieneOc ? 'relacionan' : 'generarían'} ${resumenProveedores.ocs_previstas} orden${resumenProveedores.ocs_previstas === 1 ? '' : 'es'} de compra: ${resumenProveedores.proveedores.join(', ')}.`
                       : 'Todavía no hay proveedor en las líneas: falta asignar el insumo.'}
                     {resumenProveedores.lineas_sin_insumo > 0 && (
-                      <span style={{ color: '#92400e', fontWeight: 700 }}>
+                      <span style={{ color: contraste.warnText, fontWeight: 700 }}>
                         {' '}
                         {resumenProveedores.lineas_sin_insumo} línea(s) sin insumo asignado.
                       </span>
@@ -798,11 +784,8 @@ export default function SolicitudDetalleModal({
                   <div
                     data-testid="solicitud-totales-compra"
                     style={{
+                      ...estiloAvisoAlmacen(contraste, 'panel'),
                       marginTop: 8,
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
                       fontSize: 'var(--cc-sm)',
                     }}
                   >
@@ -870,12 +853,8 @@ export default function SolicitudDetalleModal({
                 <div
                   data-testid="motivo-aprobacion-no-disponible"
                   style={{
+                    ...estiloAvisoAlmacen(contraste, 'warn'),
                     marginTop: 8,
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                    background: '#fffbeb',
-                    border: '1px solid #fcd34d',
-                    color: '#92400e',
                     fontSize: 'var(--cc-sm)',
                     lineHeight: 1.45,
                   }}
@@ -1114,7 +1093,7 @@ export default function SolicitudDetalleModal({
               </>
             )}
           {eliminarLineaAviso && (
-            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarLineaAviso}</div>
+            <div style={{ marginTop: 10, color: contraste.dangerText }}>{eliminarLineaAviso}</div>
           )}
         </CcConfirmModal>
       )}

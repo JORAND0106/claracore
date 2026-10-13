@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import InsumoSearchTable from './InsumoSearchTable'
 import ProveedorOfertaField from './ProveedorOfertaField'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
@@ -40,6 +41,7 @@ import {
 const LINEA_MODAL_WIDTH = 'min(1622px, 100%)'
 
 function EconomiaRevisionLinea({ verEconomicos, valorLinea, totales }) {
+  const ui = useAlmacenTheme()
   if (!verEconomicos) return null
   const grupos = totales?.grupos || []
   if (valorLinea == null && !totales?.alguna) return null
@@ -53,11 +55,8 @@ function EconomiaRevisionLinea({ verEconomicos, valorLinea, totales }) {
     <div
       data-testid="revision-linea-economia"
       style={{
+        ...estiloAvisoAlmacen(almacenContraste(ui), 'panel'),
         marginBottom: 12,
-        padding: '8px 10px',
-        borderRadius: 8,
-        background: '#f8fafc',
-        border: '1px solid #e2e8f0',
       }}
     >
       {valorLinea != null && (
@@ -129,6 +128,7 @@ export default function SolicitudLineaRevisionModal({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const compact = useAlmacenCompact()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -511,10 +511,7 @@ export default function SolicitudLineaRevisionModal({
 
         {error && (
           <div style={{
-            color: '#991b1b',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 8,
+            ...estiloAvisoAlmacen(contraste, 'danger'),
             padding: '10px 12px',
             marginBottom: 14,
             fontSize: 'var(--cc-sm)',
@@ -584,7 +581,7 @@ export default function SolicitudLineaRevisionModal({
         )}
 
         <div style={{ fontSize: 'var(--cc-xs)', marginBottom: 10, color: ui.text }}>
-          Proveedor: <strong style={{ color: item?.sin_insumo || (!item?.insumo_id && !item?.es_recurrente) ? '#92400e' : ui.text }}>
+          Proveedor: <strong style={{ color: item?.sin_insumo || (!item?.insumo_id && !item?.es_recurrente) ? contraste.warnText : ui.text }}>
             {etiquetaProveedorLinea(item)}
           </strong>
         </div>
@@ -592,16 +589,13 @@ export default function SolicitudLineaRevisionModal({
           <div
             data-testid="revision-linea-justificacion"
             style={{
+              ...estiloAvisoAlmacen(contraste, 'warn'),
               marginBottom: 12,
-              padding: '8px 10px',
-              borderRadius: 8,
-              background: '#fffbeb',
-              border: '1px solid #fcd34d',
               fontSize: 'var(--cc-sm)',
               lineHeight: 1.45,
             }}
           >
-            <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
               {item?.supera_presupuesto ? 'Justificación (supera presupuesto)' : 'Justificación'}
             </div>
             <div style={{ whiteSpace: 'pre-wrap' }}>{justTxt}</div>
@@ -614,12 +608,8 @@ export default function SolicitudLineaRevisionModal({
           <div
             data-testid="motivo-item-no-validable"
             style={{
+              ...estiloAvisoAlmacen(contraste, 'warn'),
               marginBottom: 12,
-              padding: '8px 10px',
-              borderRadius: 8,
-              background: '#fffbeb',
-              border: '1px solid #fcd34d',
-              color: '#92400e',
               fontSize: 'var(--cc-sm)',
               lineHeight: 1.45,
             }}
@@ -785,12 +775,8 @@ export default function SolicitudLineaRevisionModal({
 
             {puedeCorregirPostOc && !puedeValidarLinea && (
               <div style={{
+                ...estiloAvisoAlmacen(contraste, 'info'),
                 marginBottom: 10,
-                padding: '8px 10px',
-                borderRadius: 8,
-                background: '#eff6ff',
-                border: '1px solid #bfdbfe',
-                color: '#1e3a8a',
                 fontSize: 'var(--cc-xs)',
                 lineHeight: 1.4,
               }}
@@ -832,7 +818,7 @@ export default function SolicitudLineaRevisionModal({
                   </button>
                   <button
                     type="button"
-                    style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
+                    style={{ ...ui.btnSecondary, color: contraste.dangerText, borderColor: contraste.dangerBorder, padding: '10px 16px' }}
                     disabled={busy}
                     data-testid="revision-linea-rechazar-item"
                     onClick={() => { void validar('rechazar') }}
@@ -947,7 +933,7 @@ export default function SolicitudLineaRevisionModal({
                   </button>
                   <button
                     type="button"
-                    style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
+                    style={{ ...ui.btnSecondary, color: contraste.dangerText, borderColor: contraste.dangerBorder, padding: '10px 16px' }}
                     disabled={busy}
                     data-testid="revision-linea-rechazar-item"
                     onClick={() => { void validar('rechazar') }}
@@ -962,11 +948,7 @@ export default function SolicitudLineaRevisionModal({
                   <div
                     data-testid="revision-proveedor-oc"
                     style={{
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      background: '#fffbeb',
-                      border: '1px solid #fcd34d',
-                      color: '#92400e',
+                      ...estiloAvisoAlmacen(contraste, 'warn'),
                       fontSize: 'var(--cc-sm)',
                       lineHeight: 1.45,
                     }}
