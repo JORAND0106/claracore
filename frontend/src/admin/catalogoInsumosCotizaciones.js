@@ -735,6 +735,54 @@ export function toUpperTrim(s) {
   return String(s || '').trim().toUpperCase()
 }
 
+/** Copia unidad y rendimiento (y descripción) a cada cotización del insumo. */
+export function propagarIdentidadInsumo(pares, identidad = {}) {
+  const desc = identidad.descripcion != null ? toUpperTrim(identidad.descripcion) : null
+  const und = identidad.unidad != null ? String(identidad.unidad).trim() : null
+  const rend = identidad.rendimiento != null
+    ? sanitizeRendimientoInput(identidad.rendimiento)
+    : null
+  return (pares || []).map((p) => ({
+    ...p,
+    coherencia: {
+      ...(p.coherencia || {}),
+      ...(desc != null ? { descripcion: desc } : {}),
+      ...(und != null ? { unidad: und } : {}),
+      ...(rend != null ? { rendimiento: rend } : {}),
+    },
+  }))
+}
+
+export function formConIdentidadPropagada(form) {
+  if (!form) return form
+  return {
+    ...form,
+    cotizaciones_detalle: propagarIdentidadInsumo(form.cotizaciones_detalle || [], {
+      descripcion: form.descripcion,
+      unidad: form.unidad,
+      rendimiento: form.rendimiento ?? '',
+    }),
+  }
+}
+
+function mismoRendimientoIdentidad(a, b) {
+  const sa = sanitizeRendimientoInput(a ?? '')
+  const sb = sanitizeRendimientoInput(b ?? '')
+  if (sa === '' && sb === '') return true
+  if (sa === '' || sb === '') return false
+  const na = Number(sa)
+  const nb = Number(sb)
+  if (Number.isFinite(na) && Number.isFinite(nb)) return Math.abs(na - nb) < 1e-9
+  return sa === sb
+}
+
+/** True si la unidad o el rendimiento del formulario difieren del insumo guardado. */
+export function identidadInsumoDifiere(actual, base) {
+  const undA = String(actual?.unidad || '').trim().toUpperCase()
+  const undB = String(base?.unidad || '').trim().toUpperCase()
+  return undA !== undB || !mismoRendimientoIdentidad(actual?.rendimiento, base?.rendimiento)
+}
+
 /** Solo dígitos y un separador decimal (punto o coma). */
 export function sanitizeRendimientoInput(raw) {
   let s = String(raw ?? '').replace(/[^\d.,]/g, '')

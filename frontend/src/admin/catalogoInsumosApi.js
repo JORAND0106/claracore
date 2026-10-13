@@ -32,6 +32,13 @@ export function createCatalogoInsumosApi(contratoId, token) {
     getInsumo: (insumoId) =>
       fetch(`${base}/insumos/${insumoId}`, { headers: headers(token) }).then(parseJson),
 
+    usoInsumo: (insumoId, { unidad = '', rendimiento = '' } = {}) => {
+      const params = new URLSearchParams()
+      params.set('unidad', unidad || '')
+      params.set('rendimiento', rendimiento == null ? '' : String(rendimiento))
+      return fetch(`${base}/insumos/${insumoId}/uso?${params}`, { headers: headers(token) }).then(parseJson)
+    },
+
     checkDuplicado: (body) =>
       fetch(`${base}/check-duplicado`, {
         method: 'POST',

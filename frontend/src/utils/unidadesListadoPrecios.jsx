@@ -14,6 +14,8 @@ export function UnidadSelector({
   setModoCustom,
   uCustom,
   setUCustom,
+  permitirCustom = true,
+  selectTestId,
 }) {
   const sel = selectStyle || {}
   const inp = inputStyle || {}
@@ -24,6 +26,7 @@ export function UnidadSelector({
     <div>
       {!modoCustom ? (
         <select
+          data-testid={selectTestId}
           style={{ ...sel, width: '100%' }}
           value={UNIDADES_LISTADO_PRECIOS.includes(value) ? value : (value ? '__prev__' : '')}
           onChange={(e) => {
@@ -45,7 +48,7 @@ export function UnidadSelector({
           {value && !UNIDADES_LISTADO_PRECIOS.includes(value) && (
             <option value="__prev__">{value}</option>
           )}
-          <option value="__custom__">+ Agregar unidad...</option>
+          {permitirCustom && <option value="__custom__">+ Agregar unidad...</option>}
         </select>
       ) : (
         <div style={{ display: 'flex', gap: 6 }}>
