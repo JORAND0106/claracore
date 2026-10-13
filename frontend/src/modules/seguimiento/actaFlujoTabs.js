@@ -188,19 +188,29 @@ export function mensajeTabBloqueada(tabId, { encabezadoGuardado, flujo, tieneAbi
  * Tras guardar con éxito en `tabId`, calcula el nuevo flujo y la siguiente pestaña.
  * Devuelve null nextTab si no debe avanzar (p. ej. bloqueo por compromisos abiertos).
  */
-export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } = {}) {
+export function ordenTabsActa({ incluirGestionObra = true } = {}) {
+  const base = [
+    'encabezado', 'orden', 'asistentes', 'compromisos', 'gestion_obra', 'ideas', 'apartados', 'acciones',
+  ]
+  if (incluirGestionObra) return base
+  return base.filter((id) => id !== 'gestion_obra')
+}
+
+export function avanceTrasGuardar(
+  tabId,
+  flujoActual,
+  { compromisPrevios = [], incluirGestionObra = true } = {},
+) {
   const flujo = parseFlujoTabs(flujoActual)
   // Asegurar versión de acta en secuencia (nunca “legacy vacío”).
   if (flujo.v == null && !flujo.liberado) flujo.v = 1
   const marca = TAB_MARCA_FLUJO[tabId]
+  const order = ordenTabsActa({ incluirGestionObra })
 
   // Edición libre: no aplicar gate de compromisos ni forzar hitos.
   if (flujo.liberado) {
-    const orderLibre = [
-      'encabezado', 'orden', 'asistentes', 'compromisos', 'gestion_obra', 'ideas', 'apartados', 'acciones',
-    ]
-    const idxL = orderLibre.indexOf(tabId)
-    const nextLibre = idxL >= 0 && idxL < orderLibre.length - 1 ? orderLibre[idxL + 1] : null
+    const idxL = order.indexOf(tabId)
+    const nextLibre = idxL >= 0 && idxL < order.length - 1 ? order[idxL + 1] : null
     return { ok: true, flujo, nextTab: nextLibre, error: null }
   }
 
@@ -222,9 +232,6 @@ export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } 
     flujo.liberado = true
   }
 
-  const order = [
-    'encabezado', 'orden', 'asistentes', 'compromisos', 'gestion_obra', 'ideas', 'apartados', 'acciones',
-  ]
   const idx = order.indexOf(tabId)
   let nextTab = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null
   // Tras Temas: ir a Vista previa (acciones); apartados también quedan libres por liberado.

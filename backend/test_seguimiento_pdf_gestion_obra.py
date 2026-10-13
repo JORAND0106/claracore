@@ -3,13 +3,34 @@ from __future__ import annotations
 
 import unittest
 
-from seguimiento_pdf import _gestion_obra_pdf_html, contenido_hash_acta, generar_pdf_acta
+from seguimiento_pdf import (
+    _gestion_obra_pdf_html,
+    _gestion_obra_section_html,
+    contenido_hash_acta,
+    generar_pdf_acta,
+)
 
 
 class TestPdfGestionObra(unittest.TestCase):
     def test_html_vacio(self):
         html = _gestion_obra_pdf_html({})
         self.assertIn("Sin consolidado", html)
+
+    def test_seccion_omitida_si_tipo_no_es_interna_externa(self):
+        acta = {
+            "tipo_acta": "Capacitación",
+            "gestion_obra": {
+                "fecha_desde": "2026-10-05",
+                "fecha_hasta": "2026-10-06",
+                "datos": {"personal_jornada": {"disponible": False, "mensaje": "x"}},
+                "observaciones": {},
+            },
+        }
+        self.assertEqual(_gestion_obra_section_html(acta), "")
+        # Interna sí incluye la sección (sin hueco vacío forzado).
+        acta_in = {**acta, "tipo_acta": "interna"}
+        html_in = _gestion_obra_section_html(acta_in)
+        self.assertIn("Gestión de obra", html_in)
 
     def test_html_con_secciones_por_dia(self):
         acta = {

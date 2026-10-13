@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 
 from seguimiento_tipo_acta import (
+    acta_incluye_gestion_obra,
     display_tipo_acta,
     norm_tipo_key,
     normalize_tipo_acta_value,
@@ -15,6 +16,13 @@ class TestTipoActaNorm(unittest.TestCase):
         self.assertEqual(normalize_tipo_acta_value("Interna"), "interna")
         self.assertEqual(normalize_tipo_acta_value("EXTERNA"), "externa")
         self.assertEqual(display_tipo_acta("interna"), "Interna")
+
+    def test_gestion_obra_solo_interna_externa(self):
+        self.assertTrue(acta_incluye_gestion_obra("interna"))
+        self.assertTrue(acta_incluye_gestion_obra("Externa"))
+        self.assertFalse(acta_incluye_gestion_obra("Capacitación"))
+        self.assertFalse(acta_incluye_gestion_obra("Comité"))
+        self.assertFalse(acta_incluye_gestion_obra(""))
 
     def test_custom_dedupe_accents(self):
         k1 = norm_tipo_key("Comité Técnico")

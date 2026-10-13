@@ -28,6 +28,14 @@ export function isBuiltinTipoActa(value) {
   return k === 'interna' || k === 'externa'
 }
 
+/**
+ * Gestión de obra (TAB + PDF) solo aplica a los tipos originales Interna/Externa.
+ * Se decide por el tipo canónico, no por el texto del nombre.
+ */
+export function actaIncluyeGestionObra(tipoActa) {
+  return isBuiltinTipoActa(tipoActa)
+}
+
 export function labelTipoActaValue(value, customTipos = []) {
   const raw = String(value || '').trim()
   if (!raw) return '—'
