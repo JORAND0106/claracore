@@ -199,12 +199,20 @@ def test_clasificar_stt_vacio_distingue_casos():
 
 
 def test_detalle_error_sintesis_explica_punto_de_falla():
-    msg = _detalle_error_sintesis(RuntimeError("credit balance too low"), model="claude-haiku-4-5")
-    assert "No se pudo sintetizar los temas con IA" in msg
-    assert "créditos" in msg.lower() or "saldo" in msg.lower()
+    msg = _detalle_error_sintesis(RuntimeError("credit balance too low"), model="claude-haiku-5-5")
+    assert "saldo" in msg.lower()
+    assert "temperature" not in msg.lower()
+    assert "ACTA_ANTHROPIC" not in msg
     msg2 = _detalle_error_sintesis(RuntimeError("not_found_error: model xyz"), model="bad-model")
-    assert "modelo no disponible" in msg2.lower()
-    assert "bad-model" in msg2
+    assert "modelo" in msg2.lower()
+    assert "bad-model" not in msg2  # sin detalle técnico en UI
+    msg3 = _detalle_error_sintesis(
+        TypeError("AsyncMessages.create() got an unexpected keyword argument 'temperature'"),
+        model="claude-haiku-5-5",
+    )
+    assert "reintentar" in msg3.lower()
+    assert "temperature" not in msg3
+    assert "AsyncMessages" not in msg3
 
 
 class _Resp:
