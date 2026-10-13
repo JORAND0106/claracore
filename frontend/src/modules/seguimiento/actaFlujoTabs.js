@@ -41,13 +41,23 @@ export function flujoInicialNuevaActa(partial = null) {
     compromisos: false,
     ideas: false,
     liberado: false,
-    v: 1,
+    v: 2,
+    temas_escritura_expositor: true,
   }
   if (!partial || typeof partial !== 'object') return base
   for (const k of FLUJO_TAB_KEYS) {
     if (partial[k]) base[k] = true
   }
   if (partial.liberado || base.ideas) base.liberado = true
+  if (partial.v != null && partial.v !== '') {
+    const n = Number(partial.v)
+    if (Number.isFinite(n)) base.v = n
+  }
+  if (partial.temas_escritura_expositor || (base.v != null && Number(base.v) >= 2)) {
+    base.temas_escritura_expositor = true
+  } else if (partial.temas_escritura_expositor === false) {
+    base.temas_escritura_expositor = false
+  }
   return base
 }
 
@@ -108,9 +118,13 @@ export function mergeFlujoProgress(primary, ...rest) {
     }
     if (f.liberado) out.liberado = true
     if (f.v != null) out.v = f.v
+    if (f.temas_escritura_expositor || (f.v != null && Number(f.v) >= 2)) {
+      out.temas_escritura_expositor = true
+    }
   }
   if (out.ideas) out.liberado = true
-  if (out.v == null && !out.liberado) out.v = 1
+  if (out.v == null && !out.liberado) out.v = 2
+  if (out.v != null && Number(out.v) >= 2) out.temas_escritura_expositor = true
   return out
 }
 

@@ -32,6 +32,11 @@ import {
   serializeOrdenItems,
   tabDesbloqueada,
 } from './actaFlujoTabs'
+import {
+  actaUsaEscrituraExpositor,
+  puedeEditarTema,
+  puedeGuardarAlgunTema,
+} from './temaEscritura'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
@@ -166,6 +171,8 @@ function mergeIdeaIds(local = [], server = []) {
     const localImgs = normalizeIdeaImagenes(row.imagenes)
     const pending = localImgs.filter((im) => im.pending && im.data_uri)
     const serverImgs = normalizeIdeaImagenes(match.imagenes)
+    const expServer = match.expositor_usuario_id ?? match.expositor_id
+    const expLocal = row.expositor_usuario_id ?? row.expositor_id
     return {
       ...row,
       id: match.id,
@@ -174,6 +181,12 @@ function mergeIdeaIds(local = [], server = []) {
       quien_dijo: quienServer || quienLocal || '',
       titulo: tituloServer || tituloLocal || '',
       imagenes: [...serverImgs, ...pending],
+      expositor_usuario_id: (expServer != null && Number(expServer) > 0)
+        ? Number(expServer)
+        : (expLocal != null && Number(expLocal) > 0 ? Number(expLocal) : null),
+      texto_es_borrador: match.texto_es_borrador != null
+        ? !!match.texto_es_borrador
+        : !!row.texto_es_borrador,
     }
   })
   return [...merged].sort((a, b) => {
@@ -413,6 +426,25 @@ export default function ActaEditor({
     || esElaborador
     || (esDev && form.estado === 'borrador')
   )
+  const escrituraExpositorActiva = actaUsaEscrituraExpositor(flujoTabs)
+  const puedeEditarEsteTema = (idea) => puedeEditarTema({
+    idea,
+    usuarioId: usuario?.id,
+    elaboradorId: form.elaborador_id,
+    flujoTabs,
+    esDesarrollador: esDev,
+    puedeEditarActa: puedeEditar,
+  })
+  const puedeGuardarComoExpositor = !sellada && escrituraExpositorActiva && puedeGuardarAlgunTema({
+    ideas: form.ideas,
+    usuarioId: usuario?.id,
+    elaboradorId: form.elaborador_id,
+    flujoTabs,
+    esDesarrollador: esDev,
+    puedeEditarActa: puedeEditar,
+  })
+  /** Guardar: elaborador (todo) o expositor de al menos un tema (solo sus temas en servidor). */
+  const puedeGuardarContenido = puedeEditar || puedeGuardarComoExpositor
   const esAsistenteInvitado = !!(usuario?.id && (form.asistentes || []).some(
     (a) => a.usuario_id != null && Number(a.usuario_id) === Number(usuario.id),
   ))
@@ -420,6 +452,9 @@ export default function ActaEditor({
   const puedeEditarOrden = puedeEditar || (!sellada && esAsistenteInvitado && encabezadoGuardado)
   const soloLectura = !puedeEditar
   const soloLecturaOrden = !puedeEditarOrden
+  const temaEditSoloLectura = temaEditIdx != null
+    ? !puedeEditarEsteTema(form.ideas[temaEditIdx])
+    : soloLectura
   const flujoCtx = { encabezadoGuardado, flujo: flujoTabs }
   const isTabLocked = (tabId) => !tabDesbloqueada(tabId, flujoCtx)
   const secuencialActivo = encabezadoGuardado && !flujoLiberado(flujoTabs)
@@ -669,15 +704,22 @@ export default function ActaEditor({
                     if (ox !== oy) return ox - oy
                     return (Number(x.id) || 0) - (Number(y.id) || 0)
                   })
-                  .map((x, i) => ({
-                    _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
-                    id: x.id,
-                    texto: x.texto || '',
-                    quien_dijo: x.quien_dijo || x.interviniente || '',
-                    titulo: x.titulo || '',
-                    orden: x.orden != null ? Number(x.orden) : i,
-                    imagenes: normalizeIdeaImagenes(x.imagenes),
-                  }))
+                  .map((x, i) => {
+                    const expId = x.expositor_usuario_id ?? x.expositor_id ?? null
+                    return {
+                      _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
+                      id: x.id,
+                      texto: x.texto || '',
+                      quien_dijo: x.quien_dijo || x.interviniente || '',
+                      titulo: x.titulo || '',
+                      orden: x.orden != null ? Number(x.orden) : i,
+                      imagenes: normalizeIdeaImagenes(x.imagenes),
+                      expositor_usuario_id: expId != null && Number(expId) > 0
+                        ? Number(expId)
+                        : null,
+                      texto_es_borrador: !!x.texto_es_borrador,
+                    }
+                  })
                 : [emptyIdea()]
               return seedIdeasFromOrdenDia(ordenItems, loaded, {
                 newRowKey: (p) => newRowKey(p || 'idea'),
@@ -840,6 +882,7 @@ export default function ActaEditor({
             kind: im.kind || 'esquema',
             ...(im.url && !im.blob_path ? { url: im.url } : {}),
           }))
+        const expId = i.expositor_usuario_id ?? i.expositor_id ?? null
         return {
           id: i.id || undefined,
           texto: i.texto || '',
@@ -849,6 +892,8 @@ export default function ActaEditor({
           // Consecutivo interno = posición actual en UI (tras reordenar).
           orden: idx,
           imagenes,
+          expositor_usuario_id: expId != null && Number(expId) > 0 ? Number(expId) : null,
+          texto_es_borrador: !!i.texto_es_borrador,
         }
       }),
     apartados: (formSrc.apartados || [])
@@ -1013,7 +1058,7 @@ export default function ActaEditor({
   }
 
   const handleIdeaPaste = (ideaIdx, e) => {
-    if (soloLectura) return
+    if (!puedeEditarEsteTema(form.ideas[ideaIdx])) return
     const items = e.clipboardData?.items
     if (!items?.length) return
     let imageItem = null
@@ -1326,8 +1371,11 @@ export default function ActaEditor({
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
             {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta, tiposActaCustom)}
             {sellada ? ' · sellada (solo lectura)' : ''}
-            {!sellada && encabezadoGuardado && soloLectura && !puedeEditarOrden ? ' · solo lectura (elaborador exclusivo)' : ''}
+            {!sellada && encabezadoGuardado && soloLectura && !puedeEditarOrden && !puedeGuardarComoExpositor ? ' · solo lectura (elaborador exclusivo)' : ''}
             {!sellada && encabezadoGuardado && soloLectura && puedeEditarOrden ? ' · puede reservar puntos del orden del día' : ''}
+            {!sellada && encabezadoGuardado && escrituraExpositorActiva && puedeGuardarComoExpositor && !esElaborador && !esDev
+              ? ' · puede editar los temas donde es expositor'
+              : ''}
             {!encabezadoGuardado ? ' · guarde el encabezado para continuar' : ''}
             {secuencialActivo ? ' · primer diligenciamiento (avance por pestañas)' : ''}
             {!sellada && encabezadoGuardado && flujoLiberado(flujoTabs) ? ' · edición libre' : ''}
@@ -1345,7 +1393,7 @@ export default function ActaEditor({
               {grabacionBusy ? 'Iniciando…' : 'Grabar reunión'}
             </button>
           )}
-          {(puedeEditar || (puedeEditarOrden && tab === 'orden')) && (permisos?.crear || permisos?.editar || puedeEditarOrden) && (
+          {(puedeGuardarContenido || (puedeEditarOrden && tab === 'orden')) && (permisos?.crear || permisos?.editar || puedeEditarOrden || puedeGuardarComoExpositor) && (
             <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>
               {saving ? 'Guardando…' : 'Guardar'}
             </button>
@@ -1960,13 +2008,15 @@ export default function ActaEditor({
           t={t}
           ideas={form.ideas}
           soloLectura={soloLectura}
+          canEditarIdea={puedeEditarEsteTema}
+          puedeAbrirCerrarTema={!!puedeEditar}
           canCrearCompromiso={!!permisos?.crear}
           saving={saving}
           viewportCompact={viewportCompact}
           grabacionActiva={grabacionPhase === 'recording'}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
           puedeActualizarTemas={
-            !soloLectura
+            !!puedeEditar
             && grabacionPhase === 'recording'
             && grabacionSesionId != null
           }
@@ -2242,7 +2292,7 @@ export default function ActaEditor({
             paddingBottom: 2,
           }}
         >
-          {puedeEditar && (permisos?.crear || permisos?.editar) && (
+          {puedeGuardarContenido && (permisos?.crear || permisos?.editar || puedeGuardarComoExpositor) && (
             <button
               type="button"
               disabled={saving}
@@ -2419,33 +2469,57 @@ export default function ActaEditor({
           t={t}
           idea={form.ideas[temaEditIdx]}
           ideaIdx={temaEditIdx}
-          soloLectura={soloLectura}
-          canCrearCompromiso={!!permisos?.crear}
+          soloLectura={temaEditSoloLectura}
+          canCrearCompromiso={!!permisos?.crear && !temaEditSoloLectura}
+          canQuitarTema={!!puedeEditar}
           saving={saving}
           asistenteOpciones={asistenteOpciones}
           viewportCompact={viewportCompact}
           onClose={() => setTemaEditIdx(null)}
           onPatch={(patch) => {
             const idx = temaEditIdx
+            if (!puedeEditarEsteTema(form.ideas[idx])) return
             const locks = patch.texto != null || patch.titulo != null || patch.quien_dijo != null
               || patch.interviniente != null
+            const clearBorrador = patch.texto != null
+              ? { texto_es_borrador: false }
+              : {}
             patchList('ideas', (list) => list.map((row, i) => (
               i === idx
-                ? { ...row, ...patch, ...(locks ? { _editadoUsuario: true } : {}) }
+                ? {
+                  ...row,
+                  ...patch,
+                  ...clearBorrador,
+                  ...(locks ? { _editadoUsuario: true } : {}),
+                }
                 : row
             )))
           }}
-          onAddImagen={(file) => addIdeaImagen(temaEditIdx, file)}
-          onRemoveImagen={(imgIdx) => removeIdeaImagen(temaEditIdx, imgIdx)}
+          onAddImagen={(file) => {
+            if (!puedeEditarEsteTema(form.ideas[temaEditIdx])) return
+            addIdeaImagen(temaEditIdx, file)
+          }}
+          onRemoveImagen={(imgIdx) => {
+            if (!puedeEditarEsteTema(form.ideas[temaEditIdx])) return
+            removeIdeaImagen(temaEditIdx, imgIdx)
+          }}
           onPasteImage={(e) => handleIdeaPaste(temaEditIdx, e)}
-          onOpenClara={() => setClaraIdx(temaEditIdx)}
-          onOpenEsquema={() => setEsquemaIdeaIdx(temaEditIdx)}
+          onOpenClara={() => {
+            if (!puedeEditarEsteTema(form.ideas[temaEditIdx])) return
+            setClaraIdx(temaEditIdx)
+          }}
+          onOpenEsquema={() => {
+            if (!puedeEditarEsteTema(form.ideas[temaEditIdx])) return
+            setEsquemaIdeaIdx(temaEditIdx)
+          }}
           onGenerarCompromiso={() => {
             const idx = temaEditIdx
+            if (!puedeEditarEsteTema(form.ideas[idx])) return
             setTemaEditIdx(null)
             abrirCompromiso(idx, form.ideas[idx]?.texto)
           }}
           onQuitar={() => {
+            if (!puedeEditar) return
             const idx = temaEditIdx
             patchList('ideas', (list) => list
               .filter((_, i) => i !== idx)
@@ -2474,6 +2548,10 @@ export default function ActaEditor({
           onClose={() => setClaraIdx(null)}
           onEnviarAlActa={async (texto) => {
             const idx = claraIdx
+            if (!puedeEditarEsteTema(form.ideas[idx])) {
+              setClaraIdx(null)
+              return
+            }
             const plano = String(texto || '')
             let titulo = ''
             try {
@@ -2489,8 +2567,11 @@ export default function ActaEditor({
               titulo = first.trim().slice(0, 72)
             }
             const html = plainTextToHtml(plano)
+            // Resultado de Clara = borrador del tema (el expositor puede corregirlo).
             patchList('ideas', (list) => list.map((row, i) => (
-              i === idx ? { ...row, texto: html, titulo } : row
+              i === idx
+                ? { ...row, texto: html, titulo, texto_es_borrador: true, _editadoUsuario: false }
+                : row
             )))
             setClaraIdx(null)
           }}
