@@ -23,16 +23,20 @@ class TestPdfGestionObra(unittest.TestCase):
                         "personal": {
                             "empresas": [{
                                 "empresa": "ACME",
-                                "total": 3,
+                                "max_diario": 2,
+                                "total": 2,
                                 "filas": [{
                                     "cargo": "Oficial",
                                     "por_dia": {"2026-10-05": 2, "2026-10-06": 1},
-                                    "total": 3,
+                                    "max_diario": 2,
+                                    "ausencias_por_dia": {"2026-10-06": 1},
+                                    "total": 2,
                                 }],
                             }],
                         },
                         "maquinaria": {"filas": []},
-                        "ausentismo": {"disponible": True, "ausentes": 0, "total": 3},
+                        "ausentismo": {"disponible": True, "ausentes": 1, "total": 1},
+                        "convencion_ausentismo": "Celdas sombreadas: hubo ausencias",
                         "jornada": {"disponible": False, "mensaje": "Sin jornada"},
                     },
                     "cantidades_obra": {
@@ -80,11 +84,13 @@ class TestPdfGestionObra(unittest.TestCase):
         html = _gestion_obra_pdf_html(acta)
         self.assertIn("Personal y jornada", html)
         self.assertIn("ACME", html)
+        self.assertIn("máx. diario", html)
         self.assertIn("Oficial", html)
+        self.assertIn("Celdas sombreadas", html)
         self.assertIn("Cantidades de obra", html)
         self.assertIn("1.1", html)
         self.assertIn("Pedro", html)
-        # PDF no debe mostrar valor económico
+        # Sin ver_valores: no mostrar cifra cruda de almacén
         self.assertNotIn("999999", html)
         self.assertIn("no tiene Programación", html)
 

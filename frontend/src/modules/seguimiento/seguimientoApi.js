@@ -50,6 +50,9 @@ export function createSeguimientoApi(contratoId, token) {
   const cid = contratoId
   const t = token
 
+  /** Expuestos para modales anidados (p. ej. Almacén desde Gestión de obra). */
+  const apiMeta = { contratoId: cid, token: t }
+
   async function get(path, timeout = 30000) {
     const sig = apiFetchSignal(timeout)
     try {
@@ -79,6 +82,7 @@ export function createSeguimientoApi(contratoId, token) {
   }
 
   return {
+    ...apiMeta,
     listActas: (params = {}) => {
       const q = new URLSearchParams()
       Object.entries(params).forEach(([k, v]) => {

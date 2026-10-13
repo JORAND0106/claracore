@@ -1982,22 +1982,34 @@ def _filtrar_actas_por_keywords(sb, rows: List[dict], q: str) -> List[dict]:
 
 
 def _mask_gestion_obra_valores(acta: dict, current_user: Optional[dict] = None) -> dict:
-    """Oculta valor de solicitudes de almacén si el rol no tiene visibilidad económica."""
+    """Oculta valores económicos (almacén + cantidades) según rol del usuario."""
     go = acta.get("gestion_obra")
     if not isinstance(go, dict):
         return acta
-    ver = False
+    ver_alm = False
     try:
         from almacen_permissions import puede_ver_valores_economicos_almacen
-        ver = bool(puede_ver_valores_economicos_almacen(current_user))
+        ver_alm = bool(puede_ver_valores_economicos_almacen(current_user))
     except Exception:
-        ver = False
+        ver_alm = False
+    ver_cant = True
+    try:
+        from subcontratista_visibilidad import usuario_ve_valores_economicos_contrato
+        cargo = None
+        rol = None
+        if isinstance(current_user, dict):
+            cargo = current_user.get("cargo_nombre") or current_user.get("cargo")
+            rol = current_user.get("rol_nombre") or current_user.get("rol")
+        ver_cant = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+    except Exception:
+        ver_cant = True
     go = dict(go)
-    go["ver_valores_almacen"] = ver
+    go["ver_valores_almacen"] = ver_alm
+    go["ver_valores_cantidades"] = ver_cant
     datos = dict(go.get("datos") or {}) if isinstance(go.get("datos"), dict) else {}
     al = dict(datos.get("almacen") or {}) if isinstance(datos.get("almacen"), dict) else {}
-    al["ver_valores"] = ver
-    if not ver:
+    al["ver_valores"] = ver_alm
+    if not ver_alm:
         sols = []
         for s in al.get("solicitudes") or []:
             if isinstance(s, dict):
@@ -2008,6 +2020,49 @@ def _mask_gestion_obra_valores(acta: dict, current_user: Optional[dict] = None) 
                 sols.append(s)
         al["solicitudes"] = sols
     datos["almacen"] = al
+
+    co = dict(datos.get("cantidades_obra") or {}) if isinstance(datos.get("cantidades_obra"), dict) else {}
+    co["ver_valores"] = ver_cant
+    if not ver_cant:
+        co.pop("total_general_valor", None)
+        filas = []
+        for f in co.get("filas") or []:
+            if isinstance(f, dict):
+                f2 = dict(f)
+                f2.pop("vlr_unitario", None)
+                f2.pop("valor_total", None)
+                filas.append(f2)
+            else:
+                filas.append(f)
+        co["filas"] = filas
+        tramos = []
+        for tr in co.get("tramos") or []:
+            if not isinstance(tr, dict):
+                tramos.append(tr)
+                continue
+            tr2 = dict(tr)
+            caps = []
+            for cap in tr2.get("capitulos") or []:
+                if not isinstance(cap, dict):
+                    caps.append(cap)
+                    continue
+                c2 = dict(cap)
+                c2.pop("subtotal_valor", None)
+                items = []
+                for it in c2.get("items") or []:
+                    if isinstance(it, dict):
+                        it2 = dict(it)
+                        it2.pop("vlr_unitario", None)
+                        it2.pop("valor_total", None)
+                        items.append(it2)
+                    else:
+                        items.append(it)
+                c2["items"] = items
+                caps.append(c2)
+            tr2["capitulos"] = caps
+            tramos.append(tr2)
+        co["tramos"] = tramos
+    datos["cantidades_obra"] = co
     go["datos"] = datos
     acta["gestion_obra"] = go
     return acta
@@ -2439,8 +2494,19 @@ def recalcular_gestion_obra_acta(
         ver_economicos=True,  # guardar valor en snapshot; se oculta por rol al servir
     )
     snap["ver_valores_almacen"] = ver_eco
+    ver_cant = True
+    try:
+        from subcontratista_visibilidad import usuario_ve_valores_economicos_contrato
+        cargo = (current_user or {}).get("cargo_nombre") or (current_user or {}).get("cargo")
+        rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
+        ver_cant = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+    except Exception:
+        ver_cant = True
+    snap["ver_valores_cantidades"] = ver_cant
     if isinstance(snap.get("datos"), dict) and isinstance(snap["datos"].get("almacen"), dict):
         snap["datos"]["almacen"]["ver_valores"] = ver_eco
+    if isinstance(snap.get("datos"), dict) and isinstance(snap["datos"].get("cantidades_obra"), dict):
+        snap["datos"]["cantidades_obra"]["ver_valores"] = ver_cant
     stamp = snap.get("snapshot_at")
     _persist_acta_row(
         sb,

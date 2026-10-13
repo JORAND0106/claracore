@@ -4,6 +4,10 @@ import {
   Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import { AlmacenProviders } from '../../almacen/almacenShared'
+import SolicitudDetalleModal from '../../almacen/SolicitudDetalleModal'
+import { accesoAlmacen } from '../../almacen/almacenPermisos'
+import { formatCOP } from '../../utils/formatCOP'
 import TemaRichEditor from './TemaRichEditor'
 import { isRichTextEmpty } from './richTextUtils'
 import {
@@ -14,9 +18,10 @@ import {
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
 const CHART_COLORS = ['#2563eb', '#0f766e', '#b45309', '#7c3aed', '#be123c', '#0369a1', '#15803d', '#a16207']
+const AUSENCIA_BG = 'rgba(245, 158, 11, 0.28)'
 
 /** Debe coincidir con SCHEMA_VERSION del backend (gestion_obra_service). */
-const GESTION_OBRA_SCHEMA_VERSION = 2
+const GESTION_OBRA_SCHEMA_VERSION = 3
 
 function snapshotObsoleto(snap) {
   if (!snap || typeof snap !== 'object') return true
@@ -31,6 +36,7 @@ function snapshotObsoleto(snap) {
 export default function ActaGestionObraPanel({
   t,
   api,
+  usuario = null,
   actaId,
   fechaReunion,
   value = null,
@@ -44,6 +50,7 @@ export default function ActaGestionObraPanel({
   const [error, setError] = useState('')
   const [obsSeccion, setObsSeccion] = useState(null)
   const [obsDraft, setObsDraft] = useState('')
+  const [solicitudDetalleId, setSolicitudDetalleId] = useState(null)
 
   const snap = value && typeof value === 'object' ? value : null
   const datos = snap?.datos && typeof snap.datos === 'object' ? snap.datos : {}
@@ -52,6 +59,14 @@ export default function ActaGestionObraPanel({
     [snap],
   )
   const stale = snapshotObsoleto(snap)
+  const contratoId = api?.contratoId
+  const token = api?.token
+  const accesoAlm = useMemo(
+    () => (usuario ? accesoAlmacen(usuario, contratoId) : null),
+    [usuario, contratoId],
+  )
+  const puedeAbrirSolicitud = Boolean(accesoAlm?.verSolicitudesInventario)
+  const permisosAlm = accesoAlm?.permisos || null
 
   useEffect(() => {
     if (snap?.fecha_desde && snap?.fecha_hasta) {
@@ -90,7 +105,6 @@ export default function ActaGestionObraPanel({
     }
   }, [api, actaId, onChange])
 
-  // Al abrir (o si el snapshot es de una versión anterior), recalcular con lógica vigente.
   useEffect(() => {
     if (!actaId || soloLectura) return
     if (!stale) return
@@ -133,6 +147,8 @@ export default function ActaGestionObraPanel({
   }
 
   const labelObs = GESTION_OBRA_SECCIONES.find((s) => s.id === obsSeccion)?.label || 'Observaciones'
+  const verValoresCant = !!(datos.cantidades_obra?.ver_valores ?? snap?.ver_valores_cantidades)
+  const verValoresAlm = !!(datos.almacen?.ver_valores ?? snap?.ver_valores_almacen)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -180,7 +196,7 @@ export default function ActaGestionObraPanel({
       </SectionCard>
 
       <SectionCard t={t} title="2. Cantidades de obra" onObs={!soloLectura ? () => abrirObs('cantidades_obra') : null} hasObs={!isRichTextEmpty(observaciones.cantidades_obra)}>
-        <CantidadesBlock t={t} data={datos.cantidades_obra} />
+        <CantidadesBlock t={t} data={datos.cantidades_obra} verValores={verValoresCant} />
         <ObsPreview t={t} html={observaciones.cantidades_obra} />
       </SectionCard>
 
@@ -190,7 +206,13 @@ export default function ActaGestionObraPanel({
       </SectionCard>
 
       <SectionCard t={t} title="4. Almacén" onObs={!soloLectura ? () => abrirObs('almacen') : null} hasObs={!isRichTextEmpty(observaciones.almacen)}>
-        <AlmacenBlock t={t} data={datos.almacen} verValores={!!(datos.almacen?.ver_valores ?? snap?.ver_valores_almacen)} />
+        <AlmacenBlock
+          t={t}
+          data={datos.almacen}
+          verValores={verValoresAlm}
+          puedeAbrir={puedeAbrirSolicitud}
+          onAbrirSolicitud={(id) => setSolicitudDetalleId(id)}
+        />
         <ObsPreview t={t} html={observaciones.almacen} />
       </SectionCard>
 
@@ -229,6 +251,20 @@ export default function ActaGestionObraPanel({
           </div>
         </div>
       )}
+
+      {solicitudDetalleId && contratoId != null && token && permisosAlm && (
+        <AlmacenProviders t={t} compact={viewportCompact} contratoId={contratoId} token={token}>
+          <SolicitudDetalleModal
+            solicitudId={solicitudDetalleId}
+            permisos={permisosAlm}
+            token={token}
+            t={t}
+            contratoId={contratoId}
+            onClose={() => setSolicitudDetalleId(null)}
+            onUpdated={() => setSolicitudDetalleId(null)}
+          />
+        </AlmacenProviders>
+      )}
     </div>
   )
 }
@@ -242,35 +278,49 @@ function PersonalJornadaBlock({ t, data, viewportCompact }) {
   const empresas = personal.empresas || []
   const dias = data.dias || []
   const maq = data.maquinaria || {}
+  const aus = data.ausentismo || {}
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <MiniChart t={t} series={series} title="Personal por empresa (persona-días del rango)" />
-      {(data.notas_conteo || []).map((n, i) => (
-        <div key={i} style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>{n}</div>
-      ))}
+      <MiniChart t={t} series={series} title="Personal por empresa (máximo de personas en un día)" />
       {empresas.map((emp) => (
         <div key={emp.empresa} style={{ border: `1px solid ${t.border}`, borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ padding: '6px 10px', background: `${t.primary}12`, fontWeight: 700, fontSize: 12, color: t.text }}>
             {emp.empresa}
-            <span style={{ fontWeight: 500, color: t.textMuted, marginLeft: 8 }}>Total {emp.total}</span>
+            <span style={{ fontWeight: 500, color: t.textMuted, marginLeft: 8 }}>
+              Máx. diario {emp.max_diario ?? emp.total ?? '—'}
+            </span>
           </div>
           <DayMatrixTable
             t={t}
             dias={dias}
-            rows={(emp.filas || []).map((f) => ({ label: f.cargo, por_dia: f.por_dia, total: f.total }))}
+            rows={(emp.filas || []).map((f) => ({
+              label: f.cargo,
+              por_dia: f.por_dia,
+              max_diario: f.max_diario ?? f.total,
+              ausencias_por_dia: f.ausencias_por_dia,
+              es_total_dia: !!f.es_total_dia,
+            }))}
             labelCol="Cargo"
+            lastColLabel="Máx. diario"
             compact={viewportCompact}
+            shadeAusencias
           />
         </div>
       ))}
+      {data.convencion_ausentismo && (
+        <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+          <span style={{ display: 'inline-block', width: 12, height: 12, background: AUSENCIA_BG, border: `1px solid ${t.border}`, marginRight: 6, verticalAlign: 'middle' }} />
+          {data.convencion_ausentismo}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8 }}>
         <InfoChip
           t={t}
           title="Ausentismo"
-          body={data.ausentismo?.disponible
-            ? `${data.ausentismo.ausentes || 0} ausentes / ${data.ausentismo.total || 0} registros`
-            : (data.ausentismo?.mensaje || 'No registrado')}
+          body={aus.disponible
+            ? `${aus.ausentes || 0} ausencia(s) en el rango`
+            : (aus.mensaje || 'No registrado')}
         />
         <InfoChip
           t={t}
@@ -289,16 +339,17 @@ function PersonalJornadaBlock({ t, data, viewportCompact }) {
       </div>
       {(maq.series || []).length > 0 && (
         <>
-          <MiniChart t={t} series={maq.series || []} title="Maquinaria por equipo (suma del rango)" />
+          <MiniChart t={t} series={maq.series || []} title="Maquinaria por equipo (máximo en un día)" />
           <DayMatrixTable
             t={t}
             dias={dias}
             rows={(maq.filas || []).map((f) => ({
               label: f.equipo,
               por_dia: f.por_dia || {},
-              total: f.total != null ? f.total : f.cantidad,
+              max_diario: f.max_diario != null ? f.max_diario : f.total,
             }))}
             labelCol="Equipo"
+            lastColLabel="Máx. diario"
             compact={viewportCompact}
           />
         </>
@@ -307,51 +358,95 @@ function PersonalJornadaBlock({ t, data, viewportCompact }) {
   )
 }
 
-function CantidadesBlock({ t, data }) {
+function CantidadesBlock({ t, data, verValores }) {
   if (!data || data.disponible === false) {
     return <EmptyMsg t={t} text={data?.mensaje || 'Sin cantidades SICOE en el rango.'} />
   }
   const tramos = data.tramos || []
+  const border = '#94a3b8'
+  const th = {
+    border: `1px solid ${border}`,
+    background: '#e2e8f0',
+    padding: '5px 7px',
+    fontWeight: 700,
+    fontSize: 11,
+    textAlign: 'left',
+    color: t.text,
+  }
+  const td = {
+    border: `1px solid ${border}`,
+    padding: '4px 7px',
+    fontSize: 12,
+    color: t.text,
+    verticalAlign: 'top',
+  }
+  const cols = verValores
+    ? ['Ítem', 'Descripción', 'Und', 'Cantidad', 'Vlr. unitario', 'Valor total']
+    : ['Ítem', 'Descripción', 'Und', 'Cantidad']
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <MiniChart t={t} series={data.series || []} title="Cantidad por tramo (período)" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {tramos.map((tr) => (
-        <div key={tr.tramo} style={{ border: `1px solid ${t.border}`, borderRadius: 8, overflow: 'hidden' }}>
-          <div style={{ padding: '6px 10px', background: `${t.primary}12`, fontWeight: 700, fontSize: 12 }}>
+        <div key={tr.tramo}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6, color: t.text }}>
             Tramo: {tr.tramo}
           </div>
           {(tr.capitulos || []).map((cap) => (
-            <div key={cap.capitulo}>
-              <div style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, color: t.textMuted, borderTop: `1px solid ${t.border}` }}>
+            <div key={cap.capitulo} style={{ marginBottom: 10, overflowX: 'auto' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
                 Capítulo {cap.capitulo}
               </div>
-              <SimpleTable
-                t={t}
-                columns={[
-                  { key: 'item_numero', label: 'Ítem' },
-                  { key: 'item_descripcion', label: 'Descripción' },
-                  { key: 'unidad', label: 'Und' },
-                  { key: 'cantidad', label: 'Cantidad', align: 'right' },
-                ]}
-                rows={cap.items || []}
-              />
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: verValores ? 560 : 360 }}>
+                <thead>
+                  <tr>
+                    {cols.map((c) => (
+                      <th key={c} style={{ ...th, textAlign: ['Cantidad', 'Vlr. unitario', 'Valor total'].includes(c) ? 'right' : 'left' }}>{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(cap.items || []).map((it, i) => (
+                    <tr key={i}>
+                      <td style={td}>{it.item_numero || '—'}</td>
+                      <td style={td}>{it.item_descripcion || '—'}</td>
+                      <td style={td}>{it.unidad || '—'}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{it.cantidad != null ? String(it.cantidad) : '—'}</td>
+                      {verValores && (
+                        <>
+                          <td style={{ ...td, textAlign: 'right' }}>{formatCOP(it.vlr_unitario)}</td>
+                          <td style={{ ...td, textAlign: 'right' }}>{formatCOP(it.valor_total)}</td>
+                        </>
+                      )}
+                    </tr>
+                  ))}
+                  {verValores && (
+                    <tr>
+                      <td colSpan={5} style={{ ...td, fontWeight: 700, textAlign: 'right', background: '#f1f5f9' }}>
+                        Subtotal capítulo
+                      </td>
+                      <td style={{ ...td, fontWeight: 700, textAlign: 'right', background: '#f1f5f9' }}>
+                        {formatCOP(cap.subtotal_valor)}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           ))}
         </div>
       ))}
+      {verValores && data.total_general_valor != null && (
+        <div style={{ fontWeight: 700, fontSize: 13, color: t.text, textAlign: 'right' }}>
+          Total general del avance: {formatCOP(data.total_general_valor)}
+        </div>
+      )}
+      {Number(data.registros_sin_item) > 0 && (
+        <div style={{ fontSize: 11, color: t.textMuted }}>
+          {data.registros_sin_item} registro(s) del rango sin ítem asignado; no se valoran.
+        </div>
+      )}
       {!tramos.length && (
-        <SimpleTable
-          t={t}
-          columns={[
-            { key: 'tramo', label: 'Tramo' },
-            { key: 'capitulo', label: 'Capítulo' },
-            { key: 'item_numero', label: 'Ítem' },
-            { key: 'item_descripcion', label: 'Descripción' },
-            { key: 'unidad', label: 'Und' },
-            { key: 'cantidad', label: 'Cantidad', align: 'right' },
-          ]}
-          rows={data.filas || []}
-        />
+        <EmptyMsg t={t} text="Sin filas de cantidades." />
       )}
     </div>
   )
@@ -362,7 +457,6 @@ function ActividadesBlock({ t, data }) {
     return <EmptyMsg t={t} text={data?.mensaje || 'Sin actividades adicionales en Bitácora.'} />
   }
   let porDia = Array.isArray(data.por_dia) ? data.por_dia : []
-  // Compat: snapshots viejos solo traían filas planas
   if (!porDia.length && Array.isArray(data.filas) && data.filas.length) {
     const byFecha = {}
     for (const f of data.filas) {
@@ -405,7 +499,7 @@ function ActividadesBlock({ t, data }) {
   )
 }
 
-function AlmacenBlock({ t, data, verValores }) {
+function AlmacenBlock({ t, data, verValores, puedeAbrir, onAbrirSolicitud }) {
   if (!data || data.disponible === false) {
     return <EmptyMsg t={t} text={data?.mensaje || 'Sin movimientos de almacén en el rango.'} />
   }
@@ -416,7 +510,6 @@ function AlmacenBlock({ t, data, verValores }) {
     aprobadas: r.aprobadas || 0,
     pendientes: r.pendientes || 0,
   }))
-  // Compat: armar gráfico desde filas si el snapshot viejo no traía series_por_dia
   if (!seriesDia.length && Array.isArray(data.solicitudes) && data.solicitudes.length) {
     const by = {}
     for (const s of data.solicitudes) {
@@ -435,9 +528,14 @@ function AlmacenBlock({ t, data, verValores }) {
     { key: 'fecha', label: 'Fecha' },
     { key: 'solicitante', label: 'Solicitante' },
     { key: 'insumos_resumen', label: 'Insumos solicitados' },
-    ...(verValores ? [{ key: 'valor', label: 'Valor', align: 'right' }] : []),
+    ...(verValores ? [{ key: 'valor_fmt', label: 'Valor', align: 'right' }] : []),
     { key: 'estado', label: 'Estado' },
   ]
+  const rows = (data.solicitudes || []).map((s) => ({
+    ...s,
+    valor_fmt: s.valor != null ? formatCOP(s.valor) : '—',
+  }))
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {seriesDia.length > 0 && (
@@ -467,13 +565,14 @@ function AlmacenBlock({ t, data, verValores }) {
           Equiparación de estados: gestionadas = enviada; pendientes = borrador o enviada; aprobadas = aprobada.
         </div>
       )}
-      <SimpleTable
+      <ClickableTable
         t={t}
         columns={cols}
-        rows={(data.solicitudes || []).map((s) => ({
-          ...s,
-          valor: s.valor != null ? Number(s.valor).toLocaleString('es-CO') : '—',
-        }))}
+        rows={rows}
+        puedeAbrir={puedeAbrir}
+        onRowClick={(r) => {
+          if (r?.id != null) onAbrirSolicitud?.(r.id)
+        }}
       />
       {(data.entradas || []).length > 0 && (
         <>
@@ -511,33 +610,45 @@ function ProgramacionBlock({ t, data }) {
   if (!data || data.disponible === false) {
     return <EmptyMsg t={t} text={data?.mensaje || 'Sin programación de obra cargada.'} />
   }
+  const versiones = data.versiones || []
+  const alertas = data.alertas || []
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>
-        Avance {data.ejecutado_pct != null ? `${Math.round(Number(data.ejecutado_pct))}%` : '—'}
-        {data.alertas?.length ? (
-          <span style={{ marginLeft: 8, color: 'var(--cc-color-danger,#b91c1c)', fontWeight: 500, fontSize: 12 }}>
-            · {data.alertas.length} alerta(s)
-          </span>
-        ) : null}
+        Programación cargada
+        {versiones.length ? ` · ${versiones.length} versión(es)` : ''}
       </div>
-      <MiniChart t={t} series={data.series || []} title="% ejecutado por capítulo" />
-      <SimpleTable
-        t={t}
-        columns={[
-          { key: 'capitulo', label: 'Capítulo' },
-          { key: 'ejecutado_pct', label: '%', align: 'right' },
-        ]}
-        rows={(data.filas || []).map((r) => ({
-          ...r,
-          ejecutado_pct: r.ejecutado_pct != null ? `${Math.round(Number(r.ejecutado_pct))}%` : '—',
-        }))}
-      />
+      {versiones.length > 0 && (
+        <SimpleTable
+          t={t}
+          columns={[
+            { key: 'numero', label: 'Nº' },
+            { key: 'tipo', label: 'Tipo' },
+            { key: 'estado', label: 'Estado' },
+          ]}
+          rows={versiones}
+        />
+      )}
+      {alertas.length > 0 ? (
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--cc-color-danger,#b91c1c)' }}>
+          {alertas.map((a, i) => <li key={i}>{a}</li>)}
+        </ul>
+      ) : (
+        <div style={{ fontSize: 12, color: t.textMuted }}>Sin alertas de desviación reportadas por el módulo.</div>
+      )}
     </div>
   )
 }
 
-function DayMatrixTable({ t, dias = [], rows = [], labelCol = 'Concepto', compact = false }) {
+function DayMatrixTable({
+  t,
+  dias = [],
+  rows = [],
+  labelCol = 'Concepto',
+  lastColLabel = 'Máx. diario',
+  compact = false,
+  shadeAusencias = false,
+}) {
   if (!rows.length) return <EmptyMsg t={t} text="Sin filas." />
   const dayLabels = dias.map((d) => String(d).slice(5))
   return (
@@ -549,23 +660,32 @@ function DayMatrixTable({ t, dias = [], rows = [], labelCol = 'Concepto', compac
             {dayLabels.map((d) => (
               <th key={d} style={th(t, 'right')}>{d}</th>
             ))}
-            <th style={th(t, 'right')}>Total</th>
+            <th style={th(t, 'right')}>{lastColLabel}</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i}>
+            <tr key={i} style={r.es_total_dia ? { background: `${t.primary}08`, fontWeight: 700 } : undefined}>
               <td style={td(t, 'left')}>{r.label}</td>
               {dias.map((d) => {
                 const v = r.por_dia?.[d]
+                const aus = shadeAusencias ? Number(r.ausencias_por_dia?.[d] || 0) : 0
+                const shaded = aus > 0
                 return (
-                  <td key={d} style={td(t, 'right')}>
+                  <td
+                    key={d}
+                    title={shaded ? `${aus} ausencia(s)` : undefined}
+                    style={{
+                      ...td(t, 'right'),
+                      ...(shaded ? { background: AUSENCIA_BG, cursor: 'help' } : null),
+                    }}
+                  >
                     {v != null && v !== '' && Number(v) !== 0 ? String(v) : '—'}
                   </td>
                 )
               })}
               <td style={{ ...td(t, 'right'), fontWeight: 700 }}>
-                {r.total != null && r.total !== '' ? String(r.total) : '—'}
+                {r.max_diario != null && r.max_diario !== '' ? String(r.max_diario) : '—'}
               </td>
             </tr>
           ))}
@@ -588,7 +708,7 @@ function MiniChart({ t, series = [], title }) {
           <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.border} />
             <XAxis dataKey="nombre" tick={{ fontSize: 10, fill: t.textMuted }} interval={0} angle={-20} textAnchor="end" height={48} />
-            <YAxis tick={{ fontSize: 10, fill: t.textMuted }} width={36} />
+            <YAxis tick={{ fontSize: 10, fill: t.textMuted }} width={36} allowDecimals={false} />
             <Tooltip />
             <Bar dataKey="valor" radius={[4, 4, 0, 0]}>
               {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
@@ -623,6 +743,45 @@ function SimpleTable({ t, columns, rows }) {
               ))}
             </tr>
           ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ClickableTable({ t, columns, rows, puedeAbrir, onRowClick }) {
+  const list = Array.isArray(rows) ? rows : []
+  if (!list.length) return <EmptyMsg t={t} text="Sin filas." />
+  return (
+    <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 8 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ background: `${t.primary}14` }}>
+            {columns.map((c) => (
+              <th key={c.key} style={th(t, c.align || 'left')}>{c.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {list.slice(0, 80).map((r, i) => {
+            const clickable = puedeAbrir && r?.id != null
+            return (
+              <tr
+                key={i}
+                onClick={clickable ? () => onRowClick?.(r) : undefined}
+                style={clickable ? { cursor: 'pointer' } : undefined}
+                title={clickable ? 'Abrir solicitud' : undefined}
+                onMouseEnter={clickable ? (e) => { e.currentTarget.style.background = `${t.primary}10` } : undefined}
+                onMouseLeave={clickable ? (e) => { e.currentTarget.style.background = '' } : undefined}
+              >
+                {columns.map((c) => (
+                  <td key={c.key} style={td(t, c.align || 'left')}>
+                    {r?.[c.key] != null && r[c.key] !== '' ? String(r[c.key]) : '—'}
+                  </td>
+                ))}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

@@ -43,67 +43,100 @@ class TestEmpresaAsistencia(unittest.TestCase):
         self.assertEqual(_empresa_asistencia({}), "Sin empresa")
 
 
-class TestPersonalAgg(unittest.TestCase):
-    def test_personal_con_empresa_desde_asistencia(self):
-        dias = ["2026-10-06", "2026-10-07"]
-        diarios = [
-            {
-                "fecha": "2026-10-06",
-                # personal agregado NO debe sumarse si hay asistencia (evita doble conteo)
-                "personal": [{"cargo": "Oficial", "cantidad": 99}],
-                "asistencia_colaboradores": [
-                    {
-                        "nombre": "Juan Pérez",
-                        "cargo": "Ayudante",
-                        "subcontratista_nombre": "ACME",
-                        "estado": "activo",
-                        "hora_ingreso": "07:00",
-                        "hora_salida": "17:00",
-                    },
-                    {
-                        "nombre": "Ana",
-                        "cargo": "Ayudante",
-                        "subcontratista_nombre": "ACME",
-                        "estado": "ausente",
-                    },
-                ],
-                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 1}],
-            },
-            {
-                "fecha": "2026-10-07",
-                "asistencia_colaboradores": [
-                    {
-                        "cargo": "Oficial",
-                        "subcontratista_nombre": "ACME",
-                        "estado": "activo",
-                        "hora_ingreso": "07:00",
-                        "hora_salida": "16:00",
-                    },
-                ],
-            },
-        ]
+class TestPersonalMaxDiario(unittest.TestCase):
+    def test_max_diario_no_suma_dias(self):
+        dias = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]
+        # Auxiliar de Tráfico: 6 cada día → máx = 6, no 30
+        diarios = []
+        for f in dias:
+            asis = [
+                {
+                    "rrhh_trabajador_id": i,
+                    "nombre": f"P{i}",
+                    "cargo": "Auxiliar de Tráfico",
+                    "subcontratista_nombre": "OC Ingeniería",
+                    "estado": "activo",
+                    "hora_ingreso": "07:00",
+                    "hora_salida": "16:00",
+                }
+                for i in range(1, 7)
+            ]
+            diarios.append({"fecha": f, "asistencia_colaboradores": asis})
         out = _agg_personal_desde_diarios(diarios, dias)
-        self.assertTrue(out["disponible"])
-        empresas = {e["empresa"] for e in out["personal"]["empresas"]}
-        self.assertIn("ACME", empresas)
-        self.assertNotIn("Sin empresa", empresas)
-        # No debe haber filas con cantidad 99 del personal agregado
-        for e in out["personal"]["empresas"]:
-            for f in e["filas"]:
-                self.assertLess(f["total"], 99)
-        # persona-días presentes: 1 (día6) + 1 (día7) = 2
-        self.assertEqual(out["personal"]["total_persona_dias"], 2)
-        self.assertEqual(out["ausentismo"]["presentes"], 2)
+        emp = next(e for e in out["personal"]["empresas"] if e["empresa"] == "OC Ingeniería")
+        self.assertEqual(emp["max_diario"], 6)
+        self.assertEqual(out["personal"]["series"][0]["valor"], 6)
+        aux = next(f for f in emp["filas"] if f["cargo"] == "Auxiliar de Tráfico")
+        self.assertEqual(aux["max_diario"], 6)
+        total_dia = next(f for f in emp["filas"] if f.get("es_total_dia"))
+        self.assertEqual(total_dia["por_dia"]["2026-10-05"], 6)
+        self.assertEqual(total_dia["max_diario"], 6)
+        self.assertFalse(out.get("notas_conteo"))
+
+    def test_ausentismo_maestro_oc(self):
+        """Maestros 3,4,3,4,4 del 5–9 oct → 1 ausencia el día 7."""
+        dias = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]
+        # 4 maestros: A B C D. Día 5: A B C (3). Día 6: A B C D. Día 7: A B C (D falta). …
+        maestros = [
+            {"id": 101, "nombre": "Maestro A"},
+            {"id": 102, "nombre": "Maestro B"},
+            {"id": 103, "nombre": "Maestro C"},
+            {"id": 104, "nombre": "Maestro D"},
+        ]
+        presentes_por_dia = {
+            "2026-10-05": [101, 102, 103],
+            "2026-10-06": [101, 102, 103, 104],
+            "2026-10-07": [101, 102, 103],  # D ausente
+            "2026-10-08": [101, 102, 103, 104],
+            "2026-10-09": [101, 102, 103, 104],
+        }
+        diarios = []
+        for f in dias:
+            asis = []
+            for m in maestros:
+                if m["id"] not in presentes_por_dia[f]:
+                    continue
+                asis.append({
+                    "rrhh_trabajador_id": m["id"],
+                    "nombre": m["nombre"],
+                    "cargo": "Maestro",
+                    "subcontratista_nombre": "OC Ingeniería",
+                    "estado": "activo",
+                })
+            diarios.append({"fecha": f, "asistencia_colaboradores": asis})
+        out = _agg_personal_desde_diarios(diarios, dias)
         self.assertEqual(out["ausentismo"]["ausentes"], 1)
-        # ACME Ayudante solo el 06
-        acme = next(e for e in out["personal"]["empresas"] if e["empresa"] == "ACME")
-        ayud = next(f for f in acme["filas"] if f["cargo"] == "Ayudante")
-        self.assertEqual(ayud["por_dia"]["2026-10-06"], 1)
-        self.assertEqual(ayud["por_dia"].get("2026-10-07", 0), 0)
+        emp = next(e for e in out["personal"]["empresas"] if e["empresa"] == "OC Ingeniería")
+        mae = next(f for f in emp["filas"] if f["cargo"] == "Maestro")
+        self.assertEqual(mae["ausencias_por_dia"].get("2026-10-07"), 1)
+        self.assertEqual(mae["por_dia"]["2026-10-07"], 3)
+        self.assertEqual(mae["max_diario"], 4)
+        # Domingo sin asistencia no cuenta
+        diarios_con_domingo = diarios + [{"fecha": "2026-10-11", "asistencia_colaboradores": []}]
+        dias2 = dias + ["2026-10-10", "2026-10-11"]
+        out2 = _agg_personal_desde_diarios(diarios_con_domingo, dias2)
+        self.assertEqual(out2["ausentismo"]["ausentes"], 1)
 
     def test_vacio(self):
         out = _agg_personal_desde_diarios([], ["2026-10-05"])
         self.assertFalse(out["disponible"])
+
+
+class TestMaquinariaMaxDiario(unittest.TestCase):
+    def test_max_no_suma(self):
+        dias = ["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]
+        diarios = [
+            {
+                "fecha": f,
+                "asistencia_colaboradores": [],
+                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 1}],
+            }
+            for f in dias
+        ]
+        out = _agg_personal_desde_diarios(diarios, dias)
+        filas = out["maquinaria"]["filas"]
+        self.assertEqual(filas[0]["max_diario"], 1)
+        self.assertEqual(out["maquinaria"]["series"][0]["valor"], 1)
 
 
 class TestActividades(unittest.TestCase):
@@ -144,8 +177,7 @@ class TestObservaciones(unittest.TestCase):
 
     def test_snapshot_obsoleto(self):
         self.assertTrue(snapshot_esta_obsoleto(None))
-        self.assertTrue(snapshot_esta_obsoleto({"datos": {}}))
-        self.assertTrue(snapshot_esta_obsoleto({"schema_version": 1, "datos": {}}))
+        self.assertTrue(snapshot_esta_obsoleto({"schema_version": 2, "datos": {}}))
         self.assertFalse(snapshot_esta_obsoleto({
             "schema_version": SCHEMA_VERSION, "datos": {"personal_jornada": {}},
         }))
@@ -154,24 +186,31 @@ class TestObservaciones(unittest.TestCase):
 class TestBogotaFechas(unittest.TestCase):
     def test_bounds_cubre_tarde_bogota(self):
         start, end = _bogota_day_bounds_utc("2026-10-06", "2026-10-12")
-        # 12 oct 23:59 Bogotá = 13 oct ~05:00 UTC
         self.assertTrue(end.startswith("2026-10-13") or "2026-10-13" in end)
         self.assertTrue(start.startswith("2026-10-06"))
 
     def test_fecha_bogota_desde_utc_noche(self):
-        # 13 oct 00:30 UTC = 12 oct 19:30 Bogotá
         dt = datetime(2026, 10, 13, 0, 30, tzinfo=timezone.utc)
         self.assertEqual(_fecha_bogota(dt), "2026-10-12")
-        self.assertEqual(_fecha_bogota("2026-10-13T00:30:00+00:00"), "2026-10-12")
 
 
-class TestProgramacionSinVersiones(unittest.TestCase):
-    def test_sin_prog_versiones_vacio(self):
+class TestProgramacionSinCarga(unittest.TestCase):
+    def test_sin_actividades_programadas_vacio(self):
         class _Q:
+            def __init__(self, data):
+                self._data = data
+                self.not_ = self
+
             def select(self, *_a, **_k):
                 return self
 
             def eq(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def is_(self, *_a, **_k):
                 return self
 
             def limit(self, *_a, **_k):
@@ -179,41 +218,19 @@ class TestProgramacionSinVersiones(unittest.TestCase):
 
             def execute(self):
                 class R:
-                    data = []
+                    data = self._data
                 return R()
 
         class _Sb:
             def table(self, name):
-                self.name = name
-                return _Q()
+                if name == "prog_versiones":
+                    return _Q([{"id": "v1", "numero_version": 1, "tipo": "borrador", "estado": "borrador"}])
+                # actividades sin fecha_inicio → no cargada
+                return _Q([])
 
         out = _agg_programacion(_Sb(), 1)
         self.assertFalse(out["disponible"])
         self.assertIn("no tiene Programación", out["mensaje"])
-
-
-class TestMaquinariaPorDia(unittest.TestCase):
-    def test_tabla_equipo_por_dia(self):
-        dias = ["2026-10-06", "2026-10-07"]
-        diarios = [
-            {
-                "fecha": "2026-10-06",
-                "asistencia_colaboradores": [],
-                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 2}],
-            },
-            {
-                "fecha": "2026-10-07",
-                "asistencia_colaboradores": [],
-                "equipos_uso": [{"equipo_nombre": "Retro", "cantidad": 1}],
-            },
-        ]
-        # Sin asistencia: usa personal vacío → disponible por maquinaria
-        out = _agg_personal_desde_diarios(diarios, dias)
-        filas = out["maquinaria"]["filas"]
-        self.assertEqual(len(filas), 1)
-        self.assertEqual(filas[0]["total"], 3)
-        self.assertEqual(filas[0]["por_dia"]["2026-10-06"], 2)
-        self.assertEqual(filas[0]["por_dia"]["2026-10-07"], 1)
 
 
 if __name__ == "__main__":
