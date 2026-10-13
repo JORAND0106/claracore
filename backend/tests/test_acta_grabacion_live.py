@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from acta_grabacion_live_service import (
     COLA_OVERLAP_CHARS,
+    FORMATO_TEXTO_SINTESIS,
     MAX_TEMAS,
     MAX_TRANSCRIPT_CHARS,
     MAX_TRAMO_INTENTOS,
@@ -22,10 +23,13 @@ from acta_grabacion_live_service import (
     _normalize_temas,
     _parse_temas_json,
     _sembrar_temas_base,
+    append_texto_sintesis_tema,
     append_transcript,
     append_transcript_tracking_checkpoint,
     clasificar_stt_vacio,
+    format_sintesis_plain,
     mensaje_stt_usuario,
+    parse_sintesis_estructura,
     speech_status,
     tramo_desde_checkpoint,
     wav_pcm16_rms,
@@ -63,6 +67,36 @@ def test_cola_desde_tramos_usa_solape():
     assert len(cola) <= COLA_OVERLAP_CHARS
 
 
+def test_formato_sintesis_prompt_pide_numerales():
+    assert "lista numerada" in FORMATO_TEXTO_SINTESIS.lower()
+    assert "primera frase" in FORMATO_TEXTO_SINTESIS.lower()
+
+
+def test_parse_y_append_sintesis_numerada():
+    intro, items = parse_sintesis_estructura(
+        "Se trató el drenaje temporal.\n\n"
+        "1. El interventor pidió refuerzo antes del viernes.\n"
+        "2. Ramírez hará seguimiento diario."
+    )
+    assert "drenaje" in intro.lower()
+    assert len(items) == 2
+    assert "viernes" in items[0]
+    plain = format_sintesis_plain(intro, items)
+    assert plain.startswith("Se trató")
+    assert "1. " in plain and "2. " in plain
+
+    merged = append_texto_sintesis_tema(
+        plain,
+        "Se habló del suministro.\n\n1. Compas reportó demora en tubería HDPE.",
+    )
+    assert "1. " in merged and "2. " in merged and "3. " in merged
+    assert "tubería HDPE" in merged
+    assert merged.count("Ramírez") == 1
+    # No duplicar si el tramo nuevo ya estaba.
+    again = append_texto_sintesis_tema(merged, "1. Ramírez hará seguimiento diario.")
+    assert again.count("Ramírez") == 1
+
+
 def test_merge_temas_por_clave_actualiza_y_agrega():
     prev = [{"clave": "t1", "titulo": "A", "texto": "viejo", "interviniente": None}]
     nuevos = [
@@ -71,7 +105,9 @@ def test_merge_temas_por_clave_actualiza_y_agrega():
     ]
     out = _merge_temas_por_clave(prev, nuevos)
     assert len(out) == 2
-    assert out[0]["texto"] == "actualizado"
+    # Anexa el tramo nuevo; no reemplaza el texto previo.
+    assert "viejo" in (out[0]["texto"] or "")
+    assert "actualizado" in (out[0]["texto"] or "")
     assert out[0]["interviniente"] == "Ana"
     assert out[1]["clave"] == "t2"
 
@@ -105,7 +141,8 @@ def test_merge_od_conserva_titulo_si_nuevo_vacio():
     out = _merge_temas_por_clave(prev, nuevos)
     assert out[0]["titulo"] == "Punto OD"
     assert out[0]["interviniente"] == "Ana"
-    assert out[0]["texto"] == "ampliado"
+    assert "a" in (out[0]["texto"] or "")
+    assert "ampliado" in (out[0]["texto"] or "")
 
 
 def test_merge_colapsa_tN_dentro_de_od_N():
