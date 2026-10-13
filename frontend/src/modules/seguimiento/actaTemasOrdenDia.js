@@ -43,6 +43,33 @@ function appendIdeaHtml(baseHtml, addHtml) {
   return `${left}${right}`
 }
 
+/** Normaliza títulos para comparar (minúsculas, sin tildes, espacios colapsados). */
+export function normalizarTituloTema(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Si la clave es legacy tN y existe od-N en la lista, devolver od-N.
+ * Ese era el vínculo real (tema N) cuando la síntesis inventaba t1/t2/…
+ */
+export function remapClaveLegacyAOd(clave, ideas = []) {
+  const raw = String(clave || '').trim()
+  const m = /^t(\d+)$/i.exec(raw)
+  if (!m) return raw
+  const od = `od-${m[1]}`
+  const existe = (Array.isArray(ideas) ? ideas : []).some((row) => {
+    const k = String(row?._claveGrabacion || row?.clave_grabacion || '').trim().toLowerCase()
+    return k === od.toLowerCase() || (!!row?._desdeOrdenDia && Number(row?.orden) + 1 === Number(m[1]))
+  })
+  return existe ? od : raw
+}
+
 export function ideaTemaAbierto(idea) {
   return !!(idea && idea._temaAbierto)
 }
@@ -256,12 +283,38 @@ export function seedIdeasFromOrdenDia(ordenItems = [], ideasActuales = [], { new
   return changed ? list : ideasActuales
 }
 
+function absorbInto(dest, src, reporte, motivo, extra = {}) {
+  dest.texto = appendIdeaHtml(dest.texto, src.texto)
+  if (!String(dest.titulo || '').trim() && String(src.titulo || '').trim()) {
+    dest.titulo = src.titulo
+  }
+  if (!String(dest.quien_dijo || '').trim() && String(src.quien_dijo || '').trim()) {
+    dest.quien_dijo = src.quien_dijo
+  }
+  const imgsD = Array.isArray(dest.imagenes) ? dest.imagenes : []
+  const imgsR = Array.isArray(src.imagenes) ? src.imagenes : []
+  if (imgsR.length) dest.imagenes = [...imgsD, ...imgsR]
+  reporte.unidos.push({
+    motivo,
+    clave_destino: dest._claveGrabacion || null,
+    destino_id: dest.id ?? null,
+    origen_id: src.id ?? null,
+    titulo: dest.titulo || src.titulo || null,
+    chars: plainIdeaText(src).length,
+    orden_origen: src.orden != null ? Number(src.orden) : null,
+    ...extra,
+  })
+}
+
 /**
  * Une filas de texto separadas a su tema cuando hay vínculo confiable:
- * - misma clave_grabacion (duplicados)
- * - clave legacy tN / sin clave + título idéntico a un único od-* / manual-*
- * No fusiona suelta-* (ideas generales sin tema abierto).
- * Conserva todo el texto (lo agrega si ambos tienen contenido).
+ * 1) misma clave_grabacion (duplicados)
+ * 2) clave legacy tN → od-N si ese OD existe (vínculo de tema N)
+ * 3) mismo `orden` que el tema od-(orden+1) / ancla con ese orden
+ *    (en Acta 18 los textos mostraban los números 2,3,4 = orden 1,2,3)
+ * 4) título normalizado idéntico a un único od-* / manual-*
+ * No fusiona suelta-* salvo que su orden/título apunten de forma unívoca a un OD
+ * vacío y no haya otra interpretación (solo orden/tN; suelta por título no se une).
  *
  * @returns {{ ideas, reporte }} si withReport; si no, solo el array de ideas.
  */
@@ -281,12 +334,23 @@ export function reunirTextosIdeasConTemas(ideas = [], { withReport = false } = {
     if (used.has(row)) return false
     if (isAncla(row)) return false
     const k = String(row?._claveGrabacion || '').trim()
-    if (isClaveSuelta(k)) return false
     const texto = plainIdeaText(row)
     if (!texto) return false
-    // Solo candidatos con clave legacy, sin clave, o título sin od/manual.
-    return !k || isClaveLegacyTema(k)
+    // Candidatos: legacy tN, sin clave, o suelta que aún guarda el orden del tema.
+    if (!k || isClaveLegacyTema(k)) return true
+    if (isClaveSuelta(k) && row.orden != null && Number.isFinite(Number(row.orden))) return true
+    return false
   }
+
+  // 0) Remapear claves tN → od-N in-place cuando el OD existe.
+  list.forEach((row) => {
+    const k = String(row?._claveGrabacion || '').trim()
+    const remapped = remapClaveLegacyAOd(k, list)
+    if (remapped && remapped !== k) {
+      row._claveGrabacion = remapped
+      if (isClaveOrdenDia(remapped)) row._desdeOrdenDia = true
+    }
+  })
 
   // 1) Colapsar duplicados por la misma clave (od/manual).
   const byClave = new Map()
@@ -298,7 +362,6 @@ export function reunirTextosIdeasConTemas(ideas = [], { withReport = false } = {
   })
   byClave.forEach((idxs, clave) => {
     if (idxs.length < 2) return
-    // Preferir la fila con más contenido / id más bajo como ancla.
     idxs.sort((a, b) => {
       const sa = (plainIdeaText(list[a]).length) + (String(list[a].titulo || '').trim() ? 1000 : 0)
       const sb = (plainIdeaText(list[b]).length) + (String(list[b].titulo || '').trim() ? 1000 : 0)
@@ -308,80 +371,119 @@ export function reunirTextosIdeasConTemas(ideas = [], { withReport = false } = {
     const keepIdx = idxs[0]
     const keep = list[keepIdx]
     for (let i = 1; i < idxs.length; i += 1) {
-      const otherIdx = idxs[i]
-      const other = list[otherIdx]
-      keep.texto = appendIdeaHtml(keep.texto, other.texto)
-      if (!String(keep.titulo || '').trim() && String(other.titulo || '').trim()) {
-        keep.titulo = other.titulo
-      }
-      if (!String(keep.quien_dijo || '').trim() && String(other.quien_dijo || '').trim()) {
-        keep.quien_dijo = other.quien_dijo
-      }
-      const imgsK = Array.isArray(keep.imagenes) ? keep.imagenes : []
-      const imgsO = Array.isArray(other.imagenes) ? other.imagenes : []
-      if (imgsO.length) keep.imagenes = [...imgsK, ...imgsO]
-      reporte.unidos.push({
-        motivo: 'misma_clave',
-        clave,
-        destino_id: keep.id ?? null,
-        origen_id: other.id ?? null,
-        chars: plainIdeaText(other).length,
-      })
+      const other = list[idxs[i]]
+      absorbInto(keep, other, reporte, 'misma_clave', { clave })
       used.add(other)
     }
     list[keepIdx] = keep
   })
 
-  // 2) Huérfanos tN / sin clave → tema od/manual con el mismo título (único).
+  // 2) Huérfanos → ancla por orden (número de tema en pantalla) o título normalizado.
   list.forEach((row) => {
-    if (!isHuerfanoTexto(row)) {
-      if (isClaveSuelta(String(row?._claveGrabacion || '')) && plainIdeaText(row)) {
-        // solo documentar
+    if (!isHuerfanoTexto(row)) return
+    const k = String(row?._claveGrabacion || '').trim()
+
+    // 2a) orden compartido con un único tema OD/manual (vínculo de Acta 18).
+    const ordenNum = row.orden != null && row.orden !== '' ? Number(row.orden) : NaN
+    if (Number.isFinite(ordenNum)) {
+      const porOrden = list.filter((ancla) => {
+        if (used.has(ancla) || ancla === row) return false
+        if (!isAncla(ancla)) return false
+        const ao = ancla.orden != null && ancla.orden !== '' ? Number(ancla.orden) : NaN
+        if (!Number.isFinite(ao)) return false
+        if (ao !== ordenNum) return false
+        // Preferir anclas sin texto o con menos texto que el huérfano.
+        return true
+      })
+      if (porOrden.length === 1) {
+        const dest = porOrden[0]
+        // Solo unir si el destino es el tema N y el huérfano no es una idea general
+        // con contenido ya distinto y destino ya lleno del mismo texto.
+        absorbInto(dest, row, reporte, 'mismo_orden', {
+          orden: ordenNum,
+          numero_tema: ordenNum + 1,
+        })
+        used.add(row)
+        return
       }
-      return
-    }
-    const tituloLc = String(row.titulo || '').trim().toLowerCase()
-    if (!tituloLc) {
-      reporte.sin_vinculo.push({
-        id: row.id ?? null,
-        clave: row._claveGrabacion || null,
-        chars: plainIdeaText(row).length,
-        razon: 'sin_titulo_ni_clave_od',
+      // od-N por número de tema (orden+1) si la ancla tiene clave od-(orden+1)
+      const nTema = ordenNum + 1
+      const porClaveOd = list.filter((ancla) => {
+        if (used.has(ancla) || ancla === row) return false
+        if (!isAncla(ancla)) return false
+        return String(ancla._claveGrabacion || '').trim().toLowerCase() === `od-${nTema}`
       })
-      return
+      if (porClaveOd.length === 1) {
+        absorbInto(porClaveOd[0], row, reporte, 'orden_a_clave_od', {
+          orden: ordenNum,
+          numero_tema: nTema,
+        })
+        used.add(row)
+        return
+      }
     }
-    const candidatos = list.filter((ancla) => {
-      if (used.has(ancla) || ancla === row) return false
-      if (!isAncla(ancla)) return false
-      return String(ancla.titulo || '').trim().toLowerCase() === tituloLc
+
+    // 2b) título normalizado idéntico.
+    const tituloNorm = normalizarTituloTema(row.titulo)
+    if (tituloNorm) {
+      const candidatos = list.filter((ancla) => {
+        if (used.has(ancla) || ancla === row) return false
+        if (!isAncla(ancla)) return false
+        return normalizarTituloTema(ancla.titulo) === tituloNorm
+      })
+      if (candidatos.length === 1) {
+        absorbInto(candidatos[0], row, reporte, 'titulo_normalizado')
+        used.add(row)
+        return
+      }
+    }
+
+    // 2c) solapamiento de palabras del título OD con el texto/título del huérfano
+    // (p. ej. "Videos Capacitación" ↔ texto que habla de videos/capacitación).
+    const corpus = normalizarTituloTema(`${row.titulo || ''} ${plainIdeaText(row)}`)
+    const scored = []
+    list.forEach((ancla) => {
+      if (used.has(ancla) || ancla === row) return
+      if (!isAncla(ancla)) return
+      // Solo candidatos OD aún sin texto (o con mucho menos que el huérfano).
+      const destChars = plainIdeaText(ancla).length
+      const srcChars = plainIdeaText(row).length
+      if (destChars > 40 && destChars >= srcChars) return
+      const words = normalizarTituloTema(ancla.titulo).split(' ').filter((w) => w.length >= 4)
+      if (!words.length) return
+      const hits = words.filter((w) => corpus.includes(w)).length
+      if (hits <= 0) return
+      scored.push({ ancla, hits, ratio: hits / words.length })
     })
-    if (candidatos.length !== 1) {
-      reporte.sin_vinculo.push({
-        id: row.id ?? null,
-        clave: row._claveGrabacion || null,
-        titulo: row.titulo || null,
-        chars: plainIdeaText(row).length,
-        razon: candidatos.length === 0 ? 'sin_titulo_coincidente' : 'titulo_ambiguo',
+    scored.sort((a, b) => b.hits - a.hits || b.ratio - a.ratio)
+    if (
+      scored.length >= 1
+      && scored[0].hits >= 1
+      && (scored.length === 1 || scored[0].hits > scored[1].hits)
+    ) {
+      absorbInto(scored[0].ancla, row, reporte, 'solape_titulo_contenido', {
+        hits: scored[0].hits,
       })
+      used.add(row)
       return
     }
-    const dest = candidatos[0]
-    dest.texto = appendIdeaHtml(dest.texto, row.texto)
-    if (!String(dest.quien_dijo || '').trim() && String(row.quien_dijo || '').trim()) {
-      dest.quien_dijo = row.quien_dijo
+
+    if (isClaveSuelta(k)) {
+      reporte.omitidos_suelta.push({
+        id: row.id ?? null,
+        clave: k,
+        orden: row.orden ?? null,
+        chars: plainIdeaText(row).length,
+      })
     }
-    const imgsD = Array.isArray(dest.imagenes) ? dest.imagenes : []
-    const imgsR = Array.isArray(row.imagenes) ? row.imagenes : []
-    if (imgsR.length) dest.imagenes = [...imgsD, ...imgsR]
-    reporte.unidos.push({
-      motivo: 'titulo_identico',
-      clave_destino: dest._claveGrabacion || null,
-      destino_id: dest.id ?? null,
-      origen_id: row.id ?? null,
-      titulo: dest.titulo || row.titulo,
+    reporte.sin_vinculo.push({
+      id: row.id ?? null,
+      clave: row._claveGrabacion || null,
+      titulo: row.titulo || null,
+      orden: row.orden ?? null,
       chars: plainIdeaText(row).length,
+      razon: 'sin_vinculo_confiable',
     })
-    used.add(row)
   })
 
   // Rotular sueltas sin título.
@@ -390,12 +492,11 @@ export function reunirTextosIdeasConTemas(ideas = [], { withReport = false } = {
     if (used.has(row)) return
     const k = String(row?._claveGrabacion || '').trim()
     if (isClaveSuelta(k)) {
-      const labeled = {
+      next.push({
         ...row,
         _ideaSuelta: true,
         titulo: String(row.titulo || '').trim() || 'Idea general',
-      }
-      next.push(labeled)
+      })
       return
     }
     next.push(row)

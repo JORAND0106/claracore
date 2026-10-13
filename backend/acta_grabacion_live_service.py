@@ -824,20 +824,65 @@ def _detalle_error_sintesis(exc: BaseException, *, model: str = "") -> str:
     )
 
 
+_TEMA_LEGACY_CLAVE_RE = re.compile(r"^t(\d+)$", re.IGNORECASE)
+
+
+def _remap_clave_legacy_a_od(clave: str, conocidos: set[str]) -> str:
+    """tN → od-N si ese OD ya está en la sesión (evita filas de texto huérfanas)."""
+    k = (clave or "").strip()
+    m = _TEMA_LEGACY_CLAVE_RE.match(k)
+    if not m:
+        return k
+    od = f"od-{m.group(1)}"
+    if od.lower() in conocidos or od in conocidos:
+        return od
+    return k
+
+
 def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict]:
     """Fusiona por clave: actualiza existentes y agrega nuevos; conserva previos no tocados."""
     by_clave: dict[str, dict] = {}
     order: list[str] = []
+    # Primero indexar od-/manual- para poder remapear tN → od-N de previos.
+    od_conocidos: set[str] = set()
     for t in previos or []:
-        k = str(t.get("clave") or "").strip()
-        if not k:
+        k0 = str(t.get("clave") or "").strip()
+        if k0.lower().startswith("od-") or k0.lower().startswith("manual-"):
+            od_conocidos.add(k0.lower())
+            od_conocidos.add(k0)
+    for t in previos or []:
+        k_raw = str(t.get("clave") or "").strip()
+        if not k_raw:
             continue
-        by_clave[k] = dict(t)
-        order.append(k)
+        k = _remap_clave_legacy_a_od(k_raw, od_conocidos)
+        row = {**dict(t), "clave": k}
+        if k in by_clave:
+            prev = by_clave[k]
+            merged = {**prev, **row}
+            # Preferir texto más largo al colapsar tN dentro de od-N.
+            if len(str(prev.get("texto") or "")) > len(str(row.get("texto") or "")):
+                merged["texto"] = prev.get("texto")
+            # Conservar título/interviniente del ancla od-/manual-.
+            if str(k).startswith(("od-", "manual-")):
+                if prev.get("titulo"):
+                    merged["titulo"] = prev.get("titulo")
+                if prev.get("interviniente"):
+                    merged["interviniente"] = prev.get("interviniente")
+            elif prev.get("titulo") and not (row.get("titulo") or "").strip():
+                merged["titulo"] = prev.get("titulo")
+            elif prev.get("interviniente") and not row.get("interviniente"):
+                merged["interviniente"] = prev.get("interviniente")
+            by_clave[k] = merged
+        else:
+            by_clave[k] = row
+            order.append(k)
+    conocidos = {str(k).lower() for k in by_clave.keys()} | set(od_conocidos)
     for t in nuevos or []:
-        k = str(t.get("clave") or "").strip()
-        if not k:
+        k_raw = str(t.get("clave") or "").strip()
+        if not k_raw:
             continue
+        k = _remap_clave_legacy_a_od(k_raw, conocidos)
+        t = {**t, "clave": k}
         if k in by_clave:
             merged = {**by_clave[k], **t}
             # No pisar título/interviniente de temas pre-creados (od-/manual-) con vacío.
@@ -850,6 +895,7 @@ def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict
         else:
             by_clave[k] = dict(t)
             order.append(k)
+            conocidos.add(k.lower())
     return _normalize_temas([by_clave[k] for k in order if k in by_clave])
 
 

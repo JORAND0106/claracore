@@ -8,6 +8,7 @@ import { htmlToPlainText, plainTextToHtml } from './richTextUtils.js'
 import {
   isClaveOrdenDia,
   isClaveSuelta,
+  remapClaveLegacyAOd,
   reunirTextosIdeasConTemas,
 } from './actaTemasOrdenDia.js'
 
@@ -33,7 +34,10 @@ function idxPorTituloOdManual(list, titulo) {
  */
 export function resolverClaveTemaSintesis(tema, ideasActuales = [], indiceFallback = 0) {
   const raw = String(tema?.clave || '').trim()
-  if (raw) return raw
+  if (raw) {
+    // t2 → od-2 si el OD existe: evita crear fila aparte al vivir/guardar.
+    return remapClaveLegacyAOd(raw, ideasActuales) || raw
+  }
   const open = idxTemaAbierto(ideasActuales)
   if (open >= 0) {
     const k = String(ideasActuales[open]?._claveGrabacion || '').trim()
