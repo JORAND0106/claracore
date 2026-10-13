@@ -11,7 +11,7 @@ import {
   segundosAReclamar,
   stopMediaStream,
 } from './actaGrabacionHelpers.js'
-import { createPcmWavStreamer } from './actaGrabacionLive.js'
+import { createPcmWavStreamer, mensajeSttUsuario } from './actaGrabacionLive.js'
 
 /** Tope para no dejar Detener colgado si MediaRecorder no dispara onstop. */
 export const RECORDER_STOP_TIMEOUT_MS = 4000
@@ -174,31 +174,38 @@ export function createGrabacionSessionController({
     }
 
     if (sttAzure && typeof api.grabacionChunk === 'function') {
-      // WAV/PCM 16 kHz desde el AudioContext mezclado (Azure no acepta WebM).
-      // MediaRecorder sigue solo para la descarga local — no se interrumpe.
+      // PCM desde mic/pestaña (origen), NO desde mixedStream/dest: ese loopback
+      // en el mismo AudioContext suele mandar silencio a Azure.
+      // MediaRecorder sigue en mixedStream solo para la descarga local.
+      const sourceStreams = [handles?.micStream, handles?.displayStream].filter(
+        (s) => s?.getAudioTracks?.()?.some((t) => t && t.readyState !== 'ended'),
+      )
       const streamer = createPcmWavStreamer({
         audioCtx: handles?.audioCtx,
-        mediaStream: handles?.mixedStream,
+        sourceStreams,
         intervalMs: chunkIntervalMs,
-        onBatch: async (blob) => {
+        onBatch: async (blob, meta = {}) => {
           if (closed || stopping || !sesionId) return
           try {
-            const payload = await api.grabacionChunk(sesionId, blob)
+            const payload = await api.grabacionChunk(sesionId, blob, {
+              rms: meta?.rms,
+              samples: meta?.samples,
+            })
             const delta = Number(payload?.delta_chars || 0)
             if (delta > 0) sttEmptyStreak = 0
             else {
               sttEmptyStreak += 1
               // Varios lotes sin texto: avisar sin tumbar la grabación.
               if (sttEmptyStreak === 4) {
-                onError?.(
-                  payload?.detalle
-                  || 'Azure Speech no está devolviendo texto del audio. Verifique micrófono/pestaña y la clave AZURE_SPEECH_KEY.',
-                )
+                onError?.(mensajeSttUsuario(payload) || mensajeSttUsuario({
+                  stt_causa: (Number(meta?.rms) || 0) < 0.004 ? 'sin_audio' : 'sin_reconocimiento',
+                }))
               }
             }
             applyLivePayload(payload, { applyTemas: false })
           } catch (e) {
-            onError?.(e?.message || 'No se pudo transcribir el audio con Azure Speech')
+            onError?.(mensajeSttUsuario({ stt_causa: 'error_red', detalle: e?.message })
+              || 'No se pudo enviar el audio para transcribir.')
           }
         },
       })
@@ -213,8 +220,8 @@ export function createGrabacionSessionController({
         stt_disponible: true,
         acepta_transcripcion_cliente: false,
         detalle: (
-          'No se pudo capturar PCM del audio mezclado para Azure Speech. '
-          + 'Use un navegador Chromium reciente con AudioContext.'
+          'No se pudo capturar el audio del micrófono para transcribir. '
+          + 'Use Chrome o Edge e intente de nuevo.'
         ),
       })
       emitState({ liveMode })

@@ -1218,11 +1218,20 @@ async def route_grabacion_chunk(
     current_user=Depends(get_current_user),
     archivo: UploadFile = File(...),
     forzar_sintesis: bool = Form(False),
+    rms: Optional[str] = Form(None),
+    samples: Optional[str] = Form(None),
 ):
     """Chunk de audio real → Azure Speech. No persiste audio ni sintetiza Temas."""
     require_permiso_seguimiento(current_user, "crear")
     _check_contrato(current_user, contrato_id)
     raw = await archivo.read()
+    rms_cliente = None
+    if rms is not None and str(rms).strip() != "":
+        try:
+            rms_cliente = float(rms)
+        except (TypeError, ValueError):
+            rms_cliente = None
+    del samples  # solo diagnóstico cliente; el RMS del WAV manda en servidor
     return await grabacion_ingest_audio_chunk(
         supabase,
         contrato_id,
@@ -1231,6 +1240,7 @@ async def route_grabacion_chunk(
         raw,
         content_type=archivo.content_type or "audio/webm",
         forzar_sintesis=bool(forzar_sintesis),
+        rms_cliente=rms_cliente,
     )
 
 

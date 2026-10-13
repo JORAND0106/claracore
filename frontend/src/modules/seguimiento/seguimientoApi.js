@@ -264,13 +264,17 @@ export function createSeguimientoApi(contratoId, token) {
         120000,
       )
     },
-    async grabacionChunk(sesionId, blob, { forzarSintesis = false } = {}) {
+    async grabacionChunk(sesionId, blob, { forzarSintesis = false, rms = null, samples = null } = {}) {
       const fd = new FormData()
       const type = String(blob?.type || '').toLowerCase()
       const isWav = type.includes('wav') || type.includes('pcm')
       // Azure Speech REST short-audio: WAV/PCM 16 kHz (preferido) u OGG/Opus — no WebM.
       fd.append('archivo', blob, isWav ? 'chunk.wav' : 'chunk.bin')
       if (forzarSintesis) fd.append('forzar_sintesis', 'true')
+      if (rms != null && Number.isFinite(Number(rms))) fd.append('rms', String(Number(rms)))
+      if (samples != null && Number.isFinite(Number(samples))) {
+        fd.append('samples', String(Math.floor(Number(samples))))
+      }
       const sig = apiFetchSignal(120000)
       const res = await fetch(
         `${API_BASE}/seguimiento/${cid}/grabacion/sesiones/${sesionId}/chunk`,

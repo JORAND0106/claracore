@@ -4,7 +4,9 @@ import { describe, it } from 'node:test'
 import {
   AZURE_STT_SAMPLE_RATE,
   encodeWavPcm16,
+  float32Rms,
   mergeTemasGrabacionViva,
+  mensajeSttUsuario,
   resampleFloat32Mono,
 } from './actaGrabacionLive.js'
 
@@ -80,5 +82,24 @@ describe('PCM/WAV para Azure Speech', () => {
     assert.equal(buf.toString('ascii', 0, 4), 'RIFF')
     assert.equal(buf.toString('ascii', 8, 12), 'WAVE')
     assert.equal(buf.length, 44 + samples.length * 2)
+  })
+
+  it('float32Rms detecta silencio vs señal', () => {
+    assert.equal(float32Rms(new Float32Array(1000)), 0)
+    const signal = new Float32Array(1000)
+    for (let i = 0; i < signal.length; i += 1) signal[i] = 0.2
+    assert.ok(float32Rms(signal) > 0.1)
+  })
+})
+
+describe('mensajeSttUsuario', () => {
+  it('distingue sin audio, auth y sin reconocimiento sin exponer claves', () => {
+    assert.match(mensajeSttUsuario({ stt_causa: 'sin_audio' }), /micrófono/i)
+    assert.match(mensajeSttUsuario({ stt_causa: 'auth_rechazada' }), /soporte/i)
+    assert.match(mensajeSttUsuario({ stt_causa: 'sin_reconocimiento' }), /voz/i)
+    const all = ['sin_audio', 'auth_rechazada', 'sin_reconocimiento', 'sin_clave']
+      .map((c) => mensajeSttUsuario({ stt_causa: c }))
+      .join(' ')
+    assert.doesNotMatch(all, /AZURE_SPEECH_KEY|Ocp-Apim|subscription/i)
   })
 })

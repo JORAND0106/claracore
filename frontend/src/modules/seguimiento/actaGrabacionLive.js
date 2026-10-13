@@ -149,6 +149,30 @@ export const AZURE_STT_SAMPLE_RATE = 16000
 export const AZURE_STT_WAV_CONTENT_TYPE = 'audio/wav; codecs=audio/pcm; samplerate=16000'
 
 /**
+ * Mensaje breve al usuario según la causa STT (sin jerga ni nombres de variables/claves).
+ */
+export function mensajeSttUsuario(payload = {}) {
+  const causa = String(payload?.stt_causa || payload?.causa || '').trim().toLowerCase()
+  const map = {
+    sin_audio: 'No se detectó sonido del micrófono. Revise el permiso y que el micrófono esté activo.',
+    sin_clave: 'La transcripción no está configurada en el servidor. Avise a soporte.',
+    auth_rechazada: 'El servicio de voz rechazó la configuración. Avise a soporte.',
+    region_invalida: 'El servicio de voz no responde en esta región. Avise a soporte.',
+    formato_invalido: 'No se pudo preparar el audio para transcribir. Intente de nuevo en Chrome o Edge.',
+    sin_reconocimiento: 'Se oyó audio, pero no se reconoció voz clara. Hable más cerca del micrófono.',
+    error_red: 'No se pudo enviar el audio para transcribir. Revise la conexión e intente de nuevo.',
+    http_error: 'El servicio de voz no pudo transcribir el audio. Intente de nuevo en un momento.',
+  }
+  if (causa && map[causa]) return map[causa]
+  const detalle = String(payload?.detalle || '').trim()
+  // Evitar filtrar mensajes técnicos antiguos al usuario.
+  if (detalle && !/AZURE_|Speech|WAV|PCM|WebM|Ocp-|subscription/i.test(detalle)) {
+    return detalle
+  }
+  return map.sin_reconocimiento
+}
+
+/**
  * Re-muestrea Float32 mono a `targetRate` con interpolación lineal.
  */
 export function resampleFloat32Mono(input, inputRate, targetRate = AZURE_STT_SAMPLE_RATE) {
@@ -222,26 +246,58 @@ function concatFloat32(chunks) {
 }
 
 /**
- * Captura PCM del MediaStream mezclado (AudioContext) y emite WAV 16 kHz
- * cada `intervalMs` para Azure Speech — sin tocar MediaRecorder ni la descarga.
+ * RMS de muestras Float32 (0..~1). Útil para detectar silencio antes de Azure.
+ */
+export function float32Rms(samples) {
+  const src = samples instanceof Float32Array ? samples : new Float32Array(samples || [])
+  if (!src.length) return 0
+  let sum = 0
+  for (let i = 0; i < src.length; i += 1) {
+    const s = src[i]
+    sum += s * s
+  }
+  return Math.sqrt(sum / src.length)
+}
+
+/**
+ * Captura PCM desde los streams de origen (mic / pestaña), NO desde el
+ * MediaStreamDestination del mix: reinyectar dest.stream en el mismo
+ * AudioContext suele llegar en silencio a Azure (0 caracteres).
+ *
+ * Emite WAV 16 kHz cada `intervalMs` para Azure Speech.
  */
 export function createPcmWavStreamer({
   audioCtx,
-  mediaStream,
+  /** @deprecated Preferir sourceStreams (mic/pestaña). mixedStream (dest) puede ser silencio. */
+  mediaStream = null,
+  /** Streams originales: micrófono y, si hay, audio de pestaña. */
+  sourceStreams = null,
   intervalMs = 15000,
   targetSampleRate = AZURE_STT_SAMPLE_RATE,
   onBatch,
   /** Mínimo de samples a 16 kHz (~0.4 s) para no mandar silencio vacío. */
   minSamples = 6400,
 } = {}) {
-  if (!audioCtx || !mediaStream?.getAudioTracks?.()?.length) return null
+  const streams = []
+  const fromSources = Array.isArray(sourceStreams) ? sourceStreams : []
+  fromSources.forEach((s) => {
+    if (s?.getAudioTracks?.()?.some((t) => t && t.readyState !== 'ended')) {
+      streams.push(s)
+    }
+  })
+  // Respaldo legado: un solo mediaStream (idealmente ya no el dest.stream).
+  if (!streams.length && mediaStream?.getAudioTracks?.()?.length) {
+    streams.push(mediaStream)
+  }
+  if (!audioCtx || !streams.length) return null
 
   let closed = false
   let chunks = []
   let timer = null
-  let source = null
+  const sourceNodes = []
   let processor = null
   let mute = null
+  const ownsAudioCtx = false
   const inputRate = Number(audioCtx.sampleRate) || 48000
 
   const flush = async () => {
@@ -251,10 +307,11 @@ export function createPcmWavStreamer({
     if (!raw.length) return
     const resampled = resampleFloat32Mono(raw, inputRate, targetSampleRate)
     if (resampled.length < minSamples) return
+    const rms = float32Rms(resampled)
     const blob = encodeWavPcm16(resampled, targetSampleRate)
     if (!blob || blob.size < 100) return
     try {
-      await onBatch?.(blob)
+      await onBatch?.(blob, { rms, samples: resampled.length, bytes: blob.size })
     } catch {
       /* best-effort */
     }
@@ -264,7 +321,6 @@ export function createPcmWavStreamer({
     if (audioCtx.state === 'suspended') {
       Promise.resolve(audioCtx.resume?.()).catch(() => { /* ignore */ })
     }
-    source = audioCtx.createMediaStreamSource(mediaStream)
     // ScriptProcessor: amplio soporte; el grafo se mantiene vivo vía gain=0.
     const bufferSize = 4096
     processor = audioCtx.createScriptProcessor(bufferSize, 1, 1)
@@ -279,11 +335,15 @@ export function createPcmWavStreamer({
         /* ignore */
       }
     }
-    source.connect(processor)
+    for (const stream of streams) {
+      const node = audioCtx.createMediaStreamSource(stream)
+      node.connect(processor)
+      sourceNodes.push(node)
+    }
     processor.connect(mute)
     mute.connect(audioCtx.destination)
   } catch {
-    try { source?.disconnect?.() } catch { /* ignore */ }
+    sourceNodes.forEach((n) => { try { n.disconnect?.() } catch { /* ignore */ } })
     try { processor?.disconnect?.() } catch { /* ignore */ }
     return null
   }
@@ -305,11 +365,14 @@ export function createPcmWavStreamer({
       chunks = []
       try { processor.onaudioprocess = null } catch { /* ignore */ }
       try { processor?.disconnect?.() } catch { /* ignore */ }
-      try { source?.disconnect?.() } catch { /* ignore */ }
+      sourceNodes.forEach((n) => { try { n.disconnect?.() } catch { /* ignore */ } })
       try { mute?.disconnect?.() } catch { /* ignore */ }
       processor = null
-      source = null
       mute = null
+      sourceNodes.length = 0
+      if (ownsAudioCtx) {
+        try { audioCtx.close?.() } catch { /* ignore */ }
+      }
     },
   }
 }

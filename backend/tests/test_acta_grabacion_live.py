@@ -24,8 +24,11 @@ from acta_grabacion_live_service import (
     _sembrar_temas_base,
     append_transcript,
     append_transcript_tracking_checkpoint,
+    clasificar_stt_vacio,
+    mensaje_stt_usuario,
     speech_status,
     tramo_desde_checkpoint,
+    wav_pcm16_rms,
 )
 
 
@@ -175,6 +178,24 @@ def test_azure_stt_content_type_solo_wav_u_ogg():
     # WebM / desconocido → vacío (requiere conversión o rechazo)
     assert _azure_stt_content_type(b"\x1aE\xdf\xa3webm", "audio/webm") == ""
     assert _azure_stt_content_type(b"nope", "audio/webm;codecs=opus") == ""
+
+
+def test_wav_pcm16_rms_silencio():
+    wav = _minimal_wav(16000)
+    rms = wav_pcm16_rms(wav)
+    assert rms is not None
+    assert rms < 0.001
+
+
+def test_clasificar_stt_vacio_distingue_casos():
+    assert clasificar_stt_vacio(status="no_key") == "sin_clave"
+    assert clasificar_stt_vacio(status="http_401", http_code=401) == "auth_rechazada"
+    assert clasificar_stt_vacio(status="NoMatch", rms=0.0) == "sin_audio"
+    assert clasificar_stt_vacio(status="NoMatch", rms=0.05) == "sin_reconocimiento"
+    msg = mensaje_stt_usuario("sin_audio")
+    assert "micrófono" in msg.lower()
+    assert "AZURE_SPEECH_KEY" not in msg
+    assert "Ocp-" not in msg
 
 
 def test_detalle_error_sintesis_explica_punto_de_falla():
