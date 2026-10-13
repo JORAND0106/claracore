@@ -108,6 +108,29 @@ def test_merge_od_conserva_titulo_si_nuevo_vacio():
     assert out[0]["texto"] == "ampliado"
 
 
+def test_merge_colapsa_tN_dentro_de_od_N():
+    """Si la sesión tiene od-2 y un t2 huérfano, el texto queda en od-2 (una sola fila)."""
+    prev = [
+        {"clave": "od-2", "titulo": "Videos Capacitación", "texto": "", "interviniente": "Dev"},
+        {"clave": "t2", "titulo": "Resumen videos", "texto": "Se vieron videos de capacitación.", "interviniente": None},
+    ]
+    out = _merge_temas_por_clave(prev, [])
+    assert len(out) == 1
+    assert out[0]["clave"] == "od-2"
+    assert "videos de capacitación" in (out[0].get("texto") or "").lower()
+    assert out[0]["titulo"] == "Videos Capacitación"
+
+    # Nuevos con t3 se remapean a od-3 si existe.
+    prev2 = [
+        {"clave": "od-3", "titulo": "Almacén", "texto": "", "interviniente": None},
+    ]
+    nuevos = [{"clave": "t3", "titulo": "Notas", "texto": "Avance del módulo de almacén.", "interviniente": None}]
+    out2 = _merge_temas_por_clave(prev2, nuevos)
+    assert len(out2) == 1
+    assert out2[0]["clave"] == "od-3"
+    assert "almacén" in (out2[0].get("texto") or "").lower()
+
+
 def test_normalize_temas_limita_y_completa_titulo():
     raw = [
         {"clave": "t1", "titulo": "Obra", "texto": "Se revisó el avance."},

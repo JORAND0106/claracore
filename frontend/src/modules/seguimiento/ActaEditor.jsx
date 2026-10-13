@@ -18,6 +18,7 @@ import {
   cerrarTemaEnIdeas,
   claveTemaActivo,
   indexTemaAbierto,
+  reunirTextosIdeasConTemas,
   seedIdeasFromOrdenDia,
   temasBaseDesdeIdeas,
 } from './actaTemasOrdenDia'
@@ -469,6 +470,9 @@ export default function ActaEditor({
   const skipServerHydrateRef = useRef(false)
   /** Acta ya hidratada en esta sesión del popup — no volver a pisar el formulario. */
   const hydratedActaIdRef = useRef(null)
+  /** Tras abrir un acta con textos separados: respaldo + auto-guardado de la unión. */
+  const pendingReunionRef = useRef(null)
+  const reunionPersistiendoRef = useRef(false)
   const apiRef = useRef(api)
   apiRef.current = api
   const formRef = useRef(form)
@@ -756,9 +760,25 @@ export default function ActaEditor({
                     }
                   })
                 : [emptyIdea()]
-              return seedIdeasFromOrdenDia(ordenItems, loaded, {
+              const seeded = seedIdeasFromOrdenDia(ordenItems, loaded, {
                 newRowKey: (p) => newRowKey(p || 'idea'),
               })
+              // Unir textos separados al abrir (sin scripts manuales).
+              const { ideas: reunidas, reporte } = reunirTextosIdeasConTemas(seeded, {
+                withReport: true,
+              })
+              // Señal para auto-guardar tras hidratar (ver efecto abajo).
+              if ((reporte.unidos || []).length > 0) {
+                pendingReunionRef.current = {
+                  actaId: a.id,
+                  before: loaded,
+                  reporte,
+                  ideas: reunidas,
+                }
+              } else {
+                pendingReunionRef.current = null
+              }
+              return reunidas
             })(),
             apartados: (a.apartados || []).length
               ? a.apartados.map((x) => ({
@@ -821,6 +841,54 @@ export default function ActaEditor({
   }, [actaId])
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
+
+  // Si al abrir se reunieron textos huérfanos con su tema, persistir sin pasos manuales.
+  useEffect(() => {
+    if (loading) return
+    const pending = pendingReunionRef.current
+    if (!pending?.actaId || !pending?.ideas || reunionPersistiendoRef.current) return
+    if (Number(localActaId) !== Number(pending.actaId)) return
+    if (!(permisos?.editar || permisos?.crear)) return
+    const unidos = pending.reporte?.unidos || []
+    if (!unidos.length) {
+      pendingReunionRef.current = null
+      return
+    }
+    let cancelled = false
+    reunionPersistiendoRef.current = true
+    ;(async () => {
+      try {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+        const backupKey = `claracore:acta-ideas-backup:${pending.actaId}:${stamp}`
+        try {
+          localStorage.setItem(backupKey, JSON.stringify({
+            acta_id: pending.actaId,
+            created_at: stamp,
+            ideas: pending.before || [],
+            reporte: pending.reporte,
+          }))
+        } catch { /* storage lleno / privado: no bloquea el guardado */ }
+        const formSrc = { ...formRef.current, ideas: pending.ideas }
+        await persistActa({}, formSrc)
+        if (cancelled) return
+        const sin = (pending.reporte?.sin_vinculo || []).length
+        setOkMsg(
+          `Se unieron ${unidos.length} texto(s) a su tema y se guardó el acta.`
+          + (sin ? ` ${sin} fila(s) sin vínculo confiable se dejaron aparte.` : ''),
+        )
+        pendingReunionRef.current = null
+      } catch (e) {
+        if (!cancelled) {
+          setError(friendlyFetchError(e, 'No se pudo guardar la unión automática de temas'))
+        }
+      } finally {
+        reunionPersistiendoRef.current = false
+      }
+    })()
+    return () => { cancelled = true }
+    // persistActa es estable en la práctica vía formRef/api; no listarlo para evitar bucles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, localActaId, permisos?.editar, permisos?.crear])
 
   // Recargar compromisos previos al cambiar tipo (interna ↔ externa no se mezclan).
   useEffect(() => {
@@ -901,7 +969,7 @@ export default function ActaEditor({
         email: (a.email || '').trim() || null,
         usuario_id: a.usuario_id && Number(a.usuario_id) > 0 ? Number(a.usuario_id) : null,
       })),
-    ideas: (formSrc.ideas || [])
+    ideas: reunirTextosIdeasConTemas(formSrc.ideas || [])
       // Conservar temas OD/manual aunque aún no tengan texto (evita cascarones
       // sin clave al reabrir y textos huérfanos en filas aparte).
       .filter((i) => !isRichTextEmpty(i.texto) || (i.quien_dijo || '').trim() || i.id
@@ -1028,7 +1096,9 @@ export default function ActaEditor({
     if (!src.elaborador_id) {
       throw new Error('Seleccione un elaborador registrado en el contrato')
     }
-    const ideasConTitulo = await asegurarTitulosTema(src.ideas || [])
+    // Unir huérfanos al tema antes de inventar títulos / persistir.
+    const ideasReunidas = reunirTextosIdeasConTemas(src.ideas || [])
+    const ideasConTitulo = await asegurarTitulosTema(ideasReunidas)
     patchList('ideas', () => ideasConTitulo)
     const payload = buildPayload(extra, { ...src, ideas: ideasConTitulo }, flujoSrc)
     let row = localActaId

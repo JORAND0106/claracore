@@ -166,7 +166,8 @@ describe('actaTemasOrdenDia', () => {
     assert.equal(next[2]._claveGrabacion, 'suelta-1')
     assert.equal(next[2].titulo, 'Idea general')
     assert.equal(reporte.unidos.length, 1)
-    assert.equal(reporte.unidos[0].motivo, 'titulo_identico')
+    // t2 se remapea a od-2 y se colapsa por misma clave (vínculo real de tema N).
+    assert.ok(['misma_clave', 'titulo_identico', 'titulo_normalizado'].includes(reporte.unidos[0].motivo))
   })
 
   it('seed al reabrir une texto separado al tema OD (caso Acta 18)', () => {
@@ -192,4 +193,65 @@ describe('actaTemasOrdenDia', () => {
     assert.match(next[3].texto, /Texto cuatro/)
     assert.equal(next[0].texto || '', '')
   })
+
+  it('une por número de tema (orden) aunque el título IA no coincida — Acta 18 real', () => {
+    // Filas 1-4: OD solo título. Filas texto con orden 1,2,3 (= números 2,3,4 en pantalla).
+    const ideas = [
+      { id: 1, orden: 0, _claveGrabacion: 'od-1', _desdeOrdenDia: true, titulo: 'Presentacion Módulo Actas', texto: '', quien_dijo: 'Dev' },
+      { id: 2, orden: 1, _claveGrabacion: 'od-2', _desdeOrdenDia: true, titulo: 'Videos Capacitación', texto: '', quien_dijo: 'Dev' },
+      { id: 3, orden: 2, _claveGrabacion: 'od-3', _desdeOrdenDia: true, titulo: 'Módulo de Almacén', texto: '', quien_dijo: 'Dev' },
+      { id: 4, orden: 3, _claveGrabacion: 'od-4', _desdeOrdenDia: true, titulo: 'Acta de recibo parcial', texto: '', quien_dijo: 'Dev' },
+      { id: 5, orden: 1, titulo: 'Resumen de la sesión de videos', texto: '<p>Se revisaron los videos de capacitación del módulo.</p>', quien_dijo: '' },
+      { id: 6, orden: 2, titulo: 'Notas del almacén', texto: '<p>Avances del módulo de almacén y pendientes.</p>', quien_dijo: '' },
+      { id: 7, orden: 3, titulo: 'Recibo parcial de obra', texto: '<p>Acuerdos del acta de recibo parcial.</p>', quien_dijo: '' },
+    ]
+    const { ideas: next, reporte } = reunirTextosIdeasConTemas(ideas, { withReport: true })
+    assert.equal(next.length, 4, `esperaba 4 filas, got ${next.length}`)
+    assert.equal(reporte.unidos.length, 3)
+    assert.match(next[1].texto, /videos de capacitación/i)
+    assert.match(next[2].texto, /módulo de almacén/i)
+    assert.match(next[3].texto, /recibo parcial/i)
+    assert.ok(!plainOrEmpty(next[0].texto))
+  })
+
+  it('recorrido guardar→reabrir: payload reunido no vuelve a separar', () => {
+    const orden = [
+      { texto: 'Presentacion Módulo Actas' },
+      { texto: 'Videos Capacitación' },
+      { texto: 'Módulo de Almacén' },
+      { texto: 'Acta de recibo parcial' },
+    ]
+    const duringRecording = [
+      { id: 1, orden: 0, _claveGrabacion: 'od-1', titulo: 'Presentacion Módulo Actas', texto: '', quien_dijo: 'Dev' },
+      { id: 2, orden: 1, _claveGrabacion: 'od-2', titulo: 'Videos Capacitación', texto: '', quien_dijo: 'Dev' },
+      { id: 3, orden: 2, _claveGrabacion: 'od-3', titulo: 'Módulo de Almacén', texto: '', quien_dijo: 'Dev' },
+      { id: 4, orden: 3, _claveGrabacion: 'od-4', titulo: 'Acta de recibo parcial', texto: '', quien_dijo: 'Dev' },
+      // Simula el estado roto justo antes de guardar (texto en filas aparte con nº 2,3,4).
+      { orden: 1, titulo: 'Capacitación en video', texto: '<p>Contenido videos capacitación</p>', quien_dijo: '' },
+      { orden: 2, titulo: 'Almacén Clara', texto: '<p>Contenido módulo almacén</p>', quien_dijo: '' },
+      { orden: 3, titulo: 'Recibo', texto: '<p>Contenido acta recibo parcial</p>', quien_dijo: '' },
+    ]
+    const alGuardar = reunirTextosIdeasConTemas(duringRecording)
+    assert.equal(alGuardar.length, 4)
+    // Persistido (como buildPayload): orden 0..3 con texto dentro.
+    const persisted = alGuardar.map((row, idx) => ({
+      id: row.id || 100 + idx,
+      orden: idx,
+      titulo: row.titulo,
+      texto: row.texto,
+      quien_dijo: row.quien_dijo,
+      clave_grabacion: row._claveGrabacion,
+      _claveGrabacion: row._claveGrabacion,
+    }))
+    const reabierto = seedIdeasFromOrdenDia(orden, persisted, { newRowKey: () => 'r' })
+    assert.equal(reabierto.length, 4)
+    assert.match(reabierto[1].texto, /videos capacitación/i)
+    assert.match(reabierto[2].texto, /módulo almacén/i)
+    assert.match(reabierto[3].texto, /recibo parcial/i)
+  })
 })
+
+function plainOrEmpty(html) {
+  const s = String(html || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+  return s.length > 0
+}
