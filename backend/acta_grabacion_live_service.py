@@ -253,6 +253,115 @@ def _is_ogg_bytes(audio_bytes: bytes) -> bool:
     return bool(audio_bytes) and audio_bytes[0:4] == b"OggS"
 
 
+# RMS normalizado (0..1) por debajo → se considera silencio / sin micrófono.
+_STT_SILENCE_RMS = 0.004
+
+
+def wav_pcm16_rms(audio_bytes: bytes) -> Optional[float]:
+    """RMS de un WAV PCM 16-bit mono/stereo (normalizado 0..1). None si no es WAV PCM."""
+    if not _is_wav_bytes(audio_bytes) or len(audio_bytes) < 44:
+        return None
+    # Buscar chunk "data"
+    data_off = None
+    pos = 12
+    while pos + 8 <= len(audio_bytes):
+        chunk_id = audio_bytes[pos : pos + 4]
+        chunk_size = int.from_bytes(audio_bytes[pos + 4 : pos + 8], "little", signed=False)
+        if chunk_id == b"data":
+            data_off = pos + 8
+            data_size = chunk_size
+            break
+        pos += 8 + chunk_size + (chunk_size & 1)
+    if data_off is None:
+        return None
+    data = audio_bytes[data_off : data_off + data_size]
+    if len(data) < 2:
+        return 0.0
+    import array
+
+    n = len(data) // 2
+    samples = array.array("h")
+    samples.frombytes(data[: n * 2])
+    if not samples:
+        return 0.0
+    acc = 0.0
+    for s in samples:
+        v = float(s) / 32768.0
+        acc += v * v
+    return (acc / len(samples)) ** 0.5
+
+
+def clasificar_stt_vacio(
+    *,
+    status: str = "",
+    rms: Optional[float] = None,
+    http_code: Optional[int] = None,
+) -> str:
+    """Código corto de causa cuando no hay texto (sin exponer secretos)."""
+    st = (status or "").strip().lower()
+    if st == "no_key":
+        return "sin_clave"
+    if st == "unsupported_format":
+        return "formato_invalido"
+    if st == "exception":
+        return "error_red"
+    if http_code is not None:
+        if http_code in (401, 403):
+            return "auth_rechazada"
+        if http_code == 404:
+            return "region_invalida"
+        if http_code >= 400:
+            return "http_error"
+    if st.startswith("http_"):
+        try:
+            code = int(st.split("_", 1)[1])
+        except (TypeError, ValueError):
+            code = 0
+        if code in (401, 403):
+            return "auth_rechazada"
+        if code == 404:
+            return "region_invalida"
+        if code >= 400:
+            return "http_error"
+    if rms is not None and rms < _STT_SILENCE_RMS:
+        return "sin_audio"
+    if st in ("nomatch", "initialsilencetimeout", "babbletimeout", "empty"):
+        return "sin_reconocimiento" if (rms is None or rms >= _STT_SILENCE_RMS) else "sin_audio"
+    return "sin_reconocimiento"
+
+
+def mensaje_stt_usuario(causa: str) -> str:
+    """Aviso breve al usuario (sin jerga ni nombres de variables/claves)."""
+    return {
+        "sin_audio": (
+            "No se detectó sonido del micrófono. "
+            "Revise el permiso y que el micrófono esté activo."
+        ),
+        "sin_clave": "La transcripción no está configurada en el servidor. Avise a soporte.",
+        "auth_rechazada": "El servicio de voz rechazó la configuración. Avise a soporte.",
+        "region_invalida": "El servicio de voz no responde en esta región. Avise a soporte.",
+        "formato_invalido": (
+            "No se pudo preparar el audio para transcribir. "
+            "Intente de nuevo en Chrome o Edge."
+        ),
+        "sin_reconocimiento": (
+            "Se oyó audio, pero no se reconoció voz clara. "
+            "Hable más cerca del micrófono."
+        ),
+        "error_red": (
+            "No se pudo enviar el audio para transcribir. "
+            "Revise la conexión e intente de nuevo."
+        ),
+        "http_error": (
+            "El servicio de voz no pudo transcribir el audio. "
+            "Intente de nuevo en un momento."
+        ),
+    }.get((causa or "").strip().lower(), (
+        "Se oyó audio, pero no se reconoció voz clara. "
+        "Hable más cerca del micrófono."
+    ))
+
+
 def _azure_stt_content_type(audio_bytes: bytes, content_type: str = "") -> str:
     """
     Azure Speech REST short-audio solo acepta:
@@ -333,7 +442,15 @@ async def transcribe_audio_azure(
     Espera WAV/PCM 16 kHz mono (preferido) u OGG/Opus. Si llega WebM, intenta
     convertir con ffmpeg. Devuelve {text, status, content_type, converted}.
     """
-    empty = {"text": "", "status": "", "content_type": "", "converted": False}
+    empty = {
+        "text": "",
+        "status": "",
+        "content_type": "",
+        "converted": False,
+        "bytes": len(audio_bytes or b""),
+        "rms": None,
+        "causa": "",
+    }
     key = (os.getenv("AZURE_SPEECH_KEY") or "").strip()
     if not key:
         if raise_on_error:
@@ -341,9 +458,11 @@ async def transcribe_audio_azure(
                 status_code=503,
                 detail="AZURE_SPEECH_KEY no configurada. No se puede transcribir el audio real.",
             )
-        return {**empty, "status": "no_key"}
+        causa = clasificar_stt_vacio(status="no_key")
+        return {**empty, "status": "no_key", "causa": causa}
     if not audio_bytes:
-        return empty
+        causa = clasificar_stt_vacio(status="empty", rms=0.0)
+        return {**empty, "status": "empty", "rms": 0.0, "causa": causa}
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         raise HTTPException(status_code=413, detail="Chunk de audio demasiado grande.")
 
@@ -365,7 +484,28 @@ async def transcribe_audio_azure(
             _log.warning(msg)
             if raise_on_error:
                 raise HTTPException(status_code=415, detail=msg)
-            return {**empty, "status": "unsupported_format", "content_type": content_type or ""}
+            causa = clasificar_stt_vacio(status="unsupported_format")
+            return {
+                **empty,
+                "status": "unsupported_format",
+                "content_type": content_type or "",
+                "causa": causa,
+            }
+
+    rms = wav_pcm16_rms(payload)
+    empty["rms"] = rms
+    empty["bytes"] = len(payload)
+    # Silencio claro: no gastar cuota Azure ni confundir con NoMatch.
+    if rms is not None and rms < _STT_SILENCE_RMS:
+        causa = clasificar_stt_vacio(status="empty", rms=rms)
+        _log.info("Azure STT omitido: audio en silencio rms=%.5f bytes=%s", rms, len(payload))
+        return {
+            **empty,
+            "status": "empty",
+            "content_type": ct,
+            "converted": converted,
+            "causa": causa,
+        }
 
     region = (os.getenv("AZURE_SPEECH_REGION") or "eastus").strip() or "eastus"
     language = (os.getenv("AZURE_SPEECH_LANGUAGE") or "es-CO").strip() or "es-CO"
@@ -387,15 +527,20 @@ async def transcribe_audio_azure(
         async with httpx.AsyncClient(timeout=90.0) as client:
             res = await client.post(url, params=params, headers=headers, content=payload)
         if res.status_code >= 400:
-            msg = f"Azure STT HTTP {res.status_code}: {(res.text or '')[:240]}"
-            _log.warning(msg)
+            # Nunca loguear la clave; solo código y cuerpo truncado sin headers.
+            body_safe = (res.text or "")[:240]
+            _log.warning("Azure STT HTTP %s: %s", res.status_code, body_safe)
             if raise_on_error:
                 raise HTTPException(status_code=502, detail="No se pudo transcribir el audio con Azure Speech.")
+            causa = clasificar_stt_vacio(status=f"http_{res.status_code}", http_code=res.status_code, rms=rms)
             return {
                 "text": "",
                 "status": f"http_{res.status_code}",
                 "content_type": ct,
                 "converted": converted,
+                "bytes": len(payload),
+                "rms": rms,
+                "causa": causa,
             }
         data = res.json() if res.content else {}
         # detailed → NBest[0].Display; simple → DisplayText
@@ -406,17 +551,27 @@ async def transcribe_audio_azure(
                 text = str(nbest[0].get("Display") or nbest[0].get("Lexical") or "").strip()
         status = str(data.get("RecognitionStatus") or "")
         if status and status not in ("Success", "InitialSilenceTimeout", "EndOfDictation") and not text:
-            _log.warning("Azure STT RecognitionStatus=%s", status)
+            _log.warning(
+                "Azure STT RecognitionStatus=%s rms=%s bytes=%s",
+                status,
+                f"{rms:.5f}" if rms is not None else "n/a",
+                len(payload),
+            )
             if raise_on_error and status not in ("NoMatch", "InitialSilenceTimeout", "BabbleTimeout"):
                 raise HTTPException(
                     status_code=502,
                     detail=f"Azure Speech no reconoció el audio ({status}).",
                 )
+        out_status = status or ("Success" if text else "empty")
+        causa = "" if text else clasificar_stt_vacio(status=out_status, rms=rms)
         return {
             "text": text,
-            "status": status or ("Success" if text else "empty"),
+            "status": out_status,
             "content_type": ct,
             "converted": converted,
+            "bytes": len(payload),
+            "rms": rms,
+            "causa": causa,
         }
     except HTTPException:
         raise
@@ -424,7 +579,14 @@ async def transcribe_audio_azure(
         _log.warning("Azure STT falló: %s", exc)
         if raise_on_error:
             raise HTTPException(status_code=502, detail="No se pudo transcribir el audio con Azure Speech.") from exc
-        return {**empty, "status": "exception", "content_type": ct, "converted": converted}
+        causa = clasificar_stt_vacio(status="exception", rms=rms)
+        return {
+            **empty,
+            "status": "exception",
+            "content_type": ct,
+            "converted": converted,
+            "causa": causa,
+        }
 
 
 def _parse_temas_json(raw: str) -> list[dict]:
@@ -921,6 +1083,7 @@ async def ingest_audio_chunk(
     content_type: str = "audio/webm",
     *,
     forzar_sintesis: bool = False,
+    rms_cliente: Optional[float] = None,
 ) -> dict:
     del forzar_sintesis
     sesion = _sesion_row(sb, sesion_id)
@@ -929,13 +1092,12 @@ async def ingest_audio_chunk(
     _assert_sesion_activa(sesion, contrato_id, usuario_id)
 
     if not speech_configured():
+        causa = clasificar_stt_vacio(status="no_key")
         return {
             **_live_payload(sesion),
             "stt_omitido": True,
-            "detalle": (
-                "AZURE_SPEECH_KEY no configurada. "
-                "Sin Azure Speech no se puede transcribir el audio real para Temas."
-            ),
+            "stt_causa": causa,
+            "detalle": mensaje_stt_usuario(causa),
         }
 
     if not ensure_live_columns(sb):
@@ -946,15 +1108,24 @@ async def ingest_audio_chunk(
 
     stt = await transcribe_audio_azure(audio_bytes, content_type=content_type)
     text = str((stt or {}).get("text") or "").strip()
+    rms = (stt or {}).get("rms")
+    if rms is None and rms_cliente is not None:
+        try:
+            rms = float(rms_cliente)
+        except (TypeError, ValueError):
+            rms = None
     if not text:
+        causa = (stt or {}).get("causa") or clasificar_stt_vacio(
+            status=(stt or {}).get("status") or "empty",
+            rms=rms,
+        )
         payload = _live_payload(sesion, sintetizado=False, delta="")
         payload["stt_status"] = (stt or {}).get("status") or "empty"
         payload["stt_content_type"] = (stt or {}).get("content_type") or ""
-        if (stt or {}).get("status") == "unsupported_format":
-            payload["detalle"] = (
-                "El audio enviado no es WAV/PCM ni OGG/Opus (Azure Speech REST). "
-                "El cliente debe enviar PCM 16 kHz del AudioContext, no WebM del MediaRecorder."
-            )
+        payload["stt_causa"] = causa
+        payload["stt_rms"] = rms
+        payload["stt_bytes"] = (stt or {}).get("bytes") or len(audio_bytes or b"")
+        payload["detalle"] = mensaje_stt_usuario(causa)
         return payload
     out = await ingest_transcript_delta(
         sb,
@@ -966,6 +1137,9 @@ async def ingest_audio_chunk(
     out["stt_status"] = (stt or {}).get("status") or "Success"
     out["stt_content_type"] = (stt or {}).get("content_type") or ""
     out["stt_converted"] = bool((stt or {}).get("converted"))
+    out["stt_rms"] = rms
+    out["stt_bytes"] = (stt or {}).get("bytes") or len(audio_bytes or b"")
+    out["stt_causa"] = ""
     return out
 
 
