@@ -347,10 +347,10 @@ async def generar_esquema_ia(
     model = (os.getenv("ESQUEMA_IA_MODEL") or os.getenv("ANTHROPIC_MODEL") or "claude-haiku-4-5").strip()
     client = anthropic.AsyncAnthropic(api_key=api_key)
     try:
+        # SDK Anthropic reciente no acepta `temperature` en messages.create.
         resp = await client.messages.create(
             model=model,
             max_tokens=4096,
-            temperature=0,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )

@@ -722,10 +722,10 @@ async def sintetizar_temas(
         )
     client = anthropic.AsyncAnthropic(api_key=api_key)
     try:
+        # SDK Anthropic reciente (p. ej. 1.13+) no acepta `temperature` en messages.create.
         msg = await client.messages.create(
             model=model,
             max_tokens=2500,
-            temperature=0.2,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
@@ -767,7 +767,6 @@ async def sintetizar_temas(
     except HTTPException:
         raise
     except Exception as exc:
-        _log.error("Síntesis de temas falló: %s", exc)
         raise HTTPException(
             status_code=502,
             detail=_detalle_error_sintesis(exc, model=model),
@@ -775,13 +774,14 @@ async def sintetizar_temas(
 
 
 def _detalle_error_sintesis(exc: BaseException, *, model: str = "") -> str:
-    """Traduce el fallo de Anthropic a un mensaje accionable (punto exacto: síntesis Claude)."""
+    """Mensaje breve para la UI. El detalle técnico solo va al log del sistema."""
     msg = str(exc) or ""
     low = msg.lower()
-    base = (
-        "No se pudo sintetizar los temas con IA "
-        "(falló la llamada a Claude sobre el tramo transcrito). "
-        "El tramo queda pendiente para reintento; la transcripción no se pierde."
+    # Siempre registrar el error técnico completo (sin claves).
+    _log.error(
+        "Síntesis temas falló (model=%s): %s",
+        model or "(default)",
+        msg.replace("\n", " ")[:500],
     )
     if (
         "credit balance" in low
@@ -790,26 +790,38 @@ def _detalle_error_sintesis(exc: BaseException, *, model: str = "") -> str:
         or ("billing" in low and "upgrade" in low)
     ):
         return (
-            f"{base} Causa: créditos/saldo insuficientes en Anthropic. "
-            "Revise Plans & Billing y ACTA_ANTHROPIC_API_KEY."
+            "No se pudieron redactar los temas: la cuenta de IA no tiene saldo. "
+            "El tramo queda pendiente; la transcripción no se pierde. Avise a soporte."
         )
     if "not_found_error" in low and "model" in low:
         return (
-            f"{base} Causa: modelo no disponible "
-            f"(configurado: «{model or 'claude-haiku-5-5'}»). "
-            "Defina ACTA_GRABACION_IA_MODEL o ANTHROPIC_MODEL."
+            "No se pudieron redactar los temas: el modelo de IA no está disponible. "
+            "El tramo queda pendiente; la transcripción no se pierde. Avise a soporte."
         )
     if "rate" in low and "limit" in low:
-        return f"{base} Causa: límite de tasa de Anthropic; reintente en unos segundos."
+        return (
+            "No se pudieron redactar los temas: el servicio de IA está ocupado. "
+            "Espere unos segundos y pulse Reintentar tramo. La transcripción no se pierde."
+        )
     if "timeout" in low or "timed out" in low:
-        return f"{base} Causa: tiempo de espera agotado al llamar a Anthropic."
+        return (
+            "No se pudieron redactar los temas: el servicio de IA no respondió a tiempo. "
+            "Pulse Reintentar tramo. La transcripción no se pierde."
+        )
     if "authentication" in low or "invalid api key" in low or "unauthorized" in low:
-        return f"{base} Causa: clave Anthropic de actas inválida o sin permiso."
-    # Truncar detalle técnico para la UI
-    extra = msg.strip().replace("\n", " ")[:220]
-    if extra:
-        return f"{base} Detalle: {extra}"
-    return base
+        return (
+            "No se pudieron redactar los temas: la configuración de IA fue rechazada. "
+            "El tramo queda pendiente; la transcripción no se pierde. Avise a soporte."
+        )
+    if "unexpected keyword argument" in low:
+        return (
+            "No se pudieron redactar los temas por un ajuste interno de la IA. "
+            "Pulse Reintentar tramo. La transcripción no se pierde."
+        )
+    return (
+        "No se pudieron redactar los temas con IA. "
+        "El tramo queda pendiente; pulse Reintentar tramo. La transcripción no se pierde."
+    )
 
 
 def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict]:
