@@ -106,6 +106,26 @@ export function sicoePuedeEditarGraficoRegistro({
   })
 }
 
+/**
+ * Observación:
+ * - Editar: siempre (incluida franja post-sello; no afecta cantidades/ítem/sello).
+ * - Crear (creador): misma ventana que dims (hasta sellado del último nivel).
+ */
+export function sicoePuedeEditarObservacionRegistro({
+  puedeEditar = false,
+  puedeCrear = false,
+  esCreador = false,
+  selladoMax = false,
+} = {}) {
+  if (puedeEditar) return true
+  return sicoePuedeEditarCamposDimensionales({
+    puedeEditar: false,
+    puedeCrear,
+    esCreador,
+    selladoMax,
+  })
+}
+
 /** Capítulos / ítem / valores: solo permiso Editar y no sellado. */
 export function sicoePuedeEditarCamposFinancieros({
   puedeEditar = false,

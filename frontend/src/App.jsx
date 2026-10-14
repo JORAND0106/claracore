@@ -218,10 +218,16 @@ import {
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
   sicoePuedeEditarGraficoRegistro,
+  sicoePuedeEditarObservacionRegistro,
   sicoeCantidadCambioSignificativo,
   sicoeCalcCantidadTotal,
   sicoeDebeResetAlertaPorCambioCantidad,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
+import {
+  sicoeActaEleccionAlRevalidar,
+  sicoeActaLabel,
+  sicoeNivelAsignaActaRpo,
+} from './modules/sicoe-obra/sicoeActaRevalidacion'
 import { formatearCantidadTotal, formatearDimension, redondearDimension } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
 import SicoeCamposMedicion from './modules/sicoe-obra/SicoeCamposMedicion.jsx'
 import SicoeAuditoriaTraslaposModal from './modules/sicoe-obra/SicoeAuditoriaTraslaposModal.jsx'
@@ -3053,6 +3059,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
   const [esquemaCargando, setEsquemaCargando] = useState(false)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
+  const [modalActaRevalidacion, setModalActaRevalidacion] = useState(null)
   const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
   const [panelReversionExpandido, setPanelReversionExpandido] = useState(false)
   // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
@@ -3199,9 +3206,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     reporte,
     listaSubs,
   }) || 'Sin subcontratista'
-  // Foto: solo permiso Editar (incluido post-sello). Gráfico: Editar o Crear+creador hasta sellado.
+  // Foto: solo permiso Editar (incluido post-sello). Gráfico/obs: Editar post-sello; Crear+creador hasta sellado.
   const editableFoto = !!puedeEditar
   const editableGrafico = sicoePuedeEditarGraficoRegistro({
+    puedeEditar: !!puedeEditar,
+    puedeCrear: !!puedeCrear,
+    esCreador: esCreadorReg,
+    selladoMax: regSelladoMax,
+  })
+  const editableObservacion = sicoePuedeEditarObservacionRegistro({
     puedeEditar: !!puedeEditar,
     puedeCrear: !!puedeCrear,
     esCreador: esCreadorReg,
@@ -4055,6 +4068,40 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
   }
 
+  const guardarObservacionSellado = async () => {
+    if (!editableObservacion || !regSelladoMax) return
+    setGuardando(true)
+    try {
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method: 'PUT',
+        headers: hdrs,
+        body: JSON.stringify({
+          reporte_id: registro.reporte_id,
+          numero_registro: registro.numero_registro,
+          observacion: observacion || null,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
+      }
+      setToastMsg('Observación actualizada')
+      try {
+        await new Promise((r) => setTimeout(r, 200))
+        setToastMsg(null)
+        notificarTrasEdicionRegistro({ observacion: observacion || null })
+        const p = onItemAsignado?.()
+        if (p != null && typeof p.then === 'function') await p
+      } catch {
+        /* noop */
+      }
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+    setGuardando(false)
+  }
+
   const guardarCorte = async () => {
     setGuardandoCorte(true)
     try {
@@ -4210,14 +4257,45 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (nivel === 2 && registro.nivel2_objeto_pago_sub !== undefined) {
       body.objeto_pago_sub = registro.nivel2_objeto_pago_sub
     }
+
+    // Al revalidar tras reversión (nivel que asigna acta): preguntar original vs vigente.
+    if (
+      estadoValidando === 'Aprobado'
+      && sicoeNivelAsignaActaRpo(nivel)
+      && registro?.acta_rpo_id_pre_reversion != null
+    ) {
+      let actaVigente = null
+      try {
+        const vr = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
+        if (vr.ok) actaVigente = await vr.json().catch(() => null)
+      } catch { /* noop */ }
+      const elec = sicoeActaEleccionAlRevalidar({
+        registro,
+        actasList,
+        actaVigente,
+      })
+      if (elec.requerida) {
+        setModalActaRevalidacion({
+          original: elec.original,
+          vigente: elec.vigente,
+          pendiente: { nivel, sufijo, body, comentarioData },
+        })
+        return
+      }
+    }
+
+    await ejecutarValidacionConBody({ nivel, sufijo, body })
+  }
+
+  const ejecutarValidacionConBody = async ({ nivel, sufijo, body }) => {
     // Actualización optimista inmediata — el usuario ve el cambio al instante
-    onOptimisticValidacion?.(registro.id, nivel, estadoValidando)
+    onOptimisticValidacion?.(registro.id, nivel, body.estado)
 
     // ── Modo offline: guardar en IndexedDB y encolar mutación ──────────────
     if (!isOnline && isOfflineReady) {
       try {
         const campo = `nivel${nivel}_estado`
-        await aplicarValidacionLocal(registro.id, campo, estadoValidando)
+        await aplicarValidacionLocal(registro.id, campo, body.estado)
         await enqueueMutation({
           type: `validar_nivel${nivel}`,
           method: 'PUT',
@@ -4240,10 +4318,24 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         const detail = err?.detail
+        if (
+          res.status === 409
+          && detail
+          && typeof detail === 'object'
+          && detail.code === 'acta_eleccion_requerida'
+        ) {
+          onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
+          setModalActaRevalidacion({
+            original: detail.acta_original,
+            vigente: detail.acta_vigente,
+            pendiente: { nivel, sufijo, body },
+          })
+          return
+        }
         let msg = `Error ${res.status}`
         if (typeof detail === 'string') msg = detail
         else if (Array.isArray(detail)) msg = detail.map(x => x?.msg || JSON.stringify(x)).join(', ')
-        else if (detail && typeof detail === 'object') msg = JSON.stringify(detail)
+        else if (detail && typeof detail === 'object') msg = detail.mensaje || JSON.stringify(detail)
         else if (err?.message) msg = String(err.message)
         throw new Error(msg)
       }
@@ -4258,6 +4350,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         alert(`No se pudo aplicar la validación: ${msg}`)
       }
     }
+  }
+
+  const confirmarActaRevalidacion = async (eleccion) => {
+    const modal = modalActaRevalidacion
+    setModalActaRevalidacion(null)
+    if (!modal?.pendiente || !eleccion) return
+    const { nivel, sufijo, body } = modal.pendiente
+    await ejecutarValidacionConBody({
+      nivel,
+      sufijo,
+      body: { ...body, acta_rpo_eleccion: eleccion },
+    })
   }
 
   const confirmarReversionN3Doble = async (comentarioData) => {
@@ -5065,9 +5169,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         )}
         <div style={{ marginTop: excel ? 4 : 10 }}>
-          {editableCamposDimensionales ? (
+          {editableObservacion ? (
             <div>
-              <div style={labSt}>Observación</div>
+              <div style={labSt}>
+                Observación
+                {regSelladoMax && puedeEditar ? (
+                  <span style={{ marginLeft: 6, fontWeight: 500, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                    (editable en sellado)
+                  </span>
+                ) : null}
+              </div>
               <textarea
                 value={observacion}
                 onChange={e => setObservacion(e.target.value)}
@@ -5653,6 +5764,72 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         />
       )}
 
+      {modalActaRevalidacion && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 10700,
+            background: 'rgba(15,23,42,0.48)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}
+          onClick={() => setModalActaRevalidacion(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%', maxWidth: 480, background: t.bgCard || t.bg || '#fff',
+              border: `1px solid ${t.border || C.borde}`, borderRadius: 14,
+              boxShadow: '0 24px 64px rgba(0,0,0,0.28)', overflow: 'hidden', color: t.text,
+            }}
+          >
+            <CcModalBrandHeader theme={t} />
+            <div style={{ padding: '16px 20px 8px' }}>
+              <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 700, marginBottom: 8 }}>
+                Selección de acta al revalidar
+              </div>
+              <p style={{ margin: '0 0 14px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+                ¿Conservar el acta original ({sicoeActaLabel(modalActaRevalidacion.original)}) o asignar el acta vigente ({sicoeActaLabel(modalActaRevalidacion.vigente)})?
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => confirmarActaRevalidacion('original')}
+                  style={{
+                    textAlign: 'left', padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                    border: `1px solid ${t.primary}66`, background: `${t.primary}14`, color: t.text, fontWeight: 600,
+                  }}
+                >
+                  Conservar original · {sicoeActaLabel(modalActaRevalidacion.original)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmarActaRevalidacion('vigente')}
+                  style={{
+                    textAlign: 'left', padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                    border: `1px solid ${t.border || C.borde}`, background: t.bg || 'transparent', color: t.text, fontWeight: 600,
+                  }}
+                >
+                  Asignar vigente · {sicoeActaLabel(modalActaRevalidacion.vigente)}
+                </button>
+              </div>
+            </div>
+            <div style={{ padding: '12px 20px 16px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setModalActaRevalidacion(null)}
+                style={{
+                  background: 'transparent', border: `1px solid ${t.border || C.borde}`,
+                  borderRadius: 8, padding: '6px 14px', cursor: 'pointer', color: t.textMuted,
+                }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmCantidadCambio && (
         <CcConfirmModal
           theme={t}
@@ -5739,7 +5916,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {/* ─ Acciones finales ─ */}
-      {(puedeEditar || editableCamposDimensionales) && (editableCamposDimensionales || editableCamposFinancieros || toastMsg) && (
+      {(puedeEditar || editableCamposDimensionales || editableObservacion) && (editableCamposDimensionales || editableCamposFinancieros || (editableObservacion && regSelladoMax) || toastMsg) && (
         <div style={{ display:'flex', justifyContent:'flex-end', paddingTop: excel ? 6 : 12, borderTop:`1px solid ${excel ? sheetGrid : C.borde}` }}>
           {toastMsg && (
             <div style={{
@@ -5767,6 +5944,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             borderRadius: excel ? 4 : 8, padding: excel ? '5px 14px' : '8px 22px', fontSize: 'var(--cc-sm)', fontWeight:'700',
             cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
           }}>{guardando ? 'Guardando...' : '💾 Guardar Cambios'}</button>
+          )}
+          {regSelladoMax && editableObservacion && !editableCamposDimensionales && !editableCamposFinancieros && (
+          <button onClick={guardarObservacionSellado} disabled={guardando} style={{
+            background: t.primary, color:'#fff', border:'none',
+            borderRadius: excel ? 4 : 8, padding: excel ? '5px 14px' : '8px 22px', fontSize: 'var(--cc-sm)', fontWeight:'700',
+            cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
+          }}>{guardando ? 'Guardando...' : '💾 Guardar observación'}</button>
           )}
         </div>
       )}
