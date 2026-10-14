@@ -22157,11 +22157,22 @@ def _sicoe_reversion_ambas_llaves_listas(arm2: Optional[int], arm3: Optional[int
     return arm2 is not None and arm3 is not None and arm2 != arm3
 
 
-def _sicoe_reversion_update_desellar(contrato_id: int) -> dict:
-    """Payload único de desbloqueo tras doble llave (o recuperación de estado atascado)."""
+def _sicoe_reversion_update_desellar(
+    contrato_id: int,
+    *,
+    acta_rpo_id_actual: Any = None,
+    acta_rpo_id_pre_reversion_actual: Any = None,
+) -> dict:
+    """Payload único de desbloqueo tras doble llave (o recuperación de estado atascado).
+
+    Conserva acta_rpo_id del registro y, si aún no hay respaldo, guarda
+    acta_rpo_id_pre_reversion para la elección al revalidar.
+    """
+    from sicoe_acta_revalidacion import sicoe_payload_desellar_con_acta_pre
+
     campo_mx = _get_nivel_maximo_contrato(contrato_id)
     u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
-    return {
+    base = {
         "bloqueado": False,
         "solicitud_reversion": False,
         campo_mx: "No Revisado",
@@ -22170,16 +22181,18 @@ def _sicoe_reversion_update_desellar(contrato_id: int) -> dict:
         "reversion_arm_n2_usuario_id": None,
         "reversion_arm_n3_usuario_id": None,
     }
+    return sicoe_payload_desellar_con_acta_pre(
+        base,
+        acta_rpo_id_actual=acta_rpo_id_actual,
+        acta_rpo_id_pre_reversion_actual=acta_rpo_id_pre_reversion_actual,
+    )
 
 
 def _sicoe_reversion_fetch_arms_row(contrato_id: int, registro_id: int) -> dict:
-    def _get():
+    def _get(cols: str):
         return (
             supabase.table("so_registros")
-            .select(
-                f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
-                "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id"
-            )
+            .select(cols)
             .eq("id", registro_id)
             .eq("contrato_id", contrato_id)
             .limit(1)
@@ -22187,10 +22200,25 @@ def _sicoe_reversion_fetch_arms_row(contrato_id: int, registro_id: int) -> dict:
             .data
         )
 
+    cols_full = (
+        f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
+        "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id,"
+        "acta_rpo_id,acta_rpo_id_pre_reversion"
+    )
+    cols_fallback = (
+        f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
+        "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id,acta_rpo_id"
+    )
     try:
-        rows = supabase_execute(_get)
+        rows = supabase_execute(lambda: _get(cols_full))
     except Exception as ex:
-        raise _http_reversion_doble_llave_db_error(ex) from ex
+        if "acta_rpo_id_pre_reversion" in str(ex).lower():
+            try:
+                rows = supabase_execute(lambda: _get(cols_fallback))
+            except Exception as ex2:
+                raise _http_reversion_doble_llave_db_error(ex2) from ex2
+        else:
+            raise _http_reversion_doble_llave_db_error(ex) from ex
     if not rows:
         raise HTTPException(status_code=404, detail="Registro no encontrado.")
     return rows[0]
@@ -22341,7 +22369,11 @@ def _sicoe_reversion_doble_llave_procesar_registro(
         pass
 
     if ejecutar:
-        update = _sicoe_reversion_update_desellar(contrato_id)
+        update = _sicoe_reversion_update_desellar(
+            contrato_id,
+            acta_rpo_id_actual=row.get("acta_rpo_id"),
+            acta_rpo_id_pre_reversion_actual=row.get("acta_rpo_id_pre_reversion"),
+        )
     else:
         update = (
             {"reversion_arm_n2_usuario_id": autor_id}
@@ -22367,7 +22399,15 @@ def _sicoe_reversion_doble_llave_procesar_registro(
     try:
         supabase_execute(_upd)
     except Exception as ex:
-        raise _http_reversion_doble_llave_db_error(ex) from ex
+        # Migración pre_reversion aún no aplicada: reintentar sin esa columna.
+        if ejecutar and "acta_rpo_id_pre_reversion" in str(ex).lower():
+            update.pop("acta_rpo_id_pre_reversion", None)
+            try:
+                supabase_execute(_upd)
+            except Exception as ex2:
+                raise _http_reversion_doble_llave_db_error(ex2) from ex2
+        else:
+            raise _http_reversion_doble_llave_db_error(ex) from ex
 
     # Carrera: la contraparte pudo grabar su llave en paralelo. Releer y desellar si aplica.
     if not ejecutar:
@@ -22383,10 +22423,16 @@ def _sicoe_reversion_doble_llave_procesar_registro(
                 and row_after.get("bloqueado")
                 and _registro_nivel_max_aprobado(row_after, contrato_id)
             ):
+                desellar_payload = _sicoe_reversion_update_desellar(
+                    contrato_id,
+                    acta_rpo_id_actual=row_after.get("acta_rpo_id"),
+                    acta_rpo_id_pre_reversion_actual=row_after.get("acta_rpo_id_pre_reversion"),
+                )
+
                 def _upd_desellar():
                     return (
                         supabase.table("so_registros")
-                        .update(_sicoe_reversion_update_desellar(contrato_id))
+                        .update(desellar_payload)
                         .eq("id", registro_id)
                         .eq("contrato_id", contrato_id)
                         .eq("bloqueado", True)
@@ -22399,13 +22445,19 @@ def _sicoe_reversion_doble_llave_procesar_registro(
                     ejecutar = True
                     recuperacion = True
                 except Exception as ex:
-                    raise _http_reversion_doble_llave_db_error(ex) from ex
+                    if "acta_rpo_id_pre_reversion" in str(ex).lower():
+                        desellar_payload.pop("acta_rpo_id_pre_reversion", None)
+                        try:
+                            supabase_execute(_upd_desellar)
+                            ejecutar = True
+                            recuperacion = True
+                        except Exception as ex2:
+                            raise _http_reversion_doble_llave_db_error(ex2) from ex2
+                    else:
+                        raise _http_reversion_doble_llave_db_error(ex) from ex
 
-    if ejecutar:
-        try:
-            _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
-        except Exception:
-            pass
+    # No reasignar acta vigente aquí: el registro conservará su acta_rpo_id
+    # y, si aplica, acta_rpo_id_pre_reversion para elegir al revalidar.
 
     accion_log = (
         "REVERSION_DOBLE_RECUPERADA"
@@ -29251,8 +29303,10 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
 
     if sellado:
         # Campos siempre editables aunque el registro esté sellado en el nivel máximo
+        # (no afectan cantidades, ítem, valores, validación ni sello).
         _CAMPOS_N3_PERMITIDOS = {
             "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
+            "observacion",
             "foto_url", "foto_numero", "foto_descripcion",
             "grafico_url", "grafico_numero", "grafico_descripcion",
             "graficos_historial",
@@ -29260,13 +29314,13 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         if not puede_editar_full:
             raise HTTPException(
                 status_code=403,
-                detail="Registro sellado: se requiere permiso «Editar» en Reporte de Cantidades para ajustar subcontratista, corte o foto/gráfico.",
+                detail="Registro sellado: se requiere permiso «Editar» en Reporte de Cantidades para ajustar observación, subcontratista, corte o foto/gráfico.",
             )
         otros = {k: v for k, v in data.items() if k not in _CAMPOS_N3_PERMITIDOS}
         if otros:
             raise HTTPException(
                 status_code=400,
-                detail="Registro aprobado en el último nivel de validación: solo puede modificarse el subcontratista, el corte y la foto/gráfico del registro.",
+                detail="Registro aprobado en el último nivel de validación: solo puede modificarse la observación, el subcontratista, el corte y la foto/gráfico del registro.",
             )
         if data.get("reporte_id") is not None and int(data["reporte_id"]) != int(prev_row["reporte_id"]):
             raise HTTPException(status_code=400, detail="No puede modificarse el reporte del registro aprobado en el último nivel de validación.")
@@ -30147,6 +30201,286 @@ def _aplicar_acta_rpo_vigente_a_registro(contrato_id: int, registro_id: int, ref
 
     supabase_execute(_upd_rep)
     return acta_id
+
+
+def _acta_rpo_row_by_id(contrato_id: int, acta_id: Optional[int]) -> Optional[dict]:
+    if acta_id is None:
+        return None
+    try:
+        aid = int(acta_id)
+    except (TypeError, ValueError):
+        return None
+
+    def _q():
+        return (
+            supabase.table("actas")
+            .select("id, numero_rpo, fecha_inicio, fecha_fin")
+            .eq("contrato_id", contrato_id)
+            .eq("id", aid)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    return rows[0] if rows else None
+
+
+def _asignar_acta_rpo_a_registro(
+    contrato_id: int,
+    registro_id: int,
+    acta_id: int,
+    *,
+    limpiar_pre_reversion: bool = False,
+) -> Optional[int]:
+    """Escribe acta_rpo_id en registro + reporte; opcionalmente limpia pre_reversion."""
+
+    def _get():
+        return (
+            supabase.table("so_registros")
+            .select("reporte_id")
+            .eq("id", registro_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_get)
+    if not rows:
+        return None
+    rep_id = rows[0]["reporte_id"]
+    payload = {"acta_rpo_id": int(acta_id)}
+    if limpiar_pre_reversion:
+        payload["acta_rpo_id_pre_reversion"] = None
+
+    def _upd_reg():
+        return (
+            supabase.table("so_registros")
+            .update(payload)
+            .eq("id", registro_id)
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        )
+
+    try:
+        supabase_execute(_upd_reg)
+    except Exception as ex:
+        # Columna pre_reversion aún no migrada: reintentar sin ella.
+        if limpiar_pre_reversion and "acta_rpo_id_pre_reversion" in str(ex).lower():
+            supabase_execute(
+                lambda: supabase.table("so_registros")
+                .update({"acta_rpo_id": int(acta_id)})
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        else:
+            raise
+
+    def _upd_rep():
+        return (
+            supabase.table("so_reportes")
+            .update({"acta_rpo_id": int(acta_id)})
+            .eq("id", rep_id)
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        )
+
+    supabase_execute(_upd_rep)
+    return int(acta_id)
+
+
+def _sicoe_fetch_acta_pre_reversion(contrato_id: int, registro_id: int) -> Optional[dict]:
+    """Fila mínima con acta / pre_reversion; None si no existe el registro."""
+
+    def _get(cols: str):
+        return (
+            supabase.table("so_registros")
+            .select(cols)
+            .eq("id", registro_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    try:
+        rows = supabase_execute(lambda: _get("reporte_id, acta_rpo_id, acta_rpo_id_pre_reversion"))
+    except Exception as ex:
+        if "acta_rpo_id_pre_reversion" in str(ex).lower():
+            return None  # migración no aplicada → sin elección
+        raise
+    return rows[0] if rows else None
+
+
+def _sicoe_raise_si_acta_eleccion_pendiente(
+    contrato_id: int,
+    registro_id: int,
+    ref_date,
+    *,
+    eleccion: Optional[str] = None,
+    modo_masivo: bool = False,
+) -> None:
+    """
+    Lanza 409 ANTES de persistir la validación si hace falta elegir acta.
+    En masivo no lanza (se conservará original después).
+    """
+    if modo_masivo:
+        return
+    from sicoe_acta_revalidacion import (
+        sicoe_formatear_acta_opcion,
+        sicoe_resolver_acta_elegida,
+    )
+
+    row = _sicoe_fetch_acta_pre_reversion(contrato_id, registro_id)
+    if not row:
+        return
+    pre_id = row.get("acta_rpo_id_pre_reversion")
+    if pre_id is None:
+        return
+    vigente_id = _acta_rpo_id_vigente_para_fecha(contrato_id, ref_date)
+    _, err = sicoe_resolver_acta_elegida(
+        eleccion=eleccion,
+        acta_original_id=pre_id,
+        acta_vigente_id=vigente_id,
+    )
+    if err == "eleccion_requerida":
+        orig_meta = sicoe_formatear_acta_opcion(_acta_rpo_row_by_id(contrato_id, pre_id))
+        vig_meta = sicoe_formatear_acta_opcion(_acta_rpo_row_by_id(contrato_id, vigente_id))
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "acta_eleccion_requerida",
+                "mensaje": (
+                    "¿Conservar el acta original "
+                    f"({(orig_meta or {}).get('label') or 'Acta original'}) "
+                    "o asignar el acta vigente "
+                    f"({(vig_meta or {}).get('label') or 'Acta vigente'})?"
+                ),
+                "acta_original": orig_meta,
+                "acta_vigente": vig_meta,
+            },
+        )
+    if err:
+        raise HTTPException(status_code=422, detail="acta_rpo_eleccion debe ser 'original' o 'vigente'.")
+
+
+def _aplicar_acta_rpo_en_validacion(
+    contrato_id: int,
+    registro_id: int,
+    ref_date,
+    *,
+    eleccion: Optional[str] = None,
+    current_user=None,
+    modo_masivo: bool = False,
+) -> Optional[int]:
+    """
+    Al aprobar en un nivel que asigna acta:
+    - Sin acta_rpo_id_pre_reversion → comportamiento histórico (acta vigente).
+    - Con pre_reversion = vigente → conserva y limpia el flag.
+    - Con pre_reversion ≠ vigente → exige eleccion original|vigente (409 si falta).
+      En masivo sin elección: conserva original y limpia el flag.
+
+    Preferir llamar `_sicoe_raise_si_acta_eleccion_pendiente` antes del UPDATE de nivel
+    para no dejar la validación a medias si falta la elección.
+    """
+    from sicoe_acta_revalidacion import (
+        sicoe_formatear_acta_opcion,
+        sicoe_resolver_acta_elegida,
+    )
+
+    row = _sicoe_fetch_acta_pre_reversion(contrato_id, registro_id)
+    if row is None:
+        # Migración ausente o registro inexistente → flujo histórico.
+        return _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, ref_date)
+    pre_id = row.get("acta_rpo_id_pre_reversion")
+    vigente_id = _acta_rpo_id_vigente_para_fecha(contrato_id, ref_date)
+
+    if pre_id is None:
+        return _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, ref_date)
+
+    original_id = pre_id
+    chosen, err = sicoe_resolver_acta_elegida(
+        eleccion=eleccion,
+        acta_original_id=original_id,
+        acta_vigente_id=vigente_id,
+    )
+    eleccion_efectiva = (eleccion or "").strip().lower() or None
+    if err == "eleccion_requerida":
+        if modo_masivo:
+            # Conservar original sin bloquear el lote.
+            chosen = int(original_id) if original_id is not None else vigente_id
+            eleccion_efectiva = "original"
+        else:
+            orig_meta = sicoe_formatear_acta_opcion(_acta_rpo_row_by_id(contrato_id, original_id))
+            vig_meta = sicoe_formatear_acta_opcion(_acta_rpo_row_by_id(contrato_id, vigente_id))
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "acta_eleccion_requerida",
+                    "mensaje": (
+                        "¿Conservar el acta original "
+                        f"({(orig_meta or {}).get('label') or 'Acta original'}) "
+                        "o asignar el acta vigente "
+                        f"({(vig_meta or {}).get('label') or 'Acta vigente'})?"
+                    ),
+                    "acta_original": orig_meta,
+                    "acta_vigente": vig_meta,
+                },
+            )
+    elif err:
+        raise HTTPException(status_code=422, detail="acta_rpo_eleccion debe ser 'original' o 'vigente'.")
+    elif not eleccion_efectiva and chosen is not None and original_id is not None:
+        try:
+            eleccion_efectiva = "original" if int(chosen) == int(original_id) else "vigente"
+        except (TypeError, ValueError):
+            eleccion_efectiva = None
+
+    if chosen is None:
+        # Sin vigente ni original usable: solo limpiar flag.
+        def _clr():
+            return (
+                supabase.table("so_registros")
+                .update({"acta_rpo_id_pre_reversion": None})
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        try:
+            supabase_execute(_clr)
+        except Exception:
+            pass
+        return None
+
+    applied = _asignar_acta_rpo_a_registro(
+        contrato_id, registro_id, int(chosen), limpiar_pre_reversion=True
+    )
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id) if current_user else None
+        if u_log:
+            registrar_log(
+                u_log,
+                "ACTA_ELECCION_REVALIDACION",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {
+                    "eleccion": eleccion_efectiva,
+                    "acta_original_id": int(original_id) if original_id is not None else None,
+                    "acta_vigente_id": int(vigente_id) if vigente_id is not None else None,
+                    "acta_asignada_id": int(chosen),
+                    "modo_masivo": bool(modo_masivo),
+                },
+                severidad="AUDIT",
+            )
+    except Exception:
+        pass
+    return applied
 
 
 @app.get("/sicoe-obra/{contrato_id}/acta-rpo-vigente")
@@ -33456,6 +33790,8 @@ class ValidarNivel2Body(BaseModel):
     estado: str
     objeto_pago_sub: Optional[bool] = None
     comentario_data: Optional[dict] = None
+    # Tras reversión: 'original' | 'vigente' cuando original ≠ vigente.
+    acta_rpo_eleccion: Optional[str] = None
 
 
 class ObjetoPagoSubBody(BaseModel):
@@ -33464,6 +33800,7 @@ class ObjetoPagoSubBody(BaseModel):
 class ValidarNivel3Body(BaseModel):
     estado: str
     comentario_data: Optional[dict] = None
+    acta_rpo_eleccion: Optional[str] = None
 
 class ValidarSubBody(BaseModel):
     estado: str
@@ -34894,12 +35231,22 @@ def _put_validar_nivel_sicoe_alto(
                 .data
             )
 
+        if body.estado == "Aprobado":
+            _sicoe_raise_si_acta_eleccion_pendiente(
+                contrato_id,
+                registro_id,
+                date.today(),
+                eleccion=getattr(body, "acta_rpo_eleccion", None),
+            )
         supabase_execute(_upd)
         if body.estado == "Aprobado":
-            try:
-                _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
-            except Exception:
-                pass
+            _aplicar_acta_rpo_en_validacion(
+                contrato_id,
+                registro_id,
+                date.today(),
+                eleccion=getattr(body, "acta_rpo_eleccion", None),
+                current_user=current_user,
+            )
         if body.comentario_data:
             _insertar_comentario(
                 contrato_id,
@@ -35317,13 +35664,23 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
             return supabase.table("so_registros")\
                 .update(update).eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).execute().data
-        supabase_execute(_upd)
-        # Acta RPO parcial: al aprobar Residente de Obra (N2), alinear a acta vigente a la fecha de aprobación
+        # Acta RPO: al aprobar N2, vigente (o elección si el registro venía de reversión).
         if estado_real == "Aprobado":
-            try:
-                _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
-            except Exception:
-                pass
+            _sicoe_raise_si_acta_eleccion_pendiente(
+                contrato_id,
+                registro_id,
+                date.today(),
+                eleccion=getattr(body, "acta_rpo_eleccion", None),
+            )
+        supabase_execute(_upd)
+        if estado_real == "Aprobado":
+            _aplicar_acta_rpo_en_validacion(
+                contrato_id,
+                registro_id,
+                date.today(),
+                eleccion=getattr(body, "acta_rpo_eleccion", None),
+                current_user=current_user,
+            )
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                                  tipo_override="validacion", nivel_validacion_override="Nivel 2",
@@ -35632,7 +35989,14 @@ def validar_nivel_masivo_por_filtro(
 
                 if marcar == "Aprobado":
                     try:
-                        _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                        _aplicar_acta_rpo_en_validacion(
+                            contrato_id,
+                            rid,
+                            date.today(),
+                            eleccion=None,
+                            current_user=current_user,
+                            modo_masivo=True,
+                        )
                     except Exception:
                         pass
 
@@ -35709,7 +36073,14 @@ def validar_nivel_masivo_por_filtro(
 
                 if marcar == "Aprobado":
                     try:
-                        _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                        _aplicar_acta_rpo_en_validacion(
+                            contrato_id,
+                            rid,
+                            date.today(),
+                            eleccion=None,
+                            current_user=current_user,
+                            modo_masivo=True,
+                        )
                     except Exception:
                         pass
 
@@ -35798,7 +36169,14 @@ def validar_nivel_masivo_por_filtro(
 
                 if marcar == "Aprobado":
                     try:
-                        _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                        _aplicar_acta_rpo_en_validacion(
+                            contrato_id,
+                            rid,
+                            date.today(),
+                            eleccion=None,
+                            current_user=current_user,
+                            modo_masivo=True,
+                        )
                     except Exception:
                         pass
 
@@ -42732,28 +43110,47 @@ def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarRever
 def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversionBody,
                       current_user=Depends(get_current_user)):
     try:
+        from sicoe_acta_revalidacion import sicoe_payload_desellar_con_acta_pre
+
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         def _get():
             return supabase.table("so_registros")\
-                .select("solicitud_reversion").eq("id", registro_id)\
+                .select("solicitud_reversion,acta_rpo_id,acta_rpo_id_pre_reversion")\
+                .eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
-        rows = supabase_execute(_get)
+        try:
+            rows = supabase_execute(_get)
+        except Exception as ex:
+            if "acta_rpo_id_pre_reversion" in str(ex).lower():
+                def _get2():
+                    return supabase.table("so_registros")\
+                        .select("solicitud_reversion,acta_rpo_id")\
+                        .eq("id", registro_id)\
+                        .eq("contrato_id", contrato_id).limit(1).execute().data
+                rows = supabase_execute(_get2)
+            else:
+                raise
         if not rows or not rows[0].get("solicitud_reversion"):
             raise HTTPException(status_code=422,
                 detail="No existe una solicitud de reversión activa para este registro.")
 
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+        row0 = rows[0]
 
         if body.aceptar:
             campo_mx = _get_nivel_maximo_contrato(contrato_id)
             u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
-            update = {
-                "bloqueado": False,
-                "solicitud_reversion": False,
-                campo_mx: "No Revisado",
-                u_k: None,
-                f_k: None,
-            }
+            update = sicoe_payload_desellar_con_acta_pre(
+                {
+                    "bloqueado": False,
+                    "solicitud_reversion": False,
+                    campo_mx: "No Revisado",
+                    u_k: None,
+                    f_k: None,
+                },
+                acta_rpo_id_actual=row0.get("acta_rpo_id"),
+                acta_rpo_id_pre_reversion_actual=row0.get("acta_rpo_id_pre_reversion"),
+            )
         else:
             update = {"solicitud_reversion": False}
 
@@ -42761,13 +43158,17 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
             return supabase.table("so_registros")\
                 .update(update).eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).execute().data
-        supabase_execute(_upd)
+        try:
+            supabase_execute(_upd)
+        except Exception as ex:
+            if "acta_rpo_id_pre_reversion" in str(ex).lower():
+                update.pop("acta_rpo_id_pre_reversion", None)
+                supabase_execute(_upd)
+            else:
+                raise
 
         if body.aceptar:
-            try:
-                _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
-            except Exception:
-                pass
+            # Conserva acta_rpo_id; no fuerza vigente. Elección al revalidar.
             comentario_data = {
                 "tipo":    "aceptar_reversion",
                 "mensaje": "Reversión aceptada.",
@@ -43492,7 +43893,14 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
 
             if estado_real == "Aprobado":
                 try:
-                    _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                    _aplicar_acta_rpo_en_validacion(
+                        contrato_id,
+                        rid,
+                        date.today(),
+                        eleccion=getattr(body, "acta_rpo_eleccion", None),
+                        current_user=current_user,
+                        modo_masivo=True,
+                    )
                 except Exception:
                     pass
 
@@ -43620,7 +44028,14 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
 
             if body.estado == "Aprobado":
                 try:
-                    _aplicar_acta_rpo_vigente_a_registro(contrato_id, reg_id, date.today())
+                    _aplicar_acta_rpo_en_validacion(
+                        contrato_id,
+                        reg_id,
+                        date.today(),
+                        eleccion=getattr(body, "acta_rpo_eleccion", None),
+                        current_user=current_user,
+                        modo_masivo=True,
+                    )
                 except Exception:
                     pass
 

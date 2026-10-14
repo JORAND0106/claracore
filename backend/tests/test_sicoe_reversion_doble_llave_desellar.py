@@ -90,7 +90,7 @@ def test_procesar_recuperacion_ambas_llaves_desella(monkeypatch):
     monkeypatch.setattr(m, "_get_nivel_maximo_contrato", lambda *_a, **_k: "nivel4_estado")
     monkeypatch.setattr(m, "_insertar_comentario", lambda *_a, **_k: {"id": 1})
     monkeypatch.setattr(m, "_push_notif_validacion_sicoe_destinatarios", lambda *_a, **_k: None)
-    monkeypatch.setattr(m, "_aplicar_acta_rpo_vigente_a_registro", lambda *_a, **_k: None)
+    monkeypatch.setattr(m, "_aplicar_acta_rpo_vigente_a_registro", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no debe reasignar acta en reversión")))
     monkeypatch.setattr(m, "_audit_user_contrato", lambda u, *_a, **_k: u)
     monkeypatch.setattr(m, "registrar_log", lambda *_a, **_k: None)
 
@@ -115,8 +115,9 @@ def test_procesar_recuperacion_ambas_llaves_desella(monkeypatch):
     monkeypatch.setattr(m, "supabase", MagicMock(**{"table.return_value": _Q()}))
     monkeypatch.setattr(m, "supabase_execute", lambda fn: fn())
 
+    row_con_acta = {**row, "acta_rpo_id": 101, "acta_rpo_id_pre_reversion": None}
     res = m._sicoe_reversion_doble_llave_procesar_registro(
-        3, 60924, 38, {"sub": 38, "id": 38}, _cd(), row=row
+        3, 60924, 38, {"sub": 38, "id": 38}, _cd(), row=row_con_acta
     )
     assert res["ok"] is True
     assert res["ejecutada"] is True
@@ -126,6 +127,8 @@ def test_procesar_recuperacion_ambas_llaves_desella(monkeypatch):
     assert updates[0]["nivel4_estado"] == "No Revisado"
     assert updates[0]["reversion_arm_n2_usuario_id"] is None
     assert updates[0]["reversion_arm_n3_usuario_id"] is None
+    assert updates[0]["acta_rpo_id_pre_reversion"] == 101
+    assert "acta_rpo_id" not in updates[0]
 
 
 def test_procesar_carrera_releer_y_desellar(monkeypatch):
@@ -155,10 +158,11 @@ def test_procesar_carrera_releer_y_desellar(monkeypatch):
     monkeypatch.setattr(m, "_get_nivel_maximo_contrato", lambda *_a, **_k: "nivel4_estado")
     monkeypatch.setattr(m, "_insertar_comentario", lambda *_a, **_k: {"id": 1})
     monkeypatch.setattr(m, "_push_notif_validacion_sicoe_destinatarios", lambda *_a, **_k: None)
-    monkeypatch.setattr(m, "_aplicar_acta_rpo_vigente_a_registro", lambda *_a, **_k: None)
+    monkeypatch.setattr(m, "_aplicar_acta_rpo_vigente_a_registro", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no debe reasignar acta en reversión")))
     monkeypatch.setattr(m, "_audit_user_contrato", lambda u, *_a, **_k: u)
     monkeypatch.setattr(m, "registrar_log", lambda *_a, **_k: None)
-    monkeypatch.setattr(m, "_sicoe_reversion_fetch_arms_row", lambda *_a, **_k: dict(row_after))
+    row_after_acta = {**row_after, "acta_rpo_id": 55, "acta_rpo_id_pre_reversion": None}
+    monkeypatch.setattr(m, "_sicoe_reversion_fetch_arms_row", lambda *_a, **_k: dict(row_after_acta))
 
     class _Q:
         def update(self, payload):
@@ -187,3 +191,4 @@ def test_procesar_carrera_releer_y_desellar(monkeypatch):
     assert updates[0] == {"reversion_arm_n3_usuario_id": 38}
     assert updates[1]["bloqueado"] is False
     assert updates[1]["reversion_arm_n2_usuario_id"] is None
+    assert updates[1]["acta_rpo_id_pre_reversion"] == 55

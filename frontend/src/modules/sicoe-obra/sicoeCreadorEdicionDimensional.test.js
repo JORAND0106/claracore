@@ -11,6 +11,7 @@ import {
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
   sicoePuedeEditarGraficoRegistro,
+  sicoePuedeEditarObservacionRegistro,
   sicoeDebeResetAlertaPorCambioCantidad,
 } from './sicoeCreadorEdicionDimensional.js'
 
@@ -217,6 +218,43 @@ describe('sicoeCreadorEdicionDimensional', () => {
         esCreador: false,
         puedeEditar: false,
         selladoMax: false,
+      }),
+      false,
+    )
+  })
+
+  it('Observación editable con Editar post-sello; Crear+creador solo hasta sellado', () => {
+    assert.equal(
+      sicoePuedeEditarObservacionRegistro({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: false,
+      }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeEditarObservacionRegistro({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: true,
+      }),
+      false,
+    )
+    assert.equal(
+      sicoePuedeEditarObservacionRegistro({
+        puedeCrear: false,
+        esCreador: false,
+        puedeEditar: true,
+        selladoMax: true,
+      }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeEditarCamposDimensionales({
+        puedeEditar: true,
+        selladoMax: true,
       }),
       false,
     )
