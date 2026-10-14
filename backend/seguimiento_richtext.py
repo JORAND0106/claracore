@@ -189,6 +189,11 @@ def looks_like_html(raw: Optional[str]) -> bool:
 
 class _ListNumberer(HTMLParser):
     """Inyecta numeración jerárquica 1. / 1.1. / 1.1.1. (xhtml2pdf no usa CSS counters).
+
+    Numerales: tabla de 2 columnas (marcador | texto) = sangría francesa fiable
+    en xhtml2pdf. TipTap emite ``<li><p>…</p></li>``: se aplana el ``<p>`` para
+    que número y texto queden en la misma línea.
+
     Aplica anchos de columna en % según plan (contenido + proporción editor).
     """
 
@@ -197,7 +202,8 @@ class _ListNumberer(HTMLParser):
         self.out: List[str] = []
         self._ol_stack: List[List[int]] = []
         self._ul_depth = 0
-        self._li_pending_marker: Optional[str] = None
+        # pila de ítems abiertos: {"kind": "ol"|"ul", "p_count": int}
+        self._li_stack: List[Dict[str, object]] = []
         self._table_plans = list(table_plans or [])
         self._table_idx = -1
         self._col_idx = 0
@@ -214,24 +220,49 @@ class _ListNumberer(HTMLParser):
         tag = tag.lower()
         if tag == "ol":
             self._ol_stack.append([0])
-            self.out.append('<ol style="margin:2pt 0 2pt 14pt;padding:0;list-style:none;">')
+            # Contenedor div (no <ol>): los ítems son tablas con sangría francesa.
+            self.out.append('<div class="tema-ol" style="margin:2pt 0;">')
             return
         if tag == "ul":
             self._ul_depth += 1
-            self.out.append('<ul style="margin:2pt 0 2pt 14pt;padding-left:14pt;">')
+            pad = 14 + max(0, self._ul_depth - 1) * 10
+            self.out.append(
+                f'<ul style="margin:2pt 0 2pt {pad}pt;padding-left:12pt;'
+                f'line-height:1.35;">'
+            )
             return
         if tag == "li":
             if self._ol_stack:
                 self._ol_stack[-1][0] += 1
                 nums = [str(level[0]) for level in self._ol_stack]
-                self._li_pending_marker = ".".join(nums) + "."
-            else:
-                self._li_pending_marker = None
-            self.out.append('<li style="margin:1pt 0;">')
-            if self._li_pending_marker:
+                marker = ".".join(nums) + "."
+                depth = len(self._ol_stack)
+                left_pad = max(0, depth - 1) * 12
+                # Ancho del marcador ~ proporcional a caracteres (Helvetica 11pt).
+                marker_w = max(20, 6 * len(marker) + 6)
                 self.out.append(
-                    f'<span style="font-weight:700;">{html.escape(self._li_pending_marker)} </span>'
+                    f'<table class="tema-ol-item" width="100%" cellspacing="0" '
+                    f'cellpadding="0" style="margin:1.5pt 0;border-collapse:collapse;">'
+                    f"<tr>"
+                    f'<td style="width:{marker_w}pt;vertical-align:top;font-weight:700;'
+                    f"padding:0 4pt 0 {left_pad}pt;line-height:1.35;"
+                    f'white-space:nowrap;">{html.escape(marker)}</td>'
+                    f'<td style="vertical-align:top;padding:0;line-height:1.35;">'
                 )
+                self._li_stack.append({"kind": "ol", "p_count": 0})
+            else:
+                self.out.append('<li style="margin:1.5pt 0;line-height:1.35;">')
+                self._li_stack.append({"kind": "ul", "p_count": 0})
+            return
+        if tag == "p":
+            # TipTap: <li><p>texto</p></li> — aplanar para no partir número/viñeta.
+            if self._li_stack:
+                ctx = self._li_stack[-1]
+                if int(ctx.get("p_count") or 0) > 0:
+                    self.out.append("<br/>")
+                ctx["p_count"] = int(ctx.get("p_count") or 0) + 1
+                return
+            self.out.append('<p style="margin:0 0 4pt;line-height:1.35;">')
             return
         if tag == "br":
             self.out.append("<br/>")
@@ -247,6 +278,7 @@ class _ListNumberer(HTMLParser):
                 if k not in ("border", "cellpadding", "cellspacing", "style", "width")
             ]
             # xhtml2pdf: width="100%" como atributo HTML (no solo CSS).
+            # Tablas ≥9pt (mínimo NTC); el cuerpo del tema va a 11pt en el wrapper.
             style = "border-collapse:collapse;font-size:9pt;margin:4pt 0;"
             self.out.append(
                 f'<table border="1" cellpadding="4" cellspacing="0" width="100%"'
@@ -327,15 +359,26 @@ class _ListNumberer(HTMLParser):
         if tag == "ol":
             if self._ol_stack:
                 self._ol_stack.pop()
-            self.out.append("</ol>")
+            self.out.append("</div>")
             return
         if tag == "ul":
             self._ul_depth = max(0, self._ul_depth - 1)
             self.out.append("</ul>")
             return
         if tag == "li":
-            self.out.append("</li>")
-            self._li_pending_marker = None
+            if self._li_stack:
+                ctx = self._li_stack.pop()
+                if ctx.get("kind") == "ol":
+                    self.out.append("</td></tr></table>")
+                else:
+                    self.out.append("</li>")
+            else:
+                self.out.append("</li>")
+            return
+        if tag == "p":
+            if self._li_stack:
+                return  # aplanado dentro de li
+            self.out.append("</p>")
             return
         if tag == "table":
             self.out.append("</table>")
@@ -358,7 +401,9 @@ class _ListNumberer(HTMLParser):
 def render_tema_html_for_pdf(raw: Optional[str]) -> str:
     """
     HTML seguro para xhtml2pdf: negrita/cursiva/subrayado + listas + tablas.
-    Las ol anidadas llevan marcadores explícitos 1. / 1.1. / 1.1.1.
+    Las ol anidadas llevan marcadores explícitos 1. / 1.1. / 1.1.1. con
+    sangría francesa (número y texto en la misma línea).
+    Cuerpo ≥11pt; tablas ≥9pt. Nunca se reduce la letra para que quepa.
     Tablas: anchos vía atributo HTML width="N%" (xhtml2pdf ignora style width:%),
     calculados por contenido + suave proporción del editor.
     """
@@ -366,7 +411,7 @@ def render_tema_html_for_pdf(raw: Optional[str]) -> str:
 
     clean = sanitize_tema_html(raw)
     if not clean:
-        return "<div style='color:#94a3b8;'>—</div>"
+        return "<div style='color:#94a3b8;font-size:11pt;'>—</div>"
     plans = plan_table_column_pcts(clean)
     parser = _ListNumberer(table_plans=plans)
     try:
@@ -375,7 +420,7 @@ def render_tema_html_for_pdf(raw: Optional[str]) -> str:
     except Exception:
         body = f"<div style='white-space:pre-wrap;'>{html.escape(html_to_plain_text(raw))}</div>"
     return (
-        "<div style='font-size:9pt;' class='tema-rich'>"
+        "<div style='font-size:11pt;line-height:1.35;' class='tema-rich'>"
         f"{body}"
         "</div>"
     )

@@ -150,7 +150,7 @@ def test_pdf_interna_no_muestra_bloque_entidad():
     )
     text = _pdf_text(pdf)
     compact = " ".join(text.split())
-    assert "Tema 1: Drenaje norte" in compact or ("Tema 1" in compact and "Drenaje norte" in compact)
+    assert "Tema 1. Drenaje norte" in compact or ("Tema 1" in compact and "Drenaje norte" in compact)
     assert "TEMAS A TRATAR EN PRESENTE ACTA" in compact
     # Interna no etiqueta bloque Entidad en el encabezado de tres recuadros
     assert "Entidad" not in text.split("Objeto")[0] or "Logo entidad" not in text
