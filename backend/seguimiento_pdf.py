@@ -34,10 +34,15 @@ _HDR_META_FS = "6pt"
 _HDR_PAD = "1pt 2pt"
 _HDR_PAD_CELL = "2pt"
 # Tabla de asistentes: filas compactas y bordes tenues.
+# Mínimo NTC para tablas: 9pt (antes 8pt).
 _ASIS_PAD = "2pt 4pt"
 _ASIS_PAD_EMPTY = "3pt 4pt"
-_ASIS_FS = "8pt"
+_ASIS_FS = "9pt"
 _ASIS_BORDER = f"0.3pt solid {_BORDE_SUAVE}"
+
+# Tipografía de cuerpo / tablas (misma norma que Gestión de obra).
+_FS_BODY = "11pt"
+_FS_TABLE = "9pt"
 
 # Esquemas/gráficos de ideas: caja fija (xhtml2pdf ignora max-height).
 _IDEA_IMG_BOX_W_PT = 240.0
@@ -45,7 +50,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-10-13.1-gestion-obra-ntc"
+PDF_ACTA_TEMPLATE_VERSION = "2026-10-14.1-temas-ntc"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -500,6 +505,10 @@ def _section(title: str, body: str, *, bordered: bool = True) -> str:
     marco) y xhtml2pdf sí puede partir el contenido entre páginas.
     Tampoco poner ``page-break-inside:avoid`` dentro del cuerpo (p. ej. firmas
     o esquemas): dentro de celdas provoca KeepTogether.draw / Splitting.
+
+    Nota: secciones con cuerpo muy largo (temas, gestión de obra) NO deben usar
+    esta celda única — xhtml2pdf escala la tipografía. Ver ``_temas_section_html``
+    y ``_gestion_obra_section_html``.
     """
     border = (
         f"border:1pt solid {_BORDE};"
@@ -515,8 +524,9 @@ def _section(title: str, body: str, *, bordered: bool = True) -> str:
         f'<table class="sec" width="100%" cellspacing="0" cellpadding="0" '
         f'style="{border}margin:6pt 0 0;border-collapse:collapse;">'
         f'<tr><td style="background:{_BG_H};{head_border}'
-        f'padding:4pt 6pt;font-size:9pt;font-weight:700;color:{_FG_H};">{_esc(title)}</td></tr>'
-        f'<tr><td style="padding:6pt;font-size:9pt;">{body}</td></tr>'
+        f'padding:4pt 6pt;font-size:{_FS_TABLE};font-weight:700;color:{_FG_H};">'
+        f'{_esc(title)}</td></tr>'
+        f'<tr><td style="padding:6pt;font-size:{_FS_BODY};">{body}</td></tr>'
         f"</table>"
     )
 
@@ -607,6 +617,113 @@ def _gestion_obra_section_html(acta: dict, *, bordered: bool = True) -> str:
     )
 
 
+def _ideas_body_html(ideas: List[dict]) -> str:
+    """Cuerpo HTML de temas (sin marco de sección). Jerarquía NTC 1486 adaptada."""
+    ideas_sorted = sorted(
+        list(ideas or []),
+        key=lambda x: (
+            int(x.get("orden") if x.get("orden") is not None else 10**9),
+            int(x.get("id") or 0),
+        ),
+    )
+    ideas_html = ""
+    tema_num = 0
+    for idea in ideas_sorted:
+        clave = str(idea.get("clave_grabacion") or "").strip()
+        es_suelta = bool(re.match(r"^suelta-", clave, re.I))
+        titulo_tema = (idea.get("titulo") or "").strip()
+        if es_suelta:
+            if not titulo_tema:
+                titulo_tema = "Idea general"
+            label = (
+                f"Idea general: {_esc(titulo_tema)}"
+                if titulo_tema != "Idea general"
+                else "Idea general"
+            )
+        else:
+            tema_num += 1
+            if not titulo_tema:
+                titulo_tema = (
+                    _titulo_tema_fallback(idea.get("texto") or "")
+                    or f"Tema {tema_num}"
+                )
+            # NTC: "Tema N. Título" (punto, no dos puntos).
+            label = f"Tema {tema_num}. {_esc(titulo_tema)}"
+        quien = (idea.get("quien_dijo") or idea.get("interviniente") or "").strip()
+        quien_line = (
+            f"<div style='font-size:{_FS_BODY};color:#475569;margin:1pt 0 4pt;"
+            f"line-height:1.35;'>Interviniente: {_esc(quien)}</div>"
+            if quien
+            else ""
+        )
+        imgs_html = _idea_imagenes_html(idea.get("imagenes"))
+        # Título + interviniente juntos; page-break-after:avoid reduce títulos huérfanos.
+        ideas_html += (
+            f"<div class='pdf-idea' style='margin:0 0 10pt;'>"
+            f"<div style='font-size:{_FS_BODY};font-weight:700;line-height:1.35;"
+            f"margin:0 0 2pt;page-break-after:avoid;'>{label}</div>"
+            f"{quien_line}"
+            f"{_render_tema_texto_pdf(idea.get('texto') or '')}"
+            f"{imgs_html}"
+            f"</div>"
+        )
+    if not ideas_html:
+        return (
+            f"<div style='color:#94a3b8;font-size:{_FS_BODY};'>"
+            "Sin temas registrados.</div>"
+        )
+    return ideas_html
+
+
+def _temas_section_html(ideas: List[dict], *, bordered: bool = True) -> str:
+    """Sección Temas tratados fuera de una celda única.
+
+    Misma causa que Gestión de obra: xhtml2pdf, si mete un tema largo (p. ej.
+    ~38 numerales TipTap) en la celda de ``_section``, no parte el contenido y
+    lo *escala* (tipografía ~4 pt). El encabezado va en su propia tabla; el
+    cuerpo fluye como bloques hermanos y puede continuar de página.
+    """
+    ideas_sorted = sorted(
+        list(ideas or []),
+        key=lambda x: (
+            int(x.get("orden") if x.get("orden") is not None else 10**9),
+            int(x.get("id") or 0),
+        ),
+    )
+    n_ideas = len(ideas_sorted)
+    title = f"TEMAS TRATADOS EN PRESENTE ACTA ({n_ideas})"
+    border = (
+        f"border:1pt solid {_BORDE};"
+        if bordered
+        else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    )
+    head_border = (
+        f"border-bottom:1pt solid {_BORDE};"
+        if bordered
+        else f"border-bottom:0.6pt solid {_BORDE_SUAVE};"
+    )
+    body_border = (
+        f"border-left:1pt solid {_BORDE};border-right:1pt solid {_BORDE};"
+        f"border-bottom:1pt solid {_BORDE};"
+        if bordered
+        else ""
+    )
+    head = (
+        f'<table width="100%" cellspacing="0" cellpadding="0" '
+        f'style="{border}margin:6pt 0 0;border-collapse:collapse;">'
+        f'<tr><td style="background:{_BG_H};{head_border}'
+        f'padding:4pt 6pt;font-size:{_FS_TABLE};font-weight:700;color:{_FG_H};">'
+        f"{_esc(title)}</td></tr></table>"
+    )
+    body = _ideas_body_html(ideas)
+    frame = (
+        f"padding:6pt;{body_border}"
+        if body_border
+        else "padding:6pt 0;"
+    )
+    return f"{head}<div style=\"{frame}\">{body}</div>"
+
+
 def generar_pdf_acta(
     contrato: dict,
     acta: dict,
@@ -673,50 +790,12 @@ def generar_pdf_acta(
         f"</tr>{asis_rows}</table>"
     )
 
-    ideas_sorted = sorted(
-        list(ideas or []),
-        key=lambda x: (
-            int(x.get("orden") if x.get("orden") is not None else 10**9),
-            int(x.get("id") or 0),
-        ),
-    )
-    ideas_html = ""
-    tema_num = 0
-    for idea in ideas_sorted:
-        clave = str(idea.get("clave_grabacion") or "").strip()
-        es_suelta = bool(re.match(r"^suelta-", clave, re.I))
-        titulo_tema = (idea.get("titulo") or "").strip()
-        if es_suelta:
-            if not titulo_tema:
-                titulo_tema = "Idea general"
-            label = f"Idea general: {_esc(titulo_tema)}" if titulo_tema != "Idea general" else "Idea general"
-        else:
-            tema_num += 1
-            if not titulo_tema:
-                titulo_tema = _titulo_tema_fallback(idea.get("texto") or "") or f"Tema {tema_num}"
-            label = f"Tema {tema_num}: {_esc(titulo_tema)}"
-        quien = (idea.get("quien_dijo") or idea.get("interviniente") or "").strip()
-        quien_line = (
-            f"<div style='font-size:8pt;color:#475569;margin:1pt 0 3pt;'>"
-            f"Interviniente: {_esc(quien)}</div>"
-            if quien else ""
-        )
-        imgs_html = _idea_imagenes_html(idea.get("imagenes"))
-        ideas_html += (
-            f"<div class='pdf-idea' style='margin:0 0 8pt;padding-bottom:6pt;"
-            f"border-bottom:0.4pt solid {_BORDE_SUAVE};'>"
-            f"<div style='font-size:9pt;font-weight:700;'>{label}</div>"
-            f"{quien_line}"
-            f"{_render_tema_texto_pdf(idea.get('texto') or '')}"
-            f"{imgs_html}"
-            f"</div>"
-        )
-    if not ideas_html:
-        ideas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin temas registrados.</div>"
-
     def _comp_table(rows_src: list, empty_msg: str) -> str:
         if not rows_src:
-            return f"<div style='color:#94a3b8;font-size:9pt;'>{_esc(empty_msg)}</div>"
+            return (
+                f"<div style='color:#94a3b8;font-size:{_FS_BODY};'>"
+                f"{_esc(empty_msg)}</div>"
+            )
         rows = "".join(
             f"<tr>"
             f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};'>{_esc(c.get('titulo'))}</td>"
@@ -728,7 +807,8 @@ def generar_pdf_acta(
             for c in rows_src
         )
         return (
-            f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse:collapse;font-size:8pt;'>"
+            f"<table width='100%' cellspacing='0' cellpadding='0' "
+            f"style='border-collapse:collapse;font-size:{_FS_TABLE};'>"
             f"<tr style='background:{_BG_H};'>"
             f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Compromiso</th>"
             f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;color:{_FG_H};'>Asignado</th>"
@@ -742,12 +822,16 @@ def generar_pdf_acta(
         tit = ap.get("titulo") or "Apartado"
         apartados_html += (
             f"<div style='margin:0 0 8pt;'>"
-            f"<div style='font-size:9pt;font-weight:700;'>{_esc(tit)}</div>"
-            f"<div style='font-size:9pt;'>{_nl2br(ap.get('contenido') or '')}</div>"
+            f"<div style='font-size:{_FS_BODY};font-weight:700;'>{_esc(tit)}</div>"
+            f"<div style='font-size:{_FS_BODY};line-height:1.35;'>"
+            f"{_nl2br(ap.get('contenido') or '')}</div>"
             f"</div>"
         )
     if not apartados_html:
-        apartados_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin apartados adicionales.</div>"
+        apartados_html = (
+            f"<div style='color:#94a3b8;font-size:{_FS_BODY};'>"
+            "Sin apartados adicionales.</div>"
+        )
 
     # Firmas en 2 columnas: Nombre | Cargo | Empresa | Email | Firma.
     # Una sola tabla 2-col con todas las firmas no pagina bien en xhtml2pdf
@@ -783,12 +867,14 @@ def generar_pdf_acta(
         ])
         firma_blocks.append(
             f'<div class="pdf-firma" style="margin:0 0 22pt;padding:4pt 6pt;">'
-            f'<div style="font-size:8pt;line-height:1.35;">{meta}</div>'
+            f'<div style="font-size:{_FS_TABLE};line-height:1.35;">{meta}</div>'
             f"{firma_img}</div>"
         )
 
     if not firma_blocks:
-        firmas_html = "<div style='color:#94a3b8;font-size:9pt;'>Sin firmantes.</div>"
+        firmas_html = (
+            f"<div style='color:#94a3b8;font-size:{_FS_BODY};'>Sin firmantes.</div>"
+        )
     else:
         pairs = []
         for i in range(0, len(firma_blocks), 2):
@@ -813,15 +899,17 @@ def generar_pdf_acta(
     proxima_html = (
         " &nbsp;·&nbsp; ".join(prox_parts)
         if prox_parts
-        else "<span style='color:#94a3b8;'>Sin información reservada para la próxima reunión.</span>"
+        else (
+            f"<span style='color:#94a3b8;font-size:{_FS_BODY};'>"
+            "Sin información reservada para la próxima reunión.</span>"
+        )
     )
 
-    n_ideas = len(ideas_sorted)
     doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
 @page {{ size: letter portrait; margin: 12mm 10mm; }}
-body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: 9pt; }}
+body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: {_FS_BODY}; }}
 .pdf-idea {{ page-break-inside: auto; }}
 .go-table thead {{ display: table-header-group; }}
 table thead {{ display: table-header-group; }}
@@ -840,7 +928,7 @@ table thead {{ display: table-header-group; }}
     bordered=sec_border,
 )}
 {_gestion_obra_section_html(acta, bordered=sec_border)}
-{_section(f"TEMAS TRATADOS EN PRESENTE ACTA ({n_ideas})", ideas_html, bordered=sec_border)}
+{_temas_section_html(ideas, bordered=sec_border)}
 {_section(
     "Compromisos generados",
     _comp_table(compromisos, "Sin compromisos generados en esta acta."),

@@ -41,7 +41,10 @@ def test_render_pdf_hierarchical_numbers():
     assert "1.1." in out
     assert "1.1.1." in out
     assert "2." in out
-    assert "<strong>" not in out or True  # marks optional
+    # Sangría francesa: marcador en celda de tabla, no <ol>/<li> TipTap.
+    assert "tema-ol-item" in out
+    assert ">1.</td>" in out
+    assert "font-size:11pt" in out
     # marks preserved
     bold = render_tema_html_for_pdf("<p><strong>Negrita</strong> <em>cursiva</em> <u>sub</u></p>")
     assert "<strong>Negrita</strong>" in bold
@@ -53,6 +56,8 @@ def test_render_pdf_bullets():
     out = render_tema_html_for_pdf("<ul><li><p>A</p></li><li><p>B</p></li></ul>")
     assert "<ul" in out
     assert "A" in out and "B" in out
+    # <p> dentro de <li> se aplana (viñeta y texto en flujo continuo).
+    assert "<li><p>" not in out
 
 
 def test_sanitize_preserves_table_and_colwidth():
