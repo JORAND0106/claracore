@@ -427,6 +427,171 @@ def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
     assert any("1, 2" in v or "1,2" in v for v in flat)
 
 
+def test_fotos_y_graficos_siguen_el_orden_de_la_tabla():
+    """Varios tramos y medios compartidos: la secuencia no sigue el número de registro.
+
+    La tabla pone primero el tramo de menor abscisa. La foto o el gráfico
+    compartido queda en el primero de sus registros dentro de ese orden.
+    La vista HTML y el Excel muestran la misma secuencia.
+    """
+    inf = _import_informes_with_stubs()
+    # Llegan como la consulta: por numero_registro. El orden de la tabla es otro.
+    registros = [
+        {
+            "numero_registro": 10,
+            "tramo": "5",
+            "abs_inicio": 12000.0,
+            "abs_final": 12010.0,
+            "cantidad_total": 4.0,
+            "foto_url": "https://cdn/a.jpg",
+            "foto_numero": 1,
+            "grafico_url": "https://cdn/ga.png",
+            "grafico_numero": 1,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+            "observacion": "tramo 5 alto",
+        },
+        {
+            "numero_registro": 20,
+            "tramo": "7",
+            "abs_inicio": 11200.0,
+            "abs_final": 11250.0,
+            "cantidad_total": 10.0,
+            "foto_url": "https://cdn/shared.jpg",
+            "foto_numero": 9,
+            "grafico_url": "https://cdn/shared-g.png",
+            "grafico_numero": 9,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+            "observacion": "tramo 7 alto",
+        },
+        {
+            "numero_registro": 30,
+            "tramo": "7",
+            "abs_inicio": 11090.0,
+            "abs_final": 11100.0,
+            "cantidad_total": 8.0,
+            "foto_url": "https://cdn/b.jpg",
+            "foto_numero": 2,
+            "grafico_url": "https://cdn/shared-g.png",
+            "grafico_numero": 9,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+            "observacion": "tramo 7 bajo",
+        },
+        {
+            "numero_registro": 40,
+            "tramo": "5",
+            "abs_inicio": 12000.0,
+            "abs_final": 12005.0,
+            "cantidad_total": 2.0,
+            "foto_url": "https://cdn/shared.jpg",
+            "foto_numero": 9,
+            "grafico_url": "https://cdn/gb.png",
+            "grafico_numero": 2,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+            "observacion": "tramo 5 bajo",
+        },
+    ]
+    plan_nums = [
+        p["reg"]["numero_registro"]
+        for p in inf._memoria_plan_filas_detalle(registros)
+        if p["kind"] == "reg"
+    ]
+    assert plan_nums == [30, 20, 40, 10]
+
+    fotos = inf._dedupe_fotos_memoria(registros)
+    graficos = inf._dedupe_graficos_memoria(registros)
+    assert [f["foto_url"] for f in fotos] == [
+        "https://cdn/b.jpg",
+        "https://cdn/shared.jpg",
+        "https://cdn/a.jpg",
+    ]
+    assert fotos[1]["numeros_registro"] == [20, 40]
+    assert [g["grafico_url"] for g in graficos] == [
+        "https://cdn/shared-g.png",
+        "https://cdn/gb.png",
+        "https://cdn/ga.png",
+    ]
+    assert graficos[0]["numeros_registro"] == [30, 20]
+
+    contrato = {"numero": "ICCU-CTO-1614-2025", "logo_contratista": None}
+    sub = {"razon_social": "Sub SA", "nombre_contacto": "Ana"}
+    corte = {"consecutivo": 1, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-31"}
+    item_info = inf._item_info_desde_registros(registros, "1.1")
+    html = inf._html_memoria_item_body(
+        contrato,
+        sub,
+        corte,
+        item_info,
+        registros,
+        "Usuario",
+        "Cargo",
+        conc_meta={
+            "titulo": "MEMORIA MENSUAL",
+            "codigo": "CC-MES-002",
+            "cells": [("CONTRATO", "ICCU-CTO-1614-2025"), ("ACTA RPO", "1")],
+        },
+        pie_fotos_contexto="Acta RPO 1",
+    )
+    assert html.index("Foto 2 — Reg. 30") < html.index("Foto 9 — Reg. 20, 40")
+    assert html.index("Foto 9 — Reg. 20, 40") < html.index("Foto 1 — Reg. 10")
+    assert html.index("Gráfico 9 — Reg. 30, 20") < html.index("Gráfico 2 — Reg. 40")
+    assert html.index("Gráfico 2 — Reg. 40") < html.index("Gráfico 1 — Reg. 10")
+    assert html.count("https://cdn/shared.jpg") == 1
+    assert html.count("https://cdn/shared-g.png") == 1
+    assert "height:6.85cm" in html
+    assert "mem002-foto-grid" in html
+    # La tabla de detalle no cambia de orden: tramo 7 (abs menor) antes que tramo 5.
+    assert html.index("Total tramo 7") < html.index("Total tramo 5")
+    assert html.index(">30<") < html.index(">20<")
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    inf._fill_memoria_excel_ws(
+        ws,
+        contrato,
+        sub,
+        corte,
+        item_info,
+        registros,
+        {},
+        conc_meta={"codigo": "CC-MES-002"},
+        pie_fotos_contexto="Acta RPO 1",
+    )
+    urls = []
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=3):
+        val = row[2].value
+        if isinstance(val, str) and val.startswith("https://cdn/"):
+            urls.append(val)
+    assert urls == [
+        "https://cdn/b.jpg",
+        "https://cdn/shared.jpg",
+        "https://cdn/a.jpg",
+        "https://cdn/shared-g.png",
+        "https://cdn/gb.png",
+        "https://cdn/ga.png",
+    ]
+    regs_col = []
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=1):
+        val = row[0].value
+        if isinstance(val, str) and val[:1].isdigit():
+            regs_col.append(val)
+    assert "20, 40" in regs_col
+    assert "30, 20" in regs_col
+
+
 def test_lista_graficos_desde_historial():
     inf = _import_informes_with_stubs()
     r = {
