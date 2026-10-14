@@ -13002,11 +13002,28 @@ def _memoria_regs_txt(nums: List[Any]) -> str:
     return ", ".join(parts)
 
 
+def _memoria_registros_en_orden_detalle(registros: Optional[List[dict]]) -> List[dict]:
+    """Filas de registro de la tabla de detalle, sin las filas de subtotal.
+
+    Mismo criterio que ``_memoria_plan_filas_detalle``: tramo según su abscisa
+    mínima y, dentro del tramo, abscisa inicial, abscisa final y número.
+    """
+    return [
+        p["reg"]
+        for p in _memoria_plan_filas_detalle(registros)
+        if p.get("kind") == "reg" and isinstance(p.get("reg"), dict)
+    ]
+
+
 def _dedupe_fotos_memoria(registros: List[dict]) -> List[Dict[str, Any]]:
-    """Una foto por URL única; orden = primer registro; pie con todos los regs asociados."""
+    """Una foto por URL única, en el orden de la tabla de detalle.
+
+    La foto compartida se ubica en el primero de sus registros según ese
+    orden. El pie lista todos los números asociados, en el mismo recorrido.
+    """
     order: List[str] = []
     by_key: Dict[str, Dict[str, Any]] = {}
-    for r in registros:
+    for r in _memoria_registros_en_orden_detalle(registros):
         url = _memoria_norm_media_url(r.get("foto_url"))
         if not url:
             continue
@@ -13032,10 +13049,14 @@ def _dedupe_fotos_memoria(registros: List[dict]) -> List[Dict[str, Any]]:
 
 
 def _dedupe_graficos_memoria(registros: List[dict]) -> List[Dict[str, Any]]:
-    """Un gráfico por URL única; orden = primera aparición; pie con todos los regs."""
+    """Un gráfico por URL única, en el orden de la tabla de detalle.
+
+    El gráfico compartido se ubica en el primero de sus registros según ese
+    orden. Dentro de un mismo registro se conserva el orden del historial.
+    """
     order: List[str] = []
     by_key: Dict[str, Dict[str, Any]] = {}
-    for r in registros:
+    for r in _memoria_registros_en_orden_detalle(registros):
         for g in _lista_graficos_memoria_registro(r):
             url = _memoria_norm_media_url(g.get("grafico_url"))
             if not url:
