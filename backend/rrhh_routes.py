@@ -471,6 +471,65 @@ def route_list_trabajadores(
     return {"items": items, "total": total}
 
 
+@router.get("/{contrato_id}/informes/estado-documental")
+def route_informe_estado_documental(
+    contrato_id: int,
+    filtro: str = Query("todos", description="todos | aprobado | sin_aprobar"),
+    formato: str = Query("xlsx", description="xlsx | pdf"),
+    current_user=Depends(get_current_user),
+):
+    """
+    Informe matriz «Estado documental de colaboradores» (Excel o PDF).
+    Requiere permiso Exportar de RRHH (Desarrollador tiene acceso pleno).
+    """
+    from rrhh_estado_documental_informe import (
+        build_estado_documental_matrix,
+        build_estado_documental_pdf,
+        build_estado_documental_xlsx,
+    )
+
+    _require_contract_access(current_user, contrato_id)
+    # Desarrollador tiene acceso pleno vía tiene_permiso_rrhh / require_permiso_rrhh.
+    require_permiso_rrhh(current_user, "exportar", contrato_id)
+
+    fmt = (formato or "xlsx").strip().lower()
+    if fmt not in ("xlsx", "pdf"):
+        raise HTTPException(status_code=400, detail="Formato inválido. Use xlsx o pdf.")
+    try:
+        matrix = build_estado_documental_matrix(
+            supabase, contrato_id, filtro=filtro,
+        )
+        if fmt == "pdf":
+            data, fname = build_estado_documental_pdf(matrix)
+            media = "application/pdf"
+        else:
+            data, fname = build_estado_documental_xlsx(matrix)
+            media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.getLogger("claracore.rrhh").exception("informe estado documental: %s", exc)
+        raise HTTPException(status_code=500, detail="No se pudo generar el informe.") from exc
+
+    try:
+        registrar_log(
+            current_user,
+            "EXPORTAR",
+            "RRHH",
+            "informe_estado_documental",
+            str(contrato_id),
+            {"filtro": filtro, "formato": fmt, "total": matrix.get("total")},
+        )
+    except Exception:
+        pass
+
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/{contrato_id}/trabajadores/por-documento")
 def route_por_documento_alias(
     contrato_id: int,

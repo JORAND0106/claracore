@@ -25,6 +25,10 @@ import { accesoRrhh } from './rrhhPermisos'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 import { pastelForEmpresa } from './rrhhTarjetaStyles'
 import CumpleanosFestivoModal, { CumpleanosMesButton } from './CumpleanosFestivoModal'
+import EstadoDocumentalInformeModal, {
+  EstadoDocumentalInformeButton,
+} from './EstadoDocumentalInformeModal'
+import { ESTADO_DOCUMENTAL_CODIGO } from './estadoDocumentalInformeOptions.js'
 
 function EmpresaLogoPlaceholder({ accent = '#4A7C94', size = 44 }) {
   return (
@@ -54,6 +58,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const [grupos, setGrupos] = useState([])
   const [cumpleanosMes, setCumpleanosMes] = useState({ mes: null, items: [] })
   const [showCumpleanos, setShowCumpleanos] = useState(false)
+  const [showInformeDocumental, setShowInformeDocumental] = useState(false)
+  const [busyInformeDocumental, setBusyInformeDocumental] = useState(false)
   const [empresaSel, setEmpresaSel] = useState(null)
   const [page, setPage] = useState(0)
   const [total, setTotal] = useState(0)
@@ -461,6 +467,14 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {seccionModulo === 'documentacion' && permisos.exportar && (
+            <EstadoDocumentalInformeButton
+              onClick={() => setShowInformeDocumental(true)}
+              disabled={busyInformeDocumental}
+              tTok={tTok}
+              S={S}
+            />
+          )}
           {seccionModulo === 'documentacion' && !empresaSel && (
             <CumpleanosMesButton
               count={(cumpleanosMes?.items || []).length}
@@ -944,6 +958,32 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         theme={theme}
         tTok={tTok}
         flash={flash}
+      />
+
+      <EstadoDocumentalInformeModal
+        open={showInformeDocumental}
+        theme={theme}
+        tTok={tTok}
+        procesando={busyInformeDocumental}
+        onCancel={() => !busyInformeDocumental && setShowInformeDocumental(false)}
+        onConfirm={async ({ filtro: fInforme, formato }) => {
+          if (!api?.estadoDocumentalInformeUrl || !api?.downloadBlob) return
+          setBusyInformeDocumental(true)
+          try {
+            const ext = formato === 'pdf' ? 'pdf' : 'xlsx'
+            const fname = `${ESTADO_DOCUMENTAL_CODIGO}_estado_documental_${fInforme || 'todos'}.${ext}`
+            await api.downloadBlob(
+              api.estadoDocumentalInformeUrl({ filtro: fInforme, formato }),
+              fname,
+            )
+            setShowInformeDocumental(false)
+            flash('ok', 'Informe de estado documental generado.')
+          } catch (e) {
+            flash('error', e?.message || 'No se pudo generar el informe.')
+          } finally {
+            setBusyInformeDocumental(false)
+          }
+        }}
       />
     </div>
   )

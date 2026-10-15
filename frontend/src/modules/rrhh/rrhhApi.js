@@ -69,6 +69,15 @@ export function createRrhhApi(contratoId, token) {
     },
     resumenEmpresas: () => apiJson(`${base}/trabajadores/resumen-empresas`, { token }),
     cumpleanosMesPdfUrl: () => `${API_BASE}${base}/trabajadores/cumpleanos-mes/pdf`,
+    /** Informe matriz estado documental (filtro: todos|aprobado|sin_aprobar; formato: xlsx|pdf). */
+    estadoDocumentalInformeUrl: ({ filtro = 'todos', formato = 'xlsx' } = {}) => {
+      const qs = new URLSearchParams({
+        filtro: String(filtro || 'todos'),
+        formato: String(formato || 'xlsx'),
+      })
+      return `${API_BASE}${base}/informes/estado-documental?${qs}`
+    },
+
     nominaParams: (anio) => {
       const qs = anio != null ? `?anio=${encodeURIComponent(anio)}` : ''
       return apiJson(`${base}/nomina-params${qs}`, { token })
