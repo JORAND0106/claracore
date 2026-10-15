@@ -512,10 +512,11 @@ def _build_portada_html(
     rows = ""
     for item in checklist:
         estado = str(item.get("estado") or "").upper()
-        if estado == "VERIFICADO":
+        # ADJUNTO (y legado VERIFICADO): documento cargado en el expediente
+        if estado in ("ADJUNTO", "VERIFICADO"):
             estado_html = (
                 "<span style='color:#166534;font-weight:700;'>"
-                "<span style='font-size:9pt;'>✓</span> VERIFICADO</span>"
+                "<span style='font-size:9pt;'>✓</span> ADJUNTO</span>"
             )
         elif estado == "NO ADJUNTO":
             estado_html = (
@@ -659,24 +660,29 @@ def _estado_documento_checklist(
     *,
     aplica: bool,
     adjunto: bool,
-    auditoria_ok: Optional[bool],
+    auditoria_ok: Optional[bool] = None,
     opcional: bool = False,
 ) -> str:
     """
-    NO APLICA | NO ADJUNTO | VERIFICADO
-    VERIFICADO: aplica, está cargado y la auditoría no falló
-    (ok=True, o aún no ejecutada: ok is None — la aprobación real exige ok=True).
-    Opcional sin adjunto → NO APLICA (no cuenta como faltante).
+    ADJUNTO | NO ADJUNTO | NO APLICA
+
+    El estado depende únicamente de si el documento está cargado en el
+    expediente. No usa auditoría, hallazgos ni aprobación.
+
+    - ADJUNTO: documento cargado (obligatorio u opcional).
+    - NO ADJUNTO: obligatorio aplicable sin cargar.
+    - NO APLICA: opcional sin cargar, o tipo que no aplica al colaborador.
+
+    `auditoria_ok` se conserva en la firma por compatibilidad y se ignora.
     """
+    del auditoria_ok  # no influye en la tabla «Documentación adjunta»
     if opcional and not adjunto:
         return "NO APLICA"
     if not aplica:
         return "NO APLICA"
     if not adjunto:
         return "NO ADJUNTO"
-    if auditoria_ok is False:
-        return "NO ADJUNTO"
-    return "VERIFICADO"
+    return "ADJUNTO"
 
 
 def _custom_tipos_catalogo(sb, contrato_id: int) -> List[Tuple[str, str, str]]:
@@ -702,29 +708,49 @@ def _custom_tipos_catalogo(sb, contrato_id: int) -> List[Tuple[str, str, str]]:
     return out
 
 
+def _tiene_contrato_laboral_vigente(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+) -> bool:
+    """True si hay contrato laboral generado o PDF cargado vigente."""
+    if sb is None or not contrato_id or not trabajador_id:
+        return False
+    return bool(_contrato_laboral_vigente_meta(sb, contrato_id, trabajador_id))
+
+
 def _checklist_items(
     trab: dict,
     docs: List[dict],
     *,
     sb=None,
     contrato_id: Optional[int] = None,
+    tiene_contrato: Optional[bool] = None,
 ) -> List[dict]:
     """
     Lista completa de documentos contemplados (siempre), con estado individual:
-    NO ADJUNTO | VERIFICADO | NO APLICA.
-    No depende de que el colaborador esté Aprobado.
+    ADJUNTO | NO ADJUNTO | NO APLICA.
+
+    El estado refleja solo presencia en el expediente (docs vigentes + contrato
+    laboral). No depende de auditoría ni de que el colaborador esté Aprobado.
     """
     vigentes = {
-        (d.get("categoria"), d.get("tipo"))
+        (str(d.get("categoria") or "").strip().lower(), str(d.get("tipo") or "").strip().lower())
         for d in docs
         if d.get("vigente") and not d.get("eliminado_en")
+        and d.get("categoria") and d.get("tipo")
     }
-    # Tras consolidación los blobs se eliminan; si hay PDF consolidado y auditoría OK,
-    # los tipos que constaban en la auditoría/checklist previo se tratan como adjuntos.
-    auditoria_ok = trab.get("doc_auditoria_ok")
-    if trab.get("doc_consolidado_blob_path") and auditoria_ok and not vigentes:
-        # No inventar adjuntos: sin vigentes reales → NO ADJUNTO salvo NO APLICA
-        pass
+
+    tid = 0
+    try:
+        tid = int(trab.get("id") or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    cid = int(contrato_id or 0) or 0
+    if tiene_contrato is None:
+        tiene_contrato = _tiene_contrato_laboral_vigente(sb, cid, tid)
+    if tiene_contrato:
+        vigentes.add(("contrato_laboral", "contrato_laboral"))
 
     items: List[dict] = []
     from rrhh_docs_obligatoriedad import es_doc_opcional
@@ -738,19 +764,27 @@ def _checklist_items(
     seen: set = set()
 
     def add_item(cat: str, tipo: str, label: str) -> None:
-        key = (cat, tipo)
-        if tipo == "otro" or key in seen:
+        cat_n = (cat or "").strip().lower()
+        tipo_n = (tipo or "").strip().lower()
+        key = (cat_n, tipo_n)
+        if tipo_n == "otro" or key in seen:
             return
         seen.add(key)
-        aplica = _doc_aplica_al_colaborador(trab, cat, tipo)
+        aplica = _doc_aplica_al_colaborador(trab, cat_n, tipo_n)
         adjunto = key in vigentes
         estado = _estado_documento_checklist(
             aplica=aplica,
             adjunto=adjunto,
-            auditoria_ok=auditoria_ok if isinstance(auditoria_ok, bool) else None,
-            opcional=es_doc_opcional(cat, tipo),
+            opcional=es_doc_opcional(cat_n, tipo_n),
         )
-        items.append({"label": label, "estado": estado, "categoria": cat, "tipo": tipo})
+        items.append({
+            "label": label,
+            "estado": estado,
+            "categoria": cat_n,
+            "tipo": tipo_n,
+        })
+
+    add_item("contrato_laboral", "contrato_laboral", "Contrato laboral")
 
     for cat, tipos in (
         ("soporte", DOC_TIPOS_SOPORTE),
@@ -761,14 +795,14 @@ def _checklist_items(
         for tipo, label in tipos:
             add_item(cat, tipo, label)
 
-    for cat, tipo, label in _custom_tipos_catalogo(sb, int(contrato_id or 0) or 0):
+    for cat, tipo, label in _custom_tipos_catalogo(sb, cid):
         add_item(cat, tipo, label)
 
     for d in docs:
-        if not d.get("vigente"):
+        if not d.get("vigente") or d.get("eliminado_en"):
             continue
-        t = d.get("tipo") or ""
-        cat = d.get("categoria") or "soporte"
+        t = str(d.get("tipo") or "").strip().lower()
+        cat = str(d.get("categoria") or "soporte").strip().lower()
         if t.startswith("ext_") or d.get("tipo_otro_texto"):
             label = d.get("tipo_otro_texto") or DOC_TIPO_LABEL.get(t) or t
             add_item(cat, t, label)
