@@ -89,7 +89,10 @@ def slug_tipo_documento(label: str) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Hora de Colombia (America/Bogota)."""
+    from rrhh_timezone import now_iso_bogota
+
+    return now_iso_bogota()
 
 
 def _uid(current_user) -> Optional[int]:
