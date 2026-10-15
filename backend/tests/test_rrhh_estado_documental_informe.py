@@ -38,10 +38,10 @@ def test_slug_tipo_otro():
 
 def test_filtrar_trabajadores_tres_opciones():
     rows = [
-        {"id": 1, "doc_validacion_estado": "aprobado"},
-        {"id": 2, "doc_validacion_estado": "pendiente"},
-        {"id": 3, "doc_validacion_estado": "rechazado"},
-        {"id": 4, "doc_validacion_estado": "Aprobado"},
+        {"id": 1, "nombres": "A", "apellidos": "A", "empresa_nombre": "X", "doc_validacion_estado": "aprobado"},
+        {"id": 2, "nombres": "B", "apellidos": "B", "empresa_nombre": "X", "doc_validacion_estado": "pendiente"},
+        {"id": 3, "nombres": "C", "apellidos": "C", "empresa_nombre": "X", "doc_validacion_estado": "rechazado"},
+        {"id": 4, "nombres": "D", "apellidos": "D", "empresa_nombre": "X", "doc_validacion_estado": "Aprobado"},
     ]
     assert [r["id"] for r in _filtrar_trabajadores(rows, "todos")] == [1, 2, 3, 4]
     assert [r["id"] for r in _filtrar_trabajadores(rows, "aprobado")] == [1, 4]

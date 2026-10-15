@@ -92,10 +92,22 @@ def _filtrar_trabajadores(rows: List[dict], filtro: str) -> List[dict]:
     if f not in FILTROS:
         f = "todos"
     if f == "aprobado":
-        return [r for r in rows if _es_aprobado(r)]
-    if f == "sin_aprobar":
-        return [r for r in rows if not _es_aprobado(r)]
-    return list(rows)
+        out = [r for r in rows if _es_aprobado(r)]
+    elif f == "sin_aprobar":
+        out = [r for r in rows if not _es_aprobado(r)]
+    else:
+        out = list(rows)
+    return _ordenar_trabajadores_informe(out)
+
+
+def _ordenar_trabajadores_informe(rows: List[dict]) -> List[dict]:
+    """
+    Empresa (alfabética por nombre) → colaborador (alfabético por nombre).
+    Ignora mayúsculas/minúsculas y tildes. Aplica a todos los filtros.
+    """
+    from rrhh_service import sort_key_empresa_luego_nombre
+
+    return sorted(rows or [], key=sort_key_empresa_luego_nombre)
 
 
 def _custom_tipos(sb, contrato_id: int) -> List[Tuple[str, str, str]]:
