@@ -79,7 +79,7 @@ class TestPdfCellPadding(unittest.TestCase):
         self.assertIn("padding:3px 4px", src)
         self.assertIn("table.sheet.resumen th,table.sheet.resumen td", src)
         self.assertIn("padding:2px 3px", src)
-        self.assertIn("height:141px", src)
+        self.assertIn("height:158px", src)
         self.assertIn("graficos-wrap", src)
 
 

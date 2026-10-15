@@ -30,7 +30,7 @@ class TestDimensionesPdf(unittest.TestCase):
         self.assertIn("class=\"sheet resumen\"", src)
         self.assertIn("padding:3px 4px", src)  # cartera ~70%
         self.assertIn("padding:2px 3px", src)  # resumen ~50%
-        self.assertIn("height:141px", src)  # gráfico ~160% de 88
+        self.assertIn("height:158px", src)  # gráfico + leyenda dimensiones
         self.assertIn("background:#B0B0B0", src)  # cartera header más oscuro
         self.assertIn("td.item", src)  # columna Item ampliada sin wrap
 

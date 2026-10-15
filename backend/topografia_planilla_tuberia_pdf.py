@@ -521,6 +521,87 @@ def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, hei
     return "".join(parts)
 
 
+def captions_dimensiones_seccion(
+    seccion_tipica: Optional[dict],
+    *,
+    tipo: Optional[str] = None,
+) -> tuple[str, str]:
+    """Misma leyenda que PlanillaTuberiaSeccionSvg (bajo el PNG de sección)."""
+    st = seccion_tipica or {}
+    tipo_u = str(tipo or st.get("tipo") or "ALCANTARILLA").upper()
+    es_filtro = tipo_u == "FILTRO"
+    B = max(_num(st.get("ancho_excavacion_m"), 1.2), 0.4)
+    D = max(_num(st.get("diametro_externo_m"), 0.6), 0.2)
+    h_rel = max(_num(st.get("altura_relleno_m"), 0.2), 0.05)
+    h_exc = max(_num(st.get("prom_altura_excavacion"), B), 0.5)
+    cama = max(_num(st.get("cama_triturado_m"), 0.0), 0.0)
+    h_trit = max(_num(st.get("prom_altura_triturado"), h_rel + cama), 0.05)
+    linea1 = f"B={B:.2f} m · Øext={D:.3f} m · h_exc={h_exc:.2f} m"
+    if es_filtro:
+        linea1 += f" · Alt Tritur.={h_trit:.3f} m"
+    else:
+        rel = str(st.get("relacion_atraque") or "").strip()
+        linea1 += f" · h_atr={h_rel:.3f} m"
+        if rel:
+            linea1 += f" ({rel})"
+    a1 = _num(st.get("area_1_m2"), 0.0)
+    a2 = _num(st.get("area_2_m2"), 0.0)
+    linea2 = f"A1={a1:.4f} m² · A2={a2:.4f} m²"
+    return linea1, linea2
+
+
+def html_captions_dimensiones_seccion(
+    calculo: Optional[dict],
+    *,
+    tipo: Optional[str] = None,
+) -> str:
+    """HTML de dimensiones bajo el gráfico de sección típica (PDF)."""
+    st = (calculo or {}).get("seccion_tipica") or (calculo or {}).get("seccion") or {}
+    tipo_u = str(
+        tipo or st.get("tipo") or ((calculo or {}).get("seccion") or {}).get("tipo") or "ALCANTARILLA"
+    ).upper()
+    l1, l2 = captions_dimensiones_seccion(st, tipo=tipo_u)
+    return (
+        f'<div class="seccion-dims" style="font-size:5.5pt;color:#475569;text-align:center;'
+        f'line-height:1.25;margin-top:2px;">{html.escape(l1)}</div>'
+        f'<div class="seccion-dims" style="font-size:5.5pt;color:#64748b;text-align:center;'
+        f'line-height:1.2;">{html.escape(l2)}</div>'
+    )
+
+
+def html_notas_descuento_volumen_pdf(calculo: Optional[dict]) -> str:
+    """Recuadro de notas de descuento (mismo texto que en pantalla)."""
+    notas = list(
+        (calculo or {}).get("notas_descuento_volumen")
+        or (calculo or {}).get("notas_descuento_altura")
+        or []
+    )
+    if not notas:
+        for d in (
+            (calculo or {}).get("descuentos_volumen_detalle")
+            or (calculo or {}).get("descuentos_altura_detalle")
+            or []
+        ):
+            if isinstance(d, dict):
+                txt = str(d.get("nota") or "").strip()
+                if txt:
+                    notas.append(txt)
+    if not notas:
+        return ""
+    items = "".join(
+        f'<li style="margin:0 0 1px 0;">{html.escape(str(n))}</li>' for n in notas if str(n).strip()
+    )
+    if not items:
+        return ""
+    return (
+        '<div class="notas-descuento" style="margin-top:4px;padding:4px 6px;'
+        'border:0.4pt solid #fed7aa;background:#fff7ed;color:#9a3412;font-size:6pt;">'
+        '<div style="font-weight:700;margin-bottom:2px;">Notas de descuento de volumen</div>'
+        f'<ul style="margin:0;padding-left:14px;">{items}</ul>'
+        "</div>"
+    )
+
+
 def html_bloque_graficos_pdf(
     calculo: dict,
     *,
@@ -534,6 +615,7 @@ def html_bloque_graficos_pdf(
     """Panel GRAFICO + Perfil longitudinal embebidos (xhtml2pdf).
 
     Sección típica: PNG del XLSM según tipo (ALCANTARILLA→SeccionTub, FILTRO→SeccionFil).
+    Bajo el PNG: mismas dimensiones que en pantalla (B, Øext, h_exc, …, A1, A2).
     Contenedor con altura fija para que el gráfico no se monte sobre cantidades.
     """
     from topografia_utils import svg_embed_pdf
@@ -544,16 +626,19 @@ def html_bloque_graficos_pdf(
         tipo = "ALCANTARILLA"
 
     titulo = "GRAFICO — Sección Filtro" if tipo == "FILTRO" else "GRAFICO — Sección típica Tubería"
+    dims_html = html_captions_dimensiones_seccion(calculo, tipo=tipo)
     png_uri = _png_data_uri(_SECCION_PNG[tipo], max_w=sec_w, max_h=max(sec_h - 12, 60))
     if png_uri:
         sec_html = (
             f'<div style="font-size:7pt;font-weight:700;text-align:center;line-height:1.2;">{titulo}</div>'
             f'<img src="{png_uri}" width="{sec_w}" height="{sec_h}" '
             f'style="display:block;margin:0 auto;max-width:100%;max-height:{sec_h}px;" alt="{titulo}"/>'
+            f"{dims_html}"
         )
     else:
-        sec_html = svg_embed_pdf(
-            svg_seccion_tipica_pdf(st, width=sec_w, height=sec_h), sec_w, sec_h
+        sec_html = (
+            svg_embed_pdf(svg_seccion_tipica_pdf(st, width=sec_w, height=sec_h), sec_w, sec_h)
+            + dims_html
         )
 
     perfil = svg_perfil_longitudinal_pdf(
@@ -564,7 +649,7 @@ def html_bloque_graficos_pdf(
     return f"""
     <table class="graficos-wrap" width="100%" cellspacing="0" cellpadding="0">
       <tr>
-        <td width="38%" height="{sec_h}">{sec_html}</td>
+        <td width="38%" style="vertical-align:top;">{sec_html}</td>
         <td width="62%" height="{perfil_h}">{perfil_html}</td>
       </tr>
     </table>

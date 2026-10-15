@@ -84,7 +84,73 @@ PERFIL_GRID_LINE_WIDTH_EMU = 3175  # ~0.25 pt
 PERFIL_GRID_LINE_COLOR = "E2E8F0"
 # Celdas de resultado del panel gráfico que conservan cuadrícula/borde.
 PANEL_RESULTADO_CELDAS = ("L18", "K23", "K30")
+# Dimensiones bajo el gráfico (misma leyenda que pantalla); no mueve L20:N40.
+SECCION_DIMS_ROW = 41
+SECCION_DIMS_MERGE = ("K41", "N41")
 NO_BORDER = Border()
+
+
+def _captions_dimensiones_seccion(
+    calculo: Optional[dict],
+    planilla: Optional[dict],
+    *,
+    tipo: str,
+) -> tuple[str, str]:
+    """Leyenda B/Øext/h_exc/…/A1/A2 — mismos textos que PlanillaTuberiaSeccionSvg."""
+    st = dict((calculo or {}).get("seccion_tipica") or (calculo or {}).get("seccion") or {})
+    p = planilla or {}
+    if st.get("ancho_excavacion_m") is None and p.get("ancho_excavacion_m") is not None:
+        st["ancho_excavacion_m"] = p.get("ancho_excavacion_m")
+    if st.get("diametro_externo_m") is None:
+        # diametro_m (interno) + 2·espesor ≈ externo cuando no viene del motor.
+        try:
+            d_in = float(p.get("diametro_m") or 0)
+            esp = float(p.get("espesor_m") or 0)
+            if d_in:
+                st["diametro_externo_m"] = d_in + 2.0 * esp
+        except (TypeError, ValueError):
+            pass
+    if st.get("area_1_m2") is None and p.get("area_1_m2") is not None:
+        st["area_1_m2"] = p.get("area_1_m2")
+    if st.get("area_2_m2") is None and p.get("area_2_m2") is not None:
+        st["area_2_m2"] = p.get("area_2_m2")
+    if st.get("altura_relleno_m") is None and p.get("altura_relleno_m") is not None:
+        st["altura_relleno_m"] = p.get("altura_relleno_m")
+    if st.get("relacion_atraque") is None:
+        st["relacion_atraque"] = p.get("relacion_atraque")
+    if st.get("cama_triturado_m") is None:
+        meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+        st["cama_triturado_m"] = meta.get("cama_triturado_m")
+    from topografia_planilla_tuberia_pdf import captions_dimensiones_seccion
+
+    return captions_dimensiones_seccion(st, tipo=tipo)
+
+
+def _write_dimensiones_bajo_grafico(
+    ws,
+    *,
+    calculo: Optional[dict],
+    planilla: Optional[dict],
+    tipo: str,
+) -> None:
+    """Escribe dimensiones bajo el PNG (fila 41, K:N) sin mover el ancla L20:N40."""
+    l1, l2 = _captions_dimensiones_seccion(calculo, planilla, tipo=tipo)
+    texto = f"{l1}\n{l2}"
+    _merge_range_safe(
+        ws,
+        start_row=SECCION_DIMS_ROW,
+        end_row=SECCION_DIMS_ROW,
+        start_column=11,  # K
+        end_column=14,  # N
+    )
+    _set(ws, "K41", texto)
+    cell = ws["K41"]
+    cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+    cell.font = Font(name="Arial", size=7, color="475569")
+    _style(ws, "K41", fill=FILL_CALC, border=THIN)
+    ws.row_dimensions[SECCION_DIMS_ROW].height = max(
+        ws.row_dimensions[SECCION_DIMS_ROW].height or 0, 28
+    )
 
 # Presentación Long/Ancho/Espesor/Desc./Cantidad en Resumen y Descuentos (2 dec).
 # No altera el criterio SICOE (dims 3 / cantidad 2 / CD 0).
@@ -1044,10 +1110,43 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         _set(ws, f"F{r}", f.get("cota_fondo_excavacion"))
 
     _set(ws, "B41", "=MAX(B17:B36)-MIN(B17:B36)")
-    _set(ws, "G41", '=IFERROR(AVERAGE(G17:G36),"")')
-    _set(ws, "H41", '=IFERROR(AVERAGE(H17:H36),"")')
-    _set(ws, "I41", '=IFERROR(AVERAGE(I17:I36),"")')
-    _set(ws, "J41", '=IFERROR(AVERAGE(J17:J36),"")')
+    # Fila de promedios: mismos valores del cálculo (totales). Plantilla vacía
+    # conserva AVERAGE para verificación de formato.
+    tot = ((calculo or {}).get("cartera") or {}).get("totales") or {}
+    prom_map = (
+        ("G41", "prom_altura_excavacion", '"Alt. Prom "0.000'),
+        ("H41", "prom_altura_triturado", '"Alt. Prom "0.000'),
+        ("I41", "prom_altura_relleno", '"Alt. Prom "0.000'),
+        ("J41", "prom_ancho_geotextil", '"Anc. Prom "0.000'),
+    )
+    if not vacia and tot:
+        for addr, key, num_fmt in prom_map:
+            raw = tot.get(key)
+            if raw is None or raw == "":
+                _set(ws, addr, None)
+            else:
+                try:
+                    _set(ws, addr, round(float(raw), 3))
+                except (TypeError, ValueError):
+                    _set(ws, addr, None)
+            _style(ws, addr, fill=FILL_CALC, border=THIN)
+            try:
+                ws[addr].number_format = num_fmt
+                ws[addr].font = Font(name="Arial", size=10, bold=True)
+                ws[addr].alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True
+                )
+            except Exception:
+                pass
+    else:
+        _set(ws, "G41", '=IFERROR(AVERAGE(G17:G36),"")')
+        _set(ws, "H41", '=IFERROR(AVERAGE(H17:H36),"")')
+        _set(ws, "I41", '=IFERROR(AVERAGE(I17:I36),"")')
+        _set(ws, "J41", '=IFERROR(AVERAGE(J17:J36),"")')
+
+    _write_dimensiones_bajo_grafico(
+        ws, calculo=calculo, planilla=planilla, tipo=tipo,
+    )
 
     for col, label in (
         ("B", "Item"),

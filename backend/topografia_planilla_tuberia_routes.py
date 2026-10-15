@@ -4210,6 +4210,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         else "PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS"
     )
 
+    tot_cartera = (calc.get("cartera") or {}).get("totales") or {}
     if tipo == "ALCANTARILLA":
         rows = "".join(
             f"<tr><td>{f.get('orden')}</td><td>{fmt(f.get('abscisa'),2)}</td>"
@@ -4229,6 +4230,17 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
             "<th>Altura Excavacion</th><th>Altura Triturado</th>"
             "<th>Altura Relleno</th><th>Ancho Geotextil</th>"
         )
+        # Fila de promedios: mismos valores del cálculo (totales), 3 dec como columnas.
+        rows += (
+            "<tr class='promedios'>"
+            f"<td colspan='6' style='text-align:left;font-weight:700;'>"
+            f"Promedio · L={fmt(tot_cartera.get('longitud_m'), 2)} m</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_altura_excavacion'))}</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_altura_triturado'))}</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_altura_relleno'))}</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_ancho_geotextil'))}</td>"
+            "</tr>"
+        )
     else:
         rows = "".join(
             f"<tr><td>{f.get('orden')}</td><td>{fmt(f.get('abscisa'),2)}</td>"
@@ -4246,6 +4258,16 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
             "<th>Cota Fondo Excavación</th>"
             "<th>Altura Excavacion</th><th>Altura Triturado</th>"
             "<th>Altura Relleno</th><th>Ancho Geotextil</th>"
+        )
+        rows += (
+            "<tr class='promedios'>"
+            f"<td colspan='5' style='text-align:left;font-weight:700;'>"
+            f"Promedio · L={fmt(tot_cartera.get('longitud_m'), 2)} m</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_altura_excavacion'))}</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_altura_triturado'))}</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_altura_relleno'))}</td>"
+            f"<td class='calc'>{fmt(tot_cartera.get('prom_ancho_geotextil'))}</td>"
+            "</tr>"
         )
     netos = calc.get("netos") or [
         {
@@ -4298,6 +4320,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         html_bloque_graficos_pdf,
         html_cabecera_planilla_tuberia,
         html_franja_tramo_tuberia,
+        html_notas_descuento_volumen_pdf,
     )
 
     cabecera = html_cabecera_planilla_tuberia(
@@ -4305,6 +4328,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     )
     franja = html_franja_tramo_tuberia(planilla=p, calculo=calc, meta=meta)
     graficos = html_bloque_graficos_pdf(calc, tipo=tipo)
+    notas_descuento = html_notas_descuento_volumen_pdf(calc)
 
     html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
     <style>
@@ -4321,7 +4345,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     table.sheet.resumen th.item,table.sheet.resumen td.item{{width:42%;white-space:nowrap;text-align:left}}
     table.sheet.resumen th.num,table.sheet.resumen td.num{{width:11%;white-space:nowrap}}
     .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 3px;table-layout:fixed}}
-    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:141px}}
+    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:158px}}
     .graficos-wrap img{{display:block;width:100%;height:auto;margin:0 auto}}
     table.sheet th.desc{{background:#EA4296;color:#fff}}
     table.sheet th.cant{{background:#4472C4;color:#fff}}
@@ -4358,6 +4382,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         </tr></thead><tbody>{descs}</tbody></table>
       </td>
     </tr></table>
+    {notas_descuento}
     {tabla_firmas}
     </body></html>"""
     try:
