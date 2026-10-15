@@ -266,3 +266,57 @@ def test_build_impacto_edicion_meta():
     assert out["actas_rpo"][0]["firmada"] is True
     assert out["reportes_count"] == 2
     assert {r["numero_reporte"] for r in out["reportes"]} == {101, 102}
+
+
+def test_resolver_ficha_efectiva_item_unico_otro_capitulo():
+    from listado_precios_meta import resolver_ficha_efectiva_sicoe
+
+    idx = {
+        ("1.ACTIVIDADES PRELIMINARES", "NP-08"): {
+            "id": 10,
+            "capitulo": "1. ACTIVIDADES PRELIMINARES",
+            "item_numero": "NP-08",
+            "descripcion": "EXCAVACIÓN MANUAL EN ROCA",
+            "unidad": "M3",
+            "precio_unitario": 222133,
+        }
+    }
+    reg = {
+        "capitulo": "3. OBRAS DE ARTE (ALCANTARILLA)",
+        "item_numero": "NP-08",
+        "item_descripcion": "excavacion",
+        "unidad": "m³",
+    }
+    ficha = resolver_ficha_efectiva_sicoe(
+        reg, idx, norm_cap=_norm_cap, norm_item=_norm_item
+    )
+    assert ficha["match"] == "item_unico"
+    assert ficha["capitulo_efectivo"] == "1. ACTIVIDADES PRELIMINARES"
+    assert ficha["unidad"] == "M3"
+    assert ficha["vlr_unitario"] == 222133
+    assert ficha["sin_precio"] is False
+    # No muta el capítulo del registro de entrada
+    assert reg["capitulo"] == "3. OBRAS DE ARTE (ALCANTARILLA)"
+
+
+def test_resolver_ficha_efectiva_exacto_y_sin_precio():
+    from listado_precios_meta import resolver_ficha_efectiva_sicoe
+
+    idx = {
+        ("3.OBRAS", "9.9"): {
+            "id": 1,
+            "capitulo": "3. OBRAS",
+            "item_numero": "9.9",
+            "descripcion": "Sin tarifa",
+            "unidad": "UND",
+            "precio_unitario": 0,
+        }
+    }
+    ficha = resolver_ficha_efectiva_sicoe(
+        {"capitulo": "3. OBRAS", "item_numero": "9.9"},
+        idx,
+        norm_cap=_norm_cap,
+        norm_item=_norm_item,
+    )
+    assert ficha["sin_precio"] is True
+    assert ficha["match"] == "sin_precio"

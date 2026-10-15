@@ -24330,14 +24330,38 @@ def analisis_registros_obra(
         _acta_id_verif = acta_ids_panel_ana[0] if len(acta_ids_panel_ana) == 1 else None
 
     _listado_idx_ana = _listado_precios_vu_by_cap_item(int(contrato_id))
+    from listado_precios_meta import resolver_ficha_efectiva_sicoe
+    from sicoe_valor_canonico import valor_cant_vu
+
+    def _ficha_eff(reg: dict) -> dict:
+        return resolver_ficha_efectiva_sicoe(
+            reg,
+            _listado_idx_ana,
+            norm_cap=_dash_norm_capitulo_key_py,
+            norm_item=_dash_norm_item_key_py,
+        )
 
     def _cd_linea(reg: dict) -> float:
-        from sicoe_valor_canonico import valor_linea_canonico
+        # V.U. por capítulo efectivo del ítem (no el capítulo del reporte/registro mal ubicado).
+        ficha = _ficha_eff(reg)
+        vu = float(ficha.get("vlr_unitario") or 0)
+        if vu <= 0:
+            return 0.0
+        return valor_cant_vu(reg.get("cantidad_total"), vu)
 
-        return valor_linea_canonico(reg, _listado_idx_ana)
+    def _cap_eff(reg: dict) -> str:
+        return str(_ficha_eff(reg).get("capitulo_efectivo") or reg.get("capitulo") or "Sin capítulo").strip()
+
+    # Verificación canónica con capítulo efectivo (misma base que consolidada / CPI).
+    _regs_verif = []
+    for _r in registros or []:
+        _fr = dict(_r)
+        _ff = _ficha_eff(_r)
+        _fr["capitulo"] = _ff.get("capitulo_efectivo") or _fr.get("capitulo")
+        _regs_verif.append(_fr)
 
     verificacion = _sicoe_analisis_verificacion_totales(
-        registros,
+        _regs_verif,
         contrato_id,
         capas_ana or [],
         acta_id_filtro=_acta_id_verif,
@@ -24401,7 +24425,7 @@ def analisis_registros_obra(
 
     if modo in ("acta_semana", "general"):
         for reg in registros:
-            cap = reg.get("capitulo") or "Sin capítulo"
+            cap = _cap_eff(reg) or "Sin capítulo"
             ee  = _estado_efectivo(reg)
             cd  = _cd_linea(reg)
             if cap not in grupos:
@@ -24464,7 +24488,7 @@ def analisis_registros_obra(
         for reg in registros:
             ee   = _estado_efectivo(reg)
             cd   = _cd_linea(reg)
-            cap  = reg.get("capitulo") or "Sin capítulo"
+            cap  = _cap_eff(reg) or "Sin capítulo"
             a_id = reg.get("acta_rpo_id")
             a    = acta_map_local.get(a_id) or {}
             nr   = a.get("numero_rpo") or a.get("consecutivo") or "?"
@@ -30540,7 +30564,7 @@ def sicoe_cantidades_por_item(
     Sin criterios de filtro → respuesta vacía (misma regla que la grilla por reporte).
     """
     _require_contract_access(current_user, contrato_id)
-    from dashboard_costo_agregado import costo_agregado_cant_vu, listado_vu_for_cap_item
+    from dashboard_costo_agregado import costo_agregado_cant_vu
 
     subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
     _sub_restricto_cpi, _sub_forced_cpi = _scope_subcontratista_usuario(current_user)
@@ -30780,7 +30804,9 @@ def sicoe_cantidades_por_item(
             acta_rpo_id=acta_id if not acta_ids_panel else None,
             acta_rpo_ids=acta_ids_panel or None,
             reporte_id_in=reporte_id_in,
-            require_item=True,
+            # Misma universo que el panel /analisis (incluye sin ítem) para cuadrar
+            # encabezado ↔ vista consolidada.
+            require_item=False,
             capas_v=capas_v if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado) else None,
             estado=estado,
             contrato_id=contrato_id,
@@ -30823,22 +30849,16 @@ def sicoe_cantidades_por_item(
             except (TypeError, ValueError, KeyError):
                 pass
 
-    # Índice listado por capítulo (clave ítem_norm → fila). listado_vu_for_cap_item
-    # espera este shape — NO el índice (cap,item) de listado_vu_from_index.
-    listado_by_cap: Dict[str, Dict[str, dict]] = {}
-    caps_needed = {
-        str(r.get("capitulo") or "").strip()
-        for r in out_rows
-        if str(r.get("capitulo") or "").strip()
-    }
-    for cap_raw in caps_needed:
-        listado_by_cap[_dash_norm_capitulo_key_py(cap_raw)] = _listado_precios_index_por_item_norm(
-            contrato_id, cap_raw
-        )
+    # Índice completo (cap, ítem) para resolver capítulo efectivo del ítem
+    # cuando el registro guardó el capítulo del reporte (homónimo / mal ubicado).
+    from listado_precios_meta import resolver_ficha_efectiva_sicoe
+
+    listado_full = _listado_precios_vu_by_cap_item(int(contrato_id))
 
     ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
     items_seen: Dict[str, dict] = {}
     enriched = []
+    n_sin_precio = 0
     for r in out_rows:
         row = dict(r)
         try:
@@ -30851,14 +30871,30 @@ def sicoe_cantidades_por_item(
 
         cap_raw = str(row.get("capitulo") or "").strip()
         it_raw = str(row.get("item_numero") or "").strip()
-        ck = _dash_norm_capitulo_key_py(cap_raw)
-        ik = _dash_norm_item_key_py(it_raw)
-        lp_idx = listado_by_cap.get(ck) or {}
-        vu = listado_vu_for_cap_item(ck, ik, cap_listado_by_item=lp_idx) or 0.0
-        lp_row = lp_idx.get(ik) or {}
+        ficha = resolver_ficha_efectiva_sicoe(
+            row,
+            listado_full,
+            norm_cap=_dash_norm_capitulo_key_py,
+            norm_item=_dash_norm_item_key_py,
+        )
+        cap_eff = str(ficha.get("capitulo_efectivo") or cap_raw or "Sin capítulo").strip()
+        vu = float(ficha.get("vlr_unitario") or 0)
+        sin_precio = bool(ficha.get("sin_precio"))
+        if it_raw and sin_precio:
+            n_sin_precio += 1
         cant = float(row.get("cantidad_total") or row.get("cantidad") or 0)
         cd_calc = costo_agregado_cant_vu(cant, float(vu or 0))
+        # Metadatos de lectura (no mutan capítulo/ítem guardados en BD).
+        row["capitulo_efectivo"] = cap_eff
+        row["capitulo_listado_match"] = ficha.get("match")
+        row["sin_precio_listado"] = sin_precio and bool(it_raw)
         row["vlr_unitario_listado"] = float(vu or 0)
+        if ficha.get("descripcion"):
+            row["item_descripcion"] = ficha["descripcion"]
+        if ficha.get("unidad"):
+            row["unidad"] = ficha["unidad"]
+        if ficha.get("item_numero"):
+            row["item_numero"] = ficha["item_numero"]
         if ocultar_cd:
             row["costo_directo_calc"] = None
         else:
@@ -30866,20 +30902,26 @@ def sicoe_cantidades_por_item(
         row.pop("costo_directo", None)
         row.pop("vlr_unitario", None)
         if it_raw:
-            key_it = f"{cap_raw}\u0001{it_raw}"
+            key_it = f"{cap_eff}\u0001{it_raw}"
             if key_it not in items_seen:
                 items_seen[key_it] = {
-                    "capitulo": cap_raw,
+                    "capitulo": cap_eff,
                     "item": it_raw,
-                    "item_descripcion": (row.get("item_descripcion") or lp_row.get("descripcion") or "").strip() or None,
-                    "unidad": (row.get("unidad") or lp_row.get("unidad") or "").strip() or None,
+                    "item_descripcion": (row.get("item_descripcion") or "").strip() or None,
+                    "unidad": (row.get("unidad") or "").strip() or None,
                     "vlr_unitario_listado": float(vu or 0),
+                    "sin_precio_listado": sin_precio,
                 }
         enriched.append(row)
 
     n_items = len(items_seen)
     modo = "analisis" if n_items == 1 else ("general" if n_items > 1 or enriched else "vacio")
     unico = next(iter(items_seen.values()), None) if n_items == 1 else None
+    items_sin_precio = [
+        {"capitulo": v.get("capitulo"), "item": v.get("item")}
+        for v in items_seen.values()
+        if v.get("sin_precio_listado")
+    ]
 
     return {
         "ok": True,
@@ -30894,6 +30936,8 @@ def sicoe_cantidades_por_item(
         "items": list(items_seen.values()),
         "ocultar_costo_directo": ocultar_cd,
         "total": len(enriched),
+        "registros_sin_precio_listado": n_sin_precio,
+        "items_sin_precio_listado": items_sin_precio,
         "registros": enriched,
     }
 

@@ -226,6 +226,9 @@ export default function SicoeEjecucionConsolidadaVista({
     setExpandCaps(new Set())
     setExpandItems(new Set())
   }
+  const restablecerVista = () => {
+    aplicarExpandDefault(payload?.registros || [])
+  }
 
   const colSpanMain = 6 + (verEco ? 2 : 0)
 
@@ -348,9 +351,14 @@ export default function SicoeEjecucionConsolidadaVista({
             Ejecución consolidada
           </div>
           <div style={{ marginTop: 4, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Clic en la fila para desplegar · mismos filtros y costos del informe.
+            Clic en la fila para desplegar · agrupación por capítulo efectivo del ítem.
             {arbol.totalItems > 0 && (
               <> · {arbol.totalItems} ítem(s) · {arbol.totalRegistros} registro(s)</>
+            )}
+            {(arbol.itemsSinPrecio || []).length > 0 && (
+              <span style={{ color: '#b45309', fontWeight: 700 }}>
+                {' '}· {(arbol.itemsSinPrecio || []).length} ítem(s) sin precio en Listado
+              </span>
             )}
           </div>
         </div>
@@ -365,6 +373,22 @@ export default function SicoeEjecucionConsolidadaVista({
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
               <path d="M2 4h12M2 8h8M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
               <path d="M14 6.5L12 8l2 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </IconBtn>
+          <IconBtn
+            t={t}
+            title="Restablecer vista (como al abrir)"
+            onClick={restablecerVista}
+            disabled={!arbol.tramos.length}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path
+                d="M3.5 8a4.5 4.5 0 1 0 1.2-3.1"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+              <path d="M3 3.5v3h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </IconBtn>
           <button
@@ -816,6 +840,14 @@ function FragmentItem({
           >
             {it.descripcion || '—'}
           </div>
+          {it.sin_precio_listado && (
+            <div
+              title="Sin precio en Listado de Precios para este capítulo e ítem"
+              style={{ marginTop: 3, fontSize: 10, fontWeight: 800, color: '#b45309' }}
+            >
+              ⚠ Sin precio en Listado
+            </div>
+          )}
           {(it.validacion?.chips || []).length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
               {it.validacion.chips.map((ch) => chipValidacionUi(ch))}
@@ -825,15 +857,40 @@ function FragmentItem({
         <td style={{ ...td, textAlign: 'center' }}>{it.unidad || '—'}</td>
         {verEco && (
           <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-            {fmtVu(it.vlr_unitario)}
+            {it.sin_precio_listado ? (
+              <span
+                title="Sin precio en Listado de Precios para este capítulo e ítem"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  color: '#b45309',
+                  fontWeight: 800,
+                  fontSize: 11,
+                }}
+              >
+                <span aria-hidden>⚠</span> Sin precio
+              </span>
+            ) : (
+              fmtVu(it.vlr_unitario)
+            )}
           </td>
         )}
         <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {fmtCant(it.cantidad)}
         </td>
         {verEco && (
-          <td style={{ ...td, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-            {fmtPesos(it.costo)}
+          <td
+            style={{
+              ...td,
+              textAlign: 'right',
+              fontWeight: 700,
+              fontVariantNumeric: 'tabular-nums',
+              color: it.sin_precio_listado ? '#b45309' : undefined,
+            }}
+            title={it.sin_precio_listado ? 'Sin precio en Listado de Precios — no se valora como $0 normal' : undefined}
+          >
+            {it.sin_precio_listado ? '—' : fmtPesos(it.costo)}
           </td>
         )}
       </tr>
