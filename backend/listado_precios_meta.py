@@ -369,3 +369,146 @@ def build_impacto_edicion_meta(
             "en Presupuesto y SicoeObra. Esta acción no se puede deshacer."
         ),
     }
+
+
+def _vu_de_ficha(meta: Optional[dict]) -> float:
+    if not meta:
+        return 0.0
+    for key in ("precio_unitario", "vlr_unitario"):
+        raw = meta.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 0.0
+
+
+def _score_capitulo_parcial(cap_solicitado: str, cap_listado: str) -> int:
+    """Puntúa parecido de capítulos (misma idea que lookup de almacén)."""
+    import re
+
+    a = (cap_solicitado or "").strip().lower()
+    b = (cap_listado or "").strip().lower()
+    if not a or not b:
+        return 0
+    if a == b:
+        return 3
+    if a in b or b in a:
+        return 2
+    toks = [t for t in re.split(r"\W+", a) if len(t) > 2]
+    if any(t in b for t in toks):
+        return 1
+    return 0
+
+
+def resolver_ficha_efectiva_sicoe(
+    reg: dict,
+    listado_idx: Optional[Dict[ItemKey, dict]],
+    *,
+    norm_cap: NormCapFn,
+    norm_item: NormItemFn,
+) -> dict:
+    """Resuelve ficha del Listado para un registro Sicoe sin mutar el capítulo guardado.
+
+    Orden:
+      1. Cruce exacto (capítulo del registro, ítem).
+      2. Ítem único en el listado (otro capítulo) → capítulo efectivo del listado.
+      3. Varios homónimos → mejor coincidencia parcial de capítulo.
+      4. Sin ficha → ``sin_precio``.
+
+    No escribe en BD: solo aporta metadatos para agrupar / valorar en vistas.
+    """
+    cap_raw = str((reg or {}).get("capitulo") or "").strip()
+    it_raw = str((reg or {}).get("item_numero") or (reg or {}).get("item") or "").strip()
+    ck = norm_cap(cap_raw) if cap_raw else norm_cap("")
+    ik = norm_item(it_raw)
+    out = {
+        "capitulo_registro": cap_raw,
+        "capitulo_efectivo": cap_raw or "Sin capítulo",
+        "item_numero": it_raw,
+        "descripcion": str((reg or {}).get("item_descripcion") or "").strip() or None,
+        "unidad": str((reg or {}).get("unidad") or "").strip() or None,
+        "vlr_unitario": 0.0,
+        "sin_precio": True,
+        "match": "sin_item" if not ik else "ausente",
+        "ficha": None,
+    }
+    if not ik or not listado_idx:
+        return out
+
+    exact = listado_idx.get((ck, ik))
+    if isinstance(exact, dict):
+        vu = _vu_de_ficha(exact)
+        out.update(
+            {
+                "capitulo_efectivo": str(exact.get("capitulo") or cap_raw or "").strip()
+                or out["capitulo_efectivo"],
+                "item_numero": str(exact.get("item_numero") or it_raw).strip() or it_raw,
+                "descripcion": str(exact.get("descripcion") or out["descripcion"] or "").strip()
+                or out["descripcion"],
+                "unidad": str(exact.get("unidad") or out["unidad"] or "").strip() or out["unidad"],
+                "vlr_unitario": vu,
+                "sin_precio": vu <= 0,
+                "match": "capitulo_item" if vu > 0 else "sin_precio",
+                "ficha": exact,
+            }
+        )
+        if vu > 0:
+            return out
+        # Exacto sin precio: intentar homónimo con precio en otro capítulo.
+
+    hits = [
+        v
+        for (c_key, i_key), v in listado_idx.items()
+        if i_key == ik and isinstance(v, dict)
+    ]
+    if not hits:
+        return out
+
+    priced = [h for h in hits if _vu_de_ficha(h) > 0]
+    pool = priced or hits
+
+    elegido = None
+    match = "item_unico"
+    if len(pool) == 1:
+        elegido = pool[0]
+    else:
+        scored = [
+            (_score_capitulo_parcial(cap_raw, str(h.get("capitulo") or "")), h)
+            for h in pool
+        ]
+        scored.sort(key=lambda x: -x[0])
+        if scored and scored[0][0] > 0:
+            elegido = scored[0][1]
+            match = "item_capitulo_parcial"
+        elif exact is not None:
+            # Conservar exacto sin precio si no hay mejor.
+            return out
+        else:
+            # Ambiguo: no inventar capítulo.
+            out["match"] = "ambiguo"
+            return out
+
+    if elegido is None:
+        return out
+
+    vu = _vu_de_ficha(elegido)
+    out.update(
+        {
+            "capitulo_efectivo": str(elegido.get("capitulo") or cap_raw or "").strip()
+            or out["capitulo_efectivo"],
+            "item_numero": str(elegido.get("item_numero") or it_raw).strip() or it_raw,
+            "descripcion": str(elegido.get("descripcion") or out["descripcion"] or "").strip()
+            or out["descripcion"],
+            "unidad": str(elegido.get("unidad") or out["unidad"] or "").strip() or out["unidad"],
+            "vlr_unitario": vu,
+            "sin_precio": vu <= 0,
+            "match": match if vu > 0 else "sin_precio",
+            "ficha": elegido,
+        }
+    )
+    return out

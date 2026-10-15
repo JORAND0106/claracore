@@ -2,6 +2,7 @@
  * Vista consolidada tipo informe mensual de ejecución:
  * Tramo → Capítulo → Ítem (subtotales) → registros al expandir.
  * Cantidad / costo: mismas reglas que CPI / informe (round2(cant)×VU → round0).
+ * Capítulo de agrupación: capitulo_efectivo del ítem (listado), no el del reporte.
  */
 import { costoDirectoDesdeListado, vuEfectivoFila } from './sicoeCantidadesPorItemHelpers.js'
 import { chipValidacionNivel } from './sicoeCantidadesGrillaHelpers.js'
@@ -11,11 +12,19 @@ export function sicoeTramoLabel(tramo) {
   return s || 'Sin tramo'
 }
 
+/** Capítulo de agrupación: efectivo del listado si viene; si no, el guardado. */
+export function sicoeCapituloEfectivoLabel(reg) {
+  const eff = String(reg?.capitulo_efectivo || '').trim()
+  if (eff) return eff
+  const raw = String(reg?.capitulo || '').trim()
+  return raw || 'Sin capítulo'
+}
+
 export function sicoeClaveItemEjecucion(reg) {
   return [
     sicoeTramoLabel(reg?.tramo),
-    String(reg?.capitulo || '').trim() || 'Sin capítulo',
-    String(reg?.item_numero || '').trim(),
+    sicoeCapituloEfectivoLabel(reg),
+    String(reg?.item_numero || '').trim() || 'Sin ítem',
   ].join('\u0001')
 }
 
@@ -64,7 +73,8 @@ export function sicoeRegistroCostoEfectivo(reg, payloadVu = null) {
 
 /**
  * Construye el árbol Tramo → Capítulo → Ítem a partir de registros planos (CPI).
- * Ítems sin número se omiten (igual que CPI general).
+ * Agrupa por capítulo efectivo del ítem. Incluye registros sin ítem (para cuadrar
+ * con el encabezado del panel /analisis).
  */
 export function sicoeConstruirArbolEjecucion(registros, {
   nivelesActivos = [1, 2, 3],
@@ -73,27 +83,30 @@ export function sicoeConstruirArbolEjecucion(registros, {
   const byTramo = new Map()
 
   for (const raw of registros || []) {
-    if (!String(raw?.item_numero || '').trim()) continue
     const { vu, cant, costo } = sicoeRegistroCostoEfectivo(raw, payloadVu)
-    const reg = { ...raw, _vu_efectivo: vu, _cant_efectiva: cant, _costo_efectivo: costo }
+    const capitulo = sicoeCapituloEfectivoLabel(raw)
+    const item = String(raw?.item_numero || '').trim() || 'Sin ítem'
+    const sinPrecio = !!raw?.sin_precio_listado || (item !== 'Sin ítem' && !(vu > 0))
+    const reg = {
+      ...raw,
+      _vu_efectivo: vu,
+      _cant_efectiva: cant,
+      _costo_efectivo: costo,
+      _capitulo_efectivo: capitulo,
+      _sin_precio_listado: sinPrecio,
+    }
 
     const tramo = sicoeTramoLabel(reg.tramo)
-    const capitulo = String(reg.capitulo || '').trim() || 'Sin capítulo'
-    const item = String(reg.item_numero || '').trim()
 
     if (!byTramo.has(tramo)) {
       byTramo.set(tramo, { tramo, cantidad: 0, costo: 0, capitulos: new Map() })
     }
     const tNode = byTramo.get(tramo)
-    tNode.cantidad += cant
-    tNode.costo += costo
 
     if (!tNode.capitulos.has(capitulo)) {
       tNode.capitulos.set(capitulo, { capitulo, cantidad: 0, costo: 0, items: new Map() })
     }
     const cNode = tNode.capitulos.get(capitulo)
-    cNode.cantidad += cant
-    cNode.costo += costo
 
     const itemKey = item
     if (!cNode.items.has(itemKey)) {
@@ -102,21 +115,20 @@ export function sicoeConstruirArbolEjecucion(registros, {
         descripcion: String(reg.item_descripcion || '').trim(),
         unidad: String(reg.unidad || '').trim(),
         vlr_unitario: vu,
+        sin_precio_listado: sinPrecio,
         cantidad: 0,
         costo: 0,
         registros: [],
       })
     }
     const iNode = cNode.items.get(itemKey)
-    iNode.cantidad += cant
-    iNode.costo += costo
     iNode.registros.push(reg)
     if (!iNode.descripcion && reg.item_descripcion) {
       iNode.descripcion = String(reg.item_descripcion).trim()
     }
     if (!iNode.unidad && reg.unidad) iNode.unidad = String(reg.unidad).trim()
-    // Conservar VU si ya hay uno; si el primero era 0 y llega otro, actualizar.
     if (!(iNode.vlr_unitario > 0) && vu > 0) iNode.vlr_unitario = vu
+    if (sinPrecio) iNode.sin_precio_listado = true
   }
 
   const tramos = [...byTramo.values()]
@@ -130,30 +142,45 @@ export function sicoeConstruirArbolEjecucion(registros, {
                 if (nr) return nr
                 return (Number(a.numero_registro) || 0) - (Number(b.numero_registro) || 0)
               })
+              // Canónico panel /analisis: ROUND0(ROUND(Σcant,2)×VU) por ítem.
+              const cantSum = regs.reduce((s, r) => s + _num(r._cant_efectiva), 0)
+              const cant = Math.round(cantSum * 100) / 100
+              const vu = it.vlr_unitario > 0 ? it.vlr_unitario : 0
+              const costo = it.sin_precio_listado || !(vu > 0)
+                ? 0
+                : costoDirectoDesdeListado(cant, vu)
               return {
                 ...it,
                 key: `${t.tramo}\u0001${c.capitulo}\u0001${it.item_numero}`,
                 registros: regs,
                 validacion: sicoeContarValidacionItem(regs, nivelesActivos),
-                cantidad: Math.round(it.cantidad * 1000) / 1000,
-                costo: Math.round(it.costo),
+                cantidad: cant,
+                costo,
               }
             })
-            .sort((a, b) => _cmpStr(a.item_numero, b.item_numero))
+            .sort((a, b) => {
+              if (a.item_numero === 'Sin ítem') return 1
+              if (b.item_numero === 'Sin ítem') return -1
+              return _cmpStr(a.item_numero, b.item_numero)
+            })
+          const cantidad = Math.round(items.reduce((s, it) => s + it.cantidad, 0) * 1000) / 1000
+          const costo = Math.round(items.reduce((s, it) => s + it.costo, 0))
           return {
             key: `${t.tramo}\u0001${c.capitulo}`,
             capitulo: c.capitulo,
-            cantidad: Math.round(c.cantidad * 1000) / 1000,
-            costo: Math.round(c.costo),
+            cantidad,
+            costo,
             items,
           }
         })
         .sort((a, b) => _cmpStr(a.capitulo, b.capitulo))
+      const cantidad = Math.round(capitulos.reduce((s, c) => s + c.cantidad, 0) * 1000) / 1000
+      const costo = Math.round(capitulos.reduce((s, c) => s + c.costo, 0))
       return {
         key: t.tramo,
         tramo: t.tramo,
-        cantidad: Math.round(t.cantidad * 1000) / 1000,
-        costo: Math.round(t.costo),
+        cantidad,
+        costo,
         capitulos,
       }
     })
@@ -166,12 +193,30 @@ export function sicoeConstruirArbolEjecucion(registros, {
     totalCosto += t.costo
   }
 
+  const totalRegistros = (registros || []).length
+  const itemsSinPrecio = []
+  for (const t of tramos) {
+    for (const c of t.capitulos) {
+      for (const it of c.items) {
+        if (it.sin_precio_listado && it.item_numero !== 'Sin ítem') {
+          itemsSinPrecio.push({
+            tramo: t.tramo,
+            capitulo: c.capitulo,
+            item: it.item_numero,
+            nRegs: (it.registros || []).length,
+          })
+        }
+      }
+    }
+  }
+
   return {
     tramos,
     totalCantidad: Math.round(totalCantidad * 1000) / 1000,
     totalCosto: Math.round(totalCosto),
-    totalRegistros: (registros || []).filter((r) => String(r?.item_numero || '').trim()).length,
+    totalRegistros,
     totalItems: tramos.reduce((n, t) => n + t.capitulos.reduce((m, c) => m + c.items.length, 0), 0),
+    itemsSinPrecio,
   }
 }
 
@@ -193,6 +238,7 @@ export function sicoeFilasExcelEjecucion(arbol, { verEco = true, incluirRegistro
     'Validación',
     'N° Reporte',
     'N° Registro',
+    ...(verEco ? ['Sin precio listado'] : []),
   ]
   const rows = []
   for (const t of arbol?.tramos || []) {
@@ -209,6 +255,7 @@ export function sicoeFilasExcelEjecucion(arbol, { verEco = true, incluirRegistro
       '',
       '',
       '',
+      ...(verEco ? [''] : []),
     ])
     for (const c of t.capitulos || []) {
       rows.push([
@@ -224,6 +271,7 @@ export function sicoeFilasExcelEjecucion(arbol, { verEco = true, incluirRegistro
         '',
         '',
         '',
+        ...(verEco ? [''] : []),
       ])
       for (const it of c.items || []) {
         const valTxt = (it.validacion?.chips || [])
@@ -236,12 +284,13 @@ export function sicoeFilasExcelEjecucion(arbol, { verEco = true, incluirRegistro
           it.item_numero,
           it.descripcion,
           it.unidad,
-          ...(verEco ? [it.vlr_unitario || ''] : []),
+          ...(verEco ? [it.sin_precio_listado ? '' : (it.vlr_unitario || '')] : []),
           it.cantidad,
-          ...(verEco ? [it.costo] : []),
+          ...(verEco ? [it.sin_precio_listado ? '' : it.costo] : []),
           valTxt,
           '',
           '',
+          ...(verEco ? [it.sin_precio_listado ? 'Sí' : ''] : []),
         ])
         if (incluirRegistros) {
           for (const r of it.registros || []) {
@@ -253,12 +302,13 @@ export function sicoeFilasExcelEjecucion(arbol, { verEco = true, incluirRegistro
               it.item_numero,
               it.descripcion,
               it.unidad,
-              ...(verEco ? [r._vu_efectivo ?? it.vlr_unitario ?? ''] : []),
+              ...(verEco ? [r._sin_precio_listado ? '' : (r._vu_efectivo ?? it.vlr_unitario ?? '')] : []),
               r._cant_efectiva ?? r.cantidad_total ?? '',
-              ...(verEco ? [r._costo_efectivo ?? ''] : []),
+              ...(verEco ? [r._sin_precio_listado ? '' : (r._costo_efectivo ?? '')] : []),
               `${chip.estado}${chip.nivel != null ? ` N${chip.nivel}` : ''}`,
               r.numero_reporte ?? '',
               r.numero_registro ?? '',
+              ...(verEco ? [r._sin_precio_listado ? 'Sí' : ''] : []),
             ])
           }
         }
@@ -278,6 +328,7 @@ export function sicoeFilasExcelEjecucion(arbol, { verEco = true, incluirRegistro
     '',
     '',
     '',
+    ...(verEco ? [''] : []),
   ])
   return { headers, rows }
 }

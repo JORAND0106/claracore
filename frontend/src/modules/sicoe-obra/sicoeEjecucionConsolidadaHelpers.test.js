@@ -100,6 +100,77 @@ describe('sicoeEjecucionConsolidadaHelpers', () => {
     )
   })
 
+  it('agrupa por capitulo_efectivo aunque el registro tenga otro capítulo', () => {
+    const regs = [
+      {
+        id: 1,
+        tramo: '8',
+        capitulo: '3. OBRAS DE ARTE',
+        capitulo_efectivo: '1. ACTIVIDADES PRELIMINARES',
+        item_numero: 'NP-08',
+        item_descripcion: 'EXCAVACIÓN',
+        unidad: 'M3',
+        cantidad_total: 5.62,
+        vlr_unitario_listado: 222133,
+      },
+      {
+        id: 2,
+        tramo: '8',
+        capitulo: '1. ACTIVIDADES PRELIMINARES',
+        capitulo_efectivo: '1. ACTIVIDADES PRELIMINARES',
+        item_numero: 'NP-08',
+        unidad: 'M3',
+        cantidad_total: 1,
+        vlr_unitario_listado: 222133,
+      },
+    ]
+    const arbol = sicoeConstruirArbolEjecucion(regs)
+    assert.equal(arbol.tramos[0].capitulos.length, 1)
+    assert.equal(arbol.tramos[0].capitulos[0].capitulo, '1. ACTIVIDADES PRELIMINARES')
+    assert.equal(arbol.tramos[0].capitulos[0].items[0].registros.length, 2)
+    assert.equal(arbol.tramos[0].capitulos[0].items[0].unidad, 'M3')
+    assert.ok(arbol.tramos[0].capitulos[0].items[0].vlr_unitario > 0)
+    assert.equal(arbol.totalRegistros, 2)
+  })
+
+  it('incluye registro sin ítem en el conteo y marca sin precio', () => {
+    const arbol = sicoeConstruirArbolEjecucion([
+      {
+        id: 1, tramo: 'T', capitulo: 'C', item_numero: '1.1',
+        cantidad_total: 2, vlr_unitario_listado: 1000,
+      },
+      {
+        id: 2, tramo: 'T', capitulo: 'C', item_numero: '',
+        cantidad_total: 1, vlr_unitario_listado: 0,
+      },
+      {
+        id: 3, tramo: 'T', capitulo: 'C', item_numero: '9.9',
+        cantidad_total: 1, vlr_unitario_listado: 0, sin_precio_listado: true,
+      },
+    ])
+    assert.equal(arbol.totalRegistros, 3)
+    assert.ok(arbol.itemsSinPrecio.some((x) => x.item === '9.9'))
+    const sinItem = arbol.tramos[0].capitulos[0].items.find((i) => i.item_numero === 'Sin ítem')
+    assert.ok(sinItem)
+    assert.equal(sinItem.registros.length, 1)
+  })
+
+  it('costo de ítem canónico Σcant×VU (no suma de redondeos por fila)', () => {
+    const arbol = sicoeConstruirArbolEjecucion([
+      {
+        id: 1, tramo: 'T', capitulo: 'C', item_numero: '1',
+        cantidad_total: 1.004, vlr_unitario_listado: 1000,
+      },
+      {
+        id: 2, tramo: 'T', capitulo: 'C', item_numero: '1',
+        cantidad_total: 1.004, vlr_unitario_listado: 1000,
+      },
+    ])
+    // ROUND0(ROUND(2.008,2)×1000) = ROUND0(2.01×1000) = 2010
+    assert.equal(arbol.tramos[0].capitulos[0].items[0].costo, 2010)
+    assert.equal(arbol.totalCosto, 2010)
+  })
+
   it('filas excel incluyen total y niveles', () => {
     const arbol = sicoeConstruirArbolEjecucion([
       {
