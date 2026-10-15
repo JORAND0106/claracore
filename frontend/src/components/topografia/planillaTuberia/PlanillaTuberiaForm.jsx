@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import BitacoraMaterialUbicacionModal from '../../../modules/seguimiento/BitacoraMaterialUbicacionModal'
 import TopoExcelSheet from '../TopoExcelSheet'
 import { topoSheetStyles } from '../topoSheetStyles'
@@ -28,6 +28,10 @@ import {
   esCodigoDescOtros,
 } from './planillaTuberiaCalc'
 import { aplicarDimsEnlace, lineasSinItem, padreDeDescuento } from './planillaTuberiaItemSicoe'
+import {
+  agruparNetosResumen,
+  descontarDeDefaultGrupo,
+} from './planillaTuberiaResumenGrupos'
 import {
   usuarioPuedeCrearRegistrosSicoe,
   usuarioPuedeEditarRegistrosSicoe,
@@ -193,6 +197,8 @@ export default function PlanillaTuberiaForm({
   const [evidencias, setEvidencias] = useState(() => normalizarEvidenciasFotograficas(null))
   const [itemsPorLinea, setItemsPorLinea] = useState({})
   const [dimsSync, setDimsSync] = useState({})
+  /** Grupos del Resumen abiertos (id → bool). Sellada: todos abiertos. */
+  const [gruposResumenAbiertos, setGruposResumenAbiertos] = useState({})
   /** Contenedor del editor: Enter avanza como Tab en cabecera/cartera/cantidades/descuentos. */
   const editorRef = useRef(null)
 
@@ -443,11 +449,17 @@ export default function PlanillaTuberiaForm({
     })
   }
 
-  const agregarLineaOtros = () => {
+  const agregarLineaOtros = () => agregarLineaGrupoResumen('otros')
+
+  const agregarLineaGrupoResumen = (grupoId) => {
     setCantManuales((prev) => {
       const list = normalizarCantidadesManuales(prev)
-      return [...list, { codigo: siguienteCodigoOtros(list) }]
+      const entry = { codigo: siguienteCodigoOtros(list), grupo: grupoId }
+      const dd = descontarDeDefaultGrupo(grupoId)
+      if (dd) entry.descontar_de = dd
+      return [...list, entry]
     })
+    setGruposResumenAbiertos((prev) => ({ ...prev, [grupoId]: true }))
   }
 
   const eliminarLineaOtros = (codigo) => {
@@ -455,7 +467,7 @@ export default function PlanillaTuberiaForm({
       const list = normalizarCantidadesManuales(prev).filter(
         (c) => String(c.codigo || '').toUpperCase() !== String(codigo || '').toUpperCase(),
       )
-      if (!list.some((c) => esCodigoOtros(c.codigo))) list.push({ codigo: 'OTROS_1' })
+      if (!list.some((c) => esCodigoOtros(c.codigo))) list.push({ codigo: 'OTROS_1', grupo: 'otros' })
       return list
     })
   }
@@ -525,10 +537,13 @@ export default function PlanillaTuberiaForm({
   const displayNombreCant = (n) => {
     if (!n?.editable_nombre) return n?.nombre
     const ov = overrideCantidad(n.codigo)
+    const grupo = String(ov?.grupo || n?.grupo || '').trim().toLowerCase()
     if (ov && ov.nombre != null && String(ov.nombre).trim() !== '') {
       const nom = String(ov.nombre).trim()
+      if (grupo && grupo !== 'otros') return nom
       return nom.toLowerCase().startsWith('otros') ? nom : `Otros: ${nom}`
     }
+    if (grupo && grupo !== 'otros') return '____'
     return n?.nombre || 'Otros: ____'
   }
 
@@ -536,6 +551,36 @@ export default function PlanillaTuberiaForm({
     () => (cantManuales || []).filter((c) => esCodigoOtros(c.codigo)).length,
     [cantManuales],
   )
+
+  const overridesByCodigo = useMemo(() => {
+    const map = {}
+    for (const c of cantManuales || []) {
+      const cod = String(c?.codigo || '').trim().toUpperCase()
+      if (cod) map[cod] = c
+    }
+    return map
+  }, [cantManuales])
+
+  const gruposResumen = useMemo(() => agruparNetosResumen(calculoVista?.netos || [], {
+    tipo: params.tipo,
+    overridesByCodigo,
+    displayNeto: displayNetoCant,
+  }), [calculoVista?.netos, params.tipo, overridesByCodigo, cantManuales, displayNetoCant])
+
+  const grupoResumenAbierto = (grupoId) => {
+    if (!editable) return true
+    if (Object.prototype.hasOwnProperty.call(gruposResumenAbiertos, grupoId)) {
+      return Boolean(gruposResumenAbiertos[grupoId])
+    }
+    return true
+  }
+
+  const toggleGrupoResumen = (grupoId) => {
+    setGruposResumenAbiertos((prev) => ({
+      ...prev,
+      [grupoId]: !grupoResumenAbierto(grupoId),
+    }))
+  }
 
   const nDescOtrosLineas = useMemo(
     () => (descManuales || []).filter((c) => esCodigoDescOtros(c.codigo)).length,
@@ -1715,19 +1760,8 @@ export default function PlanillaTuberiaForm({
 
   <div style={layoutTables}>
     <div style={cardPad}>
-      <div style={{ ...sheet.sectionTitle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+      <div style={sheet.sectionTitle}>
         <span>Resumen de Cantidades</span>
-        {editable && (
-          <button
-            type="button"
-            className="cc-topo-touch-btn"
-            style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }}
-            onClick={agregarLineaOtros}
-            title="Agregar otra línea Otros"
-          >
-            + Otros
-          </button>
-        )}
       </div>
       {previewParcial && (
         <div style={{
@@ -1743,7 +1777,7 @@ export default function PlanillaTuberiaForm({
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
             <tr>
-              {['Item', 'Ítem cobro', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Descontar de', 'Foto'].map((h, i) => (
+              {['Observación', 'Ítem cobro', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Descontar de', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -1762,145 +1796,219 @@ export default function PlanillaTuberiaForm({
             </tr>
           </thead>
           <tbody>
-            {(calculoVista?.netos || []).map((n) => {
-              const editDims = !!n.editable_dims && editable
-              const editNom = !!n.editable_nombre && editable
-              const esOtros = esCodigoOtros(n.codigo)
-              const ov = overrideCantidad(n.codigo)
-              const descontarDe = ov?.descontar_de || n.descontar_de || ''
-              const inpStyle = {
-                ...sheet.cellInp,
-                height: RESUMEN_ROW_HEIGHT,
-                padding: '1px 3px',
-                textAlign: 'right',
-                fontFamily: 'ui-monospace, Consolas, monospace',
-                fontVariantNumeric: 'tabular-nums',
+            {gruposResumen.map((grupo) => {
+              const abierto = grupoResumenAbierto(grupo.id)
+              const tdGrupo = {
+                ...tdResumenItem,
+                background: '#E8EEF7',
                 fontWeight: 700,
-                fontSize: 'var(--cc-xs)',
-                lineHeight: 1.05,
-                background: 'transparent',
-                boxSizing: 'border-box',
-                width: '100%',
+              }
+              const tdGrupoCalc = {
+                ...tdResumenCalc,
+                background: '#E8EEF7',
+                fontWeight: 700,
               }
               return (
-                <tr key={n.codigo}>
-                  <td style={tdResumenItem}>
-                    {editNom ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: '100%' }}>
-                        <span>Otros:</span>
-                        <input
-                          disabled={!editable}
-                          value={ov?.nombre ?? ''}
-                          placeholder="____"
-                          onChange={(e) => setOverrideCantidad(n.codigo, { nombre: e.target.value })}
+                <Fragment key={grupo.id}>
+                  <tr>
+                    <td style={tdGrupo}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleGrupoResumen(grupo.id)}
+                          title={abierto ? 'Contraer grupo' : 'Expandir grupo'}
                           style={{
-                            ...sheet.cellInp,
-                            height: RESUMEN_ROW_HEIGHT,
-                            padding: '1px 3px',
-                            textAlign: 'left',
-                            flex: 1,
-                            fontSize: 'var(--cc-xs)',
-                            lineHeight: 1.05,
-                            fontWeight: 700,
+                            border: 'none',
                             background: 'transparent',
+                            cursor: 'pointer',
+                            padding: '0 2px',
+                            fontWeight: 700,
+                            fontSize: 11,
+                            color: '#1e3a8a',
+                            lineHeight: 1,
                           }}
-                        />
-                        {editable && nOtrosLineas > 1 && (
+                        >
+                          {abierto ? '▼' : '▶'}
+                        </button>
+                        <span style={{ flex: 1 }}>{grupo.titulo}</span>
+                        {editable && (
                           <button
                             type="button"
-                            title="Quitar esta línea Otros"
-                            onClick={() => eliminarLineaOtros(n.codigo)}
+                            className="cc-topo-touch-btn"
+                            title={`Agregar línea en ${grupo.titulo}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              agregarLineaGrupoResumen(grupo.id)
+                            }}
                             style={{
-                              border: 'none', background: 'transparent', color: '#b91c1c',
-                              cursor: 'pointer', fontWeight: 700, padding: '0 4px', fontSize: 12,
+                              ...ui.btnSecondary,
+                              height: 22,
+                              minWidth: 22,
+                              padding: '0 6px',
+                              fontSize: 12,
+                              fontWeight: 700,
+                              lineHeight: 1,
                             }}
                           >
-                            ×
+                            +
                           </button>
                         )}
                       </span>
-                    ) : displayNombreCant(n)}
-                  </td>
-                  <td style={{ ...tdResumenItem, minWidth: 150 }}>
-                    <PlanillaTuberiaItemCobro
-                      contratoId={contratoId}
-                      token={token}
-                      item={itemsPorLinea[`cantidades:${String(n.codigo || '').toUpperCase()}`]}
-                      disabled={!editable || !puedeAsignarItem}
-                      tituloPermiso={
-                        puedeAsignarItem
-                          ? ''
-                          : 'Se requiere permiso de crear o editar el reporte de cantidades'
-                      }
-                      onSelect={(item) => setItemsPorLinea((prev) => ({
-                        ...prev,
-                        [`cantidades:${String(n.codigo || '').toUpperCase()}`]: item,
-                      }))}
-                    />
-                  </td>
-                  <td style={{ ...tdResumenCalc, textAlign: 'center' }}>{n.unidad || ''}</td>
-                  {['long', 'ancho', 'espesor'].map((k) => (
-                    <td key={k} style={editDims ? { ...tdResumenCalc, padding: 0 } : tdResumenCalc}>
-                      {editDims ? (
-                        <input
-                          type="number"
-                          step="0.0001"
-                          inputMode="decimal"
-                          disabled={!editable}
-                          value={cellValCant(n, k)}
-                          onChange={(e) => setOverrideCantidad(n.codigo, { [k]: e.target.value })}
-                          style={inpStyle}
-                        />
-                      ) : fmtResumenCantidades(n[k])}
                     </td>
-                  ))}
-                  <td style={tdResumenCalc}>{fmtResumenCantidades(n.descuentos)}</td>
-                  <td style={tdResumenCalc}>{fmtResumenCantidades(displayNetoCant(n))}</td>
-                  <td style={{ ...tdResumenCalc, padding: 2, textAlign: 'left' }}>
-                    {(n.codigo === 'EXC_ROC' || esOtros) ? (
-                      <select
-                        disabled={!editable}
-                        value={descontarDe || ''}
-                        title="Descontar el volumen (L×A×E) de una línea del Resumen"
-                        onChange={(e) => setOverrideCantidad(n.codigo, {
-                          descontar_de: e.target.value || null,
-                        })}
-                        style={{
-                          ...sheet.cellSelect,
-                          height: RESUMEN_ROW_HEIGHT,
-                          padding: '0 2px',
-                          fontSize: 'var(--cc-xxs)',
-                          width: '100%',
-                          background: editable ? 'transparent' : CALC_CELL_BG,
-                        }}
-                      >
-                        <option value="">—</option>
-                        {LINEAS_DESCUENTO_VOLUMEN.map((c) => (
-                          <option key={c.key} value={c.key}>
-                            {c.key === 'TRI' ? labelLineaDescuentoVolumen('TRI', params.tipo) : c.label}
-                          </option>
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc}>{fmtResumenCantidades(grupo.total)}</td>
+                    <td style={tdGrupoCalc} />
+                    <td style={tdGrupoCalc} />
+                  </tr>
+                  {abierto && grupo.lineas.map((n) => {
+                    const editDims = !!n.editable_dims && editable
+                    const editNom = !!n.editable_nombre && editable
+                    const esOtros = esCodigoOtros(n.codigo)
+                    const ov = overrideCantidad(n.codigo)
+                    const grupoLinea = String(ov?.grupo || n?.grupo || '').trim().toLowerCase()
+                    const esObsLibre = esOtros && grupoLinea && grupoLinea !== 'otros'
+                    const descontarDe = ov?.descontar_de || n.descontar_de || ''
+                    const inpStyle = {
+                      ...sheet.cellInp,
+                      height: RESUMEN_ROW_HEIGHT,
+                      padding: '1px 3px',
+                      textAlign: 'right',
+                      fontFamily: 'ui-monospace, Consolas, monospace',
+                      fontVariantNumeric: 'tabular-nums',
+                      fontWeight: 700,
+                      fontSize: 'var(--cc-xs)',
+                      lineHeight: 1.05,
+                      background: 'transparent',
+                      boxSizing: 'border-box',
+                      width: '100%',
+                    }
+                    return (
+                      <tr key={n.codigo}>
+                        <td style={{ ...tdResumenItem, paddingLeft: 18 }}>
+                          {editNom ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: '100%' }}>
+                              {!esObsLibre && <span>Otros:</span>}
+                              <input
+                                disabled={!editable}
+                                value={ov?.nombre ?? ''}
+                                placeholder="____"
+                                onChange={(e) => setOverrideCantidad(n.codigo, { nombre: e.target.value })}
+                                style={{
+                                  ...sheet.cellInp,
+                                  height: RESUMEN_ROW_HEIGHT,
+                                  padding: '1px 3px',
+                                  textAlign: 'left',
+                                  flex: 1,
+                                  fontSize: 'var(--cc-xs)',
+                                  lineHeight: 1.05,
+                                  fontWeight: 700,
+                                  background: 'transparent',
+                                }}
+                              />
+                              {editable && nOtrosLineas > 1 && (
+                                <button
+                                  type="button"
+                                  title="Quitar esta línea"
+                                  onClick={() => eliminarLineaOtros(n.codigo)}
+                                  style={{
+                                    border: 'none', background: 'transparent', color: '#b91c1c',
+                                    cursor: 'pointer', fontWeight: 700, padding: '0 4px', fontSize: 12,
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </span>
+                          ) : displayNombreCant(n)}
+                        </td>
+                        <td style={{ ...tdResumenItem, minWidth: 150 }}>
+                          <PlanillaTuberiaItemCobro
+                            contratoId={contratoId}
+                            token={token}
+                            item={itemsPorLinea[`cantidades:${String(n.codigo || '').toUpperCase()}`]}
+                            disabled={!editable || !puedeAsignarItem}
+                            tituloPermiso={
+                              puedeAsignarItem
+                                ? ''
+                                : 'Se requiere permiso de crear o editar el reporte de cantidades'
+                            }
+                            onSelect={(item) => setItemsPorLinea((prev) => ({
+                              ...prev,
+                              [`cantidades:${String(n.codigo || '').toUpperCase()}`]: item,
+                            }))}
+                          />
+                        </td>
+                        <td style={{ ...tdResumenCalc, textAlign: 'center' }}>{n.unidad || ''}</td>
+                        {['long', 'ancho', 'espesor'].map((k) => (
+                          <td key={k} style={editDims ? { ...tdResumenCalc, padding: 0 } : tdResumenCalc}>
+                            {editDims ? (
+                              <input
+                                type="number"
+                                step="0.0001"
+                                inputMode="decimal"
+                                disabled={!editable}
+                                value={cellValCant(n, k)}
+                                onChange={(e) => setOverrideCantidad(n.codigo, { [k]: e.target.value })}
+                                style={inpStyle}
+                              />
+                            ) : fmtResumenCantidades(n[k])}
+                          </td>
                         ))}
-                      </select>
-                    ) : '—'}
-                  </td>
-                  <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
-                    <PlanillaTuberiaEvidenciaBtn
-                      scope="cantidades"
-                      codigo={n.codigo}
-                      label={displayNombreCant(n)}
-                      evidencias={evidencias}
-                      editable={editable}
-                      busy={busy}
-                      requiere={lineasFotoReq.has(`cantidades:${n.codigo}`)}
-                      onAdjuntar={adjuntarEvidencia}
-                      onEliminar={eliminarEvidencia}
-                      onError={(msg) => setErr(msg)}
-                      contratoId={contratoId}
-                      token={token}
-                      theme={ui.t}
-                    />
-                  </td>
-                </tr>
+                        <td style={tdResumenCalc}>{fmtResumenCantidades(n.descuentos)}</td>
+                        <td style={tdResumenCalc}>{fmtResumenCantidades(displayNetoCant(n))}</td>
+                        <td style={{ ...tdResumenCalc, padding: 2, textAlign: 'left' }}>
+                          {(n.codigo === 'EXC_ROC' || esOtros) ? (
+                            <select
+                              disabled={!editable}
+                              value={descontarDe || ''}
+                              title="Descontar el volumen (L×A×E) de una línea del Resumen"
+                              onChange={(e) => setOverrideCantidad(n.codigo, {
+                                descontar_de: e.target.value || null,
+                              })}
+                              style={{
+                                ...sheet.cellSelect,
+                                height: RESUMEN_ROW_HEIGHT,
+                                padding: '0 2px',
+                                fontSize: 'var(--cc-xxs)',
+                                width: '100%',
+                                background: editable ? 'transparent' : CALC_CELL_BG,
+                              }}
+                            >
+                              <option value="">—</option>
+                              {LINEAS_DESCUENTO_VOLUMEN.map((c) => (
+                                <option key={c.key} value={c.key}>
+                                  {c.key === 'TRI' ? labelLineaDescuentoVolumen('TRI', params.tipo) : c.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : '—'}
+                        </td>
+                        <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
+                          <PlanillaTuberiaEvidenciaBtn
+                            scope="cantidades"
+                            codigo={n.codigo}
+                            label={displayNombreCant(n)}
+                            evidencias={evidencias}
+                            editable={editable}
+                            busy={busy}
+                            requiere={lineasFotoReq.has(`cantidades:${n.codigo}`)}
+                            onAdjuntar={adjuntarEvidencia}
+                            onEliminar={eliminarEvidencia}
+                            onError={(msg) => setErr(msg)}
+                            contratoId={contratoId}
+                            token={token}
+                            theme={ui.t}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </Fragment>
               )
             })}
           </tbody>

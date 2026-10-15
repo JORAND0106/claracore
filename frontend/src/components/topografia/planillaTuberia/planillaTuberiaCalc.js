@@ -497,12 +497,23 @@ function normalizeCantidadesManuales(cantidadesManuales) {
     if (esCodigoOtros(cod) && 'nombre' in d) entry.nombre = String(d.nombre || '').trim()
     const dest = resolverLineaDescuentoVolumen(d.descontar_de)
     if (dest) entry.descontar_de = dest
+    const grupo = String(d.grupo || '').trim().toLowerCase()
+    if (grupo) entry.grupo = grupo
     out.push(entry)
   }
   if (!out.some((x) => esCodigoOtros(x.codigo))) out.push({ codigo: 'OTROS_1' })
   if (!out.some((x) => x.codigo === 'EXC_ROC')) out.unshift({ codigo: 'EXC_ROC' })
   else out.sort((a, b) => (a.codigo === 'EXC_ROC' ? 0 : 1) - (b.codigo === 'EXC_ROC' ? 0 : 1) || String(a.codigo).localeCompare(b.codigo))
   return out
+}
+
+/** Etiqueta visible de línea OTROS[_n]: en grupo «otros» usa prefijo; en otros grupos = Observación. */
+export function labelLineaOtrosOverride(ov) {
+  const grupo = String(ov?.grupo || '').trim().toLowerCase()
+  const nom = String(ov?.nombre || '').trim()
+  if (grupo && grupo !== 'otros') return nom || '____'
+  if (nom) return nom.toLowerCase().startsWith('otros') ? nom : `Otros: ${nom}`
+  return 'Otros: ____'
 }
 
 function metaItemCantidad(codigo, tipo = null) {
@@ -608,13 +619,8 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
 
   for (const ov of overridesList) {
     if (!esCodigoOtros(ov.codigo)) continue
-    let otrLabel = 'Otros: ____'
-    if (ov.nombre) {
-      otrLabel = ov.nombre.toLowerCase().startsWith('otros')
-        ? ov.nombre
-        : `Otros: ${ov.nombre}`
-    }
-    cantidades.push(row(
+    const otrLabel = labelLineaOtrosOverride(ov)
+    const r = row(
       ov.codigo,
       ov.long ?? null,
       ov.ancho ?? null,
@@ -623,7 +629,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
       false,
       otrLabel,
       ov.descontar_de || null,
-    ))
+    )
+    if (ov.grupo) r.grupo = ov.grupo
+    cantidades.push(r)
   }
 
   const catalogo = tipo === 'FILTRO' ? ITEMS_DESCUENTOS_FILTRO : ITEMS_DESCUENTOS_ALCANTARILLA
@@ -693,7 +701,7 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
       bruto = c.cantidad
       neto = Math.round((Number(bruto) - descuento) * 100) / 100
     }
-    return {
+    const outNeto = {
       codigo: c.codigo,
       nombre: c.nombre,
       unidad: c.unidad,
@@ -707,6 +715,8 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
       editable_nombre: Boolean(c.editable_nombre),
       descontar_de: c.descontar_de || null,
     }
+    if (c.grupo) outNeto.grupo = c.grupo
+    return outNeto
   })
 
   const descuentosVolumen = Object.fromEntries(

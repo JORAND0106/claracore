@@ -72,18 +72,21 @@ class TestExcelOcultarCeros(unittest.TestCase):
             ],
         }
         ws = _ws_con_calculo(calc)
-        # Compactado: EXC, TRI en resumen; Area 1 en descuentos
-        self.assertEqual(ws["B45"].value, "Excavación Varias")
-        self.assertEqual(ws["B46"].value, "Atraque mat. filtrante")
-        self.assertIn(ws["B47"].value, (None, ""))
-        self.assertNotEqual(ws["B50"].value, "Excavación Roca")
-        self.assertNotEqual(ws["B51"].value, "Otros: ____")
+        # Agrupado + compactado: cabecera Excavación, EXC; cabecera triturado, TRI; Area 1
+        self.assertEqual(ws["B45"].value, "Excavación")
+        self.assertEqual(ws["B46"].value, "Excavación Varias")
+        self.assertEqual(ws["H45"].value, 5.0)
+        # Segunda sección con cantidad: Mat. granular / atraque (título por tipo)
+        self.assertTrue(str(ws["B47"].value or ""))
+        self.assertEqual(ws["B48"].value, "Atraque mat. filtrante")
+        self.assertNotEqual(ws["B49"].value, "Excavación Roca")
+        self.assertNotEqual(ws["B50"].value, "Otros: ____")
         self.assertEqual(ws["I45"].value, "Area 1")
         self.assertIn(ws["I46"].value, (None, ""))
-        # Fórmula viva de TRI apunta a N45 (Area1 compactada)
-        self.assertEqual(ws["G46"].value, "=N45")
-        self.assertIn("PRODUCT(D46:F46)", str(ws["H46"].value))
-        self.assertIn("-G46", str(ws["H46"].value))
+        # Fórmula viva de TRI (fila 48) apunta a N45 (Area1 compactada)
+        self.assertEqual(ws["G48"].value, "=N45")
+        self.assertIn("PRODUCT(D48:F48)", str(ws["H48"].value))
+        self.assertIn("-G48", str(ws["H48"].value))
 
     def test_plantilla_vacia_conserva_filas_fijas(self):
         raw = build_planilla_tuberia_xlsx(
