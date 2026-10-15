@@ -98,4 +98,11 @@ describe('planillaTuberiaResumenGrupos', () => {
     // + del Resumen está en cabecera de grupo (editable); Descuentos sigue con «+ Otros».
     assert.match(formSrc, /title=\{`Agregar línea en \$\{grupo\.titulo\}`\}/)
   })
+
+  it('gruposResumen useMemo va después de calculoVista (sin TDZ)', () => {
+    const idxCalc = formSrc.indexOf('const calculoVista = useMemo')
+    const idxGrupos = formSrc.indexOf('const gruposResumen = useMemo')
+    assert.ok(idxCalc >= 0 && idxGrupos >= 0)
+    assert.ok(idxGrupos > idxCalc, 'gruposResumen debe declararse después de calculoVista')
+  })
 })
