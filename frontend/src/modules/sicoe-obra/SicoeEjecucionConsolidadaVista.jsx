@@ -120,37 +120,57 @@ export default function SicoeEjecucionConsolidadaVista({
     setExpandItems(new Set())
   }, [])
 
+  const abortRef = useRef(null)
+  const [ultimaCargaMs, setUltimaCargaMs] = useState(null)
+
   const cargar = useCallback(async () => {
     if (!contratoId || !token || !busquedaActiva) {
       setPayload(null)
       setError(null)
       expandInitRef.current = false
+      setUltimaCargaMs(null)
       return
     }
     if (typeof buildFiltrosParams !== 'function') return
+    if (abortRef.current) abortRef.current.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setCargando(true)
     setError(null)
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
       const params = buildFiltrosParams()
       if (!params || ![...params.keys()].length) {
         setPayload({ ok: true, total: 0, registros: [], ocultar_costo_directo: false })
+        setUltimaCargaMs(0)
         return
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/cantidades-por-item?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: ac.signal,
+        cache: 'no-store',
       })
       const data = await res.json().catch(() => ({}))
+      if (ac.signal.aborted) return
       if (!res.ok) throw new Error(data?.detail || `Error ${res.status}`)
       setPayload(data)
+      const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+      setUltimaCargaMs(ms)
+      if (typeof window !== 'undefined') {
+        console.info(`[SicoeObra] Ejecución consolidada cargada en ${ms} ms`)
+      }
       if (!expandInitRef.current) {
         aplicarExpandDefault(data?.registros || [])
         expandInitRef.current = true
       }
     } catch (e) {
+      if (e?.name === 'AbortError') return
       setPayload(null)
       setError(e?.message || String(e))
+      setUltimaCargaMs(null)
     } finally {
-      setCargando(false)
+      if (abortRef.current === ac) abortRef.current = null
+      if (!ac.signal.aborted) setCargando(false)
     }
   }, [API_URL, contratoId, token, busquedaActiva, buildFiltrosParams, aplicarExpandDefault])
 
@@ -161,6 +181,9 @@ export default function SicoeEjecucionConsolidadaVista({
 
   useEffect(() => {
     void cargar()
+    return () => {
+      if (abortRef.current) abortRef.current.abort()
+    }
   }, [cargar, refreshNonce, filtrosVersion])
 
   const arbol = useMemo(
@@ -415,7 +438,14 @@ export default function SicoeEjecucionConsolidadaVista({
       </div>
 
       {cargando && (
-        <div style={{ padding: 16, color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando…</div>
+        <div style={{ padding: '10px 14px', color: t.textMuted, fontSize: 'var(--cc-sm)' }} aria-live="polite">
+          Cargando consolidada…
+        </div>
+      )}
+      {!cargando && ultimaCargaMs != null && (
+        <div style={{ padding: '0 4px 4px', color: t.textMuted, fontSize: 11 }} aria-hidden>
+          {ultimaCargaMs} ms
+        </div>
       )}
       {error && (
         <div style={{ padding: 12, color: '#dc2626', background: '#fef2f2', borderRadius: 8, fontSize: 'var(--cc-sm)' }}>
