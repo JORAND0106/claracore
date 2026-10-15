@@ -57,6 +57,7 @@ import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeCantidadesPorItemVista from './modules/sicoe-obra/SicoeCantidadesPorItemVista'
+import SicoeEjecucionConsolidadaVista from './modules/sicoe-obra/SicoeEjecucionConsolidadaVista'
 import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
 import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
 import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
@@ -12175,9 +12176,10 @@ function ModuloSicoeObra({
     return params
   }, [])
 
-  const abrirRegistroDesdeCantidadesItem = useCallback(async (reg) => {
+  const abrirRegistroDesdeCantidadesItem = useCallback(async (reg, opts = {}) => {
     const rid = Number(reg?.reporte_id)
     if (!Number.isFinite(rid) || rid <= 0) return
+    const soloRegistro = !!opts?.soloRegistro
     abortarPeticionesSicoeFondo()
     setReporteSeleccionado({
       id: rid,
@@ -12186,6 +12188,7 @@ function ModuloSicoeObra({
       registros: [],
       puntos: [],
       _autoRegistro: reg.id,
+      ...(soloRegistro ? { registros_vista_filtrada: true } : {}),
     })
     setModalCarpeta(true)
     try {
@@ -12198,10 +12201,17 @@ function ModuloSicoeObra({
         )
         return
       }
+      let registros = Array.isArray(data.registros) ? data.registros : []
+      if (soloRegistro && reg?.id != null) {
+        const one = registros.find((r) => String(r.id) === String(reg.id))
+        registros = one ? [one] : registros.filter((r) => String(r.id) === String(reg.id))
+      }
       setReporteSeleccionado({
         ...data,
+        registros,
         _cargandoDetalle: false,
         _autoRegistro: reg.id,
+        ...(soloRegistro ? { registros_vista_filtrada: true } : {}),
       })
     } catch {
       setReporteSeleccionado((prev) =>
@@ -12548,6 +12558,32 @@ function ModuloSicoeObra({
               }}
             >
               {usuarioVeAuditoriaTraslapos(usuario) ? 'Auditoría' : 'Por cantidades'}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sicoeModuloVista === 'ejecucion_consolidada'}
+              onClick={() => setSicoeModuloVista('ejecucion_consolidada')}
+              title="Ejecución consolidada (tramo · capítulo · ítem)"
+              aria-label="Ejecución consolidada"
+              style={{
+                background: sicoeModuloVista === 'ejecucion_consolidada' ? t.primary : 'transparent',
+                color: sicoeModuloVista === 'ejecucion_consolidada' ? '#fff' : t.textMuted,
+                border: `1px solid ${sicoeModuloVista === 'ejecucion_consolidada' ? t.primary : t.border}`,
+                borderRadius: 8,
+                padding: '6px 10px',
+                minWidth: 36,
+                minHeight: 32,
+                fontWeight: 800,
+                fontSize: 'var(--cc-md)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                lineHeight: 1,
+              }}
+            >
+              📊
             </button>
           </div>
         </div>
@@ -13085,7 +13121,7 @@ function ModuloSicoeObra({
         filtroSubcList={filtroSubcList}
         pkList={sicoePkList}
         busquedaRealizada={busquedaRealizada}
-        chipsSuaves={sicoeModuloVista === 'cantidades_item'}
+        chipsSuaves={sicoeModuloVista === 'cantidades_item' || sicoeModuloVista === 'ejecucion_consolidada'}
         extraActions={
           puedeReversionCantidadesMasiva && sicoeModuloVista === 'reportes' ? (
             <button
@@ -13202,6 +13238,21 @@ function ModuloSicoeObra({
             filtrosVersion={cpiFiltrosVersion}
           />
         )
+      ) : sicoeModuloVista === 'ejecucion_consolidada' ? (
+        <SicoeEjecucionConsolidadaVista
+          t={t}
+          contratoId={contrato_id}
+          token={getToken()}
+          API_URL={API_URL}
+          nivelInfo={nivelInfo}
+          nivelesContrato={nivelesContrato}
+          busquedaActiva={!!sicoeVistaResultadosActiva}
+          buildFiltrosParams={buildCantidadesItemParams}
+          onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
+          refreshNonce={cpiRefreshNonce}
+          filtrosVersion={cpiFiltrosVersion}
+          exportMeta={exportMetaContrato || {}}
+        />
       ) : (
       <>
       {/* ── Grid reportes ── */}
@@ -13831,7 +13882,9 @@ function ModuloSicoeObra({
             setReporteSeleccionado(null)
             invalidateSicoeVistaCache(contrato_id)
             invalidateDashboardVistaCache(contrato_id)
-            if (sicoeModuloVista === 'cantidades_item') setCpiRefreshNonce((n) => n + 1)
+            if (sicoeModuloVista === 'cantidades_item' || sicoeModuloVista === 'ejecucion_consolidada') {
+              setCpiRefreshNonce((n) => n + 1)
+            }
             if (busquedaRealizada) {
               try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
             } else {
@@ -13841,7 +13894,9 @@ function ModuloSicoeObra({
           onRefrescarListadoSicoe={() => {
             invalidateSicoeVistaCache(contrato_id)
             invalidateDashboardVistaCache(contrato_id)
-            if (sicoeModuloVista === 'cantidades_item') setCpiRefreshNonce((n) => n + 1)
+            if (sicoeModuloVista === 'cantidades_item' || sicoeModuloVista === 'ejecucion_consolidada') {
+              setCpiRefreshNonce((n) => n + 1)
+            }
             if (busquedaRealizada) {
               try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
             }
