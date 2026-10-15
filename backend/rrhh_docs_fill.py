@@ -5,9 +5,11 @@ Grupos (orden de la barra):
   1. contrato   — contrato laboral generado/cargado
   2. soporte    — documentos de soporte (+ tipos «Otro» del checklist)
   3. ingreso    — documentos de ingreso (+ tipos «Otro»)
-  4. afiliacion — certificaciones de afiliación (solo las que aplican)
+  4. afiliacion — certificaciones de afiliación (EPS/ARL/Pensión/Cesantías
+                  obligatorias; Caja opcional)
 
 Cálculo en lote sobre la página de la grilla (sin N+1).
+Opcionales no cargados (hoja de vida, certificados, caja) no restan avance.
 Si el colaborador ya está Aprobado, todas las secciones se muestran llenas
 (los adjuntos individuales se eliminan al consolidar).
 """
@@ -15,6 +17,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+from rrhh_docs_obligatoriedad import es_doc_opcional
 
 _log = logging.getLogger("uvicorn.error")
 
@@ -91,20 +95,6 @@ def _builtin_tipos(categoria: str) -> Set[str]:
     if categoria == "afiliacion":
         return set(_BUILTIN_AFILIACION)
     return set()
-
-
-def _afiliacion_aplica(trab: dict, tipo: str) -> bool:
-    field_by_tipo = {
-        "cert_eps": "eps",
-        "cert_pension": "pension",
-        "cert_arl": "arl",
-        "cert_cesantias": "cesantias",
-        "cert_caja": "caja_compensacion",
-    }
-    field = field_by_tipo.get(tipo)
-    if not field:
-        return True
-    return bool(str(trab.get(field) or "").strip())
 
 
 def _fetch_docs_batch(sb, contrato_id: int, ids: List[int]) -> Dict[int, List[Tuple[str, str]]]:
@@ -200,13 +190,21 @@ def _fill_for_trabajador(
             for c, t in vigentes:
                 if c == cat and t.startswith("ext_"):
                     expected.add(t)
-        if cat == "afiliacion":
-            expected = {t for t in expected if _afiliacion_aplica(trab, t)}
-        if not expected:
-            # Sin ítems aplicables: sección vacía (ratio 0) para no marcar “completa” por defecto.
+        # Denominador: solo obligatorios (+ opcionales que sí estén cargados).
+        # Opcionales vacíos no restan ni cuentan como faltantes.
+        contables: Set[str] = set()
+        filled = 0
+        for t in expected:
+            cargado = (cat, t) in vigentes
+            if es_doc_opcional(cat, t) and not cargado:
+                continue
+            contables.add(t)
+            if cargado:
+                filled += 1
+        if not contables:
+            # Solo opcionales vacíos en la sección → 0/0 (no marca completa ni resta).
             return _seg(0, 0)
-        filled = sum(1 for t in expected if (cat, t) in vigentes)
-        return _seg(filled, len(expected))
+        return _seg(filled, len(contables))
 
     return {
         "contrato": contrato,

@@ -8,6 +8,11 @@ from rrhh_docs_fill import (
     attach_docs_fill,
     empty_docs_fill,
 )
+from rrhh_docs_obligatoriedad import (
+    es_doc_opcional,
+    iniciales_empresa,
+    nombre_corto_colaborador,
+)
 
 
 def test_empty_docs_fill():
@@ -16,27 +21,62 @@ def test_empty_docs_fill():
     assert e["contrato"]["ratio"] == 0.0
 
 
-def test_fill_parcial_soporte_e_ingreso():
-    trab = {"id": 1, "doc_validacion_estado": "pendiente", "eps": "Sura"}
+def test_opcionales_definidos():
+    assert es_doc_opcional("soporte", "hoja_vida")
+    assert es_doc_opcional("soporte", "certificados")
+    assert es_doc_opcional("afiliacion", "cert_caja")
+    assert not es_doc_opcional("soporte", "cedula")
+    assert not es_doc_opcional("afiliacion", "cert_eps")
+    assert not es_doc_opcional("afiliacion", "cert_arl")
+
+
+def test_fill_excluye_opcionales_vacios_del_denominador():
+    """Hoja de vida / certificados / caja vacíos no restan avance."""
+    trab = {"id": 1, "doc_validacion_estado": "pendiente"}
+    docs = [
+        ("soporte", "cedula"),
+        # sin hoja_vida ni certificados
+        ("ingreso", "induccion"),
+        ("ingreso", "reglamento"),
+        ("ingreso", "examen_medico"),
+        ("afiliacion", "cert_eps"),
+        ("afiliacion", "cert_pension"),
+        ("afiliacion", "cert_arl"),
+        ("afiliacion", "cert_cesantias"),
+        # sin caja
+    ]
+    custom = {"soporte": set(), "ingreso": set()}
+    fill = _fill_for_trabajador(trab, docs, tiene_contrato=True, custom=custom)
+    assert fill["contrato"]["ratio"] == 1.0
+    # soporte: solo cédula cuenta (1/1); hv y certificados opcionales vacíos fuera
+    assert fill["soporte"] == {"filled": 1, "total": 1, "ratio": 1.0}
+    assert fill["ingreso"]["ratio"] == 1.0
+    # afiliacion: 4 obligatorias cargadas; caja opcional vacía no resta
+    assert fill["afiliacion"] == {"filled": 4, "total": 4, "ratio": 1.0}
+
+
+def test_afiliacion_obligatorias_siempre_en_denominador():
+    """EPS/ARL/Pensión/Cesantías faltantes restan aunque no haya entidad."""
+    trab = {"id": 1, "doc_validacion_estado": "pendiente", "eps": "", "pension": ""}
+    fill = _fill_for_trabajador(
+        trab, [], tiene_contrato=False, custom={"soporte": set(), "ingreso": set()},
+    )
+    assert fill["afiliacion"]["total"] == 4
+    assert fill["afiliacion"]["filled"] == 0
+    assert fill["afiliacion"]["ratio"] == 0.0
+
+
+def test_opcional_cargado_suma_al_avance():
+    trab = {"id": 1, "doc_validacion_estado": "pendiente"}
     docs = [
         ("soporte", "cedula"),
         ("soporte", "hoja_vida"),
-        ("ingreso", "induccion"),
-        ("afiliacion", "cert_eps"),
-        ("soporte", "ext_diploma"),
     ]
-    custom = {"soporte": {"ext_diploma"}, "ingreso": set()}
-    fill = _fill_for_trabajador(trab, docs, tiene_contrato=True, custom=custom)
-    assert fill["contrato"] == {"filled": 1, "total": 1, "ratio": 1.0}
-    # soporte builtin 3 + ext_diploma = 4; filled cedula+hv+diploma = 3
-    assert fill["soporte"]["total"] == 4
-    assert fill["soporte"]["filled"] == 3
-    # ingreso: 3 builtin, 1 filled
-    assert fill["ingreso"]["total"] == 3
-    assert fill["ingreso"]["filled"] == 1
-    # afiliacion: solo EPS aplica
-    assert fill["afiliacion"]["total"] == 1
-    assert fill["afiliacion"]["filled"] == 1
+    fill = _fill_for_trabajador(
+        trab, docs, tiene_contrato=False, custom={"soporte": set(), "ingreso": set()},
+    )
+    # cédula + hoja_vida cargada
+    assert fill["soporte"] == {"filled": 2, "total": 2, "ratio": 1.0}
 
 
 def test_aprobado_llena_todo():
@@ -44,6 +84,13 @@ def test_aprobado_llena_todo():
     fill = _fill_for_trabajador(trab, [], tiene_contrato=False, custom={"soporte": set(), "ingreso": set()})
     for g in ("contrato", "soporte", "ingreso", "afiliacion"):
         assert fill[g]["ratio"] == 1.0
+
+
+def test_nombre_corto_e_iniciales():
+    assert nombre_corto_colaborador("María Fernanda", "López Gómez") == "María López"
+    assert nombre_corto_colaborador("Ana", "Díaz") == "Ana Díaz"
+    assert iniciales_empresa("OC Ingenieria y Consultoria SAS") == "OIC"
+    assert iniciales_empresa("") == "—"
 
 
 def test_attach_docs_fill_batch(monkeypatch):
@@ -58,7 +105,7 @@ def test_attach_docs_fill_batch(monkeypatch):
 
     def fake_docs(_sb, _cid, ids):
         return {
-            10: [("soporte", "cedula"), ("soporte", "hoja_vida"), ("soporte", "certificados")],
+            10: [("soporte", "cedula")],  # opcionales vacíos no restan
             11: [],
         }
 
