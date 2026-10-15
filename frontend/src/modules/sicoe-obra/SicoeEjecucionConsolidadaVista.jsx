@@ -2,9 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useClaraViewport } from '../../useClaraViewport'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { downloadSicoeRegistrosExcel } from './sicoeExportExcel.js'
-import { chipValidacionNivel } from './sicoeCantidadesGrillaHelpers.js'
-import { pastelDeEstadoValidacion } from './sicoeReporteItemsTablaHelpers.js'
-import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
+import {
+  chipValidacionNivel,
+  nivelMaximoAprobado,
+} from './sicoeCantidadesGrillaHelpers.js'
+import {
+  pastelDeEstadoValidacion,
+  estadoNivelRegistro,
+} from './sicoeReporteItemsTablaHelpers.js'
+import { sicoeMedicionCeldasDisplay } from './sicoeVarilla.js'
+import { formatearCantidadTotal, formatearDimension } from './sicoeCantidadRedondeo.js'
 import {
   sicoeConstruirArbolEjecucion,
   sicoeFilasExcelEjecucion,
@@ -17,6 +24,12 @@ function fmtCant(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return '—'
   return formatearCantidadTotal(n, { locale: true })
+}
+
+function fmtDim(v) {
+  if (v == null || v === '' || v === '—') return '—'
+  if (typeof v === 'string' && Number.isNaN(Number(v))) return v
+  return formatearDimension(v) ?? '—'
 }
 
 function fmtPesos(v) {
@@ -33,6 +46,35 @@ function fmtVu(v) {
   return `$ ${n.toLocaleString('es-CO', { maximumFractionDigits: 2 })}`
 }
 
+function IconBtn({ title, onClick, disabled, t, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        background: 'transparent',
+        color: t.text,
+        border: `1px solid ${t.border}`,
+        borderRadius: 8,
+        width: 36,
+        height: 36,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        padding: 0,
+        lineHeight: 1,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 /**
  * Vista consolidada tipo informe mensual de ejecución (Tramo → Capítulo → Ítem → registros).
  */
@@ -46,6 +88,8 @@ export default function SicoeEjecucionConsolidadaVista({
   busquedaActiva = false,
   buildFiltrosParams,
   onAbrirRegistro,
+  onValidarRapido,
+  ejecutandoValidacion = false,
   refreshNonce = 0,
   filtrosVersion = 0,
   exportMeta = {},
@@ -60,16 +104,27 @@ export default function SicoeEjecucionConsolidadaVista({
   const [expandItems, setExpandItems] = useState(() => new Set())
   const [confirmReg, setConfirmReg] = useState(null)
   const [exportando, setExportando] = useState(false)
+  const [validandoId, setValidandoId] = useState(null)
+  const expandInitRef = useRef(false)
   const scrollRef = useRef(null)
 
   const nivelesActivos = Array.isArray(nivelesContrato?.niveles_activos)
     ? nivelesContrato.niveles_activos
     : [1, 2, 3]
+  const nvUsuario = Number(nivelInfo?.nivelValidacion) || null
+
+  const aplicarExpandDefault = useCallback((regs) => {
+    const arbolTmp = sicoeConstruirArbolEjecucion(regs || [])
+    setExpandTramos(new Set(arbolTmp.tramos.map((x) => x.key)))
+    setExpandCaps(new Set(arbolTmp.tramos.flatMap((tr) => tr.capitulos.map((c) => c.key))))
+    setExpandItems(new Set())
+  }, [])
 
   const cargar = useCallback(async () => {
     if (!contratoId || !token || !busquedaActiva) {
       setPayload(null)
       setError(null)
+      expandInitRef.current = false
       return
     }
     if (typeof buildFiltrosParams !== 'function') return
@@ -87,19 +142,22 @@ export default function SicoeEjecucionConsolidadaVista({
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.detail || `Error ${res.status}`)
       setPayload(data)
-      // Por defecto: tramos y capítulos abiertos; ítems recogidos.
-      const regs = data?.registros || []
-      const arbolTmp = sicoeConstruirArbolEjecucion(regs)
-      setExpandTramos(new Set(arbolTmp.tramos.map((x) => x.key)))
-      setExpandCaps(new Set(arbolTmp.tramos.flatMap((tr) => tr.capitulos.map((c) => c.key))))
-      setExpandItems(new Set())
+      if (!expandInitRef.current) {
+        aplicarExpandDefault(data?.registros || [])
+        expandInitRef.current = true
+      }
     } catch (e) {
       setPayload(null)
       setError(e?.message || String(e))
     } finally {
       setCargando(false)
     }
-  }, [API_URL, contratoId, token, busquedaActiva, buildFiltrosParams])
+  }, [API_URL, contratoId, token, busquedaActiva, buildFiltrosParams, aplicarExpandDefault])
+
+  useEffect(() => {
+    // Cambio de filtros → reiniciar expansión por defecto.
+    expandInitRef.current = false
+  }, [filtrosVersion])
 
   useEffect(() => {
     void cargar()
@@ -118,12 +176,12 @@ export default function SicoeEjecucionConsolidadaVista({
   const sheetGrid = t.sheetGridBorder || SHEET_CELL_BORDER
 
   const th = {
-    padding: vistaCompacta ? '5px 6px' : '7px 8px',
-    fontSize: 11,
+    padding: vistaCompacta ? '4px 5px' : '6px 7px',
+    fontSize: 10,
     fontWeight: 800,
     color: t.textMuted,
     textTransform: 'uppercase',
-    letterSpacing: '0.04em',
+    letterSpacing: '0.03em',
     whiteSpace: 'nowrap',
     border: `1px solid ${sheetGrid}`,
     background: t.headerBg || t.bg,
@@ -132,7 +190,7 @@ export default function SicoeEjecucionConsolidadaVista({
     zIndex: 2,
   }
   const td = {
-    padding: vistaCompacta ? '5px 6px' : '6px 8px',
+    padding: vistaCompacta ? '4px 5px' : '5px 7px',
     fontSize: 'var(--cc-sm)',
     color: t.text,
     border: `1px solid ${sheetGrid}`,
@@ -149,7 +207,27 @@ export default function SicoeEjecucionConsolidadaVista({
     })
   }
 
-  const colSpan = 6 + (verEco ? 2 : 0)
+  const keysArbol = useMemo(() => {
+    const tramos = arbol.tramos.map((x) => x.key)
+    const caps = arbol.tramos.flatMap((tr) => tr.capitulos.map((c) => c.key))
+    const items = arbol.tramos.flatMap((tr) =>
+      tr.capitulos.flatMap((c) => c.items.map((it) => it.key)),
+    )
+    return { tramos, caps, items }
+  }, [arbol])
+
+  const expandirTodo = () => {
+    setExpandTramos(new Set(keysArbol.tramos))
+    setExpandCaps(new Set(keysArbol.caps))
+    setExpandItems(new Set(keysArbol.items))
+  }
+  const contraerTodo = () => {
+    setExpandTramos(new Set())
+    setExpandCaps(new Set())
+    setExpandItems(new Set())
+  }
+
+  const colSpanMain = 6 + (verEco ? 2 : 0)
 
   const descargarExcel = async () => {
     if (!arbol.tramos.length) return
@@ -172,6 +250,38 @@ export default function SicoeEjecucionConsolidadaVista({
     }
   }
 
+  const patchRegistroLocal = useCallback((regId, patch) => {
+    setPayload((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        registros: (prev.registros || []).map((r) =>
+          String(r.id) === String(regId) ? { ...r, ...patch } : r,
+        ),
+      }
+    })
+  }, [])
+
+  const validarDesdeSubtabla = async (reg, estado) => {
+    if (!reg?.id || !onValidarRapido) return
+    setValidandoId(reg.id)
+    try {
+      const ok = await onValidarRapido(reg, estado, { sinRefreshVista: true })
+      if (ok && nvUsuario >= 1 && nvUsuario <= 6) {
+        patchRegistroLocal(reg.id, { [`nivel${nvUsuario}_estado`]: estado })
+      }
+    } finally {
+      setValidandoId(null)
+    }
+  }
+
+  const puedeValidarFila = (reg) =>
+    !!nivelInfo?.puedeValidar &&
+    nvUsuario >= 1 &&
+    nvUsuario <= 6 &&
+    !reg?.bloqueado &&
+    !!String(reg?.item_numero || '').trim()
+
   const chipValidacionUi = (chip) => {
     const pastel = pastelDeEstadoValidacion(chip.estado)
     return (
@@ -182,9 +292,9 @@ export default function SicoeEjecucionConsolidadaVista({
           display: 'inline-flex',
           alignItems: 'center',
           gap: 3,
-          padding: '1px 7px',
+          padding: '1px 6px',
           borderRadius: 10,
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: 800,
           background: pastel.bg,
           color: pastel.color || t.text,
@@ -197,6 +307,14 @@ export default function SicoeEjecucionConsolidadaVista({
       </span>
     )
   }
+
+  const rowOpenStyle = (open) => ({
+    cursor: 'pointer',
+    background: open
+      ? `color-mix(in srgb, ${t.primary || '#0077B6'} 12%, ${t.bgCard || '#fff'})`
+      : undefined,
+    boxShadow: open ? `inset 3px 0 0 ${t.primary || '#0077B6'}` : undefined,
+  })
 
   if (!busquedaActiva) {
     return (
@@ -225,37 +343,51 @@ export default function SicoeEjecucionConsolidadaVista({
           gap: 10,
         }}
       >
-        <div>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text }}>
             Ejecución consolidada
           </div>
           <div style={{ marginTop: 4, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Tramo → Capítulo → Ítem · mismos filtros y costos que el informe mensual.
+            Clic en la fila para desplegar · mismos filtros y costos del informe.
             {arbol.totalItems > 0 && (
               <> · {arbol.totalItems} ítem(s) · {arbol.totalRegistros} registro(s)</>
             )}
           </div>
         </div>
-        <button
-          type="button"
-          disabled={exportando || !arbol.tramos.length}
-          onClick={() => void descargarExcel()}
-          title="Descargar Excel de la vista consolidada (filtros activos)"
-          style={{
-            background: t.primary,
-            color: '#fff',
-            border: 'none',
-            borderRadius: 8,
-            padding: vistaCompacta ? '10px 14px' : '8px 14px',
-            fontWeight: 800,
-            fontSize: 'var(--cc-sm)',
-            cursor: exportando || !arbol.tramos.length ? 'not-allowed' : 'pointer',
-            opacity: exportando || !arbol.tramos.length ? 0.55 : 1,
-            minHeight: vistaCompacta ? 44 : undefined,
-          }}
-        >
-          {exportando ? 'Exportando…' : '⬇ Excel'}
-        </button>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <IconBtn t={t} title="Desplegar todos los niveles" onClick={expandirTodo} disabled={!arbol.tramos.length}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <path d="M12 6.5L14 8l-2 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </IconBtn>
+          <IconBtn t={t} title="Contraer todos los niveles" onClick={contraerTodo} disabled={!arbol.tramos.length}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path d="M2 4h12M2 8h8M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <path d="M14 6.5L12 8l2 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </IconBtn>
+          <button
+            type="button"
+            disabled={exportando || !arbol.tramos.length}
+            onClick={() => void descargarExcel()}
+            title="Descargar Excel de la vista consolidada (filtros activos)"
+            style={{
+              background: t.primary,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: vistaCompacta ? '8px 12px' : '7px 12px',
+              fontWeight: 800,
+              fontSize: 'var(--cc-sm)',
+              cursor: exportando || !arbol.tramos.length ? 'not-allowed' : 'pointer',
+              opacity: exportando || !arbol.tramos.length ? 0.55 : 1,
+              minHeight: 36,
+            }}
+          >
+            {exportando ? '…' : '⬇ Excel'}
+          </button>
+        </div>
       </div>
 
       {cargando && (
@@ -287,23 +419,23 @@ export default function SicoeEjecucionConsolidadaVista({
             style={{
               width: '100%',
               borderCollapse: 'collapse',
-              minWidth: vistaCompacta ? 720 : 880,
+              minWidth: vistaCompacta ? 680 : 820,
               tableLayout: 'fixed',
             }}
           >
             <thead>
               <tr>
-                <th style={{ ...th, width: vistaCompacta ? 120 : 140, textAlign: 'left' }}>Tramo</th>
-                <th style={{ ...th, width: vistaCompacta ? 100 : 120, textAlign: 'left' }}>Capítulo</th>
-                <th style={{ ...th, width: 72, textAlign: 'left' }}>Ítem</th>
-                <th style={{ ...th, textAlign: 'left' }}>Descripción</th>
-                <th style={{ ...th, width: 56, textAlign: 'center' }}>Und</th>
+                <th style={{ ...th, width: vistaCompacta ? '14%' : '13%', textAlign: 'left' }}>Tramo</th>
+                <th style={{ ...th, width: vistaCompacta ? '12%' : '12%', textAlign: 'left' }}>Capítulo</th>
+                <th style={{ ...th, width: '7%', textAlign: 'left' }}>Ítem</th>
+                <th style={{ ...th, width: vistaCompacta ? '18%' : '16%', textAlign: 'left' }}>Descripción</th>
+                <th style={{ ...th, width: '6%', textAlign: 'center' }}>Und</th>
                 {verEco && (
-                  <th style={{ ...th, width: 100, textAlign: 'right' }}>Vlr unitario</th>
+                  <th style={{ ...th, width: '12%', textAlign: 'right' }}>Vlr unitario</th>
                 )}
-                <th style={{ ...th, width: 88, textAlign: 'right' }}>Cantidad</th>
+                <th style={{ ...th, width: '11%', textAlign: 'right' }}>Cantidad</th>
                 {verEco && (
-                  <th style={{ ...th, width: 110, textAlign: 'right' }}>Costo Directo</th>
+                  <th style={{ ...th, width: '13%', textAlign: 'right' }}>Costo Directo</th>
                 )}
               </tr>
             </thead>
@@ -322,18 +454,26 @@ export default function SicoeEjecucionConsolidadaVista({
                     toggleItem={(k) => toggleSet(setExpandItems, k)}
                     verEco={verEco}
                     td={td}
+                    th={th}
                     sheetGrid={sheetGrid}
                     t={t}
-                    colSpan={colSpan}
+                    colSpanMain={colSpanMain}
                     chipValidacionUi={chipValidacionUi}
                     nivelesActivos={nivelesActivos}
+                    rowOpenStyle={rowOpenStyle}
+                    puedeValidarFila={puedeValidarFila}
+                    nvUsuario={nvUsuario}
+                    validandoId={validandoId}
+                    ejecutandoValidacion={ejecutandoValidacion || validandoId != null}
+                    onValidar={validarDesdeSubtabla}
                     onClickRegistro={(reg) => setConfirmReg(reg)}
+                    vistaCompacta={vistaCompacta}
                   />
                 )
               })}
               <tr>
                 <td
-                  colSpan={colSpan - (verEco ? 2 : 1)}
+                  colSpan={colSpanMain - (verEco ? 2 : 1)}
                   style={{
                     ...td,
                     fontWeight: 900,
@@ -478,24 +618,34 @@ function FragmentTramo({
   toggleItem,
   verEco,
   td,
+  th,
   sheetGrid,
   t,
-  colSpan,
+  colSpanMain,
   chipValidacionUi,
   nivelesActivos,
+  rowOpenStyle,
+  puedeValidarFila,
+  nvUsuario,
+  validandoId,
+  ejecutandoValidacion,
+  onValidar,
   onClickRegistro,
+  vistaCompacta,
 }) {
-  const bgTramo = 'color-mix(in srgb, ' + (t.primary || '#0077B6') + ' 10%, ' + (t.bgCard || '#fff') + ')'
   return (
     <>
       <tr
         onClick={toggleTramo}
-        style={{ cursor: 'pointer', background: bgTramo }}
-        title={trOpen ? 'Contraer tramo' : 'Expandir tramo'}
+        style={rowOpenStyle(trOpen)}
+        title={trOpen ? 'Contraer tramo' : 'Desplegar tramo'}
+        aria-expanded={trOpen}
       >
         <td style={{ ...td, fontWeight: 900 }} colSpan={4}>
-          <span style={{ marginRight: 6 }} aria-hidden>{trOpen ? '▼' : '▶'}</span>
           {tr.tramo}
+          <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 600, color: t.textMuted }}>
+            {trOpen ? 'desplegado' : 'clic para desplegar'}
+          </span>
         </td>
         <td style={{ ...td, textAlign: 'center', color: t.textMuted }}>—</td>
         {verEco && <td style={{ ...td, textAlign: 'right', color: t.textMuted }}>—</td>}
@@ -518,11 +668,20 @@ function FragmentTramo({
               toggleItem={toggleItem}
               verEco={verEco}
               td={td}
+              th={th}
               sheetGrid={sheetGrid}
               t={t}
+              colSpanMain={colSpanMain}
               chipValidacionUi={chipValidacionUi}
               nivelesActivos={nivelesActivos}
+              rowOpenStyle={rowOpenStyle}
+              puedeValidarFila={puedeValidarFila}
+              nvUsuario={nvUsuario}
+              validandoId={validandoId}
+              ejecutandoValidacion={ejecutandoValidacion}
+              onValidar={onValidar}
               onClickRegistro={onClickRegistro}
+              vistaCompacta={vistaCompacta}
             />
           )
         })}
@@ -539,24 +698,35 @@ function FragmentCapitulo({
   toggleItem,
   verEco,
   td,
+  th,
   sheetGrid,
   t,
+  colSpanMain,
   chipValidacionUi,
   nivelesActivos,
+  rowOpenStyle,
+  puedeValidarFila,
+  nvUsuario,
+  validandoId,
+  ejecutandoValidacion,
+  onValidar,
   onClickRegistro,
+  vistaCompacta,
 }) {
-  const bgCap = 'color-mix(in srgb, ' + (t.primary || '#0077B6') + ' 5%, ' + (t.bgCard || '#fff') + ')'
   return (
     <>
       <tr
         onClick={toggleCap}
-        style={{ cursor: 'pointer', background: bgCap }}
-        title={capOpen ? 'Contraer capítulo' : 'Expandir capítulo'}
+        style={rowOpenStyle(capOpen)}
+        title={capOpen ? 'Contraer capítulo' : 'Desplegar capítulo'}
+        aria-expanded={capOpen}
       >
-        <td style={{ ...td, color: t.textMuted, paddingLeft: 18 }}>{tr.tramo}</td>
+        <td style={{ ...td, color: t.textMuted, fontSize: 11 }}>{tr.tramo}</td>
         <td style={{ ...td, fontWeight: 800 }} colSpan={3}>
-          <span style={{ marginRight: 6 }} aria-hidden>{capOpen ? '▼' : '▶'}</span>
           {cap.capitulo}
+          <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 600, color: t.textMuted }}>
+            {capOpen ? 'desplegado' : 'clic para desplegar'}
+          </span>
         </td>
         <td style={{ ...td, textAlign: 'center', color: t.textMuted }}>—</td>
         {verEco && <td style={{ ...td, textAlign: 'right', color: t.textMuted }}>—</td>}
@@ -578,11 +748,20 @@ function FragmentCapitulo({
               toggleItem={() => toggleItem(it.key)}
               verEco={verEco}
               td={td}
+              th={th}
               sheetGrid={sheetGrid}
               t={t}
+              colSpanMain={colSpanMain}
               chipValidacionUi={chipValidacionUi}
               nivelesActivos={nivelesActivos}
+              rowOpenStyle={rowOpenStyle}
+              puedeValidarFila={puedeValidarFila}
+              nvUsuario={nvUsuario}
+              validandoId={validandoId}
+              ejecutandoValidacion={ejecutandoValidacion}
+              onValidar={onValidar}
               onClickRegistro={onClickRegistro}
+              vistaCompacta={vistaCompacta}
             />
           )
         })}
@@ -598,30 +777,47 @@ function FragmentItem({
   toggleItem,
   verEco,
   td,
+  th,
+  sheetGrid,
   t,
+  colSpanMain,
   chipValidacionUi,
   nivelesActivos,
+  rowOpenStyle,
+  puedeValidarFila,
+  nvUsuario,
+  validandoId,
+  ejecutandoValidacion,
+  onValidar,
   onClickRegistro,
+  vistaCompacta,
 }) {
   return (
     <>
       <tr
         onClick={toggleItem}
-        style={{ cursor: 'pointer' }}
+        style={rowOpenStyle(itOpen)}
         title={itOpen ? 'Ocultar registros' : 'Ver registros del ítem'}
+        aria-expanded={itOpen}
       >
         <td style={{ ...td, color: t.textMuted, fontSize: 11 }}>{tr.tramo}</td>
         <td style={{ ...td, color: t.textMuted, fontSize: 11 }}>{cap.capitulo}</td>
-        <td style={{ ...td, fontWeight: 800 }}>
-          <span style={{ marginRight: 4, color: t.textMuted }} aria-hidden>{itOpen ? '▼' : '▶'}</span>
-          {it.item_numero}
-        </td>
-        <td style={{ ...td }} title={it.descripcion || undefined}>
-          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <td style={{ ...td, fontWeight: 800 }}>{it.item_numero}</td>
+        <td style={{ ...td, paddingTop: 4, paddingBottom: 4 }}>
+          <div
+            title={it.descripcion || undefined}
+            style={{
+              fontSize: 11,
+              lineHeight: 1.3,
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+              color: t.text,
+            }}
+          >
             {it.descripcion || '—'}
           </div>
           {(it.validacion?.chips || []).length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
               {it.validacion.chips.map((ch) => chipValidacionUi(ch))}
             </div>
           )}
@@ -641,60 +837,195 @@ function FragmentItem({
           </td>
         )}
       </tr>
-      {itOpen &&
-        it.registros.map((reg) => {
-          const chip = chipValidacionNivel(reg, nivelesActivos)
-          const pastel = pastelDeEstadoValidacion(chip.estado)
-          return (
-            <tr
-              key={reg.id}
-              onClick={(e) => {
-                e.stopPropagation()
-                onClickRegistro?.(reg)
-              }}
-              style={{ cursor: 'pointer', background: 'color-mix(in srgb, ' + (t.bg || '#f8fafc') + ' 70%, transparent)' }}
-              title="Abrir registro"
-            >
-              <td style={{ ...td, paddingLeft: 22, fontSize: 11, color: t.textMuted }} colSpan={2}>
-                Rep #{reg.numero_reporte ?? '—'} · Reg #{reg.numero_registro ?? reg.id}
-              </td>
-              <td style={{ ...td, fontSize: 11, color: t.textMuted }}>{it.item_numero}</td>
-              <td style={{ ...td }}>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '2px 8px',
-                    borderRadius: 8,
-                    background: pastel.bg,
-                    color: pastel.color || t.text,
-                    fontSize: 11,
-                    fontWeight: 800,
-                    border: `1px solid ${pastel.border || 'transparent'}`,
-                  }}
-                  title={chip.tooltip}
-                >
-                  {chip.label} · {chip.estado}
-                </span>
-              </td>
-              <td style={{ ...td, textAlign: 'center', color: t.textMuted }}>{it.unidad || '—'}</td>
-              {verEco && (
-                <td style={{ ...td, textAlign: 'right', fontSize: 11, color: t.textMuted }}>
-                  {fmtVu(reg._vu_efectivo)}
-                </td>
-              )}
-              <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {fmtCant(reg._cant_efectiva)}
-              </td>
-              {verEco && (
-                <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                  {fmtPesos(reg._costo_efectivo)}
-                </td>
-              )}
-            </tr>
-          )
-        })}
+      {itOpen && (
+        <tr>
+          <td colSpan={colSpanMain} style={{ padding: 0, border: `1px solid ${sheetGrid}`, background: t.bg || t.bgCard }}>
+            <SubtablaRegistros
+              registros={it.registros}
+              verEco={verEco}
+              t={t}
+              th={th}
+              sheetGrid={sheetGrid}
+              nivelesActivos={nivelesActivos}
+              puedeValidarFila={puedeValidarFila}
+              nvUsuario={nvUsuario}
+              validandoId={validandoId}
+              ejecutandoValidacion={ejecutandoValidacion}
+              onValidar={onValidar}
+              onClickRegistro={onClickRegistro}
+              vistaCompacta={vistaCompacta}
+            />
+          </td>
+        </tr>
+      )}
     </>
   )
+}
+
+function SubtablaRegistros({
+  registros,
+  verEco,
+  t,
+  th,
+  sheetGrid,
+  nivelesActivos,
+  puedeValidarFila,
+  nvUsuario,
+  validandoId,
+  ejecutandoValidacion,
+  onValidar,
+  onClickRegistro,
+  vistaCompacta,
+}) {
+  const tdS = {
+    padding: vistaCompacta ? '3px 5px' : '4px 6px',
+    fontSize: 11,
+    color: t.text,
+    border: `1px solid ${sheetGrid}`,
+    verticalAlign: 'middle',
+    lineHeight: 1.2,
+  }
+  const num = { ...tdS, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
+
+  return (
+    <div style={{ padding: '6px 8px 10px', overflowX: 'auto' }}>
+      <table
+        style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          minWidth: verEco ? 780 : 680,
+          tableLayout: 'auto',
+        }}
+      >
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: 'left' }}>Reporte</th>
+            <th style={{ ...th, textAlign: 'left' }}>Registro</th>
+            <th style={{ ...th, textAlign: 'right' }}>Longitud</th>
+            <th style={{ ...th, textAlign: 'right' }} title="Ancho o Diámetro Ø (varilla)">Ancho/Ø</th>
+            <th style={{ ...th, textAlign: 'right' }} title="Espesor o Peso kg/m (varilla)">Esp./kg/m</th>
+            <th style={{ ...th, textAlign: 'right' }}>Cantidad</th>
+            <th style={{ ...th, textAlign: 'right' }}>Cant. Total</th>
+            {verEco && <th style={{ ...th, textAlign: 'right' }}>Costo directo</th>}
+            <th style={{ ...th, textAlign: 'left' }}>Validación</th>
+            <th style={{ ...th, textAlign: 'left' }}>Último nivel aprobado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(registros || []).map((reg) => {
+            const cel = sicoeMedicionCeldasDisplay(reg)
+            const chip = chipValidacionNivel(reg, nivelesActivos)
+            const pastel = pastelDeEstadoValidacion(chip.estado)
+            const maxApr = nivelMaximoAprobado(reg, nivelesActivos)
+            const estMi = nvUsuario ? estadoNivelRegistro(reg, nvUsuario) : 'No Revisado'
+            const puede = puedeValidarFila(reg)
+            const busy = ejecutandoValidacion || String(validandoId) === String(reg.id)
+            return (
+              <tr
+                key={reg.id}
+                onClick={() => onClickRegistro?.(reg)}
+                style={{ cursor: 'pointer' }}
+                title="Abrir registro"
+              >
+                <td style={{ ...tdS, fontWeight: 700 }}>#{reg.numero_reporte ?? '—'}</td>
+                <td style={{ ...tdS, fontWeight: 700 }}>#{reg.numero_registro ?? reg.id}</td>
+                <td style={num}>{fmtDim(reg.longitud)}</td>
+                <td style={num} title={cel.esVarilla ? 'Diámetro Ø' : 'Ancho'}>
+                  {cel.esVarilla ? (cel.col2 || '—') : fmtDim(cel.col2)}
+                </td>
+                <td style={num} title={cel.esVarilla ? 'Peso kg/m' : 'Espesor'}>
+                  {cel.esVarilla ? (cel.col3 || '—') : fmtDim(cel.col3)}
+                </td>
+                <td style={num}>{fmtDim(reg.cantidad)}</td>
+                <td style={{ ...num, fontWeight: 700 }}>
+                  {fmtCant(reg._cant_efectiva ?? reg.cantidad_total)}
+                </td>
+                {verEco && (
+                  <td style={{ ...num, fontWeight: 700 }}>
+                    {fmtPesos(reg._costo_efectivo)}
+                  </td>
+                )}
+                <td style={tdS} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                    <span
+                      title={chip.tooltip}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 800,
+                        padding: '1px 6px',
+                        borderRadius: 5,
+                        background: pastel.bg !== 'transparent' ? pastel.bg : `${t.textMuted}18`,
+                        border: pastel.border !== 'transparent'
+                          ? `1px solid ${pastel.border}`
+                          : `1px solid ${t.border}`,
+                        color: pastel.color || t.textMuted,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {chip.label}
+                    </span>
+                    {puede && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={busy || estMi === 'Aprobado'}
+                          title="Aprobar en mi nivel"
+                          onClick={() => onValidar?.(reg, 'Aprobado')}
+                          style={btnVal('#16a34a', busy || estMi === 'Aprobado')}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || estMi === 'Pendiente'}
+                          title="Pendiente en mi nivel"
+                          onClick={() => onValidar?.(reg, 'Pendiente')}
+                          style={btnVal('#d97706', busy || estMi === 'Pendiente')}
+                        >
+                          ⏸
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || estMi === 'Rechazado'}
+                          title="Rechazar en mi nivel"
+                          onClick={() => onValidar?.(reg, 'Rechazado')}
+                          style={btnVal('#dc2626', busy || estMi === 'Rechazado')}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </td>
+                <td style={{ ...tdS, whiteSpace: 'nowrap' }}>
+                  {maxApr != null ? (
+                    <span style={{ fontWeight: 800, color: '#166534' }}>N{maxApr}</span>
+                  ) : (
+                    <span style={{ color: t.textMuted }}>Sin aprobación</span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function btnVal(bg, disabled) {
+  return {
+    background: bg,
+    color: '#fff',
+    border: 'none',
+    borderRadius: 5,
+    width: 24,
+    height: 22,
+    padding: 0,
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.4 : 1,
+  }
 }

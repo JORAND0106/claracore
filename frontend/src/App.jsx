@@ -12223,14 +12223,15 @@ function ModuloSicoeObra({
   // Abrir detalle desde Cantidades por ítem no debe mutar los filtros del modal.
   // (La selección/resaltado se maneja solo dentro de SicoeCantidadesPorItemVista.)
 
-  const validarRapidoCantidadesItem = useCallback(async (reg, estado) => {
+  const validarRapidoCantidadesItem = useCallback(async (reg, estado, opts = {}) => {
     const nv = Number(nivelInfo?.nivelValidacion)
-    if (!Number.isFinite(nv) || nv < 1 || nv > 6) return
-    if (!reg?.id) return
+    if (!Number.isFinite(nv) || nv < 1 || nv > 6) return false
+    if (!reg?.id) return false
     if (!String(reg.item_numero || '').trim()) {
       window.alert('No puedes validar un registro sin ítem asignado.')
-      return
+      return false
     }
+    const sinRefreshVista = !!opts?.sinRefreshVista
     setEjecutandoCpiValidacion(true)
     try {
       const sufijo = `validar-nivel${nv}`
@@ -12246,10 +12247,13 @@ function ModuloSicoeObra({
       }
       invalidateSicoeVistaCache(contrato_id)
       invalidateDashboardVistaCache(contrato_id)
-      setCpiRefreshNonce((n) => n + 1)
-      if (busquedaRealizada) {
-        try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+      if (!sinRefreshVista) {
+        setCpiRefreshNonce((n) => n + 1)
+        if (busquedaRealizada) {
+          try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+        }
       }
+      return true
     } catch (e) {
       const msg = e?.message || String(e)
       if (/último nivel|ultimo nivel|Listado de Precios/i.test(msg)) {
@@ -12257,6 +12261,7 @@ function ModuloSicoeObra({
       } else {
         window.alert(msg)
       }
+      return false
     } finally {
       setEjecutandoCpiValidacion(false)
     }
@@ -12564,7 +12569,7 @@ function ModuloSicoeObra({
               role="tab"
               aria-selected={sicoeModuloVista === 'ejecucion_consolidada'}
               onClick={() => setSicoeModuloVista('ejecucion_consolidada')}
-              title="Ejecución consolidada (tramo · capítulo · ítem)"
+              title="Ejecución consolidada — informe por tramo, capítulo e ítem"
               aria-label="Ejecución consolidada"
               style={{
                 background: sicoeModuloVista === 'ejecucion_consolidada' ? t.primary : 'transparent',
@@ -12583,7 +12588,10 @@ function ModuloSicoeObra({
                 lineHeight: 1,
               }}
             >
-              📊
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="1.5" y="2" width="13" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M1.5 5.5h13M1.5 9h13M6 5.5V14M10.5 5.5V14" stroke="currentColor" strokeWidth="1.35" />
+              </svg>
             </button>
           </div>
         </div>
@@ -13249,6 +13257,8 @@ function ModuloSicoeObra({
           busquedaActiva={!!sicoeVistaResultadosActiva}
           buildFiltrosParams={buildCantidadesItemParams}
           onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
+          onValidarRapido={validarRapidoCantidadesItem}
+          ejecutandoValidacion={ejecutandoCpiValidacion}
           refreshNonce={cpiRefreshNonce}
           filtrosVersion={cpiFiltrosVersion}
           exportMeta={exportMetaContrato || {}}
