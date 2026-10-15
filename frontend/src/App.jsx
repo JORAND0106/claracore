@@ -13876,7 +13876,13 @@ function ModuloSicoeObra({
           capasFiltroValidacionOp={capasValidacion.length > 1 ? capasValidacionOp : 'and'}
           urlReporteDetalle={(id) => urlDetalleReporteParaAbrir(id, { aplicarFiltros: true })}
           urlReporteDetalleFiltrado={urlReporteDetalleFiltradoSiAplica}
-          onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
+          onClose={() => {
+            setModalCarpeta(false)
+            setReporteSeleccionado(null)
+            if (sicoeModuloVista === 'cantidades_item' || sicoeModuloVista === 'ejecucion_consolidada') {
+              setCpiRefreshNonce((n) => n + 1)
+            }
+          }}
           onActualizar={() => {
             setModalCarpeta(false)
             setReporteSeleccionado(null)
