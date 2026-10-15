@@ -32,6 +32,10 @@ SO_REPORTES_OPTIONAL_COLUMNS = frozenset({
     "dibujo_escena",
     "dibujo_actualizado_en",
     "dibujo_por",
+    # Localización de portada: mismas columnas opcionales que en so_registros.
+    "coords_geojson",
+    "geometria_tipo",
+    "sector",
 })
 
 

@@ -258,7 +258,7 @@ import {
   SICOE_NUEVO_REPORTE_FLUSH_EVENT,
 } from './modules/sicoe-obra/sicoeNuevoReporteDraft'
 import { sicoeEstadoAlEnviarReporte } from './modules/sicoe-obra/sicoeEstadoAlEnviarReporte'
-import { alertaErrorGuardarReporte } from './modules/sicoe-obra/sicoeGuardarReporteError'
+import { alertaErrorGuardarReporte, mensajeErrorGuardarReporte } from './modules/sicoe-obra/sicoeGuardarReporteError'
 import { sicoeCortesSoloVigente } from './modules/sicoe-obra/sicoeCorteVigente'
 import {
   sicoeCorteNumeroDeRegistro,
@@ -6927,7 +6927,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         let msg = 'No se pudo actualizar la localización del reporte.'
         try {
           const j = await pRes.json()
-          if (typeof j?.detail === 'string') msg = j.detail
+          if (typeof j?.detail === 'string' && j.detail.trim()) msg = j.detail
         } catch { /* noop */ }
         throw new Error(msg)
       }
@@ -6940,7 +6940,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       console.error('persistirLocalizacionPortadaUnica', e)
       setAvisoGuardadoPortada({
         titulo: 'No se pudo guardar la localización',
-        mensaje: e?.message || 'Intente de nuevo. Si el problema continúa, revise su conexión e inicie sesión otra vez.',
+        mensaje: mensajeErrorGuardarReporte(e) || e?.message || 'Intente de nuevo.',
       })
     }
   }
@@ -7046,7 +7046,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     } catch (e) {
       setAvisoGuardadoPortada({
         titulo: 'No se pudo guardar',
-        mensaje: e?.message || 'Intente de nuevo. Si el problema continúa, revise su conexión.',
+        mensaje: mensajeErrorGuardarReporte(e) || e?.message || 'Intente de nuevo.',
       })
     } finally {
       setGuardandoEdicion(false)
