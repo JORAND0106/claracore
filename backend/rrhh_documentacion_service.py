@@ -501,32 +501,14 @@ ClaraCore — Recursos Humanos · Documento generado automáticamente
 
 def _doc_aplica_al_colaborador(trab: dict, categoria: str, tipo: str) -> bool:
     """
-    Relevancia/obligatoriedad por tipo según datos del colaborador.
-    Soporte, ingreso y bancario base: siempre aplican.
-    Afiliaciones: aplican solo si el colaborador tiene entidad registrada.
-    Tipos extendidos (ext_*): aplican (fueron añadidos al checklist del contrato).
+    Relevancia del tipo en el checklist del colaborador.
+    EPS / ARL / Pensión / Cesantías siempre aplican (nunca «No aplica»).
+    Opcionales (hoja de vida, certificados, caja) también figuran en el
+    checklist; el estado NO APLICA se resuelve al no estar cargados.
     """
-    cat = (categoria or "").strip().lower()
-    t = (tipo or "").strip().lower()
-    if t == "otro":
-        return False
-    if cat in ("soporte", "ingreso", "bancario"):
-        return True
-    if cat == "afiliacion":
-        field_by_tipo = {
-            "cert_eps": "eps",
-            "cert_pension": "pension",
-            "cert_arl": "arl",
-            "cert_cesantias": "cesantias",
-            "cert_caja": "caja_compensacion",
-        }
-        field = field_by_tipo.get(t)
-        if not field:
-            return True
-        return bool(str(trab.get(field) or "").strip())
-    if t.startswith("ext_"):
-        return True
-    return True
+    from rrhh_docs_obligatoriedad import doc_aplica_checklist
+
+    return doc_aplica_checklist(trab, categoria, tipo)
 
 
 def _estado_documento_checklist(
@@ -534,12 +516,16 @@ def _estado_documento_checklist(
     aplica: bool,
     adjunto: bool,
     auditoria_ok: Optional[bool],
+    opcional: bool = False,
 ) -> str:
     """
     NO APLICA | NO ADJUNTO | VERIFICADO
     VERIFICADO: aplica, está cargado y la auditoría no falló
     (ok=True, o aún no ejecutada: ok is None — la aprobación real exige ok=True).
+    Opcional sin adjunto → NO APLICA (no cuenta como faltante).
     """
+    if opcional and not adjunto:
+        return "NO APLICA"
     if not aplica:
         return "NO APLICA"
     if not adjunto:
@@ -597,6 +583,7 @@ def _checklist_items(
         pass
 
     items: List[dict] = []
+    from rrhh_docs_obligatoriedad import es_doc_opcional
     from rrhh_docs_service import (
         DOC_TIPOS_AFILIACION,
         DOC_TIPOS_BANCARIO,
@@ -617,6 +604,7 @@ def _checklist_items(
             aplica=aplica,
             adjunto=adjunto,
             auditoria_ok=auditoria_ok if isinstance(auditoria_ok, bool) else None,
+            opcional=es_doc_opcional(cat, tipo),
         )
         items.append({"label": label, "estado": estado, "categoria": cat, "tipo": tipo})
 

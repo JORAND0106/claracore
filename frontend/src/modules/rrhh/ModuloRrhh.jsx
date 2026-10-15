@@ -7,6 +7,7 @@ import {
   buildContratoUiTheme,
 } from '../../theme/adminPanelTheme'
 import DocumentacionTab from './DocumentacionTab'
+import { DocsFillBattery, DocsFillLegend } from './DocsFillBattery'
 import LiquidacionPanel from './LiquidacionPanel'
 import NominaPanel from './NominaPanel'
 import TrabajadorFormSheet from './TrabajadorFormSheet'
@@ -719,14 +720,23 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       {empresaSel && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{
-            fontSize: 'var(--cc-sm)',
-            color: tTok.textMuted,
-            fontWeight: 600,
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            alignItems: 'center',
+            justifyContent: 'space-between',
           }}>
-            {empresaSel.nombre}
-            {empresaSel.empresa_nit ? ` · NIT ${empresaSel.empresa_nit}` : ''}
-            {' · '}
-            {empresaSel.activos} activos
+            <div style={{
+              fontSize: 'var(--cc-sm)',
+              color: tTok.textMuted,
+              fontWeight: 600,
+            }}>
+              {empresaSel.nombre}
+              {empresaSel.empresa_nit ? ` · NIT ${empresaSel.empresa_nit}` : ''}
+              {' · '}
+              {empresaSel.activos} activos
+            </div>
+            <DocsFillLegend theme={tTok} />
           </div>
           <div style={{
             flex: 1,
@@ -744,16 +754,17 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   <th style={sheetUi.th}>Documento</th>
                   <th style={sheetUi.th}>Cargo</th>
                   <th style={sheetUi.th}>Tipo de contrato</th>
+                  <th style={{ ...sheetUi.th, minWidth: 120 }}>Documentación</th>
                   <th style={sheetUi.th}>Estado</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td style={sheetUi.td} colSpan={5}>Cargando…</td></tr>
+                  <tr><td style={sheetUi.td} colSpan={6}>Cargando…</td></tr>
                 )}
                 {!loading && items.length === 0 && (
                   <tr>
-                    <td style={sheetUi.td} colSpan={5}>
+                    <td style={sheetUi.td} colSpan={6}>
                       No hay colaboradores en esta empresa.
                     </td>
                   </tr>
@@ -770,6 +781,9 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
                     <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
                     <td style={sheetUi.td}>{row.tipo_contrato || '—'}</td>
+                    <td style={{ ...sheetUi.td, verticalAlign: 'middle' }}>
+                      <DocsFillBattery docsFill={row.docs_fill} />
+                    </td>
                     <td style={sheetUi.td}>{row.estado}</td>
                   </tr>
                 ))}

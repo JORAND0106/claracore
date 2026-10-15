@@ -468,6 +468,13 @@ def route_list_trabajadores(
     )
     if not puede_ver_salario_rrhh(current_user):
         items = redactar_salario_lista(items)
+    try:
+        from rrhh_docs_fill import attach_docs_fill
+
+        items = attach_docs_fill(supabase, contrato_id, items)
+    except Exception:
+        # No tumbar la grilla si falla el avance documental.
+        pass
     return {"items": items, "total": total}
 
 

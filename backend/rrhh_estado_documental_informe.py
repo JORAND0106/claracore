@@ -34,9 +34,16 @@ FILTROS = frozenset({"todos", "aprobado", "sin_aprobar"})
 # Orden de columnas documentales (excluye bancario: no está en los 4 grupos del TAB Documentación).
 _DOC_GROUPS_ORDER = ("contrato_laboral", "soporte", "ingreso", "afiliacion")
 
-_CELDA_OK = "Sí"
-_CELDA_FALTA = "Falta"
-_CELDA_NA = "N/A"
+# Íconos de estado (Excel/PDF). Equivalentes semánticos si el motor no renderiza emoji.
+_CELDA_OK = "✅"       # cargado
+_CELDA_FALTA = "❌"    # obligatorio faltante
+_CELDA_OPCIONAL = "🔘"  # opcional no cargado (no resta avance)
+
+LEYENDA_ICONOS = (
+    f"{_CELDA_OK} Cargado  ·  "
+    f"{_CELDA_FALTA} Obligatorio faltante  ·  "
+    f"{_CELDA_OPCIONAL} Opcional no cargado"
+)
 
 
 def _slug_tipo(label: str) -> str:
@@ -55,8 +62,19 @@ def _fecha_calidad(d: Optional[datetime] = None) -> str:
     return dt.strftime("%d/%m/%Y")
 
 
-def _nombre_completo(t: dict) -> str:
-    return f"{t.get('nombres') or ''} {t.get('apellidos') or ''}".strip() or "—"
+def _nombre_informe(t: dict) -> str:
+    """Primer nombre + primer apellido (columna de identificación del informe)."""
+    from rrhh_docs_obligatoriedad import nombre_corto_colaborador
+
+    return nombre_corto_colaborador(t.get("nombres"), t.get("apellidos"))
+
+
+def _empresa_informe(t: dict) -> str:
+    from rrhh_docs_obligatoriedad import iniciales_empresa
+
+    return iniciales_empresa(
+        t.get("empresa_nombre") or t.get("empresa") or t.get("empresa_key") or "",
+    )
 
 
 def _documento_identidad(t: dict) -> str:
@@ -245,6 +263,12 @@ def _celda_doc(
     tiene_contrato: bool,
     aprobado: bool,
 ) -> str:
+    """
+    ✅ cargado · ❌ obligatorio faltante · 🔘 opcional no cargado.
+    EPS/ARL/Pensión/Cesantías nunca son 🔘.
+    """
+    from rrhh_docs_obligatoriedad import es_doc_opcional
+
     cat = col["categoria"]
     tipo = col["tipo"]
     if cat == "contrato_laboral":
@@ -252,19 +276,10 @@ def _celda_doc(
             return _CELDA_OK
         return _CELDA_FALTA
 
-    if cat == "afiliacion":
-        field_by_tipo = {
-            "cert_eps": "eps",
-            "cert_pension": "pension",
-            "cert_arl": "arl",
-            "cert_cesantias": "cesantias",
-            "cert_caja": "caja_compensacion",
-        }
-        field = field_by_tipo.get(tipo)
-        if field and not str(trab.get(field) or "").strip():
-            return _CELDA_NA
     if aprobado or (cat, tipo) in vigentes:
         return _CELDA_OK
+    if es_doc_opcional(cat, tipo):
+        return _CELDA_OPCIONAL
     return _CELDA_FALTA
 
 
@@ -345,7 +360,8 @@ def build_estado_documental_matrix(
         })
 
     identity_cols = [
-        {"key": "nombre", "label": "Nombre y Apellido"},
+        {"key": "nombre", "label": "Nombre"},
+        {"key": "empresa", "label": "Empresa"},
         {"key": "cargo", "label": "Cargo"},
         {"key": "documento", "label": "Documento de identidad"},
     ]
@@ -366,7 +382,8 @@ def build_estado_documental_matrix(
             )
         rows_out.append({
             "id": tid,
-            "nombre": _nombre_completo(t),
+            "nombre": _nombre_informe(t),
+            "empresa": _empresa_informe(t),
             "cargo": str(t.get("cargo_aspira") or "").strip() or "—",
             "documento": _documento_identidad(t),
             "doc_validacion_estado": str(t.get("doc_validacion_estado") or "pendiente").lower(),
@@ -392,6 +409,7 @@ def build_estado_documental_matrix(
         "doc_columns": doc_cols,
         "rows": rows_out,
         "total": len(rows_out),
+        "leyenda": LEYENDA_ICONOS,
     }
 
 
@@ -486,9 +504,15 @@ def build_estado_documental_xlsx(matrix: dict) -> Tuple[bytes, str]:
     ws.cell(4, 2, _filtro_label(matrix.get("filtro") or "todos")).font = font_body
     ws.cell(4, 3, "Colaboradores").font = font_head
     ws.cell(4, 4, int(matrix.get("total") or 0)).font = font_body
+    ws.cell(5, 1, "Leyenda").font = font_head
+    leyenda = matrix.get("leyenda") or LEYENDA_ICONOS
+    if n_cols >= 2:
+        ws.merge_cells(start_row=5, start_column=2, end_row=5, end_column=n_cols)
+    ws.cell(5, 2, leyenda).font = font_body
 
+    n_id = max(1, len(identity))
     # Header tabla
-    header_row = 6
+    header_row = 7
     all_headers = [c["label"] for c in identity] + [c["label"] for c in doc_cols]
     for i, label in enumerate(all_headers, start=1):
         cell = ws.cell(header_row, i, label)
@@ -500,29 +524,34 @@ def build_estado_documental_xlsx(matrix: dict) -> Tuple[bytes, str]:
 
     for ri, row in enumerate(rows):
         r = header_row + 1 + ri
-        values = [row.get("nombre"), row.get("cargo"), row.get("documento")]
+        values = [
+            row.get("nombre"),
+            row.get("empresa"),
+            row.get("cargo"),
+            row.get("documento"),
+        ]
         for col in doc_cols:
             values.append((row.get("celdas") or {}).get(col["key"], _CELDA_FALTA))
         for ci, val in enumerate(values, start=1):
             cell = ws.cell(r, ci, val)
             cell.font = font_body
             cell.border = thin
-            cell.alignment = left if ci <= 3 else center
-            if ci > 3:
+            cell.alignment = left if ci <= n_id else center
+            if ci > n_id:
                 s = str(val)
                 if s == _CELDA_OK:
                     cell.fill = fill_ok
                 elif s == _CELDA_FALTA:
                     cell.fill = fill_falta
-                elif s == _CELDA_NA:
+                elif s == _CELDA_OPCIONAL:
                     cell.fill = fill_na
 
-    # Anchos
-    widths = [28, 18, 18] + [12] * len(doc_cols)
+    # Nombre más ancho; documentos ~50% del ancho previo (12 → 6).
+    widths = [36, 10, 16, 16] + [6] * len(doc_cols)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    ws.freeze_panes = "A7"
+    ws.freeze_panes = "A8"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToPage = True
     ws.page_setup.fitToWidth = 1
@@ -556,20 +585,47 @@ def build_estado_documental_pdf(matrix: dict) -> Tuple[bytes, str]:
             .replace('"', "&quot;")
         )
 
-    th_id = "".join(f"<th>{esc(c['label'])}</th>" for c in identity)
-    th_doc = "".join(f"<th class='doc'>{esc(c['label'])}</th>" for c in doc_cols)
+    # Equivalentes tipográficos para PDF (Helvetica no trae emoji).
+    pdf_icon = {
+        _CELDA_OK: ("ok", "&#10004;"),       # ✓
+        _CELDA_FALTA: ("falta", "&#10008;"),  # ✘
+        _CELDA_OPCIONAL: ("na", "&#9679;"),   # ●
+    }
+    leyenda_pdf = (
+        "&#10004; Cargado &nbsp;&middot;&nbsp; "
+        "&#10008; Obligatorio faltante &nbsp;&middot;&nbsp; "
+        "&#9679; Opcional no cargado"
+    )
+
+    # Nombre ~2× más ancho; docs ~50% (reparto del espacio liberado).
+    name_w = 18
+    emp_w = 7
+    cargo_w = 10
+    docid_w = 11
+    doc_w = max(3.2, (100 - name_w - emp_w - cargo_w - docid_w) / max(1, len(doc_cols)))
+
+    th_id = (
+        f"<th class='name' style='width:{name_w}%'>{esc(identity[0]['label']) if identity else 'Nombre'}</th>"
+        f"<th style='width:{emp_w}%'>{esc(identity[1]['label']) if len(identity) > 1 else 'Empresa'}</th>"
+        f"<th style='width:{cargo_w}%'>{esc(identity[2]['label']) if len(identity) > 2 else 'Cargo'}</th>"
+        f"<th style='width:{docid_w}%'>{esc(identity[3]['label']) if len(identity) > 3 else 'Documento'}</th>"
+    )
+    th_doc = "".join(
+        f"<th class='doc' style='width:{doc_w:.1f}%'>{esc(c['label'])}</th>" for c in doc_cols
+    )
 
     body_rows = []
     for row in rows:
         tds = [
             f"<td class='name'>{esc(row.get('nombre'))}</td>",
+            f"<td class='emp'>{esc(row.get('empresa'))}</td>",
             f"<td>{esc(row.get('cargo'))}</td>",
             f"<td>{esc(row.get('documento'))}</td>",
         ]
         for col in doc_cols:
             v = (row.get("celdas") or {}).get(col["key"], _CELDA_FALTA)
-            cls = "ok" if v == _CELDA_OK else ("falta" if v == _CELDA_FALTA else "na")
-            tds.append(f"<td class='{cls}'>{esc(v)}</td>")
+            cls, glyph = pdf_icon.get(v, ("falta", "&#10008;"))
+            tds.append(f"<td class='{cls}'>{glyph}</td>")
         body_rows.append("<tr>" + "".join(tds) + "</tr>")
 
     html = f"""<!DOCTYPE html>
@@ -582,17 +638,19 @@ def build_estado_documental_pdf(matrix: dict) -> Tuple[bytes, str]:
   .hdr .logo {{ width: 18%; text-align: center; font-size: 9pt; font-weight: bold; }}
   .hdr .title {{ width: 52%; text-align: center; font-size: 13pt; font-weight: bold; }}
   .hdr .calidad {{ width: 30%; text-align: center; font-size: 8pt; white-space: pre-line; }}
-  .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 8pt; }}
+  .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 8pt; }}
   .meta td {{ border: 1px solid #94A3B8; padding: 3px 6px; }}
   .meta .lbl {{ font-weight: bold; background: #F1F5F9; width: 14%; }}
+  .leyenda {{ margin: 0 0 8px 0; font-size: 7.5pt; color: #334155; }}
   table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-  table.grid th, table.grid td {{ border: 1px solid #94A3B8; padding: 3px 4px; word-wrap: break-word; }}
-  table.grid th {{ background: #DDEFF8; font-size: 7pt; }}
-  table.grid th.doc {{ font-size: 6.5pt; }}
+  table.grid th, table.grid td {{ border: 1px solid #94A3B8; padding: 2px 3px; word-wrap: break-word; }}
+  table.grid th {{ background: #DDEFF8; font-size: 6.5pt; }}
+  table.grid th.doc {{ font-size: 5.5pt; }}
   table.grid td.name {{ font-size: 7.5pt; }}
-  .ok {{ background: #DCFCE7; text-align: center; font-weight: bold; color: #166534; }}
-  .falta {{ background: #FEE2E2; text-align: center; font-weight: bold; color: #991B1B; }}
-  .na {{ background: #F1F5F9; text-align: center; color: #64748B; }}
+  table.grid td.emp {{ font-size: 7pt; text-align: center; font-weight: bold; }}
+  .ok {{ background: #DCFCE7; text-align: center; font-weight: bold; color: #166534; font-size: 9pt; }}
+  .falta {{ background: #FEE2E2; text-align: center; font-weight: bold; color: #991B1B; font-size: 9pt; }}
+  .na {{ background: #F1F5F9; text-align: center; color: #64748B; font-size: 9pt; }}
 </style></head><body>
 <table class="hdr"><tr>
   <td class="logo">ClaraCore</td>
@@ -612,6 +670,7 @@ Fecha {esc(matrix.get('fecha_calidad'))}</td>
   <td class="lbl">Colaboradores</td><td colspan="3">{esc(matrix.get('total') or 0)}</td>
 </tr>
 </table>
+<div class="leyenda">{leyenda_pdf}</div>
 <table class="grid">
 <thead><tr>{th_id}{th_doc}</tr></thead>
 <tbody>
