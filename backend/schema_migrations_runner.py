@@ -34,6 +34,7 @@ CRITICAL_MIGRATIONS = (
     "20261009203000_almacen_agrupar_mover_lineas.sql",
     "20261009204000_almacen_mensaje_aviso.sql",
     "20261010012000_almacen_agrupar_mover_sin_choque.sql",
+    "20261015220000_rrhh_auditoria_informes.sql",
 )
 
 _ENSURE_TABLE_SQL = """

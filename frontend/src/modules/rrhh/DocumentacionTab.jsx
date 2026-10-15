@@ -149,13 +149,17 @@ export default function DocumentacionTab({
     try {
       const r = await api.consolidarDocumentacion(detalle.id)
       onTrabajadorUpdated?.(r.trabajador)
+      const nDocs = r.auditoria?.documentos_auditados
       if (r.auditoria?.ok) {
-        flash('success', 'Auditoría sin discrepancias. Ya puede marcar Aprobado.')
+        flash('success', `Auditoría sin discrepancias${nDocs != null ? ` (${nDocs} archivo(s))` : ''}. Ya puede aprobar.`)
       } else {
-        flash('error', 'La auditoría encontró diferencias. Revise las observaciones y corrija.')
+        flash(
+          'success',
+          'Auditoría ejecutada con hallazgos. Puede corregir y volver a auditar, o aprobar bajo su responsabilidad.',
+        )
       }
     } catch (e) {
-      flash('error', e.message || 'No se pudo consolidar.')
+      flash('error', e.message || 'No se pudo ejecutar la auditoría.')
     } finally {
       setBusy(false)
     }
@@ -177,10 +181,12 @@ export default function DocumentacionTab({
     }
   }
 
+  const auditEjecutada = Boolean(detalle?.doc_auditoria_en || detalle?.doc_auditoria_informe_id)
+
   const setValidacion = async (estado) => {
     if (!api || !detalle || !canValidar) return
-    if (estado === 'aprobado' && !detalle.doc_auditoria_ok) {
-      flash('error', 'Ejecute «Consolidar documentación» sin discrepancias antes de aprobar.')
+    if (estado === 'aprobado' && !auditEjecutada) {
+      flash('error', 'Ejecute la auditoría documental al menos una vez antes de aprobar.')
       return
     }
     if ((estado === 'rechazado' || estado === 'pendiente') && estado === 'rechazado' && !String(obsValidacion || '').trim()) {
@@ -188,7 +194,7 @@ export default function DocumentacionTab({
       return
     }
     if (estado === 'aprobado' && !window.confirm(
-      '¿Aprobar? Se generará el PDF consolidado, se eliminarán los adjuntos individuales y se bloqueará la documentación.'
+      '¿Aprobar? Se generará el PDF consolidado (con el último informe de auditoría), se eliminarán los adjuntos individuales y se bloqueará la documentación. Los hallazgos no impiden aprobar.',
     )) return
     setBusy(true)
     try {
@@ -215,9 +221,9 @@ export default function DocumentacionTab({
     width: '100%',
   }
 
-  const hallazgos = (detalle?.doc_auditoria_resultado?.hallazgos || []).filter(
-    (h) => ['DISCREPANCIA', 'NO ENCONTRADO'].includes(String(h.estado || '').toUpperCase()),
-  )
+  const filasAuditoria = Array.isArray(detalle?.doc_auditoria_resultado?.filas)
+    ? detalle.doc_auditoria_resultado.filas
+    : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -401,10 +407,14 @@ export default function DocumentacionTab({
               </button>
               <button
                 type="button"
-                style={btnEstadoValidacion('Aprobado', busy || locked || !detalle.doc_auditoria_ok)}
-                disabled={busy || locked || !detalle.doc_auditoria_ok}
+                style={btnEstadoValidacion('Aprobado', busy || locked || !auditEjecutada)}
+                disabled={busy || locked || !auditEjecutada}
                 onClick={() => setValidacion('aprobado')}
-                title={!detalle.doc_auditoria_ok ? 'Requiere auditoría sin discrepancias' : 'Marcar documentación como aprobada'}
+                title={
+                  !auditEjecutada
+                    ? 'Ejecute la auditoría al menos una vez (los hallazgos no bloquean la aprobación)'
+                    : 'Marcar documentación como aprobada'
+                }
               >
                 Aprobado
               </button>
@@ -429,8 +439,20 @@ export default function DocumentacionTab({
             </div>
             <div style={{ marginBottom: 8, fontSize: 'var(--cc-sm)' }}>
               Estado: <b>{detalle.doc_validacion_estado || 'pendiente'}</b>
-              {detalle.doc_auditoria_ok === true && <span style={{ marginLeft: 8, color: S.successColor }}>· Auditoría OK</span>}
-              {detalle.doc_auditoria_ok === false && <span style={{ marginLeft: 8, color: S.dangerColor }}>· Auditoría con diferencias</span>}
+              {!auditEjecutada && (
+                <span style={{ marginLeft: 8, color: tTok.textMuted }}>· Sin auditoría</span>
+              )}
+              {auditEjecutada && detalle.doc_auditoria_ok === true && (
+                <span style={{ marginLeft: 8, color: S.successColor }}>· Auditoría sin diferencias</span>
+              )}
+              {auditEjecutada && detalle.doc_auditoria_ok === false && (
+                <span style={{ marginLeft: 8, color: S.dangerColor }}>· Auditoría con hallazgos (no bloquean aprobación)</span>
+              )}
+              {auditEjecutada && detalle.doc_auditoria_en && (
+                <span style={{ marginLeft: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+                  · {String(detalle.doc_auditoria_en).replace('T', ' ').slice(0, 19)}
+                </span>
+              )}
             </div>
             <div>
               <div style={{ fontSize: 'var(--cc-xs)', color: tTok.textMuted }}>Causal / observación (Pendiente o Rechazado)</div>
@@ -441,23 +463,41 @@ export default function DocumentacionTab({
                 onChange={(e) => setObsValidacion(e.target.value)}
               />
             </div>
-            {(hallazgos.length > 0 || detalle.doc_auditoria_observaciones) && (
-              <div style={{ marginTop: 10 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Observaciones de auditoría</div>
-                <div style={{
-                  maxHeight: 200,
-                  overflow: 'auto',
-                  fontSize: 'var(--cc-sm)',
-                  whiteSpace: 'pre-wrap',
-                  background: 'rgba(220,38,38,0.06)',
-                  padding: 10,
-                  borderRadius: 8,
-                }}>
-                  {detalle.doc_auditoria_observaciones
-                    || hallazgos.map((h) => `${h.campo}: ${h.estado} — BD «${h.valor_bd}» / PDF «${h.valor_pdf}»`).join('\n')}
+            {filasAuditoria.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Informe de auditoría</div>
+                <div style={{ ...ui.sheetWrap, maxHeight: 'min(320px, 45vh)' }}>
+                  <table style={ui.sheetTable}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...ui.th, width: '28%' }}>Ubicación - Tipo de documento</th>
+                        <th style={{ ...ui.th, width: '22%' }}>Archivo</th>
+                        <th style={{ ...ui.th, width: '12%' }}>Versión</th>
+                        <th style={ui.th}>Hallazgo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filasAuditoria.map((fila, idx) => {
+                        const est = String(fila.estado || '').toUpperCase()
+                        const rowBg = est === 'DISCREPANCIA' || est === 'NO_CARGADO'
+                          ? 'rgba(220,38,38,0.06)'
+                          : est === 'OK' || est === 'OK_PARCIAL'
+                            ? 'rgba(4,120,87,0.05)'
+                            : 'transparent'
+                        return (
+                          <tr key={`${fila.categoria}-${fila.tipo}-${idx}`} style={{ background: rowBg }}>
+                            <td style={ui.td}>{fila.ubicacion || '—'}</td>
+                            <td style={ui.td}>{fila.archivo || '—'}</td>
+                            <td style={{ ...ui.td, textAlign: 'center' }}>{fila.version || '—'}</td>
+                            <td style={ui.td}>{fila.hallazgo || '—'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
                 <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginTop: 6 }}>
-                  Corrija los datos o documentos (con permiso de edición) y vuelva a consolidar. El estado de validación no cambia automáticamente.
+                  Puede volver a ejecutar la auditoría cuantas veces necesite. La aprobación exige al menos una ejecución; los hallazgos no la bloquean.
                 </div>
               </div>
             )}

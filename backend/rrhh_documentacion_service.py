@@ -17,14 +17,24 @@ from azure_blob_storage import (
     path_rrhh_doc_consolidado,
     upload_blob_private,
 )
-from rrhh_auditoria_docs import ejecutar_auditoria_documentacion
-from rrhh_docs_service import DOC_TIPO_LABEL, assert_documentacion_editable, list_documentos
-from rrhh_service import get_trabajador, trabajador_display_nombre
+from rrhh_auditoria_docs import (
+    auditoria_fue_ejecutada,
+    ejecutar_auditoria_documentacion,
+    slots_checklist_auditoria,
+)
+from rrhh_docs_service import (
+    DOC_TIPO_LABEL,
+    assert_documentacion_editable,
+    list_contratos_generados,
+    list_documentos,
+)
+from rrhh_service import get_trabajador, list_catalogo, trabajador_display_nombre
 
 _log = logging.getLogger("claracore.rrhh.doc_consolidacion")
 
 _TABLE = "rrhh_trabajadores"
 _TABLE_DOCS = "rrhh_trabajador_documentos"
+_TABLE_AUDITORIA = "rrhh_auditoria_informes"
 
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 _CERT_PLANTILLA = os.path.join(_ASSETS_DIR, "rrhh_certificado_documental_plantilla.txt")
@@ -245,28 +255,126 @@ def _docs_vigentes_pdf(sb, contrato_id: int, trabajador_id: int) -> List[dict]:
     for d in docs:
         if not d.get("vigente"):
             continue
-        mime = (d.get("mime_type") or "").lower()
         path = d.get("azure_blob_path")
         if not path:
             continue
-        if "pdf" not in mime and not str(d.get("nombre_archivo") or "").lower().endswith(".pdf"):
-            # Incluir imágenes también en consolidado (convertidas después)
-            out.append(d)
-        else:
-            out.append(d)
+        out.append(d)
     return out
+
+
+def _contrato_laboral_vigente_meta(sb, contrato_id: int, trabajador_id: int) -> Optional[dict]:
+    """
+    Contrato laboral vigente (generado en plataforma o PDF cargado).
+    Ambos viven en rrhh_contratos_generados — se tratan igual.
+    """
+    try:
+        rows = list_contratos_generados(sb, contrato_id, trabajador_id) or []
+    except Exception as exc:
+        _log.warning("list contratos auditoría: %s", exc)
+        return None
+    vigente = next((r for r in rows if r.get("vigente") and not r.get("eliminado_en")), None)
+    if not vigente:
+        vigente = next((r for r in rows if not r.get("eliminado_en") and r.get("azure_blob_path")), None)
+    if not vigente or not vigente.get("azure_blob_path"):
+        return None
+    label = "Contrato laboral"
+    origen = str(vigente.get("origen") or vigente.get("estado") or "").strip().lower()
+    if origen == "cargado":
+        label = "Contrato laboral (PDF cargado)"
+    elif origen == "generado":
+        label = "Contrato laboral (generado)"
+    return {
+        "id": vigente.get("id"),
+        "categoria": "contrato_laboral",
+        "tipo": "contrato_laboral",
+        "label": label,
+        "nombre_archivo": vigente.get("nombre_archivo") or f"contrato_laboral_v{vigente.get('version_num') or 1}.pdf",
+        "version_num": vigente.get("version_num"),
+        "version_label": f"v{vigente.get('version_num')}" if vigente.get("version_num") is not None else None,
+        "mime_type": vigente.get("mime_type") or "application/pdf",
+        "azure_blob_path": vigente["azure_blob_path"],
+        "origen": origen or "contrato",
+    }
+
+
+def _custom_tipos_auditoria(sb, contrato_id: int) -> List[Tuple[str, str, str]]:
+    out: List[Tuple[str, str, str]] = []
+    try:
+        from rrhh_docs_service import slug_tipo_documento
+    except Exception:
+        return out
+    for cat, catalog_key in (("soporte", "doc_soporte"), ("ingreso", "doc_ingreso")):
+        try:
+            rows = list_catalogo(sb, int(contrato_id), catalog_key) or []
+        except Exception:
+            rows = []
+        for r in rows:
+            label = str(r.get("valor") or "").strip()
+            if label:
+                out.append((cat, slug_tipo_documento(label), label))
+    return out
+
+
+def _expediente_adjuntos_meta(sb, contrato_id: int, trabajador_id: int) -> List[dict]:
+    """Inventario de archivos del expediente (contrato + docs vigentes)."""
+    adjuntos: List[dict] = []
+    cto = _contrato_laboral_vigente_meta(sb, contrato_id, trabajador_id)
+    if cto:
+        adjuntos.append(cto)
+    for d in _docs_vigentes_pdf(sb, contrato_id, trabajador_id):
+        cat = str(d.get("categoria") or "").strip().lower()
+        tipo = str(d.get("tipo") or "").strip().lower()
+        if not cat or not tipo or tipo == "otro":
+            continue
+        label = (
+            d.get("tipo_otro_texto")
+            or DOC_TIPO_LABEL.get(tipo)
+            or tipo
+        )
+        adjuntos.append({
+            "id": d.get("id"),
+            "categoria": cat,
+            "tipo": tipo,
+            "label": label,
+            "nombre_archivo": d.get("nombre_archivo") or "documento",
+            "version_label": d.get("version_label"),
+            "version_num": d.get("version_num"),
+            "mime_type": d.get("mime_type"),
+            "azure_blob_path": d.get("azure_blob_path"),
+        })
+    return adjuntos
 
 
 def _cargar_blobs(docs: List[dict]) -> List[Tuple[dict, bytes]]:
     pairs = []
     for d in docs:
+        path = d.get("azure_blob_path")
+        if not path:
+            continue
         try:
-            data = download_blob_bytes_private(d["azure_blob_path"])
+            data = download_blob_bytes_private(path)
             if data:
                 pairs.append((d, data))
         except Exception as exc:
             _log.warning("No se pudo descargar doc %s: %s", d.get("id"), exc)
     return pairs
+
+
+def _blob_a_pdf_bytes(meta: dict, data: bytes) -> Optional[bytes]:
+    mime = (meta.get("mime_type") or "").lower()
+    if data[:5] == b"%PDF-" or "pdf" in mime:
+        return data
+    try:
+        import fitz
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=data)
+        out = doc.tobytes()
+        doc.close()
+        return out
+    except Exception:
+        _log.warning("Omitiendo imagen no convertible doc=%s", meta.get("id"))
+        return None
 
 
 def consolidar_documentacion(
@@ -276,56 +384,86 @@ def consolidar_documentacion(
     current_user=None,
 ) -> dict:
     """
-    Ejecuta auditoría Claude sobre los documentos vigentes.
-    Guarda el resultado; NO cambia el estado de validación.
+    Ejecuta auditoría sobre el expediente (docs + contrato laboral).
+    Guarda resultado e historial; NO cambia el estado de validación.
     """
     trab = get_trabajador(sb, contrato_id, trabajador_id)
     assert_documentacion_editable(trab)
 
-    docs = [d for d in _docs_vigentes_pdf(sb, contrato_id, trabajador_id)]
-    pairs = _cargar_blobs(docs)
-    pdf_blobs = []
-    for d, data in pairs:
-        mime = (d.get("mime_type") or "").lower()
-        if data[:5] == b"%PDF-" or "pdf" in mime:
-            pdf_blobs.append(data)
-        else:
-            # Imágenes: empaquetar como PDF de una página vía reportlab/xhtml no; usar pypdf image?
-            # Convert simple: wrap as PDF with fitz if available
-            try:
-                import fitz
-                doc = fitz.open()
-                page = doc.new_page()
-                page.insert_image(page.rect, stream=data)
-                pdf_blobs.append(doc.tobytes())
-                doc.close()
-            except Exception:
-                _log.warning("Omitiendo imagen no convertible doc=%s", d.get("id"))
+    adjuntos_meta = _expediente_adjuntos_meta(sb, contrato_id, trabajador_id)
+    pairs = _cargar_blobs(adjuntos_meta)
+    pdf_blobs: List[bytes] = []
+    adjuntos_ok: List[dict] = []
+    for meta, data in pairs:
+        pdf = _blob_a_pdf_bytes(meta, data)
+        if pdf:
+            pdf_blobs.append(pdf)
+            adjuntos_ok.append(meta)
 
-    if not pdf_blobs:
-        raise ValueError("No hay documentos vigentes para consolidar/auditar.")
+    slots = slots_checklist_auditoria(
+        trab, custom_tipos=_custom_tipos_auditoria(sb, contrato_id),
+    )
+    # Permitir auditar aunque no haya PDFs: la tabla marcará «no cargado».
+    audit = ejecutar_auditoria_documentacion(
+        trabajador=trab,
+        slots=slots,
+        adjuntos=adjuntos_ok,
+        pdf_blobs=pdf_blobs,
+    )
 
-    audit = ejecutar_auditoria_documentacion(trabajador=trab, pdf_blobs=pdf_blobs)
     observaciones = []
-    for h in (audit["resultado"].get("hallazgos") or []):
-        est = str(h.get("estado") or "").upper()
-        if est in ("DISCREPANCIA", "NO ENCONTRADO"):
+    for fila in (audit.get("filas") or []):
+        est = str(fila.get("estado") or "").upper()
+        if est in ("DISCREPANCIA", "NO_CARGADO"):
+            if est == "NO_CARGADO" and fila.get("opcional"):
+                continue
             observaciones.append(
-                f"{h.get('campo')}: {est} — BD=«{h.get('valor_bd')}» PDF=«{h.get('valor_pdf')}» "
-                f"({h.get('detalle') or ''})"
+                f"{fila.get('ubicacion')}: {fila.get('hallazgo')}"
             )
     for a in (audit["resultado"].get("alertas_criticas") or []):
         observaciones.append(str(a))
-
     obs_text = "\n".join(observaciones) if observaciones else None
+
+    informe_id = None
+    try:
+        ins = (
+            sb.table(_TABLE_AUDITORIA)
+            .insert({
+                "contrato_id": int(contrato_id),
+                "trabajador_id": int(trabajador_id),
+                "filas": audit.get("filas") or [],
+                "resultado_ia": audit.get("resultado") or {},
+                "tiene_discrepancias": bool(audit.get("tiene_discrepancias")),
+                "documentos_auditados": int(audit.get("documentos_auditados") or 0),
+                "observaciones": obs_text,
+                "tokens_in": audit.get("tokens_in"),
+                "tokens_out": audit.get("tokens_out"),
+                "ejecutado_en": audit.get("ejecutado_en") or _now_iso(),
+                "ejecutado_por": _uid(current_user),
+            })
+            .execute()
+            .data
+            or []
+        )
+        if ins:
+            informe_id = ins[0].get("id")
+    except Exception as exc:
+        _log.warning("No se pudo persistir historial de auditoría: %s", exc)
+
     upd = {
         "doc_auditoria_ok": bool(audit["ok"]),
-        "doc_auditoria_resultado": audit["resultado"],
+        "doc_auditoria_resultado": {
+            **(audit.get("resultado") or {}),
+            "filas": audit.get("filas") or [],
+        },
         "doc_auditoria_observaciones": obs_text,
-        "doc_auditoria_en": _now_iso(),
+        "doc_auditoria_en": audit.get("ejecutado_en") or _now_iso(),
         "updated_at": _now_iso(),
         "updated_by": _uid(current_user),
     }
+    if informe_id is not None:
+        upd["doc_auditoria_informe_id"] = informe_id
+
     rows = (
         sb.table(_TABLE)
         .update(upd)
@@ -342,8 +480,11 @@ def consolidar_documentacion(
             "ok": audit["ok"],
             "tiene_discrepancias": audit["tiene_discrepancias"],
             "resultado": audit["resultado"],
+            "filas": audit.get("filas") or [],
             "observaciones": obs_text,
-            "documentos_auditados": len(pdf_blobs),
+            "documentos_auditados": audit.get("documentos_auditados") or 0,
+            "informe_id": informe_id,
+            "ejecutado_en": audit.get("ejecutado_en"),
         },
     }
 
@@ -658,8 +799,9 @@ def set_validacion(
     current_user=None,
 ) -> dict:
     """
-    Cambia estado de validación. Aprobado solo si auditoría OK;
-    genera PDF consolidado, elimina adjuntos individuales y bloquea.
+    Cambia estado de validación.
+    Aprobado exige haber ejecutado al menos una auditoría (los hallazgos
+    NO bloquean: la decisión queda bajo responsabilidad de quien aprueba).
     """
     trab = get_trabajador(sb, contrato_id, trabajador_id)
     est = (estado or "").strip().lower()
@@ -670,10 +812,11 @@ def set_validacion(
         raise ValueError("La documentación está bloqueada; no se puede cambiar la validación.")
 
     if est == "aprobado":
-        if not trab.get("doc_auditoria_ok"):
+        if not auditoria_fue_ejecutada(trab):
             raise ValueError(
-                "No se puede aprobar: ejecute «Consolidar documentación» y "
-                "corrija las diferencias hasta que la auditoría no encuentre discrepancias."
+                "No se puede aprobar: ejecute primero la auditoría documental "
+                "al menos una vez. Los hallazgos no impiden aprobar, pero la "
+                "plataforma debe haber alertado lo encontrado."
             )
         return _aprobar_y_consolidar_pdf(
             sb, contrato_id, trabajador_id, trab,
@@ -769,6 +912,84 @@ def download_doc_consolidado(sb, contrato_id: int, trabajador_id: int) -> Tuple[
     return data, trab.get("doc_consolidado_nombre") or "documentacion_consolidada.pdf"
 
 
+def _filas_ultima_auditoria(sb, trab: dict) -> List[dict]:
+    """Filas del último informe (tabla) — desde historial o resultado embebido."""
+    informe_id = trab.get("doc_auditoria_informe_id")
+    if informe_id:
+        try:
+            rows = (
+                sb.table(_TABLE_AUDITORIA)
+                .select("filas, ejecutado_en, ejecutado_por")
+                .eq("id", int(informe_id))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if rows and isinstance(rows[0].get("filas"), list):
+                return list(rows[0]["filas"])
+        except Exception as exc:
+            _log.warning("leer informe auditoría %s: %s", informe_id, exc)
+    res = trab.get("doc_auditoria_resultado") or {}
+    if isinstance(res, dict) and isinstance(res.get("filas"), list):
+        return list(res["filas"])
+    return []
+
+
+def _build_auditoria_tabla_html(trab: dict, filas: List[dict]) -> str:
+    """Última sección del consolidado: informe de auditoría en formato tabla."""
+    import html as html_mod
+
+    def esc(v):
+        return html_mod.escape(str(v if v is not None else "—"))
+
+    fecha = trab.get("doc_auditoria_en") or "—"
+    body = ""
+    for f in filas or []:
+        body += (
+            "<tr>"
+            f"<td>{esc(f.get('ubicacion'))}</td>"
+            f"<td>{esc(f.get('archivo'))}</td>"
+            f"<td style='text-align:center'>{esc(f.get('version'))}</td>"
+            f"<td>{esc(f.get('hallazgo'))}</td>"
+            "</tr>"
+        )
+    if not body:
+        body = (
+            "<tr><td colspan='4' style='text-align:center;color:#64748b;'>"
+            "Sin filas de auditoría registradas.</td></tr>"
+        )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+  @page {{ size: letter; margin: 14mm; }}
+  body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #0F2942; }}
+  h1 {{ font-size: 13pt; margin: 0 0 6px 0; color: #0F2942; }}
+  .meta {{ font-size: 8pt; color: #64748b; margin-bottom: 10px; }}
+  table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+  th, td {{ border: 1px solid #94A3B8; padding: 5px 6px; vertical-align: top; word-wrap: break-word; }}
+  th {{ background: #DDEFF8; font-size: 8pt; text-align: left; }}
+  th.ver {{ width: 12%; text-align: center; }}
+  td {{ font-size: 8pt; }}
+</style></head><body>
+<h1>Informe de auditoría documental</h1>
+<div class="meta">Última ejecución: {esc(fecha)} · Constancia al momento de la aprobación</div>
+<table>
+<thead>
+<tr>
+  <th style="width:28%">Ubicación - Tipo de documento</th>
+  <th style="width:22%">Archivo</th>
+  <th class="ver">Versión</th>
+  <th style="width:38%">Hallazgo</th>
+</tr>
+</thead>
+<tbody>
+{body}
+</tbody>
+</table>
+</body></html>"""
+
+
 def build_pdf_consolidado_bytes(
     sb,
     contrato_id: int,
@@ -777,30 +998,25 @@ def build_pdf_consolidado_bytes(
     trab: Optional[dict] = None,
 ) -> Tuple[bytes, str, int]:
     """
-    Genera el PDF consolidado con los documentos vigentes actuales.
+    Genera el PDF consolidado con los documentos vigentes actuales
+    (incluye contrato laboral generado/cargado) y el último informe de
+    auditoría como sección final.
     No modifica storage ni estado de validación.
     Retorna (pdf_bytes, filename, n_adjuntos).
     """
     from topografia_utils import to_pdf_bytes
 
     trabajador = trab or get_trabajador(sb, contrato_id, trabajador_id)
-    docs = [d for d in list_documentos(sb, contrato_id, trabajador_id) if d.get("vigente")]
-    pairs = _cargar_blobs(docs)
+    # Expediente completo: docs de soporte/… + contrato laboral
+    adjuntos_meta = _expediente_adjuntos_meta(sb, contrato_id, trabajador_id)
+    pairs = _cargar_blobs(adjuntos_meta)
     adjuntos_pdf: List[bytes] = []
-    for d, data in pairs:
-        if data[:5] == b"%PDF-":
-            adjuntos_pdf.append(data)
-        else:
-            try:
-                import fitz
-                doc = fitz.open()
-                page = doc.new_page()
-                page.insert_image(page.rect, stream=data)
-                adjuntos_pdf.append(doc.tobytes())
-                doc.close()
-            except Exception:
-                pass
+    for meta, data in pairs:
+        pdf = _blob_a_pdf_bytes(meta, data)
+        if pdf:
+            adjuntos_pdf.append(pdf)
 
+    docs = [d for d in list_documentos(sb, contrato_id, trabajador_id) if d.get("vigente")]
     checklist = _checklist_items(
         trabajador, docs, sb=sb, contrato_id=contrato_id
     )
@@ -821,7 +1037,17 @@ def build_pdf_consolidado_bytes(
         contrato_obra=obra,
     )
     portada = to_pdf_bytes(html, landscape=False)
-    consolidado = _merge_pdfs(portada, adjuntos_pdf)
+    partes = list(adjuntos_pdf)
+
+    filas_audit = _filas_ultima_auditoria(sb, trabajador)
+    if filas_audit or trabajador.get("doc_auditoria_en"):
+        try:
+            audit_html = _build_auditoria_tabla_html(trabajador, filas_audit)
+            partes.append(to_pdf_bytes(audit_html, landscape=False))
+        except Exception as exc:
+            _log.warning("sección auditoría en consolidado: %s", exc)
+
+    consolidado = _merge_pdfs(portada, partes)
     nombre = (
         f"preview_documentacion_{trabajador.get('numero_documento') or trabajador_id}.pdf"
     )
