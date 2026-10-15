@@ -29087,6 +29087,22 @@ def actualizar_localizacion_reporte_y_registros(
         elif raw_geo == "":
             loc_campos.pop("geometria_tipo", None)
 
+    # Portada edita abscisas/nodos/PK/costado: esos SIEMPRE se guardan.
+    # coords_geojson / geometria_tipo / sector son opcionales (PGRST204 en prod) y
+    # no deben tumbar el guardado — se aplican best-effort aparte.
+    # Abs inicial = abs final con tipo Línea es válido (no hay validación que lo rechace).
+    _LOC_CORE_KEYS = frozenset({
+        "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
+        "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+        "coord_lat", "coord_lng",
+    })
+    _LOC_OPTIONAL_KEYS = frozenset({"geometria_tipo", "coords_geojson", "sector"})
+    loc_core = {k: v for k, v in loc_campos.items() if k in _LOC_CORE_KEYS}
+    loc_optional = {k: v for k, v in loc_campos.items() if k in _LOC_OPTIONAL_KEYS}
+    if not loc_core and not loc_optional:
+        # Cualquier otra clave de localización conocida.
+        loc_core = dict(loc_campos)
+
     cabecera_keys = (
         "descripcion_actividad", "subcontratista_id", "inspector_id",
         "capitulo", "tipo_localizacion", "enlace_soporte",
@@ -29121,13 +29137,14 @@ def actualizar_localizacion_reporte_y_registros(
 
     regs_prev = supabase_execute(_regs) or []
     uid = _sicoe_uid_from_user(current_user)
-    loc_patch = dict(loc_campos)
+    loc_patch = dict(loc_core)
     if uid is not None:
         loc_patch["modificado_por_reg"] = int(uid)
 
     aplicados: List[dict] = []  # {id, prev_loc}
     reporte_aplicado = False
     nuevo_rep = None
+    opcionales_omitidos: List[str] = []
 
     def _loc_snap(row: dict) -> dict:
         return {k: row.get(k) for k in SICOE_CAMPOS_LOCALIZACION}
@@ -29184,7 +29201,7 @@ def actualizar_localizacion_reporte_y_registros(
                 )
         if reporte_aplicado:
             try:
-                rb_rep = {k: prev_rep.get(k) for k in (set(loc_campos) | set(cabecera))}
+                rb_rep = {k: prev_rep.get(k) for k in (set(loc_core) | set(cabecera))}
                 def _rbr(patch=rb_rep):
                     return _so_reportes_write_omit_missing(
                         lambda d: (
@@ -29205,8 +29222,7 @@ def actualizar_localizacion_reporte_y_registros(
                 )
 
     try:
-        # 1) Registros primero (incl. sellados): solo localización.
-        # Escritura resiliente: omite coords_geojson/geometria_tipo/sector si PGRST204.
+        # 1) Registros primero (incl. sellados): solo campos CORE de localización.
         for reg in regs_prev:
             rid = reg.get("id")
             if rid is None:
@@ -29240,8 +29256,8 @@ def actualizar_localizacion_reporte_y_registros(
                 ) from ex_reg
             aplicados.append({"id": int(rid), "prev_loc": prev_loc, "prev_row": reg})
 
-        # 2) Reporte (también con omisión resiliente de columnas opcionales).
-        rep_patch = {**loc_campos, **cabecera}
+        # 2) Reporte (campos CORE + cabecera).
+        rep_patch = {**loc_core, **cabecera}
         try:
             def _upd_rep(p=rep_patch):
                 return _so_reportes_write_omit_missing(
@@ -29268,6 +29284,58 @@ def actualizar_localizacion_reporte_y_registros(
             ) from ex_rep
         nuevo_rep = rep_out[0] if rep_out else {**prev_rep, **rep_patch}
         reporte_aplicado = True
+
+        # 3) Opcionales (geometria/coords/sector): best-effort, no revierten el guardado.
+        if loc_optional:
+            for item in aplicados:
+                try:
+                    def _upd_opt(r_id=item["id"], p=dict(loc_optional)):
+                        return _so_registros_write_omit_missing(
+                            lambda d: (
+                                supabase.table("so_registros")
+                                .update(d)
+                                .eq("id", r_id)
+                                .eq("contrato_id", contrato_id)
+                                .execute()
+                                .data
+                            ),
+                            p,
+                            operacion="localizacion_completa_registro_opt",
+                        )
+                    supabase_execute(_upd_opt)
+                except Exception as ex_opt:
+                    logging.getLogger(__name__).warning(
+                        "localizacion-completa opt registro %s omitido: %s",
+                        item.get("id"),
+                        ex_opt,
+                    )
+                    for k in loc_optional:
+                        if k not in opcionales_omitidos:
+                            opcionales_omitidos.append(k)
+            try:
+                def _upd_rep_opt(p=dict(loc_optional)):
+                    return _so_reportes_write_omit_missing(
+                        lambda d: (
+                            supabase.table("so_reportes")
+                            .update(d)
+                            .eq("id", reporte_id)
+                            .eq("contrato_id", contrato_id)
+                            .execute()
+                            .data
+                        ),
+                        p,
+                        operacion="localizacion_completa_reporte_opt",
+                    )
+                supabase_execute(_upd_rep_opt)
+            except Exception as ex_opt_rep:
+                logging.getLogger(__name__).warning(
+                    "localizacion-completa opt reporte %s omitido: %s",
+                    reporte_id,
+                    ex_opt_rep,
+                )
+                for k in loc_optional:
+                    if k not in opcionales_omitidos:
+                        opcionales_omitidos.append(k)
     except HTTPException:
         raise
     except Exception as ex:
@@ -29286,7 +29354,7 @@ def actualizar_localizacion_reporte_y_registros(
         for item in aplicados:
             prev_row = item.get("prev_row") or {}
             campos_mod = []
-            for k, nuevo in loc_campos.items():
+            for k, nuevo in loc_core.items():
                 ant = prev_row.get(k)
                 if ant != nuevo:
                     campos_mod.append({"campo": k, "anterior": ant, "nuevo": nuevo})
@@ -29305,7 +29373,7 @@ def actualizar_localizacion_reporte_y_registros(
                     "sellado_conservado": bool(_registro_nivel_max_aprobado(prev_row, int(contrato_id))),
                 },
                 valor_anterior=_so_registro_audit_snapshot(prev_row),
-                valor_nuevo={**(_so_registro_audit_snapshot(prev_row) or {}), **loc_campos},
+                valor_nuevo={**(_so_registro_audit_snapshot(prev_row) or {}), **loc_core},
             )
         registrar_log(
             u_log,
@@ -29316,7 +29384,8 @@ def actualizar_localizacion_reporte_y_registros(
             {
                 "alcance": "localizacion_completa",
                 "registros_actualizados": len(aplicados),
-                "campos": list(loc_campos.keys()),
+                "campos": list(loc_core.keys()),
+                "opcionales_omitidos": opcionales_omitidos,
             },
             valor_anterior=_so_reporte_audit_snapshot(prev_rep),
             valor_nuevo=_so_reporte_audit_snapshot(nuevo_rep),
@@ -29345,7 +29414,9 @@ def actualizar_localizacion_reporte_y_registros(
         "ok": True,
         "reporte": nuevo_rep,
         "registros_actualizados": len(aplicados),
-        "campos_localizacion": list(loc_campos.keys()),
+        "campos_localizacion": list(loc_core.keys()),
+        "campos_opcionales": list(loc_optional.keys()),
+        "opcionales_omitidos": opcionales_omitidos,
     }
 
 
