@@ -593,7 +593,7 @@ def _write_bloque_notas(
     return body_end
 
 
-def _clear_tabla_cantidades_descuentos(ws, first_row: int = 45, last_row: int = 70) -> None:
+def _clear_tabla_cantidades_descuentos(ws, first_row: int = 45, last_row: int = 80) -> None:
     for r in range(first_row, last_row + 1):
         for col in ("B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"):
             cell = ws[f"{col}{r}"]
@@ -827,6 +827,15 @@ def _overlay_valores_editables_resumen(ws, calculo: dict) -> None:
         _style_fila_cantidad(ws, r)
 
 
+def _style_fila_grupo_cantidad(ws, r: int) -> None:
+    """Cabecera de grupo en Resumen (solo presentación; total informativo)."""
+    fill = PatternFill("solid", fgColor="E8EEF7")
+    font = Font(name="Arial", size=10, bold=True)
+    for col in ("B", "C", "D", "E", "F", "G", "H"):
+        _style(ws, f"{col}{r}", fill=fill, font=font, border=THIN)
+    ws[f"H{r}"].number_format = NUM_FMT_RESUMEN_CANTIDADES
+
+
 def _write_tablas_cantidades_descuentos(
     ws,
     *,
@@ -837,9 +846,12 @@ def _write_tablas_cantidades_descuentos(
     """
     Escribe Resumen de Cantidades + Descuentos Específicos.
     Con cálculo real (listas netos/descuentos): excluye líneas con cantidad 0,
-    compacta filas y mantiene fórmulas vivas en las restantes (refs N ajustadas).
+    agrupa Resumen por sección (cabecera + total informativo), compacta filas
+    y mantiene fórmulas vivas en las líneas (refs N ajustadas).
     Plantilla vacía / sin listas: layout fijo histórico.
     """
+    from topografia_planilla_tuberia_resumen_grupos import agrupar_netos_resumen
+
     es_alc = tipo == "ALCANTARILLA"
     usar_filtro = (
         bool(calculo)
@@ -858,6 +870,10 @@ def _write_tablas_cantidades_descuentos(
 
     netos_vis = _netos_visibles_excel(calculo)
     desc_vis = _descuentos_visibles_excel(calculo)
+    grupos = [
+        g for g in agrupar_netos_resumen(netos_vis, tipo=tipo)
+        if g.get("lineas")
+    ]
     _clear_tabla_cantidades_descuentos(ws)
 
     desc_row_by_cod: dict[str, int] = {}
@@ -896,13 +912,30 @@ def _write_tablas_cantidades_descuentos(
                 _set(ws, f"N{r}", _num_resumen_2(d["cantidad"]))
         _style_fila_descuento(ws, r)
 
+    # Filas intercaladas: cabecera de grupo + líneas (solo presentación).
+    entries: list[tuple[str, Any]] = []
+    for g in grupos:
+        entries.append(("grupo", g))
+        for n in g.get("lineas") or []:
+            entries.append(("linea", n))
+
     exc_row = None
-    for i, n in enumerate(netos_vis):
-        if str(n.get("codigo") or "").upper() == "EXC":
-            exc_row = 45 + i
+    probe = 45
+    for kind, payload in entries:
+        if kind == "linea" and str(payload.get("codigo") or "").upper() == "EXC":
+            exc_row = probe
             break
-    for i, n in enumerate(netos_vis):
-        r = 45 + i
+        probe += 1
+
+    r = 45
+    for kind, payload in entries:
+        if kind == "grupo":
+            _set_nombre_item_cantidad(ws, r, payload.get("titulo") or "", None)
+            _set(ws, f"H{r}", _num_resumen_2(payload.get("total")))
+            _style_fila_grupo_cantidad(ws, r)
+            r += 1
+            continue
+        n = payload
         cod = str(n.get("codigo") or "").strip()
         _set_nombre_item_cantidad(ws, r, n.get("nombre") or cod, n.get("unidad") or "m³")
         _write_resumen_fila_formulas(
@@ -926,8 +959,10 @@ def _write_tablas_cantidades_descuentos(
             elif ws[f"H{r}"].value is None:
                 _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
         _style_fila_cantidad(ws, r)
+        r += 1
 
-    return max(44 + len(netos_vis), 44 + len(desc_vis), 45)
+    n_cant_rows = len(entries)
+    return max(44 + n_cant_rows, 44 + len(desc_vis), 45)
 
 
 def _apply_sheet_borders(ws, cant_last_row: int = 51) -> None:
@@ -1149,7 +1184,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     )
 
     for col, label in (
-        ("B", "Item"),
+        ("B", "Observación"),
         ("C", "Und."),
         ("D", "Long"),
         ("E", "Ancho"),

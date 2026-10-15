@@ -872,6 +872,10 @@ def _normalize_cantidades_manuales(
         desc_de = resolver_linea_descuento_volumen(d.get("descontar_de"))
         if desc_de:
             entry["descontar_de"] = desc_de
+        # Metadato de presentación (Resumen agrupado); no afecta fórmulas.
+        grupo = str(d.get("grupo") or "").strip().lower()
+        if grupo:
+            entry["grupo"] = grupo
         out.append(entry)
     # Siempre al menos una línea OTROS_1 (vacía) para UI/export
     if not any(es_codigo_otros(x["codigo"]) for x in out):
@@ -1021,7 +1025,11 @@ def calcular_cantidades_y_descuentos(
         if not es_codigo_otros(ov["codigo"]):
             continue
         otr_nombre = ov.get("nombre")
-        if otr_nombre:
+        grupo = str(ov.get("grupo") or "").strip().lower()
+        if grupo and grupo != "otros":
+            # Línea agregada con + en Excavación/Tubería/…: Observación libre.
+            otr_label = str(otr_nombre).strip() if otr_nombre else "____"
+        elif otr_nombre:
             otr_label = (
                 f"Otros: {otr_nombre}"
                 if not str(otr_nombre).lower().startswith("otros")
@@ -1029,16 +1037,17 @@ def calcular_cantidades_y_descuentos(
             )
         else:
             otr_label = "Otros: ____"
-        cantidades.append(
-            _row(
-                ov["codigo"],
-                ov.get("long"),
-                ov.get("ancho"),
-                ov.get("espesor"),
-                nombre=otr_label,
-                descontar_de=ov.get("descontar_de"),
-            )
+        row_otr = _row(
+            ov["codigo"],
+            ov.get("long"),
+            ov.get("ancho"),
+            ov.get("espesor"),
+            nombre=otr_label,
+            descontar_de=ov.get("descontar_de"),
         )
+        if grupo:
+            row_otr["grupo"] = grupo
+        cantidades.append(row_otr)
 
     catalogo = ITEMS_DESCUENTOS_FILTRO if tipo == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
     descuentos: list[dict] = []
@@ -1118,7 +1127,7 @@ def calcular_cantidades_y_descuentos(
             descuento = 0.0
             bruto = c["cantidad"]
             neto = c["cantidad"]
-        netos.append({
+        neto_row = {
             "codigo": c["codigo"],
             "nombre": c["nombre"],
             "unidad": c["unidad"],
@@ -1131,7 +1140,10 @@ def calcular_cantidades_y_descuentos(
             "editable_dims": bool(c.get("editable_dims")),
             "editable_nombre": bool(c.get("editable_nombre")),
             "descontar_de": c.get("descontar_de"),
-        })
+        }
+        if c.get("grupo"):
+            neto_row["grupo"] = c.get("grupo")
+        netos.append(neto_row)
     return {
         "cantidades": cantidades,
         "descuentos": descuentos,

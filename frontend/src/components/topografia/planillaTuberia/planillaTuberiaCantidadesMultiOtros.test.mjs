@@ -71,10 +71,11 @@ describe('Resumen Cantidades — multi Otros + unidades + descuento volumen', ()
     assert.ok((calc.notas_descuento_volumen || []).some((n) => n.includes('Vol')))
   })
 
-  it('UI: Und., + Otros, Descontar de y tipografía uniforme', () => {
+  it('UI: Und., + por grupo, Descontar de y tipografía uniforme', () => {
     assert.match(formSrc, /Und\./)
-    assert.match(formSrc, /\+ Otros/)
+    assert.match(formSrc, /Observación/)
     assert.match(formSrc, /Descontar de/)
+    assert.match(formSrc, /agregarLineaGrupoResumen/)
     assert.match(formSrc, /agregarLineaOtros/)
     assert.match(formSrc, /LINEAS_DESCUENTO_VOLUMEN/)
     assert.match(formSrc, /Notas de descuento de volumen/)

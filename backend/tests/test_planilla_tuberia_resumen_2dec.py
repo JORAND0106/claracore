@@ -88,16 +88,18 @@ class TestExcelNumFmtRuntime(unittest.TestCase):
         )
         wb = load_workbook(io.BytesIO(raw))
         ws = wb["planilla"]
-        # Compactado: única línea de netos y descuentos en fila 45
-        self.assertEqual(ws["D45"].number_format, NUM_FMT_RESUMEN_CANTIDADES)
+        # Agrupado: cabecera Excavación (45) + EXC_ROC (46); descuento en 45
+        self.assertEqual(ws["B45"].value, "Excavación")
         self.assertEqual(ws["H45"].number_format, NUM_FMT_RESUMEN_CANTIDADES)
+        self.assertEqual(ws["D46"].number_format, NUM_FMT_RESUMEN_CANTIDADES)
+        self.assertEqual(ws["H46"].number_format, NUM_FMT_RESUMEN_CANTIDADES)
         self.assertEqual(ws["K45"].number_format, NUM_FMT_RESUMEN_CANTIDADES)
         self.assertEqual(ws["N45"].number_format, NUM_FMT_RESUMEN_CANTIDADES)
         # EXC_ROC: literales de dims/cantidad redondeados a 2
-        self.assertEqual(ws["D45"].value, 10.12)
-        self.assertEqual(ws["E45"].value, 1.57)
-        self.assertEqual(ws["F45"].value, 0.12)
-        self.assertEqual(ws["H45"].value, 2.35)
+        self.assertEqual(ws["D46"].value, 10.12)
+        self.assertEqual(ws["E46"].value, 1.57)
+        self.assertEqual(ws["F46"].value, 0.12)
+        self.assertEqual(ws["H46"].value, 2.35)
         # DESC_OTROS_*: dims redondeadas; cantidad vía ROUND(PRODUCT…,2)
         self.assertEqual(ws["K45"].value, 3.14)
         self.assertEqual(ws["L45"].value, 2.72)

@@ -928,7 +928,9 @@ export function puedeVerBotonCrearReporteSicoe(usuario, contratoId) {
   )
 }
 
-/** Normaliza cantidades_manuales: OTROS → OTROS_1; garantiza EXC_ROC + ≥1 Otros. */
+/** Normaliza cantidades_manuales: OTROS → OTROS_1; garantiza EXC_ROC + ≥1 Otros.
+ * Conserva `grupo` (presentación del Resumen agrupado); no altera dims ni fórmulas.
+ */
 export function normalizarCantidadesManuales(raw) {
   const out = []
   const seen = new Set()
@@ -947,8 +949,13 @@ export function normalizarCantidadesManuales(raw) {
       prom_altura_relleno: 'REL',
     }
     if (entry.descontar_de != null && entry.descontar_de !== '') {
-      const raw = String(entry.descontar_de).trim()
-      entry.descontar_de = legacy[raw] || raw.toUpperCase()
+      const rawDe = String(entry.descontar_de).trim()
+      entry.descontar_de = legacy[rawDe] || rawDe.toUpperCase()
+    }
+    if (entry.grupo != null && String(entry.grupo).trim() !== '') {
+      entry.grupo = String(entry.grupo).trim().toLowerCase()
+    } else {
+      delete entry.grupo
     }
     out.push(entry)
   }

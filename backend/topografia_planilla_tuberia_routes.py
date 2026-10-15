@@ -4308,16 +4308,38 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         for it in ITEMS_CANTIDADES
     ]
     # Resumen / Descuentos: presentación a 2 decimales (no aplica a cartera ni a SICOE).
-    cants = "".join(
-        f"<tr><td class='item'>{n['nombre']}</td>"
-        f"<td class='calc num'>{n.get('unidad') or ''}</td>"
-        f"<td class='calc num'>{fmt(n.get('long'), 2)}</td>"
-        f"<td class='calc num'>{fmt(n.get('ancho'), 2)}</td>"
-        f"<td class='calc num'>{fmt(n.get('espesor'), 2)}</td>"
-        f"<td class='calc num'>{fmt(n.get('descuentos'), 2)}</td>"
-        f"<td class='calc num'>{fmt(n.get('neto') if n.get('neto') is not None else n.get('bruto'), 2)}</td></tr>"
-        for n in netos
-    )
+    # Agrupación solo visual (totales informativos = suma de netos visibles).
+    from topografia_planilla_tuberia_resumen_grupos import agrupar_netos_resumen
+
+    def _neto_pdf(n: dict):
+        v = n.get("neto")
+        if v is None:
+            v = n.get("bruto")
+        return v
+
+    cants_parts: list[str] = []
+    for grupo in agrupar_netos_resumen(netos, tipo=tipo, display_neto=_neto_pdf):
+        lineas = grupo.get("lineas") or []
+        if not lineas:
+            continue
+        cants_parts.append(
+            f"<tr class='grupo'><td class='item'>{grupo.get('titulo') or ''}</td>"
+            f"<td class='calc num'></td>"
+            f"<td class='calc num'></td><td class='calc num'></td>"
+            f"<td class='calc num'></td><td class='calc num'></td>"
+            f"<td class='calc num'>{fmt(grupo.get('total'), 2)}</td></tr>"
+        )
+        for n in lineas:
+            cants_parts.append(
+                f"<tr><td class='item' style='padding-left:8px'>{n.get('nombre') or ''}</td>"
+                f"<td class='calc num'>{n.get('unidad') or ''}</td>"
+                f"<td class='calc num'>{fmt(n.get('long'), 2)}</td>"
+                f"<td class='calc num'>{fmt(n.get('ancho'), 2)}</td>"
+                f"<td class='calc num'>{fmt(n.get('espesor'), 2)}</td>"
+                f"<td class='calc num'>{fmt(n.get('descuentos'), 2)}</td>"
+                f"<td class='calc num'>{fmt(_neto_pdf(n), 2)}</td></tr>"
+            )
+    cants = "".join(cants_parts)
     descuentos = calc.get("descuentos") or [
         {**it, "cantidad": None, "long": None, "ancho": None, "espesor": None}
         for it in _catalogo_descuentos(tipo)
@@ -4371,6 +4393,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     table.sheet.resumen th{{font-size:5.5pt}}
     table.sheet.resumen th.item,table.sheet.resumen td.item{{width:42%;white-space:nowrap;text-align:left}}
     table.sheet.resumen th.num,table.sheet.resumen td.num{{width:11%;white-space:nowrap}}
+    table.sheet.resumen tr.grupo td{{background:#E8EEF7;font-weight:700}}
     .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 3px;table-layout:fixed}}
     .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:158px}}
     .graficos-wrap img{{display:block;width:100%;height:auto;margin:0 auto}}
@@ -4396,7 +4419,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
       <td width="58%">
         <h2>Resumen de Cantidades</h2>
         <table class="sheet resumen"><thead><tr>
-          <th class="cant item" width="36%">Item</th><th class="cant num">Und.</th>
+          <th class="cant item" width="36%">Observación</th><th class="cant num">Und.</th>
           <th class="cant num">Long</th><th class="cant num">Ancho</th>
           <th class="cant num">Espesor</th><th class="cant num">Desc.</th><th class="cant num">Cantidad</th>
         </tr></thead><tbody>{cants}</tbody></table>
