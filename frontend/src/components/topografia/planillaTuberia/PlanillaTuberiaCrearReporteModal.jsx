@@ -10,7 +10,13 @@ import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
 import TopoConfirmModal from '../TopoConfirmModal'
 import { filtrarCapitulosPorTipoPlanilla } from './planillaTuberiaCrearReporteUi'
-import { mensajeCapituloDistinto } from './planillaTuberiaItemSicoe'
+import {
+  fetchPreciosPorItemCapitulo,
+  lineasSinPrecio,
+  mensajeCapituloDistinto,
+  mensajeFaltanPrecios,
+  padreDeDescuento,
+} from './planillaTuberiaItemSicoe'
 
 /** Por encima del editor de planilla (100030) y del mapa PK (100050). */
 export const CREAR_REPORTE_Z_INDEX = 100060
@@ -373,6 +379,31 @@ export default function PlanillaTuberiaCrearReporteModal({
     }
     setBusy(true); setErr('')
     try {
+      const cap = String(capitulo).trim()
+      const numeros = []
+      for (const l of lineasPreview || []) {
+        const codigo = String(l?.codigo || '').toUpperCase()
+        const scope = String(l?.scope || 'cantidades').toLowerCase()
+        const origen = `${scope}:${codigo}`
+        const padre = scope === 'descuentos'
+          ? padreDeDescuento(codigo, l?.item_cant_codigo)
+          : origen
+        const item = padre && itemsPorLinea ? itemsPorLinea[padre] : null
+        if (item?.item_numero) numeros.push(item.item_numero)
+      }
+      const precios = await fetchPreciosPorItemCapitulo({
+        contratoId,
+        token,
+        capitulo: cap,
+        itemNumeros: numeros,
+        apiBase: API_BASE,
+      })
+      const sinPrecio = lineasSinPrecio(lineasPreview, itemsPorLinea, precios)
+      if (sinPrecio.length) {
+        setAvisoCapitulo('')
+        setErr(mensajeFaltanPrecios(sinPrecio))
+        return
+      }
       const numOrNull = (v) => {
         if (v === '' || v == null) return null
         const n = Number(v)
@@ -381,7 +412,7 @@ export default function PlanillaTuberiaCrearReporteModal({
       const res = await apiCrear({
         subcontratista_id: Number(subId),
         inspector_id: Number(inspId),
-        capitulo: String(capitulo).trim(),
+        capitulo: cap,
         nodo_ini: String(nodoIni).trim(),
         nodo_fin: String(nodoFin).trim(),
         abs_inicio: numOrNull(absIni),

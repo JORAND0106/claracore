@@ -2604,8 +2604,11 @@ def crear_reporte_sicoe_desde_planilla(
         item_de_linea,
         items_desde_meta,
         lineas_sin_item,
+        lineas_sin_precio,
         mensaje_faltan_items,
+        mensaje_faltan_precios,
         normalizar_items_por_linea,
+        precio_listado_cap_item,
     )
     meta_items = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
     if body.sicoe_items_por_linea is not None:
@@ -2618,6 +2621,24 @@ def crear_reporte_sicoe_desde_planilla(
     faltan_item = lineas_sin_item(lineas, items_cobro, p.get("tipo"))
     if faltan_item:
         raise HTTPException(422, mensaje_faltan_items(faltan_item))
+    # Precio por (capítulo del reporte, ítem): mismo código en otro capítulo no vale.
+    listado_idx: dict = {}
+    try:
+        from sicoe_valor_canonico import load_listado_vu_by_cap_item
+
+        listado_idx = load_listado_vu_by_cap_item(supabase, int(contrato_id)) or {}
+    except Exception:
+        try:
+            from main import _listado_precios_vu_by_cap_item
+
+            listado_idx = _listado_precios_vu_by_cap_item(int(contrato_id)) or {}
+        except Exception:
+            listado_idx = {}
+    faltan_precio = lineas_sin_precio(
+        lineas, items_cobro, capitulo, listado_idx, p.get("tipo"),
+    )
+    if faltan_precio:
+        raise HTTPException(422, mensaje_faltan_precios(faltan_precio))
     # Un ítem de otro capítulo no bloquea: el formulario lo confirma y, si el
     # usuario sigue, el reporte queda con el capítulo seleccionado y esos ítems.
 
@@ -2754,7 +2775,13 @@ def crear_reporte_sicoe_desde_planilla(
         # Solo Longitud/Ancho/Espesor como dims; cantidad (factor) vacío.
         # cantidad_total ya viene del Resumen (2 dec) — no recalcular PRODUCT.
         data["cantidad"] = None
-        item_line = item_de_linea(line, items_cobro, p.get("tipo")) or {}
+        item_line = dict(item_de_linea(line, items_cobro, p.get("tipo")) or {})
+        # V.U. del listado para el capítulo del reporte (no el del ítem asignado).
+        vu_cap = precio_listado_cap_item(
+            listado_idx, capitulo, item_line.get("item_numero"),
+        )
+        if vu_cap is not None:
+            item_line["precio_unitario"] = vu_cap
         data.update(campos_item_en_registro(line, item_line))
         if data.get("costo_directo") is not None:
             data["costo_directo"] = redondear_costo_directo_sicoe(data.get("costo_directo"))

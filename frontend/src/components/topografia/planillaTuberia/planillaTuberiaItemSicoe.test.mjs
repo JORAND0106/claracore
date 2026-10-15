@@ -11,8 +11,11 @@ import {
   etiquetaItem,
   capituloItemDistinto,
   lineasSinItem,
+  lineasSinPrecio,
   mensajeCapituloDistinto,
+  mensajeFaltanPrecios,
   padreDeDescuento,
+  precioListadoUsable,
 } from './planillaTuberiaItemSicoe.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -52,6 +55,35 @@ describe('ítem de cobro en la planilla', () => {
     assert.match(app, /usuarioPuedeEditarRegistrosSicoe/)
     assert.match(app, /alertaSyncCantidades/)
     assert.match(app, /IconoModuloConAlerta icon=\{icon\} total=\{alertaIcono\}/)
+  })
+
+  it('bloquea crear reporte si el ítem no tiene precio en el capítulo', () => {
+    assert.equal(precioListadoUsable(0), false)
+    assert.equal(precioListadoUsable(null), false)
+    assert.equal(precioListadoUsable(12.5), true)
+    const lineas = [
+      { scope: 'cantidades', codigo: 'EXC', nombre: 'Excavación Varias' },
+      { scope: 'cantidades', codigo: 'TRI', nombre: 'Atraque' },
+      { scope: 'descuentos', codigo: 'DESC_A1', nombre: 'Area 1', item_cant_codigo: 'TRI' },
+    ]
+    const items = {
+      'cantidades:EXC': { item_numero: '1.01', precio_unitario: 1000, capitulo: 'Alc' },
+      'cantidades:TRI': { item_numero: '1.02', precio_unitario: 2000, capitulo: 'Filtros' },
+    }
+    // Precio de 1.02 solo existiría en otro capítulo → mapa del capítulo del reporte sin 1.02.
+    const preciosCapReporte = { '1.01': 1000 }
+    const faltan = lineasSinPrecio(lineas, items, preciosCapReporte)
+    assert.deepEqual(faltan.map((f) => f.item_numero), ['1.02'])
+    assert.match(mensajeFaltanPrecios(faltan), /faltan precios en el listado/)
+    assert.match(mensajeFaltanPrecios(faltan), /1\.02/)
+    // Con precio en el capítulo del reporte → no bloquea.
+    assert.deepEqual(
+      lineasSinPrecio(lineas, items, { '1.01': 1000, '1.02': 2100 }),
+      [],
+    )
+    assert.match(modal, /fetchPreciosPorItemCapitulo/)
+    assert.match(modal, /lineasSinPrecio/)
+    assert.match(modal, /mensajeFaltanPrecios/)
   })
 
   it('el capítulo distinto pregunta si continúa y el mismo capítulo no', () => {
