@@ -121,6 +121,11 @@ import {
   sicoeLocSpreadEnRegistro,
   fmtLocCorta,
 } from './modules/sicoe-obra/sicoeLocalizacionHelpers'
+import {
+  sicoePortadaEditDraftSave,
+  sicoePortadaEditDraftLoad,
+  sicoePortadaEditDraftClear,
+} from './modules/sicoe-obra/sicoePortadaEditDraft'
 import { sicoeDatosMapaPortadaPk } from './modules/sicoe-obra/sicoeMapaPortadaPk'
 import {
   applySicoeBasemapTerrain,
@@ -6222,6 +6227,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const skipCotaWarnPortadaRef = useRef(false)
   const [modoEdicion, setModoEdicion]              = useState(false)
   const [guardandoEdicion, setGuardandoEdicion]    = useState(false)
+  const [avisoGuardadoPortada, setAvisoGuardadoPortada] = useState(null) // { titulo, mensaje }
   const [editDesc, setEditDesc]                    = useState(repoProp.descripcion_actividad || '')
   const [editAbsInicio, setEditAbsInicio]          = useState(repoProp.abs_inicio ?? '')
   const [editAbsFinal, setEditAbsFinal]            = useState(repoProp.abs_final ?? '')
@@ -6423,13 +6429,48 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const esLocMultipleReporte = (reporte?.tipo_localizacion || 'unica') === 'multiple'
 
+  const portadaDraftRestauradoRef = useRef(false)
+
   useEffect(() => {
+    // No pisar un borrador local recuperado tras expiración de sesión.
+    if (portadaDraftRestauradoRef.current || modoEdicion) return
     setLocPortada(sicoeLocFromRegistro(reporte, listaPkIds))
   }, [
     reporte.id, reporte.pk_id_id, reporte.margen, reporte.abs_inicio, reporte.abs_final,
     reporte.nodo_ini, reporte.nodo_fin, reporte.coord_lat, reporte.coord_lng,
-    listaPkIds.length,
+    listaPkIds.length, modoEdicion,
   ])
+
+  // Restaurar borrador de portada si la sesión expiró a mitad de un guardado.
+  useEffect(() => {
+    if (!reporte?.id || !contrato_id) return
+    const draft = sicoePortadaEditDraftLoad(contrato_id, reporte.id)
+    if (!draft) return
+    portadaDraftRestauradoRef.current = true
+    if (draft.locPortada) setLocPortada(draft.locPortada)
+    if (draft.editDesc != null) setEditDesc(draft.editDesc)
+    if (draft.editSubId != null) setEditSubId(draft.editSubId)
+    if (draft.editInspId != null) setEditInspId(draft.editInspId)
+    if (draft.editCapitulo != null) setEditCapitulo(draft.editCapitulo)
+    setModoEdicion(true)
+    setAvisoGuardadoPortada({
+      titulo: 'Cambios pendientes',
+      mensaje:
+        'Se recuperaron los cambios de localización/portada que no alcanzaron a guardarse. Revíselos y pulse Guardar para completarlos.',
+    })
+  }, [reporte?.id, contrato_id])
+
+  // Autoguardado local mientras se edita la portada (sobrevive cierre por inactividad).
+  useEffect(() => {
+    if (!modoEdicion || !reporte?.id || !contrato_id) return
+    sicoePortadaEditDraftSave(contrato_id, reporte.id, {
+      editDesc,
+      editSubId,
+      editInspId,
+      editCapitulo,
+      locPortada,
+    })
+  }, [modoEdicion, reporte?.id, contrato_id, editDesc, editSubId, editInspId, editCapitulo, locPortada])
 
   useEffect(() => {
     if (esLocMultipleReporte || !contrato_id || !reporte?.capitulo) {
@@ -6860,38 +6901,47 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setModoEdicion(true)
   }
 
-  /** Localización única en portada: persiste reporte + todos los registros (PK, GPS, abscisas). */
+  /** Localización única en portada: persiste reporte + todos los registros (PK, GPS, abscisas), incl. sellados. */
   const persistirLocalizacionPortadaUnica = async (loc) => {
     if (esLocMultipleReporte || !reporte?.id) return
     const fields = localizacionToApiFields(loc)
     if (fields.pk_id_id == null && fields.coord_lat == null) return
     try {
-      const pRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/localizacion`, {
-        method: 'PATCH',
-        headers: { ...hdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields),
-      })
-      if (!pRes.ok) throw new Error(`HTTP ${pRes.status}`)
+      const pRes = await fetch(
+        `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/localizacion-completa`,
+        {
+          method: 'PUT',
+          headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify(fields),
+        },
+      )
+      if (pRes.status === 401) {
+        sicoePortadaEditDraftSave(contrato_id, reporte.id, { locPortada: loc, editDesc, editSubId, editInspId, editCapitulo })
+        setAvisoGuardadoPortada({
+          titulo: 'Sesión expirada',
+          mensaje: 'Su sesión expiró. Inicie sesión de nuevo; los cambios de localización quedaron guardados en este dispositivo y se completarán al volver a abrir el reporte.',
+        })
+        return
+      }
+      if (!pRes.ok) {
+        let msg = 'No se pudo actualizar la localización del reporte.'
+        try {
+          const j = await pRes.json()
+          if (typeof j?.detail === 'string') msg = j.detail
+        } catch { /* noop */ }
+        throw new Error(msg)
+      }
       setReporte((prev) => ({ ...prev, ...fields }))
       setLocPortada(loc)
-      const regs = registros.filter((r) => r?.id)
-      if (regs.length) {
-        await Promise.all(regs.map((reg) =>
-          fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
-            method: 'PUT',
-            headers: { ...hdrs, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              reporte_id: reg.reporte_id,
-              numero_registro: reg.numero_registro,
-              ...fields,
-            }),
-          }),
-        ))
-        setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...fields } : r)))
-      }
+      setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...fields } : r)))
+      sicoePortadaEditDraftClear(contrato_id, reporte.id)
       propagarReporteGuardado({ ...fields })
     } catch (e) {
       console.error('persistirLocalizacionPortadaUnica', e)
+      setAvisoGuardadoPortada({
+        titulo: 'No se pudo guardar la localización',
+        mensaje: e?.message || 'Intente de nuevo. Si el problema continúa, revise su conexión e inicie sesión otra vez.',
+      })
     }
   }
 
@@ -6907,65 +6957,100 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const guardarEdicion = async () => {
     setGuardandoEdicion(true)
+    const locFields = esLocMultipleReporte ? {} : localizacionToApiFields(locPortada)
+    const cabecera = {
+      descripcion_actividad: (editDesc || '').trim() || reporte.descripcion_actividad,
+      subcontratista_id: editSubId ? parseInt(editSubId, 10) : null,
+      inspector_id: editInspId ? parseInt(editInspId, 10) : null,
+      capitulo: editCapitulo || reporte.capitulo,
+      tipo_localizacion: reporte.tipo_localizacion || 'unica',
+    }
+    const draftSnap = {
+      editDesc,
+      editSubId,
+      editInspId,
+      editCapitulo,
+      locPortada,
+    }
     try {
-      const locFields = esLocMultipleReporte ? {} : localizacionToApiFields(locPortada)
-      const payload = {
-        descripcion_actividad: (editDesc || '').trim() || reporte.descripcion_actividad,
-        subcontratista_id: editSubId ? parseInt(editSubId, 10) : null,
-        inspector_id: editInspId ? parseInt(editInspId, 10) : null,
-        capitulo: editCapitulo || reporte.capitulo,
-        tipo_localizacion: reporte.tipo_localizacion || 'unica',
-        ...locFields,
+      // Con localización única: un solo endpoint atómico (reporte + todos los registros, incl. sellados).
+      if (!esLocMultipleReporte && Object.keys(locFields).length) {
+        const res = await fetch(
+          `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/localizacion-completa`,
+          {
+            method: 'PUT',
+            headers: { ...hdrs, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...cabecera, ...locFields }),
+          },
+        )
+        if (res.status === 401) {
+          sicoePortadaEditDraftSave(contrato_id, reporte.id, draftSnap)
+          setAvisoGuardadoPortada({
+            titulo: 'Sesión expirada',
+            mensaje:
+              'Su sesión expiró. Inicie sesión de nuevo; los cambios de la portada quedaron guardados en este dispositivo y podrá completar el guardado al volver a abrir el reporte.',
+          })
+          return
+        }
+        if (!res.ok) {
+          let msg = 'No se pudo guardar la localización del reporte y sus registros.'
+          try {
+            const j = await res.json()
+            if (typeof j?.detail === 'string' && j.detail.trim()) msg = j.detail
+          } catch { /* noop */ }
+          throw new Error(msg)
+        }
+        const data = await res.json().catch(() => ({}))
+        const updated = data?.reporte || {}
+        const merged = { ...reporte, ...updated, ...cabecera, ...locFields }
+        setReporte(merged)
+        setEditDesc(merged.descripcion_actividad || '')
+        setLocPortada(locPortada)
+        setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...locFields } : r)))
+        sicoePortadaEditDraftClear(contrato_id, reporte.id)
+        propagarReporteGuardado(merged)
+        setModoEdicion(false)
+        return
       }
+
+      const payload = { ...cabecera, ...locFields }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
         method: 'PUT',
         headers: hdrs,
         body: JSON.stringify(payload),
       })
+      if (res.status === 401) {
+        sicoePortadaEditDraftSave(contrato_id, reporte.id, draftSnap)
+        setAvisoGuardadoPortada({
+          titulo: 'Sesión expirada',
+          mensaje:
+            'Su sesión expiró. Inicie sesión de nuevo; los cambios de la portada quedaron guardados en este dispositivo.',
+        })
+        return
+      }
       if (!res.ok) {
-        let msg = `HTTP ${res.status}`
+        let msg = 'No se pudo guardar los cambios del reporte.'
         try {
           const j = await res.json()
-          msg = typeof j?.detail === 'string' ? j.detail : JSON.stringify(j?.detail || j)
+          if (typeof j?.detail === 'string' && j.detail.trim()) msg = j.detail
         } catch { /* cuerpo no JSON */ }
         throw new Error(msg)
       }
       const updated = await res.json().catch(() => ({}))
-
-      if (!esLocMultipleReporte && Object.keys(locFields).length) {
-        const regs = registros.filter((r) => r?.id)
-        if (regs.length) {
-          const results = await Promise.all(regs.map((reg) =>
-            fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
-              method: 'PUT',
-              headers: hdrs,
-              body: JSON.stringify({
-                reporte_id: reg.reporte_id,
-                numero_registro: reg.numero_registro,
-                ...locFields,
-              }),
-            }),
-          ))
-          const fallo = results.find((r) => !r.ok)
-          if (fallo) throw new Error(`No se pudo actualizar localización en registros (HTTP ${fallo.status})`)
-          setRegistros((prev) => prev.map((r) => (r?.id ? { ...r, ...locFields } : r)))
-        }
-      }
-
       const merged = { ...reporte, ...updated, ...payload }
-      if (!esLocMultipleReporte && Object.keys(locFields).length) {
-        Object.assign(merged, locFields)
-      }
-
       setReporte(merged)
       setEditDesc(merged.descripcion_actividad || '')
-      if (!esLocMultipleReporte) setLocPortada(locPortada)
+      sicoePortadaEditDraftClear(contrato_id, reporte.id)
       propagarReporteGuardado(merged)
       setModoEdicion(false)
     } catch (e) {
-      alert('No se pudo guardar los cambios: ' + (e?.message || String(e)))
+      setAvisoGuardadoPortada({
+        titulo: 'No se pudo guardar',
+        mensaje: e?.message || 'Intente de nuevo. Si el problema continúa, revise su conexión.',
+      })
+    } finally {
+      setGuardandoEdicion(false)
     }
-    setGuardandoEdicion(false)
   }
 
   const agregarEnlace = async () => {
@@ -8064,7 +8149,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     <div style={{ display:'flex', gap:'8px' }}>
                       {modoEdicion ? (
                         <>
-                          <button onClick={() => setModoEdicion(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
+                          <button onClick={() => {
+                            sicoePortadaEditDraftClear(contrato_id, reporte?.id)
+                            setLocPortada(sicoeLocFromRegistro(reporte, listaPkIds))
+                            setEditDesc(reporte.descripcion_actividad || '')
+                            setModoEdicion(false)
+                          }} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
                           <button onClick={guardarEdicion} disabled={guardandoEdicion} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer', opacity:guardandoEdicion?0.6:1 }}>{guardandoEdicion?'Guardando...':'💾 Guardar'}</button>
                         </>
                       ) : (
@@ -8115,6 +8205,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     onGpsCapturado={persistirLocalizacionPortadaUnica}
                     pkIds={listaPkIds}
                     nodos={nodosPortada}
+                    showTitle={false}
                   />
                 ) : (
                 <div className="cc-sicoe-portada-loc-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
@@ -9011,6 +9102,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           }}
         >
           <p style={{ margin: 0 }}>{topoAviso.mensaje}</p>
+        </CcConfirmModal>
+      )}
+
+      {avisoGuardadoPortada && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={10850}
+          tipo="warn"
+          titulo={avisoGuardadoPortada.titulo || 'Aviso'}
+          confirmar="Entendido"
+          soloConfirmar
+          onCancel={() => setAvisoGuardadoPortada(null)}
+          onConfirm={() => setAvisoGuardadoPortada(null)}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+            {avisoGuardadoPortada.mensaje}
+          </p>
         </CcConfirmModal>
       )}
 

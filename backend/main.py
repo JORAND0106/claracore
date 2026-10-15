@@ -28975,6 +28975,13 @@ def asignar_actores_por_pk(
         pass
     return {"ok": True, "actualizados": len(rows)}
 
+_SICOE_LOC_REPORTE_KEYS = frozenset({
+    "pk_id_id", "civ", "tramo", "infraestructura", "calzada",
+    "ubicacion", "coord_lat", "coord_lng", "abs_inicio", "abs_final",
+    "nodo_ini", "nodo_fin", "margen", "geometria_tipo", "coords_geojson", "sector",
+})
+
+
 @app.patch("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/localizacion")
 def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: dict, current_user=Depends(get_current_user)):
     """Actualiza solo campos de localización en so_reportes (cualquier estado del reporte)."""
@@ -28984,11 +28991,7 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
     rep_rows = supabase_execute(_check)
     if not rep_rows:
         raise HTTPException(status_code=404, detail="Reporte no encontrado")
-    campos = {k: v for k, v in body.items() if k in (
-        'pk_id_id','civ','tramo','infraestructura','calzada',
-        'ubicacion','coord_lat','coord_lng','abs_inicio','abs_final',
-        'nodo_ini','nodo_fin','margen'
-    )}
+    campos = {k: v for k, v in body.items() if k in _SICOE_LOC_REPORTE_KEYS}
     if not campos:
         raise HTTPException(status_code=400, detail="Sin campos de localización")
     def _prev_snap():
@@ -29015,6 +29018,229 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
     except Exception:
         pass
     return out
+
+
+@app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/localizacion-completa")
+def actualizar_localizacion_reporte_y_registros(
+    contrato_id: int,
+    reporte_id: int,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
+    """
+    Actualiza localización del reporte y la replica a TODOS sus registros
+    (sellados y no sellados). En sellados solo toca localización: conserva sello,
+    validación, cantidades y demás campos.
+
+    Atómico a nivel de aplicación: si falla un registro, se revierten los cambios
+    ya aplicados (reporte + registros previos).
+    """
+    from sicoe_creador_permisos import SICOE_CAMPOS_LOCALIZACION
+
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(
+            status_code=403,
+            detail="Se requiere permiso «Editar» en Reporte de Cantidades para cambiar la localización del reporte.",
+        )
+
+    loc_campos = {k: body.get(k) for k in SICOE_CAMPOS_LOCALIZACION if k in body}
+    # Aceptar también claves del reporte (mismo set + alias).
+    for k in _SICOE_LOC_REPORTE_KEYS:
+        if k in body and k not in loc_campos:
+            loc_campos[k] = body.get(k)
+    if not loc_campos:
+        raise HTTPException(status_code=400, detail="Indique al menos un campo de localización.")
+
+    cabecera_keys = (
+        "descripcion_actividad", "subcontratista_id", "inspector_id",
+        "capitulo", "tipo_localizacion", "enlace_soporte",
+    )
+    cabecera = {k: body[k] for k in cabecera_keys if k in body}
+
+    def _rep_prev():
+        return (
+            supabase.table("so_reportes")
+            .select("*")
+            .eq("id", reporte_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    prev_rows = supabase_execute(_rep_prev) or []
+    if not prev_rows:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    prev_rep = prev_rows[0]
+
+    def _regs():
+        return (
+            supabase.table("so_registros")
+            .select("*")
+            .eq("reporte_id", reporte_id)
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        )
+
+    regs_prev = supabase_execute(_regs) or []
+    uid = _sicoe_uid_from_user(current_user)
+    loc_patch = dict(loc_campos)
+    if uid is not None:
+        loc_patch["modificado_por_reg"] = int(uid)
+
+    aplicados: List[dict] = []  # {id, prev_loc}
+    reporte_aplicado = False
+    nuevo_rep = None
+
+    def _loc_snap(row: dict) -> dict:
+        return {k: row.get(k) for k in SICOE_CAMPOS_LOCALIZACION}
+
+    def _rollback():
+        for item in reversed(aplicados):
+            try:
+                def _rb(rid=item["id"], patch=item["prev_loc"]):
+                    return (
+                        supabase.table("so_registros")
+                        .update(patch)
+                        .eq("id", rid)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    )
+                supabase_execute(_rb)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "rollback loc registro %s reporte %s", item.get("id"), reporte_id
+                )
+        if reporte_aplicado:
+            try:
+                rb_rep = {k: prev_rep.get(k) for k in (set(loc_campos) | set(cabecera))}
+                def _rbr(patch=rb_rep):
+                    return (
+                        supabase.table("so_reportes")
+                        .update(patch)
+                        .eq("id", reporte_id)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    )
+                supabase_execute(_rbr)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "rollback loc reporte %s", reporte_id
+                )
+
+    try:
+        # 1) Registros primero (incl. sellados): solo localización.
+        for reg in regs_prev:
+            rid = reg.get("id")
+            if rid is None:
+                continue
+            prev_loc = _loc_snap(reg)
+            # Conservar bloqueado/sello: el patch solo lleva localización (+ modificado_por).
+            patch = dict(loc_patch)
+            def _upd_reg(r_id=rid, p=patch):
+                return (
+                    supabase.table("so_registros")
+                    .update(p)
+                    .eq("id", r_id)
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                    .data
+                )
+            supabase_execute(_upd_reg)
+            aplicados.append({"id": int(rid), "prev_loc": prev_loc, "prev_row": reg})
+
+        # 2) Reporte
+        rep_patch = {**loc_campos, **cabecera}
+        def _upd_rep(p=rep_patch):
+            return (
+                supabase.table("so_reportes")
+                .update(p)
+                .eq("id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        rep_out = supabase_execute(_upd_rep) or []
+        nuevo_rep = rep_out[0] if rep_out else {**prev_rep, **rep_patch}
+        reporte_aplicado = True
+    except Exception as ex:
+        _rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo actualizar la localización. No se guardó ningún cambio.",
+        ) from ex
+
+    # Trazabilidad por registro
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        for item in aplicados:
+            prev_row = item.get("prev_row") or {}
+            campos_mod = []
+            for k, nuevo in loc_campos.items():
+                ant = prev_row.get(k)
+                if ant != nuevo:
+                    campos_mod.append({"campo": k, "anterior": ant, "nuevo": nuevo})
+            if not campos_mod:
+                continue
+            registrar_log(
+                u_log,
+                "EDITAR",
+                "SICOE",
+                "registro",
+                str(item["id"]),
+                {
+                    "alcance": "localizacion_portada",
+                    "reporte_id": reporte_id,
+                    "campos_modificados": campos_mod,
+                    "sellado_conservado": bool(_registro_nivel_max_aprobado(prev_row, int(contrato_id))),
+                },
+                valor_anterior=_so_registro_audit_snapshot(prev_row),
+                valor_nuevo={**(_so_registro_audit_snapshot(prev_row) or {}), **loc_campos},
+            )
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {
+                "alcance": "localizacion_completa",
+                "registros_actualizados": len(aplicados),
+                "campos": list(loc_campos.keys()),
+            },
+            valor_anterior=_so_reporte_audit_snapshot(prev_rep),
+            valor_nuevo=_so_reporte_audit_snapshot(nuevo_rep),
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("log localizacion-completa reporte %s", reporte_id)
+
+    # Reevaluar auditoría / huella de cada registro (best-effort, en background).
+    def _sync_huellas(ids=None):
+        ids = ids or [x["id"] for x in aplicados]
+        for rid in ids:
+            try:
+                sicoe_sincronizar_huella_registro(contrato_id, rid, current_user)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "sync huella tras loc portada reg=%s", rid
+                )
+
+    try:
+        background_tasks.add_task(_sync_huellas)
+    except Exception:
+        # Si no hay BackgroundTasks usable, no bloquear el guardado.
+        pass
+
+    return {
+        "ok": True,
+        "reporte": nuevo_rep,
+        "registros_actualizados": len(aplicados),
+        "campos_localizacion": list(loc_campos.keys()),
+    }
 
 
 def _sicoe_exige_topografia_para_aprobar_nivel2(contrato_id: int) -> bool:
@@ -29328,23 +29554,29 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     if sellado:
         # Campos siempre editables aunque el registro esté sellado en el nivel máximo
         # (no afectan cantidades, ítem, valores, validación ni sello).
+        # Localización es la excepción explícita: se puede actualizar desde la portada
+        # del reporte y se replica a sellados sin retirar el sello.
+        from sicoe_creador_permisos import SICOE_CAMPOS_LOCALIZACION as _LOC_SELLADO
         _CAMPOS_N3_PERMITIDOS = {
             "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
             "observacion",
             "foto_url", "foto_numero", "foto_descripcion",
             "grafico_url", "grafico_numero", "grafico_descripcion",
             "graficos_historial",
-        }
+        } | set(_LOC_SELLADO)
         if not puede_editar_full:
             raise HTTPException(
                 status_code=403,
-                detail="Registro sellado: se requiere permiso «Editar» en Reporte de Cantidades para ajustar observación, subcontratista, corte o foto/gráfico.",
+                detail="Registro sellado: se requiere permiso «Editar» en Reporte de Cantidades para ajustar observación, subcontratista, corte, foto/gráfico o localización.",
             )
         otros = {k: v for k, v in data.items() if k not in _CAMPOS_N3_PERMITIDOS}
         if otros:
             raise HTTPException(
                 status_code=400,
-                detail="Registro aprobado en el último nivel de validación: solo puede modificarse la observación, el subcontratista, el corte y la foto/gráfico del registro.",
+                detail=(
+                    "Registro aprobado en el último nivel de validación: solo puede modificarse "
+                    "la observación, el subcontratista, el corte, la foto/gráfico y la localización."
+                ),
             )
         if data.get("reporte_id") is not None and int(data["reporte_id"]) != int(prev_row["reporte_id"]):
             raise HTTPException(status_code=400, detail="No puede modificarse el reporte del registro aprobado en el último nivel de validación.")

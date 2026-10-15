@@ -5,15 +5,20 @@ Sin dependencias de FastAPI/Supabase para tests unitarios.
 from __future__ import annotations
 from typing import Any, Optional
 
+# Localización de portada/registro: única excepción editable también en sellados
+# (réplica desde la portada del reporte; no toca sello ni validación).
+SICOE_CAMPOS_LOCALIZACION = frozenset({
+    "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
+    "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+    "coord_lat", "coord_lng", "geometria_tipo", "coords_geojson", "sector",
+})
+
 # Campos dimensionales / localización: el creador con permiso Crear puede editarlos
 # hasta el sellado del último nivel (sin permiso Editar).
 SICOE_CAMPOS_DIMENSIONALES = frozenset({
     "longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion",
     "es_varilla", "diametro_varilla", "peso_kg_m",
-    "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
-    "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
-    "coord_lat", "coord_lng",
-})
+}) | SICOE_CAMPOS_LOCALIZACION
 # Gráfico/plano: mismo alcance que dims para el creador (no afecta Cantidad Total).
 # La foto sigue fuera de este set (solo permiso Editar).
 SICOE_CAMPOS_GRAFICO = frozenset({
