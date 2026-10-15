@@ -1660,19 +1660,40 @@ export default function PlanillaTuberiaForm({
               </tr>
             )
           })}
+          {calculoVista?.cartera?.totales && (
+            <tr data-cartera-promedios>
+              <td
+                colSpan={colsCampoEdit.length + 1}
+                style={{
+                  ...tdCartera,
+                  textAlign: 'left',
+                  fontWeight: 800,
+                  background: CALC_CELL_BG,
+                  paddingLeft: 8,
+                }}
+              >
+                Promedio · L={fmtNDash(calculoVista.cartera.totales.longitud_m, 2)} m
+              </td>
+              <td style={{ ...tdCarteraCalc, fontWeight: 800 }}>
+                {fmtNDash(calculoVista.cartera.totales.prom_altura_excavacion)}
+              </td>
+              <td style={{ ...tdCarteraCalc, fontWeight: 800 }}>
+                {fmtNDash(calculoVista.cartera.totales.prom_altura_triturado)}
+              </td>
+              <td style={{ ...tdCarteraCalc, fontWeight: 800 }}>
+                {fmtNDash(calculoVista.cartera.totales.prom_altura_relleno)}
+              </td>
+              <td style={{ ...tdCarteraCalc, fontWeight: 800 }}>
+                {fmtNDash(calculoVista.cartera.totales.prom_ancho_geotextil)}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
     {isCompact && (
       <div style={{ marginTop: 6, fontSize: 'var(--cc-xxs)', color: ui.textMuted }}>
         Deslice horizontalmente para ver todas las columnas (formato hoja de cálculo).
-      </div>
-    )}
-    {calculoVista?.cartera?.totales && (
-      <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-        L={fmtNDash(calculoVista.cartera.totales.longitud_m, 2)} m ·
-        prom H.Exc={fmtNDash(calculoVista.cartera.totales.prom_altura_excavacion)} ·
-        prom Geo={fmtNDash(calculoVista.cartera.totales.prom_ancho_geotextil)}
       </div>
     )}
     {editable && (
