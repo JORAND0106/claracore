@@ -9516,8 +9516,15 @@ function ModuloSicoeObra({
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
   /** Vista módulo: grilla por reporte (default) | cantidades por ítem (control solapes/vacíos). */
   const [sicoeModuloVista, setSicoeModuloVista] = useState('reportes')
+  const sicoeModuloVistaRef = useRef('reportes')
+  useEffect(() => { sicoeModuloVistaRef.current = sicoeModuloVista }, [sicoeModuloVista])
   const [cpiRefreshNonce, setCpiRefreshNonce] = useState(0)
   const [cpiFiltrosVersion, setCpiFiltrosVersion] = useState(0)
+  /** Datos de CPI/consolidada desactualizados tras filtrar en otra vista. */
+  const cpiStaleRef = useRef(true)
+  /** Grilla Por reporte desactualizada tras filtrar en consolidada/auditoría. */
+  const reportesStaleRef = useRef(false)
+  const [sicoeCargaVistaMs, setSicoeCargaVistaMs] = useState(null)
   const [ejecutandoCpiValidacion, setEjecutandoCpiValidacion] = useState(false)
   const [avisoItemNoAprobadoSicoe, setAvisoItemNoAprobadoSicoe] = useState(null)
   /** Antes de filtrar la grilla por PK desde el mapa: asignar inspector/subcontratista en bloque. */
@@ -10380,9 +10387,10 @@ function ModuloSicoeObra({
   const restaurarSicoeDesdeEntradaRef = useRef(null)
 
   /**
-   * Grilla + panel en paralelo: antes iban en serie (T_buscar + T_analisis), hasta varios minutos sin feedback útil.
-   * Mismo criterio de filtros en ambas peticiones; el tiempo total tiende a max(T_buscar, T_analisis).
-   * Doble carga simultánea en API: aceptable frente a esperar el doble en cola.
+   * Carga según la vista activa (no bloquea una vista con datos de otra):
+   * - Por reporte: solo /reportes/buscar (grilla). Panel /analisis en background.
+   * - Consolidada / Auditoría (CPI): solo invalidan CPI; no llaman /reportes/buscar.
+   * CPI/consolidada se cargan al entrar a esa pestaña si quedaron stale.
    */
   const ejecutarBusquedaSicoeCompleta = async (f, capas, capasOpParam) => {
     if (sicoeBusquedaAbortRef.current) {
@@ -10394,14 +10402,43 @@ function ModuloSicoeObra({
     const timeoutId = window.setTimeout(() => ac.abort(), SICOE_BUSQUEDA_TIMEOUT_MS)
     const opSeq = ++sicoeOperacionSeqRef.current
     sicoeBusquedaEnCursoRef.current = true
+    const vista = sicoeModuloVistaRef.current || 'reportes'
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
-      const [repResult, analResult] = await Promise.all([
-        buscarReportes(f, 0, capas, capasOpParam, opSeq, ac.signal),
-        cargarAnalisis(f, capas, capasOpParam, opSeq, ac.signal),
-      ])
-      if (opSeq === sicoeOperacionSeqRef.current) {
-        guardarSicoeVistaTrasBusquedaRef.current?.(f, repResult, analResult)
+      if (vista === 'cantidades_item' || vista === 'ejecucion_consolidada') {
+        // Solo la vista activa (CPI / consolidada). Marcar grilla y panel como pendientes.
+        reportesStaleRef.current = true
+        cpiStaleRef.current = false
         setCpiFiltrosVersion((n) => n + 1)
+        const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+        setSicoeCargaVistaMs({ vista, ms, fuente: 'cpi-kickoff' })
+        // Panel diferido: no compite con /cantidades-por-item (evita saturar Supabase).
+        window.setTimeout(() => {
+          if (opSeq !== sicoeOperacionSeqRef.current) return
+          if (ac.signal.aborted) return
+          void cargarAnalisis(f, capas, capasOpParam, opSeq, ac.signal).then((analResult) => {
+            if (opSeq !== sicoeOperacionSeqRef.current) return
+            guardarSicoeVistaTrasBusquedaRef.current?.(f, null, analResult)
+          }).catch(() => { /* abort / red */ })
+        }, 120)
+      } else {
+        // Por reporte: grilla primero; no esperar análisis ni CPI.
+        cpiStaleRef.current = true
+        reportesStaleRef.current = false
+        const repResult = await buscarReportes(f, 0, capas, capasOpParam, opSeq, ac.signal)
+        if (opSeq === sicoeOperacionSeqRef.current) {
+          const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+          setSicoeCargaVistaMs({ vista: 'reportes', ms, fuente: 'grilla' })
+          if (typeof window !== 'undefined') {
+            console.info(`[SicoeObra] Por reporte (grilla) cargada en ${ms} ms`)
+          }
+          guardarSicoeVistaTrasBusquedaRef.current?.(f, repResult, null)
+        }
+        // Panel en background (señal propia cargandoAnalisis); no bloquea la grilla.
+        void cargarAnalisis(f, capas, capasOpParam, opSeq, ac.signal).then((analResult) => {
+          if (opSeq !== sicoeOperacionSeqRef.current) return
+          guardarSicoeVistaTrasBusquedaRef.current?.(f, repResult, analResult)
+        }).catch(() => { /* abort / red */ })
       }
     } catch (e) {
       if (e?.name !== 'AbortError') throw e
@@ -10413,10 +10450,29 @@ function ModuloSicoeObra({
       }
       if (opSeq === sicoeOperacionSeqRef.current) {
         setCargando(false)
-        setCargandoAnalisis(false)
       }
     }
   }
+
+  /** Cambia de pestaña y, si los datos de esa vista quedaron stale, los refresca. */
+  const cambiarVistaSicoe = useCallback((vista) => {
+    const prev = sicoeModuloVistaRef.current
+    if (vista === prev) return
+    setSicoeModuloVista(vista)
+    sicoeModuloVistaRef.current = vista
+    if (!busquedaRealizadaRef.current) return
+    if ((vista === 'cantidades_item' || vista === 'ejecucion_consolidada') && cpiStaleRef.current) {
+      cpiStaleRef.current = false
+      setCpiFiltrosVersion((n) => n + 1)
+    }
+    if (vista === 'reportes' && reportesStaleRef.current) {
+      reportesStaleRef.current = false
+      const f = filtrosSicoeRef.current || filtros
+      const capas = capasSicoeRef.current || []
+      const capasOp = capasValidacionOpRef.current || 'and'
+      void buscarReportesSicoeRef.current?.(f, 0, capas, capasOp)
+    }
+  }, [filtros])
 
   const aplicarSicoeFiltroBundle = useCallback((snap, ejecutarBusqueda = true) => {
     const bundle = sicoeFiltroFromSnapshot(snap)
@@ -10448,7 +10504,14 @@ function ModuloSicoeObra({
         setBusquedaRealizada(false)
         setHayMas(false)
         setOffsetActual(0)
-        setCpiFiltrosVersion((n) => n + 1)
+        reportesStaleRef.current = false
+        const vista = sicoeModuloVistaRef.current || 'reportes'
+        if (vista === 'cantidades_item' || vista === 'ejecucion_consolidada') {
+          cpiStaleRef.current = false
+          setCpiFiltrosVersion((n) => n + 1)
+        } else {
+          cpiStaleRef.current = true
+        }
         return
       }
       void ejecutarBusquedaSicoeCompleta(f, bundle.capasValidacion, bundle.capasValidacionOp)
@@ -12640,7 +12703,7 @@ function ModuloSicoeObra({
               type="button"
               role="tab"
               aria-selected={sicoeModuloVista === 'reportes'}
-              onClick={() => setSicoeModuloVista('reportes')}
+              onClick={() => cambiarVistaSicoe('reportes')}
               style={{
                 background: sicoeModuloVista === 'reportes' ? t.primary : 'transparent',
                 color: sicoeModuloVista === 'reportes' ? '#fff' : t.textMuted,
@@ -12658,7 +12721,7 @@ function ModuloSicoeObra({
               type="button"
               role="tab"
               aria-selected={sicoeModuloVista === 'cantidades_item'}
-              onClick={() => setSicoeModuloVista('cantidades_item')}
+              onClick={() => cambiarVistaSicoe('cantidades_item')}
               style={{
                 background: sicoeModuloVista === 'cantidades_item' ? t.primary : 'transparent',
                 color: sicoeModuloVista === 'cantidades_item' ? '#fff' : t.textMuted,
@@ -12676,7 +12739,7 @@ function ModuloSicoeObra({
               type="button"
               role="tab"
               aria-selected={sicoeModuloVista === 'ejecucion_consolidada'}
-              onClick={() => setSicoeModuloVista('ejecucion_consolidada')}
+              onClick={() => cambiarVistaSicoe('ejecucion_consolidada')}
               title="Ejecución consolidada — informe por tramo, capítulo e ítem"
               aria-label="Ejecución consolidada"
               style={{
@@ -13476,13 +13539,21 @@ function ModuloSicoeObra({
         </div>
 
         {/* Filas */}
+        {cargando && reportes.length > 0 && (
+          <div style={{ padding: '8px 16px', color: t.textMuted, fontSize: 'var(--cc-sm)' }} aria-live="polite">
+            Actualizando grilla…
+            {sicoeCargaVistaMs?.vista === 'reportes' && sicoeCargaVistaMs.ms != null
+              ? ` · última ${sicoeCargaVistaMs.ms} ms`
+              : ''}
+          </div>
+        )}
         {cargando && reportes.length === 0 ? (
-          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
+          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }} aria-live="polite">
             {busquedaAmplia
               ? <span>⏳ <strong>Búsqueda amplia detectada</strong> — esto puede tomar unos segundos.<br/>
                   <span style={{fontSize:'var(--cc-sm)'}}>Combina filtros adicionales para resultados más rápidos.</span>
                 </span>
-              : 'Cargando reportes...'
+              : 'Cargando reportes…'
             }
           </div>
         ) : !sicoeVistaResultadosActiva ? (

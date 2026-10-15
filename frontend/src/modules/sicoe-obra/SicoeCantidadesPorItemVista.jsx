@@ -345,38 +345,61 @@ export default function SicoeCantidadesPorItemVista({
   const [filtroAlerta, setFiltroAlerta] = useState('todos')
   const filaRefs = useRef(new Map())
 
+  const abortRef = useRef(null)
+  const [ultimaCargaMs, setUltimaCargaMs] = useState(null)
+
   const cargar = useCallback(async () => {
     if (!contratoId || !token || !busquedaActiva) {
       setPayload(null)
       setError(null)
+      setUltimaCargaMs(null)
       return
     }
     if (typeof buildFiltrosParams !== 'function') return
+    if (abortRef.current) abortRef.current.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setCargando(true)
     setError(null)
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
       const params = buildFiltrosParams()
       if (!params || ![...params.keys()].length) {
         setPayload({ ok: true, modo: 'vacio', total: 0, items_distintos: 0, registros: [] })
+        setUltimaCargaMs(0)
         return
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/cantidades-por-item?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: ac.signal,
+        cache: 'no-store',
       })
       const data = await res.json().catch(() => ({}))
+      if (ac.signal.aborted) return
       if (!res.ok) throw new Error(data?.detail || `Error ${res.status}`)
       setPayload(data)
       setFiltroAlerta('todos')
+      const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+      setUltimaCargaMs(ms)
+      if (typeof window !== 'undefined') {
+        console.info(`[SicoeObra] Auditoría / Por cantidades cargada en ${ms} ms`)
+      }
     } catch (e) {
+      if (e?.name === 'AbortError') return
       setPayload(null)
       setError(e?.message || String(e))
+      setUltimaCargaMs(null)
     } finally {
-      setCargando(false)
+      if (abortRef.current === ac) abortRef.current = null
+      if (!ac.signal.aborted) setCargando(false)
     }
   }, [API_URL, contratoId, token, busquedaActiva, buildFiltrosParams])
 
   useEffect(() => {
     void cargar()
+    return () => {
+      if (abortRef.current) abortRef.current.abort()
+    }
   }, [cargar, refreshNonce, filtrosVersion])
 
   const modo = useMemo(
@@ -498,7 +521,14 @@ export default function SicoeCantidadesPorItemVista({
           {modo === 'general' && ' · Modo consulta: varios ítems, sin análisis de inconsistencias.'}
         </div>
         {cargando && (
-          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }}>Cargando registros…</div>
+          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }} aria-live="polite">
+            Cargando registros…
+          </div>
+        )}
+        {!cargando && ultimaCargaMs != null && (
+          <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }} aria-hidden>
+            {ultimaCargaMs} ms
+          </div>
         )}
         {error && (
           <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 'var(--cc-sm)', fontWeight: 600 }}>{error}</div>

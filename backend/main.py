@@ -24333,13 +24333,22 @@ def analisis_registros_obra(
     from listado_precios_meta import resolver_ficha_efectiva_sicoe
     from sicoe_valor_canonico import valor_cant_vu
 
+    # Cache por id de registro: antes se resolvía 3× por línea (cd, cap, verif).
+    _ficha_eff_cache: dict = {}
+
     def _ficha_eff(reg: dict) -> dict:
-        return resolver_ficha_efectiva_sicoe(
+        rid = reg.get("id")
+        if rid is not None and rid in _ficha_eff_cache:
+            return _ficha_eff_cache[rid]
+        ficha = resolver_ficha_efectiva_sicoe(
             reg,
             _listado_idx_ana,
             norm_cap=_dash_norm_capitulo_key_py,
             norm_item=_dash_norm_item_key_py,
         )
+        if rid is not None:
+            _ficha_eff_cache[rid] = ficha
+        return ficha
 
     def _cd_linea(reg: dict) -> float:
         # V.U. por capítulo efectivo del ítem (no el capítulo del reporte/registro mal ubicado).
