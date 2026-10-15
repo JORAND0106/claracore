@@ -561,12 +561,6 @@ export default function PlanillaTuberiaForm({
     return map
   }, [cantManuales])
 
-  const gruposResumen = useMemo(() => agruparNetosResumen(calculoVista?.netos || [], {
-    tipo: params.tipo,
-    overridesByCodigo,
-    displayNeto: displayNetoCant,
-  }), [calculoVista?.netos, params.tipo, overridesByCodigo, cantManuales, displayNetoCant])
-
   const grupoResumenAbierto = (grupoId) => {
     if (!editable) return true
     if (Object.prototype.hasOwnProperty.call(gruposResumenAbiertos, grupoId)) {
@@ -954,6 +948,13 @@ export default function PlanillaTuberiaForm({
     return aplicarDimsEnlace(calculoLocal || calculo, dimsSync)
   }, [sellada, calculoLocal, calculo, dimsSync])
   const previewParcial = !!calculoLocal?.preview_parcial
+
+  /** Después de calculoVista (evitar TDZ en deps del useMemo). */
+  const gruposResumen = useMemo(() => agruparNetosResumen(calculoVista?.netos || [], {
+    tipo: params.tipo,
+    overridesByCodigo,
+    displayNeto: displayNetoCant,
+  }), [calculoVista?.netos, params.tipo, overridesByCodigo, cantManuales])
 
   const absExtremos = useMemo(
     () => abscisasExtremosPlanilla(calculoVista, filas),
