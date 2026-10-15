@@ -19,8 +19,9 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from rrhh_timezone import now_iso_bogota
 
 _log = logging.getLogger("claracore.rrhh.auditoria_docs")
 
@@ -63,7 +64,8 @@ _RRHH_AUDITOR_KEYS = (
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Hora de Colombia (America/Bogota), no UTC."""
+    return now_iso_bogota()
 
 
 def _parse_resultado(raw: str) -> dict:

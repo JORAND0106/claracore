@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { formatFechaHoraColombia } from '../../utils/fechaColombia.js'
 import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
 import { PASTEL_ESTADO_VALIDACION } from '../sicoe-obra/sicoeReporteItemsTablaHelpers'
@@ -450,7 +451,7 @@ export default function DocumentacionTab({
               )}
               {auditEjecutada && detalle.doc_auditoria_en && (
                 <span style={{ marginLeft: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
-                  · {String(detalle.doc_auditoria_en).replace('T', ' ').slice(0, 19)}
+                  · {formatFechaHoraColombia(detalle.doc_auditoria_en)}
                 </span>
               )}
             </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { tFrom } from '../../theme/adminPanelTheme'
+import { formatFechaHoraColombia } from '../../utils/fechaColombia.js'
 import CatalogSelect from './CatalogSelect'
 import { PERIODICIDAD_RENOVACION_OPTS } from './rrhhCicloLogic'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
@@ -359,7 +360,7 @@ export default function ContratoLaboralBlock({
                 <td style={ui.td}>
                   {row.origen === 'cargado' ? 'Cargado' : 'Generado'}
                 </td>
-                <td style={ui.td}>{(row.created_at || '').toString().slice(0, 19).replace('T', ' ')}</td>
+                <td style={ui.td}>{formatFechaHoraColombia(row.created_at, { fallback: '—' })}</td>
                 <td style={ui.td}>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {(canExport || true) && (

@@ -48,7 +48,10 @@ _FIRMA_MAX_W = 200
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Hora de Colombia (America/Bogota) para marcas visibles de RRHH."""
+    from rrhh_timezone import now_iso_bogota
+
+    return now_iso_bogota()
 
 
 def _uid(current_user) -> Optional[int]:
@@ -943,7 +946,9 @@ def _build_auditoria_tabla_html(trab: dict, filas: List[dict]) -> str:
     def esc(v):
         return html_mod.escape(str(v if v is not None else "—"))
 
-    fecha = trab.get("doc_auditoria_en") or "—"
+    from rrhh_timezone import format_fecha_hora_colombia
+
+    fecha = format_fecha_hora_colombia(trab.get("doc_auditoria_en"), with_seconds=True)
     body = ""
     for f in filas or []:
         body += (
