@@ -106,6 +106,49 @@ def test_write_omite_perimetro_geojson_en_reportes():
     so_reportes_clear_omit_cache()
 
 
+def test_write_omite_coords_geojson_en_reportes_localizacion():
+    """Portada: abs iguales + geometria linea no debe fallar por columna opcional ausente."""
+    from sicoe_registros_schema import (
+        so_reportes_clear_omit_cache,
+        so_reportes_omit_cache_snapshot,
+        so_reportes_write_omit_missing,
+    )
+
+    so_reportes_clear_omit_cache()
+
+    def write_fn(data):
+        if "coords_geojson" in data:
+            raise _FakeAPIError(
+                "Could not find the 'coords_geojson' column of 'so_reportes' in the schema cache"
+            )
+        if "geometria_tipo" in data:
+            raise _FakeAPIError(
+                "Could not find the 'geometria_tipo' column of 'so_reportes' in the schema cache"
+            )
+        return [{"id": 27, **data}]
+
+    out = so_reportes_write_omit_missing(
+        write_fn,
+        {
+            "abs_inicio": 1315.0,
+            "abs_final": 1315.0,
+            "margen": "Derecho",
+            "geometria_tipo": "linea",
+            "coords_geojson": {"type": "Point", "coordinates": [-74.0, 4.6]},
+        },
+        operacion="localizacion_completa_reporte",
+    )
+    assert out and out[0]["id"] == 27
+    assert out[0]["abs_inicio"] == 1315.0
+    assert out[0]["abs_final"] == 1315.0
+    assert "coords_geojson" not in out[0]
+    assert "geometria_tipo" not in out[0]
+    cache = so_reportes_omit_cache_snapshot()
+    assert "coords_geojson" in cache
+    assert "geometria_tipo" in cache
+    so_reportes_clear_omit_cache()
+
+
 
 def test_insert_batch_omite_coords_geojson():
     calls = []

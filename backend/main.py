@@ -28999,9 +28999,30 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
     pr = supabase_execute(_prev_snap)
     prev_rep = pr[0] if pr else {}
     def _upd():
-        return supabase.table("so_reportes").update(campos)\
-            .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
-    result = supabase_execute(_upd)
+        return _so_reportes_write_omit_missing(
+            lambda d: (
+                supabase.table("so_reportes")
+                .update(d)
+                .eq("id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            ),
+            campos,
+            operacion="localizacion_borrador",
+        )
+    try:
+        result = supabase_execute(_upd)
+    except Exception as ex:
+        col = _so_registros_pgrst_unknown_column(ex) or _logs_pgrst_unknown_column(ex)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No se pudo guardar la localización"
+                + (f" (columna «{col}» no disponible)" if col else "")
+                + f". Detalle: {str(ex)[:240]}"
+            ),
+        ) from ex
     out = result[0] if result else {}
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
@@ -29052,6 +29073,20 @@ def actualizar_localizacion_reporte_y_registros(
     if not loc_campos:
         raise HTTPException(status_code=400, detail="Indique al menos un campo de localización.")
 
+    # Normalizar tipo de geometría a valores canónicos (punto|linea|area).
+    if "geometria_tipo" in loc_campos and loc_campos.get("geometria_tipo") is not None:
+        raw_geo = str(loc_campos.get("geometria_tipo") or "").strip().lower()
+        if raw_geo in ("línea", "line", "franja"):
+            loc_campos["geometria_tipo"] = "linea"
+        elif raw_geo in ("área", "poligono", "polígono", "polygon"):
+            loc_campos["geometria_tipo"] = "area"
+        elif raw_geo in ("point", "nodo"):
+            loc_campos["geometria_tipo"] = "punto"
+        elif raw_geo in ("punto", "linea", "area"):
+            loc_campos["geometria_tipo"] = raw_geo
+        elif raw_geo == "":
+            loc_campos.pop("geometria_tipo", None)
+
     cabecera_keys = (
         "descripcion_actividad", "subcontratista_id", "inspector_id",
         "capitulo", "tipo_localizacion", "enlace_soporte",
@@ -29097,17 +29132,50 @@ def actualizar_localizacion_reporte_y_registros(
     def _loc_snap(row: dict) -> dict:
         return {k: row.get(k) for k in SICOE_CAMPOS_LOCALIZACION}
 
+    def _mensaje_error_loc(ex: BaseException, *, registro_id=None) -> str:
+        """Mensaje concreto en español (no ocultar la causa real)."""
+        text = str(ex or "")
+        low = text.lower()
+        col = _so_registros_pgrst_unknown_column(ex) or _logs_pgrst_unknown_column(ex)
+        if col or ("pgrst204" in low or "schema cache" in low or "could not find" in low):
+            col_txt = col or "opcional"
+            return (
+                f"No se pudo guardar la localización porque la columna «{col_txt}» "
+                "aún no está disponible en la base de datos (o la caché del esquema no se recargó). "
+                "Los campos de abscisa, nodos, PK y costado sí se intentan guardar; "
+                "reintente o avise al administrador para aplicar la migración / recargar el esquema."
+            )
+        if "check" in low and ("abs" in low or "abscisa" in low):
+            return (
+                "La base de datos rechazó el rango de abscisas. "
+                "Revise abscisa inicial y abscisa final e intente de nuevo."
+            )
+        if registro_id is not None:
+            return (
+                f"No se pudo actualizar la localización del registro {registro_id}. "
+                "No se guardó ningún cambio. "
+                f"Detalle: {text[:280]}"
+            )
+        return (
+            "No se pudo actualizar la localización. No se guardó ningún cambio. "
+            f"Detalle: {text[:280]}"
+        )
+
     def _rollback():
         for item in reversed(aplicados):
             try:
                 def _rb(rid=item["id"], patch=item["prev_loc"]):
-                    return (
-                        supabase.table("so_registros")
-                        .update(patch)
-                        .eq("id", rid)
-                        .eq("contrato_id", contrato_id)
-                        .execute()
-                        .data
+                    return _so_registros_write_omit_missing(
+                        lambda d: (
+                            supabase.table("so_registros")
+                            .update(d)
+                            .eq("id", rid)
+                            .eq("contrato_id", contrato_id)
+                            .execute()
+                            .data
+                        ),
+                        patch,
+                        operacion="rollback_loc_registro",
                     )
                 supabase_execute(_rb)
             except Exception:
@@ -29118,13 +29186,17 @@ def actualizar_localizacion_reporte_y_registros(
             try:
                 rb_rep = {k: prev_rep.get(k) for k in (set(loc_campos) | set(cabecera))}
                 def _rbr(patch=rb_rep):
-                    return (
-                        supabase.table("so_reportes")
-                        .update(patch)
-                        .eq("id", reporte_id)
-                        .eq("contrato_id", contrato_id)
-                        .execute()
-                        .data
+                    return _so_reportes_write_omit_missing(
+                        lambda d: (
+                            supabase.table("so_reportes")
+                            .update(d)
+                            .eq("id", reporte_id)
+                            .eq("contrato_id", contrato_id)
+                            .execute()
+                            .data
+                        ),
+                        patch,
+                        operacion="rollback_loc_reporte",
                     )
                 supabase_execute(_rbr)
             except Exception:
@@ -29134,6 +29206,7 @@ def actualizar_localizacion_reporte_y_registros(
 
     try:
         # 1) Registros primero (incl. sellados): solo localización.
+        # Escritura resiliente: omite coords_geojson/geometria_tipo/sector si PGRST204.
         for reg in regs_prev:
             rid = reg.get("id")
             if rid is None:
@@ -29141,37 +29214,70 @@ def actualizar_localizacion_reporte_y_registros(
             prev_loc = _loc_snap(reg)
             # Conservar bloqueado/sello: el patch solo lleva localización (+ modificado_por).
             patch = dict(loc_patch)
-            def _upd_reg(r_id=rid, p=patch):
-                return (
-                    supabase.table("so_registros")
-                    .update(p)
-                    .eq("id", r_id)
-                    .eq("contrato_id", contrato_id)
-                    .execute()
-                    .data
+            try:
+                def _upd_reg(r_id=rid, p=patch):
+                    return _so_registros_write_omit_missing(
+                        lambda d: (
+                            supabase.table("so_registros")
+                            .update(d)
+                            .eq("id", r_id)
+                            .eq("contrato_id", contrato_id)
+                            .execute()
+                            .data
+                        ),
+                        p,
+                        operacion="localizacion_completa_registro",
+                    )
+                supabase_execute(_upd_reg)
+            except Exception as ex_reg:
+                _rollback()
+                logging.getLogger(__name__).exception(
+                    "localizacion-completa fallo registro %s reporte %s", rid, reporte_id
                 )
-            supabase_execute(_upd_reg)
+                raise HTTPException(
+                    status_code=400,
+                    detail=_mensaje_error_loc(ex_reg, registro_id=rid),
+                ) from ex_reg
             aplicados.append({"id": int(rid), "prev_loc": prev_loc, "prev_row": reg})
 
-        # 2) Reporte
+        # 2) Reporte (también con omisión resiliente de columnas opcionales).
         rep_patch = {**loc_campos, **cabecera}
-        def _upd_rep(p=rep_patch):
-            return (
-                supabase.table("so_reportes")
-                .update(p)
-                .eq("id", reporte_id)
-                .eq("contrato_id", contrato_id)
-                .execute()
-                .data
+        try:
+            def _upd_rep(p=rep_patch):
+                return _so_reportes_write_omit_missing(
+                    lambda d: (
+                        supabase.table("so_reportes")
+                        .update(d)
+                        .eq("id", reporte_id)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    ),
+                    p,
+                    operacion="localizacion_completa_reporte",
+                )
+            rep_out = supabase_execute(_upd_rep) or []
+        except Exception as ex_rep:
+            _rollback()
+            logging.getLogger(__name__).exception(
+                "localizacion-completa fallo reporte %s", reporte_id
             )
-        rep_out = supabase_execute(_upd_rep) or []
+            raise HTTPException(
+                status_code=400,
+                detail=_mensaje_error_loc(ex_rep),
+            ) from ex_rep
         nuevo_rep = rep_out[0] if rep_out else {**prev_rep, **rep_patch}
         reporte_aplicado = True
+    except HTTPException:
+        raise
     except Exception as ex:
         _rollback()
+        logging.getLogger(__name__).exception(
+            "localizacion-completa fallo inesperado reporte %s", reporte_id
+        )
         raise HTTPException(
             status_code=400,
-            detail="No se pudo actualizar la localización. No se guardó ningún cambio.",
+            detail=_mensaje_error_loc(ex),
         ) from ex
 
     # Trazabilidad por registro
