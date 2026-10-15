@@ -33,6 +33,38 @@ def _strip_accents_lower(txt: str) -> str:
     return s.lower()
 
 
+def fold_sort_key(txt: Any) -> str:
+    """Clave alfabética estable: minúsculas, sin tildes ni espacios extremos."""
+    return _strip_accents_lower(str(txt or "").strip())
+
+
+def sort_key_nombre_colaborador(row: Optional[dict]) -> tuple:
+    """
+    Orden alfabético por nombre del colaborador (nombres → apellidos).
+    Ignora mayúsculas/minúsculas y tildes. Id como desempate estable.
+    """
+    r = row or {}
+    try:
+        tid = int(r.get("id") or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    return (
+        fold_sort_key(r.get("nombres")),
+        fold_sort_key(r.get("apellidos")),
+        tid,
+    )
+
+
+def sort_key_empresa_luego_nombre(row: Optional[dict]) -> tuple:
+    """
+    Orden para informe documental: empresa (nombre completo) → colaborador.
+    No usa iniciales: el agrupamiento sigue el nombre real de la empresa.
+    """
+    r = row or {}
+    empresa = r.get("empresa_nombre") or r.get("empresa") or ""
+    return (fold_sort_key(empresa),) + sort_key_nombre_colaborador(r)
+
+
 def normalizar_cargo_nombre_propio(raw: Any) -> str:
     """
     Formato «Nombre Propio» para cargos: primera letra de cada palabra en
@@ -1086,6 +1118,9 @@ def list_trabajadores_paginado(
     ek = (empresa_key or "").strip()
     if ek:
         rows = [r for r in rows if _empresa_key_from_row(r) == ek]
+    # Dentro de cada empresa (o del listado filtrado): alfabético por nombre,
+    # sin depender del collation de Postgres (tildes / mayúsculas).
+    rows.sort(key=sort_key_nombre_colaborador)
     total = len(rows)
     if offset is not None or limit is not None:
         start = max(0, int(offset or 0))
