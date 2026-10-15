@@ -28,6 +28,101 @@ export function lineasSinItem(lineas, items) {
   return faltan
 }
 
+function itemDeLineaPreview(linea, items) {
+  const map = items && typeof items === 'object' ? items : {}
+  const codigo = String(linea?.codigo || '').toUpperCase()
+  const scope = String(linea?.scope || 'cantidades').toLowerCase()
+  const origen = `${scope}:${codigo}`
+  const padre = scope === 'descuentos'
+    ? padreDeDescuento(codigo, linea?.item_cant_codigo)
+    : origen
+  return padre ? map[padre] : null
+}
+
+/** True si el V.U. del listado es usable (> 0). */
+export function precioListadoUsable(precio) {
+  if (precio == null || precio === '') return false
+  const n = Number(precio)
+  return Number.isFinite(n) && n > 0
+}
+
+/**
+ * Líneas con ítem cuyo (capítulo del reporte, ítem) no tiene precio en el mapa
+ * `preciosPorItem` (item_numero → precio_unitario del listado en ese capítulo).
+ * Un aviso por ítem (descuentos heredan el del padre).
+ */
+export function lineasSinPrecio(lineas, items, preciosPorItem) {
+  const precios = preciosPorItem && typeof preciosPorItem === 'object' ? preciosPorItem : {}
+  const faltan = []
+  const vistos = new Set()
+  for (const l of lineas || []) {
+    const item = itemDeLineaPreview(l, items)
+    const numero = String(item?.item_numero || '').trim()
+    if (!numero || vistos.has(numero)) continue
+    if (precioListadoUsable(precios[numero])) continue
+    vistos.add(numero)
+    const codigo = String(l?.codigo || '').toUpperCase()
+    const scope = String(l?.scope || 'cantidades').toLowerCase()
+    faltan.push({
+      origen: `${scope}:${codigo}`,
+      nombre: l?.nombre || codigo,
+      item_numero: numero,
+    })
+  }
+  return faltan
+}
+
+export function mensajeFaltanPrecios(faltan) {
+  const partes = (faltan || []).map((f) => {
+    const nom = f?.nombre || f?.origen || 'línea'
+    const num = String(f?.item_numero || '').trim()
+    return num ? `${nom} (${num})` : String(nom)
+  })
+  const lista = partes.slice(0, 8).join(', ')
+  const extra = partes.length > 8 ? ` y ${partes.length - 8} más` : ''
+  return `No se puede crear el reporte: faltan precios en el listado para ${lista}${extra}.`
+}
+
+/**
+ * Consulta el listado de precios del contrato filtrado por capítulo e ítem.
+ * Devuelve mapa item_numero → precio_unitario (solo filas del capítulo pedido).
+ */
+export async function fetchPreciosPorItemCapitulo({
+  contratoId,
+  token,
+  capitulo,
+  itemNumeros,
+  apiBase,
+}) {
+  const cap = String(capitulo || '').trim()
+  const nums = [...new Set(
+    (itemNumeros || []).map((n) => String(n || '').trim()).filter(Boolean),
+  )]
+  const out = {}
+  if (!contratoId || !cap || !nums.length) return out
+  const base = String(apiBase || '').replace(/\/$/, '')
+  await Promise.all(nums.map(async (numero) => {
+    try {
+      const p = new URLSearchParams({ q: numero, capitulo: cap })
+      const res = await fetch(
+        `${base}/sicoe-obra/${contratoId}/listado-precios-busqueda?${p.toString()}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      )
+      const data = res.ok ? await res.json() : []
+      const rows = Array.isArray(data) ? data : []
+      const match = rows.find((r) => String(r?.item_numero || '').trim() === numero)
+        || rows.find((r) => String(r?.item_numero || '').trim().replace(/\.$/, '')
+          === numero.replace(/\.$/, ''))
+      if (match && precioListadoUsable(match.precio_unitario)) {
+        out[numero] = Number(match.precio_unitario)
+      }
+    } catch {
+      /* el backend vuelve a validar al crear */
+    }
+  }))
+  return out
+}
+
 /** Misma regla que `item_capitulo_distinto`: vacío en cualquiera de los dos no es diferencia. */
 export function capituloItemDistinto(item, capituloReporte) {
   const capItem = String(item?.capitulo || '').trim()

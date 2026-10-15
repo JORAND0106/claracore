@@ -156,6 +156,90 @@ def mensaje_faltan_items(faltan: list[dict[str, str]]) -> str:
     )
 
 
+def precio_listado_cap_item(
+    listado_idx: Any,
+    capitulo: Any,
+    item_numero: Any,
+) -> Optional[float]:
+    """V.U. del listado para (capítulo, ítem). None si no hay fila o precio ≤ 0."""
+    if not listado_idx or not item_numero:
+        return None
+    try:
+        from sicoe_valor_canonico import cap_item_key, vu_listado_para_registro
+    except ImportError:
+        return None
+    # Preferir el helper canónico (misma clave cap+ítem que el resto de SICOE).
+    vu = vu_listado_para_registro(
+        {"capitulo": capitulo, "item_numero": item_numero},
+        listado_idx,
+    )
+    if vu is not None and float(vu) > 0:
+        return float(vu)
+    # Fallback si el índice usa precio_unitario crudo (main._listado_precios_vu_by_cap_item).
+    k = cap_item_key(capitulo, item_numero)
+    meta = listado_idx.get(k) if isinstance(listado_idx, dict) else None
+    if not isinstance(meta, dict):
+        return None
+    for key in ("vlr_unitario", "precio_unitario"):
+        raw = meta.get(key)
+        try:
+            val = float(raw) if raw is not None and raw != "" else None
+        except (TypeError, ValueError):
+            val = None
+        if val is not None and val > 0:
+            return val
+    return None
+
+
+def lineas_sin_precio(
+    lineas: list[dict[str, Any]],
+    items: dict[str, dict[str, Any]],
+    capitulo_reporte: Any,
+    listado_idx: Any,
+    tipo: Optional[str] = None,
+) -> list[dict[str, str]]:
+    """Líneas con ítem asignado cuyo (capítulo del reporte, ítem) no tiene precio en listado.
+
+    La búsqueda es por capítulo + ítem: el mismo código en otro capítulo no cuenta.
+    """
+    cap = str(capitulo_reporte or "").strip()
+    faltan: list[dict[str, str]] = []
+    # Un aviso por ítem (varias líneas pueden heredar el mismo ítem de cobro).
+    vistos_item: set[str] = set()
+    for linea in lineas or []:
+        if not isinstance(linea, dict):
+            continue
+        item = item_de_linea(linea, items, tipo)
+        if not item:
+            continue
+        numero = str(item.get("item_numero") or "").strip()
+        if not numero or numero in vistos_item:
+            continue
+        if precio_listado_cap_item(listado_idx, cap, numero) is not None:
+            continue
+        vistos_item.add(numero)
+        faltan.append({
+            "origen": origen_key_linea_sicoe(linea),
+            "nombre": str(linea.get("nombre") or linea.get("_origen_codigo") or "").strip(),
+            "item_numero": numero,
+        })
+    return faltan
+
+
+def mensaje_faltan_precios(faltan: list[dict[str, str]]) -> str:
+    partes: list[str] = []
+    for f in faltan:
+        nom = f.get("nombre") or f.get("origen") or "línea"
+        num = str(f.get("item_numero") or "").strip()
+        partes.append(f"{nom} ({num})" if num else str(nom))
+    lista = ", ".join(partes[:8])
+    extra = f" y {len(partes) - 8} más" if len(partes) > 8 else ""
+    return (
+        "No se puede crear el reporte: faltan precios en el listado para "
+        f"{lista}{extra}."
+    )
+
+
 def item_capitulo_distinto(item: dict[str, Any], capitulo_reporte: str) -> bool:
     cap_item = str(item.get("capitulo") or "").strip()
     cap_rep = str(capitulo_reporte or "").strip()

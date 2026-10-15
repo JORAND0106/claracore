@@ -16,7 +16,9 @@ from topografia_planilla_sicoe_enlace import (
     item_de_linea,
     item_capitulo_distinto,
     lineas_sin_item,
+    lineas_sin_precio,
     mensaje_faltan_items,
+    mensaje_faltan_precios,
     mensaje_item_capitulo_distinto,
     origen_padre_item,
     override_desde_registro,
@@ -24,6 +26,7 @@ from topografia_planilla_sicoe_enlace import (
     planilla_tiene_alerta_sync,
     puede_asignar_item_cobro,
     puede_reabrir_para_editar,
+    precio_listado_cap_item,
     registro_esta_enlazado,
     registro_esta_sellado,
     snapshots_de_diff,
@@ -181,6 +184,61 @@ class TestAsignacionYHerencia(unittest.TestCase):
         self.assertNotIn("pertenece al capítulo", alta)
         self.assertIn("campos_item_en_registro", alta)
         self.assertIn("ESTADO_REPORTE_CON_ITEM", alta)
+        self.assertIn("lineas_sin_precio", alta)
+        self.assertIn("mensaje_faltan_precios", alta)
+
+    def test_precio_por_capitulo_e_item_bloquea_si_falta(self):
+        from sicoe_valor_canonico import cap_item_key
+
+        lineas = _lineas()
+        items = _items()
+        cap_ok = "Alcantarillado"
+        cap_otro = "Filtros"
+        # Índice: EXC tiene precio solo en Alcantarillado; TRI solo en Filtros.
+        idx = {
+            cap_item_key(cap_ok, "1.01"): {
+                "id": 1, "capitulo": cap_ok, "item_numero": "1.01", "vlr_unitario": 1000.0,
+            },
+            cap_item_key(cap_otro, "1.02"): {
+                "id": 2, "capitulo": cap_otro, "item_numero": "1.02", "vlr_unitario": 2000.0,
+            },
+            cap_item_key(cap_ok, "1.03"): {
+                "id": 3, "capitulo": cap_ok, "item_numero": "1.03", "vlr_unitario": 800.0,
+            },
+            cap_item_key(cap_ok, "1.04"): {
+                "id": 4, "capitulo": cap_ok, "item_numero": "1.04", "vlr_unitario": 500.0,
+            },
+            cap_item_key(cap_ok, "1.05"): {
+                "id": 5, "capitulo": cap_ok, "item_numero": "1.05", "vlr_unitario": 1500.0,
+            },
+        }
+        self.assertEqual(precio_listado_cap_item(idx, cap_ok, "1.01"), 1000.0)
+        self.assertIsNone(precio_listado_cap_item(idx, cap_ok, "1.02"))  # precio en otro cap
+        self.assertIsNone(precio_listado_cap_item(idx, cap_ok, "9.99"))  # sin fila
+        self.assertIsNone(precio_listado_cap_item(
+            {cap_item_key(cap_ok, "1.01"): {"vlr_unitario": 0}}, cap_ok, "1.01",
+        ))
+
+        # Con precio: reporte en Alcantarillado — TRI (1.02) falta (solo está en Filtros).
+        faltan = lineas_sin_precio(lineas, items, cap_ok, idx, "ALCANTARILLA")
+        nums = {f["item_numero"] for f in faltan}
+        self.assertIn("1.02", nums)
+        self.assertNotIn("1.01", nums)
+        self.assertIn("faltan precios en el listado", mensaje_faltan_precios(faltan))
+
+        # Todos los ítems asignados con precio en el capítulo del reporte → vacío.
+        for it in items.values():
+            num = it["item_numero"]
+            idx[cap_item_key(cap_ok, num)] = {
+                "id": int(it["item_listado_id"]),
+                "capitulo": cap_ok,
+                "item_numero": num,
+                "vlr_unitario": float(it["precio_unitario"]),
+            }
+        self.assertEqual(
+            lineas_sin_precio(lineas, items, cap_ok, idx, "ALCANTARILLA"),
+            [],
+        )
 
 
 class TestEnlaceYSync(unittest.TestCase):
