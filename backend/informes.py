@@ -3373,6 +3373,30 @@ def ccd_items_conciliacion_acta(
     return {"items": items, "total_costo": total, "item_numeros": nums, "registros_raw": len(reg)}
 
 
+@router.get("/{contrato_id}/ccd/conciliacion/acta/{acta_id}/tiene-items-np")
+def ccd_acta_tiene_items_np(
+    contrato_id: int,
+    acta_id: int,
+    current_user=Depends(_get_user),
+):
+    """True si el informe mensual de este contrato incluye códigos NP-.
+
+    El universo es el mismo del cuadro: listado aprobado, sin capítulos de PMT.
+    No mira solo los registros del acta, porque un NP sin cantidad también entra.
+    """
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    from informe_mes_items import (
+        fetch_listado_contrato,
+        filas_que_entran_al_informe,
+        informe_tiene_items_np,
+    )
+
+    filas = filas_que_entran_al_informe(fetch_listado_contrato(_sb, int(contrato_id)))
+    return {"tiene_items_np": informe_tiene_items_np(filas)}
+
+
 @router.post("/{contrato_id}/ccd/contexto/{contexto_tipo}/{contexto_id}/registrar-firma/{formato_codigo}")
 def ccd_registrar_firma_contexto(
     contrato_id: int,
@@ -6743,11 +6767,24 @@ def pdf_cc_sem_001_semana(
     )
 
 
+def _items_informe_mes_presentacion(items, agrupar_np: bool = False):
+    """Presentación del cuadro. Sin el flag, la lista queda exactamente como está."""
+    if not agrupar_np:
+        return items
+    from informe_mes_items import agrupar_items_np_en_capitulo
+
+    return agrupar_items_np_en_capitulo(items)
+
+
 @router.get("/{contrato_id}/pdf/cc-mes-001/acta/{acta_id}")
 def pdf_cc_mes_001_acta(
     contrato_id: int,
     acta_id: int,
     nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    agrupar_np: bool = Query(
+        False,
+        description="Si es verdadero, los ítems NP- van al capítulo NO PREVISTOS al final.",
+    ),
     current_user=Depends(_get_user),
 ):
     _perm_informes_ccd(current_user, "ver")
@@ -6755,7 +6792,7 @@ def pdf_cc_mes_001_acta(
         raise HTTPException(404, "Acta no encontrada en este contrato")
     niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
     pdf_bytes = _pdf_bytes_cc_mes_001_desde_ctx(
-        contrato_id, acta_id, current_user, nivel_aprobacion=niv
+        contrato_id, acta_id, current_user, nivel_aprobacion=niv, agrupar_np=bool(agrupar_np)
     )
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
@@ -6773,6 +6810,7 @@ def _pdf_bytes_cc_mes_001_desde_ctx(
     current_user: dict,
     *,
     nivel_aprobacion: Optional[int] = None,
+    agrupar_np: bool = False,
 ) -> bytes:
     """PDF CC-MES-001 landscape: ítems 4 bloques + resumen conciliación (misma lógica que popup)."""
     ctx = _contexto_acta_mes_conciliacion(
@@ -6780,7 +6818,7 @@ def _pdf_bytes_cc_mes_001_desde_ctx(
     )
     contrato = ctx["contrato"]
     acta = ctx["acta"]
-    items = ctx["items"]
+    items = _items_informe_mes_presentacion(ctx["items"], agrupar_np)
     total_costo = ctx["total_costo"]
     usuario_nombre = ctx["usuario_nombre"]
     usuario_cargo = ctx["usuario_cargo"]
@@ -7281,6 +7319,10 @@ def pdf_cc_mes_001_acta_con_sello_firma(
     contrato_id: int,
     acta_id: int,
     nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    agrupar_np: bool = Query(
+        False,
+        description="Si es verdadero, los ítems NP- van al capítulo NO PREVISTOS al final.",
+    ),
     current_user=Depends(_get_user),
 ):
     """Mismo PDF que CC-MES-001 + página final de sello."""
@@ -7289,7 +7331,7 @@ def pdf_cc_mes_001_acta_con_sello_firma(
         raise HTTPException(404, "Acta no encontrada en este contrato")
     niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
     pdf_bytes = _pdf_bytes_cc_mes_001_desde_ctx(
-        contrato_id, acta_id, current_user, nivel_aprobacion=niv
+        contrato_id, acta_id, current_user, nivel_aprobacion=niv, agrupar_np=bool(agrupar_np)
     )
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
@@ -8495,6 +8537,10 @@ def excel_cc_mes_001_acta(
     contrato_id: int,
     acta_id: int,
     nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    agrupar_np: bool = Query(
+        False,
+        description="Si es verdadero, los ítems NP- van al capítulo NO PREVISTOS al final.",
+    ),
     current_user=Depends(_get_user),
 ):
     """Excel CC-MES-001: mismo contenido lógico que el informe mensual (PDF)."""
@@ -8502,7 +8548,7 @@ def excel_cc_mes_001_acta(
     try:
         niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
         xbytes = _cc_mes_001_excel_bytes(
-            contrato_id, acta_id, current_user, nivel_aprobacion=niv
+            contrato_id, acta_id, current_user, nivel_aprobacion=niv, agrupar_np=bool(agrupar_np)
         )
         ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
         nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
@@ -8610,6 +8656,10 @@ def excel_cc_mes_integral_acta(
     contrato_id: int,
     acta_id: int,
     nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    agrupar_np: bool = Query(
+        False,
+        description="Si es verdadero, los ítems NP- van al capítulo NO PREVISTOS al final.",
+    ),
     current_user=Depends(_get_user),
 ):
     """Excel integral mensual: CC-MES-001 + memorias CC-MES-002 (una pestaña por capítulo|ítem), formulado."""
@@ -8617,7 +8667,7 @@ def excel_cc_mes_integral_acta(
     try:
         niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
         xbytes = _cc_mes_integral_excel_bytes(
-            contrato_id, acta_id, current_user, nivel_aprobacion=niv
+            contrato_id, acta_id, current_user, nivel_aprobacion=niv, agrupar_np=bool(agrupar_np)
         )
         ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
         nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
@@ -13984,8 +14034,17 @@ def _fill_corte_sub_001_excel_ws(
             return None
         inum = str(it.get("item_numero") or "").strip()
         cap = str(it.get("capitulo") or "").strip()
-        for key in (f"{cap}||{inum}", inum):
-            if key and key in memoria_links:
+        origen = str(it.get("capitulo_origen") or "").strip()
+        # El capítulo de origen desambigua el mismo NP- en dos capítulos.
+        claves = []
+        if origen and inum:
+            claves.append(f"{origen}||{inum}")
+        if cap and inum:
+            claves.append(f"{cap}||{inum}")
+        if inum:
+            claves.append(inum)
+        for key in claves:
+            if key in memoria_links:
                 return memoria_links[key]
         return None
 
@@ -14640,8 +14699,17 @@ def _fill_cc_conc_001_excel_ws(
             return None
         inum = str(it.get("item_numero") or "").strip()
         cap = str(it.get("capitulo") or "").strip()
-        for key in (f"{cap}||{inum}", inum):
-            if key and key in memoria_links:
+        origen = str(it.get("capitulo_origen") or "").strip()
+        # El capítulo de origen desambigua el mismo NP- en dos capítulos.
+        claves = []
+        if origen and inum:
+            claves.append(f"{origen}||{inum}")
+        if cap and inum:
+            claves.append(f"{cap}||{inum}")
+        if inum:
+            claves.append(inum)
+        for key in claves:
+            if key in memoria_links:
                 return memoria_links[key]
         return None
 
@@ -14907,6 +14975,7 @@ def _cc_mes_001_excel_bytes(
     current_user: dict,
     *,
     nivel_aprobacion: Optional[int] = None,
+    agrupar_np: bool = False,
 ) -> bytes:
     """Excel CC-MES-001: misma estructura 4 bloques + resumen que el PDF mensual."""
     if not _acta_pertenece_contrato(contrato_id, acta_id):
@@ -14916,7 +14985,7 @@ def _cc_mes_001_excel_bytes(
     )
     contrato = ctx["contrato"]
     acta = ctx["acta"]
-    items = ctx["items"]
+    items = _items_informe_mes_presentacion(ctx["items"], agrupar_np)
     total = ctx["total_costo"]
     nrpo = str(acta.get("numero_rpo") or acta.get("consecutivo") or acta_id)
     cons = str(acta.get("consecutivo") or "—")
@@ -14983,6 +15052,7 @@ def _cc_sem_mes_integral_excel_bytes(
     semana_id: Optional[int] = None,
     acta_id: Optional[int] = None,
     nivel_aprobacion: Optional[int] = None,
+    agrupar_np: bool = False,
 ) -> bytes:
     """Libro integral: hoja 1 = ejecución (001) formulada; siguientes = memorias (002) por capítulo|ítem."""
     modo = (modo or "").strip().lower()
@@ -15154,11 +15224,20 @@ def _cc_sem_mes_integral_excel_bytes(
         memoria_links[inum] = link
         if cap:
             memoria_links[f"{cap}||{inum}"] = link
+        if modo == "mes" and agrupar_np:
+            from informe_mes_items import CAPITULO_NO_PREVISTOS, es_item_np
+
+            if es_item_np(inum):
+                memoria_links[f"{CAPITULO_NO_PREVISTOS}||{inum}"] = link
+
+    items_cuadro = items
+    if modo == "mes" and agrupar_np:
+        items_cuadro = _items_informe_mes_presentacion(items, True)
 
     _fill_cc_conc_001_excel_ws(
         ws_ejec,
         contrato,
-        items,
+        items_cuadro,
         float(total or 0.0),
         usuario_nombre,
         usuario_cargo,
@@ -15192,7 +15271,7 @@ def _cc_sem_mes_integral_excel_bytes(
             contrato,
             sub_m,
             corte_m,
-            items,
+            items_cuadro,
             float(total or 0.0),
             usuario_nombre,
             usuario_cargo,
@@ -15233,6 +15312,7 @@ def _cc_mes_integral_excel_bytes(
     current_user: dict,
     *,
     nivel_aprobacion: Optional[int] = None,
+    agrupar_np: bool = False,
 ) -> bytes:
     return _cc_sem_mes_integral_excel_bytes(
         contrato_id,
@@ -15240,6 +15320,7 @@ def _cc_mes_integral_excel_bytes(
         modo="mes",
         acta_id=acta_id,
         nivel_aprobacion=nivel_aprobacion,
+        agrupar_np=bool(agrupar_np),
     )
 
 

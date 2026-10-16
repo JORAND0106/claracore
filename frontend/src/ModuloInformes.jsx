@@ -617,6 +617,11 @@ export default function ModuloInformes({
   /** Popup de conciliación CC-MES-001 (antes de vista previa / tras Enviar). */
   const [actaMesConcPopupOpen, setActaMesConcPopupOpen] = useState(false)
   const [actaMesConcEnviado, setActaMesConcEnviado] = useState(false)
+  /** Pregunta al descargar el informe mensual si hay ítems NP-. null = cerrada. */
+  const [preguntaNpAbierta, setPreguntaNpAbierta] = useState(false)
+  const preguntaNpResolveRef = useRef(null)
+  const npEleccionLockRef = useRef(false)
+  const tieneNpCacheRef = useRef({ key: '', valor: null })
   /** CC-MES-002: filas por ítem; recogido por defecto (mismo criterio que CC-SUB/CC-SEM). */
   const [ccMes002ListadoItemsAbierto, setCcMes002ListadoItemsAbierto] = useState(false)
   const [itemsSemanal, setItemsSemanal] = useState([])
@@ -1942,6 +1947,77 @@ export default function ModuloInformes({
     }
   }
 
+  function preguntarAgruparNp() {
+    return new Promise((resolve) => {
+      preguntaNpResolveRef.current = resolve
+      setPreguntaNpAbierta(true)
+    })
+  }
+
+  function cerrarPreguntaNp(agrupar) {
+    const resolve = preguntaNpResolveRef.current
+    preguntaNpResolveRef.current = null
+    setPreguntaNpAbierta(false)
+    if (resolve) resolve(agrupar)
+  }
+
+  /** True si el cuadro del informe (listado aprobado, sin PMT) trae códigos NP-. */
+  async function asegurarTieneItemsNp() {
+    if (contratoId == null || contratoId === '' || !actaConcId) return false
+    const key = `${contratoId}|${actaConcId}`
+    if (tieneNpCacheRef.current.key === key && tieneNpCacheRef.current.valor != null) {
+      return tieneNpCacheRef.current.valor
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return false
+    const path = `/informes/${encodeURIComponent(contratoId)}/ccd/conciliacion/acta/${encodeURIComponent(actaConcId)}/tiene-items-np`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r?.ok) return false
+      const d = await r.json()
+      const tiene = !!d?.tiene_items_np
+      tieneNpCacheRef.current = { key, valor: tiene }
+      return tiene
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * false: descargar como hoy. true: capítulo NO PREVISTOS.
+   * null: el usuario cerró sin elegir (no genera archivo).
+   */
+  async function elegirAgruparNp() {
+    if (npEleccionLockRef.current) return null
+    npEleccionLockRef.current = true
+    try {
+      const tiene = await asegurarTieneItemsNp()
+      if (!tiene) return false
+      return await preguntarAgruparNp()
+    } finally {
+      npEleccionLockRef.current = false
+    }
+  }
+
+  async function descargarPdfInformeMes() {
+    if (!actaMesConcEnviado && !puedeVistaPreviaCorteSinConciliar) {
+      abrirConciliacionActaMes()
+      return
+    }
+    const agrupar = await elegirAgruparNp()
+    if (agrupar === null) return
+    const extra = agrupar ? { agrupar_np: '1' } : undefined
+    await descargarPdfConc(
+      rutaPdfConcConSello(
+        withQsNivelAprobacionMes(
+          `/informes/${contratoId}/pdf/cc-mes-001/acta/${encodeURIComponent(actaConcId)}`,
+          extra
+        )
+      ),
+      'CC-MES-001.pdf'
+    )
+  }
+
   async function abrirConciliacionActaMes() {
     if (contratoId == null || contratoId === '' || !actaConcId) {
       setError('Selecciona el acta RPO.')
@@ -2307,6 +2383,22 @@ export default function ModuloInformes({
       if (plan.action === 'fo-eo-04-generar') {
         await generarFoEo04Pdf({ conSello: false, descargarAlListo: true })
         return
+      }
+      if (vistaPrevia?.tipo === 'corte-mes-pdf' || vistaPrevia?.tipo === 'corte-mes') {
+        const agrupar = await elegirAgruparNp()
+        if (agrupar === null) return
+        if (agrupar) {
+          const cid = encodeURIComponent(contratoId)
+          const aid = encodeURIComponent(actaConcId)
+          await descargarPdfConc(
+            withQsNivelAprobacionMes(
+              `/informes/${cid}/pdf/cc-mes-001/acta/${aid}`,
+              { agrupar_np: '1' }
+            ),
+            'CC-MES-001.pdf'
+          )
+          return
+        }
       }
       // blob-local
       if (!vistaPrevia?.pdfUrl && !vistaPrevia?.pdfBlob) return
@@ -2693,11 +2785,16 @@ export default function ModuloInformes({
       setError('Selecciona contrato y acta RPO de conciliación.')
       return
     }
+    const agrupar = await elegirAgruparNp()
+    if (agrupar === null) return
     setExcelBusy('mes001')
     setError(null)
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const path = withQsNivelAprobacionMes(`/informes/${cid}/excel/cc-mes-001/acta/${aid}`)
+    const path = withQsNivelAprobacionMes(
+      `/informes/${cid}/excel/cc-mes-001/acta/${aid}`,
+      agrupar ? { agrupar_np: '1' } : undefined
+    )
     try {
       const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r || !r.ok) {
@@ -2778,11 +2875,16 @@ export default function ModuloInformes({
       setError('Selecciona contrato y acta RPO de conciliación.')
       return
     }
+    const agrupar = await elegirAgruparNp()
+    if (agrupar === null) return
     setExcelBusy('mes-integral')
     setError(null)
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const path = withQsNivelAprobacionMes(`/informes/${cid}/excel/cc-mes-integral/acta/${aid}`)
+    const path = withQsNivelAprobacionMes(
+      `/informes/${cid}/excel/cc-mes-integral/acta/${aid}`,
+      agrupar ? { agrupar_np: '1' } : undefined
+    )
     try {
       const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r || !r.ok) {
@@ -5850,20 +5952,7 @@ export default function ModuloInformes({
                     <button
                       type="button"
                       style={btnCcdToolbar(concPdfBusy, 'pdf')}
-                      onClick={() => {
-                        if (!actaMesConcEnviado && !puedeVistaPreviaCorteSinConciliar) {
-                          abrirConciliacionActaMes()
-                          return
-                        }
-                        descargarPdfConc(
-                          rutaPdfConcConSello(
-                            withQsNivelAprobacionMes(
-                              `/informes/${contratoId}/pdf/cc-mes-001/acta/${encodeURIComponent(actaConcId)}`
-                            )
-                          ),
-                          'CC-MES-001.pdf'
-                        )
-                      }}
+                      onClick={() => { void descargarPdfInformeMes() }}
                       disabled={concPdfBusy}
                       title="Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)"
                       aria-label="Descargar PDF CC-MES-001 con sello"
@@ -6715,6 +6804,75 @@ export default function ModuloInformes({
           abrirVistaPreviaCorteMensual()
         }}
       />
+
+      {preguntaNpAbierta && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="informe-mes-np-titulo"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100001,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+            boxSizing: 'border-box',
+          }}
+          onClick={() => cerrarPreguntaNp(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '440px',
+              backgroundColor: '#ffffff',
+              color: '#0f172a',
+              borderRadius: '12px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)',
+              padding: '18px 18px 16px',
+            }}
+          >
+            <div id="informe-mes-np-titulo" style={{ fontSize: (f?.sub || 14) + 'px', fontWeight: 700, lineHeight: 1.45 }}>
+              Este informe tiene ítems No Previstos (NP). ¿Agruparlos en un capítulo aparte?
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
+              <button
+                type="button"
+                onClick={() => cerrarPreguntaNp(false)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e1',
+                  background: '#f8fafc',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => cerrarPreguntaNp(true)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid #1d4ed8',
+                  background: '#1d4ed8',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: vista previa = PDF embebido (misma ruta que descarga el backend).
           Fondos opacos fijos: en producción t.bgCard/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
