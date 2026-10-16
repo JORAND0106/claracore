@@ -10818,9 +10818,232 @@ def update_precio(
         **{k: data[k] for k in ("tipo_precio", "estado_precio", "acta_fijacion", "acta_modificatoria") if k in data},
     }
 
+_PRESUPUESTO_USO_SELECT = (
+    "id, contrato_id, tipo_ejecucion, dado_de_baja, pk_id, id_pol, capitulo, competencia, "
+    "item, descripcion, und, tramo, calzada, abs_inicio, abs_final, cant_total"
+)
+_COBRO_USO_SELECT = (
+    "id, contrato_id, registro, acta, pk_id, capitulo, competencia, item, descripcion, und, "
+    "cantidad, tramo, calzada, abs_inicial, abs_final"
+)
+
+
+def _listado_item_variants(item_numero: str) -> List[str]:
+    """Variantes de ítem que el cruce en vivo trata como el mismo precio."""
+    from sicoe_valor_canonico import norm_item
+
+    raw = str(item_numero or "").strip()
+    normal = norm_item(raw)
+    out: List[str] = []
+    for value in (raw, normal, f"{normal}." if normal else "", f"{normal}._" if normal else ""):
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def _fetch_filas_item_listado(
+    table: str,
+    select: str,
+    contrato_id: int,
+    item_field: str,
+    variants: List[str],
+) -> List[dict]:
+    if not variants:
+        return []
+    rows: List[dict] = []
+    offset = 0
+    while True:
+        query = (
+            supabase.table(table)
+            .select(select)
+            .eq("contrato_id", int(contrato_id))
+        )
+        if len(variants) == 1:
+            query = query.eq(item_field, variants[0])
+        else:
+            query = query.in_(item_field, variants)
+        batch = query.order("id").range(offset, offset + 999).execute().data or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return rows
+
+
+def _map_ids_listado(table: str, id_field: str, label_field: str, ids: List[int]) -> Dict[int, Any]:
+    found: Dict[int, Any] = {}
+    uniq = []
+    for raw in ids:
+        try:
+            num = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if num not in uniq:
+            uniq.append(num)
+    if not uniq:
+        return found
+    try:
+        for i in range(0, len(uniq), 200):
+            chunk = uniq[i : i + 200]
+            data = (
+                supabase.table(table)
+                .select(f"{id_field}, {label_field}")
+                .in_(id_field, chunk)
+                .execute()
+                .data
+                or []
+            )
+            for row in data:
+                try:
+                    found[int(row.get(id_field))] = row.get(label_field)
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        return {}
+    return found
+
+
+def _enriquecer_sicoe_uso(rows: List[dict]) -> List[dict]:
+    pk_ids: List[int] = []
+    acta_ids: List[int] = []
+    for row in rows:
+        if row.get("pk_id_id") is not None:
+            pk_ids.append(row.get("pk_id_id"))
+        if row.get("acta_rpo_id") is not None:
+            acta_ids.append(row.get("acta_rpo_id"))
+    pk_map = _map_ids_listado("pk_ids", "id", "pk_id", pk_ids)
+    acta_map = _map_ids_listado("actas", "id", "numero_rpo", acta_ids)
+    out: List[dict] = []
+    for row in rows:
+        enriched = dict(row)
+        try:
+            pk_id = int(row["pk_id_id"]) if row.get("pk_id_id") is not None else None
+        except (TypeError, ValueError):
+            pk_id = None
+        if pk_id is not None and pk_map.get(pk_id):
+            enriched["_pk_label"] = str(pk_map[pk_id])
+        try:
+            acta_id = int(row["acta_rpo_id"]) if row.get("acta_rpo_id") is not None else None
+        except (TypeError, ValueError):
+            acta_id = None
+        if acta_id is not None and acta_map.get(acta_id) is not None:
+            enriched["_acta_label"] = str(acta_map[acta_id])
+        out.append(enriched)
+    return out
+
+
+def _fetch_precio_listado_o_404(item_id: int) -> dict:
+    rows = (
+        supabase.table("listado_precios")
+        .select("*")
+        .eq("id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    return rows[0]
+
+
+def _require_eliminar_precio_listado(current_user, contrato_id: int) -> None:
+    _require_contract_access(current_user, int(contrato_id))
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
+    if not _cargo_tiene_permiso_funcion(current_user, "listado de precios", "eliminar", int(contrato_id)):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para eliminar precios del listado.",
+        )
+
+
+def _uso_precio_listado(precio: dict) -> dict:
+    from listado_precios_eliminar import MENSAJE_EN_USO, clasificar_uso_precio
+
+    contrato_id = int(precio["contrato_id"])
+    variants = _listado_item_variants(precio.get("item_numero") or "")
+    presupuesto = _fetch_filas_item_listado(
+        "presupuesto", _PRESUPUESTO_USO_SELECT, contrato_id, "item", variants,
+    )
+    sicoe_select = (
+        "id, contrato_id, numero_registro, reporte_id, acta_rpo_id, pk_id_id, "
+        "capitulo, competencia, item_numero, item_descripcion, unidad, "
+        "cantidad_total, tramo, calzada, abs_inicio, abs_final, "
+        f"{SICOE_SELECT_NIVELES_ESTADO}"
+    )
+    sicoe = _fetch_filas_item_listado(
+        "so_registros", sicoe_select, contrato_id, "item_numero", variants,
+    )
+    try:
+        cobro = _fetch_filas_item_listado(
+            "cobro", _COBRO_USO_SELECT, contrato_id, "item", variants,
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "cobro" in msg and ("does not exist" in msg or "42p01" in msg or "pgrst" in msg):
+            cobro = []
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="No se pudo verificar las cantidades cobradas. El precio no se eliminó.",
+            ) from exc
+    sicoe = _enriquecer_sicoe_uso(sicoe)
+
+    def _es_cobrado(row: dict) -> bool:
+        return _matriz_validacion_norm_estado_nivel_final(row, contrato_id) == "Aprobado"
+
+    uso = clasificar_uso_precio(
+        precio, presupuesto, sicoe, cobro, es_cobrado=_es_cobrado,
+    )
+    uso["item_id"] = precio.get("id")
+    uso["item_numero"] = precio.get("item_numero") or ""
+    uso["descripcion"] = precio.get("descripcion") or ""
+    uso["capitulo"] = precio.get("capitulo") or ""
+    uso["message"] = None if uso.get("puede_eliminar") else MENSAJE_EN_USO
+    return uso
+
+
+@app.get("/listado-precios/item/{item_id}/uso")
+def get_uso_precio(item_id: int, current_user=Depends(get_current_user)):
+    """Indica si el precio se puede eliminar y lista presupuesto y cobrados asociados."""
+    precio = _fetch_precio_listado_o_404(item_id)
+    _require_eliminar_precio_listado(current_user, int(precio["contrato_id"]))
+    return _uso_precio_listado(precio)
+
+
 @app.delete("/listado-precios/item/{item_id}")
 def delete_precio(item_id: int, current_user=Depends(get_current_user)):
-    supabase.table("listado_precios").delete().eq("id", item_id).execute()
+    """Elimina el precio solo si no tiene cantidades en presupuesto ni cobradas."""
+    from almacen_eliminar_reglas import registro_completo
+    from listado_precios_eliminar import MENSAJE_EN_USO
+
+    precio = _fetch_precio_listado_o_404(item_id)
+    contrato_id = int(precio["contrato_id"])
+    _require_eliminar_precio_listado(current_user, contrato_id)
+    uso = _uso_precio_listado(precio)
+    if not uso.get("puede_eliminar"):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "precio_en_uso", "message": MENSAJE_EN_USO, **uso},
+        )
+    supabase.table("listado_precios").delete().eq("id", int(item_id)).execute()
+    _dash_agg_cache_invalidate_listado(contrato_id)
+    registrar_log(
+        current_user,
+        "ELIMINAR",
+        "PRECIOS",
+        "listado_precios",
+        str(item_id),
+        {
+            "item_numero": precio.get("item_numero"),
+            "capitulo": precio.get("capitulo"),
+            "descripcion": precio.get("descripcion"),
+            "contrato_id": contrato_id,
+        },
+        valor_anterior=registro_completo(precio),
+        valor_nuevo={"deleted": True, "id": int(item_id)},
+    )
+    return {"ok": True, "id": int(item_id)}
 
 @app.post("/listado-precios/{contrato_id}/item")
 def crear_precio(contrato_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
