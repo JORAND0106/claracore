@@ -38,6 +38,7 @@ porque esa es la que mezcla 2.1 con 2.1._.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from corte_sub_conciliacion import (
@@ -143,6 +144,56 @@ def filas_que_entran_al_informe(filas: Optional[Iterable[dict]]) -> List[dict]:
         for ficha in indice.values()
         if ficha.get("aprobado") and not ficha.get("es_pmt")
     ]
+
+
+CAPITULO_NO_PREVISTOS = "NO PREVISTOS"
+_NP_PREFIJO = "NP-"
+_NP_NUMERO_RE = re.compile(r"^NP-(\d+)", re.IGNORECASE)
+
+
+def es_item_np(item_numero: Any) -> bool:
+    """Código de ítem No Previsto: empieza por NP- (sin distinguir mayúsculas)."""
+    return str(item_numero or "").strip().upper().startswith(_NP_PREFIJO)
+
+
+def clave_orden_np(item_numero: Any) -> Tuple[int, int, str]:
+    """NP-09 antes de NP-10: el número se compara como entero, no como texto."""
+    texto = str(item_numero or "").strip()
+    coincidencia = _NP_NUMERO_RE.match(texto)
+    if coincidencia:
+        return (0, int(coincidencia.group(1)), texto.casefold())
+    return (1, 0, texto.casefold())
+
+
+def informe_tiene_items_np(items: Optional[Iterable[dict]]) -> bool:
+    """True si el cuadro (o el listado que entra al informe) trae códigos NP-."""
+    for it in items or []:
+        if isinstance(it, dict) and es_item_np(it.get("item_numero")):
+            return True
+    return False
+
+
+def agrupar_items_np_en_capitulo(items: Optional[Iterable[dict]]) -> List[dict]:
+    """Saca los NP- de su capítulo y los deja al final, en «NO PREVISTOS».
+
+    El resto conserva el orden. Cada NP se copia: descripción, unidad, norma,
+    valor unitario, cantidades y valores no cambian. ``capitulo_origen`` guarda
+    el capítulo del listado para las pestañas de memoria.
+    """
+    normales: List[dict] = []
+    nps: List[dict] = []
+    for it in items or []:
+        if isinstance(it, dict) and es_item_np(it.get("item_numero")):
+            copia = dict(it)
+            origen = copia.get("capitulo_origen")
+            if origen is None or str(origen).strip() == "":
+                copia["capitulo_origen"] = copia.get("capitulo")
+            copia["capitulo"] = CAPITULO_NO_PREVISTOS
+            nps.append(copia)
+        else:
+            normales.append(it)
+    nps.sort(key=lambda it: clave_orden_np(it.get("item_numero")))
+    return normales + nps
 
 
 def sumar_cantidad_por_clave(registros: Optional[Iterable[dict]]) -> Dict[ClaveItem, float]:
