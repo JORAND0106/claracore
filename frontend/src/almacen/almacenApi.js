@@ -187,14 +187,16 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
-    listSolicitudes: (estado, { resumen = true, limit = 80, offset = 0 } = {}) => {
+    listSolicitudes: (estado, { resumen = true, limit = 80, offset = 0, q = '' } = {}) => {
       const params = new URLSearchParams()
       if (estado) params.set('estado', estado)
       params.set('resumen', resumen ? 'true' : 'false')
       params.set('limit', String(limit))
       params.set('offset', String(offset))
-      const q = `?${params.toString()}`
-      return fetch(`${base}/solicitudes${q}`, { headers: authHeaders() })
+      const texto = String(q || '').trim()
+      if (texto) params.set('q', texto)
+      const qs = `?${params.toString()}`
+      return fetch(`${base}/solicitudes${qs}`, { headers: authHeaders() })
         .then(parseJson)
         .then((data) => {
           // Compat: array legado o { items, total, has_more }

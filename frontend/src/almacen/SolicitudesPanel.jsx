@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SolicitudFormModal from './SolicitudFormModal'
 import SolicitudDetalleModal from './SolicitudDetalleModal'
 import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
@@ -30,6 +30,34 @@ import {
 } from './almacenShared'
 import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
+import {
+  partesResaltadas,
+  textoConteoBusqueda,
+  tokensBusqueda,
+} from './solicitudBusqueda'
+
+function ResalteBusqueda({ texto, tokens, accentSoft }) {
+  const src = texto == null ? '' : String(texto)
+  const parts = partesResaltadas(src, tokens)
+  if (!tokens?.length) return src
+  return parts.map((p, i) => (
+    p.hit ? (
+      <mark
+        key={i}
+        data-testid="busqueda-resalte"
+        style={{
+          background: accentSoft || 'transparent',
+          color: 'inherit',
+          fontWeight: 800,
+          padding: 0,
+          borderRadius: 2,
+        }}
+      >
+        {p.text}
+      </mark>
+    ) : <span key={i}>{p.text}</span>
+  ))
+}
 
 export default function SolicitudesPanel({
   permisos, t, token, contratoId, refreshSignal = 0, onDataLoaded,
@@ -63,9 +91,16 @@ export default function SolicitudesPanel({
   const [deshacer, setDeshacer] = useState(null)
   const [deshacerError, setDeshacerError] = useState('')
   const [deshacerResumen, setDeshacerResumen] = useState('')
+  const [qInput, setQInput] = useState('')
+  const [q, setQ] = useState('')
+  const [buscando, setBuscando] = useState(false)
+  const busquedaSeq = useRef(0)
 
   const PAGE_SIZE = 80
   const puedeEliminar = Boolean(permisos?.eliminar)
+  const tokens = useMemo(() => tokensBusqueda(q), [q])
+  const busquedaActiva = tokens.length > 0
+  const busquedaPendiente = tokensBusqueda(qInput).join(' ') !== tokens.join(' ')
 
   const listaFiltrada = useMemo(
     () => filterSolicitudesLista(lista, filtros),
@@ -73,27 +108,42 @@ export default function SolicitudesPanel({
   )
   const filtrosActivos = countSolicitudesFiltrosActivos(filtros)
 
+  useEffect(() => {
+    const handle = setTimeout(() => setQ(qInput.trim()), 300)
+    return () => clearTimeout(handle)
+  }, [qInput])
+
   const reload = useCallback(() => {
-    setLoading(true)
+    const id = busquedaSeq.current + 1
+    busquedaSeq.current = id
     setError('')
-    return api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: 0 })
+    setBuscando(true)
+    return api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: 0, q })
       .then((page) => {
+        if (id !== busquedaSeq.current) return
         setLista(page.items || [])
         setHasMore(Boolean(page.has_more))
         setTotalCount(Number(page.total) || (page.items || []).length)
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => {
+        if (id !== busquedaSeq.current) return
+        setError(e.message)
+      })
       .finally(() => {
+        if (id !== busquedaSeq.current) return
+        setBuscando(false)
         setLoading(false)
         onDataLoaded?.()
       })
-  }, [api, onDataLoaded])
+  }, [api, onDataLoaded, q])
 
   const loadMore = useCallback(() => {
-    if (loadingMore || !hasMore) return
+    if (loadingMore || !hasMore || buscando) return
+    const id = busquedaSeq.current
     setLoadingMore(true)
-    api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: lista.length })
+    api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: lista.length, q })
       .then((page) => {
+        if (id !== busquedaSeq.current) return
         const next = page.items || []
         setLista((prev) => {
           const seen = new Set(prev.map((s) => s.id))
@@ -102,18 +152,30 @@ export default function SolicitudesPanel({
         setHasMore(Boolean(page.has_more))
         setTotalCount(Number(page.total) || 0)
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingMore(false))
-  }, [api, hasMore, lista.length, loadingMore])
+      .catch((e) => {
+        if (id !== busquedaSeq.current) return
+        setError(e.message)
+      })
+      .finally(() => {
+        if (id === busquedaSeq.current) setLoadingMore(false)
+      })
+  }, [api, buscando, hasMore, lista.length, loadingMore, q])
 
   useEffect(() => { reload() }, [reload])
 
+  const limpiarBusqueda = () => {
+    setQInput('')
+    setQ('')
+  }
+
+  const reloadRef = useRef(reload)
+  reloadRef.current = reload
   useEffect(() => {
     if (refreshSignal > 0) {
-      if (!creating && !editId && !detalleId) reload()
+      if (!creating && !editId && !detalleId) reloadRef.current()
       else onDataLoaded?.()
     }
-  }, [refreshSignal, creating, editId, detalleId, reload, onDataLoaded])
+  }, [refreshSignal, creating, editId, detalleId, onDataLoaded])
 
   const abrirDetalle = (s, tab = 'portada') => {
     setDetalleTab(tab)
@@ -281,10 +343,58 @@ export default function SolicitudesPanel({
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+        <input
+          type="search"
+          value={qInput}
+          onChange={(e) => setQInput(e.target.value)}
+          placeholder="Buscar insumo, mensaje, proveedor, tramo, PK-ID…"
+          aria-label="Buscar solicitudes"
+          data-testid="solicitud-busqueda"
+          autoComplete="off"
+          style={{ ...ui.input, flex: '1 1 240px', minWidth: 200, margin: 0 }}
+        />
+        {qInput.trim() && (
+          <button
+            type="button"
+            data-testid="solicitud-busqueda-limpiar"
+            style={ui.btnSecondary}
+            onClick={limpiarBusqueda}
+          >
+            Limpiar
+          </button>
+        )}
+      </div>
+      <div
+        data-testid="solicitud-busqueda-conteo"
+        aria-live="polite"
+        style={{
+          fontSize: 'var(--cc-sm)',
+          color: ui.textMuted,
+          marginBottom: qInput.trim() ? 12 : 0,
+        }}
+      >
+        {qInput.trim()
+          ? (buscando || busquedaPendiente ? 'Buscando…' : textoConteoBusqueda(totalCount))
+          : ''}
+      </div>
+
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
 
-      {loading ? (
+      {loading && lista.length === 0 ? (
         <div style={{ color: ui.textMuted }}>Cargando…</div>
+      ) : busquedaActiva && !buscando && lista.length === 0 ? (
+        <div style={{ ...ui.card, textAlign: 'center', color: ui.text }} data-testid="solicitud-busqueda-vacia">
+          Ninguna solicitud coincide con la búsqueda.
+          {' '}
+          <button
+            type="button"
+            style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-caption)' }}
+            onClick={limpiarBusqueda}
+          >
+            Limpiar búsqueda
+          </button>
+        </div>
       ) : lista.length === 0 ? (
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>
           No hay solicitudes registradas.
@@ -337,6 +447,11 @@ export default function SolicitudesPanel({
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }
+                const titulo = s.titulo?.trim() || `Solicitud #${s.consecutivo}`
+                const estadoTxt = s.oc_parcial || (s.estado === 'enviada' && solicitudTieneOrdenCompra(s))
+                  ? 'OC parcial'
+                  : ESTADO_SOLICITUD_LABEL[s.estado]
+                const aprobacion = textoAprobacionSolicitud(s)
                 return (
                 <tr
                   key={s.id}
@@ -351,7 +466,9 @@ export default function SolicitudesPanel({
                   onMouseEnter={(e) => { e.currentTarget.style.background = fondoHover }}
                   onMouseLeave={(e) => { e.currentTarget.style.background = fondo }}
                 >
-                  <td style={ui.tdNum} data-label="#">{s.consecutivo}</td>
+                  <td style={ui.tdNum} data-label="#">
+                    <ResalteBusqueda texto={s.consecutivo} tokens={tokens} accentSoft={ui.accentSoft} />
+                  </td>
                   <td
                     style={{ ...ui.td, fontWeight: 600, whiteSpace: 'normal', lineHeight: 1.35 }}
                     data-label="Título"
@@ -373,7 +490,15 @@ export default function SolicitudesPanel({
                         {s.mensajes_no_leidos}
                       </span>
                     )}
-                    {s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
+                    <ResalteBusqueda texto={titulo} tokens={tokens} accentSoft={ui.accentSoft} />
+                    {busquedaActiva && s.busqueda_donde ? (
+                      <div
+                        data-testid="solicitud-busqueda-donde"
+                        style={{ fontWeight: 600, fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}
+                      >
+                        {s.busqueda_donde}
+                      </div>
+                    ) : null}
                     {vacia && (
                       <span
                         data-testid="solicitud-vacia"
@@ -418,23 +543,21 @@ export default function SolicitudesPanel({
                     }}
                     data-label="Estado"
                   >
-                    {s.oc_parcial || (s.estado === 'enviada' && solicitudTieneOrdenCompra(s))
-                      ? 'OC parcial'
-                      : ESTADO_SOLICITUD_LABEL[s.estado]}
+                    <ResalteBusqueda texto={estadoTxt} tokens={tokens} accentSoft={ui.accentSoft} />
                   </td>
                   <td
                     style={{ ...ui.td, ...cellEllipsis }}
                     data-label="Solicitante"
                     title={s.solicitante_nombre || undefined}
                   >
-                    {s.solicitante_nombre || '—'}
+                    <ResalteBusqueda texto={s.solicitante_nombre || '—'} tokens={tokens} accentSoft={ui.accentSoft} />
                   </td>
                   <td
                     style={{ ...ui.td, ...cellEllipsis }}
                     data-label="Aprobación"
                     title={textoAprobacionSolicitud(s) || undefined}
                   >
-                    {textoAprobacionSolicitud(s)}
+                    <ResalteBusqueda texto={aprobacion} tokens={tokens} accentSoft={ui.accentSoft} />
                   </td>
                   <td style={ui.tdNum} data-label="Ítems">{nItems}</td>
                   {verEconomicos && (
@@ -447,7 +570,7 @@ export default function SolicitudesPanel({
                     </td>
                   )}
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="Fecha">
-                    {fmtFechaAlmacenCorta(s.created_at)}
+                    <ResalteBusqueda texto={fmtFechaAlmacenCorta(s.created_at)} tokens={tokens} accentSoft={ui.accentSoft} />
                   </td>
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="OC" onClick={(e) => e.stopPropagation()}>
                     {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && permisos?.exportar

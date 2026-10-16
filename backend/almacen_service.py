@@ -1457,6 +1457,74 @@ def list_solicitudes(
     return out
 
 
+def list_solicitudes_pagina(
+    contrato_id: int,
+    estado: Optional[str] = None,
+    *,
+    ver_economicos: bool = True,
+    resumen: bool = True,
+    limit: Optional[int] = 80,
+    offset: int = 0,
+    q: Optional[str] = None,
+) -> dict:
+    """Página de la grilla. Con ``q`` el total y las filas son solo las coincidencias."""
+    from almacen_solicitud_busqueda import coincidencias_solicitudes, tokens_busqueda
+
+    tokens = tokens_busqueda(q)
+    if not tokens:
+        items = list_solicitudes(
+            contrato_id,
+            estado,
+            ver_economicos=ver_economicos,
+            resumen=resumen,
+            limit=limit,
+            offset=offset,
+        )
+        return {"items": items, "total": count_solicitudes(contrato_id, estado)}
+
+    sb = _sb()
+    hits = coincidencias_solicitudes(sb, contrato_id, tokens, estado=estado)
+    total = len(hits)
+    lim = max(1, min(int(limit if limit is not None else 80), 200))
+    off = max(0, int(offset or 0))
+    page = hits[off:off + lim]
+    donde = {
+        int(h["solicitud"]["id"]): h.get("donde") or ""
+        for h in page
+        if h.get("solicitud") and h["solicitud"].get("id")
+    }
+    list_keys = [c.strip() for c in _SOLICITUD_LIST_SELECT.split(",")]
+    rows = [
+        {k: h["solicitud"].get(k) for k in list_keys}
+        for h in page
+        if h.get("solicitud")
+    ]
+    if resumen:
+        items = _list_solicitudes_resumen(
+            sb, rows, contrato_id, ver_economicos=ver_economicos,
+        )
+    else:
+        ids = [int(r["id"]) for r in rows if r.get("id")]
+        full = (
+            sb.table("almacen_solicitud").select("*").in_("id", ids).execute().data or []
+        ) if ids else []
+        by_id = {int(r["id"]): r for r in full if r.get("id")}
+        ordered = [by_id[i] for i in ids if i in by_id]
+        validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
+        items = [
+            _enrich_solicitud(
+                sb, dict(r),
+                validadores_pendientes=validadores_pendientes,
+                ver_economicos=ver_economicos,
+            )
+            for r in ordered
+        ]
+    for it in items:
+        if isinstance(it, dict) and it.get("id") is not None:
+            it["busqueda_donde"] = donde.get(int(it["id"]), "")
+    return {"items": items, "total": total}
+
+
 def count_solicitudes(contrato_id: int, estado: Optional[str] = None) -> int:
     """Conteo barato (badge de pendientes) sin enriquecer filas."""
     sb = _sb()

@@ -125,7 +125,7 @@ from almacen_service import (
     list_devoluciones,
     get_devolucion,
     eliminar_devolucion,
-    list_solicitudes,
+    list_solicitudes_pagina,
     count_solicitudes,
     list_usuarios_receptor_obra,
     salidas_devolvibles_por_pk,
@@ -751,19 +751,22 @@ def route_list_solicitudes(
     resumen: bool = Query(True),
     limit: int = Query(80, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    q: Optional[str] = Query(None, max_length=200),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
     require_lectura_almacen(current_user)
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
-    items = list_solicitudes(
+    page = list_solicitudes_pagina(
         contrato_id,
         estado,
         ver_economicos=ver_eco,
         resumen=resumen,
         limit=limit,
         offset=offset,
+        q=q,
     )
+    items = page.get("items") or []
     no_leidos = contar_mensajes_no_leidos(
         contrato_id,
         [it.get("id") for it in items if isinstance(it, dict)],
@@ -772,7 +775,7 @@ def route_list_solicitudes(
     for it in items:
         if isinstance(it, dict) and it.get("id") is not None:
             it["mensajes_no_leidos"] = no_leidos.get(int(it["id"]), 0)
-    total = count_solicitudes(contrato_id, estado)
+    total = int(page.get("total") or 0)
     return {
         "items": items,
         "total": total,
