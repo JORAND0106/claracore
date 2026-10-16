@@ -102,6 +102,8 @@ export default function SicoeEjecucionConsolidadaVista({
   const [expandTramos, setExpandTramos] = useState(() => new Set())
   const [expandCaps, setExpandCaps] = useState(() => new Set())
   const [expandItems, setExpandItems] = useState(() => new Set())
+  /** Nivel de agrupación tipo Excel: 1 Tramos · 2 +Capítulos · 3 +Ítems · 4 +Registros. null = mezcla manual. */
+  const [nivelAgrupacion, setNivelAgrupacion] = useState(3)
   const [confirmReg, setConfirmReg] = useState(null)
   const [exportando, setExportando] = useState(false)
   const [validandoId, setValidandoId] = useState(null)
@@ -118,6 +120,7 @@ export default function SicoeEjecucionConsolidadaVista({
     setExpandTramos(new Set(arbolTmp.tramos.map((x) => x.key)))
     setExpandCaps(new Set(arbolTmp.tramos.flatMap((tr) => tr.capitulos.map((c) => c.key))))
     setExpandItems(new Set())
+    setNivelAgrupacion(3)
   }, [])
 
   const abortRef = useRef(null)
@@ -222,6 +225,7 @@ export default function SicoeEjecucionConsolidadaVista({
   }
 
   const toggleSet = (setter, key) => {
+    setNivelAgrupacion(null)
     setter((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
@@ -239,21 +243,48 @@ export default function SicoeEjecucionConsolidadaVista({
     return { tramos, caps, items }
   }, [arbol])
 
+  const aplicarNivelAgrupacion = useCallback((nivel) => {
+    const n = Number(nivel)
+    if (n === 1) {
+      setExpandTramos(new Set())
+      setExpandCaps(new Set())
+      setExpandItems(new Set())
+    } else if (n === 2) {
+      setExpandTramos(new Set(keysArbol.tramos))
+      setExpandCaps(new Set())
+      setExpandItems(new Set())
+    } else if (n === 3) {
+      setExpandTramos(new Set(keysArbol.tramos))
+      setExpandCaps(new Set(keysArbol.caps))
+      setExpandItems(new Set())
+    } else if (n === 4) {
+      setExpandTramos(new Set(keysArbol.tramos))
+      setExpandCaps(new Set(keysArbol.caps))
+      setExpandItems(new Set(keysArbol.items))
+    } else {
+      return
+    }
+    setNivelAgrupacion(n)
+  }, [keysArbol])
+
   const expandirTodo = () => {
-    setExpandTramos(new Set(keysArbol.tramos))
-    setExpandCaps(new Set(keysArbol.caps))
-    setExpandItems(new Set(keysArbol.items))
+    aplicarNivelAgrupacion(4)
   }
   const contraerTodo = () => {
-    setExpandTramos(new Set())
-    setExpandCaps(new Set())
-    setExpandItems(new Set())
+    aplicarNivelAgrupacion(1)
   }
   const restablecerVista = () => {
     aplicarExpandDefault(payload?.registros || [])
   }
 
   const colSpanMain = 6 + (verEco ? 2 : 0)
+
+  const NIVELES_AGRUPACION = [
+    { n: 1, title: 'Nivel 1 — Solo tramos (con subtotales)' },
+    { n: 2, title: 'Nivel 2 — Tramos y capítulos' },
+    { n: 3, title: 'Nivel 3 — Tramos, capítulos e ítems' },
+    { n: 4, title: 'Nivel 4 — Todo, incluidos los registros' },
+  ]
 
   const descargarExcel = async () => {
     if (!arbol.tramos.length) return
@@ -386,6 +417,50 @@ export default function SicoeEjecucionConsolidadaVista({
           </div>
         </div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div
+            role="group"
+            aria-label="Niveles de agrupación"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              overflow: 'hidden',
+              background: t.bg || t.bgCard,
+            }}
+          >
+            {NIVELES_AGRUPACION.map(({ n, title }) => {
+              const activo = nivelAgrupacion === n
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  title={title}
+                  aria-label={title}
+                  aria-pressed={activo}
+                  disabled={!arbol.tramos.length}
+                  onClick={() => aplicarNivelAgrupacion(n)}
+                  style={{
+                    width: vistaCompacta ? 36 : 32,
+                    height: vistaCompacta ? 36 : 32,
+                    margin: 0,
+                    padding: 0,
+                    border: 'none',
+                    borderRight: n < 4 ? `1px solid ${t.border}` : 'none',
+                    background: activo ? (t.primary || '#0077B6') : 'transparent',
+                    color: activo ? '#fff' : t.text,
+                    fontWeight: 800,
+                    fontSize: 'var(--cc-sm)',
+                    cursor: !arbol.tramos.length ? 'not-allowed' : 'pointer',
+                    opacity: !arbol.tramos.length ? 0.45 : 1,
+                    lineHeight: 1,
+                  }}
+                >
+                  {n}
+                </button>
+              )
+            })}
+          </div>
           <IconBtn t={t} title="Desplegar todos los niveles" onClick={expandirTodo} disabled={!arbol.tramos.length}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
               <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
