@@ -568,11 +568,11 @@ export default function SicoeEjecucionConsolidadaVista({
           <div
             role="dialog"
             aria-modal="true"
-            aria-labelledby="sicoe-ejec-confirm-title"
+            aria-labelledby="sicoe-ejec-abrir-title"
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '100%',
-              maxWidth: 440,
+              maxWidth: 420,
               background: t.bgCard || t.bg || '#fff',
               border: `1px solid ${t.border || SHEET_CELL_BORDER}`,
               borderRadius: 14,
@@ -583,24 +583,25 @@ export default function SicoeEjecucionConsolidadaVista({
           >
             <CcModalBrandHeader theme={t} />
             <div style={{ padding: '16px 20px 8px' }}>
-              <div id="sicoe-ejec-confirm-title" style={{ fontSize: 'var(--cc-h3)', fontWeight: 700, marginBottom: 8 }}>
-                Abrir registro
+              <div id="sicoe-ejec-abrir-title" style={{ fontSize: 'var(--cc-h3)', fontWeight: 700, marginBottom: 8 }}>
+                Abrir
               </div>
               <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-                ¿Desea ver la información asociada a este registro?
-              </p>
-              <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
                 Reporte #{confirmReg.numero_reporte ?? '—'} · Registro #{confirmReg.numero_registro ?? confirmReg.id}
                 {' · '}
                 Ítem {confirmReg.item_numero || '—'}
               </p>
-              <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-                <strong style={{ color: t.text }}>Sí</strong>: abre el reporte completo.
-                {' '}
-                <strong style={{ color: t.text }}>No</strong>: abre solo este registro.
-              </p>
             </div>
-            <div style={{ padding: '12px 20px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+            <div
+              style={{
+                padding: '12px 20px 16px',
+                display: 'flex',
+                justifyContent: vistaCompacta ? 'stretch' : 'flex-end',
+                gap: 8,
+                flexWrap: 'wrap',
+                flexDirection: vistaCompacta ? 'column-reverse' : 'row',
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setConfirmReg(null)}
@@ -608,16 +609,19 @@ export default function SicoeEjecucionConsolidadaVista({
                   background: 'transparent',
                   border: `1px solid ${t.border}`,
                   borderRadius: 8,
-                  padding: '8px 14px',
+                  padding: vistaCompacta ? '12px 14px' : '8px 14px',
+                  minHeight: vistaCompacta ? 44 : undefined,
                   cursor: 'pointer',
                   color: t.textMuted,
                   fontWeight: 600,
+                  fontSize: 'var(--cc-sm)',
                 }}
               >
                 Cancelar
               </button>
               <button
                 type="button"
+                title="Abre solo este registro (datos, fotos, gráfico, planilla y adjuntos)"
                 onClick={() => {
                   const reg = confirmReg
                   setConfirmReg(null)
@@ -625,18 +629,21 @@ export default function SicoeEjecucionConsolidadaVista({
                 }}
                 style={{
                   background: 'transparent',
-                  border: `1px solid ${t.primary}66`,
+                  border: `1px solid ${t.primary}`,
                   borderRadius: 8,
-                  padding: '8px 14px',
+                  padding: vistaCompacta ? '12px 14px' : '8px 14px',
+                  minHeight: vistaCompacta ? 44 : undefined,
                   cursor: 'pointer',
                   color: t.primary,
                   fontWeight: 800,
+                  fontSize: 'var(--cc-sm)',
                 }}
               >
-                No
+                Registro
               </button>
               <button
                 type="button"
+                title="Abre el reporte completo con todos sus registros"
                 onClick={() => {
                   const reg = confirmReg
                   setConfirmReg(null)
@@ -646,13 +653,15 @@ export default function SicoeEjecucionConsolidadaVista({
                   background: t.primary,
                   border: 'none',
                   borderRadius: 8,
-                  padding: '8px 14px',
+                  padding: vistaCompacta ? '12px 14px' : '8px 14px',
+                  minHeight: vistaCompacta ? 44 : undefined,
                   cursor: 'pointer',
                   color: '#fff',
                   fontWeight: 800,
+                  fontSize: 'var(--cc-sm)',
                 }}
               >
-                Sí
+                Reporte
               </button>
             </div>
           </div>
