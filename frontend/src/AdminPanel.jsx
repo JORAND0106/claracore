@@ -13,7 +13,7 @@ import CcModalBrandHeader from "./components/CcModalBrandHeader";
 import CcTipChrome from "./components/CcTipChrome";
 import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
 import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
 import { comprimirImagenADataUrl, prepararImagenParaUpload } from "./comprimirImagen";
 import ContratoEditModal from "./ContratoEditModal";
@@ -29,6 +29,7 @@ import { notifyListadoMetaChanged } from "./cache/listadoMetaEvents";
 import SeccionSubcontratistas from "./modules/subcontratistas";
 import { formatFechaLogBogota } from "./utils/fechaColombia";
 import SeccionLogs from "./admin/SeccionLogs";
+import ListadoPrecioEliminarDialogs from "./admin/ListadoPrecioEliminarUi";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -3961,6 +3962,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const [eliminarAgConfirm, setEliminarAgConfirm] = useState(null);
   const [eliminarAgPreview, setEliminarAgPreview] = useState(null);
   const [eliminandoAg,      setEliminandoAg]      = useState(false);
+  const [usoLoadingId,      setUsoLoadingId]      = useState(null);
+  const [eliminarPrecioConfirm, setEliminarPrecioConfirm] = useState(null);
+  const [eliminarPrecioBloqueo, setEliminarPrecioBloqueo] = useState(null);
+  const [eliminandoPrecio,  setEliminandoPrecio]  = useState(false);
   const [agDropdown,        setAgDropdown]        = useState(null);
   const [reasignandoAg,     setReasignandoAg]     = useState(false);
   const [uModoCustomC,     setUModoCustomC]     = useState(false);
@@ -4018,7 +4023,6 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const esModoAprobadas = modoCantidad === "aprobadas";
   const esVistaWbs = modoVista === "wbs";
-  const numColsTabla = esModoAprobadas ? 10 : 9;
 
   const cantidadItem = (item) => {
     const c = cantidadesById[item.id];
@@ -4039,8 +4043,11 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     const extra = esModoAprobadas
       ? ["Cantidad", "Valor Total", "Delta"]
       : ["Cantidad", "Valor Total"];
-    return [...base, ...extra, "Estado / WBS"];
-  }, [esModoAprobadas]);
+    const cols = [...base, ...extra, "Estado / WBS"];
+    if (perms?.eliminar) cols.push("");
+    return cols;
+  }, [esModoAprobadas, perms?.eliminar]);
+  const numColsTabla = headersTabla.length;
 
   const CeldaCantidad = ({ item }) => (
     <td style={{ ...itemRowTd, textAlign: "right", color: col.textSecondary }}>
@@ -4503,6 +4510,54 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       setMsg({ type: "error", text: e.message });
     } finally {
       setEliminandoAg(false);
+    }
+  };
+
+  const solicitarEliminarPrecio = async (item) => {
+    if (!perms?.eliminar || usoLoadingId || eliminandoPrecio) return;
+    setUsoLoadingId(item.id);
+    setMsg(null);
+    try {
+      const uso = await call("GET", `/listado-precios/item/${item.id}/uso`);
+      if (uso?.puede_eliminar) setEliminarPrecioConfirm(item);
+      else setEliminarPrecioBloqueo({ item, uso });
+    } catch (e) {
+      if (e?.detail?.code === "precio_en_uso") setEliminarPrecioBloqueo({ item, uso: e.detail });
+      else setMsg({ type: "error", text: e.message });
+    } finally {
+      setUsoLoadingId(null);
+    }
+  };
+
+  const confirmarEliminarPrecio = async () => {
+    const item = eliminarPrecioConfirm;
+    if (!item || eliminandoPrecio) return;
+    setEliminandoPrecio(true);
+    try {
+      await call("DELETE", `/listado-precios/item/${item.id}`);
+      setItems(prev => prev.filter(i => String(i.id) !== String(item.id)));
+      setTotalPreciosCount(prev => (prev == null ? prev : Math.max(0, prev - 1)));
+      if (!item.agrupador_id) setSinAgruparCount(prev => Math.max(0, prev - 1));
+      else {
+        setAgrupadores(prev => prev.map(a => (
+          String(a.id) === String(item.agrupador_id)
+            ? { ...a, items_total: Math.max(0, (Number(a.items_total) || 0) - 1) }
+            : a
+        )));
+      }
+      if (popup && String(popup.id) === String(item.id)) setPopup(null);
+      if (contratoId) notifyListadoMetaChanged(contratoId);
+      setMsg({ type: "success", text: `Precio ${item.item_numero || ""} eliminado.` });
+      setEliminarPrecioConfirm(null);
+    } catch (e) {
+      if (e?.detail?.code === "precio_en_uso" || e?.status === 409) {
+        setEliminarPrecioConfirm(null);
+        setEliminarPrecioBloqueo({ item, uso: e.detail || {} });
+      } else {
+        setMsg({ type: "error", text: e.message });
+      }
+    } finally {
+      setEliminandoPrecio(false);
     }
   };
 
@@ -4974,6 +5029,32 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       <CeldaValorTotal item={item} />
       {esModoAprobadas && <CeldaDelta item={item} />}
       <CeldaEstadoItem item={item} />
+      {perms?.eliminar && (
+        <td
+          style={{ ...itemRowTd, textAlign: "center", width: 36 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            title={usoLoadingId === item.id ? "Verificando uso del precio" : "Eliminar precio"}
+            aria-label={`Eliminar precio ${item.item_numero || ""}`.trim()}
+            disabled={usoLoadingId === item.id || eliminandoPrecio}
+            onClick={() => solicitarEliminarPrecio(item)}
+            style={{
+              background: "transparent",
+              border: "none",
+              padding: 2,
+              lineHeight: 0,
+              display: "inline-flex",
+              color: "#ef4444",
+              cursor: usoLoadingId === item.id || eliminandoPrecio ? "wait" : "pointer",
+              opacity: usoLoadingId === item.id ? 0.45 : 1,
+            }}
+          >
+            <Trash2 size={15} strokeWidth={2} aria-hidden />
+          </button>
+        </td>
+      )}
     </tr>
   );
 
@@ -5139,6 +5220,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                               </td>
                             )}
                             <td style={tdStyle}><span style={{ fontSize:11, color:col.textMuted }}>Σ hijos</span></td>
+                            {perms?.eliminar && <td style={tdStyle} />}
                           </tr>
                           {hijos.map(item => filaItemPrecio(item, { paddingLeft: 48 }))}
                         </Fragment>
@@ -6024,6 +6106,16 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
           </div>
         </div>
       )}
+
+      <ListadoPrecioEliminarDialogs
+        theme={tTok}
+        confirmItem={eliminarPrecioConfirm}
+        bloqueo={eliminarPrecioBloqueo}
+        eliminando={eliminandoPrecio}
+        onCancelConfirm={() => { if (!eliminandoPrecio) setEliminarPrecioConfirm(null); }}
+        onConfirm={confirmarEliminarPrecio}
+        onCloseBloqueo={() => setEliminarPrecioBloqueo(null)}
+      />
 
       {/* ── Dropdown reasignar agrupador (WBS) ── */}
       {agDropdown && createPortal(
