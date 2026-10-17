@@ -9,7 +9,7 @@ export const docsFillLegend = [
   { key: 'contrato', order: 1, short: 'Contrato', label: 'Contrato laboral' },
   { key: 'soporte', order: 2, short: 'Soporte', label: 'Documentos de soporte' },
   { key: 'ingreso', order: 3, short: 'Ingreso', label: 'Documentos de ingreso' },
-  { key: 'afiliacion', order: 4, short: 'Afiliación', label: 'Certificaciones de afiliación' },
+  { key: 'afiliacion', order: 4, short: 'Afil./Planilla', label: 'Afiliación o planilla de pago (según tipo de contrato)' },
 ]
 
 const EMPTY = { filled: 0, total: 0, ratio: 0 }

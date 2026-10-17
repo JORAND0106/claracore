@@ -17,11 +17,11 @@ import {
 const dir = dirname(fileURLToPath(import.meta.url))
 
 describe('rrhhDocsFill', () => {
-  it('ordena 4 grupos Contrato → Soporte → Ingreso → Afiliación', () => {
+  it('ordena 4 grupos Contrato → Soporte → Ingreso → Afil./Planilla', () => {
     assert.deepEqual(DOCS_FILL_GROUPS, ['contrato', 'soporte', 'ingreso', 'afiliacion'])
     assert.equal(docsFillLegend.length, 4)
     assert.equal(docsFillLegend[0].short, 'Contrato')
-    assert.equal(docsFillLegend[3].short, 'Afiliación')
+    assert.equal(docsFillLegend[3].short, 'Afil./Planilla')
   })
 
   it('normaliza docs_fill incompleto', () => {

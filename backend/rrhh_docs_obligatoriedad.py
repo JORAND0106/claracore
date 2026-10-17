@@ -6,7 +6,10 @@ Reglas de negocio (sistema de calidad / contratación):
     EPS, ARL, Pensión, Cesantías, y tipos «Otro» (ext_*) del checklist.
   - Opcionales: Hoja de vida, Certificados laborales, Caja de Compensación.
   - Las opcionales no cargadas NUNCA cuentan como faltantes ni restan avance.
-  - EPS / ARL / Pensión / Cesantías NUNCA son «No aplica».
+  - EPS / ARL / Pensión / Cesantías NUNCA son «No aplica» (salvo prestación
+    de servicios: allí no aplican y se exige planilla de pago).
+  - Prestación de servicios: sin certificaciones de afiliación; planilla de
+    pago obligatoria (misma categoría de almacenamiento `afiliacion`).
 """
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ DOC_OPCIONALES: FrozenSet[Tuple[str, str]] = frozenset({
     ("afiliacion", "cert_caja"),
 })
 
-# Afiliaciones que nunca pueden ser «No aplica»
+# Afiliaciones que nunca pueden ser «No aplica» (colaboradores no prestación)
 AFILIACION_OBLIGATORIAS: FrozenSet[str] = frozenset({
     "cert_eps",
     "cert_pension",
@@ -27,11 +30,29 @@ AFILIACION_OBLIGATORIAS: FrozenSet[str] = frozenset({
     "cert_cesantias",
 })
 
+AFILIACION_CERT_TIPOS: FrozenSet[str] = frozenset({
+    "cert_eps",
+    "cert_pension",
+    "cert_arl",
+    "cert_cesantias",
+    "cert_caja",
+})
+
+PLANILLA_PAGO_TIPO = "planilla_pago"
+
+
+def trabajador_es_prestacion_servicios(trab: dict | None) -> bool:
+    from rrhh_service import es_prestacion_servicios
+
+    return es_prestacion_servicios((trab or {}).get("tipo_contrato"))
+
 
 def es_doc_opcional(categoria: str, tipo: str) -> bool:
     cat = (categoria or "").strip().lower()
     t = (tipo or "").strip().lower()
     if cat == "contrato_laboral":
+        return False
+    if t == PLANILLA_PAGO_TIPO:
         return False
     return (cat, t) in DOC_OPCIONALES
 
@@ -40,20 +61,23 @@ def doc_aplica_checklist(trab: dict | None, categoria: str, tipo: str) -> bool:
     """
     Si el documento forma parte del checklist aplicable al colaborador.
 
-    - Opcionales: siempre «aplican» como ítem del checklist (el estado
-      NO APLICA / 🔘 se decide al no estar cargados).
-    - Afiliaciones obligatorias: siempre aplican (aunque falte la entidad).
-    - Caja: aplica (es opcional).
+    - Prestación de servicios: certificaciones de afiliación NO aplican;
+      planilla de pago SÍ (obligatoria).
+    - Otros contratos: afiliaciones aplican; planilla NO aplica.
     - Slot UI «otro»: no aplica.
     """
-    del trab  # reservado por si reglas futuras dependen del colaborador
     cat = (categoria or "").strip().lower()
     t = (tipo or "").strip().lower()
     if t == "otro":
         return False
-    if cat in ("soporte", "ingreso", "bancario", "contrato_laboral"):
-        return True
+    prestacion = trabajador_es_prestacion_servicios(trab)
     if cat == "afiliacion":
+        if t == PLANILLA_PAGO_TIPO:
+            return prestacion
+        if t in AFILIACION_CERT_TIPOS or t.startswith("cert_"):
+            return not prestacion
+        return not prestacion
+    if cat in ("soporte", "ingreso", "bancario", "contrato_laboral"):
         return True
     if t.startswith("ext_"):
         return True

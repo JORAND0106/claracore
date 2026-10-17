@@ -66,6 +66,28 @@ def test_afiliacion_obligatorias_siempre_en_denominador():
     assert fill["afiliacion"]["ratio"] == 0.0
 
 
+def test_fill_prestacion_servicios_mide_planilla():
+    """4.º segmento: planilla de pago en lugar de certificaciones."""
+    trab = {
+        "id": 3,
+        "doc_validacion_estado": "pendiente",
+        "tipo_contrato": "Prestación de servicios",
+    }
+    fill_vacio = _fill_for_trabajador(
+        trab, [], tiene_contrato=True, custom={"soporte": set(), "ingreso": set()},
+    )
+    assert fill_vacio["afiliacion"] == {"filled": 0, "total": 1, "ratio": 0.0}
+
+    fill_ok = _fill_for_trabajador(
+        trab,
+        [("afiliacion", "planilla_pago"), ("afiliacion", "cert_eps")],
+        tiene_contrato=True,
+        custom={"soporte": set(), "ingreso": set()},
+    )
+    # Solo planilla cuenta; cert_* cargada no afecta el denominador.
+    assert fill_ok["afiliacion"] == {"filled": 1, "total": 1, "ratio": 1.0}
+
+
 def test_opcional_cargado_suma_al_avance():
     trab = {"id": 1, "doc_validacion_estado": "pendiente"}
     docs = [

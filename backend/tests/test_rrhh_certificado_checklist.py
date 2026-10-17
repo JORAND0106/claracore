@@ -136,6 +136,19 @@ def test_checklist_incluye_contrato_laboral_primero():
     assert items[0]["label"] == "Contrato laboral"
 
 
+def test_checklist_prestacion_servicios_planilla_sin_certs():
+    trab = {"id": 30, "tipo_contrato": "Prestación de servicios"}
+    items = _checklist_items(
+        trab,
+        _docs(("afiliacion", "planilla_pago"), ("afiliacion", "cert_eps")),
+        tiene_contrato=True,
+    )
+    by = {(i["categoria"], i["tipo"]): i["estado"] for i in items}
+    assert ("afiliacion", "cert_eps") not in by
+    assert ("afiliacion", "cert_arl") not in by
+    assert by[("afiliacion", "planilla_pago")] == "ADJUNTO"
+
+
 def test_checklist_tres_niveles_documentacion():
     """Tres perfiles: vacío, parcial, completo (opcionales incluidos)."""
     vacio = _checklist_items({"id": 10}, [], tiene_contrato=False)

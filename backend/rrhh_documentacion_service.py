@@ -758,6 +758,7 @@ def _checklist_items(
         DOC_TIPOS_AFILIACION,
         DOC_TIPOS_BANCARIO,
         DOC_TIPOS_INGRESO,
+        DOC_TIPOS_PLANILLA,
         DOC_TIPOS_SOPORTE,
     )
 
@@ -771,6 +772,9 @@ def _checklist_items(
             return
         seen.add(key)
         aplica = _doc_aplica_al_colaborador(trab, cat_n, tipo_n)
+        # No listar ítems que no aplican (p. ej. cert_* en prestación; planilla en otros).
+        if not aplica:
+            return
         adjunto = key in vigentes
         estado = _estado_documento_checklist(
             aplica=aplica,
@@ -791,6 +795,7 @@ def _checklist_items(
         ("ingreso", DOC_TIPOS_INGRESO),
         ("bancario", DOC_TIPOS_BANCARIO),
         ("afiliacion", DOC_TIPOS_AFILIACION),
+        ("afiliacion", DOC_TIPOS_PLANILLA),
     ):
         for tipo, label in tipos:
             add_item(cat, tipo, label)

@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { formatFechaHoraColombia } from '../../utils/fechaColombia.js'
 import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
 import { PASTEL_ESTADO_VALIDACION } from '../sicoe-obra/sicoeReporteItemsTablaHelpers'
+import { DOC_TIPOS_PLANILLA, esPrestacionServicios } from './rrhhHelpers'
 import { rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 const panelStyle = (tTok) => ({
@@ -62,6 +63,10 @@ export default function DocumentacionTab({
   const canEdit = (permisos.crear || permisos.editar) && !locked
   const canValidar = Boolean(permisos.validar || permisos.esDesarrollador)
   const esDesarrollador = Boolean(permisos.esDesarrollador)
+  const esPrestacion = useMemo(
+    () => esPrestacionServicios(editForm?.tipo_contrato || detalle?.tipo_contrato),
+    [editForm?.tipo_contrato, detalle?.tipo_contrato],
+  )
 
   const refSoporte = useRef(null)
   const refIngreso = useRef(null)
@@ -351,24 +356,40 @@ export default function DocumentacionTab({
         />
       </div>
 
-      {/* Afiliaciones: entidad + certificación en el mismo panel */}
+      {/* Afiliaciones o planilla de pago según tipo de contrato */}
       <div style={panelStyle(tTok)}>
-        <DocumentosTrabajadorBlock
-          ref={refAfiliacion}
-          theme={theme}
-          api={api}
-          trabajadorId={detalle.id}
-          categoria="afiliacion"
-          canEdit={canEdit}
-          locked={locked}
-          hideSave
-          showAfiliacionEntidad
-          afiliacionValues={editForm}
-          catalogo={catalogo}
-          onAfiliacionChange={(field, v) => setField(field, v)}
-          onAfiliacionAdd={async (catalogKey, v) => addCatalogValue(catalogKey, v)}
-          onMsg={(m) => flash(m.type, m.text)}
-        />
+        {esPrestacion ? (
+          <DocumentosTrabajadorBlock
+            ref={refAfiliacion}
+            theme={theme}
+            api={api}
+            trabajadorId={detalle.id}
+            categoria="afiliacion"
+            canEdit={canEdit}
+            locked={locked}
+            hideSave
+            tituloOverride="Planilla de pago"
+            tiposFijos={DOC_TIPOS_PLANILLA}
+            onMsg={(m) => flash(m.type, m.text)}
+          />
+        ) : (
+          <DocumentosTrabajadorBlock
+            ref={refAfiliacion}
+            theme={theme}
+            api={api}
+            trabajadorId={detalle.id}
+            categoria="afiliacion"
+            canEdit={canEdit}
+            locked={locked}
+            hideSave
+            showAfiliacionEntidad
+            afiliacionValues={editForm}
+            catalogo={catalogo}
+            onAfiliacionChange={(field, v) => setField(field, v)}
+            onAfiliacionAdd={async (catalogKey, v) => addCatalogValue(catalogKey, v)}
+            onMsg={(m) => flash(m.type, m.text)}
+          />
+        )}
       </div>
 
       {/* Validación */}

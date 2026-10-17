@@ -57,11 +57,17 @@ DOC_TIPOS_AFILIACION = (
     ("cert_caja", "Certificación Caja de Compensación"),
 )
 
+# Mismo almacenamiento (categoria=afiliacion); aplica solo a prestación de servicios.
+DOC_TIPOS_PLANILLA = (
+    ("planilla_pago", "Planilla de pago"),
+)
+
 DOC_TIPO_LABEL = {
     **{k: v for k, v in DOC_TIPOS_SOPORTE},
     **{k: v for k, v in DOC_TIPOS_INGRESO},
     **{k: v for k, v in DOC_TIPOS_BANCARIO},
     **{k: v for k, v in DOC_TIPOS_AFILIACION},
+    **{k: v for k, v in DOC_TIPOS_PLANILLA},
 }
 
 DOC_MIMES = frozenset({
@@ -129,7 +135,9 @@ def _tipos_builtin(categoria: str) -> frozenset:
     if categoria == "bancario":
         return frozenset(k for k, _ in DOC_TIPOS_BANCARIO)
     if categoria == "afiliacion":
-        return frozenset(k for k, _ in DOC_TIPOS_AFILIACION)
+        return frozenset(k for k, _ in DOC_TIPOS_AFILIACION) | frozenset(
+            k for k, _ in DOC_TIPOS_PLANILLA
+        )
     raise ValueError("Categoría de documento inválida.")
 
 

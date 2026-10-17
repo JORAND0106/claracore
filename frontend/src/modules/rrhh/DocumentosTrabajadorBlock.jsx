@@ -29,20 +29,24 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
   onAfiliacionChange = null,
   onAfiliacionAdd = null,
   catalogo = null,
+  /** Si se pasa, sustituye el checklist por defecto (p. ej. solo planilla de pago). */
+  tiposFijos = null,
 }, ref) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
   const S = rrhhUi(theme, tTok)
   const cssVars = rrhhSheetCssVars(tTok)
   const catalogKey = categoria === 'ingreso' ? 'doc_ingreso' : 'doc_soporte'
-  const allowOtro = categoria === 'soporte' || categoria === 'ingreso'
+  const allowOtro = (categoria === 'soporte' || categoria === 'ingreso') && !tiposFijos?.length
   const editable = canEdit && !locked
 
   const [pendingTipos, setPendingTipos] = useState([])
-  const tipos = useMemo(
-    () => buildDocChecklist(categoria, [...(customTipos || []), ...pendingTipos]),
-    [categoria, customTipos, pendingTipos],
-  )
+  const tipos = useMemo(() => {
+    if (Array.isArray(tiposFijos) && tiposFijos.length) {
+      return tiposFijos.map((x) => ({ tipo: x.tipo, label: x.label }))
+    }
+    return buildDocChecklist(categoria, [...(customTipos || []), ...pendingTipos])
+  }, [categoria, customTipos, pendingTipos, tiposFijos])
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
