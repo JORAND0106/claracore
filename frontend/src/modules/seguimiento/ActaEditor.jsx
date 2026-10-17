@@ -2773,7 +2773,7 @@ export default function ActaEditor({
             docKey: `acta-${localActaId || actaId || 'new'}-idea-${esquemaIdeaIdx}`,
           }}
           onClose={() => setEsquemaIdeaIdx(null)}
-          onSave={(dataUrl) => {
+          onSave={(dataUrl, extras) => {
             const idx = esquemaIdeaIdx
             const ok = pushIdeaImagenPending(idx, {
               nombre: `esquema-idea-${idx + 1}-${Date.now()}.png`,
@@ -2782,6 +2782,18 @@ export default function ActaEditor({
               kind: 'esquema',
               origen: 'esquema',
             })
+            void (async () => {
+              const { applyEsquemaCalcAdjuntos } = await import('../../components/esquema/esquemaSaveExtras.js')
+              await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+                pushIdeaImagenPending(idx, {
+                  nombre: adj.nombre,
+                  data_uri: adj.dataUri,
+                  mime_type: adj.mime,
+                  kind: adj.kind || 'esquema-calculo',
+                  origen: adj.origen || 'esquema-calculo',
+                })
+              })
+            })()
             setEsquemaIdeaIdx(null)
             if (!ok) setError('Máximo 8 esquemas/gráficos por idea')
             else {

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { applyEsquemaCalcAdjuntos } from '../../components/esquema/esquemaSaveExtras'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
@@ -406,7 +407,7 @@ export default function BitacoraAdjuntos({
           mapLocation={mapLocation}
           iaDoc={{ ambito: 'bitacora', docKey: `bitacora-${entradaId != null ? entradaId : 'draft'}` }}
           onClose={() => setEsquemaOpen(false)}
-          onSave={async (dataUrl) => {
+          onSave={async (dataUrl, extras) => {
             setEsquemaOpen(false)
             if (!dataUrl) return
             try {
@@ -416,6 +417,15 @@ export default function BitacoraAdjuntos({
                 mime: 'image/png',
                 origen: 'esquema',
                 pie: '',
+              })
+              await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+                await commitImage({
+                  dataUri: adj.dataUri,
+                  nombre: adj.nombre,
+                  mime: adj.mime,
+                  origen: adj.origen || 'esquema-calculo',
+                  pie: adj.kind === 'memoria-calculo' ? 'Memoria de cálculo' : 'Gráfico isométrico',
+                })
               })
             } catch {
               /* error en state */

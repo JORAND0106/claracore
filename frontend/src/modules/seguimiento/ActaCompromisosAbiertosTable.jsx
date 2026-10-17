@@ -874,12 +874,19 @@ function ActionPanel({
                   contratoId={item?.contrato_id}
                   iaDoc={{ ambito: 'compromiso', docKey: `compromiso-${item.id}` }}
                   onClose={() => setEsquemaOpen(false)}
-                  onSave={async (dataUrl) => {
+                  onSave={async (dataUrl, extras) => {
                     try {
                       const file = await dataUriEsquemaAFile(dataUrl, `esquema-compromiso-${item.id}`)
                       if (!file) throw new Error('No se pudo convertir el esquema')
                       setEsquemaOpen(false)
                       await api.uploadEvidencia(item.id, file, 'esquema')
+                      const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
+                      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+                        const f = adj.blob
+                          ? new File([adj.blob], adj.nombre, { type: adj.mime })
+                          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+                        if (f) await api.uploadEvidencia(item.id, f, adj.origen || 'esquema-calculo')
+                      })
                       const d = await api.getItem(item.id)
                       setDetail(d)
                       onChanged?.()

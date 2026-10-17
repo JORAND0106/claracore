@@ -3598,10 +3598,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)
       if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
-      // Esquemas: preservar PNG hi-res (tabla de coordenadas legible en memorias).
-      const prepared = origen === 'esquema'
-        ? await prepararEsquemaParaUpload(file)
-        : await prepararImagenParaUpload(file)
+      // Esquemas: preservar PNG hi-res. PDF de memoria de cálculo se sube tal cual.
+      const isPdf = String(file?.type || '').includes('pdf')
+        || String(file?.name || '').toLowerCase().endsWith('.pdf')
+      const prepared = isPdf
+        ? file
+        : (origen === 'esquema' || origen === 'esquema-calculo')
+          ? await prepararEsquemaParaUpload(file)
+          : await prepararImagenParaUpload(file)
       const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
@@ -3657,7 +3661,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }, [autoAbrirEsquema])
 
   /** Guarda el PNG del editor como gráfico de este registro (next-grafico + upload + PUT). */
-  const guardarEsquemaComoGrafico = async (dataUrl) => {
+  const guardarEsquemaComoGrafico = async (dataUrl, extras) => {
     if (!dataUrl || uploadingGraf) return
     try {
       const file = await dataUriEsquemaAFile(
@@ -3668,6 +3672,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       setEsquemaOpen(false)
       setEsquemaInitialDataUri(null)
       await subirGrafico(file, { origen: 'esquema' })
+      const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('./components/esquema/esquemaSaveExtras.js')
+      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+        const f = adj.blob
+          ? new File([adj.blob], adj.nombre, { type: adj.mime })
+          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+        if (!f) return
+        // PNG isométrico y PDF de memoria al historial del registro
+        await subirGrafico(f, { origen: adj.origen || 'esquema-calculo' })
+      })
     } catch (e) {
       alert('Error guardando esquema: ' + (e?.message || String(e)))
     }

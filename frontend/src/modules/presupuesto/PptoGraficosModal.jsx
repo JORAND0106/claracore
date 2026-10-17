@@ -86,27 +86,40 @@ export default function PptoGraficosModal({
   }, [open])
 
   const addFiles = useCallback(async (fileList, origen = 'upload') => {
-    const files = [...(fileList || [])].filter((f) => f && f.type?.startsWith('image/'))
+    const files = [...(fileList || [])].filter((f) => {
+      if (!f) return false
+      if (f.type?.startsWith('image/')) return true
+      // Memoria de cálculo (PDF) desde el esquema 3D
+      if (origen === 'esquema-calculo' && (f.type === 'application/pdf' || String(f.name || '').toLowerCase().endsWith('.pdf'))) {
+        return true
+      }
+      return false
+    })
     if (!files.length) return
     setError('')
     const next = []
     for (const file of files) {
       try {
-        const prepared = origen === 'esquema'
-          ? await prepararEsquemaParaUpload(file)
-          : await prepararImagenParaUpload(file)
+        const isPdf = String(file.type || '').includes('pdf')
+          || String(file.name || '').toLowerCase().endsWith('.pdf')
+        const prepared = isPdf
+          ? file
+          : (origen === 'esquema' || origen === 'esquema-calculo')
+            ? await prepararEsquemaParaUpload(file)
+            : await prepararImagenParaUpload(file)
         const named = prepared instanceof File
           ? prepared
           : new File([prepared], file.name || `grafico-${Date.now()}.jpg`, {
             type: prepared.type || file.type || 'image/jpeg',
           })
-        const previewUrl = URL.createObjectURL(named)
+        const previewUrl = isPdf ? null : URL.createObjectURL(named)
         next.push({
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           file: named,
           previewUrl,
           url: null,
           origen,
+          mime: named.type,
         })
       } catch (err) {
         setError(err?.message || 'No se pudo preparar la imagen')
@@ -145,12 +158,19 @@ export default function PptoGraficosModal({
     }
   }, [addFiles])
 
-  const guardarEsquema = useCallback(async (dataUrl) => {
+  const guardarEsquema = useCallback(async (dataUrl, extras) => {
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema-ppto')
       if (!file) throw new Error('No se pudo convertir el esquema')
       setEsquemaOpen(false)
       await addFiles([file], 'esquema')
+      const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
+      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+        const f = adj.blob
+          ? new File([adj.blob], adj.nombre, { type: adj.mime })
+          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+        if (f) await addFiles([f], 'esquema-calculo')
+      })
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')
     }

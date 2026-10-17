@@ -82,6 +82,12 @@ import {
 } from './esquema3dSolids'
 import { isEsquema3dDrawView, isEsquema3dIsoView } from './esquema3dViews'
 import { Esquema3dExtrudePopup, Esquema3dViewToolbar, Esquema3dVolumeHint } from './esquema3dUi'
+import {
+  createVolumeCalc,
+  freezeCalcSnapshot,
+} from './esquema3dCalc'
+import { buildCalcAdjuntos } from './esquema3dCalcExport'
+import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
 import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
@@ -579,12 +585,16 @@ export default function EsquemaEditorModal({
   const [selectedSolidIds, setSelectedSolidIds] = useState([])
   const [extrudePrompt, setExtrudePrompt] = useState(null)
   const [op3d, setOp3d] = useState(null) // unir | sustraer | cortar
+  const [calcPanelOpen, setCalcPanelOpen] = useState(false)
+  const [volumeCalcs, setVolumeCalcs] = useState([])
+  const [activeCalcId, setActiveCalcId] = useState(null)
   const mode3dRef = useRef(false)
   const view3dRef = useRef('top')
   const solids3dRef = useRef([])
   const selectedSolidIdsRef = useRef([])
   const cutDraftRef = useRef(null)
   const op3dRef = useRef(null)
+  const volumeCalcsRef = useRef([])
   const [mapBasemap, setMapBasemap] = useState('calle')
   const [mapError, setMapError] = useState('')
   const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
@@ -657,6 +667,7 @@ export default function EsquemaEditorModal({
   solids3dRef.current = solids3d
   selectedSolidIdsRef.current = selectedSolidIds
   op3dRef.current = op3d
+  volumeCalcsRef.current = volumeCalcs
 
   useEffect(() => {
     themeRef.current = ui
@@ -1505,6 +1516,7 @@ export default function EsquemaEditorModal({
         setOp3d(null)
         cutDraftRef.current = null
         setExtrudePrompt(null)
+        setCalcPanelOpen(false)
         setToolHint(mapActiveRef.current
           ? 'Modo 2D restaurado. Mapa de fondo visible de nuevo.'
           : 'Modo 2D restaurado.')
@@ -5055,6 +5067,20 @@ export default function EsquemaEditorModal({
     setSavePrompt({ title: '' })
   }
 
+  const buildVolumeCalcAdjuntos = async () => {
+    const calcs = volumeCalcsRef.current || []
+    if (!calcs.length) return { adjuntos: [], snapshots: [] }
+    const solidsMap = new Map((solids3dRef.current || []).map((s) => [s.id, s]))
+    const snapshots = calcs.map((c) => freezeCalcSnapshot(c, solids3dRef.current || []))
+    const adjuntos = []
+    for (const snap of snapshots) {
+      if (!(snap.lines || []).some((l) => l.ok)) continue
+      const rows = await buildCalcAdjuntos(snap, solidsMap)
+      adjuntos.push(...rows)
+    }
+    return { adjuntos, snapshots }
+  }
+
   const confirmarGuardar = async () => {
     const title = String(savePrompt?.title || '').trim() || 'Esquema'
     setSavePrompt(null)
@@ -5070,7 +5096,13 @@ export default function EsquemaEditorModal({
         nodes,
         drawObject,
       })
-      await onSave?.(composed)
+      // Congela cálculos al guardar (ya no se recalculan tras cerrar).
+      const { adjuntos, snapshots } = await buildVolumeCalcAdjuntos()
+      await onSave?.(composed, {
+        title,
+        adjuntos,
+        calcSnapshots: snapshots,
+      })
     } finally {
       setBusy(false)
     }
@@ -5479,6 +5511,24 @@ export default function EsquemaEditorModal({
                   }, 0)}
                 />
               ) : null}
+              <button
+                type="button"
+                title="Panel de cálculo de volúmenes (memoria PDF + gráfico isométrico)"
+                aria-label="Cálculo de volúmenes"
+                onClick={() => {
+                  setCalcPanelOpen(true)
+                  if (!(volumeCalcsRef.current || []).length) {
+                    const c = createVolumeCalc('Excavación')
+                    setVolumeCalcs([c])
+                    setActiveCalcId(c.id)
+                  }
+                  setToolHint('Panel de cálculo: agregue sólidos seleccionados, indique suma o descuento.')
+                }}
+                style={iconBtn(t, calcPanelOpen)}
+                data-testid="esquema-calc-panel-btn"
+              >
+                <IconCalcVolumenes />
+              </button>
             </>
           ) : null}
           <button
@@ -6005,6 +6055,53 @@ export default function EsquemaEditorModal({
               snapRef.current = null
               redraw()
             }}
+          />
+          <Esquema3dCalcPanel
+            t={t}
+            ui={ui}
+            open={calcPanelOpen && mode3d}
+            onClose={() => setCalcPanelOpen(false)}
+            calcs={volumeCalcs}
+            activeCalcId={activeCalcId}
+            onActiveCalcId={setActiveCalcId}
+            onCreateCalc={(c) => {
+              setVolumeCalcs((prev) => [...prev, c])
+              setActiveCalcId(c.id)
+            }}
+            onRenameCalc={(id, nombre) => {
+              setVolumeCalcs((prev) => prev.map((c) => (c.id === id ? { ...c, nombre } : c)))
+            }}
+            onDeleteCalc={(id) => {
+              setVolumeCalcs((prev) => {
+                const next = prev.filter((c) => c.id !== id)
+                if (activeCalcId === id) setActiveCalcId(next[0]?.id || null)
+                return next
+              })
+            }}
+            onAddLine={(calcId, line) => {
+              setVolumeCalcs((prev) => prev.map((c) => (
+                c.id === calcId ? { ...c, lines: [...(c.lines || []), line] } : c
+              )))
+            }}
+            onUpdateLine={(calcId, lineId, patch) => {
+              setVolumeCalcs((prev) => prev.map((c) => {
+                if (c.id !== calcId) return c
+                return {
+                  ...c,
+                  lines: (c.lines || []).map((l) => (l.id === lineId ? { ...l, ...patch } : l)),
+                }
+              }))
+            }}
+            onRemoveLine={(calcId, lineId) => {
+              setVolumeCalcs((prev) => prev.map((c) => (
+                c.id === calcId
+                  ? { ...c, lines: (c.lines || []).filter((l) => l.id !== lineId) }
+                  : c
+              )))
+            }}
+            solids={solids3d}
+            selectedSolidIds={selectedSolidIds}
+            onHint={setToolHint}
           />
           {editingTabla && selectedObj && (
             <TablaOverlay
@@ -9461,6 +9558,17 @@ function IconCortar3d() {
       <path d="M4 20 20 4" />
       <circle cx="7" cy="7" r="2.2" />
       <circle cx="17" cy="17" r="2.2" />
+    </svg>
+  )
+}
+function IconCalcVolumenes() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="4" y="4" width="16" height="16" rx="1.5" />
+      <path d="M4 9h16" />
+      <path d="M9 4v16" />
+      <path d="M12 12h5" />
+      <path d="M12 16h5" />
     </svg>
   )
 }

@@ -78,9 +78,13 @@ export default function SicoeGraficosWizardPanel({
     const origen = opts.origen || 'manual'
     setSubiendo(true)
     try {
-      const prepared = origen === 'esquema'
-        ? await prepararEsquemaParaUpload(file)
-        : await prepararImagenParaUpload(file)
+      const isPdf = String(file?.type || '').includes('pdf')
+        || String(file?.name || '').toLowerCase().endsWith('.pdf')
+      const prepared = isPdf
+        ? file
+        : (origen === 'esquema' || origen === 'esquema-calculo')
+          ? await prepararEsquemaParaUpload(file)
+          : await prepararImagenParaUpload(file)
       const fd = new FormData()
       fd.append('file', prepared)
       const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method: 'POST', headers: hdrs })
@@ -123,7 +127,7 @@ export default function SicoeGraficosWizardPanel({
     }
   }
 
-  const guardarEsquemaComoGrafico = async (dataUrl) => {
+  const guardarEsquemaComoGrafico = async (dataUrl, extras) => {
     if (!dataUrl || subiendo) return
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema')
@@ -131,6 +135,13 @@ export default function SicoeGraficosWizardPanel({
       setEsquemaOpen(false)
       setEsquemaInitialDataUri(null)
       await subirArchivo(file, { origen: 'esquema' })
+      const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
+      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+        const f = adj.blob
+          ? new File([adj.blob], adj.nombre, { type: adj.mime })
+          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+        if (f) await subirArchivo(f, { origen: adj.origen || 'esquema-calculo' })
+      })
     } catch (err) {
       alert('Error guardando esquema: ' + (err?.message || String(err)))
     }
