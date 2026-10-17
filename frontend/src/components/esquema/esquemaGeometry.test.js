@@ -49,6 +49,7 @@ import {
   nodeMarkerWorldRadius,
   selectIdsInDrag,
   selectionRectFromDrag,
+  squareDrawingAreaSize,
   MAX_ZOOM,
   MIN_ZOOM,
   worldToMeters,
@@ -483,6 +484,20 @@ describe('esquemaGeometry', () => {
     assert.equal(clampZoom(999), MAX_ZOOM)
     assert.equal(clampZoom(0.01), MIN_ZOOM)
     assert.ok(MAX_ZOOM >= 20)
+  })
+
+  it('área de dibujo cuadrada: conserva ancho y fija alto = ancho', () => {
+    assert.deepEqual(squareDrawingAreaSize(900), { w: 900, h: 900 })
+    assert.deepEqual(squareDrawingAreaSize(1200, 480), { w: 1200, h: 1200 })
+    // Anchos estrechos (celular) respetan el piso, siguen cuadrados
+    assert.deepEqual(squareDrawingAreaSize(200), { w: 480, h: 480 })
+    // Cambio de ancho (resize / giro) → alto sigue al ancho
+    const a = squareDrawingAreaSize(640)
+    const b = squareDrawingAreaSize(1024)
+    assert.equal(a.w, a.h)
+    assert.equal(b.w, b.h)
+    assert.equal(a.w, 640)
+    assert.equal(b.w, 1024)
   })
 
   it('hatch raster scale stays within pixel budget', () => {
