@@ -25,9 +25,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Contrato de esquema: bloquea el despliegue si fallan las pruebas de comportamiento.
+  esquema_contrato:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: esquema-contrato
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run esquema contract tests
+        run: npm run test:esquema
+
   build_and_deploy_job:
     # Solo production hasta liberar cupo de staging en Azure.
     if: github.event_name == 'push'
+    needs: [esquema_contrato]
     runs-on: ubuntu-latest
     name: Build and Deploy Job
     steps:

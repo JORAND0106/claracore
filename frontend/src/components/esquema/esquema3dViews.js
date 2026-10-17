@@ -330,14 +330,15 @@ export function entityNeedsViewRemap(entity, targetViewId, { orbit = null } = {}
   if (!entity) return false
   const src = normalizeViewId(entity.viewPlane || 'top')
   const dst = normalizeViewId(targetViewId)
-  if (orbit && Number.isFinite(orbit.yaw)) return extrudeModeForView(src) === 'length'
+  // Giro libre / órbita: todo el 2D se proyecta al espacio 3D (no queda plano en pantalla).
+  if (orbit && Number.isFinite(orbit.yaw)) return true
+  // Isométricas: planta y perfiles se proyectan con cota/profundidad.
+  if (isEsquema3dIsoView(dst)) return true
   if (src === dst) return false
-  // Contornos de perfil siempre se remapean al cambiar de vista.
+  // Contornos de perfil siempre se remapean al cambiar de cara.
   if (extrudeModeForView(src) === 'length') return true
   // Planta ↔ inferior: invertir Y
   if ((src === 'top' && dst === 'bottom') || (src === 'bottom' && dst === 'top')) return true
-  // Planta en iso: proyectar con cota (si hay viewDepth/z)
-  if (isEsquema3dIsoView(dst) && Number.isFinite(Number(entity.viewZCota))) return true
   return false
 }
 
