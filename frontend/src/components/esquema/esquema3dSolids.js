@@ -24,7 +24,8 @@ import {
   worldZToCota,
 } from './esquema3dViews.js'
 
-const CIRCLE_SEGMENTS = 96
+/** Segmentos del anillo de círculo/elipse: suficientes para contorno limpio, sin trama densa. */
+const CIRCLE_SEGMENTS = 32
 
 function uid() {
   return `s3d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
@@ -480,8 +481,8 @@ function tessellateProfileAlongZ(profile, meta, depthMin, depthMax, analytic) {
   const zMax = Math.max(...profile.map((p) => p.cota))
   const alongMin = Math.min(...profile.map((p) => p.along))
   const alongMax = Math.max(...profile.map((p) => p.along))
-  // Menos bandas = menos rayas al dibujar (el volumen sigue siendo analítico vía lockSolidVolume).
-  const nBands = analytic?.type === 'ellipse' ? 16 : 12
+  // Pocas bandas: el volumen es analítico; el dibujo evita trama densa.
+  const nBands = analytic?.type === 'ellipse' ? 8 : 8
   const cells = []
   const xyRect = (a0, a1) => {
     if (meta.alongAxis === 'x' && meta.depthAxis === 'y') {
@@ -1592,28 +1593,60 @@ export function pickSubtractBase(solids, orderedIds = null) {
   return [...list].sort((a, b) => solidVolumeM3(b) - solidVolumeM3(a))[0]
 }
 
+/** Longitud que hace coincidir área × L = volumen (p. ej. tramo dentro de la pared). */
+export function lengthMatchingVolumeM3(areaM2, volumeM3, fallbackL = null) {
+  const area = Number(areaM2)
+  const vol = Number(volumeM3)
+  if (!(area > VOL_EPS) || !Number.isFinite(vol) || !(vol >= 0)) {
+    return fallbackL
+  }
+  const L = vol / area
+  if (!(L > 0) || !Number.isFinite(L)) return fallbackL
+  const fb = Number(fallbackL)
+  if (Number.isFinite(fb) && fb > 0 && Math.abs(L - fb) / fb < 0.02) return fb
+  return L
+}
+
 function operandSnapshot(solid, volumeM3) {
   const dims = solidFootprintDimsM(solid)
   const zr = solidZRange(solid)
   const cells = solid?.cells || []
   const analytic = cells.length === 1 ? (cells[0].analytic || null) : null
-  const formMeta = solid?.formMeta || null
+  let formMeta = solid?.formMeta || null
   const vol = Number(volumeM3)
-  // Si es cilindro y el volumen descontado es parcial, longitud efectiva L = V/(π r²).
-  let effectiveForm = formMeta
-  if (formMeta?.kind === 'cylinder' && formMeta.rxM > 0 && Number.isFinite(vol)) {
-    const area = Math.PI * formMeta.rxM * formMeta.rxM
-    const fullLen = formMeta.lengthM
-    const fullVol = area * fullLen
-    let lengthM = fullLen
-    if (fullVol > VOL_EPS && vol < fullVol * 0.98) {
-      lengthM = vol / area
+  // Inferir cilindro/elipse desde analytic si no hay formMeta (p. ej. tras boolean).
+  if (!formMeta && analytic?.type === 'ellipse') {
+    const rx = Math.abs(analytic.rxM)
+    const ry = Math.abs(analytic.ryM)
+    const circ = Math.abs(rx - ry) < 1e-9
+    formMeta = {
+      kind: circ ? 'cylinder' : 'elliptic_prism',
+      rxM: rx,
+      ryM: ry,
+      lengthM: dims?.heightM ?? (zr ? Math.abs(zr.z1 - zr.z0) : null),
+      diameterM: circ ? rx * 2 : null,
     }
-    effectiveForm = {
-      ...formMeta,
-      lengthM,
-      diameterM: formMeta.rxM * 2,
-      effectiveLengthM: lengthM,
+  }
+  // Longitud efectiva siempre alineada al volumen descontado (V = área × L).
+  let effectiveForm = formMeta
+  if (formMeta && Number.isFinite(vol)) {
+    if (formMeta.kind === 'cylinder' && formMeta.rxM > 0) {
+      const area = Math.PI * formMeta.rxM * formMeta.rxM
+      const lengthM = lengthMatchingVolumeM3(area, vol, formMeta.lengthM)
+      effectiveForm = {
+        ...formMeta,
+        lengthM,
+        diameterM: formMeta.rxM * 2,
+        effectiveLengthM: lengthM,
+      }
+    } else if (formMeta.kind === 'elliptic_prism' && formMeta.rxM > 0 && formMeta.ryM > 0) {
+      const area = Math.PI * formMeta.rxM * formMeta.ryM
+      const lengthM = lengthMatchingVolumeM3(area, vol, formMeta.lengthM)
+      effectiveForm = {
+        ...formMeta,
+        lengthM,
+        effectiveLengthM: lengthM,
+      }
     }
   }
   return {
@@ -2240,7 +2273,7 @@ export function drawSolid3d(ctx, solid, {
     worldRing = null,
     zBottom = 0,
     zTop = 0,
-    { skipTop = false, skipBottom = false } = {},
+    { skipTop = false, skipBottom = false, skipVerticals = false } = {},
   ) => {
     const n = ringBot.length
     const lastDup = n > 1
@@ -2266,8 +2299,11 @@ export function drawSolid3d(ctx, solid, {
       // Omitir aristas horizontales internas entre losas apiladas (evita rayas densas).
       if (!skipBottom) addEdge(ringBot[i], ringBot[j], front)
       if (!skipTop) addEdge(ringTop[j], ringTop[i], front)
-      addEdge(ringBot[i], ringTop[i], front)
-      addEdge(ringBot[j], ringTop[j], front)
+      // Cilindros / losas intermedias: sin generatrices de teselado (solo contornos reales).
+      if (!skipVerticals) {
+        addEdge(ringBot[i], ringTop[i], front)
+        addEdge(ringBot[j], ringTop[j], front)
+      }
     }
     const topPts = ringTop.slice(0, edgeCount)
     const botPts = ringBot.slice(0, edgeCount)
@@ -2323,10 +2359,30 @@ export function drawSolid3d(ctx, solid, {
   }
 
   const cellsDraw = solid.cells || []
+  const thinSlabMax = metersToWorld(0.07)
+  const curvedSolid = !!(
+    solid.formMeta?.kind === 'cylinder'
+    || solid.formMeta?.kind === 'elliptic_prism'
+    || cellsDraw.some((c) => c.analytic?.type === 'ellipse')
+  )
+  const neighborAtZ = (cell, zEdge, atTop) => cellsDraw.find((o) => {
+    if (o === cell) return false
+    const oz0 = Math.min(o.z0, o.z1)
+    const oz1 = Math.max(o.z0, o.z1)
+    return atTop
+      ? Math.abs(oz0 - zEdge) < 1e-6
+      : Math.abs(oz1 - zEdge) < 1e-6
+  })
+
   for (let ci = 0; ci < cellsDraw.length; ci += 1) {
     const cell = cellsDraw[ci]
     const zBottom = Math.min(cell.z0, cell.z1)
     const zTop = Math.max(cell.z0, cell.z1)
+    const slabH = zTop - zBottom
+    const thin = slabH > 0 && slabH < thinSlabMax
+    const aboveAny = neighborAtZ(cell, zTop, true)
+    const belowAny = neighborAtZ(cell, zBottom, false)
+    const midTess = thin && aboveAny && belowAny
     const worldRing = cell.ring || []
     const ringBot = worldRing.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
     const ringTop = worldRing.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
@@ -2336,31 +2392,39 @@ export function drawSolid3d(ctx, solid, {
     const holesTop = (cell.holes || []).map((hole) => (
       hole.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
     ))
-    // Capas internas entre losas apiladas de misma huella → no dibujar (rayas).
-    let skipTop = false
-    let skipBottom = false
+    // Capas internas / losas finas: sin caps horizontales (evita rayas).
+    let skipTop = midTess
+    let skipBottom = midTess
+    // Cilindro/elipse o losa intermedia de teselado: sin generatrices densas.
+    let skipVerticals = midTess || curvedSolid || cell.analytic?.type === 'ellipse'
     if (cellsDraw.length > 1) {
-      const above = cellsDraw.find((o) => (
+      const aboveSame = cellsDraw.find((o) => (
         o !== cell
         && Math.abs(Math.min(o.z0, o.z1) - zTop) < 1e-6
         && ringsApproxEqual(o.ring, cell.ring)
         && holesApproxEqual(o.holes, cell.holes)
       ))
-      const below = cellsDraw.find((o) => (
+      const belowSame = cellsDraw.find((o) => (
         o !== cell
         && Math.abs(Math.max(o.z0, o.z1) - zBottom) < 1e-6
         && ringsApproxEqual(o.ring, cell.ring)
         && holesApproxEqual(o.holes, cell.holes)
       ))
-      skipTop = !!above
-      skipBottom = !!below
+      if (aboveSame) skipTop = true
+      if (belowSame) skipBottom = true
+      // Contacto con otra losa (aunque la huella cambie): no dibujar el cap interno.
+      if (aboveAny) skipTop = true
+      if (belowAny) skipBottom = true
+      // Entre losas apiladas del mismo sólido: no dibujar verticales de unión.
+      if (aboveAny && belowAny) skipVerticals = true
     }
     emitPrismFaces(ringBot, ringTop, holesBot, holesTop, worldRing, zBottom, zTop, {
       skipTop,
       skipBottom,
+      skipVerticals,
     })
 
-    // Paredes interiores del vacío (orientación invertida respecto al contorno exterior).
+    // Paredes interiores del vacío (fills siempre; aristas solo en extremos reales).
     for (let hi = 0; hi < holesBot.length; hi += 1) {
       const hb = holesBot[hi]
       const ht = holesTop[hi]
@@ -2370,6 +2434,8 @@ export function drawSolid3d(ctx, solid, {
       const lastDup = hn > 1
         && Math.hypot(hb[0].x - hb[hn - 1].x, hb[0].y - hb[hn - 1].y) < 1e-6
       const edgeCount = lastDup ? hn - 1 : hn
+      // Hueco curvo (muchas cuerdas): solo contornos, sin generatrices.
+      const holeSkipVert = skipVerticals || edgeCount > 8
       for (let i = 0; i < edgeCount; i += 1) {
         const j = (i + 1) % edgeCount
         const pts = [hb[i], ht[i], ht[j], hb[j]]
@@ -2379,14 +2445,15 @@ export function drawSolid3d(ctx, solid, {
         if (wh[i] && wh[j]) {
           const ax = wh[j].x - wh[i].x
           const ay = wh[j].y - wh[i].y
-          // Interior: normal hacia adentro del vacío (= hacia el sólido).
           tone = faceToneFactorFromNormal(-ay, ax, 0)
         }
         facePolys.push({ pts, depth, front, tone })
-        addEdge(hb[i], hb[j], front)
-        addEdge(ht[j], ht[i], front)
-        addEdge(hb[i], ht[i], front)
-        addEdge(hb[j], ht[j], front)
+        if (!skipBottom) addEdge(hb[i], hb[j], front)
+        if (!skipTop) addEdge(ht[j], ht[i], front)
+        if (!holeSkipVert) {
+          addEdge(hb[i], ht[i], front)
+          addEdge(hb[j], ht[j], front)
+        }
       }
     }
   }

@@ -139,7 +139,7 @@ describe('render limpio perforados · caso a', () => {
     })
     // Sin AABB opaco: hay fills; aristas no deben explotar a miles.
     assert.ok(ctx.fills.length >= 1)
-    assert.ok(ctx.strokes.length < 2500, `strokes ${ctx.strokes.length} aún densos`)
+    assert.ok(ctx.strokes.length < 1200, `strokes ${ctx.strokes.length} aún densos`)
 
     const ctxF = mockCtx()
     drawSolid3d(ctxF, solid, {
@@ -245,12 +245,14 @@ describe('fórmulas naturales y desglose · casos d–e', () => {
     const dPoly = describeSolidForMemoria(poly)
     assert.ok(dPoly.formaCalculo.includes('×') || dPoly.forma.includes('irregular') || dPoly.forma.includes('poligonal') || dPoly.forma.includes('Prisma'))
 
+    // Volumen parcial = área × L efectiva (no la longitud total del tubo).
     const nat = naturalFormulaFromOperand({
-      volumeM3: 0.1,
+      volumeM3: Math.PI * 0.15 * 0.15 * 0.2,
       formMeta: { kind: 'cylinder', rxM: 0.15, lengthM: 1.4, diameterM: 0.3, effectiveLengthM: 0.2 },
     })
     assert.match(nat.formula, /π × 0,15² × 0,20/)
     assert.match(nat.dimensiones, /Ø 0,30/)
+    assert.doesNotMatch(nat.formula, /× 1,40/)
   })
 })
 

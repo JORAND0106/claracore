@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ESQUEMA_3D_VIEWS,
+  editorCanvasFill,
   extrudeAxisForView,
   extrudeModeForView,
   isEsquema3dDrawView,
@@ -9,6 +10,8 @@ import {
   normalizeViewId,
   projectWorld3dToCanvas,
   solidsViewCamera,
+  VIEW_PASTEL,
+  viewPastelFor,
 } from './esquema3dViews.js'
 
 describe('esquema3dViews', () => {
@@ -54,5 +57,19 @@ describe('esquema3dViews', () => {
   it('proyección lateral derecha invierte Y', () => {
     const p = projectWorld3dToCanvas({ x: 0, y: 40, zCota: 1 }, 'right', 0)
     assert.equal(p.x, -40)
+  })
+
+  it('pastel por vista plana; iso/órbita conservan fondo', () => {
+    assert.equal(viewPastelFor('bottom').label, 'verde')
+    assert.equal(viewPastelFor('right').label, 'rosa')
+    assert.equal(Object.keys(VIEW_PASTEL).length, 6)
+    assert.equal(
+      editorCanvasFill({ mode3d: true, viewId: 'left', defaultCanvas: '#fff' }),
+      VIEW_PASTEL.left.canvas,
+    )
+    assert.equal(
+      editorCanvasFill({ mode3d: true, viewId: 'iso-sw', defaultCanvas: '#abc' }),
+      '#abc',
+    )
   })
 })
