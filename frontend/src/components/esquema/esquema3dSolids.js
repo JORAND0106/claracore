@@ -1789,7 +1789,9 @@ export const SOLID3D_STYLE = Object.freeze({
   visiblePx: 1.45,
   /** Punteado occulto: un poco más grueso y contraste para que se lea sobre el fill. */
   hiddenPx: 1.35,
-  selectedPx: 2.2,
+  selectedPx: 2.6,
+  /** Halo luminoso externo al contorno de selección (px pantalla). */
+  selectedGlowPx: 7.5,
   dashOnPx: 5.0,
   dashOffPx: 3.2,
   fillAlpha: 0.30,
@@ -1903,8 +1905,13 @@ export function solidFaceFillRgba(color, faceTone, alpha) {
 
 /** Arista visible: tono oscuro del color del sólido. */
 export function solidEdgeStrokeColor(color, selected = false) {
-  if (selected) return '#1d4ed8'
+  if (selected) return '#38bdf8'
   return rgbCss(mixRgb(parseRgb(color), 0.42))
+}
+
+/** Contorno luminoso de selección (cálculo / clic en lista). */
+export function solidSelectedGlowColor() {
+  return 'rgba(56,189,248,0.45)'
 }
 
 /** Arista oculta: tono oscuro-medio del color del sólido (legible sobre fill translúcido). */
@@ -1993,6 +2000,10 @@ export function drawSolid3d(ctx, solid, {
     selected ? SOLID3D_STYLE.selectedPx : SOLID3D_STYLE.visiblePx,
     pScale,
   )
+  const lwGlow = selected
+    ? solidLineWidthWorld(SOLID3D_STYLE.selectedGlowPx, pScale)
+    : 0
+  const glowColor = selected ? solidSelectedGlowColor() : null
   const lwHid = solidLineWidthWorld(SOLID3D_STYLE.hiddenPx, pScale)
   const dash = [
     solidLineWidthWorld(SOLID3D_STYLE.dashOnPx, pScale),
@@ -2025,6 +2036,13 @@ export function drawSolid3d(ctx, solid, {
         ctx.fill('evenodd')
       }
       if (doEdgesVis) {
+        if (glowColor && lwGlow) {
+          pathRing(ctx, ring)
+          ctx.strokeStyle = glowColor
+          ctx.lineWidth = lwGlow
+          ctx.setLineDash([])
+          ctx.stroke()
+        }
         pathRing(ctx, ring)
         ctx.strokeStyle = strokeVis
         ctx.lineWidth = lwVis
@@ -2046,58 +2064,16 @@ export function drawSolid3d(ctx, solid, {
     return
   }
 
-  // Alzados ortográficos (front/back/left/right): rellenar la cara cercana con su
-  // tono fijo y luego dibujar aristas del prisma (profundidad de proyección).
+  // Alzados e iso: caras reales (con recortes/huecos de Sustraer), no AABB opaco.
+  // En alzado ortográfico se pintan solo caras hacia la cámara con el tono del
+  // alzado (front/back/left/right), para que frontal ≠ posterior y los huecos se vean.
   const flatElevId = !useOrbit ? normalizeViewId(viewId) : null
   const flatElev = flatElevId === 'front' || flatElevId === 'back'
     || flatElevId === 'left' || flatElevId === 'side' || flatElevId === 'right'
-  if (flatElev && doFills) {
-    let elevTone = FACE_TONE_FACTOR.front
-    if (flatElevId === 'back') elevTone = FACE_TONE_FACTOR.back
-    else if (flatElevId === 'left' || flatElevId === 'side') elevTone = FACE_TONE_FACTOR.left
-    else if (flatElevId === 'right') elevTone = FACE_TONE_FACTOR.right
-    const bb = solidAabbWorld(solid)
-    if (bb) {
-      const { minX, maxX, minY, maxY, minZ, maxZ } = bb
-      let face3d
-      if (flatElevId === 'front') {
-        face3d = [
-          { x: minX, y: minY, zCota: minZ },
-          { x: maxX, y: minY, zCota: minZ },
-          { x: maxX, y: minY, zCota: maxZ },
-          { x: minX, y: minY, zCota: maxZ },
-        ]
-      } else if (flatElevId === 'back') {
-        face3d = [
-          { x: minX, y: maxY, zCota: minZ },
-          { x: maxX, y: maxY, zCota: minZ },
-          { x: maxX, y: maxY, zCota: maxZ },
-          { x: minX, y: maxY, zCota: maxZ },
-        ]
-      } else if (flatElevId === 'left' || flatElevId === 'side') {
-        face3d = [
-          { x: minX, y: minY, zCota: minZ },
-          { x: minX, y: maxY, zCota: minZ },
-          { x: minX, y: maxY, zCota: maxZ },
-          { x: minX, y: minY, zCota: maxZ },
-        ]
-      } else {
-        face3d = [
-          { x: maxX, y: minY, zCota: minZ },
-          { x: maxX, y: maxY, zCota: minZ },
-          { x: maxX, y: maxY, zCota: maxZ },
-          { x: maxX, y: minY, zCota: maxZ },
-        ]
-      }
-      const face2d = face3d.map((p) => projectPt(p, p.zCota, viewId, cotaRefM, orbit))
-      pathRing(ctx, face2d)
-      ctx.fillStyle = solidFaceFillRgba(base, elevTone, fillAlpha)
-      ctx.fill()
-    }
-    // Continuar para aristas (y fills internos en iso no aplica aquí).
-    // En alzado ortográfico el fill de caras laterales del painter se omite
-    // para no tapar el tono de la cara vista; solo aristas abajo.
-  }
+  let elevTone = FACE_TONE_FACTOR.front
+  if (flatElevId === 'back') elevTone = FACE_TONE_FACTOR.back
+  else if (flatElevId === 'left' || flatElevId === 'side') elevTone = FACE_TONE_FACTOR.left
+  else if (flatElevId === 'right') elevTone = FACE_TONE_FACTOR.right
 
   const facePolys = []
   const faceWithHoles = []
@@ -2239,15 +2215,16 @@ export function drawSolid3d(ctx, solid, {
     }
   }
 
-  // En alzados ortográficos el fill principal ya se pintó con el tono de la cara
-  // vista; el painter multi-cara taparía frontal/posterior con el mismo rectángulo.
-  if (doFills && !flatElev) {
+  if (doFills) {
     const allFaces = [
       ...facePolys.map((f) => ({ ...f, kind: 'solid' })),
       ...faceWithHoles.map((f) => ({ ...f, kind: 'holes' })),
     ].sort((a, b) => a.depth - b.depth)
-    for (const f of allFaces) {
-      ctx.fillStyle = solidFaceFillRgba(base, f.tone ?? 1, fillAlpha)
+    // Alzado: solo caras hacia la cámara (huecos no tapados por AABB).
+    const facesToPaint = flatElev ? allFaces.filter((f) => f.front) : allFaces
+    for (const f of facesToPaint) {
+      const tone = flatElev ? elevTone : (f.tone ?? 1)
+      ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
       if (f.kind === 'holes') {
         pathRingWithHoles(ctx, f.outer, f.holes)
         ctx.fill('evenodd')
@@ -2259,6 +2236,19 @@ export function drawSolid3d(ctx, solid, {
   }
 
   if (doEdgesVis) {
+    if (glowColor && lwGlow) {
+      for (const e of edgeMap.values()) {
+        const hidden = e.frontVotes === 0 && e.backVotes > 0
+        if (hidden) continue
+        ctx.strokeStyle = glowColor
+        ctx.lineWidth = lwGlow
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.moveTo(e.a.x, e.a.y)
+        ctx.lineTo(e.b.x, e.b.y)
+        ctx.stroke()
+      }
+    }
     for (const e of edgeMap.values()) {
       const hidden = e.frontVotes === 0 && e.backVotes > 0
       if (hidden) continue
