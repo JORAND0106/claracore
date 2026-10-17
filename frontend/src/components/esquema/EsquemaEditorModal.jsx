@@ -980,8 +980,18 @@ export default function EsquemaEditorModal({
     const wrap = wrapRef.current
     if (!c || !wrap) return
     const dpr = window.devicePixelRatio || 1
-    const w = Math.max(480, wrap.clientWidth)
-    const h = Math.max(360, wrap.clientHeight)
+    // La ventana completa es cuadrada (modalSide); el lienzo llena el espacio bajo la barra.
+    let innerW = wrap.clientWidth
+    let innerH = wrap.clientHeight
+    try {
+      const cs = window.getComputedStyle(wrap)
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+      innerW = Math.max(0, wrap.clientWidth - padX)
+      innerH = Math.max(0, wrap.clientHeight - padY)
+    } catch { /* use clientWidth/Height */ }
+    const w = Math.max(280, Math.floor(innerW))
+    const h = Math.max(200, Math.floor(innerH || innerW))
     c.width = Math.floor(w * dpr)
     c.height = Math.floor(h * dpr)
     c.style.width = `${w}px`
@@ -5920,6 +5930,7 @@ export default function EsquemaEditorModal({
 
         <div
           style={{
+            // Llena el resto de la ventana cuadrada bajo la barra de herramientas.
             flex: 1,
             minHeight: 0,
             display: 'flex',
@@ -6295,8 +6306,30 @@ export default function EsquemaEditorModal({
             )
           ) : null}
 
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
+          <div style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+          }}
+          >
+            <div
+              ref={wrapRef}
+              data-testid="esquema-drawing-wrap"
+              style={{
+                // Llena el resto de la ventana cuadrada bajo la barra de herramientas.
+                width: '100%',
+                flex: 1,
+                minHeight: 0,
+                alignSelf: 'stretch',
+                background: ui.wrap,
+                padding: 10,
+                position: 'relative',
+                boxSizing: 'border-box',
+              }}
+            >
           {mapActive ? (
             <div
               ref={mapHostRef}

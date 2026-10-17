@@ -17,6 +17,19 @@ export const PX_PER_METER = 50
 export const MIN_ZOOM = 0.02
 export const MAX_ZOOM = 40
 
+/**
+ * Tamaño del área de dibujo del esquema: cuadrada.
+ * Conserva el ancho disponible y fija alto = ancho (no deforma el contenido world).
+ * @param {number} clientWidth ancho CSS del contenedor del lienzo
+ * @param {number} [minSide=480] piso de seguridad (misma convención previa)
+ * @returns {{ w: number, h: number }}
+ */
+export function squareDrawingAreaSize(clientWidth, minSide = 480) {
+  const min = Math.max(1, Number(minSide) || 480)
+  const w = Math.max(min, Math.floor(Number(clientWidth) || 0))
+  return { w, h: w }
+}
+
 export function clampZoom(z) {
   const n = Number(z)
   if (!Number.isFinite(n)) return 1
