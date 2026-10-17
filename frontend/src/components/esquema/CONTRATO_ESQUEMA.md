@@ -20,6 +20,8 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-2D-06 | Acotado con área integrada y exacta, también en figuras rotadas. |
 | C-2D-07 | Mapa de fondo: capas y opacidad, polígonos PK, PK de contexto en ámbar, escala real = mapa, zoom nunca bloqueado, GPS. |
 | C-2D-08 | Ventana: altura actual y ancho del panel lateral izquierdo; panel por secciones sin superposición; etiquetas al pasar el mouse. |
+| C-2D-09 | Comandos de la barra: un clic activa, segundo clic sobre el mismo desactiva y vuelve a selección; el botón refleja el estado activo. |
+| C-2D-10 | Paneo/zoom/gestos sobre el área de dibujo no desplazan la página de atrás; el dibujo se mueve en el mismo sentido del arrastre (2D, vistas 3D, con cualquier comando). Panel lateral de contexto ampliable por su borde derecho (mín. ancho de contrato) sin solapar el dibujo. |
 
 ## 3D
 
@@ -42,9 +44,9 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 
 | ID | Comportamiento |
 |----|----------------|
-| C-CALC-01 | Varios cálculos por esquema; elementos con nombre, Suma/Descuenta y «Descuenta de». |
+| C-CALC-01 | Varios cálculos por esquema; elementos con nombre obligatorio (sin «Sólido N» automático), Suma/Descuenta y «Descuenta de». Mientras el último elemento no tenga nombre no se agrega otro; no se guarda el cálculo con nombres vacíos. |
 | C-CALC-02 | Solo se descuenta el volumen común con el sólido indicado. |
-| C-CALC-03 | Lista con todos los elementos visibles y desplazamiento. |
+| C-CALC-03 | Lista con todos los elementos visibles y desplazamiento. Columna Op = dos íconos apilados (+ Suma / − Descuenta) con el seleccionado resaltado; «Descuenta de» se conserva. |
 | C-CALC-04 | Cálculo dinámico con el esquema abierto; fijo al cerrarlo. |
 
 ## Salidas
@@ -75,8 +77,11 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 8. Cubo de un color: vista frontal y posterior con tonos distintos; en NE se distinguen las tres caras visibles.
 9. OSNAP en las 6 vistas y NE sobre cubo y cilindro (vértices, medios, centros de cara), con zoom alejado y cercano: engancha siempre.
 10. Cubo 1,50³ − interior 1,10×1,10×1,30; al resultado restar dos cilindros que atraviesen paredes: ambos pases quedan y el volumen es exacto (Sustraer en cadena / múltiple).
+11. Activar y desactivar con dos clics cada comando de la barra → modo selección.
+12. Paneo en el área de dibujo (dedo/mouse) en 2D, superior y NE: solo se mueve el dibujo, en el sentido del arrastre.
+13. Íconos +/− de Op cambian suma/descuenta y el total se actualiza; panel lateral ampliable; nombre obligatorio al agregar/guardar.
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js` y `esquema3dTonosOsnapSustraer.scenario.test.js` bloquean el despliegue si se rompe 5–10.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js` y `esquemaComandosPaneoNombres.scenario.test.js` bloquean el despliegue si se rompe 5–13.
 
 ## Mantenimiento
 
