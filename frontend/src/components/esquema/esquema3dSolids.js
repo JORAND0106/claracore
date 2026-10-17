@@ -15,6 +15,8 @@ import {
   worldToMeters,
 } from './esquemaGeometry.js'
 import {
+  canvasDeltaToWorldMove,
+  depthAxisValueFromWorld,
   extrudeModeForView,
   normalizeViewId,
   projectWorld3dToCanvas,
@@ -561,20 +563,40 @@ export function solidForSourceEntity(solids, entityId) {
 
 /** Traslada un sólido en planta (XY). No altera cotas (z0/z1) ni el volumen bloqueado. */
 export function translateSolidXy(solid, dx, dy) {
+  return translateSolid3d(solid, { dx, dy, dzCota: 0 })
+}
+
+/**
+ * Traslada un sólido en world 3D (XY + cotas). Conserva volumen bloqueado y dimensiones.
+ * `dzCota` se suma a z0/z1 de cada celda.
+ */
+export function translateSolid3d(solid, { dx = 0, dy = 0, dzCota = 0 } = {}) {
   if (!solid || solid.type !== 'solid3d') return solid
   const ddx = Number(dx) || 0
   const ddy = Number(dy) || 0
-  if (!ddx && !ddy) return solid
+  const ddz = Number(dzCota) || 0
+  if (!ddx && !ddy && !ddz) return solid
   return {
     ...solid,
     volumeM3: solid.volumeM3,
     volumeLocked: !!solid.volumeLocked,
     cells: (solid.cells || []).map((cell) => ({
       ...cell,
+      z0: (Number(cell.z0) || 0) + ddz,
+      z1: (Number(cell.z1) || 0) + ddz,
       ring: (cell.ring || []).map((p) => ({ x: p.x + ddx, y: p.y + ddy })),
       holes: (cell.holes || []).map((hole) => hole.map((p) => ({ x: p.x + ddx, y: p.y + ddy }))),
     })),
   }
+}
+
+/**
+ * Traslada un sólido según un arrastre en el plano de la vista actual.
+ * En caras frontales/laterales mueve along + cota; en superior/iso, en planta.
+ */
+export function translateSolidInView(solid, dxCanvas, dyCanvas, viewId) {
+  const delta = canvasDeltaToWorldMove(dxCanvas, dyCanvas, viewId)
+  return translateSolid3d(solid, delta)
 }
 
 /**
@@ -670,9 +692,24 @@ export function solidThicknessAlongViewM(solid, viewId) {
 }
 
 /**
+ * Empaqueta un punto world 3D como OSNAP de lienzo (con profundidad de cara).
+ */
+function osnapFromWorld(pt3d, viewId, cotaRefM, kind, solidId = null) {
+  const canvas = projectWorld3dToCanvas(pt3d, viewId, cotaRefM, null)
+  return {
+    x: canvas.x,
+    y: canvas.y,
+    kind,
+    solidId,
+    world: { x: pt3d.x, y: pt3d.y, zCota: pt3d.zCota },
+    faceDepthWorld: depthAxisValueFromWorld(pt3d, viewId),
+  }
+}
+
+/**
  * Puntos de referencia de la cara visible (esquinas, medios de arista, centro)
- * en coordenadas de lienzo de la vista.
- * @returns {Array<{ x: number, y: number, kind: string }>}
+ * en coordenadas de lienzo de la vista. Incluye `world` y `faceDepthWorld`.
+ * @returns {Array<{ x: number, y: number, kind: string, world?: object, faceDepthWorld?: number }>}
  */
 export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
   const id = normalizeViewId(viewId)
@@ -736,17 +773,228 @@ export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
       break
   }
 
-  const toCanvas = (p) => projectWorld3dToCanvas(p, id, cotaRefM, null)
-  const corners = corners3d.map((p) => ({ ...toCanvas(p), kind: 'corner' }))
+  const corners = corners3d.map((p) => osnapFromWorld(p, id, cotaRefM, 'corner', solid.id))
   const mids = []
-  for (let i = 0; i < corners.length; i += 1) {
-    const a = corners[i]
-    const b = corners[(i + 1) % corners.length]
-    mids.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, kind: 'mid' })
+  for (let i = 0; i < corners3d.length; i += 1) {
+    const a = corners3d[i]
+    const b = corners3d[(i + 1) % corners3d.length]
+    const mid = {
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+      zCota: (a.zCota + b.zCota) / 2,
+    }
+    mids.push(osnapFromWorld(mid, id, cotaRefM, 'mid', solid.id))
   }
-  const cx = corners.reduce((s, p) => s + p.x, 0) / corners.length
-  const cy = corners.reduce((s, p) => s + p.y, 0) / corners.length
-  return [...corners, ...mids, { x: cx, y: cy, kind: 'center' }]
+  const center3d = {
+    x: corners3d.reduce((s, p) => s + p.x, 0) / corners3d.length,
+    y: corners3d.reduce((s, p) => s + p.y, 0) / corners3d.length,
+    zCota: corners3d.reduce((s, p) => s + p.zCota, 0) / corners3d.length,
+  }
+  return [...corners, ...mids, osnapFromWorld(center3d, id, cotaRefM, 'center', solid.id)]
+}
+
+/**
+ * OSNAP 3D completo: cara visible + vértices reales del sólido + centros de círculo/elipse.
+ * Usado al dibujar y al mover.
+ */
+export function solidOsnapPoints(solid, viewId, cotaRefM = 0) {
+  const id = normalizeViewId(viewId)
+  if (!solid?.cells?.length) return []
+  const out = [...solidFaceSnapPoints(solid, id, cotaRefM)]
+  const seen = new Set(out.map((s) => `${s.kind}:${s.x.toFixed(2)},${s.y.toFixed(2)}`))
+  const push = (pt3d, kind) => {
+    const sp = osnapFromWorld(pt3d, id, cotaRefM, kind, solid.id)
+    const key = `${kind}:${sp.x.toFixed(2)},${sp.y.toFixed(2)}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(sp)
+  }
+
+  for (const cell of solid.cells) {
+    const z0 = Math.min(Number(cell.z0) || 0, Number(cell.z1) || 0)
+    const z1 = Math.max(Number(cell.z0) || 0, Number(cell.z1) || 0)
+    const rings = [cell.ring || [], ...(cell.holes || [])]
+    for (const ring of rings) {
+      const n = ring.length
+      for (let i = 0; i < n; i += 1) {
+        const a = ring[i]
+        const b = ring[(i + 1) % n]
+        if (!a) continue
+        push({ x: a.x, y: a.y, zCota: z0 }, 'end')
+        push({ x: a.x, y: a.y, zCota: z1 }, 'end')
+        if (b) {
+          push({
+            x: (a.x + b.x) / 2,
+            y: (a.y + b.y) / 2,
+            zCota: z0,
+          }, 'mid')
+          push({
+            x: (a.x + b.x) / 2,
+            y: (a.y + b.y) / 2,
+            zCota: z1,
+          }, 'mid')
+          // Vertical mid (arista entre cotas)
+          push({ x: a.x, y: a.y, zCota: (z0 + z1) / 2 }, 'mid')
+        }
+      }
+    }
+    // Centro de círculo / elipse analítica (huella en planta).
+    if (cell.analytic?.type === 'ellipse' || cell.analytic?.type === 'rect') {
+      let sx = 0
+      let sy = 0
+      const ring = cell.ring || []
+      if (ring.length) {
+        for (const p of ring) {
+          sx += p.x
+          sy += p.y
+        }
+        const cx = sx / ring.length
+        const cy = sy / ring.length
+        push({ x: cx, y: cy, zCota: (z0 + z1) / 2 }, 'center')
+        if (cell.analytic?.type === 'ellipse') {
+          push({ x: cx, y: cy, zCota: z0 }, 'center')
+          push({ x: cx, y: cy, zCota: z1 }, 'center')
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** Todos los OSNAP 3D de una lista de sólidos (opcionalmente excluye uno). */
+export function collectSolidsOsnap(solids, viewId, cotaRefM = 0, excludeSolidId = null) {
+  const list = []
+  for (const s of solids || []) {
+    if (!s || s.id === excludeSolidId) continue
+    list.push(...solidOsnapPoints(s, viewId, cotaRefM))
+  }
+  return list
+}
+
+/**
+ * Profundidad de cara para extruir un contorno:
+ * 1) sólido bajo el centro del contorno
+ * 2) `entity.viewDepthWorld` si se dibujó con OSNAP/apoyo
+ * 3) OSNAP 3D más cercano a los puntos del contorno
+ * 4) 0 (plano de referencia de la vista)
+ */
+export function inferFaceDepthForExtrude(entity, solids, viewId, cotaRefM = 0) {
+  const id = normalizeViewId(viewId)
+  if (entity && Number.isFinite(Number(entity.viewDepthWorld))) {
+    // Preferir hit de cara si el centro cae sobre un sólido (más fiable).
+  }
+  const pts = []
+  if (Number.isFinite(entity?.x1) && Number.isFinite(entity?.y1)) {
+    pts.push({ x: entity.x1, y: entity.y1 })
+    if (Number.isFinite(entity.x2) && Number.isFinite(entity.y2)) {
+      pts.push({ x: entity.x2, y: entity.y2 })
+      pts.push({ x: (entity.x1 + entity.x2) / 2, y: (entity.y1 + entity.y2) / 2 })
+    }
+  }
+  for (const p of entity?.points || []) {
+    if (Number.isFinite(p?.x) && Number.isFinite(p?.y)) pts.push({ x: p.x, y: p.y })
+  }
+  const center = pts.length
+    ? {
+      x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+      y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+    }
+    : null
+  if (center) {
+    const support = hitSolidFaceAtView(solids, center, id, cotaRefM)
+    if (support) {
+      return {
+        faceDepthWorld: solidFaceDepthWorld(support, id),
+        support,
+        source: 'face',
+      }
+    }
+  }
+  if (Number.isFinite(Number(entity?.viewDepthWorld))) {
+    return {
+      faceDepthWorld: Number(entity.viewDepthWorld),
+      support: null,
+      source: 'entity',
+    }
+  }
+  const thr = metersToWorld(0.35)
+  let best = null
+  let bestDist = thr
+  const osnaps = collectSolidsOsnap(solids, id, cotaRefM)
+  for (const pt of pts) {
+    for (const sp of osnaps) {
+      const d = Math.hypot(pt.x - sp.x, pt.y - sp.y)
+      if (d < bestDist) {
+        bestDist = d
+        best = sp
+      }
+    }
+  }
+  if (best && Number.isFinite(best.faceDepthWorld)) {
+    return {
+      faceDepthWorld: best.faceDepthWorld,
+      support: (solids || []).find((s) => s.id === best.solidId) || null,
+      source: 'osnap',
+    }
+  }
+  return { faceDepthWorld: 0, support: null, source: 'plane' }
+}
+
+/**
+ * Al mover un sólido: engancha un vértice/OSNAP propio al OSNAP de otros.
+ * `grabCanvas` = punto de agarre en lienzo (origen del drag).
+ * Devuelve dx/dy de lienzo ya corregidos (listos para translateSolidInView).
+ */
+export function snapSolidMoveDelta({
+  originSolid,
+  solids,
+  viewId,
+  grabCanvas,
+  cursorCanvas,
+  threshold = 14,
+  cotaRefM = 0,
+} = {}) {
+  const id = normalizeViewId(viewId)
+  if (!originSolid || !grabCanvas || !cursorCanvas) {
+    return {
+      dx: (cursorCanvas?.x || 0) - (grabCanvas?.x || 0),
+      dy: (cursorCanvas?.y || 0) - (grabCanvas?.y || 0),
+      snap: null,
+    }
+  }
+  const rawDx = cursorCanvas.x - grabCanvas.x
+  const rawDy = cursorCanvas.y - grabCanvas.y
+  const movedPreview = translateSolidInView(originSolid, rawDx, rawDy, id)
+  const selfSnaps = solidOsnapPoints(movedPreview, id, cotaRefM)
+  const others = collectSolidsOsnap(solids, id, cotaRefM, originSolid.id)
+  let best = null
+  let bestDist = threshold
+  for (const a of selfSnaps) {
+    for (const b of others) {
+      const d = Math.hypot(a.x - b.x, a.y - b.y)
+      if (d < bestDist) {
+        bestDist = d
+        best = { self: a, target: b, dist: d }
+      }
+    }
+  }
+  if (!best) {
+    return { dx: rawDx, dy: rawDy, snap: null }
+  }
+  // Ajuste: desplazar el preview para que self coincida con target.
+  const adjDx = rawDx + (best.target.x - best.self.x)
+  const adjDy = rawDy + (best.target.y - best.self.y)
+  return {
+    dx: adjDx,
+    dy: adjDy,
+    snap: {
+      x: best.target.x,
+      y: best.target.y,
+      kind: best.target.kind || 'end',
+      faceDepthWorld: best.target.faceDepthWorld,
+      solidId: best.target.solidId,
+    },
+  }
 }
 
 /**

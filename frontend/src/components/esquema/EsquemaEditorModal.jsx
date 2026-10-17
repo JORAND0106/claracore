@@ -79,30 +79,33 @@ import {
   extrudeClosedEntity,
   formatVolumeM3,
   hitSolidAtView,
-  hitSolidFaceAtView,
+  inferFaceDepthForExtrude,
   isClosedDrawableEntity,
   linkedSourceEntityIds,
   pickSubtractBase,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
-  solidFaceDepthWorld,
-  solidFaceSnapPoints,
+  solidOsnapPoints,
   solidForSourceEntity,
   solidThicknessAlongViewM,
   solidVolumeM3,
   solidXyBounds,
+  snapSolidMoveDelta,
   sourceEntityIdsOfSolids,
   subtractSolids,
   syncSolidsWithEntities,
-  translateSolidXy,
+  translateSolidInView,
   uniteSolids,
 } from './esquema3dSolids'
 import {
+  applyWorldDeltaToEntity,
+  canvasDeltaToWorldMove,
   extrudeModeForView,
   isEsquema3dDrawView,
   isEsquema3dIsoView,
   normalizeViewId,
   orbitAnglesForView,
+  projectEntityToView,
   solidsViewCamera,
 } from './esquema3dViews'
 import { adoptNativeTitlesInTree } from '../ccTooltipTheme.js'
@@ -928,11 +931,22 @@ export default function EsquemaEditorModal({
     const topEdit3d = mode3dRef.current
       && !orbitFreeRef.current
       && (view3dRef.current || 'top') === 'top'
+    const viewIdDraw = view3dRef.current || 'top'
+    const orbitDraw = mode3dRef.current
+      ? solidsViewCamera(viewIdDraw, solids3dRef.current || [], {
+        orbitFree: !!orbitFreeRef.current,
+        orbitAngles: orbitAnglesRef.current,
+      })
+      : null
     for (const obj of list) {
       if (linked2d && linked2d.has(obj.id)) {
         if (!(topEdit3d && selSet.has(obj.id))) continue
       }
-      drawObject(ctx, obj, selSet.has(obj.id), {
+      // Contornos de perfil: proyectar al espacio 3D de la vista actual (iso/otras caras).
+      const drawObj = (mode3dRef.current && obj.viewPlane)
+        ? projectEntityToView(obj, viewIdDraw, { orbit: orbitDraw })
+        : obj
+      drawObject(ctx, drawObj, selSet.has(obj.id), {
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
@@ -1732,28 +1746,15 @@ export default function EsquemaEditorModal({
     let faceDepthWorld = 0
     let defaultLengthM = null
     if (mode === 'length') {
-      // Apoyar en la cara del sólido bajo el centro del contorno (si hay).
-      const bb = (() => {
-        const xs = [sel.x1, sel.x2].filter((n) => Number.isFinite(n))
-        const ys = [sel.y1, sel.y2].filter((n) => Number.isFinite(n))
-        if (xs.length >= 2 && ys.length >= 2) {
-          return { x: (xs[0] + xs[1]) / 2, y: (ys[0] + ys[1]) / 2 }
-        }
-        const pts = sel.points || []
-        if (pts.length) {
-          return {
-            x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
-            y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
-          }
-        }
-        return null
-      })()
-      const support = bb
-        ? hitSolidFaceAtView(solids3dRef.current || [], bb, viewId)
-        : null
-      if (support) {
-        faceDepthWorld = solidFaceDepthWorld(support, viewId)
-        const th = solidThicknessAlongViewM(support, viewId)
+      // Cara bajo el contorno → OSNAP 3D → profundidad guardada al dibujar → plano 0.
+      const inferred = inferFaceDepthForExtrude(
+        sel,
+        solids3dRef.current || [],
+        viewId,
+      )
+      faceDepthWorld = inferred.faceDepthWorld || 0
+      if (inferred.support) {
+        const th = solidThicknessAlongViewM(inferred.support, viewId)
         if (th > 1e-6) defaultLengthM = Number(th.toFixed(2))
       }
     }
@@ -2595,19 +2596,40 @@ export default function EsquemaEditorModal({
     return list
   }
 
+  /** Marca profundidad de vista 3D en una entidad recién dibujada (OSNAP / cara). */
+  const withViewDepth3d = (shape) => {
+    if (!shape || !mode3dRef.current || !isEsquema3dDrawView(view3dRef.current)) return shape
+    const viewId = normalizeViewId(view3dRef.current)
+    const mode = extrudeModeForView(viewId)
+    if (mode !== 'length') {
+      return { ...shape, viewPlane: viewId }
+    }
+    let depth = null
+    const snap = snapRef.current
+    if (snap && Number.isFinite(Number(snap.faceDepthWorld))) {
+      depth = Number(snap.faceDepthWorld)
+    } else {
+      const inferred = inferFaceDepthForExtrude(shape, solids3dRef.current || [], viewId)
+      if (inferred.source !== 'plane') depth = inferred.faceDepthWorld
+    }
+    const next = { ...shape, viewPlane: viewId }
+    if (depth != null && Number.isFinite(depth)) next.viewDepthWorld = depth
+    return next
+  }
+
   const snapWorldPoint = (p, { fromPoint = null, excludeId = null, allowPerp = true } = {}) => {
-    // En vistas de cara 3D: puntos de referencia de la cara del sólido bajo el cursor.
+    // En vistas de cara 3D: OSNAP de sólidos (vértices, medios, centros, cara).
     if (mode3dRef.current && isEsquema3dDrawView(view3dRef.current)) {
       const viewId = normalizeViewId(view3dRef.current)
       const thr = snapThreshold()
       let bestFace = null
       let bestDist = thr
       for (const solid of solids3dRef.current || []) {
-        for (const sp of solidFaceSnapPoints(solid, viewId)) {
+        for (const sp of solidOsnapPoints(solid, viewId)) {
           const d = Math.hypot(p.x - sp.x, p.y - sp.y)
           if (d < bestDist) {
             bestDist = d
-            bestFace = { x: sp.x, y: sp.y, kind: sp.kind || 'face' }
+            bestFace = sp
           }
         }
       }
@@ -3529,40 +3551,27 @@ export default function EsquemaEditorModal({
         selectSolidAndSource(hitOrbit, { additive })
         setToolHint(`Sólido · ${Number(solidVolumeM3(hitOrbit) || 0).toFixed(2)} m³`)
         if (!additive) {
-          if (!hitOrbit.sourceEntityId) {
-            dragRef.current = {
-              mode: 'move-solid',
-              solidId: hitOrbit.id,
-              pending: true,
-              ox: p.x,
-              oy: p.y,
-              clickX: p.x,
-              clickY: p.y,
-              originSolid: cloneScene([hitOrbit])[0],
-            }
-          } else {
-            const src = objectsRef.current.find((o) => o.id === hitOrbit.sourceEntityId)
-            if (src && !(src.type === 'image' && src.fit)) {
-              dragRef.current = {
-                id: src.id,
-                mode: 'move',
-                pending: true,
-                ox: p.x,
-                oy: p.y,
-                clickX: p.x,
-                clickY: p.y,
-                groupOrigins: cloneScene([src]),
-              }
-            }
+          // Iso / órbita: siempre mover el sólido en planta (+ sync entidad ligada).
+          const src = hitOrbit.sourceEntityId
+            ? objectsRef.current.find((o) => o.id === hitOrbit.sourceEntityId)
+            : null
+          dragRef.current = {
+            mode: 'move-solid',
+            solidId: hitOrbit.id,
+            pending: true,
+            ox: p.x,
+            oy: p.y,
+            clickX: p.x,
+            clickY: p.y,
+            originSolid: cloneScene([hitOrbit])[0],
+            originEntity: src ? cloneScene([src])[0] : null,
           }
-          if (dragRef.current) {
-            drawing.current = true
-            startPt.current = p
-            lastPt.current = p
-            moveGuideRef.current = null
-            redraw()
-            return
-          }
+          drawing.current = true
+          startPt.current = p
+          lastPt.current = p
+          moveGuideRef.current = null
+          redraw()
+          return
         }
       }
       const screenOrbit = screenPosFromEvent(e)
@@ -3603,43 +3612,26 @@ export default function EsquemaEditorModal({
             && !additive
             && selectModeRef.current === 'mover'
           ) {
-            if (!hitS.sourceEntityId) {
-              dragRef.current = {
-                mode: 'move-solid',
-                solidId: hitS.id,
-                pending: true,
-                ox: p.x,
-                oy: p.y,
-                clickX: p.x,
-                clickY: p.y,
-                originSolid: cloneScene([hitS])[0],
-              }
-              drawing.current = true
-              startPt.current = p
-              lastPt.current = p
-              moveGuideRef.current = null
-              redraw()
-              return
+            const src = hitS.sourceEntityId
+              ? objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
+              : null
+            dragRef.current = {
+              mode: 'move-solid',
+              solidId: hitS.id,
+              pending: true,
+              ox: p.x,
+              oy: p.y,
+              clickX: p.x,
+              clickY: p.y,
+              originSolid: cloneScene([hitS])[0],
+              originEntity: src ? cloneScene([src])[0] : null,
             }
-            const src = objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
-            if (src && !(src.type === 'image' && src.fit)) {
-              dragRef.current = {
-                id: src.id,
-                mode: 'move',
-                pending: true,
-                ox: p.x,
-                oy: p.y,
-                clickX: p.x,
-                clickY: p.y,
-                groupOrigins: cloneScene([src]),
-              }
-              drawing.current = true
-              startPt.current = p
-              lastPt.current = p
-              moveGuideRef.current = null
-              redraw()
-              return
-            }
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            redraw()
+            return
           }
         } else if (currentTool === 'seleccion') {
           selectSolidAndSource(null)
@@ -3682,48 +3674,37 @@ export default function EsquemaEditorModal({
           return
         }
         setToolHint(`Sólido · ${Number(solidVolumeM3(hitS) || 0).toFixed(2)} m³`)
-        // Mover en cualquier vista de dibujo (superior/frontal/lateral): un gesto basta.
+        // Mover en cualquier vista de dibujo: sólido en plano de vista + OSNAP 3D.
         if (!additive && selectModeRef.current === 'mover') {
-          if (!hitS.sourceEntityId) {
-            dragRef.current = {
-              mode: 'move-solid',
-              solidId: hitS.id,
-              pending: true,
-              ox: p.x,
-              oy: p.y,
-              clickX: p.x,
-              clickY: p.y,
-              originSolid: cloneScene([hitS])[0],
+          const src = hitS.sourceEntityId
+            ? objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
+            : null
+          // Preferir agarre en OSNAP del sólido (vértice/centro) para enganchar al soltar.
+          let grab = p
+          for (const sp of solidOsnapPoints(hitS, normalizeViewId(view3dRef.current || 'top'))) {
+            if (Math.hypot(p.x - sp.x, p.y - sp.y) <= snapThreshold()) {
+              grab = { x: sp.x, y: sp.y }
+              snapRef.current = sp
+              break
             }
-            drawing.current = true
-            startPt.current = p
-            lastPt.current = p
-            moveGuideRef.current = null
-            redraw()
-            return
           }
-          const src = objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
-          if (src && !(src.type === 'image' && src.fit)) {
-            const grabHit = findSnap(p, [src], { threshold: snapThreshold(), allowNear: false })
-            const grab = grabHit ? { x: grabHit.x, y: grabHit.y } : p
-            if (grabHit) snapRef.current = grabHit
-            dragRef.current = {
-              id: src.id,
-              mode: 'move',
-              pending: true,
-              ox: grab.x,
-              oy: grab.y,
-              clickX: p.x,
-              clickY: p.y,
-              groupOrigins: cloneScene([src]),
-            }
-            drawing.current = true
-            startPt.current = grab
-            lastPt.current = grab
-            moveGuideRef.current = null
-            redraw()
-            return
+          dragRef.current = {
+            mode: 'move-solid',
+            solidId: hitS.id,
+            pending: true,
+            ox: grab.x,
+            oy: grab.y,
+            clickX: p.x,
+            clickY: p.y,
+            originSolid: cloneScene([hitS])[0],
+            originEntity: src ? cloneScene([src])[0] : null,
           }
+          drawing.current = true
+          startPt.current = grab
+          lastPt.current = grab
+          moveGuideRef.current = null
+          redraw()
+          return
         }
         drawing.current = false
         redraw()
@@ -4525,13 +4506,43 @@ export default function EsquemaEditorModal({
         d.pending = false
         pushHistory()
       }
-      // Mover sólido libre (sin contorno 2D): traslación XY sin cambiar cotas ni volumen.
+      // Mover sólido libre: plano de la vista (cara = along+cota; iso/sup = planta) + OSNAP 3D.
       if (d.mode === 'move-solid' && d.originSolid && d.solidId) {
-        const dx = raw.x - d.ox
-        const dy = raw.y - d.oy
-        moveGuideRef.current = { a: { x: d.ox, y: d.oy }, b: raw }
+        const viewId = normalizeViewId(view3dRef.current || 'top')
+        const snapped = snapSolidMoveDelta({
+          originSolid: d.originSolid,
+          solids: solids3dRef.current || [],
+          viewId,
+          grabCanvas: { x: d.ox, y: d.oy },
+          cursorCanvas: raw,
+          threshold: snapThreshold(),
+        })
+        const dx = snapped.dx
+        const dy = snapped.dy
+        snapRef.current = snapped.snap
+        moveGuideRef.current = {
+          a: { x: d.ox, y: d.oy },
+          b: { x: d.ox + dx, y: d.oy + dy },
+        }
         setLiveMeasure(formatMeters(Math.hypot(dx, dy)))
-        const moved = translateSolidXy(d.originSolid, dx, dy)
+        let moved = translateSolidInView(d.originSolid, dx, dy, viewId)
+        // Contorno ligado: mismo desplazamiento world en su viewPlane nativo.
+        if (d.originEntity?.id) {
+          const worldDelta = canvasDeltaToWorldMove(dx, dy, viewId)
+          const entMoved = applyWorldDeltaToEntity(d.originEntity, worldDelta)
+          if (moved.extrudeParams && Number.isFinite(Number(entMoved.viewDepthWorld))) {
+            moved = {
+              ...moved,
+              extrudeParams: {
+                ...moved.extrudeParams,
+                faceDepthWorld: entMoved.viewDepthWorld,
+              },
+            }
+          }
+          objectsRef.current = objectsRef.current.map((o) => (
+            o.id === d.originEntity.id ? entMoved : o
+          ))
+        }
         const next = (solids3dRef.current || []).map((s) => (s.id === d.solidId ? moved : s))
         solids3dRef.current = next
         setSolids3d(next)
@@ -4842,10 +4853,11 @@ export default function EsquemaEditorModal({
         shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
       }
       pushHistory()
-      objectsRef.current = [...objectsRef.current, shape]
-      selectOne(shape.id)
-      if (SHAPE_TOOLS.has(shape.type)) syncMeasureFromObject(shape)
-      setLiveMeasure(shape.label)
+      const placed = withViewDepth3d(shape)
+      objectsRef.current = [...objectsRef.current, placed]
+      selectOne(placed.id)
+      if (SHAPE_TOOLS.has(placed.type)) syncMeasureFromObject(placed)
+      setLiveMeasure(placed.label)
       setDirty(true)
       draftRef.current = null
       snapRef.current = null
@@ -5356,10 +5368,11 @@ export default function EsquemaEditorModal({
         shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
       }
       pushHistory()
-      objectsRef.current = [...objectsRef.current, shape]
-      selectOne(shape.id)
-      if (SHAPE_TOOLS.has(shape.type)) syncMeasureFromObject(shape)
-      setLiveMeasure(shape.label)
+      const placedDyn = withViewDepth3d(shape)
+      objectsRef.current = [...objectsRef.current, placedDyn]
+      selectOne(placedDyn.id)
+      if (SHAPE_TOOLS.has(placedDyn.type)) syncMeasureFromObject(placedDyn)
+      setLiveMeasure(placedDyn.label)
       setDirty(true)
       draftRef.current = null
       drawing.current = false
