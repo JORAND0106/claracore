@@ -1,5 +1,5 @@
 /**
- * Panel de cálculo de volúmenes (estilo hoja / Excel, paleta institucional).
+ * Panel de cálculo de volúmenes (tabla tipo Excel, paleta institucional).
  */
 import React, { useMemo, useState } from 'react'
 import {
@@ -29,6 +29,8 @@ export function Esquema3dCalcPanel({
   solids,
   selectedSolidIds,
   onHint,
+  onHighlightSolid,
+  highlightedSolidId = null,
   embedded = false,
 }) {
   const [newName, setNewName] = useState('Excavación')
@@ -101,10 +103,11 @@ export function Esquema3dCalcPanel({
       }
       onAddLine?.(active?.id, createCalcLine({
         solidId: id,
-        nombre: solid?.nombre ? String(solid.nombre).trim() : '',
+        nombre: '',
         op: 'sum',
       }))
       added += 1
+      onHighlightSolid?.(id)
     }
     if (!added) {
       onHint?.(skipped
@@ -114,6 +117,11 @@ export function Esquema3dCalcPanel({
     }
     if (skipped) onHint?.(`${added} agregado(s). ${skipped} no válido(s) omitido(s). Nombre el sólido.`)
     else onHint?.('Elemento agregado. Escriba su nombre en la lista.')
+  }
+
+  const selectLineSolid = (solidId) => {
+    if (!solidId) return
+    onHighlightSolid?.(solidId)
   }
 
   const shellStyle = embedded
@@ -145,6 +153,10 @@ export function Esquema3dCalcPanel({
       flexDirection: 'column',
       overflow: 'hidden',
     }
+
+  const headerBg = t.primary || '#0f766e'
+  const altRow = t.bgHover || '#f1f5f9'
+  const borderCell = t.border || '#cbd5e1'
 
   return (
     <div
@@ -249,53 +261,94 @@ export function Esquema3dCalcPanel({
               flex: 1,
               minHeight: 0,
               overflowY: 'auto',
-              overflowX: 'hidden',
-              padding: 8,
+              overflowX: 'auto',
+              padding: 0,
               WebkitOverflowScrolling: 'touch',
               scrollbarGutter: 'stable',
             }}
           >
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: t.bgHover || '#f1f5f9', textAlign: 'left' }}>
-                  <th style={th(t)}>Nombre</th>
-                  <th style={{ ...th(t), width: 44, textAlign: 'center' }} title="Operación">Op</th>
-                  <th style={th(t)}>Descuenta de</th>
-                  <th style={{ ...th(t), textAlign: 'right' }}>Volumen</th>
-                  <th style={th(t)} />
+            <table
+              data-testid="esquema-calc-excel-table"
+              style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: 12,
+                tableLayout: 'fixed',
+              }}
+            >
+              <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
+                <tr style={{ background: headerBg, color: '#fff', textAlign: 'left' }}>
+                  <th style={{ ...thExcel(borderCell), width: 28, textAlign: 'center', color: '#fff', background: headerBg }}>#</th>
+                  <th style={{ ...thExcel(borderCell), width: 36, textAlign: 'center', color: '#fff', background: headerBg }}>Color</th>
+                  <th style={{ ...thExcel(borderCell), color: '#fff', background: headerBg }}>Nombre</th>
+                  <th style={{ ...thExcel(borderCell), width: 40, textAlign: 'center', color: '#fff', background: headerBg }} title="Operación">Op</th>
+                  <th style={{ ...thExcel(borderCell), width: '22%', color: '#fff', background: headerBg }}>Descuenta de</th>
+                  <th style={{ ...thExcel(borderCell), width: 72, textAlign: 'right', color: '#fff', background: headerBg }}>Volumen (m³)</th>
+                  <th style={{ ...thExcel(borderCell), width: 28, color: '#fff', background: headerBg }} />
                 </tr>
               </thead>
               <tbody>
-                {(active.lines || []).map((line) => {
+                {(active.lines || []).map((line, idx) => {
                   const r = resolveCalcLine(line, solids, active)
+                  const solid = (solids || []).find((s) => s.id === line.solidId)
                   const fromOptions = lineOptions.filter((o) => o.solidId !== line.solidId)
+                  const isHi = highlightedSolidId && line.solidId === highlightedSolidId
+                  const rowBg = isHi
+                    ? `color-mix(in srgb, ${t.primary || '#0f766e'} 18%, #fff)`
+                    : (idx % 2 === 1 ? altRow : (t.bg || '#fff'))
                   return (
-                    <tr key={line.id} style={{ borderBottom: `1px solid ${t.border}` }}>
-                      <td style={td()}>
+                    <tr
+                      key={line.id}
+                      data-testid="esquema-calc-row"
+                      data-solid-id={line.solidId || ''}
+                      onClick={() => selectLineSolid(line.solidId)}
+                      style={{
+                        background: rowBg,
+                        cursor: line.solidId ? 'pointer' : 'default',
+                        outline: isHi ? `2px solid ${t.primary || '#0f766e'}` : undefined,
+                        outlineOffset: -2,
+                      }}
+                    >
+                      <td style={{ ...tdExcel(borderCell), textAlign: 'center', fontWeight: 700, color: t.textMuted || '#64748b' }}>
+                        {idx + 1}
+                      </td>
+                      <td style={{ ...tdExcel(borderCell), textAlign: 'center' }}>
+                        <span
+                          title={solid?.color || ''}
+                          style={{
+                            display: 'inline-block',
+                            width: 16,
+                            height: 16,
+                            borderRadius: 3,
+                            border: `1px solid ${borderCell}`,
+                            background: solid?.color || '#94a3b8',
+                            verticalAlign: 'middle',
+                          }}
+                        />
+                      </td>
+                      <td style={tdExcel(borderCell)} onClick={(e) => e.stopPropagation()}>
                         <input
                           value={line.nombre}
                           placeholder="Nombre obligatorio"
                           aria-label="Nombre del sólido"
                           onChange={(e) => onUpdateLine?.(active.id, line.id, { nombre: e.target.value })}
+                          onFocus={() => selectLineSolid(line.solidId)}
                           style={{
                             ...inputStyle(t),
-                            padding: '4px 6px',
+                            padding: '3px 5px',
                             fontSize: 12,
-                            borderColor: String(line.nombre || '').trim() ? (t.border) : '#f59e0b',
+                            borderRadius: 0,
+                            border: `1px solid ${String(line.nombre || '').trim() ? borderCell : '#f59e0b'}`,
+                            background: 'transparent',
                           }}
                         />
-                        {!String(line.nombre || '').trim() ? (
-                          <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, lineHeight: 1.3 }}>
-                            Escriba un nombre
-                          </div>
-                        ) : null}
                         {!r.ok && line.op === 'subtract' ? (
                           <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 2, lineHeight: 1.3 }}>
                             {r.error || 'Sin volumen común'}
                           </div>
                         ) : null}
                       </td>
-                      <td style={{ ...td(), verticalAlign: 'middle' }}>
+                      <td style={{ ...tdExcel(borderCell), verticalAlign: 'middle' }} onClick={(e) => e.stopPropagation()}>
                         <div
                           data-testid="esquema-calc-op-icons"
                           role="group"
@@ -331,7 +384,7 @@ export function Esquema3dCalcPanel({
                           </button>
                         </div>
                       </td>
-                      <td style={td()}>
+                      <td style={tdExcel(borderCell)} onClick={(e) => e.stopPropagation()}>
                         {line.op === 'subtract' ? (
                           <select
                             data-testid="esquema-calc-discount-from"
@@ -350,7 +403,7 @@ export function Esquema3dCalcPanel({
                                 onHint?.(probe.error || 'No se puede descontar del sólido indicado.')
                               }
                             }}
-                            style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 11 }}
+                            style={{ ...inputStyle(t), padding: '3px 4px', fontSize: 11, borderRadius: 0 }}
                             title="Descuenta de"
                           >
                             <option value="">— Elegir —</option>
@@ -362,17 +415,24 @@ export function Esquema3dCalcPanel({
                           <span style={{ fontSize: 11, color: ui?.muted || '#94a3b8' }}>—</span>
                         )}
                       </td>
-                      <td style={{ ...td(), textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: r.ok ? (line.op === 'subtract' ? '#b91c1c' : t.text) : '#b91c1c' }}>
+                      <td style={{
+                        ...tdExcel(borderCell),
+                        textAlign: 'right',
+                        fontVariantNumeric: 'tabular-nums',
+                        fontWeight: 700,
+                        color: r.ok ? (line.op === 'subtract' ? '#b91c1c' : t.text) : '#b91c1c',
+                      }}
+                      >
                         {r.ok
-                          ? `${line.op === 'subtract' ? '−' : '+'}${Number(r.volumeM3).toFixed(2)}`
+                          ? `${line.op === 'subtract' ? '−' : ''}${Number(r.volumeM3).toFixed(2)}`
                           : '—'}
                       </td>
-                      <td style={td()}>
+                      <td style={{ ...tdExcel(borderCell), textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           title="Quitar"
                           onClick={() => onRemoveLine?.(active.id, line.id)}
-                          style={{ ...btnGhost(t), padding: '2px 6px' }}
+                          style={{ ...btnGhost(t), padding: '2px 6px', borderRadius: 0 }}
                         >
                           ×
                         </button>
@@ -382,7 +442,7 @@ export function Esquema3dCalcPanel({
                 })}
                 {!(active.lines || []).length ? (
                   <tr>
-                    <td colSpan={5} style={{ ...td(), color: ui?.muted || '#64748b', padding: 12 }}>
+                    <td colSpan={7} style={{ ...tdExcel(borderCell), color: ui?.muted || '#64748b', padding: 12 }}>
                       Seleccione sólidos en el dibujo y pulse «Sólidos seleccionados».
                     </td>
                   </tr>
@@ -391,16 +451,19 @@ export function Esquema3dCalcPanel({
             </table>
           </div>
 
-          <div style={{
-            padding: '10px 12px',
-            borderTop: `1px solid ${t.border}`,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            background: t.bgHover || '#f8fafc',
-          }}
+          <div
+            data-testid="esquema-calc-total-row"
+            style={{
+              padding: '10px 12px',
+              borderTop: `2px solid ${headerBg}`,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: altRow,
+              flexShrink: 0,
+            }}
           >
-            <span style={{ fontSize: 12, fontWeight: 700, color: t.textMuted || '#64748b' }}>Total</span>
+            <span style={{ fontSize: 12, fontWeight: 800, color: t.textMuted || '#64748b' }}>Total</span>
             <span data-testid="esquema-calc-total" style={{ fontSize: 16, fontWeight: 800, color: t.primary || '#0f766e', fontVariantNumeric: 'tabular-nums' }}>
               {formatVolumeM3(total)}
             </span>
@@ -411,11 +474,22 @@ export function Esquema3dCalcPanel({
   )
 }
 
-function th(t) {
-  return { padding: '6px 6px', borderBottom: `1px solid ${t.border}`, fontWeight: 700, color: t.textMuted || '#64748b', fontSize: 11 }
+function thExcel(border) {
+  return {
+    padding: '6px 4px',
+    border: `1px solid ${border}`,
+    fontWeight: 700,
+    fontSize: 10,
+    letterSpacing: 0.02,
+    whiteSpace: 'nowrap',
+  }
 }
-function td() {
-  return { padding: '4px 4px', verticalAlign: 'middle' }
+function tdExcel(border) {
+  return {
+    padding: '3px 4px',
+    border: `1px solid ${border}`,
+    verticalAlign: 'middle',
+  }
 }
 function inputStyle(t) {
   return {

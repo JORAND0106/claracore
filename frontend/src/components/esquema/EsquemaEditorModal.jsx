@@ -147,7 +147,7 @@ import {
   syncSceneBloquesToLibrary,
 } from './esquemaLibraryScale'
 import CcModalBrandHeader from '../CcModalBrandHeader'
-import { composeEsquemaExport, isEsquemaPngDataUrl, sceneExportBounds } from './esquemaExport'
+import { composeEsquemaExport, isEsquemaPngDataUrl, sceneExportBounds, solidsExportBounds } from './esquemaExport'
 import { generarEsquemaIa, fetchEsquemaIaUso } from './esquemaIaApi'
 import {
   hydrateIaObjects,
@@ -260,6 +260,8 @@ const TOOL_GROUPS = [
     tools: [
       { id: 'seleccion', label: 'Selección / mover', Icon: IconSeleccion },
       { id: 'paneo', label: 'Paneo', Icon: IconPaneo },
+      { id: 'zoom-extendido', label: 'Zoom extendido', Icon: IconZoomExtendido },
+      { id: 'zoom-ventana', label: 'Zoom ventana', Icon: IconZoomVentana },
     ],
   },
   {
@@ -674,9 +676,11 @@ export default function EsquemaEditorModal({
     return ESQUEMA_CONTEXT_SIDEBAR_W
   })
   const contextSidebarDragRef = useRef(null)
+  // Usar el ancho arrastrado directamente (no modalLayout.sidebar, que queda
+  // desfasado durante el drag y dejaba el panel “sin ampliar”).
   const contextSidebarW = contextSidebarCollapsed
     ? 36
-    : (modalLayout.sidebar || contextSidebarUserW || ESQUEMA_CONTEXT_SIDEBAR_W)
+    : (contextSidebarUserW || ESQUEMA_CONTEXT_SIDEBAR_W)
   const [sectionPropsOpen, setSectionPropsOpen] = useState(true)
   const [sectionCalcOpen, setSectionCalcOpen] = useState(true)
   const [sectionCoordsOpen, setSectionCoordsOpen] = useState(true)
@@ -757,6 +761,7 @@ export default function EsquemaEditorModal({
   const selectedIdRef = useRef(null)
   const selectedIdsRef = useRef(new Set())
   const marqueeRef = useRef(null)
+  const fitViewToBoundsRef = useRef(() => {})
   const redrawRef = useRef(() => {})
 
   toolRef.current = tool
@@ -1855,9 +1860,16 @@ export default function EsquemaEditorModal({
   }, [])
 
   const applyUnite3d = useCallback(() => {
+    // Segundo clic con menos de 2 sólidos → desactiva el comando.
+    if (op3dRef.current === 'unir' && gatherSelectedSolids3d().length < 2) {
+      setOp3d(null)
+      setToolHint('Unir desactivado.')
+      return
+    }
     const sels = gatherSelectedSolids3d()
     if (sels.length < 2) {
       setOp3d('unir')
+      setTool('seleccion')
       setToolHint('Unir: toque otro sólido para agregarlo (o seleccione dos o más) y pulse Unir de nuevo.')
       return
     }
@@ -1873,9 +1885,16 @@ export default function EsquemaEditorModal({
   }, [consumeSolidOperands, gatherSelectedSolids3d])
 
   const applySubtract3d = useCallback(() => {
+    // Segundo clic sin operandos suficientes → desactiva (no deja el comando pegado).
+    if (op3dRef.current === 'sustraer' && gatherSelectedSolids3d().length < 2) {
+      setOp3d(null)
+      setToolHint('Sustraer desactivado. Seleccione base + sólidos a quitar y pulse Sustraer.')
+      return
+    }
     const sels = gatherSelectedSolids3d()
     if (sels.length < 2) {
       setOp3d('sustraer')
+      setTool('seleccion')
       setToolHint('Sustraer: toque el sólido base y luego el/los a quitar; pulse Sustraer de nuevo.')
       return
     }
@@ -1891,9 +1910,9 @@ export default function EsquemaEditorModal({
     }
     pushHistory()
     consumeSolidOperands([base, ...others], r.solid)
-    // Dejar el resultado seleccionado listo para otra sustracción en cadena.
-    setOp3d('sustraer')
-    setToolHint(`Sustracción · ${Number(r.solid.volumeM3).toFixed(2)} m³ · toque más sólidos a quitar y pulse Sustraer.`)
+    // Resultado seleccionado; comando off para no bloquear la herramienta.
+    setOp3d(null)
+    setToolHint(`Sustracción · ${Number(r.solid.volumeM3).toFixed(2)} m³ · seleccione más sólidos y pulse Sustraer para continuar.`)
   }, [consumeSolidOperands, gatherSelectedSolids3d])
 
   const beginCut3d = useCallback(() => {
@@ -1901,13 +1920,22 @@ export default function EsquemaEditorModal({
       setToolHint('Active el modo 3D para cortar.')
       return
     }
+    if (op3dRef.current === 'cortar') {
+      cutDraftRef.current = null
+      setOp3d(null)
+      setToolHint('Cortar desactivado.')
+      return
+    }
     const ids = selectedSolidIdsRef.current || []
     if (ids.length !== 1) {
+      setOp3d('cortar')
+      setTool('seleccion')
       setToolHint('Cortar: seleccione un sólido y trace la línea de corte.')
       return
     }
     cutDraftRef.current = { solidId: ids[0], a: null, b: null }
     setOp3d('cortar')
+    setTool('seleccion')
     setToolHint('Cortar: pulse y arrastre una línea de corte sobre el sólido.')
   }, [])
 
@@ -1954,17 +1982,25 @@ export default function EsquemaEditorModal({
       orbitFree: !!orbitFreeRef.current,
       orbitAngles: orbitAnglesRef.current,
     })
-    // Preferir el sólido de menor área XY bajo el clic (sólidos internos sobre el contenedor).
+    // Preferir el sólido de menor área proyectada bajo el clic (internos / el tocado).
     let best = null
     let bestArea = Infinity
+    let bestIdx = -1
     for (let i = 0; i < list.length; i += 1) {
       const s = list[i]
       if (!hitSolidAtView(s, p, viewId, 0, orbit)) continue
-      const bb = solidXyBounds(s)
-      const area = bb ? Math.abs(bb.w * bb.h) : Number.MAX_SAFE_INTEGER
-      if (area < bestArea || (area === bestArea && (!best || i > list.indexOf(best)))) {
+      let area = Number.MAX_SAFE_INTEGER
+      if (!orbit && viewId === 'top') {
+        const bb = solidXyBounds(s)
+        area = bb ? Math.abs(bb.w * bb.h) : Number.MAX_SAFE_INTEGER
+      } else {
+        const bb = solidsExportBounds([s], normalizeViewId(viewId), orbit)
+        area = bb ? Math.abs(bb.w * bb.h) : Number.MAX_SAFE_INTEGER
+      }
+      if (area < bestArea || (area === bestArea && i > bestIdx)) {
         bestArea = area
         best = s
+        bestIdx = i
       }
     }
     return best
@@ -3574,6 +3610,19 @@ export default function EsquemaEditorModal({
     let p = posFromEvent(e)
     const currentTool = toolRef.current
 
+    // Zoom ventana: trazar rectángulo (2D, vistas planas, iso y giro libre).
+    if (currentTool === 'zoom-ventana') {
+      dragRef.current = { mode: 'zoom-ventana', ox: p.x, oy: p.y }
+      marqueeRef.current = { from: { x: p.x, y: p.y }, to: { x: p.x, y: p.y } }
+      drawing.current = true
+      startPt.current = p
+      lastPt.current = p
+      snapRef.current = null
+      moveGuideRef.current = null
+      redraw()
+      return
+    }
+
     // Giro libre 3D: si hay sólido bajo el clic + Mover → traslación en planta;
     // si no, arrastre = orbitar cámara (no modifica geometría).
     if (mode3dRef.current && orbitFreeRef.current) {
@@ -4539,6 +4588,13 @@ export default function EsquemaEditorModal({
     let p = raw
     lastPt.current = p
 
+    if (dragRef.current?.mode === 'zoom-ventana') {
+      const d = dragRef.current
+      marqueeRef.current = { from: { x: d.ox, y: d.oy }, to: raw }
+      redraw()
+      return
+    }
+
     if ((currentTool === 'seleccion' || currentTool === 'girar-escalar') && dragRef.current) {
       const d = dragRef.current
       if (d.mode === 'resize') {
@@ -4810,6 +4866,25 @@ export default function EsquemaEditorModal({
 
     if (panDragRef.current) {
       panDragRef.current = null
+      return
+    }
+
+    if (dragRef.current?.mode === 'zoom-ventana') {
+      const from = { x: dragRef.current.ox, y: dragRef.current.oy }
+      const x = Math.min(from.x, p.x)
+      const y = Math.min(from.y, p.y)
+      const w = Math.abs(p.x - from.x)
+      const h = Math.abs(p.y - from.y)
+      marqueeRef.current = null
+      dragRef.current = null
+      if (w > 8 && h > 8 && !(mapActiveRef.current && !mode3dRef.current)) {
+        fitViewToBoundsRef.current?.({ x, y, w, h })
+      }
+      setTool('seleccion')
+      setToolHint(w > 8 && h > 8
+        ? 'Zoom ventana: zona encuadrada. Modo selección.'
+        : 'Zoom ventana cancelado (rectángulo demasiado pequeño).')
+      redraw()
       return
     }
 
@@ -5678,6 +5753,25 @@ export default function EsquemaEditorModal({
     return undefined
   }, [tool])
 
+  const fitViewToBounds = (bb) => {
+    if (!bb || !(bb.w > 0) || !(bb.h > 0)) return
+    const { w, h } = cssSize()
+    if (w < 40 || h < 40) return
+    const margin = 0.12
+    const z = clampZoom(Math.min(
+      8,
+      Math.min((w * (1 - margin)) / bb.w, (h * (1 - margin)) / bb.h),
+    ))
+    zoomRef.current = z
+    panRef.current = {
+      x: (w / 2) - (bb.x + bb.w / 2) * z,
+      y: (h / 2) - (bb.y + bb.h / 2) * z,
+    }
+    setZoomPct(Math.round(z * 100))
+    setPanTick((n) => n + 1)
+  }
+  fitViewToBoundsRef.current = fitViewToBounds
+
   const fitViewToObjects = (objs) => {
     // Con mapa activo la escala la dicta Mapbox: no encuadrar el lienzo a mano
     // (rompería el 1:1 geo ↔ world). Solo re-sincronizar.
@@ -5686,17 +5780,38 @@ export default function EsquemaEditorModal({
       setPanTick((n) => n + 1)
       return
     }
-    const bb = sceneExportBounds(objs)
-    const { w, h } = cssSize()
-    if (w < 40 || h < 40) return
-    const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bb.w, (h - 80) / bb.h)))
-    zoomRef.current = z
-    panRef.current = {
-      x: (w / 2) - (bb.x + bb.w / 2) * z,
-      y: (h / 2) - (bb.y + bb.h / 2) * z,
+    fitViewToBounds(sceneExportBounds(objs))
+  }
+
+  /** Zoom extendido: 2D + sólidos 3D en la vista/órbita actual. */
+  const fitViewToScene = () => {
+    if (mapActiveRef.current && !mode3dRef.current) {
+      syncCanvasToMapRef.current()
+      setPanTick((n) => n + 1)
+      return
     }
-    setZoomPct(Math.round(z * 100))
-    setPanTick((n) => n + 1)
+    const objs = (objectsRef.current || []).filter((o) => !(o.type === 'image' && o.fit))
+    const bb2d = sceneExportBounds(objs)
+    let bb = bb2d
+    if (mode3dRef.current && (solids3dRef.current || []).length) {
+      const orbit = solidsViewCamera(view3dRef.current || 'top', solids3dRef.current || [], {
+        orbitFree: !!orbitFreeRef.current,
+        orbitAngles: orbitAnglesRef.current,
+      })
+      const bb3d = solidsExportBounds(
+        solids3dRef.current,
+        normalizeViewId(view3dRef.current || 'top'),
+        orbit,
+      )
+      if (bb3d) {
+        const minX = Math.min(bb2d.x, bb3d.x)
+        const minY = Math.min(bb2d.y, bb3d.y)
+        const maxX = Math.max(bb2d.x + bb2d.w, bb3d.x + bb3d.w)
+        const maxY = Math.max(bb2d.y + bb2d.h, bb3d.y + bb3d.h)
+        bb = { x: minX, y: minY, w: Math.max(40, maxX - minX), h: Math.max(40, maxY - minY) }
+      }
+    }
+    fitViewToBounds(bb)
   }
 
   const abrirIaPrompt = () => {
@@ -6152,11 +6267,22 @@ export default function EsquemaEditorModal({
                       mirrorAxisRef.current = null
                       setMirrorPrompt(null)
                       anglePickRef.current = { lines: [], points: [] }
+                      // Activar otro comando desactiva Unir/Sustraer/Cortar.
+                      setOp3d(null)
                       // Segundo clic sobre el mismo comando → vuelve a selección.
                       const next = (tool === tb.id && tb.id !== 'seleccion')
                         ? 'seleccion'
                         : tb.id
+                      if (next === 'zoom-extendido') {
+                        fitViewToScene()
+                        setTool('seleccion')
+                        setToolHint('Zoom extendido: toda la geometría en pantalla.')
+                        return
+                      }
                       setTool(next)
+                      if (next === 'zoom-ventana') {
+                        setToolHint('Zoom ventana: arrastre un rectángulo y suelte.')
+                      }
                     }}
                     style={iconBtn(t, tool === tb.id)}
                     aria-pressed={tool === tb.id}
@@ -7059,10 +7185,9 @@ export default function EsquemaEditorModal({
                     onLineStyle={applySelectedLineStyle}
                     onFontSize={applyFontSize}
                     onRotationDeg={applyRotationDeg}
-                    solid={solidForSourceEntity(solids3d, selectedObj.id)
-                      || (selectedSolidIds.length === 1
-                        ? solids3d.find((s) => s.id === selectedSolidIds[0])
-                        : null)}
+                    solid={selectedSolidIds.length === 1
+                      ? solids3d.find((s) => s.id === selectedSolidIds[0])
+                      : solidForSourceEntity(solids3d, selectedObj.id)}
                     embedded
                   />
                 ) : !selectedObj && selectedSolidIds.length === 1 ? (
@@ -7155,6 +7280,14 @@ export default function EsquemaEditorModal({
                       }}
                       solids={solids3d}
                       selectedSolidIds={selectedSolidIds}
+                      highlightedSolidId={selectedSolidIds[0] || null}
+                      onHighlightSolid={(solidId) => {
+                        if (!solidId) return
+                        const s = (solids3dRef.current || []).find((x) => x.id === solidId)
+                        if (s) selectSolidAndSource(s)
+                        else selectSolid3d(solidId)
+                        setToolHint(`Sólido del cálculo · ${Number(solidVolumeM3(s) || 0).toFixed(2)} m³`)
+                      }}
                       onHint={setToolHint}
                     />
                   ) : (
@@ -10405,6 +10538,26 @@ function IconSeleccion() {
       <path d="M4 14h2v4h4v2H4v-6Z" />
       <path d="M18 14h2v6h-6v-2h4v-4Z" />
       <path d="m9 15 2-7 2 7 3 1-7 3-1-3Z" />
+    </svg>
+  )
+}
+function IconZoomExtendido() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 9V4h5" />
+      <path d="M15 4h5v5" />
+      <path d="M20 15v5h-5" />
+      <path d="M9 20H4v-5" />
+      <rect x="8" y="8" width="8" height="8" rx="1" />
+    </svg>
+  )
+}
+function IconZoomVentana() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+      <rect x="7" y="7" width="8" height="6" rx="0.5" />
     </svg>
   )
 }

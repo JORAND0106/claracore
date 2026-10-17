@@ -20,8 +20,10 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-2D-06 | Acotado con área integrada y exacta, también en figuras rotadas. |
 | C-2D-07 | Mapa de fondo: capas y opacidad, polígonos PK, PK de contexto en ámbar, escala real = mapa, zoom nunca bloqueado, GPS. |
 | C-2D-08 | Ventana: altura actual y ancho del panel lateral izquierdo; panel por secciones sin superposición; etiquetas al pasar el mouse. |
-| C-2D-09 | Comandos de la barra: un clic activa, segundo clic sobre el mismo desactiva y vuelve a selección; el botón refleja el estado activo. |
-| C-2D-10 | Paneo/zoom/gestos sobre el área de dibujo no desplazan la página de atrás; el dibujo se mueve en el mismo sentido del arrastre (2D, vistas 3D, con cualquier comando). Panel lateral de contexto ampliable por su borde derecho (mín. ancho de contrato) sin solapar el dibujo. |
+| C-2D-09 | Comandos de la barra: un clic activa, segundo clic sobre el mismo desactiva y vuelve a selección; activar otro desactiva el anterior; el botón refleja el estado activo. Nunca queda un comando activo que impida seleccionar, mover u otro comando. Unir/Sustraer/Cortar se desactivan con el segundo clic o al elegir otra herramienta. |
+| C-2D-10 | Paneo/zoom/gestos sobre el área de dibujo no desplazan la página de atrás; el dibujo se mueve en el mismo sentido del arrastre (2D, vistas 3D, con cualquier comando). Panel lateral de contexto ampliable por su borde derecho (mín. ancho de contrato) sin solapar el dibujo; el ancho arrastrado se aplica de inmediato. |
+| C-2D-11 | **Zoom extendido:** botón con ícono y etiqueta; ajusta la vista para mostrar todo lo dibujado (2D + sólidos 3D) con margen proporcionado, sin cambiar dimensiones ni cotas. Funciona en 2D, seis vistas planas, isométricas y giro libre. |
+| C-2D-12 | **Zoom ventana:** botón con ícono y etiqueta; trazar un rectángulo (mouse o dedo); al soltar, la vista se ajusta a esa zona y el comando se desactiva solo (modo selección). Mismas vistas que C-2D-11; no altera geometría. |
 
 ## 3D
 
@@ -35,10 +37,11 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-3D-06 | Dibujo adherido a las caras; OSNAP 3D al dibujar y al mover (vértices, medios, centros de cara/círculo y de cilindro). Enganche fiable en las 6 vistas, isométricas y giro libre, también sobre resultados de Unir/Sustraer/Cortar; distancia de enganche constante en pantalla (independiente del zoom); resalte antes de soltar; mouse y dedo. |
 | C-3D-07 | Mover libre de cualquier sólido (incluidos resultados de operaciones) sin cambiar dimensiones ni cotas; Dimensionar actualiza el volumen de inmediato. |
 | C-3D-08 | Color aplicable a cualquier sólido. Cada sólido conserva el color elegido; sus seis caras se muestran con tonos distintos fijos (superior la más clara, inferior la más oscura; frontal, posterior, izquierda y derecha intermedios distintos). En cilindros y caras curvas el tono varía de forma gradual según la normal. Tonos visibles en vistas planas, isométricas, giro libre e imagen de memoria. |
-| C-3D-09 | Unir, Sustraer y Cortar con geometría y volumen exactos. Sustraer funciona en cadena sobre resultados previos y admite varios operandos a la vez; el resultado conserva color y nombre del base. |
+| C-3D-09 | Unir, Sustraer y Cortar con geometría y volumen exactos. Sustraer funciona en cadena sobre resultados previos (incl. Unir/Cortar) y admite varios operandos a la vez; el resultado conserva color y nombre del base. Los huecos se ven en todas las vistas (alzados e iso pintan caras reales con recortes, no un relleno AABB opaco). Tras Sustraer el comando se desactiva para no bloquear la herramienta. |
 | C-3D-10 | Selección de sólidos internos. |
 | C-3D-11 | Deshacer y Rehacer exactos, sin acciones que se repitan solas. |
 | C-3D-12 | Representación: aristas visibles continuas finas; ocultas punteadas finas; caras semitransparentes con tonos por cara; internos legibles; igual en editor e imagen. |
+| C-3D-14 | Al seleccionar un sólido (dibujo o fila del cálculo) se resalta con contorno luminoso (halo + trazo claro) para confirmar cuál se está nombrando o agregando. |
 
 ## Cálculo de volúmenes
 
@@ -46,8 +49,9 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 |----|----------------|
 | C-CALC-01 | Varios cálculos por esquema; elementos con nombre obligatorio (sin «Sólido N» automático), Suma/Descuenta y «Descuenta de». Mientras el último elemento no tenga nombre no se agrega otro; no se guarda el cálculo con nombres vacíos. |
 | C-CALC-02 | Solo se descuenta el volumen común con el sólido indicado. |
-| C-CALC-03 | Lista con todos los elementos visibles y desplazamiento. Columna Op = dos íconos apilados (+ Suma / − Descuenta) con el seleccionado resaltado; «Descuenta de» se conserva. |
+| C-CALC-03 | Lista en tabla tipo Excel (paleta de la plataforma): celdas con bordes, encabezado fijo al desplazarse, filas alternas, columnas alineadas, números a la derecha. Columnas: # \| Color \| Nombre \| Op \| Descuenta de \| Volumen (m³). Op = dos íconos apilados (+ Suma / − Descuenta) con el seleccionado resaltado. Nombre editable en celda (vacío al agregar). Columnas se ajustan al ancho del panel (también al ampliarlo). Fila de total fija al final. |
 | C-CALC-04 | Cálculo dinámico con el esquema abierto; fijo al cerrarlo. |
+| C-CALC-05 | Al seleccionar un sólido en el dibujo para el cálculo se carga exactamente la información de ese sólido (id/volumen/color correctos). Al tocar una fila de la lista, el sólido correspondiente se resalta en el dibujo (C-3D-14). |
 
 ## Salidas
 
@@ -77,13 +81,17 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 7. **Regresión:** Extruir abre popup de cotas (altura calculada) en superior/inferior; por longitud en frontal/laterales/posterior.
 8. Cubo de un color: vista frontal y posterior con tonos distintos; en NE se distinguen las tres caras visibles.
 9. OSNAP en las 6 vistas y NE sobre cubo y cilindro (vértices, medios, centros de cara), con zoom alejado y cercano: engancha siempre.
-10. Cubo 1,50³ − interior 1,10×1,10×1,30; al resultado restar dos cilindros que atraviesen paredes: ambos pases quedan y el volumen es exacto (Sustraer en cadena / múltiple).
-11. Activar y desactivar con dos clics cada comando de la barra → modo selección.
+10. Cubo 1,50³ − interior 1,10×1,10×1,30; al resultado restar dos cilindros que atraviesen paredes: ambos pases quedan visibles en NE/frontal/lateral y el volumen es exacto (Sustraer en cadena / múltiple).
+11. Activar y desactivar con dos clics cada comando de la barra (y Unir/Sustraer/Cortar) → modo selección; activar uno y luego otro → queda uno solo o ninguno.
 12. Paneo en el área de dibujo (dedo/mouse) en 2D, superior y NE: solo se mueve el dibujo, en el sentido del arrastre (sin `stopPropagation` en capture del wrap).
 13. Íconos +/− de Op cambian suma/descuenta y el total se actualiza; panel lateral ampliable; nombre obligatorio al agregar/guardar.
 14. **Regresión:** pointer/touch llegan al canvas; se puede dibujar en 2D y 3D (cotas vs longitud).
+15. Con cuatro sólidos, seleccionar cada uno para el cálculo carga su propia información y lo resalta; tocar cada fila resalta el sólido correcto.
+16. Zoom extendido con sólidos dispersos y zoom cercano: muestra todo en 2D, superior, NE y giro libre.
+17. Zoom ventana sobre un sólido pequeño: al soltar ocupa el área de dibujo; comando vuelve a selección (dedo y mouse).
+18. Con seis sólidos en el cálculo: tabla Excel legible, encabezado fijo, nombres editables en celda, +/− actualizan total; no se agrega otro sin nombre.
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js` y `esquemaDibujoPointer.regression.test.js` bloquean el despliegue si se rompe 5–14.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js` y `esquemaCorreccionesZoomExcel.scenario.test.js` bloquean el despliegue si se rompe 5–18.
 
 ## Mantenimiento
 
