@@ -323,6 +323,171 @@ export function canvasDeltaToWorldMove(dxCanvas, dyCanvas, viewId) {
   }
 }
 
+/**
+ * ¿La entidad 2D está anclada a un plano de perfil 3D (necesita remapeo entre vistas)?
+ */
+export function entityNeedsViewRemap(entity, targetViewId, { orbit = null } = {}) {
+  if (!entity) return false
+  const src = normalizeViewId(entity.viewPlane || 'top')
+  const dst = normalizeViewId(targetViewId)
+  if (orbit && Number.isFinite(orbit.yaw)) return extrudeModeForView(src) === 'length'
+  if (src === dst) return false
+  // Contornos de perfil siempre se remapean al cambiar de vista.
+  if (extrudeModeForView(src) === 'length') return true
+  // Planta ↔ inferior: invertir Y
+  if ((src === 'top' && dst === 'bottom') || (src === 'bottom' && dst === 'top')) return true
+  // Planta en iso: proyectar con cota (si hay viewDepth/z)
+  if (isEsquema3dIsoView(dst) && Number.isFinite(Number(entity.viewZCota))) return true
+  return false
+}
+
+/** Extrae puntos de control de una entidad 2D (rect/elipse/polilínea/…). */
+export function entityControlPoints(entity) {
+  if (!entity) return []
+  if (Array.isArray(entity.points) && entity.points.length) {
+    return entity.points.map((p) => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }))
+  }
+  if (
+    Number.isFinite(entity.x1) && Number.isFinite(entity.y1)
+    && Number.isFinite(entity.x2) && Number.isFinite(entity.y2)
+  ) {
+    return [
+      { x: entity.x1, y: entity.y1 },
+      { x: entity.x2, y: entity.y1 },
+      { x: entity.x2, y: entity.y2 },
+      { x: entity.x1, y: entity.y2 },
+    ]
+  }
+  return []
+}
+
+/**
+ * Remapea una entidad dibujada en `viewPlane` al lienzo de `targetViewId`
+ * (mismo espacio 3D: world XY + cota). Conserva id/tipo; solo adapta coords.
+ */
+export function projectEntityToView(entity, targetViewId, {
+  orbit = null,
+  cotaRefM = 0,
+} = {}) {
+  if (!entity) return entity
+  const src = normalizeViewId(entity.viewPlane || 'top')
+  const dst = normalizeViewId(targetViewId)
+  if (!entityNeedsViewRemap(entity, dst, { orbit })) return entity
+
+  const depth = Number.isFinite(Number(entity.viewDepthWorld))
+    ? Number(entity.viewDepthWorld)
+    : 0
+  const zHint = Number.isFinite(Number(entity.viewZCota))
+    ? Number(entity.viewZCota)
+    : null
+
+  const mapPt = (pt) => {
+    const world = canvasToWorldOnViewPlane(pt, src, {
+      faceDepthWorld: depth,
+      cotaRefM,
+      zCota: zHint,
+    })
+    return projectWorld3dToCanvas(world, dst, cotaRefM, orbit)
+  }
+
+  const next = { ...entity, _projectedFrom: src }
+  if (Array.isArray(entity.points) && entity.points.length) {
+    next.points = entity.points.map((p) => {
+      const q = mapPt(p)
+      return { ...p, x: q.x, y: q.y }
+    })
+  }
+  if (
+    Number.isFinite(entity.x1) && Number.isFinite(entity.y1)
+    && Number.isFinite(entity.x2) && Number.isFinite(entity.y2)
+  ) {
+    const a = mapPt({ x: entity.x1, y: entity.y1 })
+    const b = mapPt({ x: entity.x2, y: entity.y2 })
+    // Para rect/elipse el AABB proyectado puede rotar en iso: usar extremos.
+    next.x1 = Math.min(a.x, b.x)
+    next.y1 = Math.min(a.y, b.y)
+    next.x2 = Math.max(a.x, b.x)
+    next.y2 = Math.max(a.y, b.y)
+    if (isEsquema3dIsoView(dst) || orbit) {
+      // En iso el AABB no basta para el contorno real: preferir polilínea.
+      const corners = [
+        { x: entity.x1, y: entity.y1 },
+        { x: entity.x2, y: entity.y1 },
+        { x: entity.x2, y: entity.y2 },
+        { x: entity.x1, y: entity.y2 },
+      ].map(mapPt)
+      next.points = corners
+      if (entity.type === 'rect' || entity.type === 'elipse') {
+        // Mantener tipo; drawObject usa x1/y1/x2/y2. Ajustar bbox.
+        next.x1 = Math.min(...corners.map((p) => p.x))
+        next.y1 = Math.min(...corners.map((p) => p.y))
+        next.x2 = Math.max(...corners.map((p) => p.x))
+        next.y2 = Math.max(...corners.map((p) => p.y))
+      }
+    }
+  }
+  return next
+}
+
+/**
+ * Aplica un delta world (dx, dy, dzCota) a una entidad 2D en su viewPlane nativo.
+ * Usado al mover el sólido ligado en otra vista (p. ej. iso).
+ */
+export function applyWorldDeltaToEntity(entity, { dx = 0, dy = 0, dzCota = 0 } = {}) {
+  if (!entity) return entity
+  const plane = normalizeViewId(entity.viewPlane || 'top')
+  const ddx = Number(dx) || 0
+  const ddy = Number(dy) || 0
+  const ddz = Number(dzCota) || 0
+  if (!ddx && !ddy && !ddz) return entity
+
+  const next = { ...entity }
+  if (extrudeModeForView(plane) === 'cotas') {
+    const sx = ddx
+    const sy = plane === 'bottom' ? -ddy : ddy
+    if (Array.isArray(next.points)) {
+      next.points = next.points.map((p) => ({ ...p, x: p.x + sx, y: p.y + sy }))
+    }
+    if (Number.isFinite(next.x1)) {
+      next.x1 += sx
+      next.x2 += sx
+      next.y1 += sy
+      next.y2 += sy
+    }
+    return next
+  }
+
+  // Perfil: canvas X = along (con signo), canvas Y = cotaToWorldZ.
+  const meta = viewProfileMeta(plane)
+  let dCanvasX = 0
+  if (meta.alongAxis === 'x') {
+    // front: canvasX = x → +dx; back: canvasX = -x → -dx
+    dCanvasX = meta.alongSign * ddx
+  } else {
+    // left: canvasX = y → +dy; right: canvasX = -y → -dy
+    dCanvasX = meta.alongSign * ddy
+  }
+  const dCanvasY = cotaToWorldZ(ddz, 0) - cotaToWorldZ(0, 0) // = -PPM*ddz
+  if (Array.isArray(next.points)) {
+    next.points = next.points.map((p) => ({
+      ...p,
+      x: p.x + dCanvasX,
+      y: p.y + dCanvasY,
+    }))
+  }
+  if (Number.isFinite(next.x1)) {
+    next.x1 += dCanvasX
+    next.x2 += dCanvasX
+    next.y1 += dCanvasY
+    next.y2 += dCanvasY
+  }
+  // Profundidad de cara sigue al movimiento perpendicular al plano.
+  const prevDepth = Number.isFinite(Number(next.viewDepthWorld)) ? Number(next.viewDepthWorld) : 0
+  if (meta.depthAxis === 'y') next.viewDepthWorld = prevDepth + ddy
+  else if (meta.depthAxis === 'x') next.viewDepthWorld = prevDepth + ddx
+  return next
+}
+
 /** Centro aproximado de un conjunto de sólidos (para órbita). */
 export function solidsOrbitCenter(solids, cotaRefM = 0) {
   let minX = Infinity

@@ -6,9 +6,11 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { metersToWorld, worldToMeters } from './esquemaGeometry.js'
 import {
+  applyWorldDeltaToEntity,
   canvasDeltaToWorldMove,
   canvasToWorldOnViewPlane,
   depthAxisValueFromWorld,
+  projectEntityToView,
   projectWorld3dToCanvas,
 } from './esquema3dViews.js'
 import {
@@ -39,6 +41,48 @@ function box150() {
   r.solid.color = '#2563eb'
   return r.solid
 }
+
+describe('espacio 3D · proyección entre vistas', () => {
+  it('projectEntityToView: círculo frontal se ve sobre la cara en iso', () => {
+    const box = box150()
+    const frontY = solidFaceDepthWorld(box, 'front')
+    const snaps = solidOsnapPoints(box, 'front')
+    const center = snaps.find((s) => s.kind === 'center')
+    const rPx = metersToWorld(0.45)
+    const circ = {
+      id: 'c',
+      type: 'elipse',
+      x1: center.x - rPx,
+      y1: center.y - rPx,
+      x2: center.x + rPx,
+      y2: center.y + rPx,
+      viewPlane: 'front',
+      viewDepthWorld: frontY,
+    }
+    const inFront = projectEntityToView(circ, 'front')
+    assert.equal(inFront.x1, circ.x1)
+    const inIso = projectEntityToView(circ, 'iso-ne')
+    // El centro proyectado del círculo debe quedar cerca del centro de cara en iso.
+    const cx = (inIso.x1 + inIso.x2) / 2
+    const cy = (inIso.y1 + inIso.y2) / 2
+    const face = projectWorld3dToCanvas(
+      { x: metersToWorld(0.75), y: frontY, zCota: 0.75 },
+      'iso-ne',
+    )
+    assert.ok(Math.hypot(cx - face.x, cy - face.y) < metersToWorld(0.25), 'adherido en iso')
+  })
+
+  it('applyWorldDeltaToEntity: frontal conserva profundidad al subir cota', () => {
+    const ent = {
+      id: 'e', type: 'rect', x1: 0, y1: 0, x2: 10, y2: -20,
+      viewPlane: 'front', viewDepthWorld: 50,
+    }
+    const next = applyWorldDeltaToEntity(ent, { dx: 5, dy: 0, dzCota: 0.4 })
+    assert.equal(next.viewDepthWorld, 50)
+    assert.equal(next.x1, 5)
+    assert.ok(next.y1 < 0) // cota mayor → y de pantalla menor
+  })
+})
 
 describe('espacio 3D · proyección / unproject', () => {
   it('canvasToWorldOnViewPlane front ancla Y = faceDepth', () => {
