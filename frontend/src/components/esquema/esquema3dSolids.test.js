@@ -135,15 +135,28 @@ describe('esquema3dSolids — volumen y booleanos', () => {
     assert.ok(Math.abs(sum - solidVolumeM3(box)) < 1e-4)
   })
 
-  it('extrusión en vista frontal por longitud', () => {
-    // Contorno 2 m × 1 m en plano del perfil → volumen 2*1*3 = 6 m³
-    const profile = rectMeters(2, 1)
+  it('extrusión en vista frontal por longitud (profundidad)', () => {
+    // Contorno 2 m (X) × 1 m (altura en cotas) → volumen 2*1*3 = 6 m³
+    // canvas y = cotaToWorldZ: cota 1 → -PPM, cota 0 → 0
+    const profile = {
+      type: 'rect',
+      x1: 0,
+      y1: -metersToWorld(1),
+      x2: metersToWorld(2),
+      y2: 0,
+    }
     const r = extrudeClosedEntity(profile, {
       viewId: 'front',
       lengthM: 3,
+      faceDepthWorld: 0,
     })
     assert.equal(r.ok, true)
-    assert.ok(Math.abs(r.solid.volumeM3 - 6) < 1e-9)
+    assert.ok(Math.abs(r.solid.volumeM3 - 6) < 1e-9, `got ${r.solid.volumeM3}`)
+    // Sólido canónico: footprint X×Y con profundidad 3 m en Y, cotas 0–1
+    const z0 = Math.min(...r.solid.cells.map((c) => Math.min(c.z0, c.z1)))
+    const z1 = Math.max(...r.solid.cells.map((c) => Math.max(c.z0, c.z1)))
+    assert.ok(Math.abs(z0 - 0) < 1e-6)
+    assert.ok(Math.abs(z1 - 1) < 1e-6)
   })
 
   it('PX_PER_METER estable', () => {

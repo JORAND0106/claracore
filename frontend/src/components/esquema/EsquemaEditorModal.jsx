@@ -79,12 +79,16 @@ import {
   extrudeClosedEntity,
   formatVolumeM3,
   hitSolidAtView,
+  hitSolidFaceAtView,
   isClosedDrawableEntity,
   linkedSourceEntityIds,
   pickSubtractBase,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
+  solidFaceDepthWorld,
+  solidFaceSnapPoints,
   solidForSourceEntity,
+  solidThicknessAlongViewM,
   solidVolumeM3,
   solidXyBounds,
   sourceEntityIdsOfSolids,
@@ -94,8 +98,10 @@ import {
   uniteSolids,
 } from './esquema3dSolids'
 import {
+  extrudeModeForView,
   isEsquema3dDrawView,
   isEsquema3dIsoView,
+  normalizeViewId,
   orbitAnglesForView,
   solidsViewCamera,
 } from './esquema3dViews'
@@ -1712,8 +1718,9 @@ export default function EsquemaEditorModal({
       setToolHint('Active el modo 3D para extruir.')
       return
     }
-    if (!isEsquema3dDrawView(view3dRef.current)) {
-      setToolHint('Cambie a vista superior, frontal o lateral para extruir.')
+    const viewId = normalizeViewId(view3dRef.current)
+    if (!isEsquema3dDrawView(viewId)) {
+      setToolHint('Cambie a una de las seis vistas de cara para extruir.')
       return
     }
     const sel = objectsRef.current.find((o) => selectedIdsRef.current.has(o.id) && isClosedDrawableEntity(o))
@@ -1721,9 +1728,41 @@ export default function EsquemaEditorModal({
       setToolHint('Seleccione un contorno cerrado (rectángulo, polígono, círculo…) para extruir.')
       return
     }
+    const mode = extrudeModeForView(viewId)
+    let faceDepthWorld = 0
+    let defaultLengthM = null
+    if (mode === 'length') {
+      // Apoyar en la cara del sólido bajo el centro del contorno (si hay).
+      const bb = (() => {
+        const xs = [sel.x1, sel.x2].filter((n) => Number.isFinite(n))
+        const ys = [sel.y1, sel.y2].filter((n) => Number.isFinite(n))
+        if (xs.length >= 2 && ys.length >= 2) {
+          return { x: (xs[0] + xs[1]) / 2, y: (ys[0] + ys[1]) / 2 }
+        }
+        const pts = sel.points || []
+        if (pts.length) {
+          return {
+            x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+            y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+          }
+        }
+        return null
+      })()
+      const support = bb
+        ? hitSolidFaceAtView(solids3dRef.current || [], bb, viewId)
+        : null
+      if (support) {
+        faceDepthWorld = solidFaceDepthWorld(support, viewId)
+        const th = solidThicknessAlongViewM(support, viewId)
+        if (th > 1e-6) defaultLengthM = Number(th.toFixed(2))
+      }
+    }
     setExtrudePrompt({
-      mode: view3dRef.current === 'top' ? 'cotas' : 'length',
+      mode,
       entityId: sel.id,
+      viewId,
+      faceDepthWorld,
+      defaultLengthM,
     })
   }, [])
 
@@ -1733,12 +1772,14 @@ export default function EsquemaEditorModal({
       setError?.('Contorno no encontrado.')
       return
     }
+    const viewId = extrudePrompt?.viewId || normalizeViewId(view3dRef.current) || 'top'
     const r = extrudeClosedEntity(ent, {
-      viewId: view3dRef.current || 'top',
+      viewId,
       cotaSuperior: values?.cotaSuperior,
       cotaInferior: values?.cotaInferior,
       lengthM: values?.lengthM,
       color: colorRef.current,
+      faceDepthWorld: extrudePrompt?.faceDepthWorld ?? 0,
     })
     if (!r.ok) {
       setError?.(r.error || 'No se pudo extruir.')
@@ -1921,16 +1962,25 @@ export default function EsquemaEditorModal({
   }, [])
 
   const setView3dSafe = useCallback((id) => {
+    const vid = normalizeViewId(id)
     // Actualizar ref de inmediato para que el redibujo use la vista nueva.
-    view3dRef.current = id
-    orbitAnglesRef.current = orbitAnglesForView(id)
+    view3dRef.current = vid
+    orbitAnglesRef.current = orbitAnglesForView(vid)
     setOrbitFree(false)
     orbitFreeRef.current = false
-    setView3d(id)
+    setView3d(vid)
     cutDraftRef.current = null
     if (op3dRef.current === 'cortar') setOp3d(null)
-    setToolHint(isEsquema3dDrawView(id)
-      ? `Vista ${id === 'top' ? 'superior' : id === 'front' ? 'frontal' : 'lateral'}: puede dibujar y extruir.`
+    const labels = {
+      top: 'superior',
+      bottom: 'inferior',
+      front: 'frontal',
+      back: 'posterior',
+      left: 'lateral izquierda',
+      right: 'lateral derecha',
+    }
+    setToolHint(isEsquema3dDrawView(vid)
+      ? `Vista ${labels[vid] || vid}: puede dibujar y extruir sobre esta cara.`
       : 'Vista isométrica: solo inspección (no dibujo).')
     setOrbitTick((n) => n + 1)
     setPanTick((n) => n + 1)
@@ -2546,6 +2596,26 @@ export default function EsquemaEditorModal({
   }
 
   const snapWorldPoint = (p, { fromPoint = null, excludeId = null, allowPerp = true } = {}) => {
+    // En vistas de cara 3D: puntos de referencia de la cara del sólido bajo el cursor.
+    if (mode3dRef.current && isEsquema3dDrawView(view3dRef.current)) {
+      const viewId = normalizeViewId(view3dRef.current)
+      const thr = snapThreshold()
+      let bestFace = null
+      let bestDist = thr
+      for (const solid of solids3dRef.current || []) {
+        for (const sp of solidFaceSnapPoints(solid, viewId)) {
+          const d = Math.hypot(p.x - sp.x, p.y - sp.y)
+          if (d < bestDist) {
+            bestDist = d
+            bestFace = { x: sp.x, y: sp.y, kind: sp.kind || 'face' }
+          }
+        }
+      }
+      if (bestFace) {
+        snapRef.current = bestFace
+        return { x: bestFace.x, y: bestFace.y }
+      }
+    }
     const hit = findSnap(p, snapSearchObjects(), {
       threshold: snapThreshold(),
       fromPoint,
@@ -3579,7 +3649,7 @@ export default function EsquemaEditorModal({
         redraw()
         return
       }
-      setToolHint('Vista isométrica: selección y mover en planta. Cambie a superior/frontal/lateral para dibujar.')
+      setToolHint('Vista isométrica: selección y mover en planta. Cambie a una cara (sup/inf/front/post/izq/der) para dibujar.')
       drawing.current = false
       return
     }
@@ -6315,8 +6385,8 @@ export default function EsquemaEditorModal({
               </button>
               <button
                 type="button"
-                title="Extruir contorno cerrado (cotas en vista superior; longitud en frontal/lateral)"
-                data-cc-tooltip="Extruir contorno cerrado (cotas en vista superior; longitud en frontal/lateral)"
+                title="Extruir contorno cerrado (cotas en superior/inferior; profundidad en las otras caras)"
+                data-cc-tooltip="Extruir contorno cerrado (cotas en superior/inferior; profundidad en las otras caras)"
                 data-cc-tooltip-variant="short"
                 aria-label="Extruir"
                 onClick={beginExtrude3d}
@@ -7602,6 +7672,7 @@ export default function EsquemaEditorModal({
             t={t}
             ui={ui}
             mode={extrudePrompt.mode}
+            defaultLengthM={extrudePrompt.defaultLengthM}
             onCancel={() => setExtrudePrompt(null)}
             onConfirm={confirmExtrude3d}
           />

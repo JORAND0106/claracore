@@ -1,26 +1,48 @@
 /**
  * Vistas del modo 3D del esquema (proyección ortográfica / isométrica / órbita libre).
+ * Seis caras de dibujo + isométricas NE/NO/SE/SO.
  * El lienzo 2D sigue en píxeles world; Z (cota) se expresa en metros reales.
  */
 import { PX_PER_METER, metersToWorld } from './esquemaGeometry.js'
 
+/**
+ * Vistas de dibujo (6 caras) e inspección isométrica.
+ * extrude: 'cotas' | 'length'
+ */
 export const ESQUEMA_3D_VIEWS = Object.freeze([
-  { id: 'top', label: 'Vista superior', draw: true },
-  { id: 'front', label: 'Vista frontal', draw: true },
-  { id: 'side', label: 'Vista lateral', draw: true },
+  { id: 'top', label: 'Superior', draw: true, extrude: 'cotas', face: 'top' },
+  { id: 'bottom', label: 'Inferior', draw: true, extrude: 'cotas', face: 'bottom' },
+  { id: 'front', label: 'Frontal', draw: true, extrude: 'length', face: 'front' },
+  { id: 'back', label: 'Posterior', draw: true, extrude: 'length', face: 'back' },
+  { id: 'left', label: 'Lateral izquierda', draw: true, extrude: 'length', face: 'left' },
+  { id: 'right', label: 'Lateral derecha', draw: true, extrude: 'length', face: 'right' },
   { id: 'iso-ne', label: 'Isométrica NE', draw: false },
   { id: 'iso-nw', label: 'Isométrica NO', draw: false },
   { id: 'iso-se', label: 'Isométrica SE', draw: false },
   { id: 'iso-sw', label: 'Isométrica SO', draw: false },
 ])
 
+/** Alias legacy: 'side' = lateral izquierda. */
+export function normalizeViewId(viewId) {
+  if (viewId === 'side') return 'left'
+  return viewId || 'top'
+}
+
 export function isEsquema3dDrawView(viewId) {
-  const v = ESQUEMA_3D_VIEWS.find((x) => x.id === viewId)
+  const id = normalizeViewId(viewId)
+  const v = ESQUEMA_3D_VIEWS.find((x) => x.id === id)
   return !!(v && v.draw)
 }
 
 export function isEsquema3dIsoView(viewId) {
   return String(viewId || '').startsWith('iso-')
+}
+
+/** ¿La extrusión en esta vista pide cotas (Z) o longitud (profundidad)? */
+export function extrudeModeForView(viewId) {
+  const id = normalizeViewId(viewId)
+  const v = ESQUEMA_3D_VIEWS.find((x) => x.id === id)
+  return v?.extrude === 'length' ? 'length' : 'cotas'
 }
 
 /** Cota (m) → desplazamiento world en el eje de pantalla vertical de perfil. */
@@ -45,12 +67,20 @@ export function worldZToCota(worldZ, cotaRefM = 0) {
  * Convención: pitch=π/2 mira desde arriba; pitch=0 mira horizontal.
  */
 export function orbitAnglesForView(viewId) {
+  const id = normalizeViewId(viewId)
   const isoPitch = Math.atan(1 / Math.SQRT2) // ~35.26°
-  switch (viewId) {
+  switch (id) {
     case 'front':
       return { yaw: 0, pitch: 0 }
+    case 'back':
+      return { yaw: Math.PI, pitch: 0 }
+    case 'left':
     case 'side':
+      return { yaw: -Math.PI / 2, pitch: 0 }
+    case 'right':
       return { yaw: Math.PI / 2, pitch: 0 }
+    case 'bottom':
+      return { yaw: 0, pitch: -Math.PI / 2 }
     case 'iso-ne':
       return { yaw: Math.PI / 4, pitch: isoPitch }
     case 'iso-nw':
@@ -102,8 +132,6 @@ export function projectOrbit(pt, {
 
 /**
  * Proyecta un punto 3D al plano del lienzo 2D según vista o cámara órbita.
- * Si no se pasa orbit, las isométricas usan los mismos ángulos que el giro libre
- * (así NE/NO/SE/SO cambian efectivamente la perspectiva).
  * Las cotas son elevaciones absolutas en el eje Z (plano de comparación común).
  * @returns {{ x: number, y: number, depth?: number }}
  */
@@ -116,7 +144,6 @@ export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
       center: orbit.center || null,
     })
   }
-  // Isométricas sin orbit explícito: misma cámara que orbitAnglesForView.
   if (isEsquema3dIsoView(viewId)) {
     const angles = orbitAnglesForView(viewId)
     return projectOrbit(pt, {
@@ -126,14 +153,27 @@ export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
       center: null,
     })
   }
+  const id = normalizeViewId(viewId)
   const x = Number(pt?.x) || 0
   const y = Number(pt?.y) || 0
-  const z = cotaToWorldZ(pt?.zCota ?? cotaRefM, cotaRefM)
-  switch (viewId) {
+  const zDisp = cotaToWorldZ(pt?.zCota ?? cotaRefM, cotaRefM)
+  switch (id) {
     case 'front':
-      return { x, y: z }
+      // Mirando desde −Y: pantalla X = world X, pantalla Y = −Z
+      return { x, y: zDisp }
+    case 'back':
+      // Mirando desde +Y: pantalla X = −world X, pantalla Y = −Z
+      return { x: -x, y: zDisp }
+    case 'left':
     case 'side':
-      return { x: y, y: z }
+      // Mirando desde −X: pantalla X = world Y, pantalla Y = −Z
+      return { x: y, y: zDisp }
+    case 'right':
+      // Mirando desde +X: pantalla X = −world Y, pantalla Y = −Z
+      return { x: -y, y: zDisp }
+    case 'bottom':
+      // Mirando desde abajo: pantalla X = world X, pantalla Y = −world Y
+      return { x, y: -y }
     case 'top':
     default:
       return { x, y }
@@ -141,31 +181,55 @@ export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
 }
 
 /**
- * Cámara de proyección para sólidos: siempre usa ángulos de la vista (o giro libre)
- * centrados en el conjunto de sólidos, para que NE/NO/SE/SO y perfiles se vean bien.
+ * Cámara de proyección para sólidos.
+ * Vistas de dibujo (6 caras): ortográficas puras (null) para coincidir 1:1 con el trazo 2D.
+ * Isométricas / giro libre: ángulos centrados en los sólidos.
  */
 export function solidsViewCamera(viewId, solids, {
   orbitFree = false,
   orbitAngles = null,
   cotaRefM = 0,
 } = {}) {
-  const angles = (orbitAngles && Number.isFinite(orbitAngles.yaw) && Number.isFinite(orbitAngles.pitch))
-    ? orbitAngles
-    : orbitAnglesForView(viewId || 'top')
-  const center = solidsOrbitCenter(solids || [], cotaRefM)
-  // Vista superior sin giro libre: proyección ortográfica XY (sin órbita) para
-  // coincidir 1:1 con el contorno base y el hit-test en planta.
-  if (!orbitFree && (viewId === 'top' || !viewId)) {
+  const id = normalizeViewId(viewId)
+  if (!orbitFree && isEsquema3dDrawView(id)) {
     return null
   }
+  const angles = (orbitAngles && Number.isFinite(orbitAngles.yaw) && Number.isFinite(orbitAngles.pitch))
+    ? orbitAngles
+    : orbitAnglesForView(id || 'top')
+  const center = solidsOrbitCenter(solids || [], cotaRefM)
   return { ...angles, center }
+}
+
+/**
+ * Metadatos del eje de profundidad / eje horizontal de una vista de perfil.
+ * depthAxis: 'x' | 'y' — eje world de extrusión por longitud
+ * depthSign: dirección hacia el fondo de la vista (+ entra a la escena)
+ * alongAxis: eje world del “ancho” en pantalla
+ */
+export function viewProfileMeta(viewId) {
+  const id = normalizeViewId(viewId)
+  switch (id) {
+    case 'front':
+      return { depthAxis: 'y', depthSign: 1, alongAxis: 'x', alongSign: 1 }
+    case 'back':
+      return { depthAxis: 'y', depthSign: -1, alongAxis: 'x', alongSign: -1 }
+    case 'left':
+    case 'side':
+      return { depthAxis: 'x', depthSign: 1, alongAxis: 'y', alongSign: 1 }
+    case 'right':
+      return { depthAxis: 'x', depthSign: -1, alongAxis: 'y', alongSign: -1 }
+    default:
+      return { depthAxis: 'z', depthSign: 1, alongAxis: 'x', alongSign: 1 }
+  }
 }
 
 /** Eje de extrusión según la vista donde se dibujó el contorno. */
 export function extrudeAxisForView(viewId) {
-  if (viewId === 'front') return 'y'
-  if (viewId === 'side') return 'x'
-  return 'z' // superior → cotas
+  const mode = extrudeModeForView(viewId)
+  if (mode === 'cotas') return 'z'
+  const meta = viewProfileMeta(viewId)
+  return meta.depthAxis
 }
 
 /** Centro aproximado de un conjunto de sólidos (para órbita). */
