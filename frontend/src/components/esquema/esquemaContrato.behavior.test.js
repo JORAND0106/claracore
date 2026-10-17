@@ -23,16 +23,10 @@ import {
   canvasDeltaToWorldMove,
   ESQUEMA_3D_VIEWS,
   isEsquema3dDrawView,
-  isEsquema3dSketchView,
   projectEntityToView,
   projectWorld3dToCanvas,
   solidsViewCamera,
 } from './esquema3dViews.js'
-import {
-  cameraFacingFaceId,
-  pickNearestFaceUnderCursor,
-  solidFaceDescriptors,
-} from './esquema3dFace.js'
 import {
   filterObjectsFor3dDraw,
   linkedContoursHiddenInOrbit,
@@ -72,6 +66,9 @@ describe('contrato · documento', () => {
     assert.match(md, /una sola entidad/i)
     assert.match(md, /C-OUT-02/)
     assert.match(md, /C-CALC-02/)
+    // Regresiones pre-SketchUp (casos 5–7) deben figurar en el contrato.
+    assert.match(md, /esquema3dRegresionPreSketchup/)
+    assert.match(md, /círculo se ve como círculo/i)
   })
 })
 
@@ -81,8 +78,6 @@ describe('contrato · C-3D-02 / C-3D-03 vistas y espacio único', () => {
     assert.equal(draw.length, 6)
     assert.equal(ESQUEMA_3D_VIEWS.filter((v) => String(v.id).startsWith('iso-')).length, 4)
     assert.equal(isEsquema3dDrawView('front'), true)
-    assert.equal(isEsquema3dSketchView('iso-ne'), true)
-    assert.equal(isEsquema3dSketchView('front'), true)
   })
 
   it('proyección frontal y superior usan el mismo world X', () => {
@@ -90,27 +85,6 @@ describe('contrato · C-3D-02 / C-3D-03 vistas y espacio único', () => {
     const top = projectWorld3dToCanvas(pt, 'top')
     const front = projectWorld3dToCanvas(pt, 'front')
     assert.ok(Math.abs(top.x - front.x) < 1e-9)
-  })
-})
-
-describe('contrato · C-3D-06 / C-3D-13 cara tocada (SketchUp)', () => {
-  it('documento declara C-3D-13 y dibujo sobre cara tocada', () => {
-    const md = readFileSync(join(__dirname, 'CONTRATO_ESQUEMA.md'), 'utf8')
-    assert.match(md, /C-3D-13/)
-    assert.match(md, /cara tocada/i)
-    assert.match(md, /más cercana a quien mira/i)
-  })
-
-  it('vista frontal nunca elige la cara de atrás', () => {
-    const box = extrudeClosedEntity(rectAt(0, 0, 1.5, 1.5, 'box'), {
-      viewId: 'top', cotaSuperior: 1.5, cotaInferior: 0,
-    }).solid
-    box.id = 'box'
-    const front = solidFaceDescriptors(box).find((f) => f.faceId === 'front')
-    const canvas = projectWorld3dToCanvas(front.center, 'front')
-    const hit = pickNearestFaceUnderCursor([box], canvas, 'front')
-    assert.equal(hit.faceId, cameraFacingFaceId('front'))
-    assert.notEqual(hit.faceId, 'back')
   })
 })
 

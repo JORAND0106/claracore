@@ -23,12 +23,6 @@ import {
   viewProfileMeta,
   worldZToCota,
 } from './esquema3dViews.js'
-import {
-  cameraFacingFaceId,
-  faceOsnapPoints,
-  pickNearestFaceUnderCursor,
-  solidFaceDescriptors,
-} from './esquema3dFace.js'
 
 const CIRCLE_SEGMENTS = 96
 
@@ -258,47 +252,16 @@ export function extrudeClosedEntity(obj, {
   color,
   id,
   faceDepthWorld = null,
-  /** true = hacia afuera de la cara; false = hacia adentro (default, compat). */
-  outward = false,
-  /** Cara origen (top/bottom/front/…); ajusta cotas si se pasa baseZ. */
-  faceId = null,
-  /** Cota de la cara (m) para extruir desde top/bottom sin popup de cotas absolutas. */
-  baseZCota = null,
 } = {}) {
   const contour = closedEntityToContour(obj)
   if (!contour?.ring?.length) return { ok: false, error: 'Seleccione un contorno cerrado.' }
 
   const vid = normalizeViewId(viewId)
   const mode = extrudeModeForView(vid)
-  const out = !!outward
 
   if (mode === 'cotas') {
-    let z0
-    let z1
-    if (baseZCota != null && Number.isFinite(Number(baseZCota)) && lengthM != null) {
-      const vLen = validateExtrudeLengthM(lengthM)
-      if (!vLen.ok) return vLen
-      const base = Number(baseZCota)
-      const L = vLen.lengthM
-      const fid = faceId || (vid === 'bottom' ? 'bottom' : 'top')
-      if (fid === 'bottom') {
-        // Cara inferior: afuera = −Z; adentro = +Z
-        z0 = out ? base - L : base
-        z1 = out ? base : base + L
-      } else {
-        // Cara superior: afuera = +Z; adentro = −Z
-        z0 = out ? base : base - L
-        z1 = out ? base + L : base
-      }
-      if (!(z1 > z0)) {
-        return { ok: false, error: 'La longitud de extrusión debe producir altura positiva.' }
-      }
-    } else {
-      const v = validateCotas(cotaSuperior, cotaInferior)
-      if (!v.ok) return v
-      z0 = v.z0
-      z1 = v.z1
-    }
+    const v = validateCotas(cotaSuperior, cotaInferior)
+    if (!v.ok) return v
     let ring = contour.ring
     if (vid === 'bottom') {
       // Vista inferior: el lienzo Y está invertido respecto a world Y.
@@ -313,16 +276,14 @@ export function extrudeClosedEntity(obj, {
       sourceEntityId: obj.id || null,
       extrudeParams: {
         viewId: vid,
-        cotaSuperior: z1,
-        cotaInferior: z0,
-        outward: out,
-        faceId: faceId || null,
+        cotaSuperior: v.z1,
+        cotaInferior: v.z0,
       },
       cells: [{
         ring: closeRing(ring)?.slice(0, -1) || ring,
         holes: [],
-        z0,
-        z1,
+        z0: v.z0,
+        z1: v.z1,
         analytic: contour.analytic,
       }],
     }
@@ -338,7 +299,6 @@ export function extrudeClosedEntity(obj, {
     viewId: vid,
     lengthM: vLen.lengthM,
     faceDepthWorld: faceDepthWorld == null ? 0 : Number(faceDepthWorld),
-    outward: out,
   })
   if (!built.ok) return built
 
@@ -353,8 +313,6 @@ export function extrudeClosedEntity(obj, {
       viewId: vid,
       lengthM: vLen.lengthM,
       faceDepthWorld: faceDepthWorld == null ? 0 : Number(faceDepthWorld),
-      outward: out,
-      faceId: faceId || null,
     },
     cells: built.cells,
   }
@@ -387,15 +345,11 @@ function buildCanonicalFromProfile({
   viewId,
   lengthM,
   faceDepthWorld = 0,
-  outward = false,
 }) {
   const meta = viewProfileMeta(viewId)
   const lengthPx = metersToWorld(lengthM)
   const d0 = Number(faceDepthWorld) || 0
-  // depthSign entra a la escena desde la vista de la cara (= hacia adentro del sólido
-  // si la cara es la que mira a esa vista). Afuera = sentido opuesto.
-  const dir = outward ? -meta.depthSign : meta.depthSign
-  const d1 = d0 + dir * lengthPx
+  const d1 = d0 + meta.depthSign * lengthPx
   const depthMin = Math.min(d0, d1)
   const depthMax = Math.max(d0, d1)
 
@@ -924,8 +878,11 @@ export function collectSolidsOsnap(solids, viewId, cotaRefM = 0, excludeSolidId 
  * 3) OSNAP 3D más cercano a los puntos del contorno
  * 4) 0 (plano de referencia de la vista)
  */
-export function inferFaceDepthForExtrude(entity, solids, viewId, cotaRefM = 0, orbit = null) {
+export function inferFaceDepthForExtrude(entity, solids, viewId, cotaRefM = 0) {
   const id = normalizeViewId(viewId)
+  if (entity && Number.isFinite(Number(entity.viewDepthWorld))) {
+    // Preferir hit de cara si el centro cae sobre un sólido (más fiable).
+  }
   const pts = []
   if (Number.isFinite(entity?.x1) && Number.isFinite(entity?.y1)) {
     pts.push({ x: entity.x1, y: entity.y1 })
@@ -943,45 +900,33 @@ export function inferFaceDepthForExtrude(entity, solids, viewId, cotaRefM = 0, o
       y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
     }
     : null
-  // 1) Cara más cercana bajo el contorno (nunca la de atrás).
   if (center) {
-    const face = pickNearestFaceUnderCursor(solids, center, id, { orbit, cotaRefM })
-    if (face) {
+    const support = hitSolidFaceAtView(solids, center, id, cotaRefM)
+    if (support) {
       return {
-        faceDepthWorld: face.depthWorld,
-        support: face.solid,
-        face,
-        viewPlane: face.viewPlane,
+        faceDepthWorld: solidFaceDepthWorld(support, id),
+        support,
         source: 'face',
       }
     }
   }
-  // 2) Profundidad guardada al dibujar (OSNAP / cara).
   if (Number.isFinite(Number(entity?.viewDepthWorld))) {
     return {
       faceDepthWorld: Number(entity.viewDepthWorld),
-      support: entity.faceSolidId
-        ? ((solids || []).find((s) => s.id === entity.faceSolidId) || null)
-        : null,
-      viewPlane: entity.viewPlane || id,
+      support: null,
       source: 'entity',
     }
   }
-  // 3) OSNAP solo de caras que miran a la cámara.
   const thr = metersToWorld(0.35)
   let best = null
   let bestDist = thr
-  const facingId = cameraFacingFaceId(id)
-  for (const solid of solids || []) {
-    const desc = (solidFaceDescriptors(solid) || []).find((f) => f.faceId === facingId)
-    if (!desc) continue
-    for (const sp of faceOsnapPoints(desc, id, { orbit, cotaRefM })) {
-      for (const pt of pts) {
-        const d = Math.hypot(pt.x - sp.x, pt.y - sp.y)
-        if (d < bestDist) {
-          bestDist = d
-          best = sp
-        }
+  const osnaps = collectSolidsOsnap(solids, id, cotaRefM)
+  for (const pt of pts) {
+    for (const sp of osnaps) {
+      const d = Math.hypot(pt.x - sp.x, pt.y - sp.y)
+      if (d < bestDist) {
+        bestDist = d
+        best = sp
       }
     }
   }
@@ -989,7 +934,6 @@ export function inferFaceDepthForExtrude(entity, solids, viewId, cotaRefM = 0, o
     return {
       faceDepthWorld: best.faceDepthWorld,
       support: (solids || []).find((s) => s.id === best.solidId) || null,
-      viewPlane: best.viewPlane || id,
       source: 'osnap',
     }
   }
@@ -1054,12 +998,35 @@ export function snapSolidMoveDelta({
 }
 
 /**
- * Sólido bajo un punto de lienzo: cara más cercana a quien mira (nunca la de atrás).
- * @returns {object|null} sólido (compat) — use pickNearestFaceUnderCursor para la cara.
+ * Sólido bajo un punto de lienzo en la vista actual (cara visible).
+ * Prefiere el de menor área de cara (elementos apoyados sobre muros).
  */
-export function hitSolidFaceAtView(solids, canvasPt, viewId, cotaRefM = 0, orbit = null) {
-  const face = pickNearestFaceUnderCursor(solids, canvasPt, viewId, { orbit, cotaRefM })
-  return face?.solid || null
+export function hitSolidFaceAtView(solids, canvasPt, viewId, cotaRefM = 0) {
+  const list = solids || []
+  let best = null
+  let bestArea = Infinity
+  for (const solid of list) {
+    const snaps = solidFaceSnapPoints(solid, viewId, cotaRefM)
+    if (snaps.length < 4) continue
+    const xs = snaps.filter((s) => s.kind === 'corner').map((s) => s.x)
+    const ys = snaps.filter((s) => s.kind === 'corner').map((s) => s.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    if (
+      canvasPt.x < minX - 1
+      || canvasPt.x > maxX + 1
+      || canvasPt.y < minY - 1
+      || canvasPt.y > maxY + 1
+    ) continue
+    const area = Math.abs((maxX - minX) * (maxY - minY))
+    if (area < bestArea) {
+      bestArea = area
+      best = solid
+    }
+  }
+  return best
 }
 
 function polygonsFromCell(cell) {
