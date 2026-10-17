@@ -319,6 +319,9 @@ export function breakdownRowsForBooleanSolid(solid, {
   }
   const net = round2(meta.netVolumeM3 ?? solidVolumeM3(solid))
   const netSigned = op === 'subtract' ? -net : net
+  // Fórmula por números de fila: "3 − 3.1" (sin medidas engañosas).
+  const netParts = [String(num), ...Array.from({ length: subI - 1 }, (_, i) => `${num}.${i + 1}`)]
+  const netOpLabel = netParts.join(' − ')
   rows.push({
     numLabel: `${num}.${subI}`,
     num,
@@ -329,16 +332,18 @@ export function breakdownRowsForBooleanSolid(solid, {
     volumeM3: net,
     signedM3: netSigned,
     countsInTotal: true,
+    isNetRow: true,
+    netOpLabel,
     color,
     discountFromNombre: op === 'subtract' ? discountFromNombre : null,
     detail: {
       color,
-      longM: meta.base.longM,
-      anchM: meta.base.anchM,
-      espesorM: meta.base.espesorM,
+      longM: null,
+      anchM: null,
+      espesorM: null,
       volumeM3: net,
       forma: 'Volumen neto',
-      formaCalculo: `${fmt(baseVol)} − ${(meta.subtracted || []).map((s) => fmt(round2(s.volumeM3))).join(' − ')} = ${fmt(net)} m³`,
+      formaCalculo: `${netOpLabel} = ${fmt(net)} m³`,
     },
   })
   return rows
@@ -409,6 +414,8 @@ export function breakdownRowsForNestedDiscount(parentLine, parentResolved, calc,
   const targetName = parentLine.discountFromSolidId
     ? ((calc?.lines || []).find((l) => l.solidId === parentLine.discountFromSolidId)?.nombre || null)
     : null
+  const netParts = [String(num), ...Array.from({ length: subI - 1 }, (_, i) => `${num}.${i + 1}`)]
+  const netOpLabel = netParts.join(' − ')
   rows.push({
     numLabel: `${num}.${subI}`,
     num,
@@ -419,16 +426,18 @@ export function breakdownRowsForNestedDiscount(parentLine, parentResolved, calc,
     volumeM3: net,
     signedM3: netSigned,
     countsInTotal: true,
+    isNetRow: true,
+    netOpLabel,
     color,
     discountFromNombre: parentLine.op === 'subtract' ? targetName : null,
     detail: {
       color,
-      longM: parentResolved.detail?.longM,
-      anchM: parentResolved.detail?.anchM,
-      espesorM: parentResolved.detail?.espesorM,
+      longM: null,
+      anchM: null,
+      espesorM: null,
       volumeM3: net,
       forma: 'Volumen neto',
-      formaCalculo: `${fmt(full)} − ${fmt(deducted)} = ${fmt(net)} m³`,
+      formaCalculo: `${netOpLabel} = ${fmt(net)} m³`,
     },
   })
   return rows

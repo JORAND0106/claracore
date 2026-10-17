@@ -172,7 +172,7 @@ describe('sólidos internos (selección / líneas ocultas)', () => {
     }
     const solids = [big, inner]
     drawSolid3d(ctx, big, { viewId: 'top', solids, zoom: 1, pixelScale: 1, nested: false })
-    assert.ok(fills.some((f) => String(f).includes('0.4')), 'externo fill translucido')
+    assert.ok(fills.some((f) => /rgba?\([^)]+,\s*0\.[23]/.test(String(f))), 'externo fill translucido')
     fills.length = 0
     drawSolid3d(ctx, inner, { viewId: 'top', solids, zoom: 1, pixelScale: 1, nested: true })
     assert.ok(fills.length > 0, 'interno también tiene fill (se lee a través)')
