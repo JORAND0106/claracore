@@ -30,6 +30,10 @@ import EstadoDocumentalInformeModal, {
   EstadoDocumentalInformeButton,
 } from './EstadoDocumentalInformeModal'
 import { ESTADO_DOCUMENTAL_CODIGO } from './estadoDocumentalInformeOptions.js'
+import {
+  estiloCeldaValidacion,
+  patchFilaValidacionAuditoria,
+} from './rrhhValidacionCelda.js'
 
 function EmpresaLogoPlaceholder({ accent = '#4A7C94', size = 44 }) {
   return (
@@ -755,21 +759,24 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   <th style={sheetUi.th}>Cargo</th>
                   <th style={sheetUi.th}>Tipo de contrato</th>
                   <th style={{ ...sheetUi.th, minWidth: 120 }}>Documentación</th>
+                  <th style={sheetUi.th}>Validación</th>
                   <th style={sheetUi.th}>Estado</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td style={sheetUi.td} colSpan={6}>Cargando…</td></tr>
+                  <tr><td style={sheetUi.td} colSpan={7}>Cargando…</td></tr>
                 )}
                 {!loading && items.length === 0 && (
                   <tr>
-                    <td style={sheetUi.td} colSpan={6}>
+                    <td style={sheetUi.td} colSpan={7}>
                       No hay colaboradores en esta empresa.
                     </td>
                   </tr>
                 )}
-                {items.map((row) => (
+                {items.map((row) => {
+                  const celdaVal = estiloCeldaValidacion(row, theme, uiTheme, sheetUi.td)
+                  return (
                   <tr
                     key={row.id}
                     onClick={() => abrirDetalle(row)}
@@ -784,9 +791,13 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     <td style={{ ...sheetUi.td, verticalAlign: 'middle' }}>
                       <DocsFillBattery docsFill={row.docs_fill} />
                     </td>
+                    <td style={celdaVal.style} title={celdaVal.title}>
+                      {celdaVal.label}
+                    </td>
                     <td style={sheetUi.td}>{row.estado}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -955,6 +966,12 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     setDetalle(full)
                     const withMedia = await syncMediaPreviews(full, formFromTrabajador(full))
                     setEditForm(withMedia)
+                    // Sincroniza estado/auditoría en la grilla sin recargar toda la página.
+                    setItems((prev) => prev.map((r) => (
+                      Number(r.id) === Number(full.id)
+                        ? { ...r, ...patchFilaValidacionAuditoria(full) }
+                        : r
+                    )))
                     await cargar()
                   }}
                 />
