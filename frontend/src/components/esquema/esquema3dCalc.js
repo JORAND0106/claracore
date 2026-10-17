@@ -45,10 +45,34 @@ export function createCalcLine({ solidId, nombre, op = 'sum', discountFromSolidI
   return {
     id: uid('vl'),
     solidId: solidId || null,
-    nombre: String(nombre || '').trim() || 'Elemento',
+    // Nombre vacío por defecto: el usuario debe nombrarlo (memoria legible).
+    nombre: nombre == null ? '' : String(nombre).trim(),
     op: op === 'subtract' ? 'subtract' : 'sum',
     discountFromSolidId: op === 'subtract' ? (discountFromSolidId || null) : null,
   }
+}
+
+/** ¿La línea de cálculo tiene nombre usable? */
+export function calcLineHasNombre(line) {
+  return !!(line && String(line.nombre || '').trim())
+}
+
+/** Última línea del cálculo activo sin nombre (bloquea agregar otra). */
+export function lastCalcLineNeedsNombre(calc) {
+  const lines = calc?.lines || []
+  if (!lines.length) return null
+  const last = lines[lines.length - 1]
+  return calcLineHasNombre(last) ? null : last
+}
+
+/** Algún cálculo tiene elementos sin nombre (bloquea guardar). */
+export function volumeCalcsHaveUnnamed(calcs) {
+  for (const c of calcs || []) {
+    for (const line of c.lines || []) {
+      if (!calcLineHasNombre(line)) return true
+    }
+  }
+  return false
 }
 
 /**
