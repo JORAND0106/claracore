@@ -2,12 +2,13 @@
  * Rotulado de esquema guardado: márgenes, contorno, título y tabla de coords.
  * Única fuente para Guardar desde cualquier módulo (Seguimiento, SicoeObra, Presupuesto).
  *
- * Resolución de export: el dibujo se rasteriza a ~2× la escala histórica para que
- * textos (tabla de coordenadas, cotas, etiquetas) sigan legibles al reducirse al
- * contenedor de memorias FO-EO-04 (~240 px de alto) y al hacer zoom en el PDF.
+ * Siempre PNG de alta resolución, fondo blanco (legible en cualquier tema).
+ * En modo 3D incluye los sólidos en la vista activa al guardar.
  */
 import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esquemaGeometry.js'
 import { partitionBackgroundFirst } from './esquemaZOrder.js'
+import { linkedSourceEntityIds, solidXyBounds } from './esquema3dSolids.js'
+import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
 
 export const EXPORT_MARGIN = 48
 export const EXPORT_TITLE_H = 56
@@ -19,17 +20,17 @@ export const EXPORT_MARGIN_CONTOUR_WIDTH = 2
  * Lado máximo del área de dibujo (sin título/tabla) en el PNG exportado.
  * Histórico: 1100 → insuficiente para tipografía de tabla en memorias.
  */
-export const EXPORT_MAX_INNER = 2200
+export const EXPORT_MAX_INNER = 2800
 /** Tope de escala mundo→export (evita PNG enormes en escenas pequeñas). */
-export const EXPORT_SCALE_CAP = 3.2
+export const EXPORT_SCALE_CAP = 4
 /** Ancho mínimo del canvas exportado (landscape) sin tabla de coords. */
-export const EXPORT_MIN_WIDTH = 1400
+export const EXPORT_MIN_WIDTH = 1600
 /**
  * Con tabla de coordenadas el ancho se acota para que el aspect ratio
  * encaje mejor en el contenedor FO-EO-04 (~380×240): un PNG muy ancho
  * queda limitado por el ancho y el texto se ve más pequeño.
  */
-export const EXPORT_MIN_WIDTH_WITH_TABLE = 960
+export const EXPORT_MIN_WIDTH_WITH_TABLE = 1100
 /**
  * Ancho de referencia de la tabla para tipografía base.
  * A anchos mayores se escala el texto (con tope) para legibilidad a tamaño real.
@@ -57,6 +58,66 @@ export function sceneExportBounds(objects) {
     w: Math.max(40, maxX - minX),
     h: Math.max(40, maxY - minY),
   }
+}
+
+/** Bounds de sólidos 3D en el espacio proyectado de la vista/órbita activa. */
+export function solidsExportBounds(solids, viewId = 'top', orbit = null) {
+  const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  if (!list.length) return null
+  const vid = viewId || 'top'
+  const cam = orbit || solidsViewCamera(vid, list, { orbitFree: false })
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const solid of list) {
+    for (const cell of solid.cells || []) {
+      const z0 = Math.min(Number(cell.z0) || 0, Number(cell.z1) || 0)
+      const z1 = Math.max(Number(cell.z0) || 0, Number(cell.z1) || 0)
+      for (const p of cell.ring || []) {
+        const a = projectWorld3dToCanvas({ x: p.x, y: p.y, zCota: z0 }, vid, 0, cam)
+        const b = projectWorld3dToCanvas({ x: p.x, y: p.y, zCota: z1 }, vid, 0, cam)
+        minX = Math.min(minX, a.x, b.x)
+        minY = Math.min(minY, a.y, b.y)
+        maxX = Math.max(maxX, a.x, b.x)
+        maxY = Math.max(maxY, a.y, b.y)
+      }
+    }
+  }
+  if (!Number.isFinite(minX)) {
+    // Fallback planta XY
+    for (const s of list) {
+      const bb = solidXyBounds(s)
+      if (!bb) continue
+      minX = Math.min(minX, bb.x)
+      minY = Math.min(minY, bb.y)
+      maxX = Math.max(maxX, bb.x + bb.w)
+      maxY = Math.max(maxY, bb.y + bb.h)
+    }
+  }
+  if (!Number.isFinite(minX)) return { x: 0, y: 0, w: 400, h: 300 }
+  return {
+    x: minX,
+    y: minY,
+    w: Math.max(40, maxX - minX),
+    h: Math.max(40, maxY - minY),
+  }
+}
+
+/** Une bounds 2D + 3D para el marco de export. */
+export function mergeExportBounds(a, b) {
+  if (!a) return b
+  if (!b) return a
+  const minX = Math.min(a.x, b.x)
+  const minY = Math.min(a.y, b.y)
+  const maxX = Math.max(a.x + a.w, b.x + b.w)
+  const maxY = Math.max(a.y + a.h, b.y + b.h)
+  return { x: minX, y: minY, w: Math.max(40, maxX - minX), h: Math.max(40, maxY - minY) }
+}
+
+/** True si el data URL es PNG (nunca PDF). */
+export function isEsquemaPngDataUrl(dataUrl) {
+  return /^data:image\/png[;,]/i.test(String(dataUrl || ''))
 }
 
 /**
@@ -222,13 +283,23 @@ export function drawExportCoordTable(ctx, nodes, x, y, width, opts = {}) {
 
 /**
  * Dimensiones del PNG rotulado (sin rasterizar). Útil para tests y presupuestos.
- * @param {{ objects?: object[], nodes?: object[] }} opts
+ * @param {{ objects?: object[], nodes?: object[], solids3d?: object[], view3d?: string, orbit?: object|null }} opts
  */
-export function computeEsquemaExportSize({ objects, nodes } = {}) {
+export function computeEsquemaExportSize({ objects, nodes, solids3d, view3d, orbit } = {}) {
   const margin = EXPORT_MARGIN
   const titleH = EXPORT_TITLE_H
   const rows = nodes || []
-  const bb = sceneExportBounds(objects)
+  const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  const linked = solids.length ? linkedSourceEntityIds(solids) : null
+  const objs2d = linked
+    ? (objects || []).filter((o) => o && !linked.has(o.id))
+    : (objects || [])
+  const bb2d = sceneExportBounds(objs2d)
+  const bb3d = solids.length ? solidsExportBounds(solids, view3d || 'top', orbit) : null
+  const bb = mergeExportBounds(
+    objs2d.length ? bb2d : null,
+    bb3d,
+  ) || bb2d
   // Escala natural hi-res: NO aplastar el dibujo cuando hay tabla de coordenadas.
   // (Regresión 7c70e5dc: reducir scale para “ganar” alto de tabla hacía trazos/
   // achurados ilegibles en el PNG; la tipografía de tabla se agranda vía heightBoost.)
@@ -281,19 +352,48 @@ export function computeEsquemaExportSize({ objects, nodes } = {}) {
 
 /**
  * Compone el PNG rotulado (título + márgenes + contorno + rosa + tabla).
+ * Siempre `data:image/png` con fondo blanco.
+ * En 3D: dibuja sólidos en la vista/órbita activa (`drawSolid` = drawSolid3d).
  * `drawObject` lo inyecta el editor para no duplicar el rasterizado de entidades.
  */
-export function composeEsquemaExport({ title, objects, nodes, drawObject }) {
+export function composeEsquemaExport({
+  title,
+  objects,
+  nodes,
+  drawObject,
+  solids3d = null,
+  view3d = 'top',
+  orbit = null,
+  drawSolid = null,
+} = {}) {
   const margin = EXPORT_MARGIN
   const titleH = EXPORT_TITLE_H
   const rows = nodes || []
-  const layout = computeEsquemaExportSize({ objects, nodes })
+  const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  const mode3d = solids.length > 0 && typeof drawSolid === 'function'
+  const linked = mode3d ? linkedSourceEntityIds(solids) : null
+  const objs2d = linked
+    ? (objects || []).filter((o) => o && !linked.has(o.id))
+    : (objects || [])
+  const cam = mode3d
+    ? (orbit || solidsViewCamera(view3d || 'top', solids, { orbitFree: false }))
+    : null
+  const layout = computeEsquemaExportSize({
+    objects: objs2d,
+    nodes: rows,
+    solids3d: mode3d ? solids : null,
+    view3d: view3d || 'top',
+    orbit: cam,
+  })
   const { w, h, scale, drawW, drawH, heightBoost } = layout
-  const bb = sceneExportBounds(objects)
+  const bb2d = sceneExportBounds(objs2d)
+  const bb3d = mode3d ? solidsExportBounds(solids, view3d || 'top', cam) : null
+  const bb = mergeExportBounds(objs2d.length ? bb2d : null, bb3d) || bb2d
   const c = document.createElement('canvas')
   c.width = Math.round(w)
   c.height = Math.round(h)
   const ctx = c.getContext('2d')
+  // Fondo siempre blanco (independiente del tema de la plataforma)
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, w, h)
 
@@ -311,9 +411,19 @@ export function composeEsquemaExport({ title, objects, nodes, drawObject }) {
   ctx.clip()
   ctx.translate(drawX + margin - bb.x * scale, titleH + margin - bb.y * scale)
   ctx.scale(scale, scale)
-  for (const obj of partitionBackgroundFirst(objects || [])) {
+  for (const obj of partitionBackgroundFirst(objs2d)) {
     if (obj?.type === 'image' && obj.fit) continue
     drawObject?.(ctx, obj, false, { skipResize: true, zoom: scale })
+  }
+  if (mode3d) {
+    for (const solid of solids) {
+      drawSolid(ctx, solid, {
+        viewId: view3d || 'top',
+        selected: false,
+        zoom: 1 / Math.max(scale, 0.25),
+        orbit: cam,
+      })
+    }
   }
   ctx.restore()
   // Contorno del margen / área imprimible (después del clip, sin tapar el dibujo)
@@ -331,5 +441,9 @@ export function composeEsquemaExport({ title, objects, nodes, drawObject }) {
     ctx.fillText('Tabla de coordenadas', tableX, tableY + Math.round(m.titleBlockH * 0.65))
     drawExportCoordTable(ctx, rows, tableX, tableY + m.titleBlockH + 4, tableW, { heightBoost })
   }
-  return Promise.resolve(c.toDataURL('image/png'))
+  const dataUrl = c.toDataURL('image/png')
+  if (!isEsquemaPngDataUrl(dataUrl)) {
+    return Promise.reject(new Error('El esquema debe guardarse como PNG.'))
+  }
+  return Promise.resolve(dataUrl)
 }

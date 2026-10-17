@@ -101,6 +101,31 @@ export function graficosPorLoteFromRegistros(regs) {
   return map
 }
 
+function esAdjuntoPdfGrafico(g) {
+  const mime = String(g?.mime || g?.mime_type || '').toLowerCase()
+  const kind = String(g?.kind || '').toLowerCase()
+  const nombre = String(g?.nombre || '').toLowerCase()
+  const url = String(g?.url || '')
+  if (kind === 'memoria-calculo') return true
+  if (mime.includes('pdf')) return true
+  if (/\.pdf(\?|$)/i.test(nombre) || /\.pdf(\?|$)/i.test(url)) return true
+  return false
+}
+
+/**
+ * Elige el gráfico principal: prioriza el esquema PNG (origen esquema),
+ * luego la última imagen; nunca un PDF de memoria de cálculo.
+ */
+export function pickPrimaryGraficoFromHistorial(hist) {
+  const lista = Array.isArray(hist) ? hist.filter((x) => x && x.url) : []
+  if (!lista.length) return null
+  const esquema = [...lista].reverse().find((g) => String(g.origen || '') === 'esquema' && !esAdjuntoPdfGrafico(g))
+  if (esquema) return esquema
+  const imagen = [...lista].reverse().find((g) => !esAdjuntoPdfGrafico(g))
+  if (imagen) return imagen
+  return lista[lista.length - 1]
+}
+
 /** Campos grafico_* listos para API a partir del historial del lote del registro. */
 export function graficosPayloadDesdeHistorial(hist) {
   const lista = Array.isArray(hist) ? hist.filter((x) => x && x.url) : []
@@ -112,10 +137,10 @@ export function graficosPayloadDesdeHistorial(hist) {
       graficos_historial: [],
     }
   }
-  const ult = lista[lista.length - 1]
+  const prim = pickPrimaryGraficoFromHistorial(lista) || lista[lista.length - 1]
   return {
-    grafico_url: ult.url,
-    grafico_numero: ult.numero ?? null,
+    grafico_url: prim.url,
+    grafico_numero: prim.numero ?? null,
     grafico_descripcion: 'Gráfico del registro',
     graficos_historial: lista,
   }
@@ -130,6 +155,8 @@ export async function urlADataUriParaEsquema(src) {
   if (src == null) return null
   const s = String(src).trim()
   if (!s || s === 'null' || s === 'undefined') return null
+  // No cargar PDF de memoria como fondo del editor (solo PNG/imagen).
+  if (s.startsWith('data:application/pdf') || /\.pdf(\?|$)/i.test(s)) return null
   if (s.startsWith('data:')) return s
 
   const blobToDataUri = (blob) => new Promise((resolve, reject) => {
@@ -143,7 +170,10 @@ export async function urlADataUriParaEsquema(src) {
     const res = await fetch(s, { mode: 'cors', credentials: 'omit' })
     if (res.ok) {
       const blob = await res.blob()
-      if (blob && blob.size > 0) return await blobToDataUri(blob)
+      if (blob && blob.size > 0) {
+        if (String(blob.type || '').includes('pdf')) return null
+        return await blobToDataUri(blob)
+      }
     }
   } catch {
     /* fallback Image + canvas */
@@ -169,14 +199,16 @@ export async function urlADataUriParaEsquema(src) {
   })
 }
 
-/** PNG data URI del editor → File listo para upload-grafico. */
+/** PNG data URI del editor → File listo para upload-grafico (siempre .png / image/png). */
 export async function dataUriEsquemaAFile(dataUrl, nombreBase = 'esquema') {
   if (!dataUrl) return null
+  if (String(dataUrl).startsWith('data:application/pdf')) return null
   const resp = await fetch(dataUrl)
   const blob = await resp.blob()
+  if (String(blob.type || '').includes('pdf')) return null
   return new File(
     [blob],
     `${nombreBase}_${Date.now()}.png`,
-    { type: blob.type || 'image/png' },
+    { type: 'image/png' },
   )
 }

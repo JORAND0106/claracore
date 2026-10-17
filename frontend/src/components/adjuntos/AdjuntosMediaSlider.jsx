@@ -4,8 +4,8 @@
  * PDF / memoria-calculo: tarjeta + vista previa y descarga al clic.
  */
 import { useState } from 'react'
-import { isEsquemaCalcAdjunto, isPdfAdjunto } from './adjuntosMedia'
-import EsquemaCalcAdjuntoPreview from '../esquema/EsquemaCalcAdjuntoPreview'
+import { isEsquemaAdjunto, isEsquemaCalcAdjunto, isPdfAdjunto } from './adjuntosMedia'
+import EsquemaCalcAdjuntoPreview, { resolveEsquemaCalcAdjuntoUrl } from '../esquema/EsquemaCalcAdjuntoPreview'
 
 export default function AdjuntosMediaSlider({
   t,
@@ -19,6 +19,8 @@ export default function AdjuntosMediaSlider({
   compact = false,
   renderImage = null,
   overlay = null,
+  /** Opcional: resuelve URL async (p. ej. Bitácora blob_path autenticado). */
+  resolveItemUrl = null,
 }) {
   const [preview, setPreview] = useState(null)
   const lista = Array.isArray(items) ? items.filter((x) => x && (x.url || x.source)) : []
@@ -31,10 +33,18 @@ export default function AdjuntosMediaSlider({
     if (next !== safeIdx) onIndexChange(next)
   }
 
-  const openItem = (item, idx) => {
-    // Memoria PDF / gráfico isométrico: siempre vista previa + descarga.
-    if (isEsquemaCalcAdjunto(item) || isPdfAdjunto(item)) {
-      setPreview({ item, siblings: lista })
+  const openItem = async (item, idx) => {
+    // Vista previa + descarga unificada (PDF memoria, PNG esquema/gráfico, fotos).
+    // En iPad el iframe data: PDF falla; el modal convierte a blob: y ofrece Abrir.
+    if (item?.url || item?.source || isEsquemaCalcAdjunto(item) || isPdfAdjunto(item) || isEsquemaAdjunto(item)) {
+      let enriched = item
+      if (!resolveEsquemaCalcAdjuntoUrl(item) && typeof resolveItemUrl === 'function') {
+        try {
+          const u = await resolveItemUrl(item, idx)
+          if (u) enriched = { ...item, url: u, previewUrl: u }
+        } catch { /* preview sin URL */ }
+      }
+      setPreview({ item: enriched, siblings: lista })
       return
     }
     if (typeof onClickItem === 'function') onClickItem(item, idx)
@@ -74,9 +84,8 @@ export default function AdjuntosMediaSlider({
   }
 
   const showPdfTile = isPdfAdjunto(actual)
-  const clickable = typeof onClickItem === 'function'
-    || isEsquemaCalcAdjunto(actual)
-    || isPdfAdjunto(actual)
+  // Cualquier slide con URL/source se puede abrir (esquema PNG, memoria PDF, fotos).
+  const clickable = !!(actual && (actual.url || actual.source || typeof onClickItem === 'function'))
 
   return (
     <div style={{ position: 'relative', width: '100%' }}>
