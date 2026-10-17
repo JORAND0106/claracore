@@ -52,8 +52,10 @@ describe('volumen vivo y vistas 3D', () => {
     const top = projectWorld3dToCanvas(pt, 'top')
     const ne = projectWorld3dToCanvas(pt, 'iso-ne')
     const front = projectWorld3dToCanvas(pt, 'front')
-    assert.deepEqual(top, { x: 100, y: 50 })
-    assert.notDeepEqual(ne, top)
+    assert.equal(top.x, 100)
+    assert.equal(top.y, 50)
+    assert.ok(Number.isFinite(top.depth))
+    assert.ok(ne.x !== top.x || ne.y !== top.y)
     assert.equal(front.x, 100)
     assert.ok(front.y !== top.y)
 

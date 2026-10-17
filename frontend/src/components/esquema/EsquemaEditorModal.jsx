@@ -56,6 +56,7 @@ import {
   scaleObjectUniform,
   selectIdsInDrag,
   snapThresholdWorld,
+  solidSnapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
 import { finalizeJoinSequence, joinIntersectingLines, materializeJoinAsClosedPolygon, buildJoinPolygonDraft } from './esquemaJoin'
@@ -1870,8 +1871,9 @@ export default function EsquemaEditorModal({
     }
     pushHistory()
     consumeSolidOperands([base, ...others], r.solid)
-    setOp3d(null)
-    setToolHint(`Sustracción · ${Number(r.solid.volumeM3).toFixed(2)} m³`)
+    // Dejar el resultado seleccionado listo para otra sustracción en cadena.
+    setOp3d('sustraer')
+    setToolHint(`Sustracción · ${Number(r.solid.volumeM3).toFixed(2)} m³ · toque más sólidos a quitar y pulse Sustraer.`)
   }, [consumeSolidOperands, gatherSelectedSolids3d])
 
   const beginCut3d = useCallback(() => {
@@ -2581,7 +2583,16 @@ export default function EsquemaEditorModal({
 
   // El marcador visible (8–13 px) es la zona caliente; no un disco menor de 6.5 px.
   const snapThreshold = () => snapThresholdWorld(zoomRef.current)
+  /** OSNAP de sólidos: distancia fija en pantalla (independiente del zoom). */
+  const solidSnapThreshold = () => solidSnapThresholdWorld(zoomRef.current, 16)
   const handleHitThreshold = () => 10 / (zoomRef.current || 1)
+  const currentOrbitCamera = () => {
+    if (!mode3dRef.current) return null
+    return solidsViewCamera(view3dRef.current || 'top', solids3dRef.current || [], {
+      orbitFree: !!orbitFreeRef.current,
+      orbitAngles: orbitAnglesRef.current,
+    })
+  }
 
   const snapSearchObjects = () => {
     const list = objectsRef.current || []
@@ -2620,14 +2631,15 @@ export default function EsquemaEditorModal({
   }
 
   const snapWorldPoint = (p, { fromPoint = null, excludeId = null, allowPerp = true } = {}) => {
-    // En vistas de cara 3D: OSNAP de sólidos (vértices, medios, centros, cara).
-    if (mode3dRef.current && isEsquema3dDrawView(view3dRef.current)) {
+    // OSNAP 3D de sólidos en cualquier vista de dibujo (e iso si aplica): siempre.
+    if (mode3dRef.current && (isEsquema3dDrawView(view3dRef.current) || isEsquema3dIsoView(view3dRef.current) || orbitFreeRef.current)) {
       const viewId = normalizeViewId(view3dRef.current)
-      const thr = snapThreshold()
+      const orbit = currentOrbitCamera()
+      const thr = solidSnapThreshold()
       let bestFace = null
       let bestDist = thr
       for (const solid of solids3dRef.current || []) {
-        for (const sp of solidOsnapPoints(solid, viewId)) {
+        for (const sp of solidOsnapPoints(solid, viewId, 0, orbit)) {
           const d = Math.hypot(p.x - sp.x, p.y - sp.y)
           if (d < bestDist) {
             bestDist = d
@@ -3683,8 +3695,15 @@ export default function EsquemaEditorModal({
             : null
           // Preferir agarre en OSNAP del sólido (vértice/centro) para enganchar al soltar.
           let grab = p
-          for (const sp of solidOsnapPoints(hitS, normalizeViewId(view3dRef.current || 'top'))) {
-            if (Math.hypot(p.x - sp.x, p.y - sp.y) <= snapThreshold()) {
+          const grabOrbit = currentOrbitCamera()
+          const grabThr = solidSnapThreshold()
+          for (const sp of solidOsnapPoints(
+            hitS,
+            normalizeViewId(view3dRef.current || 'top'),
+            0,
+            grabOrbit,
+          )) {
+            if (Math.hypot(p.x - sp.x, p.y - sp.y) <= grabThr) {
               grab = { x: sp.x, y: sp.y }
               snapRef.current = sp
               break
@@ -4517,7 +4536,8 @@ export default function EsquemaEditorModal({
           viewId,
           grabCanvas: { x: d.ox, y: d.oy },
           cursorCanvas: raw,
-          threshold: snapThreshold(),
+          threshold: solidSnapThreshold(),
+          orbit: currentOrbitCamera(),
         })
         const dx = snapped.dx
         const dy = snapped.dy
