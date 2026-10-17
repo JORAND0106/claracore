@@ -15,13 +15,24 @@ export function isEsquemaCalcAdjunto(item) {
 }
 
 export function isPdfAdjunto(item) {
-  const mime = String(item?.mime || item?.mime_type || item?.tipo || item?.source?.mime || '').toLowerCase()
-  const name = String(item?.nombre || item?.nombre_archivo || item?.name || item?.label || '').toLowerCase()
+  const mime = String(item?.mime || item?.mime_type || item?.tipo || item?.source?.mime || item?.source?.mime_type || '').toLowerCase()
+  const name = String(item?.nombre || item?.nombre_archivo || item?.name || item?.label || item?.source?.nombre || '').toLowerCase()
   const kind = String(item?.kind || item?.source?.kind || '').toLowerCase()
-  if (kind === 'memoria-calculo') return true
+  const url = String(item?.url || item?.previewUrl || item?.data_uri || item?.dataUri || item?.source?.url || '')
+  // Memoria nueva es PNG: no tratarla como PDF por el kind.
+  if (kind === 'memoria-calculo') {
+    if (mime.startsWith('image/') || /\.png(\?|$)/i.test(name) || /^data:image\//i.test(url) || /\.png(\?|$)/i.test(url)) {
+      return false
+    }
+    if (mime.includes('pdf') || /\.pdf(\?|$)/i.test(name) || /^data:application\/pdf/i.test(url) || /\.pdf(\?|$)/i.test(url)) {
+      return true
+    }
+    // Por defecto (sin mime claro): PNG de memoria actual.
+    return false
+  }
   if (mime.includes('pdf')) return true
   if (/\.pdf(\?|$)/i.test(name)) return true
-  if (/\.pdf(\?|$)/i.test(String(item?.url || item?.previewUrl || ''))) return true
+  if (/\.pdf(\?|$)/i.test(url)) return true
   return false
 }
 

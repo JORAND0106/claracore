@@ -920,10 +920,24 @@ function edgeKey(a, b) {
     : `${bx},${by}|${ax},${ay}`
 }
 
-/** Oscurece un hex para aristas contrastadas sobre caras del mismo color. */
-export function solidEdgeStrokeColor(color, selected = false) {
-  if (selected) return '#1d4ed8'
-  const raw = String(color || '#0f766e').trim()
+/**
+ * Estilo de dibujo técnico 3D (píxeles de pantalla fijos).
+ * Independiente del zoom / escala de exportación.
+ */
+export const SOLID3D_STYLE = Object.freeze({
+  visiblePx: 1.4,
+  hiddenPx: 1.05,
+  selectedPx: 2.1,
+  dashOnPx: 3.2,
+  dashOffPx: 2.4,
+  fillAlpha: 0.40,
+  fillAlphaNested: 0.32,
+  labelRPx: 9,
+  labelFontPx: 11,
+})
+
+function parseRgb(color, fallback = '#0f766e') {
+  const raw = String(color || fallback).trim()
   const m6 = raw.match(/^#([0-9a-fA-F]{6})$/)
   const m3 = raw.match(/^#([0-9a-fA-F]{3})$/)
   let r = 15
@@ -937,9 +951,48 @@ export function solidEdgeStrokeColor(color, selected = false) {
     r = parseInt(m3[1][0] + m3[1][0], 16)
     g = parseInt(m3[1][1] + m3[1][1], 16)
     b = parseInt(m3[1][2] + m3[1][2], 16)
+  } else {
+    const rgba = raw.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i)
+    if (rgba) {
+      r = Number(rgba[1])
+      g = Number(rgba[2])
+      b = Number(rgba[3])
+    }
   }
-  const dark = (c) => Math.max(0, Math.round(c * 0.45))
-  return `rgb(${dark(r)},${dark(g)},${dark(b)})`
+  return { r, g, b }
+}
+
+function mixRgb({ r, g, b }, factor) {
+  const f = Math.min(1, Math.max(0, factor))
+  return {
+    r: Math.round(r * f),
+    g: Math.round(g * f),
+    b: Math.round(b * f),
+  }
+}
+
+function rgbCss({ r, g, b }) {
+  return `rgb(${r},${g},${b})`
+}
+
+/** Arista visible: tono oscuro del color del sólido. */
+export function solidEdgeStrokeColor(color, selected = false) {
+  if (selected) return '#1d4ed8'
+  return rgbCss(mixRgb(parseRgb(color), 0.42))
+}
+
+/** Arista oculta: tono medio del color del sólido. */
+export function solidHiddenStrokeColor(color) {
+  return rgbCss(mixRgb(parseRgb(color), 0.62))
+}
+
+/**
+ * Grosor en unidades del ctx para obtener `px` píxeles de pantalla.
+ * `pixelScale` = escala actual del transform (zoom del editor o scale del export).
+ */
+export function solidLineWidthWorld(px, pixelScale = 1) {
+  const s = Math.max(Number(pixelScale) || 1, 0.05)
+  return Math.max(0.35, (Number(px) || 1) / s)
 }
 
 /**
@@ -982,15 +1035,18 @@ export function solidFootprintDimsM(solid) {
 }
 
 /**
- * Dibuja un sólido: caras macizas + aristas visibles (continua fuerte) y ocultas (punteada).
- * Sólido interno: sin relleno; solo aristas punteadas en su color (visto a través del externo).
- * La selección no sustituye el color del sólido (solo refuerza el trazo).
+ * Dibuja un sólido con reglas de dibujo técnico:
+ * - Caras con color + transparencia ligera (internos también, se leen a través).
+ * - Aristas visibles: continua fina, tono oscuro del color.
+ * - Aristas ocultas: punteada fina de trazos cortos, tono medio del color.
+ * Grosores en píxeles de pantalla vía `pixelScale` (no dependen del zoom aparente).
  */
 export function drawSolid3d(ctx, solid, {
   viewId = 'top',
   cotaRefM = 0,
   selected = false,
   zoom = 1,
+  pixelScale = null,
   orbit = null,
   solids = null,
   nested = null,
@@ -998,19 +1054,30 @@ export function drawSolid3d(ctx, solid, {
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
   const base = solid.color || '#0f766e'
-  const stroke = solidEdgeStrokeColor(base, selected)
-  const nestedStroke = base
-  const fill = solidColorToRgba(base, 0.94)
+  const strokeVis = solidEdgeStrokeColor(base, selected)
+  const strokeHid = solidHiddenStrokeColor(base)
+  const isNested = nested != null ? !!nested : solidIsInternal(solid, solids)
+  const fill = solidColorToRgba(
+    base,
+    isNested ? SOLID3D_STYLE.fillAlphaNested : SOLID3D_STYLE.fillAlpha,
+  )
   const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
   const flatTop = !useOrbit && viewId === 'top'
-  const isNested = nested != null ? !!nested : solidIsInternal(solid, solids)
-  const lw = Math.max(selected ? 1.8 : 1.35, (selected ? 2.6 : 2) / Math.max(zoom, 0.25))
-  const dash = [Math.max(3, 5 / Math.max(zoom, 0.25)), Math.max(2.5, 4 / Math.max(zoom, 0.25))]
+  // pixelScale = escala del transform del ctx; si no viene, usar zoom del editor.
+  const pScale = Math.max(Number(pixelScale != null ? pixelScale : zoom) || 1, 0.05)
+  const lwVis = solidLineWidthWorld(
+    selected ? SOLID3D_STYLE.selectedPx : SOLID3D_STYLE.visiblePx,
+    pScale,
+  )
+  const lwHid = solidLineWidthWorld(SOLID3D_STYLE.hiddenPx, pScale)
+  const dash = [
+    solidLineWidthWorld(SOLID3D_STYLE.dashOnPx, pScale),
+    solidLineWidthWorld(SOLID3D_STYLE.dashOffPx, pScale),
+  ]
   const doFills = pass === 'all' || pass === 'fills'
   const doEdges = pass === 'all' || pass === 'edges'
 
   ctx.save()
-  ctx.lineWidth = lw
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
 
@@ -1018,19 +1085,22 @@ export function drawSolid3d(ctx, solid, {
     for (const cell of solid.cells) {
       const zBottom = Math.min(cell.z0, cell.z1)
       const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
-      if (doFills && !isNested) {
+      if (doFills) {
         pathRing(ctx, ringBot)
         ctx.fillStyle = fill
         ctx.fill()
       }
       if (doEdges) {
         pathRing(ctx, ringBot)
-        ctx.strokeStyle = isNested ? nestedStroke : stroke
-        ctx.setLineDash(isNested ? dash : [])
+        ctx.strokeStyle = strokeVis
+        ctx.lineWidth = lwVis
+        ctx.setLineDash([])
         ctx.stroke()
         for (const hole of cell.holes || []) {
           pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
-          ctx.setLineDash(isNested ? dash : [])
+          ctx.strokeStyle = strokeHid
+          ctx.lineWidth = lwHid
+          ctx.setLineDash(dash)
           ctx.stroke()
         }
       }
@@ -1095,7 +1165,7 @@ export function drawSolid3d(ctx, solid, {
     }
   }
 
-  if (doFills && !isNested) {
+  if (doFills) {
     facePolys.sort((a, b) => a.depth - b.depth)
     ctx.fillStyle = fill
     for (const f of facePolys) {
@@ -1105,12 +1175,24 @@ export function drawSolid3d(ctx, solid, {
   }
 
   if (doEdges) {
-    // Interno: todas punteadas en su color. Externo: visibles continuas, ocultas punteadas.
-    ctx.strokeStyle = isNested ? nestedStroke : stroke
-    ctx.lineWidth = isNested ? Math.max(1.1, lw * 0.95) : lw
+    // Primero ocultas (punteadas), luego visibles (continuas) del mismo sólido.
     for (const e of edgeMap.values()) {
-      const hidden = isNested || (e.frontVotes === 0 && e.backVotes > 0)
-      ctx.setLineDash(hidden ? dash : [])
+      const hidden = e.frontVotes === 0 && e.backVotes > 0
+      if (!hidden) continue
+      ctx.strokeStyle = strokeHid
+      ctx.lineWidth = lwHid
+      ctx.setLineDash(dash)
+      ctx.beginPath()
+      ctx.moveTo(e.a.x, e.a.y)
+      ctx.lineTo(e.b.x, e.b.y)
+      ctx.stroke()
+    }
+    for (const e of edgeMap.values()) {
+      const hidden = e.frontVotes === 0 && e.backVotes > 0
+      if (hidden) continue
+      ctx.strokeStyle = strokeVis
+      ctx.lineWidth = lwVis
+      ctx.setLineDash([])
       ctx.beginPath()
       ctx.moveTo(e.a.x, e.a.y)
       ctx.lineTo(e.b.x, e.b.y)
@@ -1121,23 +1203,141 @@ export function drawSolid3d(ctx, solid, {
   ctx.restore()
 }
 
-/** Orden de pintado: externos (fills+edges) primero; internos solo edges al final. */
+/** Centroide proyectado aproximado de un sólido (para etiquetas #). */
+export function solidProjectedCentroid(solid, viewId = 'top', cotaRefM = 0, orbit = null) {
+  const pts = []
+  for (const cell of solid?.cells || []) {
+    const z0 = Math.min(Number(cell.z0) || 0, Number(cell.z1) || 0)
+    const z1 = Math.max(Number(cell.z0) || 0, Number(cell.z1) || 0)
+    const zMid = (z0 + z1) / 2
+    for (const p of cell.ring || []) {
+      pts.push(projectPt(p, zMid, viewId, cotaRefM, orbit))
+    }
+  }
+  if (!pts.length) return null
+  let sx = 0
+  let sy = 0
+  let sd = 0
+  for (const q of pts) {
+    sx += q.x
+    sy += q.y
+    sd += q.depth || 0
+  }
+  return { x: sx / pts.length, y: sy / pts.length, depth: sd / pts.length }
+}
+
+/**
+ * Dibuja etiquetas numeradas (círculo + #) sin solaparse.
+ * `labels`: [{ solidId, num }]
+ */
+export function drawSolidNumberLabels(ctx, solids, {
+  labels = [],
+  viewId = 'top',
+  cotaRefM = 0,
+  orbit = null,
+  pixelScale = 1,
+} = {}) {
+  if (!ctx || !labels?.length) return
+  const list = solids || []
+  const pScale = Math.max(Number(pixelScale) || 1, 0.05)
+  const r = solidLineWidthWorld(SOLID3D_STYLE.labelRPx, pScale)
+  const fontPx = SOLID3D_STYLE.labelFontPx
+  const fontWorld = solidLineWidthWorld(fontPx, pScale)
+  const placed = []
+  const minDist = r * 2.4
+
+  const anchors = labels.map((lb) => {
+    const solid = list.find((s) => s.id === lb.solidId)
+    const c = solid ? solidProjectedCentroid(solid, viewId, cotaRefM, orbit) : null
+    return { ...lb, solid, c }
+  }).filter((a) => a.c && a.solid)
+
+  // Empuje simple para evitar solapes
+  for (let iter = 0; iter < 8; iter += 1) {
+    for (let i = 0; i < anchors.length; i += 1) {
+      for (let j = i + 1; j < anchors.length; j += 1) {
+        const a = anchors[i].c
+        const b = anchors[j].c
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const d = Math.hypot(dx, dy) || 0.01
+        if (d < minDist) {
+          const push = (minDist - d) / 2
+          const ux = dx / d
+          const uy = dy / d
+          a.x -= ux * push
+          a.y -= uy * push
+          b.x += ux * push
+          b.y += uy * push
+        }
+      }
+    }
+  }
+
+  ctx.save()
+  for (const a of anchors) {
+    const { x, y } = a.c
+    const color = a.solid.color || '#0f766e'
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = solidEdgeStrokeColor(color)
+    ctx.lineWidth = solidLineWidthWorld(1.2, pScale)
+    ctx.setLineDash([])
+    ctx.stroke()
+    ctx.fillStyle = solidEdgeStrokeColor(color)
+    ctx.font = `bold ${fontWorld}px "Segoe UI", system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(a.num), x, y + fontWorld * 0.05)
+    placed.push(a)
+  }
+  ctx.restore()
+  return placed
+}
+
+/**
+ * Orden de pintado legible:
+ * 1) externos (mayor área) fills → 2) internos fills → 3) todos edges → 4) etiquetas.
+ * Cada sólido conserva su color en caras y aristas.
+ */
 export function drawSolids3dLayered(ctx, solids, opts = {}) {
   const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  const areaOf = (s) => {
+    const bb = solidXyBounds(s)
+    return bb ? Math.abs(bb.w * bb.h) : 0
+  }
   const outers = []
   const inners = []
   for (const s of list) {
     if (solidIsInternal(s, list)) inners.push(s)
     else outers.push(s)
   }
+  outers.sort((a, b) => areaOf(b) - areaOf(a))
+  inners.sort((a, b) => areaOf(b) - areaOf(a))
+
+  const base = { ...opts, solids: list }
   for (const s of outers) {
-    drawSolid3d(ctx, s, { ...opts, solids: list, nested: false, pass: 'fills' })
-  }
-  for (const s of outers) {
-    drawSolid3d(ctx, s, { ...opts, solids: list, nested: false, pass: 'edges' })
+    drawSolid3d(ctx, s, { ...base, nested: false, pass: 'fills' })
   }
   for (const s of inners) {
-    drawSolid3d(ctx, s, { ...opts, solids: list, nested: true, pass: 'edges' })
+    drawSolid3d(ctx, s, { ...base, nested: true, pass: 'fills' })
+  }
+  for (const s of outers) {
+    drawSolid3d(ctx, s, { ...base, nested: false, pass: 'edges' })
+  }
+  for (const s of inners) {
+    drawSolid3d(ctx, s, { ...base, nested: true, pass: 'edges' })
+  }
+  if (opts.labels?.length) {
+    drawSolidNumberLabels(ctx, list, {
+      labels: opts.labels,
+      viewId: opts.viewId || 'top',
+      cotaRefM: opts.cotaRefM || 0,
+      orbit: opts.orbit || null,
+      pixelScale: opts.pixelScale != null ? opts.pixelScale : opts.zoom,
+    })
   }
 }
 

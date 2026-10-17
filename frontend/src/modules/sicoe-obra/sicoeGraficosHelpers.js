@@ -106,6 +106,7 @@ function esAdjuntoPdfGrafico(g) {
   const kind = String(g?.kind || '').toLowerCase()
   const nombre = String(g?.nombre || '').toLowerCase()
   const url = String(g?.url || '')
+  // Memoria (PNG o PDF legacy) no debe ser el gráfico principal del registro.
   if (kind === 'memoria-calculo') return true
   if (mime.includes('pdf')) return true
   if (/\.pdf(\?|$)/i.test(nombre) || /\.pdf(\?|$)/i.test(url)) return true

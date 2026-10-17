@@ -49,9 +49,28 @@ describe('adjuntosMedia · slider unificado', () => {
     assert.equal(evidenciaEsImagen({ mime_type: 'application/pdf', nombre_archivo: 'a.pdf' }), false)
   })
 
+  it('memoria PNG no se trata como PDF (miniatura de imagen)', () => {
+    assert.equal(isPdfAdjunto({
+      kind: 'memoria-calculo',
+      mime: 'image/png',
+      nombre: 'memoria_calculo_Poceta.png',
+    }), false)
+    assert.equal(isPdfAdjunto({
+      kind: 'memoria-calculo',
+      mime: 'image/png',
+      url: 'https://cdn/memoria_calculo_Poceta.png',
+    }), false)
+    // Legacy PDF sigue siendo PDF
+    assert.equal(isPdfAdjunto({
+      kind: 'memoria-calculo',
+      mime: 'application/pdf',
+      nombre: 'memoria.pdf',
+    }), true)
+  })
+
   it('incluye memoria PDF y gráfico isométrico en el carrusel', () => {
     assert.equal(isEsquemaCalcAdjunto({ origen: 'esquema-calculo', kind: 'memoria-calculo' }), true)
-    assert.equal(isPdfAdjunto({ kind: 'memoria-calculo', nombre: 'memoria.pdf' }), true)
+    assert.equal(isPdfAdjunto({ kind: 'memoria-calculo', nombre: 'memoria.pdf', mime: 'application/pdf' }), true)
     assert.equal(evidenciaEsMediaCarrusel({
       mime_type: 'application/pdf',
       origen: 'esquema-calculo',

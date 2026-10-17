@@ -955,10 +955,12 @@ export default function EsquemaEditorModal({
         orbitAngles: orbitAnglesRef.current,
       })
       const solidsList = solids3dRef.current || []
-      // Dos pasadas: caras de externos → aristas → internos solo punteados (profundidad).
+      const z = zoomRef.current || 1
+      // Caras translucidas + aristas visibles/ocultas; grosores fijos en píxeles.
       drawSolids3dLayered(ctx, solidsList, {
         viewId,
-        zoom: zoomRef.current,
+        zoom: z,
+        pixelScale: z,
         orbit,
       })
       // Resaltar selección sin sustituir el color del sólido.
@@ -967,7 +969,8 @@ export default function EsquemaEditorModal({
         drawSolid3d(ctx, solid, {
           viewId,
           selected: true,
-          zoom: zoomRef.current,
+          zoom: z,
+          pixelScale: z,
           orbit,
           solids: solidsList,
           pass: 'edges',

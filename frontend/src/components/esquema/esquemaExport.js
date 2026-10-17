@@ -416,13 +416,13 @@ export function composeEsquemaExport({
     drawObject?.(ctx, obj, false, { skipResize: true, zoom: scale })
   }
   if (mode3d) {
-    // Capas: caras de externos → aristas → internos solo punteados.
+    // pixelScale = escala del ctx (líneas fijas en píxeles de pantalla).
     drawSolids3dLayered(ctx, solids, {
       viewId: view3d || 'top',
-      zoom: 1 / Math.max(scale, 0.25),
+      zoom: scale,
+      pixelScale: scale,
       orbit: cam,
     })
-    // drawSolid se conserva en la firma por compat; el pintado usa capas.
     void drawSolid
   }
   ctx.restore()

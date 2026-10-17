@@ -137,7 +137,7 @@ describe('sólidos internos (selección / líneas ocultas)', () => {
     assert.ok(aIn < aBig)
   })
 
-  it('drawSolid3d: externo con fill macizo; interno solo punteado; iso con ocultas', () => {
+  it('drawSolid3d: fill translucido en externo e interno; iso con ocultas finas', () => {
     const big = extrudeClosedEntity(rectAt(0, 0, 3, 3, 'big'), {
       viewId: 'top', cotaSuperior: 2, cotaInferior: 0,
     }).solid
@@ -150,7 +150,7 @@ describe('sólidos internos (selección / líneas ocultas)', () => {
     inner.color = '#b91c1c'
     const dashes = []
     const fills = []
-    const strokes = []
+    const lineWidths = []
     const ctx = {
       save() {},
       restore() {},
@@ -159,7 +159,7 @@ describe('sólidos internos (selección / líneas ocultas)', () => {
       lineTo() {},
       closePath() {},
       fill() { fills.push(this.fillStyle) },
-      stroke() { strokes.push(this.strokeStyle) },
+      stroke() { lineWidths.push(this.lineWidth) },
       setLineDash(d) { dashes.push([...(d || [])]) },
       set fillStyle(v) { this._fill = v },
       get fillStyle() { return this._fill },
@@ -170,22 +170,23 @@ describe('sólidos internos (selección / líneas ocultas)', () => {
       lineCap: 'round',
     }
     const solids = [big, inner]
-    // Externo: fill macizo
-    drawSolid3d(ctx, big, { viewId: 'top', solids, zoom: 1, nested: false })
-    assert.ok(fills.some((f) => String(f).startsWith('rgba')), 'externo fill macizo')
+    drawSolid3d(ctx, big, { viewId: 'top', solids, zoom: 1, pixelScale: 1, nested: false })
+    assert.ok(fills.some((f) => String(f).includes('0.4')), 'externo fill translucido')
     fills.length = 0
+    drawSolid3d(ctx, inner, { viewId: 'top', solids, zoom: 1, pixelScale: 1, nested: true })
+    assert.ok(fills.length > 0, 'interno también tiene fill (se lee a través)')
     dashes.length = 0
-    strokes.length = 0
-    // Interno: sin fill, aristas punteadas en su color
-    drawSolid3d(ctx, inner, { viewId: 'top', solids, zoom: 1, nested: true })
-    assert.equal(fills.length, 0, 'interno sin fill (se ve a través del externo)')
-    assert.ok(dashes.some((d) => d.length > 0), 'interno en planta usa dash')
-    assert.ok(strokes.some((s) => String(s).toLowerCase().includes('b91c1c') || String(s) === '#b91c1c'), 'interno stroke en su color')
-    dashes.length = 0
+    lineWidths.length = 0
     const orbit = solidsViewCamera('iso-ne', solids)
-    drawSolid3d(ctx, big, { viewId: 'iso-ne', solids, zoom: 1, orbit, nested: false })
+    // Export-like: scale grande; pixelScale=scale → grosores finos en world
+    const exportScale = 8
+    drawSolid3d(ctx, big, {
+      viewId: 'iso-ne', solids, zoom: exportScale, pixelScale: exportScale, orbit, nested: false,
+    })
     assert.ok(dashes.some((d) => d.length > 0), 'iso: aristas ocultas con dash')
     assert.ok(dashes.some((d) => d.length === 0), 'iso: aristas visibles continuas')
+    assert.ok(lineWidths.every((w) => w < 1), 'grosores finos tras scale alto (no flechas)')
+    assert.ok(dashes.filter((d) => d.length).every((d) => d[0] < 1 && d[1] < 1), 'trazos cortos')
   })
 
   it('volumen unido bloqueado: panel y solidVolumeM3 coinciden tras contacto', () => {
