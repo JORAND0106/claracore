@@ -57,7 +57,7 @@ export function Esquema3dViewToolbar({
       })}
       <span style={{ width: 1, alignSelf: 'stretch', background: t.border || '#cbd5e1', margin: '0 2px' }} />
       {isoViews.map((v) => {
-        const tip = `${v.label} (solo vista)`
+        const tip = `${v.label} (dibujar sobre la cara tocada)`
         return (
           <button
             key={v.id}
@@ -81,7 +81,7 @@ export function Esquema3dViewToolbar({
       })}
       {!isEsquema3dDrawView(current) ? (
         <span style={{ ...ghost(t), fontSize: 11, opacity: 0.85 }}>
-          Vista isométrica: solo inspección
+          Isométrica: dibuje sobre la cara resaltada
         </span>
       ) : null}
     </span>
@@ -190,7 +190,7 @@ export function Esquema3dExtrudePopup({
         <div style={{ fontSize: 13, color: ui?.muted || '#64748b', marginBottom: 12 }}>
           {mode === 'cotas'
             ? 'Indique la cota superior y la cota inferior (metros). El sólido se construye entre ambas.'
-            : 'Indique la longitud en metros (profundidad perpendicular a la cara, hacia el fondo de la vista). La figura conserva su posición y cotas.'}
+            : 'Indique la longitud exacta en metros (perpendicular a la cara). El arrastre previa el sentido hacia adentro o afuera; el sólido nace pegado a la cara.'}
         </div>
         {mode === 'cotas' ? (
           <div style={{ display: 'grid', gap: 10 }}>

@@ -98,14 +98,28 @@ import {
 } from './esquema3dSolids'
 import { filterObjectsFor3dDraw } from './esquema3dEntityUnity'
 import {
+  cameraFacingFaceId,
+  canvasToFacePlaneCoords,
+  drawFaceHighlight,
+  faceDrawMeta,
+  faceOsnapPointsWithCircles,
+  faceThicknessM,
+  pickNearestFaceUnderCursor,
+  resolveDrawFace,
+  solidsMinCota,
+} from './esquema3dFace'
+import {
   applyWorldDeltaToEntity,
   canvasDeltaToWorldMove,
+  canvasToWorldOnViewPlane,
   extrudeModeForView,
   isEsquema3dDrawView,
   isEsquema3dIsoView,
+  isEsquema3dSketchView,
   normalizeViewId,
   orbitAnglesForView,
   projectEntityToView,
+  projectWorld3dToCanvas,
   solidsViewCamera,
 } from './esquema3dViews'
 import { adoptNativeTitlesInTree } from '../ccTooltipTheme.js'
@@ -515,6 +529,12 @@ export default function EsquemaEditorModal({
   const pointersRef = useRef(new Map()) // pointerId → { x, y } (pantalla, para pellizco)
   const pinchRef = useRef(null) // { dist0, zoom0, midX, midY, pan0 }
   const snapRef = useRef(null) // { x, y, kind, guide? }
+  /** Cara bajo el cursor (resaltado SketchUp). */
+  const hoverFaceRef = useRef(null)
+  /** Cara activa del trazo en curso (plano de dibujo). */
+  const activeFaceDrawRef = useRef(null)
+  /** Arrastre de extrusión desde cara: { entityId, faceMeta, originCanvas, lengthM, outward }. */
+  const extrudeDragRef = useRef(null)
   const clipboardRef = useRef(null)
   const copySelectedRef = useRef(() => false)
   const pasteClipboardRef = useRef(() => false)
@@ -1003,6 +1023,29 @@ export default function EsquemaEditorModal({
         const a = cutDraftRef.current.a
         const b = cutDraftRef.current.b || lastPt.current
         drawMoveGuide(ctx, a, b, zoomRef.current, uiNow)
+      }
+      // Resaltado de la cara bajo el cursor / trazo (SketchUp).
+      const hoverFace = hoverFaceRef.current || activeFaceDrawRef.current
+      if (hoverFace && !hoverFace.isFloor && hoverFace.corners?.length) {
+        drawFaceHighlight(ctx, hoverFace, {
+          viewId,
+          orbit,
+          fill: 'rgba(37, 99, 235, 0.28)',
+          stroke: '#2563eb',
+        })
+      }
+      // Preview de extrusión por arrastre.
+      const ed = extrudeDragRef.current
+      if (ed?.previewSolid) {
+        drawSolid3d(ctx, ed.previewSolid, {
+          viewId,
+          selected: true,
+          zoom: z,
+          pixelScale: z,
+          orbit,
+          solids: solidsList,
+          pass: 'edges',
+        })
       }
     }
     // Polígono (huellaMode): mientras dibuja, cerrar visualmente al primer punto.
@@ -1734,39 +1777,82 @@ export default function EsquemaEditorModal({
       setToolHint('Active el modo 3D para extruir.')
       return
     }
-    const viewId = normalizeViewId(view3dRef.current)
-    if (!isEsquema3dDrawView(viewId)) {
-      setToolHint('Cambie a una de las seis vistas de cara para extruir.')
-      return
-    }
     const sel = objectsRef.current.find((o) => selectedIdsRef.current.has(o.id) && isClosedDrawableEntity(o))
     if (!sel) {
       setToolHint('Seleccione un contorno cerrado (rectángulo, polígono, círculo…) para extruir.')
       return
     }
-    const mode = extrudeModeForView(viewId)
-    let faceDepthWorld = 0
+    // Plano de extrusión = cara donde se dibujó (viewPlane), no la vista de cámara.
+    const viewId = normalizeViewId(sel.viewPlane || view3dRef.current || 'top')
+    const meta = faceDrawMeta({
+      faceId: sel.faceId || (extrudeModeForView(viewId) === 'cotas'
+        ? (viewId === 'bottom' ? 'bottom' : 'top')
+        : cameraFacingFaceId(viewId)),
+      viewPlane: viewId,
+      depthWorld: Number.isFinite(Number(sel.viewDepthWorld)) ? Number(sel.viewDepthWorld) : 0,
+      zCota: Number.isFinite(Number(sel.viewZCota)) ? Number(sel.viewZCota) : null,
+      solidId: sel.faceSolidId || null,
+    })
+    let faceDepthWorld = meta.extrudeMode === 'length'
+      ? (Number.isFinite(Number(sel.viewDepthWorld))
+        ? Number(sel.viewDepthWorld)
+        : 0)
+      : 0
     let defaultLengthM = null
-    if (mode === 'length') {
-      // Cara bajo el contorno → OSNAP 3D → profundidad guardada al dibujar → plano 0.
+    if (meta.extrudeMode === 'length') {
       const inferred = inferFaceDepthForExtrude(
         sel,
         solids3dRef.current || [],
         viewId,
       )
-      faceDepthWorld = inferred.faceDepthWorld || 0
+      if (!Number.isFinite(Number(sel.viewDepthWorld))) {
+        faceDepthWorld = inferred.faceDepthWorld || 0
+      }
       if (inferred.support) {
         const th = solidThicknessAlongViewM(inferred.support, viewId)
         if (th > 1e-6) defaultLengthM = Number(th.toFixed(2))
+      } else if (sel.faceSolidId) {
+        const support = (solids3dRef.current || []).find((s) => s.id === sel.faceSolidId)
+        if (support) {
+          const th = faceThicknessM(
+            { faceId: sel.faceId, depthWorld: faceDepthWorld, zCota: sel.viewZCota },
+            support,
+          )
+          if (th > 1e-6) defaultLengthM = Number(th.toFixed(2))
+        }
       }
     }
-    setExtrudePrompt({
-      mode,
+    const baseZCota = Number.isFinite(Number(sel.viewZCota)) ? Number(sel.viewZCota) : null
+    // Superior/inferior clásico (sin cara anclada): popup de cotas absolutas (se conserva).
+    if (meta.extrudeMode === 'cotas' && baseZCota == null) {
+      setExtrudePrompt({
+        mode: 'cotas',
+        entityId: sel.id,
+        viewId,
+        faceDepthWorld: 0,
+        defaultLengthM: null,
+        outward: false,
+        faceId: sel.faceId || meta.faceId || null,
+        baseZCota: null,
+      })
+      return
+    }
+    // Arrastre interactivo desde la cara; al soltar abre popup con longitud exacta.
+    extrudeDragRef.current = {
       entityId: sel.id,
       viewId,
+      mode: meta.extrudeMode,
       faceDepthWorld,
-      defaultLengthM,
-    })
+      faceId: sel.faceId || meta.faceId || null,
+      baseZCota,
+      lengthM: defaultLengthM || 0.3,
+      outward: false,
+      origin: null,
+      previewSolid: null,
+    }
+    setToolHint('Extruir: arrastre hacia adentro o afuera de la cara; suelte para fijar la longitud.')
+    setOp3d('extruir-drag')
+    setPanTick((n) => n + 1)
   }, [])
 
   const confirmExtrude3d = useCallback((values, setError) => {
@@ -1775,14 +1861,27 @@ export default function EsquemaEditorModal({
       setError?.('Contorno no encontrado.')
       return
     }
-    const viewId = extrudePrompt?.viewId || normalizeViewId(view3dRef.current) || 'top'
+    const viewId = extrudePrompt?.viewId || normalizeViewId(ent.viewPlane || view3dRef.current) || 'top'
+    const faceId = extrudePrompt?.faceId || ent.faceId || null
+    const baseZ = extrudePrompt?.baseZCota ?? (
+      Number.isFinite(Number(ent.viewZCota)) ? Number(ent.viewZCota) : null
+    )
+    // Top/bottom anclados a cara: extruir por longitud desde baseZ (modo cotas interno).
+    const effectiveViewId = (
+      baseZ != null
+      && values?.lengthM != null
+      && (faceId === 'top' || faceId === 'bottom')
+    ) ? faceId : viewId
     const r = extrudeClosedEntity(ent, {
-      viewId,
+      viewId: effectiveViewId,
       cotaSuperior: values?.cotaSuperior,
       cotaInferior: values?.cotaInferior,
       lengthM: values?.lengthM,
       color: colorRef.current,
       faceDepthWorld: extrudePrompt?.faceDepthWorld ?? 0,
+      outward: !!extrudePrompt?.outward,
+      faceId,
+      baseZCota: baseZ,
     })
     if (!r.ok) {
       setError?.(r.error || 'No se pudo extruir.')
@@ -1798,6 +1897,8 @@ export default function EsquemaEditorModal({
     selectOne(ent.id)
     if (SHAPE_TOOLS.has(ent.type)) syncMeasureFromObject(ent)
     setExtrudePrompt(null)
+    extrudeDragRef.current = null
+    if (op3dRef.current === 'extruir-drag') setOp3d(null)
     setDirty(true)
     setToolHint(`Sólido creado · ${r.solid.volumeM3.toFixed(2)} m³`)
     setPanTick((n) => n + 1)
@@ -1983,8 +2084,8 @@ export default function EsquemaEditorModal({
       right: 'lateral derecha',
     }
     setToolHint(isEsquema3dDrawView(vid)
-      ? `Vista ${labels[vid] || vid}: puede dibujar y extruir sobre esta cara.`
-      : 'Vista isométrica: solo inspección (no dibujo).')
+      ? `Vista ${labels[vid] || vid}: dibuja sobre la cara más cercana a quien mira.`
+      : `Vista isométrica ${String(vid).replace('iso-', '').toUpperCase()}: dibuja sobre la cara que toca.`)
     setOrbitTick((n) => n + 1)
     setPanTick((n) => n + 1)
   }, [])
@@ -1996,7 +2097,7 @@ export default function EsquemaEditorModal({
       if (next) {
         // Partir de la vista actual
         orbitAnglesRef.current = orbitAnglesForView(view3dRef.current || 'top')
-        setToolHint('Giro libre: arrastre para orbitar. No modifica cotas ni dimensiones.')
+        setToolHint('Giro libre: arrastre con Selección/Paneo para orbitar; con figuras dibuja sobre la cara tocada.')
       } else {
         setToolHint('Giro libre desactivado.')
       }
@@ -2598,47 +2699,153 @@ export default function EsquemaEditorModal({
     return list
   }
 
-  /** Marca profundidad de vista 3D en una entidad recién dibujada (OSNAP / cara). */
+  /** Cámara órbita/iso actual (null en vistas ortográficas de cara sin giro libre). */
+  const currentOrbitCamera = () => {
+    if (!mode3dRef.current) return null
+    return solidsViewCamera(view3dRef.current || 'top', solids3dRef.current || [], {
+      orbitFree: !!orbitFreeRef.current,
+      orbitAngles: orbitAnglesRef.current,
+    })
+  }
+
+  /** Actualiza longitud/sentido del arrastre de extrusión y el sólido preview. */
+  const updateExtrudeDragFromPointer = (canvasPt) => {
+    const d = extrudeDragRef.current
+    if (!d?.origin || !d.entityId) return
+    const ent = objectsRef.current.find((o) => o.id === d.entityId)
+    if (!ent) return
+    const viewId = d.viewId || normalizeViewId(ent.viewPlane || 'top')
+    const orbit = currentOrbitCamera()
+    const faceId = d.faceId || cameraFacingFaceId(viewId)
+    const depth = Number.isFinite(Number(d.faceDepthWorld)) ? Number(d.faceDepthWorld) : 0
+    const centerWorld = canvasToWorldOnViewPlane(
+      {
+        x: (Number(ent.x1) + Number(ent.x2)) / 2,
+        y: (Number(ent.y1) + Number(ent.y2)) / 2,
+      },
+      viewId,
+      {
+        faceDepthWorld: depth,
+        zCota: d.baseZCota != null ? d.baseZCota : (Number(ent.viewZCota) || 0),
+      },
+    )
+    const normal = ({
+      front: { x: 0, y: -1, z: 0 },
+      back: { x: 0, y: 1, z: 0 },
+      left: { x: -1, y: 0, z: 0 },
+      right: { x: 1, y: 0, z: 0 },
+      top: { x: 0, y: 0, z: 1 },
+      bottom: { x: 0, y: 0, z: -1 },
+    })[faceId] || { x: 0, y: -1, z: 0 }
+    const outWorld = {
+      x: centerWorld.x + normal.x * metersToWorld(1),
+      y: centerWorld.y + normal.y * metersToWorld(1),
+      zCota: centerWorld.zCota + (normal.z || 0),
+    }
+    const camView = normalizeViewId(view3dRef.current || 'top')
+    const c0 = projectWorld3dToCanvas(centerWorld, camView, 0, orbit)
+    const c1 = projectWorld3dToCanvas(outWorld, camView, 0, orbit)
+    const outDir = { x: c1.x - c0.x, y: c1.y - c0.y }
+    const drag = { x: canvasPt.x - d.origin.x, y: canvasPt.y - d.origin.y }
+    const outLen = Math.hypot(outDir.x, outDir.y) || 1
+    const proj = (drag.x * outDir.x + drag.y * outDir.y) / (outLen * outLen)
+    const outward = proj > 0
+    const lengthM = Math.max(0.01, Math.abs(proj))
+    d.outward = outward
+    d.lengthM = Number(lengthM.toFixed(3))
+    const r = extrudeClosedEntity(ent, {
+      viewId,
+      lengthM: d.lengthM,
+      faceDepthWorld: d.faceDepthWorld,
+      outward: d.outward,
+      faceId,
+      baseZCota: d.baseZCota,
+      color: colorRef.current,
+    })
+    d.previewSolid = r.ok ? r.solid : null
+    setLiveMeasure(`${d.lengthM.toFixed(2)} m${outward ? ' · afuera' : ' · adentro'}`)
+    setToolHint(`Extruir ${d.lengthM.toFixed(2)} m ${outward ? 'hacia afuera' : 'hacia adentro'} · suelte para confirmar`)
+  }
+
+  /** Marca profundidad / cara 3D en una entidad recién dibujada (SketchUp). */
   const withViewDepth3d = (shape) => {
-    if (!shape || !mode3dRef.current || !isEsquema3dDrawView(view3dRef.current)) return shape
-    const viewId = normalizeViewId(view3dRef.current)
-    const mode = extrudeModeForView(viewId)
-    if (mode !== 'length') {
-      return { ...shape, viewPlane: viewId }
+    if (!shape || !mode3dRef.current) return shape
+    const face = shape._face || activeFaceDrawRef.current || null
+    const meta = faceDrawMeta(face)
+    const viewPlane = meta.viewPlane || normalizeViewId(view3dRef.current || 'top')
+    const next = {
+      ...shape,
+      viewPlane,
+      faceId: meta.faceId || null,
+      faceSolidId: meta.solidId || face?.solidId || null,
+    }
+    delete next._face
+    delete next._viewCanvas
+    if (meta.extrudeMode === 'cotas') {
+      if (meta.zCota != null && Number.isFinite(Number(meta.zCota))) {
+        next.viewZCota = Number(meta.zCota)
+      } else {
+        next.viewZCota = solidsMinCota(solids3dRef.current || [])
+      }
+      return next
     }
     let depth = null
+    if (Number.isFinite(Number(meta.faceDepthWorld))) {
+      depth = Number(meta.faceDepthWorld)
+    }
     const snap = snapRef.current
-    if (snap && Number.isFinite(Number(snap.faceDepthWorld))) {
+    if (depth == null && snap && Number.isFinite(Number(snap.faceDepthWorld))) {
       depth = Number(snap.faceDepthWorld)
-    } else {
-      const inferred = inferFaceDepthForExtrude(shape, solids3dRef.current || [], viewId)
+    }
+    if (depth == null) {
+      const inferred = inferFaceDepthForExtrude(shape, solids3dRef.current || [], viewPlane)
       if (inferred.source !== 'plane') depth = inferred.faceDepthWorld
     }
-    const next = { ...shape, viewPlane: viewId }
     if (depth != null && Number.isFinite(depth)) next.viewDepthWorld = depth
     return next
   }
 
   const snapWorldPoint = (p, { fromPoint = null, excludeId = null, allowPerp = true } = {}) => {
-    // En vistas de cara 3D: OSNAP de sólidos (vértices, medios, centros, cara).
-    if (mode3dRef.current && isEsquema3dDrawView(view3dRef.current)) {
+    // SketchUp: OSNAP de la cara tocada + punto siempre en el plano de esa cara.
+    if (mode3dRef.current && isEsquema3dSketchView(view3dRef.current)) {
       const viewId = normalizeViewId(view3dRef.current)
+      const orbit = currentOrbitCamera()
+      const face = activeFaceDrawRef.current
+        || resolveDrawFace(solids3dRef.current || [], p, viewId, { orbit })
+      if (!activeFaceDrawRef.current) activeFaceDrawRef.current = face
+      hoverFaceRef.current = face?.isFloor ? null : face
       const thr = snapThreshold()
-      let bestFace = null
+      let best = null
       let bestDist = thr
-      for (const solid of solids3dRef.current || []) {
-        for (const sp of solidOsnapPoints(solid, viewId)) {
+      if (face && !face.isFloor) {
+        const pts = faceOsnapPointsWithCircles(face, face.solid, viewId, { orbit })
+        for (const sp of pts) {
           const d = Math.hypot(p.x - sp.x, p.y - sp.y)
           if (d < bestDist) {
             bestDist = d
-            bestFace = sp
+            best = sp
           }
         }
       }
-      if (bestFace) {
-        snapRef.current = bestFace
-        return { x: bestFace.x, y: bestFace.y }
+      if (best) {
+        const planePt = best.world
+          ? projectWorld3dToCanvas(best.world, face.viewPlane || 'top', 0, null)
+          : canvasToFacePlaneCoords({ x: best.x, y: best.y }, face, viewId, { orbit })
+        // Marcador en coords de la vista actual (iso/órbita/cara).
+        snapRef.current = {
+          ...best,
+          x: best.x,
+          y: best.y,
+          faceDepthWorld: face.depthWorld,
+          viewPlane: face.viewPlane,
+          zCota: face.zCota,
+        }
+        return { x: planePt.x, y: planePt.y }
       }
+      // Sin OSNAP: proyectar el cursor al plano de la cara.
+      const planePt = canvasToFacePlaneCoords(p, face, viewId, { orbit })
+      snapRef.current = null
+      return { x: planePt.x, y: planePt.y }
     }
     const hit = findSnap(p, snapSearchObjects(), {
       threshold: snapThreshold(),
@@ -3542,49 +3749,66 @@ export default function EsquemaEditorModal({
     let p = posFromEvent(e)
     const currentTool = toolRef.current
 
-    // Giro libre 3D: si hay sólido bajo el clic + Mover → traslación en planta;
-    // si no, arrastre = orbitar cámara (no modifica geometría).
-    if (mode3dRef.current && orbitFreeRef.current) {
-      const hitOrbit = (currentTool === 'seleccion' && selectModeRef.current === 'mover')
-        ? hitSolid3dAt(p)
-        : null
-      if (hitOrbit) {
-        const additive = !!(e.shiftKey || e.metaKey || e.ctrlKey)
-        selectSolidAndSource(hitOrbit, { additive })
-        setToolHint(`Sólido · ${Number(solidVolumeM3(hitOrbit) || 0).toFixed(2)} m³`)
-        if (!additive) {
-          // Iso / órbita: siempre mover el sólido en planta (+ sync entidad ligada).
-          const src = hitOrbit.sourceEntityId
-            ? objectsRef.current.find((o) => o.id === hitOrbit.sourceEntityId)
-            : null
-          dragRef.current = {
-            mode: 'move-solid',
-            solidId: hitOrbit.id,
-            pending: true,
-            ox: p.x,
-            oy: p.y,
-            clickX: p.x,
-            clickY: p.y,
-            originSolid: cloneScene([hitOrbit])[0],
-            originEntity: src ? cloneScene([src])[0] : null,
-          }
-          drawing.current = true
-          startPt.current = p
-          lastPt.current = p
-          moveGuideRef.current = null
-          redraw()
-          return
-        }
-      }
-      const screenOrbit = screenPosFromEvent(e)
-      orbitDragRef.current = {
-        x0: screenOrbit.x,
-        y0: screenOrbit.y,
-        yaw0: orbitAnglesRef.current.yaw,
-        pitch0: orbitAnglesRef.current.pitch,
-      }
+    // Arrastre de extrusión desde cara (SketchUp push/pull).
+    if (mode3dRef.current && op3dRef.current === 'extruir-drag' && extrudeDragRef.current) {
+      const d = extrudeDragRef.current
+      d.origin = { x: p.x, y: p.y }
       drawing.current = true
+      startPt.current = p
+      lastPt.current = p
+      setToolHint('Extruir: arrastre hacia adentro/afuera · longitud en metros')
+      redraw()
       return
+    }
+
+    // Giro libre 3D: con figuras se dibuja sobre la cara; Selección/Paneo orbitan o mueven.
+    if (mode3dRef.current && orbitFreeRef.current) {
+      const sketchTool = TWO_POINT_TOOLS.has(currentTool)
+        || currentTool === 'polilinea'
+        || currentTool === 'lapiz'
+      if (!sketchTool) {
+        const hitOrbit = (currentTool === 'seleccion' && selectModeRef.current === 'mover')
+          ? hitSolid3dAt(p)
+          : null
+        if (hitOrbit) {
+          const additive = !!(e.shiftKey || e.metaKey || e.ctrlKey)
+          selectSolidAndSource(hitOrbit, { additive })
+          setToolHint(`Sólido · ${Number(solidVolumeM3(hitOrbit) || 0).toFixed(2)} m³`)
+          if (!additive) {
+            const src = hitOrbit.sourceEntityId
+              ? objectsRef.current.find((o) => o.id === hitOrbit.sourceEntityId)
+              : null
+            dragRef.current = {
+              mode: 'move-solid',
+              solidId: hitOrbit.id,
+              pending: true,
+              ox: p.x,
+              oy: p.y,
+              clickX: p.x,
+              clickY: p.y,
+              originSolid: cloneScene([hitOrbit])[0],
+              originEntity: src ? cloneScene([src])[0] : null,
+            }
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            redraw()
+            return
+          }
+        }
+        const screenOrbit = screenPosFromEvent(e)
+        orbitDragRef.current = {
+          x0: screenOrbit.x,
+          y0: screenOrbit.y,
+          yaw0: orbitAnglesRef.current.yaw,
+          pitch0: orbitAnglesRef.current.pitch,
+        }
+        drawing.current = true
+        return
+      }
+      // Figuras en giro libre: caer al flujo de dibujo (cara tocada).
+      activeFaceDrawRef.current = null
     }
 
     // Modo 3D: corte por línea (arrastre) y selección de sólidos.
@@ -3602,8 +3826,11 @@ export default function EsquemaEditorModal({
       return
     }
     if (mode3dRef.current && isEsquema3dIsoView(view3dRef.current)) {
-      // Isométrica: inspección + mover en planta (cotas no cambian). Sin dibujar.
-      if (currentTool === 'seleccion' || currentTool === 'paneo') {
+      // Isométrica: dibujo sobre cara tocada; selección/paneo mueven en planta.
+      const sketchTool = TWO_POINT_TOOLS.has(currentTool)
+        || currentTool === 'polilinea'
+        || currentTool === 'lapiz'
+      if (!sketchTool && (currentTool === 'seleccion' || currentTool === 'paneo')) {
         const hitS = hitSolid3dAt(p)
         if (hitS) {
           const additive = !!(e.shiftKey || e.metaKey || e.ctrlKey)
@@ -3643,9 +3870,12 @@ export default function EsquemaEditorModal({
         redraw()
         return
       }
-      setToolHint('Vista isométrica: selección y mover en planta. Cambie a una cara (sup/inf/front/post/izq/der) para dibujar.')
-      drawing.current = false
-      return
+      if (!sketchTool) {
+        setToolHint('Vista isométrica: elija una figura para dibujar sobre la cara tocada, o Selección para mover.')
+        drawing.current = false
+        return
+      }
+      activeFaceDrawRef.current = null
     }
     if (
       mode3dRef.current
@@ -3909,6 +4139,8 @@ export default function EsquemaEditorModal({
         return
       }
       if (!draftRef.current || draftRef.current.type !== 'polilinea') {
+        const face = activeFaceDrawRef.current
+        const meta = face ? faceDrawMeta(face) : null
         draftRef.current = {
           id: uid(),
           type: 'polilinea',
@@ -3917,6 +4149,13 @@ export default function EsquemaEditorModal({
           width: widthRef.current,
           lineStyle: lineStyleRef.current,
           rotation: 0,
+          ...(meta ? {
+            viewPlane: meta.viewPlane,
+            viewDepthWorld: meta.extrudeMode === 'length' ? meta.faceDepthWorld : undefined,
+            viewZCota: meta.extrudeMode === 'cotas' ? meta.zCota : undefined,
+            faceId: meta.faceId || null,
+            faceSolidId: meta.solidId || null,
+          } : {}),
         }
       } else {
         const pts = draftRef.current.points || []
@@ -4271,6 +4510,8 @@ export default function EsquemaEditorModal({
     }
 
     if (TWO_POINT_TOOLS.has(currentTool)) {
+      const face = activeFaceDrawRef.current
+      const meta = face ? faceDrawMeta(face) : null
       draftRef.current = {
         id: uid(),
         type: currentTool,
@@ -4285,6 +4526,13 @@ export default function EsquemaEditorModal({
         hatch: null,
         label: '0',
         ...(currentTool === 'cota' ? { offset: DEFAULT_COTA_OFFSET, text: '0 m' } : {}),
+        ...(meta ? {
+          viewPlane: meta.viewPlane,
+          viewDepthWorld: meta.extrudeMode === 'length' ? meta.faceDepthWorld : undefined,
+          viewZCota: meta.extrudeMode === 'cotas' ? meta.zCota : undefined,
+          faceId: meta.faceId || null,
+          faceSolidId: meta.solidId || null,
+        } : {}),
       }
     }
   }
@@ -4379,8 +4627,34 @@ export default function EsquemaEditorModal({
       return
     }
 
+    // Extrusión por arrastre desde la cara.
+    if (mode3dRef.current && op3dRef.current === 'extruir-drag' && extrudeDragRef.current && drawing.current) {
+      e.preventDefault()
+      updateExtrudeDragFromPointer(raw)
+      redraw()
+      return
+    }
+
     // Hover: manijas / cursor de mover; preview de snap al dibujar o seleccionar
     if (!drawing.current) {
+      // Resaltar cara bajo el cursor en modo 3D (todas las vistas / órbita).
+      if (mode3dRef.current && isEsquema3dSketchView(view3dRef.current)) {
+        const orbit = currentOrbitCamera()
+        const face = pickNearestFaceUnderCursor(
+          solids3dRef.current || [],
+          raw,
+          normalizeViewId(view3dRef.current),
+          { orbit },
+        )
+        const prevId = hoverFaceRef.current
+          ? `${hoverFaceRef.current.solidId}:${hoverFaceRef.current.faceId}`
+          : null
+        const nextId = face ? `${face.solidId}:${face.faceId}` : null
+        hoverFaceRef.current = face
+        if (prevId !== nextId) redraw()
+      } else {
+        hoverFaceRef.current = null
+      }
       const selId = selectedIdRef.current
       const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
       if (currentTool === 'seleccion') {
@@ -4745,6 +5019,35 @@ export default function EsquemaEditorModal({
     const currentTool = toolRef.current
     let p = posFromEvent(e)
 
+    if (mode3dRef.current && op3dRef.current === 'extruir-drag' && extrudeDragRef.current) {
+      updateExtrudeDragFromPointer(p)
+      const d = extrudeDragRef.current
+      const ent = objectsRef.current.find((o) => o.id === d.entityId)
+      if (!ent) {
+        extrudeDragRef.current = null
+        setOp3d(null)
+        return
+      }
+      // Popup de longitud exacta (también para top/bottom anclados a cara).
+      setExtrudePrompt({
+        mode: 'length',
+        entityId: d.entityId,
+        viewId: d.viewId,
+        faceDepthWorld: d.faceDepthWorld,
+        defaultLengthM: d.lengthM,
+        outward: !!d.outward,
+        faceId: d.faceId,
+        baseZCota: d.baseZCota,
+        // Conserva el modo geométrico real (cotas vs length) para extrudeClosedEntity.
+        geomMode: d.mode || extrudeModeForView(d.viewId),
+      })
+      d.previewSolid = null
+      setOp3d(null)
+      setToolHint('Confirme la longitud exacta en el popup o cancele.')
+      setPanTick((n) => n + 1)
+      return
+    }
+
     if (mode3dRef.current && orbitFreeRef.current && orbitDragRef.current) {
       orbitDragRef.current = null
       return
@@ -4863,6 +5166,7 @@ export default function EsquemaEditorModal({
       setDirty(true)
       draftRef.current = null
       snapRef.current = null
+      activeFaceDrawRef.current = null
       clearDynBuffer()
       redraw()
     }
