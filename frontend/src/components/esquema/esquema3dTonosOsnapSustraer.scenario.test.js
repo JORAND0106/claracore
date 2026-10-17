@@ -260,16 +260,17 @@ describe('Sustraer en cadena · caso c', () => {
 
     const vPoc = solidVolumeM3(poc.solid)
 
-    // Varios a la vez sobre el resultado de Sustraer.
+    // Varios a la vez sobre el resultado de Sustraer (acumula desglose: vacío + pases).
     const both = subtractSolids(poc.solid, [pipe1, pipe2])
     assert.equal(both.ok, true, both.error)
     assert.equal(both.solid.color, '#2563eb')
     assert.equal(both.solid.nombre, 'Poceta')
-    assert.equal(both.solid.booleanMeta?.subtracted?.length, 2)
+    assert.equal(both.solid.booleanMeta?.subtracted?.length, 3)
 
+    const exterior = round2(both.solid.booleanMeta.base.volumeM3)
     const subSum = both.solid.booleanMeta.subtracted
       .reduce((s, x) => s + Number(x.volumeM3), 0)
-    const expected = round2(round2(vPoc) - round2(subSum))
+    const expected = round2(exterior - round2(subSum))
     assert.equal(round2(both.solid.volumeM3), expected)
     assert.ok(both.solid.volumeM3 < vPoc - 0.01, 'volumen debe bajar tras los pases')
     assert.ok(both.solid.cells?.length > 0)

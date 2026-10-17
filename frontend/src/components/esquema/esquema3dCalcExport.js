@@ -231,8 +231,8 @@ export async function composeCalcIsoPng({
 /**
  * Tabla de resumen (sin encabezado de memoria — solo columnas + filas + total).
  * Soporta desglose N / N.1 / N.2 y columna "Descuenta de".
- * `fontScale` y anchos crecen con el tamaño de la imagen (legibilidad prioritaria).
- * Filas netas: Long/Anch/Espesor = "—"; Operación = "3 − 3.1".
+ * Columnas Dimensiones + Fórmula (fórmulas naturales por figura).
+ * Filas netas: Dimensiones/Fórmula = "—"; Operación = "1 − 1.1 − …".
  */
 export function renderMemoriaColorTableCanvas(snapshot, {
   width = 880,
@@ -243,15 +243,14 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   const fs = Math.max(0.9, Math.min(2.0, Number(fontScale) || 1))
   const margin = Math.round(8 * fs)
   const baseCols = [
-    { key: 'num', label: '#', w: 44 },
-    { key: 'color', label: 'Color', w: 48 },
-    { key: 'nombre', label: 'Nombre', w: 168 },
-    { key: 'op', label: 'Operación', w: 100 },
-    { key: 'from', label: 'Descuenta de', w: 120 },
-    { key: 'long', label: 'Long', w: 64 },
-    { key: 'anch', label: 'Anch', w: 64 },
-    { key: 'espesor', label: 'Espesor', w: 78 },
-    { key: 'vol', label: 'Volumen (m³)', w: 108 },
+    { key: 'num', label: '#', w: 40 },
+    { key: 'color', label: 'Color', w: 42 },
+    { key: 'nombre', label: 'Nombre', w: 140 },
+    { key: 'op', label: 'Operación', w: 88 },
+    { key: 'from', label: 'Descuenta de', w: 90 },
+    { key: 'dims', label: 'Dimensiones', w: 150 },
+    { key: 'formula', label: 'Fórmula', w: 160 },
+    { key: 'vol', label: 'Volumen (m³)', w: 90 },
   ]
   const baseW = baseCols.reduce((s, c) => s + c.w, 0)
   // Mismo ancho que el isométrico: estirar columnas al ancho pedido (fs solo tipografía).
@@ -319,37 +318,38 @@ export function renderMemoriaColorTableCanvas(snapshot, {
     if (row.subIndex === 0 && String(row.nombre || '').includes('(exterior)')) opLabel = 'Exterior'
     if (isNet) opLabel = row.netOpLabel || d.formaCalculo?.split('=')[0]?.trim() || 'Neto'
 
+    const dimsTxt = isNet
+      ? '—'
+      : (d.dimensiones || d.formula || '—')
+    const formulaTxt = isNet
+      ? '—'
+      : (d.formula || (d.formaCalculo ? String(d.formaCalculo).split('=')[0].trim() : '—'))
     const cells = {
       nombre: row.nombre || 'Elemento',
       op: opLabel,
       from: row.discountFromNombre || '—',
-      long: isNet ? '—' : (d.longM != null ? fmtMemoria(d.longM) : '—'),
-      anch: isNet ? '—' : (d.anchM != null ? fmtMemoria(d.anchM) : '—'),
-      espesor: isNet
-        ? '—'
-        : (d.espesorM != null
-          ? fmtMemoria(d.espesorM)
-          : (d.altura != null ? fmtMemoria(d.altura) : '—')),
+      dims: dimsTxt,
+      formula: formulaTxt,
       vol: fmtMemoria(row.volumeM3 || 0),
     }
     let cx = cx0 + cols[1].w
-    const keys = ['nombre', 'op', 'from', 'long', 'anch', 'espesor', 'vol']
+    const keys = ['nombre', 'op', 'from', 'dims', 'formula', 'vol']
     keys.forEach((key, ki) => {
       const col = cols[ki + 2]
       const isVol = key === 'vol'
       const isOp = key === 'op'
       ctx.fillStyle = (isOp && (isSub || isNet)) ? C.subtract : C.text
       ctx.font = (isVol || isOp || isNet)
-        ? `bold ${Math.round(13 * fs)}px "Segoe UI", system-ui, sans-serif`
-        : `${Math.round(13 * fs)}px "Segoe UI", system-ui, sans-serif`
+        ? `bold ${Math.round(12 * fs)}px "Segoe UI", system-ui, sans-serif`
+        : `${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
       let txt = String(cells[key])
-      const maxChars = Math.max(8, Math.floor(col.w / (7 * fs)))
-      if (txt.length > maxChars && (key === 'nombre' || key === 'from' || key === 'op')) {
+      const maxChars = Math.max(8, Math.floor(col.w / (6.2 * fs)))
+      if (txt.length > maxChars && (key === 'nombre' || key === 'from' || key === 'op' || key === 'dims' || key === 'formula')) {
         txt = `${txt.slice(0, Math.max(4, maxChars - 1))}…`
       }
-      const tx = (isVol || key === 'long' || key === 'anch' || key === 'espesor')
+      const tx = isVol
         ? cx + col.w - 8 - ctx.measureText(txt).width
-        : cx + 5
+        : cx + 4
       ctx.fillText(txt, tx, y0 + Math.round(24 * fs))
       cx += col.w
     })
@@ -393,26 +393,27 @@ export async function composeCalcMemoriaPng({
   const nRows = Math.max(1, rows.length)
   const labels = labelsFromSnapshot(snapshot)
 
-  // Ancho base legible a pantalla completa; crece un poco con muchas filas.
+  // Iso a ancho completo; tabla ~½ del ancho anterior, centrada debajo.
   const baseW = width != null
     ? width
-    : Math.round(1480 + Math.min(400, Math.max(0, nRows - 4) * 40))
-  const textScale = baseW / 1400
+    : Math.round(1280 + Math.min(240, Math.max(0, nRows - 4) * 24))
+  const textScale = baseW / 1280
   const margin = Math.round(28 * textScale)
   const headerH = Math.round(78 * textScale)
   const footerH = Math.round(26 * textScale)
   const gap = Math.round(14 * textScale)
 
-  // Tabla primero (prioridad de legibilidad): mismo ancho que el bloque de contenido.
   const contentW = baseW - margin * 2
-  const tableFontScale = textScale * (nRows <= 5 ? 1.08 : (nRows <= 9 ? 1.0 : 0.94))
+  // Tabla compacta ≈ mitad del ancho del isométrico (legible sin ampliar).
+  const tableTargetW = Math.round(contentW * 0.52)
+  const tableFontScale = textScale * (nRows <= 5 ? 1.12 : (nRows <= 9 ? 1.05 : 0.98))
   const table = renderMemoriaColorTableCanvas(snapshot, {
-    width: contentW,
+    width: tableTargetW,
     fontScale: tableFontScale,
   })
-  const tableW = table ? table.width : contentW
+  const tableW = table ? table.width : tableTargetW
   const tableH = table ? table.height : Math.round(140 * textScale)
-  const imgW = Math.max(baseW, tableW + margin * 2)
+  const imgW = Math.max(baseW, contentW + margin * 2)
   const isoW = imgW - margin * 2
 
   // Iso ≤ ~½ de la altura final: isoH ≤ header + table + footer + gaps

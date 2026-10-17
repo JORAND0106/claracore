@@ -288,6 +288,26 @@ export function extrudeClosedEntity(obj, {
       }],
     }
     lockSolidVolume(solid, solidGeomVolumeM3(solid))
+    const hM = Math.abs(v.z1 - v.z0)
+    if (contour.analytic?.type === 'ellipse') {
+      const rx = Math.abs(contour.analytic.rxM)
+      const ry = Math.abs(contour.analytic.ryM)
+      const circ = Math.abs(rx - ry) < 1e-9
+      solid.formMeta = {
+        kind: circ ? 'cylinder' : 'elliptic_prism',
+        rxM: rx,
+        ryM: ry,
+        lengthM: hM,
+        diameterM: circ ? rx * 2 : null,
+      }
+    } else if (contour.analytic?.type === 'rect') {
+      solid.formMeta = {
+        kind: 'rect_prism',
+        wM: Math.abs(contour.analytic.wM),
+        hM: Math.abs(contour.analytic.hM),
+        lengthM: hM,
+      }
+    }
     return { ok: true, solid }
   }
 
@@ -319,6 +339,26 @@ export function extrudeClosedEntity(obj, {
   // Volumen exacto: área del perfil × longitud (no la suma de losas de teselación).
   const profileArea = profileAreaM2(contour.ring, contour.analytic)
   lockSolidVolume(solid, profileArea * vLen.lengthM)
+  // Metadatos de forma para memoria (fórmulas naturales), también tras teselar.
+  if (contour.analytic?.type === 'ellipse') {
+    const rx = Math.abs(contour.analytic.rxM)
+    const ry = Math.abs(contour.analytic.ryM)
+    const circ = Math.abs(rx - ry) < 1e-9
+    solid.formMeta = {
+      kind: circ ? 'cylinder' : 'elliptic_prism',
+      rxM: rx,
+      ryM: ry,
+      lengthM: vLen.lengthM,
+      diameterM: circ ? rx * 2 : null,
+    }
+  } else if (contour.analytic?.type === 'rect') {
+    solid.formMeta = {
+      kind: 'rect_prism',
+      wM: Math.abs(contour.analytic.wM),
+      hM: Math.abs(contour.analytic.hM),
+      lengthM: vLen.lengthM,
+    }
+  }
   return { ok: true, solid }
 }
 
@@ -440,7 +480,8 @@ function tessellateProfileAlongZ(profile, meta, depthMin, depthMax, analytic) {
   const zMax = Math.max(...profile.map((p) => p.cota))
   const alongMin = Math.min(...profile.map((p) => p.along))
   const alongMax = Math.max(...profile.map((p) => p.along))
-  const nBands = analytic?.type === 'ellipse' ? 48 : 24
+  // Menos bandas = menos rayas al dibujar (el volumen sigue siendo analítico vía lockSolidVolume).
+  const nBands = analytic?.type === 'ellipse' ? 16 : 12
   const cells = []
   const xyRect = (a0, a1) => {
     if (meta.alongAxis === 'x' && meta.depthAxis === 'y') {
@@ -1292,9 +1333,83 @@ function booleanSolids(solids, op) {
     color,
     extrudeAxis: list[0].extrudeAxis || 'z',
     viewPlane: list[0].viewPlane || 'top',
-    cells: outCells,
+    cells: coalesceStackedCells(outCells),
     volumeM3: 0,
   }
+}
+
+/** ¿Dos anillos XY coinciden (misma huella, para fusionar losas Z)? */
+function ringsApproxEqual(a, b, eps = metersToWorld(0.0015)) {
+  const ra = a || []
+  const rb = b || []
+  if (ra.length !== rb.length || ra.length < 3) return false
+  let ax = 0
+  let ay = 0
+  let bx = 0
+  let by = 0
+  for (const p of ra) { ax += p.x; ay += p.y }
+  for (const p of rb) { bx += p.x; by += p.y }
+  ax /= ra.length
+  ay /= ra.length
+  bx /= rb.length
+  by /= rb.length
+  if (Math.hypot(ax - bx, ay - by) > eps) return false
+  const da = ra.map((p) => Math.hypot(p.x - ax, p.y - ay)).sort((u, v) => u - v)
+  const db = rb.map((p) => Math.hypot(p.x - bx, p.y - by)).sort((u, v) => u - v)
+  for (let i = 0; i < da.length; i += 1) {
+    if (Math.abs(da[i] - db[i]) > eps) return false
+  }
+  return true
+}
+
+function holesApproxEqual(ha, hb, eps = metersToWorld(0.0015)) {
+  const a = ha || []
+  const b = hb || []
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (!ringsApproxEqual(a[i], b[i], eps)) return false
+  }
+  return true
+}
+
+/**
+ * Fusiona losas Z consecutivas con la misma huella XY (menos caras/aristas internas).
+ * No altera el volumen (unión de intervalos Z).
+ */
+export function coalesceStackedCells(cells) {
+  const list = (cells || []).map((c) => ({
+    ...c,
+    ring: (c.ring || []).map((p) => ({ ...p })),
+    holes: (c.holes || []).map((h) => h.map((p) => ({ ...p }))),
+    z0: Math.min(Number(c.z0) || 0, Number(c.z1) || 0),
+    z1: Math.max(Number(c.z0) || 0, Number(c.z1) || 0),
+  })).sort((a, b) => (a.z0 - b.z0) || (a.z1 - b.z1))
+  if (list.length < 2) return list
+  const out = []
+  let cur = list[0]
+  for (let i = 1; i < list.length; i += 1) {
+    const n = list[i]
+    const touch = Math.abs(cur.z1 - n.z0) < 1e-6
+      || (n.z0 <= cur.z1 + 1e-6 && n.z1 >= cur.z0 - 1e-6)
+    if (
+      touch
+      && ringsApproxEqual(cur.ring, n.ring)
+      && holesApproxEqual(cur.holes, n.holes)
+      && !cur.analytic
+      && !n.analytic
+    ) {
+      cur = {
+        ...cur,
+        z0: Math.min(cur.z0, n.z0),
+        z1: Math.max(cur.z1, n.z1),
+      }
+    } else {
+      out.push(cur)
+      cur = n
+    }
+  }
+  out.push(cur)
+  return out
 }
 
 /** Unión geométrica sin exigir contacto (p. ej. grupo de sumas en un cálculo). */
@@ -1482,17 +1597,37 @@ function operandSnapshot(solid, volumeM3) {
   const zr = solidZRange(solid)
   const cells = solid?.cells || []
   const analytic = cells.length === 1 ? (cells[0].analytic || null) : null
+  const formMeta = solid?.formMeta || null
+  const vol = Number(volumeM3)
+  // Si es cilindro y el volumen descontado es parcial, longitud efectiva L = V/(π r²).
+  let effectiveForm = formMeta
+  if (formMeta?.kind === 'cylinder' && formMeta.rxM > 0 && Number.isFinite(vol)) {
+    const area = Math.PI * formMeta.rxM * formMeta.rxM
+    const fullLen = formMeta.lengthM
+    const fullVol = area * fullLen
+    let lengthM = fullLen
+    if (fullVol > VOL_EPS && vol < fullVol * 0.98) {
+      lengthM = vol / area
+    }
+    effectiveForm = {
+      ...formMeta,
+      lengthM,
+      diameterM: formMeta.rxM * 2,
+      effectiveLengthM: lengthM,
+    }
+  }
   return {
     solidId: solid?.id || null,
     color: solid?.color || null,
     nombre: solid?.nombre || null,
-    volumeM3: Number(volumeM3),
+    volumeM3: vol,
     longM: dims?.longM ?? null,
     anchM: dims?.anchM ?? null,
     espesorM: dims?.heightM ?? (zr ? Math.abs(zr.z1 - zr.z0) : null),
     cotaSuperior: zr ? zr.z1 : null,
     cotaInferior: zr ? zr.z0 : null,
     analytic,
+    formMeta: effectiveForm,
   }
 }
 
@@ -1551,22 +1686,29 @@ export function subtractSolids(baseSolid, subtractList) {
   if (!solid) return { ok: false, error: 'No se pudo sustraer (resultado vacío).' }
   solid.color = baseSolid.color || solid.color
   if (baseSolid.nombre) solid.nombre = baseSolid.nombre
+  if (baseSolid.formMeta) solid.formMeta = baseSolid.formMeta
 
   // Volumen mostrado = suma de valores redondeados (p. ej. 3,38 − 1,57 = 1,81).
-  const baseVol = solidVolumeM3(baseSolid)
-  const baseR = round2(baseVol)
-  let subR = 0
+  // En cadena: conservar el exterior original y acumular operandos descontados.
+  const prevMeta = baseSolid.booleanMeta?.op === 'subtract' ? baseSolid.booleanMeta : null
+  const exteriorBase = prevMeta?.base || null
+  const baseVolForNet = solidVolumeM3(baseSolid)
+  const baseR = round2(baseVolForNet)
   for (const snap of subSnapshots) {
     snap.volumeM3 = round2(snap.volumeM3)
-    subR += snap.volumeM3
   }
-  const netR = round2(baseR - subR)
-  lockSolidVolume(solid, Math.max(0, netR))
+  const prevSubs = prevMeta?.subtracted || []
+  const allSubs = [...prevSubs, ...subSnapshots]
+  const exteriorVol = exteriorBase ? round2(exteriorBase.volumeM3) : baseR
+  let allSubR = 0
+  for (const s of allSubs) allSubR = round2(allSubR + round2(s.volumeM3))
+  const absoluteNet = round2(exteriorVol - allSubR)
+  lockSolidVolume(solid, Math.max(0, absoluteNet))
 
   solid.booleanMeta = {
     op: 'subtract',
-    base: operandSnapshot(baseSolid, baseR),
-    subtracted: subSnapshots,
+    base: exteriorBase || operandSnapshot(baseSolid, baseR),
+    subtracted: allSubs,
     netVolumeM3: solid.volumeM3,
   }
   return { ok: true, solid }
@@ -2090,7 +2232,16 @@ export function drawSolid3d(ctx, solid, {
     else e.backVotes += 1
   }
 
-  const emitPrismFaces = (ringBot, ringTop, holesBot = [], holesTop = [], worldRing = null, zBottom = 0, zTop = 0) => {
+  const emitPrismFaces = (
+    ringBot,
+    ringTop,
+    holesBot = [],
+    holesTop = [],
+    worldRing = null,
+    zBottom = 0,
+    zTop = 0,
+    { skipTop = false, skipBottom = false } = {},
+  ) => {
     const n = ringBot.length
     const lastDup = n > 1
       && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
@@ -2112,8 +2263,9 @@ export function drawSolid3d(ctx, solid, {
         tone = faceToneFactorFromNormal(nx, ny, 0)
       }
       facePolys.push({ pts, depth, front, tone })
-      addEdge(ringBot[i], ringBot[j], front)
-      addEdge(ringTop[j], ringTop[i], front)
+      // Omitir aristas horizontales internas entre losas apiladas (evita rayas densas).
+      if (!skipBottom) addEdge(ringBot[i], ringBot[j], front)
+      if (!skipTop) addEdge(ringTop[j], ringTop[i], front)
       addEdge(ringBot[i], ringTop[i], front)
       addEdge(ringBot[j], ringTop[j], front)
     }
@@ -2130,7 +2282,7 @@ export function drawSolid3d(ctx, solid, {
       return h.slice(0, dup ? hn - 1 : hn)
     }).filter((h) => h.length >= 3)
 
-    if (topPts.length >= 3) {
+    if (topPts.length >= 3 && !skipTop) {
       const depth = topPts.reduce((s, q) => s + (q.depth || 0), 0) / topPts.length
       const front = signedProjectedArea(topPts) < 0
       const tone = FACE_TONE_FACTOR.top
@@ -2148,7 +2300,7 @@ export function drawSolid3d(ctx, solid, {
         }
       }
     }
-    if (botPts.length >= 3) {
+    if (botPts.length >= 3 && !skipBottom) {
       const depth = botPts.reduce((s, q) => s + (q.depth || 0), 0) / botPts.length
       const front = signedProjectedArea(botPts) < 0
       const tone = FACE_TONE_FACTOR.bottom
@@ -2170,7 +2322,9 @@ export function drawSolid3d(ctx, solid, {
     void zTop
   }
 
-  for (const cell of solid.cells) {
+  const cellsDraw = solid.cells || []
+  for (let ci = 0; ci < cellsDraw.length; ci += 1) {
+    const cell = cellsDraw[ci]
     const zBottom = Math.min(cell.z0, cell.z1)
     const zTop = Math.max(cell.z0, cell.z1)
     const worldRing = cell.ring || []
@@ -2182,7 +2336,29 @@ export function drawSolid3d(ctx, solid, {
     const holesTop = (cell.holes || []).map((hole) => (
       hole.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
     ))
-    emitPrismFaces(ringBot, ringTop, holesBot, holesTop, worldRing, zBottom, zTop)
+    // Capas internas entre losas apiladas de misma huella → no dibujar (rayas).
+    let skipTop = false
+    let skipBottom = false
+    if (cellsDraw.length > 1) {
+      const above = cellsDraw.find((o) => (
+        o !== cell
+        && Math.abs(Math.min(o.z0, o.z1) - zTop) < 1e-6
+        && ringsApproxEqual(o.ring, cell.ring)
+        && holesApproxEqual(o.holes, cell.holes)
+      ))
+      const below = cellsDraw.find((o) => (
+        o !== cell
+        && Math.abs(Math.max(o.z0, o.z1) - zBottom) < 1e-6
+        && ringsApproxEqual(o.ring, cell.ring)
+        && holesApproxEqual(o.holes, cell.holes)
+      ))
+      skipTop = !!above
+      skipBottom = !!below
+    }
+    emitPrismFaces(ringBot, ringTop, holesBot, holesTop, worldRing, zBottom, zTop, {
+      skipTop,
+      skipBottom,
+    })
 
     // Paredes interiores del vacío (orientación invertida respecto al contorno exterior).
     for (let hi = 0; hi < holesBot.length; hi += 1) {

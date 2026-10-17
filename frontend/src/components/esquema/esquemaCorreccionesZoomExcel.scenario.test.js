@@ -153,7 +153,8 @@ describe('Sustraer en cadena · huecos visibles · caso a', () => {
     const both = subtractSolids(poc.solid, [pipe1, pipe2])
     assert.equal(both.ok, true, both.error)
     assert.ok(both.solid.volumeM3 < poc.solid.volumeM3 - 0.01)
-    assert.equal(both.solid.booleanMeta?.subtracted?.length, 2)
+    // Acumula vacío interior + 2 cilindros en el desglose de memoria.
+    assert.equal(both.solid.booleanMeta?.subtracted?.length, 3)
 
     // Alzados: caras hacia la cámara (sin AABB opaco); iso con varias caras.
     const ctx = mockCtx()
@@ -239,8 +240,8 @@ describe('Panel lateral ampliable · caso c', () => {
     assert.match(src, /contextSidebarUserW/)
     assert.match(src, /contextSidebarUserW \|\| ESQUEMA_CONTEXT_SIDEBAR_W/)
     const panel = readFileSync(join(__dirname, 'esquema3dCalcPanel.jsx'), 'utf8')
+    assert.match(panel, /esquema-calc-popup-table/)
     assert.match(panel, /tableLayout:\s*'fixed'/)
-    assert.match(panel, /width:\s*'100%'/)
   })
 })
 
@@ -350,15 +351,14 @@ describe('Zoom ventana · caso f', () => {
 })
 
 describe('Lista cálculo tipo Excel · caso g', () => {
-  it('columnas # Color Nombre Op Descuenta Volumen; nombre vacío bloquea; total fijo', () => {
+  it('popup Excel + lista de nombres; nombre vacío bloquea; total fijo', () => {
     const panel = readFileSync(join(__dirname, 'esquema3dCalcPanel.jsx'), 'utf8')
-    assert.match(panel, /esquema-calc-excel-table/)
-    assert.match(panel, />#</)
+    assert.match(panel, /esquema-calc-data-popup/)
+    assert.match(panel, /esquema-calc-popup-table/)
+    assert.match(panel, /esquema-calc-names-list/)
     assert.match(panel, />Color</)
     assert.match(panel, />Nombre</)
     assert.match(panel, />Descuenta de</)
-    assert.match(panel, /Volumen \(m³\)/)
-    assert.match(panel, /position:\s*'sticky'/)
     assert.match(panel, /esquema-calc-total-row/)
     assert.match(panel, /aria-label="Suma"/)
     assert.match(panel, /aria-label="Descuenta"/)

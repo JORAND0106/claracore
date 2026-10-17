@@ -68,7 +68,7 @@ export function EsquemaContextSidebar({
         maxWidth: 'min(56vw, 560px)',
         height: '100%',
         minHeight: 0,
-        borderRight: `1px solid ${t.border}`,
+        borderRight: `2px solid color-mix(in srgb, ${t.primary || '#0f766e'} 35%, ${t.border || '#cbd5e1'})`,
         background: t.bgCard || '#fff',
         display: 'flex',
         flexDirection: 'column',
@@ -83,18 +83,36 @@ export function EsquemaContextSidebar({
           role="separator"
           aria-orientation="vertical"
           aria-label="Ajustar ancho del panel lateral"
+          title="Arrastre para ampliar o reducir el panel"
+          data-cc-tooltip="Arrastre para ampliar o reducir el panel"
           onPointerDown={onResizePointerDown}
           style={{
             position: 'absolute',
             top: 0,
-            right: -3,
-            width: 8,
+            right: -5,
+            width: 12,
             height: '100%',
             cursor: 'col-resize',
-            zIndex: 6,
+            zIndex: 8,
             touchAction: 'none',
+            display: 'flex',
+            alignItems: 'stretch',
+            justifyContent: 'center',
+            background: 'transparent',
           }}
-        />
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 3,
+              margin: '8px 0',
+              borderRadius: 2,
+              background: t.primary || '#0f766e',
+              opacity: 0.55,
+              boxShadow: `0 0 0 1px color-mix(in srgb, ${t.primary || '#0f766e'} 25%, transparent)`,
+            }}
+          />
+        </div>
       ) : null}
       <div
         style={{

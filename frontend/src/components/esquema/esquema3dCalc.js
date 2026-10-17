@@ -244,30 +244,92 @@ export function calcTotalM3(calc, solids) {
   return total
 }
 
-function formaCalculoFromOperand(op) {
-  if (!op) return null
+/** Dimensiones legibles + fórmula natural a partir de operandSnapshot / formMeta. */
+export function naturalFormulaFromOperand(op) {
+  if (!op) return { dimensiones: null, formula: null, forma: 'Sólido' }
+  const v = op.volumeM3
+  const fm = op.formMeta
+  if (fm?.kind === 'cylinder' && fm.rxM > 0) {
+    const L = fm.effectiveLengthM ?? fm.lengthM
+    const d = fm.diameterM ?? (fm.rxM * 2)
+    return {
+      forma: 'Cilindro',
+      dimensiones: `Ø ${fmt(d)} m · L ${fmt(L)} m`,
+      formula: `π × ${fmt(fm.rxM)}² × ${fmt(L)}`,
+      formaCalculo: `π × ${fmt(fm.rxM)}² × ${fmt(L)} = ${fmt(v)} m³`,
+    }
+  }
+  if (fm?.kind === 'elliptic_prism' && fm.rxM > 0) {
+    const L = fm.lengthM
+    return {
+      forma: 'Prisma elíptico',
+      dimensiones: `rx ${fmt(fm.rxM)} · ry ${fmt(fm.ryM)} · L ${fmt(L)} m`,
+      formula: `π × ${fmt(fm.rxM)} × ${fmt(fm.ryM)} × ${fmt(L)}`,
+      formaCalculo: `π × ${fmt(fm.rxM)} × ${fmt(fm.ryM)} × ${fmt(L)} = ${fmt(v)} m³`,
+    }
+  }
+  if (fm?.kind === 'rect_prism' && fm.wM > 0) {
+    const L = fm.lengthM
+    return {
+      forma: 'Prisma rectangular',
+      dimensiones: `${fmt(fm.wM)} × ${fmt(fm.hM)} × ${fmt(L)} m`,
+      formula: `${fmt(fm.wM)} × ${fmt(fm.hM)} × ${fmt(L)}`,
+      formaCalculo: `${fmt(fm.wM)} × ${fmt(fm.hM)} × ${fmt(L)} = ${fmt(v)} m³`,
+    }
+  }
   const a = op.analytic
   const h = op.espesorM
-  const v = op.volumeM3
   if (a?.type === 'rect' && Number.isFinite(a.wM) && Number.isFinite(a.hM) && Number.isFinite(h)) {
-    return `${fmt(Math.abs(a.wM))} × ${fmt(Math.abs(a.hM))} × ${fmt(h)} = ${fmt(v)} m³`
+    const w = Math.abs(a.wM)
+    const ht = Math.abs(a.hM)
+    return {
+      forma: 'Prisma rectangular',
+      dimensiones: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)} m`,
+      formula: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)}`,
+      formaCalculo: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)} = ${fmt(v)} m³`,
+    }
   }
   if (a?.type === 'ellipse' && Number.isFinite(a.rxM) && Number.isFinite(h)) {
     const rx = Math.abs(a.rxM)
     const ry = Math.abs(a.ryM)
     if (Math.abs(rx - ry) < 1e-9) {
-      return `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(v)} m³`
+      return {
+        forma: 'Cilindro',
+        dimensiones: `Ø ${fmt(rx * 2)} m · L ${fmt(h)} m`,
+        formula: `π × ${fmt(rx)}² × ${fmt(h)}`,
+        formaCalculo: `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(v)} m³`,
+      }
     }
-    return `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(v)} m³`
+    return {
+      forma: 'Prisma elíptico',
+      dimensiones: `rx ${fmt(rx)} · ry ${fmt(ry)} · L ${fmt(h)} m`,
+      formula: `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)}`,
+      formaCalculo: `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(v)} m³`,
+    }
   }
   if (Number.isFinite(op.longM) && Number.isFinite(op.anchM) && Number.isFinite(h)) {
-    return `${fmt(op.longM)} × ${fmt(op.anchM)} × ${fmt(h)} = ${fmt(v)} m³`
+    return {
+      forma: 'Prisma rectangular',
+      dimensiones: `${fmt(op.longM)} × ${fmt(op.anchM)} × ${fmt(h)} m`,
+      formula: `${fmt(op.longM)} × ${fmt(op.anchM)} × ${fmt(h)}`,
+      formaCalculo: `${fmt(op.longM)} × ${fmt(op.anchM)} × ${fmt(h)} = ${fmt(v)} m³`,
+    }
   }
-  return `Volumen = ${fmt(v)} m³`
+  return {
+    forma: 'Sólido',
+    dimensiones: null,
+    formula: `Volumen = ${fmt(v)}`,
+    formaCalculo: `Volumen = ${fmt(v)} m³`,
+  }
+}
+
+function formaCalculoFromOperand(op) {
+  return naturalFormulaFromOperand(op).formaCalculo
 }
 
 function detailFromOperand(op, overrides = {}) {
   if (!op) return null
+  const nat = naturalFormulaFromOperand(op)
   return {
     color: op.color || '#0f766e',
     longM: op.longM,
@@ -277,13 +339,10 @@ function detailFromOperand(op, overrides = {}) {
     cotaInferior: op.cotaInferior,
     altura: op.espesorM,
     volumeM3: op.volumeM3,
-    forma: overrides.forma || (op.analytic?.type === 'rect' ? 'Prisma rectangular' : 'Sólido'),
-    dimensiones: overrides.dimensiones || (
-      Number.isFinite(op.longM) && Number.isFinite(op.anchM)
-        ? `${fmt(op.longM)} × ${fmt(op.anchM)} m`
-        : null
-    ),
-    formaCalculo: overrides.formaCalculo || formaCalculoFromOperand(op),
+    forma: overrides.forma || nat.forma,
+    dimensiones: overrides.dimensiones || nat.dimensiones,
+    formula: overrides.formula || nat.formula,
+    formaCalculo: overrides.formaCalculo || nat.formaCalculo,
     ...overrides,
   }
 }
@@ -304,6 +363,7 @@ export function breakdownRowsForBooleanSolid(solid, {
   const color = solid.color || meta.base.color || '#0f766e'
   const rows = []
   const baseVol = round2(meta.base.volumeM3)
+  const natExt = naturalFormulaFromOperand(meta.base)
   rows.push({
     numLabel: String(num),
     num,
@@ -316,17 +376,25 @@ export function breakdownRowsForBooleanSolid(solid, {
     countsInTotal: false,
     color,
     discountFromNombre: null,
-    detail: detailFromOperand(meta.base, { color, forma: 'Volumen exterior' }),
+    detail: detailFromOperand(meta.base, {
+      color,
+      forma: natExt.forma || 'Volumen exterior',
+      dimensiones: natExt.dimensiones,
+      formula: natExt.formula,
+      formaCalculo: natExt.formaCalculo,
+    }),
   })
   let subI = 1
   for (const sub of meta.subtracted || []) {
     const v = round2(sub.volumeM3)
+    const nat = naturalFormulaFromOperand(sub)
+    const subName = sub.nombre || (nat.forma === 'Cilindro' ? 'Pase' : 'Vacío interior')
     rows.push({
       numLabel: `${num}.${subI}`,
       num,
       subIndex: subI,
       solidId: solid.id,
-      nombre: sub.nombre || 'Vacío interior',
+      nombre: subName,
       op: 'subtract',
       volumeM3: v,
       signedM3: -v,
@@ -335,8 +403,10 @@ export function breakdownRowsForBooleanSolid(solid, {
       discountFromNombre: nombre || 'Sólido base',
       detail: detailFromOperand(sub, {
         color,
-        forma: 'Vacío interior',
-        formaCalculo: formaCalculoFromOperand(sub),
+        forma: nat.forma,
+        dimensiones: nat.dimensiones,
+        formula: nat.formula,
+        formaCalculo: nat.formaCalculo,
       }),
     })
     subI += 1
@@ -624,7 +694,7 @@ function fmt(n, d = 2) {
   return fmtMemoria(n, d)
 }
 
-/** Descripción textual para la memoria de cálculo (incluye Long/Anch/Espesor). */
+/** Descripción textual para la memoria (Dimensiones + Fórmula naturales). */
 export function describeSolidForMemoria(solid) {
   if (!isValidCalcSolid(solid)) return null
   const cells = solid.cells || []
@@ -650,16 +720,41 @@ export function describeSolidForMemoria(solid) {
     const baseVol = round2(meta.base.volumeM3)
     const subs = (meta.subtracted || []).map((s) => fmt(round2(s.volumeM3)))
     const net = round2(meta.netVolumeM3 ?? volumeM3)
+    const natBase = naturalFormulaFromOperand(meta.base)
     return {
       ...base,
       longM: meta.base.longM ?? base.longM,
       anchM: meta.base.anchM ?? base.anchM,
       espesorM: meta.base.espesorM ?? base.espesorM,
       forma: 'Sólido con huecos',
-      dimensiones: Number.isFinite(meta.base.longM)
-        ? `${fmt(meta.base.longM)} × ${fmt(meta.base.anchM)} m`
-        : base.dimensiones,
+      dimensiones: natBase.dimensiones || (
+        Number.isFinite(meta.base.longM)
+          ? `${fmt(meta.base.longM)} × ${fmt(meta.base.anchM)} × ${fmt(meta.base.espesorM)} m`
+          : null
+      ),
+      formula: `${fmt(baseVol)}${subs.length ? ` − ${subs.join(' − ')}` : ''}`,
       formaCalculo: `${fmt(baseVol)}${subs.length ? ` − ${subs.join(' − ')}` : ''} = ${fmt(net)} m³`,
+    }
+  }
+
+  // formMeta (cilindro / prisma) aunque esté teselado en varias celdas.
+  if (solid.formMeta) {
+    const nat = naturalFormulaFromOperand({
+      volumeM3,
+      formMeta: solid.formMeta,
+      espesorM: heightM,
+      longM: dims.longM,
+      anchM: dims.anchM,
+      analytic: cells.length === 1 ? cells[0].analytic : null,
+    })
+    return {
+      ...base,
+      forma: nat.forma,
+      dimensiones: nat.dimensiones,
+      formula: nat.formula,
+      formaCalculo: nat.formaCalculo,
+      espesorM: solid.formMeta.lengthM ?? heightM,
+      altura: solid.formMeta.lengthM ?? heightM,
     }
   }
 
@@ -673,64 +768,74 @@ export function describeSolidForMemoria(solid) {
     if (c.analytic?.type === 'rect') {
       const w = Math.abs(c.analytic.wM)
       const ht = Math.abs(c.analytic.hM)
+      const formula = `${fmt(w)} × ${fmt(ht)} × ${fmt(h)}`
       return {
         ...base,
         forma: 'Prisma rectangular',
-        dimensiones: `${fmt(w)} × ${fmt(ht)} m`,
+        dimensiones: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)} m`,
+        formula,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
         altura: h,
         espesorM: h,
         longM: w,
         anchM: ht,
-        formaCalculo: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+        formaCalculo: `${formula} = ${fmt(volumeM3)} m³`,
       }
     }
     if (c.analytic?.type === 'ellipse') {
       const rx = Math.abs(c.analytic.rxM)
       const ry = Math.abs(c.analytic.ryM)
       const circ = Math.abs(rx - ry) < 1e-9
+      const formula = circ
+        ? `π × ${fmt(rx)}² × ${fmt(h)}`
+        : `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)}`
       return {
         ...base,
         forma: circ ? 'Cilindro' : 'Prisma elíptico',
-        dimensiones: circ ? `Ø ${fmt(rx * 2)} m` : `rx ${fmt(rx)} × ry ${fmt(ry)} m`,
+        dimensiones: circ
+          ? `Ø ${fmt(rx * 2)} m · L ${fmt(h)} m`
+          : `rx ${fmt(rx)} · ry ${fmt(ry)} · L ${fmt(h)} m`,
+        formula,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
         altura: h,
         espesorM: h,
         longM: circ ? rx * 2 : rx * 2,
         anchM: circ ? rx * 2 : ry * 2,
-        formaCalculo: circ
-          ? `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(volumeM3)} m³`
-          : `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+        formaCalculo: `${formula} = ${fmt(volumeM3)} m³`,
       }
     }
     if (c.analytic?.type === 'triangle') {
       const b = Math.abs(c.analytic.baseM)
       const th = Math.abs(c.analytic.heightM)
+      const formula = `(${fmt(b)} × ${fmt(th)} / 2) × ${fmt(h)}`
       return {
         ...base,
         forma: 'Prisma triangular',
-        dimensiones: `base ${fmt(b)} × altura ${fmt(th)} m`,
+        dimensiones: `base ${fmt(b)} × altura ${fmt(th)} · L ${fmt(h)} m`,
+        formula,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
         altura: h,
         espesorM: h,
         longM: b,
         anchM: th,
-        formaCalculo: `(${fmt(b)} × ${fmt(th)} / 2) × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+        formaCalculo: `${formula} = ${fmt(volumeM3)} m³`,
       }
     }
-    // Polígono / booleano parcial
+    // Polígono / booleano parcial: área de la base × altura
+    const formula = `${fmt(area)} × ${fmt(h)}`
     return {
       ...base,
-      forma: (c.holes || []).length ? 'Sólido con huecos' : 'Prisma poligonal',
-      dimensiones: `envolvente ${fmt(dims.longM)} × ${fmt(dims.anchM)} m · área ${fmt(area)} m²`,
+      forma: (c.holes || []).length ? 'Sólido con huecos' : 'Prisma de base irregular',
+      dimensiones: `Área base ${fmt(area)} m² · altura ${fmt(h)} m`,
+      formula,
       cotaSuperior: cotaSup,
       cotaInferior: cotaInf,
       altura: h,
       espesorM: h,
-      formaCalculo: `${fmt(area)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+      formaCalculo: `${formula} = ${fmt(volumeM3)} m³`,
     }
   }
 
@@ -738,7 +843,8 @@ export function describeSolidForMemoria(solid) {
   return {
     ...base,
     forma: 'Sólido unido',
-    dimensiones: `${fmt(dims.longM)} × ${fmt(dims.anchM)} m`,
+    dimensiones: `${fmt(dims.longM)} × ${fmt(dims.anchM)} × ${fmt(heightM)} m`,
+    formula: `Volumen = ${fmt(volumeM3)}`,
     formaCalculo: `Volumen exacto = ${fmt(volumeM3)} m³`,
   }
 }

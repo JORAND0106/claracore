@@ -1,11 +1,12 @@
 /**
- * Panel de cálculo de volúmenes (tabla tipo Excel, paleta institucional).
+ * Panel de cálculo de volúmenes: lista compacta de nombres + popup Excel para datos.
  */
 import React, { useMemo, useState } from 'react'
 import {
   calcTotalM3,
   createCalcLine,
   createVolumeCalc,
+  describeSolidForMemoria,
   formatVolumeM3,
   isValidCalcSolid,
   lastCalcLineNeedsNombre,
@@ -34,6 +35,7 @@ export function Esquema3dCalcPanel({
   embedded = false,
 }) {
   const [newName, setNewName] = useState('Excavación')
+  const [popup, setPopup] = useState(null) // { mode:'add'|'edit', drafts:[] }
   const active = useMemo(
     () => (calcs || []).find((c) => c.id === activeCalcId) || (calcs || [])[0] || null,
     [calcs, activeCalcId],
@@ -50,34 +52,16 @@ export function Esquema3dCalcPanel({
 
   if (!open) return null
 
-  const defaultDiscountFrom = (exceptSolidId) => {
+  const defaultDiscountFrom = (exceptSolidId, drafts = []) => {
+    const fromDraft = (drafts || []).find((d) => d.op === 'sum' && d.solidId !== exceptSolidId)
+    if (fromDraft) return fromDraft.solidId
     const sumLine = (active?.lines || []).find((l) => l.op === 'sum' && l.solidId && l.solidId !== exceptSolidId)
     if (sumLine) return sumLine.solidId
     const other = (active?.lines || []).find((l) => l.solidId && l.solidId !== exceptSolidId)
     return other?.solidId || null
   }
 
-  const applyOp = (line, op) => {
-    const discountFromSolidId = op === 'subtract'
-      ? (line.discountFromSolidId || defaultDiscountFrom(line.solidId))
-      : null
-    const patch = { op, discountFromSolidId }
-    onUpdateLine?.(active.id, line.id, patch)
-    if (op === 'subtract') {
-      const nextLine = { ...line, ...patch }
-      const probe = resolveCalcLine(nextLine, solids, {
-        ...active,
-        lines: (active.lines || []).map((l) => (
-          l.id === line.id ? nextLine : l
-        )),
-      })
-      if (!probe.ok) {
-        onHint?.(probe.error || 'No se puede descontar: sin volumen común.')
-      }
-    }
-  }
-
-  const addFromSelection = () => {
+  const openAddPopup = () => {
     const ids = selectedSolidIds || []
     if (!ids.length) {
       onHint?.('Seleccione uno o más sólidos en el dibujo para agregarlos al cálculo.')
@@ -88,40 +72,94 @@ export function Esquema3dCalcPanel({
       onHint?.('Nombre el último sólido del cálculo antes de agregar otro.')
       return
     }
-    let added = 0
-    let skipped = 0
+    const drafts = []
     for (const id of ids) {
       const solid = (solids || []).find((s) => s.id === id)
-      if (!isValidCalcSolid(solid)) {
-        skipped += 1
-        continue
-      }
-      // Sin nombre automático: el usuario debe escribirlo.
-      if (added >= 1) {
-        onHint?.('Nombre el sólido agregado antes de añadir otro.')
-        break
-      }
-      onAddLine?.(active?.id, createCalcLine({
+      if (!isValidCalcSolid(solid)) continue
+      const desc = describeSolidForMemoria(solid)
+      drafts.push({
+        key: id,
         solidId: id,
         nombre: '',
         op: 'sum',
-      }))
-      added += 1
-      onHighlightSolid?.(id)
+        discountFromSolidId: null,
+        color: solid.color || '#0f766e',
+        volumeM3: Number(solid.volumeM3) || 0,
+        forma: desc?.forma || 'Sólido',
+        lineId: null,
+      })
     }
-    if (!added) {
-      onHint?.(skipped
-        ? 'Seleccione un sólido cerrado y bien construido.'
-        : 'Nombre el último sólido del cálculo antes de agregar otro.')
+    if (!drafts.length) {
+      onHint?.('Seleccione un sólido cerrado y bien construido.')
       return
     }
-    if (skipped) onHint?.(`${added} agregado(s). ${skipped} no válido(s) omitido(s). Nombre el sólido.`)
-    else onHint?.('Elemento agregado. Escriba su nombre en la lista.')
+    setPopup({ mode: 'add', drafts })
   }
 
-  const selectLineSolid = (solidId) => {
-    if (!solidId) return
-    onHighlightSolid?.(solidId)
+  const openEditPopup = (line) => {
+    const solid = (solids || []).find((s) => s.id === line.solidId)
+    const desc = describeSolidForMemoria(solid)
+    const r = resolveCalcLine(line, solids, active)
+    setPopup({
+      mode: 'edit',
+      drafts: [{
+        key: line.id,
+        solidId: line.solidId,
+        nombre: line.nombre || '',
+        op: line.op === 'subtract' ? 'subtract' : 'sum',
+        discountFromSolidId: line.discountFromSolidId || null,
+        color: solid?.color || '#0f766e',
+        volumeM3: r.ok ? r.volumeM3 : (Number(solid?.volumeM3) || 0),
+        forma: desc?.forma || 'Sólido',
+        lineId: line.id,
+      }],
+    })
+    if (line.solidId) onHighlightSolid?.(line.solidId)
+  }
+
+  const confirmPopup = () => {
+    if (!popup?.drafts?.length || !active) return
+    const unnamed = popup.drafts.find((d) => !String(d.nombre || '').trim())
+    if (unnamed) {
+      onHint?.('Escriba el nombre de cada sólido antes de confirmar.')
+      return
+    }
+    if (popup.mode === 'add') {
+      for (const d of popup.drafts) {
+        onAddLine?.(active.id, createCalcLine({
+          solidId: d.solidId,
+          nombre: String(d.nombre).trim(),
+          op: d.op,
+          discountFromSolidId: d.op === 'subtract'
+            ? (d.discountFromSolidId || defaultDiscountFrom(d.solidId, popup.drafts))
+            : null,
+        }))
+      }
+      onHint?.(`${popup.drafts.length} sólido(s) agregados al cálculo.`)
+    } else {
+      for (const d of popup.drafts) {
+        if (!d.lineId) continue
+        onUpdateLine?.(active.id, d.lineId, {
+          nombre: String(d.nombre).trim(),
+          op: d.op,
+          discountFromSolidId: d.op === 'subtract'
+            ? (d.discountFromSolidId || defaultDiscountFrom(d.solidId))
+            : null,
+        })
+      }
+      onHint?.('Datos del sólido actualizados.')
+    }
+    setPopup(null)
+  }
+
+  const patchDraft = (key, patch) => {
+    setPopup((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        drafts: prev.drafts.map((d) => (d.key === key ? { ...d, ...patch } : d)),
+      }
+    })
   }
 
   const shellStyle = embedded
@@ -129,7 +167,7 @@ export function Esquema3dCalcPanel({
       position: 'relative',
       width: '100%',
       maxHeight: 'min(520px, 65vh)',
-      minHeight: 180,
+      minHeight: 160,
       background: t.bg || '#fff',
       border: `1px solid ${t.border}`,
       borderRadius: 8,
@@ -154,37 +192,32 @@ export function Esquema3dCalcPanel({
       overflow: 'hidden',
     }
 
-  const headerBg = t.primary || '#0f766e'
-  const altRow = t.bgHover || '#f1f5f9'
-  const borderCell = t.border || '#cbd5e1'
-
   return (
     <div
       data-testid="esquema-calc-panel"
       data-embedded={embedded ? '1' : '0'}
       style={shellStyle}
     >
-      {embedded ? null : (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '10px 12px',
-        borderBottom: `1px solid ${t.border}`,
-        background: `color-mix(in srgb, ${t.primary || '#0f766e'} 12%, ${t.bgCard || '#fff'})`,
-      }}
-      >
-        <div style={{ fontWeight: 800, color: t.primary || '#0f766e', fontSize: 14, flex: 1 }}>
-          Cálculo de volúmenes
-        </div>
-        <button type="button" title="Cerrar panel" data-cc-tooltip="Cerrar panel" onClick={onClose} style={btnGhost(t)}>✕</button>
-      </div>
-      )}
       {embedded ? (
         <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 6px 0' }}>
           <button type="button" title="Cerrar panel" data-cc-tooltip="Cerrar panel" onClick={onClose} style={{ ...btnGhost(t), padding: '2px 8px' }}>✕</button>
         </div>
-      ) : null}
+      ) : (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 12px',
+          borderBottom: `1px solid ${t.border}`,
+          background: `color-mix(in srgb, ${t.primary || '#0f766e'} 12%, ${t.bgCard || '#fff'})`,
+        }}
+        >
+          <div style={{ fontWeight: 800, color: t.primary || '#0f766e', fontSize: 14, flex: 1 }}>
+            Cálculo de volúmenes
+          </div>
+          <button type="button" title="Cerrar panel" onClick={onClose} style={btnGhost(t)}>✕</button>
+        </div>
+      )}
 
       <div style={{ padding: 10, borderBottom: `1px solid ${t.border}`, display: 'grid', gap: 8 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -232,12 +265,7 @@ export function Esquema3dCalcPanel({
               style={{ ...inputStyle(t), flex: 1 }}
               title="Nombre del cálculo activo"
             />
-            <button
-              type="button"
-              title="Eliminar cálculo"
-              onClick={() => onDeleteCalc?.(active.id)}
-              style={btnGhost(t)}
-            >
+            <button type="button" title="Eliminar cálculo" onClick={() => onDeleteCalc?.(active.id)} style={btnGhost(t)}>
               Eliminar
             </button>
           </div>
@@ -247,7 +275,13 @@ export function Esquema3dCalcPanel({
       {active ? (
         <>
           <div style={{ padding: '8px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', borderBottom: `1px solid ${t.border}` }}>
-            <button type="button" title="Agregar sólidos seleccionados" onClick={addFromSelection} style={btnPrimary(t)}>
+            <button
+              type="button"
+              title="Agregar sólidos seleccionados"
+              data-testid="esquema-calc-add-selected"
+              onClick={openAddPopup}
+              style={btnPrimary(t)}
+            >
               + Sólidos seleccionados
             </button>
             <span style={{ fontSize: 11, color: ui?.muted || '#64748b', alignSelf: 'center' }}>
@@ -256,210 +290,102 @@ export function Esquema3dCalcPanel({
           </div>
 
           <div
-            data-testid="esquema-calc-lines-scroll"
+            data-testid="esquema-calc-names-list"
             style={{
               flex: 1,
               minHeight: 0,
               overflowY: 'auto',
-              overflowX: 'auto',
-              padding: 0,
+              padding: '6px 8px',
               WebkitOverflowScrolling: 'touch',
-              scrollbarGutter: 'stable',
             }}
           >
-            <table
-              data-testid="esquema-calc-excel-table"
-              style={{
-                width: '100%',
-                borderCollapse: 'collapse',
-                fontSize: 12,
-                tableLayout: 'fixed',
-              }}
-            >
-              <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
-                <tr style={{ background: headerBg, color: '#fff', textAlign: 'left' }}>
-                  <th style={{ ...thExcel(borderCell), width: 28, textAlign: 'center', color: '#fff', background: headerBg }}>#</th>
-                  <th style={{ ...thExcel(borderCell), width: 36, textAlign: 'center', color: '#fff', background: headerBg }}>Color</th>
-                  <th style={{ ...thExcel(borderCell), color: '#fff', background: headerBg }}>Nombre</th>
-                  <th style={{ ...thExcel(borderCell), width: 40, textAlign: 'center', color: '#fff', background: headerBg }} title="Operación">Op</th>
-                  <th style={{ ...thExcel(borderCell), width: '22%', color: '#fff', background: headerBg }}>Descuenta de</th>
-                  <th style={{ ...thExcel(borderCell), width: 72, textAlign: 'right', color: '#fff', background: headerBg }}>Volumen (m³)</th>
-                  <th style={{ ...thExcel(borderCell), width: 28, color: '#fff', background: headerBg }} />
-                </tr>
-              </thead>
-              <tbody>
-                {(active.lines || []).map((line, idx) => {
-                  const r = resolveCalcLine(line, solids, active)
-                  const solid = (solids || []).find((s) => s.id === line.solidId)
-                  const fromOptions = lineOptions.filter((o) => o.solidId !== line.solidId)
-                  const isHi = highlightedSolidId && line.solidId === highlightedSolidId
-                  const rowBg = isHi
-                    ? `color-mix(in srgb, ${t.primary || '#0f766e'} 18%, #fff)`
-                    : (idx % 2 === 1 ? altRow : (t.bg || '#fff'))
-                  return (
-                    <tr
-                      key={line.id}
-                      data-testid="esquema-calc-row"
-                      data-solid-id={line.solidId || ''}
-                      onClick={() => selectLineSolid(line.solidId)}
-                      style={{
-                        background: rowBg,
-                        cursor: line.solidId ? 'pointer' : 'default',
-                        outline: isHi ? `2px solid ${t.primary || '#0f766e'}` : undefined,
-                        outlineOffset: -2,
-                      }}
-                    >
-                      <td style={{ ...tdExcel(borderCell), textAlign: 'center', fontWeight: 700, color: t.textMuted || '#64748b' }}>
-                        {idx + 1}
-                      </td>
-                      <td style={{ ...tdExcel(borderCell), textAlign: 'center' }}>
-                        <span
-                          title={solid?.color || ''}
-                          style={{
-                            display: 'inline-block',
-                            width: 16,
-                            height: 16,
-                            borderRadius: 3,
-                            border: `1px solid ${borderCell}`,
-                            background: solid?.color || '#94a3b8',
-                            verticalAlign: 'middle',
-                          }}
-                        />
-                      </td>
-                      <td style={tdExcel(borderCell)} onClick={(e) => e.stopPropagation()}>
-                        <input
-                          value={line.nombre}
-                          placeholder="Nombre obligatorio"
-                          aria-label="Nombre del sólido"
-                          onChange={(e) => onUpdateLine?.(active.id, line.id, { nombre: e.target.value })}
-                          onFocus={() => selectLineSolid(line.solidId)}
-                          style={{
-                            ...inputStyle(t),
-                            padding: '3px 5px',
-                            fontSize: 12,
-                            borderRadius: 0,
-                            border: `1px solid ${String(line.nombre || '').trim() ? borderCell : '#f59e0b'}`,
-                            background: 'transparent',
-                          }}
-                        />
-                        {!r.ok && line.op === 'subtract' ? (
-                          <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 2, lineHeight: 1.3 }}>
-                            {r.error || 'Sin volumen común'}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td style={{ ...tdExcel(borderCell), verticalAlign: 'middle' }} onClick={(e) => e.stopPropagation()}>
-                        <div
-                          data-testid="esquema-calc-op-icons"
-                          role="group"
-                          aria-label="Operación"
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            gap: 2,
-                          }}
-                        >
-                          <button
-                            type="button"
-                            title="Suma"
-                            aria-label="Suma"
-                            aria-pressed={line.op === 'sum'}
-                            data-testid="esquema-calc-op-sum"
-                            onClick={() => applyOp(line, 'sum')}
-                            style={opIconBtn(t, line.op === 'sum', false)}
-                          >
-                            +
-                          </button>
-                          <button
-                            type="button"
-                            title="Descuenta"
-                            aria-label="Descuenta"
-                            aria-pressed={line.op === 'subtract'}
-                            data-testid="esquema-calc-op-subtract"
-                            onClick={() => applyOp(line, 'subtract')}
-                            style={opIconBtn(t, line.op === 'subtract', true)}
-                          >
-                            −
-                          </button>
-                        </div>
-                      </td>
-                      <td style={tdExcel(borderCell)} onClick={(e) => e.stopPropagation()}>
-                        {line.op === 'subtract' ? (
-                          <select
-                            data-testid="esquema-calc-discount-from"
-                            value={line.discountFromSolidId || ''}
-                            onChange={(e) => {
-                              const discountFromSolidId = e.target.value || null
-                              const nextLine = { ...line, discountFromSolidId }
-                              onUpdateLine?.(active.id, line.id, { discountFromSolidId })
-                              const probe = resolveCalcLine(nextLine, solids, {
-                                ...active,
-                                lines: (active.lines || []).map((l) => (
-                                  l.id === line.id ? nextLine : l
-                                )),
-                              })
-                              if (!probe.ok) {
-                                onHint?.(probe.error || 'No se puede descontar del sólido indicado.')
-                              }
-                            }}
-                            style={{ ...inputStyle(t), padding: '3px 4px', fontSize: 11, borderRadius: 0 }}
-                            title="Descuenta de"
-                          >
-                            <option value="">— Elegir —</option>
-                            {fromOptions.map((o) => (
-                              <option key={o.solidId} value={o.solidId}>{o.nombre}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span style={{ fontSize: 11, color: ui?.muted || '#94a3b8' }}>—</span>
-                        )}
-                      </td>
-                      <td style={{
-                        ...tdExcel(borderCell),
-                        textAlign: 'right',
-                        fontVariantNumeric: 'tabular-nums',
-                        fontWeight: 700,
-                        color: r.ok ? (line.op === 'subtract' ? '#b91c1c' : t.text) : '#b91c1c',
-                      }}
-                      >
-                        {r.ok
-                          ? `${line.op === 'subtract' ? '−' : ''}${Number(r.volumeM3).toFixed(2)}`
-                          : '—'}
-                      </td>
-                      <td style={{ ...tdExcel(borderCell), textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          title="Quitar"
-                          onClick={() => onRemoveLine?.(active.id, line.id)}
-                          style={{ ...btnGhost(t), padding: '2px 6px', borderRadius: 0 }}
-                        >
-                          ×
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-                {!(active.lines || []).length ? (
-                  <tr>
-                    <td colSpan={7} style={{ ...tdExcel(borderCell), color: ui?.muted || '#64748b', padding: 12 }}>
-                      Seleccione sólidos en el dibujo y pulse «Sólidos seleccionados».
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+            {(active.lines || []).map((line) => {
+              const r = resolveCalcLine(line, solids, active)
+              const solid = (solids || []).find((s) => s.id === line.solidId)
+              const desc = describeSolidForMemoria(solid)
+              const isHi = highlightedSolidId && line.solidId === highlightedSolidId
+              const tip = [
+                line.op === 'subtract' ? 'Descuenta' : 'Suma',
+                line.discountFromNombre || (line.op === 'subtract' ? (lineOptions.find((o) => o.solidId === line.discountFromSolidId)?.nombre || '—') : null),
+                desc?.forma,
+                r.ok ? `${Number(r.volumeM3).toFixed(2)} m³` : null,
+              ].filter(Boolean).join(' · ')
+              return (
+                <button
+                  key={line.id}
+                  type="button"
+                  data-testid="esquema-calc-name-row"
+                  data-solid-id={line.solidId || ''}
+                  title={tip}
+                  data-cc-tooltip={tip}
+                  onMouseEnter={() => onHighlightSolid?.(line.solidId)}
+                  onFocus={() => onHighlightSolid?.(line.solidId)}
+                  onPointerDown={() => onHighlightSolid?.(line.solidId)}
+                  onClick={() => openEditPopup(line)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '8px 10px',
+                    marginBottom: 4,
+                    borderRadius: 6,
+                    border: `1px solid ${isHi ? (t.primary || '#0f766e') : (t.border || '#cbd5e1')}`,
+                    background: isHi
+                      ? `color-mix(in srgb, ${t.primary || '#0f766e'} 14%, #fff)`
+                      : (t.bg || '#fff'),
+                    cursor: 'pointer',
+                    color: t.text,
+                    fontWeight: 700,
+                    fontSize: 13,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: 3,
+                      background: solid?.color || '#94a3b8',
+                      border: `1px solid ${t.border}`,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {String(line.nombre || '').trim() || (
+                      <span style={{ color: '#b45309', fontWeight: 600 }}>Sin nombre</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    title="Quitar"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRemoveLine?.(active.id, line.id)
+                    }}
+                    style={{ ...btnGhost(t), padding: '2px 6px', fontSize: 12 }}
+                  >
+                    ×
+                  </button>
+                </button>
+              )
+            })}
+            {!(active.lines || []).length ? (
+              <div style={{ fontSize: 12, color: ui?.muted || '#64748b', padding: 10 }}>
+                Seleccione sólidos y pulse «Sólidos seleccionados».
+              </div>
+            ) : null}
           </div>
 
           <div
             data-testid="esquema-calc-total-row"
             style={{
               padding: '10px 12px',
-              borderTop: `2px solid ${headerBg}`,
+              borderTop: `2px solid ${t.primary || '#0f766e'}`,
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              background: altRow,
+              background: t.bgHover || '#f8fafc',
               flexShrink: 0,
             }}
           >
@@ -470,23 +396,242 @@ export function Esquema3dCalcPanel({
           </div>
         </>
       ) : null}
+
+      {popup ? (
+        <CalcDataPopup
+          t={t}
+          ui={ui}
+          mode={popup.mode}
+          drafts={popup.drafts}
+          lineOptions={lineOptions}
+          onPatch={patchDraft}
+          onCancel={() => setPopup(null)}
+          onConfirm={confirmPopup}
+          onHighlightSolid={onHighlightSolid}
+        />
+      ) : null}
     </div>
   )
 }
 
-function thExcel(border) {
+function CalcDataPopup({
+  t,
+  ui,
+  mode,
+  drafts,
+  lineOptions,
+  onPatch,
+  onCancel,
+  onConfirm,
+  onHighlightSolid,
+}) {
+  const hasUnnamed = (drafts || []).some((d) => !String(d.nombre || '').trim())
+  const border = t.border || '#cbd5e1'
+  const headerBg = t.primary || '#0f766e'
+  return (
+    <div
+      data-testid="esquema-calc-data-popup"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Datos del cálculo"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 80,
+        background: 'rgba(15,23,42,0.45)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(720px, 96vw)',
+          maxHeight: 'min(80vh, 640px)',
+          background: t.bgCard || '#fff',
+          borderRadius: 10,
+          border: `1px solid ${border}`,
+          boxShadow: '0 20px 48px rgba(15,23,42,0.28)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{
+          padding: '12px 14px',
+          background: `color-mix(in srgb, ${headerBg} 14%, #fff)`,
+          borderBottom: `1px solid ${border}`,
+          fontWeight: 800,
+          color: headerBg,
+          fontSize: 15,
+        }}
+        >
+          {mode === 'add' ? 'Agregar sólidos al cálculo' : 'Editar sólido del cálculo'}
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: 10 }}>
+          <table
+            data-testid="esquema-calc-popup-table"
+            style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 12 }}
+          >
+            <thead>
+              <tr style={{ background: headerBg, color: '#fff' }}>
+                <th style={th(border, headerBg)}>Color</th>
+                <th style={{ ...th(border, headerBg), width: '18%' }}>Forma</th>
+                <th style={{ ...th(border, headerBg), width: '22%' }}>Nombre</th>
+                <th style={{ ...th(border, headerBg), width: 70, textAlign: 'center' }}>Op</th>
+                <th style={{ ...th(border, headerBg), width: '20%' }}>Descuenta de</th>
+                <th style={{ ...th(border, headerBg), width: 80, textAlign: 'right' }}>Volumen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(drafts || []).map((d, idx) => (
+                <tr
+                  key={d.key}
+                  style={{ background: idx % 2 ? (t.bgHover || '#f1f5f9') : (t.bg || '#fff') }}
+                  onClick={() => onHighlightSolid?.(d.solidId)}
+                >
+                  <td style={td(border)}>
+                    <span style={{
+                      display: 'inline-block',
+                      width: 16,
+                      height: 16,
+                      borderRadius: 3,
+                      background: d.color,
+                      border: `1px solid ${border}`,
+                    }}
+                    />
+                  </td>
+                  <td style={{ ...td(border), color: ui?.muted || '#64748b' }}>{d.forma}</td>
+                  <td style={td(border)} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      value={d.nombre}
+                      placeholder="Nombre obligatorio"
+                      aria-label="Nombre del sólido"
+                      data-testid="esquema-calc-popup-nombre"
+                      onChange={(e) => onPatch(d.key, { nombre: e.target.value })}
+                      style={{
+                        ...inputStyle(t),
+                        padding: '6px 8px',
+                        borderRadius: 0,
+                        border: `1px solid ${String(d.nombre || '').trim() ? border : '#f59e0b'}`,
+                      }}
+                    />
+                  </td>
+                  <td style={{ ...td(border), textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                      <button
+                        type="button"
+                        title="Suma"
+                        aria-label="Suma"
+                        aria-pressed={d.op === 'sum'}
+                        onClick={() => onPatch(d.key, { op: 'sum', discountFromSolidId: null })}
+                        style={opIconBtn(t, d.op === 'sum', false)}
+                      >
+                        +
+                      </button>
+                      <button
+                        type="button"
+                        title="Descuenta"
+                        aria-label="Descuenta"
+                        aria-pressed={d.op === 'subtract'}
+                        onClick={() => onPatch(d.key, {
+                          op: 'subtract',
+                          discountFromSolidId: d.discountFromSolidId
+                            || lineOptions.find((o) => o.solidId !== d.solidId)?.solidId
+                            || null,
+                        })}
+                        style={opIconBtn(t, d.op === 'subtract', true)}
+                      >
+                        −
+                      </button>
+                    </div>
+                  </td>
+                  <td style={td(border)} onClick={(e) => e.stopPropagation()}>
+                    {d.op === 'subtract' ? (
+                      <select
+                        value={d.discountFromSolidId || ''}
+                        onChange={(e) => onPatch(d.key, { discountFromSolidId: e.target.value || null })}
+                        style={{ ...inputStyle(t), padding: '4px 6px', borderRadius: 0, fontSize: 11 }}
+                      >
+                        <option value="">— Elegir —</option>
+                        {lineOptions.filter((o) => o.solidId !== d.solidId).map((o) => (
+                          <option key={o.solidId} value={o.solidId}>{o.nombre}</option>
+                        ))}
+                        {(drafts || []).filter((x) => x.solidId !== d.solidId && x.op === 'sum').map((x) => (
+                          <option key={`d-${x.solidId}`} value={x.solidId}>
+                            {String(x.nombre || '').trim() || 'Nuevo (suma)'}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ color: ui?.muted || '#94a3b8' }}>—</span>
+                    )}
+                  </td>
+                  <td style={{
+                    ...td(border),
+                    textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                    fontWeight: 700,
+                  }}
+                  >
+                    {Number(d.volumeM3 || 0).toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hasUnnamed ? (
+            <div data-testid="esquema-calc-popup-unnamed-hint" style={{ marginTop: 8, fontSize: 12, color: '#b45309', fontWeight: 700 }}>
+              Escriba el nombre de cada sólido antes de confirmar.
+            </div>
+          ) : null}
+        </div>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 8,
+          padding: '10px 12px',
+          borderTop: `1px solid ${border}`,
+          background: t.bgHover || '#f8fafc',
+        }}
+        >
+          <button type="button" onClick={onCancel} style={btnGhost(t)}>Cancelar</button>
+          <button
+            type="button"
+            data-testid="esquema-calc-popup-confirm"
+            onClick={onConfirm}
+            disabled={hasUnnamed}
+            style={{
+              ...btnPrimary(t),
+              opacity: hasUnnamed ? 0.45 : 1,
+              cursor: hasUnnamed ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Confirmar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function th(border, bg) {
   return {
-    padding: '6px 4px',
+    padding: '8px 6px',
     border: `1px solid ${border}`,
+    background: bg,
+    color: '#fff',
     fontWeight: 700,
-    fontSize: 10,
-    letterSpacing: 0.02,
-    whiteSpace: 'nowrap',
+    fontSize: 11,
+    textAlign: 'left',
   }
 }
-function tdExcel(border) {
+function td(border) {
   return {
-    padding: '3px 4px',
+    padding: '6px 6px',
     border: `1px solid ${border}`,
     verticalAlign: 'middle',
   }
@@ -526,7 +671,6 @@ function btnPrimary(t) {
     whiteSpace: 'nowrap',
   }
 }
-/** Íconos apilados + / − de la columna Op. */
 function opIconBtn(t, active, isSubtract) {
   const accent = isSubtract ? '#b91c1c' : (t.primary || '#0f766e')
   return {

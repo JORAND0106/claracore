@@ -7134,15 +7134,18 @@ export default function EsquemaEditorModal({
               onResizePointerDown={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                const startX = e.clientX
+                const startX = e.clientX ?? e.touches?.[0]?.clientX
                 const startW = contextSidebarUserW
                 contextSidebarDragRef.current = { startX, startW }
+                try { e.currentTarget?.setPointerCapture?.(e.pointerId) } catch { /* ignore */ }
+                const clientXOf = (ev) => ev.clientX ?? ev.touches?.[0]?.clientX ?? startX
                 const onMove = (ev) => {
                   const drag = contextSidebarDragRef.current
                   if (!drag) return
+                  ev.preventDefault?.()
                   const next = Math.max(
                     ESQUEMA_CONTEXT_SIDEBAR_W,
-                    Math.min(560, drag.startW + (ev.clientX - drag.startX)),
+                    Math.min(560, drag.startW + (clientXOf(ev) - drag.startX)),
                   )
                   setContextSidebarUserW(next)
                 }
@@ -7150,13 +7153,17 @@ export default function EsquemaEditorModal({
                   contextSidebarDragRef.current = null
                   window.removeEventListener('pointermove', onMove)
                   window.removeEventListener('pointerup', onUpPersist)
+                  window.removeEventListener('touchmove', onMove)
+                  window.removeEventListener('touchend', onUpPersist)
                   setContextSidebarUserW((w) => {
                     try { localStorage.setItem('cc_esquema_context_sidebar_w', String(w)) } catch { /* ignore */ }
                     return w
                   })
                 }
-                window.addEventListener('pointermove', onMove)
+                window.addEventListener('pointermove', onMove, { passive: false })
                 window.addEventListener('pointerup', onUpPersist)
+                window.addEventListener('touchmove', onMove, { passive: false })
+                window.addEventListener('touchend', onUpPersist)
               }}
             >
               <EsquemaSidebarSection
