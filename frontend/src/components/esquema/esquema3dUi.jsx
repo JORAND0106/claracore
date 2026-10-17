@@ -4,6 +4,9 @@
 import React, { useState } from 'react'
 import { ESQUEMA_3D_VIEWS, isEsquema3dDrawView } from './esquema3dViews.js'
 import { formatVolumeM3 } from './esquema3dSolids.js'
+import { alturaFromCotasText } from './esquema3dCalc.js'
+
+export { alturaFromCotasText }
 
 export function Esquema3dViewToolbar({
   t,
@@ -71,6 +74,8 @@ export function Esquema3dExtrudePopup({
   const [lengthM, setLengthM] = useState('1')
   const [error, setError] = useState('')
 
+  const alturaM = mode === 'cotas' ? alturaFromCotasText(cotaSup, cotaInf) : null
+
   const submit = () => {
     setError('')
     if (mode === 'cotas') {
@@ -93,6 +98,7 @@ export function Esquema3dExtrudePopup({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        data-testid="esquema-extruir-popup"
         style={{
           width: 'min(420px, 96vw)',
           background: t.bgCard || '#fff',
@@ -114,12 +120,45 @@ export function Esquema3dExtrudePopup({
           <div style={{ display: 'grid', gap: 10 }}>
             <label style={labelStyle(t)}>
               Cota superior (m)
-              <input value={cotaSup} onChange={(e) => setCotaSup(e.target.value)} style={inputStyle(t)} inputMode="decimal" />
+              <input
+                value={cotaSup}
+                onChange={(e) => setCotaSup(e.target.value)}
+                style={inputStyle(t)}
+                inputMode="decimal"
+                data-testid="esquema-extruir-cota-sup"
+              />
             </label>
             <label style={labelStyle(t)}>
               Cota inferior (m)
-              <input value={cotaInf} onChange={(e) => setCotaInf(e.target.value)} style={inputStyle(t)} inputMode="decimal" />
+              <input
+                value={cotaInf}
+                onChange={(e) => setCotaInf(e.target.value)}
+                style={inputStyle(t)}
+                inputMode="decimal"
+                data-testid="esquema-extruir-cota-inf"
+              />
             </label>
+            <div
+              data-testid="esquema-extruir-altura"
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: `1px solid ${t.border}`,
+                background: t.bgHover || 'rgba(15,118,110,0.08)',
+                fontSize: 13,
+                color: t.text,
+              }}
+            >
+              <span style={{ fontWeight: 700, color: ui?.muted || '#64748b' }}>Altura calculada</span>
+              <div style={{ fontWeight: 800, fontSize: 18, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                {alturaM != null
+                  ? `${alturaM.toFixed(2)} m`
+                  : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: ui?.muted || '#64748b', marginTop: 2 }}>
+                Cota superior − cota inferior (solo lectura)
+              </div>
+            </div>
           </div>
         ) : (
           <label style={labelStyle(t)}>

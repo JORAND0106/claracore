@@ -80,15 +80,27 @@ export default function PptoSincroSicoeLoteModal({
   }, [open, data?.ts])
 
   const addFiles = useCallback(async (fileList, origen = 'upload') => {
-    const files = [...(fileList || [])].filter((f) => f && f.type?.startsWith('image/'))
+    const files = [...(fileList || [])].filter((f) => {
+      if (!f) return false
+      if (f.type?.startsWith('image/')) return true
+      // Memoria de cálculo (PDF) desde el esquema 3D
+      if (origen === 'esquema-calculo' && (f.type === 'application/pdf' || String(f.name || '').toLowerCase().endsWith('.pdf'))) {
+        return true
+      }
+      return false
+    })
     if (!files.length) return
     setError('')
     const next = []
     for (const file of files) {
       try {
-        const prepared = origen === 'esquema'
-          ? await prepararEsquemaParaUpload(file)
-          : await prepararImagenParaUpload(file)
+        const isPdf = String(file.type || '').includes('pdf')
+          || String(file.name || '').toLowerCase().endsWith('.pdf')
+        const prepared = isPdf
+          ? file
+          : (origen === 'esquema' || origen === 'esquema-calculo')
+            ? await prepararEsquemaParaUpload(file)
+            : await prepararImagenParaUpload(file)
         const named = prepared instanceof File
           ? prepared
           : new File([prepared], file.name || `grafico-${Date.now()}.jpg`, {
@@ -101,6 +113,11 @@ export default function PptoSincroSicoeLoteModal({
           previewUrl,
           url: null,
           origen,
+          mime: named.type,
+          kind: origen === 'esquema-calculo'
+            ? (isPdf ? 'memoria-calculo' : 'grafico-isometrico')
+            : undefined,
+          nombre: named.name,
         })
       } catch (err) {
         setError(err?.message || 'No se pudo preparar la imagen')
@@ -153,7 +170,8 @@ export default function PptoSincroSicoeLoteModal({
         const f = adj.blob
           ? new File([adj.blob], adj.nombre, { type: adj.mime })
           : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-        if (f && String(f.type || '').startsWith('image/')) await addFiles([f], 'esquema-calculo')
+        // PNG isométrico + PDF de memoria (mismo flujo transversal que PptoGraficosModal)
+        if (f) await addFiles([f], 'esquema-calculo')
       })
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')

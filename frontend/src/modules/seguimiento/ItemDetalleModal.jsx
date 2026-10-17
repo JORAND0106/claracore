@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
-import { evidenciaEsImagen, slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
+import { evidenciaEsMediaCarrusel, slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
@@ -1090,8 +1090,8 @@ export default function ItemDetalleModal({
           <h4 style={h4(t)}>Evidencia / respuesta</h4>
           {(() => {
             const evidencias = item.evidencias || []
-            const imagenes = evidencias.filter(evidenciaEsImagen)
-            const slides = slidesFromImagenes(imagenes, (ev) => imagenSrc(ev) || ev.url || ev.data_uri)
+            const enCarrusel = evidencias.filter(evidenciaEsMediaCarrusel)
+            const slides = slidesFromImagenes(enCarrusel, (ev) => imagenSrc(ev) || ev.url || ev.data_uri)
             return slides.length ? (
               <div style={{ marginBottom: 10 }}>
                 <AdjuntosMediaSlider
@@ -1123,7 +1123,7 @@ export default function ItemDetalleModal({
           </button>
           </div>
           <ul style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            {(item.evidencias || []).filter((ev) => !evidenciaEsImagen(ev)).map((ev) => (
+            {(item.evidencias || []).filter((ev) => !evidenciaEsMediaCarrusel(ev)).map((ev) => (
               <li key={ev.id}>{ev.nombre_archivo} · {fmtFecha(ev.created_at)}</li>
             ))}
           </ul>

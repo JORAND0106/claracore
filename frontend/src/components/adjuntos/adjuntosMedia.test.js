@@ -2,7 +2,10 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   evidenciaEsImagen,
+  evidenciaEsMediaCarrusel,
+  isEsquemaCalcAdjunto,
   isEsquemaAdjunto,
+  isPdfAdjunto,
   slidesFromChecklistItem,
   slidesFromImagenes,
   slidesFromRegistro,
@@ -44,5 +47,67 @@ describe('adjuntosMedia · slider unificado', () => {
   it('detecta evidencias de imagen vs archivo', () => {
     assert.equal(evidenciaEsImagen({ mime_type: 'image/png', nombre_archivo: 'a.png' }), true)
     assert.equal(evidenciaEsImagen({ mime_type: 'application/pdf', nombre_archivo: 'a.pdf' }), false)
+  })
+
+  it('incluye memoria PDF y gráfico isométrico en el carrusel', () => {
+    assert.equal(isEsquemaCalcAdjunto({ origen: 'esquema-calculo', kind: 'memoria-calculo' }), true)
+    assert.equal(isPdfAdjunto({ kind: 'memoria-calculo', nombre: 'memoria.pdf' }), true)
+    assert.equal(evidenciaEsMediaCarrusel({
+      mime_type: 'application/pdf',
+      origen: 'esquema-calculo',
+      kind: 'memoria-calculo',
+      nombre_archivo: 'memoria.pdf',
+    }), true)
+
+    const slides = slidesFromImagenes([
+      {
+        previewUrl: 'blob:pdf',
+        origen: 'esquema-calculo',
+        kind: 'memoria-calculo',
+        mime: 'application/pdf',
+        nombre: 'memoria_calculo_Pozo.pdf',
+      },
+      {
+        previewUrl: 'blob:png',
+        origen: 'esquema-calculo',
+        kind: 'grafico-isometrico',
+        mime: 'image/png',
+      },
+    ])
+    assert.equal(slides.length, 2)
+    assert.equal(slides[0].kind, 'memoria-calculo')
+    assert.match(slides[0].label, /Memoria|memoria/i)
+    assert.equal(slides[1].kind, 'grafico-isometrico')
+
+    const checklist = slidesFromChecklistItem({
+      imagen: { url: 'https://x/a.jpg' },
+      esquema_calc_adjuntos: [
+        { data_uri: 'data:application/pdf;base64,xx', kind: 'memoria-calculo', origen: 'esquema-calculo', nombre: 'm.pdf' },
+      ],
+    })
+    assert.equal(checklist.some((s) => s.kind === 'memoria-calculo'), true)
+
+    // Registro SicoeObra / hoja: origen esquema-calculo debe conservar kind PDF/PNG
+    const reg = slidesFromRegistro(null, [
+      {
+        url: 'https://x/memoria_calculo_Pozo_25S.pdf',
+        origen: 'esquema-calculo',
+        kind: 'memoria-calculo',
+        mime: 'application/pdf',
+        nombre: 'memoria_calculo_Pozo_25S.pdf',
+        numero: 7,
+      },
+      {
+        url: 'https://x/grafico_isometrico_Pozo_25S.png',
+        origen: 'esquema-calculo',
+        kind: 'grafico-isometrico',
+        mime: 'image/png',
+        numero: 8,
+      },
+    ])
+    assert.equal(reg.length, 2)
+    assert.equal(reg[0].kind, 'memoria-calculo')
+    assert.equal(reg[1].kind, 'grafico-isometrico')
+    assert.match(reg[0].label, /Memoria|memoria/i)
   })
 })

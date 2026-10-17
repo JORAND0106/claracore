@@ -78,9 +78,9 @@ export default function SicoeGraficosWizardPanel({
     const origen = opts.origen || 'manual'
     setSubiendo(true)
     try {
-      const isPdf = String(file?.type || '').includes('pdf')
+      const isPdfUpload = String(file?.type || '').includes('pdf')
         || String(file?.name || '').toLowerCase().endsWith('.pdf')
-      const prepared = isPdf
+      const prepared = isPdfUpload
         ? file
         : (origen === 'esquema' || origen === 'esquema-calculo')
           ? await prepararEsquemaParaUpload(file)
@@ -104,6 +104,12 @@ export default function SicoeGraficosWizardPanel({
         numero: data.numero ?? numero,
         creado_en: new Date().toISOString(),
         origen,
+        mime: file?.type || (isPdfUpload ? 'application/pdf' : null),
+        mime_type: file?.type || (isPdfUpload ? 'application/pdf' : null),
+        nombre: file?.name || null,
+        kind: origen === 'esquema-calculo'
+          ? (isPdfUpload ? 'memoria-calculo' : 'grafico-isometrico')
+          : undefined,
       })
     } catch (err) {
       alert('Error subiendo gráfico: ' + (err?.message || String(err)))
