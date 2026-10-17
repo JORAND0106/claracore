@@ -7,6 +7,7 @@ import {
   extrudeModeForView,
   isEsquema3dDrawView,
   normalizeViewId,
+  viewPastelFor,
 } from './esquema3dViews.js'
 import { formatVolumeM3 } from './esquema3dSolids.js'
 import { alturaFromCotasText } from './esquema3dCalc.js'
@@ -50,7 +51,12 @@ export function Esquema3dViewToolbar({
               lineHeight: 1.1,
             }}
           >
-            <CubeFaceIcon face={v.face || v.id} active={current === v.id} primary={t.primary || '#0f766e'} />
+            <CubeFaceIcon
+              face={v.face || v.id}
+              active={current === v.id}
+              primary={t.primary || '#0f766e'}
+              pastel={viewPastelFor(v.id)?.face}
+            />
             <span>{viewShort(v.id)}</span>
           </button>
         )
@@ -88,11 +94,11 @@ export function Esquema3dViewToolbar({
   )
 }
 
-/** Ícono de cubo isométrico con una cara resaltada. */
-function CubeFaceIcon({ face, active, primary }) {
+/** Ícono de cubo isométrico con la cara de la vista en su color pastel. */
+function CubeFaceIcon({ face, active, primary, pastel }) {
   const stroke = active ? primary : '#64748b'
-  const fillFace = active ? primary : '#94a3b8'
-  const fillDim = active ? 'rgba(15,118,110,0.12)' : '#e2e8f0'
+  const fillFace = pastel || (active ? primary : '#94a3b8')
+  const fillDim = active ? 'rgba(15,118,110,0.10)' : '#e2e8f0'
   // Cubo isométrico simple (vista 3/4)
   // Caras: top trapecio, front parallelogram, right parallelogram
   const top = '8,2 18,2 22,6 12,6'

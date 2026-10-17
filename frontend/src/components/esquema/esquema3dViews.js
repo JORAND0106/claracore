@@ -22,10 +22,44 @@ export const ESQUEMA_3D_VIEWS = Object.freeze([
   { id: 'iso-sw', label: 'Isométrica SO', draw: false },
 ])
 
+/**
+ * Color pastel del lienzo / ícono por vista plana (C-3D-15).
+ * Iso, giro libre y 2D conservan el fondo del tema; memoria/PNG siguen en blanco.
+ */
+export const VIEW_PASTEL = Object.freeze({
+  bottom: { canvas: '#e3f5e5', face: '#8fd196', label: 'verde' },
+  front: { canvas: '#fde9d6', face: '#f0a86a', label: 'naranja' },
+  top: { canvas: '#ddebf8', face: '#7eb3e0', label: 'azul' },
+  back: { canvas: '#ebe0f5', face: '#b894d4', label: 'morado' },
+  left: { canvas: '#f7f1d0', face: '#e0d070', label: 'amarillo' },
+  right: { canvas: '#f8dde8', face: '#e090b0', label: 'rosa' },
+})
+
 /** Alias legacy: 'side' = lateral izquierda. */
 export function normalizeViewId(viewId) {
   if (viewId === 'side') return 'left'
   return viewId || 'top'
+}
+
+/** Pastel de una vista plana (null en iso / desconocida). */
+export function viewPastelFor(viewId) {
+  const id = normalizeViewId(viewId)
+  return VIEW_PASTEL[id] || null
+}
+
+/**
+ * Fondo del lienzo del editor: pastel solo en vistas planas 3D (no iso, no órbita, no 2D).
+ * Memoria/PNG no usan esta función (fondo blanco fijo).
+ */
+export function editorCanvasFill({
+  mode3d = false,
+  orbitFree = false,
+  viewId = 'top',
+  defaultCanvas = '#ffffff',
+} = {}) {
+  if (!mode3d || orbitFree) return defaultCanvas
+  if (isEsquema3dIsoView(viewId) || !isEsquema3dDrawView(viewId)) return defaultCanvas
+  return viewPastelFor(viewId)?.canvas || defaultCanvas
 }
 
 export function isEsquema3dDrawView(viewId) {

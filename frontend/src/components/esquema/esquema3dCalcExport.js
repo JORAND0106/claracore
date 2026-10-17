@@ -228,11 +228,57 @@ export async function composeCalcIsoPng({
   return canvas ? canvas.toDataURL('image/png') : null
 }
 
+/** Parte texto en hasta `maxLines` líneas que caben en `maxW` (sin cortar con …). */
+export function wrapMemoriaText(ctx, text, maxW, maxLines = 2) {
+  const raw = String(text ?? '')
+  if (!raw) return ['']
+  if (ctx.measureText(raw).width <= maxW) return [raw]
+  // Preferir cortes en espacios / · / × / −
+  const tokens = raw.split(/(\s+|·|×|−|-)/).filter((t) => t.length)
+  const lines = []
+  let cur = ''
+  const push = () => {
+    if (cur) lines.push(cur)
+    cur = ''
+  }
+  for (const tok of tokens) {
+    if (lines.length >= maxLines) break
+    const trial = cur + tok
+    if (ctx.measureText(trial).width <= maxW || !cur) {
+      cur = trial
+      continue
+    }
+    push()
+    if (lines.length >= maxLines) break
+    cur = tok.trimStart()
+  }
+  if (lines.length < maxLines) push()
+  // Si aún sobra y la última línea no cabe, bajar fuente no; repartir por caracteres.
+  if (lines.length && ctx.measureText(lines[lines.length - 1]).width > maxW) {
+    const last = lines[lines.length - 1]
+    const fitted = []
+    let buf = ''
+    for (const ch of last) {
+      const t = buf + ch
+      if (ctx.measureText(t).width <= maxW || !buf) buf = t
+      else {
+        fitted.push(buf)
+        buf = ch
+        if (fitted.length >= maxLines) break
+      }
+    }
+    if (buf && fitted.length < maxLines) fitted.push(buf)
+    return fitted.length ? fitted : [last]
+  }
+  return lines.length ? lines : [raw]
+}
+
 /**
  * Tabla de resumen (sin encabezado de memoria — solo columnas + filas + total).
  * Soporta desglose N / N.1 / N.2 y columna "Descuenta de".
  * Columnas Dimensiones + Fórmula (fórmulas naturales por figura).
  * Filas netas: Dimensiones/Fórmula = "—"; Operación = "1 − 1.1 − …".
+ * Textos completos: anchos generosos + hasta 2 líneas por celda (sin ellipsis).
  */
 export function renderMemoriaColorTableCanvas(snapshot, {
   width = 880,
@@ -243,14 +289,14 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   const fs = Math.max(0.9, Math.min(2.0, Number(fontScale) || 1))
   const margin = Math.round(8 * fs)
   const baseCols = [
-    { key: 'num', label: '#', w: 40 },
-    { key: 'color', label: 'Color', w: 42 },
-    { key: 'nombre', label: 'Nombre', w: 140 },
-    { key: 'op', label: 'Operación', w: 88 },
-    { key: 'from', label: 'Descuenta de', w: 90 },
-    { key: 'dims', label: 'Dimensiones', w: 150 },
-    { key: 'formula', label: 'Fórmula', w: 160 },
-    { key: 'vol', label: 'Volumen (m³)', w: 90 },
+    { key: 'num', label: '#', w: 36 },
+    { key: 'color', label: 'Color', w: 40 },
+    { key: 'nombre', label: 'Nombre', w: 120 },
+    { key: 'op', label: 'Operación', w: 100 },
+    { key: 'from', label: 'Descuenta de', w: 110 },
+    { key: 'dims', label: 'Dimensiones', w: 168 },
+    { key: 'formula', label: 'Fórmula', w: 168 },
+    { key: 'vol', label: 'Volumen (m³)', w: 100 },
   ]
   const baseW = baseCols.reduce((s, c) => s + c.w, 0)
   // Mismo ancho que el isométrico: estirar columnas al ancho pedido (fs solo tipografía).
@@ -264,11 +310,55 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   }
   const tableW = cols.reduce((s, c) => s + c.w, 0)
   const canvasW = tableW + margin * 2
-  const rowH = Math.round(36 * fs)
-  const colHeaderH = Math.round(34 * fs)
+  const baseRowH = Math.round(36 * fs)
+  const lineGap = Math.round(14 * fs)
+  const colHeaderH = Math.round(44 * fs)
   const totalH = Math.round(40 * fs)
   const rows = memoriaDisplayRows(snapshot)
-  const bodyH = Math.max(rowH, rows.length * rowH)
+
+  // Medir filas (2 líneas máx) antes de fijar altura del canvas.
+  const measureCanvas = typeof document !== 'undefined'
+    ? document.createElement('canvas')
+    : null
+  const mctx = measureCanvas ? measureCanvas.getContext('2d') : null
+  const rowPlans = rows.map((row) => {
+    const d = row.detail || {}
+    const isSub = row.op === 'subtract'
+    const isNet = !!(row.isNetRow || String(row.nombre || '').includes('(neto)'))
+    let opLabel = isSub ? 'Descuenta' : 'Suma'
+    if (row.subIndex === 0 && String(row.nombre || '').includes('(exterior)')) opLabel = 'Exterior'
+    if (isNet) opLabel = row.netOpLabel || d.formaCalculo?.split('=')[0]?.trim() || 'Neto'
+    const cells = {
+      nombre: row.nombre || 'Elemento',
+      op: opLabel,
+      from: row.discountFromNombre || '—',
+      dims: isNet ? '—' : (d.dimensiones || d.formula || '—'),
+      formula: isNet
+        ? '—'
+        : (d.formula || (d.formaCalculo ? String(d.formaCalculo).split('=')[0].trim() : '—')),
+      vol: fmtMemoria(row.volumeM3 || 0),
+    }
+    const keys = ['nombre', 'op', 'from', 'dims', 'formula', 'vol']
+    let maxLines = 1
+    const wrapped = {}
+    if (mctx) {
+      keys.forEach((key, ki) => {
+        const col = cols[ki + 2]
+        const bold = key === 'vol' || key === 'op' || isNet
+        mctx.font = bold
+          ? `bold ${Math.round(12 * fs)}px "Segoe UI", system-ui, sans-serif`
+          : `${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
+        const lines = wrapMemoriaText(mctx, cells[key], Math.max(8, col.w - 10), 2)
+        wrapped[key] = lines
+        maxLines = Math.max(maxLines, lines.length)
+      })
+    } else {
+      keys.forEach((key) => { wrapped[key] = [String(cells[key])] })
+    }
+    const h = Math.max(baseRowH, Math.round((maxLines * lineGap) + 12 * fs))
+    return { row, d, isSub, isNet, cells, wrapped, h }
+  })
+  const bodyH = Math.max(baseRowH, rowPlans.reduce((s, p) => s + p.h, 0))
   const canvasH = colHeaderH + bodyH + totalH + margin
 
   const canvas = document.createElement('canvas')
@@ -283,18 +373,21 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   ctx.fillStyle = C.primary
   ctx.fillRect(x0, y0, tableW, colHeaderH)
   ctx.fillStyle = '#ffffff'
-  ctx.font = `bold ${Math.round(12 * fs)}px "Segoe UI", system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
   let x = x0
   for (const col of cols) {
-    ctx.fillText(col.label, x + 5, y0 + Math.round(22 * fs))
+    const lines = wrapMemoriaText(ctx, col.label, Math.max(8, col.w - 8), 2)
+    const blockH = lines.length * lineGap
+    const yStart = y0 + (colHeaderH - blockH) / 2 + Math.round(11 * fs)
+    lines.forEach((ln, li) => {
+      ctx.fillText(ln, x + 4, yStart + li * lineGap)
+    })
     x += col.w
   }
   y0 += colHeaderH
 
-  rows.forEach((row, idx) => {
-    const d = row.detail || {}
-    const isSub = row.op === 'subtract'
-    const isNet = !!(row.isNetRow || String(row.nombre || '').includes('(neto)'))
+  rowPlans.forEach((plan, idx) => {
+    const { row, d, isSub, isNet, wrapped, h: rowH } = plan
     ctx.fillStyle = idx % 2 === 0 ? C.bg : C.rowAlt
     ctx.fillRect(x0, y0, tableW, rowH)
     ctx.strokeStyle = C.border
@@ -303,7 +396,7 @@ export function renderMemoriaColorTableCanvas(snapshot, {
     ctx.fillStyle = row.color || d.color || C.text
     ctx.font = `bold ${Math.round(13 * fs)}px "Segoe UI", system-ui, sans-serif`
     const numTxt = String(row.numLabel || row.num || '')
-    ctx.fillText(numTxt, x0 + (cols[0].w - ctx.measureText(numTxt).width) / 2, y0 + Math.round(24 * fs))
+    ctx.fillText(numTxt, x0 + (cols[0].w - ctx.measureText(numTxt).width) / 2, y0 + rowH / 2 + 4)
 
     const color = row.color || d.color || '#0f766e'
     const sw = Math.round(20 * fs)
@@ -314,24 +407,6 @@ export function renderMemoriaColorTableCanvas(snapshot, {
     ctx.strokeStyle = C.border
     ctx.strokeRect(cx0 + (cols[1].w - sw) / 2 + 0.5, y0 + (rowH - sh) / 2 + 0.5, sw - 1, sh - 1)
 
-    let opLabel = isSub ? 'Descuenta' : 'Suma'
-    if (row.subIndex === 0 && String(row.nombre || '').includes('(exterior)')) opLabel = 'Exterior'
-    if (isNet) opLabel = row.netOpLabel || d.formaCalculo?.split('=')[0]?.trim() || 'Neto'
-
-    const dimsTxt = isNet
-      ? '—'
-      : (d.dimensiones || d.formula || '—')
-    const formulaTxt = isNet
-      ? '—'
-      : (d.formula || (d.formaCalculo ? String(d.formaCalculo).split('=')[0].trim() : '—'))
-    const cells = {
-      nombre: row.nombre || 'Elemento',
-      op: opLabel,
-      from: row.discountFromNombre || '—',
-      dims: dimsTxt,
-      formula: formulaTxt,
-      vol: fmtMemoria(row.volumeM3 || 0),
-    }
     let cx = cx0 + cols[1].w
     const keys = ['nombre', 'op', 'from', 'dims', 'formula', 'vol']
     keys.forEach((key, ki) => {
@@ -342,15 +417,15 @@ export function renderMemoriaColorTableCanvas(snapshot, {
       ctx.font = (isVol || isOp || isNet)
         ? `bold ${Math.round(12 * fs)}px "Segoe UI", system-ui, sans-serif`
         : `${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
-      let txt = String(cells[key])
-      const maxChars = Math.max(8, Math.floor(col.w / (6.2 * fs)))
-      if (txt.length > maxChars && (key === 'nombre' || key === 'from' || key === 'op' || key === 'dims' || key === 'formula')) {
-        txt = `${txt.slice(0, Math.max(4, maxChars - 1))}…`
-      }
-      const tx = isVol
-        ? cx + col.w - 8 - ctx.measureText(txt).width
-        : cx + 4
-      ctx.fillText(txt, tx, y0 + Math.round(24 * fs))
+      const lines = wrapped[key] || [String(plan.cells[key])]
+      const blockH = lines.length * lineGap
+      const yStart = y0 + (rowH - blockH) / 2 + Math.round(11 * fs)
+      lines.forEach((ln, li) => {
+        const tx = isVol
+          ? cx + col.w - 8 - ctx.measureText(ln).width
+          : cx + 4
+        ctx.fillText(ln, tx, yStart + li * lineGap)
+      })
       cx += col.w
     })
     y0 += rowH

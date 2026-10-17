@@ -101,6 +101,7 @@ import { filterObjectsFor3dDraw } from './esquema3dEntityUnity'
 import {
   applyWorldDeltaToEntity,
   canvasDeltaToWorldMove,
+  editorCanvasFill,
   extrudeModeForView,
   isEsquema3dDrawView,
   isEsquema3dIsoView,
@@ -914,10 +915,16 @@ export default function EsquemaEditorModal({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const uiNow = themeRef.current
     // En modo 3D el mapa no se muestra: lienzo opaco aunque mapActive siga true.
+    // Vistas planas: fondo pastel de la cara activa (iso/órbita/2D = fondo del tema).
     if (mapActiveRef.current && !mode3dRef.current) {
       ctx.clearRect(0, 0, w, h)
     } else {
-      ctx.fillStyle = uiNow.canvas
+      ctx.fillStyle = editorCanvasFill({
+        mode3d: !!mode3dRef.current,
+        orbitFree: !!orbitFreeRef.current,
+        viewId: view3dRef.current || 'top',
+        defaultCanvas: uiNow.canvas,
+      })
       ctx.fillRect(0, 0, w, h)
     }
     ctx.save()

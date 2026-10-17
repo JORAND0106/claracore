@@ -7,6 +7,7 @@
 import {
   formatVolumeM3,
   intersectionVolumeM3,
+  lengthMatchingVolumeM3,
   mergeSolidsUnion,
   round2,
   solidFootprintDimsM,
@@ -250,7 +251,9 @@ export function naturalFormulaFromOperand(op) {
   const v = op.volumeM3
   const fm = op.formMeta
   if (fm?.kind === 'cylinder' && fm.rxM > 0) {
-    const L = fm.effectiveLengthM ?? fm.lengthM
+    const area = Math.PI * fm.rxM * fm.rxM
+    const L = lengthMatchingVolumeM3(area, v, fm.effectiveLengthM ?? fm.lengthM)
+      ?? (fm.effectiveLengthM ?? fm.lengthM)
     const d = fm.diameterM ?? (fm.rxM * 2)
     return {
       forma: 'Cilindro',
@@ -260,7 +263,9 @@ export function naturalFormulaFromOperand(op) {
     }
   }
   if (fm?.kind === 'elliptic_prism' && fm.rxM > 0) {
-    const L = fm.lengthM
+    const area = Math.PI * fm.rxM * fm.ryM
+    const L = lengthMatchingVolumeM3(area, v, fm.effectiveLengthM ?? fm.lengthM)
+      ?? (fm.effectiveLengthM ?? fm.lengthM)
     return {
       forma: 'Prisma elíptico',
       dimensiones: `rx ${fmt(fm.rxM)} · ry ${fmt(fm.ryM)} · L ${fmt(L)} m`,
@@ -292,19 +297,21 @@ export function naturalFormulaFromOperand(op) {
   if (a?.type === 'ellipse' && Number.isFinite(a.rxM) && Number.isFinite(h)) {
     const rx = Math.abs(a.rxM)
     const ry = Math.abs(a.ryM)
+    const area = Math.PI * rx * ry
+    const L = lengthMatchingVolumeM3(area, v, h) ?? h
     if (Math.abs(rx - ry) < 1e-9) {
       return {
         forma: 'Cilindro',
-        dimensiones: `Ø ${fmt(rx * 2)} m · L ${fmt(h)} m`,
-        formula: `π × ${fmt(rx)}² × ${fmt(h)}`,
-        formaCalculo: `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(v)} m³`,
+        dimensiones: `Ø ${fmt(rx * 2)} m · L ${fmt(L)} m`,
+        formula: `π × ${fmt(rx)}² × ${fmt(L)}`,
+        formaCalculo: `π × ${fmt(rx)}² × ${fmt(L)} = ${fmt(v)} m³`,
       }
     }
     return {
       forma: 'Prisma elíptico',
-      dimensiones: `rx ${fmt(rx)} · ry ${fmt(ry)} · L ${fmt(h)} m`,
-      formula: `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)}`,
-      formaCalculo: `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(v)} m³`,
+      dimensiones: `rx ${fmt(rx)} · ry ${fmt(ry)} · L ${fmt(L)} m`,
+      formula: `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(L)}`,
+      formaCalculo: `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(L)} = ${fmt(v)} m³`,
     }
   }
   if (Number.isFinite(op.longM) && Number.isFinite(op.anchM) && Number.isFinite(h)) {

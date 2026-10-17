@@ -73,8 +73,11 @@ describe('contrato · documento', () => {
     assert.match(md, /C-OUT-06/)
     assert.match(md, /C-3D-12/)
     assert.match(md, /Render limpio/i)
+    assert.match(md, /C-3D-15/)
+    assert.match(md, /pastel/i)
     assert.match(md, /esquemaCorreccionesZoomExcel/)
     assert.match(md, /esquemaRenderMemoriaPopup/)
+    assert.match(md, /esquemaPastelRenderTabla/)
     // Regresiones pre-SketchUp (casos 5–7) deben figurar en el contrato.
     assert.match(md, /esquema3dRegresionPreSketchup/)
     assert.match(md, /círculo se ve como círculo/i)
