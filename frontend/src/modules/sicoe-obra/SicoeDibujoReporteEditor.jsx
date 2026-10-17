@@ -253,6 +253,12 @@ export default function SicoeDibujoReporteEditor({
             numero_reporte: full?.numero_reporte ?? info?.numero_reporte,
           })
         }}
+        iaDoc={{
+          ambito: 'sicoe_huella',
+          docKey: `sicoe-huella-${reporte?.id || reporte?.numero_reporte || 'nuevo'}`,
+        }}
+        draftModule="sicoe_huella"
+        draftEntityId={reporte?.id || reporte?.numero_reporte || 'nuevo'}
         onSaveHuella={onSaveHuella}
         onClose={onClose}
         onSave={async () => { /* PNG no aplica en huellaMode */ }}

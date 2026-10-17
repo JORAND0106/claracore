@@ -854,6 +854,12 @@ export default function PlanillaTuberiaCrearReporteModal({
             mapLocation={mapLocation}
             seedTramo={seedTramo}
             autoActivateMap
+            iaDoc={{
+              ambito: 'topo_tuberia',
+              docKey: `topo-tuberia-${planilla?.id || 'planilla'}-crear`,
+            }}
+            draftModule="topo_tuberia"
+            draftEntityId={`${planilla?.id || 'planilla'}-crear`}
             onClose={() => setEsquemaOpen(false)}
             onSave={async (dataUrl, extras) => {
               if (!dataUrl) {

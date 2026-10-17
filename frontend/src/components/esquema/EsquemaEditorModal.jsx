@@ -88,6 +88,15 @@ import {
 } from './esquema3dCalc'
 import { buildCalcAdjuntos } from './esquema3dCalcExport'
 import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
+import {
+  buildEsquemaDraftSnapshot,
+  esquemaDraftClear,
+  esquemaDraftKey,
+  esquemaDraftLoad,
+  esquemaDraftSave,
+  getEsquemaDraftUserId,
+} from './esquemaDraft'
+import { EsquemaDraftNoticePopup } from './esquemaDraftUi'
 import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
@@ -421,6 +430,15 @@ export default function EsquemaEditorModal({
   referenciaPanelInfo = null,
   /** Cierra el panel de referencia embebido. */
   onReferenciaPanelClose = null,
+  /**
+   * Clave de borrador (opcional). Si no se pasa, se deriva de draftModule + draftEntityId.
+   * Solo el usuario creador puede leer/editar el borrador.
+   */
+  draftKey: draftKeyProp = null,
+  /** Módulo lógico para la clave de borrador (bitacora, acta_idea, sicoe_registro, …). */
+  draftModule = null,
+  /** Identificador de entidad en el módulo (entradaId, registroId, …). */
+  draftEntityId = null,
   onSave,
   onClose,
 }) {
@@ -588,6 +606,20 @@ export default function EsquemaEditorModal({
   const [calcPanelOpen, setCalcPanelOpen] = useState(false)
   const [volumeCalcs, setVolumeCalcs] = useState([])
   const [activeCalcId, setActiveCalcId] = useState(null)
+  const [draftNotice, setDraftNotice] = useState(null) // { kind, title, message, ... }
+  const draftHydratedRef = useRef(false)
+  const resolvedDraftKey = useMemo(() => {
+    if (draftKeyProp) return draftKeyProp
+    if (!draftModule && !draftEntityId && !iaDoc?.docKey) return null
+    return esquemaDraftKey({
+      module: draftModule || iaDoc?.ambito || 'esquema',
+      entityId: draftEntityId ?? iaDoc?.docKey ?? 'draft',
+      contratoId: contratoIdProp,
+      userId: getEsquemaDraftUserId(),
+    })
+  }, [draftKeyProp, draftModule, draftEntityId, iaDoc, contratoIdProp])
+  const resolvedDraftKeyRef = useRef(resolvedDraftKey)
+  resolvedDraftKeyRef.current = resolvedDraftKey
   const mode3dRef = useRef(false)
   const view3dRef = useRef('top')
   const solids3dRef = useRef([])
@@ -5047,6 +5079,9 @@ export default function EsquemaEditorModal({
             originLngLat: origin,
             coordRows: coordRowsRef.current,
           })
+          if (resolvedDraftKeyRef.current) {
+            await esquemaDraftClear(resolvedDraftKeyRef.current)
+          }
         } catch {
           /* el caller muestra el error */
         } finally {
@@ -5081,8 +5116,133 @@ export default function EsquemaEditorModal({
     return { adjuntos, snapshots }
   }
 
+  const applyDraftSnapshot = useCallback((snap) => {
+    if (!snap) return
+    objectsRef.current = cloneScene(snap.objects || [])
+    setCoordRows(Array.isArray(snap.coordRows) ? snap.coordRows : [])
+    setSolids3d(Array.isArray(snap.solids3d) ? snap.solids3d : [])
+    setSelectedSolidIds([])
+    setVolumeCalcs(Array.isArray(snap.volumeCalcs) ? snap.volumeCalcs : [])
+    setActiveCalcId(snap.activeCalcId || (snap.volumeCalcs?.[0]?.id ?? null))
+    setMode3d(!!snap.mode3d)
+    setView3d(snap.view3d || 'top')
+    if (snap.mode3d) setCalcPanelOpen(!!(snap.volumeCalcs || []).length)
+    panRef.current = snap.pan && Number.isFinite(snap.pan.x)
+      ? { x: snap.pan.x, y: snap.pan.y }
+      : { x: 0, y: 0 }
+    const z = Number(snap.zoom)
+    zoomRef.current = Number.isFinite(z) && z > 0 ? z : 1
+    setZoomPct(Math.round(zoomRef.current * 100))
+    if (Number.isFinite(Number(snap.mapOpacity))) setMapOpacity(Number(snap.mapOpacity))
+    if (snap.mapBasemap) setMapBasemap(snap.mapBasemap)
+    if (snap.mapGeoOrigin) mapGeoOriginRef.current = snap.mapGeoOrigin
+    if (snap.originLngLat && huellaMode) {
+      // ancla geo si venía en el borrador
+      try {
+        const o = snap.originLngLat
+        if (o && Number.isFinite(Number(o.lng)) && Number.isFinite(Number(o.lat))) {
+          mapGeoOriginRef.current = o
+        }
+      } catch { /* ignore */ }
+    }
+    historyRef.current = []
+    setCanUndo(false)
+    setDirty(true)
+    setPanTick((n) => n + 1)
+    requestAnimationFrame(() => redrawRef.current())
+    // Restaurar mapa de fondo si el borrador lo tenía activo (y no estamos en 3D)
+    if (snap.mapActive && !snap.mode3d) {
+      try { activateMap() } catch { /* ignore */ }
+    }
+    setToolHint('Borrador restaurado. Los cálculos siguen siendo dinámicos.')
+  }, [huellaMode, activateMap])
+
+  const collectDraftSnapshot = useCallback(() => buildEsquemaDraftSnapshot({
+    objects: cloneScene(objectsRef.current),
+    coordRows: coordRowsRef.current || [],
+    mode3d: mode3dRef.current,
+    view3d: view3dRef.current,
+    solids3d: solids3dRef.current || [],
+    volumeCalcs: volumeCalcsRef.current || [],
+    activeCalcId,
+    pan: panRef.current,
+    zoom: zoomRef.current,
+    mapActive: mapActiveRef.current,
+    mapOpacity,
+    mapBasemap,
+    mapGeoOrigin: mapGeoOriginRef.current,
+    originLngLat: mapGeoOriginRef.current,
+    title: title || '',
+  }), [activeCalcId, mapOpacity, mapBasemap, title])
+
+  const saveEsquemaDraft = useCallback(async () => {
+    const key = resolvedDraftKeyRef.current
+    if (!key) {
+      setDraftNotice({
+        kind: 'info',
+        title: 'Borrador',
+        message: 'Este esquema no tiene un lugar de borrador asociado en el módulo.',
+        confirmLabel: 'Entendido',
+      })
+      return
+    }
+    setBusy(true)
+    try {
+      const snapshot = collectDraftSnapshot()
+      const r = await esquemaDraftSave({
+        key,
+        module: draftModule || iaDoc?.ambito || 'esquema',
+        entityId: draftEntityId ?? iaDoc?.docKey ?? 'draft',
+        contratoId: contratoIdProp,
+        userId: getEsquemaDraftUserId(),
+        snapshot,
+      })
+      if (!r.ok) {
+        setDraftNotice({
+          kind: 'info',
+          title: 'No se pudo guardar',
+          message: r.error || 'Intente de nuevo.',
+          confirmLabel: 'Entendido',
+        })
+        return
+      }
+      setDirty(false)
+      setDraftNotice({
+        kind: 'saved',
+        title: 'Borrador guardado',
+        message: 'Puede cerrar y continuar más adelante desde el mismo lugar del módulo.',
+        confirmLabel: 'Entendido',
+      })
+      setToolHint('Borrador guardado.')
+    } finally {
+      setBusy(false)
+    }
+  }, [collectDraftSnapshot, draftModule, draftEntityId, iaDoc, contratoIdProp])
+
+  // Al abrir: si hay borrador del usuario, ofrecer continuar o empezar de nuevo.
+  useEffect(() => {
+    if (draftHydratedRef.current) return undefined
+    const key = resolvedDraftKey
+    if (!key) return undefined
+    let cancelled = false
+    ;(async () => {
+      const row = await esquemaDraftLoad(key, { userId: getEsquemaDraftUserId() })
+      if (cancelled || !row?.snapshot) return
+      draftHydratedRef.current = true
+      setDraftNotice({
+        kind: 'resume',
+        title: 'Borrador encontrado',
+        message: 'Hay un borrador suyo en este esquema. ¿Desea continuar donde lo dejó?',
+        confirmLabel: 'Continuar',
+        cancelLabel: 'Empezar de nuevo',
+        snapshot: row.snapshot,
+      })
+    })()
+    return () => { cancelled = true }
+  }, [resolvedDraftKey])
+
   const confirmarGuardar = async () => {
-    const title = String(savePrompt?.title || '').trim() || 'Esquema'
+    const titleTxt = String(savePrompt?.title || '').trim() || 'Esquema'
     setSavePrompt(null)
     setBusy(true)
     try {
@@ -5091,7 +5251,7 @@ export default function EsquemaEditorModal({
       await new Promise((r) => requestAnimationFrame(r))
       const nodes = objectsRef.current.filter((o) => o.type === 'nodo')
       const composed = await composeEsquemaExport({
-        title,
+        title: titleTxt,
         objects: objectsRef.current,
         nodes,
         drawObject,
@@ -5099,10 +5259,14 @@ export default function EsquemaEditorModal({
       // Congela cálculos al guardar (ya no se recalculan tras cerrar).
       const { adjuntos, snapshots } = await buildVolumeCalcAdjuntos()
       await onSave?.(composed, {
-        title,
+        title: titleTxt,
         adjuntos,
         calcSnapshots: snapshots,
       })
+      // Finalizar: el resultado queda fijo y se limpia el borrador.
+      if (resolvedDraftKeyRef.current) {
+        await esquemaDraftClear(resolvedDraftKeyRef.current)
+      }
     } finally {
       setBusy(false)
     }
@@ -5562,6 +5726,20 @@ export default function EsquemaEditorModal({
             <IconBiblioteca />
           </button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              type="button"
+              title="Guardar borrador (2D y 3D). Podrá continuar más adelante desde este mismo lugar."
+              aria-label="Guardar borrador"
+              data-testid="esquema-guardar-borrador"
+              disabled={busy || !resolvedDraftKey}
+              onClick={() => { void saveEsquemaDraft() }}
+              style={{
+                ...iconBtn(t, false),
+                opacity: (busy || !resolvedDraftKey) ? 0.4 : 1,
+              }}
+            >
+              <IconGuardarBorrador />
+            </button>
             <button
               type="button"
               title="Cerrar"
@@ -6659,6 +6837,29 @@ export default function EsquemaEditorModal({
             mode={extrudePrompt.mode}
             onCancel={() => setExtrudePrompt(null)}
             onConfirm={confirmExtrude3d}
+          />
+        ) : null}
+        {draftNotice ? (
+          <EsquemaDraftNoticePopup
+            t={t}
+            title={draftNotice.title}
+            message={draftNotice.message}
+            confirmLabel={draftNotice.confirmLabel || 'Aceptar'}
+            cancelLabel={draftNotice.cancelLabel || null}
+            onConfirm={() => {
+              const n = draftNotice
+              setDraftNotice(null)
+              if (n.kind === 'resume' && n.snapshot) {
+                applyDraftSnapshot(n.snapshot)
+              }
+            }}
+            onCancel={() => {
+              const n = draftNotice
+              setDraftNotice(null)
+              if (n.kind === 'resume' && resolvedDraftKeyRef.current) {
+                void esquemaDraftClear(resolvedDraftKeyRef.current)
+              }
+            }}
           />
         ) : null}
         {savePrompt && (
@@ -9569,6 +9770,17 @@ function IconCalcVolumenes() {
       <path d="M9 4v16" />
       <path d="M12 12h5" />
       <path d="M12 16h5" />
+    </svg>
+  )
+}
+function IconGuardarBorrador() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M5 3h11l3 3v15H5Z" />
+      <path d="M8 3v5h7" />
+      <path d="M8 21v-6h8v6" />
+      <path d="M14 12h5" />
+      <path d="m17 9 3 3-3 3" />
     </svg>
   )
 }

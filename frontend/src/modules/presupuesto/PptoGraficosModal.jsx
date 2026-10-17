@@ -48,7 +48,18 @@ export default function PptoGraficosModal({
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [slideIdx, setSlideIdx] = useState(0)
   const dropRef = useRef(null)
-  const iaDraftRef = useRef(`ppto-grupo-nuevo-${Date.now().toString(36)}`)
+  const iaDraftKey = useMemo(() => {
+    const ids = (seleccionados || [])
+      .map((x) => (typeof x === 'object' ? (x?.id ?? x?.numero_registro) : x))
+      .filter((x) => x != null && x !== '')
+      .map(String)
+      .sort()
+    return ids.length
+      ? `ppto-grupo-nuevo-${ids.join('_')}`
+      : `ppto-grupo-nuevo-${contratoId || 'local'}`
+  }, [seleccionados, contratoId])
+  const iaDraftRef = useRef(iaDraftKey)
+  iaDraftRef.current = iaDraftKey
 
   const regsSel = useMemo(() => {
     const ids = seleccionados instanceof Set ? [...seleccionados] : []
