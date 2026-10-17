@@ -7,9 +7,10 @@ import {
   formatVolumeM3,
   intersectionVolumeM3,
   mergeSolidsUnion,
+  solidFootprintDimsM,
   solidVolumeM3,
 } from './esquema3dSolids.js'
-import { worldToMeters, polygonAreaM2 } from './esquemaGeometry.js'
+import { polygonAreaM2 } from './esquemaGeometry.js'
 
 const SHARED_VOL_EPS = 1e-6
 
@@ -223,7 +224,7 @@ function fmt(n, d = 2) {
   return fmtMemoria(n, d)
 }
 
-/** Descripción textual para la memoria de cálculo. */
+/** Descripción textual para la memoria de cálculo (incluye Long/Anch/Espesor). */
 export function describeSolidForMemoria(solid) {
   if (!isValidCalcSolid(solid)) return null
   const cells = solid.cells || []
@@ -231,6 +232,18 @@ export function describeSolidForMemoria(solid) {
   const z1 = Math.max(...cells.map((c) => Number(c.z1) || 0))
   const heightM = Math.abs(z1 - z0)
   const volumeM3 = solidVolumeM3(solid)
+  const dims = solidFootprintDimsM(solid)
+  const color = solid.color || '#0f766e'
+  const base = {
+    color,
+    longM: dims.longM,
+    anchM: dims.anchM,
+    espesorM: dims.heightM || heightM,
+    cotaSuperior: z1,
+    cotaInferior: z0,
+    altura: heightM,
+    volumeM3,
+  }
 
   // Una sola celda analítica → forma exacta
   if (cells.length === 1) {
@@ -243,13 +256,16 @@ export function describeSolidForMemoria(solid) {
       const w = Math.abs(c.analytic.wM)
       const ht = Math.abs(c.analytic.hM)
       return {
+        ...base,
         forma: 'Prisma rectangular',
         dimensiones: `${fmt(w)} × ${fmt(ht)} m`,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
         altura: h,
+        espesorM: h,
+        longM: w,
+        anchM: ht,
         formaCalculo: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
-        volumeM3,
       }
     }
     if (c.analytic?.type === 'ellipse') {
@@ -257,65 +273,55 @@ export function describeSolidForMemoria(solid) {
       const ry = Math.abs(c.analytic.ryM)
       const circ = Math.abs(rx - ry) < 1e-9
       return {
+        ...base,
         forma: circ ? 'Cilindro' : 'Prisma elíptico',
         dimensiones: circ ? `Ø ${fmt(rx * 2)} m` : `rx ${fmt(rx)} × ry ${fmt(ry)} m`,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
         altura: h,
-        // Formato pedido: π × 0,85² × 2,00 = 4,54 m³
+        espesorM: h,
+        longM: circ ? rx * 2 : rx * 2,
+        anchM: circ ? rx * 2 : ry * 2,
         formaCalculo: circ
           ? `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(volumeM3)} m³`
           : `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
-        volumeM3,
       }
     }
     if (c.analytic?.type === 'triangle') {
       const b = Math.abs(c.analytic.baseM)
       const th = Math.abs(c.analytic.heightM)
       return {
+        ...base,
         forma: 'Prisma triangular',
         dimensiones: `base ${fmt(b)} × altura ${fmt(th)} m`,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
         altura: h,
+        espesorM: h,
+        longM: b,
+        anchM: th,
         formaCalculo: `(${fmt(b)} × ${fmt(th)} / 2) × ${fmt(h)} = ${fmt(volumeM3)} m³`,
-        volumeM3,
       }
     }
     // Polígono / booleano parcial
-    const ring = c.ring || []
-    let minX = Infinity
-    let minY = Infinity
-    let maxX = -Infinity
-    let maxY = -Infinity
-    for (const p of ring) {
-      minX = Math.min(minX, p.x)
-      minY = Math.min(minY, p.y)
-      maxX = Math.max(maxX, p.x)
-      maxY = Math.max(maxY, p.y)
-    }
-    const wM = worldToMeters(Math.max(0, maxX - minX))
-    const hM = worldToMeters(Math.max(0, maxY - minY))
     return {
+      ...base,
       forma: (c.holes || []).length ? 'Sólido con huecos' : 'Prisma poligonal',
-      dimensiones: `envolvente ${fmt(wM)} × ${fmt(hM)} m · área ${fmt(area)} m²`,
+      dimensiones: `envolvente ${fmt(dims.longM)} × ${fmt(dims.anchM)} m · área ${fmt(area)} m²`,
       cotaSuperior: cotaSup,
       cotaInferior: cotaInf,
       altura: h,
+      espesorM: h,
       formaCalculo: `${fmt(area)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
-      volumeM3,
     }
   }
 
-  // Varias celdas (unión / sustracción / corte)
+  // Varias celdas (unión / sustracción / corte): envolvente máxima en planta.
   return {
-    forma: 'Sólido compuesto',
-    dimensiones: `${cells.length} cuerpo(s)`,
-    cotaSuperior: z1,
-    cotaInferior: z0,
-    altura: heightM,
-    formaCalculo: `Suma de volúmenes de celdas = ${fmt(volumeM3)} m³`,
-    volumeM3,
+    ...base,
+    forma: 'Sólido unido',
+    dimensiones: `${fmt(dims.longM)} × ${fmt(dims.anchM)} m`,
+    formaCalculo: `Volumen exacto = ${fmt(volumeM3)} m³`,
   }
 }
 

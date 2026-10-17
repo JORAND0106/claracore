@@ -7,7 +7,7 @@
  */
 import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esquemaGeometry.js'
 import { partitionBackgroundFirst } from './esquemaZOrder.js'
-import { linkedSourceEntityIds, solidXyBounds } from './esquema3dSolids.js'
+import { drawSolids3dLayered, linkedSourceEntityIds, solidXyBounds } from './esquema3dSolids.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
 
 export const EXPORT_MARGIN = 48
@@ -416,15 +416,14 @@ export function composeEsquemaExport({
     drawObject?.(ctx, obj, false, { skipResize: true, zoom: scale })
   }
   if (mode3d) {
-    for (const solid of solids) {
-      drawSolid(ctx, solid, {
-        viewId: view3d || 'top',
-        selected: false,
-        zoom: 1 / Math.max(scale, 0.25),
-        orbit: cam,
-        solids,
-      })
-    }
+    // Capas: caras de externos → aristas → internos solo punteados.
+    drawSolids3dLayered(ctx, solids, {
+      viewId: view3d || 'top',
+      zoom: 1 / Math.max(scale, 0.25),
+      orbit: cam,
+    })
+    // drawSolid se conserva en la firma por compat; el pintado usa capas.
+    void drawSolid
   }
   ctx.restore()
   // Contorno del margen / área imprimible (después del clip, sin tapar el dibujo)

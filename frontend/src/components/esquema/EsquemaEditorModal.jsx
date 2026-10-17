@@ -74,6 +74,7 @@ import {
 import { DIBUJO_TIPOS } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
 import {
   drawSolid3d,
+  drawSolids3dLayered,
   dropSolidsForEntities,
   extrudeClosedEntity,
   formatVolumeM3,
@@ -954,13 +955,22 @@ export default function EsquemaEditorModal({
         orbitAngles: orbitAnglesRef.current,
       })
       const solidsList = solids3dRef.current || []
+      // Dos pasadas: caras de externos → aristas → internos solo punteados (profundidad).
+      drawSolids3dLayered(ctx, solidsList, {
+        viewId,
+        zoom: zoomRef.current,
+        orbit,
+      })
+      // Resaltar selección sin sustituir el color del sólido.
       for (const solid of solidsList) {
+        if (!selSolids.has(solid.id)) continue
         drawSolid3d(ctx, solid, {
           viewId,
-          selected: selSolids.has(solid.id),
+          selected: true,
           zoom: zoomRef.current,
           orbit,
           solids: solidsList,
+          pass: 'edges',
         })
       }
       if (cutDraftRef.current?.a && (cutDraftRef.current.b || lastPt.current)) {
@@ -3434,12 +3444,57 @@ export default function EsquemaEditorModal({
     let p = posFromEvent(e)
     const currentTool = toolRef.current
 
-    // Giro libre 3D: arrastre = orbitar cámara (no modifica geometría).
+    // Giro libre 3D: si hay sólido bajo el clic + Mover → traslación en planta;
+    // si no, arrastre = orbitar cámara (no modifica geometría).
     if (mode3dRef.current && orbitFreeRef.current) {
-      const screen = screenPosFromEvent(e)
+      const hitOrbit = (currentTool === 'seleccion' && selectModeRef.current === 'mover')
+        ? hitSolid3dAt(p)
+        : null
+      if (hitOrbit) {
+        const additive = !!(e.shiftKey || e.metaKey || e.ctrlKey)
+        selectSolidAndSource(hitOrbit, { additive })
+        setToolHint(`Sólido · ${Number(solidVolumeM3(hitOrbit) || 0).toFixed(2)} m³`)
+        if (!additive) {
+          if (!hitOrbit.sourceEntityId) {
+            dragRef.current = {
+              mode: 'move-solid',
+              solidId: hitOrbit.id,
+              pending: true,
+              ox: p.x,
+              oy: p.y,
+              clickX: p.x,
+              clickY: p.y,
+              originSolid: cloneScene([hitOrbit])[0],
+            }
+          } else {
+            const src = objectsRef.current.find((o) => o.id === hitOrbit.sourceEntityId)
+            if (src && !(src.type === 'image' && src.fit)) {
+              dragRef.current = {
+                id: src.id,
+                mode: 'move',
+                pending: true,
+                ox: p.x,
+                oy: p.y,
+                clickX: p.x,
+                clickY: p.y,
+                groupOrigins: cloneScene([src]),
+              }
+            }
+          }
+          if (dragRef.current) {
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            redraw()
+            return
+          }
+        }
+      }
+      const screenOrbit = screenPosFromEvent(e)
       orbitDragRef.current = {
-        x0: screen.x,
-        y0: screen.y,
+        x0: screenOrbit.x,
+        y0: screenOrbit.y,
         yaw0: orbitAnglesRef.current.yaw,
         pitch0: orbitAnglesRef.current.pitch,
       }
@@ -3461,13 +3516,57 @@ export default function EsquemaEditorModal({
       redraw()
       return
     }
-    if (mode3dRef.current && (isEsquema3dIsoView(view3dRef.current) || orbitFreeRef.current)) {
-      // Isométrica / órbita: solo inspección / selección de sólidos (sin dibujar).
+    if (mode3dRef.current && isEsquema3dIsoView(view3dRef.current)) {
+      // Isométrica: inspección + mover en planta (cotas no cambian). Sin dibujar.
       if (currentTool === 'seleccion' || currentTool === 'paneo') {
         const hitS = hitSolid3dAt(p)
         if (hitS) {
-          selectSolidAndSource(hitS, { additive: !!(e.shiftKey || e.metaKey || e.ctrlKey) })
-          setToolHint(`Sólido · ${Number(hitS.volumeM3 || 0).toFixed(2)} m³`)
+          const additive = !!(e.shiftKey || e.metaKey || e.ctrlKey)
+          selectSolidAndSource(hitS, { additive })
+          setToolHint(`Sólido · ${Number(solidVolumeM3(hitS) || 0).toFixed(2)} m³`)
+          if (
+            currentTool === 'seleccion'
+            && !additive
+            && selectModeRef.current === 'mover'
+          ) {
+            if (!hitS.sourceEntityId) {
+              dragRef.current = {
+                mode: 'move-solid',
+                solidId: hitS.id,
+                pending: true,
+                ox: p.x,
+                oy: p.y,
+                clickX: p.x,
+                clickY: p.y,
+                originSolid: cloneScene([hitS])[0],
+              }
+              drawing.current = true
+              startPt.current = p
+              lastPt.current = p
+              moveGuideRef.current = null
+              redraw()
+              return
+            }
+            const src = objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
+            if (src && !(src.type === 'image' && src.fit)) {
+              dragRef.current = {
+                id: src.id,
+                mode: 'move',
+                pending: true,
+                ox: p.x,
+                oy: p.y,
+                clickX: p.x,
+                clickY: p.y,
+                groupOrigins: cloneScene([src]),
+              }
+              drawing.current = true
+              startPt.current = p
+              lastPt.current = p
+              moveGuideRef.current = null
+              redraw()
+              return
+            }
+          }
         } else if (currentTool === 'seleccion') {
           selectSolidAndSource(null)
           selectOne(null)
@@ -3476,7 +3575,7 @@ export default function EsquemaEditorModal({
         redraw()
         return
       }
-      setToolHint('Vista isométrica: solo inspección. Cambie a superior, frontal o lateral para dibujar.')
+      setToolHint('Vista isométrica: selección y mover en planta. Cambie a superior/frontal/lateral para dibujar.')
       drawing.current = false
       return
     }
@@ -3491,17 +3590,13 @@ export default function EsquemaEditorModal({
       const booleanPick = op3dRef.current === 'unir' || op3dRef.current === 'sustraer'
       const additive = booleanPick || !!(e.shiftKey || e.metaKey || e.ctrlKey)
       // Preferir siempre el sólido bajo el clic (incl. internos sin sourceEntityId).
-      // No dejar que el contorno del sólido mayor “robe” la selección del interno.
       if (hitS) {
-        const already = (selectedSolidIdsRef.current || []).includes(hitS.id)
-          || (hitS.sourceEntityId && selectedIdsRef.current.has(hitS.sourceEntityId))
         selectSolidAndSource(hitS, { additive })
         if (booleanPick) {
           const prev = selectedSolidIdsRef.current || []
           const n = additive
             ? (prev.includes(hitS.id) ? prev.filter((x) => x !== hitS.id).length : prev.length + 1)
             : 1
-          // Ref sincroniza en el siguiente render; anticipar conteo del toque actual.
           selectedSolidIdsRef.current = additive
             ? (prev.includes(hitS.id) ? prev.filter((x) => x !== hitS.id) : [...prev, hitS.id])
             : [hitS.id]
@@ -3512,15 +3607,9 @@ export default function EsquemaEditorModal({
           redraw()
           return
         }
-        setToolHint(`Sólido · ${Number(hitS.volumeM3 || 0).toFixed(2)} m³`)
-        // Si ya estaba seleccionado en planta, continuar al arrastre (mover contorno+sólido).
-        if (!already || additive || isEsquema3dIsoView(view3dRef.current) || (view3dRef.current || 'top') !== 'top') {
-          drawing.current = false
-          redraw()
-          return
-        }
-        if (selectModeRef.current === 'mover') {
-          // Sólido libre (unir/sustraer/cortar): mover con translateSolidXy, sin redimensionar.
+        setToolHint(`Sólido · ${Number(solidVolumeM3(hitS) || 0).toFixed(2)} m³`)
+        // Mover en cualquier vista de dibujo (superior/frontal/lateral): un gesto basta.
+        if (!additive && selectModeRef.current === 'mover') {
           if (!hitS.sourceEntityId) {
             dragRef.current = {
               mode: 'move-solid',
@@ -3539,7 +3628,6 @@ export default function EsquemaEditorModal({
             redraw()
             return
           }
-          // Contorno + sólido: arrastre de la entidad fuente (el sólido sigue vía sync).
           const src = objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
           if (src && !(src.type === 'image' && src.fit)) {
             const grabHit = findSnap(p, [src], { threshold: snapThreshold(), allowNear: false })
@@ -6285,8 +6373,8 @@ export default function EsquemaEditorModal({
               ) : null}
               <button
                 type="button"
-                title="Panel de cálculo de volúmenes (memoria PDF + gráfico isométrico)"
-                data-cc-tooltip="Panel de cálculo de volúmenes (memoria PDF + gráfico isométrico)"
+                title="Panel de cálculo de volúmenes (memoria PNG: isométrico + cuadro)"
+                data-cc-tooltip="Panel de cálculo de volúmenes (memoria PNG: isométrico + cuadro)"
                 data-cc-tooltip-variant="short"
                 aria-label="Cálculo de volúmenes"
                 onClick={() => {
@@ -8394,6 +8482,7 @@ function SolidPropiedadesPanel({ t, ui, solid, embedded = false, onColor }) {
   const z0 = params.cotaInferior
   const z1 = params.cotaSuperior
   const colorVal = String(solid.color || '#0f766e')
+  const vol = solidVolumeM3(solid)
   return (
     <div
       data-testid="esquema-solid-props"
@@ -8429,7 +8518,7 @@ function SolidPropiedadesPanel({ t, ui, solid, embedded = false, onColor }) {
         Propiedades · Sólido 3D
       </div>
       <div style={{ fontSize: 12, color: t.text, fontWeight: 700 }}>
-        V = {formatVolumeM3(solid.volumeM3)}
+        V = {formatVolumeM3(vol)}
       </div>
       {Number.isFinite(Number(z1)) && Number.isFinite(Number(z0)) ? (
         <div style={{ fontSize: 11, color: ui?.muted || t.textMuted, lineHeight: 1.4 }}>
@@ -8505,7 +8594,7 @@ function PropiedadesPanel({
       </div>
       {solid ? (
         <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>
-          V = {formatVolumeM3(solid.volumeM3)}
+          V = {formatVolumeM3(solidVolumeM3(solid))}
           {solid.extrudeParams?.cotaSuperior != null && solid.extrudeParams?.cotaInferior != null ? (
             <div style={{ fontSize: 11, fontWeight: 600, color: ui?.muted || t.textMuted, marginTop: 2 }}>
               Cotas {Number(solid.extrudeParams.cotaSuperior).toFixed(2)} → {Number(solid.extrudeParams.cotaInferior).toFixed(2)} m
