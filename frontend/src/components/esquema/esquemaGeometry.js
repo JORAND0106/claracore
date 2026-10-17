@@ -440,16 +440,6 @@ export function snapThresholdWorld(zoom) {
   return (marker * 0.55 + 4) / z
 }
 
-/**
- * Umbral OSNAP 3D de sólidos: distancia fija en pantalla (px), independiente del zoom.
- * Asegura enganche fiable con mouse y dedo (zoom cercano o alejado).
- */
-export function solidSnapThresholdWorld(zoom, screenPx = 16) {
-  const z = Math.max(0.001, Number(zoom) || 1)
-  const px = Math.max(10, Number(screenPx) || 16)
-  return px / z
-}
-
 /** Cabeza de flecha proporcional al largo del cuerpo. */
 export function arrowHeadLength(obj) {
   const body = Math.hypot((obj?.x2 || 0) - (obj?.x1 || 0), (obj?.y2 || 0) - (obj?.y1 || 0))
