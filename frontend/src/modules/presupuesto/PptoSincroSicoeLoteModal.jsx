@@ -142,12 +142,19 @@ export default function PptoSincroSicoeLoteModal({
     }
   }, [addFiles])
 
-  const guardarEsquema = useCallback(async (dataUrl) => {
+  const guardarEsquema = useCallback(async (dataUrl, extras) => {
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema-lote')
       if (!file) throw new Error('No se pudo convertir el esquema')
       setEsquemaOpen(false)
       await addFiles([file], 'esquema')
+      const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
+      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+        const f = adj.blob
+          ? new File([adj.blob], adj.nombre, { type: adj.mime })
+          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+        if (f && String(f.type || '').startsWith('image/')) await addFiles([f], 'esquema-calculo')
+      })
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')
     }

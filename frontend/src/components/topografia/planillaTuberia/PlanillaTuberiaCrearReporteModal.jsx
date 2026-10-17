@@ -242,6 +242,7 @@ export default function PlanillaTuberiaCrearReporteModal({
   const [avisoCapitulo, setAvisoCapitulo] = useState('')
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaDataUri, setEsquemaDataUri] = useState(null)
+  const [esquemaCalcAdjuntos, setEsquemaCalcAdjuntos] = useState([])
 
   useEffect(() => {
     if (!open) return
@@ -418,6 +419,17 @@ export default function PlanillaTuberiaCrearReporteModal({
         abs_inicio: numOrNull(absIni),
         abs_final: numOrNull(absFin),
         esquema_data_uri: esquemaDataUri || null,
+        ...(esquemaCalcAdjuntos.length
+          ? {
+            esquema_calc_adjuntos: esquemaCalcAdjuntos.map((a) => ({
+              nombre: a.nombre,
+              mime_type: a.mime,
+              data_uri: a.dataUri,
+              kind: a.kind,
+              origen: a.origen,
+            })),
+          }
+          : {}),
         sicoe_items_por_linea: itemsPorLinea || {},
       })
       setAvisoCapitulo('')
@@ -843,12 +855,13 @@ export default function PlanillaTuberiaCrearReporteModal({
             seedTramo={seedTramo}
             autoActivateMap
             onClose={() => setEsquemaOpen(false)}
-            onSave={async (dataUrl) => {
+            onSave={async (dataUrl, extras) => {
               if (!dataUrl) {
                 setErr('El esquema no devolvió imagen. Guarde de nuevo.')
                 return
               }
               setEsquemaDataUri(dataUrl)
+              setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
               setEsquemaOpen(false)
               setErr('')
             }}

@@ -712,7 +712,18 @@ export default function TareaChecklistEditor({
           initialDataUri={imagenSrc(items[esquemaIdx].esquema)}
           iaDoc={{ ambito: 'tarea_checklist', docKey: `tarea-subitem-${items[esquemaIdx].id}` }}
           onClose={() => setEsquemaIdx(null)}
-          onSave={(dataUrl) => {
+          onSave={(dataUrl, extras) => {
+            const calcAdj = Array.isArray(extras?.adjuntos)
+              ? extras.adjuntos.map((a) => ({
+                nombre: a.nombre,
+                data_uri: a.dataUri,
+                mime_type: a.mime,
+                created_at: new Date().toISOString(),
+                pending: true,
+                kind: a.kind || 'esquema-calculo',
+                origen: a.origen || 'esquema-calculo',
+              }))
+              : []
             setAt(esquemaIdx, {
               esquema: {
                 nombre: `esquema-${items[esquemaIdx].id || Date.now()}.png`,
@@ -722,6 +733,7 @@ export default function TareaChecklistEditor({
                 pending: true,
                 kind: 'esquema',
               },
+              ...(calcAdj.length ? { esquema_calc_adjuntos: calcAdj } : {}),
             })
             setEsquemaIdx(null)
           }}

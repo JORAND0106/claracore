@@ -93,6 +93,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
   const [err, setErr] = useState('')
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaDataUri, setEsquemaDataUri] = useState(null)
+  const [esquemaCalcAdjuntos, setEsquemaCalcAdjuntos] = useState([])
   /** Orígenes marcados para crear en Sin Asignar Ítem (desmarcados por defecto). */
   const [origenesSel, setOrigenesSel] = useState(() => new Set())
   /** Filas de comparación (ítems cobrados en el reporte seleccionado). */
@@ -309,6 +310,17 @@ export default function PlanillaTuberiaAsociarReporteModal({
         reporte_id: Number(selected.id),
         numero_reporte: Number(selected.numero_reporte),
         esquema_data_uri: esquemaDataUri,
+        ...(esquemaCalcAdjuntos.length
+          ? {
+            esquema_calc_adjuntos: esquemaCalcAdjuntos.map((a) => ({
+              nombre: a.nombre,
+              mime_type: a.mime,
+              data_uri: a.dataUri,
+              kind: a.kind,
+              origen: a.origen,
+            })),
+          }
+          : {}),
         origenes_seleccionados: Array.from(origenesSel),
       })
       onAsociado?.(res)
@@ -968,12 +980,13 @@ export default function PlanillaTuberiaAsociarReporteModal({
             seedTramo={seedTramo}
             autoActivateMap
             onClose={() => setEsquemaOpen(false)}
-            onSave={async (dataUrl) => {
+            onSave={async (dataUrl, extras) => {
               if (!dataUrl) {
                 setErr('El esquema no devolvió imagen. Guarde de nuevo.')
                 return
               }
               setEsquemaDataUri(dataUrl)
+              setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
               setEsquemaOpen(false)
               setErr('')
             }}
