@@ -1,9 +1,17 @@
 /**
  * Cálculos de volumen 3D del esquema: líneas suma/descuento sobre sólidos.
  * Dinámicos mientras el editor está abierto; se fijan al exportar/cerrar.
+ * Descuento: solo el volumen común con los sólidos que suman.
  */
-import { solidVolumeM3, formatVolumeM3 } from './esquema3dSolids.js'
+import {
+  formatVolumeM3,
+  intersectionVolumeM3,
+  mergeSolidsUnion,
+  solidVolumeM3,
+} from './esquema3dSolids.js'
 import { worldToMeters, polygonAreaM2 } from './esquemaGeometry.js'
+
+const SHARED_VOL_EPS = 1e-6
 
 function uid(prefix = 'calc') {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -39,25 +47,88 @@ export function createCalcLine({ solidId, nombre, op = 'sum' } = {}) {
 }
 
 /**
- * Resuelve una línea contra el catálogo actual de sólidos (dinámico).
- * @returns {{ ok: true, volumeM3: number, signedM3: number, solid: object } | { ok: false, error: string }}
+ * Sólidos del cálculo con operación Suma (válidos), excluyendo opcionalmente un id.
  */
-export function resolveCalcLine(line, solids) {
+export function sumSolidsOfCalc(calc, solids, exceptSolidId = null) {
+  const out = []
+  for (const line of calc?.lines || []) {
+    if (line.op !== 'sum') continue
+    if (!line.solidId || line.solidId === exceptSolidId) continue
+    const solid = (solids || []).find((s) => s.id === line.solidId)
+    if (isValidCalcSolid(solid)) out.push(solid)
+  }
+  return out
+}
+
+/**
+ * Volumen común entre un sólido a descontar y la unión de los que suman.
+ * @returns {{ sharedM3: number, fullM3: number, error?: string }}
+ */
+export function sharedDiscountVolumeM3(discountSolid, calc, solids) {
+  const fullM3 = solidVolumeM3(discountSolid)
+  const sums = sumSolidsOfCalc(calc, solids, discountSolid?.id)
+  if (!sums.length) {
+    return {
+      sharedM3: 0,
+      fullM3,
+      error: 'No hay un sólido que sume para descontar volumen común.',
+    }
+  }
+  const united = mergeSolidsUnion(sums)
+  if (!united) {
+    return { sharedM3: 0, fullM3, error: 'No se pudo evaluar el volumen que suma.' }
+  }
+  let sharedM3 = intersectionVolumeM3(discountSolid, united)
+  if (!(sharedM3 > SHARED_VOL_EPS)) {
+    return {
+      sharedM3: 0,
+      fullM3,
+      error: 'El sólido no comparte volumen con los que suman; no se puede descontar.',
+    }
+  }
+  // Contención casi total (p. ej. cilindro tessellado dentro de prisma): usar volumen exacto del sólido.
+  if (fullM3 > SHARED_VOL_EPS && sharedM3 >= fullM3 * 0.98) {
+    sharedM3 = fullM3
+  } else {
+    sharedM3 = Math.min(sharedM3, fullM3)
+  }
+  return { sharedM3, fullM3 }
+}
+
+/**
+ * Resuelve una línea contra el catálogo actual de sólidos (dinámico).
+ * Descuenta solo el volumen común con los sólidos que suman del mismo cálculo.
+ * @returns {{ ok: true, volumeM3: number, signedM3: number, solid: object, shared?: boolean } | { ok: false, error: string }}
+ */
+export function resolveCalcLine(line, solids, calc = null) {
   if (!line?.solidId) return { ok: false, error: 'Seleccione un sólido.' }
   const solid = (solids || []).find((s) => s.id === line.solidId)
   if (!isValidCalcSolid(solid)) {
     return { ok: false, error: 'Seleccione un sólido cerrado y bien construido.' }
   }
+  if (line.op === 'subtract') {
+    const ctx = calc || { lines: [] }
+    const { sharedM3, error } = sharedDiscountVolumeM3(solid, ctx, solids)
+    if (error || !(sharedM3 > SHARED_VOL_EPS)) {
+      return { ok: false, error: error || 'Sin volumen común para descontar.' }
+    }
+    return {
+      ok: true,
+      volumeM3: sharedM3,
+      signedM3: -sharedM3,
+      solid,
+      shared: true,
+    }
+  }
   const volumeM3 = solidVolumeM3(solid)
-  const signedM3 = line.op === 'subtract' ? -volumeM3 : volumeM3
-  return { ok: true, volumeM3, signedM3, solid }
+  return { ok: true, volumeM3, signedM3: volumeM3, solid }
 }
 
 /** Total de un cálculo (m³) con los sólidos actuales. */
 export function calcTotalM3(calc, solids) {
   let total = 0
   for (const line of calc?.lines || []) {
-    const r = resolveCalcLine(line, solids)
+    const r = resolveCalcLine(line, solids, calc)
     if (r.ok) total += r.signedM3
   }
   return total
@@ -70,7 +141,7 @@ export function calcTotalM3(calc, solids) {
 export function freezeCalcSnapshot(calc, solids) {
   const lines = []
   for (const line of calc?.lines || []) {
-    const r = resolveCalcLine(line, solids)
+    const r = resolveCalcLine(line, solids, calc)
     if (!r.ok) {
       lines.push({
         id: line.id,
@@ -85,6 +156,15 @@ export function freezeCalcSnapshot(calc, solids) {
       })
       continue
     }
+    const detail = describeSolidForMemoria(r.solid)
+    if (detail && line.op === 'subtract' && r.shared) {
+      detail.volumeM3 = r.volumeM3
+      const full = solidVolumeM3(r.solid)
+      // Solo reemplazar la fórmula si el descuento es parcial (no cabe entero).
+      if (full > SHARED_VOL_EPS && r.volumeM3 < full * 0.98) {
+        detail.formaCalculo = `Volumen común = ${fmt(r.volumeM3)} m³`
+      }
+    }
     lines.push({
       id: line.id,
       nombre: line.nombre,
@@ -93,7 +173,7 @@ export function freezeCalcSnapshot(calc, solids) {
       ok: true,
       volumeM3: r.volumeM3,
       signedM3: r.signedM3,
-      detail: describeSolidForMemoria(r.solid),
+      detail,
     })
   }
   const totalM3 = lines.reduce((s, l) => s + (l.ok ? l.signedM3 : 0), 0)

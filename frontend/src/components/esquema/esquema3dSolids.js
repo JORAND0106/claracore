@@ -432,9 +432,14 @@ function cellsFromClippingPolys(polys, z0, z1) {
   return cells
 }
 
+/** Tolerancia de volumen (m³) para solape / vacío. */
+const VOL_EPS = 1e-6
+/** Holgura XY (~2 mm) para considerar que dos sólidos se tocan. */
+const TOUCH_XY_EPS = metersToWorld(0.002)
+
 /**
  * Descompone sólidos en losas Z y aplica boolean 2D por losa.
- * @param {'union'|'difference'} op
+ * @param {'union'|'difference'|'intersection'} op
  */
 function booleanSolids(solids, op) {
   const list = (solids || []).filter((s) => s?.cells?.length)
@@ -462,7 +467,8 @@ function booleanSolids(solids, op) {
       for (const c of s.cells) {
         const a = Math.min(c.z0, c.z1)
         const b = Math.max(c.z0, c.z1)
-        if (mid > a && mid < b) {
+        // Incluir celda si la losa se solapa con el intervalo Z (incluye tocar bordes).
+        if (mid >= a - 1e-12 && mid <= b + 1e-12 && b > a + 1e-12) {
           const poly = polygonsFromCell(c)
           if (poly) parts.push(poly)
         }
@@ -474,7 +480,7 @@ function booleanSolids(solids, op) {
           acc = polygonClipping.union(acc, parts[k])
         }
         slices.push(acc)
-      } else if (op === 'difference') {
+      } else if (op === 'difference' || op === 'intersection') {
         slices.push(null)
       }
     }
@@ -496,6 +502,13 @@ function booleanSolids(solids, op) {
         acc = polygonClipping.difference(acc, slices[k])
       }
       outCells.push(...cellsFromClippingPolys(acc, z0, z1))
+    } else if (op === 'intersection') {
+      if (slices.some((s) => !s)) continue
+      let acc = slices[0]
+      for (let k = 1; k < slices.length; k += 1) {
+        acc = polygonClipping.intersection(acc, slices[k])
+      }
+      outCells.push(...cellsFromClippingPolys(acc, z0, z1))
     }
   }
 
@@ -512,12 +525,149 @@ function booleanSolids(solids, op) {
   }
 }
 
+/** Unión geométrica sin exigir contacto (p. ej. grupo de sumas en un cálculo). */
+export function mergeSolidsUnion(solids) {
+  const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  if (!list.length) return null
+  if (list.length === 1) {
+    return {
+      ...list[0],
+      cells: list[0].cells,
+      volumeM3: solidVolumeM3(list[0]),
+    }
+  }
+  const solid = booleanSolids(list, 'union')
+  if (!solid) return null
+  solid.volumeM3 = solidVolumeM3(solid)
+  return solid
+}
+
+/** Intersección de dos o más sólidos. */
+export function intersectSolids(solids) {
+  const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  if (list.length < 2) return { ok: false, error: 'Se necesitan al menos dos sólidos.', solid: null }
+  const solid = booleanSolids(list, 'intersection')
+  if (!solid) return { ok: false, error: 'Sin volumen común.', solid: null }
+  solid.volumeM3 = solidVolumeM3(solid)
+  return { ok: true, solid }
+}
+
+/** Volumen de intersección (m³); 0 si no se solapan. */
+export function intersectionVolumeM3(a, b) {
+  if (!a || !b) return 0
+  const r = intersectSolids([a, b])
+  return r.ok ? r.solid.volumeM3 : 0
+}
+
+function solidZRange(solid) {
+  let z0 = Infinity
+  let z1 = -Infinity
+  for (const c of solid?.cells || []) {
+    z0 = Math.min(z0, Number(c.z0) || 0, Number(c.z1) || 0)
+    z1 = Math.max(z1, Number(c.z0) || 0, Number(c.z1) || 0)
+  }
+  if (!Number.isFinite(z0)) return null
+  return { z0, z1 }
+}
+
+function expandBounds(bb, eps) {
+  if (!bb) return null
+  return {
+    x: bb.x - eps,
+    y: bb.y - eps,
+    w: bb.w + eps * 2,
+    h: bb.h + eps * 2,
+  }
+}
+
+function boundsOverlap(a, b) {
+  if (!a || !b) return false
+  return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y)
+}
+
+/** ¿Dos sólidos se tocan o se superponen (volumen común o contacto XY con Z solapado)? */
+export function solidsTouchOrOverlap(solids, { xyEps = TOUCH_XY_EPS, volEps = VOL_EPS } = {}) {
+  const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  if (list.length < 2) return false
+  for (let i = 0; i < list.length; i += 1) {
+    for (let j = i + 1; j < list.length; j += 1) {
+      const a = list[i]
+      const b = list[j]
+      const za = solidZRange(a)
+      const zb = solidZRange(b)
+      if (!za || !zb) continue
+      if (za.z1 < zb.z0 - 1e-9 || zb.z1 < za.z0 - 1e-9) continue
+      if (intersectionVolumeM3(a, b) > volEps) return true
+      const ba = expandBounds(solidXyBounds(a), xyEps)
+      const bb = expandBounds(solidXyBounds(b), xyEps)
+      if (boundsOverlap(ba, bb)) {
+        // Contacto / casi contacto en planta con Z solapado → se pueden unir.
+        // Confirmar con unión: si el volumen unido ≈ suma, están disjuntos sin solape
+        // pero "pegados"; si es menor, se solapan. Ambos casos permiten unir.
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Expande ligeramente cada ring desde su centroide para fusionar bordes que se tocan
+ * (tolerancia de dibujo / iPad).
+ */
+function expandSolidForUnite(solid, delta = TOUCH_XY_EPS) {
+  if (!solid?.cells?.length || !(delta > 0)) return solid
+  const expandRing = (ring) => {
+    const pts = ring || []
+    if (pts.length < 3) return pts
+    let cx = 0
+    let cy = 0
+    for (const p of pts) {
+      cx += p.x
+      cy += p.y
+    }
+    cx /= pts.length
+    cy /= pts.length
+    return pts.map((p) => {
+      const dx = p.x - cx
+      const dy = p.y - cy
+      const len = Math.hypot(dx, dy) || 1
+      return { x: p.x + (dx / len) * delta, y: p.y + (dy / len) * delta }
+    })
+  }
+  return {
+    ...solid,
+    cells: solid.cells.map((cell) => ({
+      ...cell,
+      analytic: null,
+      ring: expandRing(cell.ring),
+      holes: (cell.holes || []).map(expandRing),
+    })),
+  }
+}
+
 export function uniteSolids(solids) {
   const list = (solids || []).filter((s) => s?.type === 'solid3d')
   if (list.length < 2) return { ok: false, error: 'Seleccione dos o más sólidos para unir.' }
-  const solid = booleanSolids(list, 'union')
+  if (!solidsTouchOrOverlap(list)) {
+    return { ok: false, error: 'Los sólidos no se tocan ni se superponen.' }
+  }
+  let overlap = 0
+  for (let i = 0; i < list.length; i += 1) {
+    for (let j = i + 1; j < list.length; j += 1) {
+      overlap += intersectionVolumeM3(list[i], list[j])
+    }
+  }
+  // Intentar unión exacta; si solo hay contacto/casi contacto, expandir para fusionar aristas.
+  let solid = booleanSolids(list, 'union')
+  if (!solid || (overlap <= VOL_EPS && (solid.cells || []).length >= list.length)) {
+    solid = booleanSolids(list.map((s) => expandSolidForUnite(s, TOUCH_XY_EPS)), 'union')
+  }
   if (!solid) return { ok: false, error: 'No se pudo unir los sólidos.' }
-  solid.volumeM3 = solidVolumeM3(solid)
+  const sumVol = list.reduce((s, x) => s + solidVolumeM3(x), 0)
+  // Sin solape real: el volumen es la suma exacta (el expand no debe inflar el dato).
+  // Con solape: el boolean ya evita doble conteo.
+  solid.volumeM3 = overlap > VOL_EPS ? solidVolumeM3(solid) : sumVol
   return { ok: true, solid }
 }
 
@@ -656,8 +806,37 @@ function pointInRing(x, y, ring) {
   return inside
 }
 
+/** Hex #rgb/#rrggbb → rgba() con alpha (conserva transparencia del sólido). */
+export function solidColorToRgba(color, alpha = 0.18, fallback = '#0f766e') {
+  const raw = String(color || fallback).trim()
+  const m3 = raw.match(/^#([0-9a-fA-F]{3})$/)
+  const m6 = raw.match(/^#([0-9a-fA-F]{6})$/)
+  let r = 15
+  let g = 118
+  let b = 110
+  if (m6) {
+    r = parseInt(m6[1].slice(0, 2), 16)
+    g = parseInt(m6[1].slice(2, 4), 16)
+    b = parseInt(m6[1].slice(4, 6), 16)
+  } else if (m3) {
+    r = parseInt(m3[1][0] + m3[1][0], 16)
+    g = parseInt(m3[1][1] + m3[1][1], 16)
+    b = parseInt(m3[1][2] + m3[1][2], 16)
+  } else {
+    const rgba = raw.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i)
+    if (rgba) {
+      r = Number(rgba[1])
+      g = Number(rgba[2])
+      b = Number(rgba[3])
+    }
+  }
+  const a = Math.min(1, Math.max(0, Number(alpha) || 0))
+  return `rgba(${r},${g},${b},${a})`
+}
+
 /**
  * Dibuja un sólido proyectado en el ctx 2D según la vista.
+ * Color del sólido en caras (fill semitransparente) y aristas (stroke).
  */
 export function drawSolid3d(ctx, solid, {
   viewId = 'top',
@@ -667,8 +846,10 @@ export function drawSolid3d(ctx, solid, {
   orbit = null,
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
-  const stroke = selected ? '#2563eb' : (solid.color || '#0f766e')
-  const fill = selected ? 'rgba(37,99,235,0.18)' : 'rgba(15,118,110,0.14)'
+  const base = solid.color || '#0f766e'
+  const stroke = selected ? '#2563eb' : base
+  // Transparencia fija para ver sólidos internos; el matiz sigue el color elegido.
+  const fill = selected ? 'rgba(37,99,235,0.18)' : solidColorToRgba(base, 0.22)
   const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
   const flatTop = !useOrbit && viewId === 'top'
   ctx.save()
