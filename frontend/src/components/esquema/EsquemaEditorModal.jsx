@@ -13,6 +13,7 @@ import {
   applySoftOrthoAngle,
   arrowHeadLength,
   clampZoom,
+  ESQUEMA_CONTEXT_SIDEBAR_W,
   squareModalOuterSize,
   DEFAULT_COTA_OFFSET,
   degToRad,
@@ -102,6 +103,8 @@ import {
 } from './esquema3dCalc'
 import { buildCalcAdjuntos } from './esquema3dCalcExport'
 import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
+import { EsquemaContextSidebar, EsquemaSidebarSection } from './esquemaContextSidebar'
+import { EsquemaToolbarHoverTips } from './esquemaToolbarHoverTips'
 import {
   buildEsquemaDraftSnapshot,
   esquemaDraftClear,
@@ -621,13 +624,28 @@ export default function EsquemaEditorModal({
   const [volumeCalcs, setVolumeCalcs] = useState([])
   const [activeCalcId, setActiveCalcId] = useState(null)
   const [draftNotice, setDraftNotice] = useState(null) // { kind, title, message, ... }
-  /** Ventana cuadrada: lado en px (ancho = alto), incluye barra de herramientas. */
-  const [modalSide, setModalSide] = useState(() => {
-    if (typeof window === 'undefined') return 720
+  /**
+   * Ventana: altura = lado de dibujo; ancho = lado + panel lateral
+   * (el área de dibujo no se reduce para alojar el lateral).
+   */
+  const [modalLayout, setModalLayout] = useState(() => {
+    if (typeof window === 'undefined') {
+      return { w: 720 + ESQUEMA_CONTEXT_SIDEBAR_W, h: 720, side: 720, sidebar: ESQUEMA_CONTEXT_SIDEBAR_W }
+    }
     const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
     const maxH = window.innerHeight * 0.92 - 32
-    return squareModalOuterSize(maxW, maxH).side
+    return squareModalOuterSize(maxW, maxH, ESQUEMA_CONTEXT_SIDEBAR_W)
   })
+  const modalSide = modalLayout.side
+  const modalWidth = modalLayout.w
+  const modalHeight = modalLayout.h
+  const contextSidebarW = modalLayout.sidebar || ESQUEMA_CONTEXT_SIDEBAR_W
+  const [contextSidebarCollapsed, setContextSidebarCollapsed] = useState(false)
+  const [sectionPropsOpen, setSectionPropsOpen] = useState(true)
+  const [sectionCalcOpen, setSectionCalcOpen] = useState(true)
+  const [sectionCoordsOpen, setSectionCoordsOpen] = useState(true)
+  const toolbarRootRef = useRef(null)
+  const modalRootRef = useRef(null)
   /** Giro libre 3D: arrastrar para orbitar sin modificar geometría. */
   const [orbitFree, setOrbitFree] = useState(false)
   const orbitFreeRef = useRef(false)
@@ -1024,12 +1042,13 @@ export default function EsquemaEditorModal({
     return () => ro?.disconnect()
   }, [setupCanvas])
 
-  // Ventana cuadrada: recalcular lado al redimensionar / girar dispositivo.
+  // Ventana: recalcular alto (lado dibujo) + ancho (+ lateral) al redimensionar.
   useEffect(() => {
     const update = () => {
       const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
       const maxH = window.innerHeight * 0.92 - 32
-      setModalSide(squareModalOuterSize(maxW, maxH).side)
+      const sb = contextSidebarCollapsed ? 36 : ESQUEMA_CONTEXT_SIDEBAR_W
+      setModalLayout(squareModalOuterSize(maxW, maxH, huellaMode ? 0 : sb))
     }
     update()
     window.addEventListener('resize', update)
@@ -1038,13 +1057,13 @@ export default function EsquemaEditorModal({
       window.removeEventListener('resize', update)
       window.removeEventListener('orientationchange', update)
     }
-  }, [])
+  }, [contextSidebarCollapsed, huellaMode])
 
   useEffect(() => {
-    // Tras cambiar el lado del modal, reajustar el lienzo al espacio restante.
+    // Tras cambiar el tamaño del modal, reajustar el lienzo al espacio restante.
     const tmr = window.setTimeout(() => setupCanvas(), 40)
     return () => window.clearTimeout(tmr)
-  }, [modalSide, setupCanvas])
+  }, [modalSide, modalWidth, modalHeight, setupCanvas])
 
   // IMPORTANTE: no depender de `redraw` aquí. Si se incluye, cada pan/zoom/selección
   // recrea el callback y este efecto vacía objectsRef → el lienzo deja de dibujar.
@@ -5573,12 +5592,16 @@ export default function EsquemaEditorModal({
       }}
     >
       <div
+        ref={modalRootRef}
         onClick={(e) => e.stopPropagation()}
         data-testid="esquema-modal-square"
+        data-modal-w={modalWidth}
+        data-modal-h={modalHeight}
+        data-modal-side={modalSide}
         style={{
-          // Ventana cuadrada completa (herramientas + dibujo): lado = min(ancho, alto) disponible.
-          width: modalSide,
-          height: modalSide,
+          // Altura = área de dibujo; ancho = dibujo + panel lateral izquierdo.
+          width: modalWidth,
+          height: modalHeight,
           maxWidth: '98vw',
           maxHeight: '92vh',
           background: t.bgCard || '#fff',
@@ -5590,17 +5613,24 @@ export default function EsquemaEditorModal({
           overflow: 'hidden',
         }}
       >
-        <div style={{
-          display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
-          padding: '10px 14px', borderBottom: `1px solid ${t.border}`,
-          // Panel de herramientas siempre visible dentro de la ventana cuadrada.
-          flexShrink: 0,
-          flexGrow: 0,
-        }}>
+        <EsquemaToolbarHoverTips rootRef={modalRootRef} />
+        <div
+          ref={toolbarRootRef}
+          data-testid="esquema-toolbar"
+          style={{
+            display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+            padding: '10px 14px', borderBottom: `1px solid ${t.border}`,
+            // Panel de herramientas siempre visible.
+            flexShrink: 0,
+            flexGrow: 0,
+          }}
+        >
           <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4 }}>{title}</div>
           <button
             type="button"
             title="Deshacer"
+            data-cc-tooltip="Deshacer"
+            data-cc-tooltip-variant="short"
             aria-label="Deshacer"
             disabled={!canUndo}
             onClick={undo}
@@ -5994,8 +6024,12 @@ export default function EsquemaEditorModal({
               <button
                 type="button"
                 title="Panel de cálculo de volúmenes (memoria PDF + gráfico isométrico)"
+                data-cc-tooltip="Panel de cálculo de volúmenes (memoria PDF + gráfico isométrico)"
+                data-cc-tooltip-variant="short"
                 aria-label="Cálculo de volúmenes"
                 onClick={() => {
+                  setContextSidebarCollapsed(false)
+                  setSectionCalcOpen(true)
                   setCalcPanelOpen(true)
                   if (!(volumeCalcsRef.current || []).length) {
                     const c = createVolumeCalc('Excavación')
@@ -6090,11 +6124,11 @@ export default function EsquemaEditorModal({
 
         <div
           style={{
-            // Llena el resto de la ventana cuadrada bajo la barra de herramientas.
+            // Bajo la barra: panel lateral izquierdo + área de dibujo (2D y 3D).
             flex: 1,
             minHeight: 0,
             display: 'flex',
-            flexDirection: huellaMode ? 'row' : 'column',
+            flexDirection: 'row',
             background: ui.wrap,
           }}
         >
@@ -6464,7 +6498,187 @@ export default function EsquemaEditorModal({
                 />
               </aside>
             )
-          ) : null}
+          ) : (
+            <EsquemaContextSidebar
+              t={t}
+              ui={ui}
+              width={contextSidebarW}
+              collapsed={contextSidebarCollapsed}
+              onToggleCollapsed={() => setContextSidebarCollapsed((v) => !v)}
+            >
+              <EsquemaSidebarSection
+                t={t}
+                id="propiedades"
+                title="Propiedades"
+                open={sectionPropsOpen}
+                onToggle={setSectionPropsOpen}
+                badge={selectedObj || selectedSolidIds.length === 1 ? '1' : null}
+              >
+                {selectedObj && selectedObj.type !== 'image' ? (
+                  <PropiedadesPanel
+                    t={t}
+                    ui={ui}
+                    obj={selectedObj}
+                    selectMode={tool === 'seleccion' ? selectMode : null}
+                    onSelectMode={setSelectMode}
+                    scaleLocked={isScaleLockedBloque(selectedObj) && (huellaMode || mapActive)}
+                    measureW={measureW}
+                    measureH={measureH}
+                    onMeasureW={setMeasureW}
+                    onMeasureH={setMeasureH}
+                    onApplyDims={(w, h) => applyMeasureToSelected(w, h)}
+                    onColor={applySelectedColor}
+                    onWidth={applySelectedWidth}
+                    onLineStyle={applySelectedLineStyle}
+                    onFontSize={applyFontSize}
+                    onRotationDeg={applyRotationDeg}
+                    solid={solidForSourceEntity(solids3d, selectedObj.id)
+                      || (selectedSolidIds.length === 1
+                        ? solids3d.find((s) => s.id === selectedSolidIds[0])
+                        : null)}
+                    embedded
+                  />
+                ) : !selectedObj && selectedSolidIds.length === 1 ? (
+                  <SolidPropiedadesPanel
+                    t={t}
+                    ui={ui}
+                    solid={solids3d.find((s) => s.id === selectedSolidIds[0])}
+                    embedded
+                  />
+                ) : selectedIds.length > 1 ? (
+                  <div style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg || '#fff',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: t.text,
+                  }}
+                  >
+                    {selectedIds.length} entidades seleccionadas
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: t.textMuted, padding: '4px 2px' }}>
+                    Seleccione una entidad o sólido para ver sus propiedades.
+                  </div>
+                )}
+              </EsquemaSidebarSection>
+
+              {mode3d ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="calculo"
+                  title="Cálculo de volúmenes"
+                  open={sectionCalcOpen}
+                  onToggle={setSectionCalcOpen}
+                  badge={(volumeCalcs || []).length || null}
+                >
+                  {calcPanelOpen ? (
+                    <Esquema3dCalcPanel
+                      t={t}
+                      ui={ui}
+                      open
+                      embedded
+                      onClose={() => setCalcPanelOpen(false)}
+                      calcs={volumeCalcs}
+                      activeCalcId={activeCalcId}
+                      onActiveCalcId={setActiveCalcId}
+                      onCreateCalc={(c) => {
+                        setVolumeCalcs((prev) => [...prev, c])
+                        setActiveCalcId(c.id)
+                      }}
+                      onRenameCalc={(id, nombre) => {
+                        setVolumeCalcs((prev) => prev.map((c) => (c.id === id ? { ...c, nombre } : c)))
+                      }}
+                      onDeleteCalc={(id) => {
+                        setVolumeCalcs((prev) => {
+                          const next = prev.filter((c) => c.id !== id)
+                          if (activeCalcId === id) setActiveCalcId(next[0]?.id || null)
+                          return next
+                        })
+                      }}
+                      onAddLine={(calcId, line) => {
+                        setVolumeCalcs((prev) => prev.map((c) => (
+                          c.id === calcId ? { ...c, lines: [...(c.lines || []), line] } : c
+                        )))
+                      }}
+                      onUpdateLine={(calcId, lineId, patch) => {
+                        setVolumeCalcs((prev) => prev.map((c) => {
+                          if (c.id !== calcId) return c
+                          return {
+                            ...c,
+                            lines: (c.lines || []).map((l) => (l.id === lineId ? { ...l, ...patch } : l)),
+                          }
+                        }))
+                      }}
+                      onRemoveLine={(calcId, lineId) => {
+                        setVolumeCalcs((prev) => prev.map((c) => (
+                          c.id === calcId
+                            ? { ...c, lines: (c.lines || []).filter((l) => l.id !== lineId) }
+                            : c
+                        )))
+                      }}
+                      solids={solids3d}
+                      selectedSolidIds={selectedSolidIds}
+                      onHint={setToolHint}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      title="Abrir cálculo de volúmenes"
+                      data-cc-tooltip="Abrir cálculo de volúmenes"
+                      data-cc-tooltip-variant="short"
+                      onClick={() => { setCalcPanelOpen(true); setSectionCalcOpen(true) }}
+                      style={{
+                        ...ghost(t),
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: '8px 10px',
+                      }}
+                    >
+                      Abrir cálculo de volúmenes
+                    </button>
+                  )}
+                </EsquemaSidebarSection>
+              ) : null}
+
+              {coordPanelOpen ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="coordenadas"
+                  title="Coordenadas"
+                  open={sectionCoordsOpen}
+                  onToggle={setSectionCoordsOpen}
+                >
+                  <CoordsPanel
+                    t={t}
+                    rows={coordRows}
+                    fileRef={coordFileRef}
+                    embedded
+                    pickFromMapActive={pickNodoFromMap}
+                    onTogglePickFromMap={togglePickNodoFromMap}
+                    onClose={() => {
+                      setPickNodoFromMap(false)
+                      setCoordPanelOpen(false)
+                      setToolHint('')
+                    }}
+                    onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
+                    onImport={async (file) => {
+                      try {
+                        const parsed = await parseCoordFile(file)
+                        const numbered = renumberCoordRows(parsed)
+                        setCoordRows(numbered)
+                        requestDrawFromCoords(numbered)
+                      } catch (err) {
+                        window.alert(err?.message || 'No se pudo leer el archivo')
+                      }
+                    }}
+                  />
+                </EsquemaSidebarSection>
+              ) : null}
+            </EsquemaContextSidebar>
+          )}
 
           <div style={{
             flex: 1,
@@ -6479,7 +6693,7 @@ export default function EsquemaEditorModal({
               ref={wrapRef}
               data-testid="esquema-drawing-wrap"
               style={{
-                // Llena el resto de la ventana cuadrada bajo la barra de herramientas.
+                // Área de dibujo: llena el espacio a la derecha del panel lateral.
                 width: '100%',
                 flex: 1,
                 minHeight: 0,
@@ -6548,53 +6762,6 @@ export default function EsquemaEditorModal({
               snapRef.current = null
               redraw()
             }}
-          />
-          <Esquema3dCalcPanel
-            t={t}
-            ui={ui}
-            open={calcPanelOpen && mode3d}
-            onClose={() => setCalcPanelOpen(false)}
-            calcs={volumeCalcs}
-            activeCalcId={activeCalcId}
-            onActiveCalcId={setActiveCalcId}
-            onCreateCalc={(c) => {
-              setVolumeCalcs((prev) => [...prev, c])
-              setActiveCalcId(c.id)
-            }}
-            onRenameCalc={(id, nombre) => {
-              setVolumeCalcs((prev) => prev.map((c) => (c.id === id ? { ...c, nombre } : c)))
-            }}
-            onDeleteCalc={(id) => {
-              setVolumeCalcs((prev) => {
-                const next = prev.filter((c) => c.id !== id)
-                if (activeCalcId === id) setActiveCalcId(next[0]?.id || null)
-                return next
-              })
-            }}
-            onAddLine={(calcId, line) => {
-              setVolumeCalcs((prev) => prev.map((c) => (
-                c.id === calcId ? { ...c, lines: [...(c.lines || []), line] } : c
-              )))
-            }}
-            onUpdateLine={(calcId, lineId, patch) => {
-              setVolumeCalcs((prev) => prev.map((c) => {
-                if (c.id !== calcId) return c
-                return {
-                  ...c,
-                  lines: (c.lines || []).map((l) => (l.id === lineId ? { ...l, ...patch } : l)),
-                }
-              }))
-            }}
-            onRemoveLine={(calcId, lineId) => {
-              setVolumeCalcs((prev) => prev.map((c) => (
-                c.id === calcId
-                  ? { ...c, lines: (c.lines || []).filter((l) => l.id !== lineId) }
-                  : c
-              )))
-            }}
-            solids={solids3d}
-            selectedSolidIds={selectedSolidIds}
-            onHint={setToolHint}
           />
           {editingTabla && selectedObj && (
             <TablaOverlay
@@ -6710,30 +6877,6 @@ export default function EsquemaEditorModal({
             </div>
           ) : null}
 
-          {!huellaMode && selectedIds.length > 1 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 18,
-                right: 18,
-                zIndex: 5,
-                width: 220,
-                padding: '10px 12px',
-                borderRadius: 10,
-                border: `1px solid ${t.border}`,
-                background: t.bgCard || 'rgba(255,255,255,0.96)',
-                boxShadow: '0 8px 24px rgba(15,23,42,0.14)',
-                fontSize: 12,
-                color: t.text,
-                fontWeight: 700,
-              }}
-            >
-              {selectedIds.length} entidades seleccionadas
-              <div style={{ fontSize: 11, fontWeight: 600, color: t.textMuted, marginTop: 4 }}>
-                Puede guardarlas juntas en la biblioteca del contrato.
-              </div>
-            </div>
-          )}
           {!huellaMode && mapActive && !mode3d && mapPropsOpen ? (
             <MapaPropiedadesPanel
               t={t}
@@ -6743,8 +6886,8 @@ export default function EsquemaEditorModal({
               pickInfo={mapPickInfo}
               printAreaSelecting={printAreaSelecting}
               dodgeCoords={false}
-              besideCoords={coordPanelOpen}
-              besideWidth={coordPanelOpen ? 460 : 220}
+              besideCoords={false}
+              besideWidth={220}
               contextHint={mapCtx.hasPk
                 ? `PK ${mapCtx.pkId} resaltado`
                 : mapCtx.hasPoint
@@ -6837,70 +6980,13 @@ export default function EsquemaEditorModal({
             </div>
           ) : null}
 
-          {!huellaMode && selectedObj && selectedObj.type !== 'image' && (
-            <PropiedadesPanel
-              t={t}
-              ui={ui}
-              obj={selectedObj}
-              selectMode={tool === 'seleccion' ? selectMode : null}
-              onSelectMode={setSelectMode}
-              scaleLocked={isScaleLockedBloque(selectedObj) && (huellaMode || mapActive)}
-              measureW={measureW}
-              measureH={measureH}
-              onMeasureW={setMeasureW}
-              onMeasureH={setMeasureH}
-              onApplyDims={(w, h) => applyMeasureToSelected(w, h)}
-              onColor={applySelectedColor}
-              onWidth={applySelectedWidth}
-              onLineStyle={applySelectedLineStyle}
-              onFontSize={applyFontSize}
-              onRotationDeg={applyRotationDeg}
-              solid={solidForSourceEntity(solids3d, selectedObj.id)
-                || (selectedSolidIds.length === 1
-                  ? solids3d.find((s) => s.id === selectedSolidIds[0])
-                  : null)}
-            />
-          )}
-          {!huellaMode && !selectedObj && selectedSolidIds.length === 1 && (
-            <SolidPropiedadesPanel
-              t={t}
-              ui={ui}
-              solid={solids3d.find((s) => s.id === selectedSolidIds[0])}
-            />
-          )}
-          {!huellaMode && coordPanelOpen && (
-            <CoordsPanel
-              t={t}
-              rows={coordRows}
-              fileRef={coordFileRef}
-              topOffset={18}
-              pickFromMapActive={pickNodoFromMap}
-              onTogglePickFromMap={togglePickNodoFromMap}
-              onClose={() => {
-                setPickNodoFromMap(false)
-                setCoordPanelOpen(false)
-                setToolHint('')
-              }}
-              onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
-              onImport={async (file) => {
-                try {
-                  const parsed = await parseCoordFile(file)
-                  const numbered = renumberCoordRows(parsed)
-                  setCoordRows(numbered)
-                  requestDrawFromCoords(numbered)
-                } catch (err) {
-                  window.alert(err?.message || 'No se pudo leer el archivo')
-                }
-              }}
-            />
-          )}
           {!huellaMode && sentidoEjePrompt ? (
             <div
               data-testid="esquema-sentido-eje-prompt"
               style={{
                 position: 'absolute',
-                left: coordPanelOpen ? 490 : 18,
-                top: coordPanelOpen ? 18 : 64,
+                left: 18,
+                top: 18,
                 zIndex: 12,
                 width: 'min(260px, calc(100% - 36px))',
                 padding: '12px 14px',
@@ -8039,7 +8125,7 @@ function MapaPropiedadesPanel({
   )
 }
 
-function SolidPropiedadesPanel({ t, ui, solid }) {
+function SolidPropiedadesPanel({ t, ui, solid, embedded = false }) {
   if (!solid || solid.type !== 'solid3d') return null
   const params = solid.extrudeParams || {}
   const z0 = params.cotaInferior
@@ -8047,10 +8133,21 @@ function SolidPropiedadesPanel({ t, ui, solid }) {
   return (
     <div
       data-testid="esquema-solid-props"
-      style={{
+      style={embedded ? {
+        position: 'relative',
+        width: '100%',
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bg || '#fff',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        boxSizing: 'border-box',
+      } : {
         position: 'absolute',
         top: 18,
-        right: 18,
+        left: 18,
         zIndex: 12,
         width: 220,
         padding: '10px 12px',
@@ -8110,9 +8207,10 @@ function PropiedadesPanel({
         gap: 8,
         boxSizing: 'border-box',
       } : {
+        // Overlay legado: izquierda (mismo criterio que el panel lateral 2D).
         position: 'absolute',
         top: 18,
-        right: 18,
+        left: 18,
         zIndex: 12,
         width: 220,
         padding: '10px 12px',

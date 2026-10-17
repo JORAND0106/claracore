@@ -28,6 +28,7 @@ export function Esquema3dCalcPanel({
   solids,
   selectedSolidIds,
   onHint,
+  embedded = false,
 }) {
   const [newName, setNewName] = useState('Excavación')
   const active = useMemo(
@@ -67,25 +68,42 @@ export function Esquema3dCalcPanel({
     else onHint?.(`${added} elemento(s) agregados al cálculo.`)
   }
 
+  const shellStyle = embedded
+    ? {
+      position: 'relative',
+      width: '100%',
+      maxHeight: 'min(420px, 55vh)',
+      background: t.bg || '#fff',
+      border: `1px solid ${t.border}`,
+      borderRadius: 8,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      boxSizing: 'border-box',
+    }
+    : {
+      position: 'absolute',
+      right: 12,
+      top: 12,
+      bottom: 12,
+      width: 'min(420px, 92vw)',
+      zIndex: 8,
+      background: t.bgCard || '#fff',
+      border: `1px solid ${t.border}`,
+      borderRadius: 10,
+      boxShadow: t.shadow || '0 12px 32px rgba(15,23,42,0.18)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    }
+
   return (
     <div
       data-testid="esquema-calc-panel"
-      style={{
-        position: 'absolute',
-        right: 12,
-        top: 12,
-        bottom: 12,
-        width: 'min(420px, 92vw)',
-        zIndex: 8,
-        background: t.bgCard || '#fff',
-        border: `1px solid ${t.border}`,
-        borderRadius: 10,
-        boxShadow: t.shadow || '0 12px 32px rgba(15,23,42,0.18)',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}
+      data-embedded={embedded ? '1' : '0'}
+      style={shellStyle}
     >
+      {embedded ? null : (
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -98,8 +116,14 @@ export function Esquema3dCalcPanel({
         <div style={{ fontWeight: 800, color: t.primary || '#0f766e', fontSize: 14, flex: 1 }}>
           Cálculo de volúmenes
         </div>
-        <button type="button" title="Cerrar panel" onClick={onClose} style={btnGhost(t)}>✕</button>
+        <button type="button" title="Cerrar panel" data-cc-tooltip="Cerrar panel" onClick={onClose} style={btnGhost(t)}>✕</button>
       </div>
+      )}
+      {embedded ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 6px 0' }}>
+          <button type="button" title="Cerrar panel" data-cc-tooltip="Cerrar panel" onClick={onClose} style={{ ...btnGhost(t), padding: '2px 8px' }}>✕</button>
+        </div>
+      ) : null}
 
       <div style={{ padding: 10, borderBottom: `1px solid ${t.border}`, display: 'grid', gap: 8 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
