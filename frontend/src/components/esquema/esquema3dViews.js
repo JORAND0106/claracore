@@ -232,6 +232,97 @@ export function extrudeAxisForView(viewId) {
   return meta.depthAxis
 }
 
+/**
+ * Profundidad world (eje de la vista) a usar al dibujar/extruir en un plano de cara.
+ * front/back → Y; left/right → X; top/bottom → 0 (cota va en Z).
+ */
+export function depthAxisValueFromWorld(pt, viewId) {
+  const id = normalizeViewId(viewId)
+  const x = Number(pt?.x) || 0
+  const y = Number(pt?.y) || 0
+  switch (id) {
+    case 'front':
+    case 'back':
+      return y
+    case 'left':
+    case 'side':
+    case 'right':
+      return x
+    default:
+      return 0
+  }
+}
+
+/**
+ * Punto de lienzo (vista de cara) → world 3D anclado a una profundidad de cara.
+ * top/bottom: (x,y) planta; zCota = cotaRef o la indicada.
+ * perfiles: pantalla X/Y → along + cota; profundidad = faceDepthWorld.
+ */
+export function canvasToWorldOnViewPlane(canvasPt, viewId, {
+  faceDepthWorld = 0,
+  cotaRefM = 0,
+  zCota = null,
+} = {}) {
+  const id = normalizeViewId(viewId)
+  const cx = Number(canvasPt?.x) || 0
+  const cy = Number(canvasPt?.y) || 0
+  const depth = Number(faceDepthWorld) || 0
+  const meta = viewProfileMeta(id)
+  switch (id) {
+    case 'front':
+      return { x: cx, y: depth, zCota: worldZToCota(cy, cotaRefM) }
+    case 'back':
+      return { x: -cx, y: depth, zCota: worldZToCota(cy, cotaRefM) }
+    case 'left':
+    case 'side':
+      return { x: depth, y: cx, zCota: worldZToCota(cy, cotaRefM) }
+    case 'right':
+      return { x: depth, y: -cx, zCota: worldZToCota(cy, cotaRefM) }
+    case 'bottom':
+      return {
+        x: cx,
+        y: -cy,
+        zCota: zCota != null && Number.isFinite(Number(zCota)) ? Number(zCota) : cotaRefM,
+      }
+    case 'top':
+    default:
+      return {
+        x: cx,
+        y: cy,
+        zCota: zCota != null && Number.isFinite(Number(zCota)) ? Number(zCota) : cotaRefM,
+      }
+  }
+  void meta
+}
+
+/**
+ * Delta de arrastre en lienzo → traslación world (dx, dy, dzCota).
+ * Vistas de cara: se mueve en el plano de la vista (sin cambiar profundidad).
+ * Iso / órbita: movimiento en planta (cotas fijas), como hoy.
+ */
+export function canvasDeltaToWorldMove(dxCanvas, dyCanvas, viewId) {
+  const id = normalizeViewId(viewId)
+  const dx = Number(dxCanvas) || 0
+  const dy = Number(dyCanvas) || 0
+  switch (id) {
+    case 'front':
+      return { dx, dy: 0, dzCota: worldZToCota(dy, 0) - worldZToCota(0, 0) }
+    case 'back':
+      return { dx: -dx, dy: 0, dzCota: worldZToCota(dy, 0) - worldZToCota(0, 0) }
+    case 'left':
+    case 'side':
+      return { dx: 0, dy: dx, dzCota: worldZToCota(dy, 0) - worldZToCota(0, 0) }
+    case 'right':
+      return { dx: 0, dy: -dx, dzCota: worldZToCota(dy, 0) - worldZToCota(0, 0) }
+    case 'bottom':
+      return { dx, dy: -dy, dzCota: 0 }
+    case 'top':
+    default:
+      // Incluye isométricas: movimiento en planta.
+      return { dx, dy, dzCota: 0 }
+  }
+}
+
 /** Centro aproximado de un conjunto de sólidos (para órbita). */
 export function solidsOrbitCenter(solids, cotaRefM = 0) {
   let minX = Infinity
