@@ -14,7 +14,7 @@ import {
   triangleLocalVertices,
   worldToMeters,
 } from './esquemaGeometry.js'
-import { extrudeAxisForView } from './esquema3dViews.js'
+import { extrudeAxisForView, projectWorld3dToCanvas } from './esquema3dViews.js'
 
 const CIRCLE_SEGMENTS = 96
 
@@ -243,6 +243,10 @@ export function extrudeClosedEntity(obj, {
     color: color || undefined,
     extrudeAxis: axis,
     viewPlane: viewId === 'front' || viewId === 'side' ? viewId : 'top',
+    sourceEntityId: obj.id || null,
+    extrudeParams: axis === 'z'
+      ? { viewId: 'top', cotaSuperior: z1, cotaInferior: z0 }
+      : { viewId, lengthM: z1 - z0 },
     cells: [{
       ring: closeRing(ring)?.slice(0, -1) || ring,
       holes: [],
@@ -268,6 +272,36 @@ export function extrudeClosedEntity(obj, {
 
   solid.volumeM3 = solidVolumeM3(solid)
   return { ok: true, solid }
+}
+
+/**
+ * Reconstruye un sólido ligado a una entidad 2D (p. ej. tras redimensionar).
+ * Conserva id y parámetros de extrusión; actualiza volumen de inmediato.
+ */
+export function refreshSolidFromSourceEntity(solid, entity) {
+  if (!solid || solid.type !== 'solid3d' || !entity) {
+    return { ok: false, error: 'Sólido o entidad no válidos.' }
+  }
+  const params = solid.extrudeParams || {}
+  const r = extrudeClosedEntity(entity, {
+    viewId: params.viewId || solid.viewPlane || 'top',
+    cotaSuperior: params.cotaSuperior,
+    cotaInferior: params.cotaInferior,
+    lengthM: params.lengthM,
+    color: solid.color,
+    id: solid.id,
+  })
+  if (!r.ok) return r
+  r.solid.sourceEntityId = entity.id
+  r.solid.extrudeParams = { ...params }
+  r.solid.volumeM3 = solidVolumeM3(r.solid)
+  return r
+}
+
+/** Recalcula volumeM3 en una copia del sólido. */
+export function withUpdatedVolume(solid) {
+  if (!solid || solid.type !== 'solid3d') return solid
+  return { ...solid, volumeM3: solidVolumeM3(solid) }
 }
 
 /**
@@ -567,10 +601,13 @@ export function drawSolid3d(ctx, solid, {
   cotaRefM = 0,
   selected = false,
   zoom = 1,
+  orbit = null,
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
   const stroke = selected ? '#2563eb' : (solid.color || '#0f766e')
   const fill = selected ? 'rgba(37,99,235,0.18)' : 'rgba(15,118,110,0.14)'
+  const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
+  const flatTop = !useOrbit && viewId === 'top'
   ctx.save()
   ctx.lineWidth = Math.max(1.2, 2 / Math.max(zoom, 0.25))
   ctx.strokeStyle = stroke
@@ -579,30 +616,40 @@ export function drawSolid3d(ctx, solid, {
   for (const cell of solid.cells) {
     const zBottom = Math.min(cell.z0, cell.z1)
     const zTop = Math.max(cell.z0, cell.z1)
-    const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM))
-    const ringTop = (cell.ring || []).map((p) => projectPt(p, zTop, viewId, cotaRefM))
+    const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+    const ringTop = (cell.ring || []).map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
 
-    if (viewId === 'top') {
+    if (flatTop) {
       pathRing(ctx, ringBot)
       ctx.fill()
       ctx.stroke()
       for (const hole of cell.holes || []) {
-        pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM)))
+        pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
         ctx.stroke()
       }
     } else {
-      // Frontal / lateral / isométrica: caras laterales + tapa
+      // Frontal / lateral / isométrica / órbita: caras laterales + tapa
       const n = ringBot.length
       const lastDup = n > 1
         && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
       const edgeCount = lastDup ? n - 1 : n
+      // Ordenar caras por profundidad media (painter's algorithm simple)
+      const faces = []
       for (let i = 0; i < edgeCount; i += 1) {
         const j = (i + 1) % edgeCount
+        const depth = (
+          (ringBot[i].depth || 0) + (ringBot[j].depth || 0)
+          + (ringTop[j].depth || 0) + (ringTop[i].depth || 0)
+        ) / 4
+        faces.push({ i, j, depth })
+      }
+      faces.sort((a, b) => a.depth - b.depth)
+      for (const f of faces) {
         ctx.beginPath()
-        ctx.moveTo(ringBot[i].x, ringBot[i].y)
-        ctx.lineTo(ringBot[j].x, ringBot[j].y)
-        ctx.lineTo(ringTop[j].x, ringTop[j].y)
-        ctx.lineTo(ringTop[i].x, ringTop[i].y)
+        ctx.moveTo(ringBot[f.i].x, ringBot[f.i].y)
+        ctx.lineTo(ringBot[f.j].x, ringBot[f.j].y)
+        ctx.lineTo(ringTop[f.j].x, ringTop[f.j].y)
+        ctx.lineTo(ringTop[f.i].x, ringTop[f.i].y)
         ctx.closePath()
         ctx.fill()
         ctx.stroke()
@@ -645,23 +692,13 @@ export function hitSolidAtView(solid, canvasPt, viewId = 'top', cotaRefM = 0) {
   return false
 }
 
-function projectPt(p, zCota, viewId, cotaRefM) {
-  // Import lazy to avoid cycle — inline top/front/side/iso
-  const x = p.x
-  const y = p.y
-  const z = -((zCota - (cotaRefM || 0)) * PX_PER_METER)
-  if (viewId === 'front') return { x, y: z }
-  if (viewId === 'side') return { x: y, y: z }
-  if (String(viewId).startsWith('iso')) {
-    const sx = viewId.includes('w') ? -1 : 1
-    const sy = viewId.includes('s') ? -1 : 1
-    const X = x * sx
-    const Y = y * sy
-    const cos = Math.SQRT1_2
-    const sin = Math.SQRT1_2
-    return { x: (X - Y) * cos, y: (X + Y) * sin * 0.5 + z }
-  }
-  return { x, y }
+function projectPt(p, zCota, viewId, cotaRefM, orbit = null) {
+  return projectWorld3dToCanvas(
+    { x: p.x, y: p.y, zCota },
+    viewId,
+    cotaRefM,
+    orbit,
+  )
 }
 
 function pathRing(ctx, ring) {
