@@ -1873,18 +1873,34 @@ export function drawNorthIndicator(ctx, canvasW, canvasH, origin = null, ui) {
   ctx.restore()
 }
 
+/** Ancho por defecto del panel lateral de contexto (propiedades / cálculos). */
+export const ESQUEMA_CONTEXT_SIDEBAR_W = 300
+
 /**
- * Ventana cuadrada del editor de esquema: conserva el ancho disponible
- * y fija alto = ancho, sin superar el alto máximo de viewport.
+ * Ventana del editor de esquema: conserva la altura del área cuadrada de dibujo
+ * y amplía el ancho para alojar el panel lateral izquierdo sin reducir el lienzo
+ * cuando el viewport lo permite.
  * @param {number} maxWidthPx
  * @param {number} maxHeightPx
- * @returns {{ w: number, h: number, side: number }}
+ * @param {number} [sidebarWidthPx]
+ * @returns {{ w: number, h: number, side: number, sidebar: number }}
  */
-export function squareModalOuterSize(maxWidthPx, maxHeightPx) {
+export function squareModalOuterSize(maxWidthPx, maxHeightPx, sidebarWidthPx = ESQUEMA_CONTEXT_SIDEBAR_W) {
   const mw = Number(maxWidthPx)
   const mh = Number(maxHeightPx)
   const w0 = Number.isFinite(mw) && mw > 0 ? mw : 480
   const h0 = Number.isFinite(mh) && mh > 0 ? mh : 480
-  const side = Math.max(280, Math.min(w0, h0))
-  return { w: side, h: side, side }
+  const sidebarRaw = Number(sidebarWidthPx)
+  const sidebar = Number.isFinite(sidebarRaw) && sidebarRaw > 0 ? Math.floor(sidebarRaw) : 0
+  // Altura = lado del área de dibujo (igual criterio histórico: min disponible).
+  // Si cabe el lateral, el lado se calcula sobre (ancho − lateral) para no encoger el dibujo
+  // respecto a un viewport que ya reservó ese espacio.
+  const drawBudgetW = Math.max(280, w0 - sidebar)
+  const side = Math.max(280, Math.min(drawBudgetW, h0))
+  return { w: side + sidebar, h: side, side, sidebar }
+}
+
+/** @deprecated alias — preferir squareModalOuterSize */
+export function esquemaModalOuterSize(maxWidthPx, maxHeightPx, sidebarWidthPx) {
+  return squareModalOuterSize(maxWidthPx, maxHeightPx, sidebarWidthPx)
 }
