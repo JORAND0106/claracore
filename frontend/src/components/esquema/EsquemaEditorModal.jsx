@@ -13,6 +13,7 @@ import {
   applySoftOrthoAngle,
   arrowHeadLength,
   clampZoom,
+  squareDrawingAreaSize,
   DEFAULT_COTA_OFFSET,
   degToRad,
   cursorForHandle,
@@ -860,8 +861,15 @@ export default function EsquemaEditorModal({
     const wrap = wrapRef.current
     if (!c || !wrap) return
     const dpr = window.devicePixelRatio || 1
-    const w = Math.max(480, wrap.clientWidth)
-    const h = Math.max(360, wrap.clientHeight)
+    // Área de dibujo cuadrada: conserva el ancho útil del contenedor y fija alto = ancho.
+    // ResizeObserver ya reacciona a cambio de ventana / giro de dispositivo.
+    let innerW = wrap.clientWidth
+    try {
+      const cs = window.getComputedStyle(wrap)
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      innerW = Math.max(0, wrap.clientWidth - padX)
+    } catch { /* use clientWidth */ }
+    const { w, h } = squareDrawingAreaSize(innerW)
     c.width = Math.floor(w * dpr)
     c.height = Math.floor(h * dpr)
     c.style.width = `${w}px`
@@ -4773,14 +4781,15 @@ export default function EsquemaEditorModal({
         style={{
           width: 'min(1640px, 98vw)',
           maxHeight: '92vh',
-          height: 'min(820px, 92vh)',
+          // Alto libre: el lienzo es cuadrado (alto = ancho); si no cabe, el modal hace scroll.
+          height: 'auto',
           background: t.bgCard || '#fff',
           border: `1px solid ${t.border}`,
           borderRadius: 14,
           boxShadow: t.shadow,
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'hidden',
+          overflow: 'auto',
         }}
       >
         <div style={{
@@ -5149,7 +5158,8 @@ export default function EsquemaEditorModal({
 
         <div
           style={{
-            flex: 1,
+            // No flex-grow: el alto lo define el lienzo cuadrado (aspect-ratio).
+            flex: '0 1 auto',
             minHeight: 0,
             display: 'flex',
             flexDirection: huellaMode ? 'row' : 'column',
@@ -5524,8 +5534,31 @@ export default function EsquemaEditorModal({
             )
           ) : null}
 
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
+          <div style={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+          }}
+          >
+            <div
+              ref={wrapRef}
+              data-testid="esquema-drawing-wrap"
+              style={{
+                // Cuadrado: ancho = 100 % del panel; alto = ancho (aspect-ratio).
+                width: '100%',
+                aspectRatio: '1 / 1',
+                flex: '0 0 auto',
+                alignSelf: 'stretch',
+                minHeight: 0,
+                background: ui.wrap,
+                padding: 10,
+                position: 'relative',
+                boxSizing: 'border-box',
+              }}
+            >
           {mapActive ? (
             <div
               ref={mapHostRef}
