@@ -114,7 +114,6 @@ import { Esquema3dExtrudePopup, Esquema3dViewToolbar, Esquema3dVolumeHint } from
 import {
   createVolumeCalc,
   freezeCalcSnapshot,
-  volumeCalcsHaveUnnamed,
 } from './esquema3dCalc'
 import { buildCalcAdjuntos } from './esquema3dCalcExport'
 import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
@@ -646,37 +645,18 @@ export default function EsquemaEditorModal({
    * (el área de dibujo no se reduce para alojar el lateral).
    */
   const [modalLayout, setModalLayout] = useState(() => {
-    let sb = ESQUEMA_CONTEXT_SIDEBAR_W
-    if (typeof window !== 'undefined') {
-      try {
-        const raw = Number(localStorage.getItem('cc_esquema_context_sidebar_w'))
-        if (Number.isFinite(raw) && raw >= ESQUEMA_CONTEXT_SIDEBAR_W && raw <= 560) sb = raw
-      } catch { /* ignore */ }
-    }
     if (typeof window === 'undefined') {
-      return { w: 720 + sb, h: 720, side: 720, sidebar: sb }
+      return { w: 720 + ESQUEMA_CONTEXT_SIDEBAR_W, h: 720, side: 720, sidebar: ESQUEMA_CONTEXT_SIDEBAR_W }
     }
     const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
     const maxH = window.innerHeight * 0.92 - 32
-    return squareModalOuterSize(maxW, maxH, sb)
+    return squareModalOuterSize(maxW, maxH, ESQUEMA_CONTEXT_SIDEBAR_W)
   })
   const modalSide = modalLayout.side
   const modalWidth = modalLayout.w
   const modalHeight = modalLayout.h
+  const contextSidebarW = modalLayout.sidebar || ESQUEMA_CONTEXT_SIDEBAR_W
   const [contextSidebarCollapsed, setContextSidebarCollapsed] = useState(false)
-  /** Ancho ampliable del panel de contexto (mínimo = ancho actual de contrato). */
-  const [contextSidebarUserW, setContextSidebarUserW] = useState(() => {
-    if (typeof window === 'undefined') return ESQUEMA_CONTEXT_SIDEBAR_W
-    try {
-      const raw = Number(localStorage.getItem('cc_esquema_context_sidebar_w'))
-      if (Number.isFinite(raw) && raw >= ESQUEMA_CONTEXT_SIDEBAR_W && raw <= 560) return raw
-    } catch { /* ignore */ }
-    return ESQUEMA_CONTEXT_SIDEBAR_W
-  })
-  const contextSidebarDragRef = useRef(null)
-  const contextSidebarW = contextSidebarCollapsed
-    ? 36
-    : (modalLayout.sidebar || contextSidebarUserW || ESQUEMA_CONTEXT_SIDEBAR_W)
   const [sectionPropsOpen, setSectionPropsOpen] = useState(true)
   const [sectionCalcOpen, setSectionCalcOpen] = useState(true)
   const [sectionCoordsOpen, setSectionCoordsOpen] = useState(true)
@@ -1141,7 +1121,7 @@ export default function EsquemaEditorModal({
     const update = () => {
       const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
       const maxH = window.innerHeight * 0.92 - 32
-      const sb = contextSidebarCollapsed ? 36 : contextSidebarUserW
+      const sb = contextSidebarCollapsed ? 36 : ESQUEMA_CONTEXT_SIDEBAR_W
       setModalLayout(squareModalOuterSize(maxW, maxH, huellaMode ? 0 : sb))
     }
     update()
@@ -1151,7 +1131,7 @@ export default function EsquemaEditorModal({
       window.removeEventListener('resize', update)
       window.removeEventListener('orientationchange', update)
     }
-  }, [contextSidebarCollapsed, contextSidebarUserW, huellaMode])
+  }, [contextSidebarCollapsed, huellaMode])
 
   useEffect(() => {
     // Tras cambiar el tamaño del modal, reajustar el lienzo al espacio restante.
@@ -3873,11 +3853,7 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Paneo: herramienta Paneo, rueda/medio, o Alt+arrastre (cualquier comando).
-    const panGesture = currentTool === 'paneo'
-      || e.button === 1
-      || e.altKey
-    if (panGesture) {
+    if (currentTool === 'paneo') {
       const src = e.touches?.[0] || e
       panDragRef.current = {
         startX: src.clientX,
@@ -3887,7 +3863,6 @@ export default function EsquemaEditorModal({
       }
       startPt.current = p
       lastPt.current = p
-      drawing.current = true
       return
     }
 
@@ -4488,12 +4463,9 @@ export default function EsquemaEditorModal({
 
     e.preventDefault()
 
-    if (panDragRef.current) {
-      e.preventDefault()
-      e.stopPropagation?.()
+    if (currentTool === 'paneo' && panDragRef.current) {
       const src = e.touches?.[0] || e
       const d = panDragRef.current
-      // Mismo sentido que el arrastre (dedo/mouse): no invertir ejes.
       panRef.current = {
         x: d.originX + (src.clientX - d.startX),
         y: d.originY + (src.clientY - d.startY),
@@ -4808,7 +4780,7 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (panDragRef.current) {
+    if (currentTool === 'paneo') {
       panDragRef.current = null
       return
     }
@@ -5830,12 +5802,6 @@ export default function EsquemaEditorModal({
       setPanTick((n) => n + 1)
       return
     }
-    if (volumeCalcsHaveUnnamed(volumeCalcsRef.current || [])) {
-      setToolHint('Nombre todos los sólidos del cálculo de volúmenes antes de guardar.')
-      setCalcPanelOpen(true)
-      setSectionCalcOpen(true)
-      return
-    }
     if (!dirty) return
     setSavePrompt({ title: '' })
   }
@@ -6092,8 +6058,6 @@ export default function EsquemaEditorModal({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          overscrollBehavior: 'contain',
-          touchAction: 'manipulation',
         }}
       >
         <EsquemaToolbarHoverTips rootRef={modalRootRef} />
@@ -6152,14 +6116,9 @@ export default function EsquemaEditorModal({
                       mirrorAxisRef.current = null
                       setMirrorPrompt(null)
                       anglePickRef.current = { lines: [], points: [] }
-                      // Segundo clic sobre el mismo comando → vuelve a selección.
-                      const next = (tool === tb.id && tb.id !== 'seleccion')
-                        ? 'seleccion'
-                        : tb.id
-                      setTool(next)
+                      setTool(tb.id)
                     }}
                     style={iconBtn(t, tool === tb.id)}
-                    aria-pressed={tool === tb.id}
                   >
                     <Icon />
                   </button>
@@ -7005,33 +6964,6 @@ export default function EsquemaEditorModal({
               width={contextSidebarW}
               collapsed={contextSidebarCollapsed}
               onToggleCollapsed={() => setContextSidebarCollapsed((v) => !v)}
-              onResizePointerDown={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                const startX = e.clientX
-                const startW = contextSidebarUserW
-                contextSidebarDragRef.current = { startX, startW }
-                const onMove = (ev) => {
-                  const drag = contextSidebarDragRef.current
-                  if (!drag) return
-                  const next = Math.max(
-                    ESQUEMA_CONTEXT_SIDEBAR_W,
-                    Math.min(560, drag.startW + (ev.clientX - drag.startX)),
-                  )
-                  setContextSidebarUserW(next)
-                }
-                const onUpPersist = () => {
-                  contextSidebarDragRef.current = null
-                  window.removeEventListener('pointermove', onMove)
-                  window.removeEventListener('pointerup', onUpPersist)
-                  setContextSidebarUserW((w) => {
-                    try { localStorage.setItem('cc_esquema_context_sidebar_w', String(w)) } catch { /* ignore */ }
-                    return w
-                  })
-                }
-                window.addEventListener('pointermove', onMove)
-                window.addEventListener('pointerup', onUpPersist)
-              }}
             >
               <EsquemaSidebarSection
                 t={t}
@@ -7115,11 +7047,9 @@ export default function EsquemaEditorModal({
                       onCreateCalc={(c) => {
                         setVolumeCalcs((prev) => [...prev, c])
                         setActiveCalcId(c.id)
-                        setDirty(true)
                       }}
                       onRenameCalc={(id, nombre) => {
                         setVolumeCalcs((prev) => prev.map((c) => (c.id === id ? { ...c, nombre } : c)))
-                        setDirty(true)
                       }}
                       onDeleteCalc={(id) => {
                         setVolumeCalcs((prev) => {
@@ -7127,13 +7057,11 @@ export default function EsquemaEditorModal({
                           if (activeCalcId === id) setActiveCalcId(next[0]?.id || null)
                           return next
                         })
-                        setDirty(true)
                       }}
                       onAddLine={(calcId, line) => {
                         setVolumeCalcs((prev) => prev.map((c) => (
                           c.id === calcId ? { ...c, lines: [...(c.lines || []), line] } : c
                         )))
-                        setDirty(true)
                       }}
                       onUpdateLine={(calcId, lineId, patch) => {
                         setVolumeCalcs((prev) => prev.map((c) => {
@@ -7143,7 +7071,6 @@ export default function EsquemaEditorModal({
                             lines: (c.lines || []).map((l) => (l.id === lineId ? { ...l, ...patch } : l)),
                           }
                         }))
-                        setDirty(true)
                       }}
                       onRemoveLine={(calcId, lineId) => {
                         setVolumeCalcs((prev) => prev.map((c) => (
@@ -7151,7 +7078,6 @@ export default function EsquemaEditorModal({
                             ? { ...c, lines: (c.lines || []).filter((l) => l.id !== lineId) }
                             : c
                         )))
-                        setDirty(true)
                       }}
                       solids={solids3d}
                       selectedSolidIds={selectedSolidIds}
@@ -7226,16 +7152,6 @@ export default function EsquemaEditorModal({
             <div
               ref={wrapRef}
               data-testid="esquema-drawing-wrap"
-              onPointerDownCapture={(e) => {
-                // Evita que el gesto llegue al scroll de la página detrás (Bitácora/iPad).
-                e.stopPropagation()
-              }}
-              onTouchStartCapture={(e) => {
-                e.stopPropagation()
-              }}
-              onWheelCapture={(e) => {
-                e.stopPropagation()
-              }}
               style={{
                 // Área de dibujo: llena el espacio a la derecha del panel lateral.
                 width: '100%',
@@ -7246,8 +7162,6 @@ export default function EsquemaEditorModal({
                 padding: 10,
                 position: 'relative',
                 boxSizing: 'border-box',
-                touchAction: 'none',
-                overscrollBehavior: 'none',
               }}
             >
           {mapActive ? (

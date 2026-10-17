@@ -10,7 +10,6 @@ export function EsquemaContextSidebar({
   width = 300,
   collapsed = false,
   onToggleCollapsed,
-  onResizePointerDown = null,
   children,
 }) {
   if (collapsed) {
@@ -65,7 +64,7 @@ export function EsquemaContextSidebar({
       style={{
         flexShrink: 0,
         width,
-        maxWidth: 'min(56vw, 560px)',
+        maxWidth: 'min(48vw, 420px)',
         height: '100%',
         minHeight: 0,
         borderRight: `1px solid ${t.border}`,
@@ -77,25 +76,6 @@ export function EsquemaContextSidebar({
         boxSizing: 'border-box',
       }}
     >
-      {typeof onResizePointerDown === 'function' ? (
-        <div
-          data-testid="esquema-context-sidebar-resizer"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Ajustar ancho del panel lateral"
-          onPointerDown={onResizePointerDown}
-          style={{
-            position: 'absolute',
-            top: 0,
-            right: -3,
-            width: 8,
-            height: '100%',
-            cursor: 'col-resize',
-            zIndex: 6,
-            touchAction: 'none',
-          }}
-        />
-      ) : null}
       <div
         style={{
           flexShrink: 0,
