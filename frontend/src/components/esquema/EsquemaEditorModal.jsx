@@ -84,9 +84,11 @@ import {
   sliceSolidByLine,
   solidForSourceEntity,
   solidVolumeM3,
+  solidXyBounds,
   sourceEntityIdsOfSolids,
   subtractSolids,
   syncSolidsWithEntities,
+  translateSolidXy,
   uniteSolids,
 } from './esquema3dSolids'
 import {
@@ -479,6 +481,7 @@ export default function EsquemaEditorModal({
   const printAreaDraftRef = useRef(null)
   const objectsRef = useRef([])
   const historyRef = useRef([])
+  const redoRef = useRef([])
   const drawing = useRef(false)
   const startPt = useRef(null)
   const lastPt = useRef(null)
@@ -536,6 +539,7 @@ export default function EsquemaEditorModal({
   const [selectedIds, setSelectedIds] = useState([])
   const [liveMeasure, setLiveMeasure] = useState('')
   const [canUndo, setCanUndo] = useState(false)
+  const [canRedo, setCanRedo] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [panTick, setPanTick] = useState(0)
@@ -824,14 +828,43 @@ export default function EsquemaEditorModal({
     return { w: c?.clientWidth || 0, h: c?.clientHeight || 0 }
   }
 
+  const snapshotScene = () => ({
+    objects: cloneScene(objectsRef.current),
+    solids3d: cloneScene(solids3dRef.current || []),
+  })
+
   const pushHistory = () => {
     // Incluye sólidos 3D para que Deshacer restaure geometría y la vista de inmediato.
-    historyRef.current.push({
-      objects: cloneScene(objectsRef.current),
-      solids3d: cloneScene(solids3dRef.current || []),
-    })
+    // Una acción nueva invalida el stack de Rehacer (no reaplicar solos).
+    historyRef.current.push(snapshotScene())
     if (historyRef.current.length > 40) historyRef.current.shift()
+    redoRef.current = []
     setCanUndo(historyRef.current.length > 0)
+    setCanRedo(false)
+  }
+
+  const applyHistorySnapshot = (snap) => {
+    if (Array.isArray(snap)) {
+      objectsRef.current = snap
+      solids3dRef.current = []
+      setSolids3d([])
+    } else {
+      objectsRef.current = Array.isArray(snap?.objects) ? snap.objects : (objectsRef.current || [])
+      const solids = Array.isArray(snap?.solids3d) ? snap.solids3d : []
+      solids3dRef.current = solids
+      setSolids3d(solids)
+    }
+    setSelectedSolidIds([])
+    selectOne(null)
+    setMeasureArmedBoth(false)
+    setMeasureW('')
+    setMeasureH('')
+    measureWRef.current = ''
+    measureHRef.current = ''
+    setDirty(true)
+    setPanTick((n) => n + 1)
+    setOrbitTick((n) => n + 1)
+    redraw()
   }
 
   const redraw = useCallback((extraDraft = null) => {
@@ -920,12 +953,14 @@ export default function EsquemaEditorModal({
         orbitFree: !!orbitFreeRef.current,
         orbitAngles: orbitAnglesRef.current,
       })
-      for (const solid of solids3dRef.current || []) {
+      const solidsList = solids3dRef.current || []
+      for (const solid of solidsList) {
         drawSolid3d(ctx, solid, {
           viewId,
           selected: selSolids.has(solid.id),
           zoom: zoomRef.current,
           orbit,
+          solids: solidsList,
         })
       }
       if (cutDraftRef.current?.a && (cutDraftRef.current.b || lastPt.current)) {
@@ -1104,7 +1139,9 @@ export default function EsquemaEditorModal({
       sentidoEjeSanitizedRef.current = false
     }
     historyRef.current = []
+    redoRef.current = []
     setCanUndo(false)
+    setCanRedo(false)
     setDirty(false)
     requestAnimationFrame(() => redrawRef.current())
   }, [initialDataUri, initialSceneObjects, huellaMode, contratoId])
@@ -1694,6 +1731,7 @@ export default function EsquemaEditorModal({
       setToolHint(r.error || 'No se pudo extruir.')
       return
     }
+    pushHistory()
     const next = [...(solids3dRef.current || []), r.solid]
     solids3dRef.current = next
     setSolids3d(next)
@@ -1814,6 +1852,7 @@ export default function EsquemaEditorModal({
       setPanTick((n) => n + 1)
       return
     }
+    pushHistory()
     // El resultado del corte es entidad(es) sólida(s); se retira el contorno fuente.
     if (solid?.sourceEntityId) {
       objectsRef.current = objectsRef.current.filter((o) => o.id !== solid.sourceEntityId)
@@ -1835,10 +1874,20 @@ export default function EsquemaEditorModal({
       orbitFree: !!orbitFreeRef.current,
       orbitAngles: orbitAnglesRef.current,
     })
-    for (let i = list.length - 1; i >= 0; i -= 1) {
-      if (hitSolidAtView(list[i], p, viewId, 0, orbit)) return list[i]
+    // Preferir el sólido de menor área XY bajo el clic (sólidos internos sobre el contenedor).
+    let best = null
+    let bestArea = Infinity
+    for (let i = 0; i < list.length; i += 1) {
+      const s = list[i]
+      if (!hitSolidAtView(s, p, viewId, 0, orbit)) continue
+      const bb = solidXyBounds(s)
+      const area = bb ? Math.abs(bb.w * bb.h) : Number.MAX_SAFE_INTEGER
+      if (area < bestArea || (area === bestArea && (!best || i > list.indexOf(best)))) {
+        bestArea = area
+        best = s
+      }
     }
-    return null
+    return best
   }, [])
 
   const selectSolid3d = useCallback((id, { additive = false } = {}) => {
@@ -3441,8 +3490,9 @@ export default function EsquemaEditorModal({
       // En Unir/Sustraer, cada toque agrega (iPad sin Shift).
       const booleanPick = op3dRef.current === 'unir' || op3dRef.current === 'sustraer'
       const additive = booleanPick || !!(e.shiftKey || e.metaKey || e.ctrlKey)
-      // Preferir el sólido (entidad única); si hay contorno fuente, queda seleccionado también.
-      if (hitS && (!hitEnt || hitEnt.id === hitS.sourceEntityId || e.altKey)) {
+      // Preferir siempre el sólido bajo el clic (incl. internos sin sourceEntityId).
+      // No dejar que el contorno del sólido mayor “robe” la selección del interno.
+      if (hitS) {
         const already = (selectedSolidIdsRef.current || []).includes(hitS.id)
           || (hitS.sourceEntityId && selectedIdsRef.current.has(hitS.sourceEntityId))
         selectSolidAndSource(hitS, { additive })
@@ -3469,8 +3519,27 @@ export default function EsquemaEditorModal({
           redraw()
           return
         }
-        // Sin hit de contorno: iniciar arrastre de la entidad fuente en modo Mover.
-        if (hitS.sourceEntityId && selectModeRef.current === 'mover') {
+        if (selectModeRef.current === 'mover') {
+          // Sólido libre (unir/sustraer/cortar): mover con translateSolidXy, sin redimensionar.
+          if (!hitS.sourceEntityId) {
+            dragRef.current = {
+              mode: 'move-solid',
+              solidId: hitS.id,
+              pending: true,
+              ox: p.x,
+              oy: p.y,
+              clickX: p.x,
+              clickY: p.y,
+              originSolid: cloneScene([hitS])[0],
+            }
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            redraw()
+            return
+          }
+          // Contorno + sólido: arrastre de la entidad fuente (el sólido sigue vía sync).
           const src = objectsRef.current.find((o) => o.id === hitS.sourceEntityId)
           if (src && !(src.type === 'image' && src.fit)) {
             const grabHit = findSnap(p, [src], { threshold: snapThreshold(), allowNear: false })
@@ -3494,6 +3563,9 @@ export default function EsquemaEditorModal({
             return
           }
         }
+        drawing.current = false
+        redraw()
+        return
       } else if (hitEnt) {
         const linked = solidForSourceEntity(solids3dRef.current || [], hitEnt.id)
         if (linked) selectSolid3d(linked.id, { additive: booleanPick })
@@ -4285,11 +4357,25 @@ export default function EsquemaEditorModal({
         redraw()
         return
       }
-      if (d.pending && d.mode === 'move') {
+      if (d.pending && (d.mode === 'move' || d.mode === 'move-solid')) {
         const click = { x: d.clickX ?? d.ox, y: d.clickY ?? d.oy }
         if (dist(raw, click) < 4) return
         d.pending = false
         pushHistory()
+      }
+      // Mover sólido libre (sin contorno 2D): traslación XY sin cambiar cotas ni volumen.
+      if (d.mode === 'move-solid' && d.originSolid && d.solidId) {
+        const dx = raw.x - d.ox
+        const dy = raw.y - d.oy
+        moveGuideRef.current = { a: { x: d.ox, y: d.oy }, b: raw }
+        setLiveMeasure(formatMeters(Math.hypot(dx, dy)))
+        const moved = translateSolidXy(d.originSolid, dx, dy)
+        const next = (solids3dRef.current || []).map((s) => (s.id === d.solidId ? moved : s))
+        solids3dRef.current = next
+        setSolids3d(next)
+        setDirty(true)
+        redraw()
+        return
       }
       const origins = new Map((d.groupOrigins || (d.origin ? [d.origin] : [])).map((o) => [o.id, o]))
       if (d.mode === 'move') {
@@ -4608,24 +4694,23 @@ export default function EsquemaEditorModal({
 
   const undo = () => {
     if (!historyRef.current.length) return
+    // Guardar el estado actual en Rehacer; Deshacer no se reaplica solo.
+    redoRef.current.push(snapshotScene())
+    if (redoRef.current.length > 40) redoRef.current.shift()
     const prev = historyRef.current.pop()
-    // Compat: entradas antiguas eran solo el arreglo de objects.
-    if (Array.isArray(prev)) {
-      objectsRef.current = prev
-    } else {
-      objectsRef.current = Array.isArray(prev?.objects) ? prev.objects : (objectsRef.current || [])
-      const solids = Array.isArray(prev?.solids3d) ? prev.solids3d : []
-      solids3dRef.current = solids
-      setSolids3d(solids)
-      setSelectedSolidIds([])
-    }
+    applyHistorySnapshot(prev)
     setCanUndo(historyRef.current.length > 0)
-    selectOne(null)
-    setDirty(true)
-    // Forzar repintado inmediato en 2D y 3D (cualquier vista).
-    setPanTick((n) => n + 1)
-    setOrbitTick((n) => n + 1)
-    redraw()
+    setCanRedo(redoRef.current.length > 0)
+  }
+
+  const redo = () => {
+    if (!redoRef.current.length) return
+    historyRef.current.push(snapshotScene())
+    if (historyRef.current.length > 40) historyRef.current.shift()
+    const next = redoRef.current.pop()
+    applyHistorySnapshot(next)
+    setCanUndo(historyRef.current.length > 0)
+    setCanRedo(redoRef.current.length > 0)
   }
 
   const clearAll = () => {
@@ -4663,6 +4748,21 @@ export default function EsquemaEditorModal({
     } else if (!wVal) {
       return
     }
+    // No-op si las medidas coinciden con la geometría actual (evita reaplicar tras Deshacer
+    // cuando el blur del campo de medida se dispara al abrir color / cambiar foco).
+    const curW = LINE_TOOLS.has(obj.type)
+      ? worldToMeters(dist({ x: obj.x1, y: obj.y1 }, { x: obj.x2, y: obj.y2 }))
+      : obj.type === 'elipse'
+        ? worldToMeters(Math.abs(obj.x2 - obj.x1) / 2)
+        : worldToMeters(Math.abs(obj.x2 - obj.x1))
+    const curH = obj.type === 'elipse'
+      ? worldToMeters(Math.abs(obj.y2 - obj.y1) / 2)
+      : (BOX_TOOLS.has(obj.type) || obj.type === 'triangulo')
+        ? worldToMeters(Math.abs(obj.y2 - obj.y1))
+        : null
+    const sameW = wVal == null || Math.abs(curW - wVal) < 1e-4
+    const sameH = hVal == null || curH == null || Math.abs(curH - hVal) < 1e-4
+    if (sameW && sameH) return
     pushHistory()
     const a = obj.type === 'elipse'
       ? { x: (obj.x1 + obj.x2) / 2, y: (obj.y1 + obj.y2) / 2 }
@@ -5571,7 +5671,9 @@ export default function EsquemaEditorModal({
       } catch { /* ignore */ }
     }
     historyRef.current = []
+    redoRef.current = []
     setCanUndo(false)
+    setCanRedo(false)
     setDirty(true)
     // Re-sincronizar sólidos con contornos por si el snapshot quedó desfasado.
     const synced = syncSolidsWithEntities(solids3dRef.current || [], objectsRef.current || [])
@@ -5785,6 +5887,18 @@ export default function EsquemaEditorModal({
             style={{ ...iconBtn(t, false), opacity: canUndo ? 1 : 0.4 }}
           >
             <IconUndo />
+          </button>
+          <button
+            type="button"
+            title="Rehacer"
+            data-cc-tooltip="Rehacer"
+            data-cc-tooltip-variant="short"
+            aria-label="Rehacer"
+            disabled={!canRedo}
+            onClick={redo}
+            style={{ ...iconBtn(t, false), opacity: canRedo ? 1 : 0.4 }}
+          >
+            <IconRedo />
           </button>
           {TOOL_GROUPS.map((group) => (
             <span key={group.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -10319,6 +10433,7 @@ function IconGuardar() {
   )
 }
 function IconUndo() { return <svg {...iconProps()}><path d="M3 7v6h6" /><path d="M3 13a9 9 0 1 0 3-7.7L3 7" /></svg> }
+function IconRedo() { return <svg {...iconProps()}><path d="M21 7v6h-6" /><path d="M21 13a9 9 0 1 1-3-7.7L21 7" /></svg> }
 function IconTraerFrente() {
   return (
     <svg {...iconProps()}>

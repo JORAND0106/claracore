@@ -2,14 +2,19 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { metersToWorld } from './esquemaGeometry.js'
 import {
+  drawSolid3d,
   extrudeClosedEntity,
   intersectionVolumeM3,
+  isSolidNestedIn,
   solidColorToRgba,
+  solidIsInternal,
   solidVolumeM3,
+  solidXyBounds,
   solidsTouchOrOverlap,
   translateSolidXy,
   uniteSolids,
 } from './esquema3dSolids.js'
+import { solidsViewCamera } from './esquema3dViews.js'
 import {
   calcTotalM3,
   createCalcLine,
@@ -77,6 +82,103 @@ describe('mover sin redimensionar', () => {
     assert.ok(Math.abs(solidVolumeM3(moved) - v0) < 1e-12)
     assert.ok(Math.abs(moved.cells[0].z0 - box.cells[0].z0) < 1e-12)
     assert.ok(Math.abs(moved.cells[0].z1 - box.cells[0].z1) < 1e-12)
+  })
+
+  it('sólido unido (sin sourceEntityId) se traslada dentro de otro sin cambiar volumen ni cotas', () => {
+    const big = extrudeClosedEntity(rectAt(0, 0, 1.8, 2.7, 'big'), {
+      viewId: 'top', cotaSuperior: 2.3, cotaInferior: 0,
+    }).solid
+    big.id = 'big'
+    const a = extrudeClosedEntity(rectAt(5, 0, 0.5, 0.5, 'a'), {
+      viewId: 'top', cotaSuperior: 1, cotaInferior: 0,
+    }).solid
+    const b = extrudeClosedEntity(rectAt(5.5, 0, 0.5, 0.5, 'b'), {
+      viewId: 'top', cotaSuperior: 1, cotaInferior: 0,
+    }).solid
+    const u = uniteSolids([a, b])
+    assert.equal(u.ok, true)
+    assert.equal(u.solid.sourceEntityId, undefined)
+    const v0 = solidVolumeM3(u.solid)
+    const into = translateSolidXy(u.solid, metersToWorld(-4.7), metersToWorld(1))
+    assert.ok(Math.abs(solidVolumeM3(into) - v0) < 1e-9)
+    assert.ok(isSolidNestedIn(into, big))
+    const bb0 = solidXyBounds(u.solid)
+    const bb1 = solidXyBounds(into)
+    assert.ok(Math.abs(bb0.w - bb1.w) < 1e-9)
+    assert.ok(Math.abs(bb0.h - bb1.h) < 1e-9)
+  })
+})
+
+describe('sólidos internos (selección / líneas ocultas)', () => {
+  it('isSolidNestedIn / solidIsInternal detectan el sólido menor dentro del mayor', () => {
+    const big = extrudeClosedEntity(rectAt(0, 0, 3, 3, 'big'), {
+      viewId: 'top', cotaSuperior: 2, cotaInferior: 0,
+    }).solid
+    big.id = 'big'
+    const inner = extrudeClosedEntity(rectAt(1, 1, 0.8, 0.8, 'in'), {
+      viewId: 'top', cotaSuperior: 1.5, cotaInferior: 0,
+    }).solid
+    inner.id = 'in'
+    assert.equal(isSolidNestedIn(inner, big), true)
+    assert.equal(isSolidNestedIn(big, inner), false)
+    assert.equal(solidIsInternal(inner, [big, inner]), true)
+    assert.equal(solidIsInternal(big, [big, inner]), false)
+  })
+
+  it('área XY del interno es menor (criterio de hit-test preferente)', () => {
+    const big = extrudeClosedEntity(rectAt(0, 0, 3, 3, 'big'), {
+      viewId: 'top', cotaSuperior: 2, cotaInferior: 0,
+    }).solid
+    const inner = extrudeClosedEntity(rectAt(1, 1, 0.5, 0.5, 'in'), {
+      viewId: 'top', cotaSuperior: 1, cotaInferior: 0,
+    }).solid
+    const aBig = Math.abs(solidXyBounds(big).w * solidXyBounds(big).h)
+    const aIn = Math.abs(solidXyBounds(inner).w * solidXyBounds(inner).h)
+    assert.ok(aIn < aBig)
+  })
+
+  it('drawSolid3d usa línea punteada para aristas ocultas / internos y fill opaco', () => {
+    const big = extrudeClosedEntity(rectAt(0, 0, 3, 3, 'big'), {
+      viewId: 'top', cotaSuperior: 2, cotaInferior: 0,
+    }).solid
+    big.id = 'big'
+    big.color = '#0f766e'
+    const inner = extrudeClosedEntity(rectAt(1, 1, 0.6, 0.6, 'in'), {
+      viewId: 'top', cotaSuperior: 1, cotaInferior: 0,
+    }).solid
+    inner.id = 'in'
+    inner.color = '#b91c1c'
+    const dashes = []
+    const fills = []
+    const ctx = {
+      save() {},
+      restore() {},
+      beginPath() {},
+      moveTo() {},
+      lineTo() {},
+      closePath() {},
+      fill() { fills.push(this.fillStyle) },
+      stroke() {},
+      setLineDash(d) { dashes.push([...(d || [])]) },
+      set fillStyle(v) { this._fill = v },
+      get fillStyle() { return this._fill },
+      set strokeStyle(v) { this._stroke = v },
+      get strokeStyle() { return this._stroke },
+      lineWidth: 1,
+      lineJoin: 'round',
+      lineCap: 'round',
+    }
+    const solids = [big, inner]
+    // Planta: interno debe trazar con dash no vacío
+    drawSolid3d(ctx, inner, { viewId: 'top', solids, zoom: 1 })
+    assert.ok(dashes.some((d) => d.length > 0), 'interno en planta usa dash')
+    assert.ok(fills.some((f) => String(f).includes('0.92') || String(f).startsWith('rgba')), 'fill macizo')
+    dashes.length = 0
+    fills.length = 0
+    const orbit = solidsViewCamera('iso-ne', solids)
+    drawSolid3d(ctx, big, { viewId: 'iso-ne', solids, zoom: 1, orbit })
+    assert.ok(dashes.some((d) => d.length > 0), 'iso: aristas ocultas con dash')
+    assert.ok(dashes.some((d) => d.length === 0), 'iso: aristas visibles continuas')
   })
 })
 

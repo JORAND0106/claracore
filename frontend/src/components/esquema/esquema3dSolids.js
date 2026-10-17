@@ -806,7 +806,7 @@ function pointInRing(x, y, ring) {
   return inside
 }
 
-/** Hex #rgb/#rrggbb → rgba() con alpha (conserva transparencia del sólido). */
+/** Hex #rgb/#rrggbb → rgba() con alpha. */
 export function solidColorToRgba(color, alpha = 0.18, fallback = '#0f766e') {
   const raw = String(color || fallback).trim()
   const m3 = raw.match(/^#([0-9a-fA-F]{3})$/)
@@ -834,9 +834,69 @@ export function solidColorToRgba(color, alpha = 0.18, fallback = '#0f766e') {
   return `rgba(${r},${g},${b},${a})`
 }
 
+/** Centroide XY aproximado (bounds) de un sólido. */
+export function solidCentroidXy(solid) {
+  const bb = solidXyBounds(solid)
+  if (!bb) return null
+  return { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 }
+}
+
 /**
- * Dibuja un sólido proyectado en el ctx 2D según la vista.
- * Color del sólido en caras (fill semitransparente) y aristas (stroke).
+ * True si `inner` queda contenido en planta (y con solape de cotas) dentro de `outer`.
+ * Usado para dibujar el interno con líneas ocultas.
+ */
+export function isSolidNestedIn(inner, outer) {
+  if (!inner || !outer || inner.id === outer.id) return false
+  const c = solidCentroidXy(inner)
+  if (!c || !pointInSolidXy(outer, c.x, c.y)) return false
+  const bbIn = solidXyBounds(inner)
+  const bbOut = solidXyBounds(outer)
+  if (!bbIn || !bbOut) return false
+  if ((bbOut.w * bbOut.h) <= (bbIn.w * bbIn.h) * 1.001) return false
+  let z0i = Infinity
+  let z1i = -Infinity
+  let z0o = Infinity
+  let z1o = -Infinity
+  for (const cell of inner.cells || []) {
+    z0i = Math.min(z0i, Number(cell.z0) || 0, Number(cell.z1) || 0)
+    z1i = Math.max(z1i, Number(cell.z0) || 0, Number(cell.z1) || 0)
+  }
+  for (const cell of outer.cells || []) {
+    z0o = Math.min(z0o, Number(cell.z0) || 0, Number(cell.z1) || 0)
+    z1o = Math.max(z1o, Number(cell.z0) || 0, Number(cell.z1) || 0)
+  }
+  return z1i > z0o - 1e-9 && z0i < z1o + 1e-9
+}
+
+/** True si el sólido está dentro de algún otro de la lista. */
+export function solidIsInternal(solid, solids) {
+  return (solids || []).some((o) => isSolidNestedIn(solid, o))
+}
+
+function signedProjectedArea(pts) {
+  let a = 0
+  const n = pts?.length || 0
+  for (let i = 0; i < n; i += 1) {
+    const j = (i + 1) % n
+    a += pts[i].x * pts[j].y - pts[j].x * pts[i].y
+  }
+  return a
+}
+
+function edgeKey(a, b) {
+  const ax = a.x.toFixed(2)
+  const ay = a.y.toFixed(2)
+  const bx = b.x.toFixed(2)
+  const by = b.y.toFixed(2)
+  return ax < bx || (ax === bx && ay <= by)
+    ? `${ax},${ay}|${bx},${by}`
+    : `${bx},${by}|${ax},${ay}`
+}
+
+/**
+ * Dibuja un sólido proyectado: caras macizas (opacas) + aristas visibles continuas
+ * y aristas ocultas (caras traseras / sólidos internos) punteadas.
+ * Reemplaza el criterio previo de sólidos transparentes.
  */
 export function drawSolid3d(ctx, solid, {
   viewId = 'top',
@@ -844,65 +904,122 @@ export function drawSolid3d(ctx, solid, {
   selected = false,
   zoom = 1,
   orbit = null,
+  solids = null,
+  nested = null,
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
   const base = solid.color || '#0f766e'
   const stroke = selected ? '#2563eb' : base
-  // Transparencia fija para ver sólidos internos; el matiz sigue el color elegido.
-  const fill = selected ? 'rgba(37,99,235,0.18)' : solidColorToRgba(base, 0.22)
+  // Caras macizas: color del sólido casi opaco (selección un poco más clara).
+  const fill = selected ? solidColorToRgba('#2563eb', 0.88) : solidColorToRgba(base, 0.92)
   const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
   const flatTop = !useOrbit && viewId === 'top'
+  const isNested = nested != null ? !!nested : solidIsInternal(solid, solids)
+  const lw = Math.max(1.2, 2 / Math.max(zoom, 0.25))
+  const dash = [Math.max(3, 5 / Math.max(zoom, 0.25)), Math.max(2, 4 / Math.max(zoom, 0.25))]
+
   ctx.save()
-  ctx.lineWidth = Math.max(1.2, 2 / Math.max(zoom, 0.25))
-  ctx.strokeStyle = stroke
-  ctx.fillStyle = fill
+  ctx.lineWidth = lw
+  ctx.lineJoin = 'round'
+  ctx.lineCap = 'round'
+
+  if (flatTop) {
+    // Planta: relleno opaco + contorno; internos con línea oculta (punteada).
+    for (const cell of solid.cells) {
+      const zBottom = Math.min(cell.z0, cell.z1)
+      const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+      pathRing(ctx, ringBot)
+      ctx.fillStyle = fill
+      ctx.fill()
+      ctx.strokeStyle = stroke
+      ctx.setLineDash(isNested ? dash : [])
+      ctx.stroke()
+      for (const hole of cell.holes || []) {
+        pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
+        ctx.setLineDash(isNested ? dash : [])
+        ctx.stroke()
+      }
+    }
+    ctx.restore()
+    return
+  }
+
+  // Perfil / isométrica / órbita: painter's algorithm en caras, luego aristas.
+  const facePolys = []
+  const edgeMap = new Map() // key → { a, b, frontVotes, backVotes }
+
+  const addEdge = (pa, pb, front) => {
+    const k = edgeKey(pa, pb)
+    let e = edgeMap.get(k)
+    if (!e) {
+      e = { a: pa, b: pb, frontVotes: 0, backVotes: 0 }
+      edgeMap.set(k, e)
+    }
+    if (front) e.frontVotes += 1
+    else e.backVotes += 1
+  }
 
   for (const cell of solid.cells) {
     const zBottom = Math.min(cell.z0, cell.z1)
     const zTop = Math.max(cell.z0, cell.z1)
     const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
     const ringTop = (cell.ring || []).map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
+    const n = ringBot.length
+    const lastDup = n > 1
+      && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
+    const edgeCount = lastDup ? n - 1 : n
 
-    if (flatTop) {
-      pathRing(ctx, ringBot)
-      ctx.fill()
-      ctx.stroke()
-      for (const hole of cell.holes || []) {
-        pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
-        ctx.stroke()
-      }
-    } else {
-      // Frontal / lateral / isométrica / órbita: caras laterales + tapa
-      const n = ringBot.length
-      const lastDup = n > 1
-        && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
-      const edgeCount = lastDup ? n - 1 : n
-      // Ordenar caras por profundidad media (painter's algorithm simple)
-      const faces = []
+    for (let i = 0; i < edgeCount; i += 1) {
+      const j = (i + 1) % edgeCount
+      const pts = [ringBot[i], ringBot[j], ringTop[j], ringTop[i]]
+      const depth = pts.reduce((s, q) => s + (q.depth || 0), 0) / 4
+      const front = signedProjectedArea(pts) < 0
+      facePolys.push({ pts, depth, front })
+      addEdge(ringBot[i], ringBot[j], front)
+      addEdge(ringTop[j], ringTop[i], front)
+      addEdge(ringBot[i], ringTop[i], front)
+      addEdge(ringBot[j], ringTop[j], front)
+    }
+    // Tapas superior e inferior
+    const topPts = ringTop.slice(0, edgeCount)
+    const botPts = ringBot.slice(0, edgeCount)
+    if (topPts.length >= 3) {
+      const depth = topPts.reduce((s, q) => s + (q.depth || 0), 0) / topPts.length
+      const front = signedProjectedArea(topPts) < 0
+      facePolys.push({ pts: topPts, depth, front })
       for (let i = 0; i < edgeCount; i += 1) {
-        const j = (i + 1) % edgeCount
-        const depth = (
-          (ringBot[i].depth || 0) + (ringBot[j].depth || 0)
-          + (ringTop[j].depth || 0) + (ringTop[i].depth || 0)
-        ) / 4
-        faces.push({ i, j, depth })
+        addEdge(topPts[i], topPts[(i + 1) % edgeCount], front)
       }
-      faces.sort((a, b) => a.depth - b.depth)
-      for (const f of faces) {
-        ctx.beginPath()
-        ctx.moveTo(ringBot[f.i].x, ringBot[f.i].y)
-        ctx.lineTo(ringBot[f.j].x, ringBot[f.j].y)
-        ctx.lineTo(ringTop[f.j].x, ringTop[f.j].y)
-        ctx.lineTo(ringTop[f.i].x, ringTop[f.i].y)
-        ctx.closePath()
-        ctx.fill()
-        ctx.stroke()
+    }
+    if (botPts.length >= 3) {
+      const depth = botPts.reduce((s, q) => s + (q.depth || 0), 0) / botPts.length
+      const front = signedProjectedArea(botPts) < 0
+      facePolys.push({ pts: botPts, depth, front })
+      for (let i = 0; i < edgeCount; i += 1) {
+        addEdge(botPts[i], botPts[(i + 1) % edgeCount], front)
       }
-      pathRing(ctx, ringTop)
-      ctx.fill()
-      ctx.stroke()
     }
   }
+
+  facePolys.sort((a, b) => a.depth - b.depth)
+  ctx.fillStyle = fill
+  for (const f of facePolys) {
+    pathRing(ctx, f.pts)
+    ctx.fill()
+  }
+
+  // Aristas: visibles = al menos un voto frontal; ocultas = solo traseras.
+  // Sólido interno: todas las aristas como línea oculta (punteada).
+  ctx.strokeStyle = stroke
+  for (const e of edgeMap.values()) {
+    const hidden = isNested || (e.frontVotes === 0 && e.backVotes > 0)
+    ctx.setLineDash(hidden ? dash : [])
+    ctx.beginPath()
+    ctx.moveTo(e.a.x, e.a.y)
+    ctx.lineTo(e.b.x, e.b.y)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
   ctx.restore()
 }
 

@@ -171,6 +171,7 @@ export async function composeCalcIsoPng({
         selected: false,
         zoom: 1 / Math.max(scale, 0.25),
         orbit: bb.orbit,
+        solids: list,
       })
     }
     ctx.restore()
