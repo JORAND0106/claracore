@@ -72,7 +72,8 @@ export function Esquema3dCalcPanel({
     ? {
       position: 'relative',
       width: '100%',
-      maxHeight: 'min(420px, 55vh)',
+      maxHeight: 'min(520px, 65vh)',
+      minHeight: 180,
       background: t.bg || '#fff',
       border: `1px solid ${t.border}`,
       borderRadius: 8,
@@ -194,7 +195,18 @@ export function Esquema3dCalcPanel({
             </span>
           </div>
 
-          <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+          <div
+            data-testid="esquema-calc-lines-scroll"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              padding: 8,
+              WebkitOverflowScrolling: 'touch',
+              scrollbarGutter: 'stable',
+            }}
+          >
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: t.bgHover || '#f1f5f9', textAlign: 'left' }}>
@@ -206,7 +218,7 @@ export function Esquema3dCalcPanel({
               </thead>
               <tbody>
                 {(active.lines || []).map((line) => {
-                  const r = resolveCalcLine(line, solids)
+                  const r = resolveCalcLine(line, solids, active)
                   return (
                     <tr key={line.id} style={{ borderBottom: `1px solid ${t.border}` }}>
                       <td style={td()}>
@@ -215,13 +227,32 @@ export function Esquema3dCalcPanel({
                           onChange={(e) => onUpdateLine?.(active.id, line.id, { nombre: e.target.value })}
                           style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 12 }}
                         />
+                        {!r.ok && line.op === 'subtract' ? (
+                          <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 2, lineHeight: 1.3 }}>
+                            {r.error || 'Sin volumen común'}
+                          </div>
+                        ) : null}
                       </td>
                       <td style={td()}>
                         <select
                           value={line.op}
-                          onChange={(e) => onUpdateLine?.(active.id, line.id, { op: e.target.value })}
+                          onChange={(e) => {
+                            const op = e.target.value
+                            onUpdateLine?.(active.id, line.id, { op })
+                            if (op === 'subtract') {
+                              const probe = resolveCalcLine({ ...line, op }, solids, {
+                                ...active,
+                                lines: (active.lines || []).map((l) => (
+                                  l.id === line.id ? { ...l, op } : l
+                                )),
+                              })
+                              if (!probe.ok) {
+                                onHint?.(probe.error || 'No se puede descontar: sin volumen común.')
+                              }
+                            }
+                          }}
                           style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 12 }}
-                          title="Suma o descuenta"
+                          title="Suma o descuenta (solo volumen común)"
                         >
                           <option value="sum">Suma</option>
                           <option value="subtract">Descuenta</option>
