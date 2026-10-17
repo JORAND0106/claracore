@@ -3547,12 +3547,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
   }
 
-  const persistirGraficoEnRegistro = async (url, numero, origen = 'manual') => {
+  const persistirGraficoEnRegistro = async (url, numero, origen = 'manual', meta = {}) => {
     const entrada = {
       url,
       numero: numero ?? null,
       creado_en: new Date().toISOString(),
       origen,
+      ...(meta.mime ? { mime: meta.mime, mime_type: meta.mime } : {}),
+      ...(meta.nombre ? { nombre: meta.nombre } : {}),
+      ...(meta.kind ? { kind: meta.kind } : {}),
     }
     let baseHist = graficosHistLocal
     if (!baseHist.length && registro.grafico_url && registro.grafico_url !== url) {
@@ -3609,7 +3612,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
-      await persistirGraficoEnRegistro(res.url, res.numero ?? numero, origen)
+      const meta = origen === 'esquema-calculo'
+        ? {
+          mime: file?.type || (isPdf ? 'application/pdf' : 'image/png'),
+          nombre: file?.name || null,
+          kind: isPdf ? 'memoria-calculo' : 'grafico-isometrico',
+        }
+        : {}
+      await persistirGraficoEnRegistro(res.url, res.numero ?? numero, origen, meta)
     } catch(e) { alert('Error subiendo gráfico: ' + (e?.message || String(e))) }
     setUploadingGraf(false)
   }

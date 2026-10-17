@@ -123,7 +123,7 @@ export default function PptoGraficosModal({
           : new File([prepared], file.name || `grafico-${Date.now()}.jpg`, {
             type: prepared.type || file.type || 'image/jpeg',
           })
-        const previewUrl = isPdf ? null : URL.createObjectURL(named)
+        const previewUrl = URL.createObjectURL(named)
         next.push({
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           file: named,
@@ -131,6 +131,10 @@ export default function PptoGraficosModal({
           url: null,
           origen,
           mime: named.type,
+          kind: origen === 'esquema-calculo'
+            ? (isPdf ? 'memoria-calculo' : 'grafico-isometrico')
+            : undefined,
+          nombre: named.name,
         })
       } catch (err) {
         setError(err?.message || 'No se pudo preparar la imagen')

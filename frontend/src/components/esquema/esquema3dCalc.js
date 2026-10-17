@@ -123,10 +123,24 @@ function cellAreaM2Local(cell) {
   return Math.max(0, a)
 }
 
-function fmt(n, d = 2) {
+/** Altura resultante (m) a partir de cotas textuales; null si no es válida. */
+export function alturaFromCotasText(cotaSuperior, cotaInferior) {
+  const a = Number(String(cotaSuperior ?? '').trim().replace(',', '.'))
+  const b = Number(String(cotaInferior ?? '').trim().replace(',', '.'))
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  if (a <= b) return null
+  return a - b
+}
+
+/** Formato decimal es-CO (coma) para memoria de cálculo legible. */
+export function fmtMemoria(n, d = 2) {
   const x = Number(n)
   if (!Number.isFinite(x)) return '—'
-  return x.toFixed(d)
+  return x.toFixed(d).replace('.', ',')
+}
+
+function fmt(n, d = 2) {
+  return fmtMemoria(n, d)
 }
 
 /** Descripción textual para la memoria de cálculo. */
@@ -153,7 +167,8 @@ export function describeSolidForMemoria(solid) {
         dimensiones: `${fmt(w)} × ${fmt(ht)} m`,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
-        formaCalculo: `Área × altura = ${fmt(w)} × ${fmt(ht)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+        altura: h,
+        formaCalculo: `${fmt(w)} × ${fmt(ht)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
         volumeM3,
       }
     }
@@ -166,9 +181,11 @@ export function describeSolidForMemoria(solid) {
         dimensiones: circ ? `Ø ${fmt(rx * 2)} m` : `rx ${fmt(rx)} × ry ${fmt(ry)} m`,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
+        altura: h,
+        // Formato pedido: π × 0,85² × 2,00 = 4,54 m³
         formaCalculo: circ
-          ? `π r² h = π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(volumeM3)} m³`
-          : `π rx ry h = π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+          ? `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(volumeM3)} m³`
+          : `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
         volumeM3,
       }
     }
@@ -180,7 +197,8 @@ export function describeSolidForMemoria(solid) {
         dimensiones: `base ${fmt(b)} × altura ${fmt(th)} m`,
         cotaSuperior: cotaSup,
         cotaInferior: cotaInf,
-        formaCalculo: `(base × altura / 2) × h = (${fmt(b)} × ${fmt(th)} / 2) × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+        altura: h,
+        formaCalculo: `(${fmt(b)} × ${fmt(th)} / 2) × ${fmt(h)} = ${fmt(volumeM3)} m³`,
         volumeM3,
       }
     }
@@ -203,7 +221,8 @@ export function describeSolidForMemoria(solid) {
       dimensiones: `envolvente ${fmt(wM)} × ${fmt(hM)} m · área ${fmt(area)} m²`,
       cotaSuperior: cotaSup,
       cotaInferior: cotaInf,
-      formaCalculo: `Área × altura = ${fmt(area)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
+      altura: h,
+      formaCalculo: `${fmt(area)} × ${fmt(h)} = ${fmt(volumeM3)} m³`,
       volumeM3,
     }
   }
@@ -214,7 +233,8 @@ export function describeSolidForMemoria(solid) {
     dimensiones: `${cells.length} cuerpo(s)`,
     cotaSuperior: z1,
     cotaInferior: z0,
-    formaCalculo: `Suma de volúmenes de celdas = ${fmt(volumeM3)} m³ (altura envolvente ${fmt(heightM)} m)`,
+    altura: heightM,
+    formaCalculo: `Suma de volúmenes de celdas = ${fmt(volumeM3)} m³`,
     volumeM3,
   }
 }

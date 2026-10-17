@@ -1,7 +1,12 @@
 /**
- * Carrusel único de adjuntos (foto, gráfico, esquema).
+ * Carrusel único de adjuntos (foto, gráfico, esquema, memoria de cálculo).
  * object-fit: contain para no recortar el rotulado (márgenes + título).
+ * PDF / memoria-calculo: tarjeta + vista previa y descarga al clic.
  */
+import { useState } from 'react'
+import { isEsquemaCalcAdjunto, isPdfAdjunto } from './adjuntosMedia'
+import EsquemaCalcAdjuntoPreview from '../esquema/EsquemaCalcAdjuntoPreview'
+
 export default function AdjuntosMediaSlider({
   t,
   items = [],
@@ -15,6 +20,7 @@ export default function AdjuntosMediaSlider({
   renderImage = null,
   overlay = null,
 }) {
+  const [preview, setPreview] = useState(null)
   const lista = Array.isArray(items) ? items.filter((x) => x && (x.url || x.source)) : []
   const safeIdx = Math.min(Math.max(0, index), Math.max(0, lista.length - 1))
   const actual = lista[safeIdx] || null
@@ -23,6 +29,15 @@ export default function AdjuntosMediaSlider({
     if (!lista.length || typeof onIndexChange !== 'function') return
     const next = Math.min(lista.length - 1, Math.max(0, safeIdx + dir))
     if (next !== safeIdx) onIndexChange(next)
+  }
+
+  const openItem = (item, idx) => {
+    // Memoria PDF / gráfico isométrico: siempre vista previa + descarga.
+    if (isEsquemaCalcAdjunto(item) || isPdfAdjunto(item)) {
+      setPreview({ item, siblings: lista })
+      return
+    }
+    if (typeof onClickItem === 'function') onClickItem(item, idx)
   }
 
   if (!actual) {
@@ -58,13 +73,18 @@ export default function AdjuntosMediaSlider({
     border: `1px solid ${theme.border || '#e2e8f0'}`,
   }
 
+  const showPdfTile = isPdfAdjunto(actual)
+  const clickable = typeof onClickItem === 'function'
+    || isEsquemaCalcAdjunto(actual)
+    || isPdfAdjunto(actual)
+
   return (
     <div style={{ position: 'relative', width: '100%' }}>
       <div style={stageStyle}>
         <button
           type="button"
-          onClick={() => onClickItem?.(actual, safeIdx)}
-          disabled={!onClickItem}
+          onClick={() => openItem(actual, safeIdx)}
+          disabled={!clickable}
           style={{
             display: 'block',
             width: '100%',
@@ -72,11 +92,59 @@ export default function AdjuntosMediaSlider({
             padding: 0,
             border: 'none',
             background: '#fff',
-            cursor: onClickItem ? 'pointer' : 'default',
+            cursor: clickable ? 'pointer' : 'default',
           }}
           title={actual.label || 'Adjunto'}
+          data-testid="adjuntos-media-slide"
         >
-          {typeof renderImage === 'function' ? (
+          {showPdfTile ? (
+            <div
+              data-testid="adjuntos-media-pdf-tile"
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                background: 'linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%)',
+                color: '#0f172a',
+                padding: 12,
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{
+                width: compact ? 36 : 48,
+                height: compact ? 44 : 58,
+                borderRadius: 6,
+                border: '2px solid #0f766e',
+                background: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 800,
+                fontSize: compact ? 10 : 12,
+                color: '#0f766e',
+              }}
+              >
+                PDF
+              </div>
+              <div style={{
+                fontSize: compact ? 10 : 12,
+                fontWeight: 700,
+                textAlign: 'center',
+                maxWidth: '90%',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              >
+                {actual.label || 'Memoria de cálculo'}
+              </div>
+              <div style={{ fontSize: 10, color: '#64748b' }}>Tocar para vista previa / descargar</div>
+            </div>
+          ) : typeof renderImage === 'function' ? (
             renderImage(actual, safeIdx)
           ) : (
             <img
@@ -164,7 +232,7 @@ export default function AdjuntosMediaSlider({
             </div>
           </>
         )}
-        {lista.length === 1 && actual.label && (
+        {lista.length === 1 && actual.label && !showPdfTile && (
           <div
             style={{
               position: 'absolute',
@@ -185,6 +253,14 @@ export default function AdjuntosMediaSlider({
         )}
         {typeof overlay === 'function' ? overlay(actual, safeIdx) : overlay}
       </div>
+
+      <EsquemaCalcAdjuntoPreview
+        t={theme}
+        open={!!preview}
+        item={preview?.item || null}
+        siblings={preview?.siblings || []}
+        onClose={() => setPreview(null)}
+      />
     </div>
   )
 }

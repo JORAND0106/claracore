@@ -60,8 +60,9 @@ export default function BitacoraAdjuntos({
     reader.readAsDataURL(file)
   })
 
-  const commitImage = async ({ dataUri, nombre, mime, origen, pie }) => {
+  const commitImage = async ({ dataUri, nombre, mime, origen, pie, kind }) => {
     const pieTxt = String(pie || '').trim()
+    const kindVal = kind || undefined
     if (entradaId != null && onUploadPersisted) {
       setBusy(true)
       setError('')
@@ -71,6 +72,7 @@ export default function BitacoraAdjuntos({
           data_base64: dataUri,
           mime_type: mime || 'image/png',
           origen: origen || 'archivo',
+          ...(kindVal ? { kind: kindVal } : {}),
           ...(pieTxt ? { pie: pieTxt } : {}),
         })
       } catch (e) {
@@ -86,6 +88,7 @@ export default function BitacoraAdjuntos({
       data_uri: dataUri,
       mime_type: mime || 'image/png',
       origen: origen || 'archivo',
+      ...(kindVal ? { kind: kindVal } : {}),
       pending: true,
       created_at: new Date().toISOString(),
       ...(pieTxt ? { pie: pieTxt } : {}),
@@ -424,6 +427,7 @@ export default function BitacoraAdjuntos({
                   nombre: adj.nombre,
                   mime: adj.mime,
                   origen: adj.origen || 'esquema-calculo',
+                  kind: adj.kind || (String(adj.mime || '').includes('pdf') ? 'memoria-calculo' : 'grafico-isometrico'),
                   pie: adj.kind === 'memoria-calculo' ? 'Memoria de cálculo' : 'Gráfico isométrico',
                 })
               })

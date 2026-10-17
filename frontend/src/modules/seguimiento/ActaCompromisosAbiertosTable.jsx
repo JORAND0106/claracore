@@ -15,7 +15,10 @@ import {
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
-import { evidenciaEsImagen, slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
+import {
+  evidenciaEsMediaCarrusel,
+  slidesFromImagenes,
+} from '../../components/adjuntos/adjuntosMedia'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { fechaVencimientoEfectiva, sortByProximidadVencimiento } from './vencimientoLevels'
@@ -803,9 +806,9 @@ function ActionPanel({
             <>
               {(() => {
                 const evidencias = detail?.evidencias || []
-                const imagenes = evidencias.filter(evidenciaEsImagen)
-                const otros = evidencias.filter((ev) => !evidenciaEsImagen(ev))
-                const slides = slidesFromImagenes(imagenes, (ev) => imagenSrc(ev) || ev.url || ev.data_uri)
+                const enCarrusel = evidencias.filter(evidenciaEsMediaCarrusel)
+                const otros = evidencias.filter((ev) => !evidenciaEsMediaCarrusel(ev))
+                const slides = slidesFromImagenes(enCarrusel, (ev) => imagenSrc(ev) || ev.url || ev.data_uri)
                 return (
                   <>
                     {slides.length > 0 && (
