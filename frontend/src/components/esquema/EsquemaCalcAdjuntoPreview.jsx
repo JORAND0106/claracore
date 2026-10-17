@@ -1,8 +1,9 @@
 /**
- * Vista previa + descarga de memoria de cálculo (PDF) y gráfico isométrico (PNG).
- * Transversal a todos los módulos que muestran adjuntos del esquema.
+ * Vista previa + descarga de memoria de cálculo (PDF), gráfico isométrico (PNG)
+ * y esquema/fotos PNG. Transversal a todos los módulos.
+ * iPad/iOS: convierte data: PDF a blob: y ofrece Abrir (iframe data: no funciona).
  */
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 
 function isPdfItem(item) {
@@ -28,15 +29,56 @@ function resolveUrl(item) {
     || null
 }
 
+function dataUriToBlob(dataUri) {
+  const raw = String(dataUri || '')
+  const m = /^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/s.exec(raw)
+  if (!m) return null
+  const mime = m[1] || 'application/octet-stream'
+  try {
+    const bin = atob(m[2])
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i)
+    return new Blob([bytes], { type: mime })
+  } catch {
+    return null
+  }
+}
+
+function toObjectUrl(url) {
+  if (!url) return { href: null, revoke: null }
+  if (String(url).startsWith('blob:') || String(url).startsWith('http')) {
+    return { href: url, revoke: null }
+  }
+  if (String(url).startsWith('data:')) {
+    const blob = dataUriToBlob(url)
+    if (!blob) return { href: url, revoke: null }
+    const href = URL.createObjectURL(blob)
+    return { href, revoke: href }
+  }
+  return { href: url, revoke: null }
+}
+
 function downloadFromUrl(url, nombre, mime) {
   if (!url) return
+  const { href, revoke } = toObjectUrl(url)
+  if (!href) return
   const a = document.createElement('a')
-  a.href = url
-  a.download = nombre || (String(mime || '').includes('pdf') ? 'memoria_calculo.pdf' : 'grafico_isometrico.png')
+  a.href = href
+  a.download = nombre || (String(mime || '').includes('pdf') ? 'memoria_calculo.pdf' : 'adjunto.png')
   a.rel = 'noopener'
+  a.target = '_blank'
   document.body.appendChild(a)
   a.click()
   a.remove()
+  if (revoke) setTimeout(() => URL.revokeObjectURL(revoke), 60_000)
+}
+
+function openInNewTab(url) {
+  if (!url) return
+  const { href, revoke } = toObjectUrl(url)
+  if (!href) return
+  window.open(href, '_blank', 'noopener,noreferrer')
+  if (revoke) setTimeout(() => URL.revokeObjectURL(revoke), 120_000)
 }
 
 /**
@@ -68,17 +110,38 @@ export default function EsquemaCalcAdjuntoPreview({
   const pngItem = useMemo(
     () => list.find((x) => {
       const kind = String(x?.kind || x?.source?.kind || '').toLowerCase()
-      const mime = String(x?.mime || x?.source?.mime || '').toLowerCase()
-      return kind === 'grafico-isometrico' || (mime.startsWith('image/') && !isPdfItem(x))
+      const mime = String(x?.mime || x?.mime_type || x?.source?.mime || '').toLowerCase()
+      return kind === 'grafico-isometrico'
+        || kind === 'esquema'
+        || (mime.startsWith('image/') && !isPdfItem(x))
     }) || (!isPdfItem(item) ? item : null),
     [list, item],
   )
 
   const active = item || pdfItem || pngItem
   const activeIsPdf = isPdfItem(active)
-  const url = resolveUrl(active)
+  const rawUrl = resolveUrl(active)
   const pdfUrl = resolveUrl(pdfItem)
   const pngUrl = resolveUrl(pngItem)
+
+  const [viewUrl, setViewUrl] = useState(null)
+
+  useEffect(() => {
+    if (!open || !rawUrl) {
+      setViewUrl(null)
+      return undefined
+    }
+    if (activeIsPdf && String(rawUrl).startsWith('data:')) {
+      const blob = dataUriToBlob(rawUrl)
+      if (blob) {
+        const u = URL.createObjectURL(blob)
+        setViewUrl(u)
+        return () => URL.revokeObjectURL(u)
+      }
+    }
+    setViewUrl(rawUrl)
+    return undefined
+  }, [open, rawUrl, activeIsPdf])
 
   useEffect(() => {
     if (!open) return undefined
@@ -119,11 +182,14 @@ export default function EsquemaCalcAdjuntoPreview({
     },
   }
 
+  const downloadName = active?.nombre || active?.label || active?.source?.nombre
+    || (activeIsPdf ? 'memoria_calculo.pdf' : 'esquema.png')
+
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Vista previa memoria de cálculo"
+      aria-label="Vista previa de adjunto"
       data-testid="esquema-calc-adjunto-preview"
       style={{
         position: 'fixed',
@@ -164,8 +230,18 @@ export default function EsquemaCalcAdjuntoPreview({
         }}
         >
           <strong style={{ flex: 1, color: theme.text || '#0f172a', fontSize: 14 }}>
-            {active?.label || active?.nombre || active?.source?.nombre || (activeIsPdf ? 'Memoria de cálculo' : 'Gráfico isométrico')}
+            {active?.label || active?.nombre || active?.source?.nombre || (activeIsPdf ? 'Memoria de cálculo' : 'Adjunto')}
           </strong>
+          {activeIsPdf && (viewUrl || pdfUrl) ? (
+            <button
+              type="button"
+              data-testid="esquema-calc-open-pdf"
+              style={btn.ghost}
+              onClick={() => openInNewTab(viewUrl || pdfUrl)}
+            >
+              Abrir PDF
+            </button>
+          ) : null}
           {pdfUrl ? (
             <button
               type="button"
@@ -194,6 +270,16 @@ export default function EsquemaCalcAdjuntoPreview({
               Descargar PNG
             </button>
           ) : null}
+          {!pdfUrl && !pngUrl && rawUrl ? (
+            <button
+              type="button"
+              data-testid="esquema-calc-download-file"
+              style={btn.primary}
+              onClick={() => downloadFromUrl(rawUrl, downloadName, activeIsPdf ? 'application/pdf' : 'image/png')}
+            >
+              Descargar
+            </button>
+          ) : null}
           <button type="button" style={btn.ghost} onClick={onClose} aria-label="Cerrar">Cerrar</button>
         </div>
 
@@ -205,16 +291,23 @@ export default function EsquemaCalcAdjuntoPreview({
           overflow: 'auto',
         }}
         >
-          {activeIsPdf && url ? (
-            <iframe
+          {activeIsPdf && viewUrl ? (
+            <object
+              data={viewUrl}
+              type="application/pdf"
               title="Vista previa PDF"
-              src={url}
               style={{ width: '100%', height: 'min(70vh, 640px)', border: 'none', background: '#fff' }}
-            />
-          ) : url ? (
+            >
+              <iframe
+                title="Vista previa PDF"
+                src={viewUrl}
+                style={{ width: '100%', height: 'min(70vh, 640px)', border: 'none', background: '#fff' }}
+              />
+            </object>
+          ) : viewUrl || rawUrl ? (
             <img
-              src={url}
-              alt={active?.label || 'Gráfico'}
+              src={viewUrl || rawUrl}
+              alt={active?.label || 'Adjunto'}
               style={{
                 display: 'block',
                 maxWidth: '100%',
@@ -226,7 +319,7 @@ export default function EsquemaCalcAdjuntoPreview({
             />
           ) : (
             <div style={{ padding: 24, color: theme.textMuted || '#64748b', textAlign: 'center' }}>
-              No hay vista previa disponible. Use Descargar si el archivo está en el registro.
+              No hay vista previa disponible. Use Descargar o Abrir PDF si el archivo está en el registro.
             </div>
           )}
         </div>

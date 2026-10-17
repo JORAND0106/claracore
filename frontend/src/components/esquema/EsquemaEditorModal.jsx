@@ -132,7 +132,7 @@ import {
   syncSceneBloquesToLibrary,
 } from './esquemaLibraryScale'
 import CcModalBrandHeader from '../CcModalBrandHeader'
-import { composeEsquemaExport, sceneExportBounds } from './esquemaExport'
+import { composeEsquemaExport, isEsquemaPngDataUrl, sceneExportBounds } from './esquemaExport'
 import { generarEsquemaIa, fetchEsquemaIaUso } from './esquemaIaApi'
 import {
   hydrateIaObjects,
@@ -5687,18 +5687,37 @@ export default function EsquemaEditorModal({
       await preloadHatchRegions(objectsRef.current)
       await new Promise((r) => requestAnimationFrame(r))
       const nodes = objectsRef.current.filter((o) => o.type === 'nodo')
+      const in3d = !!mode3dRef.current
+      const solids = solids3dRef.current || []
+      const viewId = view3dRef.current || 'top'
+      const orbit = in3d
+        ? solidsViewCamera(viewId, solids, {
+          orbitFree: !!orbitFreeRef.current,
+          orbitAngles: orbitAnglesRef.current,
+        })
+        : null
+      // Siempre PNG hi-res; en 3D incluye sólidos en la vista activa.
       const composed = await composeEsquemaExport({
         title: titleTxt,
         objects: objectsRef.current,
         nodes,
         drawObject,
+        solids3d: in3d ? solids : null,
+        view3d: viewId,
+        orbit,
+        drawSolid: in3d ? drawSolid3d : null,
       })
+      if (!isEsquemaPngDataUrl(composed)) {
+        throw new Error('El esquema debe guardarse como PNG.')
+      }
       // Congela cálculos al guardar (ya no se recalculan tras cerrar).
       const { adjuntos, snapshots } = await buildVolumeCalcAdjuntos()
       await onSave?.(composed, {
         title: titleTxt,
         adjuntos,
         calcSnapshots: snapshots,
+        mime: 'image/png',
+        formato: 'png',
       })
       // Finalizar: el resultado queda fijo y se limpia el borrador.
       if (resolvedDraftKeyRef.current) {

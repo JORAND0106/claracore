@@ -8,6 +8,7 @@ import {
   fmtFechaGrafico,
   etiquetaOrigenGrafico,
   dataUriEsquemaAFile,
+  pickPrimaryGraficoFromHistorial,
   urlADataUriParaEsquema,
 } from './sicoeGraficosHelpers'
 
@@ -69,8 +70,16 @@ export default function SicoeGraficosWizardPanel({
   }
 
   const agregarEntrada = (entrada) => {
-    aplicar(agregarEntradaGraficoHistorial(lista, entrada))
-    setIdx(lista.length)
+    const next = agregarEntradaGraficoHistorial(lista, entrada)
+    aplicar(next)
+    // Tras PDF de memoria, mantener foco en el esquema PNG (no en el PDF).
+    if (entrada?.origen === 'esquema-calculo' && (entrada?.kind === 'memoria-calculo' || String(entrada?.mime || '').includes('pdf'))) {
+      const prim = pickPrimaryGraficoFromHistorial(next)
+      const i = prim ? next.findIndex((g) => g.url === prim.url) : -1
+      setIdx(i >= 0 ? i : Math.max(0, next.length - 1))
+      return
+    }
+    setIdx(Math.max(0, next.length - 1))
   }
 
   const subirArchivo = async (file, opts = {}) => {
@@ -122,7 +131,8 @@ export default function SicoeGraficosWizardPanel({
     if (subiendo || esquemaCargando) return
     setEsquemaCargando(true)
     try {
-      const dataUri = actual?.url ? await urlADataUriParaEsquema(actual.url) : null
+      const prim = pickPrimaryGraficoFromHistorial(lista) || actual
+      const dataUri = prim?.url ? await urlADataUriParaEsquema(prim.url) : null
       setEsquemaInitialDataUri(dataUri)
       setEsquemaOpen(true)
     } catch {

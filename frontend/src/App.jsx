@@ -3568,11 +3568,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
     const nuevoHist = agregarEntradaGraficoHistorial(baseHist, entrada)
     const rid = registro?.id
+    // El gráfico principal del registro es el esquema PNG (no el PDF de memoria).
+    const { pickPrimaryGraficoFromHistorial } = await import('./modules/sicoe-obra/sicoeGraficosHelpers.js')
+    const prim = pickPrimaryGraficoFromHistorial(nuevoHist) || entrada
     const body = {
       reporte_id: registro.reporte_id,
       numero_registro: registro.numero_registro,
-      grafico_url: url,
-      grafico_numero: numero ?? null,
+      grafico_url: prim.url,
+      grafico_numero: prim.numero ?? null,
       graficos_historial: nuevoHist,
     }
     if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
@@ -3580,10 +3583,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       onOptimisticRegistroPatch?.(rid, body)
     }
     setGraficosHistLocal(nuevoHist)
-    setGrafLocal(url)
-    const nextG = Math.max(0, nuevoHist.length - 1)
-    setGraficoIdx(nextG)
-    setMediaIdx((fotoVista ? 1 : 0) + nextG)
+    setGrafLocal(prim.url)
+    const nextG = Math.max(0, nuevoHist.findIndex((g) => g.url === prim.url))
+    setGraficoIdx(nextG >= 0 ? nextG : Math.max(0, nuevoHist.length - 1))
+    setMediaIdx((fotoVista ? 1 : 0) + (nextG >= 0 ? nextG : Math.max(0, nuevoHist.length - 1)))
   }
 
   // Subir gráfico (manual o pantallazo del plano)

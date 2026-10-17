@@ -24,8 +24,8 @@ describe('esquemaExport · rotulado', () => {
   })
 
   it('exporta a resolución mayor que el histórico (1100 / 2.2)', () => {
-    assert.ok(EXPORT_MAX_INNER >= 2000)
-    assert.ok(EXPORT_SCALE_CAP >= 3)
+    assert.ok(EXPORT_MAX_INNER >= 2200)
+    assert.ok(EXPORT_SCALE_CAP >= 3.2)
     assert.ok(EXPORT_MIN_WIDTH >= 1400)
   })
 

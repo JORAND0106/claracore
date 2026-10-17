@@ -7,6 +7,7 @@ import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
 import { MAX_FOTOS_BITACORA } from './bitacoraConstants'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
+import { imagenSrc } from './imagenUtils'
 
 /**
  * Adjuntos en una sola línea de íconos (archivo | galería | Ctrl+V | esquema)
@@ -301,6 +302,16 @@ export default function BitacoraAdjuntos({
             index={Math.min(slideIdx, list.length - 1)}
             height={160}
             onIndexChange={setSlideIdx}
+            resolveItemUrl={async (slide) => {
+              const im = slide?.source || slide
+              const direct = imagenSrc(im) || slide?.url
+              if (direct) return direct
+              if (im?.blob_path && api?.getBitacoraMediaBlob) {
+                const blob = await api.getBitacoraMediaBlob(im.blob_path)
+                return URL.createObjectURL(blob)
+              }
+              return null
+            }}
             renderImage={(slide) => (
               <BitacoraAuthThumb
                 api={api}
@@ -308,6 +319,7 @@ export default function BitacoraAdjuntos({
                 width="100%"
                 height="100%"
                 style={{ objectFit: 'contain' }}
+                interactive={false}
               />
             )}
           />
