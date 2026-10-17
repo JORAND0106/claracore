@@ -38,6 +38,78 @@ export function isEsquema3dIsoView(viewId) {
   return String(viewId || '').startsWith('iso-')
 }
 
+/** Vistas donde se puede dibujar sobre caras: 6 caras + isométricas (estilo SketchUp). */
+export function isEsquema3dSketchView(viewId) {
+  const id = normalizeViewId(viewId)
+  return isEsquema3dDrawView(id) || isEsquema3dIsoView(id)
+}
+
+/**
+ * Punto de un rayo ortográfico de órbita/iso a una profundidad `t` (eje de cámara).
+ * Inversa de projectOrbit.
+ */
+export function unprojectOrbitAtDepth(canvasPt, {
+  yaw = 0,
+  pitch = Math.PI / 2,
+  cotaRefM = 0,
+  center = null,
+  depth = 0,
+} = {}) {
+  const cx = Number(center?.x) || 0
+  const cy = Number(center?.y) || 0
+  const cz = Number(center?.zCota) || cotaRefM || 0
+  const sx = (Number(canvasPt?.x) || 0) - cx
+  const sy = (Number(canvasPt?.y) || 0) - cy
+  const t = Number(depth) || 0
+  const cosY = Math.cos(yaw)
+  const sinY = Math.sin(yaw)
+  const cosP = Math.cos(pitch)
+  const sinP = Math.sin(pitch)
+  const x1 = sx
+  const y1 = sy * sinP + t * cosP
+  const z1 = -sy * cosP + t * sinP
+  const x0 = x1 * cosY + y1 * sinY
+  const y0 = -x1 * sinY + y1 * cosY
+  return {
+    x: x0 + cx,
+    y: y0 + cy,
+    zCota: cz + z1 / PX_PER_METER,
+  }
+}
+
+/**
+ * Intersecta el rayo órbita/iso del punto de lienzo con un plano de cara AABB.
+ * plane: { faceId|axis, depthWorld?, zCota? }
+ */
+export function intersectOrbitRayWithFacePlane(canvasPt, orbit, plane, cotaRefM = 0) {
+  if (!orbit || !Number.isFinite(orbit.yaw) || !Number.isFinite(orbit.pitch)) return null
+  const faceId = plane?.faceId || plane?.axis || 'top'
+  // Dos muestras de profundidad → recta; resolver t en el plano.
+  const p0 = unprojectOrbitAtDepth(canvasPt, { ...orbit, cotaRefM, depth: 0 })
+  const p1 = unprojectOrbitAtDepth(canvasPt, { ...orbit, cotaRefM, depth: PX_PER_METER })
+  const dx = p1.x - p0.x
+  const dy = p1.y - p0.y
+  const dz = p1.zCota - p0.zCota
+  let t
+  if (faceId === 'front' || faceId === 'back') {
+    if (Math.abs(dy) < 1e-12) return null
+    t = ((Number(plane.depthWorld) || 0) - p0.y) / dy
+  } else if (faceId === 'left' || faceId === 'right' || faceId === 'side') {
+    if (Math.abs(dx) < 1e-12) return null
+    t = ((Number(plane.depthWorld) || 0) - p0.x) / dx
+  } else {
+    // top / bottom / suelo
+    if (Math.abs(dz) < 1e-12) return null
+    const zTarget = Number.isFinite(Number(plane.zCota)) ? Number(plane.zCota) : (cotaRefM || 0)
+    t = (zTarget - p0.zCota) / dz
+  }
+  return {
+    x: p0.x + t * dx,
+    y: p0.y + t * dy,
+    zCota: p0.zCota + t * dz,
+  }
+}
+
 /** ¿La extrusión en esta vista pide cotas (Z) o longitud (profundidad)? */
 export function extrudeModeForView(viewId) {
   const id = normalizeViewId(viewId)
