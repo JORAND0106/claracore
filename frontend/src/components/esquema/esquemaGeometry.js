@@ -1872,3 +1872,19 @@ export function drawNorthIndicator(ctx, canvasW, canvasH, origin = null, ui) {
   ctx.fillText('N', cx, cy + size * 0.28)
   ctx.restore()
 }
+
+/**
+ * Ventana cuadrada del editor de esquema: conserva el ancho disponible
+ * y fija alto = ancho, sin superar el alto máximo de viewport.
+ * @param {number} maxWidthPx
+ * @param {number} maxHeightPx
+ * @returns {{ w: number, h: number, side: number }}
+ */
+export function squareModalOuterSize(maxWidthPx, maxHeightPx) {
+  const mw = Number(maxWidthPx)
+  const mh = Number(maxHeightPx)
+  const w0 = Number.isFinite(mw) && mw > 0 ? mw : 480
+  const h0 = Number.isFinite(mh) && mh > 0 ? mh : 480
+  const side = Math.max(280, Math.min(w0, h0))
+  return { w: side, h: side, side }
+}

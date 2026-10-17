@@ -13,7 +13,7 @@ import {
   applySoftOrthoAngle,
   arrowHeadLength,
   clampZoom,
-  squareDrawingAreaSize,
+  squareModalOuterSize,
   DEFAULT_COTA_OFFSET,
   degToRad,
   cursorForHandle,
@@ -76,11 +76,18 @@ import {
   extrudeClosedEntity,
   hitSolidAtView,
   isClosedDrawableEntity,
+  refreshSolidFromSourceEntity,
   sliceSolidByLine,
+  solidVolumeM3,
   subtractSolids,
   uniteSolids,
 } from './esquema3dSolids'
-import { isEsquema3dDrawView, isEsquema3dIsoView } from './esquema3dViews'
+import {
+  isEsquema3dDrawView,
+  isEsquema3dIsoView,
+  orbitAnglesForView,
+  solidsOrbitCenter,
+} from './esquema3dViews'
 import { Esquema3dExtrudePopup, Esquema3dViewToolbar, Esquema3dVolumeHint } from './esquema3dUi'
 import {
   createVolumeCalc,
@@ -607,6 +614,19 @@ export default function EsquemaEditorModal({
   const [volumeCalcs, setVolumeCalcs] = useState([])
   const [activeCalcId, setActiveCalcId] = useState(null)
   const [draftNotice, setDraftNotice] = useState(null) // { kind, title, message, ... }
+  /** Ventana cuadrada: lado en px (ancho = alto), incluye barra de herramientas. */
+  const [modalSide, setModalSide] = useState(() => {
+    if (typeof window === 'undefined') return 720
+    const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
+    const maxH = window.innerHeight * 0.92 - 32
+    return squareModalOuterSize(maxW, maxH).side
+  })
+  /** Giro libre 3D: arrastrar para orbitar sin modificar geometría. */
+  const [orbitFree, setOrbitFree] = useState(false)
+  const orbitFreeRef = useRef(false)
+  const orbitAnglesRef = useRef(orbitAnglesForView('top'))
+  const orbitDragRef = useRef(null)
+  const [orbitTick, setOrbitTick] = useState(0)
   const draftHydratedRef = useRef(false)
   const resolvedDraftKey = useMemo(() => {
     if (draftKeyProp) return draftKeyProp
@@ -700,6 +720,7 @@ export default function EsquemaEditorModal({
   selectedSolidIdsRef.current = selectedSolidIds
   op3dRef.current = op3d
   volumeCalcsRef.current = volumeCalcs
+  orbitFreeRef.current = orbitFree
 
   useEffect(() => {
     themeRef.current = ui
@@ -852,14 +873,23 @@ export default function EsquemaEditorModal({
         ui: uiNow,
       })
     }
-    // Sólidos 3D (proyección según vista activa).
+    // Sólidos 3D (proyección según vista activa u órbita libre).
     if (mode3dRef.current) {
       const selSolids = new Set(selectedSolidIdsRef.current || [])
+      // Vistas predefinidas: proyección ortográfica/isométrica por viewId.
+      // Giro libre: cámara órbita (yaw/pitch) alrededor del centro de los sólidos.
+      const orbit = orbitFreeRef.current
+        ? {
+          ...orbitAnglesRef.current,
+          center: solidsOrbitCenter(solids3dRef.current || []),
+        }
+        : null
       for (const solid of solids3dRef.current || []) {
         drawSolid3d(ctx, solid, {
           viewId: view3dRef.current || 'top',
           selected: selSolids.has(solid.id),
           zoom: zoomRef.current,
+          orbit,
         })
       }
       if (cutDraftRef.current?.a && (cutDraftRef.current.b || lastPt.current)) {
@@ -939,7 +969,7 @@ export default function EsquemaEditorModal({
       ctx.restore()
     }
     drawNorthIndicator(ctx, w, h, null, uiNow)
-  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick])
+  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick, orbitTick, mode3d, view3d, solids3d])
 
   redrawRef.current = redraw
   // Cuando la máscara del hatch termina de cargar, redibujar (no pintar sobre ctx viejo).
@@ -950,15 +980,18 @@ export default function EsquemaEditorModal({
     const wrap = wrapRef.current
     if (!c || !wrap) return
     const dpr = window.devicePixelRatio || 1
-    // Área de dibujo cuadrada: conserva el ancho útil del contenedor y fija alto = ancho.
-    // ResizeObserver ya reacciona a cambio de ventana / giro de dispositivo.
+    // La ventana completa es cuadrada (modalSide); el lienzo llena el espacio bajo la barra.
     let innerW = wrap.clientWidth
+    let innerH = wrap.clientHeight
     try {
       const cs = window.getComputedStyle(wrap)
       const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
       innerW = Math.max(0, wrap.clientWidth - padX)
-    } catch { /* use clientWidth */ }
-    const { w, h } = squareDrawingAreaSize(innerW)
+      innerH = Math.max(0, wrap.clientHeight - padY)
+    } catch { /* use clientWidth/Height */ }
+    const w = Math.max(280, Math.floor(innerW))
+    const h = Math.max(200, Math.floor(innerH || innerW))
     c.width = Math.floor(w * dpr)
     c.height = Math.floor(h * dpr)
     c.style.width = `${w}px`
@@ -974,6 +1007,28 @@ export default function EsquemaEditorModal({
     if (ro && wrapRef.current) ro.observe(wrapRef.current)
     return () => ro?.disconnect()
   }, [setupCanvas])
+
+  // Ventana cuadrada: recalcular lado al redimensionar / girar dispositivo.
+  useEffect(() => {
+    const update = () => {
+      const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
+      const maxH = window.innerHeight * 0.92 - 32
+      setModalSide(squareModalOuterSize(maxW, maxH).side)
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('orientationchange', update)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('orientationchange', update)
+    }
+  }, [])
+
+  useEffect(() => {
+    // Tras cambiar el lado del modal, reajustar el lienzo al espacio restante.
+    const tmr = window.setTimeout(() => setupCanvas(), 40)
+    return () => window.clearTimeout(tmr)
+  }, [modalSide, setupCanvas])
 
   // IMPORTANTE: no depender de `redraw` aquí. Si se incluye, cada pan/zoom/selección
   // recrea el callback y este efecto vacía objectsRef → el lienzo deja de dibujar.
@@ -1539,7 +1594,11 @@ export default function EsquemaEditorModal({
     setMode3d((prev) => {
       const next = !prev
       if (next) {
+        view3dRef.current = 'top'
+        orbitAnglesRef.current = orbitAnglesForView('top')
         setView3d('top')
+        setOrbitFree(false)
+        orbitFreeRef.current = false
         setOp3d(null)
         cutDraftRef.current = null
         setMapPropsOpen(false)
@@ -1549,6 +1608,8 @@ export default function EsquemaEditorModal({
         cutDraftRef.current = null
         setExtrudePrompt(null)
         setCalcPanelOpen(false)
+        setOrbitFree(false)
+        orbitFreeRef.current = false
         setToolHint(mapActiveRef.current
           ? 'Modo 2D restaurado. Mapa de fondo visible de nuevo.'
           : 'Modo 2D restaurado.')
@@ -1711,13 +1772,59 @@ export default function EsquemaEditorModal({
   }, [])
 
   const setView3dSafe = useCallback((id) => {
+    // Actualizar ref de inmediato para que el redibujo use la vista nueva.
+    view3dRef.current = id
+    orbitAnglesRef.current = orbitAnglesForView(id)
+    setOrbitFree(false)
+    orbitFreeRef.current = false
     setView3d(id)
     cutDraftRef.current = null
     if (op3dRef.current === 'cortar') setOp3d(null)
     setToolHint(isEsquema3dDrawView(id)
       ? `Vista ${id === 'top' ? 'superior' : id === 'front' ? 'frontal' : 'lateral'}: puede dibujar y extruir.`
       : 'Vista isométrica: solo inspección (no dibujo).')
+    setOrbitTick((n) => n + 1)
     setPanTick((n) => n + 1)
+  }, [])
+
+  const toggleOrbitFree = useCallback(() => {
+    setOrbitFree((prev) => {
+      const next = !prev
+      orbitFreeRef.current = next
+      if (next) {
+        // Partir de la vista actual
+        orbitAnglesRef.current = orbitAnglesForView(view3dRef.current || 'top')
+        setToolHint('Giro libre: arrastre para orbitar. No modifica cotas ni dimensiones.')
+      } else {
+        setToolHint('Giro libre desactivado.')
+      }
+      setOrbitTick((n) => n + 1)
+      return next
+    })
+  }, [])
+
+  /** Sincroniza sólidos ligados a entidades 2D (volumen al instante). */
+  const syncLinkedSolidsFromEntities = useCallback(() => {
+    const solids = solids3dRef.current || []
+    if (!solids.length) return
+    const objs = objectsRef.current || []
+    let changed = false
+    const next = solids.map((solid) => {
+      if (!solid?.sourceEntityId || !solid.extrudeParams) return solid
+      const ent = objs.find((o) => o.id === solid.sourceEntityId)
+      if (!ent) return solid
+      const r = refreshSolidFromSourceEntity(solid, ent)
+      if (!r.ok) return solid
+      if (Math.abs((r.solid.volumeM3 || 0) - (solid.volumeM3 || 0)) > 1e-12
+        || r.solid.cells !== solid.cells) {
+        changed = true
+      }
+      return r.solid
+    })
+    if (changed) {
+      setSolids3d(next)
+      setPanTick((n) => n + 1)
+    }
   }, [])
 
   useEffect(() => {
@@ -3133,6 +3240,19 @@ export default function EsquemaEditorModal({
     let p = posFromEvent(e)
     const currentTool = toolRef.current
 
+    // Giro libre 3D: arrastre = orbitar cámara (no modifica geometría).
+    if (mode3dRef.current && orbitFreeRef.current) {
+      const screen = screenPosFromEvent(e)
+      orbitDragRef.current = {
+        x0: screen.x,
+        y0: screen.y,
+        yaw0: orbitAnglesRef.current.yaw,
+        pitch0: orbitAnglesRef.current.pitch,
+      }
+      drawing.current = true
+      return
+    }
+
     // Modo 3D: corte por línea (arrastre) y selección de sólidos.
     if (mode3dRef.current && op3dRef.current === 'cortar') {
       p = snapWorldPoint(p)
@@ -3821,6 +3941,20 @@ export default function EsquemaEditorModal({
     const raw = posFromEvent(e)
     const currentTool = toolRef.current
 
+    if (mode3dRef.current && orbitFreeRef.current && orbitDragRef.current && drawing.current) {
+      e.preventDefault()
+      const screen = screenPosFromEvent(e)
+      const d = orbitDragRef.current
+      const dx = screen.x - d.x0
+      const dy = screen.y - d.y0
+      const yaw = d.yaw0 - dx * 0.01
+      let pitch = d.pitch0 + dy * 0.01
+      pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch))
+      orbitAnglesRef.current = { yaw, pitch }
+      setOrbitTick((n) => n + 1)
+      return
+    }
+
     if (mode3dRef.current && op3dRef.current === 'cortar' && cutDraftRef.current?.a && drawing.current) {
       e.preventDefault()
       const snapped = snapWorldPoint(raw)
@@ -4148,6 +4282,11 @@ export default function EsquemaEditorModal({
     const currentTool = toolRef.current
     let p = posFromEvent(e)
 
+    if (mode3dRef.current && orbitFreeRef.current && orbitDragRef.current) {
+      orbitDragRef.current = null
+      return
+    }
+
     if (mode3dRef.current && op3dRef.current === 'cortar' && cutDraftRef.current?.a) {
       p = snapWorldPoint(p)
       const a = cutDraftRef.current.a
@@ -4169,6 +4308,7 @@ export default function EsquemaEditorModal({
       if (obj && SHAPE_TOOLS.has(obj.type)) syncMeasureFromObject(obj)
       dragRef.current = null
       snapRef.current = null
+      syncLinkedSolidsFromEntities()
       redraw()
       return
     }
@@ -4321,6 +4461,7 @@ export default function EsquemaEditorModal({
     setMeasureArmedBoth(false)
     setLiveMeasure(shaped.label)
     setDirty(true)
+    syncLinkedSolidsFromEntities()
     redraw()
   }
 
@@ -5285,23 +5426,28 @@ export default function EsquemaEditorModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        data-testid="esquema-modal-square"
         style={{
-          width: 'min(1640px, 98vw)',
+          // Ventana cuadrada completa (herramientas + dibujo): lado = min(ancho, alto) disponible.
+          width: modalSide,
+          height: modalSide,
+          maxWidth: '98vw',
           maxHeight: '92vh',
-          // Alto libre: el lienzo es cuadrado (alto = ancho); si no cabe, el modal hace scroll.
-          height: 'auto',
           background: t.bgCard || '#fff',
           border: `1px solid ${t.border}`,
           borderRadius: 14,
           boxShadow: t.shadow,
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'auto',
+          overflow: 'hidden',
         }}
       >
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
-          padding: '10px 14px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+          padding: '10px 14px', borderBottom: `1px solid ${t.border}`,
+          // Panel de herramientas siempre visible dentro de la ventana cuadrada.
+          flexShrink: 0,
+          flexGrow: 0,
         }}>
           <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4 }}>{title}</div>
           <button
@@ -5623,6 +5769,16 @@ export default function EsquemaEditorModal({
               />
               <button
                 type="button"
+                title="Giro libre: arrastre para orbitar la vista sin modificar los elementos"
+                aria-label="Giro libre 3D"
+                onClick={toggleOrbitFree}
+                style={iconBtn(t, orbitFree)}
+                data-testid="esquema-3d-giro-libre"
+              >
+                <IconGiroLibre3d />
+              </button>
+              <button
+                type="button"
                 title="Extruir contorno cerrado (cotas en vista superior; longitud en frontal/lateral)"
                 aria-label="Extruir"
                 onClick={beginExtrude3d}
@@ -5664,14 +5820,14 @@ export default function EsquemaEditorModal({
               {selectedSolidIds.length === 1 ? (
                 <Esquema3dVolumeHint
                   t={t}
-                  volumeM3={solids3d.find((s) => s.id === selectedSolidIds[0])?.volumeM3}
+                  volumeM3={solidVolumeM3(solids3d.find((s) => s.id === selectedSolidIds[0]))}
                 />
               ) : selectedSolidIds.length > 1 ? (
                 <Esquema3dVolumeHint
                   t={t}
                   volumeM3={selectedSolidIds.reduce((sum, id) => {
                     const s = solids3d.find((x) => x.id === id)
-                    return sum + (Number(s?.volumeM3) || 0)
+                    return sum + solidVolumeM3(s)
                   }, 0)}
                 />
               ) : null}
@@ -5774,8 +5930,8 @@ export default function EsquemaEditorModal({
 
         <div
           style={{
-            // No flex-grow: el alto lo define el lienzo cuadrado (aspect-ratio).
-            flex: '0 1 auto',
+            // Llena el resto de la ventana cuadrada bajo la barra de herramientas.
+            flex: 1,
             minHeight: 0,
             display: 'flex',
             flexDirection: huellaMode ? 'row' : 'column',
@@ -6151,7 +6307,7 @@ export default function EsquemaEditorModal({
           ) : null}
 
           <div style={{
-            flex: '1 1 auto',
+            flex: 1,
             minWidth: 0,
             minHeight: 0,
             display: 'flex',
@@ -6163,12 +6319,11 @@ export default function EsquemaEditorModal({
               ref={wrapRef}
               data-testid="esquema-drawing-wrap"
               style={{
-                // Cuadrado: ancho = 100 % del panel; alto = ancho (aspect-ratio).
+                // Llena el resto de la ventana cuadrada bajo la barra de herramientas.
                 width: '100%',
-                aspectRatio: '1 / 1',
-                flex: '0 0 auto',
-                alignSelf: 'stretch',
+                flex: 1,
                 minHeight: 0,
+                alignSelf: 'stretch',
                 background: ui.wrap,
                 padding: 10,
                 position: 'relative',
@@ -9724,6 +9879,15 @@ function IconModo3d() {
       <path d="M12 3 21 8v8l-9 5-9-5V8Z" />
       <path d="M12 13v8" />
       <path d="m21 8-9 5-9-5" />
+    </svg>
+  )
+}
+function IconGiroLibre3d() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12 3a9 9 0 1 0 9 9" />
+      <path d="M21 3v6h-6" />
+      <circle cx="12" cy="12" r="2.2" />
     </svg>
   )
 }
