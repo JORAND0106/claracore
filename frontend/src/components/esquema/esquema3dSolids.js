@@ -1628,15 +1628,16 @@ function edgeKey(a, b) {
  * Independiente del zoom / escala de exportación.
  */
 export const SOLID3D_STYLE = Object.freeze({
-  visiblePx: 1.4,
-  hiddenPx: 1.05,
-  selectedPx: 2.1,
-  dashOnPx: 3.2,
-  dashOffPx: 2.4,
-  fillAlpha: 0.40,
-  fillAlphaNested: 0.32,
-  labelRPx: 9,
-  labelFontPx: 11,
+  visiblePx: 1.45,
+  /** Punteado occulto: un poco más grueso y contraste para que se lea sobre el fill. */
+  hiddenPx: 1.35,
+  selectedPx: 2.2,
+  dashOnPx: 5.0,
+  dashOffPx: 3.2,
+  fillAlpha: 0.30,
+  fillAlphaNested: 0.24,
+  labelRPx: 10,
+  labelFontPx: 12,
 })
 
 function parseRgb(color, fallback = '#0f766e') {
@@ -1684,9 +1685,9 @@ export function solidEdgeStrokeColor(color, selected = false) {
   return rgbCss(mixRgb(parseRgb(color), 0.42))
 }
 
-/** Arista oculta: tono medio del color del sólido. */
+/** Arista oculta: tono oscuro-medio del color del sólido (legible sobre fill translúcido). */
 export function solidHiddenStrokeColor(color) {
-  return rgbCss(mixRgb(parseRgb(color), 0.62))
+  return rgbCss(mixRgb(parseRgb(color), 0.48))
 }
 
 /**
@@ -1753,7 +1754,7 @@ export function drawSolid3d(ctx, solid, {
   orbit = null,
   solids = null,
   nested = null,
-  pass = 'all', // 'fills' | 'edges' | 'all'
+  pass = 'all', // 'fills' | 'edges' | 'edges-visible' | 'edges-hidden' | 'all'
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
   const base = solid.color || '#0f766e'
@@ -1778,7 +1779,9 @@ export function drawSolid3d(ctx, solid, {
     solidLineWidthWorld(SOLID3D_STYLE.dashOffPx, pScale),
   ]
   const doFills = pass === 'all' || pass === 'fills'
-  const doEdges = pass === 'all' || pass === 'edges'
+  const doEdgesVis = pass === 'all' || pass === 'edges' || pass === 'edges-visible'
+  const doEdgesHid = pass === 'all' || pass === 'edges' || pass === 'edges-hidden'
+  const doEdges = doEdgesVis || doEdgesHid
 
   ctx.save()
   ctx.lineJoin = 'round'
@@ -1796,12 +1799,14 @@ export function drawSolid3d(ctx, solid, {
         ctx.fillStyle = fill
         ctx.fill('evenodd')
       }
-      if (doEdges) {
+      if (doEdgesVis) {
         pathRing(ctx, ringBot)
         ctx.strokeStyle = strokeVis
         ctx.lineWidth = lwVis
         ctx.setLineDash([])
         ctx.stroke()
+      }
+      if (doEdgesHid) {
         for (const holeBot of holeBots) {
           pathRing(ctx, holeBot)
           ctx.strokeStyle = strokeHid
@@ -1950,25 +1955,27 @@ export function drawSolid3d(ctx, solid, {
     }
   }
 
-  if (doEdges) {
-    // Primero ocultas (punteadas), luego visibles (continuas) del mismo sólido.
-    for (const e of edgeMap.values()) {
-      const hidden = e.frontVotes === 0 && e.backVotes > 0
-      if (!hidden) continue
-      ctx.strokeStyle = strokeHid
-      ctx.lineWidth = lwHid
-      ctx.setLineDash(dash)
-      ctx.beginPath()
-      ctx.moveTo(e.a.x, e.a.y)
-      ctx.lineTo(e.b.x, e.b.y)
-      ctx.stroke()
-    }
+  if (doEdgesVis) {
     for (const e of edgeMap.values()) {
       const hidden = e.frontVotes === 0 && e.backVotes > 0
       if (hidden) continue
       ctx.strokeStyle = strokeVis
       ctx.lineWidth = lwVis
       ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(e.a.x, e.a.y)
+      ctx.lineTo(e.b.x, e.b.y)
+      ctx.stroke()
+    }
+  }
+  if (doEdgesHid) {
+    // Ocultas al final (sobre el fill) para que el punteado se lea con claridad.
+    for (const e of edgeMap.values()) {
+      const hidden = e.frontVotes === 0 && e.backVotes > 0
+      if (!hidden) continue
+      ctx.strokeStyle = strokeHid
+      ctx.lineWidth = lwHid
+      ctx.setLineDash(dash)
       ctx.beginPath()
       ctx.moveTo(e.a.x, e.a.y)
       ctx.lineTo(e.b.x, e.b.y)
@@ -2012,12 +2019,14 @@ export function drawSolidNumberLabels(ctx, solids, {
   cotaRefM = 0,
   orbit = null,
   pixelScale = 1,
+  labelScale = 1,
 } = {}) {
   if (!ctx || !labels?.length) return
   const list = solids || []
   const pScale = Math.max(Number(pixelScale) || 1, 0.05)
-  const r = solidLineWidthWorld(SOLID3D_STYLE.labelRPx, pScale)
-  const fontPx = SOLID3D_STYLE.labelFontPx
+  const ls = Math.max(0.75, Math.min(2.5, Number(labelScale) || 1))
+  const r = solidLineWidthWorld(SOLID3D_STYLE.labelRPx * ls, pScale)
+  const fontPx = SOLID3D_STYLE.labelFontPx * ls
   const fontWorld = solidLineWidthWorld(fontPx, pScale)
   const placed = []
   const minDist = r * 2.4
@@ -2094,6 +2103,7 @@ export function drawSolids3dLayered(ctx, solids, opts = {}) {
   inners.sort((a, b) => areaOf(b) - areaOf(a))
 
   const base = { ...opts, solids: list }
+  // Capas: fills → aristas visibles → aristas ocultas (punteado legible sobre el fill).
   for (const s of outers) {
     drawSolid3d(ctx, s, { ...base, nested: false, pass: 'fills' })
   }
@@ -2101,10 +2111,16 @@ export function drawSolids3dLayered(ctx, solids, opts = {}) {
     drawSolid3d(ctx, s, { ...base, nested: true, pass: 'fills' })
   }
   for (const s of outers) {
-    drawSolid3d(ctx, s, { ...base, nested: false, pass: 'edges' })
+    drawSolid3d(ctx, s, { ...base, nested: false, pass: 'edges-visible' })
   }
   for (const s of inners) {
-    drawSolid3d(ctx, s, { ...base, nested: true, pass: 'edges' })
+    drawSolid3d(ctx, s, { ...base, nested: true, pass: 'edges-visible' })
+  }
+  for (const s of outers) {
+    drawSolid3d(ctx, s, { ...base, nested: false, pass: 'edges-hidden' })
+  }
+  for (const s of inners) {
+    drawSolid3d(ctx, s, { ...base, nested: true, pass: 'edges-hidden' })
   }
   if (opts.labels?.length) {
     drawSolidNumberLabels(ctx, list, {
@@ -2113,6 +2129,7 @@ export function drawSolids3dLayered(ctx, solids, opts = {}) {
       cotaRefM: opts.cotaRefM || 0,
       orbit: opts.orbit || null,
       pixelScale: opts.pixelScale != null ? opts.pixelScale : opts.zoom,
+      labelScale: opts.labelScale != null ? opts.labelScale : 1,
     })
   }
 }

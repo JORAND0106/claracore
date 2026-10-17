@@ -5368,10 +5368,11 @@ export default function EsquemaEditorModal({
         shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
       }
       pushHistory()
-      objectsRef.current = [...objectsRef.current, shape]
-      selectOne(shape.id)
-      if (SHAPE_TOOLS.has(shape.type)) syncMeasureFromObject(shape)
-      setLiveMeasure(shape.label)
+      const placedDyn = withViewDepth3d(shape)
+      objectsRef.current = [...objectsRef.current, placedDyn]
+      selectOne(placedDyn.id)
+      if (SHAPE_TOOLS.has(placedDyn.type)) syncMeasureFromObject(placedDyn)
+      setLiveMeasure(placedDyn.label)
       setDirty(true)
       draftRef.current = null
       drawing.current = false
