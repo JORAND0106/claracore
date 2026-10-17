@@ -71,6 +71,17 @@ import {
   resolveNodoPorNumero,
 } from './esquemaApplyCoordRows.js'
 import { DIBUJO_TIPOS } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
+import {
+  drawSolid3d,
+  extrudeClosedEntity,
+  hitSolidAtView,
+  isClosedDrawableEntity,
+  sliceSolidByLine,
+  subtractSolids,
+  uniteSolids,
+} from './esquema3dSolids'
+import { isEsquema3dDrawView, isEsquema3dIsoView } from './esquema3dViews'
+import { Esquema3dExtrudePopup, Esquema3dViewToolbar, Esquema3dVolumeHint } from './esquema3dUi'
 import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
@@ -561,6 +572,19 @@ export default function EsquemaEditorModal({
   const [cotaMode, setCotaMode] = useState('linear')
   const [mapActive, setMapActive] = useState(false)
   const [mapOpacity, setMapOpacity] = useState(huellaMode ? 0.3 : 0.72)
+  /** Modo 3D (transversal). El mapa se oculta aquí y se restaura al salir. */
+  const [mode3d, setMode3d] = useState(false)
+  const [view3d, setView3d] = useState('top')
+  const [solids3d, setSolids3d] = useState([])
+  const [selectedSolidIds, setSelectedSolidIds] = useState([])
+  const [extrudePrompt, setExtrudePrompt] = useState(null)
+  const [op3d, setOp3d] = useState(null) // unir | sustraer | cortar
+  const mode3dRef = useRef(false)
+  const view3dRef = useRef('top')
+  const solids3dRef = useRef([])
+  const selectedSolidIdsRef = useRef([])
+  const cutDraftRef = useRef(null)
+  const op3dRef = useRef(null)
   const [mapBasemap, setMapBasemap] = useState('calle')
   const [mapError, setMapError] = useState('')
   const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
@@ -628,6 +652,11 @@ export default function EsquemaEditorModal({
   cotaModeRef.current = cotaMode
   mapActiveRef.current = mapActive
   printAreaSelectingRef.current = printAreaSelecting
+  mode3dRef.current = mode3d
+  view3dRef.current = view3d
+  solids3dRef.current = solids3d
+  selectedSolidIdsRef.current = selectedSolidIds
+  op3dRef.current = op3d
 
   useEffect(() => {
     themeRef.current = ui
@@ -721,7 +750,8 @@ export default function EsquemaEditorModal({
     const ctx = c.getContext('2d')
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const uiNow = themeRef.current
-    if (mapActiveRef.current) {
+    // En modo 3D el mapa no se muestra: lienzo opaco aunque mapActive siga true.
+    if (mapActiveRef.current && !mode3dRef.current) {
       ctx.clearRect(0, 0, w, h)
     } else {
       ctx.fillStyle = uiNow.canvas
@@ -731,7 +761,7 @@ export default function EsquemaEditorModal({
     ctx.translate(panRef.current.x, panRef.current.y)
     ctx.scale(zoomRef.current, zoomRef.current)
     const zGrid = zoomRef.current || 1
-    if (!mapActiveRef.current) {
+    if (!mapActiveRef.current || mode3dRef.current) {
       drawDotGrid(ctx, {
         x: -panRef.current.x / zGrid,
         y: -panRef.current.y / zGrid,
@@ -778,6 +808,22 @@ export default function EsquemaEditorModal({
         })(),
         ui: uiNow,
       })
+    }
+    // Sólidos 3D (proyección según vista activa).
+    if (mode3dRef.current) {
+      const selSolids = new Set(selectedSolidIdsRef.current || [])
+      for (const solid of solids3dRef.current || []) {
+        drawSolid3d(ctx, solid, {
+          viewId: view3dRef.current || 'top',
+          selected: selSolids.has(solid.id),
+          zoom: zoomRef.current,
+        })
+      }
+      if (cutDraftRef.current?.a && (cutDraftRef.current.b || lastPt.current)) {
+        const a = cutDraftRef.current.a
+        const b = cutDraftRef.current.b || lastPt.current
+        drawMoveGuide(ctx, a, b, zoomRef.current, uiNow)
+      }
     }
     // Polígono (huellaMode): mientras dibuja, cerrar visualmente al primer punto.
     if (
@@ -1064,7 +1110,7 @@ export default function EsquemaEditorModal({
       const r = c.getBoundingClientRect()
       const screenX = e.clientX - r.left
       const screenY = e.clientY - r.top
-      if (mapActiveRef.current && mapRef.current) {
+      if (mapActiveRef.current && mapRef.current && !mode3dRef.current) {
         const map = mapRef.current
         try {
           const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
@@ -1410,6 +1456,10 @@ export default function EsquemaEditorModal({
   }, [destroyMap, huellaMode])
 
   const activateMap = useCallback(() => {
+    if (mode3dRef.current) {
+      setToolHint('Salga del modo 3D para usar el mapa de fondo.')
+      return
+    }
     if (mapActiveRef.current) {
       if (!huellaMode) setMapPropsOpen(true)
       setToolHint('Mapa ya activo. Use Paneo para mover/consultar PK; al Guardar capture el área de impresión.')
@@ -1441,6 +1491,190 @@ export default function EsquemaEditorModal({
         : 'Vista general del contrato. Escala del lienzo = escala del mapa. Paneo para explorar; capas en Propiedades.')
     setPanTick((n) => n + 1)
   }, [mapCtx, huellaMode])
+
+  const toggleMode3d = useCallback(() => {
+    setMode3d((prev) => {
+      const next = !prev
+      if (next) {
+        setView3d('top')
+        setOp3d(null)
+        cutDraftRef.current = null
+        setMapPropsOpen(false)
+        setToolHint('Modo 3D · vista superior. Dibuje un contorno cerrado y use Extruir (cotas). El mapa se oculta hasta salir.')
+      } else {
+        setOp3d(null)
+        cutDraftRef.current = null
+        setExtrudePrompt(null)
+        setToolHint(mapActiveRef.current
+          ? 'Modo 2D restaurado. Mapa de fondo visible de nuevo.'
+          : 'Modo 2D restaurado.')
+      }
+      return next
+    })
+    setPanTick((n) => n + 1)
+  }, [])
+
+  const beginExtrude3d = useCallback(() => {
+    if (!mode3dRef.current) {
+      setToolHint('Active el modo 3D para extruir.')
+      return
+    }
+    if (!isEsquema3dDrawView(view3dRef.current)) {
+      setToolHint('Cambie a vista superior, frontal o lateral para extruir.')
+      return
+    }
+    const sel = objectsRef.current.find((o) => selectedIdsRef.current.has(o.id) && isClosedDrawableEntity(o))
+    if (!sel) {
+      setToolHint('Seleccione un contorno cerrado (rectángulo, polígono, círculo…) para extruir.')
+      return
+    }
+    setExtrudePrompt({
+      mode: view3dRef.current === 'top' ? 'cotas' : 'length',
+      entityId: sel.id,
+    })
+  }, [])
+
+  const confirmExtrude3d = useCallback((values, setError) => {
+    const ent = objectsRef.current.find((o) => o.id === extrudePrompt?.entityId)
+    if (!ent) {
+      setError?.('Contorno no encontrado.')
+      return
+    }
+    const r = extrudeClosedEntity(ent, {
+      viewId: view3dRef.current || 'top',
+      cotaSuperior: values?.cotaSuperior,
+      cotaInferior: values?.cotaInferior,
+      lengthM: values?.lengthM,
+      color: colorRef.current,
+    })
+    if (!r.ok) {
+      setError?.(r.error || 'No se pudo extruir.')
+      setToolHint(r.error || 'No se pudo extruir.')
+      return
+    }
+    setSolids3d((prev) => [...prev, r.solid])
+    setSelectedSolidIds([r.solid.id])
+    setExtrudePrompt(null)
+    setDirty(true)
+    setToolHint(`Sólido creado · ${r.solid.volumeM3.toFixed(2)} m³`)
+    setPanTick((n) => n + 1)
+  }, [extrudePrompt])
+
+  const applyUnite3d = useCallback(() => {
+    const sels = (solids3dRef.current || []).filter((s) => selectedSolidIdsRef.current.includes(s.id))
+    const r = uniteSolids(sels)
+    if (!r.ok) {
+      setToolHint(r.error || 'No se pudo unir.')
+      return
+    }
+    const drop = new Set(sels.map((s) => s.id))
+    setSolids3d((prev) => [...prev.filter((s) => !drop.has(s.id)), r.solid])
+    setSelectedSolidIds([r.solid.id])
+    setDirty(true)
+    setOp3d(null)
+    setToolHint(`Unión · ${r.solid.volumeM3.toFixed(2)} m³`)
+    setPanTick((n) => n + 1)
+  }, [])
+
+  const applySubtract3d = useCallback(() => {
+    const ids = selectedSolidIdsRef.current || []
+    if (ids.length < 2) {
+      setToolHint('Sustraer: seleccione el sólido base y luego el/los a descontar (mín. 2).')
+      return
+    }
+    const base = (solids3dRef.current || []).find((s) => s.id === ids[0])
+    const others = (solids3dRef.current || []).filter((s) => ids.includes(s.id) && s.id !== ids[0])
+    const r = subtractSolids(base, others)
+    if (!r.ok) {
+      setToolHint(r.error || 'No se pudo sustraer.')
+      return
+    }
+    const drop = new Set(ids)
+    setSolids3d((prev) => [...prev.filter((s) => !drop.has(s.id)), r.solid])
+    setSelectedSolidIds([r.solid.id])
+    setDirty(true)
+    setOp3d(null)
+    setToolHint(`Sustracción · ${r.solid.volumeM3.toFixed(2)} m³`)
+    setPanTick((n) => n + 1)
+  }, [])
+
+  const beginCut3d = useCallback(() => {
+    if (!mode3dRef.current) {
+      setToolHint('Active el modo 3D para cortar.')
+      return
+    }
+    const ids = selectedSolidIdsRef.current || []
+    if (ids.length !== 1) {
+      setToolHint('Cortar: seleccione un sólido y trace la línea de corte.')
+      return
+    }
+    cutDraftRef.current = { solidId: ids[0], a: null, b: null }
+    setOp3d('cortar')
+    setToolHint('Cortar: pulse y arrastre una línea de corte sobre el sólido.')
+  }, [])
+
+  const finishCut3d = useCallback((a, b) => {
+    const draft = cutDraftRef.current
+    cutDraftRef.current = null
+    setOp3d(null)
+    if (!draft?.solidId || !a || !b) {
+      setToolHint('Corte cancelado.')
+      setPanTick((n) => n + 1)
+      return
+    }
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 2) {
+      setToolHint('La línea de corte es demasiado corta.')
+      setPanTick((n) => n + 1)
+      return
+    }
+    const solid = (solids3dRef.current || []).find((s) => s.id === draft.solidId)
+    const r = sliceSolidByLine(solid, a, b)
+    if (!r.ok) {
+      setToolHint(r.error || 'No se pudo cortar.')
+      setPanTick((n) => n + 1)
+      return
+    }
+    setSolids3d((prev) => [...prev.filter((s) => s.id !== draft.solidId), ...r.solids])
+    setSelectedSolidIds(r.solids.map((s) => s.id))
+    setDirty(true)
+    setToolHint(`Corte · ${r.solids.map((s) => `${s.volumeM3.toFixed(2)} m³`).join(' + ')}`)
+    setPanTick((n) => n + 1)
+  }, [])
+
+  const hitSolid3dAt = useCallback((p) => {
+    const list = solids3dRef.current || []
+    const viewId = view3dRef.current || 'top'
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (hitSolidAtView(list[i], p, viewId)) return list[i]
+    }
+    return null
+  }, [])
+
+  const selectSolid3d = useCallback((id, { additive = false } = {}) => {
+    if (!id) {
+      setSelectedSolidIds([])
+      setPanTick((n) => n + 1)
+      return
+    }
+    setSelectedSolidIds((prev) => {
+      if (additive) {
+        if (prev.includes(id)) return prev.filter((x) => x !== id)
+        return [...prev, id]
+      }
+      return [id]
+    })
+    setPanTick((n) => n + 1)
+  }, [])
+
+  const setView3dSafe = useCallback((id) => {
+    setView3d(id)
+    cutDraftRef.current = null
+    if (op3dRef.current === 'cortar') setOp3d(null)
+    setToolHint(isEsquema3dDrawView(id)
+      ? `Vista ${id === 'top' ? 'superior' : id === 'front' ? 'frontal' : 'lateral'}: puede dibujar y extruir.`
+      : 'Vista isométrica: solo inspección (no dibujo).')
+    setPanTick((n) => n + 1)
+  }, [])
 
   useEffect(() => {
     if (!autoActivateMap) return undefined
@@ -2836,8 +3070,9 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Con mapa activo + Paneo: el mapa recibe el arrastre (canvas sin captura)
-    if (mapActiveRef.current && toolRef.current === 'paneo') {
+    // Con mapa activo + Paneo: el mapa recibe el arrastre (canvas sin captura).
+    // En modo 3D el mapa está oculto: el lienzo maneja paneo/gestos.
+    if (mapActiveRef.current && !mode3dRef.current && toolRef.current === 'paneo') {
       try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
       pointersRef.current.delete(e.pointerId)
       drawing.current = false
@@ -2853,6 +3088,56 @@ export default function EsquemaEditorModal({
 
     let p = posFromEvent(e)
     const currentTool = toolRef.current
+
+    // Modo 3D: corte por línea (arrastre) y selección de sólidos.
+    if (mode3dRef.current && op3dRef.current === 'cortar') {
+      p = snapWorldPoint(p)
+      cutDraftRef.current = {
+        ...(cutDraftRef.current || {}),
+        a: { x: p.x, y: p.y },
+        b: null,
+      }
+      startPt.current = p
+      lastPt.current = p
+      drawing.current = true
+      redraw()
+      return
+    }
+    if (mode3dRef.current && isEsquema3dIsoView(view3dRef.current)) {
+      // Isométrica: solo inspección / selección de sólidos (sin dibujar).
+      if (currentTool === 'seleccion' || currentTool === 'paneo') {
+        const hitS = hitSolid3dAt(p)
+        if (hitS) {
+          selectSolid3d(hitS.id, { additive: !!(e.shiftKey || e.metaKey || e.ctrlKey) })
+          setToolHint(`Sólido · ${Number(hitS.volumeM3 || 0).toFixed(2)} m³`)
+        } else if (currentTool === 'seleccion') {
+          selectSolid3d(null)
+        }
+        drawing.current = false
+        redraw()
+        return
+      }
+      setToolHint('Vista isométrica: solo inspección. Cambie a superior, frontal o lateral para dibujar.')
+      drawing.current = false
+      return
+    }
+    if (
+      mode3dRef.current
+      && (currentTool === 'seleccion')
+      && !pendingInsertRef.current
+    ) {
+      const hitS = hitSolid3dAt(p)
+      const hitEnt = hitTest(p)
+      if (hitS && (!hitEnt || e.altKey)) {
+        selectSolid3d(hitS.id, { additive: !!(e.shiftKey || e.metaKey || e.ctrlKey) })
+        if (!(e.shiftKey || e.metaKey || e.ctrlKey)) selectOne(null)
+        setToolHint(`Sólido · ${Number(hitS.volumeM3 || 0).toFixed(2)} m³`)
+        drawing.current = false
+        redraw()
+        return
+      }
+    }
+
     // Referencias: solo si no hay entidad propia bajo el clic.
     // Herramientas de dibujo/edición (girar, mover, trazar…) consumen el clic;
     // la consulta de otros reportes aplica en Selección (clic vacío) y Paneo.
@@ -3453,7 +3738,7 @@ export default function EsquemaEditorModal({
       if (distNow >= 8) {
         const pinch = pinchRef.current
         const factor = distNow / pinch.dist0
-        if (mapActiveRef.current && mapRef.current) {
+        if (mapActiveRef.current && mapRef.current && !mode3dRef.current) {
           const mid = pointerMidpoint()
           // Aplicar respecto al zoom Mapbox al inicio del pellizco
           if (pinch.mapZoom0 == null) {
@@ -3491,6 +3776,15 @@ export default function EsquemaEditorModal({
     lastScreenRef.current = screenPosFromEvent(e)
     const raw = posFromEvent(e)
     const currentTool = toolRef.current
+
+    if (mode3dRef.current && op3dRef.current === 'cortar' && cutDraftRef.current?.a && drawing.current) {
+      e.preventDefault()
+      const snapped = snapWorldPoint(raw)
+      lastPt.current = snapped
+      cutDraftRef.current = { ...cutDraftRef.current, b: { x: snapped.x, y: snapped.y } }
+      redraw()
+      return
+    }
 
     // Hover: manijas / cursor de mover; preview de snap al dibujar o seleccionar
     if (!drawing.current) {
@@ -3810,6 +4104,16 @@ export default function EsquemaEditorModal({
     const currentTool = toolRef.current
     let p = posFromEvent(e)
 
+    if (mode3dRef.current && op3dRef.current === 'cortar' && cutDraftRef.current?.a) {
+      p = snapWorldPoint(p)
+      const a = cutDraftRef.current.a
+      finishCut3d(a, { x: p.x, y: p.y })
+      lastPt.current = null
+      startPt.current = null
+      redraw()
+      return
+    }
+
     if (currentTool === 'paneo') {
       panDragRef.current = null
       return
@@ -3928,6 +4232,13 @@ export default function EsquemaEditorModal({
     pushHistory()
     objectsRef.current = []
     selectOne(null)
+    if (mode3dRef.current) {
+      setSolids3d([])
+      setSelectedSolidIds([])
+      cutDraftRef.current = null
+      setOp3d(null)
+      setExtrudePrompt(null)
+    }
     setDirty(true)
     redraw()
   }
@@ -5089,10 +5400,87 @@ export default function EsquemaEditorModal({
               : 'Insertar mapa como fondo (ubicación del reporte o selección manual)'}
             aria-label="Insertar mapa"
             onClick={() => { if (mapActive) deactivateMap(); else activateMap() }}
-            style={iconBtn(t, mapActive)}
+            style={iconBtn(t, mapActive && !mode3d)}
+            disabled={mode3d}
           >
             <IconInsertarMapa />
           </button>
+          <button
+            type="button"
+            title={mode3d ? 'Salir del modo 3D (restaura el dibujo 2D y el mapa)' : 'Modo 3D: sólidos por cotas, unir, sustraer y cortar'}
+            aria-label={mode3d ? 'Salir del modo 3D' : 'Activar modo 3D'}
+            onClick={toggleMode3d}
+            style={iconBtn(t, mode3d)}
+            data-testid="esquema-modo-3d"
+          >
+            <IconModo3d />
+          </button>
+          {mode3d ? (
+            <>
+              <ToolDivider t={t} />
+              <Esquema3dViewToolbar
+                t={t}
+                viewId={view3d}
+                onView={setView3dSafe}
+                iconBtn={iconBtn}
+                ghost={ghost}
+              />
+              <button
+                type="button"
+                title="Extruir contorno cerrado (cotas en vista superior; longitud en frontal/lateral)"
+                aria-label="Extruir"
+                onClick={beginExtrude3d}
+                style={iconBtn(t, !!extrudePrompt)}
+                data-testid="esquema-3d-extruir"
+              >
+                <IconExtruir3d />
+              </button>
+              <button
+                type="button"
+                title="Unir dos o más sólidos seleccionados"
+                aria-label="Unir sólidos"
+                onClick={applyUnite3d}
+                style={iconBtn(t, op3d === 'unir')}
+                data-testid="esquema-3d-unir"
+              >
+                <IconUnirSolidos3d />
+              </button>
+              <button
+                type="button"
+                title="Sustraer: sólido base (1.º) menos los demás seleccionados"
+                aria-label="Sustraer sólidos"
+                onClick={applySubtract3d}
+                style={iconBtn(t, op3d === 'sustraer')}
+                data-testid="esquema-3d-sustraer"
+              >
+                <IconSustraer3d />
+              </button>
+              <button
+                type="button"
+                title="Cortar: seleccione un sólido y trace la línea de corte"
+                aria-label="Cortar sólido"
+                onClick={beginCut3d}
+                style={iconBtn(t, op3d === 'cortar')}
+                data-testid="esquema-3d-cortar"
+              >
+                <IconCortar3d />
+              </button>
+              {selectedSolidIds.length === 1 ? (
+                <Esquema3dVolumeHint
+                  t={t}
+                  volumeM3={solids3d.find((s) => s.id === selectedSolidIds[0])?.volumeM3}
+                />
+              ) : selectedSolidIds.length > 1 ? (
+                <Esquema3dVolumeHint
+                  t={t}
+                  volumeM3={selectedSolidIds.reduce((sum, id) => {
+                    const s = solids3d.find((x) => x.id === id)
+                    return sum + (Number(s?.volumeM3) || 0)
+                  }, 0)}
+                />
+              ) : null}
+            </>
+          ) : null}
           <button
             type="button"
             title="Limpiar lienzo"
@@ -5373,7 +5761,7 @@ export default function EsquemaEditorModal({
                       </div>
                     </div>
                   ) : null}
-                  {mapActive ? (
+                  {mapActive && !mode3d ? (
                     mapPropsOpen ? (
                       <MapaPropiedadesPanel
                         t={t}
@@ -5577,9 +5965,10 @@ export default function EsquemaEditorModal({
                 bottom: 10,
                 borderRadius: 8,
                 overflow: 'hidden',
-                opacity: mapOpacity,
+                opacity: mode3d ? 0 : mapOpacity,
+                visibility: mode3d ? 'hidden' : 'visible',
                 zIndex: 0,
-                pointerEvents: (tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap) ? 'auto' : 'none',
+                pointerEvents: (mode3d || !(tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap)) ? 'none' : 'auto',
                 background: '#fff',
               }}
             />
@@ -5591,10 +5980,10 @@ export default function EsquemaEditorModal({
               display: 'block', width: '100%', height: '100%',
               position: 'relative',
               zIndex: 1,
-              background: mapActive ? 'transparent' : ui.canvas,
+              background: (mapActive && !mode3d) ? 'transparent' : ui.canvas,
               borderRadius: 8, touchAction: 'none',
               outline: 'none',
-              pointerEvents: (mapActive && tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap) ? 'none' : 'auto',
+              pointerEvents: (mapActive && !mode3d && tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap) ? 'none' : 'auto',
               cursor: (printAreaSelecting || pickNodoFromMap)
                 ? 'crosshair'
                 : hoverCursor
@@ -5755,7 +6144,7 @@ export default function EsquemaEditorModal({
               </div>
             </div>
           )}
-          {!huellaMode && mapActive && mapPropsOpen ? (
+          {!huellaMode && mapActive && !mode3d && mapPropsOpen ? (
             <MapaPropiedadesPanel
               t={t}
               basemap={mapBasemap}
@@ -5777,7 +6166,7 @@ export default function EsquemaEditorModal({
               onRemove={deactivateMap}
             />
           ) : null}
-          {!huellaMode && mapActive && !mapPropsOpen ? (
+          {!huellaMode && mapActive && !mode3d && !mapPropsOpen ? (
             <button
               type="button"
               data-testid="esquema-mapa-props-toggle"
@@ -6166,6 +6555,15 @@ export default function EsquemaEditorModal({
             </div>
           </div>
         )}
+        {extrudePrompt ? (
+          <Esquema3dExtrudePopup
+            t={t}
+            ui={ui}
+            mode={extrudePrompt.mode}
+            onCancel={() => setExtrudePrompt(null)}
+            onConfirm={confirmExtrude3d}
+          />
+        ) : null}
         {savePrompt && (
           <div
             style={{
@@ -9019,6 +9417,50 @@ function IconInsertarMapa() {
       <path d="M9 8v10l6 3V11" />
       <path d="m15 11 6-3v10l-6 3" />
       <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+function IconModo3d() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12 3 21 8v8l-9 5-9-5V8Z" />
+      <path d="M12 13v8" />
+      <path d="m21 8-9 5-9-5" />
+    </svg>
+  )
+}
+function IconExtruir3d() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="5" y="14" width="14" height="6" rx="1" />
+      <path d="M12 4v8" />
+      <path d="m8 8 4-4 4 4" />
+    </svg>
+  )
+}
+function IconUnirSolidos3d() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="3" y="7" width="10" height="10" rx="1" />
+      <rect x="11" y="7" width="10" height="10" rx="1" />
+    </svg>
+  )
+}
+function IconSustraer3d() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="4" y="5" width="14" height="14" rx="1" />
+      <rect x="9" y="9" width="8" height="8" rx="1" />
+      <path d="M7 12h6" />
+    </svg>
+  )
+}
+function IconCortar3d() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 20 20 4" />
+      <circle cx="7" cy="7" r="2.2" />
+      <circle cx="17" cy="17" r="2.2" />
     </svg>
   )
 }
