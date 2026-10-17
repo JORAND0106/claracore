@@ -40,7 +40,9 @@ describe('esquema3dViews', () => {
 
   it('proyección superior conserva XY', () => {
     const p = projectWorld3dToCanvas({ x: 10, y: 20, zCota: 100 }, 'top')
-    assert.deepEqual(p, { x: 10, y: 20 })
+    assert.equal(p.x, 10)
+    assert.equal(p.y, 20)
+    assert.ok(Number.isFinite(p.depth))
   })
 
   it('proyección frontal usa X y cota', () => {
