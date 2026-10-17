@@ -8,7 +8,6 @@ import {
   createVolumeCalc,
   formatVolumeM3,
   isValidCalcSolid,
-  lastCalcLineNeedsNombre,
   resolveCalcLine,
 } from './esquema3dCalc.js'
 
@@ -55,35 +54,10 @@ export function Esquema3dCalcPanel({
     return other?.solidId || null
   }
 
-  const applyOp = (line, op) => {
-    const discountFromSolidId = op === 'subtract'
-      ? (line.discountFromSolidId || defaultDiscountFrom(line.solidId))
-      : null
-    const patch = { op, discountFromSolidId }
-    onUpdateLine?.(active.id, line.id, patch)
-    if (op === 'subtract') {
-      const nextLine = { ...line, ...patch }
-      const probe = resolveCalcLine(nextLine, solids, {
-        ...active,
-        lines: (active.lines || []).map((l) => (
-          l.id === line.id ? nextLine : l
-        )),
-      })
-      if (!probe.ok) {
-        onHint?.(probe.error || 'No se puede descontar: sin volumen común.')
-      }
-    }
-  }
-
   const addFromSelection = () => {
     const ids = selectedSolidIds || []
     if (!ids.length) {
       onHint?.('Seleccione uno o más sólidos en el dibujo para agregarlos al cálculo.')
-      return
-    }
-    const needsName = lastCalcLineNeedsNombre(active)
-    if (needsName) {
-      onHint?.('Nombre el último sólido del cálculo antes de agregar otro.')
       return
     }
     let added = 0
@@ -94,26 +68,19 @@ export function Esquema3dCalcPanel({
         skipped += 1
         continue
       }
-      // Sin nombre automático: el usuario debe escribirlo.
-      if (added >= 1) {
-        onHint?.('Nombre el sólido agregado antes de añadir otro.')
-        break
-      }
       onAddLine?.(active?.id, createCalcLine({
         solidId: id,
-        nombre: solid?.nombre ? String(solid.nombre).trim() : '',
+        nombre: `Sólido ${(active?.lines?.length || 0) + added + 1}`,
         op: 'sum',
       }))
       added += 1
     }
     if (!added) {
-      onHint?.(skipped
-        ? 'Seleccione un sólido cerrado y bien construido.'
-        : 'Nombre el último sólido del cálculo antes de agregar otro.')
+      onHint?.('Seleccione un sólido cerrado y bien construido.')
       return
     }
-    if (skipped) onHint?.(`${added} agregado(s). ${skipped} no válido(s) omitido(s). Nombre el sólido.`)
-    else onHint?.('Elemento agregado. Escriba su nombre en la lista.')
+    if (skipped) onHint?.(`${added} agregado(s). ${skipped} no válido(s) omitido(s).`)
+    else onHint?.(`${added} elemento(s) agregados al cálculo.`)
   }
 
   const shellStyle = embedded
@@ -259,7 +226,7 @@ export function Esquema3dCalcPanel({
               <thead>
                 <tr style={{ background: t.bgHover || '#f1f5f9', textAlign: 'left' }}>
                   <th style={th(t)}>Nombre</th>
-                  <th style={{ ...th(t), width: 44, textAlign: 'center' }} title="Operación">Op</th>
+                  <th style={th(t)}>Op</th>
                   <th style={th(t)}>Descuenta de</th>
                   <th style={{ ...th(t), textAlign: 'right' }}>Volumen</th>
                   <th style={th(t)} />
@@ -274,62 +241,44 @@ export function Esquema3dCalcPanel({
                       <td style={td()}>
                         <input
                           value={line.nombre}
-                          placeholder="Nombre obligatorio"
-                          aria-label="Nombre del sólido"
                           onChange={(e) => onUpdateLine?.(active.id, line.id, { nombre: e.target.value })}
-                          style={{
-                            ...inputStyle(t),
-                            padding: '4px 6px',
-                            fontSize: 12,
-                            borderColor: String(line.nombre || '').trim() ? (t.border) : '#f59e0b',
-                          }}
+                          style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 12 }}
                         />
-                        {!String(line.nombre || '').trim() ? (
-                          <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, lineHeight: 1.3 }}>
-                            Escriba un nombre
-                          </div>
-                        ) : null}
                         {!r.ok && line.op === 'subtract' ? (
                           <div style={{ fontSize: 10, color: '#b91c1c', marginTop: 2, lineHeight: 1.3 }}>
                             {r.error || 'Sin volumen común'}
                           </div>
                         ) : null}
                       </td>
-                      <td style={{ ...td(), verticalAlign: 'middle' }}>
-                        <div
-                          data-testid="esquema-calc-op-icons"
-                          role="group"
-                          aria-label="Operación"
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            gap: 2,
+                      <td style={td()}>
+                        <select
+                          value={line.op}
+                          onChange={(e) => {
+                            const op = e.target.value
+                            const discountFromSolidId = op === 'subtract'
+                              ? (line.discountFromSolidId || defaultDiscountFrom(line.solidId))
+                              : null
+                            const patch = { op, discountFromSolidId }
+                            onUpdateLine?.(active.id, line.id, patch)
+                            if (op === 'subtract') {
+                              const nextLine = { ...line, ...patch }
+                              const probe = resolveCalcLine(nextLine, solids, {
+                                ...active,
+                                lines: (active.lines || []).map((l) => (
+                                  l.id === line.id ? nextLine : l
+                                )),
+                              })
+                              if (!probe.ok) {
+                                onHint?.(probe.error || 'No se puede descontar: sin volumen común.')
+                              }
+                            }
                           }}
+                          style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 12 }}
+                          title="Suma o descuenta"
                         >
-                          <button
-                            type="button"
-                            title="Suma"
-                            aria-label="Suma"
-                            aria-pressed={line.op === 'sum'}
-                            data-testid="esquema-calc-op-sum"
-                            onClick={() => applyOp(line, 'sum')}
-                            style={opIconBtn(t, line.op === 'sum', false)}
-                          >
-                            +
-                          </button>
-                          <button
-                            type="button"
-                            title="Descuenta"
-                            aria-label="Descuenta"
-                            aria-pressed={line.op === 'subtract'}
-                            data-testid="esquema-calc-op-subtract"
-                            onClick={() => applyOp(line, 'subtract')}
-                            style={opIconBtn(t, line.op === 'subtract', true)}
-                          >
-                            −
-                          </button>
-                        </div>
+                          <option value="sum">Suma</option>
+                          <option value="subtract">Descuenta</option>
+                        </select>
                       </td>
                       <td style={td()}>
                         {line.op === 'subtract' ? (
@@ -450,26 +399,5 @@ function btnPrimary(t) {
     fontWeight: 700,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
-  }
-}
-/** Íconos apilados + / − de la columna Op. */
-function opIconBtn(t, active, isSubtract) {
-  const accent = isSubtract ? '#b91c1c' : (t.primary || '#0f766e')
-  return {
-    width: 26,
-    height: 22,
-    minWidth: 26,
-    padding: 0,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 4,
-    border: `1px solid ${active ? accent : (t.border || '#cbd5e1')}`,
-    background: active ? accent : (t.bg || '#fff'),
-    color: active ? '#fff' : (t.textMuted || '#64748b'),
-    fontWeight: 800,
-    fontSize: 14,
-    lineHeight: 1,
-    cursor: 'pointer',
   }
 }
