@@ -20,6 +20,7 @@ import {
   createCalcLine,
   createVolumeCalc,
   resolveCalcLine,
+  round2,
   sharedDiscountVolumeM3,
 } from './esquema3dCalc.js'
 
@@ -227,7 +228,7 @@ describe('descuento por volumen común', () => {
     assert.match(shared.error || '', /no comparte volumen/i)
     const r = resolveCalcLine(calc.lines[1], solids, calc)
     assert.equal(r.ok, false)
-    assert.ok(Math.abs(calcTotalM3(calc, solids) - solidVolumeM3(big)) < 1e-9)
+    assert.equal(calcTotalM3(calc, solids), round2(solidVolumeM3(big)))
   })
 
   it('descuenta volumen exacto de sólido interior', () => {
@@ -249,7 +250,7 @@ describe('descuento por volumen común', () => {
     assert.equal(r.ok, true)
     assert.ok(Math.abs(r.volumeM3 - 2) < 1e-9, `got ${r.volumeM3}`)
     const total = calcTotalM3(calc, solids)
-    assert.ok(Math.abs(total - (3.5 * 3.5 * 2 - 2)) < 1e-9)
+    assert.equal(total, round2(3.5 * 3.5 * 2 - 2))
   })
 
   it('tras mover el descontado fuera, el total deja de descontar', () => {
@@ -266,9 +267,9 @@ describe('descuento por volumen común', () => {
       createCalcLine({ solidId: 'big', nombre: 'Mayor', op: 'sum' }),
       createCalcLine({ solidId: 'in', nombre: 'Interior', op: 'subtract' }),
     ]
-    assert.ok(Math.abs(calcTotalM3(calc, [big, inner]) - (18 - 2)) < 1e-9)
+    assert.equal(calcTotalM3(calc, [big, inner]), 16)
     inner = translateSolidXy(inner, metersToWorld(20), 0)
     assert.ok(intersectionVolumeM3(big, inner) < 1e-9)
-    assert.ok(Math.abs(calcTotalM3(calc, [big, inner]) - 18) < 1e-9)
+    assert.equal(calcTotalM3(calc, [big, inner]), 18)
   })
 })

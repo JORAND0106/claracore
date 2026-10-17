@@ -93,8 +93,9 @@ describe('memoria Pozo 25S — formas y totales', () => {
 
     const snap = freezeCalcSnapshot(calc, [box, pozo])
     assert.equal(snap.nombre, 'Pozo 25S')
-    assert.ok(Math.abs(snap.totalM3 - (24.5 - cylExpected)) < 1e-9)
-    assert.ok(Math.abs(snap.totalM3 - 19.96) < 0.01)
+    // Total = suma de redondeos a 2 decimales (24,50 − 4,54 = 19,96).
+    assert.equal(snap.totalM3, 19.96)
+    assert.ok(Math.abs(snap.totalM3 - (24.5 - cylExpected)) < 0.01)
     assert.equal(snap.lines[0].op, 'sum')
     assert.equal(snap.lines[1].op, 'subtract')
     assert.match(snap.lines[1].detail.formaCalculo, /π × 0,85² × 2,00/)

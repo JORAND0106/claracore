@@ -36,8 +36,23 @@ export function Esquema3dCalcPanel({
     [calcs, activeCalcId],
   )
   const total = active ? calcTotalM3(active, solids) : 0
+  const lineOptions = useMemo(() => (
+    (active?.lines || [])
+      .filter((l) => l.solidId)
+      .map((l) => ({
+        solidId: l.solidId,
+        nombre: l.nombre || 'Elemento',
+      }))
+  ), [active])
 
   if (!open) return null
+
+  const defaultDiscountFrom = (exceptSolidId) => {
+    const sumLine = (active?.lines || []).find((l) => l.op === 'sum' && l.solidId && l.solidId !== exceptSolidId)
+    if (sumLine) return sumLine.solidId
+    const other = (active?.lines || []).find((l) => l.solidId && l.solidId !== exceptSolidId)
+    return other?.solidId || null
+  }
 
   const addFromSelection = () => {
     const ids = selectedSolidIds || []
@@ -212,6 +227,7 @@ export function Esquema3dCalcPanel({
                 <tr style={{ background: t.bgHover || '#f1f5f9', textAlign: 'left' }}>
                   <th style={th(t)}>Nombre</th>
                   <th style={th(t)}>Op</th>
+                  <th style={th(t)}>Descuenta de</th>
                   <th style={{ ...th(t), textAlign: 'right' }}>Volumen</th>
                   <th style={th(t)} />
                 </tr>
@@ -219,6 +235,7 @@ export function Esquema3dCalcPanel({
               <tbody>
                 {(active.lines || []).map((line) => {
                   const r = resolveCalcLine(line, solids, active)
+                  const fromOptions = lineOptions.filter((o) => o.solidId !== line.solidId)
                   return (
                     <tr key={line.id} style={{ borderBottom: `1px solid ${t.border}` }}>
                       <td style={td()}>
@@ -238,12 +255,17 @@ export function Esquema3dCalcPanel({
                           value={line.op}
                           onChange={(e) => {
                             const op = e.target.value
-                            onUpdateLine?.(active.id, line.id, { op })
+                            const discountFromSolidId = op === 'subtract'
+                              ? (line.discountFromSolidId || defaultDiscountFrom(line.solidId))
+                              : null
+                            const patch = { op, discountFromSolidId }
+                            onUpdateLine?.(active.id, line.id, patch)
                             if (op === 'subtract') {
-                              const probe = resolveCalcLine({ ...line, op }, solids, {
+                              const nextLine = { ...line, ...patch }
+                              const probe = resolveCalcLine(nextLine, solids, {
                                 ...active,
                                 lines: (active.lines || []).map((l) => (
-                                  l.id === line.id ? { ...l, op } : l
+                                  l.id === line.id ? nextLine : l
                                 )),
                               })
                               if (!probe.ok) {
@@ -252,11 +274,42 @@ export function Esquema3dCalcPanel({
                             }
                           }}
                           style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 12 }}
-                          title="Suma o descuenta (solo volumen común)"
+                          title="Suma o descuenta"
                         >
                           <option value="sum">Suma</option>
                           <option value="subtract">Descuenta</option>
                         </select>
+                      </td>
+                      <td style={td()}>
+                        {line.op === 'subtract' ? (
+                          <select
+                            data-testid="esquema-calc-discount-from"
+                            value={line.discountFromSolidId || ''}
+                            onChange={(e) => {
+                              const discountFromSolidId = e.target.value || null
+                              const nextLine = { ...line, discountFromSolidId }
+                              onUpdateLine?.(active.id, line.id, { discountFromSolidId })
+                              const probe = resolveCalcLine(nextLine, solids, {
+                                ...active,
+                                lines: (active.lines || []).map((l) => (
+                                  l.id === line.id ? nextLine : l
+                                )),
+                              })
+                              if (!probe.ok) {
+                                onHint?.(probe.error || 'No se puede descontar del sólido indicado.')
+                              }
+                            }}
+                            style={{ ...inputStyle(t), padding: '4px 6px', fontSize: 11 }}
+                            title="Descuenta de"
+                          >
+                            <option value="">— Elegir —</option>
+                            {fromOptions.map((o) => (
+                              <option key={o.solidId} value={o.solidId}>{o.nombre}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span style={{ fontSize: 11, color: ui?.muted || '#94a3b8' }}>—</span>
+                        )}
                       </td>
                       <td style={{ ...td(), textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: r.ok ? (line.op === 'subtract' ? '#b91c1c' : t.text) : '#b91c1c' }}>
                         {r.ok
@@ -278,7 +331,7 @@ export function Esquema3dCalcPanel({
                 })}
                 {!(active.lines || []).length ? (
                   <tr>
-                    <td colSpan={4} style={{ ...td(), color: ui?.muted || '#64748b', padding: 12 }}>
+                    <td colSpan={5} style={{ ...td(), color: ui?.muted || '#64748b', padding: 12 }}>
                       Seleccione sólidos en el dibujo y pulse «Sólidos seleccionados».
                     </td>
                   </tr>

@@ -87,6 +87,18 @@ export function formatVolumeM3(m3, digits = 2) {
   return `${n.toFixed(digits)} m³`
 }
 
+/**
+ * Redondeo a 2 decimales (valores mostrados en memoria / panel).
+ * Limpia antes a 6 decimales para absorber ruido de PX_PER_METER
+ * (p. ej. 3,374999… → 3,375 → 3,38).
+ */
+export function round2(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return 0
+  const cleaned = Math.round(x * 1e6) / 1e6
+  return Math.round(cleaned * 100) / 100
+}
+
 function closeRing(pts) {
   const ring = (pts || []).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
   if (ring.length < 3) return null
@@ -698,16 +710,101 @@ export function uniteSolids(solids) {
   return { ok: true, solid }
 }
 
+/**
+ * Elige el sólido base para sustraer: el primero de la selección que deje
+ * volumen residual al quitar los demás; si ninguno, el de mayor volumen.
+ */
+export function pickSubtractBase(solids, orderedIds = null) {
+  const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  if (!list.length) return null
+  if (list.length === 1) return list[0]
+  const byId = new Map(list.map((s) => [s.id, s]))
+  const ordered = []
+  for (const id of orderedIds || []) {
+    const s = byId.get(id)
+    if (s && !ordered.includes(s)) ordered.push(s)
+  }
+  for (const s of list) {
+    if (!ordered.includes(s)) ordered.push(s)
+  }
+  const canBeBase = (base) => {
+    const others = list.filter((s) => s.id !== base.id)
+    if (!others.length) return false
+    const united = others.length === 1 ? others[0] : mergeSolidsUnion(others)
+    if (!united) return false
+    const shared = intersectionVolumeM3(base, united)
+    const baseVol = solidVolumeM3(base)
+    return shared > VOL_EPS && shared < baseVol - VOL_EPS
+  }
+  for (const cand of ordered) {
+    if (canBeBase(cand)) return cand
+  }
+  return [...list].sort((a, b) => solidVolumeM3(b) - solidVolumeM3(a))[0]
+}
+
+function operandSnapshot(solid, volumeM3) {
+  const dims = solidFootprintDimsM(solid)
+  const zr = solidZRange(solid)
+  const cells = solid?.cells || []
+  const analytic = cells.length === 1 ? (cells[0].analytic || null) : null
+  return {
+    solidId: solid?.id || null,
+    color: solid?.color || null,
+    nombre: solid?.nombre || null,
+    volumeM3: Number(volumeM3),
+    longM: dims?.longM ?? null,
+    anchM: dims?.anchM ?? null,
+    espesorM: dims?.heightM ?? (zr ? Math.abs(zr.z1 - zr.z0) : null),
+    cotaSuperior: zr ? zr.z1 : null,
+    cotaInferior: zr ? zr.z0 : null,
+    analytic,
+  }
+}
+
 export function subtractSolids(baseSolid, subtractList) {
   if (!baseSolid || baseSolid.type !== 'solid3d') {
     return { ok: false, error: 'Indique el sólido base.' }
   }
   const others = (subtractList || []).filter((s) => s && s.id !== baseSolid.id)
   if (!others.length) return { ok: false, error: 'Indique al menos un sólido a descontar.' }
+
+  let sharedTotal = 0
+  const subSnapshots = []
+  for (const o of others) {
+    let sh = intersectionVolumeM3(baseSolid, o)
+    const full = solidVolumeM3(o)
+    if (full > VOL_EPS && sh >= full * 0.98) sh = full
+    if (sh > VOL_EPS) {
+      sharedTotal += sh
+      subSnapshots.push(operandSnapshot(o, sh))
+    }
+  }
+  if (!(sharedTotal > VOL_EPS)) {
+    return { ok: false, error: 'Los sólidos no comparten volumen; no se sustrae.' }
+  }
+
   const solid = booleanSolids([baseSolid, ...others], 'difference')
   if (!solid) return { ok: false, error: 'No se pudo sustraer (resultado vacío).' }
   solid.color = baseSolid.color || solid.color
-  lockSolidVolume(solid, solidGeomVolumeM3(solid))
+  if (baseSolid.nombre) solid.nombre = baseSolid.nombre
+
+  // Volumen mostrado = suma de valores redondeados (p. ej. 3,38 − 1,57 = 1,81).
+  const baseVol = solidVolumeM3(baseSolid)
+  const baseR = round2(baseVol)
+  let subR = 0
+  for (const snap of subSnapshots) {
+    snap.volumeM3 = round2(snap.volumeM3)
+    subR += snap.volumeM3
+  }
+  const netR = round2(baseR - subR)
+  lockSolidVolume(solid, Math.max(0, netR))
+
+  solid.booleanMeta = {
+    op: 'subtract',
+    base: operandSnapshot(baseSolid, baseR),
+    subtracted: subSnapshots,
+    netVolumeM3: solid.volumeM3,
+  }
   return { ok: true, solid }
 }
 
@@ -1085,10 +1182,13 @@ export function drawSolid3d(ctx, solid, {
     for (const cell of solid.cells) {
       const zBottom = Math.min(cell.z0, cell.z1)
       const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+      const holeBots = (cell.holes || []).map((hole) => (
+        hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+      ))
       if (doFills) {
-        pathRing(ctx, ringBot)
+        pathRingWithHoles(ctx, ringBot, holeBots)
         ctx.fillStyle = fill
-        ctx.fill()
+        ctx.fill('evenodd')
       }
       if (doEdges) {
         pathRing(ctx, ringBot)
@@ -1096,8 +1196,8 @@ export function drawSolid3d(ctx, solid, {
         ctx.lineWidth = lwVis
         ctx.setLineDash([])
         ctx.stroke()
-        for (const hole of cell.holes || []) {
-          pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
+        for (const holeBot of holeBots) {
+          pathRing(ctx, holeBot)
           ctx.strokeStyle = strokeHid
           ctx.lineWidth = lwHid
           ctx.setLineDash(dash)
@@ -1111,6 +1211,7 @@ export function drawSolid3d(ctx, solid, {
   }
 
   const facePolys = []
+  const faceWithHoles = []
   const edgeMap = new Map()
 
   const addEdge = (pa, pb, front) => {
@@ -1124,11 +1225,7 @@ export function drawSolid3d(ctx, solid, {
     else e.backVotes += 1
   }
 
-  for (const cell of solid.cells) {
-    const zBottom = Math.min(cell.z0, cell.z1)
-    const zTop = Math.max(cell.z0, cell.z1)
-    const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
-    const ringTop = (cell.ring || []).map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
+  const emitPrismFaces = (ringBot, ringTop, holesBot = [], holesTop = []) => {
     const n = ringBot.length
     const lastDup = n > 1
       && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
@@ -1147,30 +1244,103 @@ export function drawSolid3d(ctx, solid, {
     }
     const topPts = ringTop.slice(0, edgeCount)
     const botPts = ringBot.slice(0, edgeCount)
+    const holeTops = holesTop.map((h) => {
+      const hn = h.length
+      const dup = hn > 1 && Math.hypot(h[0].x - h[hn - 1].x, h[0].y - h[hn - 1].y) < 1e-6
+      return h.slice(0, dup ? hn - 1 : hn)
+    }).filter((h) => h.length >= 3)
+    const holeBots = holesBot.map((h) => {
+      const hn = h.length
+      const dup = hn > 1 && Math.hypot(h[0].x - h[hn - 1].x, h[0].y - h[hn - 1].y) < 1e-6
+      return h.slice(0, dup ? hn - 1 : hn)
+    }).filter((h) => h.length >= 3)
+
     if (topPts.length >= 3) {
       const depth = topPts.reduce((s, q) => s + (q.depth || 0), 0) / topPts.length
       const front = signedProjectedArea(topPts) < 0
-      facePolys.push({ pts: topPts, depth, front })
+      if (holeTops.length) {
+        faceWithHoles.push({ outer: topPts, holes: holeTops, depth, front })
+      } else {
+        facePolys.push({ pts: topPts, depth, front })
+      }
       for (let i = 0; i < edgeCount; i += 1) {
         addEdge(topPts[i], topPts[(i + 1) % edgeCount], front)
+      }
+      for (const hole of holeTops) {
+        for (let i = 0; i < hole.length; i += 1) {
+          addEdge(hole[i], hole[(i + 1) % hole.length], front)
+        }
       }
     }
     if (botPts.length >= 3) {
       const depth = botPts.reduce((s, q) => s + (q.depth || 0), 0) / botPts.length
       const front = signedProjectedArea(botPts) < 0
-      facePolys.push({ pts: botPts, depth, front })
+      if (holeBots.length) {
+        faceWithHoles.push({ outer: botPts, holes: holeBots, depth, front })
+      } else {
+        facePolys.push({ pts: botPts, depth, front })
+      }
       for (let i = 0; i < edgeCount; i += 1) {
         addEdge(botPts[i], botPts[(i + 1) % edgeCount], front)
+      }
+      for (const hole of holeBots) {
+        for (let i = 0; i < hole.length; i += 1) {
+          addEdge(hole[i], hole[(i + 1) % hole.length], front)
+        }
+      }
+    }
+  }
+
+  for (const cell of solid.cells) {
+    const zBottom = Math.min(cell.z0, cell.z1)
+    const zTop = Math.max(cell.z0, cell.z1)
+    const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+    const ringTop = (cell.ring || []).map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
+    const holesBot = (cell.holes || []).map((hole) => (
+      hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+    ))
+    const holesTop = (cell.holes || []).map((hole) => (
+      hole.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
+    ))
+    emitPrismFaces(ringBot, ringTop, holesBot, holesTop)
+
+    // Paredes interiores del vacío (orientación invertida respecto al contorno exterior).
+    for (let hi = 0; hi < holesBot.length; hi += 1) {
+      const hb = holesBot[hi]
+      const ht = holesTop[hi]
+      if (!hb?.length || !ht?.length) continue
+      const hn = hb.length
+      const lastDup = hn > 1
+        && Math.hypot(hb[0].x - hb[hn - 1].x, hb[0].y - hb[hn - 1].y) < 1e-6
+      const edgeCount = lastDup ? hn - 1 : hn
+      for (let i = 0; i < edgeCount; i += 1) {
+        const j = (i + 1) % edgeCount
+        const pts = [hb[i], ht[i], ht[j], hb[j]]
+        const depth = pts.reduce((s, q) => s + (q.depth || 0), 0) / 4
+        const front = signedProjectedArea(pts) < 0
+        facePolys.push({ pts, depth, front })
+        addEdge(hb[i], hb[j], front)
+        addEdge(ht[j], ht[i], front)
+        addEdge(hb[i], ht[i], front)
+        addEdge(hb[j], ht[j], front)
       }
     }
   }
 
   if (doFills) {
-    facePolys.sort((a, b) => a.depth - b.depth)
+    const allFaces = [
+      ...facePolys.map((f) => ({ ...f, kind: 'solid' })),
+      ...faceWithHoles.map((f) => ({ ...f, kind: 'holes' })),
+    ].sort((a, b) => a.depth - b.depth)
     ctx.fillStyle = fill
-    for (const f of facePolys) {
-      pathRing(ctx, f.pts)
-      ctx.fill()
+    for (const f of allFaces) {
+      if (f.kind === 'holes') {
+        pathRingWithHoles(ctx, f.outer, f.holes)
+        ctx.fill('evenodd')
+      } else {
+        pathRing(ctx, f.pts)
+        ctx.fill()
+      }
     }
   }
 
@@ -1390,6 +1560,21 @@ function pathRing(ctx, ring) {
   ctx.moveTo(ring[0].x, ring[0].y)
   for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i].x, ring[i].y)
   ctx.closePath()
+}
+
+/** Contorno + huecos en un solo path (relleno evenodd = cavidad visible). */
+function pathRingWithHoles(ctx, outer, holes = []) {
+  if (!outer?.length) return
+  ctx.beginPath()
+  ctx.moveTo(outer[0].x, outer[0].y)
+  for (let i = 1; i < outer.length; i += 1) ctx.lineTo(outer[i].x, outer[i].y)
+  ctx.closePath()
+  for (const hole of holes || []) {
+    if (!hole?.length) continue
+    ctx.moveTo(hole[0].x, hole[0].y)
+    for (let i = 1; i < hole.length; i += 1) ctx.lineTo(hole[i].x, hole[i].y)
+    ctx.closePath()
+  }
 }
 
 export function isClosedDrawableEntity(obj) {
