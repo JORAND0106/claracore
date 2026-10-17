@@ -1,5 +1,5 @@
 /**
- * Aplica adjuntos de memoria de cálculo (PDF + PNG isométrico) al destino
+ * Aplica adjuntos de memoria de cálculo (PNG isométrico + cuadro) al destino
  * del módulo, sin alterar el guardado principal del esquema.
  *
  * Cada consumidor pasa un `commit` unificado:

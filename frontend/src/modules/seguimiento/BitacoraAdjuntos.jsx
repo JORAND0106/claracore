@@ -439,8 +439,8 @@ export default function BitacoraAdjuntos({
                   nombre: adj.nombre,
                   mime: adj.mime,
                   origen: adj.origen || 'esquema-calculo',
-                  kind: adj.kind || (String(adj.mime || '').includes('pdf') ? 'memoria-calculo' : 'grafico-isometrico'),
-                  pie: adj.kind === 'memoria-calculo' ? 'Memoria de cálculo' : 'Gráfico isométrico',
+                  kind: adj.kind || 'memoria-calculo',
+                  pie: adj.kind === 'memoria-calculo' ? 'Memoria de cálculo (PNG)' : 'Gráfico isométrico',
                 })
               })
             } catch {

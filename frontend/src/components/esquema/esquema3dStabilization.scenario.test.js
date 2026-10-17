@@ -49,19 +49,23 @@ describe('recorrido estabilización 3D (a–i núcleo)', () => {
     }).solid
     const vSmall = solidVolumeM3(s1) + solidVolumeM3(s2)
 
-    // b) Unir
+    // b) Unir — volumen exacto e idéntico en campo y solidVolumeM3
     const u = uniteSolids([s1, s2])
     assert.equal(u.ok, true)
     assert.equal(u.solid.sourceEntityId, undefined)
+    assert.equal(u.solid.volumeLocked, true)
     assert.ok(Math.abs(u.solid.volumeM3 - vSmall) < 1e-6)
-    const vUnited = u.solid.volumeM3
+    assert.ok(Math.abs(solidVolumeM3(u.solid) - u.solid.volumeM3) < 1e-12)
+    const vUnited = solidVolumeM3(u.solid)
 
     // c) Mover el unido dentro del grande sin redimensionar
     const united = translateSolidXy(u.solid, metersToWorld(-4.6), metersToWorld(1.1))
     united.id = 'united'
-    assert.ok(Math.abs(united.volumeM3 - vUnited) < 1e-12)
-    assert.ok(Math.abs(solidVolumeM3(united) - solidVolumeM3(u.solid)) < 1e-12)
+    assert.ok(Math.abs(solidVolumeM3(united) - vUnited) < 1e-12)
     assert.ok(isSolidNestedIn(united, big))
+    // Color del unido se conserva
+    united.color = '#7c3aed'
+    assert.equal(united.color, '#7c3aed')
 
     // d) Mover el grande (traslación) conserva volumen
     const bigMoved = translateSolidXy(big, metersToWorld(0.3), metersToWorld(-0.2))

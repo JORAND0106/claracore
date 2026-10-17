@@ -1,16 +1,26 @@
 /**
- * Vista previa + descarga de memoria de cálculo (PDF), gráfico isométrico (PNG)
- * y esquema/fotos PNG. Transversal a todos los módulos.
- * iPad/iOS: convierte data: PDF a blob: y ofrece Abrir (iframe data: no funciona).
+ * Vista previa + descarga de memoria de cálculo (PNG lado a lado),
+ * gráfico isométrico y esquema/fotos. Transversal a todos los módulos.
+ * Compat: PDF antiguos de memoria siguen abriéndose si aparecen en el historial.
  */
 import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
+
+function isMemoriaPngItem(item) {
+  const kind = String(item?.kind || item?.source?.kind || '').toLowerCase()
+  const mime = String(item?.mime || item?.mime_type || item?.source?.mime || '').toLowerCase()
+  const name = String(item?.nombre || item?.name || item?.label || item?.source?.nombre || '').toLowerCase()
+  if (kind === 'memoria-calculo' && (mime.startsWith('image/') || name.endsWith('.png'))) return true
+  if (kind === 'memoria-calculo' && !mime.includes('pdf') && !name.endsWith('.pdf')) return true
+  return false
+}
 
 function isPdfItem(item) {
   const mime = String(item?.mime || item?.mime_type || item?.source?.mime || item?.source?.mime_type || '').toLowerCase()
   const name = String(item?.nombre || item?.name || item?.label || item?.source?.nombre || '').toLowerCase()
   const kind = String(item?.kind || item?.source?.kind || '').toLowerCase()
-  if (kind === 'memoria-calculo') return true
+  // Memoria nueva es PNG; solo PDF legacy cuenta como PDF.
+  if (kind === 'memoria-calculo' && isMemoriaPngItem(item)) return false
   if (mime.includes('pdf')) return true
   if (name.endsWith('.pdf')) return true
   return false
@@ -104,14 +114,15 @@ export default function EsquemaCalcAdjuntoPreview({
   }, [siblings, item])
 
   const pdfItem = useMemo(
-    () => list.find((x) => isPdfItem(x) || String(x?.kind || x?.source?.kind || '') === 'memoria-calculo') || (isPdfItem(item) ? item : null),
+    () => list.find((x) => isPdfItem(x)) || (isPdfItem(item) ? item : null),
     [list, item],
   )
   const pngItem = useMemo(
     () => list.find((x) => {
       const kind = String(x?.kind || x?.source?.kind || '').toLowerCase()
       const mime = String(x?.mime || x?.mime_type || x?.source?.mime || '').toLowerCase()
-      return kind === 'grafico-isometrico'
+      return isMemoriaPngItem(x)
+        || kind === 'grafico-isometrico'
         || kind === 'esquema'
         || (mime.startsWith('image/') && !isPdfItem(x))
     }) || (!isPdfItem(item) ? item : null),

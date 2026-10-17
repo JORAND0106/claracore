@@ -53,10 +53,32 @@ export function solidCellVolumeM3(cell) {
   return cellAreaM2(cell) * cellHeightM(cell)
 }
 
-/** Volumen total de un sólido (m³). */
-export function solidVolumeM3(solid) {
+/** Volumen geométrico crudo (suma de celdas), ignora volumeLocked. */
+export function solidGeomVolumeM3(solid) {
   if (!solid?.cells?.length) return 0
   return solid.cells.reduce((s, c) => s + solidCellVolumeM3(c), 0)
+}
+
+/**
+ * Volumen total de un sólido (m³).
+ * Si el sólido tiene volumeLocked (p. ej. unión por contacto con expand),
+ * se usa solid.volumeM3 para que panel, barra, cálculo y memoria coincidan.
+ */
+export function solidVolumeM3(solid) {
+  if (!solid?.cells?.length) return 0
+  if (solid.volumeLocked && Number.isFinite(Number(solid.volumeM3))) {
+    return Number(solid.volumeM3)
+  }
+  return solidGeomVolumeM3(solid)
+}
+
+/** Fija el volumen exacto y lo bloquea frente a recalculos por celdas infladas. */
+export function lockSolidVolume(solid, volumeM3) {
+  if (!solid) return solid
+  const v = Number(volumeM3)
+  solid.volumeM3 = Number.isFinite(v) ? v : solidGeomVolumeM3(solid)
+  solid.volumeLocked = true
+  return solid
 }
 
 export function formatVolumeM3(m3, digits = 2) {
@@ -270,7 +292,7 @@ export function extrudeClosedEntity(obj, {
     // está en el plano perpendicular → área * length.
   }
 
-  solid.volumeM3 = solidVolumeM3(solid)
+  lockSolidVolume(solid, solidGeomVolumeM3(solid))
   return { ok: true, solid }
 }
 
@@ -295,7 +317,7 @@ export function refreshSolidFromSourceEntity(solid, entity) {
   if (!r.ok) return r
   r.solid.sourceEntityId = entity.id
   r.solid.extrudeParams = { ...params }
-  r.solid.volumeM3 = solidVolumeM3(r.solid)
+  lockSolidVolume(r.solid, solidGeomVolumeM3(r.solid))
   return r
 }
 
@@ -314,7 +336,7 @@ export function solidForSourceEntity(solids, entityId) {
   return (solids || []).find((s) => s?.sourceEntityId === entityId) || null
 }
 
-/** Traslada un sólido en planta (XY). No altera cotas (z0/z1). */
+/** Traslada un sólido en planta (XY). No altera cotas (z0/z1) ni el volumen bloqueado. */
 export function translateSolidXy(solid, dx, dy) {
   if (!solid || solid.type !== 'solid3d') return solid
   const ddx = Number(dx) || 0
@@ -322,6 +344,8 @@ export function translateSolidXy(solid, dx, dy) {
   if (!ddx && !ddy) return solid
   return {
     ...solid,
+    volumeM3: solid.volumeM3,
+    volumeLocked: !!solid.volumeLocked,
     cells: (solid.cells || []).map((cell) => ({
       ...cell,
       ring: (cell.ring || []).map((p) => ({ x: p.x + ddx, y: p.y + ddy })),
@@ -513,11 +537,12 @@ function booleanSolids(solids, op) {
   }
 
   if (!outCells.length) return null
-  // Fusionar losas adyacentes con el mismo footprint sería opcional; volumen ya es exacto.
+  // Color: primer operando con color definido (unión/sustracción/corte).
+  const color = list.map((s) => s.color).find((c) => !!c) || list[0].color
   return {
     type: 'solid3d',
     id: uid(),
-    color: list[0].color,
+    color,
     extrudeAxis: list[0].extrudeAxis || 'z',
     viewPlane: list[0].viewPlane || 'top',
     cells: outCells,
@@ -665,9 +690,11 @@ export function uniteSolids(solids) {
   }
   if (!solid) return { ok: false, error: 'No se pudo unir los sólidos.' }
   const sumVol = list.reduce((s, x) => s + solidVolumeM3(x), 0)
-  // Sin solape real: el volumen es la suma exacta (el expand no debe inflar el dato).
-  // Con solape: el boolean ya evita doble conteo.
-  solid.volumeM3 = overlap > VOL_EPS ? solidVolumeM3(solid) : sumVol
+  // Sin solape real: suma exacta de operandos (el expand solo fusiona topología).
+  // Con solape: volumen del boolean (sin doble conteo).
+  const exact = overlap > VOL_EPS ? solidGeomVolumeM3(solid) : sumVol
+  lockSolidVolume(solid, exact)
+  if (!solid.color) solid.color = list.map((s) => s.color).find((c) => !!c) || '#0f766e'
   return { ok: true, solid }
 }
 
@@ -679,8 +706,8 @@ export function subtractSolids(baseSolid, subtractList) {
   if (!others.length) return { ok: false, error: 'Indique al menos un sólido a descontar.' }
   const solid = booleanSolids([baseSolid, ...others], 'difference')
   if (!solid) return { ok: false, error: 'No se pudo sustraer (resultado vacío).' }
-  solid.color = baseSolid.color
-  solid.volumeM3 = solidVolumeM3(solid)
+  solid.color = baseSolid.color || solid.color
+  lockSolidVolume(solid, solidGeomVolumeM3(solid))
   return { ok: true, solid }
 }
 
@@ -751,8 +778,8 @@ export function sliceSolidByLine(solid, a, b) {
     viewPlane: solid.viewPlane || 'top',
     cells: rightCells,
   }
-  s1.volumeM3 = solidVolumeM3(s1)
-  s2.volumeM3 = solidVolumeM3(s2)
+  lockSolidVolume(s1, solidGeomVolumeM3(s1))
+  lockSolidVolume(s2, solidGeomVolumeM3(s2))
   return { ok: true, solids: [s1, s2] }
 }
 
@@ -893,10 +920,71 @@ function edgeKey(a, b) {
     : `${bx},${by}|${ax},${ay}`
 }
 
+/** Oscurece un hex para aristas contrastadas sobre caras del mismo color. */
+export function solidEdgeStrokeColor(color, selected = false) {
+  if (selected) return '#1d4ed8'
+  const raw = String(color || '#0f766e').trim()
+  const m6 = raw.match(/^#([0-9a-fA-F]{6})$/)
+  const m3 = raw.match(/^#([0-9a-fA-F]{3})$/)
+  let r = 15
+  let g = 118
+  let b = 110
+  if (m6) {
+    r = parseInt(m6[1].slice(0, 2), 16)
+    g = parseInt(m6[1].slice(2, 4), 16)
+    b = parseInt(m6[1].slice(4, 6), 16)
+  } else if (m3) {
+    r = parseInt(m3[1][0] + m3[1][0], 16)
+    g = parseInt(m3[1][1] + m3[1][1], 16)
+    b = parseInt(m3[1][2] + m3[1][2], 16)
+  }
+  const dark = (c) => Math.max(0, Math.round(c * 0.45))
+  return `rgb(${dark(r)},${dark(g)},${dark(b)})`
+}
+
 /**
- * Dibuja un sólido proyectado: caras macizas (opacas) + aristas visibles continuas
- * y aristas ocultas (caras traseras / sólidos internos) punteadas.
- * Reemplaza el criterio previo de sólidos transparentes.
+ * Medidas máximas en planta (m) y altura por cotas.
+ * Cilindros (elipse circular analítica): long=anch=diámetro.
+ */
+export function solidFootprintDimsM(solid) {
+  const cells = solid?.cells || []
+  if (!cells.length) return { longM: 0, anchM: 0, heightM: 0, isCylinder: false }
+  let z0 = Infinity
+  let z1 = -Infinity
+  for (const c of cells) {
+    z0 = Math.min(z0, Number(c.z0) || 0, Number(c.z1) || 0)
+    z1 = Math.max(z1, Number(c.z0) || 0, Number(c.z1) || 0)
+  }
+  const heightM = Math.max(0, z1 - z0)
+  if (cells.length === 1 && cells[0].analytic?.type === 'ellipse') {
+    const rx = Math.abs(cells[0].analytic.rxM)
+    const ry = Math.abs(cells[0].analytic.ryM)
+    const circ = Math.abs(rx - ry) < 1e-9
+    if (circ) return { longM: rx * 2, anchM: rx * 2, heightM, isCylinder: true }
+    return { longM: rx * 2, anchM: ry * 2, heightM, isCylinder: false }
+  }
+  if (cells.length === 1 && cells[0].analytic?.type === 'rect') {
+    return {
+      longM: Math.abs(cells[0].analytic.wM),
+      anchM: Math.abs(cells[0].analytic.hM),
+      heightM,
+      isCylinder: false,
+    }
+  }
+  const bb = solidXyBounds(solid)
+  if (!bb) return { longM: 0, anchM: 0, heightM, isCylinder: false }
+  return {
+    longM: worldToMeters(Math.abs(bb.w)),
+    anchM: worldToMeters(Math.abs(bb.h)),
+    heightM,
+    isCylinder: false,
+  }
+}
+
+/**
+ * Dibuja un sólido: caras macizas + aristas visibles (continua fuerte) y ocultas (punteada).
+ * Sólido interno: sin relleno; solo aristas punteadas en su color (visto a través del externo).
+ * La selección no sustituye el color del sólido (solo refuerza el trazo).
  */
 export function drawSolid3d(ctx, solid, {
   viewId = 'top',
@@ -906,17 +994,20 @@ export function drawSolid3d(ctx, solid, {
   orbit = null,
   solids = null,
   nested = null,
+  pass = 'all', // 'fills' | 'edges' | 'all'
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
   const base = solid.color || '#0f766e'
-  const stroke = selected ? '#2563eb' : base
-  // Caras macizas: color del sólido casi opaco (selección un poco más clara).
-  const fill = selected ? solidColorToRgba('#2563eb', 0.88) : solidColorToRgba(base, 0.92)
+  const stroke = solidEdgeStrokeColor(base, selected)
+  const nestedStroke = base
+  const fill = solidColorToRgba(base, 0.94)
   const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
   const flatTop = !useOrbit && viewId === 'top'
   const isNested = nested != null ? !!nested : solidIsInternal(solid, solids)
-  const lw = Math.max(1.2, 2 / Math.max(zoom, 0.25))
-  const dash = [Math.max(3, 5 / Math.max(zoom, 0.25)), Math.max(2, 4 / Math.max(zoom, 0.25))]
+  const lw = Math.max(selected ? 1.8 : 1.35, (selected ? 2.6 : 2) / Math.max(zoom, 0.25))
+  const dash = [Math.max(3, 5 / Math.max(zoom, 0.25)), Math.max(2.5, 4 / Math.max(zoom, 0.25))]
+  const doFills = pass === 'all' || pass === 'fills'
+  const doEdges = pass === 'all' || pass === 'edges'
 
   ctx.save()
   ctx.lineWidth = lw
@@ -924,29 +1015,33 @@ export function drawSolid3d(ctx, solid, {
   ctx.lineCap = 'round'
 
   if (flatTop) {
-    // Planta: relleno opaco + contorno; internos con línea oculta (punteada).
     for (const cell of solid.cells) {
       const zBottom = Math.min(cell.z0, cell.z1)
       const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
-      pathRing(ctx, ringBot)
-      ctx.fillStyle = fill
-      ctx.fill()
-      ctx.strokeStyle = stroke
-      ctx.setLineDash(isNested ? dash : [])
-      ctx.stroke()
-      for (const hole of cell.holes || []) {
-        pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
+      if (doFills && !isNested) {
+        pathRing(ctx, ringBot)
+        ctx.fillStyle = fill
+        ctx.fill()
+      }
+      if (doEdges) {
+        pathRing(ctx, ringBot)
+        ctx.strokeStyle = isNested ? nestedStroke : stroke
         ctx.setLineDash(isNested ? dash : [])
         ctx.stroke()
+        for (const hole of cell.holes || []) {
+          pathRing(ctx, hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit)))
+          ctx.setLineDash(isNested ? dash : [])
+          ctx.stroke()
+        }
       }
     }
+    ctx.setLineDash([])
     ctx.restore()
     return
   }
 
-  // Perfil / isométrica / órbita: painter's algorithm en caras, luego aristas.
   const facePolys = []
-  const edgeMap = new Map() // key → { a, b, frontVotes, backVotes }
+  const edgeMap = new Map()
 
   const addEdge = (pa, pb, front) => {
     const k = edgeKey(pa, pb)
@@ -980,7 +1075,6 @@ export function drawSolid3d(ctx, solid, {
       addEdge(ringBot[i], ringTop[i], front)
       addEdge(ringBot[j], ringTop[j], front)
     }
-    // Tapas superior e inferior
     const topPts = ringTop.slice(0, edgeCount)
     const botPts = ringBot.slice(0, edgeCount)
     if (topPts.length >= 3) {
@@ -1001,26 +1095,50 @@ export function drawSolid3d(ctx, solid, {
     }
   }
 
-  facePolys.sort((a, b) => a.depth - b.depth)
-  ctx.fillStyle = fill
-  for (const f of facePolys) {
-    pathRing(ctx, f.pts)
-    ctx.fill()
+  if (doFills && !isNested) {
+    facePolys.sort((a, b) => a.depth - b.depth)
+    ctx.fillStyle = fill
+    for (const f of facePolys) {
+      pathRing(ctx, f.pts)
+      ctx.fill()
+    }
   }
 
-  // Aristas: visibles = al menos un voto frontal; ocultas = solo traseras.
-  // Sólido interno: todas las aristas como línea oculta (punteada).
-  ctx.strokeStyle = stroke
-  for (const e of edgeMap.values()) {
-    const hidden = isNested || (e.frontVotes === 0 && e.backVotes > 0)
-    ctx.setLineDash(hidden ? dash : [])
-    ctx.beginPath()
-    ctx.moveTo(e.a.x, e.a.y)
-    ctx.lineTo(e.b.x, e.b.y)
-    ctx.stroke()
+  if (doEdges) {
+    // Interno: todas punteadas en su color. Externo: visibles continuas, ocultas punteadas.
+    ctx.strokeStyle = isNested ? nestedStroke : stroke
+    ctx.lineWidth = isNested ? Math.max(1.1, lw * 0.95) : lw
+    for (const e of edgeMap.values()) {
+      const hidden = isNested || (e.frontVotes === 0 && e.backVotes > 0)
+      ctx.setLineDash(hidden ? dash : [])
+      ctx.beginPath()
+      ctx.moveTo(e.a.x, e.a.y)
+      ctx.lineTo(e.b.x, e.b.y)
+      ctx.stroke()
+    }
   }
   ctx.setLineDash([])
   ctx.restore()
+}
+
+/** Orden de pintado: externos (fills+edges) primero; internos solo edges al final. */
+export function drawSolids3dLayered(ctx, solids, opts = {}) {
+  const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  const outers = []
+  const inners = []
+  for (const s of list) {
+    if (solidIsInternal(s, list)) inners.push(s)
+    else outers.push(s)
+  }
+  for (const s of outers) {
+    drawSolid3d(ctx, s, { ...opts, solids: list, nested: false, pass: 'fills' })
+  }
+  for (const s of outers) {
+    drawSolid3d(ctx, s, { ...opts, solids: list, nested: false, pass: 'edges' })
+  }
+  for (const s of inners) {
+    drawSolid3d(ctx, s, { ...opts, solids: list, nested: true, pass: 'edges' })
+  }
 }
 
 /**
