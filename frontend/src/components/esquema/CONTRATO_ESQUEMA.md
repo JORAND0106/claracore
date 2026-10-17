@@ -30,13 +30,13 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-3D-03 | Un solo espacio 3D con coordenadas reales para todas las vistas. |
 | C-3D-04 | **Contorno y sólido = una sola entidad** en todas las vistas y acciones. Tras extruir, el contorno fuente no aparece separado del sólido (iso, giro libre, perfiles). Solo manijas en planta superior ortográfica si está seleccionado. |
 | C-3D-05 | Extruir por cotas en superior/inferior (altura calculada visible en popup); por longitud (profundidad) en las demás vistas, sin alterar la figura. |
-| C-3D-06 | Dibujo adherido a las caras; OSNAP 3D al dibujar y al mover (vértices, medios, centros de cara/círculo). |
+| C-3D-06 | Dibujo adherido a las caras; OSNAP 3D al dibujar y al mover (vértices, medios, centros de cara/círculo y de cilindro). Enganche fiable en las 6 vistas, isométricas y giro libre, también sobre resultados de Unir/Sustraer/Cortar; distancia de enganche constante en pantalla (independiente del zoom); resalte antes de soltar; mouse y dedo. |
 | C-3D-07 | Mover libre de cualquier sólido (incluidos resultados de operaciones) sin cambiar dimensiones ni cotas; Dimensionar actualiza el volumen de inmediato. |
-| C-3D-08 | Color aplicable a cualquier sólido. |
-| C-3D-09 | Unir, Sustraer y Cortar con geometría y volumen exactos. |
+| C-3D-08 | Color aplicable a cualquier sólido. Cada sólido conserva el color elegido; sus seis caras se muestran con tonos distintos fijos (superior la más clara, inferior la más oscura; frontal, posterior, izquierda y derecha intermedios distintos). En cilindros y caras curvas el tono varía de forma gradual según la normal. Tonos visibles en vistas planas, isométricas, giro libre e imagen de memoria. |
+| C-3D-09 | Unir, Sustraer y Cortar con geometría y volumen exactos. Sustraer funciona en cadena sobre resultados previos y admite varios operandos a la vez; el resultado conserva color y nombre del base. |
 | C-3D-10 | Selección de sólidos internos. |
 | C-3D-11 | Deshacer y Rehacer exactos, sin acciones que se repitan solas. |
-| C-3D-12 | Representación: aristas visibles continuas finas; ocultas punteadas finas; caras semitransparentes; internos legibles; igual en editor e imagen. |
+| C-3D-12 | Representación: aristas visibles continuas finas; ocultas punteadas finas; caras semitransparentes con tonos por cara; internos legibles; igual en editor e imagen. |
 
 ## Cálculo de volúmenes
 
@@ -72,8 +72,11 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 5. **Regresión:** en las seis vistas planas un círculo se ve como círculo (ambos ejes), no como línea.
 6. **Regresión:** OSNAP al dibujar y al mover (vértices, medios, centros).
 7. **Regresión:** Extruir abre popup de cotas (altura calculada) en superior/inferior; por longitud en frontal/laterales/posterior.
+8. Cubo de un color: vista frontal y posterior con tonos distintos; en NE se distinguen las tres caras visibles.
+9. OSNAP en las 6 vistas y NE sobre cubo y cilindro (vértices, medios, centros de cara), con zoom alejado y cercano: engancha siempre.
+10. Cubo 1,50³ − interior 1,10×1,10×1,30; al resultado restar dos cilindros que atraviesen paredes: ambos pases quedan y el volumen es exacto (Sustraer en cadena / múltiple).
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js` bloquean el despliegue si se rompe 5–7.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js` y `esquema3dTonosOsnapSustraer.scenario.test.js` bloquean el despliegue si se rompe 5–10.
 
 ## Mantenimiento
 

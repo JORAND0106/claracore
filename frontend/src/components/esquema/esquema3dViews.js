@@ -159,24 +159,25 @@ export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
   const zDisp = cotaToWorldZ(pt?.zCota ?? cotaRefM, cotaRefM)
   switch (id) {
     case 'front':
-      // Mirando desde −Y: pantalla X = world X, pantalla Y = −Z
-      return { x, y: zDisp }
+      // Mirando desde −Y: pantalla X = world X, pantalla Y = −Z.
+      // depth mayor = más cerca (cara frontal delante de la posterior).
+      return { x, y: zDisp, depth: -y }
     case 'back':
-      // Mirando desde +Y: pantalla X = −world X, pantalla Y = −Z
-      return { x: -x, y: zDisp }
+      // Mirando desde +Y: pantalla X = −world X, pantalla Y = −Z.
+      return { x: -x, y: zDisp, depth: y }
     case 'left':
     case 'side':
-      // Mirando desde −X: pantalla X = world Y, pantalla Y = −Z
-      return { x: y, y: zDisp }
+      // Mirando desde −X: pantalla X = world Y, pantalla Y = −Z.
+      return { x: y, y: zDisp, depth: -x }
     case 'right':
-      // Mirando desde +X: pantalla X = −world Y, pantalla Y = −Z
-      return { x: -y, y: zDisp }
+      // Mirando desde +X: pantalla X = −world Y, pantalla Y = −Z.
+      return { x: -y, y: zDisp, depth: x }
     case 'bottom':
-      // Mirando desde abajo: pantalla X = world X, pantalla Y = −world Y
-      return { x, y: -y }
+      // Mirando desde abajo: pantalla X = world X, pantalla Y = −world Y.
+      return { x, y: -y, depth: -zDisp }
     case 'top':
     default:
-      return { x, y }
+      return { x, y, depth: zDisp }
   }
 }
 

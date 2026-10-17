@@ -694,8 +694,8 @@ export function solidThicknessAlongViewM(solid, viewId) {
 /**
  * Empaqueta un punto world 3D como OSNAP de lienzo (con profundidad de cara).
  */
-function osnapFromWorld(pt3d, viewId, cotaRefM, kind, solidId = null) {
-  const canvas = projectWorld3dToCanvas(pt3d, viewId, cotaRefM, null)
+function osnapFromWorld(pt3d, viewId, cotaRefM, kind, solidId = null, orbit = null) {
+  const canvas = projectWorld3dToCanvas(pt3d, viewId, cotaRefM, orbit)
   return {
     x: canvas.x,
     y: canvas.y,
@@ -711,9 +711,9 @@ function osnapFromWorld(pt3d, viewId, cotaRefM, kind, solidId = null) {
  * en coordenadas de lienzo de la vista. Incluye `world` y `faceDepthWorld`.
  * @returns {Array<{ x: number, y: number, kind: string, world?: object, faceDepthWorld?: number }>}
  */
-export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
-  const id = normalizeViewId(viewId)
-  if (!solid?.cells?.length) return []
+/** AABB world del sólido (XY px + cotas m). */
+function solidAabbWorld(solid) {
+  if (!solid?.cells?.length) return null
   let minX = Infinity
   let maxX = -Infinity
   let minY = Infinity
@@ -730,7 +730,103 @@ export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
       maxY = Math.max(maxY, p.y)
     }
   }
-  if (!Number.isFinite(minX)) return []
+  if (!Number.isFinite(minX)) return null
+  return { minX, maxX, minY, maxY, minZ, maxZ }
+}
+
+/**
+ * Centros + esquinas + medios de las 6 caras AABB (siempre, no solo la vista actual).
+ * Garantiza enganche al centro de cada cara también en resultados de booleanos.
+ */
+export function solidAllFacesSnapPoints(solid, viewId, cotaRefM = 0, orbit = null) {
+  const id = normalizeViewId(viewId)
+  const bb = solidAabbWorld(solid)
+  if (!bb) return []
+  const { minX, maxX, minY, maxY, minZ, maxZ } = bb
+  const cx = (minX + maxX) / 2
+  const cy = (minY + maxY) / 2
+  const cz = (minZ + maxZ) / 2
+  const faces = [
+    { // front
+      corners: [
+        { x: minX, y: minY, zCota: minZ },
+        { x: maxX, y: minY, zCota: minZ },
+        { x: maxX, y: minY, zCota: maxZ },
+        { x: minX, y: minY, zCota: maxZ },
+      ],
+      center: { x: cx, y: minY, zCota: cz },
+    },
+    { // back
+      corners: [
+        { x: minX, y: maxY, zCota: minZ },
+        { x: maxX, y: maxY, zCota: minZ },
+        { x: maxX, y: maxY, zCota: maxZ },
+        { x: minX, y: maxY, zCota: maxZ },
+      ],
+      center: { x: cx, y: maxY, zCota: cz },
+    },
+    { // left
+      corners: [
+        { x: minX, y: minY, zCota: minZ },
+        { x: minX, y: maxY, zCota: minZ },
+        { x: minX, y: maxY, zCota: maxZ },
+        { x: minX, y: minY, zCota: maxZ },
+      ],
+      center: { x: minX, y: cy, zCota: cz },
+    },
+    { // right
+      corners: [
+        { x: maxX, y: minY, zCota: minZ },
+        { x: maxX, y: maxY, zCota: minZ },
+        { x: maxX, y: maxY, zCota: maxZ },
+        { x: maxX, y: minY, zCota: maxZ },
+      ],
+      center: { x: maxX, y: cy, zCota: cz },
+    },
+    { // top
+      corners: [
+        { x: minX, y: minY, zCota: maxZ },
+        { x: maxX, y: minY, zCota: maxZ },
+        { x: maxX, y: maxY, zCota: maxZ },
+        { x: minX, y: maxY, zCota: maxZ },
+      ],
+      center: { x: cx, y: cy, zCota: maxZ },
+    },
+    { // bottom
+      corners: [
+        { x: minX, y: minY, zCota: minZ },
+        { x: maxX, y: minY, zCota: minZ },
+        { x: maxX, y: maxY, zCota: minZ },
+        { x: minX, y: maxY, zCota: minZ },
+      ],
+      center: { x: cx, y: cy, zCota: minZ },
+    },
+  ]
+  const out = []
+  for (const face of faces) {
+    for (const p of face.corners) {
+      out.push(osnapFromWorld(p, id, cotaRefM, 'corner', solid.id, orbit))
+    }
+    for (let i = 0; i < face.corners.length; i += 1) {
+      const a = face.corners[i]
+      const b = face.corners[(i + 1) % face.corners.length]
+      out.push(osnapFromWorld({
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2,
+        zCota: (a.zCota + b.zCota) / 2,
+      }, id, cotaRefM, 'mid', solid.id, orbit))
+    }
+    out.push(osnapFromWorld(face.center, id, cotaRefM, 'center', solid.id, orbit))
+  }
+  return out
+}
+
+export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0, orbit = null) {
+  const id = normalizeViewId(viewId)
+  if (!solid?.cells?.length) return []
+  const bb = solidAabbWorld(solid)
+  if (!bb) return []
+  const { minX, maxX, minY, maxY, minZ, maxZ } = bb
 
   const depth = solidFaceDepthWorld(solid, id)
   let corners3d = []
@@ -773,7 +869,7 @@ export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
       break
   }
 
-  const corners = corners3d.map((p) => osnapFromWorld(p, id, cotaRefM, 'corner', solid.id))
+  const corners = corners3d.map((p) => osnapFromWorld(p, id, cotaRefM, 'corner', solid.id, orbit))
   const mids = []
   for (let i = 0; i < corners3d.length; i += 1) {
     const a = corners3d[i]
@@ -783,28 +879,55 @@ export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
       y: (a.y + b.y) / 2,
       zCota: (a.zCota + b.zCota) / 2,
     }
-    mids.push(osnapFromWorld(mid, id, cotaRefM, 'mid', solid.id))
+    mids.push(osnapFromWorld(mid, id, cotaRefM, 'mid', solid.id, orbit))
   }
   const center3d = {
     x: corners3d.reduce((s, p) => s + p.x, 0) / corners3d.length,
     y: corners3d.reduce((s, p) => s + p.y, 0) / corners3d.length,
     zCota: corners3d.reduce((s, p) => s + p.zCota, 0) / corners3d.length,
   }
-  return [...corners, ...mids, osnapFromWorld(center3d, id, cotaRefM, 'center', solid.id)]
+  return [...corners, ...mids, osnapFromWorld(center3d, id, cotaRefM, 'center', solid.id, orbit)]
+}
+
+/** ¿El anillo es casi circular? (centro de cilindro/círculo tras booleanos sin analytic). */
+function ringCircleCenter(ring) {
+  if (!ring || ring.length < 8) return null
+  let sx = 0
+  let sy = 0
+  const n = ring.length
+  for (const p of ring) {
+    sx += p.x
+    sy += p.y
+  }
+  const cx = sx / n
+  const cy = sy / n
+  let rMin = Infinity
+  let rMax = 0
+  for (const p of ring) {
+    const r = Math.hypot(p.x - cx, p.y - cy)
+    rMin = Math.min(rMin, r)
+    rMax = Math.max(rMax, r)
+  }
+  if (!(rMax > 1e-6)) return null
+  if ((rMax - rMin) / rMax > 0.12) return null
+  return { x: cx, y: cy, r: (rMin + rMax) / 2 }
 }
 
 /**
- * OSNAP 3D completo: cara visible + vértices reales del sólido + centros de círculo/elipse.
- * Usado al dibujar y al mover.
+ * OSNAP 3D completo: 6 caras + vértices reales + centros de círculo/cilindro.
+ * Incluye sólidos resultantes de Unir/Sustraer/Cortar.
+ * `orbit` alinea la proyección con la cámara (iso / giro libre).
  */
-export function solidOsnapPoints(solid, viewId, cotaRefM = 0) {
+export function solidOsnapPoints(solid, viewId, cotaRefM = 0, orbit = null) {
   const id = normalizeViewId(viewId)
   if (!solid?.cells?.length) return []
-  const out = [...solidFaceSnapPoints(solid, id, cotaRefM)]
-  const seen = new Set(out.map((s) => `${s.kind}:${s.x.toFixed(2)},${s.y.toFixed(2)}`))
+  const out = [
+    ...solidAllFacesSnapPoints(solid, id, cotaRefM, orbit),
+  ]
+  const seen = new Set(out.map((s) => `${s.kind}:${s.x.toFixed(1)},${s.y.toFixed(1)}`))
   const push = (pt3d, kind) => {
-    const sp = osnapFromWorld(pt3d, id, cotaRefM, kind, solid.id)
-    const key = `${kind}:${sp.x.toFixed(2)},${sp.y.toFixed(2)}`
+    const sp = osnapFromWorld(pt3d, id, cotaRefM, kind, solid.id, orbit)
+    const key = `${kind}:${sp.x.toFixed(1)},${sp.y.toFixed(1)}`
     if (seen.has(key)) return
     seen.add(key)
     out.push(sp)
@@ -833,9 +956,14 @@ export function solidOsnapPoints(solid, viewId, cotaRefM = 0) {
             y: (a.y + b.y) / 2,
             zCota: z1,
           }, 'mid')
-          // Vertical mid (arista entre cotas)
           push({ x: a.x, y: a.y, zCota: (z0 + z1) / 2 }, 'mid')
         }
+      }
+      const circ = ringCircleCenter(ring)
+      if (circ) {
+        push({ x: circ.x, y: circ.y, zCota: (z0 + z1) / 2 }, 'center')
+        push({ x: circ.x, y: circ.y, zCota: z0 }, 'center')
+        push({ x: circ.x, y: circ.y, zCota: z1 }, 'center')
       }
     }
     // Centro de círculo / elipse analítica (huella en planta).
@@ -862,11 +990,11 @@ export function solidOsnapPoints(solid, viewId, cotaRefM = 0) {
 }
 
 /** Todos los OSNAP 3D de una lista de sólidos (opcionalmente excluye uno). */
-export function collectSolidsOsnap(solids, viewId, cotaRefM = 0, excludeSolidId = null) {
+export function collectSolidsOsnap(solids, viewId, cotaRefM = 0, excludeSolidId = null, orbit = null) {
   const list = []
   for (const s of solids || []) {
     if (!s || s.id === excludeSolidId) continue
-    list.push(...solidOsnapPoints(s, viewId, cotaRefM))
+    list.push(...solidOsnapPoints(s, viewId, cotaRefM, orbit))
   }
   return list
 }
@@ -953,6 +1081,7 @@ export function snapSolidMoveDelta({
   cursorCanvas,
   threshold = 14,
   cotaRefM = 0,
+  orbit = null,
 } = {}) {
   const id = normalizeViewId(viewId)
   if (!originSolid || !grabCanvas || !cursorCanvas) {
@@ -965,8 +1094,8 @@ export function snapSolidMoveDelta({
   const rawDx = cursorCanvas.x - grabCanvas.x
   const rawDy = cursorCanvas.y - grabCanvas.y
   const movedPreview = translateSolidInView(originSolid, rawDx, rawDy, id)
-  const selfSnaps = solidOsnapPoints(movedPreview, id, cotaRefM)
-  const others = collectSolidsOsnap(solids, id, cotaRefM, originSolid.id)
+  const selfSnaps = solidOsnapPoints(movedPreview, id, cotaRefM, orbit)
+  const others = collectSolidsOsnap(solids, id, cotaRefM, originSolid.id, orbit)
   let best = null
   let bestDist = threshold
   for (const a of selfSnaps) {
@@ -1367,6 +1496,11 @@ function operandSnapshot(solid, volumeM3) {
   }
 }
 
+/**
+ * Sustrae uno o varios sólidos del base.
+ * Funciona en cadena sobre resultados previos de Unir/Sustraer/Cortar.
+ * Varios operandos a la vez: se restan todos los que compartan volumen.
+ */
 export function subtractSolids(baseSolid, subtractList) {
   if (!baseSolid || baseSolid.type !== 'solid3d') {
     return { ok: false, error: 'Indique el sólido base.' }
@@ -1376,6 +1510,7 @@ export function subtractSolids(baseSolid, subtractList) {
 
   let sharedTotal = 0
   const subSnapshots = []
+  const withShare = []
   for (const o of others) {
     let sh = intersectionVolumeM3(baseSolid, o)
     const full = solidVolumeM3(o)
@@ -1383,13 +1518,36 @@ export function subtractSolids(baseSolid, subtractList) {
     if (sh > VOL_EPS) {
       sharedTotal += sh
       subSnapshots.push(operandSnapshot(o, sh))
+      withShare.push(o)
     }
   }
-  if (!(sharedTotal > VOL_EPS)) {
+  if (!(sharedTotal > VOL_EPS) || !withShare.length) {
     return { ok: false, error: 'Los sólidos no comparten volumen; no se sustrae.' }
   }
 
-  const solid = booleanSolids([baseSolid, ...others], 'difference')
+  // Intento único (varios a la vez); si falla (geometría compleja tras booleanos),
+  // sustraer en cadena uno a uno.
+  let solid = booleanSolids([baseSolid, ...withShare], 'difference')
+  if (!solid) {
+    let acc = {
+      ...baseSolid,
+      cells: (baseSolid.cells || []).map((c) => ({
+        ...c,
+        ring: (c.ring || []).map((p) => ({ ...p })),
+        holes: (c.holes || []).map((h) => h.map((p) => ({ ...p }))),
+      })),
+      volumeLocked: false,
+      volumeM3: undefined,
+    }
+    for (const o of withShare) {
+      const next = booleanSolids([acc, o], 'difference')
+      if (!next) {
+        return { ok: false, error: 'No se pudo sustraer (resultado vacío).' }
+      }
+      acc = next
+    }
+    solid = acc
+  }
   if (!solid) return { ok: false, error: 'No se pudo sustraer (resultado vacío).' }
   solid.color = baseSolid.color || solid.color
   if (baseSolid.nombre) solid.nombre = baseSolid.nombre
@@ -1679,6 +1837,70 @@ function rgbCss({ r, g, b }) {
   return `rgb(${r},${g},${b})`
 }
 
+/**
+ * Factores de tono por cara (misma asignación en todos los sólidos).
+ * >1 aclara hacia blanco; <1 oscurece. Superior la más clara, inferior la más oscura.
+ */
+export const FACE_TONE_FACTOR = Object.freeze({
+  top: 1.38,
+  bottom: 0.48,
+  front: 1.0,
+  back: 0.72,
+  left: 0.86,
+  right: 1.14,
+})
+
+/**
+ * Tono gradual según normal world (nx, ny, nz).
+ * Caras curvas (cilindros): interpolación suave entre las 4 laterales + top/bottom.
+ */
+export function faceToneFactorFromNormal(nx, ny, nz) {
+  const len = Math.hypot(nx, ny, nz) || 1
+  const x = nx / len
+  const y = ny / len
+  const z = nz / len
+  if (z > 0.85) return FACE_TONE_FACTOR.top
+  if (z < -0.85) return FACE_TONE_FACTOR.bottom
+  // Laterales: pesos por proyección sobre ejes de cara.
+  const wFront = Math.max(0, -y)
+  const wBack = Math.max(0, y)
+  const wLeft = Math.max(0, -x)
+  const wRight = Math.max(0, x)
+  const sum = wFront + wBack + wLeft + wRight || 1
+  let f = (
+    FACE_TONE_FACTOR.front * wFront
+    + FACE_TONE_FACTOR.back * wBack
+    + FACE_TONE_FACTOR.left * wLeft
+    + FACE_TONE_FACTOR.right * wRight
+  ) / sum
+  // Ligera influencia de la inclinación hacia top/bottom.
+  if (z > 0) f = f + (FACE_TONE_FACTOR.top - f) * (z * z * 0.35)
+  else if (z < 0) f = f + (FACE_TONE_FACTOR.bottom - f) * (z * z * 0.35)
+  return f
+}
+
+/** Aclara (factor>1) u oscurece (factor<1) el color base del sólido. */
+export function shadeSolidColorRgb(color, factor = 1) {
+  const base = parseRgb(color)
+  const f = Number(factor)
+  if (!Number.isFinite(f) || Math.abs(f - 1) < 1e-6) return base
+  if (f >= 1) {
+    const lift = Math.min(1, Math.max(0, (f - 1) * 1.2))
+    return {
+      r: Math.round(base.r + (255 - base.r) * lift),
+      g: Math.round(base.g + (255 - base.g) * lift),
+      b: Math.round(base.b + (255 - base.b) * lift),
+    }
+  }
+  return mixRgb(base, Math.max(0.15, f))
+}
+
+export function solidFaceFillRgba(color, faceTone, alpha) {
+  const rgb = shadeSolidColorRgb(color, faceTone)
+  const a = Math.min(1, Math.max(0, Number(alpha) || 0))
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`
+}
+
 /** Arista visible: tono oscuro del color del sólido. */
 export function solidEdgeStrokeColor(color, selected = false) {
   if (selected) return '#1d4ed8'
@@ -1761,12 +1983,10 @@ export function drawSolid3d(ctx, solid, {
   const strokeVis = solidEdgeStrokeColor(base, selected)
   const strokeHid = solidHiddenStrokeColor(base)
   const isNested = nested != null ? !!nested : solidIsInternal(solid, solids)
-  const fill = solidColorToRgba(
-    base,
-    isNested ? SOLID3D_STYLE.fillAlphaNested : SOLID3D_STYLE.fillAlpha,
-  )
+  const fillAlpha = isNested ? SOLID3D_STYLE.fillAlphaNested : SOLID3D_STYLE.fillAlpha
   const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
   const flatTop = !useOrbit && viewId === 'top'
+  const flatBottom = !useOrbit && viewId === 'bottom'
   // pixelScale = escala del transform del ctx; si no viene, usar zoom del editor.
   const pScale = Math.max(Number(pixelScale != null ? pixelScale : zoom) || 1, 0.05)
   const lwVis = solidLineWidthWorld(
@@ -1787,28 +2007,33 @@ export function drawSolid3d(ctx, solid, {
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
 
-  if (flatTop) {
+  // Vista superior/inferior ortográfica: un solo plano → tono de esa cara.
+  if (flatTop || flatBottom) {
+    const planeTone = flatTop ? FACE_TONE_FACTOR.top : FACE_TONE_FACTOR.bottom
+    const fill = solidFaceFillRgba(base, planeTone, fillAlpha)
     for (const cell of solid.cells) {
-      const zBottom = Math.min(cell.z0, cell.z1)
-      const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
-      const holeBots = (cell.holes || []).map((hole) => (
-        hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+      const zPlane = flatTop
+        ? Math.max(cell.z0, cell.z1)
+        : Math.min(cell.z0, cell.z1)
+      const ring = (cell.ring || []).map((p) => projectPt(p, zPlane, viewId, cotaRefM, orbit))
+      const holes = (cell.holes || []).map((hole) => (
+        hole.map((p) => projectPt(p, zPlane, viewId, cotaRefM, orbit))
       ))
       if (doFills) {
-        pathRingWithHoles(ctx, ringBot, holeBots)
+        pathRingWithHoles(ctx, ring, holes)
         ctx.fillStyle = fill
         ctx.fill('evenodd')
       }
       if (doEdgesVis) {
-        pathRing(ctx, ringBot)
+        pathRing(ctx, ring)
         ctx.strokeStyle = strokeVis
         ctx.lineWidth = lwVis
         ctx.setLineDash([])
         ctx.stroke()
       }
       if (doEdgesHid) {
-        for (const holeBot of holeBots) {
-          pathRing(ctx, holeBot)
+        for (const hole of holes) {
+          pathRing(ctx, hole)
           ctx.strokeStyle = strokeHid
           ctx.lineWidth = lwHid
           ctx.setLineDash(dash)
@@ -1819,6 +2044,59 @@ export function drawSolid3d(ctx, solid, {
     ctx.setLineDash([])
     ctx.restore()
     return
+  }
+
+  // Alzados ortográficos (front/back/left/right): rellenar la cara cercana con su
+  // tono fijo y luego dibujar aristas del prisma (profundidad de proyección).
+  const flatElevId = !useOrbit ? normalizeViewId(viewId) : null
+  const flatElev = flatElevId === 'front' || flatElevId === 'back'
+    || flatElevId === 'left' || flatElevId === 'side' || flatElevId === 'right'
+  if (flatElev && doFills) {
+    let elevTone = FACE_TONE_FACTOR.front
+    if (flatElevId === 'back') elevTone = FACE_TONE_FACTOR.back
+    else if (flatElevId === 'left' || flatElevId === 'side') elevTone = FACE_TONE_FACTOR.left
+    else if (flatElevId === 'right') elevTone = FACE_TONE_FACTOR.right
+    const bb = solidAabbWorld(solid)
+    if (bb) {
+      const { minX, maxX, minY, maxY, minZ, maxZ } = bb
+      let face3d
+      if (flatElevId === 'front') {
+        face3d = [
+          { x: minX, y: minY, zCota: minZ },
+          { x: maxX, y: minY, zCota: minZ },
+          { x: maxX, y: minY, zCota: maxZ },
+          { x: minX, y: minY, zCota: maxZ },
+        ]
+      } else if (flatElevId === 'back') {
+        face3d = [
+          { x: minX, y: maxY, zCota: minZ },
+          { x: maxX, y: maxY, zCota: minZ },
+          { x: maxX, y: maxY, zCota: maxZ },
+          { x: minX, y: maxY, zCota: maxZ },
+        ]
+      } else if (flatElevId === 'left' || flatElevId === 'side') {
+        face3d = [
+          { x: minX, y: minY, zCota: minZ },
+          { x: minX, y: maxY, zCota: minZ },
+          { x: minX, y: maxY, zCota: maxZ },
+          { x: minX, y: minY, zCota: maxZ },
+        ]
+      } else {
+        face3d = [
+          { x: maxX, y: minY, zCota: minZ },
+          { x: maxX, y: maxY, zCota: minZ },
+          { x: maxX, y: maxY, zCota: maxZ },
+          { x: maxX, y: minY, zCota: maxZ },
+        ]
+      }
+      const face2d = face3d.map((p) => projectPt(p, p.zCota, viewId, cotaRefM, orbit))
+      pathRing(ctx, face2d)
+      ctx.fillStyle = solidFaceFillRgba(base, elevTone, fillAlpha)
+      ctx.fill()
+    }
+    // Continuar para aristas (y fills internos en iso no aplica aquí).
+    // En alzado ortográfico el fill de caras laterales del painter se omite
+    // para no tapar el tono de la cara vista; solo aristas abajo.
   }
 
   const facePolys = []
@@ -1836,18 +2114,28 @@ export function drawSolid3d(ctx, solid, {
     else e.backVotes += 1
   }
 
-  const emitPrismFaces = (ringBot, ringTop, holesBot = [], holesTop = []) => {
+  const emitPrismFaces = (ringBot, ringTop, holesBot = [], holesTop = [], worldRing = null, zBottom = 0, zTop = 0) => {
     const n = ringBot.length
     const lastDup = n > 1
       && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
     const edgeCount = lastDup ? n - 1 : n
+    const wr = worldRing || []
 
     for (let i = 0; i < edgeCount; i += 1) {
       const j = (i + 1) % edgeCount
       const pts = [ringBot[i], ringBot[j], ringTop[j], ringTop[i]]
       const depth = pts.reduce((s, q) => s + (q.depth || 0), 0) / 4
       const front = signedProjectedArea(pts) < 0
-      facePolys.push({ pts, depth, front })
+      let tone = FACE_TONE_FACTOR.front
+      if (wr[i] && wr[j]) {
+        const ax = wr[j].x - wr[i].x
+        const ay = wr[j].y - wr[i].y
+        // Normal outward aproximada en planta (perpendicular a la arista, Z=0 para pared).
+        const nx = ay
+        const ny = -ax
+        tone = faceToneFactorFromNormal(nx, ny, 0)
+      }
+      facePolys.push({ pts, depth, front, tone })
       addEdge(ringBot[i], ringBot[j], front)
       addEdge(ringTop[j], ringTop[i], front)
       addEdge(ringBot[i], ringTop[i], front)
@@ -1869,10 +2157,11 @@ export function drawSolid3d(ctx, solid, {
     if (topPts.length >= 3) {
       const depth = topPts.reduce((s, q) => s + (q.depth || 0), 0) / topPts.length
       const front = signedProjectedArea(topPts) < 0
+      const tone = FACE_TONE_FACTOR.top
       if (holeTops.length) {
-        faceWithHoles.push({ outer: topPts, holes: holeTops, depth, front })
+        faceWithHoles.push({ outer: topPts, holes: holeTops, depth, front, tone })
       } else {
-        facePolys.push({ pts: topPts, depth, front })
+        facePolys.push({ pts: topPts, depth, front, tone })
       }
       for (let i = 0; i < edgeCount; i += 1) {
         addEdge(topPts[i], topPts[(i + 1) % edgeCount], front)
@@ -1886,10 +2175,11 @@ export function drawSolid3d(ctx, solid, {
     if (botPts.length >= 3) {
       const depth = botPts.reduce((s, q) => s + (q.depth || 0), 0) / botPts.length
       const front = signedProjectedArea(botPts) < 0
+      const tone = FACE_TONE_FACTOR.bottom
       if (holeBots.length) {
-        faceWithHoles.push({ outer: botPts, holes: holeBots, depth, front })
+        faceWithHoles.push({ outer: botPts, holes: holeBots, depth, front, tone })
       } else {
-        facePolys.push({ pts: botPts, depth, front })
+        facePolys.push({ pts: botPts, depth, front, tone })
       }
       for (let i = 0; i < edgeCount; i += 1) {
         addEdge(botPts[i], botPts[(i + 1) % edgeCount], front)
@@ -1900,25 +2190,29 @@ export function drawSolid3d(ctx, solid, {
         }
       }
     }
+    void zBottom
+    void zTop
   }
 
   for (const cell of solid.cells) {
     const zBottom = Math.min(cell.z0, cell.z1)
     const zTop = Math.max(cell.z0, cell.z1)
-    const ringBot = (cell.ring || []).map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
-    const ringTop = (cell.ring || []).map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
+    const worldRing = cell.ring || []
+    const ringBot = worldRing.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+    const ringTop = worldRing.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
     const holesBot = (cell.holes || []).map((hole) => (
       hole.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
     ))
     const holesTop = (cell.holes || []).map((hole) => (
       hole.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
     ))
-    emitPrismFaces(ringBot, ringTop, holesBot, holesTop)
+    emitPrismFaces(ringBot, ringTop, holesBot, holesTop, worldRing, zBottom, zTop)
 
     // Paredes interiores del vacío (orientación invertida respecto al contorno exterior).
     for (let hi = 0; hi < holesBot.length; hi += 1) {
       const hb = holesBot[hi]
       const ht = holesTop[hi]
+      const wh = (cell.holes || [])[hi] || []
       if (!hb?.length || !ht?.length) continue
       const hn = hb.length
       const lastDup = hn > 1
@@ -1929,7 +2223,14 @@ export function drawSolid3d(ctx, solid, {
         const pts = [hb[i], ht[i], ht[j], hb[j]]
         const depth = pts.reduce((s, q) => s + (q.depth || 0), 0) / 4
         const front = signedProjectedArea(pts) < 0
-        facePolys.push({ pts, depth, front })
+        let tone = FACE_TONE_FACTOR.back
+        if (wh[i] && wh[j]) {
+          const ax = wh[j].x - wh[i].x
+          const ay = wh[j].y - wh[i].y
+          // Interior: normal hacia adentro del vacío (= hacia el sólido).
+          tone = faceToneFactorFromNormal(-ay, ax, 0)
+        }
+        facePolys.push({ pts, depth, front, tone })
         addEdge(hb[i], hb[j], front)
         addEdge(ht[j], ht[i], front)
         addEdge(hb[i], ht[i], front)
@@ -1938,13 +2239,15 @@ export function drawSolid3d(ctx, solid, {
     }
   }
 
-  if (doFills) {
+  // En alzados ortográficos el fill principal ya se pintó con el tono de la cara
+  // vista; el painter multi-cara taparía frontal/posterior con el mismo rectángulo.
+  if (doFills && !flatElev) {
     const allFaces = [
       ...facePolys.map((f) => ({ ...f, kind: 'solid' })),
       ...faceWithHoles.map((f) => ({ ...f, kind: 'holes' })),
     ].sort((a, b) => a.depth - b.depth)
-    ctx.fillStyle = fill
     for (const f of allFaces) {
+      ctx.fillStyle = solidFaceFillRgba(base, f.tone ?? 1, fillAlpha)
       if (f.kind === 'holes') {
         pathRingWithHoles(ctx, f.outer, f.holes)
         ctx.fill('evenodd')
