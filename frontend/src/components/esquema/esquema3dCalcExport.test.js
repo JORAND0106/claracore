@@ -13,8 +13,10 @@ import {
 import {
   buildCalcAdjuntos,
   composeCalcMemoriaPng,
+  labelsFromSnapshot,
   renderMemoriaColorTableCanvas,
 } from './esquema3dCalcExport.js'
+import { solidLineWidthWorld, SOLID3D_STYLE } from './esquema3dSolids.js'
 
 function rectAt(x0, y0, wM, hM, id) {
   return {
@@ -27,7 +29,32 @@ function rectAt(x0, y0, wM, hM, id) {
   }
 }
 
+describe('presentación legible · grosores fijos', () => {
+  it('solidLineWidthWorld baja al subir pixelScale (export no engrosa)', () => {
+    const w1 = solidLineWidthWorld(SOLID3D_STYLE.visiblePx, 1)
+    const w4 = solidLineWidthWorld(SOLID3D_STYLE.visiblePx, 4)
+    assert.ok(w4 < w1)
+    assert.ok(Math.abs(w1 * 1 - SOLID3D_STYLE.visiblePx) < 0.2)
+    // Tras ctx.scale(4), el ancho en píxeles ≈ visiblePx
+    assert.ok(Math.abs(w4 * 4 - SOLID3D_STYLE.visiblePx) < 0.25)
+  })
+})
+
 describe('memoria PNG lado a lado', () => {
+  it('labelsFromSnapshot numera en orden de líneas', () => {
+    const labels = labelsFromSnapshot({
+      lines: [
+        { solidId: 'a', ok: true, volumeM3: 1 },
+        { solidId: 'b', ok: true, volumeM3: 2 },
+        { solidId: null, ok: false },
+      ],
+    })
+    assert.deepEqual(labels, [
+      { solidId: 'a', num: 1 },
+      { solidId: 'b', num: 2 },
+    ])
+  })
+
   it('buildCalcAdjuntos emite un solo PNG memoria-calculo (no PDF)', async () => {
     const big = extrudeClosedEntity(rectAt(0, 0, 1.9, 2.3, 'big'), {
       viewId: 'top', cotaSuperior: 2.6, cotaInferior: 0,
