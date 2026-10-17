@@ -6,7 +6,8 @@ Grupos (orden de la barra):
   2. soporte    — documentos de soporte (+ tipos «Otro» del checklist)
   3. ingreso    — documentos de ingreso (+ tipos «Otro»)
   4. afiliacion — certificaciones de afiliación (EPS/ARL/Pensión/Cesantías
-                  obligatorias; Caja opcional)
+                  obligatorias; Caja opcional). En prestación de servicios
+                  mide la planilla de pago en lugar de las certificaciones.
 
 Cálculo en lote sobre la página de la grilla (sin N+1).
 Opcionales no cargados (hoja de vida, certificados, caja) no restan avance.
@@ -85,6 +86,7 @@ _BUILTIN_INGRESO = frozenset({"induccion", "reglamento", "examen_medico"})
 _BUILTIN_AFILIACION = frozenset({
     "cert_eps", "cert_pension", "cert_arl", "cert_cesantias", "cert_caja",
 })
+_BUILTIN_PLANILLA = frozenset({"planilla_pago"})
 
 
 def _builtin_tipos(categoria: str) -> Set[str]:
@@ -177,13 +179,21 @@ def _fill_for_trabajador(
             "afiliacion": _seg(1, 1),
         }
 
+    from rrhh_docs_obligatoriedad import trabajador_es_prestacion_servicios
+
     vigentes = set(docs)
+    prestacion = trabajador_es_prestacion_servicios(trab)
 
     # Contrato: 0/1
     contrato = _seg(1 if tiene_contrato else 0, 1)
 
     def group_fill(cat: str) -> dict:
-        expected: Set[str] = set(_builtin_tipos(cat))
+        if cat == "afiliacion" and prestacion:
+            expected = set(_BUILTIN_PLANILLA)
+        else:
+            expected = set(_builtin_tipos(cat))
+            if cat == "afiliacion":
+                expected -= set(_BUILTIN_PLANILLA)
         if cat in ("soporte", "ingreso"):
             expected |= set(custom.get(cat) or ())
             # Tipos «Otro» cargados (ext_*) aunque aún no figuren en catálogo.

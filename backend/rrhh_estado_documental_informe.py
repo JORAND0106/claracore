@@ -221,6 +221,9 @@ _TIPOS_AFILIACION = (
     ("cert_cesantias", "Certificación Cesantías"),
     ("cert_caja", "Certificación Caja de Compensación"),
 )
+_TIPOS_PLANILLA = (
+    ("planilla_pago", "Planilla de pago"),
+)
 
 
 def _columnas_checklist(custom: List[Tuple[str, str, str]]) -> List[dict]:
@@ -263,6 +266,8 @@ def _columnas_checklist(custom: List[Tuple[str, str, str]]) -> List[dict]:
             add(cat, tipo, label, "Documentos de ingreso")
     for tipo, label in _TIPOS_AFILIACION:
         add("afiliacion", tipo, label, "Certificaciones de afiliación")
+    for tipo, label in _TIPOS_PLANILLA:
+        add("afiliacion", tipo, label, "Planilla de pago")
 
     return cols
 
@@ -276,10 +281,10 @@ def _celda_doc(
     aprobado: bool,
 ) -> str:
     """
-    ✅ cargado · ❌ obligatorio faltante · 🔘 opcional no cargado.
-    EPS/ARL/Pensión/Cesantías nunca son 🔘.
+    ✅ cargado · ❌ obligatorio faltante · 🔘 opcional / no aplica.
+    EPS/ARL/Pensión/Cesantías nunca son 🔘 salvo prestación de servicios.
     """
-    from rrhh_docs_obligatoriedad import es_doc_opcional
+    from rrhh_docs_obligatoriedad import doc_aplica_checklist, es_doc_opcional
 
     cat = col["categoria"]
     tipo = col["tipo"]
@@ -287,6 +292,9 @@ def _celda_doc(
         if aprobado or tiene_contrato:
             return _CELDA_OK
         return _CELDA_FALTA
+
+    if not doc_aplica_checklist(trab, cat, tipo):
+        return _CELDA_OPCIONAL  # no aplica para este tipo de contrato
 
     if aprobado or (cat, tipo) in vigentes:
         return _CELDA_OK

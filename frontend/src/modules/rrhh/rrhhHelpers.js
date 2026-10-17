@@ -198,6 +198,11 @@ export const DOC_TIPOS_AFILIACION = [
   { tipo: 'cert_caja', label: 'Certificación Caja de Compensación' },
 ]
 
+/** Solo prestación de servicios (misma categoría de almacenamiento `afiliacion`). */
+export const DOC_TIPOS_PLANILLA = [
+  { tipo: 'planilla_pago', label: 'Planilla de pago' },
+]
+
 /** Mapeo certificación → campo/catálogo de entidad en rrhh_trabajadores */
 export const AFILIACION_ENTIDAD_BY_TIPO = {
   cert_eps: { field: 'eps', catalogKey: 'eps', label: 'EPS' },

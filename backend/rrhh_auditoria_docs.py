@@ -162,6 +162,9 @@ _TIPOS_AFILIACION = (
     ("cert_cesantias", "Certificación Cesantías"),
     ("cert_caja", "Certificación Caja de Compensación"),
 )
+_TIPOS_PLANILLA = (
+    ("planilla_pago", "Planilla de pago"),
+)
 
 
 def slots_checklist_auditoria(
@@ -172,26 +175,32 @@ def slots_checklist_auditoria(
     """
     Slots del informe (incluye contrato laboral + checklist documental).
     custom_tipos: [(categoria, tipo_slug, label), ...]
+    Prestación de servicios: omite certificaciones y exige planilla de pago.
     """
-    from rrhh_docs_obligatoriedad import es_doc_opcional
+    from rrhh_docs_obligatoriedad import doc_aplica_checklist, es_doc_opcional
 
-    del trab  # reservado para reglas futuras por colaborador
     slots: List[dict] = []
     seen = set()
 
     def add(cat: str, tipo: str, label: str) -> None:
         if tipo == "otro":
             return
+        if not doc_aplica_checklist(trab, cat, tipo):
+            return
         key = (cat, tipo)
         if key in seen:
             return
         seen.add(key)
+        panel = PANEL_LABEL.get(cat, cat)
+        if tipo == "planilla_pago":
+            panel = "Planilla de pago"
         slots.append({
             "categoria": cat,
             "tipo": tipo,
             "label": label,
-            "panel": PANEL_LABEL.get(cat, cat),
-            "ubicacion": ubicacion_tipo(cat, label),
+            "panel": panel,
+            "ubicacion": ubicacion_tipo(cat, label) if tipo != "planilla_pago"
+            else f"Planilla de pago · {label}",
             "opcional": es_doc_opcional(cat, tipo),
         })
 
@@ -201,6 +210,7 @@ def slots_checklist_auditoria(
         ("ingreso", _TIPOS_INGRESO),
         ("bancario", _TIPOS_BANCARIO),
         ("afiliacion", _TIPOS_AFILIACION),
+        ("afiliacion", _TIPOS_PLANILLA),
     ):
         for tipo, label in tipos:
             add(cat, tipo, label)

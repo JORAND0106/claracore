@@ -74,6 +74,7 @@ def test_columnas_checklist_incluye_custom_otro_sin_slot_ui():
     assert "soporte:ext_carta" in keys
     assert "ingreso:ext_carnet" in keys
     assert "afiliacion:cert_eps" in keys
+    assert "afiliacion:planilla_pago" in keys
     assert not any(c["tipo"] == "otro" for c in cols)
 
 
@@ -84,6 +85,7 @@ def test_celda_iconos_obligatorio_y_opcional():
     col_hv = {"categoria": "soporte", "tipo": "hoja_vida"}
     col_eps = {"categoria": "afiliacion", "tipo": "cert_eps"}
     col_caja = {"categoria": "afiliacion", "tipo": "cert_caja"}
+    col_planilla = {"categoria": "afiliacion", "tipo": "planilla_pago"}
 
     assert _celda_doc(trab, col_contrato, vigentes=set(), tiene_contrato=True, aprobado=False) == _CELDA_OK
     assert _celda_doc(trab, col_contrato, vigentes=set(), tiene_contrato=False, aprobado=False) == _CELDA_FALTA
@@ -96,8 +98,22 @@ def test_celda_iconos_obligatorio_y_opcional():
     assert _celda_doc(trab, col_caja, vigentes=set(), tiene_contrato=False, aprobado=False) == _CELDA_OPCIONAL
     # EPS sin entidad y sin archivo → ❌ (nunca N/A / 🔘)
     assert _celda_doc(trab, col_eps, vigentes=set(), tiene_contrato=False, aprobado=False) == _CELDA_FALTA
+    # Planilla no aplica a término fijo → 🔘
+    assert _celda_doc(trab, col_planilla, vigentes=set(), tiene_contrato=False, aprobado=False) == _CELDA_OPCIONAL
     # Aprobado → ✅
     assert _celda_doc(trab, col_cedula, vigentes=set(), tiene_contrato=False, aprobado=True) == _CELDA_OK
+
+
+def test_celda_prestacion_servicios_afiliacion_na_planilla_obligatoria():
+    trab = {"tipo_contrato": "Prestación de servicios"}
+    col_eps = {"categoria": "afiliacion", "tipo": "cert_eps"}
+    col_planilla = {"categoria": "afiliacion", "tipo": "planilla_pago"}
+    assert _celda_doc(trab, col_eps, vigentes=set(), tiene_contrato=False, aprobado=False) == _CELDA_OPCIONAL
+    assert _celda_doc(trab, col_planilla, vigentes=set(), tiene_contrato=False, aprobado=False) == _CELDA_FALTA
+    assert _celda_doc(
+        trab, col_planilla, vigentes={("afiliacion", "planilla_pago")},
+        tiene_contrato=False, aprobado=False,
+    ) == _CELDA_OK
 
 
 def _sample_matrix():

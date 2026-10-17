@@ -22,6 +22,16 @@ def test_slots_incluyen_contrato_y_cedula():
     assert ("contrato_laboral", "contrato_laboral") in keys
     assert ("soporte", "cedula") in keys
     assert ("afiliacion", "cert_eps") in keys
+    assert ("afiliacion", "planilla_pago") not in keys
+
+
+def test_slots_prestacion_servicios_planilla_sin_afiliacion():
+    slots = slots_checklist_auditoria({"tipo_contrato": "Prestación de servicios"})
+    keys = {(s["categoria"], s["tipo"]) for s in slots}
+    assert ("afiliacion", "planilla_pago") in keys
+    assert ("afiliacion", "cert_eps") not in keys
+    assert ("afiliacion", "cert_caja") not in keys
+    assert ("soporte", "cedula") in keys
 
 
 def test_documento_cargado_nunca_es_no_cargado_aunque_ia_diga_no_encontrado():
