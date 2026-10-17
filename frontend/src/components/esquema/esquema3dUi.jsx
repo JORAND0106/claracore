@@ -14,24 +14,29 @@ export function Esquema3dViewToolbar({
 }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-      {ESQUEMA_3D_VIEWS.map((v) => (
-        <button
-          key={v.id}
-          type="button"
-          title={v.label + (v.draw ? ' (dibujo)' : ' (solo vista)')}
-          aria-label={v.label}
-          onClick={() => onView(v.id)}
-          style={{
-            ...iconBtn(t, viewId === v.id),
-            fontSize: 10,
-            fontWeight: 700,
-            minWidth: 36,
-            padding: '6px 8px',
-          }}
-        >
-          {viewShort(v.id)}
-        </button>
-      ))}
+      {ESQUEMA_3D_VIEWS.map((v) => {
+        const tip = v.label + (v.draw ? ' (dibujo)' : ' (solo vista)')
+        return (
+          <button
+            key={v.id}
+            type="button"
+            title={tip}
+            data-cc-tooltip={tip}
+            data-cc-tooltip-variant="short"
+            aria-label={v.label}
+            onClick={() => onView(v.id)}
+            style={{
+              ...iconBtn(t, viewId === v.id),
+              fontSize: 10,
+              fontWeight: 700,
+              minWidth: 36,
+              padding: '6px 8px',
+            }}
+          >
+            {viewShort(v.id)}
+          </button>
+        )
+      })}
       {!isEsquema3dDrawView(viewId) ? (
         <span style={{ ...ghost(t), fontSize: 11, opacity: 0.85 }}>
           Vista isométrica: solo inspección

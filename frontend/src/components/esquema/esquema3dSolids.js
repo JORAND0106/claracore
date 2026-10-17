@@ -275,8 +275,9 @@ export function extrudeClosedEntity(obj, {
 }
 
 /**
- * Reconstruye un sólido ligado a una entidad 2D (p. ej. tras redimensionar).
- * Conserva id y parámetros de extrusión; actualiza volumen de inmediato.
+ * Reconstruye un sólido ligado a una entidad 2D (p. ej. tras mover / redimensionar).
+ * Conserva id y parámetros de extrusión; actualiza geometría y volumen de inmediato.
+ * Contorno + sólido = una sola entidad: el ring del sólido siempre refleja la entidad fuente.
  */
 export function refreshSolidFromSourceEntity(solid, entity) {
   if (!solid || solid.type !== 'solid3d' || !entity) {
@@ -296,6 +297,68 @@ export function refreshSolidFromSourceEntity(solid, entity) {
   r.solid.extrudeParams = { ...params }
   r.solid.volumeM3 = solidVolumeM3(r.solid)
   return r
+}
+
+/** Ids de entidades 2D que ya son base de un sólido (no deben dibujarse aparte en 3D). */
+export function linkedSourceEntityIds(solids) {
+  const ids = new Set()
+  for (const s of solids || []) {
+    if (s?.sourceEntityId) ids.add(s.sourceEntityId)
+  }
+  return ids
+}
+
+/** Sólido ligado a una entidad 2D (si existe). */
+export function solidForSourceEntity(solids, entityId) {
+  if (!entityId) return null
+  return (solids || []).find((s) => s?.sourceEntityId === entityId) || null
+}
+
+/** Traslada un sólido en planta (XY). No altera cotas (z0/z1). */
+export function translateSolidXy(solid, dx, dy) {
+  if (!solid || solid.type !== 'solid3d') return solid
+  const ddx = Number(dx) || 0
+  const ddy = Number(dy) || 0
+  if (!ddx && !ddy) return solid
+  return {
+    ...solid,
+    cells: (solid.cells || []).map((cell) => ({
+      ...cell,
+      ring: (cell.ring || []).map((p) => ({ x: p.x + ddx, y: p.y + ddy })),
+      holes: (cell.holes || []).map((hole) => hole.map((p) => ({ x: p.x + ddx, y: p.y + ddy }))),
+    })),
+  }
+}
+
+/**
+ * Sincroniza todos los sólidos ligados a entidades 2D.
+ * @returns {{ solids: object[], changed: boolean }}
+ */
+export function syncSolidsWithEntities(solids, entities) {
+  const objs = entities || []
+  let changed = false
+  const next = (solids || []).map((solid) => {
+    if (!solid?.sourceEntityId || !solid.extrudeParams) return solid
+    const ent = objs.find((o) => o.id === solid.sourceEntityId)
+    if (!ent) return solid
+    const r = refreshSolidFromSourceEntity(solid, ent)
+    if (!r.ok) return solid
+    changed = true
+    return r.solid
+  })
+  return { solids: next, changed }
+}
+
+/** Elimina sólidos cuya entidad fuente está en entityIds. */
+export function dropSolidsForEntities(solids, entityIds) {
+  const drop = entityIds instanceof Set ? entityIds : new Set(entityIds || [])
+  if (!drop.size) return solids || []
+  return (solids || []).filter((s) => !s?.sourceEntityId || !drop.has(s.sourceEntityId))
+}
+
+/** Ids de entidades fuente de una lista de sólidos. */
+export function sourceEntityIdsOfSolids(solids) {
+  return (solids || []).map((s) => s?.sourceEntityId).filter(Boolean)
 }
 
 /** Recalcula volumeM3 en una copia del sólido. */
@@ -662,17 +725,21 @@ export function drawSolid3d(ctx, solid, {
   ctx.restore()
 }
 
-/** Hit-test de sólido en coordenadas de lienzo según la vista activa. */
-export function hitSolidAtView(solid, canvasPt, viewId = 'top', cotaRefM = 0) {
+/**
+ * Hit-test de sólido en coordenadas de lienzo según la vista / cámara activa.
+ * @param {object|null} orbit misma cámara que drawSolid3d (ángulos + centro).
+ */
+export function hitSolidAtView(solid, canvasPt, viewId = 'top', cotaRefM = 0, orbit = null) {
   if (!solid?.cells?.length || !canvasPt) return false
-  if (viewId === 'top') return pointInSolidXy(solid, canvasPt.x, canvasPt.y)
+  // Planta sin órbita: hit en XY world (coincide con el contorno fuente).
+  if (!orbit && viewId === 'top') return pointInSolidXy(solid, canvasPt.x, canvasPt.y)
   for (const cell of solid.cells) {
     const z0 = Math.min(cell.z0, cell.z1)
     const z1 = Math.max(cell.z0, cell.z1)
     const pts = []
     for (const p of cell.ring || []) {
-      pts.push(projectPt(p, z0, viewId, cotaRefM))
-      pts.push(projectPt(p, z1, viewId, cotaRefM))
+      pts.push(projectPt(p, z0, viewId, cotaRefM, orbit))
+      pts.push(projectPt(p, z1, viewId, cotaRefM, orbit))
     }
     if (pts.length < 3) continue
     let minX = Infinity
