@@ -1,0 +1,16 @@
+---
+description: Contrato de comportamiento obligatorio de la herramienta de esquema
+globs: frontend/src/components/esquema/**
+alwaysApply: false
+---
+
+# Esquema — contrato obligatorio
+
+Antes de cambiar código bajo `frontend/src/components/esquema/`:
+
+1. Leer completo `frontend/src/components/esquema/CONTRATO_ESQUEMA.md`.
+2. No romper ningún ID `C-*` ya aprobado (en especial **C-3D-04**: contorno + sólido = una sola entidad).
+3. Tras el cambio, ejecutar `npm run test:esquema` en `frontend/` y asegurar que pasa.
+4. Si el comportamiento aprobado cambia, actualizar `CONTRATO_ESQUEMA.md` y las pruebas del contrato.
+
+El job CI `esquema-contrato` bloquea el despliegue si estas pruebas fallan.

@@ -81,7 +81,6 @@ import {
   hitSolidAtView,
   inferFaceDepthForExtrude,
   isClosedDrawableEntity,
-  linkedSourceEntityIds,
   pickSubtractBase,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
@@ -97,6 +96,7 @@ import {
   translateSolidInView,
   uniteSolids,
 } from './esquema3dSolids'
+import { filterObjectsFor3dDraw } from './esquema3dEntityUnity'
 import {
   applyWorldDeltaToEntity,
   canvasDeltaToWorldMove,
@@ -922,15 +922,8 @@ export default function EsquemaEditorModal({
     ) ? selectedId : null
     const selSet = selectedIdsRef.current
     const multi = selSet.size > 1
-    // Contorno extruido = base del sólido: una sola entidad visual.
-    // En iso/órbita/perfiles no se dibuja el contorno 2D suelto.
-    // En superior, solo si está seleccionado (manijas de edición).
-    const linked2d = mode3dRef.current
-      ? linkedSourceEntityIds(solids3dRef.current || [])
-      : null
-    const topEdit3d = mode3dRef.current
-      && !orbitFreeRef.current
-      && (view3dRef.current || 'top') === 'top'
+    // Contorno extruido = una sola entidad con el sólido: no se dibuja aparte
+    // en iso / giro libre / perfiles (sí manijas en superior ortográfica).
     const viewIdDraw = view3dRef.current || 'top'
     const orbitDraw = mode3dRef.current
       ? solidsViewCamera(viewIdDraw, solids3dRef.current || [], {
@@ -938,13 +931,22 @@ export default function EsquemaEditorModal({
         orbitAngles: orbitAnglesRef.current,
       })
       : null
-    for (const obj of list) {
-      if (linked2d && linked2d.has(obj.id)) {
-        if (!(topEdit3d && selSet.has(obj.id))) continue
-      }
-      // Contornos de perfil: proyectar al espacio 3D de la vista actual (iso/otras caras).
-      const drawObj = (mode3dRef.current && obj.viewPlane)
-        ? projectEntityToView(obj, viewIdDraw, { orbit: orbitDraw })
+    const list3d = mode3dRef.current
+      ? filterObjectsFor3dDraw(list, solids3dRef.current || [], {
+        mode3d: true,
+        orbitFree: !!orbitFreeRef.current,
+        viewId: viewIdDraw,
+        selectedIds: selSet,
+      })
+      : list
+    for (const obj of list3d) {
+      // 2D restante: proyectar al espacio 3D (órbita/iso/cara) para no quedar plano en pantalla.
+      const drawObj = mode3dRef.current
+        ? projectEntityToView(
+          { ...obj, viewPlane: obj.viewPlane || 'top' },
+          viewIdDraw,
+          { orbit: orbitDraw },
+        )
         : obj
       drawObject(ctx, drawObj, selSet.has(obj.id), {
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
