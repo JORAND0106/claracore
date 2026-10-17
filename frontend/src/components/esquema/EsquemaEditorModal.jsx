@@ -73,21 +73,28 @@ import {
 import { DIBUJO_TIPOS } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
 import {
   drawSolid3d,
+  dropSolidsForEntities,
   extrudeClosedEntity,
+  formatVolumeM3,
   hitSolidAtView,
   isClosedDrawableEntity,
+  linkedSourceEntityIds,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
+  solidForSourceEntity,
   solidVolumeM3,
+  sourceEntityIdsOfSolids,
   subtractSolids,
+  syncSolidsWithEntities,
   uniteSolids,
 } from './esquema3dSolids'
 import {
   isEsquema3dDrawView,
   isEsquema3dIsoView,
   orbitAnglesForView,
-  solidsOrbitCenter,
+  solidsViewCamera,
 } from './esquema3dViews'
+import { adoptNativeTitlesInTree } from '../ccTooltipTheme.js'
 import { Esquema3dExtrudePopup, Esquema3dViewToolbar, Esquema3dVolumeHint } from './esquema3dUi'
 import {
   createVolumeCalc,
@@ -849,7 +856,19 @@ export default function EsquemaEditorModal({
     ) ? selectedId : null
     const selSet = selectedIdsRef.current
     const multi = selSet.size > 1
+    // Contorno extruido = base del sólido: una sola entidad visual.
+    // En iso/órbita/perfiles no se dibuja el contorno 2D suelto.
+    // En superior, solo si está seleccionado (manijas de edición).
+    const linked2d = mode3dRef.current
+      ? linkedSourceEntityIds(solids3dRef.current || [])
+      : null
+    const topEdit3d = mode3dRef.current
+      && !orbitFreeRef.current
+      && (view3dRef.current || 'top') === 'top'
     for (const obj of list) {
+      if (linked2d && linked2d.has(obj.id)) {
+        if (!(topEdit3d && selSet.has(obj.id))) continue
+      }
       drawObject(ctx, obj, selSet.has(obj.id), {
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
@@ -873,20 +892,17 @@ export default function EsquemaEditorModal({
         ui: uiNow,
       })
     }
-    // Sólidos 3D (proyección según vista activa u órbita libre).
+    // Sólidos 3D (proyección según vista / giro libre; cotas = elevación Z absoluta).
     if (mode3dRef.current) {
       const selSolids = new Set(selectedSolidIdsRef.current || [])
-      // Vistas predefinidas: proyección ortográfica/isométrica por viewId.
-      // Giro libre: cámara órbita (yaw/pitch) alrededor del centro de los sólidos.
-      const orbit = orbitFreeRef.current
-        ? {
-          ...orbitAnglesRef.current,
-          center: solidsOrbitCenter(solids3dRef.current || []),
-        }
-        : null
+      const viewId = view3dRef.current || 'top'
+      const orbit = solidsViewCamera(viewId, solids3dRef.current || [], {
+        orbitFree: !!orbitFreeRef.current,
+        orbitAngles: orbitAnglesRef.current,
+      })
       for (const solid of solids3dRef.current || []) {
         drawSolid3d(ctx, solid, {
-          viewId: view3dRef.current || 'top',
+          viewId,
           selected: selSolids.has(solid.id),
           zoom: zoomRef.current,
           orbit,
@@ -1657,13 +1673,34 @@ export default function EsquemaEditorModal({
       setToolHint(r.error || 'No se pudo extruir.')
       return
     }
-    setSolids3d((prev) => [...prev, r.solid])
+    const next = [...(solids3dRef.current || []), r.solid]
+    solids3dRef.current = next
+    setSolids3d(next)
     setSelectedSolidIds([r.solid.id])
+    // Contorno + sólido = una entidad: mantener el contorno seleccionado para props/mover.
+    selectOne(ent.id)
+    if (SHAPE_TOOLS.has(ent.type)) syncMeasureFromObject(ent)
     setExtrudePrompt(null)
     setDirty(true)
     setToolHint(`Sólido creado · ${r.solid.volumeM3.toFixed(2)} m³`)
     setPanTick((n) => n + 1)
   }, [extrudePrompt])
+
+  const consumeSolidOperands = useCallback((operandSolids, resultSolid) => {
+    const drop = new Set(operandSolids.map((s) => s.id))
+    const dropEntities = new Set(sourceEntityIdsOfSolids(operandSolids))
+    if (dropEntities.size) {
+      objectsRef.current = objectsRef.current.filter((o) => !dropEntities.has(o.id))
+      selectOne(null)
+    }
+    const next = [...(solids3dRef.current || []).filter((s) => !drop.has(s.id)), resultSolid]
+    solids3dRef.current = next
+    setSolids3d(next)
+    setSelectedSolidIds([resultSolid.id])
+    setDirty(true)
+    setOp3d(null)
+    setPanTick((n) => n + 1)
+  }, [])
 
   const applyUnite3d = useCallback(() => {
     const sels = (solids3dRef.current || []).filter((s) => selectedSolidIdsRef.current.includes(s.id))
@@ -1672,14 +1709,9 @@ export default function EsquemaEditorModal({
       setToolHint(r.error || 'No se pudo unir.')
       return
     }
-    const drop = new Set(sels.map((s) => s.id))
-    setSolids3d((prev) => [...prev.filter((s) => !drop.has(s.id)), r.solid])
-    setSelectedSolidIds([r.solid.id])
-    setDirty(true)
-    setOp3d(null)
+    consumeSolidOperands(sels, r.solid)
     setToolHint(`Unión · ${r.solid.volumeM3.toFixed(2)} m³`)
-    setPanTick((n) => n + 1)
-  }, [])
+  }, [consumeSolidOperands])
 
   const applySubtract3d = useCallback(() => {
     const ids = selectedSolidIdsRef.current || []
@@ -1694,14 +1726,9 @@ export default function EsquemaEditorModal({
       setToolHint(r.error || 'No se pudo sustraer.')
       return
     }
-    const drop = new Set(ids)
-    setSolids3d((prev) => [...prev.filter((s) => !drop.has(s.id)), r.solid])
-    setSelectedSolidIds([r.solid.id])
-    setDirty(true)
-    setOp3d(null)
+    consumeSolidOperands([base, ...others], r.solid)
     setToolHint(`Sustracción · ${r.solid.volumeM3.toFixed(2)} m³`)
-    setPanTick((n) => n + 1)
-  }, [])
+  }, [consumeSolidOperands])
 
   const beginCut3d = useCallback(() => {
     if (!mode3dRef.current) {
@@ -1739,7 +1766,14 @@ export default function EsquemaEditorModal({
       setPanTick((n) => n + 1)
       return
     }
-    setSolids3d((prev) => [...prev.filter((s) => s.id !== draft.solidId), ...r.solids])
+    // El resultado del corte es entidad(es) sólida(s); se retira el contorno fuente.
+    if (solid?.sourceEntityId) {
+      objectsRef.current = objectsRef.current.filter((o) => o.id !== solid.sourceEntityId)
+      selectOne(null)
+    }
+    const next = [...(solids3dRef.current || []).filter((s) => s.id !== draft.solidId), ...r.solids]
+    solids3dRef.current = next
+    setSolids3d(next)
     setSelectedSolidIds(r.solids.map((s) => s.id))
     setDirty(true)
     setToolHint(`Corte · ${r.solids.map((s) => `${s.volumeM3.toFixed(2)} m³`).join(' + ')}`)
@@ -1749,8 +1783,12 @@ export default function EsquemaEditorModal({
   const hitSolid3dAt = useCallback((p) => {
     const list = solids3dRef.current || []
     const viewId = view3dRef.current || 'top'
+    const orbit = solidsViewCamera(viewId, list, {
+      orbitFree: !!orbitFreeRef.current,
+      orbitAngles: orbitAnglesRef.current,
+    })
     for (let i = list.length - 1; i >= 0; i -= 1) {
-      if (hitSolidAtView(list[i], p, viewId)) return list[i]
+      if (hitSolidAtView(list[i], p, viewId, 0, orbit)) return list[i]
     }
     return null
   }, [])
@@ -1803,29 +1841,36 @@ export default function EsquemaEditorModal({
     })
   }, [])
 
-  /** Sincroniza sólidos ligados a entidades 2D (volumen al instante). */
+  /** Sincroniza sólidos ligados a entidades 2D (posición, tamaño y volumen al instante). */
   const syncLinkedSolidsFromEntities = useCallback(() => {
     const solids = solids3dRef.current || []
-    if (!solids.length) return
-    const objs = objectsRef.current || []
-    let changed = false
-    const next = solids.map((solid) => {
-      if (!solid?.sourceEntityId || !solid.extrudeParams) return solid
-      const ent = objs.find((o) => o.id === solid.sourceEntityId)
-      if (!ent) return solid
-      const r = refreshSolidFromSourceEntity(solid, ent)
-      if (!r.ok) return solid
-      if (Math.abs((r.solid.volumeM3 || 0) - (solid.volumeM3 || 0)) > 1e-12
-        || r.solid.cells !== solid.cells) {
-        changed = true
-      }
-      return r.solid
-    })
+    if (!solids.length) return false
+    const { solids: next, changed } = syncSolidsWithEntities(solids, objectsRef.current || [])
     if (changed) {
+      solids3dRef.current = next
       setSolids3d(next)
       setPanTick((n) => n + 1)
     }
+    return changed
   }, [])
+
+  /** Selecciona sólido y, si tiene contorno fuente, también la entidad (entidad única). */
+  const selectSolidAndSource = useCallback((solid, { additive = false } = {}) => {
+    if (!solid) {
+      setSelectedSolidIds([])
+      return
+    }
+    selectSolid3d(solid.id, { additive })
+    if (!additive && solid.sourceEntityId) {
+      const ent = objectsRef.current.find((o) => o.id === solid.sourceEntityId)
+      if (ent) {
+        selectOne(ent.id)
+        if (SHAPE_TOOLS.has(ent.type)) syncMeasureFromObject(ent)
+      }
+    } else if (!additive) {
+      selectOne(null)
+    }
+  }, [selectSolid3d])
 
   useEffect(() => {
     if (!autoActivateMap) return undefined
@@ -1834,6 +1879,15 @@ export default function EsquemaEditorModal({
     }, 160)
     return () => window.clearTimeout(tmr)
   }, [autoActivateMap, activateMap])
+
+  // Tooltips institucionales (iPad / táctil / portátil): adoptar title del modal.
+  useEffect(() => {
+    const root = document.querySelector('[data-testid="esquema-modal-square"]')
+    if (!root) return undefined
+    adoptNativeTitlesInTree(root)
+    const tmr = window.setTimeout(() => adoptNativeTitlesInTree(root), 80)
+    return () => window.clearTimeout(tmr)
+  }, [mode3d, view3d, tool, orbitFree, op3d])
 
   const bindMapPkClick = useCallback((map) => {
     if (!map || mapClickBoundRef.current) return
@@ -2464,10 +2518,32 @@ export default function EsquemaEditorModal({
     pushHistory()
     const offset = 24 / (zoomRef.current || 1)
     const source = Array.isArray(clipboardRef.current) ? clipboardRef.current : [clipboardRef.current]
+    const idMap = new Map()
     const copies = cloneScene(source).map((copy) => {
+      const oldId = copy.id
       copy.id = uid()
+      if (oldId) idMap.set(oldId, copy.id)
       return translateObject(copy, offset, offset)
     })
+    // Clonar sólidos ligados a los contornos pegados (misma entidad).
+    const solidCopies = []
+    for (const solid of solids3dRef.current || []) {
+      const newEntId = solid.sourceEntityId ? idMap.get(solid.sourceEntityId) : null
+      if (!newEntId) continue
+      const ent = copies.find((c) => c.id === newEntId)
+      if (!ent || !solid.extrudeParams) continue
+      const r = refreshSolidFromSourceEntity(
+        { ...solid, id: uid(), sourceEntityId: newEntId },
+        ent,
+      )
+      if (r.ok) solidCopies.push(r.solid)
+    }
+    if (solidCopies.length) {
+      const nextSolids = [...(solids3dRef.current || []), ...solidCopies]
+      solids3dRef.current = nextSolids
+      setSolids3d(nextSolids)
+      setSelectedSolidIds(solidCopies.map((s) => s.id))
+    }
     clipboardRef.current = cloneScene(copies)
     setHasClipboard(true)
     objectsRef.current = [...objectsRef.current, ...copies]
@@ -2703,11 +2779,32 @@ export default function EsquemaEditorModal({
 
   const deleteSelected = () => {
     const ids = selectedIdsRef.current
-    if (!ids.size) return false
-    const removable = objectsRef.current.filter((o) => ids.has(o.id) && !(o.type === 'image' && o.fit))
-    if (!removable.length) return false
+    const solidIds = selectedSolidIdsRef.current || []
+    if (!ids.size && !solidIds.length) return false
+    if (!solidIds.length) {
+      const removable = objectsRef.current.filter((o) => ids.has(o.id) && !(o.type === 'image' && o.fit))
+      if (!removable.length) return false
+    }
     pushHistory()
-    objectsRef.current = objectsRef.current.filter((o) => !ids.has(o.id) || (o.type === 'image' && o.fit))
+    // Borrar sólidos seleccionados y sus contornos fuente (entidad única).
+    if (solidIds.length) {
+      const dropSolids = new Set(solidIds)
+      const dropEntities = new Set(
+        sourceEntityIdsOfSolids((solids3dRef.current || []).filter((s) => dropSolids.has(s.id))),
+      )
+      for (const id of ids) dropEntities.add(id)
+      solids3dRef.current = (solids3dRef.current || []).filter((s) => !dropSolids.has(s.id))
+      setSolids3d(solids3dRef.current)
+      setSelectedSolidIds([])
+      objectsRef.current = objectsRef.current.filter((o) => (
+        !dropEntities.has(o.id) || (o.type === 'image' && o.fit)
+      ))
+    } else {
+      // Al borrar contornos, borrar también sus sólidos ligados.
+      solids3dRef.current = dropSolidsForEntities(solids3dRef.current || [], ids)
+      setSolids3d(solids3dRef.current)
+      objectsRef.current = objectsRef.current.filter((o) => !ids.has(o.id) || (o.type === 'image' && o.fit))
+    }
     selectOne(null)
     setDirty(true)
     snapRef.current = null
@@ -3267,15 +3364,16 @@ export default function EsquemaEditorModal({
       redraw()
       return
     }
-    if (mode3dRef.current && isEsquema3dIsoView(view3dRef.current)) {
-      // Isométrica: solo inspección / selección de sólidos (sin dibujar).
+    if (mode3dRef.current && (isEsquema3dIsoView(view3dRef.current) || orbitFreeRef.current)) {
+      // Isométrica / órbita: solo inspección / selección de sólidos (sin dibujar).
       if (currentTool === 'seleccion' || currentTool === 'paneo') {
         const hitS = hitSolid3dAt(p)
         if (hitS) {
-          selectSolid3d(hitS.id, { additive: !!(e.shiftKey || e.metaKey || e.ctrlKey) })
+          selectSolidAndSource(hitS, { additive: !!(e.shiftKey || e.metaKey || e.ctrlKey) })
           setToolHint(`Sólido · ${Number(hitS.volumeM3 || 0).toFixed(2)} m³`)
         } else if (currentTool === 'seleccion') {
-          selectSolid3d(null)
+          selectSolidAndSource(null)
+          selectOne(null)
         }
         drawing.current = false
         redraw()
@@ -3292,13 +3390,26 @@ export default function EsquemaEditorModal({
     ) {
       const hitS = hitSolid3dAt(p)
       const hitEnt = hitTest(p)
-      if (hitS && (!hitEnt || e.altKey)) {
-        selectSolid3d(hitS.id, { additive: !!(e.shiftKey || e.metaKey || e.ctrlKey) })
-        if (!(e.shiftKey || e.metaKey || e.ctrlKey)) selectOne(null)
+      const additive = !!(e.shiftKey || e.metaKey || e.ctrlKey)
+      // Preferir el sólido (entidad única); si hay contorno fuente, queda seleccionado también.
+      if (hitS && (!hitEnt || hitEnt.id === hitS.sourceEntityId || e.altKey)) {
+        const already = (selectedSolidIdsRef.current || []).includes(hitS.id)
+          || (hitS.sourceEntityId && selectedIdsRef.current.has(hitS.sourceEntityId))
+        selectSolidAndSource(hitS, { additive })
         setToolHint(`Sólido · ${Number(hitS.volumeM3 || 0).toFixed(2)} m³`)
-        drawing.current = false
-        redraw()
-        return
+        // Si ya estaba seleccionado en planta, continuar al arrastre (mover contorno+sólido).
+        if (!already || additive || isEsquema3dIsoView(view3dRef.current) || (view3dRef.current || 'top') !== 'top') {
+          drawing.current = false
+          redraw()
+          return
+        }
+        // Forzar hit de la entidad fuente para el flujo de mover/redimensionar abajo.
+        if (hitS.sourceEntityId && !hitEnt) {
+          // caer al hitTest normal: la entidad sigue en objectsRef aunque no se dibuje
+        }
+      } else if (hitEnt) {
+        const linked = solidForSourceEntity(solids3dRef.current || [], hitEnt.id)
+        if (linked) selectSolid3d(linked.id)
       }
     }
 
@@ -4068,6 +4179,7 @@ export default function EsquemaEditorModal({
         }
         return next
       })
+      if (mode3dRef.current) syncLinkedSolidsFromEntities()
       setDirty(true)
       redraw()
       return
@@ -4129,6 +4241,8 @@ export default function EsquemaEditorModal({
           const origin = origins.get(o.id)
           return origin ? translateObject(origin, dx, dy) : o
         })
+        // Entidad única: el sólido sigue al contorno en vivo.
+        if (mode3dRef.current) syncLinkedSolidsFromEntities()
         setDirty(true)
         redraw()
         return
@@ -4154,6 +4268,7 @@ export default function EsquemaEditorModal({
         if (d.pivot) return rotateObjectAroundPivot(origin, d.pivot, nextRot - d.baseRot)
         return { ...o, rotation: nextRot }
       })
+      if (mode3dRef.current) syncLinkedSolidsFromEntities()
       setDirty(true)
       redraw()
       return
@@ -4326,6 +4441,7 @@ export default function EsquemaEditorModal({
       dragRef.current = null
       moveGuideRef.current = null
       clearDynBuffer()
+      if (mode3dRef.current) syncLinkedSolidsFromEntities()
       redraw()
       return
     }
@@ -4578,6 +4694,7 @@ export default function EsquemaEditorModal({
     const pivot = rotatePivotRef.current
     pushHistory()
     objectsRef.current = rotateSelectionAroundPivot(objectsRef.current, ids, pivot, delta)
+    if (mode3dRef.current) syncLinkedSolidsFromEntities()
     setDirty(true)
     setPanTick((nTick) => nTick + 1)
   }
@@ -4773,6 +4890,7 @@ export default function EsquemaEditorModal({
         const origin = origins.get(o.id)
         return origin ? translateObject(origin, dx, dy) : o
       })
+      if (mode3dRef.current) syncLinkedSolidsFromEntities()
       setLiveMeasure(formatMeters(Math.hypot(dx, dy)))
       setDirty(true)
       redraw()
@@ -5261,13 +5379,31 @@ export default function EsquemaEditorModal({
     if (!snap) return
     objectsRef.current = cloneScene(snap.objects || [])
     setCoordRows(Array.isArray(snap.coordRows) ? snap.coordRows : [])
-    setSolids3d(Array.isArray(snap.solids3d) ? snap.solids3d : [])
+    const solids = Array.isArray(snap.solids3d) ? snap.solids3d : []
+    solids3dRef.current = solids
+    setSolids3d(solids)
     setSelectedSolidIds([])
+    selectOne(null)
     setVolumeCalcs(Array.isArray(snap.volumeCalcs) ? snap.volumeCalcs : [])
     setActiveCalcId(snap.activeCalcId || (snap.volumeCalcs?.[0]?.id ?? null))
-    setMode3d(!!snap.mode3d)
-    setView3d(snap.view3d || 'top')
-    if (snap.mode3d) setCalcPanelOpen(!!(snap.volumeCalcs || []).length)
+    // Restaurar modo/vista y refs de cámara de inmediato (herramientas operativas).
+    const nextMode3d = !!snap.mode3d
+    const nextView = snap.view3d || 'top'
+    mode3dRef.current = nextMode3d
+    view3dRef.current = nextView
+    orbitAnglesRef.current = orbitAnglesForView(nextView)
+    orbitFreeRef.current = false
+    setOrbitFree(false)
+    setMode3d(nextMode3d)
+    setView3d(nextView)
+    setOp3d(null)
+    cutDraftRef.current = null
+    setExtrudePrompt(null)
+    setTool('seleccion')
+    toolRef.current = 'seleccion'
+    setSelectMode('mover')
+    if (nextMode3d) setCalcPanelOpen(!!(snap.volumeCalcs || []).length)
+    else setCalcPanelOpen(false)
     panRef.current = snap.pan && Number.isFinite(snap.pan.x)
       ? { x: snap.pan.x, y: snap.pan.y }
       : { x: 0, y: 0 }
@@ -5289,14 +5425,26 @@ export default function EsquemaEditorModal({
     historyRef.current = []
     setCanUndo(false)
     setDirty(true)
+    // Re-sincronizar sólidos con contornos por si el snapshot quedó desfasado.
+    const synced = syncSolidsWithEntities(solids3dRef.current || [], objectsRef.current || [])
+    if (synced.changed) {
+      solids3dRef.current = synced.solids
+      setSolids3d(synced.solids)
+    }
+    setOrbitTick((n) => n + 1)
     setPanTick((n) => n + 1)
-    requestAnimationFrame(() => redrawRef.current())
+    requestAnimationFrame(() => {
+      try { setupCanvas() } catch { /* ignore */ }
+      redrawRef.current()
+    })
     // Restaurar mapa de fondo si el borrador lo tenía activo (y no estamos en 3D)
-    if (snap.mapActive && !snap.mode3d) {
+    if (snap.mapActive && !nextMode3d) {
       try { activateMap() } catch { /* ignore */ }
     }
-    setToolHint('Borrador restaurado. Los cálculos siguen siendo dinámicos.')
-  }, [huellaMode, activateMap])
+    setToolHint(nextMode3d
+      ? 'Borrador restaurado · modo 3D. Herramientas listas (vista, mover, extruir, booleanos).'
+      : 'Borrador restaurado. Los cálculos siguen siendo dinámicos.')
+  }, [huellaMode, activateMap, setupCanvas])
 
   const collectDraftSnapshot = useCallback(() => buildEsquemaDraftSnapshot({
     objects: cloneScene(objectsRef.current),
@@ -5463,13 +5611,15 @@ export default function EsquemaEditorModal({
           {TOOL_GROUPS.map((group) => (
             <span key={group.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <ToolDivider t={t} />
-              {group.tools.map((tb) => {
+                  {group.tools.map((tb) => {
                 const Icon = tb.Icon
                 return (
                   <button
                     key={tb.id}
                     type="button"
                     title={tb.label}
+                    data-cc-tooltip={tb.label}
+                    data-cc-tooltip-variant="short"
                     aria-label={tb.label}
                     onClick={() => {
                       if (tb.id !== 'polilinea') finishPolyline()
@@ -5770,6 +5920,8 @@ export default function EsquemaEditorModal({
               <button
                 type="button"
                 title="Giro libre: arrastre para orbitar la vista sin modificar los elementos"
+                data-cc-tooltip="Giro libre: arrastre para orbitar la vista sin modificar los elementos"
+                data-cc-tooltip-variant="short"
                 aria-label="Giro libre 3D"
                 onClick={toggleOrbitFree}
                 style={iconBtn(t, orbitFree)}
@@ -5780,6 +5932,8 @@ export default function EsquemaEditorModal({
               <button
                 type="button"
                 title="Extruir contorno cerrado (cotas en vista superior; longitud en frontal/lateral)"
+                data-cc-tooltip="Extruir contorno cerrado (cotas en vista superior; longitud en frontal/lateral)"
+                data-cc-tooltip-variant="short"
                 aria-label="Extruir"
                 onClick={beginExtrude3d}
                 style={iconBtn(t, !!extrudePrompt)}
@@ -5790,6 +5944,8 @@ export default function EsquemaEditorModal({
               <button
                 type="button"
                 title="Unir dos o más sólidos seleccionados"
+                data-cc-tooltip="Unir dos o más sólidos seleccionados"
+                data-cc-tooltip-variant="short"
                 aria-label="Unir sólidos"
                 onClick={applyUnite3d}
                 style={iconBtn(t, op3d === 'unir')}
@@ -5800,6 +5956,8 @@ export default function EsquemaEditorModal({
               <button
                 type="button"
                 title="Sustraer: sólido base (1.º) menos los demás seleccionados"
+                data-cc-tooltip="Sustraer: sólido base (1.º) menos los demás seleccionados"
+                data-cc-tooltip-variant="short"
                 aria-label="Sustraer sólidos"
                 onClick={applySubtract3d}
                 style={iconBtn(t, op3d === 'sustraer')}
@@ -5810,6 +5968,8 @@ export default function EsquemaEditorModal({
               <button
                 type="button"
                 title="Cortar: seleccione un sólido y trace la línea de corte"
+                data-cc-tooltip="Cortar: seleccione un sólido y trace la línea de corte"
+                data-cc-tooltip-variant="short"
                 aria-label="Cortar sólido"
                 onClick={beginCut3d}
                 style={iconBtn(t, op3d === 'cortar')}
@@ -6695,6 +6855,17 @@ export default function EsquemaEditorModal({
               onLineStyle={applySelectedLineStyle}
               onFontSize={applyFontSize}
               onRotationDeg={applyRotationDeg}
+              solid={solidForSourceEntity(solids3d, selectedObj.id)
+                || (selectedSolidIds.length === 1
+                  ? solids3d.find((s) => s.id === selectedSolidIds[0])
+                  : null)}
+            />
+          )}
+          {!huellaMode && !selectedObj && selectedSolidIds.length === 1 && (
+            <SolidPropiedadesPanel
+              t={t}
+              ui={ui}
+              solid={solids3d.find((s) => s.id === selectedSolidIds[0])}
             />
           )}
           {!huellaMode && coordPanelOpen && (
@@ -7868,10 +8039,56 @@ function MapaPropiedadesPanel({
   )
 }
 
+function SolidPropiedadesPanel({ t, ui, solid }) {
+  if (!solid || solid.type !== 'solid3d') return null
+  const params = solid.extrudeParams || {}
+  const z0 = params.cotaInferior
+  const z1 = params.cotaSuperior
+  return (
+    <div
+      data-testid="esquema-solid-props"
+      style={{
+        position: 'absolute',
+        top: 18,
+        right: 18,
+        zIndex: 12,
+        width: 220,
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bgCard || 'rgba(255,255,255,0.96)',
+        boxShadow: '0 8px 24px rgba(15,23,42,0.14)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
+        Propiedades · Sólido 3D
+      </div>
+      <div style={{ fontSize: 12, color: t.text, fontWeight: 700 }}>
+        V = {formatVolumeM3(solid.volumeM3)}
+      </div>
+      {Number.isFinite(Number(z1)) && Number.isFinite(Number(z0)) ? (
+        <div style={{ fontSize: 11, color: ui?.muted || t.textMuted, lineHeight: 1.4 }}>
+          Cota superior {Number(z1).toFixed(2)} m
+          <br />
+          Cota inferior {Number(z0).toFixed(2)} m
+        </div>
+      ) : Number.isFinite(Number(params.lengthM)) ? (
+        <div style={{ fontSize: 11, color: ui?.muted || t.textMuted }}>
+          Longitud {Number(params.lengthM).toFixed(2)} m
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function PropiedadesPanel({
   t, ui, obj, measureW, measureH, onMeasureW, onMeasureH, onApplyDims, onColor, onWidth,
   onLineStyle, onFontSize, onRotationDeg, selectMode, onSelectMode, scaleLocked = false,
-  embedded = false,
+  embedded = false, solid = null,
 }) {
   const isShape = SHAPE_TOOLS.has(obj.type)
   const isBox = BOX_TOOLS.has(obj.type)
@@ -7880,6 +8097,7 @@ function PropiedadesPanel({
 
   return (
     <div
+      data-testid="esquema-propiedades-panel"
       style={embedded ? {
         position: 'relative',
         width: '100%',
@@ -7895,7 +8113,7 @@ function PropiedadesPanel({
         position: 'absolute',
         top: 18,
         right: 18,
-        zIndex: 5,
+        zIndex: 12,
         width: 220,
         padding: '10px 12px',
         borderRadius: 10,
@@ -7910,7 +8128,18 @@ function PropiedadesPanel({
     >
       <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
         Propiedades · {entityTypeLabel(obj.type)}
+        {solid ? ' + sólido' : ''}
       </div>
+      {solid ? (
+        <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>
+          V = {formatVolumeM3(solid.volumeM3)}
+          {solid.extrudeParams?.cotaSuperior != null && solid.extrudeParams?.cotaInferior != null ? (
+            <div style={{ fontSize: 11, fontWeight: 600, color: ui?.muted || t.textMuted, marginTop: 2 }}>
+              Cotas {Number(solid.extrudeParams.cotaSuperior).toFixed(2)} → {Number(solid.extrudeParams.cotaInferior).toFixed(2)} m
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {selectMode && onSelectMode && !scaleLocked ? (
         <SelectModeRadios t={t} value={selectMode} onChange={onSelectMode} compact />
       ) : null}

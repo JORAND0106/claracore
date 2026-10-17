@@ -101,7 +101,10 @@ export function projectOrbit(pt, {
 }
 
 /**
- * Proyecta un punto 3D al plano del lienzo 2D según vista o órbita libre.
+ * Proyecta un punto 3D al plano del lienzo 2D según vista o cámara órbita.
+ * Si no se pasa orbit, las isométricas usan los mismos ángulos que el giro libre
+ * (así NE/NO/SE/SO cambian efectivamente la perspectiva).
+ * Las cotas son elevaciones absolutas en el eje Z (plano de comparación común).
  * @returns {{ x: number, y: number, depth?: number }}
  */
 export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
@@ -113,6 +116,16 @@ export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
       center: orbit.center || null,
     })
   }
+  // Isométricas sin orbit explícito: misma cámara que orbitAnglesForView.
+  if (isEsquema3dIsoView(viewId)) {
+    const angles = orbitAnglesForView(viewId)
+    return projectOrbit(pt, {
+      yaw: angles.yaw,
+      pitch: angles.pitch,
+      cotaRefM,
+      center: null,
+    })
+  }
   const x = Number(pt?.x) || 0
   const y = Number(pt?.y) || 0
   const z = cotaToWorldZ(pt?.zCota ?? cotaRefM, cotaRefM)
@@ -121,29 +134,31 @@ export function projectWorld3dToCanvas(pt, viewId, cotaRefM = 0, orbit = null) {
       return { x, y: z }
     case 'side':
       return { x: y, y: z }
-    case 'iso-ne':
-      return isoProject(x, y, z, 1, 1)
-    case 'iso-nw':
-      return isoProject(x, y, z, -1, 1)
-    case 'iso-se':
-      return isoProject(x, y, z, 1, -1)
-    case 'iso-sw':
-      return isoProject(x, y, z, -1, -1)
     case 'top':
     default:
       return { x, y }
   }
 }
 
-function isoProject(x, y, z, sx, sy) {
-  const cos = Math.SQRT1_2
-  const sin = Math.SQRT1_2
-  const X = x * sx
-  const Y = y * sy
-  return {
-    x: (X - Y) * cos,
-    y: (X + Y) * sin * 0.5 + z,
+/**
+ * Cámara de proyección para sólidos: siempre usa ángulos de la vista (o giro libre)
+ * centrados en el conjunto de sólidos, para que NE/NO/SE/SO y perfiles se vean bien.
+ */
+export function solidsViewCamera(viewId, solids, {
+  orbitFree = false,
+  orbitAngles = null,
+  cotaRefM = 0,
+} = {}) {
+  const angles = (orbitAngles && Number.isFinite(orbitAngles.yaw) && Number.isFinite(orbitAngles.pitch))
+    ? orbitAngles
+    : orbitAnglesForView(viewId || 'top')
+  const center = solidsOrbitCenter(solids || [], cotaRefM)
+  // Vista superior sin giro libre: proyección ortográfica XY (sin órbita) para
+  // coincidir 1:1 con el contorno base y el hit-test en planta.
+  if (!orbitFree && (viewId === 'top' || !viewId)) {
+    return null
   }
+  return { ...angles, center }
 }
 
 /** Eje de extrusión según la vista donde se dibujó el contorno. */
