@@ -9,6 +9,7 @@ import {
   freezeCalcSnapshot,
   isValidCalcSolid,
   resolveCalcLine,
+  round2,
 } from './esquema3dCalc.js'
 
 function rectMeters(wM, hM) {
@@ -49,14 +50,15 @@ describe('esquema3dCalc — panel de volúmenes', () => {
     ]
     const solids = [box, cyl]
     const total = calcTotalM3(calc, solids)
-    const expected = 24.5 - (Math.PI * 0.5 * 0.5 * 1)
-    assert.ok(Math.abs(total - expected) < 1e-9, `got ${total}, expected ${expected}`)
+    // Total = suma de valores mostrados (2 decimales), no float crudo.
+    const expected = round2(24.5 - round2(Math.PI * 0.5 * 0.5 * 1))
+    assert.equal(total, expected, `got ${total}, expected ${expected}`)
 
     const snap = freezeCalcSnapshot(calc, solids)
     assert.equal(snap.lines.length, 2)
     assert.equal(snap.lines[0].op, 'sum')
     assert.equal(snap.lines[1].op, 'subtract')
-    assert.ok(Math.abs(snap.totalM3 - expected) < 1e-9)
+    assert.equal(snap.totalM3, expected)
     assert.ok(snap.lines[0].detail?.formaCalculo)
     assert.ok(snap.lines[1].detail?.formaCalculo)
   })

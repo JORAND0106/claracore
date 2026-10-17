@@ -81,6 +81,7 @@ import {
   hitSolidAtView,
   isClosedDrawableEntity,
   linkedSourceEntityIds,
+  pickSubtractBase,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
   solidForSourceEntity,
@@ -1810,13 +1811,13 @@ export default function EsquemaEditorModal({
     const sels = gatherSelectedSolids3d()
     if (sels.length < 2) {
       setOp3d('sustraer')
-      setToolHint('Sustraer: toque el sólido base y luego el/los a descontar; pulse Sustraer de nuevo.')
+      setToolHint('Sustraer: toque el sólido base y luego el/los a quitar; pulse Sustraer de nuevo.')
       return
     }
     const ids = selectedSolidIdsRef.current?.length
       ? selectedSolidIdsRef.current
       : sels.map((s) => s.id)
-    const base = sels.find((s) => s.id === ids[0]) || sels[0]
+    const base = pickSubtractBase(sels, ids) || sels[0]
     const others = sels.filter((s) => s.id !== base.id)
     const r = subtractSolids(base, others)
     if (!r.ok) {
@@ -1826,7 +1827,7 @@ export default function EsquemaEditorModal({
     pushHistory()
     consumeSolidOperands([base, ...others], r.solid)
     setOp3d(null)
-    setToolHint(`Sustracción · ${r.solid.volumeM3.toFixed(2)} m³`)
+    setToolHint(`Sustracción · ${Number(r.solid.volumeM3).toFixed(2)} m³`)
   }, [consumeSolidOperands, gatherSelectedSolids3d])
 
   const beginCut3d = useCallback(() => {

@@ -17,6 +17,7 @@ import {
   createCalcLine,
   createVolumeCalc,
   freezeCalcSnapshot,
+  round2,
 } from './esquema3dCalc.js'
 import { labelsFromSnapshot } from './esquema3dCalcExport.js'
 
@@ -105,7 +106,9 @@ describe('presentación · tres casos', () => {
     ]
     const snap = freezeCalcSnapshot(calc, [prisma, cyl])
     assert.equal(labelsFromSnapshot(snap).length, 2)
-    assert.ok(Math.abs(snap.totalM3 - (solidVolumeM3(prisma) - solidVolumeM3(cyl))) < 1e-6)
+    // Total = suma de valores a 2 decimales (no float crudo de π).
+    const expected = round2(round2(solidVolumeM3(prisma)) - round2(solidVolumeM3(cyl)))
+    assert.equal(snap.totalM3, expected)
   })
 
   it('c) Seis sólidos distintos (internos y separados) con etiquetas 1..6', () => {

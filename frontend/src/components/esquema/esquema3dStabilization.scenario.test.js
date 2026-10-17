@@ -17,6 +17,7 @@ import {
   createCalcLine,
   createVolumeCalc,
   resolveCalcLine,
+  round2,
   sharedDiscountVolumeM3,
 } from './esquema3dCalc.js'
 
@@ -92,8 +93,8 @@ describe('recorrido estabilización 3D (a–i núcleo)', () => {
     const solids = [bigMoved, inner]
     const rIn = resolveCalcLine(calc.lines[1], solids, calc)
     assert.equal(rIn.ok, true)
-    const expected = solidVolumeM3(bigMoved) - solidVolumeM3(inner)
-    assert.ok(Math.abs(calcTotalM3(calc, solids) - expected) < 1e-6)
+    const expected = round2(round2(solidVolumeM3(bigMoved)) - round2(solidVolumeM3(inner)))
+    assert.equal(calcTotalM3(calc, solids), expected)
 
     const out = extrudeClosedEntity(rectAt(20, 20, 1, 1, 'out'), {
       viewId: 'top', cotaSuperior: 1, cotaInferior: 0,

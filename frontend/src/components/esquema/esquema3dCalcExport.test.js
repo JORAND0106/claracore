@@ -9,6 +9,7 @@ import {
   createCalcLine,
   createVolumeCalc,
   freezeCalcSnapshot,
+  round2,
 } from './esquema3dCalc.js'
 import {
   buildCalcAdjuntos,
@@ -79,7 +80,7 @@ describe('memoria PNG lado a lado', () => {
     ]
     const solids = [big, u.solid]
     const snap = freezeCalcSnapshot(calc, solids)
-    assert.ok(Math.abs(snap.lines[0].volumeM3 - solidVolumeM3(big)) < 1e-9)
+    assert.equal(snap.lines[0].volumeM3, round2(solidVolumeM3(big)))
     assert.ok(snap.lines[0].detail?.color)
     assert.ok(snap.lines[0].detail?.longM > 0)
 

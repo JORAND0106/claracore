@@ -1,12 +1,14 @@
 /**
  * Cálculos de volumen 3D del esquema: líneas suma/descuento sobre sólidos.
  * Dinámicos mientras el editor está abierto; se fijan al exportar/cerrar.
- * Descuento: solo el volumen común con los sólidos que suman.
+ * Descuento: volumen común con el sólido indicado en "Descuenta de"
+ * (aporte neto si ese sólido tiene a su vez descuentos).
  */
 import {
   formatVolumeM3,
   intersectionVolumeM3,
   mergeSolidsUnion,
+  round2,
   solidFootprintDimsM,
   solidVolumeM3,
 } from './esquema3dSolids.js'
@@ -37,13 +39,15 @@ export function createVolumeCalc(nombre = 'Cálculo') {
 
 /**
  * @param {'sum'|'subtract'} op
+ * @param {string|null} [discountFromSolidId] sólido del que se descuenta (op subtract)
  */
-export function createCalcLine({ solidId, nombre, op = 'sum' } = {}) {
+export function createCalcLine({ solidId, nombre, op = 'sum', discountFromSolidId = null } = {}) {
   return {
     id: uid('vl'),
     solidId: solidId || null,
     nombre: String(nombre || '').trim() || 'Elemento',
     op: op === 'subtract' ? 'subtract' : 'sum',
+    discountFromSolidId: op === 'subtract' ? (discountFromSolidId || null) : null,
   }
 }
 
@@ -61,8 +65,14 @@ export function sumSolidsOfCalc(calc, solids, exceptSolidId = null) {
   return out
 }
 
+/** ¿El solidId participa como línea Suma en el cálculo? */
+export function isSumSolidId(calc, solidId) {
+  if (!solidId) return false
+  return (calc?.lines || []).some((l) => l.op === 'sum' && l.solidId === solidId)
+}
+
 /**
- * Volumen común entre un sólido a descontar y la unión de los que suman.
+ * Volumen común entre un sólido a descontar y la unión de los que suman (compat).
  * @returns {{ sharedM3: number, fullM3: number, error?: string }}
  */
 export function sharedDiscountVolumeM3(discountSolid, calc, solids) {
@@ -87,7 +97,6 @@ export function sharedDiscountVolumeM3(discountSolid, calc, solids) {
       error: 'El sólido no comparte volumen con los que suman; no se puede descontar.',
     }
   }
-  // Contención casi total (p. ej. cilindro tessellado dentro de prisma): usar volumen exacto del sólido.
   if (fullM3 > SHARED_VOL_EPS && sharedM3 >= fullM3 * 0.98) {
     sharedM3 = fullM3
   } else {
@@ -97,9 +106,81 @@ export function sharedDiscountVolumeM3(discountSolid, calc, solids) {
 }
 
 /**
+ * Volumen neto de un sólido tras descuentos que apuntan a él
+ * (aritmética con valores a 2 decimales).
+ */
+export function netVolumeOfSolidId(solidId, calc, solids, stack = null) {
+  const solid = (solids || []).find((s) => s.id === solidId)
+  if (!isValidCalcSolid(solid)) return 0
+  const visiting = stack || new Set()
+  if (visiting.has(solidId)) return round2(solidVolumeM3(solid))
+  visiting.add(solidId)
+  let net = round2(solidVolumeM3(solid))
+  for (const line of calc?.lines || []) {
+    if (line.op !== 'subtract' || line.discountFromSolidId !== solidId) continue
+    if (!line.solidId || line.solidId === solidId) continue
+    const amt = discountAmountM3(line, solids, calc, visiting)
+    if (amt.ok) net = round2(net - round2(amt.amountM3))
+  }
+  visiting.delete(solidId)
+  return Math.max(0, net)
+}
+
+/**
+ * Cantidad a descontar de la línea respecto a su sólido indicado (o suma legacy).
+ * @returns {{ ok: true, amountM3: number, targetSolid?: object, shared?: boolean } | { ok: false, error: string }}
+ */
+export function discountAmountM3(line, solids, calc, stack = null) {
+  const discount = (solids || []).find((s) => s.id === line?.solidId)
+  if (!isValidCalcSolid(discount)) {
+    return { ok: false, error: 'Seleccione un sólido cerrado y bien construido.' }
+  }
+  const fullM3 = solidVolumeM3(discount)
+  const targetId = line.discountFromSolidId || null
+
+  if (targetId) {
+    if (targetId === line.solidId) {
+      return { ok: false, error: 'No se puede descontar un sólido de sí mismo.' }
+    }
+    const target = (solids || []).find((s) => s.id === targetId)
+    if (!isValidCalcSolid(target)) {
+      return { ok: false, error: 'Seleccione de qué sólido se descuenta.' }
+    }
+    let sharedM3 = intersectionVolumeM3(discount, target)
+    if (fullM3 > SHARED_VOL_EPS && sharedM3 >= fullM3 * 0.98) {
+      sharedM3 = fullM3
+    }
+    if (!(sharedM3 > SHARED_VOL_EPS)) {
+      return {
+        ok: false,
+        error: 'El sólido no comparte volumen con el indicado; no se descuenta.',
+      }
+    }
+    // Aporte neto del elemento que descuenta si tiene descuentos propios.
+    const visiting = stack || new Set()
+    const netD = netVolumeOfSolidId(discount.id, calc, solids, visiting)
+    if (sharedM3 >= fullM3 * 0.98) {
+      sharedM3 = netD
+    } else {
+      sharedM3 = Math.min(round2(sharedM3), netD)
+    }
+    if (!(sharedM3 > SHARED_VOL_EPS)) {
+      return { ok: false, error: 'Sin volumen neto para descontar.' }
+    }
+    return { ok: true, amountM3: round2(sharedM3), targetSolid: target, shared: true }
+  }
+
+  // Compat: sin "Descuenta de" → volumen común con la unión de sumas.
+  const { sharedM3, error } = sharedDiscountVolumeM3(discount, calc || { lines: [] }, solids)
+  if (error || !(sharedM3 > SHARED_VOL_EPS)) {
+    return { ok: false, error: error || 'Sin volumen común para descontar.' }
+  }
+  return { ok: true, amountM3: round2(sharedM3), shared: true }
+}
+
+/**
  * Resuelve una línea contra el catálogo actual de sólidos (dinámico).
- * Descuenta solo el volumen común con los sólidos que suman del mismo cálculo.
- * @returns {{ ok: true, volumeM3: number, signedM3: number, solid: object, shared?: boolean } | { ok: false, error: string }}
+ * @returns {{ ok: true, volumeM3: number, signedM3: number, solid: object, shared?: boolean, targetSolid?: object, countsInTotal?: boolean } | { ok: false, error: string }}
  */
 export function resolveCalcLine(line, solids, calc = null) {
   if (!line?.solidId) return { ok: false, error: 'Seleccione un sólido.' }
@@ -109,39 +190,270 @@ export function resolveCalcLine(line, solids, calc = null) {
   }
   if (line.op === 'subtract') {
     const ctx = calc || { lines: [] }
-    const { sharedM3, error } = sharedDiscountVolumeM3(solid, ctx, solids)
-    if (error || !(sharedM3 > SHARED_VOL_EPS)) {
-      return { ok: false, error: error || 'Sin volumen común para descontar.' }
-    }
+    const amt = discountAmountM3(line, solids, ctx)
+    if (!amt.ok) return { ok: false, error: amt.error }
+    // Anidado: descuenta de otro Descuenta → no suma otra vez al total global.
+    const countsInTotal = !line.discountFromSolidId || isSumSolidId(ctx, line.discountFromSolidId)
     return {
       ok: true,
-      volumeM3: sharedM3,
-      signedM3: -sharedM3,
+      volumeM3: amt.amountM3,
+      signedM3: -amt.amountM3,
       solid,
       shared: true,
+      targetSolid: amt.targetSolid || null,
+      countsInTotal,
     }
   }
-  const volumeM3 = solidVolumeM3(solid)
-  return { ok: true, volumeM3, signedM3: volumeM3, solid }
+  const volumeM3 = round2(solidVolumeM3(solid))
+  return { ok: true, volumeM3, signedM3: volumeM3, solid, countsInTotal: true }
 }
 
-/** Total de un cálculo (m³) con los sólidos actuales. */
+/** Total de un cálculo (m³): suma exacta de los valores redondeados a 2 decimales. */
 export function calcTotalM3(calc, solids) {
   let total = 0
   for (const line of calc?.lines || []) {
     const r = resolveCalcLine(line, solids, calc)
-    if (r.ok) total += r.signedM3
+    if (!r.ok) continue
+    if (r.countsInTotal === false) continue
+    total = round2(total + round2(r.signedM3))
   }
   return total
 }
 
+function formaCalculoFromOperand(op) {
+  if (!op) return null
+  const a = op.analytic
+  const h = op.espesorM
+  const v = op.volumeM3
+  if (a?.type === 'rect' && Number.isFinite(a.wM) && Number.isFinite(a.hM) && Number.isFinite(h)) {
+    return `${fmt(Math.abs(a.wM))} × ${fmt(Math.abs(a.hM))} × ${fmt(h)} = ${fmt(v)} m³`
+  }
+  if (a?.type === 'ellipse' && Number.isFinite(a.rxM) && Number.isFinite(h)) {
+    const rx = Math.abs(a.rxM)
+    const ry = Math.abs(a.ryM)
+    if (Math.abs(rx - ry) < 1e-9) {
+      return `π × ${fmt(rx)}² × ${fmt(h)} = ${fmt(v)} m³`
+    }
+    return `π × ${fmt(rx)} × ${fmt(ry)} × ${fmt(h)} = ${fmt(v)} m³`
+  }
+  if (Number.isFinite(op.longM) && Number.isFinite(op.anchM) && Number.isFinite(h)) {
+    return `${fmt(op.longM)} × ${fmt(op.anchM)} × ${fmt(h)} = ${fmt(v)} m³`
+  }
+  return `Volumen = ${fmt(v)} m³`
+}
+
+function detailFromOperand(op, overrides = {}) {
+  if (!op) return null
+  return {
+    color: op.color || '#0f766e',
+    longM: op.longM,
+    anchM: op.anchM,
+    espesorM: op.espesorM,
+    cotaSuperior: op.cotaSuperior,
+    cotaInferior: op.cotaInferior,
+    altura: op.espesorM,
+    volumeM3: op.volumeM3,
+    forma: overrides.forma || (op.analytic?.type === 'rect' ? 'Prisma rectangular' : 'Sólido'),
+    dimensiones: overrides.dimensiones || (
+      Number.isFinite(op.longM) && Number.isFinite(op.anchM)
+        ? `${fmt(op.longM)} × ${fmt(op.anchM)} m`
+        : null
+    ),
+    formaCalculo: overrides.formaCalculo || formaCalculoFromOperand(op),
+    ...overrides,
+  }
+}
+
+/**
+ * Filas de memoria para un sólido con booleanMeta (sustracción).
+ * Numeración N, N.1, N.2… mismo color.
+ */
+export function breakdownRowsForBooleanSolid(solid, {
+  num,
+  nombre,
+  op,
+  signedM3,
+  discountFromNombre = null,
+} = {}) {
+  const meta = solid?.booleanMeta
+  if (!meta || meta.op !== 'subtract' || !meta.base) return null
+  const color = solid.color || meta.base.color || '#0f766e'
+  const rows = []
+  const baseVol = round2(meta.base.volumeM3)
+  rows.push({
+    numLabel: String(num),
+    num,
+    subIndex: 0,
+    solidId: solid.id,
+    nombre: `${nombre || 'Sólido'} (exterior)`,
+    op: 'sum',
+    volumeM3: baseVol,
+    signedM3: baseVol,
+    countsInTotal: false,
+    color,
+    discountFromNombre: null,
+    detail: detailFromOperand(meta.base, { color, forma: 'Volumen exterior' }),
+  })
+  let subI = 1
+  for (const sub of meta.subtracted || []) {
+    const v = round2(sub.volumeM3)
+    rows.push({
+      numLabel: `${num}.${subI}`,
+      num,
+      subIndex: subI,
+      solidId: solid.id,
+      nombre: sub.nombre || 'Vacío interior',
+      op: 'subtract',
+      volumeM3: v,
+      signedM3: -v,
+      countsInTotal: false,
+      color,
+      discountFromNombre: nombre || 'Sólido base',
+      detail: detailFromOperand(sub, {
+        color,
+        forma: 'Vacío interior',
+        formaCalculo: formaCalculoFromOperand(sub),
+      }),
+    })
+    subI += 1
+  }
+  const net = round2(meta.netVolumeM3 ?? solidVolumeM3(solid))
+  const netSigned = op === 'subtract' ? -net : net
+  rows.push({
+    numLabel: `${num}.${subI}`,
+    num,
+    subIndex: subI,
+    solidId: solid.id,
+    nombre: `${nombre || 'Sólido'} (neto)`,
+    op,
+    volumeM3: net,
+    signedM3: netSigned,
+    countsInTotal: true,
+    color,
+    discountFromNombre: op === 'subtract' ? discountFromNombre : null,
+    detail: {
+      color,
+      longM: meta.base.longM,
+      anchM: meta.base.anchM,
+      espesorM: meta.base.espesorM,
+      volumeM3: net,
+      forma: 'Volumen neto',
+      formaCalculo: `${fmt(baseVol)} − ${(meta.subtracted || []).map((s) => fmt(round2(s.volumeM3))).join(' − ')} = ${fmt(net)} m³`,
+    },
+  })
+  return rows
+}
+
+/**
+ * Desglose cuando un sólido tiene líneas hijas que descuentan de él (sin Sustraer).
+ */
+export function breakdownRowsForNestedDiscount(parentLine, parentResolved, calc, solids, num) {
+  const children = (calc?.lines || []).filter(
+    (l) => l.op === 'subtract' && l.discountFromSolidId === parentLine.solidId,
+  )
+  if (!children.length || !parentResolved?.ok) return null
+  const color = parentResolved.solid?.color || parentResolved.detail?.color || '#0f766e'
+  const full = round2(solidVolumeM3(parentResolved.solid))
+  const rows = []
+  rows.push({
+    numLabel: String(num),
+    num,
+    subIndex: 0,
+    solidId: parentLine.solidId,
+    nombre: `${parentLine.nombre} (exterior)`,
+    op: 'sum',
+    volumeM3: full,
+    signedM3: full,
+    countsInTotal: false,
+    color,
+    discountFromNombre: null,
+    detail: {
+      ...(parentResolved.detail || {}),
+      color,
+      volumeM3: full,
+      forma: 'Volumen exterior',
+      formaCalculo: parentResolved.detail?.formaCalculo || `Volumen = ${fmt(full)} m³`,
+    },
+  })
+  let subI = 1
+  let deducted = 0
+  for (const ch of children) {
+    const r = resolveCalcLine(ch, solids, calc)
+    if (!r.ok) continue
+    const v = round2(r.volumeM3)
+    deducted = round2(deducted + v)
+    rows.push({
+      numLabel: `${num}.${subI}`,
+      num,
+      subIndex: subI,
+      solidId: ch.solidId,
+      lineId: ch.id,
+      nombre: ch.nombre || 'Descuento',
+      op: 'subtract',
+      volumeM3: v,
+      signedM3: -v,
+      countsInTotal: false,
+      color,
+      discountFromNombre: parentLine.nombre,
+      detail: {
+        ...(describeSolidForMemoria(r.solid) || {}),
+        color,
+        volumeM3: v,
+        formaCalculo: describeSolidForMemoria(r.solid)?.formaCalculo || `Volumen = ${fmt(v)} m³`,
+      },
+    })
+    subI += 1
+  }
+  const net = round2(full - deducted)
+  const netSigned = parentLine.op === 'subtract' ? -net : net
+  const targetName = parentLine.discountFromSolidId
+    ? ((calc?.lines || []).find((l) => l.solidId === parentLine.discountFromSolidId)?.nombre || null)
+    : null
+  rows.push({
+    numLabel: `${num}.${subI}`,
+    num,
+    subIndex: subI,
+    solidId: parentLine.solidId,
+    nombre: `${parentLine.nombre} (neto)`,
+    op: parentLine.op,
+    volumeM3: net,
+    signedM3: netSigned,
+    countsInTotal: true,
+    color,
+    discountFromNombre: parentLine.op === 'subtract' ? targetName : null,
+    detail: {
+      color,
+      longM: parentResolved.detail?.longM,
+      anchM: parentResolved.detail?.anchM,
+      espesorM: parentResolved.detail?.espesorM,
+      volumeM3: net,
+      forma: 'Volumen neto',
+      formaCalculo: `${fmt(full)} − ${fmt(deducted)} = ${fmt(net)} m³`,
+    },
+  })
+  return rows
+}
+
 /**
  * Snapshot fijo de un cálculo (al guardar/cerrar).
- * Congela volúmenes y metadatos de cada elemento.
+ * Congela volúmenes, desglose por sólido y total = suma de valores mostrados.
  */
 export function freezeCalcSnapshot(calc, solids) {
   const lines = []
+  const memoriaRows = []
+  let displayNum = 0
+  const childLineIds = new Set()
+
+  // Líneas que solo sirven de desglose anidado (descuentan de un no-suma) se
+  // expanden bajo el padre; no generan fila top-level propia.
   for (const line of calc?.lines || []) {
+    if (line.op === 'subtract' && line.discountFromSolidId && !isSumSolidId(calc, line.discountFromSolidId)) {
+      childLineIds.add(line.id)
+    }
+  }
+
+  for (const line of calc?.lines || []) {
+    if (childLineIds.has(line.id)) continue
     const r = resolveCalcLine(line, solids, calc)
     if (!r.ok) {
       lines.push({
@@ -149,6 +461,7 @@ export function freezeCalcSnapshot(calc, solids) {
         nombre: line.nombre,
         op: line.op,
         solidId: line.solidId,
+        discountFromSolidId: line.discountFromSolidId || null,
         ok: false,
         error: r.error,
         volumeM3: 0,
@@ -161,29 +474,83 @@ export function freezeCalcSnapshot(calc, solids) {
     if (detail && line.op === 'subtract' && r.shared) {
       detail.volumeM3 = r.volumeM3
       const full = solidVolumeM3(r.solid)
-      // Solo reemplazar la fórmula si el descuento es parcial (no cabe entero).
       if (full > SHARED_VOL_EPS && r.volumeM3 < full * 0.98) {
         detail.formaCalculo = `Volumen común = ${fmt(r.volumeM3)} m³`
       }
     }
+    const targetNombre = line.discountFromSolidId
+      ? ((calc?.lines || []).find((l) => l.solidId === line.discountFromSolidId)?.nombre || null)
+      : null
     lines.push({
       id: line.id,
       nombre: line.nombre,
       op: line.op,
       solidId: line.solidId,
+      discountFromSolidId: line.discountFromSolidId || null,
+      discountFromNombre: targetNombre,
       ok: true,
       volumeM3: r.volumeM3,
       signedM3: r.signedM3,
       detail,
     })
+
+    displayNum += 1
+    const boolRows = breakdownRowsForBooleanSolid(r.solid, {
+      num: displayNum,
+      nombre: line.nombre,
+      op: line.op,
+      signedM3: r.signedM3,
+      discountFromNombre: targetNombre,
+    })
+    if (boolRows?.length) {
+      memoriaRows.push(...boolRows)
+      continue
+    }
+    // Desglose anidado solo si esta línea Descuenta y otras descuentan de ella
+    // (p. ej. Box→Exc con Vacío→Box). No aplicar a Suma: sus descuentos ya
+    // son filas top-level y no deben contarse dos veces.
+    const nestedRows = line.op === 'subtract'
+      ? breakdownRowsForNestedDiscount(line, { ...r, detail }, calc, solids, displayNum)
+      : null
+    if (nestedRows?.length) {
+      memoriaRows.push(...nestedRows)
+      continue
+    }
+    memoriaRows.push({
+      numLabel: String(displayNum),
+      num: displayNum,
+      subIndex: 0,
+      solidId: line.solidId,
+      lineId: line.id,
+      nombre: line.nombre,
+      op: line.op,
+      volumeM3: round2(r.volumeM3),
+      signedM3: round2(r.signedM3),
+      countsInTotal: r.countsInTotal !== false,
+      color: detail?.color || r.solid?.color || '#0f766e',
+      discountFromNombre: targetNombre,
+      detail,
+    })
   }
-  const totalM3 = lines.reduce((s, l) => s + (l.ok ? l.signedM3 : 0), 0)
+
+  // Total = suma de los valores que aparecen en la tabla (filas countsInTotal).
+  let totalM3 = 0
+  for (const row of memoriaRows) {
+    if (!row.countsInTotal) continue
+    const shown = row.op === 'subtract' ? -round2(row.volumeM3) : round2(row.volumeM3)
+    totalM3 = round2(totalM3 + shown)
+  }
+  if (!memoriaRows.length) {
+    totalM3 = calcTotalM3(calc, solids)
+  }
+
   return {
     id: calc.id,
     nombre: calc.nombre,
     createdAt: calc.createdAt,
     frozenAt: new Date().toISOString(),
     lines,
+    memoriaRows,
     totalM3,
   }
 }
@@ -243,6 +610,24 @@ export function describeSolidForMemoria(solid) {
     cotaInferior: z0,
     altura: heightM,
     volumeM3,
+  }
+
+  if (solid.booleanMeta?.op === 'subtract' && solid.booleanMeta.base) {
+    const meta = solid.booleanMeta
+    const baseVol = round2(meta.base.volumeM3)
+    const subs = (meta.subtracted || []).map((s) => fmt(round2(s.volumeM3)))
+    const net = round2(meta.netVolumeM3 ?? volumeM3)
+    return {
+      ...base,
+      longM: meta.base.longM ?? base.longM,
+      anchM: meta.base.anchM ?? base.anchM,
+      espesorM: meta.base.espesorM ?? base.espesorM,
+      forma: 'Sólido con huecos',
+      dimensiones: Number.isFinite(meta.base.longM)
+        ? `${fmt(meta.base.longM)} × ${fmt(meta.base.anchM)} m`
+        : base.dimensiones,
+      formaCalculo: `${fmt(baseVol)}${subs.length ? ` − ${subs.join(' − ')}` : ''} = ${fmt(net)} m³`,
+    }
   }
 
   // Una sola celda analítica → forma exacta
@@ -325,4 +710,4 @@ export function describeSolidForMemoria(solid) {
   }
 }
 
-export { formatVolumeM3, solidVolumeM3 }
+export { formatVolumeM3, solidVolumeM3, round2 }
