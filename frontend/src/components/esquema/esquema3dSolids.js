@@ -14,7 +14,13 @@ import {
   triangleLocalVertices,
   worldToMeters,
 } from './esquemaGeometry.js'
-import { extrudeAxisForView, projectWorld3dToCanvas } from './esquema3dViews.js'
+import {
+  extrudeModeForView,
+  normalizeViewId,
+  projectWorld3dToCanvas,
+  viewProfileMeta,
+  worldZToCota,
+} from './esquema3dViews.js'
 
 const CIRCLE_SEGMENTS = 96
 
@@ -229,9 +235,12 @@ export function validateExtrudeLengthM(lengthM) {
 }
 
 /**
- * Extruir contorno cerrado.
- * - Vista superior: entre cotaSuperior y cotaInferior (metros).
- * - Frontal/lateral: longitud en metros a lo largo del eje de extrusión.
+ * Extruir contorno cerrado → sólido canónico (anillo XY + cotas Z).
+ * - Superior / inferior: entre cotaSuperior y cotaInferior.
+ * - Frontal / posterior / laterales: longitud = profundidad perpendicular a la cara
+ *   (la figura conserva posición, tamaño y cotas reales; no se “aplasta” a planta).
+ * @param {number} [faceDepthWorld] coordenada world (px) del plano de apoyo a lo largo
+ *   del eje de profundidad; si no hay sólido debajo, 0.
  */
 export function extrudeClosedEntity(obj, {
   viewId = 'top',
@@ -240,72 +249,273 @@ export function extrudeClosedEntity(obj, {
   lengthM,
   color,
   id,
+  faceDepthWorld = null,
 } = {}) {
   const contour = closedEntityToContour(obj)
   if (!contour?.ring?.length) return { ok: false, error: 'Seleccione un contorno cerrado.' }
 
-  const axis = extrudeAxisForView(viewId)
-  let z0
-  let z1
-  let ring = contour.ring
-  let analytic = contour.analytic
+  const vid = normalizeViewId(viewId)
+  const mode = extrudeModeForView(vid)
 
-  if (axis === 'z') {
+  if (mode === 'cotas') {
     const v = validateCotas(cotaSuperior, cotaInferior)
     if (!v.ok) return v
-    z0 = v.z0
-    z1 = v.z1
-  } else {
-    const v = validateExtrudeLengthM(lengthM)
-    if (!v.ok) return v
-    // Contorno dibujado en plano de perfil: puntos del lienzo son (x,z) o (y,z).
-    // Interpretamos obj coords como ya en world del plano activo; extrusión ortogonal.
-    // Convención: z0/z1 almacenan el intervalo a lo largo del eje de extrusión en METROS
-    // relativos (0 .. length), y el ring permanece en el plano del contorno proyectado a XY
-    // de trabajo del sólido usando ejes canónicos:
-    //  - front (eje Y): ring (x, z_world) → XY solid (x, 0) con extrusión Y
-    // Para unificar render, convertimos a sólido "vertical" en Z solo cuando axis=z.
-    // Para front/side guardamos axis + length y un ring 2D en el plano del contorno.
-    z0 = 0
-    z1 = v.lengthM
-    analytic = null // tras remap, usar área del ring
+    let ring = contour.ring
+    if (vid === 'bottom') {
+      // Vista inferior: el lienzo Y está invertido respecto a world Y.
+      ring = ring.map((p) => ({ x: p.x, y: -p.y }))
+    }
+    const solid = {
+      type: 'solid3d',
+      id: id || uid(),
+      color: color || undefined,
+      extrudeAxis: 'z',
+      viewPlane: vid,
+      sourceEntityId: obj.id || null,
+      extrudeParams: {
+        viewId: vid,
+        cotaSuperior: v.z1,
+        cotaInferior: v.z0,
+      },
+      cells: [{
+        ring: closeRing(ring)?.slice(0, -1) || ring,
+        holes: [],
+        z0: v.z0,
+        z1: v.z1,
+        analytic: contour.analytic,
+      }],
+    }
+    lockSolidVolume(solid, solidGeomVolumeM3(solid))
+    return { ok: true, solid }
   }
+
+  const vLen = validateExtrudeLengthM(lengthM)
+  if (!vLen.ok) return vLen
+  const built = buildCanonicalFromProfile({
+    ringCanvas: contour.ring,
+    analytic: contour.analytic,
+    viewId: vid,
+    lengthM: vLen.lengthM,
+    faceDepthWorld: faceDepthWorld == null ? 0 : Number(faceDepthWorld),
+  })
+  if (!built.ok) return built
 
   const solid = {
     type: 'solid3d',
     id: id || uid(),
     color: color || undefined,
-    extrudeAxis: axis,
-    viewPlane: viewId === 'front' || viewId === 'side' ? viewId : 'top',
+    extrudeAxis: 'z',
+    viewPlane: vid,
     sourceEntityId: obj.id || null,
-    extrudeParams: axis === 'z'
-      ? { viewId: 'top', cotaSuperior: z1, cotaInferior: z0 }
-      : { viewId, lengthM: z1 - z0 },
-    cells: [{
-      ring: closeRing(ring)?.slice(0, -1) || ring,
-      holes: [],
-      z0,
-      z1,
-      analytic: axis === 'z' ? analytic : null,
-    }],
+    extrudeParams: {
+      viewId: vid,
+      lengthM: vLen.lengthM,
+      faceDepthWorld: faceDepthWorld == null ? 0 : Number(faceDepthWorld),
+    },
+    cells: built.cells,
   }
-
-  // Remap frontal/lateral: el contorno en canvas está en ejes de perfil.
-  if (axis === 'y' || axis === 'x') {
-    solid.cells = [{
-      ring: remapProfileRingToXy(ring, viewId),
-      holes: [],
-      z0,
-      z1,
-      analytic: null,
-      profileView: viewId,
-    }]
-    // Para volumen, el "z" interval es la longitud de extrusión (metros) y el ring
-    // está en el plano perpendicular → área * length.
-  }
-
-  lockSolidVolume(solid, solidGeomVolumeM3(solid))
+  // Volumen exacto: área del perfil × longitud (no la suma de losas de teselación).
+  const profileArea = profileAreaM2(contour.ring, contour.analytic)
+  lockSolidVolume(solid, profileArea * vLen.lengthM)
   return { ok: true, solid }
+}
+
+function profileAreaM2(ring, analytic) {
+  if (analytic?.type === 'rect') {
+    return Math.abs(analytic.wM) * Math.abs(analytic.hM)
+  }
+  if (analytic?.type === 'ellipse') {
+    return Math.PI * Math.abs(analytic.rxM) * Math.abs(analytic.ryM)
+  }
+  if (analytic?.type === 'triangle') {
+    return 0.5 * Math.abs(analytic.baseM) * Math.abs(analytic.heightM)
+  }
+  return Math.max(0, polygonAreaM2(ring || []))
+}
+
+/**
+ * Contorno en vista de perfil (coords de lienzo) → celdas canónicas XY + cotas.
+ * Rectángulo alineado → una celda. Círculo/elipse/polígono → losas Z.
+ */
+function buildCanonicalFromProfile({
+  ringCanvas,
+  analytic,
+  viewId,
+  lengthM,
+  faceDepthWorld = 0,
+}) {
+  const meta = viewProfileMeta(viewId)
+  const lengthPx = metersToWorld(lengthM)
+  const d0 = Number(faceDepthWorld) || 0
+  const d1 = d0 + meta.depthSign * lengthPx
+  const depthMin = Math.min(d0, d1)
+  const depthMax = Math.max(d0, d1)
+
+  const profile = (ringCanvas || []).map((p) => {
+    const along = meta.alongSign * (Number(p.x) || 0)
+    const cota = worldZToCota(Number(p.y) || 0, 0)
+    return { along, cota }
+  })
+  if (profile.length < 3) {
+    return { ok: false, error: 'Contorno de perfil inválido.' }
+  }
+
+  const alongs = profile.map((p) => p.along)
+  const cotas = profile.map((p) => p.cota)
+  const alongMin = Math.min(...alongs)
+  const alongMax = Math.max(...alongs)
+  const z0 = Math.min(...cotas)
+  const z1 = Math.max(...cotas)
+  if (!(z1 > z0) || !(alongMax > alongMin)) {
+    return { ok: false, error: 'El contorno debe tener área en la vista.' }
+  }
+
+  const xyRect = (a0, a1, dep0, dep1) => {
+    // alongAxis × depthAxis → ring XY
+    if (meta.alongAxis === 'x' && meta.depthAxis === 'y') {
+      return [
+        { x: a0, y: dep0 },
+        { x: a1, y: dep0 },
+        { x: a1, y: dep1 },
+        { x: a0, y: dep1 },
+      ]
+    }
+    // along = y, depth = x
+    return [
+      { x: dep0, y: a0 },
+      { x: dep1, y: a0 },
+      { x: dep1, y: a1 },
+      { x: dep0, y: a1 },
+    ]
+  }
+
+  // Rectángulo alineado a los ejes de la vista → un prisma vertical exacto.
+  const isRect = analytic?.type === 'rect' || profileLooksAxisAlignedRect(profile)
+  if (isRect) {
+    const wAlongM = worldToMeters(alongMax - alongMin)
+    const hCotaM = z1 - z0
+    const cells = [{
+      ring: xyRect(alongMin, alongMax, depthMin, depthMax),
+      holes: [],
+      z0,
+      z1,
+      analytic: {
+        type: 'rect',
+        wM: meta.depthAxis === 'x' ? lengthM : wAlongM,
+        hM: meta.depthAxis === 'x' ? wAlongM : lengthM,
+      },
+    }]
+    // analytic del footprint XY: long = eje X del ring, anch = eje Y
+    if (meta.depthAxis === 'x') {
+      cells[0].analytic = { type: 'rect', wM: lengthM, hM: wAlongM }
+    } else {
+      cells[0].analytic = { type: 'rect', wM: wAlongM, hM: lengthM }
+    }
+    void hCotaM
+    return { ok: true, cells }
+  }
+
+  // Círculo / elipse / polígono: losas Z (compatible con booleanos).
+  const cells = tessellateProfileAlongZ(profile, meta, depthMin, depthMax, analytic)
+  if (!cells.length) return { ok: false, error: 'No se pudo extruir el perfil.' }
+  return { ok: true, cells }
+}
+
+function profileLooksAxisAlignedRect(profile) {
+  if (!profile || profile.length < 4) return false
+  const eps = metersToWorld(1e-4)
+  const alongs = [...new Set(profile.map((p) => Math.round(p.along / eps) * eps))]
+  const cotas = [...new Set(profile.map((p) => Math.round(p.cota * 1e6) / 1e6))]
+  return alongs.length === 2 && cotas.length === 2
+}
+
+/**
+ * Tesela un perfil (along, cota) extruido en profundidad como losas Z.
+ * Para círculo/elipse usa cuerdas analíticas; para polígono, barrido por bands.
+ */
+function tessellateProfileAlongZ(profile, meta, depthMin, depthMax, analytic) {
+  const zMin = Math.min(...profile.map((p) => p.cota))
+  const zMax = Math.max(...profile.map((p) => p.cota))
+  const alongMin = Math.min(...profile.map((p) => p.along))
+  const alongMax = Math.max(...profile.map((p) => p.along))
+  const nBands = analytic?.type === 'ellipse' ? 48 : 24
+  const cells = []
+  const xyRect = (a0, a1) => {
+    if (meta.alongAxis === 'x' && meta.depthAxis === 'y') {
+      return [
+        { x: a0, y: depthMin },
+        { x: a1, y: depthMin },
+        { x: a1, y: depthMax },
+        { x: a0, y: depthMax },
+      ]
+    }
+    return [
+      { x: depthMin, y: a0 },
+      { x: depthMax, y: a0 },
+      { x: depthMax, y: a1 },
+      { x: depthMin, y: a1 },
+    ]
+  }
+
+  if (analytic?.type === 'ellipse') {
+    const cx = (alongMin + alongMax) / 2
+    const cz = (zMin + zMax) / 2
+    const rx = Math.abs(alongMax - alongMin) / 2
+    const rz = Math.abs(zMax - zMin) / 2
+    if (!(rx > 0) || !(rz > 0)) return []
+    for (let i = 0; i < nBands; i += 1) {
+      const t0 = -1 + (2 * i) / nBands
+      const t1 = -1 + (2 * (i + 1)) / nBands
+      const zA = cz + t0 * rz
+      const zB = cz + t1 * rz
+      const mid = (t0 + t1) / 2
+      // Semiancho en along a la cota media de la banda
+      const half = rx * Math.sqrt(Math.max(0, 1 - mid * mid))
+      if (half < metersToWorld(1e-5)) continue
+      cells.push({
+        ring: xyRect(cx - half, cx + half),
+        holes: [],
+        z0: Math.min(zA, zB),
+        z1: Math.max(zA, zB),
+        analytic: null,
+      })
+    }
+    return cells
+  }
+
+  // Polígono genérico: bandas uniformes + intersección 1D del perfil con cada cota.
+  for (let i = 0; i < nBands; i += 1) {
+    const zA = zMin + ((zMax - zMin) * i) / nBands
+    const zB = zMin + ((zMax - zMin) * (i + 1)) / nBands
+    const zMid = (zA + zB) / 2
+    const xs = horizontalSpanAtCota(profile, zMid)
+    if (!xs || !(xs.max > xs.min)) continue
+    cells.push({
+      ring: xyRect(xs.min, xs.max),
+      holes: [],
+      z0: zA,
+      z1: zB,
+      analytic: null,
+    })
+  }
+  return cells
+}
+
+function horizontalSpanAtCota(profile, cota) {
+  const pts = profile || []
+  const hits = []
+  for (let i = 0; i < pts.length; i += 1) {
+    const a = pts[i]
+    const b = pts[(i + 1) % pts.length]
+    const dz = b.cota - a.cota
+    if (Math.abs(dz) < 1e-12) continue
+    const t = (cota - a.cota) / dz
+    if (t < -1e-9 || t > 1 + 1e-9) continue
+    hits.push(a.along + t * (b.along - a.along))
+  }
+  if (hits.length < 2) return null
+  hits.sort((u, v) => u - v)
+  return { min: hits[0], max: hits[hits.length - 1] }
 }
 
 /**
@@ -325,11 +535,12 @@ export function refreshSolidFromSourceEntity(solid, entity) {
     lengthM: params.lengthM,
     color: solid.color,
     id: solid.id,
+    faceDepthWorld: params.faceDepthWorld,
   })
   if (!r.ok) return r
   r.solid.sourceEntityId = entity.id
   r.solid.extrudeParams = { ...params }
-  lockSolidVolume(r.solid, solidGeomVolumeM3(r.solid))
+  // extrudeClosedEntity ya bloquea el volumen exacto (cotas o área×profundidad).
   return r
 }
 
@@ -404,23 +615,170 @@ export function withUpdatedVolume(solid) {
 }
 
 /**
- * Contorno en vista frontal: canvas (x, zDisplay) donde zDisplay = cotaToWorldZ.
- * Lo convertimos a ring XY con y=0 (línea en X), extrusión en Y.
- * Vista lateral: canvas (y, z) → ring con x=0.
- *
- * Para volumen solo importa el área 2D del contorno en su plano × longitud.
- * Guardamos el ring en coordenadas del plano de perfil mapeadas a XY artificial:
- * front: (canvasX, canvasY_as_Zworld) stored as (x, y) where y represents Z world units
- * and extrudeAxis length is in meters along Y — volume = area(ring in m² of x-z) * length.
- *
- * Simplificación robusta: ring en metros del plano del contorno (convertido desde world px),
- * z0/z1 = 0..lengthM, volume = polygonAreaM2(ring) * length — pero ring debe estar en world XY units.
- * Mantener ring en world units del lienzo (px): polygonAreaM2 ya divide por PPM².
+ * Profundidad (world px) de la cara del sólido que mira al usuario en la vista.
+ * Usado para apoyar el dibujo / extrusión sobre esa cara.
  */
-function remapProfileRingToXy(ring, viewId) {
-  // Conservamos las coordenadas de canvas del perfil como ring XY "de trabajo".
-  // El área en ese plano × longitud de extrusión da el volumen.
-  return (ring || []).map((p) => ({ x: p.x, y: p.y }))
+export function solidFaceDepthWorld(solid, viewId) {
+  const id = normalizeViewId(viewId)
+  if (!solid?.cells?.length) return 0
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const cell of solid.cells) {
+    for (const p of cell.ring || []) {
+      minX = Math.min(minX, p.x)
+      maxX = Math.max(maxX, p.x)
+      minY = Math.min(minY, p.y)
+      maxY = Math.max(maxY, p.y)
+    }
+  }
+  if (!Number.isFinite(minX)) return 0
+  switch (id) {
+    case 'front': return minY // cara hacia −Y
+    case 'back': return maxY
+    case 'left':
+    case 'side': return minX // cara hacia −X
+    case 'right': return maxX
+    case 'top':
+    case 'bottom':
+    default: return 0
+  }
+}
+
+/** Espesor del sólido a lo largo del eje de profundidad de la vista (m). */
+export function solidThicknessAlongViewM(solid, viewId) {
+  const id = normalizeViewId(viewId)
+  if (!solid?.cells?.length) return 0
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const cell of solid.cells) {
+    for (const p of cell.ring || []) {
+      minX = Math.min(minX, p.x)
+      maxX = Math.max(maxX, p.x)
+      minY = Math.min(minY, p.y)
+      maxY = Math.max(maxY, p.y)
+    }
+  }
+  if (!Number.isFinite(minX)) return 0
+  const meta = viewProfileMeta(id)
+  if (meta.depthAxis === 'x') return worldToMeters(maxX - minX)
+  if (meta.depthAxis === 'y') return worldToMeters(maxY - minY)
+  return 0
+}
+
+/**
+ * Puntos de referencia de la cara visible (esquinas, medios de arista, centro)
+ * en coordenadas de lienzo de la vista.
+ * @returns {Array<{ x: number, y: number, kind: string }>}
+ */
+export function solidFaceSnapPoints(solid, viewId, cotaRefM = 0) {
+  const id = normalizeViewId(viewId)
+  if (!solid?.cells?.length) return []
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const cell of solid.cells) {
+    minZ = Math.min(minZ, Number(cell.z0) || 0, Number(cell.z1) || 0)
+    maxZ = Math.max(maxZ, Number(cell.z0) || 0, Number(cell.z1) || 0)
+    for (const p of cell.ring || []) {
+      minX = Math.min(minX, p.x)
+      maxX = Math.max(maxX, p.x)
+      minY = Math.min(minY, p.y)
+      maxY = Math.max(maxY, p.y)
+    }
+  }
+  if (!Number.isFinite(minX)) return []
+
+  const depth = solidFaceDepthWorld(solid, id)
+  let corners3d = []
+  switch (id) {
+    case 'front':
+    case 'back':
+      corners3d = [
+        { x: minX, y: depth, zCota: minZ },
+        { x: maxX, y: depth, zCota: minZ },
+        { x: maxX, y: depth, zCota: maxZ },
+        { x: minX, y: depth, zCota: maxZ },
+      ]
+      break
+    case 'left':
+    case 'side':
+    case 'right':
+      corners3d = [
+        { x: depth, y: minY, zCota: minZ },
+        { x: depth, y: maxY, zCota: minZ },
+        { x: depth, y: maxY, zCota: maxZ },
+        { x: depth, y: minY, zCota: maxZ },
+      ]
+      break
+    case 'bottom':
+      corners3d = [
+        { x: minX, y: minY, zCota: minZ },
+        { x: maxX, y: minY, zCota: minZ },
+        { x: maxX, y: maxY, zCota: minZ },
+        { x: minX, y: maxY, zCota: minZ },
+      ]
+      break
+    case 'top':
+    default:
+      corners3d = [
+        { x: minX, y: minY, zCota: maxZ },
+        { x: maxX, y: minY, zCota: maxZ },
+        { x: maxX, y: maxY, zCota: maxZ },
+        { x: minX, y: maxY, zCota: maxZ },
+      ]
+      break
+  }
+
+  const toCanvas = (p) => projectWorld3dToCanvas(p, id, cotaRefM, null)
+  const corners = corners3d.map((p) => ({ ...toCanvas(p), kind: 'corner' }))
+  const mids = []
+  for (let i = 0; i < corners.length; i += 1) {
+    const a = corners[i]
+    const b = corners[(i + 1) % corners.length]
+    mids.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, kind: 'mid' })
+  }
+  const cx = corners.reduce((s, p) => s + p.x, 0) / corners.length
+  const cy = corners.reduce((s, p) => s + p.y, 0) / corners.length
+  return [...corners, ...mids, { x: cx, y: cy, kind: 'center' }]
+}
+
+/**
+ * Sólido bajo un punto de lienzo en la vista actual (cara visible).
+ * Prefiere el de menor área de cara (elementos apoyados sobre muros).
+ */
+export function hitSolidFaceAtView(solids, canvasPt, viewId, cotaRefM = 0) {
+  const list = solids || []
+  let best = null
+  let bestArea = Infinity
+  for (const solid of list) {
+    const snaps = solidFaceSnapPoints(solid, viewId, cotaRefM)
+    if (snaps.length < 4) continue
+    const xs = snaps.filter((s) => s.kind === 'corner').map((s) => s.x)
+    const ys = snaps.filter((s) => s.kind === 'corner').map((s) => s.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    if (
+      canvasPt.x < minX - 1
+      || canvasPt.x > maxX + 1
+      || canvasPt.y < minY - 1
+      || canvasPt.y > maxY + 1
+    ) continue
+    const area = Math.abs((maxX - minX) * (maxY - minY))
+    if (area < bestArea) {
+      bestArea = area
+      best = solid
+    }
+  }
+  return best
 }
 
 function polygonsFromCell(cell) {
