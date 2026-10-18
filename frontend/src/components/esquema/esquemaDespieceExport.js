@@ -84,7 +84,11 @@ function drawShapeWithCotas(ctx, shape, pos, x, y, w, h) {
   let ty = y + h * 0.58
   const labels = []
   if (shape.kind === 'spiral' && pos.spiral) {
-    labels.push(`Ø${pos.spiral.diametroCm} paso ${pos.spiral.pasoCm} ×${pos.spiral.vueltas}`)
+    const dM = Number(String(pos.spiral.diametroM ?? '').replace(',', '.'))
+    const pM = Number(String(pos.spiral.pasoM ?? '').replace(',', '.'))
+    const dCm = Number.isFinite(dM) ? Math.round(dM * 100) : (pos.spiral.diametroCm ?? '—')
+    const pCm = Number.isFinite(pM) ? Math.round(pM * 100) : (pos.spiral.pasoCm ?? '—')
+    labels.push(`Ø${dCm} paso ${pCm} ×${pos.spiral.vueltas}`)
   } else {
     for (const seg of segs) {
       const d = segmentDisplayLabel(seg)

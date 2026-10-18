@@ -36,9 +36,9 @@ describe('caso a · doble gancho a 180° 15+150+15 ×10', () => {
     assert.match(shape.segments[1].path, /^M .* L /)
 
     const segs = blankSegmentsForShape(shape)
-    segs[0].lengthCm = '15'
-    segs[1].lengthCm = '150'
-    segs[2].lengthCm = '15'
+    segs[0].lengthM = '0.15'
+    segs[1].lengthM = '1.50'
+    segs[2].lengthM = '0.15'
     const m = computePositionMetrics({
       id: 'p1',
       name: 'Dg180',
@@ -68,9 +68,9 @@ describe('caso b · fleje comercial 22×22 ganchos 6 ×50', () => {
 
     const segs = blankSegmentsForShape(shape)
     const byId = Object.fromEntries(segs.map((s) => [s.id, s]))
-    byId.ladoA.lengthCm = '22'
-    byId.ladoB.lengthCm = '22'
-    byId.gancho.lengthCm = '6'
+    byId.ladoA.lengthM = '0.22'
+    byId.ladoB.lengthM = '0.22'
+    byId.gancho.lengthM = '0.06'
     const m = computePositionMetrics({
       id: 'f1',
       name: 'Est',
@@ -105,9 +105,9 @@ describe('caso c · fleje legado conserva valores con nueva geometría', () => {
     }
     const norm = normalizeDespiecePosition(legacy)
     assert.deepEqual(norm.segments.map((s) => s.id), ['ladoA', 'ladoB', 'gancho'])
-    assert.equal(norm.segments.find((s) => s.id === 'ladoA').lengthCm, '22')
-    assert.equal(norm.segments.find((s) => s.id === 'ladoB').lengthCm, '22')
-    assert.equal(norm.segments.find((s) => s.id === 'gancho').lengthCm, '6')
+    assert.equal(norm.segments.find((s) => s.id === 'ladoA').lengthM, '0.22')
+    assert.equal(norm.segments.find((s) => s.id === 'ladoB').lengthM, '0.22')
+    assert.equal(norm.segments.find((s) => s.id === 'gancho').lengthM, '0.06')
     const m = computePositionMetrics(legacy)
     assert.equal(m.ok, true)
     assert.equal(m.partialM, 1)

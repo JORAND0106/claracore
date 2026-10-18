@@ -21,7 +21,7 @@ import {
   despieceFmtPesoKgM,
   newDespieceId,
   normalizeDespiecePosition,
-  segmentLengthCm,
+  segmentLengthM,
 } from './esquemaDespiece.js'
 import { buildCustomShapeFromPolyline } from './esquemaDespieceShapes.js'
 
@@ -309,17 +309,22 @@ export function EsquemaDespiecePositionPopup({
           <div style={{ display: 'grid', gap: 10 }}>
             {shape?.kind === 'spiral' ? (
               <>
-                {['diametroCm', 'pasoCm', 'vueltas'].map((k) => (
+                {['diametroM', 'pasoM', 'vueltas'].map((k) => (
                   <label key={k} style={label}>
-                    {k === 'diametroCm' ? 'Diámetro (cm)' : k === 'pasoCm' ? 'Paso (cm)' : 'N° de vueltas'}
-                    <input
-                      value={spiral?.[k] ?? ''}
-                      onChange={(e) => setSpiral((prev) => ({ ...(prev || {}), [k]: e.target.value }))}
-                      onFocus={() => setActiveSeg(null)}
-                      style={input}
-                      inputMode="decimal"
-                      data-testid={`despiece-spiral-${k}`}
-                    />
+                    {k === 'diametroM' ? 'Diámetro' : k === 'pasoM' ? 'Paso' : 'N° de vueltas'}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        value={spiral?.[k] ?? ''}
+                        onChange={(e) => setSpiral((prev) => ({ ...(prev || {}), [k]: e.target.value, units: 'm' }))}
+                        onFocus={() => setActiveSeg(null)}
+                        style={input}
+                        inputMode="decimal"
+                        data-testid={`despiece-spiral-${k}`}
+                      />
+                      {k !== 'vueltas' ? (
+                        <span style={{ fontWeight: 800, fontSize: 12, color: ui?.muted || '#64748b' }}>m</span>
+                      ) : null}
+                    </div>
                   </label>
                 ))}
               </>
@@ -355,46 +360,58 @@ export function EsquemaDespiecePositionPopup({
                   </div>
                   {seg.mode === 'variable' ? (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                      <input
-                        placeholder="Mín cm"
-                        value={seg.minCm}
-                        onFocus={() => setActiveSeg(seg.id)}
-                        onChange={(e) => updateSeg(seg.id, { minCm: e.target.value })}
-                        onBlur={() => focusNext(seg.id)}
-                        style={input}
-                        inputMode="decimal"
-                        data-testid={`despiece-seg-min-${seg.id}`}
-                      />
-                      <input
-                        placeholder="Máx cm"
-                        value={seg.maxCm}
-                        onFocus={() => setActiveSeg(seg.id)}
-                        onChange={(e) => updateSeg(seg.id, { maxCm: e.target.value })}
-                        onBlur={() => focusNext(seg.id)}
-                        style={input}
-                        inputMode="decimal"
-                        data-testid={`despiece-seg-max-${seg.id}`}
-                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <input
+                          placeholder="Mín"
+                          value={seg.minM ?? ''}
+                          onFocus={() => setActiveSeg(seg.id)}
+                          onChange={(e) => updateSeg(seg.id, { minM: e.target.value, units: 'm' })}
+                          onBlur={() => focusNext(seg.id)}
+                          style={input}
+                          inputMode="decimal"
+                          data-testid={`despiece-seg-min-${seg.id}`}
+                        />
+                        <span style={{ fontWeight: 800, fontSize: 12 }}>m</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <input
+                          placeholder="Máx"
+                          value={seg.maxM ?? ''}
+                          onFocus={() => setActiveSeg(seg.id)}
+                          onChange={(e) => updateSeg(seg.id, { maxM: e.target.value, units: 'm' })}
+                          onBlur={() => focusNext(seg.id)}
+                          style={input}
+                          inputMode="decimal"
+                          data-testid={`despiece-seg-max-${seg.id}`}
+                        />
+                        <span style={{ fontWeight: 800, fontSize: 12 }}>m</span>
+                      </div>
                       <div style={{ gridColumn: '1 / -1', fontSize: 11, color: ui?.muted || '#64748b' }}>
-                        Promedio: {Number.isFinite(segmentLengthCm(seg)) ? `${Math.round(segmentLengthCm(seg))} cm` : '—'}
+                        Promedio:{' '}
+                        {Number.isFinite(segmentLengthM(seg))
+                          ? `${fmt2(segmentLengthM(seg))} m`
+                          : '—'}
                       </div>
                     </div>
                   ) : (
-                    <input
-                      placeholder="Longitud cm"
-                      value={seg.lengthCm}
-                      onFocus={() => setActiveSeg(seg.id)}
-                      onChange={(e) => updateSeg(seg.id, { lengthCm: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          focusNext(seg.id)
-                        }
-                      }}
-                      style={input}
-                      inputMode="decimal"
-                      data-testid={`despiece-seg-${seg.id}`}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        placeholder="Longitud"
+                        value={seg.lengthM ?? ''}
+                        onFocus={() => setActiveSeg(seg.id)}
+                        onChange={(e) => updateSeg(seg.id, { lengthM: e.target.value, units: 'm' })}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            focusNext(seg.id)
+                          }
+                        }}
+                        style={input}
+                        inputMode="decimal"
+                        data-testid={`despiece-seg-${seg.id}`}
+                      />
+                      <span style={{ fontWeight: 800, fontSize: 12, color: ui?.muted || '#64748b' }}>m</span>
+                    </div>
                   )}
                 </div>
               ))
