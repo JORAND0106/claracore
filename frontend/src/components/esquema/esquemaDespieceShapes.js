@@ -117,7 +117,7 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'circle',
     viewBox: '0 0 100 100',
     segments: [
-      { id: 'circ', name: 'Circunferencia (Ø cm)', path: 'M 50 15 A 35 35 0 1 1 49.9 15' },
+      { id: 'circ', name: 'Circunferencia (Ø m)', path: 'M 50 15 A 35 35 0 1 1 49.9 15' },
     ],
   },
   {
@@ -128,8 +128,8 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     viewBox: '0 0 120 100',
     segments: [], // diametro, paso, vueltas — ver campos especiales
     spiralFields: [
-      { id: 'diametroCm', name: 'Diámetro (cm)' },
-      { id: 'pasoCm', name: 'Paso (cm)' },
+      { id: 'diametroM', name: 'Diámetro (m)' },
+      { id: 'pasoM', name: 'Paso (m)' },
       { id: 'vueltas', name: 'N° de vueltas' },
     ],
     thumbPath: 'M 20 50 Q 40 20 60 50 T 100 50',
@@ -164,9 +164,10 @@ export function blankSegmentsForShape(shape) {
     id: s.id,
     name: s.name,
     mode: 'unica',
-    lengthCm: '',
-    minCm: '',
-    maxCm: '',
+    units: 'm',
+    lengthM: '',
+    minM: '',
+    maxM: '',
     contrib: Number(s.contrib) > 0 ? Number(s.contrib) : 1,
   }))
 }
@@ -174,12 +175,12 @@ export function blankSegmentsForShape(shape) {
 export { normalizeDespiecePosition } from './esquemaDespiece.js'
 
 export function blankSpiral() {
-  return { diametroCm: '', pasoCm: '', vueltas: '' }
+  return { diametroM: '', pasoM: '', vueltas: '', units: 'm' }
 }
 
 /**
  * A partir de una polilínea del esquema, identifica segmentos (cada lado).
- * Longitudes en cm (world → m → cm).
+ * Longitudes en metros.
  */
 export function segmentsFromPolyline(obj) {
   const pts = obj?.points
@@ -191,14 +192,15 @@ export function segmentsFromPolyline(obj) {
     const dx = (b.x || 0) - (a.x || 0)
     const dy = (b.y || 0) - (a.y || 0)
     const lenM = Math.hypot(worldToMeters(dx), worldToMeters(dy))
-    const cm = Math.round(lenM * 100 * 100) / 100
+    const m = Math.round(lenM * 1e6) / 1e6
     segs.push({
       id: `s${i + 1}`,
       name: `Segmento ${i + 1}`,
       mode: 'unica',
-      lengthCm: String(cm),
-      minCm: '',
-      maxCm: '',
+      units: 'm',
+      lengthM: String(m),
+      minM: '',
+      maxM: '',
       pathHint: { x1: a.x, y1: a.y, x2: b.x, y2: b.y },
     })
   }
@@ -209,14 +211,15 @@ export function segmentsFromPolyline(obj) {
     const dx = (b.x || 0) - (a.x || 0)
     const dy = (b.y || 0) - (a.y || 0)
     const lenM = Math.hypot(worldToMeters(dx), worldToMeters(dy))
-    const cm = Math.round(lenM * 100 * 100) / 100
+    const m = Math.round(lenM * 1e6) / 1e6
     segs.push({
       id: `s${segs.length + 1}`,
       name: `Segmento ${segs.length + 1}`,
       mode: 'unica',
-      lengthCm: String(cm),
-      minCm: '',
-      maxCm: '',
+      units: 'm',
+      lengthM: String(m),
+      minM: '',
+      maxM: '',
       pathHint: { x1: a.x, y1: a.y, x2: b.x, y2: b.y },
     })
   }

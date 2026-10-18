@@ -1,6 +1,6 @@
 /**
  * Cuadro de despiece — casos a–g del contrato (C-DES-*).
- * Pesos: tabla NTC 2289 de plataforma (`sicoeVarilla.js`). #4 = Ø 1/2 = 0,99 kg/m.
+ * Captura en metros (legado cm se migra). Peso despiece #4 = 0,994 (tabla SicoeObra intacta 0,99).
  */
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -41,9 +41,16 @@ function dobleGanchoPos({ name, pieces, segs }) {
   const segments = blankSegmentsForShape(shape).map((s, i) => {
     const conf = segs[i]
     if (conf.mode === 'variable') {
-      return { ...s, mode: 'variable', minCm: String(conf.min), maxCm: String(conf.max) }
+      return {
+        ...s,
+        mode: 'variable',
+        units: 'm',
+        minM: String(conf.minM ?? conf.min / 100),
+        maxM: String(conf.maxM ?? conf.max / 100),
+      }
     }
-    return { ...s, mode: 'unica', lengthCm: String(conf.cm) }
+    const m = conf.m != null ? conf.m : (conf.cm / 100)
+    return { ...s, mode: 'unica', units: 'm', lengthM: String(m) }
   })
   return {
     id: name,
@@ -52,19 +59,20 @@ function dobleGanchoPos({ name, pieces, segs }) {
     pieces,
     shapeId: 'doble_gancho',
     segments,
+    units: 'm',
   }
 }
 
 describe('despiece · diámetro NTC #4', () => {
-  it('#4 resuelve a 1/2 con peso de tabla (0,99)', () => {
+  it('#4 resuelve a 1/2; despiece usa 0,994; tabla SicoeObra sigue en 0,99', () => {
     assert.equal(despieceResolverDiametro('#4'), '1/2')
-    assert.equal(despiecePesoKgM('#4'), SICOE_VARILLA_PESOS_KG_M['1/2'])
-    assert.equal(despiecePesoKgM('#4'), 0.99)
+    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.99)
+    assert.equal(despiecePesoKgM('#4'), 0.994)
   })
 })
 
 describe('caso a · As1 doble gancho 20+155+20 × 16', () => {
-  it('1,95 m parcial · 31,20 m total · peso = L×0,99', () => {
+  it('1,95 m parcial · 31,20 m total · peso = L×0,994', () => {
     const pos = dobleGanchoPos({
       name: 'As1',
       pieces: 16,
@@ -74,8 +82,8 @@ describe('caso a · As1 doble gancho 20+155+20 × 16', () => {
     assert.equal(m.ok, true)
     assert.equal(m.partialM, 1.95)
     assert.equal(m.totalM, 31.2)
-    assert.equal(m.pesoKg, round2(31.2 * 0.99))
-    assert.equal(fmt2(m.pesoKg), '30,89')
+    assert.equal(m.pesoKg, round2(31.2 * 0.994))
+    assert.equal(fmt2(m.pesoKg), '31,01')
   })
 })
 
@@ -90,7 +98,7 @@ describe('caso b · As1a variable 40–118 (prom 79)', () => {
     assert.equal(m.ok, true)
     assert.equal(m.partialM, 1.19)
     assert.equal(m.totalM, 9.52)
-    assert.equal(m.pesoKg, round2(9.52 * 0.99))
+    assert.equal(m.pesoKg, round2(9.52 * 0.994))
     const d = segmentDisplayLabel(pos.segments[1])
     assert.equal(d.varLine, 'Var. 40 a 118')
     assert.equal(d.promLine, 'Prom. 79')
@@ -108,7 +116,7 @@ describe('caso c · As2 variable 160–236 (prom 198)', () => {
     assert.equal(m.ok, true)
     assert.equal(m.partialM, 2.38)
     assert.equal(m.totalM, 47.6)
-    assert.equal(m.pesoKg, round2(47.6 * 0.99))
+    assert.equal(m.pesoKg, round2(47.6 * 0.994))
   })
 })
 
@@ -120,11 +128,11 @@ describe('caso d · total tres posiciones', () => {
       dobleGanchoPos({ name: 'As2', pieces: 20, segs: [{ cm: 20 }, { mode: 'variable', min: 160, max: 236 }, { cm: 20 }] }),
     ]
     const total = computeScheduleTotalKg(positions)
-    const a = round2(31.2 * 0.99)
-    const b = round2(9.52 * 0.99)
-    const c = round2(47.6 * 0.99)
+    const a = round2(31.2 * 0.994)
+    const b = round2(9.52 * 0.994)
+    const c = round2(47.6 * 0.994)
     assert.equal(total, round2(a + b + c))
-    assert.equal(fmt2(total), '87,43')
+    assert.equal(fmt2(total), '87,78')
   })
 })
 
@@ -150,10 +158,10 @@ describe('caso e · fleje, espiral y forma de usuario', () => {
     assert.ok(ids.includes('aro'))
     assert.ok(ids.includes('escalonada_z'))
 
-    // n × √((π·d)² + paso²)
-    const L = spiralDevelopedLengthCm(20, 10, 5)
-    const expected = 5 * Math.sqrt((Math.PI * 20) ** 2 + 10 ** 2)
-    assert.ok(Math.abs(L - expected) < 1e-9)
+    // n × √((π·d)² + paso²) con d,paso en cm (compat) o metros
+    const Lcm = spiralDevelopedLengthCm(20, 10, 5)
+    const expectedCm = 5 * Math.sqrt((Math.PI * 20) ** 2 + 10 ** 2)
+    assert.ok(Math.abs(Lcm - expectedCm) < 1e-9)
 
     const espiralPos = {
       id: 'e1',
@@ -162,22 +170,22 @@ describe('caso e · fleje, espiral y forma de usuario', () => {
       pieces: 2,
       shapeId: 'espiral',
       segments: [],
-      spiral: { diametroCm: 20, pasoCm: 10, vueltas: 5 },
+      spiral: { diametroM: '0.2', pasoM: '0.1', vueltas: 5, units: 'm' },
     }
     const me = computePositionMetrics(espiralPos)
     assert.equal(me.ok, true)
-    assert.equal(me.partialM, round2(L / 100))
+    assert.equal(me.partialM, round2(Lcm / 100))
 
     const fleje = getBuiltinShape('fleje_135')
     assert.equal(fleje.segments.length, 3)
     assert.ok(fleje.segments.every((s) => s.contrib === 2))
-    // L = 2A+2B+2G con A=B=G=25 → 150 cm
-    const fSegs = blankSegmentsForShape(fleje).map((s) => ({ ...s, lengthCm: '25' }))
+    // L = 2A+2B+2G con A=B=G=0,25 m → 1,50 m
+    const fSegs = blankSegmentsForShape(fleje).map((s) => ({ ...s, lengthM: '0.25', units: 'm' }))
     const mf = computePositionMetrics({
       id: 'f1', name: 'Est1', diameter: '3/8', pieces: 10, shapeId: 'fleje_135', segments: fSegs,
     })
     assert.equal(mf.ok, true)
-    assert.equal(mf.partialM, round2((2 * 25 + 2 * 25 + 2 * 25) / 100))
+    assert.equal(mf.partialM, round2(2 * 0.25 + 2 * 0.25 + 2 * 0.25))
     assert.ok(ids.includes('doble_gancho_180'))
 
     // Forma creada: usuario A guarda; usuario B (mismo contrato) la ve.
@@ -230,10 +238,10 @@ describe('caso g · borrador conserva cuadros', () => {
     schedule.positions = [
       dobleGanchoPos({ name: 'As1', pieces: 16, segs: [{ cm: 20 }, { cm: 155 }, { cm: 20 }] }),
     ]
-    assert.equal(computeScheduleTotalKg(schedule.positions), round2(31.2 * 0.99))
+    assert.equal(computeScheduleTotalKg(schedule.positions), round2(31.2 * 0.994))
     // Editar piezas → recalcula
     schedule.positions[0] = { ...schedule.positions[0], pieces: 8 }
-    assert.equal(computeScheduleTotalKg(schedule.positions), round2(15.6 * 0.99))
+    assert.equal(computeScheduleTotalKg(schedule.positions), round2(15.6 * 0.994))
   })
 })
 

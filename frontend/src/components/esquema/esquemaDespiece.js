@@ -1,12 +1,16 @@
 /**
  * Cuadro de despiece de acero — cálculos y modelo.
- * Pesos kg/m: misma tabla NTC 2289 de SicoeObra (`sicoeVarilla.js`), sin pedir peso al usuario.
+ *
+ * Diámetros: misma lista NTC 2289 de SicoeObra (`sicoeVarilla.js`), sin modificar esa tabla.
+ * Peso kg/m en despiece: precisión real de cálculo (p. ej. #4 = 0,994), de modo que
+ * longitud total × kg/m mostrado = peso mostrado. La tabla SicoeObra no se altera.
+ *
+ * Captura de segmentos: metros (unidad visible «m»). Columna Forma / PNG: cotas en cm.
  */
 import {
   SICOE_VARILLA_DIAMETROS,
   SICOE_VARILLA_PESOS_KG_M,
   sicoeNormalizarDiametroVarilla,
-  sicoePesoKgMPorDiametro,
 } from '../../modules/sicoe-obra/sicoeVarilla.js'
 
 /** ASTM # → clave de la tabla NTC de la plataforma. */
@@ -25,7 +29,26 @@ export const DESPIECE_BARRA_A_DIAMETRO = Object.freeze({
   '#18': '2 1/4',
 })
 
-/** Lista de diámetros para el popup: etiqueta #n + Ø fracción (peso automático). */
+/**
+ * Precisión real de cálculo para despiece (mismas claves que la tabla de plataforma).
+ * No modifica `SICOE_VARILLA_PESOS_KG_M`. Valores ASTM A615 / NTC 2289 a 3 decimales.
+ */
+export const DESPIECE_PESOS_KG_M_PRECISION = Object.freeze({
+  '1/4': 0.25,
+  '3/8': 0.56,
+  '1/2': 0.994,
+  '5/8': 1.552,
+  '3/4': 2.235,
+  '7/8': 3.042,
+  '1': 3.973,
+  '1 1/8': 5.06,
+  '1 1/4': 6.404,
+  '1 3/8': 7.907,
+  '1 3/4': 11.387,
+  '2 1/4': 20.239,
+})
+
+/** Lista de diámetros para el popup: etiqueta #n + Ø fracción (peso automático preciso). */
 export function despieceDiametroOpciones() {
   const used = new Set()
   const opts = []
@@ -36,7 +59,7 @@ export function despieceDiametroOpciones() {
       id: frac,
       bar,
       label: `${bar} (Ø ${frac})`,
-      pesoKgM: SICOE_VARILLA_PESOS_KG_M[frac],
+      pesoKgM: despiecePesoKgM(frac),
     })
   }
   for (const frac of SICOE_VARILLA_DIAMETROS) {
@@ -45,7 +68,7 @@ export function despieceDiametroOpciones() {
       id: frac,
       bar: null,
       label: `Ø ${frac}`,
-      pesoKgM: SICOE_VARILLA_PESOS_KG_M[frac],
+      pesoKgM: despiecePesoKgM(frac),
     })
   }
   return opts
@@ -62,19 +85,24 @@ export function despieceResolverDiametro(raw) {
   return sicoeNormalizarDiametroVarilla(s)
 }
 
+/** Peso kg/m con precisión de cálculo del despiece (no altera la tabla SicoeObra). */
 export function despiecePesoKgM(diametro) {
   const canon = despieceResolverDiametro(diametro)
   if (!canon) return null
-  return sicoePesoKgMPorDiametro(canon)
+  if (Object.prototype.hasOwnProperty.call(DESPIECE_PESOS_KG_M_PRECISION, canon)) {
+    return DESPIECE_PESOS_KG_M_PRECISION[canon]
+  }
+  // Fallback: valor de la tabla de plataforma (mismas claves).
+  return SICOE_VARILLA_PESOS_KG_M[canon] ?? null
 }
 
 export function despieceFmtPesoKgM(peso) {
   if (peso == null || !Number.isFinite(Number(peso))) return '—'
   const n = Number(peso)
-  // Misma precisión que la tabla (sin rellenar ceros artificiales).
+  // Misma precisión con que se calcula (p. ej. 0,994), sin forzar 2 decimales.
   const s = String(n)
   if (s.includes('e') || s.includes('E')) return n.toFixed(3)
-  return s
+  return s.replace('.', ',')
 }
 
 export function round2(n) {
@@ -92,112 +120,232 @@ function parseNum(v) {
   return Number(String(v).replace(',', '.'))
 }
 
+function fmtMField(n) {
+  if (!Number.isFinite(n)) return ''
+  // Evita ruido binario: 0.2 → "0.2", 0.76 → "0.76"
+  const r = Math.round(n * 1e6) / 1e6
+  return String(r)
+}
+
 /**
- * Longitud efectiva de un segmento en cm.
+ * Longitud efectiva de un segmento en metros.
  * Única: valor. Variable: promedio (mín+máx)/2.
+ * Acepta campos nuevos (lengthM/minM/maxM) o legado cm (lengthCm/…).
  */
-export function segmentLengthCm(seg) {
+export function segmentLengthM(seg) {
   if (!seg) return 0
+  const hasM = seg.lengthM != null || seg.minM != null || seg.maxM != null
+    || seg.units === 'm'
   if (seg.mode === 'variable' || seg.mode === 'var') {
+    if (hasM || (seg.minM != null && seg.minM !== '') || (seg.maxM != null && seg.maxM !== '')) {
+      const a = parseNum(seg.minM)
+      const b = parseNum(seg.maxM)
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN
+      return (a + b) / 2
+    }
     const a = parseNum(seg.minCm)
     const b = parseNum(seg.maxCm)
     if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN
-    return (a + b) / 2
+    return ((a + b) / 2) / 100
   }
-  const v = parseNum(seg.lengthCm ?? seg.valueCm ?? seg.cm)
-  return Number.isFinite(v) ? v : NaN
+  if (hasM || (seg.lengthM != null && seg.lengthM !== '')) {
+    const v = parseNum(seg.lengthM ?? seg.valueM)
+    return Number.isFinite(v) ? v : NaN
+  }
+  const vCm = parseNum(seg.lengthCm ?? seg.valueCm ?? seg.cm)
+  return Number.isFinite(vCm) ? vCm / 100 : NaN
 }
 
-export function segmentDisplayLabel(seg) {
-  if (!seg) return '—'
-  if (seg.mode === 'variable' || seg.mode === 'var') {
-    const a = parseNum(seg.minCm)
-    const b = parseNum(seg.maxCm)
-    const prom = segmentLengthCm(seg)
-    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(prom)) return 'Var. —'
-    return {
-      varLine: `Var. ${Math.round(a)} a ${Math.round(b)}`,
-      promLine: `Prom. ${Math.round(prom)}`,
-    }
-  }
-  const v = segmentLengthCm(seg)
-  if (!Number.isFinite(v)) return '—'
-  return { varLine: null, promLine: null, value: Math.round(v) }
+/** @deprecated usar segmentLengthM; se mantiene por compat de imports. */
+export function segmentLengthCm(seg) {
+  const m = segmentLengthM(seg)
+  return Number.isFinite(m) ? m * 100 : NaN
 }
 
 /**
- * Longitud desarrollada de espiral (cm): n × √((π·Ø)² + paso²)
- * diámetroCm, pasoCm, vueltas.
+ * Etiqueta de cota para columna Forma / PNG: siempre en centímetros.
+ * 0,20 m → 20; variable 0,40–1,18 → «Var. 40 a 118» / «Prom. 79».
  */
-export function spiralDevelopedLengthCm(diametroCm, pasoCm, vueltas) {
-  const d = parseNum(diametroCm)
-  const p = parseNum(pasoCm)
+export function segmentDisplayLabel(seg) {
+  if (!seg) return '—'
+  if (seg.mode === 'variable' || seg.mode === 'var') {
+    let a
+    let b
+    if (seg.minM != null && seg.minM !== '' && seg.maxM != null && seg.maxM !== '') {
+      a = parseNum(seg.minM) * 100
+      b = parseNum(seg.maxM) * 100
+    } else {
+      a = parseNum(seg.minCm)
+      b = parseNum(seg.maxCm)
+    }
+    const promM = segmentLengthM(seg)
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(promM)) return 'Var. —'
+    return {
+      varLine: `Var. ${Math.round(a)} a ${Math.round(b)}`,
+      promLine: `Prom. ${Math.round(promM * 100)}`,
+    }
+  }
+  const m = segmentLengthM(seg)
+  if (!Number.isFinite(m)) return '—'
+  return { varLine: null, promLine: null, value: Math.round(m * 100) }
+}
+
+/**
+ * Longitud desarrollada de espiral (m): n × √((π·Ø)² + paso²)
+ * Ø y paso en metros.
+ */
+export function spiralDevelopedLengthM(diametroM, pasoM, vueltas) {
+  const d = parseNum(diametroM)
+  const p = parseNum(pasoM)
   const n = parseNum(vueltas)
   if (![d, p, n].every(Number.isFinite) || n < 0) return NaN
   return n * Math.sqrt((Math.PI * d) ** 2 + p ** 2)
+}
+
+/** @deprecated compat: interpreta args como cm y devuelve cm. */
+export function spiralDevelopedLengthCm(diametroCm, pasoCm, vueltas) {
+  const Lm = spiralDevelopedLengthM(
+    Number.isFinite(parseNum(diametroCm)) ? parseNum(diametroCm) / 100 : diametroCm,
+    Number.isFinite(parseNum(pasoCm)) ? parseNum(pasoCm) / 100 : pasoCm,
+    vueltas,
+  )
+  return Number.isFinite(Lm) ? Lm * 100 : NaN
+}
+
+/** Convierte un segmento legado (cm) a captura en metros, conservando longitud real. */
+export function migrateSegmentToMeters(seg) {
+  if (!seg || typeof seg !== 'object') return seg
+  if (seg.units === 'm' || (seg.lengthM != null && seg.lengthM !== '')
+    || (seg.minM != null && seg.minM !== '') || (seg.maxM != null && seg.maxM !== '')) {
+    return {
+      ...seg,
+      units: 'm',
+      lengthM: seg.lengthM != null ? String(seg.lengthM) : '',
+      minM: seg.minM != null ? String(seg.minM) : '',
+      maxM: seg.maxM != null ? String(seg.maxM) : '',
+      contrib: Number(seg.contrib) > 0 ? Number(seg.contrib) : 1,
+    }
+  }
+  const mode = seg.mode === 'variable' || seg.mode === 'var' ? 'variable' : 'unica'
+  if (mode === 'variable') {
+    const a = parseNum(seg.minCm)
+    const b = parseNum(seg.maxCm)
+    return {
+      ...seg,
+      units: 'm',
+      mode: 'variable',
+      minM: Number.isFinite(a) ? fmtMField(a / 100) : '',
+      maxM: Number.isFinite(b) ? fmtMField(b / 100) : '',
+      lengthM: '',
+      lengthCm: undefined,
+      minCm: undefined,
+      maxCm: undefined,
+      contrib: Number(seg.contrib) > 0 ? Number(seg.contrib) : 1,
+    }
+  }
+  const v = parseNum(seg.lengthCm ?? seg.valueCm ?? seg.cm)
+  return {
+    ...seg,
+    units: 'm',
+    mode: 'unica',
+    lengthM: Number.isFinite(v) ? fmtMField(v / 100) : '',
+    minM: '',
+    maxM: '',
+    lengthCm: undefined,
+    minCm: undefined,
+    maxCm: undefined,
+    contrib: Number(seg.contrib) > 0 ? Number(seg.contrib) : 1,
+  }
+}
+
+function migrateSpiralToMeters(sp) {
+  if (!sp || typeof sp !== 'object') return sp
+  if (sp.units === 'm' || sp.diametroM != null || sp.pasoM != null) {
+    return {
+      diametroM: sp.diametroM != null ? String(sp.diametroM) : '',
+      pasoM: sp.pasoM != null ? String(sp.pasoM) : '',
+      vueltas: sp.vueltas != null ? String(sp.vueltas) : '',
+      units: 'm',
+    }
+  }
+  const d = parseNum(sp.diametroCm)
+  const p = parseNum(sp.pasoCm)
+  return {
+    diametroM: Number.isFinite(d) ? fmtMField(d / 100) : '',
+    pasoM: Number.isFinite(p) ? fmtMField(p / 100) : '',
+    vueltas: sp.vueltas != null ? String(sp.vueltas) : '',
+    units: 'm',
+  }
 }
 
 const FLEJE_NEW_IDS = new Set(['ladoA', 'ladoB', 'gancho'])
 const FLEJE_LEGACY_IDS = new Set(['h1', 'h2', 'top', 'bot', 'left', 'right'])
 
 function cloneFlejeSeg(from, id, name) {
-  return {
+  const base = migrateSegmentToMeters({
+    ...(from || {}),
     id,
     name,
     mode: from?.mode === 'variable' || from?.mode === 'var' ? 'variable' : 'unica',
-    lengthCm: from?.lengthCm != null ? String(from.lengthCm) : '',
-    minCm: from?.minCm != null ? String(from.minCm) : '',
-    maxCm: from?.maxCm != null ? String(from.maxCm) : '',
     contrib: 2,
-  }
+  })
+  return { ...base, id, name, contrib: 2 }
 }
 
 /**
- * Fleje legado (6 segs hacia afuera) → comercial (A, B, gancho; L=2A+2B+2G).
- * Conserva valores. Otras formas sin cambio.
+ * Normaliza fleje legado → comercial y migra segmentos a metros.
+ * Conserva longitudes reales (cm÷100 → m).
  */
 export function normalizeDespiecePosition(pos) {
   if (!pos || typeof pos !== 'object') return pos
-  if (pos.shapeId !== 'fleje_135') return pos
-  const segs = Array.isArray(pos.segments) ? pos.segments : []
-  const hasNew = segs.some((s) => FLEJE_NEW_IDS.has(s?.id))
-  const hasLegacy = segs.some((s) => FLEJE_LEGACY_IDS.has(s?.id))
+  let next = { ...pos }
 
-  if (hasNew) {
-    const byId = Object.fromEntries(segs.filter((s) => FLEJE_NEW_IDS.has(s.id)).map((s) => [s.id, s]))
-    return {
-      ...pos,
-      segments: [
-        cloneFlejeSeg(byId.ladoA, 'ladoA', 'Lado A'),
-        cloneFlejeSeg(byId.ladoB, 'ladoB', 'Lado B'),
-        cloneFlejeSeg(byId.gancho, 'gancho', 'Longitud de cada gancho'),
-      ],
+  if (pos.shapeId === 'fleje_135') {
+    const segs = Array.isArray(pos.segments) ? pos.segments : []
+    const hasNew = segs.some((s) => FLEJE_NEW_IDS.has(s?.id))
+    const hasLegacy = segs.some((s) => FLEJE_LEGACY_IDS.has(s?.id))
+    if (hasNew) {
+      const byId = Object.fromEntries(segs.filter((s) => FLEJE_NEW_IDS.has(s.id)).map((s) => [s.id, s]))
+      next = {
+        ...next,
+        segments: [
+          cloneFlejeSeg(byId.ladoA, 'ladoA', 'Lado A'),
+          cloneFlejeSeg(byId.ladoB, 'ladoB', 'Lado B'),
+          cloneFlejeSeg(byId.gancho, 'gancho', 'Longitud de cada gancho'),
+        ],
+      }
+    } else if (hasLegacy) {
+      const byId = Object.fromEntries(segs.map((s) => [s.id, s]))
+      next = {
+        ...next,
+        segments: [
+          cloneFlejeSeg(byId.top || byId.bot, 'ladoA', 'Lado A'),
+          cloneFlejeSeg(byId.left || byId.right, 'ladoB', 'Lado B'),
+          cloneFlejeSeg(byId.h1 || byId.h2, 'gancho', 'Longitud de cada gancho'),
+        ],
+      }
     }
   }
-  if (hasLegacy) {
-    const byId = Object.fromEntries(segs.map((s) => [s.id, s]))
-    return {
-      ...pos,
-      segments: [
-        cloneFlejeSeg(byId.top || byId.bot, 'ladoA', 'Lado A'),
-        cloneFlejeSeg(byId.left || byId.right, 'ladoB', 'Lado B'),
-        cloneFlejeSeg(byId.h1 || byId.h2, 'gancho', 'Longitud de cada gancho'),
-      ],
-    }
+
+  if (Array.isArray(next.segments)) {
+    next.segments = next.segments.map(migrateSegmentToMeters)
   }
-  return pos
+  if (next.spiral) {
+    next.spiral = migrateSpiralToMeters(next.spiral)
+  }
+  next.units = 'm'
+  return next
 }
 
 /**
  * Calcula longitud parcial (m), total (m) y peso (kg) de una posición.
- * Fleje comercial: L = 2×A + 2×B + 2×gancho (vía `contrib` en segmentos).
- * @returns {{ ok, error?, partialM, totalM, pesoKg, pesoKgM, pieces }}
+ * Fleje comercial: L = 2×A + 2×B + 2×gancho (vía `contrib`).
  */
 export function computePositionMetrics(rawPos) {
   const pos = normalizeDespiecePosition(rawPos) || rawPos
   const pieces = parseNum(pos?.pieces ?? pos?.nPiezas)
   const diam = despieceResolverDiametro(pos?.diameter ?? pos?.diametro)
-  const pesoKgM = diam ? sicoePesoKgMPorDiametro(diam) : null
+  const pesoKgM = diam ? despiecePesoKgM(diam) : null
   if (!diam || pesoKgM == null) {
     return { ok: false, error: 'Indique un diámetro de la tabla NTC 2289.', partialM: 0, totalM: 0, pesoKg: 0, pesoKgM: null, pieces: 0 }
   }
@@ -205,42 +353,46 @@ export function computePositionMetrics(rawPos) {
     return { ok: false, error: 'Indique el N° de piezas.', partialM: 0, totalM: 0, pesoKg: 0, pesoKgM, pieces: 0 }
   }
 
-  let sumCm = 0
+  let sumM = 0
   const segs = pos?.segments || []
   if (pos?.shapeId === 'espiral' || pos?.spiral) {
     const sp = pos.spiral || {}
-    const L = spiralDevelopedLengthCm(sp.diametroCm, sp.pasoCm, sp.vueltas)
-    if (!Number.isFinite(L)) {
+    let Lm = spiralDevelopedLengthM(sp.diametroM, sp.pasoM, sp.vueltas)
+    if (!Number.isFinite(Lm) && (sp.diametroCm != null || sp.pasoCm != null)) {
+      Lm = spiralDevelopedLengthCm(sp.diametroCm, sp.pasoCm, sp.vueltas)
+      if (Number.isFinite(Lm)) Lm /= 100
+    }
+    if (!Number.isFinite(Lm)) {
       return { ok: false, error: 'Espiral: indique diámetro, paso y vueltas.', partialM: 0, totalM: 0, pesoKg: 0, pesoKgM, pieces }
     }
-    sumCm = L
+    sumM = Lm
   } else {
     if (!segs.length) {
       return { ok: false, error: 'Indique las longitudes de cada segmento.', partialM: 0, totalM: 0, pesoKg: 0, pesoKgM, pieces }
     }
     for (const seg of segs) {
-      const L = segmentLengthCm(seg)
+      const L = segmentLengthM(seg)
       if (!Number.isFinite(L) || L < 0) {
         return { ok: false, error: `Revise el segmento «${seg?.name || seg?.id || ''}».`, partialM: 0, totalM: 0, pesoKg: 0, pesoKgM, pieces }
       }
       const contrib = Number(seg.contrib) > 0 ? Number(seg.contrib) : 1
-      sumCm += L * contrib
+      sumM += L * contrib
     }
   }
 
-  const partialM = sumCm / 100
-  const totalM = partialM * pieces
-  // Peso = longitud total × peso kg/m (valores exactos antes de redondear display).
+  const partialM = round2(sumM)
+  const totalM = round2(partialM * pieces)
+  // Peso = longitud total mostrada × kg/m mostrado → coincide exactamente a 2 decimales.
   const pesoExact = totalM * pesoKgM
   return {
     ok: true,
-    partialM: round2(partialM),
-    totalM: round2(totalM),
+    partialM,
+    totalM,
     pesoKg: round2(pesoExact),
     pesoKgM,
     pesoKgMLabel: despieceFmtPesoKgM(pesoKgM),
     pieces,
-    sumCm,
+    sumM,
   }
 }
 
@@ -277,10 +429,10 @@ export function createEmptyPosition({ shapeId = 'doble_gancho', diameter = '1/2'
     shapeId,
     segments: [],
     spiral: null,
+    units: 'm',
   }
 }
 
-/** ¿Hay cuadros con nombre vacío o posiciones incompletas que bloqueen guardar? */
 export function despieceSchedulesIncomplete(schedules) {
   for (const s of schedules || []) {
     if (!String(s?.nombre || '').trim()) return true
