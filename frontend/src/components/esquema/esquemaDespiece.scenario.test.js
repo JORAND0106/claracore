@@ -169,12 +169,16 @@ describe('caso e · fleje, espiral y forma de usuario', () => {
     assert.equal(me.partialM, round2(L / 100))
 
     const fleje = getBuiltinShape('fleje_135')
+    assert.equal(fleje.segments.length, 3)
+    assert.ok(fleje.segments.every((s) => s.contrib === 2))
+    // L = 2A+2B+2G con A=B=G=25 → 150 cm
     const fSegs = blankSegmentsForShape(fleje).map((s) => ({ ...s, lengthCm: '25' }))
     const mf = computePositionMetrics({
       id: 'f1', name: 'Est1', diameter: '3/8', pieces: 10, shapeId: 'fleje_135', segments: fSegs,
     })
     assert.equal(mf.ok, true)
-    assert.equal(mf.partialM, round2(6 * 25 / 100))
+    assert.equal(mf.partialM, round2((2 * 25 + 2 * 25 + 2 * 25) / 100))
+    assert.ok(ids.includes('doble_gancho_180'))
 
     // Forma creada: usuario A guarda; usuario B (mismo contrato) la ve.
     const poly = {

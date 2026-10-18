@@ -7,6 +7,7 @@ import {
   computeScheduleTotalKg,
   fmt2,
   despieceFmtPesoKgM,
+  normalizeDespiecePosition,
   segmentDisplayLabel,
   despieceResolverDiametro,
 } from './esquemaDespiece.js'
@@ -194,7 +195,8 @@ export async function composeDespiecePng({
   const midY0 = y
   const midY1 = y + n * rowH
 
-  positions.forEach((pos, idx) => {
+  positions.forEach((rawPos, idx) => {
+    const pos = normalizeDespiecePosition(rawPos) || rawPos
     const m = computePositionMetrics(pos)
     const bg = idx % 2 ? C.rowAlt : C.bg
     ctx.fillStyle = bg
