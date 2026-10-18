@@ -137,11 +137,64 @@ export function spiralDevelopedLengthCm(diametroCm, pasoCm, vueltas) {
   return n * Math.sqrt((Math.PI * d) ** 2 + p ** 2)
 }
 
+const FLEJE_NEW_IDS = new Set(['ladoA', 'ladoB', 'gancho'])
+const FLEJE_LEGACY_IDS = new Set(['h1', 'h2', 'top', 'bot', 'left', 'right'])
+
+function cloneFlejeSeg(from, id, name) {
+  return {
+    id,
+    name,
+    mode: from?.mode === 'variable' || from?.mode === 'var' ? 'variable' : 'unica',
+    lengthCm: from?.lengthCm != null ? String(from.lengthCm) : '',
+    minCm: from?.minCm != null ? String(from.minCm) : '',
+    maxCm: from?.maxCm != null ? String(from.maxCm) : '',
+    contrib: 2,
+  }
+}
+
+/**
+ * Fleje legado (6 segs hacia afuera) → comercial (A, B, gancho; L=2A+2B+2G).
+ * Conserva valores. Otras formas sin cambio.
+ */
+export function normalizeDespiecePosition(pos) {
+  if (!pos || typeof pos !== 'object') return pos
+  if (pos.shapeId !== 'fleje_135') return pos
+  const segs = Array.isArray(pos.segments) ? pos.segments : []
+  const hasNew = segs.some((s) => FLEJE_NEW_IDS.has(s?.id))
+  const hasLegacy = segs.some((s) => FLEJE_LEGACY_IDS.has(s?.id))
+
+  if (hasNew) {
+    const byId = Object.fromEntries(segs.filter((s) => FLEJE_NEW_IDS.has(s.id)).map((s) => [s.id, s]))
+    return {
+      ...pos,
+      segments: [
+        cloneFlejeSeg(byId.ladoA, 'ladoA', 'Lado A'),
+        cloneFlejeSeg(byId.ladoB, 'ladoB', 'Lado B'),
+        cloneFlejeSeg(byId.gancho, 'gancho', 'Longitud de cada gancho'),
+      ],
+    }
+  }
+  if (hasLegacy) {
+    const byId = Object.fromEntries(segs.map((s) => [s.id, s]))
+    return {
+      ...pos,
+      segments: [
+        cloneFlejeSeg(byId.top || byId.bot, 'ladoA', 'Lado A'),
+        cloneFlejeSeg(byId.left || byId.right, 'ladoB', 'Lado B'),
+        cloneFlejeSeg(byId.h1 || byId.h2, 'gancho', 'Longitud de cada gancho'),
+      ],
+    }
+  }
+  return pos
+}
+
 /**
  * Calcula longitud parcial (m), total (m) y peso (kg) de una posición.
+ * Fleje comercial: L = 2×A + 2×B + 2×gancho (vía `contrib` en segmentos).
  * @returns {{ ok, error?, partialM, totalM, pesoKg, pesoKgM, pieces }}
  */
-export function computePositionMetrics(pos) {
+export function computePositionMetrics(rawPos) {
+  const pos = normalizeDespiecePosition(rawPos) || rawPos
   const pieces = parseNum(pos?.pieces ?? pos?.nPiezas)
   const diam = despieceResolverDiametro(pos?.diameter ?? pos?.diametro)
   const pesoKgM = diam ? sicoePesoKgMPorDiametro(diam) : null
@@ -170,7 +223,8 @@ export function computePositionMetrics(pos) {
       if (!Number.isFinite(L) || L < 0) {
         return { ok: false, error: `Revise el segmento «${seg?.name || seg?.id || ''}».`, partialM: 0, totalM: 0, pesoKg: 0, pesoKgM, pieces }
       }
-      sumCm += L
+      const contrib = Number(seg.contrib) > 0 ? Number(seg.contrib) : 1
+      sumCm += L * contrib
     }
   }
 

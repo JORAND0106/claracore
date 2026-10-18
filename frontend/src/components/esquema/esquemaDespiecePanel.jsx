@@ -20,6 +20,7 @@ import {
   fmt2,
   despieceFmtPesoKgM,
   newDespieceId,
+  normalizeDespiecePosition,
   segmentLengthCm,
 } from './esquemaDespiece.js'
 import { buildCustomShapeFromPolyline } from './esquemaDespieceShapes.js'
@@ -90,16 +91,22 @@ export function EsquemaDespiecePositionPopup({
 }) {
   const shapes = useMemo(() => listAllDespieceShapes(contratoId), [contratoId])
   const diamOpts = useMemo(() => despieceDiametroOpciones(), [])
-  const [name, setName] = useState(initial?.name || '')
-  const [diameter, setDiameter] = useState(initial?.diameter || '1/2')
-  const [pieces, setPieces] = useState(initial?.pieces != null ? String(initial.pieces) : '')
-  const [shapeId, setShapeId] = useState(initial?.shapeId || 'doble_gancho')
+  const initialNorm = initial ? normalizeDespiecePosition(initial) : null
+  const [name, setName] = useState(initialNorm?.name || initial?.name || '')
+  const [diameter, setDiameter] = useState(initialNorm?.diameter || initial?.diameter || '1/2')
+  const [pieces, setPieces] = useState(
+    (initialNorm?.pieces ?? initial?.pieces) != null
+      ? String(initialNorm?.pieces ?? initial?.pieces)
+      : '',
+  )
+  const [shapeId, setShapeId] = useState(initialNorm?.shapeId || initial?.shapeId || 'doble_gancho')
   const [segments, setSegments] = useState(() => {
-    if (initial?.segments?.length) return initial.segments.map((s) => ({ ...s }))
-    const sh = findDespieceShape(contratoId, initial?.shapeId || 'doble_gancho')
+    const src = initialNorm || initial
+    if (src?.segments?.length) return src.segments.map((s) => ({ ...s }))
+    const sh = findDespieceShape(contratoId, src?.shapeId || 'doble_gancho')
     return blankSegmentsForShape(sh)
   })
-  const [spiral, setSpiral] = useState(() => initial?.spiral || blankSpiral())
+  const [spiral, setSpiral] = useState(() => initialNorm?.spiral || initial?.spiral || blankSpiral())
   const [activeSeg, setActiveSeg] = useState(null)
   const [error, setError] = useState('')
   const [customName, setCustomName] = useState('')
@@ -660,16 +667,17 @@ export function EsquemaDespiecePanel({
               </thead>
               <tbody>
                 {(active.positions || []).map((pos, idx) => {
-                  const m = computePositionMetrics(pos)
-                  const shape = findDespieceShape(contratoId, pos.shapeId)
+                  const norm = normalizeDespiecePosition(pos) || pos
+                  const m = computePositionMetrics(norm)
+                  const shape = findDespieceShape(contratoId, norm.shapeId)
                   return (
                     <tr
                       key={pos.id}
                       data-testid={`despiece-row-${pos.id}`}
-                      onClick={() => setPopup({ scheduleId: active.id, position: pos })}
+                      onClick={() => setPopup({ scheduleId: active.id, position: norm })}
                       style={{ cursor: 'pointer', background: idx % 2 ? (ui?.wrap || '#f8fafc') : (t.bgCard || '#fff') }}
                     >
-                      <td style={{ padding: '6px 4px', fontWeight: 700 }}>{pos.name}</td>
+                      <td style={{ padding: '6px 4px', fontWeight: 700 }}>{norm.name}</td>
                       <td style={{ padding: '6px 4px' }}>{idx + 1}</td>
                       <td style={{ padding: '6px 4px' }}>{m.ok ? m.pieces : '—'}</td>
                       <td style={{ padding: '6px 4px' }}>{m.ok ? fmt2(m.partialM) : '—'}</td>

@@ -66,18 +66,48 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     ],
   },
   {
-    id: 'fleje_135',
-    nombre: 'Fleje / estribo 135°',
+    id: 'doble_gancho_180',
+    nombre: 'Doble gancho a 180°',
     builtin: true,
     kind: 'linear',
-    viewBox: '0 0 140 100',
+    viewBox: '0 0 180 70',
     segments: [
-      { id: 'h1', name: 'Gancho 135° A', path: 'M 28 22 L 18 12' },
-      { id: 'top', name: 'Lado superior', path: 'M 28 22 L 112 22' },
-      { id: 'right', name: 'Lado derecho', path: 'M 112 22 L 112 78' },
-      { id: 'bot', name: 'Lado inferior', path: 'M 112 78 L 28 78' },
-      { id: 'left', name: 'Lado izquierdo', path: 'M 28 78 L 28 22' },
-      { id: 'h2', name: 'Gancho 135° B', path: 'M 28 78 L 18 88' },
+      // Semicírculo izquierdo (180°) + tramo + semicírculo derecho
+      { id: 'left', name: 'Gancho izquierdo', path: 'M 45 48 A 14 14 0 1 1 45 20' },
+      { id: 'center', name: 'Tramo central', path: 'M 45 48 L 135 48' },
+      { id: 'right', name: 'Gancho derecho', path: 'M 135 48 A 14 14 0 1 0 135 20' },
+    ],
+  },
+  {
+    // Fleje comercial: cerrado, ganchos 135° en la misma esquina hacia el interior.
+    // Popup: Lado A, Lado B, longitud de cada gancho. L = 2A + 2B + 2×gancho (contrib: 2).
+    id: 'fleje_135',
+    nombre: 'Fleje comercial 135°',
+    builtin: true,
+    kind: 'linear',
+    viewBox: '0 0 140 110',
+    segments: [
+      {
+        id: 'ladoA',
+        name: 'Lado A',
+        contrib: 2,
+        // Ambos lados horizontales (resalte conjunto)
+        path: 'M 32 24 L 112 24 M 32 84 L 112 84',
+      },
+      {
+        id: 'ladoB',
+        name: 'Lado B',
+        contrib: 2,
+        // Ambos lados verticales
+        path: 'M 112 24 L 112 84 M 32 24 L 32 84',
+      },
+      {
+        id: 'gancho',
+        name: 'Longitud de cada gancho',
+        contrib: 2,
+        // Dos ganchos 135° en la esquina inferior izquierda, hacia el interior
+        path: 'M 32 84 L 52 68 M 32 84 L 48 56',
+      },
     ],
   },
   {
@@ -137,8 +167,11 @@ export function blankSegmentsForShape(shape) {
     lengthCm: '',
     minCm: '',
     maxCm: '',
+    contrib: Number(s.contrib) > 0 ? Number(s.contrib) : 1,
   }))
 }
+
+export { normalizeDespiecePosition } from './esquemaDespiece.js'
 
 export function blankSpiral() {
   return { diametroCm: '', pasoCm: '', vueltas: '' }
