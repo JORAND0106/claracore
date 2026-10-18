@@ -111,7 +111,18 @@ import {
   solidsViewCamera,
 } from './esquema3dViews'
 import { adoptNativeTitlesInTree } from '../ccTooltipTheme.js'
-import { Esquema3dExtrudePopup, Esquema3dViewToolbar, Esquema3dVolumeHint } from './esquema3dUi'
+import {
+  Esquema3dExtrudePopup,
+  Esquema3dSolevarPopup,
+  Esquema3dViewToolbar,
+  Esquema3dVolumeHint,
+} from './esquema3dUi'
+import {
+  apexPointFromEntity,
+  isApexEntity,
+  loftBetweenContours,
+  loftPyramidOrCone,
+} from './esquema3dLoft'
 import {
   createVolumeCalc,
   freezeCalcSnapshot,
@@ -639,6 +650,10 @@ export default function EsquemaEditorModal({
   const [solids3d, setSolids3d] = useState([])
   const [selectedSolidIds, setSelectedSolidIds] = useState([])
   const [extrudePrompt, setExtrudePrompt] = useState(null)
+  const [solevarPrompt, setSolevarPrompt] = useState(null)
+  const [solevarHoverId, setSolevarHoverId] = useState(null)
+  const solevarHoverIdRef = useRef(null)
+  solevarHoverIdRef.current = solevarHoverId
   const [op3d, setOp3d] = useState(null) // unir | sustraer | cortar
   const [calcPanelOpen, setCalcPanelOpen] = useState(false)
   const [volumeCalcs, setVolumeCalcs] = useState([])
@@ -981,7 +996,7 @@ export default function EsquemaEditorModal({
           { orbit: orbitDraw },
         )
         : obj
-      drawObject(ctx, drawObj, selSet.has(obj.id), {
+      drawObject(ctx, drawObj, selSet.has(obj.id) || obj.id === solevarHoverIdRef.current, {
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
@@ -1109,7 +1124,7 @@ export default function EsquemaEditorModal({
       ctx.restore()
     }
     drawNorthIndicator(ctx, w, h, null, uiNow)
-  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick, orbitTick, mode3d, view3d, solids3d])
+  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick, orbitTick, mode3d, view3d, solids3d, solevarHoverId])
 
   redrawRef.current = redraw
   // Cuando la máscara del hatch termina de cargar, redibujar (no pintar sobre ctx viejo).
@@ -1750,6 +1765,8 @@ export default function EsquemaEditorModal({
         setOp3d(null)
         cutDraftRef.current = null
         setExtrudePrompt(null)
+        setSolevarPrompt(null)
+        setSolevarHoverId(null)
         setCalcPanelOpen(false)
         setOrbitFree(false)
         orbitFreeRef.current = false
@@ -1835,6 +1852,119 @@ export default function EsquemaEditorModal({
     setToolHint(`Sólido creado · ${r.solid.volumeM3.toFixed(2)} m³`)
     setPanTick((n) => n + 1)
   }, [extrudePrompt])
+
+  const beginSolevar3d = useCallback(() => {
+    if (!mode3dRef.current) {
+      setToolHint('Active el modo 3D para solevar.')
+      return
+    }
+    const viewId = normalizeViewId(view3dRef.current)
+    if (viewId !== 'top' && viewId !== 'bottom') {
+      setToolHint('Solevar: use la vista superior (contornos en planta).')
+      return
+    }
+    const selected = [...(selectedIdsRef.current || [])]
+      .map((id) => objectsRef.current.find((o) => o.id === id))
+      .filter(Boolean)
+    const closed = selected.filter((o) => isClosedDrawableEntity(o))
+    const apexEnt = selected.find((o) => isApexEntity(o) && !isClosedDrawableEntity(o))
+      || selected.find((o) => o.type === 'nodo')
+
+    if (closed.length >= 2) {
+      const a = closed[0]
+      const b = closed[1]
+      setSolevarPrompt({
+        mode: 'frustum',
+        entities: [
+          { id: a.id, label: entitySolevarLabel(a, 1) },
+          { id: b.id, label: entitySolevarLabel(b, 2) },
+        ],
+      })
+      setSolevarHoverId(null)
+      return
+    }
+    if (closed.length === 1 && apexEnt) {
+      const apex = apexPointFromEntity(apexEnt)
+      if (!apex) {
+        setToolHint('No se pudo leer el punto del vértice.')
+        return
+      }
+      setSolevarPrompt({
+        mode: 'apex',
+        baseEntityId: closed[0].id,
+        apex,
+        apexLabel: apexEnt.type === 'nodo'
+          ? `Nodo ${apexEnt.nodeNum || ''}`.trim()
+          : 'Vértice',
+      })
+      setSolevarHoverId(null)
+      return
+    }
+    setToolHint(
+      'Solevar: seleccione dos contornos cerrados, o un contorno y un nodo (vértice), luego oprima Solevar.',
+    )
+  }, [])
+
+  const confirmSolevar3d = useCallback((values, setError) => {
+    if (!solevarPrompt) return
+    if (solevarPrompt.mode === 'frustum') {
+      const base = objectsRef.current.find((o) => o.id === values.baseEntityId)
+      const top = objectsRef.current.find((o) => o.id === values.topEntityId)
+      if (!base || !top) {
+        setError?.('Contornos no encontrados.')
+        return
+      }
+      const r = loftBetweenContours(base, top, {
+        cotaBase: values.cotaBase,
+        cotaTapa: values.cotaTapa,
+        color: colorRef.current,
+        baseEntityId: base.id,
+        topEntityId: top.id,
+      })
+      if (!r.ok) {
+        setError?.(r.error || 'No se pudo solevar.')
+        return
+      }
+      pushHistory()
+      const next = [...(solids3dRef.current || []), r.solid]
+      solids3dRef.current = next
+      setSolids3d(next)
+      setSelectedSolidIds([r.solid.id])
+      selectOne(base.id)
+      setSolevarPrompt(null)
+      setSolevarHoverId(null)
+      setDirty(true)
+      setToolHint(`Solevado · ${r.kind} · ${Number(r.solid.volumeM3).toFixed(2)} m³`)
+      setPanTick((n) => n + 1)
+      return
+    }
+    const base = objectsRef.current.find((o) => o.id === solevarPrompt.baseEntityId)
+    if (!base) {
+      setError?.('Contorno base no encontrado.')
+      return
+    }
+    const r = loftPyramidOrCone(base, solevarPrompt.apex, {
+      cotaBase: values.cotaBase,
+      cotaVertice: values.cotaTapa,
+      color: colorRef.current,
+      baseEntityId: base.id,
+    })
+    if (!r.ok) {
+      setError?.(r.error || 'No se pudo solevar.')
+      return
+    }
+    pushHistory()
+    const next = [...(solids3dRef.current || []), r.solid]
+    solids3dRef.current = next
+    setSolids3d(next)
+    setSelectedSolidIds([r.solid.id])
+    selectOne(base.id)
+    setSolevarPrompt(null)
+    setSolevarHoverId(null)
+    setDirty(true)
+    setToolHint(`Solevado · ${r.kind} · ${Number(r.solid.volumeM3).toFixed(2)} m³`)
+    setPanTick((n) => n + 1)
+  }, [solevarPrompt])
 
   const consumeSolidOperands = useCallback((operandSolids, resultSolid) => {
     const drop = new Set(operandSolids.map((s) => s.id))
@@ -6606,6 +6736,30 @@ export default function EsquemaEditorModal({
               </button>
               <button
                 type="button"
+                title="Solevar: une dos contornos (tronco) o un contorno y un vértice (pirámide/cono)"
+                data-cc-tooltip="Solevar: une dos contornos (tronco) o un contorno y un vértice (pirámide/cono)"
+                data-cc-tooltip-variant="short"
+                aria-label="Solevar"
+                onClick={beginSolevar3d}
+                style={{
+                  ...iconBtn(t, !!solevarPrompt),
+                  display: 'inline-flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 2,
+                  fontSize: 9,
+                  fontWeight: 700,
+                  minWidth: 44,
+                  padding: '4px 6px',
+                  lineHeight: 1.1,
+                }}
+                data-testid="esquema-3d-solevar"
+              >
+                <IconSolevar3d />
+                <span>Solevar</span>
+              </button>
+              <button
+                type="button"
                 title="Unir dos o más sólidos seleccionados"
                 data-cc-tooltip="Unir dos o más sólidos seleccionados"
                 data-cc-tooltip-variant="short"
@@ -7938,6 +8092,24 @@ export default function EsquemaEditorModal({
             defaultLengthM={extrudePrompt.defaultLengthM}
             onCancel={() => setExtrudePrompt(null)}
             onConfirm={confirmExtrude3d}
+          />
+        ) : null}
+        {solevarPrompt ? (
+          <Esquema3dSolevarPopup
+            t={t}
+            ui={ui}
+            mode={solevarPrompt.mode}
+            entities={solevarPrompt.entities || []}
+            apexLabel={solevarPrompt.apexLabel}
+            onHoverEntity={(id) => {
+              setSolevarHoverId(id)
+              setPanTick((n) => n + 1)
+            }}
+            onCancel={() => {
+              setSolevarPrompt(null)
+              setSolevarHoverId(null)
+            }}
+            onConfirm={confirmSolevar3d}
           />
         ) : null}
         {draftNotice ? (
@@ -10949,6 +11121,23 @@ function IconExtruir3d() {
       <path d="m8 8 4-4 4 4" />
     </svg>
   )
+}
+function IconSolevar3d() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 18h16" />
+      <path d="M7 18 10 6h4l3 12" />
+      <path d="M9 12h6" />
+    </svg>
+  )
+}
+function entitySolevarLabel(obj, n) {
+  if (!obj) return `Contorno ${n}`
+  if (obj.type === 'rect') return `Rectángulo ${n}`
+  if (obj.type === 'elipse') return `Círculo ${n}`
+  if (obj.type === 'triangulo') return `Triángulo ${n}`
+  if (obj.type === 'polilinea' || obj.type === 'stroke') return `Polígono ${n}`
+  return `Contorno ${n}`
 }
 function IconUnirSolidos3d() {
   return (

@@ -250,6 +250,62 @@ export function naturalFormulaFromOperand(op) {
   if (!op) return { dimensiones: null, formula: null, forma: 'Sólido' }
   const v = op.volumeM3
   const fm = op.formMeta
+  // Solevado: tronco / pirámide / cono / transición
+  if (fm?.kind === 'pyramid_frustum') {
+    const h = fm.heightM
+    const A1 = fm.areaBaseM2
+    const A2 = fm.areaTopM2
+    const root = Math.sqrt(Math.max(0, A1) * Math.max(0, A2))
+    return {
+      forma: 'Tronco de pirámide',
+      dimensiones: `Base ${fm.baseLabel || fmt(A1)} · Tapa ${fm.topLabel || fmt(A2)} · h ${fmt(h)} m`,
+      formula: `${fmt(h)}/3 × (${fmt(A1)} + ${fmt(A2)} + ${fmt(root)})`,
+      formaCalculo: `${fmt(h)}/3 × (${fmt(A1)} + ${fmt(A2)} + √(${fmt(A1)}·${fmt(A2)})) = ${fmt(v)} m³`,
+    }
+  }
+  if (fm?.kind === 'cone_frustum' && fm.RM >= 0) {
+    const h = fm.heightM
+    const R = fm.RM
+    const r = fm.rM
+    return {
+      forma: 'Tronco de cono',
+      dimensiones: `Ø ${fmt(fm.diameterBaseM ?? R * 2)} · Ø ${fmt(fm.diameterTopM ?? r * 2)} · h ${fmt(h)} m`,
+      formula: `π × ${fmt(h)}/3 × (${fmt(R)}² + ${fmt(R)}×${fmt(r)} + ${fmt(r)}²)`,
+      formaCalculo: `π × ${fmt(h)}/3 × (${fmt(R * R)} + ${fmt(R * r)} + ${fmt(r * r)}) = ${fmt(v)} m³`,
+    }
+  }
+  if (fm?.kind === 'pyramid') {
+    const h = fm.heightM
+    const A = fm.areaBaseM2
+    return {
+      forma: 'Pirámide',
+      dimensiones: `Base ${fm.baseLabel || fmt(A)} · h ${fmt(h)} m`,
+      formula: `${fmt(A)} × ${fmt(h)}/3`,
+      formaCalculo: `${fmt(A)} × ${fmt(h)}/3 = ${fmt(v)} m³`,
+    }
+  }
+  if (fm?.kind === 'cone' && fm.rM >= 0) {
+    const h = fm.heightM
+    const r = fm.rM
+    return {
+      forma: 'Cono',
+      dimensiones: `Ø ${fmt(fm.diameterM ?? r * 2)} m · h ${fmt(h)} m`,
+      formula: `π × ${fmt(r)}² × ${fmt(h)}/3`,
+      formaCalculo: `π × ${fmt(r)}² × ${fmt(h)}/3 = ${fmt(v)} m³`,
+    }
+  }
+  if (fm?.kind === 'transition') {
+    const h = fm.heightM
+    const A1 = fm.areaBaseM2
+    const A2 = fm.areaTopM2
+    const Am = fm.areaMidM2
+    return {
+      forma: 'Sólido de transición',
+      dimensiones: `Base ${fm.baseLabel || fmt(A1)} · Tapa ${fm.topLabel || fmt(A2)} · h ${fmt(h)} m`,
+      formula: `${fmt(h)}/6 × (${fmt(A1)} + 4×${fmt(Am)} + ${fmt(A2)})`,
+      formaCalculo: `${fmt(h)}/6 × (${fmt(A1)} + 4×${fmt(Am)} + ${fmt(A2)}) = ${fmt(v)} m³`,
+    }
+  }
   if (fm?.kind === 'cylinder' && fm.rxM > 0) {
     const area = Math.PI * fm.rxM * fm.rxM
     const L = lengthMatchingVolumeM3(area, v, fm.effectiveLengthM ?? fm.lengthM)

@@ -43,6 +43,7 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-3D-12 | **Render limpio:** caras lisas y continuas (sin rayas, tramas ni patrones densos); solo aristas reales (bordes de caras y contornos de huecos); huecos cilíndricos como contornos circulares/elípticos limpios; aristas visibles continuas finas; ocultas punteadas finas; caras semitransparentes con tonos por cara. Editor e imagen de memoria se ven igual. Losas Z internas de teselación no aportan aristas (ni generatrices densas de cilindro). |
 | C-3D-14 | Al seleccionar un sólido (dibujo o fila del cálculo) se resalta con contorno luminoso (halo + trazo claro) para confirmar cuál se está nombrando o agregando. |
 | C-3D-15 | **Color pastel por vista plana:** inferior verde, frontal naranja, superior azul, posterior morado, lateral izquierda amarillo, lateral derecha rosa (suaves). El ícono del botón resalta la cara en ese color; al activar la vista el fondo del lienzo toma el mismo pastel. En isométricas, giro libre y 2D el lienzo conserva el fondo del tema. Memoria PNG y esquema PNG siguen con fondo blanco. |
+| C-3D-16 | **Solevar:** botón con ícono y etiqueta. Une dos contornos cerrados en planta (popup: base/tapa + cotas; altura |Δcota|; resalte al pasar sobre cada opción) construyendo caras rectas entre ellos (misma forma, distinta forma, tapa centrada o desplazada). Con un contorno y un nodo/vértice construye pirámide o cono. Los sólidos de solevado son sólidos normales (mover, color, unir, sustraer, cortar, cálculo) con volumen exacto. |
 
 ## Cálculo de volúmenes
 
@@ -60,7 +61,7 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 |----|----------------|
 | C-OUT-01 | Esquema guardado como PNG hi-res con fondo blanco. |
 | C-OUT-02 | Memoria = una sola PNG vertical: encabezado, isométrico y tabla; textos proporcionales y legibles; iso ≤ ~½ altura. |
-| C-OUT-03 | Tabla de memoria: #, color, nombre, operación, Descuenta de, **Dimensiones**, **Fórmula**, volumen. Dimensiones y Fórmula usan la fórmula natural de la figura (prisma: L×A×H; cilindro: π×r²×L con Ø y L; base irregular: área×altura; etc.). Si un sólido descontado atraviesa a otro, L es la longitud efectiva dentro del sólido **y la fórmula usa exactamente esos valores (resultado = volumen de la fila)**. Ningún texto se corta ni se solapan encabezados (columnas ajustadas / hasta 2 líneas). Desglose completo de booleanos: N exterior, N.1… descuentos, N.k neto (sin dimensiones; operación entre filas). Total = suma de valores mostrados. |
+| C-OUT-03 | Tabla de memoria: #, color, nombre, operación, Descuenta de, **Dimensiones**, **Fórmula**, volumen. Dimensiones y Fórmula usan la fórmula natural de la figura (prisma: L×A×H; cilindro: π×r²×L con Ø y L; tronco de pirámide: h/3×(A₁+A₂+√(A₁·A₂)); tronco de cono: π×h/3×(R²+R·r+r²); pirámide: A×h/3; cono: π×r²×h/3; transición: h/6×(A₁+4·Aₘ+A₂); base irregular: área×altura; etc.). Si un sólido descontado atraviesa a otro, L es la longitud efectiva dentro del sólido **y la fórmula usa exactamente esos valores (resultado = volumen de la fila)**. Ningún texto se corta ni se solapan encabezados (columnas ajustadas / hasta 2 líneas). Desglose completo de booleanos: N exterior, N.1… descuentos, N.k neto (sin dimensiones; operación entre filas). Total = suma de valores mostrados. |
 | C-OUT-04 | Adjunto con miniatura, vista previa y descarga. |
 | C-OUT-05 | Guardar borrador y continuarlo con todo funcionando igual. |
 | C-OUT-06 | En la PNG, la tabla de memoria ocupa ~½ del ancho del isométrico, centrada debajo, legible al ver la imagen completa. |
@@ -94,8 +95,9 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 18. Tabla PNG ~½ ancho, columnas Dimensiones y Fórmula; textos completos sin solapes.
 19. Poceta perforada en editor (NE / giro libre) y memoria: caras lisas, solo aristas reales, huecos limpios.
 20. Cada vista plana pinta el lienzo con su pastel; al volver a NE el fondo es el del tema.
+21. Solevar: tronco 2×2→1,5×1,5 = 6,17 m³ (centrado y desplazado); tronco de cono 3,67; pirámide 2,67; cono 2,09; transición con Aₘ; sustraer cilindro conserva fórmulas; vistas 6+iso+órbita.
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js` y `esquemaPastelRenderTabla.scenario.test.js` bloquean el despliegue si se rompe 5–20.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js` y `esquemaSolevar.scenario.test.js` bloquean el despliegue si se rompe 5–21.
 
 ## Mantenimiento
 
