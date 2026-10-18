@@ -4,7 +4,7 @@
  * No es importado por esquema3dSolids (solo datos loftDraw en el sólido).
  */
 import { closedEntityToContour } from './esquema3dSolids.js'
-import { metersToWorld, polygonAreaM2 } from './esquemaGeometry.js'
+import { closedEntityAreaM2, metersToWorld, polygonAreaM2 } from './esquemaGeometry.js'
 
 const LOFT_BANDS = 12
 const APEX_EPS_M = 1e-4
@@ -525,4 +525,52 @@ export function apexPointFromEntity(obj) {
 
 export function isApexEntity(obj) {
   return !!apexPointFromEntity(obj)
+}
+
+/**
+ * Fila del panel Solevar: forma, dimensiones y área del contorno (o vértice).
+ */
+export function describeContourForSolevar(obj) {
+  if (!obj) {
+    return { id: null, forma: '—', dimensiones: '—', areaM2: null, areaLabel: '—', isApex: false }
+  }
+  if (obj.type === 'nodo') {
+    return {
+      id: obj.id,
+      forma: 'Vértice',
+      dimensiones: obj.nodeNum != null ? `Nodo ${obj.nodeNum}` : 'Punto',
+      areaM2: null,
+      areaLabel: '—',
+      isApex: true,
+    }
+  }
+  const c = closedEntityToContour(obj)
+  if (!c?.ring?.length) {
+    return { id: obj.id, forma: '—', dimensiones: '—', areaM2: null, areaLabel: '—', isApex: false }
+  }
+  let forma = 'Polígono'
+  let dimensiones = '—'
+  if (c.analytic?.type === 'rect') {
+    forma = 'Rectángulo'
+    dimensiones = `${fmt(c.analytic.wM)} × ${fmt(c.analytic.hM)} m`
+  } else if (c.analytic?.type === 'ellipse') {
+    const circ = Math.abs(Math.abs(c.analytic.rxM) - Math.abs(c.analytic.ryM)) < 1e-9
+    forma = circ ? 'Círculo' : 'Elipse'
+    dimensiones = circ
+      ? `Ø ${fmt(Math.abs(c.analytic.rxM) * 2)} m`
+      : `rx ${fmt(c.analytic.rxM)} · ry ${fmt(c.analytic.ryM)} m`
+  } else if (c.analytic?.type === 'triangle') {
+    forma = 'Triángulo'
+    dimensiones = `base ${fmt(c.analytic.baseM)} · h ${fmt(c.analytic.heightM)} m`
+  }
+  const area = closedEntityAreaM2(obj)
+  const areaM2 = Number.isFinite(area) ? area : contourAreaM2(c)
+  return {
+    id: obj.id,
+    forma,
+    dimensiones,
+    areaM2,
+    areaLabel: Number.isFinite(areaM2) ? fmt(areaM2) : '—',
+    isApex: false,
+  }
 }

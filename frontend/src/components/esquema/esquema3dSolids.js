@@ -593,6 +593,9 @@ export function linkedSourceEntityIds(solids) {
   const ids = new Set()
   for (const s of solids || []) {
     if (s?.sourceEntityId) ids.add(s.sourceEntityId)
+    for (const eid of s?.sourceEntityIds || []) {
+      if (eid) ids.add(eid)
+    }
   }
   return ids
 }
