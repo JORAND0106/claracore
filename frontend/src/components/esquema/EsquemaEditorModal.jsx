@@ -131,6 +131,9 @@ import {
 } from './esquema3dCalc'
 import { buildCalcAdjuntos } from './esquema3dCalcExport'
 import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
+import { EsquemaDespiecePanel } from './esquemaDespiecePanel'
+import { buildDespieceAdjuntos } from './esquemaDespieceExport'
+import { despieceSchedulesIncomplete } from './esquemaDespiece'
 import { EsquemaContextSidebar, EsquemaSidebarSection } from './esquemaContextSidebar'
 import { EsquemaToolbarHoverTips } from './esquemaToolbarHoverTips'
 import {
@@ -702,6 +705,11 @@ export default function EsquemaEditorModal({
   const [sectionCalcOpen, setSectionCalcOpen] = useState(true)
   const [sectionCoordsOpen, setSectionCoordsOpen] = useState(true)
   const [sectionSolevarOpen, setSectionSolevarOpen] = useState(false)
+  const [sectionDespieceOpen, setSectionDespieceOpen] = useState(false)
+  const [despiecePanelOpen, setDespiecePanelOpen] = useState(false)
+  const [despieceSchedules, setDespieceSchedules] = useState([])
+  const [activeDespieceId, setActiveDespieceId] = useState(null)
+  const despieceSchedulesRef = useRef([])
   const toolbarRootRef = useRef(null)
   const modalRootRef = useRef(null)
   /** Giro libre 3D: arrastrar para orbitar sin modificar geometría. */
@@ -804,6 +812,7 @@ export default function EsquemaEditorModal({
   selectedSolidIdsRef.current = selectedSolidIds
   op3dRef.current = op3d
   volumeCalcsRef.current = volumeCalcs
+  despieceSchedulesRef.current = despieceSchedules
   orbitFreeRef.current = orbitFree
 
   useEffect(() => {
@@ -6110,6 +6119,13 @@ export default function EsquemaEditorModal({
       setSectionCalcOpen(true)
       return
     }
+    if (despieceSchedulesIncomplete(despieceSchedulesRef.current || [])) {
+      setToolHint('Complete el nombre del cuadro y de cada posición del despiece antes de guardar.')
+      setDespiecePanelOpen(true)
+      setSectionDespieceOpen(true)
+      setContextSidebarCollapsed(false)
+      return
+    }
     if (!dirty) return
     setSavePrompt({ title: '' })
   }
@@ -6128,6 +6144,12 @@ export default function EsquemaEditorModal({
     return { adjuntos, snapshots }
   }
 
+  const buildDespieceScheduleAdjuntos = async () => {
+    const list = despieceSchedulesRef.current || []
+    if (!list.length) return []
+    return buildDespieceAdjuntos(list, { contratoId })
+  }
+
   const applyDraftSnapshot = useCallback((snap) => {
     if (!snap) return
     objectsRef.current = cloneScene(snap.objects || [])
@@ -6139,6 +6161,14 @@ export default function EsquemaEditorModal({
     selectOne(null)
     setVolumeCalcs(Array.isArray(snap.volumeCalcs) ? snap.volumeCalcs : [])
     setActiveCalcId(snap.activeCalcId || (snap.volumeCalcs?.[0]?.id ?? null))
+    const dSched = Array.isArray(snap.despieceSchedules) ? snap.despieceSchedules : []
+    setDespieceSchedules(dSched)
+    despieceSchedulesRef.current = dSched
+    setActiveDespieceId(snap.activeDespieceId || (dSched[0]?.id ?? null))
+    if (dSched.length) {
+      setDespiecePanelOpen(true)
+      setSectionDespieceOpen(true)
+    }
     // Restaurar modo/vista y refs de cámara de inmediato (herramientas operativas).
     const nextMode3d = !!snap.mode3d
     const nextView = snap.view3d || 'top'
@@ -6209,6 +6239,8 @@ export default function EsquemaEditorModal({
     solids3d: solids3dRef.current || [],
     volumeCalcs: volumeCalcsRef.current || [],
     activeCalcId,
+    despieceSchedules: despieceSchedulesRef.current || [],
+    activeDespieceId,
     pan: panRef.current,
     zoom: zoomRef.current,
     mapActive: mapActiveRef.current,
@@ -6217,7 +6249,7 @@ export default function EsquemaEditorModal({
     mapGeoOrigin: mapGeoOriginRef.current,
     originLngLat: mapGeoOriginRef.current,
     title: title || '',
-  }), [activeCalcId, mapOpacity, mapBasemap, title])
+  }), [activeCalcId, activeDespieceId, mapOpacity, mapBasemap, title])
 
   const saveEsquemaDraft = useCallback(async () => {
     const key = resolvedDraftKeyRef.current
@@ -6318,7 +6350,9 @@ export default function EsquemaEditorModal({
         throw new Error('El esquema debe guardarse como PNG.')
       }
       // Congela cálculos al guardar (ya no se recalculan tras cerrar).
-      const { adjuntos, snapshots } = await buildVolumeCalcAdjuntos()
+      const { adjuntos: calcAdj, snapshots } = await buildVolumeCalcAdjuntos()
+      const despieceAdj = await buildDespieceScheduleAdjuntos()
+      const adjuntos = [...(calcAdj || []), ...(despieceAdj || [])]
       await onSave?.(composed, {
         title: titleTxt,
         adjuntos,
@@ -6854,6 +6888,39 @@ export default function EsquemaEditorModal({
               </button>
             </>
           ) : null}
+          <button
+            type="button"
+            title="Cuadro de despiece de acero (NTC 2289)"
+            data-cc-tooltip="Cuadro de despiece de acero (NTC 2289)"
+            data-cc-tooltip-variant="short"
+            aria-label="Cuadro de despiece"
+            onClick={() => {
+              setContextSidebarCollapsed(false)
+              setSectionDespieceOpen(true)
+              setDespiecePanelOpen(true)
+              if (!(despieceSchedulesRef.current || []).length) {
+                // El panel crea el cuadro al oprimir «+ Nuevo cuadro».
+              }
+              setToolHint('Cuadro de despiece: cree un cuadro, agregue posiciones y formas de varilla.')
+            }}
+            style={{
+              ...iconBtn(t, despiecePanelOpen),
+              display: 'inline-flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 2,
+              fontSize: 8,
+              fontWeight: 700,
+              minWidth: 52,
+              padding: '4px 4px',
+              lineHeight: 1.05,
+              height: 'auto',
+            }}
+            data-testid="esquema-despiece-btn"
+          >
+            <IconDespieceAcero />
+            <span>Cuadro de<br />despiece</span>
+          </button>
           <button
             type="button"
             title="Limpiar lienzo"
@@ -7428,6 +7495,38 @@ export default function EsquemaEditorModal({
                     }}
                     onCancel={closeSolevarPanel}
                     onConfirm={confirmSolevar3d}
+                  />
+                </EsquemaSidebarSection>
+              ) : null}
+
+              {despiecePanelOpen ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="despiece"
+                  title="Cuadro de despiece"
+                  open={sectionDespieceOpen}
+                  onToggle={setSectionDespieceOpen}
+                  badge={(despieceSchedules || []).length || null}
+                >
+                  <EsquemaDespiecePanel
+                    t={t}
+                    ui={ui}
+                    contratoId={contratoId}
+                    schedules={despieceSchedules}
+                    activeId={activeDespieceId}
+                    selectedPolyline={
+                      (() => {
+                        const id = selectedIds?.[0] || selectedId
+                        const o = objectsRef.current.find((x) => x.id === id)
+                        return (o?.type === 'polilinea' || o?.type === 'stroke') && o?.points ? o : null
+                      })()
+                    }
+                    onActiveId={setActiveDespieceId}
+                    onChangeSchedules={(next) => {
+                      setDespieceSchedules(next)
+                      despieceSchedulesRef.current = next
+                      setDirty(true)
+                    }}
                   />
                 </EsquemaSidebarSection>
               ) : null}
@@ -11193,6 +11292,17 @@ function IconCalcVolumenes() {
       <path d="M9 4v16" />
       <path d="M12 12h5" />
       <path d="M12 16h5" />
+    </svg>
+  )
+}
+function IconDespieceAcero() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M5 7h14" />
+      <path d="M5 12h14" />
+      <path d="M5 17h10" />
+      <path d="M4 5v14" />
+      <circle cx="18" cy="17" r="2" />
     </svg>
   )
 }

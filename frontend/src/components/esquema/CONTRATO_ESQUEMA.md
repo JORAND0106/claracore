@@ -45,6 +45,17 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-3D-15 | **Color pastel por vista plana:** inferior verde, frontal naranja, superior azul, posterior morado, lateral izquierda amarillo, lateral derecha rosa (suaves). El ícono del botón resalta la cara en ese color; al activar la vista el fondo del lienzo toma el mismo pastel. En isométricas, giro libre y 2D el lienzo conserva el fondo del tema. Memoria PNG y esquema PNG siguen con fondo blanco. |
 | C-3D-16 | **Solevar:** botón con ícono y etiqueta. Al oprimir, el panel lateral abre la sección «Solevar» (tabla tipo Excel: Contorno, Forma, Dimensiones, Área, Base, Tapa; cotas; altura |Δcota|; Solevar/Cancelar). Resalte del contorno al pasar sobre la fila. Une dos contornos en planta (o contorno + nodo/vértice → pirámide/cono). Tras solevar, los contornos dejan de existir como entidades 2D independientes (base/tapa del sólido = una sola entidad; sin contornos sueltos en ninguna vista ni giro libre). Deshacer restituye los contornos originales. Volumen exacto; sólidos normales (mover, color, unir, sustraer, cortar, cálculo). |
 
+## Cuadro de despiece de acero
+
+| ID | Comportamiento |
+|----|----------------|
+| C-DES-01 | Botón con ícono y etiqueta «Cuadro de despiece» (2D y 3D). Abre sección del panel lateral tipo Excel. Nombre del cuadro obligatorio; varios cuadros por esquema. |
+| C-DES-02 | «Agregar posición» abre popup: Posición (obligatoria), Diámetro (lista NTC 2289 / #3,#4,…; peso kg/m automático de la tabla de plataforma), N° piezas, Forma (biblioteca con miniaturas). Al elegir forma: dibujo grande, un campo por segmento (cm); resalte del segmento activo; al confirmar pasa al siguiente. Segmentos Única o Variable (mín/máx → promedio). Live: longitud parcial, total y peso. Editar al tocar fila; se puede eliminar. |
+| C-DES-03 | Long. parcial (m) = Σ segmentos cm (promedio si variable) / 100. Long. total = parcial × N° piezas. Peso kg = total × kg/m de la tabla. kg/m con la precisión de la tabla; longitudes y pesos a 2 decimales; Total = suma de pesos mostrados. |
+| C-DES-04 | Columnas: Posición \| N° \| N° piezas \| Long. parcial \| Forma L=(cm) \| Long. total \| Peso kg/m \| Peso kg \| Total (celda combinada). Forma muestra dibujo y cotas; variables como «Var. mín a máx» + «Prom. valor». Sin subtotales por grupo. |
+| C-DES-05 | Biblioteca de plataforma: recta, L, doble gancho (U), gancho 180°, fleje/estribo 135°, aro, espiral (Ø, paso, vueltas; L = n×√((π·Ø)²+paso²)), escalonada Z. El usuario crea formas con polilínea (segmentos nombrados); quedan disponibles para todos los usuarios del contrato. |
+| C-DES-06 | Al guardar el esquema, cada cuadro genera PNG hi-res (fondo blanco, encabezado con nombre/fecha/marca, cuadro legible) y se adjunta al registro (miniatura, vista previa, descarga), igual que la memoria de volúmenes. Los cuadros viven en el borrador y se editan al continuar. |
+
 ## Cálculo de volúmenes
 
 | ID | Comportamiento |
@@ -97,8 +108,9 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 20. Cada vista plana pinta el lienzo con su pastel; al volver a NE el fondo es el del tema.
 21. Solevar: tronco 2×2→1,5×1,5 = 6,17 m³ (centrado y desplazado); tronco de cono 3,67; pirámide 2,67; cono 2,09; transición con Aₘ; sustraer cilindro conserva fórmulas; vistas 6+iso+órbita.
 22. Solevar en panel lateral con áreas; tras solevar no hay contornos sueltos (giro libre / iso / vistas); Deshacer restituye contornos.
+23. Despiece: As1 20+155+20 ×16 → 1,95 / 31,20 m; As1a var. 40–118; As2 var. 160–236; total = suma de pesos (tabla NTC #4=0,99 kg/m); fleje/espiral/forma usuario; PNG adjunto; borrador.
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js`, `esquemaSolevar.scenario.test.js` y `esquemaSolevarPanel.scenario.test.js` bloquean el despliegue si se rompe 5–22.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js`, `esquemaSolevar.scenario.test.js`, `esquemaSolevarPanel.scenario.test.js` y `esquemaDespiece.scenario.test.js` bloquean el despliegue si se rompe 5–23.
 
 ## Mantenimiento
 

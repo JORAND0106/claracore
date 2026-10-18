@@ -44,6 +44,8 @@ export function buildEsquemaDraftSnapshot({
   solids3d = [],
   volumeCalcs = [],
   activeCalcId = null,
+  despieceSchedules = [],
+  activeDespieceId = null,
   pan = { x: 0, y: 0 },
   zoom = 1,
   mapActive = false,
@@ -63,6 +65,8 @@ export function buildEsquemaDraftSnapshot({
     solids3d: Array.isArray(solids3d) ? solids3d : [],
     volumeCalcs: Array.isArray(volumeCalcs) ? volumeCalcs : [],
     activeCalcId: activeCalcId || null,
+    despieceSchedules: Array.isArray(despieceSchedules) ? despieceSchedules : [],
+    activeDespieceId: activeDespieceId || null,
     pan: pan && Number.isFinite(pan.x) ? { x: pan.x, y: pan.y } : { x: 0, y: 0 },
     zoom: Number.isFinite(Number(zoom)) && Number(zoom) > 0 ? Number(zoom) : 1,
     mapActive: !!mapActive,
@@ -78,6 +82,9 @@ export function esquemaDraftIsDirty(snap) {
   if (Array.isArray(snap.objects) && snap.objects.length > 0) return true
   if (Array.isArray(snap.solids3d) && snap.solids3d.length > 0) return true
   if (Array.isArray(snap.volumeCalcs) && snap.volumeCalcs.some((c) => (c?.lines || []).length > 0)) return true
+  if (Array.isArray(snap.despieceSchedules) && snap.despieceSchedules.some((s) => (
+    String(s?.nombre || '').trim() || (s?.positions || []).length > 0
+  ))) return true
   if (Array.isArray(snap.coordRows) && snap.coordRows.some((r) => (
     String(r?.norte || '').trim() || String(r?.este || '').trim() || String(r?.punto || '').trim()
   ))) return true

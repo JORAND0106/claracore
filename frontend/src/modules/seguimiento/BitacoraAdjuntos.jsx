@@ -440,7 +440,9 @@ export default function BitacoraAdjuntos({
                   mime: adj.mime,
                   origen: adj.origen || 'esquema-calculo',
                   kind: adj.kind || 'memoria-calculo',
-                  pie: adj.kind === 'memoria-calculo' ? 'Memoria de cálculo (PNG)' : 'Gráfico isométrico',
+                  pie: adj.kind === 'memoria-calculo'
+                    ? 'Memoria de cálculo (PNG)'
+                    : (adj.kind === 'despiece-acero' ? 'Cuadro de despiece (PNG)' : 'Gráfico isométrico'),
                 })
               })
             } catch {
