@@ -618,10 +618,20 @@ export function translateSolid3d(solid, { dx = 0, dy = 0, dzCota = 0 } = {}) {
   const ddy = Number(dy) || 0
   const ddz = Number(dzCota) || 0
   if (!ddx && !ddy && !ddz) return solid
+  const loftDraw = solid.loftDraw
+    ? {
+      ...solid.loftDraw,
+      z0: (Number(solid.loftDraw.z0) || 0) + ddz,
+      z1: (Number(solid.loftDraw.z1) || 0) + ddz,
+      ringBase: (solid.loftDraw.ringBase || []).map((p) => ({ x: p.x + ddx, y: p.y + ddy })),
+      ringTop: (solid.loftDraw.ringTop || []).map((p) => ({ x: p.x + ddx, y: p.y + ddy })),
+    }
+    : solid.loftDraw
   return {
     ...solid,
     volumeM3: solid.volumeM3,
     volumeLocked: !!solid.volumeLocked,
+    loftDraw,
     cells: (solid.cells || []).map((cell) => ({
       ...cell,
       z0: (Number(cell.z0) || 0) + ddz,
@@ -2197,6 +2207,44 @@ export function drawSolid3d(ctx, solid, {
   if (flatTop || flatBottom) {
     const planeTone = flatTop ? FACE_TONE_FACTOR.top : FACE_TONE_FACTOR.bottom
     const fill = solidFaceFillRgba(base, planeTone, fillAlpha)
+    // Solevado: dibujar solo anillos base y tapa (no bandas internas).
+    const loftFlat = solid.loftDraw
+    const ringsToDraw = loftFlat?.ringBase?.length
+      ? [
+        flatTop ? (loftFlat.ringTop || loftFlat.ringBase) : loftFlat.ringBase,
+        flatTop ? loftFlat.ringBase : (loftFlat.ringTop || loftFlat.ringBase),
+      ].filter((r, i, arr) => r && (i === 0 || r !== arr[0]))
+      : null
+    if (ringsToDraw) {
+      const zPlane = flatTop
+        ? Math.max(Number(loftFlat.z0) || 0, Number(loftFlat.z1) || 0)
+        : Math.min(Number(loftFlat.z0) || 0, Number(loftFlat.z1) || 0)
+      for (const worldRing of ringsToDraw) {
+        const ring = worldRing.map((p) => projectPt(p, zPlane, viewId, cotaRefM, orbit))
+        if (doFills) {
+          pathRing(ctx, ring)
+          ctx.fillStyle = fill
+          ctx.fill()
+        }
+        if (doEdgesVis) {
+          if (glowColor && lwGlow) {
+            pathRing(ctx, ring)
+            ctx.strokeStyle = glowColor
+            ctx.lineWidth = lwGlow
+            ctx.setLineDash([])
+            ctx.stroke()
+          }
+          pathRing(ctx, ring)
+          ctx.strokeStyle = strokeVis
+          ctx.lineWidth = lwVis
+          ctx.setLineDash([])
+          ctx.stroke()
+        }
+      }
+      ctx.setLineDash([])
+      ctx.restore()
+      return
+    }
     for (const cell of solid.cells) {
       const zPlane = flatTop
         ? Math.max(cell.z0, cell.z1)
@@ -2253,6 +2301,121 @@ export function drawSolid3d(ctx, solid, {
   const facePolys = []
   const faceWithHoles = []
   const edgeMap = new Map()
+
+  // Solevado: dibujar un solo prisma base→tapa (sin trama de bandas Z).
+  const loftDraw = solid.loftDraw
+  if (loftDraw?.ringBase?.length && loftDraw?.ringTop?.length) {
+    const zBottom = Math.min(Number(loftDraw.z0) || 0, Number(loftDraw.z1) || 0)
+    const zTop = Math.max(Number(loftDraw.z0) || 0, Number(loftDraw.z1) || 0)
+    const ringBot = loftDraw.ringBase.map((p) => projectPt(p, zBottom, viewId, cotaRefM, orbit))
+    const ringTop = loftDraw.ringTop.map((p) => projectPt(p, zTop, viewId, cotaRefM, orbit))
+    const skipVert = !!loftDraw.curved
+    // Reutilizar el bucle de aristas más abajo vía emit local.
+    const addEdgeLoft = (pa, pb, front) => {
+      const k = edgeKey(pa, pb)
+      let e = edgeMap.get(k)
+      if (!e) {
+        e = { a: pa, b: pb, frontVotes: 0, backVotes: 0 }
+        edgeMap.set(k, e)
+      }
+      if (front) e.frontVotes += 1
+      else e.backVotes += 1
+    }
+    const n = ringBot.length
+    const lastDup = n > 1
+      && Math.hypot(ringBot[0].x - ringBot[n - 1].x, ringBot[0].y - ringBot[n - 1].y) < 1e-6
+    const edgeCount = lastDup ? n - 1 : n
+    const wr = loftDraw.ringBase
+    for (let i = 0; i < edgeCount; i += 1) {
+      const j = (i + 1) % edgeCount
+      if (!ringBot[i] || !ringTop[i] || !ringBot[j] || !ringTop[j]) continue
+      const pts = [ringBot[i], ringBot[j], ringTop[j], ringTop[i]]
+      const depth = pts.reduce((s, q) => s + (q.depth || 0), 0) / 4
+      const front = signedProjectedArea(pts) < 0
+      let tone = FACE_TONE_FACTOR.front
+      if (wr[i] && wr[j]) {
+        const ax = wr[j].x - wr[i].x
+        const ay = wr[j].y - wr[i].y
+        tone = faceToneFactorFromNormal(ay, -ax, 0)
+      }
+      facePolys.push({ pts, depth, front, tone })
+      addEdgeLoft(ringBot[i], ringBot[j], front)
+      addEdgeLoft(ringTop[j], ringTop[i], front)
+      if (!skipVert) {
+        addEdgeLoft(ringBot[i], ringTop[i], front)
+        addEdgeLoft(ringBot[j], ringTop[j], front)
+      }
+    }
+    const topPts = ringTop.slice(0, edgeCount)
+    const botPts = ringBot.slice(0, edgeCount)
+    if (topPts.length >= 3) {
+      const depth = topPts.reduce((s, q) => s + (q.depth || 0), 0) / topPts.length
+      const front = signedProjectedArea(topPts) < 0
+      facePolys.push({ pts: topPts, depth, front, tone: FACE_TONE_FACTOR.top })
+      for (let i = 0; i < edgeCount; i += 1) {
+        addEdgeLoft(topPts[i], topPts[(i + 1) % edgeCount], front)
+      }
+    }
+    if (botPts.length >= 3) {
+      const depth = botPts.reduce((s, q) => s + (q.depth || 0), 0) / botPts.length
+      const front = signedProjectedArea(botPts) < 0
+      facePolys.push({ pts: botPts, depth, front, tone: FACE_TONE_FACTOR.bottom })
+      for (let i = 0; i < edgeCount; i += 1) {
+        addEdgeLoft(botPts[i], botPts[(i + 1) % edgeCount], front)
+      }
+    }
+    // Pintar y salir (no recorrer celdas teseladas).
+    if (doFills) {
+      const allFaces = facePolys
+        .map((f) => ({ ...f, kind: 'solid' }))
+        .sort((a, b) => a.depth - b.depth)
+      const facesToPaint = flatElev ? allFaces.filter((f) => f.front) : allFaces
+      for (const f of facesToPaint) {
+        const tone = flatElev ? elevTone : (f.tone ?? 1)
+        ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
+        pathRing(ctx, f.pts)
+        ctx.fill()
+      }
+    }
+    if (doEdgesVis) {
+      for (const e of edgeMap.values()) {
+        const hidden = e.frontVotes === 0 && e.backVotes > 0
+        if (hidden) continue
+        if (glowColor && lwGlow) {
+          ctx.strokeStyle = glowColor
+          ctx.lineWidth = lwGlow
+          ctx.setLineDash([])
+          ctx.beginPath()
+          ctx.moveTo(e.a.x, e.a.y)
+          ctx.lineTo(e.b.x, e.b.y)
+          ctx.stroke()
+        }
+        ctx.strokeStyle = strokeVis
+        ctx.lineWidth = lwVis
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.moveTo(e.a.x, e.a.y)
+        ctx.lineTo(e.b.x, e.b.y)
+        ctx.stroke()
+      }
+    }
+    if (doEdgesHid) {
+      for (const e of edgeMap.values()) {
+        const hidden = e.frontVotes === 0 && e.backVotes > 0
+        if (!hidden) continue
+        ctx.strokeStyle = strokeHid
+        ctx.lineWidth = lwHid
+        ctx.setLineDash(dash)
+        ctx.beginPath()
+        ctx.moveTo(e.a.x, e.a.y)
+        ctx.lineTo(e.b.x, e.b.y)
+        ctx.stroke()
+      }
+    }
+    ctx.setLineDash([])
+    ctx.restore()
+    return
+  }
 
   const addEdge = (pa, pb, front) => {
     const k = edgeKey(pa, pb)

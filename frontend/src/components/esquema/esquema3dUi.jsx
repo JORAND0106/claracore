@@ -266,6 +266,222 @@ export function Esquema3dExtrudePopup({
   )
 }
 
+/**
+ * Popup de Solevar: dos contornos (base/tapa) o base+vértice, con cotas y altura.
+ * Al pasar sobre una opción se resalta el contorno (onHoverEntity).
+ */
+export function Esquema3dSolevarPopup({
+  t,
+  ui,
+  mode, // 'frustum' | 'apex'
+  entities = [], // [{ id, label }] para frustum
+  apexLabel = 'Vértice',
+  onHoverEntity = null, // (entityId|null) => void
+  onCancel,
+  onConfirm,
+  defaultCotaBase = '98',
+  defaultCotaTapa = '100',
+}) {
+  const [baseId, setBaseId] = useState(entities[0]?.id || null)
+  const [topId, setTopId] = useState(entities[1]?.id || entities[0]?.id || null)
+  const [cotaBase, setCotaBase] = useState(String(defaultCotaBase))
+  const [cotaTapa, setCotaTapa] = useState(String(defaultCotaTapa))
+  const [error, setError] = useState('')
+
+  const alturaM = (() => {
+    const a = Number(String(cotaTapa).replace(',', '.'))
+    const b = Number(String(cotaBase).replace(',', '.'))
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+    return Math.abs(a - b)
+  })()
+
+  const submit = () => {
+    setError('')
+    if (mode === 'frustum') {
+      if (!baseId || !topId || baseId === topId) {
+        setError('Indique base y tapa distintas.')
+        return
+      }
+      onConfirm({
+        mode: 'frustum',
+        baseEntityId: baseId,
+        topEntityId: topId,
+        cotaBase,
+        cotaTapa,
+      }, (err) => setError(err || ''))
+    } else {
+      onConfirm({
+        mode: 'apex',
+        cotaBase,
+        cotaTapa,
+      }, (err) => setError(err || ''))
+    }
+  }
+
+  const optionStyle = (active) => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: `1px solid ${active ? (t.primary || '#0f766e') : (t.border || '#cbd5e1')}`,
+    background: active
+      ? `color-mix(in srgb, ${t.primary || '#0f766e'} 12%, ${t.bgCard || '#fff'})`
+      : (t.inputBg || '#fff'),
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 600,
+    color: t.text,
+  })
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 14000,
+        background: t.overlay || 'rgba(15,23,42,0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        data-testid="esquema-solevar-popup"
+        style={{
+          width: 'min(440px, 96vw)',
+          background: t.bgCard || '#fff',
+          border: `1px solid ${t.border}`,
+          borderRadius: 12,
+          boxShadow: t.shadow,
+          padding: 16,
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 8 }}>
+          {mode === 'apex' ? 'Solevar · pirámide / cono' : 'Solevar · entre contornos'}
+        </div>
+        <div style={{ fontSize: 13, color: ui?.muted || '#64748b', marginBottom: 12 }}>
+          {mode === 'apex'
+            ? 'Indique la cota de la base y la del vértice. El sólido se construye entre ambas.'
+            : 'Indique cuál contorno es la base y cuál la tapa, y la cota de cada uno. La base puede estar arriba o abajo.'}
+        </div>
+
+        {mode === 'frustum' ? (
+          <div style={{ display: 'grid', gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: t.text }}>Base</div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {entities.map((e) => (
+                  <div
+                    key={`base-${e.id}`}
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`esquema-solevar-base-${e.id}`}
+                    style={optionStyle(baseId === e.id)}
+                    onMouseEnter={() => onHoverEntity?.(e.id)}
+                    onMouseLeave={() => onHoverEntity?.(null)}
+                    onFocus={() => onHoverEntity?.(e.id)}
+                    onBlur={() => onHoverEntity?.(null)}
+                    onClick={() => setBaseId(e.id)}
+                    onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') setBaseId(e.id) }}
+                  >
+                    <input type="radio" readOnly checked={baseId === e.id} />
+                    {e.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: t.text }}>Tapa</div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {entities.map((e) => (
+                  <div
+                    key={`top-${e.id}`}
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`esquema-solevar-tapa-${e.id}`}
+                    style={optionStyle(topId === e.id)}
+                    onMouseEnter={() => onHoverEntity?.(e.id)}
+                    onMouseLeave={() => onHoverEntity?.(null)}
+                    onFocus={() => onHoverEntity?.(e.id)}
+                    onBlur={() => onHoverEntity?.(null)}
+                    onClick={() => setTopId(e.id)}
+                    onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') setTopId(e.id) }}
+                  >
+                    <input type="radio" readOnly checked={topId === e.id} />
+                    {e.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, marginBottom: 12, color: t.text }}>
+            Vértice: <strong>{apexLabel}</strong>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gap: 10 }}>
+          <label style={labelStyle(t)}>
+            Cota de la base (m)
+            <input
+              value={cotaBase}
+              onChange={(e) => setCotaBase(e.target.value)}
+              style={inputStyle(t)}
+              inputMode="decimal"
+              data-testid="esquema-solevar-cota-base"
+            />
+          </label>
+          <label style={labelStyle(t)}>
+            {mode === 'apex' ? 'Cota del vértice (m)' : 'Cota de la tapa (m)'}
+            <input
+              value={cotaTapa}
+              onChange={(e) => setCotaTapa(e.target.value)}
+              style={inputStyle(t)}
+              inputMode="decimal"
+              data-testid="esquema-solevar-cota-tapa"
+            />
+          </label>
+          <div
+            data-testid="esquema-solevar-altura"
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: `1px solid ${t.border}`,
+              background: t.bgHover || 'rgba(15,118,110,0.08)',
+              fontSize: 13,
+              color: t.text,
+            }}
+          >
+            <span style={{ fontWeight: 700, color: ui?.muted || '#64748b' }}>Altura calculada</span>
+            <div style={{ fontWeight: 800, fontSize: 18, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+              {alturaM != null ? `${alturaM.toFixed(2)} m` : '—'}
+            </div>
+            <div style={{ fontSize: 11, color: ui?.muted || '#64748b', marginTop: 2 }}>
+              |cota tapa − cota base| (solo lectura)
+            </div>
+          </div>
+        </div>
+
+        {error ? (
+          <div style={{ marginTop: 10, color: '#b91c1c', fontSize: 13, fontWeight: 600 }}>{error}</div>
+        ) : null}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <button type="button" onClick={onCancel} style={btnGhost(t)}>Cancelar</button>
+          <button
+            type="button"
+            onClick={submit}
+            style={btnPrimary(t)}
+            data-testid="esquema-solevar-confirm"
+          >
+            Solevar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Esquema3dVolumeHint({ t, volumeM3 }) {
   if (volumeM3 == null || !Number.isFinite(volumeM3)) return null
   return (
