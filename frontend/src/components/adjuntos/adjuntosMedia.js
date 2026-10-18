@@ -11,7 +11,7 @@ export function isEsquemaCalcAdjunto(item) {
   const kind = String(item?.kind || item?.source?.kind || '').toLowerCase()
   const origen = String(item?.origen || item?.source?.origen || '').toLowerCase()
   if (origen === 'esquema-calculo') return true
-  return kind === 'memoria-calculo' || kind === 'grafico-isometrico' || kind === 'esquema-calculo'
+  return kind === 'memoria-calculo' || kind === 'grafico-isometrico' || kind === 'esquema-calculo' || kind === 'despiece-acero'
 }
 
 export function isPdfAdjunto(item) {
@@ -19,8 +19,8 @@ export function isPdfAdjunto(item) {
   const name = String(item?.nombre || item?.nombre_archivo || item?.name || item?.label || item?.source?.nombre || '').toLowerCase()
   const kind = String(item?.kind || item?.source?.kind || '').toLowerCase()
   const url = String(item?.url || item?.previewUrl || item?.data_uri || item?.dataUri || item?.source?.url || '')
-  // Memoria nueva es PNG: no tratarla como PDF por el kind.
-  if (kind === 'memoria-calculo') {
+  // Memoria / despiece PNG: no tratarlos como PDF por el kind.
+  if (kind === 'memoria-calculo' || kind === 'despiece-acero') {
     if (mime.startsWith('image/') || /\.png(\?|$)/i.test(name) || /^data:image\//i.test(url) || /\.png(\?|$)/i.test(url)) {
       return false
     }
@@ -39,6 +39,9 @@ export function isPdfAdjunto(item) {
 export function etiquetaAdjunto(item, fallback = 'Adjunto') {
   if (isEsquemaCalcAdjunto(item)) {
     const kind = String(item?.kind || item?.source?.kind || '').toLowerCase()
+    if (kind === 'despiece-acero') {
+      return item?.nombre || item?.label || 'Cuadro de despiece'
+    }
     if (kind === 'memoria-calculo' || isPdfAdjunto(item)) {
       return item?.nombre || item?.label || 'Memoria de cálculo'
     }
