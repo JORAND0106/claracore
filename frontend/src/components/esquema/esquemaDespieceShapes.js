@@ -28,7 +28,7 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'linear',
     viewBox: '0 0 120 40',
     segments: [
-      { id: 'a', name: 'Tramo', path: 'M 10 20 L 110 20' },
+      { id: 'a', name: 'Tramo', path: 'M 10 20 L 110 20', labelAt: { x: 60, y: 10 } },
     ],
   },
   {
@@ -38,8 +38,8 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'linear',
     viewBox: '0 0 120 80',
     segments: [
-      { id: 'hook', name: 'Gancho', path: 'M 20 15 L 20 55' },
-      { id: 'leg', name: 'Tramo', path: 'M 20 55 L 100 55' },
+      { id: 'hook', name: 'Gancho', path: 'M 20 15 L 20 55', labelAt: { x: 8, y: 35 } },
+      { id: 'leg', name: 'Tramo', path: 'M 20 55 L 100 55', labelAt: { x: 60, y: 66 } },
     ],
   },
   {
@@ -49,9 +49,9 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'linear',
     viewBox: '0 0 160 70',
     segments: [
-      { id: 'left', name: 'Gancho izquierdo', path: 'M 20 15 L 20 50' },
-      { id: 'center', name: 'Tramo central', path: 'M 20 50 L 140 50' },
-      { id: 'right', name: 'Gancho derecho', path: 'M 140 50 L 140 15' },
+      { id: 'left', name: 'Gancho izquierdo', path: 'M 20 15 L 20 50', labelAt: { x: 8, y: 32 } },
+      { id: 'center', name: 'Tramo central', path: 'M 20 50 L 140 50', labelAt: { x: 80, y: 62 } },
+      { id: 'right', name: 'Gancho derecho', path: 'M 140 50 L 140 15', labelAt: { x: 152, y: 32 } },
     ],
   },
   {
@@ -61,8 +61,8 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'linear',
     viewBox: '0 0 140 70',
     segments: [
-      { id: 'hook', name: 'Gancho 180°', path: 'M 35 45 A 15 15 0 1 1 35 15' },
-      { id: 'leg', name: 'Tramo', path: 'M 35 45 L 120 45' },
+      { id: 'hook', name: 'Gancho 180°', path: 'M 35 45 A 15 15 0 1 1 35 15', labelAt: { x: 18, y: 30 } },
+      { id: 'leg', name: 'Tramo', path: 'M 35 45 L 120 45', labelAt: { x: 78, y: 56 } },
     ],
   },
   {
@@ -72,10 +72,9 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'linear',
     viewBox: '0 0 180 70',
     segments: [
-      // Semicírculo izquierdo (180°) + tramo + semicírculo derecho
-      { id: 'left', name: 'Gancho izquierdo', path: 'M 45 48 A 14 14 0 1 1 45 20' },
-      { id: 'center', name: 'Tramo central', path: 'M 45 48 L 135 48' },
-      { id: 'right', name: 'Gancho derecho', path: 'M 135 48 A 14 14 0 1 0 135 20' },
+      { id: 'left', name: 'Gancho izquierdo', path: 'M 45 48 A 14 14 0 1 1 45 20', labelAt: { x: 28, y: 34 } },
+      { id: 'center', name: 'Tramo central', path: 'M 45 48 L 135 48', labelAt: { x: 90, y: 60 } },
+      { id: 'right', name: 'Gancho derecho', path: 'M 135 48 A 14 14 0 1 0 135 20', labelAt: { x: 152, y: 34 } },
     ],
   },
   {
@@ -91,22 +90,22 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
         id: 'ladoA',
         name: 'Lado A',
         contrib: 2,
-        // Ambos lados horizontales (resalte conjunto)
         path: 'M 32 24 L 112 24 M 32 84 L 112 84',
+        labelAt: { x: 72, y: 14 },
       },
       {
         id: 'ladoB',
         name: 'Lado B',
         contrib: 2,
-        // Ambos lados verticales
         path: 'M 112 24 L 112 84 M 32 24 L 32 84',
+        labelAt: { x: 124, y: 54 },
       },
       {
         id: 'gancho',
         name: 'Longitud de cada gancho',
         contrib: 2,
-        // Dos ganchos 135° en la esquina inferior izquierda, hacia el interior
         path: 'M 32 84 L 52 68 M 32 84 L 48 56',
+        labelAt: { x: 58, y: 72 },
       },
     ],
   },
@@ -117,7 +116,7 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'circle',
     viewBox: '0 0 100 100',
     segments: [
-      { id: 'circ', name: 'Circunferencia (Ø m)', path: 'M 50 15 A 35 35 0 1 1 49.9 15' },
+      { id: 'circ', name: 'Circunferencia (Ø m)', path: 'M 50 15 A 35 35 0 1 1 49.9 15', labelAt: { x: 50, y: 50 } },
     ],
   },
   {
@@ -141,9 +140,9 @@ export const DESPIECE_BUILTIN_SHAPES = Object.freeze([
     kind: 'linear',
     viewBox: '0 0 160 80',
     segments: [
-      { id: 'a', name: 'Tramo A', path: 'M 15 20 L 70 20' },
-      { id: 'b', name: 'Tramo diagonal', path: 'M 70 20 L 90 60' },
-      { id: 'c', name: 'Tramo C', path: 'M 90 60 L 145 60' },
+      { id: 'a', name: 'Tramo A', path: 'M 15 20 L 70 20', labelAt: { x: 42, y: 10 } },
+      { id: 'b', name: 'Tramo diagonal', path: 'M 70 20 L 90 60', labelAt: { x: 92, y: 36 } },
+      { id: 'c', name: 'Tramo C', path: 'M 90 60 L 145 60', labelAt: { x: 118, y: 72 } },
     ],
   },
 ])
@@ -261,10 +260,16 @@ export function buildCustomShapeFromPolyline(obj, { nombre, segmentNames = [] } 
   const segments = named.map((s) => {
     const a = toSvg(s.pathHint.x1, s.pathHint.y1)
     const b = toSvg(s.pathHint.x2, s.pathHint.y2)
+    const mx = (a.x + b.x) / 2
+    const my = (a.y + b.y) / 2
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy) || 1
     return {
       id: s.id,
       name: s.name,
       path: `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} L ${b.x.toFixed(1)} ${b.y.toFixed(1)}`,
+      labelAt: { x: mx + (-dy / len) * 8, y: my + (dx / len) * 8 },
     }
   })
   return {
