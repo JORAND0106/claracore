@@ -1,6 +1,6 @@
 /**
  * PNG hi-res del cuadro de despiece (encabezado + tabla legible, fondo blanco).
- * Misma vía de adjuntos que la memoria de cálculo (`origen: esquema-calculo`).
+ * Textos proporcionales y cotas sobre cada segmento de la forma.
  */
 import {
   computePositionMetrics,
@@ -8,10 +8,13 @@ import {
   fmt2,
   despieceFmtPesoKgM,
   normalizeDespiecePosition,
-  segmentDisplayLabel,
   despieceResolverDiametro,
+  formatEspaciamiento,
+  formatUbicacion,
+  formatParrilla,
 } from './esquemaDespiece.js'
 import { findDespieceShape } from './esquemaDespieceLibrary.js'
+import { drawShapeWithCotasOnSegments } from './esquemaDespieceDraw.js'
 
 const C = {
   bg: '#ffffff',
@@ -49,86 +52,46 @@ async function loadLogoDataUrl() {
   }
 }
 
-/** Dibuja miniatura de forma con cotas de segmentos. */
-function drawShapeWithCotas(ctx, shape, pos, x, y, w, h) {
-  if (!shape) return
-  ctx.save()
-  ctx.translate(x, y)
-  const vb = String(shape.viewBox || '0 0 100 40').split(/\s+/).map(Number)
-  const vbW = vb[2] || 100
-  const vbH = vb[3] || 40
-  const scale = Math.min(w / vbW, (h * 0.55) / vbH)
-  ctx.translate((w - vbW * scale) / 2, 4)
-  ctx.scale(scale, scale)
-  ctx.lineWidth = 2.2 / scale
-  ctx.strokeStyle = C.primary
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
-  for (const seg of shape.segments || []) {
-    try {
-      const p = new Path2D(seg.path)
-      ctx.stroke(p)
-    } catch { /* ignore bad path */ }
-  }
-  if (shape.kind === 'spiral' && shape.thumbPath) {
-    try {
-      ctx.stroke(new Path2D(shape.thumbPath))
-    } catch { /* ignore */ }
-  }
-  ctx.restore()
-
-  // Cotas bajo el dibujo
-  ctx.fillStyle = C.text
-  ctx.font = '10px "Segoe UI", system-ui, sans-serif'
-  const segs = pos.segments || []
-  let ty = y + h * 0.58
-  const labels = []
-  if (shape.kind === 'spiral' && pos.spiral) {
-    const dM = Number(String(pos.spiral.diametroM ?? '').replace(',', '.'))
-    const pM = Number(String(pos.spiral.pasoM ?? '').replace(',', '.'))
-    const dCm = Number.isFinite(dM) ? Math.round(dM * 100) : (pos.spiral.diametroCm ?? '—')
-    const pCm = Number.isFinite(pM) ? Math.round(pM * 100) : (pos.spiral.pasoCm ?? '—')
-    labels.push(`Ø${dCm} paso ${pCm} ×${pos.spiral.vueltas}`)
-  } else {
-    for (const seg of segs) {
-      const d = segmentDisplayLabel(seg)
-      if (d && typeof d === 'object') {
-        if (d.varLine) {
-          labels.push(`${seg.name}: ${d.varLine}`)
-          labels.push(d.promLine)
-        } else if (d.value != null) {
-          labels.push(`${d.value}`)
-        }
-      }
+function wrapFillText(ctx, text, x, y, maxW, lineH) {
+  const words = String(text || '').split(/\s+/)
+  let line = ''
+  let cy = y
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w
+    if (ctx.measureText(test).width > maxW && line) {
+      ctx.fillText(line, x, cy)
+      line = w
+      cy += lineH
+    } else {
+      line = test
     }
   }
-  for (const line of labels.slice(0, 6)) {
-    ctx.fillText(line, x + 4, ty)
-    ty += 12
-  }
+  if (line) ctx.fillText(line, x, cy)
+  return cy
 }
 
 /**
- * Compone PNG del cuadro de despiece.
+ * Compone PNG del cuadro de despiece — textos legibles sin ampliar.
  */
 export async function composeDespiecePng({
   schedule,
   contratoId = null,
   brandTitle = 'Clara Core',
-  width = 1600,
+  width = 2200,
 } = {}) {
   if (typeof document === 'undefined' || !schedule) return null
   const positions = schedule.positions || []
   const n = Math.max(1, positions.length)
   const textScale = width / 1600
-  const margin = Math.round(28 * textScale)
-  const headerH = Math.round(86 * textScale)
-  const footerH = Math.round(28 * textScale)
-  const rowH = Math.round(96 * textScale)
-  const headRowH = Math.round(36 * textScale)
+  const margin = Math.round(18 * textScale)
+  const headerH = Math.round(100 * textScale)
+  const footerH = Math.round(36 * textScale)
+  // Filas altas para forma + cotas legibles
+  const rowH = Math.round(150 * textScale)
+  const headRowH = Math.round(52 * textScale)
   const tableH = headRowH + n * rowH
   const imgW = width
-  const imgH = headerH + margin + tableH + footerH + margin
+  const imgH = headerH + Math.round(8 * textScale) + tableH + footerH
 
   const canvas = document.createElement('canvas')
   canvas.width = imgW
@@ -141,38 +104,41 @@ export async function composeDespiecePng({
   ctx.fillStyle = C.headerBg
   ctx.fillRect(0, 0, imgW, headerH)
   ctx.fillStyle = C.primary
-  ctx.font = `bold ${Math.round(24 * textScale)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText('Cuadro de despiece de acero', margin, Math.round(32 * textScale))
+  ctx.font = `bold ${Math.round(34 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.fillText('Cuadro de despiece de acero', margin, Math.round(40 * textScale))
   ctx.fillStyle = C.text
-  ctx.font = `bold ${Math.round(16 * textScale)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText(String(schedule.nombre || 'Cuadro'), margin, Math.round(58 * textScale))
+  ctx.font = `bold ${Math.round(22 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.fillText(String(schedule.nombre || 'Cuadro'), margin, Math.round(72 * textScale))
   ctx.fillStyle = C.muted
-  ctx.font = `${Math.round(13 * textScale)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText(brandTitle, imgW * 0.42, Math.round(32 * textScale))
+  ctx.font = `${Math.round(18 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.fillText(brandTitle, imgW * 0.40, Math.round(40 * textScale))
   const fecha = new Date(schedule.updatedAt || schedule.createdAt || Date.now()).toLocaleString('es-CO')
-  ctx.fillText(fecha, imgW - margin - 20 - ctx.measureText(fecha).width, Math.round(58 * textScale))
+  ctx.fillText(fecha, imgW - margin - ctx.measureText(fecha).width, Math.round(72 * textScale))
 
   const logo = await loadLogoDataUrl()
   if (logo) {
     try {
       const img = await loadImage(logo)
-      const lw = Math.round(110 * textScale)
+      const lw = Math.round(130 * textScale)
       const lh = (img.height / Math.max(1, img.width)) * lw
-      ctx.drawImage(img, imgW - margin - lw, Math.round(10 * textScale), lw, Math.min(lh, headerH - 16))
+      ctx.drawImage(img, imgW - margin - lw, Math.round(12 * textScale), lw, Math.min(lh, headerH - 20))
     } catch { /* ignore */ }
   }
 
-  // Tabla
+  // Tabla a todo el ancho útil (márgenes mínimos)
   const cols = [
     { key: 'pos', label: 'Posición', w: 0.09 },
-    { key: 'n', label: 'N°', w: 0.05 },
-    { key: 'piezas', label: 'N° piezas', w: 0.07 },
-    { key: 'parcial', label: 'Long. parcial (m)', w: 0.10 },
-    { key: 'forma', label: 'Forma L=(cm)', w: 0.28 },
-    { key: 'total', label: 'Long. total (m)', w: 0.10 },
-    { key: 'kgm', label: 'Peso kg/m', w: 0.09 },
-    { key: 'kg', label: 'Peso kg', w: 0.09 },
-    { key: 'tot', label: 'Total', w: 0.13 },
+    { key: 'n', label: 'N°', w: 0.035 },
+    { key: 'esp', label: 'Espaciamiento', w: 0.07 },
+    { key: 'piezas', label: 'N° piezas', w: 0.055 },
+    { key: 'ubic', label: 'Ubicación', w: 0.09 },
+    { key: 'parr', label: 'Parrilla', w: 0.10 },
+    { key: 'parcial', label: 'Long. parcial (m)', w: 0.08 },
+    { key: 'forma', label: 'Forma L=(cm)', w: 0.22 },
+    { key: 'total', label: 'Long. total (m)', w: 0.08 },
+    { key: 'kgm', label: 'Peso kg/m', w: 0.07 },
+    { key: 'kg', label: 'Peso kg', w: 0.06 },
+    { key: 'tot', label: 'Total', w: 0.05 },
   ]
   const tableX = margin
   const tableW = imgW - margin * 2
@@ -184,20 +150,21 @@ export async function composeDespiecePng({
     return { ...c, x: left, width: cw }
   })
 
-  let y = headerH + Math.round(12 * textScale)
-  // Header row
+  let y = headerH + Math.round(6 * textScale)
   ctx.fillStyle = C.headBg
   ctx.fillRect(tableX, y, tableW, headRowH)
   ctx.fillStyle = C.headFg
-  ctx.font = `bold ${Math.round(11 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(15 * textScale)}px "Segoe UI", system-ui, sans-serif`
   for (const c of colXs) {
-    ctx.fillText(c.label, c.x + 6, y + headRowH * 0.65)
+    wrapFillText(ctx, c.label, c.x + 5, y + Math.round(20 * textScale), c.width - 8, Math.round(16 * textScale))
   }
   y += headRowH
 
   const totalKg = computeScheduleTotalKg(positions)
   const midY0 = y
   const midY1 = y + n * rowH
+  const cellFont = Math.round(16 * textScale)
+  const cotaFont = Math.round(15 * textScale)
 
   positions.forEach((rawPos, idx) => {
     const pos = normalizeDespiecePosition(rawPos) || rawPos
@@ -206,13 +173,17 @@ export async function composeDespiecePng({
     ctx.fillStyle = bg
     ctx.fillRect(tableX, y, tableW, rowH)
     ctx.strokeStyle = C.border
+    ctx.lineWidth = 1
     ctx.strokeRect(tableX, y, tableW, rowH)
 
     const shape = findDespieceShape(contratoId, pos.shapeId)
     const values = {
       pos: String(pos.name || '—'),
       n: String(idx + 1),
+      esp: formatEspaciamiento(pos.spacingM),
       piezas: m.ok ? String(m.pieces) : '—',
+      ubic: formatUbicacion(pos),
+      parr: formatParrilla(pos),
       parcial: m.ok ? fmt2(m.partialM) : '—',
       forma: '',
       total: m.ok ? fmt2(m.totalM) : '—',
@@ -222,26 +193,44 @@ export async function composeDespiecePng({
     }
 
     ctx.fillStyle = C.text
-    ctx.font = `${Math.round(12 * textScale)}px "Segoe UI", system-ui, sans-serif`
+    ctx.font = `${cellFont}px "Segoe UI", system-ui, sans-serif`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
     for (const c of colXs) {
       if (c.key === 'forma') {
-        drawShapeWithCotas(ctx, shape, pos, c.x + 4, y + 4, c.width - 8, rowH - 8)
+        drawShapeWithCotasOnSegments(ctx, shape, pos, c.x + 4, y + 6, c.width - 8, rowH - 12, {
+          stroke: C.primary,
+          textColor: C.text,
+          fontPx: cotaFont,
+        })
         continue
       }
       if (c.key === 'tot') continue
-      ctx.fillText(values[c.key], c.x + 6, y + rowH * 0.55)
-    }
-    // Ø hint under posición
-    const diam = despieceResolverDiametro(pos.diameter)
-    if (diam) {
-      ctx.fillStyle = C.muted
-      ctx.font = `${Math.round(10 * textScale)}px "Segoe UI", system-ui, sans-serif`
-      ctx.fillText(`Ø ${diam}`, colXs[0].x + 6, y + rowH * 0.78)
+      const tx = c.x + 6
+      const ty = y + rowH * 0.42
+      if (c.key === 'pos') {
+        ctx.font = `bold ${cellFont}px "Segoe UI", system-ui, sans-serif`
+        ctx.fillText(values.pos, tx, ty)
+        const diam = despieceResolverDiametro(pos.diameter)
+        if (diam) {
+          ctx.fillStyle = C.muted
+          ctx.font = `${Math.round(13 * textScale)}px "Segoe UI", system-ui, sans-serif`
+          ctx.fillText(`Ø ${diam}`, tx, ty + Math.round(20 * textScale))
+          ctx.fillStyle = C.text
+        }
+        ctx.font = `${cellFont}px "Segoe UI", system-ui, sans-serif`
+        continue
+      }
+      if (c.key === 'ubic' || c.key === 'parr') {
+        wrapFillText(ctx, values[c.key], tx, ty - 4, c.width - 10, Math.round(17 * textScale))
+        continue
+      }
+      ctx.fillText(values[c.key], tx, ty)
     }
     y += rowH
   })
 
-  // Celda Total combinada
+  // Total combinado
   const totCol = colXs.find((c) => c.key === 'tot')
   if (totCol) {
     ctx.fillStyle = C.headerBg
@@ -249,19 +238,19 @@ export async function composeDespiecePng({
     ctx.strokeStyle = C.border
     ctx.strokeRect(totCol.x, midY0, totCol.width, midY1 - midY0)
     ctx.fillStyle = C.primary
-    ctx.font = `bold ${Math.round(18 * textScale)}px "Segoe UI", system-ui, sans-serif`
+    ctx.font = `bold ${Math.round(26 * textScale)}px "Segoe UI", system-ui, sans-serif`
     const label = fmt2(totalKg)
     const tw = ctx.measureText(label).width
-    ctx.fillText(label, totCol.x + (totCol.width - tw) / 2, (midY0 + midY1) / 2 + 6)
+    ctx.fillText(label, totCol.x + (totCol.width - tw) / 2, (midY0 + midY1) / 2 + 4)
     ctx.fillStyle = C.muted
-    ctx.font = `${Math.round(11 * textScale)}px "Segoe UI", system-ui, sans-serif`
+    ctx.font = `${Math.round(16 * textScale)}px "Segoe UI", system-ui, sans-serif`
     const u = 'kg'
-    ctx.fillText(u, totCol.x + (totCol.width - ctx.measureText(u).width) / 2, (midY0 + midY1) / 2 + 24)
+    ctx.fillText(u, totCol.x + (totCol.width - ctx.measureText(u).width) / 2, (midY0 + midY1) / 2 + Math.round(28 * textScale))
   }
 
   ctx.fillStyle = C.muted
-  ctx.font = `${Math.round(11 * textScale)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText('Clara Core · Cuadro de despiece · PNG de alta resolución', margin, imgH - Math.round(10 * textScale))
+  ctx.font = `${Math.round(14 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.fillText('Clara Core · Cuadro de despiece · PNG de alta resolución', margin, imgH - Math.round(12 * textScale))
 
   const dataUri = canvas.toDataURL('image/png')
   const comma = dataUri.indexOf(',')
@@ -277,7 +266,15 @@ export async function composeDespiecePng({
     dataUri,
     blob,
     nombre: `cuadro_despiece_${safe || 'acero'}.png`,
-    meta: { width: imgW, height: imgH, totalKg },
+    meta: {
+      width: imgW,
+      height: imgH,
+      totalKg,
+      textScale,
+      cellFont,
+      cotaFont,
+      tableWidthRatio: tableW / imgW,
+    },
   }
 }
 

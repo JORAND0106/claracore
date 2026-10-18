@@ -19,22 +19,28 @@ import {
   despieceDiametroOpciones,
   fmt2,
   despieceFmtPesoKgM,
+  formatEspaciamiento,
+  formatParrilla,
+  formatUbicacion,
   newDespieceId,
   normalizeDespiecePosition,
   segmentLengthM,
 } from './esquemaDespiece.js'
 import { buildCustomShapeFromPolyline } from './esquemaDespieceShapes.js'
+import { shapeCotaOverlays } from './esquemaDespieceDraw.js'
 
-function ShapeSvg({ shape, highlightId = null, size = 120 }) {
+function ShapeSvg({ shape, highlightId = null, size = 120, pos = null, showCotas = false }) {
   if (!shape) return null
   const vb = shape.viewBox || '0 0 120 40'
+  const overlays = showCotas ? shapeCotaOverlays(shape, pos) : []
   return (
     <svg
       width={size}
-      height={size * 0.55}
+      height={size * (showCotas ? 0.72 : 0.55)}
       viewBox={vb}
       style={{ display: 'block', maxWidth: '100%' }}
       aria-hidden
+      data-testid={showCotas ? 'despiece-shape-cotas' : undefined}
     >
       {(shape.segments || []).map((seg) => (
         <path
@@ -50,6 +56,27 @@ function ShapeSvg({ shape, highlightId = null, size = 120 }) {
       {shape.kind === 'spiral' && shape.thumbPath ? (
         <path d={shape.thumbPath} fill="none" stroke="#0f766e" strokeWidth={2.5} />
       ) : null}
+      {overlays.map((o) => (
+        <g key={o.id}>
+          {o.lines.map((line, i) => (
+            <text
+              key={`${o.id}-${i}`}
+              x={o.x}
+              y={o.y + i * 11 - ((o.lines.length - 1) * 11) / 2}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize="9"
+              fontWeight="700"
+              fill="#0f172a"
+              stroke="#fff"
+              strokeWidth="2.5"
+              paintOrder="stroke"
+            >
+              {line}
+            </text>
+          ))}
+        </g>
+      ))}
     </svg>
   )
 }
@@ -107,6 +134,15 @@ export function EsquemaDespiecePositionPopup({
     return blankSegmentsForShape(sh)
   })
   const [spiral, setSpiral] = useState(() => initialNorm?.spiral || initial?.spiral || blankSpiral())
+  const [spacingM, setSpacingM] = useState(
+    initialNorm?.spacingM != null ? String(initialNorm.spacingM) : (initial?.spacingM != null ? String(initial.spacingM) : ''),
+  )
+  const [ubicacion, setUbicacion] = useState(initialNorm?.ubicacion || initial?.ubicacion || '')
+  const [anguloDeg, setAnguloDeg] = useState(
+    initialNorm?.anguloDeg != null ? String(initialNorm.anguloDeg) : (initial?.anguloDeg != null ? String(initial.anguloDeg) : ''),
+  )
+  const [parrilla, setParrilla] = useState(initialNorm?.parrilla || initial?.parrilla || '')
+  const [parrillaCara, setParrillaCara] = useState(initialNorm?.parrillaCara || initial?.parrillaCara || '')
   const [activeSeg, setActiveSeg] = useState(null)
   const [error, setError] = useState('')
   const [customName, setCustomName] = useState('')
@@ -139,6 +175,11 @@ export function EsquemaDespiecePositionPopup({
     shapeId,
     segments,
     spiral: shape?.kind === 'spiral' ? spiral : null,
+    spacingM,
+    ubicacion,
+    anguloDeg,
+    parrilla,
+    parrillaCara,
   }
   const metrics = computePositionMetrics(draftPos)
 
@@ -159,6 +200,22 @@ export function EsquemaDespiecePositionPopup({
       setError('La posición es obligatoria (ej. As1).')
       return
     }
+    if (!ubicacion) {
+      setError('Indique la ubicación (Longitudinal, Transversal o Diagonal).')
+      return
+    }
+    if (ubicacion === 'Diagonal' && !String(anguloDeg).trim()) {
+      setError('Indique el ángulo en grados para Diagonal.')
+      return
+    }
+    if (!parrilla) {
+      setError('Indique la parrilla (Sencilla o Doble).')
+      return
+    }
+    if (parrilla === 'Doble' && !parrillaCara) {
+      setError('En parrilla Doble indique Superior / Externa o Inferior / Interna.')
+      return
+    }
     const pos = {
       id: initial?.id || newDespieceId('pos'),
       name: String(name).trim(),
@@ -167,6 +224,12 @@ export function EsquemaDespiecePositionPopup({
       shapeId,
       segments: shape?.kind === 'spiral' ? [] : segments,
       spiral: shape?.kind === 'spiral' ? { ...spiral } : null,
+      units: 'm',
+      spacingM: String(spacingM || '').trim(),
+      ubicacion,
+      anguloDeg: ubicacion === 'Diagonal' ? String(anguloDeg).trim() : '',
+      parrilla,
+      parrillaCara: parrilla === 'Doble' ? parrillaCara : '',
     }
     const m = computePositionMetrics(pos)
     if (!m.ok) {
@@ -277,6 +340,101 @@ export function EsquemaDespiecePositionPopup({
           </label>
         </div>
 
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={label}>
+            Espaciamiento (opcional)
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                value={spacingM}
+                onChange={(e) => setSpacingM(e.target.value)}
+                placeholder="0,20"
+                style={input}
+                inputMode="decimal"
+                data-testid="despiece-pos-espaciamiento"
+              />
+              <span style={{ fontWeight: 800, fontSize: 12 }}>m</span>
+            </div>
+          </label>
+          <label style={label}>
+            Ubicación
+            <select
+              value={ubicacion}
+              onChange={(e) => setUbicacion(e.target.value)}
+              style={input}
+              data-testid="despiece-pos-ubicacion"
+            >
+              <option value="">—</option>
+              <option value="Longitudinal">Longitudinal</option>
+              <option value="Transversal">Transversal</option>
+              <option value="Diagonal">Diagonal</option>
+            </select>
+          </label>
+          {ubicacion === 'Diagonal' ? (
+            <label style={label}>
+              Ángulo
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  value={anguloDeg}
+                  onChange={(e) => setAnguloDeg(e.target.value)}
+                  placeholder="45"
+                  style={input}
+                  inputMode="decimal"
+                  data-testid="despiece-pos-angulo"
+                />
+                <span style={{ fontWeight: 800, fontSize: 12 }}>°</span>
+              </div>
+            </label>
+          ) : (
+            <label style={label}>
+              Parrilla
+              <select
+                value={parrilla}
+                onChange={(e) => { setParrilla(e.target.value); if (e.target.value !== 'Doble') setParrillaCara('') }}
+                style={input}
+                data-testid="despiece-pos-parrilla"
+              >
+                <option value="">—</option>
+                <option value="Sencilla">Sencilla</option>
+                <option value="Doble">Doble</option>
+              </select>
+            </label>
+          )}
+        </div>
+        {ubicacion === 'Diagonal' ? (
+          <div style={{ marginBottom: 12 }}>
+            <label style={label}>
+              Parrilla
+              <select
+                value={parrilla}
+                onChange={(e) => { setParrilla(e.target.value); if (e.target.value !== 'Doble') setParrillaCara('') }}
+                style={input}
+                data-testid="despiece-pos-parrilla"
+              >
+                <option value="">—</option>
+                <option value="Sencilla">Sencilla</option>
+                <option value="Doble">Doble</option>
+              </select>
+            </label>
+          </div>
+        ) : null}
+        {parrilla === 'Doble' ? (
+          <div style={{ marginBottom: 12 }}>
+            <label style={label}>
+              Cara de la parrilla doble
+              <select
+                value={parrillaCara}
+                onChange={(e) => setParrillaCara(e.target.value)}
+                style={input}
+                data-testid="despiece-pos-parrilla-cara"
+              >
+                <option value="">—</option>
+                <option value="Superior / Externa">Superior / Externa</option>
+                <option value="Inferior / Interna">Inferior / Interna</option>
+              </select>
+            </label>
+          </div>
+        ) : null}
+
         <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Forma</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
           {shapes.map((s) => (
@@ -304,7 +462,13 @@ export function EsquemaDespiecePositionPopup({
             <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: ui?.muted || '#64748b' }}>
               {shape?.nombre || 'Forma'} — resalte del segmento activo
             </div>
-            <ShapeSvg shape={shape} highlightId={activeSeg} size={280} />
+            <ShapeSvg
+              shape={shape}
+              highlightId={activeSeg}
+              size={280}
+              pos={draftPos}
+              showCotas
+            />
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
             {shape?.kind === 'spiral' ? (
@@ -663,10 +827,10 @@ export function EsquemaDespiecePanel({
           </div>
 
           <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520, fontSize: 11 }} data-testid="despiece-tabla">
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, fontSize: 11 }} data-testid="despiece-tabla">
               <thead>
                 <tr>
-                  {['Posición', 'N°', 'N° piezas', 'Long. parcial', 'Forma', 'Long. total', 'kg/m', 'Peso kg'].map((h) => (
+                  {['Posición', 'N°', 'Espaciamiento', 'N° piezas', 'Ubicación', 'Parrilla', 'Long. parcial', 'Forma', 'Long. total', 'kg/m', 'Peso kg'].map((h) => (
                     <th
                       key={h}
                       style={{
@@ -696,11 +860,14 @@ export function EsquemaDespiecePanel({
                     >
                       <td style={{ padding: '6px 4px', fontWeight: 700 }}>{norm.name}</td>
                       <td style={{ padding: '6px 4px' }}>{idx + 1}</td>
+                      <td style={{ padding: '6px 4px' }}>{formatEspaciamiento(norm.spacingM)}</td>
                       <td style={{ padding: '6px 4px' }}>{m.ok ? m.pieces : '—'}</td>
+                      <td style={{ padding: '6px 4px' }}>{formatUbicacion(norm)}</td>
+                      <td style={{ padding: '6px 4px' }}>{formatParrilla(norm)}</td>
                       <td style={{ padding: '6px 4px' }}>{m.ok ? fmt2(m.partialM) : '—'}</td>
                       <td style={{ padding: '4px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <ShapeSvg shape={shape} size={56} />
+                          <ShapeSvg shape={shape} size={72} pos={norm} showCotas />
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); deletePosition(pos.id) }}

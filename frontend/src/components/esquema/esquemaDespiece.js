@@ -430,7 +430,43 @@ export function createEmptyPosition({ shapeId = 'doble_gancho', diameter = '1/2'
     segments: [],
     spiral: null,
     units: 'm',
+    spacingM: '',
+    ubicacion: '',
+    anguloDeg: '',
+    parrilla: '',
+    parrillaCara: '',
   }
+}
+
+/** Espaciamiento → «c/ 0,20» o «—». */
+export function formatEspaciamiento(spacingM) {
+  if (spacingM == null || String(spacingM).trim() === '') return '—'
+  const n = parseNum(spacingM)
+  if (!Number.isFinite(n)) return '—'
+  return `c/ ${fmt2(n)}`
+}
+
+/** Longitudinal | Transversal | Diagonal 45°. */
+export function formatUbicacion(pos) {
+  const u = String(pos?.ubicacion || '').trim()
+  if (!u) return '—'
+  if (u === 'Diagonal') {
+    const a = parseNum(pos?.anguloDeg)
+    if (Number.isFinite(a)) return `Diagonal ${Math.round(a)}°`
+    return 'Diagonal'
+  }
+  return u
+}
+
+/** Sencilla | Doble · Superior / Externa | Doble · Inferior / Interna */
+export function formatParrilla(pos) {
+  const p = String(pos?.parrilla || '').trim()
+  if (!p) return '—'
+  if (p === 'Doble') {
+    const cara = String(pos?.parrillaCara || '').trim()
+    return cara ? `Doble · ${cara}` : 'Doble'
+  }
+  return p
 }
 
 export function despieceSchedulesIncomplete(schedules) {
