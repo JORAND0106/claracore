@@ -19,7 +19,7 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-2D-05 | Achurado hasta el contorno real. |
 | C-2D-06 | Acotado con área integrada y exacta, también en figuras rotadas. |
 | C-2D-07 | Mapa de fondo: capas y opacidad, polígonos PK, PK de contexto en ámbar, escala real = mapa, zoom nunca bloqueado, GPS. |
-| C-2D-08 | Ventana: altura actual y ancho del panel lateral izquierdo; panel por secciones sin superposición; etiquetas al pasar el mouse. |
+| C-2D-08 | Ventana (iPad/portátil): altura actual y ancho del panel lateral izquierdo; panel por secciones sin superposición; etiquetas al pasar el mouse. **Celular:** pantalla completa; el lienzo ocupa la mayor parte (vertical y horizontal) y permanece usable. |
 | C-2D-09 | Comandos de la barra: un clic activa, segundo clic sobre el mismo desactiva y vuelve a selección; activar otro desactiva el anterior; el botón refleja el estado activo. Nunca queda un comando activo que impida seleccionar, mover u otro comando. Unir/Sustraer/Cortar se desactivan con el segundo clic o al elegir otra herramienta. |
 | C-2D-10 | Paneo/zoom/gestos sobre el área de dibujo no desplazan la página de atrás; el dibujo se mueve en el mismo sentido del arrastre (2D, vistas 3D, con cualquier comando). **Panel lateral ampliable desde su borde derecho** (línea visible; cursor `col-resize`; mouse y dedo); se reduce hasta el ancho mínimo de contrato; el área de dibujo se ajusta sin superposiciones. |
 | C-2D-11 | **Zoom extendido:** botón con ícono y etiqueta; ajusta la vista para mostrar todo lo dibujado (2D + sólidos 3D) con margen proporcionado, sin cambiar dimensiones ni cotas. Funciona en 2D, seis vistas planas, isométricas y giro libre. |
@@ -81,8 +81,13 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 
 | ID | Comportamiento |
 |----|----------------|
-| C-TX-01 | Mismo comportamiento en todos los módulos que invocan la herramienta (iPad, portátil, celular). |
+| C-TX-01 | Mismo comportamiento en todos los módulos que invocan la herramienta (iPad, portátil, celular). En iPad/portátil se conserva ventana cuadrada + panel lateral; en celular aplica el layout móvil (C-TX-03…C-TX-07) sin cambiar cálculos ni lógica de negocio. |
 | C-TX-02 | **Se puede dibujar** en 2D y en 3D: los eventos pointer/touch llegan al canvas. Prohibido `stopPropagation` en fase *capture* del contenedor padre del lienzo. Extruir: popup de cotas (sup/inf) y de longitud (otras vistas). |
+| C-TX-03 | **Celular — barra compacta:** una sola barra con categorías (dibujo, edición, vistas y 3D, zoom, cálculo y despiece); cada grupo se despliega al tocarlo y se cierra al elegir o tocar fuera; si no cabe, desplazamiento horizontal. Guardar, cerrar y deshacer siempre visibles. Todas las herramientas de iPad/portátil están disponibles. |
+| C-TX-04 | **Celular — hoja inferior:** propiedades, cálculo, solevado y despiece se muestran como hoja desde abajo con tres alturas (contraída / media / completa); arrastre con el dedo; el lienzo sigue visible en contraída y media; el contenido de la hoja hace scroll vertical. |
+| C-TX-05 | **Celular — popups:** Extruir, cálculo de volúmenes, Agregar posición del despiece (y equivalentes) a pantalla completa, con scroll vertical y botones confirmar/cancelar siempre visibles. |
+| C-TX-06 | **Celular — gestos:** un dedo dibuja o mueve según la herramienta; dos dedos hacen paneo/zoom (pellizco); giro libre con un dedo cuando está activo. Los gestos del lienzo no desplazan la página de atrás. Textos y botones cómodos al dedo. |
+| C-TX-07 | **Celular — orientación:** al girar el teléfono se conservan dibujo, vista y zoom; el layout se adapta a vertical u horizontal. |
 
 ## Casos de verificación obligatorios
 
@@ -112,8 +117,9 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 24. Despiece formas: doble gancho 180° 15+150+15 ×10 → 1,80 / 18,00 m; fleje comercial 22×22 ganchos 6 ×50 → 1,00 / 50,00 m; fleje legado migra conservando valores; Ø 1/4" en lista NTC.
 25. Despiece metros: Parrilla Superior 0,20+0,76+0,20 ×2 → 1,16 / 2,32 m · 0,994 · 2,31 kg (Forma 20/76/20); As1a var. en m; legado cm migra; PNG cotas en cm.
 26. Despiece PNG legible; cotas sobre segmentos; espaciamiento/ubicación/parrilla; total 4,74 kg con campos nuevos vacíos o completos.
+27. **Celular:** abrir esquema → lienzo visible a pantalla completa (V/H); barra por categorías; hoja inferior 3 alturas; popups fullscreen; gestos 1/2 dedos sin scroll de página; girar conserva vista; iPad/portátil sin cambios de layout.
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js`, `esquemaSolevar.scenario.test.js`, `esquemaSolevarPanel.scenario.test.js`, `esquemaDespiece.scenario.test.js`, `esquemaDespieceFleje180.scenario.test.js`, `esquemaDespieceMetros.scenario.test.js` y `esquemaDespiecePngCotas.scenario.test.js` bloquean el despliegue si se rompe 5–26.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js`, `esquemaSolevar.scenario.test.js`, `esquemaSolevarPanel.scenario.test.js`, `esquemaDespiece.scenario.test.js`, `esquemaDespieceFleje180.scenario.test.js`, `esquemaDespieceMetros.scenario.test.js`, `esquemaDespiecePngCotas.scenario.test.js` y `esquemaMobileLayout.test.js` bloquean el despliegue si se rompe 5–27.
 
 ## Mantenimiento
 

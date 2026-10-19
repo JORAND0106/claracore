@@ -33,6 +33,7 @@ export function Esquema3dCalcPanel({
   onHighlightSolid,
   highlightedSolidId = null,
   embedded = false,
+  phoneFullscreenPopups = false,
 }) {
   const [newName, setNewName] = useState('Excavación')
   const [popup, setPopup] = useState(null) // { mode:'add'|'edit', drafts:[] }
@@ -408,6 +409,7 @@ export function Esquema3dCalcPanel({
           onCancel={() => setPopup(null)}
           onConfirm={confirmPopup}
           onHighlightSolid={onHighlightSolid}
+          phoneFullscreen={!!phoneFullscreenPopups}
         />
       ) : null}
     </div>
@@ -424,6 +426,7 @@ function CalcDataPopup({
   onCancel,
   onConfirm,
   onHighlightSolid,
+  phoneFullscreen = false,
 }) {
   const hasUnnamed = (drafts || []).some((d) => !String(d.nombre || '').trim())
   const border = t.border || '#cbd5e1'
@@ -431,6 +434,7 @@ function CalcDataPopup({
   return (
     <div
       data-testid="esquema-calc-data-popup"
+      data-phone-fullscreen={phoneFullscreen ? '1' : '0'}
       role="dialog"
       aria-modal="true"
       aria-label="Datos del cálculo"
@@ -440,21 +444,22 @@ function CalcDataPopup({
         zIndex: 80,
         background: 'rgba(15,23,42,0.45)',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
+        alignItems: phoneFullscreen ? 'stretch' : 'center',
+        justifyContent: phoneFullscreen ? 'stretch' : 'center',
+        padding: phoneFullscreen ? 0 : 16,
       }}
       onClick={onCancel}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(720px, 96vw)',
-          maxHeight: 'min(80vh, 640px)',
+          width: phoneFullscreen ? '100%' : 'min(720px, 96vw)',
+          height: phoneFullscreen ? '100%' : undefined,
+          maxHeight: phoneFullscreen ? '100%' : 'min(80vh, 640px)',
           background: t.bgCard || '#fff',
-          borderRadius: 10,
-          border: `1px solid ${border}`,
-          boxShadow: '0 20px 48px rgba(15,23,42,0.28)',
+          borderRadius: phoneFullscreen ? 0 : 10,
+          border: phoneFullscreen ? 'none' : `1px solid ${border}`,
+          boxShadow: phoneFullscreen ? 'none' : '0 20px 48px rgba(15,23,42,0.28)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

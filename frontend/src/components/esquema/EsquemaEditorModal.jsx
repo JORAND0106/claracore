@@ -109,6 +109,7 @@ import {
   orbitAnglesForView,
   projectEntityToView,
   solidsViewCamera,
+  ESQUEMA_3D_VIEWS,
 } from './esquema3dViews'
 import { adoptNativeTitlesInTree } from '../ccTooltipTheme.js'
 import {
@@ -136,6 +137,14 @@ import { buildDespieceAdjuntos } from './esquemaDespieceExport'
 import { despieceSchedulesIncomplete } from './esquemaDespiece'
 import { EsquemaContextSidebar, EsquemaSidebarSection } from './esquemaContextSidebar'
 import { EsquemaToolbarHoverTips } from './esquemaToolbarHoverTips'
+import { useClaraViewport } from '../../useClaraViewport.js'
+import {
+  isEsquemaPhoneViewport,
+  phoneModalOuterSize,
+  phoneSheetHeightPx,
+} from './esquemaMobileLayout.js'
+import { EsquemaPhoneBottomSheet } from './EsquemaPhoneBottomSheet.jsx'
+import { EsquemaPhoneToolbar } from './EsquemaPhoneToolbar.jsx'
 import {
   buildEsquemaDraftSnapshot,
   esquemaDraftClear,
@@ -678,8 +687,13 @@ export default function EsquemaEditorModal({
     if (typeof window === 'undefined') {
       return { w: 720 + sb, h: 720, side: 720, sidebar: sb }
     }
-    const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
-    const maxH = window.innerHeight * 0.92 - 32
+    const vpW = window.innerWidth
+    const vpH = window.innerHeight
+    const landscape = vpW > vpH
+    const phone = vpW <= 767 || (landscape && vpW <= 932)
+    if (phone) return phoneModalOuterSize(vpW, vpH)
+    const maxW = Math.min(1640, vpW * 0.98 - 32)
+    const maxH = vpH * 0.92 - 32
     return squareModalOuterSize(maxW, maxH, sb)
   })
   const modalSide = modalLayout.side
@@ -710,6 +724,11 @@ export default function EsquemaEditorModal({
   const [despieceSchedules, setDespieceSchedules] = useState([])
   const [activeDespieceId, setActiveDespieceId] = useState(null)
   const despieceSchedulesRef = useRef([])
+  const viewport = useClaraViewport()
+  const isPhoneLayout = isEsquemaPhoneViewport(viewport)
+  const isPhoneLayoutRef = useRef(isPhoneLayout)
+  isPhoneLayoutRef.current = isPhoneLayout
+  const [phoneSheetSnap, setPhoneSheetSnap] = useState('collapsed')
   const toolbarRootRef = useRef(null)
   const modalRootRef = useRef(null)
   /** Giro libre 3D: arrastrar para orbitar sin modificar geometría. */
@@ -1156,8 +1175,13 @@ export default function EsquemaEditorModal({
       innerW = Math.max(0, wrap.clientWidth - padX)
       innerH = Math.max(0, wrap.clientHeight - padY)
     } catch { /* use clientWidth/Height */ }
-    const w = Math.max(280, Math.floor(innerW))
-    const h = Math.max(200, Math.floor(innerH || innerW))
+    // En celular no forzar mínimos mayores que el wrap (evita lienzo «invisible»).
+    const phone = !!isPhoneLayoutRef.current
+    if (phone && (innerW < 2 || innerH < 2)) return
+    const minW = phone ? 1 : 280
+    const minH = phone ? 1 : 200
+    const w = Math.max(minW, Math.floor(innerW))
+    const h = Math.max(minH, Math.floor(innerH || innerW))
     c.width = Math.floor(w * dpr)
     c.height = Math.floor(h * dpr)
     c.style.width = `${w}px`
@@ -1174,9 +1198,13 @@ export default function EsquemaEditorModal({
     return () => ro?.disconnect()
   }, [setupCanvas])
 
-  // Ventana: recalcular alto (lado dibujo) + ancho (+ lateral) al redimensionar.
+  // Ventana: en celular pantalla completa; en iPad/portátil cuadrada + lateral.
   useEffect(() => {
     const update = () => {
+      if (isPhoneLayoutRef.current) {
+        setModalLayout(phoneModalOuterSize(window.innerWidth, window.innerHeight))
+        return
+      }
       const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
       const maxH = window.innerHeight * 0.92 - 32
       const sb = contextSidebarCollapsed ? 36 : contextSidebarUserW
@@ -1189,7 +1217,20 @@ export default function EsquemaEditorModal({
       window.removeEventListener('resize', update)
       window.removeEventListener('orientationchange', update)
     }
-  }, [contextSidebarCollapsed, contextSidebarUserW, huellaMode])
+  }, [contextSidebarCollapsed, contextSidebarUserW, huellaMode, isPhoneLayout])
+
+  // Bloquear scroll de la página detrás mientras el esquema está abierto en celular.
+  useEffect(() => {
+    if (!isPhoneLayout) return undefined
+    const prevOverflow = document.body.style.overflow
+    const prevTouch = document.body.style.touchAction
+    document.body.style.overflow = 'hidden'
+    document.body.style.touchAction = 'none'
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.body.style.touchAction = prevTouch
+    }
+  }, [isPhoneLayout])
 
   useEffect(() => {
     // Tras cambiar el tamaño del modal, reajustar el lienzo al espacio restante.
@@ -1899,6 +1940,7 @@ export default function EsquemaEditorModal({
       setSolevarHoverId(null)
       setContextSidebarCollapsed(false)
       setSectionSolevarOpen(true)
+      if (isPhoneLayoutRef.current) setPhoneSheetSnap('medium')
       setToolHint('Solevar: marque Base y Tapa en el panel, indique cotas y confirme.')
       return
     }
@@ -1922,6 +1964,7 @@ export default function EsquemaEditorModal({
       setSolevarHoverId(null)
       setContextSidebarCollapsed(false)
       setSectionSolevarOpen(true)
+      if (isPhoneLayoutRef.current) setPhoneSheetSnap('medium')
       setToolHint('Solevar: indique cotas de base y vértice en el panel y confirme.')
       return
     }
@@ -6369,15 +6412,27 @@ export default function EsquemaEditorModal({
     }
   }
 
+  const openPhoneSheet = (snap = 'medium') => {
+    if (isPhoneLayoutRef.current) setPhoneSheetSnap(snap)
+  }
+  const phoneSheetHeightPxSafe = isPhoneLayout
+    ? phoneSheetHeightPx(phoneSheetSnap, viewport.height || (typeof window !== 'undefined' ? window.innerHeight : 640))
+    : 0
+
   return (
     <div
       role="dialog"
       aria-modal="true"
+      data-esquema-phone={isPhoneLayout ? '1' : '0'}
       style={{
         position: 'fixed', inset: 0, zIndex: 13000,
         background: t.overlay || ui.overlay,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        display: 'flex',
+        alignItems: isPhoneLayout ? 'stretch' : 'center',
+        justifyContent: isPhoneLayout ? 'stretch' : 'center',
+        padding: isPhoneLayout ? 0 : 16,
+        touchAction: isPhoneLayout ? 'none' : undefined,
+        overscrollBehavior: 'none',
       }}
     >
       <div
@@ -6387,31 +6442,311 @@ export default function EsquemaEditorModal({
         data-modal-w={modalWidth}
         data-modal-h={modalHeight}
         data-modal-side={modalSide}
+        data-phone-layout={isPhoneLayout ? '1' : '0'}
         style={{
-          // Altura = área de dibujo; ancho = dibujo + panel lateral izquierdo.
-          width: modalWidth,
-          height: modalHeight,
-          maxWidth: '98vw',
-          maxHeight: '92vh',
+          // Celular: pantalla completa. iPad/portátil: cuadrada + lateral.
+          width: isPhoneLayout ? '100%' : modalWidth,
+          height: isPhoneLayout ? '100%' : modalHeight,
+          maxWidth: isPhoneLayout ? '100%' : '98vw',
+          maxHeight: isPhoneLayout ? '100%' : '92vh',
           background: t.bgCard || '#fff',
-          border: `1px solid ${t.border}`,
-          borderRadius: 14,
-          boxShadow: t.shadow,
+          border: isPhoneLayout ? 'none' : `1px solid ${t.border}`,
+          borderRadius: isPhoneLayout ? 0 : 14,
+          boxShadow: isPhoneLayout ? 'none' : t.shadow,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
           overscrollBehavior: 'contain',
-          touchAction: 'manipulation',
+          touchAction: isPhoneLayout ? 'none' : 'manipulation',
+          position: 'relative',
         }}
       >
         <EsquemaToolbarHoverTips rootRef={modalRootRef} />
+        {isPhoneLayout ? (
+          <EsquemaPhoneToolbar
+            t={t}
+            title={title}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+            onClose={onClose}
+            onSave={pedirGuardar}
+            saveBusy={busy}
+            saveDisabled={busy || (huellaMode ? false : (!dirty && !mapActive))}
+            IconUndo={IconUndo}
+            IconRedo={IconRedo}
+            IconSave={IconGuardar}
+            IconClose={IconCerrarPanel}
+            categories={[
+              {
+                id: 'dibujo',
+                label: 'Dibujo',
+                items: [
+                  ...TOOL_GROUPS.find((g) => g.id === 'dibujo').tools,
+                  ...TOOL_GROUPS.find((g) => g.id === 'anotacion').tools,
+                ].map((tb) => ({
+                  id: tb.id,
+                  label: tb.label,
+                  Icon: tb.Icon,
+                  active: tool === tb.id,
+                  onClick: () => {
+                    if (tb.id !== 'polilinea') finishPolyline()
+                    clearDynBuffer()
+                    mirrorAxisRef.current = null
+                    setMirrorPrompt(null)
+                    anglePickRef.current = { lines: [], points: [] }
+                    setOp3d(null)
+                    const next = (tool === tb.id && tb.id !== 'seleccion') ? 'seleccion' : tb.id
+                    setTool(next)
+                  },
+                })),
+              },
+              {
+                id: 'edicion',
+                label: 'Edición',
+                items: [
+                  ...TOOL_GROUPS.find((g) => g.id === 'edicion').tools.map((tb) => ({
+                    id: tb.id,
+                    label: tb.label,
+                    Icon: tb.Icon,
+                    active: tool === tb.id,
+                    onClick: () => {
+                      clearDynBuffer()
+                      setOp3d(null)
+                      const next = (tool === tb.id && tb.id !== 'seleccion') ? 'seleccion' : tb.id
+                      setTool(next)
+                    },
+                  })),
+                  {
+                    id: 'unir-lineas',
+                    label: 'Unir líneas',
+                    Icon: IconUnirLineas,
+                    disabled: !canJoinLines,
+                    onClick: applyJoinLines,
+                  },
+                  {
+                    id: 'traer-frente',
+                    label: 'Traer al frente',
+                    Icon: IconTraerFrente,
+                    disabled: !canZOrder,
+                    onClick: () => applyZOrder('front'),
+                  },
+                  {
+                    id: 'enviar-fondo',
+                    label: 'Enviar al fondo',
+                    Icon: IconEnviarFondo,
+                    disabled: !canZOrder,
+                    onClick: () => applyZOrder('back'),
+                  },
+                ],
+              },
+              {
+                id: 'vistas3d',
+                label: 'Vistas y 3D',
+                items: [
+                  ...TOOL_GROUPS.find((g) => g.id === 'vista').tools
+                    .filter((tb) => tb.id === 'seleccion' || tb.id === 'paneo')
+                    .map((tb) => ({
+                      id: tb.id,
+                      label: tb.label,
+                      Icon: tb.Icon,
+                      active: tool === tb.id,
+                      onClick: () => {
+                        setOp3d(null)
+                        const next = (tool === tb.id && tb.id !== 'seleccion') ? 'seleccion' : tb.id
+                        setTool(next)
+                      },
+                    })),
+                  {
+                    id: 'modo-3d',
+                    label: mode3d ? 'Salir 3D' : 'Modo 3D',
+                    Icon: IconModo3d,
+                    active: mode3d,
+                    onClick: toggleMode3d,
+                    testId: 'esquema-modo-3d',
+                  },
+                  ...ESQUEMA_3D_VIEWS.map((v) => ({
+                    id: `view-${v.id}`,
+                    label: v.label,
+                    active: mode3d && normalizeViewId(view3d) === v.id,
+                    disabled: !mode3d,
+                    testId: `esquema-3d-view-${v.id}`,
+                    onClick: () => setView3dSafe(v.id),
+                  })),
+                  {
+                    id: 'extruir',
+                    label: 'Extruir',
+                    Icon: IconExtruir3d,
+                    active: !!extrudePrompt,
+                    disabled: !mode3d,
+                    onClick: beginExtrude3d,
+                    testId: 'esquema-3d-extruir',
+                  },
+                  {
+                    id: 'solevar',
+                    label: 'Solevar',
+                    Icon: IconSolevar3d,
+                    active: !!solevarPrompt,
+                    disabled: !mode3d,
+                    onClick: beginSolevar3d,
+                    testId: 'esquema-3d-solevar',
+                  },
+                  {
+                    id: 'unir-solidos',
+                    label: 'Unir',
+                    Icon: IconUnirSolidos3d,
+                    active: op3d === 'unir',
+                    disabled: !mode3d,
+                    onClick: applyUnite3d,
+                  },
+                  {
+                    id: 'sustraer',
+                    label: 'Sustraer',
+                    Icon: IconSustraer3d,
+                    active: op3d === 'sustraer',
+                    disabled: !mode3d,
+                    onClick: applySubtract3d,
+                  },
+                  {
+                    id: 'cortar',
+                    label: 'Cortar',
+                    Icon: IconCortar3d,
+                    active: op3d === 'cortar',
+                    disabled: !mode3d,
+                    onClick: beginCut3d,
+                  },
+                  {
+                    id: 'giro-libre',
+                    label: 'Giro libre',
+                    Icon: IconGiroLibre3d,
+                    active: orbitFree,
+                    disabled: !mode3d,
+                    onClick: toggleOrbitFree,
+                    testId: 'esquema-3d-giro-libre',
+                  },
+                  {
+                    id: 'mapa',
+                    label: mapActive ? 'Quitar mapa' : 'Insertar mapa',
+                    Icon: IconInsertarMapa,
+                    active: mapActive && !mode3d,
+                    disabled: mode3d,
+                    onClick: () => { if (mapActive) deactivateMap(); else activateMap() },
+                  },
+                  {
+                    id: 'coords',
+                    label: 'Coordenadas',
+                    Icon: IconCoords,
+                    active: coordPanelOpen,
+                    onClick: () => { setCoordPanelOpen(true); openPhoneSheet('medium') },
+                  },
+                  {
+                    id: 'biblioteca',
+                    label: 'Biblioteca',
+                    Icon: IconBiblioteca,
+                    active: libOpen,
+                    onClick: () => { refreshLibrary(); setLibOpen((v) => !v) },
+                  },
+                ],
+              },
+              {
+                id: 'zoom',
+                label: 'Zoom',
+                items: [
+                  {
+                    id: 'zoom-extendido',
+                    label: 'Zoom extendido',
+                    Icon: IconZoomExtendido,
+                    onClick: () => { fitViewToScene(); setTool('seleccion') },
+                  },
+                  {
+                    id: 'zoom-ventana',
+                    label: 'Zoom ventana',
+                    Icon: IconZoomVentana,
+                    active: tool === 'zoom-ventana',
+                    onClick: () => setTool(tool === 'zoom-ventana' ? 'seleccion' : 'zoom-ventana'),
+                  },
+                  {
+                    id: 'zoom-out',
+                    label: 'Alejar',
+                    Icon: IconZoomOut,
+                    onClick: () => {
+                      if (mapActiveRef.current) setZoomAroundCenter(null, { factor: 1 / 1.25 })
+                      else setZoomAroundCenter(zoomRef.current / 1.25)
+                    },
+                  },
+                  {
+                    id: 'zoom-in',
+                    label: 'Acercar',
+                    Icon: IconZoomIn,
+                    onClick: () => {
+                      if (mapActiveRef.current) setZoomAroundCenter(null, { factor: 1.25 })
+                      else setZoomAroundCenter(zoomRef.current * 1.25)
+                    },
+                  },
+                  {
+                    id: 'zoom-100',
+                    label: `${zoomPct}%`,
+                    onClick: () => {
+                      if (mapActiveRef.current) setZoomAroundCenter(null, { reset: true })
+                      else setZoomAroundCenter(1)
+                    },
+                  },
+                ],
+              },
+              {
+                id: 'calculo',
+                label: 'Cálculo y despiece',
+                items: [
+                  {
+                    id: 'calc-volumenes',
+                    label: 'Cálculo de volúmenes',
+                    Icon: IconCalcVolumenes,
+                    active: calcPanelOpen,
+                    disabled: !mode3d,
+                    testId: 'esquema-calc-panel-btn',
+                    onClick: () => {
+                      setContextSidebarCollapsed(false)
+                      setSectionCalcOpen(true)
+                      setCalcPanelOpen(true)
+                      openPhoneSheet('medium')
+                      if (!(volumeCalcsRef.current || []).length) {
+                        const c = createVolumeCalc('Excavación')
+                        setVolumeCalcs([c])
+                        setActiveCalcId(c.id)
+                      }
+                    },
+                  },
+                  {
+                    id: 'despiece',
+                    label: 'Cuadro de despiece',
+                    Icon: IconDespieceAcero,
+                    active: despiecePanelOpen,
+                    testId: 'esquema-despiece-btn',
+                    onClick: () => {
+                      setContextSidebarCollapsed(false)
+                      setSectionDespieceOpen(true)
+                      setDespiecePanelOpen(true)
+                      openPhoneSheet('medium')
+                    },
+                  },
+                  {
+                    id: 'paneles',
+                    label: 'Abrir paneles',
+                    onClick: () => openPhoneSheet(phoneSheetSnap === 'collapsed' ? 'medium' : 'full'),
+                  },
+                ],
+              },
+            ]}
+          />
+        ) : null}
         <div
           ref={toolbarRootRef}
           data-testid="esquema-toolbar"
           style={{
-            display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+            display: isPhoneLayout ? 'none' : 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
             padding: '10px 14px', borderBottom: `1px solid ${t.border}`,
-            // Panel de herramientas siempre visible.
+            // Panel de herramientas siempre visible (iPad/portátil).
             flexShrink: 0,
             flexGrow: 0,
           }}
@@ -6874,6 +7209,7 @@ export default function EsquemaEditorModal({
                   setContextSidebarCollapsed(false)
                   setSectionCalcOpen(true)
                   setCalcPanelOpen(true)
+                  if (isPhoneLayoutRef.current) setPhoneSheetSnap('medium')
                   if (!(volumeCalcsRef.current || []).length) {
                     const c = createVolumeCalc('Excavación')
                     setVolumeCalcs([c])
@@ -6898,6 +7234,7 @@ export default function EsquemaEditorModal({
               setContextSidebarCollapsed(false)
               setSectionDespieceOpen(true)
               setDespiecePanelOpen(true)
+              if (isPhoneLayoutRef.current) setPhoneSheetSnap('medium')
               if (!(despieceSchedulesRef.current || []).length) {
                 // El panel crea el cuadro al oprimir «+ Nuevo cuadro».
               }
@@ -7000,15 +7337,16 @@ export default function EsquemaEditorModal({
 
         <div
           style={{
-            // Bajo la barra: panel lateral izquierdo + área de dibujo (2D y 3D).
+            // Bajo la barra: panel lateral (iPad/portátil) o hoja inferior (celular) + lienzo.
             flex: 1,
             minHeight: 0,
             display: 'flex',
             flexDirection: 'row',
             background: ui.wrap,
+            position: 'relative',
           }}
         >
-          {huellaMode ? (
+          {!isPhoneLayout && (huellaMode ? (
             sidebarCollapsed ? (
               <div
                 data-testid="esquema-huella-sidebar-collapsed"
@@ -7511,6 +7849,7 @@ export default function EsquemaEditorModal({
                   <EsquemaDespiecePanel
                     t={t}
                     ui={ui}
+                    phoneFullscreenPopups={isPhoneLayout}
                     contratoId={contratoId}
                     schedules={despieceSchedules}
                     activeId={activeDespieceId}
@@ -7546,6 +7885,7 @@ export default function EsquemaEditorModal({
                       ui={ui}
                       open
                       embedded
+                      phoneFullscreenPopups={isPhoneLayout}
                       onClose={() => setCalcPanelOpen(false)}
                       calcs={volumeCalcs}
                       activeCalcId={activeCalcId}
@@ -7658,7 +7998,7 @@ export default function EsquemaEditorModal({
                 </EsquemaSidebarSection>
               ) : null}
             </EsquemaContextSidebar>
-          )}
+          ))}
 
           <div style={{
             flex: 1,
@@ -7667,6 +8007,8 @@ export default function EsquemaEditorModal({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'stretch',
+            // En celular el lienzo usa todo el ancho; la hoja flota encima.
+            paddingBottom: isPhoneLayout ? phoneSheetHeightPxSafe : 0,
           }}
           >
             <div
@@ -8151,6 +8493,266 @@ export default function EsquemaEditorModal({
               </div>
             ) : null}
           </div>
+        {isPhoneLayout ? (
+          <EsquemaPhoneBottomSheet
+            t={t}
+            title="Paneles"
+            snap={phoneSheetSnap}
+            onSnapChange={setPhoneSheetSnap}
+            viewportH={viewport.height || (typeof window !== 'undefined' ? window.innerHeight : 640)}
+          >
+            <div
+              data-testid="esquema-phone-panels"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+                background: ui?.wrap || t.bgMuted || '#f8fafc',
+              }}
+            >
+              <EsquemaSidebarSection
+                t={t}
+                id="propiedades"
+                title="Propiedades"
+                open={sectionPropsOpen}
+                onToggle={setSectionPropsOpen}
+                badge={selectedObj || selectedSolidIds.length === 1 ? '1' : null}
+              >
+                {selectedObj && selectedObj.type !== 'image' ? (
+                  <PropiedadesPanel
+                    t={t}
+                    ui={ui}
+                    obj={selectedObj}
+                    selectMode={tool === 'seleccion' ? selectMode : null}
+                    onSelectMode={setSelectMode}
+                    scaleLocked={isScaleLockedBloque(selectedObj) && (huellaMode || mapActive)}
+                    measureW={measureW}
+                    measureH={measureH}
+                    onMeasureW={setMeasureW}
+                    onMeasureH={setMeasureH}
+                    onApplyDims={(w, h) => applyMeasureToSelected(w, h)}
+                    onColor={applySelectedColor}
+                    onWidth={applySelectedWidth}
+                    onLineStyle={applySelectedLineStyle}
+                    onFontSize={applyFontSize}
+                    onRotationDeg={applyRotationDeg}
+                    solid={selectedSolidIds.length === 1
+                      ? solids3d.find((s) => s.id === selectedSolidIds[0])
+                      : solidForSourceEntity(solids3d, selectedObj.id)}
+                    embedded
+                  />
+                ) : !selectedObj && selectedSolidIds.length === 1 ? (
+                  <SolidPropiedadesPanel
+                    t={t}
+                    ui={ui}
+                    solid={solids3d.find((s) => s.id === selectedSolidIds[0])}
+                    onColor={(c) => applySolidColor(selectedSolidIds[0], c)}
+                    embedded
+                  />
+                ) : selectedIds.length > 1 ? (
+                  <div style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg || '#fff',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: t.text,
+                  }}
+                  >
+                    {selectedIds.length} entidades seleccionadas
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: t.textMuted, padding: '4px 2px' }}>
+                    Seleccione una entidad o sólido para ver sus propiedades.
+                  </div>
+                )}
+              </EsquemaSidebarSection>
+
+              {mode3d && solevarPrompt ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="solevar"
+                  title="Solevar"
+                  open={sectionSolevarOpen}
+                  onToggle={setSectionSolevarOpen}
+                  badge={String((solevarPrompt.rows || []).length || '')}
+                >
+                  <Esquema3dSolevarPanel
+                    t={t}
+                    ui={ui}
+                    mode={solevarPrompt.mode}
+                    rows={solevarPrompt.rows || []}
+                    onHoverEntity={(id) => {
+                      setSolevarHoverId(id)
+                      setPanTick((n) => n + 1)
+                    }}
+                    onCancel={closeSolevarPanel}
+                    onConfirm={confirmSolevar3d}
+                  />
+                </EsquemaSidebarSection>
+              ) : null}
+
+              {despiecePanelOpen ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="despiece"
+                  title="Cuadro de despiece"
+                  open={sectionDespieceOpen}
+                  onToggle={setSectionDespieceOpen}
+                  badge={(despieceSchedules || []).length || null}
+                >
+                  <EsquemaDespiecePanel
+                    t={t}
+                    ui={ui}
+                    phoneFullscreenPopups={isPhoneLayout}
+                    contratoId={contratoId}
+                    schedules={despieceSchedules}
+                    activeId={activeDespieceId}
+                    selectedPolyline={
+                      (() => {
+                        const id = selectedIds?.[0] || selectedId
+                        const o = objectsRef.current.find((x) => x.id === id)
+                        return (o?.type === 'polilinea' || o?.type === 'stroke') && o?.points ? o : null
+                      })()
+                    }
+                    onActiveId={setActiveDespieceId}
+                    onChangeSchedules={(next) => {
+                      setDespieceSchedules(next)
+                      despieceSchedulesRef.current = next
+                      setDirty(true)
+                    }}
+                  />
+                </EsquemaSidebarSection>
+              ) : null}
+
+              {mode3d ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="calculo"
+                  title="Cálculo de volúmenes"
+                  open={sectionCalcOpen}
+                  onToggle={setSectionCalcOpen}
+                  badge={(volumeCalcs || []).length || null}
+                >
+                  {calcPanelOpen ? (
+                    <Esquema3dCalcPanel
+                      t={t}
+                      ui={ui}
+                      open
+                      embedded
+                      phoneFullscreenPopups={isPhoneLayout}
+                      onClose={() => setCalcPanelOpen(false)}
+                      calcs={volumeCalcs}
+                      activeCalcId={activeCalcId}
+                      onActiveCalcId={setActiveCalcId}
+                      onCreateCalc={(c) => {
+                        setVolumeCalcs((prev) => [...prev, c])
+                        setActiveCalcId(c.id)
+                        setDirty(true)
+                      }}
+                      onRenameCalc={(id, nombre) => {
+                        setVolumeCalcs((prev) => prev.map((c) => (c.id === id ? { ...c, nombre } : c)))
+                        setDirty(true)
+                      }}
+                      onDeleteCalc={(id) => {
+                        setVolumeCalcs((prev) => {
+                          const next = prev.filter((c) => c.id !== id)
+                          if (activeCalcId === id) setActiveCalcId(next[0]?.id || null)
+                          return next
+                        })
+                        setDirty(true)
+                      }}
+                      onAddLine={(calcId, line) => {
+                        setVolumeCalcs((prev) => prev.map((c) => (
+                          c.id === calcId ? { ...c, lines: [...(c.lines || []), line] } : c
+                        )))
+                        setDirty(true)
+                      }}
+                      onUpdateLine={(calcId, lineId, patch) => {
+                        setVolumeCalcs((prev) => prev.map((c) => {
+                          if (c.id !== calcId) return c
+                          return {
+                            ...c,
+                            lines: (c.lines || []).map((l) => (l.id === lineId ? { ...l, ...patch } : l)),
+                          }
+                        }))
+                        setDirty(true)
+                      }}
+                      onRemoveLine={(calcId, lineId) => {
+                        setVolumeCalcs((prev) => prev.map((c) => (
+                          c.id === calcId
+                            ? { ...c, lines: (c.lines || []).filter((l) => l.id !== lineId) }
+                            : c
+                        )))
+                        setDirty(true)
+                      }}
+                      solids={solids3d}
+                      selectedSolidIds={selectedSolidIds}
+                      highlightedSolidId={selectedSolidIds[0] || null}
+                      onHighlightSolid={(solidId) => {
+                        if (!solidId) return
+                        const s = (solids3dRef.current || []).find((x) => x.id === solidId)
+                        if (s) selectSolidAndSource(s)
+                        else selectSolid3d(solidId)
+                        setToolHint(`Sólido del cálculo · ${Number(solidVolumeM3(s) || 0).toFixed(2)} m³`)
+                      }}
+                      onHint={setToolHint}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => { setCalcPanelOpen(true); setSectionCalcOpen(true) }}
+                      style={{
+                        ...ghost(t),
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: '8px 10px',
+                      }}
+                    >
+                      Abrir cálculo de volúmenes
+                    </button>
+                  )}
+                </EsquemaSidebarSection>
+              ) : null}
+
+              {coordPanelOpen ? (
+                <EsquemaSidebarSection
+                  t={t}
+                  id="coordenadas"
+                  title="Coordenadas"
+                  open={sectionCoordsOpen}
+                  onToggle={setSectionCoordsOpen}
+                >
+                  <CoordsPanel
+                    t={t}
+                    rows={coordRows}
+                    fileRef={coordFileRef}
+                    embedded
+                    pickFromMapActive={pickNodoFromMap}
+                    onTogglePickFromMap={togglePickNodoFromMap}
+                    onClose={() => {
+                      setPickNodoFromMap(false)
+                      setCoordPanelOpen(false)
+                      setToolHint('')
+                    }}
+                    onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
+                    onImport={async (file) => {
+                      try {
+                        const parsed = await parseCoordFile(file)
+                        const numbered = renumberCoordRows(parsed)
+                        setCoordRows(numbered)
+                        requestDrawFromCoords(numbered)
+                      } catch (err) {
+                        window.alert(err?.message || 'No se pudo leer el archivo')
+                      }
+                    }}
+                  />
+                </EsquemaSidebarSection>
+              ) : null}
+            </div>
+          </EsquemaPhoneBottomSheet>
+        ) : null}
         </div>
         {libNamePrompt && (
           <div
@@ -8235,6 +8837,7 @@ export default function EsquemaEditorModal({
             ui={ui}
             mode={extrudePrompt.mode}
             defaultLengthM={extrudePrompt.defaultLengthM}
+            phoneFullscreen={isPhoneLayout}
             onCancel={() => setExtrudePrompt(null)}
             onConfirm={confirmExtrude3d}
           />

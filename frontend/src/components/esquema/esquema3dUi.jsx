@@ -146,6 +146,7 @@ export function Esquema3dExtrudePopup({
   onCancel,
   onConfirm,
   defaultLengthM = null,
+  phoneFullscreen = false,
 }) {
   const [cotaSup, setCotaSup] = useState('100')
   const [cotaInf, setCotaInf] = useState('98')
@@ -171,95 +172,123 @@ export function Esquema3dExtrudePopup({
     <div
       role="dialog"
       aria-modal="true"
+      data-phone-fullscreen={phoneFullscreen ? '1' : '0'}
       style={{
         position: 'fixed', inset: 0, zIndex: 14000,
         background: t.overlay || 'rgba(15,23,42,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        display: 'flex',
+        alignItems: phoneFullscreen ? 'stretch' : 'center',
+        justifyContent: phoneFullscreen ? 'stretch' : 'center',
+        padding: phoneFullscreen ? 0 : 16,
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         data-testid="esquema-extruir-popup"
         style={{
-          width: 'min(420px, 96vw)',
+          width: phoneFullscreen ? '100%' : 'min(420px, 96vw)',
+          height: phoneFullscreen ? '100%' : undefined,
+          maxHeight: phoneFullscreen ? '100%' : undefined,
           background: t.bgCard || '#fff',
-          border: `1px solid ${t.border}`,
-          borderRadius: 12,
-          boxShadow: t.shadow,
-          padding: 16,
+          border: phoneFullscreen ? 'none' : `1px solid ${t.border}`,
+          borderRadius: phoneFullscreen ? 0 : 12,
+          boxShadow: phoneFullscreen ? 'none' : t.shadow,
+          padding: phoneFullscreen ? 0 : 16,
+          display: phoneFullscreen ? 'flex' : 'block',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          boxSizing: 'border-box',
         }}
       >
-        <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 8 }}>
-          {mode === 'cotas' ? 'Extruir por cotas' : 'Extruir por profundidad'}
-        </div>
-        <div style={{ fontSize: 13, color: ui?.muted || '#64748b', marginBottom: 12 }}>
-          {mode === 'cotas'
-            ? 'Indique la cota superior y la cota inferior (metros). El sólido se construye entre ambas.'
-            : 'Indique la longitud en metros (profundidad perpendicular a la cara, hacia el fondo de la vista). La figura conserva su posición y cotas.'}
-        </div>
-        {mode === 'cotas' ? (
-          <div style={{ display: 'grid', gap: 10 }}>
-            <label style={labelStyle(t)}>
-              Cota superior (m)
-              <input
-                value={cotaSup}
-                onChange={(e) => setCotaSup(e.target.value)}
-                style={inputStyle(t)}
-                inputMode="decimal"
-                data-testid="esquema-extruir-cota-sup"
-              />
-            </label>
-            <label style={labelStyle(t)}>
-              Cota inferior (m)
-              <input
-                value={cotaInf}
-                onChange={(e) => setCotaInf(e.target.value)}
-                style={inputStyle(t)}
-                inputMode="decimal"
-                data-testid="esquema-extruir-cota-inf"
-              />
-            </label>
-            <div
-              data-testid="esquema-extruir-altura"
-              style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: `1px solid ${t.border}`,
-                background: t.bgHover || 'rgba(15,118,110,0.08)',
-                fontSize: 13,
-                color: t.text,
-              }}
-            >
-              <span style={{ fontWeight: 700, color: ui?.muted || '#64748b' }}>Altura calculada</span>
-              <div style={{ fontWeight: 800, fontSize: 18, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
-                {alturaM != null
-                  ? `${alturaM.toFixed(2)} m`
-                  : '—'}
-              </div>
-              <div style={{ fontSize: 11, color: ui?.muted || '#64748b', marginTop: 2 }}>
-                Cota superior − cota inferior (solo lectura)
+        <div style={{
+          flex: phoneFullscreen ? 1 : undefined,
+          minHeight: 0,
+          overflow: phoneFullscreen ? 'auto' : undefined,
+          WebkitOverflowScrolling: phoneFullscreen ? 'touch' : undefined,
+          padding: phoneFullscreen ? 16 : 0,
+        }}
+        >
+          <div style={{ fontWeight: 800, fontSize: phoneFullscreen ? 18 : 16, color: t.text, marginBottom: 8 }}>
+            {mode === 'cotas' ? 'Extruir por cotas' : 'Extruir por profundidad'}
+          </div>
+          <div style={{ fontSize: phoneFullscreen ? 15 : 13, color: ui?.muted || '#64748b', marginBottom: 12 }}>
+            {mode === 'cotas'
+              ? 'Indique la cota superior y la cota inferior (metros). El sólido se construye entre ambas.'
+              : 'Indique la longitud en metros (profundidad perpendicular a la cara, hacia el fondo de la vista). La figura conserva su posición y cotas.'}
+          </div>
+          {mode === 'cotas' ? (
+            <div style={{ display: 'grid', gap: 10 }}>
+              <label style={labelStyle(t)}>
+                Cota superior (m)
+                <input
+                  value={cotaSup}
+                  onChange={(e) => setCotaSup(e.target.value)}
+                  style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                  inputMode="decimal"
+                  data-testid="esquema-extruir-cota-sup"
+                />
+              </label>
+              <label style={labelStyle(t)}>
+                Cota inferior (m)
+                <input
+                  value={cotaInf}
+                  onChange={(e) => setCotaInf(e.target.value)}
+                  style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                  inputMode="decimal"
+                  data-testid="esquema-extruir-cota-inf"
+                />
+              </label>
+              <div
+                data-testid="esquema-extruir-altura"
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.border}`,
+                  background: t.bgHover || 'rgba(15,118,110,0.08)',
+                  fontSize: 13,
+                  color: t.text,
+                }}
+              >
+                <span style={{ fontWeight: 700, color: ui?.muted || '#64748b' }}>Altura calculada</span>
+                <div style={{ fontWeight: 800, fontSize: 18, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                  {alturaM != null
+                    ? `${alturaM.toFixed(2)} m`
+                    : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: ui?.muted || '#64748b', marginTop: 2 }}>
+                  Cota superior − cota inferior (solo lectura)
+                </div>
               </div>
             </div>
-          </div>
-        ) : (
-          <label style={labelStyle(t)}>
-            Longitud / profundidad (m)
-            <input
-              value={lengthM}
-              onChange={(e) => setLengthM(e.target.value)}
-              style={inputStyle(t)}
-              inputMode="decimal"
-              data-testid="esquema-extruir-longitud"
-            />
-          </label>
-        )}
-        {error ? (
-          <div style={{ marginTop: 10, color: '#b91c1c', fontSize: 13, fontWeight: 600 }}>{error}</div>
-        ) : null}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-          <button type="button" onClick={onCancel} style={btnGhost(t)}>Cancelar</button>
-          <button type="button" onClick={submit} style={btnPrimary(t)}>Extruir</button>
+          ) : (
+            <label style={labelStyle(t)}>
+              Longitud / profundidad (m)
+              <input
+                value={lengthM}
+                onChange={(e) => setLengthM(e.target.value)}
+                style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                inputMode="decimal"
+                data-testid="esquema-extruir-longitud"
+              />
+            </label>
+          )}
+          {error ? (
+            <div style={{ marginTop: 10, color: '#b91c1c', fontSize: 13, fontWeight: 600 }}>{error}</div>
+          ) : null}
+        </div>
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          justifyContent: 'flex-end',
+          marginTop: phoneFullscreen ? 0 : 16,
+          flexShrink: 0,
+          padding: phoneFullscreen ? '12px 16px' : 0,
+          borderTop: phoneFullscreen ? `1px solid ${t.border}` : undefined,
+          background: phoneFullscreen ? (t.bgHover || '#f8fafc') : undefined,
+        }}
+        >
+          <button type="button" onClick={onCancel} style={{ ...btnGhost(t), minHeight: phoneFullscreen ? 44 : undefined }}>Cancelar</button>
+          <button type="button" onClick={submit} style={{ ...btnPrimary(t), minHeight: phoneFullscreen ? 44 : undefined }}>Extruir</button>
         </div>
       </div>
     </div>
