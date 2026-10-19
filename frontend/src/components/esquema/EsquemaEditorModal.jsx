@@ -6489,31 +6489,17 @@ export default function EsquemaEditorModal({
       finishParrillaSession({ ...session, bars, skipped, lastByUbic, queueIndex: nextIdx })
       return
     }
-    const nextItem = session.queue[nextIdx]
-    const canCont = canContinueFromLast(lastByUbic, nextItem.cls.ubicacion)
-    if (canCont) {
-      setParrillaSession({
-        ...session,
-        bars,
-        skipped,
-        lastByUbic,
-        queueIndex: nextIdx,
-        phase: 'ask-continue',
-        error: '',
-      })
-      setToolHint(PARRILLA_MSG.askContinue)
-      return
-    }
+    // Siempre preguntar; si no hay varillas de esa ubicación, Sí cae a toque de inicio.
     setParrillaSession({
       ...session,
       bars,
       skipped,
       lastByUbic,
       queueIndex: nextIdx,
-      phase: 'touch-start',
+      phase: 'ask-continue',
       error: '',
     })
-    setToolHint(PARRILLA_MSG.touchStart)
+    setToolHint(PARRILLA_MSG.askContinue)
   }, [finishParrillaSession])
 
   const commitParrillaPositionAt = useCallback((startM) => {

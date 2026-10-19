@@ -110,13 +110,16 @@ describe('caso b · continuar Sí desde última varilla', () => {
 })
 
 describe('caso c · Sí sin varillas previas de esa ubicación → pide inicio', () => {
-  it('transversal sin previas: canContinue false; al tocar dibuja verticales', () => {
+  it('Sí sin previas transversales: resolveContinue null → toque; luego verticales', () => {
     const a = posBar({ id: 'a', ubicacion: 'Longitudinal', pieces: 5 })
     const d = posBar({ id: 'd', name: 'D', ubicacion: 'Transversal', pieces: 6, mainM: '1.00' })
     const barA = buildBarsFromStart(a, { x: 0, y: 0 })
     const last = recordLastByUbic({}, barA)
+    // Tras responder Sí sin varillas de esa ubicación, no hay inicio automático.
     assert.equal(canContinueFromLast(last, 'Transversal'), false)
     assert.equal(resolveContinueStart(last, 'Transversal'), null)
+    assert.equal(PARRILLA_MSG.askContinue, '¿Continuar desde la última varilla?')
+    assert.equal(PARRILLA_MSG.touchStart, 'Toque el punto de inicio')
 
     const barD = buildBarsFromStart(d, { x: 2, y: 0 })
     assert.ok(barD.drawable)
