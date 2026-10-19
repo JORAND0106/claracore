@@ -9,6 +9,7 @@ import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
 import PptoSicoeGaleriaPicker from './PptoSicoeGaleriaPicker'
 import { imagenDesdeClipboard, imagenDesdePasteEvent } from './pptoPasteImage'
+import { pptoListaSeleccion } from './pptoNavegacionVista'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -49,7 +50,7 @@ export default function PptoGraficosModal({
   const [slideIdx, setSlideIdx] = useState(0)
   const dropRef = useRef(null)
   const iaDraftKey = useMemo(() => {
-    const ids = (seleccionados || [])
+    const ids = pptoListaSeleccion(seleccionados)
       .map((x) => (typeof x === 'object' ? (x?.id ?? x?.numero_registro) : x))
       .filter((x) => x != null && x !== '')
       .map(String)
@@ -62,8 +63,9 @@ export default function PptoGraficosModal({
   iaDraftRef.current = iaDraftKey
 
   const regsSel = useMemo(() => {
-    const ids = seleccionados instanceof Set ? [...seleccionados] : []
-    const byId = new Map((registros || []).map((r) => [r.id, r]))
+    const ids = pptoListaSeleccion(seleccionados)
+    const rows = Array.isArray(registros) ? registros : []
+    const byId = new Map(rows.map((r) => [r.id, r]))
     return ids.map((id) => byId.get(id)).filter(Boolean)
   }, [seleccionados, registros])
 
