@@ -155,7 +155,7 @@ def _gerencia_caches_clear() -> None:
         _GERENCIA_PDF_CACHE.clear()
 
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -9648,6 +9648,76 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
         return []
 
 
+def _fo_eo_04_clave_presentacion(capitulo: Any, item_numero: Any) -> Tuple[str, str]:
+    """Capítulo e ítem tal como quedan en el formato, después del listado."""
+    return (str(capitulo or "").strip(), str(item_numero or "").strip())
+
+
+def _fo_eo_04_filtrar_items_seleccion(items: Optional[list], claves: Optional[list]) -> list:
+    """None conserva el informe completo. Una lista recorta y mantiene el orden."""
+    base = [it for it in (items or []) if isinstance(it, dict)]
+    if claves is None:
+        return base
+    permitidas = set()
+    for raw in claves:
+        if not isinstance(raw, dict):
+            continue
+        clave = _fo_eo_04_clave_presentacion(raw.get("capitulo"), raw.get("item_numero"))
+        if clave[1]:
+            permitidas.add(clave)
+    return [
+        it
+        for it in base
+        if _fo_eo_04_clave_presentacion(it.get("capitulo"), it.get("item_numero")) in permitidas
+    ]
+
+
+def _fo_eo_04_filas_seleccion(items: Optional[list]) -> List[dict]:
+    """Filas de la ventana: identidad del formato y cantidad del presente acta."""
+    filas: List[dict] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        cap, num = _fo_eo_04_clave_presentacion(it.get("capitulo"), it.get("item_numero"))
+        if not num:
+            continue
+        try:
+            cantidad = round(float(it.get("total_acta") or 0), 3)
+        except (TypeError, ValueError):
+            cantidad = 0.0
+        filas.append(
+            {
+                "capitulo": cap,
+                "item_numero": num,
+                "descripcion": str(it.get("item_descripcion") or "").strip(),
+                "unidad": str(it.get("unidad") or "").strip(),
+                "cantidad": cantidad,
+            }
+        )
+    return filas
+
+
+def _fo_eo_04_claves_desde_body(raw: Any) -> Optional[list]:
+    """None = todos los ítems. Lista vacía o inválida no genera formatos."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or "items" not in raw or raw.get("items") is None:
+        return None
+    items = raw.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items debe ser una lista.")
+    claves = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        cap, num = _fo_eo_04_clave_presentacion(row.get("capitulo"), row.get("item_numero"))
+        if num:
+            claves.append({"capitulo": cap, "item_numero": num})
+    if not claves:
+        raise HTTPException(status_code=400, detail="Seleccione al menos un ítem.")
+    return claves
+
+
 def _combine_html_pages(htmls: list) -> str:
     """Une múltiples páginas HTML en un solo documento con saltos de página entre ellas."""
     if not htmls:
@@ -10994,6 +11064,7 @@ def _build_fo_eo_04_html(
     on_progress=None,
     standalone: bool = False,
     mostrar_rotar: bool = True,
+    claves_items: Optional[list] = None,
 ) -> tuple:
     """
     Arma el HTML del FO-IDU-EO-04-V2 (todas las páginas del acta).
@@ -11173,13 +11244,17 @@ def _build_fo_eo_04_html(
 
     _prog(30, "Obteniendo ítems (aprobados en nivel máximo del contrato)…")
     items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
-    n_items = len(items_n3)
     if acta_id_norm and not items_n3:
         campo_mx, niveles_act = matriz_params_contrato(_sb, int(contrato_id))
         raise ValueError(
             f"No hay líneas aprobadas en {campo_mx} (niveles activos {niveles_act}) "
             f"para el acta {acta_id_norm}."
         )
+    if claves_items is not None:
+        items_n3 = _fo_eo_04_filtrar_items_seleccion(items_n3, claves_items)
+        if acta_id_norm and not items_n3:
+            raise ValueError("Ninguno de los ítems seleccionados tiene formato para este acta.")
+    n_items = len(items_n3)
 
     if items_n3:
         _prog(
@@ -11489,6 +11564,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
     supervisor: str,
     on_progress=None,
     current_user: Optional[dict] = None,
+    claves_items: Optional[list] = None,
 ) -> tuple:
     """Igual que _build_fo_eo_04_pdf_bytes con reporte de progreso."""
     cu = current_user if isinstance(current_user, dict) else dict(current_user or {})
@@ -11502,6 +11578,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
         current_user=cu,
         preview_ui=False,
         on_progress=on_progress,
+        claves_items=claves_items,
     )
     t_html = time.time()
     _log.info(
@@ -11523,9 +11600,10 @@ def _build_fo_eo_04_pdf_bytes_prog(
 
 
 @router.post("/{contrato_id}/ccd/pdf-job/iniciar")
-def ccd_pdf_job_iniciar(
+async def ccd_pdf_job_iniciar(
     contrato_id: int,
     formato_codigo: str,
+    request: Request,
     subsistema: str = "vial",
     acta_id: Optional[int] = None,
     supervisor: str = "",
@@ -11540,6 +11618,13 @@ def ccd_pdf_job_iniciar(
         raise HTTPException(status_code=404, detail="Job de PDF no disponible para este formato")
     if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
         raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
+    claves_items = None
+    if "application/json" in (request.headers.get("content-type") or "").lower():
+        try:
+            raw_body = await request.json()
+        except Exception:
+            raw_body = None
+        claves_items = _fo_eo_04_claves_desde_body(raw_body)
 
     if _fo_eo_04_pdf_use_processes():
         try:
@@ -11596,6 +11681,7 @@ def ccd_pdf_job_iniciar(
                 contrato_id, formato_codigo, subsistema, acta_id, supervisor,
                 on_progress=on_progress,
                 current_user=cu_pdf,
+                claves_items=claves_items,
             )
             pdf_path = _pdf_job_store_pdf(job_id, pdf_bytes)
             dl_tok = _pdf_job_issue_download_token(job_id)
@@ -11752,6 +11838,80 @@ def ccd_pdf_job_con_sello_firma(
     )
 
 
+@router.get("/{contrato_id}/ccd/fo-eo-04/items-seleccion")
+def ccd_fo_eo_04_items_seleccion(
+    contrato_id: int,
+    acta_id: int = Query(..., description="Id del acta RPO"),
+    subsistema: str = Query("vial"),
+    current_user=Depends(_get_user),
+):
+    """Ítems cuyo formato entraría con el acta y el subsistema elegidos.
+
+    Descripción y unidad salen del listado (la misma ficha que usa el formato).
+    Cantidad es el total ejecutado del presente acta, el que imprime el formato.
+    El subsistema no cambia el universo: solo el encabezado del formato.
+    """
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
+    acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
+    if not acta_norm:
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    items = _fetch_items_n3_acta(int(acta_norm), int(contrato_id))
+    filas = _fo_eo_04_filas_seleccion(items)
+    sub = (subsistema or "vial").strip().lower()
+    if sub not in ("vial", "transporte"):
+        sub = "vial"
+    return {"items": filas, "total": len(filas), "subsistema": sub}
+
+
+def _respuesta_preview_fo_eo_04(
+    contrato_id: int,
+    *,
+    subsistema: str,
+    acta_id: Optional[int],
+    supervisor: str,
+    formato_codigo: str,
+    standalone: bool,
+    current_user,
+    claves_items: Optional[list] = None,
+):
+    _perm_informes_ccd(current_user, "ver")
+    if formato_codigo not in FORMATOS_CCD:
+        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
+    meta = FORMATOS_CCD[formato_codigo]
+    if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
+        raise HTTPException(status_code=404, detail="Vista previa HTML no disponible para este formato")
+    if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
+        raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
+    cu = current_user if isinstance(current_user, dict) else dict(current_user)
+    acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id) if acta_id is not None else None
+    try:
+        html, _, _, pages = _build_fo_eo_04_html(
+            contrato_id,
+            formato_codigo,
+            subsistema,
+            acta_id,
+            supervisor,
+            current_user=cu,
+            preview_ui=True,
+            standalone=standalone,
+            mostrar_rotar=not standalone,
+            claves_items=claves_items,
+        )
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex)) from ex
+    n_items = len(pages or []) if acta_norm else 0
+    content = html if standalone else _fo_eo_04_html_embed_fragment(html)
+    return HTMLResponse(
+        content=content,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "X-CC-Fo-Eo-04-Items": str(n_items),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'inline; filename="FO-IDU-EO-04-V2-preview.html"',
+        },
+    )
+
+
 @router.get("/{contrato_id}/ccd/fo-eo-04/preview-html")
 def ccd_fo_eo_04_preview_html(
     contrato_id: int,
@@ -11768,45 +11928,50 @@ def ccd_fo_eo_04_preview_html(
     worker), así que 120 memorias se muestran en segundos en cualquier plan de Azure.
     standalone=True devuelve un documento HTML completo (para cargar en un iframe) y
     omite los botones «Girar» (la orientación se hace en su propio modal).
+    Sin cuerpo JSON genera todos los ítems, igual que antes.
     """
-    _perm_informes_ccd(current_user, "ver")
-    if formato_codigo not in FORMATOS_CCD:
-        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
-    meta = FORMATOS_CCD[formato_codigo]
-    if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
-        raise HTTPException(status_code=404, detail="Vista previa HTML no disponible para este formato")
-    if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
-        raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
-    cu = current_user if isinstance(current_user, dict) else dict(current_user)
-    acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id) if acta_id is not None else None
-    try:
-        html, _, _, _pages = _build_fo_eo_04_html(
-            contrato_id,
-            formato_codigo,
-            subsistema,
-            acta_id,
-            supervisor,
-            current_user=cu,
-            preview_ui=True,
-            standalone=standalone,
-            mostrar_rotar=not standalone,
-        )
-    except ValueError as ex:
-        raise HTTPException(status_code=404, detail=str(ex)) from ex
-    n_items = 0
-    if acta_norm:
-        n_items = len(_fetch_items_n3_acta(int(acta_norm), int(contrato_id)))
-    content = html if standalone else _fo_eo_04_html_embed_fragment(html)
-    # text/html explícito + marcador: la UI no debe tratar esta respuesta como PDF
-    # (el botón «Descargar PDF» usa /ccd/pdf-job/.../pdf → application/pdf).
-    return HTMLResponse(
-        content=content,
-        media_type="text/html; charset=utf-8",
-        headers={
-            "X-CC-Fo-Eo-04-Items": str(n_items),
-            "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": 'inline; filename="FO-IDU-EO-04-V2-preview.html"',
-        },
+    return _respuesta_preview_fo_eo_04(
+        contrato_id,
+        subsistema=subsistema,
+        acta_id=acta_id,
+        supervisor=supervisor,
+        formato_codigo=formato_codigo,
+        standalone=standalone,
+        current_user=current_user,
+        claves_items=None,
+    )
+
+
+@router.post("/{contrato_id}/ccd/fo-eo-04/preview-html")
+async def ccd_fo_eo_04_preview_html_seleccion(
+    contrato_id: int,
+    request: Request,
+    subsistema: str = "vial",
+    acta_id: Optional[int] = None,
+    supervisor: str = "",
+    formato_codigo: str = "FO-IDU-EO-04-V2",
+    standalone: bool = False,
+    current_user=Depends(_get_user),
+):
+    """Vista previa solo de los ítems enviados en {"items": [{capitulo, item_numero}]}."""
+    raw_body = None
+    if "application/json" in (request.headers.get("content-type") or "").lower():
+        try:
+            raw_body = await request.json()
+        except Exception:
+            raw_body = None
+    claves = _fo_eo_04_claves_desde_body(raw_body)
+    if claves is None:
+        raise HTTPException(status_code=400, detail="Seleccione al menos un ítem.")
+    return _respuesta_preview_fo_eo_04(
+        contrato_id,
+        subsistema=subsistema,
+        acta_id=acta_id,
+        supervisor=supervisor,
+        formato_codigo=formato_codigo,
+        standalone=standalone,
+        current_user=current_user,
+        claves_items=claves,
     )
 
 
