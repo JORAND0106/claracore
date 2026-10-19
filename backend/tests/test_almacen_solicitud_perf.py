@@ -348,6 +348,9 @@ def test_aprobar_solicitud_bloquea_si_falta_insumo(monkeypatch):
         def limit(self, *_a, **_k):
             return self
 
+        def order(self, *_a, **_k):
+            return self
+
         def update(self, *_a, **_k):
             return self
 

@@ -331,11 +331,18 @@ class CotizacionSeleccionBody(BaseModel):
     cotizacion_id: int
 
 
+class NotificarProveedorOcBody(BaseModel):
+    proveedor_id: Optional[int] = None
+    proveedor_nombre: Optional[str] = None
+    notificar: Optional[bool] = None
+
+
 class AprobarBody(BaseModel):
     fecha_compromiso: Optional[str] = None
     cotizaciones_seleccionadas: Optional[List[CotizacionSeleccionBody]] = None
     aprobar_todos_pendientes: bool = True
     item_ids: Optional[List[int]] = None
+    notificar_proveedores: Optional[List[NotificarProveedorOcBody]] = None
 
 
 class AgruparBody(BaseModel):
@@ -1227,6 +1234,19 @@ def route_aprobar_solicitud(
             valor_anterior=snapshot_solicitud(prev),
             valor_nuevo=snapshot_solicitud(result if isinstance(result, dict) else {**prev, "estado": "aprobada"}),
         )
+        if isinstance(result, dict):
+            for oc in result.get("ordenes_compra_generadas") or []:
+                if not isinstance(oc, dict) or not isinstance(oc.get("notificar"), bool):
+                    continue
+                log_almacen(
+                    current_user, "NOTIFICAR_PROVEEDOR_OC", "orden_compra", oc.get("id"),
+                    {
+                        "decision": "si" if oc.get("notificar") else "no",
+                        "numero_oc": oc.get("numero_oc"),
+                        "proveedor": oc.get("proveedor_nombre"),
+                        "documento_sistema": oc.get("documento_sistema") is True,
+                    },
+                )
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -1780,12 +1800,21 @@ def route_reenviar_oc_correo(
     try:
         from almacen_oc_email import enviar_oc_por_correo
 
-        return enviar_oc_por_correo(
+        result = enviar_oc_por_correo(
             contrato_id,
             oc_id,
             _uid(current_user),
             correo_override=(body.correo or "").strip() or None,
         )
+        log_almacen(
+            current_user, "ENVIAR_OC_PROVEEDOR", "orden_compra", oc_id,
+            {
+                "resultado": (result or {}).get("resultado"),
+                "numero_oc": (result or {}).get("numero_oc"),
+                "proveedor": (result or {}).get("proveedor_nombre"),
+            },
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

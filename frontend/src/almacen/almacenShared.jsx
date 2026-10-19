@@ -3,6 +3,7 @@ import { useClaraViewport } from '../useClaraViewport'
 import { isLikelyDarkBackground } from '../theme/adminPanelTheme'
 import { createAlmacenApi } from './almacenApi'
 import CcTipChrome from '../components/CcTipChrome'
+import { esDocumentoSistema } from './ocDocumentoSistema'
 
 export function almacenStyles(t, compact = false) {
   const primary = t?.primary || '#2563eb'
@@ -505,7 +506,8 @@ export function formatOcOpcionEntrada(oc) {
   const saldo = Number(oc?.saldo_cantidad_pendiente)
   const un = oc?.saldo_unidad
     || (Array.isArray(oc?.saldo_unidades) && oc.saldo_unidades.length === 1 ? oc.saldo_unidades[0] : '')
-  const base = prov ? `OC #${num} · ${prov} · ${recv}` : `OC #${num} · ${recv}`
+  const marca = esDocumentoSistema(oc) ? ' · Documento de sistema' : ''
+  const base = (prov ? `OC #${num} · ${prov} · ${recv}` : `OC #${num} · ${recv}`) + marca
   if (Number.isFinite(saldo) && saldo > 0.0001) {
     const saldoTxt = `${fmtCant(saldo)}${un ? ` ${un}` : ''}`
     return `${base} (falta: ${saldoTxt})`

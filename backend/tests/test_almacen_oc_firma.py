@@ -253,10 +253,18 @@ def test_aprobar_solicitud_orden_compra_null_no_attribute_error(monkeypatch):
     monkeypatch.setattr("almacen_service.generar_y_guardar_pdf_oc", lambda *_a, **_k: None)
     monkeypatch.setattr("almacen_service._lanzar_pdfs_oc", lambda *_a, **_k: None)
 
-    result = aprobar_solicitud(10, 1, 7, {"aprobar_todos_pendientes": False})
+    result = aprobar_solicitud(10, 1, 7, {
+        "aprobar_todos_pendientes": False,
+        "notificar_proveedores": [{
+            "proveedor_nombre": "Compra recurrente",
+            "notificar": True,
+        }],
+    })
     assert result["orden_compra_generada"]["id"] == 99
     assert len(result["ordenes_compra_generadas"]) == 1
     assert result["ordenes_compra_generadas"][0]["proveedor_nombre"] == "Compra recurrente"
+    assert result["ordenes_compra_generadas"][0]["documento_sistema"] is False
+    assert result["ordenes_compra_generadas"][0]["notificar"] is True
 
 
 def test_generar_pdf_oc_con_firma_data_uri(monkeypatch):

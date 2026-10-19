@@ -3855,6 +3855,9 @@ def _insert_orden_compra_row(sb, oc_row: dict) -> List[dict]:
         if col == "proveedor_id" and "proveedor_id" in oc_row:
             row2 = {k: v for k, v in oc_row.items() if k != "proveedor_id"}
             return sb.table("almacen_orden_compra").insert(row2).execute().data or []
+        if col == "documento_sistema" and "documento_sistema" in oc_row:
+            row2 = {k: v for k, v in oc_row.items() if k != "documento_sistema"}
+            return _insert_orden_compra_row(sb, row2)
         if col == "proveedor_nombre" and "proveedor_nombre" in oc_row:
             row2 = {k: v for k, v in oc_row.items() if k != "proveedor_nombre"}
             try:
@@ -3866,6 +3869,15 @@ def _insert_orden_compra_row(sb, oc_row: dict) -> List[dict]:
                     return sb.table("almacen_orden_compra").insert(row3).execute().data or []
                 raise
         raise
+
+
+def _exigir_decision_notificar(notificaciones, grupos: List[dict]) -> None:
+    """Cada OC nueva exige Sí o No. Se llama antes de insertar."""
+    if not grupos:
+        return
+    from almacen_oc_email import resolver_notificar_proveedores
+
+    resolver_notificar_proveedores(notificaciones, grupos)
 
 
 def _crear_oc_con_items(
@@ -3881,6 +3893,7 @@ def _crear_oc_con_items(
     proveedor_nombre: str,
     cat_map: Optional[Dict[int, dict]] = None,
     prov_nombres: Optional[Dict[int, str]] = None,
+    notificaciones=None,
 ) -> dict:
     """Crea una OC nueva (un proveedor) e inserta sus líneas."""
     numero_oc = _next_consecutivo(contrato_id, "almacen_orden_compra", "numero_oc")
@@ -3889,6 +3902,13 @@ def _crear_oc_con_items(
         raise ValueError(
             "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
         )
+    from almacen_oc_email import notificar_para_grupo
+
+    notificar = notificar_para_grupo(
+        notificaciones,
+        proveedor_id=proveedor_id,
+        proveedor_nombre=proveedor_nombre,
+    )
     solicitante_firma = _usuario_firma_url(sb, sol.get("created_by"))
     oc_row = {
         "solicitud_id": solicitud_id,
@@ -3900,6 +3920,7 @@ def _crear_oc_con_items(
         "aprobador_firma_imagen_url": aprobador_firma,
         "solicitante_firma_imagen_url": solicitante_firma,
         "proveedor_nombre": proveedor_nombre,
+        "documento_sistema": notificar is False,
     }
     if proveedor_id is not None:
         oc_row["proveedor_id"] = int(proveedor_id)
@@ -3921,6 +3942,8 @@ def _crear_oc_con_items(
         "tiene_pdf_oc": False,
         "pdf_generando": True,
         "lineas": len(items),
+        "notificar": notificar,
+        "documento_sistema": notificar is False,
     }
 
 
@@ -4105,6 +4128,7 @@ def append_aprobados_a_oc(
     *,
     aprobar_pendientes: bool = True,
     item_ids: Optional[List[int]] = None,
+    notificaciones=None,
 ) -> dict:
     """
     Suma líneas aprobadas pendientes a la(s) OC de la solicitud.
@@ -4195,6 +4219,18 @@ def append_aprobados_a_oc(
         raise ValueError("No hay líneas nuevas aprobadas pendientes de agregar a la OC.")
 
     grupos = _agrupar_items_por_proveedor(sb, items_nuevos)
+    grupos_nuevos = [
+        g for g in grupos
+        if not any(
+            _oc_match_proveedor(oc, g["key"], g["proveedor_id"], g["proveedor_nombre"])
+            for oc in ocs
+        )
+    ]
+    if grupos_nuevos and not _usuario_firma_url(sb, user_id):
+        raise ValueError(
+            "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
+        )
+    _exigir_decision_notificar(notificaciones, grupos_nuevos)
     ocs_afectadas: List[dict] = []
     ocs_creadas: List[dict] = []
     lineas_total = 0
@@ -4253,6 +4289,7 @@ def append_aprobados_a_oc(
                 proveedor_nombre=pname,
                 cat_map=cat_map,
                 prov_nombres=prov_nombres,
+                notificaciones=notificaciones,
             )
             created["lineas_agregadas_oc"] = len(items_g)
             ocs_creadas.append(created)
@@ -4902,6 +4939,7 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             user_id,
             aprobar_pendientes=bool(body.get("aprobar_todos_pendientes", True)),
             item_ids=None if seleccion is None else list(seleccion),
+            notificaciones=body.get("notificar_proveedores"),
         )
 
     if sol["estado"] not in ("enviada", "aprobada"):
@@ -4971,6 +5009,11 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
 
     # Una OC independiente por proveedor involucrado.
     grupos = _agrupar_items_por_proveedor(sb, items_aprobados)
+    if not _usuario_firma_url(sb, user_id):
+        raise ValueError(
+            "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
+        )
+    _exigir_decision_notificar(body.get("notificar_proveedores"), grupos)
     ocs_creadas: List[dict] = []
     for g in grupos:
         created = _crear_oc_con_items(
@@ -4985,6 +5028,7 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             proveedor_nombre=g["proveedor_nombre"],
             cat_map=g.get("_cat_map"),
             prov_nombres=g.get("_prov_nombres"),
+            notificaciones=body.get("notificar_proveedores"),
         )
         ocs_creadas.append(created)
 
