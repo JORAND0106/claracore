@@ -54,6 +54,8 @@ jobs:
 
       # Azure App Service (Oryx Python) no incluye ffmpeg. Sin estos binarios, la
       # carga de videos del mapa falla con "No se pudo comprimir/mezclar…".
+      # La descarga sale de GitHub (BtbN). johnvansickle.com hace timeout en Actions
+      # y, si el paso falla, el ZIP nunca llega y el API sigue sin las rutas nuevas.
       - name: Empaquetar ffmpeg estático (mapa capacitaciones)
         working-directory: ./backend
         run: bash scripts/fetch_ffmpeg_static.sh
