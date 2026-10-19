@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlmacenFieldLabel, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { AlmacenFieldLabel, fmtMoneySolicitud as fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 export default function ProveedorSelector({
   value,

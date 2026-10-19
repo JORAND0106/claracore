@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { fmtMoneySolicitud as fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 /**
  * Proveedor de la cotización a comprar. Por defecto la ganadora.

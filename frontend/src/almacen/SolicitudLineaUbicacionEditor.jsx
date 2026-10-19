@@ -103,6 +103,7 @@ export default function SolicitudLineaUbicacionEditor({
               presupuestoId={item.presupuesto_id}
               presupuestoIds={item.presupuesto_ids}
               excludeSolicitudId={solicitudId || undefined}
+              insumoId={item.insumo?.insumo_id || item.insumo_id || null}
               disabled={busy}
               onToggle={onRegistroToggle}
               onSelect={onRegistroSelect}

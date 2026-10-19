@@ -1,4 +1,5 @@
-import { AlmacenHelpIcon, fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
+import { AlmacenHelpIcon, fmtCant, fmtCant2, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
+import { textoConversionPresupuesto } from './solicitudBancoSuelto'
 
 /**
  * Resumen de línea en formato hoja de cálculo (ppto / negociado / cobro-costo-utilidad).
@@ -166,11 +167,24 @@ export default function LineaResumenExcelTable({
                     color: supera ? danger : posColor,
                   }}
                   >
-                    {fmtCant(ctx.saldo_disponible_despues)}
+                    {ctx.conversion_banco_suelto
+                      ? fmtCant2(ctx.saldo_disponible_despues)
+                      : fmtCant(ctx.saldo_disponible_despues)}
                   </td>
                   <td style={tdNum}>—</td>
                   <td style={tdNum}>—</td>
                 </tr>
+                {textoConversionPresupuesto(ctx) && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      data-testid="texto-conversion-banco"
+                      style={{ ...td, fontSize: 'var(--cc-xs)', whiteSpace: 'normal' }}
+                    >
+                      {textoConversionPresupuesto(ctx)}
+                    </td>
+                  </tr>
+                )}
               </>
             )}
 

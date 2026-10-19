@@ -626,13 +626,16 @@ def route_presupuesto_tramos(
     capitulo: str,
     item: str,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
     current_user=Depends(get_current_user),
 ):
     """Acordeón nivel 1: cantidades agregadas por tramo."""
     _check_contrato(current_user, contrato_id)
     require_lectura_almacen(current_user)
     try:
-        return list_presupuesto_tramos(contrato_id, capitulo, item, exclude_solicitud_id)
+        return list_presupuesto_tramos(
+            contrato_id, capitulo, item, exclude_solicitud_id, insumo_id,
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -644,6 +647,7 @@ def route_presupuesto_tramo_pks(
     item: str,
     tramo: str = "",
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
     current_user=Depends(get_current_user),
 ):
     """Acordeón nivel 2: PK-ID de un tramo (se pide al expandir)."""
@@ -651,7 +655,7 @@ def route_presupuesto_tramo_pks(
     require_lectura_almacen(current_user)
     try:
         return list_presupuesto_pks(
-            contrato_id, capitulo, item, tramo, exclude_solicitud_id,
+            contrato_id, capitulo, item, tramo, exclude_solicitud_id, insumo_id,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -664,6 +668,7 @@ def route_presupuesto_tramo_detalle(
     item: str,
     tramo: str = "",
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
     current_user=Depends(get_current_user),
 ):
     """PK-ID y registros de un tramo, para generar las líneas al confirmar."""
@@ -671,7 +676,7 @@ def route_presupuesto_tramo_detalle(
     require_lectura_almacen(current_user)
     try:
         return list_presupuesto_tramo_detalle(
-            contrato_id, capitulo, item, tramo, exclude_solicitud_id,
+            contrato_id, capitulo, item, tramo, exclude_solicitud_id, insumo_id,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -684,6 +689,7 @@ def route_presupuesto_registros(
     item: str,
     pk_id: str,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
@@ -695,6 +701,7 @@ def route_presupuesto_registros(
             item,
             pk_id,
             exclude_solicitud_id,
+            insumo_id,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
@@ -734,6 +741,7 @@ def route_presupuesto_context(
     pk_id: str,
     cantidad: float = 0,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
@@ -746,6 +754,7 @@ def route_presupuesto_context(
             cantidad,
             exclude_solicitud_id,
             descontar_linea_actual=cantidad > 0,
+            insumo_id=insumo_id,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

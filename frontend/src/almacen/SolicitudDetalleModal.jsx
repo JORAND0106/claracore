@@ -19,7 +19,7 @@ import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import SolicitudBuzon from './SolicitudBuzon'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
-import { puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
+import { motivoAgregarMaterialesAlmacen, puedeEditarSolicitudFormAlmacen, puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
 import { resumenAccionBloque } from './solicitudTramoSeleccion'
 import {
   estadoValidacionItem,
@@ -37,7 +37,7 @@ import {
   ESTADO_SOLICITUD_LABEL,
   almacenFormModalDialogStyle,
   fmtCant,
-  fmtMoney,
+  fmtMoneySolicitud as fmtMoney,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
@@ -145,7 +145,9 @@ export default function SolicitudDetalleModal({
   }, [sol?.titulo, sol?.id])
 
   const items = sol?.items || []
-  const editable = Boolean(permisos?.editar && solicitudAlmacenEditable(sol))
+  const puedeEscribir = puedeEditarSolicitudFormAlmacen(permisos)
+  const editable = Boolean(puedeEscribir && solicitudAlmacenEditable(sol))
+  const motivoAgregar = motivoAgregarMaterialesAlmacen(sol, permisos)
   const puedeEditarTitulo = solicitudTituloEditable(permisos)
   const puedeValidar = solicitudPuedeValidar(sol, permisos)
   const puedeGenerarOc = Boolean(permisos?.puedeGenerarOc) && puedeValidar
@@ -841,6 +843,14 @@ export default function SolicitudDetalleModal({
                   <button type="button" style={ui.btnPrimary} disabled={busy} onClick={() => onEdit?.(sol)}>
                     ✏️ Editar / agregar materiales
                   </button>
+                )}
+                {!editable && motivoAgregar && (
+                  <p
+                    data-testid="motivo-agregar-materiales"
+                    style={{ margin: 0, flexBasis: '100%', fontSize: 'var(--cc-sm)', color: ui.textMuted }}
+                  >
+                    {motivoAgregar}
+                  </p>
                 )}
                 {puedeReabrir && (
                   <button

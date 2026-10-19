@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlmacenHelpIcon, fmtCant, fmtMoney, labelCobroMotivo, useAlmacenTheme } from './almacenShared'
+import { AlmacenHelpIcon, fmtCant, fmtMoneySolicitud as fmtMoney, labelCobroMotivo, useAlmacenTheme } from './almacenShared'
 
 function fmtPct(n) {
   if (n == null || Number.isNaN(Number(n))) return '—'

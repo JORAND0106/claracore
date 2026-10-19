@@ -22,11 +22,13 @@ def _esc(val) -> str:
 
 
 def _fmt_money(v) -> str:
+    """Pesos con 2 decimales, separador es-CO ($ 1.234,56)."""
     try:
-        n = float(v or 0)
+        n = round(float(v or 0), 2)
     except (TypeError, ValueError):
         return "—"
-    return f"$ {n:,.0f}".replace(",", ".")
+    texto = f"{n:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"$ {texto}"
 
 
 def _fmt_cant(v) -> str:
@@ -144,8 +146,10 @@ def _lineas_y_totales(
         cant = float(it.get("cantidad") or 0)
         vu_total = float(it.get("valor_unitario") or 0)
         vu_base, tax_unit, tax_label = _split_line_tax(vu_total, insumo)
+        line_total = round(cant * vu_total, 2)
         line_sub = round(cant * vu_base, 2)
-        line_tax = round(cant * tax_unit, 2)
+        # El impuesto absorbe el centavo para que base + impuesto = línea con IVA.
+        line_tax = round(line_total - line_sub, 2)
         subtotal += line_sub
         if tax_label:
             impuestos[tax_label] = impuestos.get(tax_label, 0.0) + line_tax
@@ -179,7 +183,8 @@ def _lineas_y_totales(
             f"</tr>"
         )
 
-    total_imp = sum(impuestos.values())
+    total_imp = round(sum(impuestos.values()), 2)
+    subtotal = round(subtotal, 2)
     grand = round(subtotal + total_imp, 2)
     imp_rows = ""
     for label, amt in sorted(impuestos.items()):

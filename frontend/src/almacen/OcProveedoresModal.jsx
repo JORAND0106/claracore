@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
+import { fmtCant, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
 import {
   itemIdsDeGrupos,
   totalProveedoresSeleccionados,

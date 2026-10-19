@@ -4,13 +4,20 @@
  */
 import { nombreProveedorGuardado } from './proveedorLinea.js'
 
+/** Redondeo half-up a 2 decimales. La suma de líneas usa estos valores. */
+export function redondearDinero(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return null
+  return Math.round((x + Number.EPSILON) * 100) / 100
+}
+
 export function valorCompraLinea(item) {
   const directo = Number(item?.valor_compra_linea)
-  if (Number.isFinite(directo) && directo > 0) return directo
+  if (Number.isFinite(directo) && directo > 0) return redondearDinero(directo)
   const cant = Number(item?.cantidad)
   const unit = Number(item?.valor_compra_unitario)
   if (Number.isFinite(cant) && cant > 0 && Number.isFinite(unit) && unit > 0) {
-    return Math.round(cant * unit)
+    return redondearDinero(cant * unit)
   }
   return null
 }
@@ -61,7 +68,7 @@ export function itemsConBorradorProveedor(items, item, draft) {
     const pid = draft?.proveedor?.proveedor_id
     const tienePid = pid != null && pid !== ''
     const valor = Number.isFinite(cantidad) && cantidad > 0 && Number.isFinite(unit) && unit > 0
-      ? Math.round(cantidad * unit)
+      ? redondearDinero(cantidad * unit)
       : null
     return {
       ...it,

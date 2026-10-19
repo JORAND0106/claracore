@@ -5,6 +5,7 @@ import {
   AlmacenHelpIcon,
   almacenFormModalDialogStyle,
   fmtCant,
+  fmtCant2,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
@@ -48,6 +49,7 @@ export default function SolicitudTramoAccordion({
   esPrincipal,
   observacion,
   excludeSolicitudId,
+  insumoId,
   t,
   busy,
   onClose,
@@ -78,7 +80,9 @@ export default function SolicitudTramoAccordion({
     let cancelled = false
     setLoading(true)
     setError('')
-    api.getPresupuestoTramos(capitulo, item, excludeSolicitudId)
+    setPksByTramo({})
+    setRegsByPk({})
+    api.getPresupuestoTramos(capitulo, item, excludeSolicitudId, insumoId || undefined)
       .then((res) => {
         if (!cancelled) setTramos(res?.tramos || [])
       })
@@ -89,13 +93,13 @@ export default function SolicitudTramoAccordion({
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [api, capitulo, item, excludeSolicitudId])
+  }, [api, capitulo, item, excludeSolicitudId, insumoId])
 
   const cargarPks = async (tramo) => {
     const key = claveTramo(tramo)
     if (pksByTramo[key]) return pksByTramo[key]
     setLoadingKey(`t:${key}`)
-    const res = await api.getPresupuestoTramoPks(capitulo, item, tramo, excludeSolicitudId)
+    const res = await api.getPresupuestoTramoPks(capitulo, item, tramo, excludeSolicitudId, insumoId || undefined)
     const pks = res?.pks || []
     setPksByTramo((prev) => ({ ...prev, [key]: pks }))
     setLoadingKey('')
@@ -106,7 +110,7 @@ export default function SolicitudTramoAccordion({
     const key = clavePk(tramo, pkId)
     if (regsByPk[key]) return regsByPk[key]
     setLoadingKey(`p:${key}`)
-    const res = await api.getPresupuestoRegistros(capitulo, item, pkId, excludeSolicitudId)
+    const res = await api.getPresupuestoRegistros(capitulo, item, pkId, excludeSolicitudId, insumoId || undefined)
     const regs = (res?.registros || []).map((r) => ({ ...r, tramo: claveTramo(tramo), pk_id: pkId }))
     setRegsByPk((prev) => ({ ...prev, [key]: regs }))
     setLoadingKey('')
@@ -284,8 +288,8 @@ export default function SolicitudTramoAccordion({
       setError('Indique una cantidad mayor a cero.')
       return
     }
-    if (cant - disponible > 0.0001) {
-      setError('La cantidad no puede superar el saldo disponible de lo seleccionado. Puede reducirla.')
+    if (cant - disponible > 0.0001 && String(obsLocal || '').trim().length < 15) {
+      setError('La cantidad supera el saldo disponible. Escriba la justificación (mínimo 15 caracteres) en Observación para poder generarla.')
       return
     }
     const material = String(descLocal || '').trim()
@@ -299,7 +303,7 @@ export default function SolicitudTramoAccordion({
       const grupos = []
       for (const t of seleccion.tramos) {
         const det = await api.getPresupuestoTramoDetalle(
-          capitulo, item, t.tramo, excludeSolicitudId,
+          capitulo, item, t.tramo, excludeSolicitudId, insumoId || undefined,
         )
         for (const pk of det?.pks || []) {
           grupos.push({
@@ -490,7 +494,12 @@ export default function SolicitudTramoAccordion({
                           fontWeight: 700,
                         }}
                         >
-                          {fmtCant(trow.saldo_disponible)}
+                          {trow.conversion_banco_suelto ? fmtCant2(trow.saldo_disponible) : fmtCant(trow.saldo_disponible)}
+                          {trow.conversion_banco_suelto && trow.texto_conversion ? (
+                            <div style={{ fontWeight: 500, fontSize: 10, whiteSpace: 'normal', maxWidth: 240, color: ui.textMuted }}>
+                              {trow.texto_conversion}
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                       {abierto && loadingKey === `t:${tKey}` && (
@@ -532,7 +541,9 @@ export default function SolicitudTramoAccordion({
                               </td>
                               <td style={tdNum}>{fmtCant(pk.cant_total)}</td>
                               <td style={tdNum}>{fmtCant(pk.cant_solicitada_acumulada)}</td>
-                              <td style={tdNum}>{fmtCant(pk.saldo_disponible)}</td>
+                              <td style={tdNum} title={pk.texto_conversion || ''}>
+                                {pk.conversion_banco_suelto ? fmtCant2(pk.saldo_disponible) : fmtCant(pk.saldo_disponible)}
+                              </td>
                             </tr>
                             {pkAbierto && loadingKey === `p:${pKey}` && (
                               <tr key={`pload-${pKey}`}>
@@ -562,7 +573,9 @@ export default function SolicitudTramoAccordion({
                                   </td>
                                   <td style={tdNum}>{fmtCant(r.cant_total)}</td>
                                   <td style={tdNum}>{fmtCant(r.cant_solicitada_acumulada)}</td>
-                                  <td style={tdNum}>{fmtCant(r.saldo_disponible)}</td>
+                                  <td style={tdNum} title={r.texto_conversion || ''}>
+                                    {r.conversion_banco_suelto ? fmtCant2(r.saldo_disponible) : fmtCant(r.saldo_disponible)}
+                                  </td>
                                 </tr>
                               )
                             })}
@@ -632,7 +645,7 @@ export default function SolicitudTramoAccordion({
         >
           <div style={{ fontSize: 'var(--cc-sm)' }}>
             Disponible seleccionado:{' '}
-            <strong>{fmtCant(disponible)}</strong>
+            <strong>{tramos.some((t) => t.conversion_banco_suelto) ? fmtCant2(disponible) : fmtCant(disponible)}</strong>
           </div>
           <label style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
             Cantidad a pedir
@@ -640,7 +653,6 @@ export default function SolicitudTramoAccordion({
               style={{ ...ui.input, marginTop: 4, width: 140, textAlign: 'right' }}
               type="number"
               min="0"
-              max={disponible || undefined}
               step="any"
               value={cantidad}
               disabled={ocupado || !(disponible > 0)}
@@ -661,7 +673,13 @@ export default function SolicitudTramoAccordion({
         </div>
         <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           Si pide menos que el total, el consumo se reparte entre los PK-ID y sus registros según el saldo de cada uno.
+          Si pide más que el saldo, escriba la justificación en Observación (mínimo 15 caracteres).
           El mapa sigue disponible como camino alterno.
+          {tramos.some((t) => t.conversion_pendiente) && !insumoId ? (
+            <div style={{ marginTop: 6 }}>
+              Saldo sin conversión de banco a suelto: la línea aún no tiene insumo asignado. Se ajustará cuando se asigne el insumo.
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

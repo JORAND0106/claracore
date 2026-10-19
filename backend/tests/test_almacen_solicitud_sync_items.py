@@ -93,7 +93,11 @@ def test_sync_solicitud_items_update_insert_delete():
 
 
 def test_sync_preserves_estado_validacion_on_update():
-    store = {"items": [{"id": 5, "estado_validacion": "aprobado"}]}
+    """Una línea pendiente conserva su estado. Una aprobada no se reescribe."""
+    store = {"items": [
+        {"id": 5, "numero_linea": 1, "estado_validacion": "pendiente"},
+        {"id": 6, "numero_linea": 2, "estado_validacion": "aprobado"},
+    ]}
     ops = {"update": []}
 
     class _Resp:
@@ -142,13 +146,23 @@ def test_sync_preserves_estado_validacion_on_update():
         def table(self, _name):
             return _Q()
 
-    items = [{
-        "id": 5, "cantidad": 3, "descripcion_solicitada": "Cemento",
-        "presupuesto_id": 1, "pk_id": "B", "material_descripcion": "Cemento",
-        "unidad": "KG", "es_principal": True,
-    }]
+    items = [
+        {
+            "id": 5, "cantidad": 3, "descripcion_solicitada": "Cemento",
+            "presupuesto_id": 1, "pk_id": "B", "material_descripcion": "Cemento",
+            "unidad": "KG", "es_principal": True,
+        },
+        {
+            "id": 6, "cantidad": 9, "descripcion_solicitada": "Arena",
+            "presupuesto_id": 1, "pk_id": "B", "material_descripcion": "Arena",
+            "unidad": "M3", "es_principal": True,
+        },
+    ]
     svc._sync_solicitud_items(_Sb(), 1, "enviada", items)
-    assert ops["update"][0]["estado_validacion"] == "aprobado"
+    assert len(ops["update"]) == 1
+    assert ops["update"][0]["id"] == 5
+    assert ops["update"][0]["estado_validacion"] == "pendiente"
+    assert ops["update"][0]["numero_linea"] == 1
 
 
 def test_sync_inserta_linea_nueva_si_conserva_las_persistidas():

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlmacenFieldLabel, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { AlmacenFieldLabel, fmtMoneySolicitud as fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 const IMPUESTO_PRESETS = [
   { nombre: 'IVA', tipo: 'porcentaje', valor: 19 },

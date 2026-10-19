@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlmacenFieldLabel, fmtCant, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { AlmacenFieldLabel, fmtCant, fmtCant2, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 import { normalizePresupuestoIds, totalSaldoRegistros } from './presupuestoReparto'
 
 export default function PresupuestoRegistroGrid({
@@ -9,6 +9,7 @@ export default function PresupuestoRegistroGrid({
   presupuestoId,
   presupuestoIds,
   excludeSolicitudId,
+  insumoId,
   disabled,
   onToggle,
   onSelect,
@@ -33,7 +34,7 @@ export default function PresupuestoRegistroGrid({
     let cancelled = false
     setLoading(true)
     setError('')
-    api.getPresupuestoRegistros(capitulo, item, pkId, excludeSolicitudId)
+    api.getPresupuestoRegistros(capitulo, item, pkId, excludeSolicitudId, insumoId || undefined)
       .then((res) => {
         if (!cancelled) setData(res)
       })
@@ -47,7 +48,7 @@ export default function PresupuestoRegistroGrid({
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [api, capitulo, item, pkId, excludeSolicitudId])
+  }, [api, capitulo, item, pkId, excludeSolicitudId, insumoId])
 
   useEffect(() => {
     if (!data?.registros?.length || selectedIds.length || disabled) return
@@ -137,6 +138,11 @@ export default function PresupuestoRegistroGrid({
           {unidad ? ` ${unidad}` : ''}
         </div>
       )}
+      {data?.texto_conversion ? (
+        <div data-testid="texto-conversion-banco" style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 6 }}>
+          {data.texto_conversion}
+        </div>
+      ) : null}
       {selectedRegs.length > 0 && (
         <div style={{
           fontSize: 'var(--cc-caption)',
@@ -195,12 +201,14 @@ export default function PresupuestoRegistroGrid({
                   <td style={td}>{nodo}</td>
                   <td style={tdNum}>{fmtCant(r.cant_total)} {r.unidad || ''}</td>
                   <td style={tdNum}>{fmtCant(r.cant_solicitada_acumulada)}</td>
-                  <td style={{
+                  <td
+                    title={r.texto_conversion || ''}
+                    style={{
                     ...tdNum,
                     color: (r.saldo_disponible ?? 0) < 0 ? 'var(--cc-color-danger)' : 'var(--cc-color-positive)',
                   }}
                   >
-                    {fmtCant(r.saldo_disponible)}
+                    {r.conversion_banco_suelto ? fmtCant2(r.saldo_disponible) : fmtCant(r.saldo_disponible)}
                   </td>
                 </tr>
               )

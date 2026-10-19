@@ -131,52 +131,57 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         headers: authHeaders(),
       }).then(parseJsonList),
 
-    getPresupuestoRegistros: (capitulo, item, pkId, excludeSolicitudId) => {
+    getPresupuestoRegistros: (capitulo, item, pkId, excludeSolicitudId, insumoId) => {
       const params = new URLSearchParams({
         capitulo,
         item,
         pk_id: pkId,
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      if (insumoId) params.set('insumo_id', String(insumoId))
       return fetch(`${base}/presupuesto-registros?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
-    getPresupuestoTramos: (capitulo, item, excludeSolicitudId) => {
+    getPresupuestoTramos: (capitulo, item, excludeSolicitudId, insumoId) => {
       const params = new URLSearchParams({
         capitulo: capitulo || '',
         item: item || '',
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      if (insumoId) params.set('insumo_id', String(insumoId))
       return fetch(`${base}/presupuesto-tramos?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
-    getPresupuestoTramoPks: (capitulo, item, tramo, excludeSolicitudId) => {
+    getPresupuestoTramoPks: (capitulo, item, tramo, excludeSolicitudId, insumoId) => {
       const params = new URLSearchParams({
         capitulo: capitulo || '',
         item: item || '',
         tramo: tramo == null ? '' : String(tramo),
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      if (insumoId) params.set('insumo_id', String(insumoId))
       return fetch(`${base}/presupuesto-tramo-pks?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
-    getPresupuestoTramoDetalle: (capitulo, item, tramo, excludeSolicitudId) => {
+    getPresupuestoTramoDetalle: (capitulo, item, tramo, excludeSolicitudId, insumoId) => {
       const params = new URLSearchParams({
         capitulo: capitulo || '',
         item: item || '',
         tramo: tramo == null ? '' : String(tramo),
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      if (insumoId) params.set('insumo_id', String(insumoId))
       return fetch(`${base}/presupuesto-tramo-detalle?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 
-    getPresupuestoContext: (presupuestoId, pkId, cantidad, excludeSolicitudId) => {
+    getPresupuestoContext: (presupuestoId, pkId, cantidad, excludeSolicitudId, insumoId) => {
       const params = new URLSearchParams({
         presupuesto_id: String(presupuestoId),
         pk_id: pkId,
         cantidad: String(cantidad || 0),
       })
       if (excludeSolicitudId) params.set('exclude_solicitud_id', String(excludeSolicitudId))
+      if (insumoId) params.set('insumo_id', String(insumoId))
       return fetch(`${base}/presupuesto-context?${params}`, { headers: authHeaders() }).then(parseJson)
     },
 

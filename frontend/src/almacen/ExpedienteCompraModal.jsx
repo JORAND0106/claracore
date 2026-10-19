@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
-import { fmtCant, fmtFechaAlmacen, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { fmtCant, fmtFechaAlmacen, fmtFechaAlmacenSolo, fmtMoneySolicitud as fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
 
 export default function ExpedienteCompraModal({

@@ -10,7 +10,7 @@ import {
   saldoPresupuestadoItem,
 } from './solicitudDetalleHelpers'
 import { almacenContraste } from './almacenContraste'
-import { AlmacenHelpIcon, fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
+import { AlmacenHelpIcon, fmtCant, fmtCant2, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
 
 const ESTADO_COLOR = {
   pendiente: '#d97706',
@@ -467,16 +467,25 @@ function SaldosContenido({ item }) {
   const neg = saldoNegociadoItem(item)
   const ppto = saldoPresupuestadoItem(item)
   const und = item.unidad || item.contexto_presupuesto?.unidad || ''
-  const fila = (label, valor) => (
+  const ctx = item.contexto_presupuesto || item.preview?.contexto_presupuesto
+  const convertido = Boolean(ctx?.conversion_banco_suelto)
+  const fila = (label, valor, decimales) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 0', borderBottom: `1px solid ${ui.textMuted}22` }}>
       <span>{label}</span>
-      <strong>{valor == null ? '—' : `${fmtCant(valor)}${und ? ` ${und}` : ''}`}</strong>
+      <strong>
+        {valor == null ? '—' : `${decimales ? fmtCant2(valor) : fmtCant(valor)}${und ? ` ${und}` : ''}`}
+      </strong>
     </div>
   )
   return (
     <div data-testid="linea-panel-saldos" style={{ fontSize: 'var(--cc-sm)' }}>
-      {fila('Saldo negociado', neg)}
-      {fila('Saldo de presupuesto', ppto)}
+      {fila('Saldo negociado', neg, false)}
+      {fila('Saldo de presupuesto', ppto, convertido)}
+      {ctx?.texto_conversion ? (
+        <p data-testid="texto-conversion-banco" style={{ margin: '8px 0 0', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+          {ctx.texto_conversion}
+        </p>
+      ) : null}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { ESTADO_SOLICITUD_LABEL, fmtMoney, useAlmacenTheme } from './almacenShared'
+import { ESTADO_SOLICITUD_LABEL, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
 
 /**
  * Vista previa de Agrupar. No escribe hasta confirmar.

@@ -1937,12 +1937,43 @@ def list_presupuesto_rows_combo(
     return sorted(matched, key=lambda r: (_natural_sort_key(r.get("abs_inicio")), int(r.get("id") or 0)))
 
 
+def _rendimiento_insumo(contrato_id: int, insumo_id: Optional[int]):
+    """(rendimiento, tiene_insumo). Sin id no hay conversión todavía."""
+    if not insumo_id:
+        return None, False
+    sb = _sb()
+    try:
+        rows = (
+            sb.table("almacen_insumo")
+            .select("id, rendimiento")
+            .eq("contrato_id", int(contrato_id))
+            .eq("id", int(insumo_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return None, True
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        return None, True
+    return rows[0].get("rendimiento"), True
+
+
+def _convertir_nodos_presupuesto(nodos, contrato_id: int, insumo_id: Optional[int]):
+    from almacen_banco_suelto import aplicar_conversion_resumen
+
+    rendimiento, tiene = _rendimiento_insumo(contrato_id, insumo_id)
+    return aplicar_conversion_resumen(nodos, rendimiento, tiene_insumo=tiene)
+
+
 def list_presupuesto_registros(
     contrato_id: int,
     capitulo: str,
     item_numero: str,
     pk_id: str,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
 ) -> dict:
     """Registros de presupuesto para un PK + capítulo + ítem, con acumulado por fila."""
     sb = _sb()
@@ -1971,10 +2002,15 @@ def list_presupuesto_registros(
             "abscisa_inicial": ubic.get("abscisa_inicial"),
             "abscisa_final": ubic.get("abscisa_final"),
         })
+    registros = _convertir_nodos_presupuesto(registros, contrato_id, insumo_id)
+    nota = next((r.get("texto_conversion") for r in registros if r.get("texto_conversion")), "")
     return {
         "registros": registros,
         "cant_presupuestada_combo": combo_total,
         "registros_count": len(registros),
+        "texto_conversion": nota,
+        "conversion_pendiente": any(r.get("conversion_pendiente") for r in registros),
+        "conversion_banco_suelto": any(r.get("conversion_banco_suelto") for r in registros),
     }
 
 
@@ -2030,6 +2066,7 @@ def list_presupuesto_tramos(
     capitulo: str,
     item_numero: str,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
 ) -> dict:
     """Primer nivel del acordeón: cantidades agregadas por tramo."""
     from almacen_presupuesto_arbol import resumir_tramos
@@ -2037,7 +2074,8 @@ def list_presupuesto_tramos(
     sb = _sb()
     rows = _presupuesto_rows_de_item(contrato_id, capitulo, item_numero)
     acum = _acum_presupuesto_rows(sb, contrato_id, rows, exclude_solicitud_id)
-    return {"tramos": resumir_tramos(rows, acum)}
+    tramos = _convertir_nodos_presupuesto(resumir_tramos(rows, acum), contrato_id, insumo_id)
+    return {"tramos": tramos}
 
 
 def list_presupuesto_pks(
@@ -2046,6 +2084,7 @@ def list_presupuesto_pks(
     item_numero: str,
     tramo: str,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
 ) -> dict:
     """Segundo nivel: PK-ID de un tramo, sin traer todavía sus registros."""
     from almacen_presupuesto_arbol import resumir_pks
@@ -2055,7 +2094,10 @@ def list_presupuesto_pks(
         contrato_id, capitulo, item_numero, tramo, filtrar_tramo=True,
     )
     acum = _acum_presupuesto_rows(sb, contrato_id, rows, exclude_solicitud_id)
-    return {"pks": resumir_pks(rows, acum, con_registros=False)}
+    pks = _convertir_nodos_presupuesto(
+        resumir_pks(rows, acum, con_registros=False), contrato_id, insumo_id,
+    )
+    return {"pks": pks}
 
 
 def list_presupuesto_tramo_detalle(
@@ -2064,6 +2106,7 @@ def list_presupuesto_tramo_detalle(
     item_numero: str,
     tramo: str,
     exclude_solicitud_id: Optional[int] = None,
+    insumo_id: Optional[int] = None,
 ) -> dict:
     """PK-ID y registros de un tramo, para partir la selección en líneas al confirmar."""
     from almacen_presupuesto_arbol import resumir_pks
@@ -2079,7 +2122,10 @@ def list_presupuesto_tramo_detalle(
         r["nodo_inicio"] = ubic.get("nodo_inicio")
         r["nodo_final"] = ubic.get("nodo_final")
     acum = _acum_presupuesto_rows(sb, contrato_id, rows, exclude_solicitud_id)
-    return {"pks": resumir_pks(rows, acum, con_registros=True)}
+    pks = _convertir_nodos_presupuesto(
+        resumir_pks(rows, acum, con_registros=True), contrato_id, insumo_id,
+    )
+    return {"pks": pks}
 
 
 def resolve_presupuesto_row(
@@ -2552,6 +2598,50 @@ def apply_saldo_flags_batch(
                 it["cobro_motivo"] = None
                 it["_cobro_sanado"] = True
 
+    from almacen_banco_suelto import evaluar_conversion
+
+    rend_map: Dict[int, object] = {}
+    insumo_ids_conv = []
+    for it in items:
+        if not it.get("insumo_id"):
+            continue
+        try:
+            insumo_ids_conv.append(int(it["insumo_id"]))
+        except (TypeError, ValueError):
+            continue
+    if insumo_ids_conv:
+        try:
+            rend_rows = (
+                sb.table("almacen_insumo")
+                .select("id, rendimiento")
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", sorted(set(insumo_ids_conv)))
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            rend_rows = []
+        if isinstance(rend_rows, list):
+            for r in rend_rows:
+                if isinstance(r, dict) and r.get("id") is not None:
+                    rend_map[int(r["id"])] = r.get("rendimiento")
+
+    def _meta_banco(it, presupuestada_banco: float) -> dict:
+        tiene = bool(it.get("insumo_id"))
+        rend = None
+        if tiene:
+            try:
+                rend = rend_map.get(int(it.get("insumo_id")))
+            except (TypeError, ValueError):
+                rend = None
+        return evaluar_conversion(
+            presupuestada_banco,
+            rend,
+            it.get("unidad") or "",
+            tiene_insumo=tiene,
+        )
+
     for it in items:
         pids = it.get("presupuesto_ids") or (
             [it["presupuesto_id"]] if it.get("presupuesto_id") else []
@@ -2575,6 +2665,8 @@ def apply_saldo_flags_batch(
             presupuestada = _to_float(it.get("cant_presupuestada"))
             acum = acum_map.get((key[0], pk_norm), 0.0)
             batch_total = batch_qty.get(key, 0.0)
+        meta_banco = _meta_banco(it, presupuestada)
+        techo = meta_banco["cant_disponible_suelto"]
         # Asociados no descuentan ni generan alerta de sobrepresupuesto.
         if not _item_es_principal(it):
             it["supera_presupuesto"] = False
@@ -2586,9 +2678,15 @@ def apply_saldo_flags_batch(
                 "cant_solicitada_acumulada": acum,
                 "cantidad_solicitada": cant,
                 "cantidad_borrador_adicional": 0,
-                "saldo_disponible_despues": presupuestada - acum - (
+                "saldo_disponible_despues": techo - acum - (
                     batch_total if descontar_linea_actual else 0
                 ),
+                "cant_presupuestada_banco": meta_banco["cant_presupuestada_banco"],
+                "cant_disponible_suelto": techo,
+                "rendimiento": meta_banco["rendimiento"],
+                "conversion_banco_suelto": meta_banco["conversion_banco_suelto"],
+                "conversion_pendiente": meta_banco["conversion_pendiente"],
+                "texto_conversion": meta_banco["texto_conversion"],
                 "vlr_unitario_cobro": it.get("vlr_unitario_cobro") or 0,
                 "supera_presupuesto": False,
                 "es_principal": False,
@@ -2599,9 +2697,9 @@ def apply_saldo_flags_batch(
             continue
         extra = batch_total - cant
         if descontar_linea_actual:
-            saldo = presupuestada - acum - cant - extra
+            saldo = techo - acum - cant - extra
         else:
-            saldo = presupuestada - acum
+            saldo = techo - acum
         it["supera_presupuesto"] = saldo < -0.0001
         it["contexto_presupuesto"] = {
             "presupuesto_id": pids[0],
@@ -2614,6 +2712,12 @@ def apply_saldo_flags_batch(
             "cantidad_solicitada": cant,
             "cantidad_borrador_adicional": extra if descontar_linea_actual else 0,
             "saldo_disponible_despues": saldo,
+            "cant_presupuestada_banco": meta_banco["cant_presupuestada_banco"],
+            "cant_disponible_suelto": techo,
+            "rendimiento": meta_banco["rendimiento"],
+            "conversion_banco_suelto": meta_banco["conversion_banco_suelto"],
+            "conversion_pendiente": meta_banco["conversion_pendiente"],
+            "texto_conversion": meta_banco["texto_conversion"],
             "vlr_unitario_cobro": it.get("vlr_unitario_cobro") or 0,
             "supera_presupuesto": it["supera_presupuesto"],
             "es_principal": True,
@@ -2697,6 +2801,9 @@ def get_presupuesto_context(
     descontar_linea_actual: bool = False,
     capitulo_listado: Optional[str] = None,
     item_listado: Optional[str] = None,
+    insumo_id: Optional[int] = None,
+    rendimiento=None,
+    rendimiento_conocido: bool = False,
 ) -> dict:
     """Contexto presupuestal por ítem + PK-ID.
 
@@ -2725,10 +2832,22 @@ def get_presupuesto_context(
     acum = _cantidad_solicitada_acumulada(sb, contrato_id, presupuesto_id, pk_id, exclude_solicitud_id)
     cant = _to_float(cantidad_solicitada)
     extra = _to_float(cantidad_extra_borrador)
+    from almacen_banco_suelto import evaluar_conversion
+
+    if insumo_id and not rendimiento_conocido:
+        rendimiento, _tiene = _rendimiento_insumo(contrato_id, insumo_id)
+        rendimiento_conocido = True
+    meta_banco = evaluar_conversion(
+        presupuestada,
+        rendimiento,
+        row.get("und") or "",
+        tiene_insumo=bool(insumo_id) or rendimiento_conocido,
+    )
+    techo = meta_banco["cant_disponible_suelto"]
     if descontar_linea_actual:
-        saldo_despues = presupuestada - acum - cant - extra
+        saldo_despues = techo - acum - cant - extra
     else:
-        saldo_despues = presupuestada - acum
+        saldo_despues = techo - acum
     combo_rows = list_presupuesto_rows_combo(
         contrato_id,
         str(row.get("capitulo") or ""),
@@ -2756,6 +2875,12 @@ def get_presupuesto_context(
         "descripcion": row.get("descripcion"),
         "unidad": row.get("und"),
         "cant_presupuestada": presupuestada,
+        "cant_presupuestada_banco": meta_banco["cant_presupuestada_banco"],
+        "cant_disponible_suelto": techo,
+        "rendimiento": meta_banco["rendimiento"],
+        "conversion_banco_suelto": meta_banco["conversion_banco_suelto"],
+        "conversion_pendiente": meta_banco["conversion_pendiente"],
+        "texto_conversion": meta_banco["texto_conversion"],
         "cant_presupuestada_combo": combo_total,
         "registros_combo_count": len(combo_rows),
         "cant_solicitada_acumulada": acum,
@@ -2902,6 +3027,9 @@ def resolve_insumo_for_solicitud(
             descontar_linea_actual=True,
             capitulo_listado=capitulo_ppto,
             item_listado=item_ppto,
+            insumo_id=int(insumo_id) if insumo_id else None,
+            rendimiento=insumo.get("rendimiento"),
+            rendimiento_conocido=True,
         )
         ctx_neg = get_contexto_negociado_insumo(
             contrato_id,
@@ -2952,6 +3080,7 @@ def resolve_insumo_for_solicitud(
             item_ppto or ppto.get("item") or "",
             pk_id,
             exclude_solicitud_id=raw.get("exclude_solicitud_id"),
+            insumo_id=int(insumo_id) if insumo_id else None,
         )
         by_id = {int(r["presupuesto_id"]): r for r in (regs_data.get("registros") or [])}
         selected = []
@@ -2970,15 +3099,29 @@ def resolve_insumo_for_solicitud(
                 for s in shares
                 if _to_float(s.get("cantidad")) > 0
             ]
-            saldo_combo = total_saldo_registros(selected)
+            from almacen_banco_suelto import evaluar_conversion
+
+            meta_combo = evaluar_conversion(
+                cant_presupuestada,
+                insumo.get("rendimiento"),
+                insumo.get("unidad") or ppto.get("und") or "",
+                tiene_insumo=True,
+            )
+            acum_sel = sum(_to_float(r.get("cant_solicitada_acumulada")) for r in selected)
             extra = _to_float(raw.get("cantidad_borrador_adicional"))
-            saldo_despues = saldo_combo - cant - extra
+            saldo_despues = meta_combo["cant_disponible_suelto"] - acum_sel - cant - extra
             supera_presupuesto = saldo_despues < -0.0001
             if ctx is not None:
                 ctx = {
                     **ctx,
                     "presupuesto_ids": pids,
                     "cant_presupuestada": cant_presupuestada,
+                    "cant_presupuestada_banco": meta_combo["cant_presupuestada_banco"],
+                    "cant_disponible_suelto": meta_combo["cant_disponible_suelto"],
+                    "rendimiento": meta_combo["rendimiento"],
+                    "conversion_banco_suelto": meta_combo["conversion_banco_suelto"],
+                    "conversion_pendiente": meta_combo["conversion_pendiente"],
+                    "texto_conversion": meta_combo["texto_conversion"],
                     "cant_presupuestada_combo": cant_presupuestada,
                     "registros_combo_count": len(pids),
                     "saldo_disponible_despues": saldo_despues,

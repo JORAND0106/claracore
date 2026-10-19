@@ -179,7 +179,11 @@ export default function SolicitudFormExcelTable({
                 return (
                 <tr
                   key={it.id ?? `new-${idx}`}
-                  title={locked ? 'Línea ya incluida en la Orden de Compra — no editable' : undefined}
+                  title={locked
+                    ? (it?.en_orden_compra
+                      ? 'Esta línea ya está en una orden de compra y no se modifica. Use + para agregar un material nuevo.'
+                      : 'Esta línea ya está aprobada y no se modifica. Use + para agregar un material nuevo.')
+                    : undefined}
                   style={locked ? { opacity: 0.72, background: `${ui.textMuted}0a` } : undefined}
                 >
                   <PresupuestoItemSelector
@@ -232,7 +236,9 @@ export default function SolicitudFormExcelTable({
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
                       <button
                         type="button"
-                        title={locked ? 'Línea bloqueada (en OC)' : ubicacionResumen(it)}
+                        title={locked
+                          ? 'Línea bloqueada. Use + para agregar un material nuevo.'
+                          : ubicacionResumen(it)}
                         disabled={rowDisabled}
                         onClick={() => setUbicacionFlow({ idx, phase: 'mapa' })}
                         style={{
@@ -321,7 +327,8 @@ export default function SolicitudFormExcelTable({
                   <td style={{ ...tdBase, textAlign: 'center', whiteSpace: 'nowrap' }}>
                     <button
                       type="button"
-                      title="Agregar fila"
+                      data-testid="agregar-fila-solicitud"
+                      title="Agregar material. La línea nueva toma el siguiente número libre y no modifica las líneas aprobadas ni las que ya están en una OC."
                       disabled={busy}
                       onClick={() => onAddRow(idx)}
                       style={iconBtn({ marginRight: 4 })}
@@ -332,7 +339,7 @@ export default function SolicitudFormExcelTable({
                       <button
                         type="button"
                         data-testid="eliminar-fila-solicitud"
-                        title={it?.en_orden_compra || locked
+                        title={it?.en_orden_compra
                           ? 'Esta línea está en una orden de compra'
                           : 'Eliminar fila'}
                         disabled={busy || (!it?.id && items.length <= 1)}
