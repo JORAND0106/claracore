@@ -135,12 +135,16 @@ import { buildCalcAdjuntos } from './esquema3dCalcExport'
 import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
 import { EsquemaDespiecePanel } from './esquemaDespiecePanel'
 import {
-  buildParrillaViews,
-  contourBoundsMetersFromRing,
+  PARRILLA_MSG,
+  buildBarsFromStart,
+  buildParrillaViewsFromBars,
   despieceParrillaBoundsWorld,
   drawDespieceParrillaObject,
+  prepareParrillaQueue,
+  recordLastByUbic,
+  resolveContinueStart,
   serializeParrillaDraw,
-  worldPointToLocalM,
+  worldToMetersPoint,
 } from './esquemaDespieceParrilla.js'
 import { buildDespieceAdjuntos } from './esquemaDespieceExport'
 import { despieceSchedulesIncomplete } from './esquemaDespiece'
@@ -730,10 +734,11 @@ export default function EsquemaEditorModal({
   const [sectionSolevarOpen, setSectionSolevarOpen] = useState(false)
   const [sectionDespieceOpen, setSectionDespieceOpen] = useState(false)
   const [despiecePanelOpen, setDespiecePanelOpen] = useState(false)
-  /** Fase 2: dibujar parrilla (solo iPad/portátil). */
-  const [parrillaPrompt, setParrillaPrompt] = useState(null)
-  const parrillaPromptRef = useRef(null)
-  parrillaPromptRef.current = parrillaPrompt
+  /** Dibujar parrilla: sesión interactiva sin contorno ni recubrimiento (iPad/portátil). */
+  const [parrillaSession, setParrillaSession] = useState(null)
+  const parrillaSessionRef = useRef(null)
+  parrillaSessionRef.current = parrillaSession
+  const commitParrillaPositionAtRef = useRef(null)
   const [despieceSchedules, setDespieceSchedules] = useState([])
   const [activeDespieceId, setActiveDespieceId] = useState(null)
   const despieceSchedulesRef = useRef([])
@@ -1932,7 +1937,7 @@ export default function EsquemaEditorModal({
     }
     const viewId = normalizeViewId(view3dRef.current)
     if (viewId !== 'top' && viewId !== 'bottom') {
-      setToolHint('Solevar: use la vista superior (contornos en planta).')
+      setToolHint('Use la vista superior')
       return
     }
     const selected = [...(selectedIdsRef.current || [])]
@@ -1954,7 +1959,7 @@ export default function EsquemaEditorModal({
       setContextSidebarCollapsed(false)
       setSectionSolevarOpen(true)
       if (isPhoneLayoutRef.current) setPhoneSheetSnap('medium')
-      setToolHint('Solevar: marque Base y Tapa en el panel, indique cotas y confirme.')
+      setToolHint('Marque Base y Tapa')
       return
     }
     if (closed.length === 1 && apexEnt) {
@@ -1978,12 +1983,10 @@ export default function EsquemaEditorModal({
       setContextSidebarCollapsed(false)
       setSectionSolevarOpen(true)
       if (isPhoneLayoutRef.current) setPhoneSheetSnap('medium')
-      setToolHint('Solevar: indique cotas de base y vértice en el panel y confirme.')
+      setToolHint('Indique cotas de base y vértice')
       return
     }
-    setToolHint(
-      'Solevar: seleccione dos contornos cerrados, o un contorno y un nodo (vértice), luego oprima Solevar.',
-    )
+    setToolHint('Seleccione dos contornos u oprima Solevar')
   }, [])
 
   const confirmSolevar3d = useCallback((values, setError) => {
@@ -3815,29 +3818,12 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Ancla opcional de parrilla: toque = inicio de la primera varilla de una posición.
-    const parrillaPick = parrillaPromptRef.current
-    if (parrillaPick?.anchorPosId && pointersRef.current.size < 2) {
+    // Parrilla: toque = punto de inicio de la posición actual.
+    const parrillaSess = parrillaSessionRef.current
+    if (parrillaSess?.phase === 'touch-start' && pointersRef.current.size < 2) {
       const world = posFromEvent(e)
-      const selId = [...(selectedIdsRef.current || [])][0]
-      const ent = objectsRef.current.find((o) => o.id === selId && isClosedDrawableEntity(o))
-      const contour = ent ? closedEntityToContour(ent) : null
-      const boundsM = contour?.ring ? contourBoundsMetersFromRing(contour.ring) : null
-      if (!boundsM) {
-        setParrillaPrompt((p) => (p ? { ...p, error: 'Seleccione primero el contorno cerrado.' } : p))
-      } else {
-        const local = worldPointToLocalM(world, boundsM)
-        setParrillaPrompt((p) => {
-          if (!p) return p
-          return {
-            ...p,
-            error: '',
-            anchorPosId: null,
-            anchorsLocalM: { ...(p.anchorsLocalM || {}), [parrillaPick.anchorPosId]: local },
-          }
-        })
-        setToolHint('Inicio registrado. Puede definir otro o dibujar la parrilla.')
-      }
+      const startM = worldToMetersPoint(world)
+      commitParrillaPositionAtRef.current?.(startM)
       drawing.current = false
       try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
       pointersRef.current.delete(e.pointerId)
@@ -6455,58 +6441,19 @@ export default function EsquemaEditorModal({
   }
 
 
-  const beginDibujarParrilla = useCallback((schedule) => {
-    if (isPhoneLayoutRef.current) {
-      setToolHint('Dibujar parrilla está disponible en iPad y portátil.')
+  const finishParrillaSession = useCallback((session) => {
+    if (!session?.scheduleId) {
+      setParrillaSession(null)
       return
     }
-    if (!schedule?.id) return
-    setDespiecePanelOpen(true)
-    setSectionDespieceOpen(true)
-    setContextSidebarCollapsed(false)
-    setParrillaPrompt({
-      scheduleId: schedule.id,
-      coverM: '0.05',
-      anchorPosId: null,
-      error: '',
-    })
-    setTool('seleccion')
-    setToolHint('Dibujar parrilla: seleccione un contorno cerrado (rectángulo o polígono) e indique el recubrimiento.')
-  }, [])
-
-  const confirmDibujarParrilla = useCallback(() => {
-    const prompt = parrillaPrompt
-    if (!prompt?.scheduleId) return
-    const schedule = (despieceSchedulesRef.current || []).find((s) => s.id === prompt.scheduleId)
+    const schedule = (despieceSchedulesRef.current || []).find((s) => s.id === session.scheduleId)
     if (!schedule) {
-      setParrillaPrompt((p) => (p ? { ...p, error: 'Cuadro no encontrado.' } : p))
+      setParrillaSession(null)
+      setToolHint(PARRILLA_MSG.noPositions)
       return
     }
-    const cover = Number(String(prompt.coverM || '').replace(',', '.'))
-    if (!Number.isFinite(cover) || cover < 0) {
-      setParrillaPrompt((p) => (p ? { ...p, error: 'Indique el recubrimiento en metros (≥ 0).' } : p))
-      return
-    }
-    const selId = [...(selectedIdsRef.current || [])][0] || selectedId
-    const ent = objectsRef.current.find((o) => o.id === selId)
-    if (!ent || !isClosedDrawableEntity(ent)) {
-      setParrillaPrompt((p) => (p ? { ...p, error: 'Seleccione un contorno cerrado en el lienzo.' } : p))
-      return
-    }
-    const contour = closedEntityToContour(ent)
-    if (!contour?.ring?.length) {
-      setParrillaPrompt((p) => (p ? { ...p, error: 'No se pudo leer el contorno.' } : p))
-      return
-    }
-    const boundsM = contourBoundsMetersFromRing(contour.ring)
-    if (!boundsM || boundsM.widthM <= 0 || boundsM.heightM <= 0) {
-      setParrillaPrompt((p) => (p ? { ...p, error: 'Contorno sin área válida.' } : p))
-      return
-    }
-    const anchors = prompt.anchorsLocalM || {}
-    const drawData = buildParrillaViews(schedule, boundsM, cover, anchors)
+    const drawData = buildParrillaViewsFromBars(schedule, session.bars || [], session.skipped || [])
     pushHistory()
-    // Quitar parrillas previas del mismo cuadro
     objectsRef.current = objectsRef.current.filter(
       (o) => !(o.type === 'despieceParrilla' && o.scheduleId === schedule.id),
     )
@@ -6514,14 +6461,12 @@ export default function EsquemaEditorModal({
       id: uid(),
       type: 'despieceParrilla',
       scheduleId: schedule.id,
-      coverM: cover,
-      contourEntityId: ent.id,
-      boundsM,
+      coverM: 0,
+      boundsM: drawData.boundsM,
       drawData: serializeParrillaDraw(drawData),
       color: '#0f766e',
     }
     objectsRef.current = [...objectsRef.current, obj]
-    // Persistir en el cuadro para el PNG
     const nextSchedules = (despieceSchedulesRef.current || []).map((s) => (
       s.id === schedule.id
         ? { ...s, parrillaDraw: serializeParrillaDraw(drawData), updatedAt: new Date().toISOString() }
@@ -6531,11 +6476,133 @@ export default function EsquemaEditorModal({
     despieceSchedulesRef.current = nextSchedules
     selectOne(obj.id)
     setDirty(true)
-    setParrillaPrompt(null)
-    setToolHint('Parrilla dibujada. Si cambia el cuadro, oprima de nuevo «Dibujar parrilla».')
+    setParrillaSession(null)
+    setToolHint(PARRILLA_MSG.done)
     redraw()
     setPanTick((n) => n + 1)
-  }, [parrillaPrompt, selectedId, pushHistory, selectOne, redraw])
+  }, [pushHistory, selectOne, redraw])
+
+  const advanceParrillaAfterBar = useCallback((session, bars, skipped, lastByUbic) => {
+    const nextIdx = (session.queueIndex || 0) + 1
+    if (nextIdx >= (session.queue || []).length) {
+      finishParrillaSession({ ...session, bars, skipped, lastByUbic, queueIndex: nextIdx })
+      return
+    }
+    // Siempre preguntar; si no hay varillas de esa ubicación, Sí cae a toque de inicio.
+    setParrillaSession({
+      ...session,
+      bars,
+      skipped,
+      lastByUbic,
+      queueIndex: nextIdx,
+      phase: 'ask-continue',
+      error: '',
+    })
+    setToolHint(PARRILLA_MSG.askContinue)
+  }, [finishParrillaSession])
+
+  const commitParrillaPositionAt = useCallback((startM) => {
+    const session = parrillaSessionRef.current
+    if (!session || session.phase !== 'touch-start') return
+    const item = session.queue?.[session.queueIndex]
+    if (!item?.pos) return
+    const bar = buildBarsFromStart(item.pos, startM, { colorIndex: item.colorIndex })
+    const bars = [...(session.bars || [])]
+    const skipped = [...(session.skipped || [])]
+    let lastByUbic = session.lastByUbic || {}
+    if (!bar.drawable) {
+      skipped.push({
+        positionId: item.positionId,
+        name: item.pos.name || '',
+        reason: bar.reason || 'Sin espaciamiento',
+      })
+    } else {
+      bars.push(bar)
+      lastByUbic = recordLastByUbic(lastByUbic, bar)
+    }
+    advanceParrillaAfterBar(session, bars, skipped, lastByUbic)
+  }, [advanceParrillaAfterBar])
+  commitParrillaPositionAtRef.current = commitParrillaPositionAt
+
+  const answerParrillaContinue = useCallback((yes) => {
+    const session = parrillaSessionRef.current
+    if (!session || session.phase !== 'ask-continue') return
+    const item = session.queue?.[session.queueIndex]
+    if (!item?.pos) return
+    if (yes) {
+      const start = resolveContinueStart(
+        session.lastByUbic,
+        item.cls.ubicacion,
+        item.cls.spacing,
+      )
+      if (start) {
+        const bar = buildBarsFromStart(item.pos, start, { colorIndex: item.colorIndex })
+        const bars = [...(session.bars || [])]
+        const skipped = [...(session.skipped || [])]
+        let lastByUbic = session.lastByUbic || {}
+        if (!bar.drawable) {
+          skipped.push({
+            positionId: item.positionId,
+            name: item.pos.name || '',
+            reason: bar.reason || 'Sin espaciamiento',
+          })
+        } else {
+          bars.push(bar)
+          lastByUbic = recordLastByUbic(lastByUbic, bar)
+        }
+        advanceParrillaAfterBar(session, bars, skipped, lastByUbic)
+        return
+      }
+    }
+    setParrillaSession({ ...session, phase: 'touch-start', error: '' })
+    setToolHint(PARRILLA_MSG.touchStart)
+  }, [advanceParrillaAfterBar])
+
+  const beginDibujarParrilla = useCallback((schedule) => {
+    if (isPhoneLayoutRef.current) {
+      setToolHint(PARRILLA_MSG.phoneOnly)
+      return
+    }
+    if (!schedule?.id) return
+    const { queue, skipped } = prepareParrillaQueue(schedule)
+    if (!queue.length && !skipped.length) {
+      setToolHint(PARRILLA_MSG.noPositions)
+      return
+    }
+    if (!queue.length) {
+      // Solo omitidas: materializar vistas vacías con notas
+      finishParrillaSession({
+        scheduleId: schedule.id,
+        queue: [],
+        queueIndex: 0,
+        bars: [],
+        skipped,
+        lastByUbic: {},
+        phase: 'done',
+      })
+      return
+    }
+    setDespiecePanelOpen(true)
+    setSectionDespieceOpen(true)
+    setContextSidebarCollapsed(false)
+    setParrillaSession({
+      scheduleId: schedule.id,
+      queue,
+      queueIndex: 0,
+      bars: [],
+      skipped,
+      lastByUbic: {},
+      phase: 'touch-start',
+      error: '',
+    })
+    setTool('seleccion')
+    setToolHint(PARRILLA_MSG.touchStart)
+  }, [finishParrillaSession])
+
+  const cancelParrillaSession = useCallback(() => {
+    setParrillaSession(null)
+    setToolHint('')
+  }, [])
 
   const openPhoneSheet = (snap = 'medium') => {
 
@@ -7341,7 +7408,7 @@ export default function EsquemaEditorModal({
                     setVolumeCalcs([c])
                     setActiveCalcId(c.id)
                   }
-                  setToolHint('Panel de cálculo: agregue sólidos seleccionados, indique suma o descuento.')
+                  setToolHint('Agregue sólidos al cálculo')
                 }}
                 style={iconBtn(t, calcPanelOpen)}
                 data-testid="esquema-calc-panel-btn"
@@ -7364,7 +7431,7 @@ export default function EsquemaEditorModal({
               if (!(despieceSchedulesRef.current || []).length) {
                 // El panel crea el cuadro al oprimir «+ Nuevo cuadro».
               }
-              setToolHint('Cuadro de despiece: cree un cuadro, agregue posiciones y formas de varilla.')
+              setToolHint('Cree un cuadro y agregue posiciones')
             }}
             style={{
               ...iconBtn(t, despiecePanelOpen),
@@ -8972,19 +9039,18 @@ export default function EsquemaEditorModal({
             onConfirm={confirmExtrude3d}
           />
         ) : null}
-        {parrillaPrompt && !isPhoneLayout ? (
+        {parrillaSession && !isPhoneLayout && parrillaSession.phase === 'ask-continue' ? (
           <div
             role="dialog"
             aria-modal="true"
             data-testid="esquema-despiece-parrilla-popup"
             style={{
-              // Flotante: el lienzo sigue recibiendo clics para contorno e inicios.
               position: 'absolute',
               top: 58,
               left: '50%',
               transform: 'translateX(-50%)',
               zIndex: 40,
-              width: 'min(440px, calc(100% - 24px))',
+              width: 'min(360px, calc(100% - 24px))',
               pointerEvents: 'auto',
             }}
           >
@@ -8996,89 +9062,70 @@ export default function EsquemaEditorModal({
                 border: `1px solid ${t.border}`,
                 borderRadius: 12,
                 boxShadow: t.shadow || '0 12px 32px rgba(15,23,42,0.2)',
-                padding: 16,
+                padding: 14,
               }}
             >
-              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 8 }}>
-                Dibujar parrilla
+              <div style={{ fontWeight: 800, fontSize: 15, color: t.text, marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {PARRILLA_MSG.askContinue}
               </div>
-              <div style={{ fontSize: 13, color: t.textMuted || '#64748b', marginBottom: 12, lineHeight: 1.4 }}>
-                Seleccione en el lienzo un contorno cerrado (rectángulo o polígono) donde va el acero.
-                Indique el recubrimiento. Las posiciones sin espaciamiento quedan como «sin distribución».
-                Opcional: elija una posición y toque el punto de inicio de su primera varilla.
-              </div>
-              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
-                Recubrimiento (m)
-                <input
-                  value={parrillaPrompt.coverM}
-                  onChange={(e) => setParrillaPrompt((p) => ({ ...p, coverM: e.target.value, error: '' }))}
-                  inputMode="decimal"
-                  data-testid="despiece-parrilla-cover"
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                    border: `1px solid ${t.border}`,
-                    fontSize: 14,
-                    color: t.text,
-                    background: t.inputBg || '#fff',
-                  }}
-                />
-              </label>
-              {(() => {
-                const sched = (despieceSchedules || []).find((s) => s.id === parrillaPrompt.scheduleId)
-                const positions = sched?.positions || []
-                if (!positions.length) return null
-                return (
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-                      Inicio opcional por posición
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {positions.map((pos) => (
-                        <button
-                          key={pos.id}
-                          type="button"
-                          data-testid={`despiece-parrilla-anchor-${pos.id}`}
-                          onClick={() => {
-                            setParrillaPrompt((p) => ({ ...p, anchorPosId: pos.id, error: '' }))
-                            setToolHint(`Toque en el lienzo el inicio de «${pos.name || 'posición'}».`)
-                          }}
-                          style={{
-                            padding: '5px 8px',
-                            borderRadius: 6,
-                            border: `1px solid ${parrillaPrompt.anchorPosId === pos.id ? (t.primary || '#0f766e') : t.border}`,
-                            background: parrillaPrompt.anchorPosId === pos.id
-                              ? `color-mix(in srgb, ${t.primary || '#0f766e'} 14%, #fff)`
-                              : (t.bgCard || '#fff'),
-                            fontSize: 11,
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            color: t.text,
-                          }}
-                        >
-                          {pos.name || 'Pos'}
-                          {parrillaPrompt.anchorsLocalM?.[pos.id] ? ' ✓' : ''}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })()}
-              {parrillaPrompt.error ? (
-                <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{parrillaPrompt.error}</div>
-              ) : null}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                <button type="button" onClick={() => setParrillaPrompt(null)} style={ghost(t)}>Cancelar</button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button type="button" onClick={cancelParrillaSession} style={ghost(t)}>Cancelar</button>
                 <button
                   type="button"
-                  data-testid="despiece-parrilla-confirm"
-                  onClick={confirmDibujarParrilla}
+                  data-testid="despiece-parrilla-continue-no"
+                  onClick={() => answerParrillaContinue(false)}
+                  style={ghost(t)}
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  data-testid="despiece-parrilla-continue-yes"
+                  onClick={() => answerParrillaContinue(true)}
                   style={primary(t)}
                 >
-                  Dibujar
+                  Sí
                 </button>
               </div>
             </div>
+          </div>
+        ) : null}
+        {parrillaSession && !isPhoneLayout && parrillaSession.phase === 'touch-start' ? (
+          <div
+            role="status"
+            data-testid="esquema-despiece-parrilla-hint"
+            style={{
+              position: 'absolute',
+              top: 58,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 35,
+              pointerEvents: 'none',
+              background: t.bgCard || '#fff',
+              border: `1px solid ${t.border}`,
+              borderRadius: 10,
+              boxShadow: t.shadow || '0 8px 20px rgba(15,23,42,0.12)',
+              padding: '8px 14px',
+              fontWeight: 700,
+              fontSize: 14,
+              color: t.text,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {PARRILLA_MSG.touchStart}
+            <button
+              type="button"
+              onClick={cancelParrillaSession}
+              style={{
+                ...ghost(t),
+                marginLeft: 10,
+                pointerEvents: 'auto',
+                padding: '4px 8px',
+                fontSize: 12,
+              }}
+            >
+              Cancelar
+            </button>
           </div>
         ) : null}
         {draftNotice ? (

@@ -394,8 +394,8 @@ export function Esquema3dSolevarPanel({
     <div data-testid="esquema-solevar-panel" style={{ display: 'grid', gap: 10 }}>
       <div style={{ fontSize: 12, color: ui?.muted || '#64748b', lineHeight: 1.35 }}>
         {mode === 'apex'
-          ? 'Marque la base, indique cotas de base y vértice, y oprima Solevar.'
-          : 'Marque Base y Tapa, indique cotas (la base puede estar arriba o abajo) y oprima Solevar.'}
+          ? 'Marque base, cotas y oprima Solevar'
+          : 'Marque Base y Tapa, cotas y oprima Solevar'}
       </div>
       <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 8 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 280 }}>

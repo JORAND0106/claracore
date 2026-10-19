@@ -65,7 +65,7 @@ export function Esquema3dCalcPanel({
   const openAddPopup = () => {
     const ids = selectedSolidIds || []
     if (!ids.length) {
-      onHint?.('Seleccione uno o más sólidos en el dibujo para agregarlos al cálculo.')
+      onHint?.('Seleccione sólidos')
       return
     }
     const needsName = lastCalcLineNeedsNombre(active)
@@ -91,7 +91,7 @@ export function Esquema3dCalcPanel({
       })
     }
     if (!drafts.length) {
-      onHint?.('Seleccione un sólido cerrado y bien construido.')
+      onHint?.('Seleccione un sólido válido')
       return
     }
     setPopup({ mode: 'add', drafts })
@@ -373,7 +373,7 @@ export function Esquema3dCalcPanel({
             })}
             {!(active.lines || []).length ? (
               <div style={{ fontSize: 12, color: ui?.muted || '#64748b', padding: 10 }}>
-                Seleccione sólidos y pulse «Sólidos seleccionados».
+                Seleccione sólidos y pulse «Sólidos seleccionados»
               </div>
             ) : null}
           </div>
