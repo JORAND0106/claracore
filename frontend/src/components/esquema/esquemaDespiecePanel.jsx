@@ -115,6 +115,7 @@ export function EsquemaDespiecePositionPopup({
   onSave,
   onCreateShapeFromSelection = null,
   selectedPolyline = null,
+  phoneFullscreen = false,
 }) {
   const shapes = useMemo(() => listAllDespieceShapes(contratoId), [contratoId])
   const diamOpts = useMemo(() => despieceDiametroOpciones(), [])
@@ -269,20 +270,24 @@ export function EsquemaDespiecePositionPopup({
     background: 'rgba(15,23,42,0.45)',
     zIndex: 80,
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
+    alignItems: phoneFullscreen ? 'stretch' : 'center',
+    justifyContent: phoneFullscreen ? 'stretch' : 'center',
+    padding: phoneFullscreen ? 0 : 16,
   }
   const card = {
     background: t.bgCard || '#fff',
     color: t.text,
-    borderRadius: 12,
-    border: `1px solid ${t.border}`,
-    width: 'min(920px, 96vw)',
-    maxHeight: '92vh',
-    overflow: 'auto',
-    padding: 16,
-    boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+    borderRadius: phoneFullscreen ? 0 : 12,
+    border: phoneFullscreen ? 'none' : `1px solid ${t.border}`,
+    width: phoneFullscreen ? '100%' : 'min(920px, 96vw)',
+    height: phoneFullscreen ? '100%' : undefined,
+    maxHeight: phoneFullscreen ? '100%' : '92vh',
+    overflow: phoneFullscreen ? 'hidden' : 'auto',
+    padding: phoneFullscreen ? 0 : 16,
+    boxShadow: phoneFullscreen ? 'none' : '0 20px 50px rgba(0,0,0,0.25)',
+    display: phoneFullscreen ? 'flex' : undefined,
+    flexDirection: phoneFullscreen ? 'column' : undefined,
+    boxSizing: 'border-box',
   }
   const input = {
     width: '100%',
@@ -297,14 +302,37 @@ export function EsquemaDespiecePositionPopup({
   const label = { display: 'grid', gap: 4, fontSize: 12, fontWeight: 700 }
 
   return (
-    <div style={overlay} data-testid="esquema-despiece-position-popup" role="dialog" aria-modal="true">
+    <div
+      style={overlay}
+      data-testid="esquema-despiece-position-popup"
+      data-phone-fullscreen={phoneFullscreen ? '1' : '0'}
+      role="dialog"
+      aria-modal="true"
+    >
       <div style={card} onMouseDown={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div style={{ fontSize: 16, fontWeight: 800 }}>{initial ? 'Editar posición' : 'Agregar posición'}</div>
-          <button type="button" onClick={onCancel} style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', color: t.text }}>×</button>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: phoneFullscreen ? 0 : 12,
+          flexShrink: 0,
+          padding: phoneFullscreen ? '12px 16px' : 0,
+          borderBottom: phoneFullscreen ? `1px solid ${t.border}` : undefined,
+        }}
+        >
+          <div style={{ fontSize: phoneFullscreen ? 18 : 16, fontWeight: 800 }}>{initial ? 'Editar posición' : 'Agregar posición'}</div>
+          <button type="button" onClick={onCancel} style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', color: t.text, minWidth: 44, minHeight: 44 }}>×</button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{
+          flex: phoneFullscreen ? 1 : undefined,
+          minHeight: 0,
+          overflow: phoneFullscreen ? 'auto' : undefined,
+          WebkitOverflowScrolling: phoneFullscreen ? 'touch' : undefined,
+          padding: phoneFullscreen ? 16 : 0,
+        }}
+        >
+        <div style={{ display: 'grid', gridTemplateColumns: phoneFullscreen ? '1fr' : '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
           <label style={label}>
             Posición
             <input
@@ -340,7 +368,7 @@ export function EsquemaDespiecePositionPopup({
           </label>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: phoneFullscreen ? '1fr' : '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
           <label style={label}>
             Espaciamiento (opcional)
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -647,15 +675,25 @@ export function EsquemaDespiecePositionPopup({
         </details>
 
         {error ? <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: 12, marginBottom: 8 }}>{error}</div> : null}
+        </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" onClick={onCancel} style={{ padding: '8px 12px', borderRadius: 8, border: `1px solid ${t.border}`, background: 'transparent', fontWeight: 700, cursor: 'pointer' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 8,
+          flexShrink: 0,
+          padding: phoneFullscreen ? '12px 16px' : 0,
+          borderTop: phoneFullscreen ? `1px solid ${t.border}` : undefined,
+          background: phoneFullscreen ? (t.bgHover || '#f8fafc') : undefined,
+        }}
+        >
+          <button type="button" onClick={onCancel} style={{ padding: '8px 12px', borderRadius: 8, border: `1px solid ${t.border}`, background: 'transparent', fontWeight: 700, cursor: 'pointer', minHeight: phoneFullscreen ? 44 : undefined }}>
             Cancelar
           </button>
           <button
             type="button"
             onClick={submit}
-            style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: t.primary || '#0f766e', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+            style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: t.primary || '#0f766e', color: '#fff', fontWeight: 700, cursor: 'pointer', minHeight: phoneFullscreen ? 44 : undefined }}
             data-testid="despiece-pos-save"
           >
             Guardar posición
@@ -678,6 +716,7 @@ export function EsquemaDespiecePanel({
   onChangeSchedules,
   onActiveId,
   selectedPolyline = null,
+  phoneFullscreenPopups = false,
 }) {
   const [popup, setPopup] = useState(null) // null | { scheduleId, position? }
   const active = schedules.find((s) => s.id === activeId) || schedules[0] || null
@@ -915,6 +954,7 @@ export function EsquemaDespiecePanel({
           contratoId={contratoId}
           initial={popup.position}
           selectedPolyline={selectedPolyline}
+          phoneFullscreen={!!phoneFullscreenPopups}
           onCancel={() => setPopup(null)}
           onSave={savePosition}
         />
