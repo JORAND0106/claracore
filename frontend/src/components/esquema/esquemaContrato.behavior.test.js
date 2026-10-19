@@ -88,6 +88,8 @@ describe('contrato · documento', () => {
     assert.match(md, /esquemaMobileLayout/)
     assert.match(md, /C-DES-07/)
     assert.match(md, /esquemaDespieceParrilla/)
+    assert.match(md, /solo rol desarrollador/i)
+    assert.match(md, /esquemaParrillaSoloDev/)
   })
 })
 

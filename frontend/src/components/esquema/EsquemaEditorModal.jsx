@@ -166,6 +166,7 @@ import {
   esquemaDraftSave,
   getEsquemaDraftUserId,
 } from './esquemaDraft'
+import { esEsquemaUsuarioDesarrollador } from './esquemaAuth.js'
 import { EsquemaDraftNoticePopup } from './esquemaDraftUi'
 import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
@@ -746,6 +747,11 @@ export default function EsquemaEditorModal({
   const isPhoneLayout = isEsquemaPhoneViewport(viewport)
   const isPhoneLayoutRef = useRef(isPhoneLayout)
   isPhoneLayoutRef.current = isPhoneLayout
+  /** Dibujar parrilla: solo rol desarrollador (sigue en ajuste). */
+  const esDesarrollador = useMemo(() => esEsquemaUsuarioDesarrollador(), [])
+  const esDesarrolladorRef = useRef(esDesarrollador)
+  esDesarrolladorRef.current = esDesarrollador
+  const allowDibujarParrilla = esDesarrollador && !isPhoneLayout
   const [phoneSheetSnap, setPhoneSheetSnap] = useState('collapsed')
   const toolbarRootRef = useRef(null)
   const modalRootRef = useRef(null)
@@ -6559,6 +6565,7 @@ export default function EsquemaEditorModal({
   }, [advanceParrillaAfterBar])
 
   const beginDibujarParrilla = useCallback((schedule) => {
+    if (!esDesarrolladorRef.current) return
     if (isPhoneLayoutRef.current) {
       setToolHint(PARRILLA_MSG.phoneOnly)
       return
@@ -8043,7 +8050,7 @@ export default function EsquemaEditorModal({
                     t={t}
                     ui={ui}
                     phoneFullscreenPopups={isPhoneLayout}
-                    allowDibujarParrilla={!isPhoneLayout}
+                    allowDibujarParrilla={allowDibujarParrilla}
                     onDibujarParrilla={beginDibujarParrilla}
                     contratoId={contratoId}
                     schedules={despieceSchedules}
@@ -8801,7 +8808,7 @@ export default function EsquemaEditorModal({
                     t={t}
                     ui={ui}
                     phoneFullscreenPopups={isPhoneLayout}
-                    allowDibujarParrilla={!isPhoneLayout}
+                    allowDibujarParrilla={allowDibujarParrilla}
                     onDibujarParrilla={beginDibujarParrilla}
                     contratoId={contratoId}
                     schedules={despieceSchedules}
