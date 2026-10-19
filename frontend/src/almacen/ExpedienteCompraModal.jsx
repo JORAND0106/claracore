@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { fmtCant, fmtFechaAlmacen, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
 
 export default function ExpedienteCompraModal({
   ocId,
@@ -159,10 +160,12 @@ export default function ExpedienteCompraModal({
 
             <section style={{ marginBottom: 16 }} data-testid="oc-envios">
               <div style={{ fontWeight: 600, marginBottom: 8 }}>✉️ Envío al proveedor</div>
-              <div style={{ fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
-                Estado: {oc?.envio_estado === 'enviado'
-                  ? 'enviado'
-                  : (oc?.envio_estado === 'pendiente' ? 'pendiente de envío' : 'sin registro de envío')}
+              <div style={{ fontSize: 'var(--cc-sm)', marginBottom: 8 }} data-testid="oc-envio-estado">
+                Estado: {esDocumentoSistema(oc)
+                  ? ETIQUETA_DOCUMENTO_SISTEMA
+                  : (oc?.envio_estado === 'enviado'
+                    ? 'enviado'
+                    : (oc?.envio_estado === 'pendiente' ? 'pendiente de envío' : 'sin registro de envío'))}
                 {oc?.envio_correo ? ` · ${oc.envio_correo}` : ''}
               </div>
               {(oc?.envios || []).length === 0 ? (
@@ -211,7 +214,7 @@ export default function ExpedienteCompraModal({
                     disabled={busy}
                     onClick={() => { void reenviarCorreo() }}
                   >
-                    {busy ? 'Enviando…' : 'Reintentar envío'}
+                    {busy ? 'Enviando…' : (esDocumentoSistema(oc) ? 'Enviar al proveedor' : 'Reintentar envío')}
                   </button>
                 </div>
               )}

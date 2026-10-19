@@ -5,6 +5,9 @@ import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
 import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
 import OcProveedoresModal from './OcProveedoresModal'
+import OcNotificarProveedorModal from './OcNotificarProveedorModal'
+import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
+import { notificarProveedoresPayload } from './ocNotificarProveedor'
 import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import { estadoProveedoresSolicitud, gruposProveedorPendientes } from './ocProveedoresSeleccion'
@@ -66,6 +69,7 @@ export default function SolicitudDetalleModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [selectorOc, setSelectorOc] = useState(false)
+  const [notificarOc, setNotificarOc] = useState(null)
   const [selIds, setSelIds] = useState(() => new Set())
   const [asignar, setAsignar] = useState(null)
   const [insumoSel, setInsumoSel] = useState(null)
@@ -243,7 +247,19 @@ export default function SolicitudDetalleModal({
     setSelectorOc(true)
   }
 
-  const ejecutarAprobar = async (itemIds) => {
+  const abrirNotificarOc = (itemIds) => {
+    const elegidos = gruposOc.grupos.filter((g) => (
+      g.lineas.some((linea) => itemIds.includes(linea.id))
+    ))
+    if (!elegidos.length) {
+      setError('Seleccione al menos un proveedor.')
+      return
+    }
+    setSelectorOc(false)
+    setNotificarOc({ grupos: elegidos, itemIds })
+  }
+
+  const ejecutarAprobar = async (itemIds, notificarProveedores) => {
     if (!sol) return
     if (!itemIds?.length) {
       setError('Seleccione al menos un proveedor.')
@@ -256,8 +272,10 @@ export default function SolicitudDetalleModal({
       const r = await api.aprobarSolicitud(sol.id, {
         aprobar_todos_pendientes: true,
         item_ids: itemIds,
+        notificar_proveedores: notificarProveedores,
       })
       setSelectorOc(false)
+      setNotificarOc(null)
       onUpdated?.(r)
       const ocs = ordenesDeRespuestaAprobar(r)
       setSol(r)
@@ -637,6 +655,20 @@ export default function SolicitudDetalleModal({
                         : `✓ OC #${solicitudOrdenesCompra(sol)[0]?.numero_oc} generada`}
                     </span>
                   )}
+                  {solicitudOrdenesCompra(sol).filter(esDocumentoSistema).map((oc) => (
+                    <span
+                      key={oc.id}
+                      data-testid="oc-documento-sistema"
+                      style={{
+                        ...estiloAvisoAlmacen(contraste, 'warn', { compact: true }),
+                        padding: '4px 10px',
+                        fontSize: 'var(--cc-xs)',
+                        fontWeight: 700,
+                      }}
+                    >
+                      OC #{oc.numero_oc} · {ETIQUETA_DOCUMENTO_SISTEMA}
+                    </span>
+                  ))}
                   {puedeReabrir && (
                     <button
                       type="button"
@@ -982,7 +1014,22 @@ export default function SolicitudDetalleModal({
           verEconomicos={verEconomicos}
           busy={busy}
           onCancel={() => !busy && setSelectorOc(false)}
-          onConfirm={(ids) => { void ejecutarAprobar(ids) }}
+          onConfirm={(ids) => abrirNotificarOc(ids)}
+        />
+      )}
+
+      {notificarOc && (
+        <OcNotificarProveedorModal
+          proveedores={notificarOc.grupos}
+          busy={busy}
+          error={error}
+          onCancel={() => !busy && setNotificarOc(null)}
+          onConfirm={(respuestas) => {
+            void ejecutarAprobar(
+              notificarOc.itemIds,
+              notificarProveedoresPayload(notificarOc.grupos, respuestas),
+            )
+          }}
         />
       )}
 

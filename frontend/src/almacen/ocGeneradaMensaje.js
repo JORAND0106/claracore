@@ -29,9 +29,19 @@ export function mensajeInicialOc(sol, ocs) {
   return `Se generó ${cuales} de ${solTxt}. Ya está disponible en Almacén.`
 }
 
+export function avisosDocumentoSistemaOc(envios) {
+  return (envios || [])
+    .filter((e) => e && e.resultado === 'sistema')
+    .map((e) => {
+      const n = e.numero_oc != null ? `OC #${e.numero_oc}` : 'La orden de compra'
+      const quien = e.proveedor_nombre ? ` de ${e.proveedor_nombre}` : ''
+      return `${n}${quien} quedó como documento de sistema. No se envió correo al proveedor.`
+    })
+}
+
 export function avisosEnvioOc(envios) {
   return (envios || [])
-    .filter((e) => e && e.resultado !== 'enviado')
+    .filter((e) => e && e.resultado !== 'enviado' && e.resultado !== 'sistema')
     .map((e) => {
       const n = e.numero_oc != null ? `OC #${e.numero_oc}` : 'La orden de compra'
       const detalle = e.detalle || 'No se pudo enviar el correo al proveedor.'

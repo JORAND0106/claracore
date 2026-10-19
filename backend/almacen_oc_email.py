@@ -18,6 +18,79 @@ _log = logging.getLogger("claracore.almacen.oc_email")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def resolver_notificar_proveedores(raw, grupos: List[dict]) -> Dict[str, bool]:
+    """Cada grupo que va a generar OC necesita un Sí o un No explícito.
+
+    No hay respuesta por defecto. Si falta alguna, no se debe generar nada.
+    """
+    if not grupos:
+        return {}
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(
+            "Indique si desea notificar al comercial de cada proveedor antes de generar la orden de compra."
+        )
+    por_id: Dict[int, bool] = {}
+    por_nombre: Dict[str, bool] = {}
+    for row in raw:
+        if not isinstance(row, dict) or not isinstance(row.get("notificar"), bool):
+            raise ValueError(
+                "Responda Sí o No para cada proveedor antes de generar la orden de compra."
+            )
+        pid = row.get("proveedor_id")
+        if pid not in (None, ""):
+            try:
+                por_id[int(pid)] = row["notificar"]
+            except (TypeError, ValueError):
+                pass
+        nom = str(row.get("proveedor_nombre") or "").strip().casefold()
+        if nom:
+            por_nombre[nom] = row["notificar"]
+    out: Dict[str, bool] = {}
+    faltan: List[str] = []
+    for g in grupos:
+        key = str(g.get("key") or "")
+        pid = g.get("proveedor_id")
+        nom = str(g.get("proveedor_nombre") or "").strip().casefold()
+        if pid not in (None, "") :
+            try:
+                if int(pid) in por_id:
+                    out[key] = por_id[int(pid)]
+                    continue
+            except (TypeError, ValueError):
+                pass
+        if nom and nom in por_nombre:
+            out[key] = por_nombre[nom]
+            continue
+        faltan.append(str(g.get("proveedor_nombre") or "Proveedor"))
+    if faltan:
+        raise ValueError(
+            "Falta responder si se notifica al comercial de: " + ", ".join(faltan) + "."
+        )
+    return out
+
+
+def notificar_para_grupo(raw, *, proveedor_id, proveedor_nombre: str) -> bool:
+    """Resuelve Sí/No de un proveedor. La firma de la OC se valida antes de llamar esto."""
+    pid = proveedor_id
+    try:
+        pid_i = int(pid) if pid not in (None, "") else None
+    except (TypeError, ValueError):
+        pid_i = None
+    nom = str(proveedor_nombre or "").strip()
+    if pid_i:
+        key = f"id:{pid_i}"
+    elif nom.casefold() == "compra recurrente":
+        key = "recurrente"
+    else:
+        key = f"nombre:{nom.casefold()}"
+    decisiones = resolver_notificar_proveedores(raw, [{
+        "key": key,
+        "proveedor_id": pid_i,
+        "proveedor_nombre": nom or "Proveedor",
+    }])
+    return decisiones[key]
+
+
 def correo_valido(value) -> Optional[str]:
     s = str(value or "").strip()
     if not s or not _EMAIL_RE.match(s):
@@ -173,6 +246,20 @@ def _registrar_envio(sb, *, oc_id, contrato_id, destinatario, user_id, nombre, r
     except Exception as exc:
         if not _ausente(exc):
             _log.warning("No se pudo registrar el envío de la OC %s: %s", oc_id, exc)
+        return False
+
+
+def _quitar_documento_sistema(sb, oc_id: int) -> bool:
+    """Al decidir enviarla, deja de ser documento de sistema aunque el correo falle."""
+    try:
+        sb.table("almacen_orden_compra").update({
+            "documento_sistema": False,
+        }).eq("id", int(oc_id)).execute()
+        return True
+    except Exception as exc:
+        if _ausente(exc) or "documento_sistema" in str(exc).lower():
+            return False
+        _log.warning("No se pudo quitar documento de sistema en la OC %s: %s", oc_id, exc)
         return False
 
 
@@ -386,6 +473,7 @@ def enviar_oc_por_correo(
     from almacen_service import generar_y_guardar_pdf_oc, get_orden_compra, get_solicitud
 
     sb = _sb()
+    _quitar_documento_sistema(sb, oc_id)
     oc = get_orden_compra(int(contrato_id), int(oc_id), incluir_entradas=False)
     sol_id = oc.get("solicitud_id")
     solicitud = get_solicitud(int(contrato_id), int(sol_id), ligera=True) if sol_id else {}
@@ -481,11 +569,51 @@ def enviar_oc_por_correo(
     )
 
 
+def _publicar_pdf_sin_correo(contrato_id: int, oc: dict, user_id: int) -> bool:
+    """Deja el PDF guardado. No llama al correo."""
+    from almacen_service import generar_y_guardar_pdf_oc, get_orden_compra, get_solicitud
+
+    oc_id = int(oc["id"])
+    try:
+        full = get_orden_compra(int(contrato_id), oc_id, incluir_entradas=False)
+        sol_id = full.get("solicitud_id") or oc.get("solicitud_id")
+        solicitud = get_solicitud(int(contrato_id), int(sol_id), ligera=True) if sol_id else {}
+        generar_y_guardar_pdf_oc(int(contrato_id), oc_id, full, solicitud or {}, int(user_id))
+        return True
+    except Exception as exc:
+        _log.warning("PDF de la OC %s (documento de sistema): %s", oc_id, exc)
+        return False
+
+
+def _resumen_sistema(oc: dict, *, pdf_ok: bool) -> dict:
+    detalle = "Documento de sistema. No se envió correo al proveedor."
+    if not pdf_ok:
+        detalle += " El PDF no quedó guardado."
+    return {
+        "orden_compra_id": oc.get("id"),
+        "numero_oc": oc.get("numero_oc"),
+        "proveedor_nombre": oc.get("proveedor_nombre"),
+        "resultado": "sistema",
+        "detalle": detalle,
+        "destinatarios": [],
+        "envio_estado": None,
+        "documento_sistema": True,
+        "persistido": True,
+    }
+
+
 def publicar_envios_oc(contrato_id: int, solicitud_id: int, user_id: int, ocs: List[dict]) -> List[dict]:
-    """Envía el PDF de cada OC recién generada. Un fallo de correo no revierte la orden."""
+    """Envía el PDF de cada OC recién generada. Un fallo de correo no revierte la orden.
+
+    Documento de sistema: se guarda el PDF y no se envía correo.
+    """
     out: List[dict] = []
     for oc in ocs or []:
         if not oc.get("id"):
+            continue
+        if oc.get("documento_sistema"):
+            pdf_ok = _publicar_pdf_sin_correo(int(contrato_id), oc, int(user_id))
+            out.append(_resumen_sistema(oc, pdf_ok=pdf_ok))
             continue
         try:
             out.append(enviar_oc_por_correo(int(contrato_id), int(oc["id"]), int(user_id)))

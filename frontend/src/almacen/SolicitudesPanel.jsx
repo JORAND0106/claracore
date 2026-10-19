@@ -29,6 +29,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
+import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
   partesResaltadas,
@@ -575,12 +576,23 @@ export default function SolicitudesPanel({
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="OC" onClick={(e) => e.stopPropagation()}>
                     {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && permisos?.exportar
                       && solicitudOrdenesCompra(s).length > 0 ? (
-                        <SolicitudOcsPdfButton
-                          solicitudId={s.id}
-                          ordenes={solicitudOrdenesCompra(s)}
-                          compact
-                          puedeExportar
-                        />
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <SolicitudOcsPdfButton
+                            solicitudId={s.id}
+                            ordenes={solicitudOrdenesCompra(s)}
+                            compact
+                            puedeExportar
+                          />
+                          {solicitudOrdenesCompra(s).filter(esDocumentoSistema).map((oc) => (
+                            <span
+                              key={oc.id}
+                              data-testid="oc-documento-sistema"
+                              style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.text }}
+                            >
+                              OC #{oc.numero_oc} · {ETIQUETA_DOCUMENTO_SISTEMA}
+                            </span>
+                          ))}
+                        </span>
                       ) : '—'}
                   </td>
                   <td
