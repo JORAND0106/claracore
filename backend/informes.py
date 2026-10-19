@@ -10285,6 +10285,47 @@ def _fo_eo_04_html_embed_fragment(html: str) -> str:
     return html
 
 
+# Caja única de foto y gráfico. xhtml2pdf ignora max-height: una foto vertical
+# crecía con su alto original y pasaba la memoria a la página siguiente.
+# 130 mm de ancho × 98 mm de alto, igual para las dos, sin depender del archivo.
+_FO_EO04_MEDIA_ANCHO_MM = 130.0
+_FO_EO04_MEDIA_ALTO_MM = 98.0
+
+
+def _fo_eo_04_pt_desde_mm(mm: float) -> float:
+    return round(float(mm) * 72.0 / 25.4, 2)
+
+
+def _fo_eo_04_contain_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
+    """Escala para caber en la caja. Conserva la proporción y puede agrandar."""
+    try:
+        from PIL import Image
+
+        m = re.match(r"data:image/[^;]+;base64,(.+)$", str(uri or ""), re.I | re.S)
+        if not m:
+            return max_w, max_h
+        im = Image.open(io.BytesIO(base64.b64decode(m.group(1))))
+        px_w, px_h = im.size
+        if not px_w or not px_h:
+            return max_w, max_h
+        scale = min(max_w / float(px_w), max_h / float(px_h))
+        return round(px_w * scale, 2), round(px_h * scale, 2)
+    except Exception:
+        return max_w, max_h
+
+
+def _fo_eo_04_caja_media_html(inner: str) -> str:
+    w = _FO_EO04_MEDIA_ANCHO_MM
+    h = _FO_EO04_MEDIA_ALTO_MM
+    return (
+        f'<table cellspacing="0" cellpadding="0" '
+        f'style="width:{w}mm;height:{h}mm;margin:0 auto;border-collapse:collapse;">'
+        f'<tr><td style="width:{w}mm;height:{h}mm;max-height:{h}mm;min-height:{h}mm;'
+        f'text-align:center;vertical-align:middle;overflow:hidden;line-height:0;padding:0;">'
+        f'{inner}</td></tr></table>'
+    )
+
+
 def _fo_eo_04_img_block_html(
     url: Optional[str],
     numero: Optional[int],
@@ -10292,21 +10333,40 @@ def _fo_eo_04_img_block_html(
     *,
     preview_ui: bool,
     empty_label: str,
-    max_height: str = "228px",
     mostrar_rotar: bool = True,
 ) -> str:
+    w_mm = _FO_EO04_MEDIA_ANCHO_MM
+    h_mm = _FO_EO04_MEDIA_ALTO_MM
     if not url or not str(url).strip():
-        return f'<div style="font-size:6pt;color:#94a3b8;padding-top:100px;">{empty_label}</div>'
-    src = html.escape(str(url).strip(), quote=True)
-    # En preview HTML (navegador) cargamos las imágenes en diferido para no saturar
-    # la red con 100+ fotos a la vez; xhtml2pdf ignora estos atributos en el PDF.
-    extra_attr = ' loading="lazy" decoding="async"' if preview_ui else ""
-    img = (
-        f'<img data-cc-img="1" src="{src}" alt=""{extra_attr} '
-        f'style="max-width:98%;max-height:{max_height};display:block;margin:0 auto;object-fit:contain;" />'
-    )
+        inner = f'<div style="font-size:6pt;color:#94a3b8;line-height:1.2;">{empty_label}</div>'
+        return _fo_eo_04_caja_media_html(inner)
+    src_raw = str(url).strip()
+    src = html.escape(src_raw, quote=True)
+    if preview_ui:
+        # El navegador respeta object-fit dentro de la caja. El PDF no.
+        extra_attr = ' loading="lazy" decoding="async"'
+        img = (
+            f'<img data-cc-img="1" src="{src}" alt=""{extra_attr} '
+            f'style="width:{w_mm}mm;height:{h_mm}mm;max-width:{w_mm}mm;max-height:{h_mm}mm;'
+            f'object-fit:contain;display:inline-block;margin:0 auto;" />'
+        )
+    else:
+        w_pt = _fo_eo_04_pt_desde_mm(w_mm)
+        h_pt = _fo_eo_04_pt_desde_mm(h_mm)
+        fw, fh = _fo_eo_04_contain_pt(src_raw, w_pt, h_pt)
+        fw = min(fw, w_pt)
+        fh = min(fh, h_pt)
+        w_px = max(1, int(round(fw * 96.0 / 72.0)))
+        h_px = max(1, int(round(fh * 96.0 / 72.0)))
+        img = (
+            f'<img data-cc-img="1" src="{src}" alt="" '
+            f'width="{w_px}" height="{h_px}" '
+            f'style="width:{fw}pt;height:{fh}pt;max-width:{w_pt}pt;max-height:{h_pt}pt;'
+            f'display:inline-block;margin:0 auto;" />'
+        )
+    caja = _fo_eo_04_caja_media_html(img)
     if not preview_ui or numero is None or not mostrar_rotar:
-        return img
+        return caja
     num = int(numero)
     tipo_esc = html.escape(tipo, quote=True)
     btn = (
@@ -10319,8 +10379,8 @@ def _fo_eo_04_img_block_html(
     )
     return (
         f'<div class="cc-img-slot" data-cc-slot="1" data-cc-tipo="{tipo_esc}" data-cc-num="{num}" '
-        f'style="position:relative;height:100%;min-height:200px;display:flex;align-items:center;'
-        f'justify-content:center;">{img}{btn}</div>'
+        f'style="position:relative;width:{w_mm}mm;height:{h_mm}mm;max-height:{h_mm}mm;'
+        f'margin:0 auto;">{caja}{btn}</div>'
     )
 
 
@@ -10759,7 +10819,7 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
   <div style="font-weight:bold;font-size:6.5pt;padding:3px 5px;
               border-bottom:1px solid {navy};text-align:center;
               background-color:{bg_hdr};color:{navy_hdr};">PLANO/ESQUEMA</div>
-  <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
+  <div style="padding:4px 2px;text-align:center;">
     {_fo_eo_04_img_block_html(grafico_url, grafico_numero, "grafico", preview_ui=preview_ui, empty_label="Sin gr&aacute;fico", mostrar_rotar=mostrar_rotar)}
   </div>
   <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
@@ -10770,7 +10830,7 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
   <div style="font-weight:bold;font-size:6.5pt;padding:3px 5px;
               border-bottom:1px solid {navy};text-align:center;
               background-color:{bg_hdr};color:{navy_hdr};">FOTOGRAF&#205;A</div>
-  <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
+  <div style="padding:4px 2px;text-align:center;">
     {_fo_eo_04_img_block_html(foto_url, foto_numero, "foto", preview_ui=preview_ui, empty_label="Sin fotograf&iacute;a", mostrar_rotar=mostrar_rotar)}
   </div>
   <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
