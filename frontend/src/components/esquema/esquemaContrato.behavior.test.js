@@ -86,6 +86,8 @@ describe('contrato · documento', () => {
     assert.match(md, /círculo se ve como círculo/i)
     assert.match(md, /C-TX-03/)
     assert.match(md, /esquemaMobileLayout/)
+    assert.match(md, /C-DES-07/)
+    assert.match(md, /esquemaDespieceParrilla/)
   })
 })
 

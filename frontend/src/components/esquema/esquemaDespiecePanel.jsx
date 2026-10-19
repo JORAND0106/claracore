@@ -717,6 +717,9 @@ export function EsquemaDespiecePanel({
   onActiveId,
   selectedPolyline = null,
   phoneFullscreenPopups = false,
+  /** false en celular (fase 2 solo iPad/portátil). */
+  allowDibujarParrilla = true,
+  onDibujarParrilla = null,
 }) {
   const [popup, setPopup] = useState(null) // null | { scheduleId, position? }
   const active = schedules.find((s) => s.id === activeId) || schedules[0] || null
@@ -830,7 +833,7 @@ export function EsquemaDespiecePanel({
             />
           </label>
 
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
               onClick={() => setPopup({ scheduleId: active.id, position: null })}
@@ -847,6 +850,33 @@ export function EsquemaDespiecePanel({
             >
               Agregar posición
             </button>
+            {allowDibujarParrilla && typeof onDibujarParrilla === 'function' ? (
+              <button
+                type="button"
+                title="Dibujar en plano la distribución de varillas del cuadro"
+                data-cc-tooltip="Dibujar en plano la distribución de varillas del cuadro"
+                data-cc-tooltip-variant="short"
+                aria-label="Dibujar parrilla"
+                onClick={() => onDibujarParrilla(active)}
+                style={{
+                  padding: '7px 10px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.primary || '#0f766e'}`,
+                  background: `color-mix(in srgb, ${t.primary || '#0f766e'} 12%, ${t.bgCard || '#fff'})`,
+                  color: t.primary || '#0f766e',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+                data-testid="despiece-dibujar-parrilla"
+              >
+                <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>⊞</span>
+                Dibujar parrilla
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => removeSchedule(active.id)}

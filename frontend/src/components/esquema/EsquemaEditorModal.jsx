@@ -82,6 +82,7 @@ import {
   hitSolidAtView,
   inferFaceDepthForExtrude,
   isClosedDrawableEntity,
+  closedEntityToContour,
   pickSubtractBase,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
@@ -133,6 +134,14 @@ import {
 import { buildCalcAdjuntos } from './esquema3dCalcExport'
 import { Esquema3dCalcPanel } from './esquema3dCalcPanel'
 import { EsquemaDespiecePanel } from './esquemaDespiecePanel'
+import {
+  buildParrillaViews,
+  contourBoundsMetersFromRing,
+  despieceParrillaBoundsWorld,
+  drawDespieceParrillaObject,
+  serializeParrillaDraw,
+  worldPointToLocalM,
+} from './esquemaDespieceParrilla.js'
 import { buildDespieceAdjuntos } from './esquemaDespieceExport'
 import { despieceSchedulesIncomplete } from './esquemaDespiece'
 import { EsquemaContextSidebar, EsquemaSidebarSection } from './esquemaContextSidebar'
@@ -721,6 +730,10 @@ export default function EsquemaEditorModal({
   const [sectionSolevarOpen, setSectionSolevarOpen] = useState(false)
   const [sectionDespieceOpen, setSectionDespieceOpen] = useState(false)
   const [despiecePanelOpen, setDespiecePanelOpen] = useState(false)
+  /** Fase 2: dibujar parrilla (solo iPad/portátil). */
+  const [parrillaPrompt, setParrillaPrompt] = useState(null)
+  const parrillaPromptRef = useRef(null)
+  parrillaPromptRef.current = parrillaPrompt
   const [despieceSchedules, setDespieceSchedules] = useState([])
   const [activeDespieceId, setActiveDespieceId] = useState(null)
   const despieceSchedulesRef = useRef([])
@@ -3802,6 +3815,35 @@ export default function EsquemaEditorModal({
       return
     }
 
+    // Ancla opcional de parrilla: toque = inicio de la primera varilla de una posición.
+    const parrillaPick = parrillaPromptRef.current
+    if (parrillaPick?.anchorPosId && pointersRef.current.size < 2) {
+      const world = posFromEvent(e)
+      const selId = [...(selectedIdsRef.current || [])][0]
+      const ent = objectsRef.current.find((o) => o.id === selId && isClosedDrawableEntity(o))
+      const contour = ent ? closedEntityToContour(ent) : null
+      const boundsM = contour?.ring ? contourBoundsMetersFromRing(contour.ring) : null
+      if (!boundsM) {
+        setParrillaPrompt((p) => (p ? { ...p, error: 'Seleccione primero el contorno cerrado.' } : p))
+      } else {
+        const local = worldPointToLocalM(world, boundsM)
+        setParrillaPrompt((p) => {
+          if (!p) return p
+          return {
+            ...p,
+            error: '',
+            anchorPosId: null,
+            anchorsLocalM: { ...(p.anchorsLocalM || {}), [parrillaPick.anchorPosId]: local },
+          }
+        })
+        setToolHint('Inicio registrado. Puede definir otro o dibujar la parrilla.')
+      }
+      drawing.current = false
+      try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
+      pointersRef.current.delete(e.pointerId)
+      return
+    }
+
     // Con mapa activo + Paneo: el mapa recibe el arrastre (canvas sin captura).
     // En modo 3D el mapa está oculto: el lienzo maneja paneo/gestos.
     if (mapActiveRef.current && !mode3dRef.current && toolRef.current === 'paneo') {
@@ -6412,7 +6454,91 @@ export default function EsquemaEditorModal({
     }
   }
 
+
+  const beginDibujarParrilla = useCallback((schedule) => {
+    if (isPhoneLayoutRef.current) {
+      setToolHint('Dibujar parrilla está disponible en iPad y portátil.')
+      return
+    }
+    if (!schedule?.id) return
+    setDespiecePanelOpen(true)
+    setSectionDespieceOpen(true)
+    setContextSidebarCollapsed(false)
+    setParrillaPrompt({
+      scheduleId: schedule.id,
+      coverM: '0.05',
+      anchorPosId: null,
+      error: '',
+    })
+    setTool('seleccion')
+    setToolHint('Dibujar parrilla: seleccione un contorno cerrado (rectángulo o polígono) e indique el recubrimiento.')
+  }, [])
+
+  const confirmDibujarParrilla = useCallback(() => {
+    const prompt = parrillaPrompt
+    if (!prompt?.scheduleId) return
+    const schedule = (despieceSchedulesRef.current || []).find((s) => s.id === prompt.scheduleId)
+    if (!schedule) {
+      setParrillaPrompt((p) => (p ? { ...p, error: 'Cuadro no encontrado.' } : p))
+      return
+    }
+    const cover = Number(String(prompt.coverM || '').replace(',', '.'))
+    if (!Number.isFinite(cover) || cover < 0) {
+      setParrillaPrompt((p) => (p ? { ...p, error: 'Indique el recubrimiento en metros (≥ 0).' } : p))
+      return
+    }
+    const selId = [...(selectedIdsRef.current || [])][0] || selectedId
+    const ent = objectsRef.current.find((o) => o.id === selId)
+    if (!ent || !isClosedDrawableEntity(ent)) {
+      setParrillaPrompt((p) => (p ? { ...p, error: 'Seleccione un contorno cerrado en el lienzo.' } : p))
+      return
+    }
+    const contour = closedEntityToContour(ent)
+    if (!contour?.ring?.length) {
+      setParrillaPrompt((p) => (p ? { ...p, error: 'No se pudo leer el contorno.' } : p))
+      return
+    }
+    const boundsM = contourBoundsMetersFromRing(contour.ring)
+    if (!boundsM || boundsM.widthM <= 0 || boundsM.heightM <= 0) {
+      setParrillaPrompt((p) => (p ? { ...p, error: 'Contorno sin área válida.' } : p))
+      return
+    }
+    const anchors = prompt.anchorsLocalM || {}
+    const drawData = buildParrillaViews(schedule, boundsM, cover, anchors)
+    pushHistory()
+    // Quitar parrillas previas del mismo cuadro
+    objectsRef.current = objectsRef.current.filter(
+      (o) => !(o.type === 'despieceParrilla' && o.scheduleId === schedule.id),
+    )
+    const obj = {
+      id: uid(),
+      type: 'despieceParrilla',
+      scheduleId: schedule.id,
+      coverM: cover,
+      contourEntityId: ent.id,
+      boundsM,
+      drawData: serializeParrillaDraw(drawData),
+      color: '#0f766e',
+    }
+    objectsRef.current = [...objectsRef.current, obj]
+    // Persistir en el cuadro para el PNG
+    const nextSchedules = (despieceSchedulesRef.current || []).map((s) => (
+      s.id === schedule.id
+        ? { ...s, parrillaDraw: serializeParrillaDraw(drawData), updatedAt: new Date().toISOString() }
+        : s
+    ))
+    setDespieceSchedules(nextSchedules)
+    despieceSchedulesRef.current = nextSchedules
+    selectOne(obj.id)
+    setDirty(true)
+    setParrillaPrompt(null)
+    setToolHint('Parrilla dibujada. Si cambia el cuadro, oprima de nuevo «Dibujar parrilla».')
+    redraw()
+    setPanTick((n) => n + 1)
+  }, [parrillaPrompt, selectedId, pushHistory, selectOne, redraw])
+
   const openPhoneSheet = (snap = 'medium') => {
+
     if (isPhoneLayoutRef.current) setPhoneSheetSnap(snap)
   }
   const phoneSheetHeightPxSafe = isPhoneLayout
@@ -7850,6 +7976,8 @@ export default function EsquemaEditorModal({
                     t={t}
                     ui={ui}
                     phoneFullscreenPopups={isPhoneLayout}
+                    allowDibujarParrilla={!isPhoneLayout}
+                    onDibujarParrilla={beginDibujarParrilla}
                     contratoId={contratoId}
                     schedules={despieceSchedules}
                     activeId={activeDespieceId}
@@ -8606,6 +8734,8 @@ export default function EsquemaEditorModal({
                     t={t}
                     ui={ui}
                     phoneFullscreenPopups={isPhoneLayout}
+                    allowDibujarParrilla={!isPhoneLayout}
+                    onDibujarParrilla={beginDibujarParrilla}
                     contratoId={contratoId}
                     schedules={despieceSchedules}
                     activeId={activeDespieceId}
@@ -8841,6 +8971,115 @@ export default function EsquemaEditorModal({
             onCancel={() => setExtrudePrompt(null)}
             onConfirm={confirmExtrude3d}
           />
+        ) : null}
+        {parrillaPrompt && !isPhoneLayout ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            data-testid="esquema-despiece-parrilla-popup"
+            style={{
+              // Flotante: el lienzo sigue recibiendo clics para contorno e inicios.
+              position: 'absolute',
+              top: 58,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 40,
+              width: 'min(440px, calc(100% - 24px))',
+              pointerEvents: 'auto',
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: '100%',
+                background: t.bgCard || '#fff',
+                border: `1px solid ${t.border}`,
+                borderRadius: 12,
+                boxShadow: t.shadow || '0 12px 32px rgba(15,23,42,0.2)',
+                padding: 16,
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 16, color: t.text, marginBottom: 8 }}>
+                Dibujar parrilla
+              </div>
+              <div style={{ fontSize: 13, color: t.textMuted || '#64748b', marginBottom: 12, lineHeight: 1.4 }}>
+                Seleccione en el lienzo un contorno cerrado (rectángulo o polígono) donde va el acero.
+                Indique el recubrimiento. Las posiciones sin espaciamiento quedan como «sin distribución».
+                Opcional: elija una posición y toque el punto de inicio de su primera varilla.
+              </div>
+              <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+                Recubrimiento (m)
+                <input
+                  value={parrillaPrompt.coverM}
+                  onChange={(e) => setParrillaPrompt((p) => ({ ...p, coverM: e.target.value, error: '' }))}
+                  inputMode="decimal"
+                  data-testid="despiece-parrilla-cover"
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    fontSize: 14,
+                    color: t.text,
+                    background: t.inputBg || '#fff',
+                  }}
+                />
+              </label>
+              {(() => {
+                const sched = (despieceSchedules || []).find((s) => s.id === parrillaPrompt.scheduleId)
+                const positions = sched?.positions || []
+                if (!positions.length) return null
+                return (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+                      Inicio opcional por posición
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {positions.map((pos) => (
+                        <button
+                          key={pos.id}
+                          type="button"
+                          data-testid={`despiece-parrilla-anchor-${pos.id}`}
+                          onClick={() => {
+                            setParrillaPrompt((p) => ({ ...p, anchorPosId: pos.id, error: '' }))
+                            setToolHint(`Toque en el lienzo el inicio de «${pos.name || 'posición'}».`)
+                          }}
+                          style={{
+                            padding: '5px 8px',
+                            borderRadius: 6,
+                            border: `1px solid ${parrillaPrompt.anchorPosId === pos.id ? (t.primary || '#0f766e') : t.border}`,
+                            background: parrillaPrompt.anchorPosId === pos.id
+                              ? `color-mix(in srgb, ${t.primary || '#0f766e'} 14%, #fff)`
+                              : (t.bgCard || '#fff'),
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            color: t.text,
+                          }}
+                        >
+                          {pos.name || 'Pos'}
+                          {parrillaPrompt.anchorsLocalM?.[pos.id] ? ' ✓' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+              {parrillaPrompt.error ? (
+                <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{parrillaPrompt.error}</div>
+              ) : null}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                <button type="button" onClick={() => setParrillaPrompt(null)} style={ghost(t)}>Cancelar</button>
+                <button
+                  type="button"
+                  data-testid="despiece-parrilla-confirm"
+                  onClick={confirmDibujarParrilla}
+                  style={primary(t)}
+                >
+                  Dibujar
+                </button>
+              </div>
+            </div>
+          </div>
         ) : null}
         {draftNotice ? (
           <EsquemaDraftNoticePopup
@@ -10026,6 +10265,11 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.restore()
     return
   }
+  if (obj.type === 'despieceParrilla') {
+    drawDespieceParrillaObject(ctx, obj, selected)
+    ctx.restore()
+    return
+  }
   if (obj.type === 'hatchRegion') {
     drawHatchRegion(ctx, obj, ui)
     if (selected) {
@@ -10434,6 +10678,7 @@ function objectCenter(obj) {
 }
 
 function objectBounds(obj) {
+  if (obj.type === 'despieceParrilla') return despieceParrillaBoundsWorld(obj)
   if (obj.type === 'cota') return objectBoundsOf(obj)
   if (obj.type === 'nodo') return { x: (obj.x || 0) - 8, y: (obj.y || 0) - 8, w: 16, h: 16 }
   if (PATH_TYPES.has(obj.type)) {
@@ -10474,6 +10719,20 @@ function pointInObject(p, obj) {
 }
 
 function translateObject(obj, dx, dy) {
+  if (obj.type === 'despieceParrilla' && obj.boundsM) {
+    const dMx = worldToMeters(dx)
+    const dMy = worldToMeters(dy)
+    return {
+      ...obj,
+      boundsM: {
+        ...obj.boundsM,
+        minX: obj.boundsM.minX + dMx,
+        maxX: obj.boundsM.maxX + dMx,
+        minY: obj.boundsM.minY + dMy,
+        maxY: obj.boundsM.maxY + dMy,
+      },
+    }
+  }
   if (obj.type === 'nodo' || obj.type === 'areaLabel') return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   if (PATH_TYPES.has(obj.type)) {
     return { ...obj, points: (obj.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy })) }

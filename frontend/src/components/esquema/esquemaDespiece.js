@@ -114,7 +114,7 @@ export function fmt2(n) {
   return round2(n).toFixed(2).replace('.', ',')
 }
 
-function parseNum(v) {
+export function parseNum(v) {
   if (v == null || v === '') return NaN
   if (typeof v === 'number') return v
   return Number(String(v).replace(',', '.'))
