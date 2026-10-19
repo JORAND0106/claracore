@@ -138,7 +138,6 @@ import {
   PARRILLA_MSG,
   buildBarsFromStart,
   buildParrillaViewsFromBars,
-  canContinueFromLast,
   despieceParrillaBoundsWorld,
   drawDespieceParrillaObject,
   prepareParrillaQueue,
