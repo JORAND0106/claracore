@@ -25,6 +25,8 @@ import {
 } from './informes/InformesLayout'
 import CorteSubConciliacionPopup from './informes/CorteSubConciliacionPopup'
 import ActaMesConciliacionPopup from './informes/ActaMesConciliacionPopup'
+import FoEo04SeleccionModal from './informes/FoEo04SeleccionModal'
+import { claveFoEo04, firmaSeleccionFoEo04 } from './informes/foEo04Seleccion'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -607,6 +609,17 @@ export default function ModuloInformes({
   const foEo04JobPollRef = useRef(null)
   const foEo04TimerRef = useRef(null)
   const [foEo04LastJobId, setFoEo04LastJobId] = useState(null)
+  /** Ventana previa a la vista previa / al PDF: elige qué formatos entran. */
+  const [foEo04SelAbierta, setFoEo04SelAbierta] = useState(false)
+  const [foEo04SelIntent, setFoEo04SelIntent] = useState('preview')
+  const [foEo04SelFilas, setFoEo04SelFilas] = useState([])
+  const [foEo04SelCargando, setFoEo04SelCargando] = useState(false)
+  const [foEo04SelError, setFoEo04SelError] = useState('')
+  const [foEo04SelSet, setFoEo04SelSet] = useState(() => new Set())
+  /** null = todas las fotos del acta (como hoy). Lista = solo los formatos elegidos. */
+  const [foEo04ClavesPdf, setFoEo04ClavesPdf] = useState(null)
+  const foEo04SeleccionRef = useRef(null)
+  const foEo04FirmaJobRef = useRef('todos')
   const [foEo04OrientarModal, setFoEo04OrientarModal] = useState(false)
   const [foEo04OrientarIdx, setFoEo04OrientarIdx] = useState(0)
   const [fotosActaFoEo04, setFotosActaFoEo04] = useState([])
@@ -1227,7 +1240,12 @@ export default function ModuloInformes({
     const out = []
     const seenF = new Set()
     const seenG = new Set()
+    const permitidas =
+      Array.isArray(foEo04ClavesPdf) && foEo04ClavesPdf.length
+        ? new Set(foEo04ClavesPdf.map(claveFoEo04))
+        : null
     for (const row of fotosActaFoEo04) {
+      if (permitidas && !permitidas.has(claveFoEo04(row))) continue
       if (row.foto_numero != null && row.foto_url && !seenF.has(row.foto_numero)) {
         seenF.add(row.foto_numero)
         out.push({
@@ -1302,6 +1320,9 @@ export default function ModuloInformes({
 
   useEffect(() => {
     setFoEo04LastJobId(null)
+    foEo04SeleccionRef.current = null
+    foEo04FirmaJobRef.current = 'todos'
+    setFoEo04ClavesPdf(null)
   }, [contratoId, actaIdFoEo04, subsistemaFoEo04, supervisorFoEo04])
 
   useEffect(() => {
@@ -3500,9 +3521,95 @@ export default function ModuloInformes({
     }
   }
 
-  /** Vista previa HTML instantánea (sin xhtml2pdf): el navegador renderiza todas las
-   *  memorias del acta. No bloquea el worker y escala a 120+ memorias en segundos. */
-  async function abrirPreviewFoEo04Html() {
+  /** Abre el listado de formatos antes de generar la vista previa o el PDF. */
+  async function abrirSeleccionFoEo04(intent) {
+    const authToken = getAuthToken()
+    if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
+    if (cargandoSub && !actasConc.length) { setError('Espere a que carguen las actas RPO del contrato.'); return }
+    if (!supervisorFoEo04.trim()) { setError('Ingrese el nombre del supervisor(a) para continuar.'); return }
+    if (!actaIdFoEo04) { setError('Selecciona un acta RPO para generar la memoria.'); return }
+    if (!actasConc.some((a) => String(a.id) === String(actaIdFoEo04))) {
+      setError('El acta seleccionado no está en la lista del contrato. Elija otro acta.')
+      return
+    }
+    setError(null)
+    setFoEo04SelIntent(intent === 'pdf' ? 'pdf' : 'preview')
+    setFoEo04SelAbierta(true)
+    setFoEo04SelCargando(true)
+    setFoEo04SelError('')
+    setFoEo04SelFilas([])
+    setFoEo04SelSet(new Set())
+    try {
+      const params = new URLSearchParams({
+        acta_id: String(actaIdFoEo04),
+        subsistema: subsistemaFoEo04 || 'vial',
+      })
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/ccd/fo-eo-04/items-seleccion?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${authToken}` } },
+      )
+      if (!r.ok) {
+        setFoEo04SelError(await leerErrorRespuesta(r))
+        return
+      }
+      const data = await r.json()
+      const filas = Array.isArray(data?.items) ? data.items : []
+      setFoEo04SelFilas(filas)
+      setFoEo04SelSet(new Set(filas.map(claveFoEo04)))
+    } catch (e) {
+      setFoEo04SelError(String(e?.message || e) || 'No se pudo cargar el listado de ítems.')
+    } finally {
+      setFoEo04SelCargando(false)
+    }
+  }
+
+  function toggleFilaFoEo04(clave) {
+    setFoEo04SelSet((prev) => {
+      const next = new Set(prev)
+      if (next.has(clave)) next.delete(clave)
+      else next.add(clave)
+      return next
+    })
+  }
+
+  function toggleTodasFoEo04(marcar) {
+    setFoEo04SelSet(marcar ? new Set(foEo04SelFilas.map(claveFoEo04)) : new Set())
+  }
+
+  function continuarSeleccionFoEo04() {
+    const elegidas = foEo04SelFilas.filter((f) => foEo04SelSet.has(claveFoEo04(f)))
+    if (!elegidas.length) return
+    const todas = elegidas.length === foEo04SelFilas.length && foEo04SelFilas.length > 0
+    const claves = todas
+      ? null
+      : elegidas.map((f) => ({
+          capitulo: String(f.capitulo ?? '').trim(),
+          item_numero: String(f.item_numero ?? '').trim(),
+        }))
+    const firma = firmaSeleccionFoEo04(null, claves)
+    const firmaPrev = foEo04FirmaJobRef.current
+    foEo04SeleccionRef.current = claves
+    foEo04FirmaJobRef.current = firma
+    setFoEo04ClavesPdf(claves)
+    setFoEo04SelAbierta(false)
+    if (foEo04SelIntent === 'pdf') {
+      if (foEo04LastJobId && firmaPrev === firma) {
+        descargarPdfConc(
+          `/informes/${contratoId}/ccd/pdf-job/${foEo04LastJobId}/con-sello-firma`,
+          'FO-IDU-EO-04-V2-sello.pdf',
+        )
+        return
+      }
+      generarFoEo04Pdf({ conSello: true, claves })
+      return
+    }
+    if (firmaPrev !== firma) setFoEo04LastJobId(null)
+    abrirPreviewFoEo04Html(claves)
+  }
+
+  /** Vista previa HTML instantánea (sin xhtml2pdf): el navegador renderiza las
+   *  memorias del acta. claves=null genera todas, igual que antes de la ventana. */
+  async function abrirPreviewFoEo04Html(claves) {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
     if (cargandoSub && !actasConc.length) { setError('Espere a que carguen las actas RPO del contrato.'); return }
@@ -3530,9 +3637,19 @@ export default function ModuloInformes({
       })
       if (actaIdFoEo04) params.set('acta_id', actaIdFoEo04)
       if (supervisorFoEo04.trim()) params.set('supervisor', supervisorFoEo04.trim())
+      const cuerpoItems = Array.isArray(claves) ? claves : null
       const r = await fetchConFallback(
         `/informes/${contratoId}/ccd/fo-eo-04/preview-html?${params.toString()}`,
-        { headers: { Authorization: `Bearer ${authToken}` } }
+        cuerpoItems && cuerpoItems.length
+          ? {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${authToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ items: cuerpoItems }),
+            }
+          : { headers: { Authorization: `Bearer ${authToken}` } },
       )
       if (!r.ok) {
         setVistaPrevia({ fase: 'error', tipo: 'idu-html', mensaje: await leerErrorRespuesta(r) })
@@ -3559,7 +3676,7 @@ export default function ModuloInformes({
   /** Genera el PDF real (todas las memorias) en background y, si conSello, descarga la
    *  versión sellada. Con descargarAlListo descarga el PDF limpio al terminar (p. ej. desde
    *  el modal cuando la vista previa actual es HTML). */
-  async function generarFoEo04Pdf({ conSello = false, descargarAlListo = false } = {}) {
+  async function generarFoEo04Pdf({ conSello = false, descargarAlListo = false, claves } = {}) {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
     if (cargandoSub && !actasConc.length) {
@@ -3576,6 +3693,12 @@ export default function ModuloInformes({
     }
     if (!actasConc.some((a) => String(a.id) === String(actaIdFoEo04))) {
       setError('El acta seleccionado no está en la lista del contrato. Elija otro acta.')
+      return
+    }
+    const clavesEff = claves === undefined ? foEo04SeleccionRef.current : claves
+    const cuerpoItems = Array.isArray(clavesEff) ? clavesEff : null
+    if (cuerpoItems && cuerpoItems.length === 0) {
+      setError('Seleccione al menos un ítem.')
       return
     }
 
@@ -3602,7 +3725,16 @@ export default function ModuloInformes({
 
       const rInit = await fetchConFallback(
         `/informes/${contratoId}/ccd/pdf-job/iniciar?${params.toString()}`,
-        { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }
+        cuerpoItems && cuerpoItems.length
+          ? {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${authToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ items: cuerpoItems }),
+            }
+          : { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } },
       )
       if (!rInit.ok) {
         detenerTimerFoEo04()
@@ -6434,7 +6566,7 @@ export default function ModuloInformes({
                       vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-html',
                       'vista'
                     )}
-                    onClick={abrirPreviewFoEo04Html}
+                    onClick={() => abrirSeleccionFoEo04('preview')}
                     disabled={
                       !supervisorFoEo04.trim() ||
                       !actaIdFoEo04 ||
@@ -6446,7 +6578,7 @@ export default function ModuloInformes({
                         ? 'Ingrese el nombre del supervisor(a) para continuar'
                         : !actaIdFoEo04
                           ? 'Seleccione un acta RPO'
-                          : 'Vista previa rápida de todas las memorias del acta (no descarga; se renderiza en pantalla)'
+                          : 'Elegir ítems y ver la vista previa de esas memorias'
                     }
                     aria-label="Vista previa FO-IDU-EO-04-V2"
                   >
@@ -6465,27 +6597,14 @@ export default function ModuloInformes({
                   <button
                     type="button"
                     style={btnCcdToolbar(ocupado, 'pdf')}
-                    onClick={() => {
-                      if (foEo04LastJobId) {
-                        // PDF ya generado para este acta → solo anexar sello (rápido).
-                        descargarPdfConc(
-                          `/informes/${contratoId}/ccd/pdf-job/${foEo04LastJobId}/con-sello-firma`,
-                          'FO-IDU-EO-04-V2-sello.pdf',
-                        )
-                        return
-                      }
-                      // Genera el PDF en background (procesos, no bloquea) y al terminar descarga con sello.
-                      generarFoEo04Pdf({ conSello: true })
-                    }}
+                    onClick={() => abrirSeleccionFoEo04('pdf')}
                     disabled={!supervisorFoEo04.trim() || !actaIdFoEo04 || ocupado}
                     title={
                       !supervisorFoEo04.trim()
                         ? 'Ingrese el nombre del supervisor(a) para continuar'
                         : !actaIdFoEo04
                           ? 'Seleccione un acta RPO'
-                          : foEo04LastJobId
-                            ? 'Descargar PDF firmado con sello SHA (rápido; reutiliza el PDF ya generado)'
-                            : 'Generar y descargar el PDF firmado con sello SHA de todas las memorias del acta'
+                          : 'Elegir ítems y descargar el PDF firmado con sello SHA'
                     }
                     aria-label="Descargar PDF FO-IDU-EO-04-V2 con sello"
                   >
@@ -6518,6 +6637,19 @@ export default function ModuloInformes({
         </InformesZona>
         </>
       </InformesGrupoPanel>
+
+      <FoEo04SeleccionModal
+        abierta={foEo04SelAbierta}
+        t={t}
+        filas={foEo04SelFilas}
+        cargando={foEo04SelCargando}
+        error={foEo04SelError}
+        seleccion={foEo04SelSet}
+        onToggle={toggleFilaFoEo04}
+        onToggleTodas={toggleTodasFoEo04}
+        onCerrar={() => setFoEo04SelAbierta(false)}
+        onContinuar={continuarSeleccionFoEo04}
+      />
 
       {/* Modal orientar fotos FO-EO-04 (visor grande + carrete, antes del PDF) */}
       {foEo04OrientarModal && actaIdFoEo04 && (
