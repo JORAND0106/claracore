@@ -14,6 +14,17 @@ export function pptoPopVistaAnterior(stack) {
   return stack.pop() || null
 }
 
+/**
+ * Normaliza la selección de la grilla a un array.
+ * En ModuloPresupuesto `seleccionados` es un Set: `(set || []).map` falla
+ * porque un Set es truthy y no tiene `.map`.
+ */
+export function pptoListaSeleccion(seleccionados) {
+  if (seleccionados instanceof Set) return [...seleccionados]
+  if (Array.isArray(seleccionados)) return seleccionados
+  return []
+}
+
 /** Suma cant_total y costo_directo de filas cuyo id está en `seleccionados`. */
 export function pptoTotalesSeleccion(registros, seleccionados) {
   const set = seleccionados instanceof Set ? seleccionados : new Set(seleccionados || [])

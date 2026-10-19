@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista.js'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { pptoListaSeleccion, pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 describe('pptoPopVistaAnterior', () => {
   it('con una sola entrada restaura esa vista previa y vacía el stack', () => {
@@ -18,6 +23,33 @@ describe('pptoPopVistaAnterior', () => {
   it('stack vacío → null', () => {
     assert.equal(pptoPopVistaAnterior([]), null)
     assert.equal(pptoPopVistaAnterior(null), null)
+  })
+})
+
+describe('pptoListaSeleccion', () => {
+  it('un Set vacío es iterable: no se usa (set || []).map', () => {
+    const set = new Set()
+    assert.equal(typeof (set || []).map, 'undefined')
+    assert.deepEqual(pptoListaSeleccion(set), [])
+    assert.deepEqual(pptoListaSeleccion(set).map(String), [])
+  })
+
+  it('copia los ids de un Set y conserva un array', () => {
+    assert.deepEqual(pptoListaSeleccion(new Set([2, 1])), [2, 1])
+    assert.deepEqual(pptoListaSeleccion([4, 5]), [4, 5])
+  })
+
+  it('objeto, null u otro tipo no iterable → []', () => {
+    assert.deepEqual(pptoListaSeleccion({}), [])
+    assert.deepEqual(pptoListaSeleccion(null), [])
+    assert.deepEqual(pptoListaSeleccion(undefined), [])
+    assert.deepEqual(pptoListaSeleccion('12'), [])
+  })
+
+  it('el modal de gráficos no hace .map sobre (seleccionados || [])', () => {
+    const src = readFileSync(join(__dirname, 'PptoGraficosModal.jsx'), 'utf8')
+    assert.equal(src.includes('(seleccionados || [])'), false)
+    assert.equal(src.includes('pptoListaSeleccion(seleccionados)'), true)
   })
 })
 
