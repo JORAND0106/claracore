@@ -15,6 +15,10 @@ import {
 } from './esquemaDespiece.js'
 import { findDespieceShape } from './esquemaDespieceLibrary.js'
 import { drawShapeWithCotasOnSegments } from './esquemaDespieceDraw.js'
+import {
+  estimateParrillaPngHeight,
+  paintParrillaViews,
+} from './esquemaDespieceParrilla.js'
 
 const C = {
   bg: '#ffffff',
@@ -91,7 +95,11 @@ export async function composeDespiecePng({
   const headRowH = Math.round(52 * textScale)
   const tableH = headRowH + n * rowH
   const imgW = width
-  const imgH = headerH + Math.round(8 * textScale) + tableH + footerH
+  const parrillaDraw = schedule.parrillaDraw || null
+  const parrillaH = parrillaDraw
+    ? Math.round(estimateParrillaPngHeight(parrillaDraw, width) + 28 * textScale)
+    : 0
+  const imgH = headerH + Math.round(8 * textScale) + tableH + parrillaH + footerH
 
   const canvas = document.createElement('canvas')
   canvas.width = imgW
@@ -246,6 +254,19 @@ export async function composeDespiecePng({
     ctx.font = `${Math.round(16 * textScale)}px "Segoe UI", system-ui, sans-serif`
     const u = 'kg'
     ctx.fillText(u, totCol.x + (totCol.width - ctx.measureText(u).width) / 2, (midY0 + midY1) / 2 + Math.round(28 * textScale))
+  }
+
+  // Vistas de parrilla debajo del cuadro (fase 2); el cuadro de arriba no cambia.
+  if (parrillaDraw?.views?.length) {
+    const py = midY1 + Math.round(20 * textScale)
+    ctx.fillStyle = C.primary
+    ctx.font = `bold ${Math.round(22 * textScale)}px "Segoe UI", system-ui, sans-serif`
+    ctx.fillText('Vistas de parrilla', margin, py)
+    paintParrillaViews(ctx, parrillaDraw, {
+      x: margin,
+      y: py + Math.round(10 * textScale),
+      width: imgW - margin * 2,
+    })
   }
 
   ctx.fillStyle = C.muted
