@@ -9,9 +9,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   itemsConBorradorProveedor,
+  redondearDinero,
   totalesCompraSolicitud,
   valorCompraLinea,
 } from './solicitudValorCompra.js'
+import { TEXTO_SALDO_SIN_INSUMO } from './solicitudBancoSuelto.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 
@@ -60,6 +62,31 @@ describe('valor de la línea y resumen por proveedor', () => {
     })
     assert.equal(valorCompraLinea(actual[0]), 238)
     assert.equal(totalesCompraSolicitud(actual).total, 388)
+  })
+
+  it('redondea cada línea a 2 decimales y la suma cuadra', () => {
+    const lineas = [
+      { cantidad: 1.5, valor_compra_unitario: 10.01 },
+      { cantidad: 2, valor_compra_unitario: 119 },
+    ]
+    const valores = lineas.map((it) => valorCompraLinea(it))
+    assert.deepEqual(valores, [redondearDinero(1.5 * 10.01), redondearDinero(2 * 119)])
+    assert.equal(totalesCompraSolicitud(lineas).total, valores[0] + valores[1])
+    assert.equal(valores[0], 15.02)
+  })
+
+  it('explica por qué no se pueden agregar materiales', () => {
+    const permisos = readFileSync(join(dir, 'almacenPermisos.js'), 'utf8')
+    assert.match(permisos, /export function motivoAgregarMaterialesAlmacen/)
+    assert.match(permisos, /Para agregar materiales se requiere permiso de Crear o Editar en Almacén/)
+    assert.match(permisos, /Para agregar materiales use Reabrir OC/)
+    const detalle = readFileSync(join(dir, 'SolicitudDetalleModal.jsx'), 'utf8')
+    assert.match(detalle, /puedeEditarSolicitudFormAlmacen/)
+    assert.match(detalle, /motivo-agregar-materiales/)
+    const acordeon = readFileSync(join(dir, 'SolicitudTramoAccordion.jsx'), 'utf8')
+    assert.doesNotMatch(acordeon, /La cantidad no puede superar el saldo disponible/)
+    assert.match(acordeon, /justificación/)
+    assert.match(TEXTO_SALDO_SIN_INSUMO, /Se ajustará cuando se asigne el insumo/)
   })
 
   it('la revisión y el listado muestran las cifras solo con visibilidad económica', () => {

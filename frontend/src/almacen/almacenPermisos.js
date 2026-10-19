@@ -285,3 +285,16 @@ export function puedeEnviarSolicitudAlmacen(permisos, sol = null, { modoReabrirO
 export function puedeEditarSolicitudFormAlmacen(permisos) {
   return Boolean(permisos?.crear || permisos?.editar)
 }
+
+/**
+ * Por qué no se puede agregar materiales. Vacío si el botón de editar debe mostrarse.
+ */
+export function motivoAgregarMaterialesAlmacen(sol, permisos) {
+  if (!puedeEditarSolicitudFormAlmacen(permisos)) {
+    return 'Para agregar materiales se requiere permiso de Crear o Editar en Almacén.'
+  }
+  if (sol?.estado === 'aprobada') {
+    return 'Esta solicitud ya está aprobada. Para agregar materiales use Reabrir OC.'
+  }
+  return ''
+}

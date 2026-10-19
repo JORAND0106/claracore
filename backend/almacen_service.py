@@ -257,7 +257,7 @@ def _aplicar_sello_justificacion(
 
 def _select_items_para_sync(sb, solicitud_id: int) -> List[dict]:
     full = (
-        "id, estado_validacion, observacion_residente, "
+        "id, numero_linea, estado_validacion, observacion_residente, "
         "justificacion_autor_id, justificacion_autor_nombre, justificacion_at"
     )
     try:
@@ -302,9 +302,12 @@ def _sync_solicitud_items(
         for r in existing_rows
         if r.get("id")
     }
+    from almacen_solicitud_numeracion import linea_congelada, planificar_numeros_linea
+
     keep_ids: set = set()
     planned: List[tuple] = []
-    for i, it in enumerate(items, start=1):
+    numeros = planificar_numeros_linea(existing_rows, items)
+    for it, numero in zip(items, numeros):
         raw_id = it.get("id")
         try:
             iid = int(raw_id) if raw_id is not None else None
@@ -312,7 +315,8 @@ def _sync_solicitud_items(
             iid = None
         if iid and iid in existing_ids:
             keep_ids.add(iid)
-        planned.append((i, it, iid))
+        it["numero_linea"] = numero
+        planned.append((numero, it, iid))
 
     # Rechazar la baja antes de escribir: Guardar no elimina líneas persistidas.
     to_delete = existing_ids - keep_ids
@@ -337,10 +341,27 @@ def _sync_solicitud_items(
     if user_id and any((it.get("observacion_residente") or "").strip() for it in items):
         autor = _nombre_usuario_id(sb, user_id)
 
-    for i, it, iid in planned:
+    ocs = (
+        sb.table("almacen_orden_compra")
+        .select("id")
+        .eq("solicitud_id", int(solicitud_id))
+        .execute()
+        .data
+        or []
+    )
+    en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+    congelados = {
+        iid
+        for iid in existing_ids
+        if linea_congelada(existing_by_id.get(iid), en_oc)
+    }
+
+    for numero, it, iid in planned:
+        if iid and iid in congelados:
+            continue
         row = _item_for_db_insert(it)
         row["solicitud_id"] = solicitud_id
-        row["numero_linea"] = i
+        row["numero_linea"] = numero
         if "observacion_residente" in it:
             _aplicar_sello_justificacion(
                 row,
@@ -362,7 +383,7 @@ def _sync_solicitud_items(
 
     if to_insert:
         _insert_solicitud_items_batch(sb, to_insert)
-    _sync_solicitud_item_repartos(sb, solicitud_id, items)
+    _sync_solicitud_item_repartos(sb, solicitud_id, items, congelados=congelados)
 
 
 def _now_iso() -> str:
@@ -577,6 +598,13 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
             "backend/sql/almacen_solicitud_item_reparto.sql "
             "(CREATE TABLE + NOTIFY pgrst, 'reload schema') y reintente."
         )
+    if "idx_almacen_solicitud_item_linea" in low or (
+        "numero_linea" in low and ("unique" in low or "23505" in low or "duplicate" in low)
+    ):
+        return (
+            "No se pudo agregar el material porque el número de línea chocó con otra "
+            "línea de la misma solicitud. Recargue la solicitud e intente de nuevo."
+        )
     if text:
         return f"No se pudo guardar la solicitud en la base de datos: {text[:400]}"
     return "No se pudo guardar la solicitud en la base de datos (error desconocido)."
@@ -627,7 +655,12 @@ def _attach_reparto_meta(
         raise ValueError("Seleccione capítulo, ítem y PK-ID para el reparto de presupuesto.")
 
     data = list_presupuesto_registros(
-        contrato_id, cap, item_n, pk, exclude_solicitud_id=exclude_solicitud_id,
+        contrato_id,
+        cap,
+        item_n,
+        pk,
+        exclude_solicitud_id=exclude_solicitud_id,
+        insumo_id=item.get("insumo_id"),
     )
     by_id = {int(r["presupuesto_id"]): r for r in (data.get("registros") or [])}
     selected = []
@@ -671,7 +704,12 @@ def _attach_reparto_meta(
     }
 
 
-def _sync_solicitud_item_repartos(sb, solicitud_id: int, items: List[dict]) -> None:
+def _sync_solicitud_item_repartos(
+    sb,
+    solicitud_id: int,
+    items: List[dict],
+    congelados: Optional[set] = None,
+) -> None:
     """Persiste filas de reparto proporcional; omite si la tabla aún no existe."""
     db_items = list(
         sb.table("almacen_solicitud_item")
@@ -690,6 +728,7 @@ def _sync_solicitud_item_repartos(sb, solicitud_id: int, items: List[dict]) -> N
         except (TypeError, ValueError):
             pass
 
+    congelados = congelados or set()
     for i, it in enumerate(items, start=1):
         iid = None
         if it.get("id") is not None:
@@ -700,10 +739,16 @@ def _sync_solicitud_item_repartos(sb, solicitud_id: int, items: List[dict]) -> N
             if cand and cand in by_id:
                 iid = cand
         if iid is None:
-            row = by_linea.get(i)
+            try:
+                numero = int(it.get("numero_linea") or 0)
+            except (TypeError, ValueError):
+                numero = 0
+            row = by_linea.get(numero) if numero else None
+            if row is None:
+                row = by_linea.get(i)
             if row and row.get("id"):
                 iid = int(row["id"])
-        if not iid:
+        if not iid or iid in congelados:
             continue
 
         repartos = it.get("repartos") or []

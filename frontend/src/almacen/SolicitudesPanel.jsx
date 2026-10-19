@@ -21,7 +21,7 @@ import {
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtFechaAlmacenCorta,
-  fmtMoney,
+  fmtMoneySolicitud as fmtMoney,
   formatEstadoOcMovimiento,
   puedeAnularSolicitud,
   textoAprobacionSolicitud,

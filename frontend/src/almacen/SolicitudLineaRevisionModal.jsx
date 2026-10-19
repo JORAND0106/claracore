@@ -32,7 +32,7 @@ import {
   AlmacenHelpIcon,
   almacenFormModalDialogStyle,
   fmtCant,
-  fmtMoney,
+  fmtMoneySolicitud as fmtMoney,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,

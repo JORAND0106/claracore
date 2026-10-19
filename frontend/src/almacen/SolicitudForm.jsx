@@ -35,6 +35,7 @@ import {
   solicitudAlmacenEditable,
 } from './almacenPermisos'
 import { parseAbscisaMetros } from './almacenAbscisa'
+import { TEXTO_SALDO_SIN_INSUMO } from './solicitudBancoSuelto'
 import { solicitudOrdenesCompra } from './solicitudDetalleHelpers'
 import {
   normalizePresupuestoIds,
@@ -284,8 +285,8 @@ export default function SolicitudForm({
       ? regs.reduce((a, r) => a + (Number(r.cant_total) || 0), 0)
       : null
 
-    // Multi-registro: preview local con saldo combinado (reparto proporcional al guardar).
-    if (multi && regs.length) {
+    // Multi-registro sin insumo: preview local. Con insumo, el servidor aplica el rendimiento.
+    if (multi && regs.length && !ins?.insumo_id && !ins?.listado_precio_id) {
       const consumo = cantidadParaSaldo + cantBorradorAdicional
       const saldoDespues = (saldoCombo ?? 0) - consumo
       const supera = esPrincipal && saldoDespues < -0.0001
@@ -310,6 +311,9 @@ export default function SolicitudForm({
             es_principal: esPrincipal,
             unidad: regs[0]?.unidad || '',
             repartos,
+            conversion_pendiente: true,
+            conversion_banco_suelto: false,
+            texto_conversion: TEXTO_SALDO_SIN_INSUMO,
           },
           supera_presupuesto: supera,
           presupuesto_id: pids[0],
@@ -432,6 +436,12 @@ export default function SolicitudForm({
     else setTramoFlow((cur) => (cur === idx ? null : cur))
   }
 
+  const isRowLocked = (it) => Boolean(
+    (modoReabrirOc && it?.id)
+    || it?.en_orden_compra
+    || it?.estado_validacion === 'aprobado'
+  )
+
   const abrirTramos = (idx) => {
     const it = items[idx]
     if (!it || isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)) return
@@ -439,7 +449,10 @@ export default function SolicitudForm({
       setError('Seleccione el ítem antes de abrir los tramos.')
       return
     }
-    if (modoReabrirOc && it.id) return
+    if (isRowLocked(it)) {
+      setError('Esta línea está aprobada o ya está en una orden de compra. Use + para agregar un material nuevo sin modificarla.')
+      return
+    }
     setError('')
     setTramoFlow(idx)
   }
@@ -577,8 +590,6 @@ export default function SolicitudForm({
     })
   }
 
-  const isRowLocked = (it) => Boolean(modoReabrirOc && it?.id)
-
   const quitarFilaLocal = (idx) => {
     markDirty()
     setItems((prev) => {
@@ -597,7 +608,7 @@ export default function SolicitudForm({
   const removeItem = (idx) => {
     const it = items[idx]
     if (!it) return
-    if (it.en_orden_compra || isRowLocked(it)) {
+    if (it.en_orden_compra || (modoReabrirOc && it.id)) {
       setLineaBloqueada(true)
       setLineaAEliminar(it)
       setEliminarLineaAviso('')
@@ -1061,6 +1072,7 @@ export default function SolicitudForm({
               esPrincipal={items[tramoFlow].es_principal !== false}
               observacion={items[tramoFlow].observacion_residente}
               excludeSolicitudId={effectiveSolicitudId}
+              insumoId={items[tramoFlow].insumo?.insumo_id || items[tramoFlow].insumo_id || null}
               t={theme}
               busy={busy}
               onClose={() => setTramoFlow(null)}
