@@ -202,19 +202,19 @@ export function EsquemaDespiecePositionPopup({
       return
     }
     if (!ubicacion) {
-      setError('Indique la ubicación (Longitudinal, Transversal o Diagonal).')
+      setError('Indique la ubicación')
       return
     }
     if (ubicacion === 'Diagonal' && !String(anguloDeg).trim()) {
-      setError('Indique el ángulo en grados para Diagonal.')
+      setError('Indique el ángulo')
       return
     }
     if (!parrilla) {
-      setError('Indique la parrilla (Sencilla o Doble).')
+      setError('Indique la parrilla')
       return
     }
     if (parrilla === 'Doble' && !parrillaCara) {
-      setError('En parrilla Doble indique Superior / Externa o Inferior / Interna.')
+      setError('Indique la cara de la parrilla doble')
       return
     }
     const pos = {
@@ -242,11 +242,11 @@ export function EsquemaDespiecePositionPopup({
 
   const saveCustomShape = () => {
     if (!selectedPolyline) {
-      setError('Seleccione una polilínea en el dibujo para crear la forma.')
+      setError('Seleccione una polilínea')
       return
     }
     if (!String(customName).trim()) {
-      setError('Indique el nombre de la forma nueva.')
+      setError('Indique el nombre de la forma')
       return
     }
     const built = buildCustomShapeFromPolyline(selectedPolyline, {
@@ -853,8 +853,8 @@ export function EsquemaDespiecePanel({
             {allowDibujarParrilla && typeof onDibujarParrilla === 'function' ? (
               <button
                 type="button"
-                title="Dibujar en plano la distribución de varillas del cuadro"
-                data-cc-tooltip="Dibujar en plano la distribución de varillas del cuadro"
+                title="Dibuja las varillas del cuadro en orden. Toque el inicio; luego puede continuar desde la última varilla. Sin contorno ni recubrimiento."
+                data-cc-tooltip="Dibuja las varillas del cuadro en orden. Toque el inicio; luego puede continuar desde la última varilla. Sin contorno ni recubrimiento."
                 data-cc-tooltip-variant="short"
                 aria-label="Dibujar parrilla"
                 onClick={() => onDibujarParrilla(active)}

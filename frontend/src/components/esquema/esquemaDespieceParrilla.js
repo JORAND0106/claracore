@@ -1,6 +1,6 @@
 /**
- * Fase 2 — dibujo en plano de la parrilla a partir del cuadro de despiece.
- * Geometría en metros locales del contorno (origen = esquina superior izquierda).
+ * Dibujar parrilla — sin contorno ni recubrimiento.
+ * Coordenadas en metros de mundo (world px = m × PX_PER_METER).
  */
 import {
   DESPIECE_BARRA_A_DIAMETRO,
@@ -15,11 +15,19 @@ import {
 } from './esquemaDespiece.js'
 import { worldToMeters, metersToWorld } from './esquemaGeometry.js'
 
-/** Paleta fija por índice de posición. */
 export const PARRILLA_POS_COLORS = [
   '#0f766e', '#b45309', '#1d4ed8', '#be123c', '#7c3aed',
   '#047857', '#c2410c', '#0369a1', '#9f1239', '#5b21b6',
 ]
+
+/** Mensajes institucionales de una sola línea. */
+export const PARRILLA_MSG = Object.freeze({
+  touchStart: 'Toque el punto de inicio',
+  askContinue: '¿Continuar desde la última varilla?',
+  done: 'Parrilla dibujada',
+  phoneOnly: 'Disponible en iPad y portátil',
+  noPositions: 'El cuadro no tiene posiciones',
+})
 
 export function parseSpacingM(spacingM) {
   if (spacingM == null || String(spacingM).trim() === '') return null
@@ -36,72 +44,95 @@ export function diameterShortLabel(raw) {
   return `Ø ${frac}`
 }
 
-/** Tramo recto principal = segmento más largo (m). */
-export function mainStraightLengthM(pos) {
+export function worldToMetersPoint(pt) {
+  return { x: worldToMeters(pt.x), y: worldToMeters(pt.y) }
+}
+
+export function metersToWorldPoint(pt) {
+  return { x: metersToWorld(pt.x), y: metersToWorld(pt.y) }
+}
+
+/** Segmento principal (el más largo) del shape. */
+export function mainSegmentOf(pos) {
   const p = normalizeDespiecePosition(pos) || pos
-  if (!p) return NaN
-  if (p.shapeId === 'espiral' || p.spiral) return NaN
-  let best = NaN
+  if (!p || p.shapeId === 'espiral' || p.spiral) return null
+  let best = null
+  let bestL = -1
   for (const seg of p.segments || []) {
     const L = segmentLengthM(seg)
     if (!Number.isFinite(L) || L <= 0) continue
-    if (!Number.isFinite(best) || L > best) best = L
+    if (L > bestL) {
+      bestL = L
+      best = seg
+    }
   }
   return best
 }
 
+export function mainStraightLengthM(pos) {
+  const seg = mainSegmentOf(pos)
+  return seg ? segmentLengthM(seg) : NaN
+}
+
 /**
- * Offsets desde el borde: cover + i·spacing, i = 0..piezas-1.
- * 1,50 / 0,05 / c/0,20 / 8 → 0,05 … 1,45.
+ * Longitudes por pieza: si el tramo principal es variable, de mín a máx uniforme.
  */
-export function distributeOffsetsM(coverM, spacingM, pieces) {
-  const cover = Number(coverM)
-  const sp = Number(spacingM)
+export function barLengthsUniformM(pos, pieces) {
   const n = Math.max(0, Math.floor(Number(pieces) || 0))
-  if (!Number.isFinite(cover) || cover < 0 || !Number.isFinite(sp) || sp <= 0 || n < 1) return []
-  const out = []
-  for (let i = 0; i < n; i += 1) out.push(round2(cover + i * sp))
-  return out
+  if (n < 1) return []
+  const seg = mainSegmentOf(pos)
+  if (!seg) return []
+  const variable = seg.mode === 'variable' || seg.mode === 'var'
+  if (variable) {
+    let a = parseNum(seg.minM)
+    let b = parseNum(seg.maxM)
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      a = parseNum(seg.minCm) / 100
+      b = parseNum(seg.maxCm) / 100
+    }
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return []
+    if (n === 1) return [round2((a + b) / 2)]
+    const out = []
+    for (let i = 0; i < n; i += 1) {
+      out.push(round2(a + ((b - a) * i) / (n - 1)))
+    }
+    return out
+  }
+  const L = segmentLengthM(seg)
+  if (!Number.isFinite(L) || L <= 0) return []
+  return Array.from({ length: n }, () => round2(L))
 }
 
-export function contourBoundsMetersFromRing(ringWorld) {
-  if (!ringWorld?.length) return null
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const p of ringWorld) {
-    const x = worldToMeters(p.x)
-    const y = worldToMeters(p.y)
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
-    minX = Math.min(minX, x)
-    minY = Math.min(minY, y)
-    maxX = Math.max(maxX, x)
-    maxY = Math.max(maxY, y)
+/**
+ * @returns {{
+ *   kind: 'spaced'|'single'|'skip'|'invalid',
+ *   pieces: number,
+ *   spacing: number|null,
+ *   ubicacion: string,
+ *   reason?: string,
+ * }}
+ */
+export function classifyParrillaPosition(pos) {
+  const p = normalizeDespiecePosition(pos) || pos
+  const ubic = String(p?.ubicacion || '').trim()
+  const metrics = computePositionMetrics(p)
+  const pieces = metrics.ok ? metrics.pieces : Math.floor(parseNum(p?.pieces) || 0)
+  const spacing = parseSpacingM(p?.spacingM)
+  if (!pieces || pieces < 1) {
+    return { kind: 'invalid', pieces: 0, spacing: null, ubicacion: ubic, reason: 'Sin piezas' }
   }
-  if (!Number.isFinite(minX)) return null
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    widthM: round2(maxX - minX),
-    heightM: round2(maxY - minY),
+  if (!ubic) {
+    return { kind: 'invalid', pieces, spacing, ubicacion: ubic, reason: 'Sin ubicación' }
   }
-}
-
-export function worldPointToLocalM(ptWorld, bounds) {
-  return {
-    x: worldToMeters(ptWorld.x) - bounds.minX,
-    y: worldToMeters(ptWorld.y) - bounds.minY,
+  if (spacing == null) {
+    if (pieces === 1) return { kind: 'single', pieces: 1, spacing: null, ubicacion: ubic }
+    return { kind: 'skip', pieces, spacing: null, ubicacion: ubic, reason: 'Sin espaciamiento' }
   }
-}
-
-export function localMToWorld(ptM, bounds) {
-  return {
-    x: metersToWorld(bounds.minX + ptM.x),
-    y: metersToWorld(bounds.minY + ptM.y),
+  const lengths = barLengthsUniformM(p, pieces)
+  if (!lengths.length) {
+    return { kind: 'invalid', pieces, spacing, ubicacion: ubic, reason: 'Sin longitud' }
   }
+  return { kind: 'spaced', pieces, spacing, ubicacion: ubic }
 }
 
 function hookStubs(x1, y1, x2, y2, hookLenM = 0.06) {
@@ -116,98 +147,117 @@ function hookStubs(x1, y1, x2, y2, hookLenM = 0.06) {
   ]
 }
 
-function barLabelText(pos, pieces, barLen, diamShort) {
-  return `${pos.name || 'Pos'} · ${pieces} ${diamShort} ${formatEspaciamiento(pos.spacingM)} L=${fmt2(barLen)}`
+function labelFor(pos, pieces, lengths, diamShort) {
+  const variable = lengths.length > 1 && lengths[0] !== lengths[lengths.length - 1]
+  const Ltxt = variable
+    ? `L=${fmt2(lengths[0])}–${fmt2(lengths[lengths.length - 1])}`
+    : `L=${fmt2(lengths[0] || 0)}`
+  const esp = formatEspaciamiento(pos.spacingM)
+  return `${pos.name || 'Pos'} · ${pieces} ${diamShort}${esp !== '—' ? ` ${esp}` : ''} ${Ltxt}`
 }
 
 /**
- * Barras de una posición en metros locales del contorno.
- * @param {{x?:number,y?:number}|null} anchorLocalM — inicio de la primera varilla (opcional)
+ * Punto de inicio al continuar desde la última varilla (+ espaciamiento).
+ * @param {{ ubicacion, lastStart:{x,y}, lastEnd:{x,y}, spacingM?:number, anguloDeg?:number }} last
+ * @param {number} spacingM — espaciamiento a aplicar (de la nueva posición o el de la última)
  */
-export function buildBarsForPosition(pos, bounds, coverM, { anchorLocalM = null, colorIndex = 0 } = {}) {
+export function continueStartFromLast(last, spacingM) {
+  if (!last?.lastStart) return null
+  const sp = Number(spacingM)
+  if (!Number.isFinite(sp) || sp <= 0) return null
+  const ubic = last.ubicacion
+  const s = last.lastStart
+  if (ubic === 'Longitudinal') {
+    return { x: round2(s.x), y: round2(s.y + sp) }
+  }
+  if (ubic === 'Transversal') {
+    return { x: round2(s.x + sp), y: round2(s.y) }
+  }
+  if (ubic === 'Diagonal') {
+    const angDeg = parseNum(last.anguloDeg)
+    const ang = Number.isFinite(angDeg) ? (angDeg * Math.PI) / 180 : Math.PI / 4
+    const nx = -Math.sin(ang)
+    const ny = Math.cos(ang)
+    return { x: round2(s.x + sp * nx), y: round2(s.y + sp * ny) }
+  }
+  return null
+}
+
+/**
+ * Dibuja una posición desde un punto de inicio (metros de mundo).
+ */
+export function buildBarsFromStart(pos, startM, { colorIndex = 0 } = {}) {
   const p = normalizeDespiecePosition(pos) || pos
-  const spacing = parseSpacingM(p?.spacingM)
-  if (spacing == null) {
-    return { drawable: false, reason: 'sin distribución', positionId: p?.id, name: p?.name || '' }
+  const cls = classifyParrillaPosition(p)
+  if (cls.kind === 'skip' || cls.kind === 'invalid') {
+    return {
+      drawable: false,
+      reason: cls.reason || 'Sin espaciamiento',
+      positionId: p?.id,
+      name: p?.name || '',
+      ubicacion: cls.ubicacion,
+    }
   }
-  const metrics = computePositionMetrics(p)
-  const pieces = metrics.ok ? metrics.pieces : Math.floor(parseNum(p?.pieces) || 0)
-  if (!pieces || pieces < 1) {
-    return { drawable: false, reason: 'sin distribución', positionId: p?.id, name: p?.name || '' }
+  const pieces = cls.pieces
+  const spacing = cls.spacing
+  const ubic = cls.ubicacion
+  const lengths = barLengthsUniformM(p, pieces)
+  if (!lengths.length) {
+    return { drawable: false, reason: 'Sin longitud', positionId: p?.id, name: p?.name || '', ubicacion: ubic }
   }
-  const barLen = mainStraightLengthM(p)
-  if (!Number.isFinite(barLen) || barLen <= 0) {
-    return { drawable: false, reason: 'sin distribución', positionId: p?.id, name: p?.name || '' }
+  if (!startM || !Number.isFinite(startM.x) || !Number.isFinite(startM.y)) {
+    return { drawable: false, reason: 'Sin inicio', positionId: p?.id, name: p?.name || '', ubicacion: ubic }
   }
 
-  const ubic = String(p?.ubicacion || '').trim()
-  const cover = Number(coverM) || 0
   const color = PARRILLA_POS_COLORS[colorIndex % PARRILLA_POS_COLORS.length]
   const diamShort = diameterShortLabel(p.diameter)
-  const w = bounds.widthM
-  const h = bounds.heightM
   const segments = []
   const hooks = []
+  const x0 = round2(startM.x)
+  const y0 = round2(startM.y)
+  const sp = spacing || 0
 
   if (ubic === 'Longitudinal') {
-    // Horizontales, arriba → abajo. Longitud desde borde + recubrimiento.
-    const yFirst = Number.isFinite(anchorLocalM?.y) ? round2(anchorLocalM.y) : cover
-    const xStart = Number.isFinite(anchorLocalM?.x) ? round2(anchorLocalM.x) : cover
     for (let i = 0; i < pieces; i += 1) {
-      const y = round2(yFirst + i * spacing)
-      const x1 = xStart
-      const x2 = round2(xStart + barLen)
+      const y = round2(y0 + i * sp)
+      const L = lengths[i]
+      const x1 = x0
+      const x2 = round2(x0 + L)
       segments.push({ x1, y1: y, x2, y2: y })
       hooks.push(...hookStubs(x1, y, x2, y))
     }
   } else if (ubic === 'Transversal') {
-    // Verticales, izquierda → derecha.
-    const xFirst = Number.isFinite(anchorLocalM?.x) ? round2(anchorLocalM.x) : cover
-    const yStart = Number.isFinite(anchorLocalM?.y) ? round2(anchorLocalM.y) : cover
     for (let i = 0; i < pieces; i += 1) {
-      const x = round2(xFirst + i * spacing)
-      const y1 = yStart
-      const y2 = round2(yStart + barLen)
+      const x = round2(x0 + i * sp)
+      const L = lengths[i]
+      const y1 = y0
+      const y2 = round2(y0 + L)
       segments.push({ x1: x, y1, x2: x, y2 })
       hooks.push(...hookStubs(x, y1, x, y2))
     }
   } else if (ubic === 'Diagonal') {
-    const angDeg = parseNum(p?.anguloDeg)
+    const angDeg = parseNum(p.anguloDeg)
     const ang = Number.isFinite(angDeg) ? (angDeg * Math.PI) / 180 : Math.PI / 4
     const ux = Math.cos(ang)
     const uy = Math.sin(ang)
-    // Normal (rotado 90°) para repartir desde esquina superior izquierda
     const nx = -Math.sin(ang)
     const ny = Math.cos(ang)
-    // Si hay ancla, la primera varilla pasa por ese punto; si no, offset = cover desde SI
     for (let i = 0; i < pieces; i += 1) {
-      let x1
-      let y1
-      if (anchorLocalM && Number.isFinite(anchorLocalM.x) && Number.isFinite(anchorLocalM.y)) {
-        x1 = round2(anchorLocalM.x + i * spacing * nx)
-        y1 = round2(anchorLocalM.y + i * spacing * ny)
-      } else {
-        const d = cover + i * spacing
-        // Punto sobre la normal desde SI; inicio del tramo a lo largo de u desde ese punto
-        const ox = d * nx
-        const oy = d * ny
-        x1 = round2(ox)
-        y1 = round2(oy)
-        // Avanzar el inicio para que el tramo quede dentro: proyectar desde borde
-        // Concepto: arranca a recubrimiento desde el borde a lo largo de la varilla
-        x1 = round2(ox + cover * ux)
-        y1 = round2(oy + cover * uy)
-      }
-      const x2 = round2(x1 + barLen * ux)
-      const y2 = round2(y1 + barLen * uy)
+      const x1 = round2(x0 + i * sp * nx)
+      const y1 = round2(y0 + i * sp * ny)
+      const L = lengths[i]
+      const x2 = round2(x1 + L * ux)
+      const y2 = round2(y1 + L * uy)
       segments.push({ x1, y1, x2, y2 })
       hooks.push(...hookStubs(x1, y1, x2, y2))
     }
   } else {
-    return { drawable: false, reason: 'sin distribución', positionId: p?.id, name: p?.name || '' }
+    return { drawable: false, reason: 'Sin ubicación', positionId: p?.id, name: p?.name || '', ubicacion: ubic }
   }
 
   const mid = segments[Math.floor(segments.length / 2)] || segments[0]
+  const last = segments[segments.length - 1]
+  const text = labelFor(p, pieces, lengths, diamShort)
   let labelX
   let labelY
   let guideX
@@ -215,13 +265,13 @@ export function buildBarsForPosition(pos, bounds, coverM, { anchorLocalM = null,
   if (ubic === 'Longitudinal') {
     guideX = mid.x2
     guideY = mid.y1
-    labelX = round2(Math.max(w, mid.x2) + 0.18)
+    labelX = round2(mid.x2 + 0.18)
     labelY = mid.y1
   } else if (ubic === 'Transversal') {
     guideX = mid.x1
     guideY = mid.y2
     labelX = mid.x1
-    labelY = round2(Math.max(h, mid.y2) + 0.18)
+    labelY = round2(mid.y2 + 0.18)
   } else {
     guideX = mid.x2
     guideY = mid.y2
@@ -229,21 +279,24 @@ export function buildBarsForPosition(pos, bounds, coverM, { anchorLocalM = null,
     labelY = round2(mid.y2 + 0.2)
   }
 
-  const text = barLabelText(p, pieces, barLen, diamShort)
   return {
     drawable: true,
     positionId: p.id,
     name: p.name || '',
     color,
     ubicacion: ubic,
+    anguloDeg: p.anguloDeg,
     pieces,
-    barLenM: barLen,
     spacingM: spacing,
     diameterLabel: diamShort,
+    lengths,
     labelText: text,
     segments,
     hooks,
     label: { text, x: labelX, y: labelY, guideX, guideY },
+    lastStart: { x: last.x1, y: last.y1 },
+    lastEnd: { x: last.x2, y: last.y2 },
+    firstStart: { x: segments[0].x1, y: segments[0].y1 },
   }
 }
 
@@ -263,15 +316,71 @@ export function viewTitleForKey(key) {
   return 'Parrilla'
 }
 
+/** AABB en metros a partir de barras dibujadas. */
+export function boundsFromBars(bars) {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const bar of bars || []) {
+    for (const seg of bar.segments || []) {
+      minX = Math.min(minX, seg.x1, seg.x2)
+      minY = Math.min(minY, seg.y1, seg.y2)
+      maxX = Math.max(maxX, seg.x1, seg.x2)
+      maxY = Math.max(maxY, seg.y1, seg.y2)
+    }
+  }
+  if (!Number.isFinite(minX)) {
+    return { minX: 0, minY: 0, maxX: 1, maxY: 1, widthM: 1, heightM: 1 }
+  }
+  // Padding para rótulos
+  minX -= 0.05
+  minY -= 0.05
+  maxX += 0.4
+  maxY += 0.3
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    widthM: round2(maxX - minX),
+    heightM: round2(maxY - minY),
+  }
+}
+
+/** Convierte barras (coords absolutas m) a coords locales del bounds. */
+export function barsToLocal(bars, bounds) {
+  const ox = bounds.minX
+  const oy = bounds.minY
+  const shift = (s) => ({
+    x1: round2(s.x1 - ox),
+    y1: round2(s.y1 - oy),
+    x2: round2(s.x2 - ox),
+    y2: round2(s.y2 - oy),
+  })
+  return (bars || []).map((bar) => ({
+    ...bar,
+    segments: (bar.segments || []).map(shift),
+    hooks: (bar.hooks || []).map(shift),
+    label: bar.label
+      ? {
+          ...bar.label,
+          x: round2(bar.label.x - ox),
+          y: round2(bar.label.y - oy),
+          guideX: round2(bar.label.guideX - ox),
+          guideY: round2(bar.label.guideY - oy),
+        }
+      : null,
+  }))
+}
+
 /**
- * @param {object} schedule
- * @param {object} boundsM
- * @param {number} coverM
- * @param {Record<string,{x:number,y:number}>} [anchorsLocalM]
+ * Agrupa barras dibujadas en vistas (sencilla / doble).
  */
-export function buildParrillaViews(schedule, boundsM, coverM, anchorsLocalM = {}) {
+export function buildParrillaViewsFromBars(schedule, bars, skipped = []) {
   const positions = (schedule?.positions || []).map((p) => normalizeDespiecePosition(p) || p)
   const hasDoble = positions.some((p) => String(p?.parrilla || '').trim() === 'Doble')
+  const posById = Object.fromEntries(positions.map((p) => [p.id, p]))
 
   const buckets = new Map()
   const ensure = (key) => {
@@ -280,7 +389,6 @@ export function buildParrillaViews(schedule, boundsM, coverM, anchorsLocalM = {}
     }
     return buckets.get(key)
   }
-
   if (hasDoble) {
     ensure('doble-sup')
     ensure('doble-inf')
@@ -288,24 +396,15 @@ export function buildParrillaViews(schedule, boundsM, coverM, anchorsLocalM = {}
     ensure('sencilla')
   }
 
-  let colorIdx = 0
-  for (const pos of positions) {
-    const key = hasDoble ? viewKeyForPosition(pos) : 'sencilla'
-    const target = ensure(key)
-    const bar = buildBarsForPosition(pos, boundsM, coverM, {
-      anchorLocalM: anchorsLocalM?.[pos.id] || null,
-      colorIndex: colorIdx,
-    })
-    colorIdx += 1
-    if (!bar.drawable) {
-      target.skipped.push({
-        positionId: pos.id,
-        name: pos.name || '',
-        reason: bar.reason || 'sin distribución',
-      })
-    } else {
-      target.bars.push(bar)
-    }
+  for (const bar of bars || []) {
+    const pos = posById[bar.positionId]
+    const key = hasDoble ? viewKeyForPosition(pos || {}) : 'sencilla'
+    ensure(key).bars.push(bar)
+  }
+  for (const sk of skipped || []) {
+    const pos = posById[sk.positionId]
+    const key = hasDoble ? viewKeyForPosition(pos || {}) : 'sencilla'
+    ensure(key).skipped.push(sk)
   }
 
   const order = hasDoble ? ['doble-sup', 'doble-inf', 'sencilla'] : ['sencilla']
@@ -317,31 +416,72 @@ export function buildParrillaViews(schedule, boundsM, coverM, anchorsLocalM = {}
     views.push(v)
   }
 
+  const allBars = views.flatMap((v) => v.bars)
+  const boundsAbs = boundsFromBars(allBars)
+  const localViews = views.map((v) => ({
+    ...v,
+    bars: barsToLocal(v.bars, boundsAbs),
+  }))
+
   return {
-    coverM: Number(coverM),
-    boundsM: { ...boundsM },
-    views,
+    coverM: 0,
+    boundsM: boundsAbs,
+    views: localViews,
   }
 }
 
-export function verifyGridCaseA(views) {
-  const v = views?.[0]
-  if (!v) return false
-  const long = v.bars.find((b) => b.ubicacion === 'Longitudinal')
-  const trans = v.bars.find((b) => b.ubicacion === 'Transversal')
-  if (!long || !trans) return false
-  const ys = long.segments.map((s) => s.y1)
-  const xs = trans.segments.map((s) => s.x1)
-  const expect = [0.05, 0.25, 0.45, 0.65, 0.85, 1.05, 1.25, 1.45]
-  if (ys.length !== 8 || xs.length !== 8) return false
-  const near = (a, b) => Math.abs(a - b) < 1e-6
-  return expect.every((e, i) => near(ys[i], e) && near(xs[i], e))
+/** @deprecated compat — usa buildBarsFromStart */
+export function buildBarsForPosition(pos, bounds, coverM, opts = {}) {
+  const start = opts.anchorLocalM
+    || (bounds ? { x: Number(coverM) || 0, y: Number(coverM) || 0 } : null)
+  return buildBarsFromStart(pos, start, opts)
 }
 
-/**
- * Dibuja vistas en canvas (PNG o miniatura).
- * @returns {{ height: number }}
- */
+/** @deprecated compat */
+export function buildParrillaViews(schedule, boundsM, coverM, anchorsLocalM = {}) {
+  const positions = (schedule?.positions || []).map((p) => normalizeDespiecePosition(p) || p)
+  const bars = []
+  const skipped = []
+  let colorIdx = 0
+  for (const pos of positions) {
+    const cls = classifyParrillaPosition(pos)
+    if (cls.kind === 'skip' || cls.kind === 'invalid') {
+      skipped.push({ positionId: pos.id, name: pos.name || '', reason: cls.reason || 'Sin espaciamiento' })
+      colorIdx += 1
+      continue
+    }
+    const anchor = anchorsLocalM?.[pos.id]
+      || { x: (boundsM?.minX || 0) + (Number(coverM) || 0), y: (boundsM?.minY || 0) + (Number(coverM) || 0) }
+    // Convert local anchor (relative to bounds) to absolute if bounds given
+    const startAbs = boundsM
+      ? { x: boundsM.minX + (anchor.x ?? 0), y: boundsM.minY + (anchor.y ?? 0) }
+      : anchor
+    const bar = buildBarsFromStart(pos, startAbs, { colorIndex: colorIdx })
+    colorIdx += 1
+    if (!bar.drawable) {
+      skipped.push({ positionId: pos.id, name: pos.name || '', reason: bar.reason || 'Sin espaciamiento' })
+    } else {
+      bars.push(bar)
+    }
+  }
+  return buildParrillaViewsFromBars(schedule, bars, skipped)
+}
+
+export function distributeOffsetsM(coverM, spacingM, pieces) {
+  const cover = Number(coverM)
+  const sp = Number(spacingM)
+  const n = Math.max(0, Math.floor(Number(pieces) || 0))
+  if (!Number.isFinite(cover) || cover < 0 || !Number.isFinite(sp) || sp <= 0 || n < 1) return []
+  const out = []
+  for (let i = 0; i < n; i += 1) out.push(round2(cover + i * sp))
+  return out
+}
+
+export function serializeParrillaDraw(drawData) {
+  if (!drawData) return null
+  return JSON.parse(JSON.stringify(drawData))
+}
+
 export function paintParrillaViews(ctx, drawData, layout) {
   if (!ctx || !drawData?.views?.length) return { height: 0 }
   const { x: ox, y: oy, width } = layout
@@ -367,15 +507,14 @@ export function paintParrillaViews(ctx, drawData, layout) {
 
     const px = ox + pad
     const py = cy + titleH + 6
-    ctx.strokeStyle = '#94a3b8'
-    ctx.lineWidth = 1.5
+    ctx.strokeStyle = '#e2e8f0'
+    ctx.lineWidth = 1
     ctx.strokeRect(px, py, plotW, plotH)
 
     const toX = (m) => px + m * s
     const toY = (m) => py + m * s
-
-    // Separar rótulos verticalmente para no solaparse
     const labelSlots = []
+
     for (const bar of view.bars) {
       ctx.strokeStyle = bar.color
       ctx.fillStyle = bar.color
@@ -398,20 +537,15 @@ export function paintParrillaViews(ctx, drawData, layout) {
       if (lb?.text) {
         let lx = toX(lb.x)
         let ly = toY(lb.y)
-        // Empujar si solapa otro rótulo
         for (const prev of labelSlots) {
-          if (Math.abs(ly - prev.y) < 16 && Math.abs(lx - prev.x) < 200) {
-            ly = prev.y + 18
-          }
+          if (Math.abs(ly - prev.y) < 16 && Math.abs(lx - prev.x) < 200) ly = prev.y + 18
         }
         labelSlots.push({ x: lx, y: ly })
-        const gx = toX(lb.guideX)
-        const gy = toY(lb.guideY)
         ctx.strokeStyle = bar.color
         ctx.lineWidth = 1
         ctx.setLineDash([4, 3])
         ctx.beginPath()
-        ctx.moveTo(gx, gy)
+        ctx.moveTo(toX(lb.guideX), toY(lb.guideY))
         ctx.lineTo(lx, ly)
         ctx.stroke()
         ctx.setLineDash([])
@@ -424,8 +558,11 @@ export function paintParrillaViews(ctx, drawData, layout) {
     if (view.skipped?.length) {
       ctx.fillStyle = '#64748b'
       ctx.font = '13px "Segoe UI", system-ui, sans-serif'
-      const skipLine = view.skipped.map((sk) => `${sk.name || 'Pos'}: ${sk.reason}`).join(' · ')
-      ctx.fillText(skipLine, px, py + plotH + 40)
+      ctx.fillText(
+        view.skipped.map((sk) => `${sk.name || 'Pos'}: ${sk.reason}`).join(' · '),
+        px,
+        py + plotH + 40,
+      )
     }
 
     cy += blockH + gap
@@ -445,38 +582,66 @@ export function estimateParrillaPngHeight(drawData, width = 2200) {
   return drawData.views.length * (blockH + 22) + 28
 }
 
-/** Serializa drawData para borrador / regeneración PNG. */
-export function serializeParrillaDraw(drawData) {
-  if (!drawData) return null
-  return JSON.parse(JSON.stringify(drawData))
+export function localMToWorld(ptM, bounds) {
+  return {
+    x: metersToWorld(bounds.minX + ptM.x),
+    y: metersToWorld(bounds.minY + ptM.y),
+  }
 }
 
-/**
- * Dibuja el objeto de lienzo `despieceParrilla` en coordenadas world.
- */
+export function worldPointToLocalM(ptWorld, bounds) {
+  return {
+    x: worldToMeters(ptWorld.x) - bounds.minX,
+    y: worldToMeters(ptWorld.y) - bounds.minY,
+  }
+}
+
+export function contourBoundsMetersFromRing(ringWorld) {
+  if (!ringWorld?.length) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const p of ringWorld) {
+    const x = worldToMeters(p.x)
+    const y = worldToMeters(p.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x)
+    maxY = Math.max(maxY, y)
+  }
+  if (!Number.isFinite(minX)) return null
+  return {
+    minX, minY, maxX, maxY,
+    widthM: round2(maxX - minX),
+    heightM: round2(maxY - minY),
+  }
+}
+
 export function drawDespieceParrillaObject(ctx, obj, selected = false) {
   if (!ctx || !obj?.drawData?.views?.length || !obj.boundsM) return
   const bounds = obj.boundsM
   const toW = (pt) => localMToWorld(pt, bounds)
   const labelSlots = []
-
-  // Contorno guía
   const c0 = toW({ x: 0, y: 0 })
   const c1 = toW({ x: bounds.widthM, y: bounds.heightM })
-  ctx.save()
-  ctx.strokeStyle = selected ? '#ea580c' : '#94a3b8'
-  ctx.lineWidth = selected ? 1.6 : 1
-  ctx.setLineDash(selected ? [] : [5, 4])
-  ctx.strokeRect(c0.x, c0.y, c1.x - c0.x, c1.y - c0.y)
-  ctx.setLineDash([])
 
+  ctx.save()
+  if (selected) {
+    ctx.strokeStyle = '#ea580c'
+    ctx.lineWidth = 1.2
+    ctx.setLineDash([4, 3])
+    ctx.strokeRect(c0.x, c0.y, c1.x - c0.x, c1.y - c0.y)
+    ctx.setLineDash([])
+  }
+
+  let titleY = c0.y - 8
   for (const view of obj.drawData.views) {
-    // Título de vista (arriba a la izquierda del bloque)
     ctx.fillStyle = '#0f766e'
     ctx.font = 'bold 12px "Segoe UI", system-ui, sans-serif'
-    const titlePt = toW({ x: 0, y: -0.12 - (obj.drawData.views.indexOf(view) * 0.01) })
-    // Offset por vista: apilar títulos ligeramente si hay varias — mejor encima del contorno
-    void titlePt
+    ctx.fillText(view.title, c0.x, titleY)
+    titleY -= 14
 
     for (const bar of view.bars) {
       ctx.strokeStyle = bar.color
@@ -504,9 +669,7 @@ export function drawDespieceParrillaObject(ctx, obj, selected = false) {
       if (lb?.text) {
         let lp = toW({ x: lb.x, y: lb.y })
         for (const prev of labelSlots) {
-          if (Math.hypot(lp.x - prev.x, lp.y - prev.y) < 14) {
-            lp = { x: lp.x, y: prev.y + 14 }
-          }
+          if (Math.hypot(lp.x - prev.x, lp.y - prev.y) < 14) lp = { x: lp.x, y: prev.y + 14 }
         }
         labelSlots.push(lp)
         const gp = toW({ x: lb.guideX, y: lb.guideY })
@@ -523,22 +686,13 @@ export function drawDespieceParrillaObject(ctx, obj, selected = false) {
         ctx.fillText(lb.text, lp.x + 3, lp.y + 3)
       }
     }
-  }
-
-  // Títulos de vista a la izquierda del contorno
-  let titleY = c0.y - 8
-  for (const view of obj.drawData.views) {
-    ctx.fillStyle = '#0f766e'
-    ctx.font = 'bold 12px "Segoe UI", system-ui, sans-serif'
-    ctx.fillText(view.title, c0.x, titleY)
-    titleY -= 14
     if (view.skipped?.length) {
       ctx.fillStyle = '#64748b'
       ctx.font = '10px "Segoe UI", system-ui, sans-serif'
       ctx.fillText(
         view.skipped.map((s) => `${s.name}: ${s.reason}`).join(' · '),
         c0.x,
-        c1.y + 16 + (obj.drawData.views.indexOf(view) * 12),
+        c1.y + 14,
       )
     }
   }
@@ -548,13 +702,86 @@ export function drawDespieceParrillaObject(ctx, obj, selected = false) {
 export function despieceParrillaBoundsWorld(obj) {
   if (!obj?.boundsM) return null
   const b = obj.boundsM
-  const padM = 0.5
+  const padM = 0.35
   const a = localMToWorld({ x: -padM, y: -padM }, b)
-  const c = localMToWorld({ x: b.widthM + padM + 0.8, y: b.heightM + padM + 0.4 }, b)
+  const c = localMToWorld({ x: b.widthM + padM + 0.5, y: b.heightM + padM + 0.3 }, b)
   return {
     x: Math.min(a.x, c.x),
     y: Math.min(a.y, c.y),
     w: Math.abs(c.x - a.x),
     h: Math.abs(c.y - a.y),
+  }
+}
+
+/** ¿Puede continuar desde última varilla de la misma ubicación? */
+export function canContinueFromLast(lastByUbic, ubicacion) {
+  return !!(lastByUbic && lastByUbic[ubicacion]?.lastStart)
+}
+
+/**
+ * Cola de dibujo en orden del cuadro.
+ * - spaced / single → se dibujan (single pide o hereda inicio)
+ * - skip (multi sin espaciamiento) → van a skipped
+ * - invalid → skipped
+ */
+export function prepareParrillaQueue(schedule) {
+  const positions = (schedule?.positions || []).map((p) => normalizeDespiecePosition(p) || p)
+  const queue = []
+  const skipped = []
+  positions.forEach((pos, colorIndex) => {
+    const cls = classifyParrillaPosition(pos)
+    if (cls.kind === 'skip' || cls.kind === 'invalid') {
+      skipped.push({
+        positionId: pos.id,
+        name: pos.name || '',
+        reason: cls.reason || 'Sin espaciamiento',
+        colorIndex,
+      })
+      return
+    }
+    queue.push({
+      positionId: pos.id,
+      pos,
+      cls,
+      colorIndex,
+    })
+  })
+  return { queue, skipped, positions }
+}
+
+/**
+ * Inicio al responder «Sí»: usa el espaciamiento de la última varilla
+ * de la misma ubicación. Si no hay, retorna null (pedir toque).
+ */
+export function resolveContinueStart(lastByUbic, ubicacion, fallbackSpacingM = null) {
+  const last = lastByUbic?.[ubicacion]
+  if (!last?.lastStart) return null
+  const sp = Number(last.spacingM) > 0
+    ? Number(last.spacingM)
+    : (Number(fallbackSpacingM) > 0 ? Number(fallbackSpacingM) : null)
+  if (sp == null) return null
+  return continueStartFromLast(last, sp)
+}
+
+/**
+ * Tras dibujar una barra, actualiza el mapa lastByUbic.
+ * Si la posición no trae espaciamiento (pieza única), conserva el de la
+ * última varilla de esa ubicación para poder continuar en cadena.
+ */
+export function recordLastByUbic(lastByUbic, bar) {
+  if (!bar?.drawable || !bar.ubicacion || !bar.lastStart) return lastByUbic || {}
+  const prev = lastByUbic?.[bar.ubicacion]
+  const spacingM = Number(bar.spacingM) > 0
+    ? bar.spacingM
+    : (Number(prev?.spacingM) > 0 ? prev.spacingM : bar.spacingM)
+  return {
+    ...(lastByUbic || {}),
+    [bar.ubicacion]: {
+      ubicacion: bar.ubicacion,
+      lastStart: { ...bar.lastStart },
+      lastEnd: bar.lastEnd ? { ...bar.lastEnd } : null,
+      spacingM,
+      anguloDeg: bar.anguloDeg ?? prev?.anguloDeg,
+    },
   }
 }
