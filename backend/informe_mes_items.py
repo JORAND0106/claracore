@@ -146,6 +146,39 @@ def filas_que_entran_al_informe(filas: Optional[Iterable[dict]]) -> List[dict]:
     ]
 
 
+def claves_que_entran_al_informe(filas: Optional[Iterable[dict]]) -> set:
+    """Capítulo y código exactos del cuadro CC-MES-001."""
+    return {
+        (ficha["capitulo"], ficha["item_numero"])
+        for ficha in filas_que_entran_al_informe(filas)
+    }
+
+
+def filtrar_registros_memorias_mes(
+    registros: Optional[Iterable[dict]],
+    filas_listado: Optional[Iterable[dict]],
+    *,
+    claves: Optional[Iterable[ClaveItem]] = None,
+) -> List[dict]:
+    """Registros del periodo que están en el cuadro del informe.
+
+    La clave es la misma de ``filas_que_entran_al_informe``: estado de precio
+    Aprobado y capítulo distinto de los cuatro de PMT. Conserva el orden.
+    Un ítem del informe sin registros no aparece.
+    """
+    admitidas = set(claves) if claves is not None else claves_que_entran_al_informe(filas_listado)
+    out: List[dict] = []
+    for raw in registros or []:
+        if not isinstance(raw, dict):
+            continue
+        item = raw.get("item_numero")
+        if item is None or str(item).strip() == "":
+            item = raw.get("item")
+        if clave_item_exacta(raw.get("capitulo"), item) in admitidas:
+            out.append(raw)
+    return out
+
+
 CAPITULO_NO_PREVISTOS = "NO PREVISTOS"
 _NP_PREFIJO = "NP-"
 _NP_NUMERO_RE = re.compile(r"^NP-(\d+)", re.IGNORECASE)

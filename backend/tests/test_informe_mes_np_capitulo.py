@@ -268,6 +268,21 @@ def _excel_par(inf, *, integral=False, norma=False):
             patch.object(inf, "_get_firma_cfg_para_documento", return_value={}),
             patch.object(inf, "_sub_corte_dummy_memoria", return_value=({}, {})),
             patch.object(inf, "fetch_registros_memoria_cc_mes_alineado_acta", side_effect=_fetch),
+            patch(
+                "informe_mes_items.fetch_listado_contrato",
+                return_value=[
+                    {
+                        "id": i + 1,
+                        "capitulo": it["capitulo"],
+                        "item_numero": it["item_numero"],
+                        "descripcion": it.get("item_descripcion") or "",
+                        "unidad": it.get("unidad") or "",
+                        "precio_unitario": it.get("vlr_unitario") or 0,
+                        "estado_precio": "Aprobado",
+                    }
+                    for i, it in enumerate(items)
+                ],
+            ),
         ):
             if integral:
                 return inf._cc_mes_integral_excel_bytes(

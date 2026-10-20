@@ -14,7 +14,7 @@ from datetime import datetime, date
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 _log = logging.getLogger("uvicorn.error")
 
@@ -3349,6 +3349,26 @@ def ccd_items_conciliacion_semana(contrato_id: int, semana_id: int, current_user
     return {"items": items, "total_costo": total, "item_numeros": nums, "registros_raw": len(reg)}
 
 
+def _filtrar_registros_memorias_al_informe(
+    contrato_id: int,
+    registros: Optional[List[dict]],
+    filas_listado: Optional[List[dict]] = None,
+    claves: Optional[Iterable[Tuple[str, str]]] = None,
+) -> List[dict]:
+    """Mismo universo de ítems que CC-MES-001. El listado se lee una vez por solicitud."""
+    from informe_mes_items import (
+        claves_que_entran_al_informe,
+        fetch_listado_contrato,
+        filtrar_registros_memorias_mes,
+    )
+
+    if claves is None:
+        if filas_listado is None:
+            filas_listado = fetch_listado_contrato(_sb, int(contrato_id))
+        claves = claves_que_entran_al_informe(filas_listado)
+    return filtrar_registros_memorias_mes(registros or [], filas_listado, claves=claves)
+
+
 @router.get("/{contrato_id}/ccd/conciliacion/acta/{acta_id}/items")
 def ccd_items_conciliacion_acta(
     contrato_id: int,
@@ -3363,6 +3383,7 @@ def ccd_items_conciliacion_acta(
     reg = fetch_registros_informe_cc_mes_por_acta(
         _sb, contrato_id, acta_id, nivel_aprobacion=niv
     )
+    reg = _filtrar_registros_memorias_al_informe(contrato_id, reg)
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     caps = _capitulos_por_item_numero_desde_items(items)
@@ -7198,6 +7219,7 @@ def pdf_cc_mes_002_acta(
         item_exacto=True,
         nivel_aprobacion=niv,
     )
+    registros = _filtrar_registros_memorias_al_informe(contrato_id, registros)
     if not registros:
         raise HTTPException(404, "No hay registros para este ítem y acta")
     contrato = _row(
@@ -7768,6 +7790,7 @@ def pdf_cc_mes_002_acta_con_sello_firma(
         item_exacto=True,
         nivel_aprobacion=niv,
     )
+    registros = _filtrar_registros_memorias_al_informe(contrato_id, registros)
     if not registros:
         raise HTTPException(404, "No hay registros para este ítem y acta")
     contrato = _row(
@@ -7871,6 +7894,7 @@ def _cc_mes_002_acta_completo_ctx(
     todos = fetch_registros_memoria_cc_mes_acta_todos(
         _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
     )
+    todos = _filtrar_registros_memorias_al_informe(contrato_id, todos)
     if not todos:
         raise HTTPException(
             status_code=404,
@@ -14034,6 +14058,7 @@ def _cc_mes_002_item_excel_bytes(
         item_exacto=True,
         nivel_aprobacion=nivel_aprobacion,
     )
+    registros = _filtrar_registros_memorias_al_informe(contrato_id, registros)
     if not registros:
         raise HTTPException(404, "No hay registros para este ítem y acta")
     contrato = _row(
@@ -14095,6 +14120,7 @@ def _cc_mes_002_acta_completo_excel_bytes(
     todos = fetch_registros_memoria_cc_mes_acta_todos(
         _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
     )
+    todos = _filtrar_registros_memorias_al_informe(contrato_id, todos)
     if not todos:
         raise HTTPException(404, "No hay registros en esta acta para generar memorias")
     items_agg, _total = aggregate_items_conciliacion(todos)
@@ -15385,6 +15411,14 @@ def _cc_sem_mes_integral_excel_bytes(
     assert ws_ejec is not None
     ws_ejec.title = sheet_ejec
 
+    claves_mes = None
+    if modo == "mes":
+        from informe_mes_items import claves_que_entran_al_informe, fetch_listado_contrato
+
+        claves_mes = claves_que_entran_al_informe(
+            fetch_listado_contrato(_sb, int(contrato_id))
+        )
+
     memoria_links: Dict[str, Dict[str, Any]] = {}
     for it in items:
         inum = str(it.get("item_numero") or "").strip()
@@ -15421,6 +15455,9 @@ def _cc_sem_mes_integral_excel_bytes(
                 ]
             else:
                 registros = []
+            registros = _filtrar_registros_memorias_al_informe(
+                contrato_id, registros, claves=claves_mes
+            )
             if not registros:
                 continue
         item_info = _item_info_desde_registros(registros, inum) if registros else {
