@@ -6934,6 +6934,7 @@ def _html_cc_mes_001_v1(
         items_sin_precio=items_sin_precio,
         vista_sin_conciliar=vista_sin_conciliar,
         resumen_4cols=resumen_4cols,
+        firmas_pie=True,
     )
     html = html.replace(CODIGO_FORMATO_CCD_CC_SUB_001, CODIGO_FORMATO_CCD_CC_MES_001)
     html = html.replace(
@@ -15700,6 +15701,12 @@ def _html_cc_sub_001_thead_items(bd: str, thead_bg: str) -> str:
 # evita que una columna estire TODA la fila de las tres firmas.
 _CCD_FIRMA_BOX_PT = "28pt"  # ≈ 1 cm (más compacto que 42pt)
 _CCD_FIRMA_IMG_INNER_PT = "26pt"
+# Informe mensual: franja inferior fija. Alto medido con la caja de imagen (28pt)
+# más nombre y cargo, con holgura para un salto de línea. El margen inferior
+# del @page es bottom + alto + separación, así el flujo no entra en la franja.
+_CC_MES_FIRMAS_BOTTOM_MM = 3.0
+_CC_MES_FIRMAS_ALTO_MM = 26.0
+_CC_MES_FIRMAS_SEPARACION_MM = 1.5
 # Memorias CC-SUB-002 / CC-SEM / CC-MES (landscape): fila de firmas más baja que CC-SUB-001.
 _CCD_FIRMA_MEM002_BOX_PT = "22pt"
 _CCD_FIRMA_MEM002_IMG_INNER_PT = "20pt"
@@ -15771,8 +15778,14 @@ def _html_cc_sub_v1_plain(
     items_sin_precio: Optional[List[str]] = None,
     vista_sin_conciliar: bool = False,
     resumen_4cols: Optional[Dict[str, Any]] = None,
+    firmas_pie: bool = False,
 ) -> str:
-    """CC-SUB-001 landscape: bloques Actualizadas/Presente/Acumulado/Saldo + resumen conciliación."""
+    """CC-SUB-001 landscape: bloques Actualizadas/Presente/Acumulado/Saldo + resumen conciliación.
+
+    ``firmas_pie`` reserva la franja inferior y repite Elaboró/Revisó/Aprobó en
+    cada página. Solo el informe mensual lo activa; el corte de subcontratista
+    sigue con las firmas a continuación del resumen.
+    """
     import corte_sub_conciliacion as csc
 
     bd = "border:1px solid #9ca3af"
@@ -15798,13 +15811,37 @@ def _html_cc_sub_v1_plain(
 
     plan = _cc_sub_001_plan_filas_capitulo(list(items or []))
     cap_sub_bg = est.get("capitulo_subtotal_bg") or "#93c5fd"
+    if firmas_pie:
+        margen_inf = (
+            _CC_MES_FIRMAS_BOTTOM_MM + _CC_MES_FIRMAS_ALTO_MM + _CC_MES_FIRMAS_SEPARACION_MM
+        )
+        page_css = f"""@page {{
+  size: letter landscape;
+  margin: 6mm 7mm {margen_inf:.1f}mm 7mm;
+  @frame footer {{
+    -pdf-frame-content: firmasFooter;
+    bottom: {_CC_MES_FIRMAS_BOTTOM_MM:.1f}mm;
+    margin-left: 7mm;
+    margin-right: 7mm;
+    height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm;
+    -pdf-keep-in-frame-mode: shrink;
+  }}
+}}"""
+        firmas_wrap_css = ".ccd-cc001-firmas-wrap { margin: 0; padding: 0; }"
+        firmas_attr = ' id="firmasFooter"'
+        periodo_css = "margin:0;padding:0;line-height:1.05;"
+    else:
+        page_css = "@page { size: letter landscape; margin: 6mm 7mm; }"
+        firmas_wrap_css = ".ccd-cc001-firmas-wrap { margin-top: 4mm; page-break-inside: avoid; }"
+        firmas_attr = ""
+        periodo_css = "margin-top:6px;"
 
     parts: list[str] = []
     parts.append(f"""<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
 <head><meta charset="UTF-8"/><title>{_h(codigo_ccd)}</title>
 <style type="text/css">
-@page {{ size: letter landscape; margin: 6mm 7mm; }}
+{page_css}
 .cc001-tabla-items {{
   width:100%; border-collapse:collapse; table-layout:fixed;
   page-break-inside: auto;
@@ -15813,7 +15850,7 @@ def _html_cc_sub_v1_plain(
 .cc001-tabla-items tbody {{ display: table-row-group; }}
 .cc001-tabla-items tr {{ page-break-inside: avoid; page-break-after: auto; }}
 .cc001-tabla-items tr.cc001-cap-sub {{ page-break-inside: avoid; }}
-.ccd-cc001-firmas-wrap {{ margin-top: 4mm; page-break-inside: avoid; }}
+{firmas_wrap_css}
 .ccd-cc001-firmas-tbl {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 .ccd-cc001-firmas-tbl td {{ vertical-align: top; }}
 .ccd-firma-slot-hdr {{ font-weight: bold; font-size: 6.5pt; margin: 0 0 1px 0; padding: 0; color: #111; line-height: 1.1; }}
@@ -15838,6 +15875,9 @@ def _html_cc_sub_v1_plain(
    a la página siguiente dejando un hueco grande tras la tabla. */
 .cc001-resumen {{ width:100%; border-collapse:collapse; margin-top:4mm; page-break-inside: auto; }}
 .cc001-resumen tr {{ page-break-inside: avoid; }}
+/* El gran total viaja con la línea de período: si no cabe, los dos pasan
+   juntos y no queda una hoja cuyo único flujo es esa línea. */
+.cc001-cierre {{ width:100%; border-collapse:collapse; margin:0; -pdf-keep-with-next: true; }}
 </style></head>
 <body style="margin:0;padding:3px;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;">
 """)
@@ -15931,6 +15971,7 @@ INFORME CORTE DE SUB CONTRATISTA
             amort_presente_override=amortizacion,
         ) or {}).get("lineas") or []
 
+    gran_total_row = None
     if lineas4:
         parts.append('<table class="cc001-resumen" cellspacing="0" cellpadding="0">')
         parts.append(
@@ -15975,7 +16016,7 @@ INFORME CORTE DE SUB CONTRATISTA
                     return "—"
                 return _fm_informe(v)
 
-            parts.append(
+            fila_resumen = (
                 f'<tr style="background:{bg};">'
                 f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;{fw}{color}">{_h(label)}</td>'
                 f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;{fw}{color}">{_cell(vals.get("actualizadas"))}</td>'
@@ -15984,6 +16025,10 @@ INFORME CORTE DE SUB CONTRATISTA
                 f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;{fw}{color}">{_cell(vals.get("saldo"))}</td>'
                 "</tr>"
             )
+            if firmas_pie and key == "gran_total":
+                gran_total_row = fila_resumen
+            else:
+                parts.append(fila_resumen)
             if key == "sub_amort":
                 # Insertar detalle de otros conceptos + fila resumen otros antes del gran total
                 sinp = [str(x) for x in (items_sin_precio or []) if str(x).strip()]
@@ -16025,11 +16070,18 @@ INFORME CORTE DE SUB CONTRATISTA
                     )
         parts.append("</table>")
 
+    if gran_total_row:
+        parts.append(
+            '<table class="cc001-cierre" cellspacing="0" cellpadding="0">'
+            + gran_total_row
+            + "</table>"
+        )
+
     elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
     reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)
 
     parts.append(f"""
-<div class="ccd-cc001-firmas-wrap">
+<div class="ccd-cc001-firmas-wrap"{firmas_attr}>
 <table class="ccd-cc001-firmas-tbl" cellspacing="0" cellpadding="0">
 <tr>
 {elaboro_td}
@@ -16045,7 +16097,7 @@ INFORME CORTE DE SUB CONTRATISTA
 </tr>
 </table>
 </div>
-<p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">
+<p style="font-size:6pt;color:#64748b;{periodo_css}text-align:center;">
 Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)} · Sesión: {_h(usuario_nombre)}
 </p>
 </body></html>""")
