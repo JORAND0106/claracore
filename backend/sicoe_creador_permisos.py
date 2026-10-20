@@ -38,7 +38,7 @@ SICOE_CAMPOS_IDENTIDAD_PUT = frozenset({
 # compat (sellado/N3), pero en modo creador se permite vía SICOE_CAMPOS_GRAFICO.
 SICOE_CAMPOS_META_MEDIA = frozenset({
     "corte_id", "subcontratista_id",
-    "foto_url", "foto_numero", "foto_descripcion",
+    "foto_url", "foto_numero", "foto_descripcion", "fotos_historial",
     "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
 })
 # Clasificación + corte/sub: bloqueados para permiso solo Crear (creador dimensional).

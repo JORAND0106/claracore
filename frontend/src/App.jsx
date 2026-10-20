@@ -148,6 +148,15 @@ import {
   urlADataUriParaEsquema,
   dataUriEsquemaAFile,
 } from './modules/sicoe-obra/sicoeGraficosHelpers'
+import {
+  listaFotosRegistro,
+  parseFotosHistorial,
+  agregarEntradaFotoHistorial,
+  reemplazarEntradaFotoHistorial,
+  fotosPayloadDesdeHistorial,
+  esFotoPreviewLocal,
+} from './modules/sicoe-obra/sicoeFotosHelpers'
+import SicoeMensajeModal from './modules/sicoe-obra/SicoeMensajeModal'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
 import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from './components/adjuntos/AdjuntosMediaSlider'
@@ -3038,14 +3047,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [listaCapitulos, setListaCapitulos] = useState([])
   const [todosLosItems,  setTodosLosItems]  = useState([])
   const [fotoLocal,      setFotoLocal]      = useState(registro.foto_url || null)
+  const [fotosHistLocal, setFotosHistLocal] = useState(() => listaFotosRegistro(registro))
+  const [fotoIdx, setFotoIdx] = useState(0)
   const [uploadingFoto,  setUploadingFoto]  = useState(false)
   const previewObjectUrlRef = useRef(null)
+  const [fotoMensaje, setFotoMensaje] = useState(null)
   const [observacion,    setObservacion]    = useState(registro.observacion || '')
   const [subcontratistaSel, setSubcontratistaSel] = useState(registro.subcontratista_id || reporte.subcontratista_id || '')
   const [listaSubs,      setListaSubs]      = useState([])
   const [editandoSub,    setEditandoSub]    = useState(false)
   const [uploadingGraf,    setUploadingGraf]    = useState(false)
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
+  /** 'add' | 'replace' — Galería agrega o reemplaza la foto activa. */
+  const [galeriaHojaModo, setGaleriaHojaModo] = useState('add')
   const [modalGaleriaGraficoHoja, setModalGaleriaGraficoHoja] = useState(false)
   const [confirmCantidadCambio, setConfirmCantidadCambio] = useState(null)
   const [galeriaHojaRefreshKey, setGaleriaHojaRefreshKey] = useState(0)
@@ -3054,7 +3068,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [modalAuditoriaTraslapos, setModalAuditoriaTraslapos] = useState(null)
   const [fotoImgError, setFotoImgError] = useState(false)
   // Misma fila en el reporte completo: a veces el `reg` del mapa no trae foto_url; el arreglo del GET sí
-  const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
+  const regMismoEnReporte = reporte?.registros?.find((r) => String(r.id) === String(registro.id)) || null
   // Gráfico: solo de ESTE registro (no heredar URL de otra línea del reporte).
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || null)
   const [graficosHistLocal, setGraficosHistLocal] = useState(() => parseGraficosHistorial(registro))
@@ -3070,10 +3084,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [panelReversionExpandido, setPanelReversionExpandido] = useState(false)
   // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
   useEffect(() => {
-    const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
-    setFotoLocal(registro.foto_url || fromRep?.foto_url || null)
+    const fromRep = reporte?.registros?.find((r) => String(r.id) === String(registro.id))
+    const merged = {
+      ...registro,
+      foto_url: registro.foto_url || fromRep?.foto_url || null,
+      foto_numero: registro.foto_numero ?? fromRep?.foto_numero,
+      fotos_historial: registro.fotos_historial ?? fromRep?.fotos_historial,
+    }
+    const lista = listaFotosRegistro(merged)
+    setFotosHistLocal(lista)
+    setFotoLocal(lista.length ? lista[lista.length - 1].url : null)
+    setFotoIdx((prev) => Math.min(prev, Math.max(0, lista.length - 1)))
     setFotoImgError(false)
-  }, [registro.id, registro.foto_url, reporte?.registros])
+  }, [registro.id, registro.foto_url, registro.foto_numero, registro.fotos_historial, reporte?.registros])
   useEffect(() => {
     const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
     // Si esta fila trae grafico_url (incluso null tras borrar), no heredar de hermanos.
@@ -3105,24 +3128,35 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (!s || s === 'null' || s === 'undefined') return null
     return s
   }
-  // Servidor primero; cruzar con reporte.registros para no perder URL si el objeto `reg` va incompleto
-  const fotoVista = _urlMedia(registro.foto_url) || _urlMedia(regMismoEnReporte?.foto_url) || _urlMedia(fotoLocal)
-  const strRefCarpeta = strRefCarpetaFoto(registro)
-  const esFotoConsecBd = regTieneFotoNumeroEnBd(registro)
+  const fotosLista = fotosHistLocal.length
+    ? fotosHistLocal
+    : listaFotosRegistro({
+      foto_url: registro.foto_url || regMismoEnReporte?.foto_url || fotoLocal,
+      foto_numero: registro.foto_numero ?? regMismoEnReporte?.foto_numero,
+      fotos_historial: registro.fotos_historial ?? regMismoEnReporte?.fotos_historial,
+    })
+  const fotoActual = fotosLista[fotoIdx] || fotosLista[fotosLista.length - 1] || null
+  // Preferir historial local (tras agregar) sobre props stale del padre.
+  const fotoVista = _urlMedia(fotoActual?.url) || _urlMedia(fotoLocal)
+    || _urlMedia(registro.foto_url) || _urlMedia(regMismoEnReporte?.foto_url)
+  const strRefCarpeta = fotoActual?.numero != null && fotoActual.numero !== ''
+    ? String(fotoActual.numero).padStart(4, '0')
+    : strRefCarpetaFoto({ ...registro, foto_numero: fotoActual?.numero ?? registro.foto_numero, foto_url: fotoVista })
+  const esFotoConsecBd = regTieneFotoNumeroEnBd({
+    ...registro,
+    foto_numero: fotoActual?.numero ?? registro.foto_numero,
+  })
   // Solo este registro — nunca el gráfico de otra línea del mismo reporte.
   const grafVista = _urlMedia(graficoActual?.url)
   const mediaSlides = useMemo(
-    () => slidesFromRegistro(fotoVista, graficosLista),
-    [fotoVista, graficosLista],
+    () => slidesFromRegistro(fotosLista, graficosLista),
+    [fotosLista, graficosLista],
   )
   useEffect(() => {
     setMediaIdx((prev) => Math.min(prev, Math.max(0, mediaSlides.length - 1)))
   }, [mediaSlides.length, registro.id])
-  const fotoOffset = mediaSlides[0]?.kind === 'foto' ? 1 : 0
+  const fotoOffset = mediaSlides.filter((s) => s?.kind === 'foto').length
   const actualMedia = mediaSlides[mediaIdx] || null
-    || _urlMedia(grafLocal)
-    || _urlMedia(registro.grafico_url)
-    || _urlMedia(regMismoEnReporte?.grafico_url)
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [avisoItemNoAprobado,    setAvisoItemNoAprobado]    = useState(null)
   const [toastMsg,               setToastMsg]               = useState(null)
@@ -3449,102 +3483,204 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     return previewUrl
   }
 
-  // Subir foto (preview inmediata + dedupe por SHA-256 del contenido comprimido)
-  const subirFoto = async (file) => {
-    setUploadingFoto(true)
-    mostrarPreviewFotoInmediata(file)
-    try {
-      if (!isOnline && isOfflineReady) {
-        // Offline: encolarMediaOffline crea su propio objectURL; liberamos el preview previo.
-        limpiarPreviewFotoLocal()
-        const offlinePreview = await encolarMediaOffline(file, 'foto')
-        setFotoLocal(offlinePreview)
-        setFotoImgError(false)
-        return
-      }
-      const prepared = await prepararImagenParaUpload(file)
-      const digest = await sha256Hex(prepared)
-      const fdCheck = new FormData()
-      fdCheck.append('content_hash', digest)
-      const checkRes = await fetch(`${API}/sicoe-obra/${contrato_id}/check-foto-hash`, {
-        method: 'POST',
-        headers: { Authorization: hdrs.Authorization },
-        body: fdCheck,
+  const avisarFoto = (message, title = 'No se pudo agregar la foto') => {
+    setFotoMensaje({ title, message: String(message || 'Error desconocido') })
+  }
+
+  const persistirFotosEnRegistro = async (nuevoHist, { focusUrl = null } = {}) => {
+    const fotoPatch = {
+      reporte_id: registro.reporte_id,
+      numero_registro: registro.numero_registro,
+      ...fotosPayloadDesdeHistorial(nuevoHist),
+    }
+    const rid = registro?.id
+    if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+      const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify(fotoPatch),
       })
-      const checkData = await checkRes.json().catch(() => ({}))
-      if (checkRes.ok && checkData?.exists) {
-        limpiarPreviewFotoLocal()
-        setFotoLocal(registro.foto_url || null)
-        alert(
-          checkData.message
-          || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro en lugar de subirla de nuevo.',
-        )
-        if (checkData.url) {
-          setGaleriaHojaSeed([{ url: checkData.url, numero: checkData.numero, descripcion: '' }])
+      await sicoeFetchJsonOThrow(put)
+    }
+    setFotosHistLocal(nuevoHist)
+    const prim = nuevoHist.length ? nuevoHist[nuevoHist.length - 1] : null
+    setFotoLocal(prim?.url || null)
+    const focus = focusUrl
+      ? nuevoHist.findIndex((f) => f.url === focusUrl)
+      : nuevoHist.length - 1
+    const nextF = focus >= 0 ? focus : Math.max(0, nuevoHist.length - 1)
+    setFotoIdx(nextF)
+    setMediaIdx(nextF)
+    notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
+    return fotoPatch
+  }
+
+  /** Sube una o varias fotos. mode: 'add' (no borra existentes) | 'replace' (solo la activa). */
+  const subirFoto = async (fileOrFiles, opts = {}) => {
+    if (!editableFoto) return
+    const { mode = 'add' } = opts
+    const files = (Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles]).filter(Boolean)
+    if (!files.length) return
+    if (mode === 'replace' && files.length > 1) {
+      avisarFoto('Para reemplazar, seleccione una sola foto. Para agregar varias use «+».')
+      return
+    }
+    setUploadingFoto(true)
+    if (files[0]) mostrarPreviewFotoInmediata(files[0])
+    let baseHist = fotosHistLocal.length
+      ? fotosHistLocal
+      : listaFotosRegistro({
+        ...registro,
+        foto_url: registro.foto_url || regMismoEnReporte?.foto_url || fotoLocal,
+        fotos_historial: registro.fotos_historial ?? regMismoEnReporte?.fotos_historial,
+      })
+    const errores = []
+    let lastUrl = null
+    try {
+      for (const file of files) {
+        try {
+          if (!isOnline && isOfflineReady) {
+            limpiarPreviewFotoLocal()
+            const offlinePreview = await encolarMediaOffline(file, 'foto')
+            const entradaOff = {
+              url: offlinePreview,
+              numero: null,
+              creado_en: new Date().toISOString(),
+              origen: 'offline',
+            }
+            baseHist = mode === 'replace'
+              ? reemplazarEntradaFotoHistorial(baseHist, fotoIdx, entradaOff)
+              : agregarEntradaFotoHistorial(baseHist, entradaOff)
+            lastUrl = offlinePreview
+            continue
+          }
+          const prepared = await prepararImagenParaUpload(file)
+          const digest = await sha256Hex(prepared)
+          const fdCheck = new FormData()
+          fdCheck.append('content_hash', digest)
+          const checkRes = await fetch(`${API}/sicoe-obra/${contrato_id}/check-foto-hash`, {
+            method: 'POST',
+            headers: { Authorization: hdrs.Authorization },
+            body: fdCheck,
+          })
+          const checkData = await checkRes.json().catch(() => ({}))
+          if (checkRes.ok && checkData?.exists) {
+            const dupUrl = checkData.url
+            const dupNum = checkData.numero
+            if (dupUrl && mode === 'add') {
+              const entradaDup = {
+                url: dupUrl,
+                numero: dupNum ?? null,
+                creado_en: new Date().toISOString(),
+                origen: 'galeria',
+              }
+              baseHist = agregarEntradaFotoHistorial(baseHist, entradaDup)
+              lastUrl = dupUrl
+              setGaleriaHojaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
+              continue
+            }
+            errores.push(
+              checkData.message
+              || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro.',
+            )
+            if (dupUrl) {
+              setGaleriaHojaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
+              setGaleriaHojaModo(mode === 'replace' ? 'replace' : 'add')
+              setGaleriaHojaRefreshKey((k) => k + 1)
+              setModalGaleriaHoja(true)
+            }
+            continue
+          }
+          const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method: 'POST', headers: hdrs })
+          const numRes = await sicoeFetchJsonOThrow(resNum)
+          const numero = sicoeNumeroDesdeNextApi(numRes)
+          if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
+          const fd = new FormData()
+          fd.append('file', prepared)
+          fd.append('numero', String(numero))
+          fd.append('descripcion', '')
+          fd.append('content_hash', digest)
+          const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, {
+            method: 'POST', headers: { Authorization: hdrs.Authorization }, body: fd,
+          })
+          if (up.status === 409) {
+            const dup = await up.json().catch(() => ({}))
+            const detail = dup?.detail
+            const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
+            const dupUrl = typeof detail === 'object' ? detail?.url : null
+            const dupNum = typeof detail === 'object' ? detail?.numero : null
+            if (dupUrl && mode === 'add') {
+              baseHist = agregarEntradaFotoHistorial(baseHist, {
+                url: dupUrl,
+                numero: dupNum ?? null,
+                creado_en: new Date().toISOString(),
+                origen: 'galeria',
+              })
+              lastUrl = dupUrl
+              continue
+            }
+            errores.push(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
+            if (dupUrl) {
+              setGaleriaHojaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
+              setGaleriaHojaModo(mode === 'replace' ? 'replace' : 'add')
+              setGaleriaHojaRefreshKey((k) => k + 1)
+              setModalGaleriaHoja(true)
+            }
+            continue
+          }
+          if (up.status === 413) {
+            const body = await up.json().catch(() => ({}))
+            const detail = body?.detail
+            const msg = typeof detail === 'object'
+              ? (detail?.message || 'Se alcanzó el límite de almacenamiento de este contrato.')
+              : (typeof detail === 'string' ? detail : 'Se alcanzó el límite de almacenamiento de este contrato.')
+            errores.push(msg)
+            break
+          }
+          const res = await sicoeFetchJsonOThrow(up)
+          const entrada = {
+            url: res.url,
+            numero: res.numero ?? numero,
+            creado_en: new Date().toISOString(),
+            origen: 'manual',
+          }
+          baseHist = mode === 'replace'
+            ? reemplazarEntradaFotoHistorial(baseHist, fotoIdx, entrada)
+            : agregarEntradaFotoHistorial(baseHist, entrada)
+          lastUrl = res.url
+          setGaleriaHojaSeed([{ url: res.url, numero: res.numero ?? numero, descripcion: '' }])
+        } catch (oneErr) {
+          errores.push(oneErr?.message || String(oneErr))
         }
-        setGaleriaHojaRefreshKey((k) => k + 1)
-        setModalGaleriaHoja(true)
-        return
-      }
-      const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
-      const numRes = await sicoeFetchJsonOThrow(resNum)
-      const numero = sicoeNumeroDesdeNextApi(numRes)
-      if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
-      const fd = new FormData()
-      fd.append('file', prepared)
-      fd.append('numero', String(numero))
-      fd.append('descripcion', '')
-      fd.append('content_hash', digest)
-      const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
-      if (up.status === 409) {
-        const dup = await up.json().catch(() => ({}))
-        const detail = dup?.detail
-        const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
-        const dupUrl = typeof detail === 'object' ? detail?.url : null
-        const dupNum = typeof detail === 'object' ? detail?.numero : null
-        limpiarPreviewFotoLocal()
-        setFotoLocal(registro.foto_url || null)
-        alert(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
-        if (dupUrl) setGaleriaHojaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
-        setGaleriaHojaRefreshKey((k) => k + 1)
-        setModalGaleriaHoja(true)
-        return
-      }
-      if (up.status === 413) {
-        const body = await up.json().catch(() => ({}))
-        const detail = body?.detail
-        const msg = typeof detail === 'object'
-          ? (detail?.message || 'Se alcanzó el límite de almacenamiento de este contrato.')
-          : (typeof detail === 'string' ? detail : 'Se alcanzó el límite de almacenamiento de este contrato.')
-        limpiarPreviewFotoLocal()
-        setFotoLocal(registro.foto_url || null)
-        alert(msg)
-        return
-      }
-      const res = await sicoeFetchJsonOThrow(up)
-      const rid = registro?.id
-      const fotoPatch = { foto_url: res.url, foto_numero: res.numero ?? numero }
-      if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
-        const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
-          method:'PUT', headers: hdrs,
-          body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, ...fotoPatch })
-        })
-        await sicoeFetchJsonOThrow(put)
       }
       limpiarPreviewFotoLocal()
-      setFotoLocal(res.url)
-      setMediaIdx(0)
-      // La foto ya está en so_foto_hashes (+ registro): invalidar galería para reutilizarla en otros.
-      setGaleriaHojaRefreshKey((k) => k + 1)
-      setGaleriaHojaSeed([{ url: res.url, numero: res.numero ?? numero, descripcion: '' }])
-      notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
-    } catch(e) {
+      if (lastUrl || (mode === 'replace' && baseHist.length)) {
+        await persistirFotosEnRegistro(baseHist, { focusUrl: lastUrl })
+        setGaleriaHojaRefreshKey((k) => k + 1)
+      } else {
+        setFotoLocal(fotosHistLocal[fotoIdx]?.url || registro.foto_url || null)
+      }
+      if (errores.length) {
+        avisarFoto(
+          errores.length === 1
+            ? errores[0]
+            : `${errores.length} foto(s) no se pudieron agregar:\n• ${errores.join('\n• ')}`,
+          lastUrl ? 'Algunas fotos no se agregaron' : 'No se pudo agregar la foto',
+        )
+      }
+    } catch (e) {
       limpiarPreviewFotoLocal()
-      setFotoLocal(registro.foto_url || null)
-      alert('Error subiendo foto: ' + (e?.message || String(e)))
+      setFotoLocal(fotosHistLocal[fotoIdx]?.url || registro.foto_url || null)
+      avisarFoto(e?.message || String(e))
     } finally {
       setUploadingFoto(false)
     }
+  }
+
+  const onInputFotosChange = (e, mode = 'add') => {
+    const list = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!list.length) return
+    void subirFoto(mode === 'replace' ? list[0] : list, { mode })
   }
 
   const persistirGraficoEnRegistro = async (url, numero, origen = 'manual', meta = {}) => {
@@ -3586,7 +3722,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setGrafLocal(prim.url)
     const nextG = Math.max(0, nuevoHist.findIndex((g) => g.url === prim.url))
     setGraficoIdx(nextG >= 0 ? nextG : Math.max(0, nuevoHist.length - 1))
-    setMediaIdx((fotoVista ? 1 : 0) + (nextG >= 0 ? nextG : Math.max(0, nuevoHist.length - 1)))
+    setMediaIdx(fotoOffset + (nextG >= 0 ? nextG : Math.max(0, nuevoHist.length - 1)))
   }
 
   // Subir gráfico (manual o pantallazo del plano)
@@ -3722,7 +3858,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       setGrafLocal(ultimo?.url ?? null)
       const nextG = Math.max(0, nuevoHist.length - 1)
       setGraficoIdx(nextG)
-      setMediaIdx(fotoVista && nuevoHist.length ? 1 + nextG : nextG)
+      setMediaIdx(fotosLista.length && nuevoHist.length ? fotoOffset + nextG : nextG)
     } catch (e) {
       alert('No se pudo eliminar el gráfico: ' + (e?.message || String(e)))
     }
@@ -5254,7 +5390,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   onIndexChange={(i) => {
                     setMediaIdx(i)
                     const slide = mediaSlides[i]
-                    if (slide && slide.kind !== 'foto') {
+                    if (slide?.kind === 'foto') {
+                      const fIdx = mediaSlides.slice(0, i + 1).filter((s) => s?.kind === 'foto').length - 1
+                      setFotoIdx(Math.max(0, fIdx))
+                    } else if (slide) {
                       setGraficoIdx(Math.max(0, i - fotoOffset))
                     }
                   }}
@@ -5283,21 +5422,30 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         : 'Adjunto')}
                   >
                     {actualMedia?.kind === 'foto'
-                      ? `📷${strRefCarpeta ? ` #${strRefCarpeta}` : ''}`
+                      ? `📷${strRefCarpeta ? ` #${strRefCarpeta}` : ''}${fotosLista.length > 1 ? ` · ${fotoIdx + 1}/${fotosLista.length}` : ''}`
                       : `📐${graficoActual?.numero != null ? ` #${String(graficoActual.numero).padStart(4, '0')}` : ''}${graficosLista.length > 1 ? ` · ${graficoIdx + 1}/${graficosLista.length}` : ''}`}
                   </span>
                   <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
                     {editableFoto && (
                       <>
-                        <label style={{ cursor:'pointer', color:t.primary, fontWeight:'600' }} title={fotoVista ? 'Cambiar foto' : 'Cargar foto'}>
-                          {fotoVista ? 'Foto' : 'Cargar'}
-                          <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                        <label style={{ cursor: uploadingFoto ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Agregar foto(s)">
+                          +
+                          <input type="file" accept="image/*" multiple capture="environment" style={{ display:'none' }} disabled={uploadingFoto}
+                            onChange={e => onInputFotosChange(e, 'add')} />
                         </label>
+                        {fotoVista && (
+                          <label style={{ cursor: uploadingFoto ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Reemplazar foto actual">
+                            Foto
+                            <input type="file" accept="image/*" capture="environment" style={{ display:'none' }} disabled={uploadingFoto}
+                              onChange={e => onInputFotosChange(e, 'replace')} />
+                          </label>
+                        )}
                         <button type="button" onClick={() => {
+                          setGaleriaHojaModo('add')
                           setGaleriaHojaRefreshKey((k) => k + 1)
                           setModalGaleriaHoja(true)
                         }}
-                          title="Galería de fotos"
+                          title="Agregar desde galería de fotos"
                           style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
                           Galería
                         </button>
@@ -5349,19 +5497,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         {editableFoto && (
                           <label style={{
                             background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
-                            borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', cursor:'pointer', fontWeight:600,
-                          }} title="Cargar foto">
-                            📷
-                            <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
-                              onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                            borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', cursor: uploadingFoto ? 'wait' : 'pointer', fontWeight:600,
+                          }} title="Agregar foto(s) — dispositivo, cámara o varias a la vez">
+                            📷+
+                            <input type="file" accept="image/*" multiple capture="environment" style={{ display:'none' }} disabled={uploadingFoto}
+                              onChange={e => onInputFotosChange(e, 'add')} />
                           </label>
                         )}
                         {editableFoto && (
                           <button type="button" onClick={() => {
+                            setGaleriaHojaModo('add')
                             setGaleriaHojaRefreshKey((k) => k + 1)
                             setModalGaleriaHoja(true)
                           }}
-                            title="Galería de fotos"
+                            title="Agregar desde galería de fotos"
                             style={{
                               background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
                               borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', fontWeight:600, cursor:'pointer',
@@ -5553,20 +5702,29 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 seedFotos={galeriaHojaSeed}
                 onSelect={async (url, numero) => {
                   try {
-                    const rid = registro?.id
-                    const fotoPatch = { foto_url: url, foto_numero: numero }
-                    if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
-                      const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
-                        method:'PUT', headers: hdrs,
-                        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, ...fotoPatch })
-                      })
-                      await sicoeFetchJsonOThrow(put)
+                    const entrada = {
+                      url,
+                      numero: numero ?? null,
+                      creado_en: new Date().toISOString(),
+                      origen: 'galeria',
                     }
+                    let baseHist = fotosHistLocal.length
+                      ? fotosHistLocal
+                      : listaFotosRegistro({
+                        ...registro,
+                        foto_url: registro.foto_url || regMismoEnReporte?.foto_url || fotoLocal,
+                        fotos_historial: registro.fotos_historial ?? regMismoEnReporte?.fotos_historial,
+                      })
+                    const nuevoHist = galeriaHojaModo === 'replace'
+                      ? reemplazarEntradaFotoHistorial(baseHist, fotoIdx, entrada)
+                      : agregarEntradaFotoHistorial(baseHist, entrada)
                     limpiarPreviewFotoLocal()
-                    setFotoLocal(url)
-                    notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
-                  } catch(e) { alert('Error asignando foto de galería: ' + (e?.message || String(e))) }
+                    await persistirFotosEnRegistro(nuevoHist, { focusUrl: url })
+                  } catch (e) {
+                    avisarFoto(e?.message || String(e), 'No se pudo asociar la foto')
+                  }
                   setModalGaleriaHoja(false)
+                  setGaleriaHojaModo('add')
                 }}
               />
             </div>
@@ -5602,6 +5760,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         </div>
       )}
+
+      <SicoeMensajeModal
+        open={!!fotoMensaje}
+        onClose={() => setFotoMensaje(null)}
+        t={t}
+        title={fotoMensaje?.title || 'Aviso'}
+        message={fotoMensaje?.message || ''}
+      />
 
       {/* ─ Sección: Validación ─ */}
       {nivelInfo.puedeValidar && nivelesValidablesReg.length > 0 && (() => {
@@ -6732,7 +6898,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const aplicarOptimisticRegistroPatch = (registroId, patch) => {
     if (!patch || typeof patch !== 'object') return
     setRegistros((prev) => {
-      const next = prev.map((r) => (r.id === registroId ? { ...r, ...patch } : r))
+      const next = prev.map((r) => (String(r.id) === String(registroId) ? { ...r, ...patch } : r))
       if (patch.item_numero) {
         const quedanSin = next.some((r) => !String(r.item_numero || '').trim())
         setReporte((rep) => ({
@@ -15311,6 +15477,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   // Datos TAB 3 - Registros
   const [registros, setRegistros] = useState([])
   const [modalRegistro, setModalRegistro] = useState(null)
+  const [wizardFotoMensaje, setWizardFotoMensaje] = useState(null)
   /** Gráficos por lote de localización (clave 0 = única o lote 1). Se copian a cada registro al guardar. */
   const [graficosPorLote, setGraficosPorLote] = useState({ 0: [] })
   const [modalGaleria, setModalGaleria] = useState(false)
@@ -15658,7 +15825,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           cantidad: r.cantidad !== undefined && r.cantidad !== null ? String(r.cantidad) : '',
           cantidad_total: r.cantidad_total, unidad: r.unidad || '',
           observacion: (r.observacion != null && String(r.observacion).trim() !== '') ? r.observacion : (r.descripcion || ''),
-          foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
+          foto_url: r.foto_url, foto_numero: r.foto_numero,
+          fotos_historial: listaFotosRegistro(r),
+          _fotoOk: !!r.foto_url || listaFotosRegistro(r).length > 0,
           grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url,
           graficos_historial: parseGraficosHistorial(r),
           ...sicoeLocFromRegistro(r, []),
@@ -15977,7 +16146,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         cantidad_total: null,
         unidad: '',
         observacion: '',
-        foto_url: null, foto_numero: null, foto_descripcion: '',
+        foto_url: null, foto_numero: null, foto_descripcion: '', fotos_historial: [],
         grafico_url: null, grafico_numero: null, grafico_descripcion: '',
         _fotoOk: false, _grafOk: false,
         ...stampLocEnRegistro(),
@@ -16008,7 +16177,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     setRegistros(prev => [...prev, {
       nombre: '', descripcion: '', longitud: '', ancho: '', espesor: '', cantidad: '',
       cantidad_total: null, unidad: '', es_varilla: null, diametro_varilla: '', peso_kg_m: null, observacion: '',
-      foto_url: null, foto_numero: null, foto_descripcion: '',
+      foto_url: null, foto_numero: null, foto_descripcion: '', fotos_historial: [],
       grafico_url: null, grafico_numero: null, grafico_descripcion: '',
       _fotoOk: false, _grafOk: false,
       ...stampLocEnRegistro(),
@@ -16088,7 +16257,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             espesor: sicoeNumCampoOmitNull(reg.espesor),
             cantidad: sicoeNumCampoOmitNull(reg.cantidad),
             unidad: reg.unidad, observacion: reg.observacion,
-            foto_url: reg.foto_url, foto_numero: reg.foto_numero,
+            ...fotosPayloadDesdeHistorial(listaFotosRegistro(reg)),
             ...payloadGraficosRegistro(reg),
           })
         }
@@ -16103,7 +16272,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             espesor: sicoeNumCampoOmitNull(r.espesor),
             cantidad: sicoeNumCampoOmitNull(r.cantidad),
             unidad: r.unidad, observacion: r.observacion,
-            foto_url: r.foto_url, foto_numero: r.foto_numero,
+            ...fotosPayloadDesdeHistorial(listaFotosRegistro(r)),
             ...payloadGraficosRegistro(r),
             ...(esMult ? localizacionToApiFields(r) : localizacionToApiFields(locReporteActual())),
           }))},
@@ -16213,7 +16382,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         es_varilla: sicoeUnidadEsKg(reg.unidad) ? (reg.es_varilla ?? null) : null,
         diametro_varilla: reg.es_varilla === true ? (reg.diametro_varilla || null) : null,
         peso_kg_m: reg.es_varilla === true ? (reg.peso_kg_m ?? sicoePesoKgMPorDiametro(reg.diametro_varilla)) : null,
-        foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
+        ...fotosPayloadDesdeHistorial(
+          (Array.isArray(reg.fotos_historial) && reg.fotos_historial.length)
+            ? reg.fotos_historial.filter((f) => f?.url && !esFotoPreviewLocal(f.url))
+            : (reg.foto_url && !esFotoPreviewLocal(reg.foto_url)
+              ? [{ url: reg.foto_url, numero: reg.foto_numero ?? null }]
+              : []),
+        ),
         ...payloadGraficosRegistro(reg),
         ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
       })
@@ -16967,100 +17142,151 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   rows={3} placeholder="Descripción detallada de la actividad..."
                   style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box', resize:'vertical' }} />
               </div>
-              {/* Foto obra - ancho completo */}
+              {/* Foto obra - una o varias; agregar no borra las existentes */}
               <div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px' }}>
                   <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted }}>
-                    📸 FOTO OBRA * 
-                    {strRefCarpetaFoto(registros[modalRegistro]) && (
-                      <span style={{ color:t.primary, marginLeft:'8px', fontFamily: 'ui-monospace, Consolas, monospace' }}>#{strRefCarpetaFoto(registros[modalRegistro])}</span>
-                    )}
+                    📸 FOTO OBRA *
+                    {(() => {
+                      const hist = listaFotosRegistro(registros[modalRegistro])
+                      const n = hist.length ? hist[hist.length - 1]?.numero : registros[modalRegistro].foto_numero
+                      return n != null && n !== '' ? (
+                        <span style={{ color:t.primary, marginLeft:'8px', fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                          #{String(n).padStart(4, '0')}{hist.length > 1 ? ` · ${hist.length} fotos` : ''}
+                        </span>
+                      ) : null
+                    })()}
                   </label>
                 </div>
-                {registros[modalRegistro].foto_url && (
-                  <img src={registros[modalRegistro].foto_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'220px', objectFit:'cover' }} />
+                {listaFotosRegistro(registros[modalRegistro]).length > 0 && (
+                  <div style={{ display:'flex', gap:8, overflowX:'auto', marginBottom:8 }}>
+                    {listaFotosRegistro(registros[modalRegistro]).map((f, i) => (
+                      <div key={`${f.url}-${i}`} style={{ flex:'0 0 auto', textAlign:'center' }}>
+                        <img src={f.url} alt="" style={{ width:96, height:72, objectFit:'cover', borderRadius:6, display:'block' }} />
+                        {f.numero != null && (
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.primary, fontWeight:700 }}>#{String(f.numero).padStart(4, '0')}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
-                <button onClick={() => {
-                  setGaleriaRefreshKey((k) => k + 1)
-                  setModalGaleria(true)
-                }} style={{
-                  background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                  borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', marginBottom:'6px'
-                }}>🖼️ Usar foto de galería</button>                
-                <input type='file' accept='image/*' onChange={async e => {
-                  const file = e.target.files[0]; if (!file) return
-                  try {
-                    const previewUrl = URL.createObjectURL(file)
-                    const aPrev=[...registros]; aPrev[modalRegistro]={...aPrev[modalRegistro], foto_url: previewUrl, _fotoOk: true, _fotoPreview: true}; setRegistros(aPrev)
-                    const prepared = await prepararImagenParaUpload(file)
-                    const digest = await sha256Hex(prepared)
-                    const fdCheck = new FormData(); fdCheck.append('content_hash', digest)
-                    const checkRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/check-foto-hash`, {
-                      method: 'POST', headers: { Authorization: hdrs.Authorization }, body: fdCheck,
-                    })
-                    const checkData = await checkRes.json().catch(() => ({}))
-                    if (checkRes.ok && checkData?.exists) {
-                      URL.revokeObjectURL(previewUrl)
-                      const aDup=[...registros]; aDup[modalRegistro]={...aDup[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aDup)
-                      alert(
-                        checkData.message
-                        || 'Esta foto ya fue cargada anteriormente. Úsala desde la galería del registro en lugar de subirla de nuevo.',
-                      )
-                      if (checkData.url) {
-                        setGaleriaSeed([{ url: checkData.url, numero: checkData.numero, descripcion: '' }])
-                      }
-                      setGaleriaRefreshKey((k) => k + 1)
-                      setModalGaleria(true)
-                      return
-                    }
-                    const fd = new FormData(); fd.append('file', prepared)
-                    const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
-                    const numR = await sicoeFetchJsonOThrow(resN)
-                    const numero = sicoeNumeroDesdeNextApi(numR)
-                    if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
-                    fd.append('numero', String(numero))
-                    fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numero}`)
-                    fd.append('content_hash', digest)
-                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: { Authorization: hdrs.Authorization }, body: fd })
-                    if (r.status === 409) {
-                      URL.revokeObjectURL(previewUrl)
-                      const dup = await r.json().catch(() => ({}))
-                      const detail = dup?.detail
-                      const msg = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : null)
-                      const dupUrl = typeof detail === 'object' ? detail?.url : null
-                      const dupNum = typeof detail === 'object' ? detail?.numero : null
-                      const aDup=[...registros]; aDup[modalRegistro]={...aDup[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aDup)
-                      alert(msg || 'Esta foto ya existe. Úsala desde la galería del registro.')
-                      if (dupUrl) setGaleriaSeed([{ url: dupUrl, numero: dupNum, descripcion: '' }])
-                      setGaleriaRefreshKey((k) => k + 1)
-                      setModalGaleria(true)
-                      return
-                    }
-                    if (r.status === 413) {
-                      URL.revokeObjectURL(previewUrl)
-                      const body = await r.json().catch(() => ({}))
-                      const detail = body?.detail
-                      const msg = typeof detail === 'object'
-                        ? (detail?.message || 'Se alcanzó el límite de almacenamiento de este contrato.')
-                        : (typeof detail === 'string' ? detail : 'Se alcanzó el límite de almacenamiento de este contrato.')
-                      const aQuota=[...registros]; aQuota[modalRegistro]={...aQuota[modalRegistro], foto_url: null, foto_numero: null, _fotoOk: false}; setRegistros(aQuota)
-                      alert(msg)
-                      return
-                    }
-                    const data = await sicoeFetchJsonOThrow(r)
-                    URL.revokeObjectURL(previewUrl)
-                    const nFoto = data.numero ?? numero
-                    const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: nFoto, _fotoOk: true}; setRegistros(a)
-                    setGaleriaSeed([{ url: data.url, numero: nFoto, descripcion: '' }])
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
+                  <button type="button" onClick={() => {
                     setGaleriaRefreshKey((k) => k + 1)
-                  } catch(err) { alert('Error subiendo foto: ' + (err?.message || String(err))) }
-                  e.target.value = ''
-                }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
+                    setModalGaleria(true)
+                  }} style={{
+                    background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                    borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer'
+                  }}>🖼️ Galería</button>
+                  <label style={{
+                    background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
+                    borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', fontWeight:600,
+                  }}>
+                    + Agregar foto(s)
+                    <input type='file' accept='image/*' multiple capture="environment" style={{ display:'none' }} onChange={async e => {
+                      const files = Array.from(e.target.files || [])
+                      e.target.value = ''
+                      if (!files.length) return
+                      const idxReg = modalRegistro
+                      let hist = listaFotosRegistro(registros[idxReg])
+                      const errores = []
+                      for (const file of files) {
+                        let previewUrl = null
+                        try {
+                          previewUrl = URL.createObjectURL(file)
+                          const prepared = await prepararImagenParaUpload(file)
+                          const digest = await sha256Hex(prepared)
+                          const fdCheck = new FormData(); fdCheck.append('content_hash', digest)
+                          const checkRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/check-foto-hash`, {
+                            method: 'POST', headers: { Authorization: hdrs.Authorization }, body: fdCheck,
+                          })
+                          const checkData = await checkRes.json().catch(() => ({}))
+                          if (checkRes.ok && checkData?.exists) {
+                            if (previewUrl) URL.revokeObjectURL(previewUrl)
+                            if (checkData.url) {
+                              hist = agregarEntradaFotoHistorial(hist, {
+                                url: checkData.url,
+                                numero: checkData.numero ?? null,
+                                creado_en: new Date().toISOString(),
+                                origen: 'galeria',
+                              })
+                              setGaleriaSeed([{ url: checkData.url, numero: checkData.numero, descripcion: '' }])
+                              continue
+                            }
+                            errores.push(checkData.message || 'Esta foto ya existe. Úsala desde la galería.')
+                            setGaleriaRefreshKey((k) => k + 1)
+                            setModalGaleria(true)
+                            continue
+                          }
+                          const fd = new FormData(); fd.append('file', prepared)
+                          const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
+                          const numR = await sicoeFetchJsonOThrow(resN)
+                          const numero = sicoeNumeroDesdeNextApi(numR)
+                          if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
+                          fd.append('numero', String(numero))
+                          fd.append('descripcion', registros[idxReg].observacion || `Foto-${numero}`)
+                          fd.append('content_hash', digest)
+                          const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: { Authorization: hdrs.Authorization }, body: fd })
+                          if (r.status === 409 || r.status === 413) {
+                            if (previewUrl) URL.revokeObjectURL(previewUrl)
+                            const body = await r.json().catch(() => ({}))
+                            const detail = body?.detail
+                            const msg = typeof detail === 'object'
+                              ? (detail?.message || (r.status === 413 ? 'Límite de almacenamiento del contrato.' : 'Foto duplicada.'))
+                              : (typeof detail === 'string' ? detail : 'No se pudo subir la foto.')
+                            const dupUrl = typeof detail === 'object' ? detail?.url : null
+                            const dupNum = typeof detail === 'object' ? detail?.numero : null
+                            if (dupUrl && r.status === 409) {
+                              hist = agregarEntradaFotoHistorial(hist, {
+                                url: dupUrl, numero: dupNum ?? null,
+                                creado_en: new Date().toISOString(), origen: 'galeria',
+                              })
+                              continue
+                            }
+                            errores.push(msg)
+                            continue
+                          }
+                          const data = await sicoeFetchJsonOThrow(r)
+                          if (previewUrl) URL.revokeObjectURL(previewUrl)
+                          const nFoto = data.numero ?? numero
+                          hist = agregarEntradaFotoHistorial(hist, {
+                            url: data.url, numero: nFoto,
+                            creado_en: new Date().toISOString(), origen: 'manual',
+                          })
+                          setGaleriaSeed([{ url: data.url, numero: nFoto, descripcion: '' }])
+                        } catch (err) {
+                          if (previewUrl) URL.revokeObjectURL(previewUrl)
+                          errores.push(err?.message || String(err))
+                        }
+                      }
+                      const payload = fotosPayloadDesdeHistorial(hist)
+                      const a = [...registros]
+                      a[idxReg] = {
+                        ...a[idxReg],
+                        ...payload,
+                        _fotoOk: hist.length > 0,
+                        _fotoPreview: false,
+                      }
+                      setRegistros(a)
+                      setGaleriaRefreshKey((k) => k + 1)
+                      if (errores.length) {
+                        setWizardFotoMensaje({
+                          title: hist.length ? 'Algunas fotos no se agregaron' : 'No se pudo agregar la foto',
+                          message: errores.length === 1
+                            ? errores[0]
+                            : `${errores.length} foto(s) fallaron:\n• ${errores.join('\n• ')}`,
+                        })
+                      }
+                    }} />
+                  </label>
+                </div>
                 {!registros[modalRegistro]._fotoOk && (
                   <div style={{ color:'#F59E0B', fontSize:'var(--cc-label)', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
                 )}
-                {registros[modalRegistro]._fotoOk && strRefCarpetaFoto(registros[modalRegistro]) && (
-                  <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Foto #{strRefCarpetaFoto(registros[modalRegistro])} cargada</div>
+                {registros[modalRegistro]._fotoOk && listaFotosRegistro(registros[modalRegistro]).length > 0 && (
+                  <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>
+                    ✅ {listaFotosRegistro(registros[modalRegistro]).length} foto(s) en el registro
+                  </div>
                 )}
               </div>
             </div>
@@ -17106,8 +17332,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   alert('La observación es obligatoria')
                   return
                 }
-                if (!reg._fotoOk) {
-                  alert('La foto de obra es obligatoria')
+                const fotosOk = listaFotosRegistro(reg).filter((f) => f?.url && !esFotoPreviewLocal(f.url))
+                if (!reg._fotoOk || !fotosOk.length) {
+                  alert('La foto de obra es obligatoria (espere a que termine de subir)')
                   return
                 }
                 setModalRegistro(null)
@@ -17163,6 +17390,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         </div>
       )}
 
+      <SicoeMensajeModal
+        open={!!wizardFotoMensaje}
+        onClose={() => setWizardFotoMensaje(null)}
+        t={t}
+        title={wizardFotoMensaje?.title || 'Aviso'}
+        message={wizardFotoMensaje?.message || ''}
+      />
+
 {/* ── Modal Galería Fotos ── */}
       {modalGaleria && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:3000,
@@ -17192,7 +17427,19 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 seedFotos={galeriaSeed}
                 onSelect={(url, numero) => {
                   const a=[...registros]
-                  a[modalRegistro]={...a[modalRegistro], foto_url: url, foto_numero: numero, _fotoOk: true}
+                  const prev = a[modalRegistro]
+                  const hist = agregarEntradaFotoHistorial(listaFotosRegistro(prev), {
+                    url,
+                    numero: numero ?? null,
+                    creado_en: new Date().toISOString(),
+                    origen: 'galeria',
+                  })
+                  a[modalRegistro] = {
+                    ...prev,
+                    ...fotosPayloadDesdeHistorial(hist),
+                    _fotoOk: true,
+                    _fotoPreview: false,
+                  }
                   setRegistros(a)
                   setModalGaleria(false)
                 }}

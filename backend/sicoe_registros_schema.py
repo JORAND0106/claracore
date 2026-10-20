@@ -24,6 +24,8 @@ SO_REGISTROS_OPTIONAL_COLUMNS = frozenset({
     "coord_lat_fin",
     "coord_lng_fin",
     "sector",
+    # Hasta aplicar so_registros_fotos_historial.sql; sin columna se conserva foto_url.
+    "fotos_historial",
 })
 
 SO_REPORTES_OPTIONAL_COLUMNS = frozenset({

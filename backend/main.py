@@ -547,7 +547,8 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
         "cantidad_alerta_anterior", "cantidad_alerta_actual", "cantidad_alerta_en", "cantidad_alerta_por",
         "cantidad_alerta_nivel_max_previo",
         "creado_por_reg", "modificado_por_reg",
-        "foto_url", "foto_numero", "grafico_url", "grafico_numero", "graficos_historial",
+        "foto_url", "foto_numero", "fotos_historial",
+        "grafico_url", "grafico_numero", "graficos_historial",
         "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
     )
     return _json_for_log({k: row.get(k) for k in keys})
@@ -557,6 +558,13 @@ def _so_registro_normalizar_graficos_historial(data: dict) -> dict:
     """so_registros.graficos_historial es NOT NULL; evita 23502 si el cliente envía null."""
     if data.get("graficos_historial") is None:
         data["graficos_historial"] = []
+    return data
+
+
+def _so_registro_normalizar_fotos_historial(data: dict) -> dict:
+    """so_registros.fotos_historial es NOT NULL; evita 23502 si el cliente envía null."""
+    if data.get("fotos_historial") is None:
+        data["fotos_historial"] = []
     return data
 
 
@@ -26890,8 +26898,10 @@ class RegistroOfflineCreate(BaseModel):
     observacion: Optional[str] = None
     foto_url: Optional[str] = None
     foto_numero: Optional[int] = None
+    fotos_historial: Optional[List[Dict[str, Any]]] = None
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
+    graficos_historial: Optional[List[Dict[str, Any]]] = None
 
 class ReporteOfflineCreate(BaseModel):
     """Creación atómica de reporte + registros desde modo offline."""
@@ -27606,7 +27616,7 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
     def _q_regs():
         q = supabase.table("so_registros")\
             .select(
-                "foto_url, foto_numero, foto_descripcion, "
+                "foto_url, foto_numero, foto_descripcion, fotos_historial, "
                 "grafico_url, grafico_numero, grafico_descripcion, graficos_historial, "
                 "created_at"
             )\
@@ -27621,16 +27631,22 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
     if tipo == "grafico":
         return _galeria_extraer_graficos_unicos(rows)
 
-    # tipo == "foto": registros + hashes (fotos subidas al instante)
-    desde_regs = [
-        {
-            "url": r["foto_url"],
-            "numero": r.get("foto_numero"),
-            "descripcion": r.get("foto_descripcion") or "",
-        }
-        for r in rows
-        if r.get("foto_url")
-    ]
+    # tipo == "foto": registros (foto_url + fotos_historial) + hashes
+    desde_regs: List[dict] = []
+    for r in rows:
+        if r.get("foto_url"):
+            desde_regs.append({
+                "url": r["foto_url"],
+                "numero": r.get("foto_numero"),
+                "descripcion": r.get("foto_descripcion") or "",
+            })
+        for h in _galeria_parse_historial_graficos(r.get("fotos_historial")):
+            if h.get("url"):
+                desde_regs.append({
+                    "url": h["url"],
+                    "numero": h.get("numero"),
+                    "descripcion": h.get("descripcion") or "",
+                })
     desde_hashes: List[dict] = []
     try:
         def _q_hashes():
@@ -27692,6 +27708,7 @@ class RegistroCreate(BaseModel):
     foto_url: Optional[str] = None
     foto_numero: Optional[int] = None
     foto_descripcion: Optional[str] = None
+    fotos_historial: Optional[List[Dict[str, Any]]] = None
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
@@ -27743,6 +27760,7 @@ class RegistroLineaNuevoReporte(BaseModel):
     foto_url: Optional[str] = None
     foto_numero: Optional[int] = None
     foto_descripcion: Optional[str] = None
+    fotos_historial: Optional[List[Dict[str, Any]]] = None
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
@@ -29969,7 +29987,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         _CAMPOS_N3_PERMITIDOS = {
             "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
             "observacion",
-            "foto_url", "foto_numero", "foto_descripcion",
+            "foto_url", "foto_numero", "foto_descripcion", "fotos_historial",
             "grafico_url", "grafico_numero", "grafico_descripcion",
             "graficos_historial",
         } | set(_LOC_SELLADO)
@@ -30147,6 +30165,9 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     # (corte/foto no deben poder quitar el sello; tampoco filas reparadas sin flag).
     if sellado:
         data["bloqueado"] = True
+
+    _so_registro_normalizar_graficos_historial(data)
+    _so_registro_normalizar_fotos_historial(data)
 
     def _upd():
         return _so_registros_write_omit_missing(
@@ -30400,6 +30421,7 @@ def reemplazar_registros_nuevo_reporte(
             if rep.get(campo) is not None:
                 data[campo] = rep[campo]
         _so_registro_normalizar_graficos_historial(data)
+        _so_registro_normalizar_fotos_historial(data)
         rows_to_insert.append(data)
     _BATCH = 200
     total = 0
@@ -30609,6 +30631,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     except Exception:
         pass
     _so_registro_normalizar_graficos_historial(data)
+    _so_registro_normalizar_fotos_historial(data)
     data = _sicoe_heredar_dibujo_en_payload_registro(contrato_id, body.reporte_id, data)
     def _ins():
         return _so_registros_write_omit_missing(
@@ -31409,7 +31432,7 @@ def sicoe_cantidades_por_item(
     cols = (
         "id,reporte_id,numero_registro,capitulo,item_numero,item_descripcion,unidad,"
         "competencia,longitud,ancho,espesor,cantidad,cantidad_total,observacion,"
-        "foto_url,foto_numero,grafico_url,grafico_numero,graficos_historial,"
+        "foto_url,foto_numero,fotos_historial,grafico_url,grafico_numero,graficos_historial,"
         "tramo,infraestructura,calzada,margen,abs_inicio,abs_final,nodo_ini,nodo_fin,"
         "pk_id_id,civ,ubicacion,coord_lat,coord_lng,bloqueado,acta_rpo_id,semana_id,"
         f"{SICOE_SELECT_NIVELES_ESTADO}"
@@ -34094,6 +34117,7 @@ def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=De
             payload[f"nivel{ni}_fecha"] = None
 
     _so_registro_normalizar_graficos_historial(payload)
+    _so_registro_normalizar_fotos_historial(payload)
     payload = _sicoe_heredar_dibujo_en_payload_registro(contrato_id, reporte_id, payload)
 
     # Contar registros previos para oferta de dibujo (primer registro del reporte)

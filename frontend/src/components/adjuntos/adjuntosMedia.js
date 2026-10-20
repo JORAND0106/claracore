@@ -59,11 +59,29 @@ export function etiquetaAdjunto(item, fallback = 'Adjunto') {
   return item?.nombre || item?.label || fallback
 }
 
-export function slidesFromRegistro(fotoUrl, graficos = []) {
+/**
+ * @param {string|null|{url:string,numero?:number}|Array<string|{url:string,numero?:number}>} fotoUrlOrLista
+ *   Una URL, una entrada, o lista de fotos del registro (fotos_historial).
+ */
+export function slidesFromRegistro(fotoUrlOrLista, graficos = []) {
   const items = []
-  const foto = String(fotoUrl || '').trim()
-  if (foto && foto !== 'null' && foto !== 'undefined') {
-    items.push({ url: foto, label: 'Foto', kind: 'foto' })
+  const fotosRaw = Array.isArray(fotoUrlOrLista)
+    ? fotoUrlOrLista
+    : (fotoUrlOrLista != null && fotoUrlOrLista !== '' ? [fotoUrlOrLista] : [])
+  for (const f of fotosRaw) {
+    const url = String((f && typeof f === 'object' ? f.url : f) || '').trim()
+    if (!url || url === 'null' || url === 'undefined') continue
+    const numero = f && typeof f === 'object' ? (f.numero ?? null) : null
+    const label = numero != null && numero !== ''
+      ? `Foto #${String(numero).padStart(4, '0')}`
+      : 'Foto'
+    items.push({
+      url,
+      label,
+      kind: 'foto',
+      numero: numero ?? null,
+      source: f && typeof f === 'object' ? f : { url },
+    })
   }
   for (const g of graficos || []) {
     if (!g?.url) continue
