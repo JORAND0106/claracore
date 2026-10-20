@@ -21,7 +21,7 @@ def test_sellado_permitidos_incluyen_localizacion():
     n3 = {
         "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
         "observacion",
-        "foto_url", "foto_numero", "foto_descripcion",
+        "foto_url", "foto_numero", "foto_descripcion", "fotos_historial",
         "grafico_url", "grafico_numero", "grafico_descripcion",
         "graficos_historial",
     } | set(SICOE_CAMPOS_LOCALIZACION)

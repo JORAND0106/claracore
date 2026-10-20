@@ -25,6 +25,22 @@ describe('adjuntosMedia · slider unificado', () => {
     assert.equal(slides[2].label, 'Esquema #5')
   })
 
+  it('acepta varias fotos del historial antes de los gráficos', () => {
+    const slides = slidesFromRegistro(
+      [
+        { url: 'https://x/f1.jpg', numero: 1 },
+        { url: 'https://x/f2.jpg', numero: 12 },
+      ],
+      [{ url: 'https://x/g.png', numero: 3, origen: 'manual' }],
+    )
+    assert.equal(slides.length, 3)
+    assert.equal(slides[0].kind, 'foto')
+    assert.equal(slides[0].label, 'Foto #0001')
+    assert.equal(slides[1].kind, 'foto')
+    assert.equal(slides[1].label, 'Foto #0012')
+    assert.equal(slides[2].kind, 'grafico')
+  })
+
   it('checklist une imagen y esquema como slides del mismo carrusel', () => {
     const slides = slidesFromChecklistItem({
       imagen: { url: 'https://x/a.jpg' },
