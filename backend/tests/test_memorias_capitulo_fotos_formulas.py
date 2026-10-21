@@ -256,7 +256,7 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     )
     assert "CAPÍTULO" in html
     assert "3. SANITARIO" in html
-    assert html.count('class="mem002-foto-slot"') == 18
+    assert html.count('class="mem002-foto-slot"') == 12
     assert html.count("REGISTRO FOTOGRÁFICO — ÍTEM") == 2
     assert html.count("MEMORIA SEMANAL") >= 4
     assert "height:6.85cm" in html
@@ -304,7 +304,7 @@ def test_html_memoria_sin_graficos_no_genera_seccion():
     )
     assert "REGISTRO FOTOGRÁFICO" in html
     assert "REGISTRO GRÁFICO" not in html
-    assert html.count('class="mem002-foto-slot"') == 6
+    assert html.count('class="mem002-foto-slot"') == 4
 
 
 def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
@@ -647,6 +647,51 @@ def test_lista_graficos_rotado_aunque_el_historial_siga_con_la_url_vieja():
     }
     g = inf._lista_graficos_memoria_registro(r)
     assert [x["grafico_url"] for x in g] == ["https://cdn/rotado.png"]
+
+
+def test_fotos_y_graficos_van_de_a_cuatro_por_pagina():
+    inf = _import_informes_with_stubs()
+    registros = []
+    for i in range(5):
+        registros.append(
+            {
+                "numero_registro": i + 1,
+                "abs_inicio": "1+000",
+                "abs_final": "1+010",
+                "tramo": "1",
+                "infraestructura": "Calzada",
+                "longitud": 1,
+                "ancho": 1,
+                "espesor": 1,
+                "cantidad": 1,
+                "cantidad_total": 1,
+                "observacion": "obs",
+                "foto_url": f"https://cdn/f{i}.jpg",
+                "foto_numero": i + 1,
+                "grafico_url": f"https://cdn/g{i}.png",
+                "grafico_numero": i + 1,
+                "item_numero": "1.1",
+                "item_descripcion": "Item",
+                "unidad": "M3",
+                "capitulo": "1",
+            }
+        )
+    html = inf._html_memoria_item_body(
+        {"numero": "C"},
+        {"razon_social": "Sub", "nombre_contacto": "Ana"},
+        {"consecutivo": 1, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-31"},
+        inf._item_info_desde_registros(registros, "1.1"),
+        registros,
+        "Usuario",
+        "Cargo",
+    )
+    assert html.count("REGISTRO FOTOGRÁFICO — ÍTEM") == 2
+    assert html.count("REGISTRO GRÁFICO — ÍTEM") == 2
+    assert html.count('class="mem002-foto-slot"') == 16
+    assert html.count("Foto 1 —") == 1
+    assert html.count("Foto 5 —") == 1
+    assert html.count("Gráfico 1 —") == 1
+    assert html.count("Gráfico 5 —") == 1
 
 
 def test_detalle_no_salta_de_hoja_si_el_cierre_cabe():
