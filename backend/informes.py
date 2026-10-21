@@ -6894,7 +6894,77 @@ def _pdf_bytes_cc_mes_001_desde_ctx(
             "Bloques Actualizadas|Presente|Acumulado|Saldo · acumulado solo actas enviadas"
         ),
     )
-    return _to_pdf(html)
+    return _acercar_firmas_pie_mes(_to_pdf(html))
+
+
+def _y_fin_contenido_sobre_firmas(page, banda_top: float) -> Optional[float]:
+    """Última tinta del flujo, sin contar la franja de firmas."""
+    limite = banda_top - 1.0
+    fin: Optional[float] = None
+    for w in page.get_text("words"):
+        y0, y1 = float(w[1]), float(w[3])
+        if y0 < limite and y1 <= limite + 0.6:
+            fin = y1 if fin is None else max(fin, y1)
+    for draw in page.get_drawings():
+        rect = draw.get("rect")
+        if rect is None or rect.is_empty or rect.height > 120:
+            continue
+        if rect.y0 < limite and rect.y1 <= limite + 0.4:
+            fin = float(rect.y1) if fin is None else max(fin, float(rect.y1))
+    return fin
+
+
+def _acercar_firmas_pie_mes(pdf: bytes) -> bytes:
+    """Sube Elaboró/Revisó/Aprobó cuando el cierre deja un hueco grande.
+
+    La franja va fija al pie de cada hoja llena. Si el resumen no alcanza a
+    llenar la última, xhtml2pdf deja esos renglones arriba y las firmas abajo,
+    con el medio en blanco. Aquí esa franja queda junto al último renglón.
+    """
+    import pymupdf
+
+    mm = 72.0 / 25.4
+    hueco_max = _CC_MES_FIRMAS_HUECO_MAX_MM * mm
+    objetivo = _CC_MES_FIRMAS_HUECO_OBJETIVO_MM * mm
+    src = pymupdf.open(stream=pdf, filetype="pdf")
+    out = None
+    try:
+        for i, page in enumerate(src):
+            banda = page.rect.height - (
+                _CC_MES_FIRMAS_BOTTOM_MM + _CC_MES_FIRMAS_ALTO_MM
+            ) * mm
+            fin = _y_fin_contenido_sobre_firmas(page, banda)
+            hueco = (banda - fin) if fin is not None else 0.0
+            if fin is None or hueco <= hueco_max:
+                if out is not None:
+                    out.insert_pdf(src, from_page=i, to_page=i)
+                continue
+            if out is None:
+                out = pymupdf.open()
+                if i:
+                    out.insert_pdf(src, from_page=0, to_page=i - 1)
+            # El filete superior de la tabla de firmas cae sobre el corte de la
+            # franja. El flujo se recorta antes; el filete viaja con las firmas.
+            recorte = 1.25
+            nueva = out.new_page(width=page.rect.width, height=page.rect.height)
+            contenido = pymupdf.Rect(0, 0, page.rect.width, banda - recorte)
+            nueva.show_pdf_page(contenido, src, i, clip=contenido)
+            pie = pymupdf.Rect(0, banda - 0.4, page.rect.width, page.rect.height)
+            dest_y0 = fin + objetivo - 0.4
+            dest = pymupdf.Rect(0, dest_y0, page.rect.width, dest_y0 + pie.height)
+            nueva.show_pdf_page(dest, src, i, clip=pie)
+            _log.info(
+                "CC-MES-001: firmas de la página %s subidas %.0f mm hasta el cierre",
+                i + 1,
+                (banda - (fin + objetivo)) / mm,
+            )
+        if out is None:
+            return pdf
+        return out.tobytes()
+    finally:
+        src.close()
+        if out is not None:
+            out.close()
 
 
 def _html_cc_mes_001_v1(
@@ -15744,6 +15814,10 @@ _CCD_FIRMA_IMG_INNER_PT = "26pt"
 _CC_MES_FIRMAS_BOTTOM_MM = 3.0
 _CC_MES_FIRMAS_ALTO_MM = 26.0
 _CC_MES_FIRMAS_SEPARACION_MM = 1.5
+# Por encima de esto el cierre no llenó la hoja: la franja se acerca al último
+# renglón. En una hoja llena el hueco real queda en 4–12 mm y no se toca.
+_CC_MES_FIRMAS_HUECO_MAX_MM = 14.0
+_CC_MES_FIRMAS_HUECO_OBJETIVO_MM = 4.0
 # Memorias CC-SUB-002 / CC-SEM / CC-MES (landscape): fila de firmas más baja que CC-SUB-001.
 _CCD_FIRMA_MEM002_BOX_PT = "22pt"
 _CCD_FIRMA_MEM002_IMG_INNER_PT = "20pt"

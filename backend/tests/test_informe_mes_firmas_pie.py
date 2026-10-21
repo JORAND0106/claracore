@@ -120,59 +120,85 @@ def _banda(inf, page_h: float) -> tuple[float, float]:
     return top, bottom
 
 
+_ETIQUETAS_FIRMA = ("Elaboró:", "Revisó:", "Aprobó:")
+
+
+def _pdf_mes(inf, items, *, uri=None) -> bytes:
+    return inf._acercar_firmas_pie_mes(inf._to_pdf(_html(inf, items, uri=uri)))
+
+
 def _revisar_pdf(inf, pdf: bytes, *, items: list[dict], con_imagen: bool) -> dict:
     doc = pymupdf.open(stream=pdf, filetype="pdf")
     assert doc.page_count >= 1
     marcas = [f"FILA-{i:03d}" for i in range(len(items))]
     vistos: dict[str, int] = {}
     paginas = []
+    alto_franja = inf._CC_MES_FIRMAS_ALTO_MM * _MM
     for n, page in enumerate(doc, start=1):
         top, bottom = _banda(inf, page.rect.height)
         words = page.get_text("words")
+        etiquetas = [w for w in words if w[4] in _ETIQUETAS_FIRMA]
+        assert {w[4] for w in etiquetas} == set(_ETIQUETAS_FIRMA), f"p{n} sin las tres firmas"
+        firma_top = min(w[1] for w in etiquetas)
         contenido = []
         pie = []
         for w in words:
-            x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
-            cruza = y0 < top - 1.0 and y1 > top + 1.0
-            assert not cruza, f"p{n} {text!r} cruza la franja ({y0:.1f}-{y1:.1f}, corte {top:.1f})"
-            if y0 >= top - 1.5:
-                pie.append((y0, y1, text))
-                assert y1 <= bottom + 1.5, f"p{n} {text!r} se sale del pie ({y1:.1f} > {bottom:.1f})"
-            else:
+            y0, y1, text = w[1], w[3], w[4]
+            if y0 < firma_top - 0.8:
                 contenido.append((y0, y1, text))
-                assert y1 <= top + 1.5, f"p{n} {text!r} entra en la franja ({y1:.1f} > {top:.1f})"
+                assert y1 <= firma_top + 1.0, f"p{n} {text!r} entra en las firmas"
+            else:
+                pie.append((y0, y1, text))
+                assert y1 <= page.rect.height - 2, f"p{n} {text!r} se sale de la hoja"
         texto_pie = " ".join(t for _, _, t in pie)
         texto_cuerpo = " ".join(t for _, _, t in contenido)
-        for etiqueta in ("Elaboró:", "Revisó:", "Aprobó:"):
-            assert etiqueta in texto_pie, f"p{n} sin {etiqueta} en el pie"
+        for etiqueta in _ETIQUETAS_FIRMA:
+            assert etiqueta in texto_pie, f"p{n} sin {etiqueta} junto al cierre"
         assert texto_cuerpo.strip(), f"p{n} solo tiene el bloque de firmas"
+        cierre = max(y1 for _, y1, _ in contenido)
+        hueco = firma_top - cierre
+        assert 1.0 * _MM <= hueco <= inf._CC_MES_FIRMAS_HUECO_MAX_MM * _MM, (
+            f"p{n} deja {hueco / _MM:.1f} mm entre el cierre y las firmas"
+        )
+        # Hoja llena: las firmas siguen en la franja inferior, no suben.
+        if cierre >= top - inf._CC_MES_FIRMAS_HUECO_MAX_MM * _MM:
+            assert firma_top >= top - 2.0, f"p{n} subió las firmas de una hoja llena"
+            for _, y1, text in pie:
+                assert y1 <= bottom + 1.5, f"p{n} {text!r} se sale del pie"
         if "Período" in texto_cuerpo or "Periodo" in texto_cuerpo:
             assert any(
                 token in texto_cuerpo
                 for token in ("ÍTEM", "RESUMEN", "Gran", "Costo", "Subtotal", "CONTRATO", "FILA-")
             ), f"p{n} solo trae la línea de período y las firmas"
-        # Una continuación del resumen no repite el título de la tabla de ítems.
-        # Sí debe traer contenido propio (cuadro, subtotal o conciliación).
         assert any(
             token in texto_cuerpo
             for token in ("ÍTEM", "RESUMEN", "CONTRATO", "Subtotal", "Costo", "FILA-", "Gran")
         ), f"p{n} sin contenido de informe: {texto_cuerpo[:180]!r}"
         if n > 1 and "FILA-" in texto_cuerpo:
             assert "ÍTEM" in texto_cuerpo and "DESCRIPCIÓN" in texto_cuerpo
-        if n < doc.page_count and contenido:
-            assert max(y1 for _, y1, _ in contenido) >= top - 42, f"p{n} deja un hueco grande antes del pie"
         for marca in marcas:
             if marca in texto_cuerpo:
                 vistos[marca] = vistos.get(marca, 0) + 1
-        imgs = [b["bbox"] for b in page.get_text("dict")["blocks"] if b.get("type") == 1]
+        imgs = []
+        for b in page.get_text("dict")["blocks"]:
+            if b.get("type") != 1:
+                continue
+            x0, y0, x1, y1 = b["bbox"]
+            if y1 - y0 < 18:
+                continue
+            imgs.append((x0, y0, x1, y1))
         if con_imagen:
             assert len(imgs) == 3, f"p{n} imágenes de firma={len(imgs)}"
             for x0, y0, x1, y1 in imgs:
-                assert y0 >= top - 1.5, f"p{n} imagen encima de la franja"
-                assert y1 <= bottom + 1.5, f"p{n} imagen recortada"
                 alto = y1 - y0
                 assert 22 <= alto <= 28, f"p{n} imagen de firma encogida o estirada ({alto:.1f}pt)"
-        paginas.append({"n": n, "cuerpo": texto_cuerpo[:80], "pie_y": min(y for y, _, _ in pie)})
+                assert y0 >= firma_top - 2, f"p{n} imagen fuera del bloque de firmas"
+                assert y1 <= firma_top + alto_franja + 6, f"p{n} imagen por debajo de la franja"
+                if firma_top < top - 8:
+                    assert y0 < top - 8, f"p{n} la imagen de firma se quedó en el pie vacío"
+        paginas.append(
+            {"n": n, "cuerpo": texto_cuerpo[:80], "hueco_mm": round(hueco / _MM, 1), "firma_y": firma_top}
+        )
     for marca in marcas:
         assert vistos.get(marca) == 1, f"{marca} aparece {vistos.get(marca)} veces"
     return {"pages": doc.page_count, "detalle": paginas}
@@ -214,8 +240,9 @@ def test_mensual_reserva_franja_y_no_parte_filas():
     pie = html.split('id="firmasFooter"', 1)[1]
     assert "Pedro Aprobó" in pie
     assert "Representante legal" in pie
-    info = _revisar_pdf(inf, inf._to_pdf(html), items=items, con_imagen=True)
+    info = _revisar_pdf(inf, _pdf_mes(inf, items, uri=uri), items=items, con_imagen=True)
     assert info["pages"] >= 2
+    assert any(p["hueco_mm"] <= inf._CC_MES_FIRMAS_HUECO_OBJETIVO_MM + 0.5 for p in info["detalle"])
 
 
 def test_mensual_con_y_sin_agrupar_np():
@@ -228,14 +255,16 @@ def test_mensual_con_y_sin_agrupar_np():
     assert f"Subtotal {CAPITULO_NO_PREVISTOS}" in html_si
     marca = "RESUMEN DE CONCILIACIÓN"
     assert html_no.split(marca, 1)[1] == html_si.split(marca, 1)[1]
-    for html, cuadro in ((html_no, items), (html_si, agrupados)):
-        info = _revisar_pdf(inf, inf._to_pdf(html), items=cuadro, con_imagen=False)
+    for cuadro in (items, agrupados):
+        info = _revisar_pdf(inf, _pdf_mes(inf, cuadro), items=cuadro, con_imagen=False)
         assert info["pages"] >= 2
+        assert max(p["hueco_mm"] for p in info["detalle"]) <= inf._CC_MES_FIRMAS_HUECO_MAX_MM
 
 
 def test_ninguna_longitud_deja_una_hoja_solo_con_firmas():
     inf = _import_informes_with_stubs()
     for n in (1, 8, 17, 29):
         items = _items(n)
-        info = _revisar_pdf(inf, inf._to_pdf(_html(inf, items)), items=items, con_imagen=False)
+        info = _revisar_pdf(inf, _pdf_mes(inf, items), items=items, con_imagen=False)
         assert info["pages"] >= 1
+        assert max(p["hueco_mm"] for p in info["detalle"]) <= inf._CC_MES_FIRMAS_HUECO_MAX_MM
