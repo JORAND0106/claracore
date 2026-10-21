@@ -27738,6 +27738,13 @@ class RegistroCreate(BaseModel):
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
     graficos_historial: Optional[List[Dict[str, Any]]] = None
+    cuadro_aceros_id: Optional[str] = None
+    cuadro_aceros_nombre: Optional[str] = None
+    cuadro_aceros_posicion: Optional[str] = None
+    cuadro_aceros_posicion_id: Optional[str] = None
+    cuadro_aceros_schedule: Optional[Dict[str, Any]] = None
+    # Flag cliente: sync desde modal de cuadro (permite editar dims de registros vinculados).
+    desde_cuadro_aceros: Optional[bool] = None
     competencia: Optional[str] = None
     item_numero: Optional[str] = None
     item_descripcion: Optional[str] = None
@@ -27790,6 +27797,11 @@ class RegistroLineaNuevoReporte(BaseModel):
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
     graficos_historial: Optional[List[Dict[str, Any]]] = None
+    cuadro_aceros_id: Optional[str] = None
+    cuadro_aceros_nombre: Optional[str] = None
+    cuadro_aceros_posicion: Optional[str] = None
+    cuadro_aceros_posicion_id: Optional[str] = None
+    cuadro_aceros_schedule: Optional[Dict[str, Any]] = None
     pk_id_id: Optional[int] = None
     civ: Optional[str] = None
     tramo: Optional[str] = None
@@ -29993,6 +30005,26 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         elif k in _REGPUT_DIM_NULLABLE or k == "observacion" or k in _REGPUT_GRAFICO_NULLABLE:
             data[k] = None
 
+    # Flag solo de transporte: no se persiste.
+    desde_cuadro = bool(data.pop("desde_cuadro_aceros", None))
+    # Registros del cuadro de aceros: dims/media solo vía sync del cuadro (ítem sí se puede asignar).
+    if prev_row.get("cuadro_aceros_id") and not desde_cuadro:
+        _CUADRO_BLOQUEADOS = {
+            "longitud", "ancho", "espesor", "cantidad", "cantidad_total",
+            "es_varilla", "diametro_varilla", "peso_kg_m", "unidad",
+            "nombre", "descripcion", "observacion",
+            "foto_url", "foto_numero", "foto_descripcion", "fotos_historial",
+            "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
+            "cuadro_aceros_id", "cuadro_aceros_nombre", "cuadro_aceros_posicion",
+            "cuadro_aceros_posicion_id", "cuadro_aceros_schedule",
+        }
+        tocados = [k for k in data.keys() if k in _CUADRO_BLOQUEADOS]
+        if tocados:
+            raise HTTPException(
+                status_code=400,
+                detail="Edítelo desde el cuadro de aceros",
+            )
+
     uid = _sicoe_uid_from_user(current_user)
     sellado = _registro_nivel_max_aprobado(prev_row, int(contrato_id))
     puede_editar_full = _sicoe_puede_editar_full_registro(current_user, int(contrato_id))
@@ -30489,20 +30521,37 @@ def reemplazar_registros_nuevo_reporte(
     return {"ok": True, "insertados": total}
 
 @app.delete("/sicoe-obra/{contrato_id}/registros/{registro_id}/dev")
-def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depends(get_current_user)):
-    """Elimina un registro y sus comentarios (Desarrollador o permiso «eliminar» en Reporte de cantidades)."""
-    if not _puede_eliminar_reporte_cantidades(current_user, contrato_id):
-        raise HTTPException(
-            status_code=403,
-            detail="No tiene permiso para eliminar registros (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
-        )
-
+def dev_eliminar_registro(
+    contrato_id: int,
+    registro_id: int,
+    desde_cuadro_aceros: bool = False,
+    current_user=Depends(get_current_user),
+):
+    """Elimina un registro y sus comentarios (Desarrollador o permiso «eliminar» en Reporte de cantidades).
+    Sync del cuadro de aceros: con ?desde_cuadro_aceros=1 basta permiso Editar.
+    """
     def _get():
         return supabase.table("so_registros").select("*").eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
     rows = supabase_execute(_get)
     if not rows:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
     prev_row = rows[0]
+
+    # Registros del cuadro: solo se eliminan desde el sync del cuadro (o con permiso eliminar).
+    if prev_row.get("cuadro_aceros_id") and not desde_cuadro_aceros:
+        raise HTTPException(status_code=400, detail="Edítelo desde el cuadro de aceros")
+
+    if desde_cuadro_aceros and prev_row.get("cuadro_aceros_id"):
+        if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+            raise HTTPException(
+                status_code=403,
+                detail="Se requiere permiso «Editar» para sincronizar el cuadro de aceros.",
+            )
+    elif not _puede_eliminar_reporte_cantidades(current_user, contrato_id):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para eliminar registros (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
+        )
 
     def _del_com():
         return supabase.table("so_registro_comentarios").delete().eq("registro_id", registro_id).execute().data
@@ -30607,6 +30656,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     data["contrato_id"] = contrato_id
     data["creado_por_reg"] = int(current_user.get("sub") or current_user.get("id", 0))
     data.pop("id_pol", None)
+    data.pop("desde_cuadro_aceros", None)  # flag solo de transporte
     for dk in ("longitud", "ancho", "espesor", "cantidad"):
         if data.get(dk) is not None:
             try:

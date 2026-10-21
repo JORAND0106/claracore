@@ -199,7 +199,21 @@ def sicoe_validar_y_preparar_medicion_varilla(
                 "Diámetro de varilla no válido. "
                 f"Diámetros aceptados (pulgadas): {sicoe_diametros_validos_msg()}."
             )
-        peso = sicoe_peso_kg_m_por_diametro(canon)
+        peso_tabla = sicoe_peso_kg_m_por_diametro(canon)
+        # Cuadro de aceros (despiece): conserva peso con precisión de cálculo (p. ej. #4=0,994)
+        # para que Cant Total coincida con el peso de la posición. La tabla NTC de plataforma
+        # (0,99) no se modifica.
+        cuadro_id = data.get("cuadro_aceros_id")
+        if cuadro_id is None:
+            cuadro_id = prev.get("cuadro_aceros_id")
+        peso_in = data["peso_kg_m"] if "peso_kg_m" in data else prev.get("peso_kg_m")
+        if cuadro_id and peso_in is not None and peso_in != "":
+            try:
+                peso = float(peso_in)
+            except (TypeError, ValueError):
+                peso = peso_tabla
+        else:
+            peso = peso_tabla
         data["es_varilla"] = True
         data["diametro_varilla"] = canon
         data["peso_kg_m"] = peso
