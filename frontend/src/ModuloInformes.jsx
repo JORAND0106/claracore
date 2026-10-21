@@ -27,6 +27,7 @@ import CorteSubConciliacionPopup from './informes/CorteSubConciliacionPopup'
 import ActaMesConciliacionPopup from './informes/ActaMesConciliacionPopup'
 import FoEo04SeleccionModal from './informes/FoEo04SeleccionModal'
 import { claveFoEo04, firmaSeleccionFoEo04 } from './informes/foEo04Seleccion'
+import { etiquetaSlotFirmaCcd, slotFirmaPendienteCcd } from './informes/firmaIconoCcd'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -1718,10 +1719,41 @@ export default function ModuloInformes({
     }
   }
 
-  /** Registra en el servidor la URL de firma del perfil para Elaboró o Revisó (según biblioteca CCD). */
+  function rolFirmaPendiente(codigo) {
+    const fmt = biblioCcd.find((f) => f.codigo === codigo)
+    return slotFirmaPendienteCcd({
+      codigo,
+      formato: fmt,
+      cfg: cfgFirmaCcd[codigo],
+      firmas: firmasCcd[codigo],
+      usuario,
+    })
+  }
+
+  function botonRegistrarFirma(codigo, { busy, onClick }) {
+    const slot = rolFirmaPendiente(codigo)
+    if (!slot) return null
+    const rol = etiquetaSlotFirmaCcd(slot)
+    return (
+      <button
+        type="button"
+        style={btnCcdToolbar(!!busy, 'firma')}
+        onClick={onClick}
+        disabled={!!busy}
+        title={`Registrar tu firma de ${rol}`}
+        aria-label={`Registrar mi firma de ${rol} en ${codigo}`}
+      >
+        {busy
+          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+          : <IconoFirmaRegistrar size={ui.iconSvg} />}
+      </button>
+    )
+  }
+
+  /** Registra en el servidor la URL de firma del perfil en el rol asignado en la Biblioteca CCD. */
   async function registrarMiFirmaCcd(formatoCodigo) {
-    if (!puedeValidarCcd) {
-      setError('No tienes permiso para registrar firmas en formatos (acción Validar en Informes CCD).')
+    if (!rolFirmaPendiente(formatoCodigo)) {
+      setError('No tienes un rol de firma pendiente en este formato.')
       return
     }
     const authToken = getAuthToken()
@@ -2545,8 +2577,8 @@ export default function ModuloInformes({
   }
 
   async function registrarFirmaConc(formatoCodigo, contextoTipo, contextoId) {
-    if (!puedeValidarCcd) {
-      setError('No tienes permiso para registrar firmas en formatos (acción Validar en Informes CCD).')
+    if (!rolFirmaPendiente(formatoCodigo)) {
+      setError('No tienes un rol de firma pendiente en este formato.')
       return
     }
     const authToken = getAuthToken()
@@ -4921,20 +4953,10 @@ export default function ModuloInformes({
                           : <IconoDescargaExcel size={ui.iconSvg} />}
                       </button>
                       )}
-                      {puedeValidarCcd && (
-                      <button
-                        type="button"
-                        style={btnCcdToolbar(registrarFirmaBusy, 'firma')}
-                        onClick={() => registrarMiFirmaCcd('CC-SUB-001')}
-                        disabled={registrarFirmaBusy}
-                        title="Registrar tu firma del perfil para Elaboró o Revisó (según Biblioteca CCD)"
-                        aria-label="Registrar mi firma en este corte"
-                      >
-                        {registrarFirmaBusy
-                          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                          : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                      </button>
-                      )}
+                      {botonRegistrarFirma('CC-SUB-001', {
+                        busy: registrarFirmaBusy,
+                        onClick: () => registrarMiFirmaCcd('CC-SUB-001'),
+                      })}
                     </div>
                   )}
                 </div>
@@ -5025,20 +5047,10 @@ export default function ModuloInformes({
                           </>
                         )}
                         <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
-                        {puedeValidarCcd && (
-                        <button
-                          type="button"
-                          style={btnCcdToolbar(registrarFirmaBusy, 'firma')}
-                          onClick={() => registrarMiFirmaCcd('CC-SUB-002')}
-                          disabled={registrarFirmaBusy}
-                          title="Registrar tu firma del perfil para Elaboró o Revisó en memorias (Biblioteca CCD)"
-                          aria-label="Registrar mi firma para CC-SUB-002"
-                        >
-                          {registrarFirmaBusy
-                            ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                            : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                        </button>
-                        )}
+                        {botonRegistrarFirma('CC-SUB-002', {
+                          busy: registrarFirmaBusy,
+                          onClick: () => registrarMiFirmaCcd('CC-SUB-002'),
+                        })}
                       </div>
 
                       <div style={{ marginBottom: '8px' }}>
@@ -5381,20 +5393,10 @@ export default function ModuloInformes({
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
-                    {puedeValidarCcd && (
-                    <button
-                      type="button"
-                      style={btnCcdToolbar(firmaRegistroBusy === 'CC-SEM-001', 'firma')}
-                      onClick={() => registrarFirmaConc('CC-SEM-001', 'semana', semanaConcId)}
-                      disabled={firmaRegistroBusy === 'CC-SEM-001'}
-                      title="Registrar tu firma (Elaboró, Revisó o Aprobó según biblioteca CCD)"
-                      aria-label="Registrar mi firma CC-SEM-001"
-                    >
-                      {firmaRegistroBusy === 'CC-SEM-001'
-                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                    </button>
-                    )}
+                    {botonRegistrarFirma('CC-SEM-001', {
+                      busy: firmaRegistroBusy === 'CC-SEM-001',
+                      onClick: () => registrarFirmaConc('CC-SEM-001', 'semana', semanaConcId),
+                    })}
                   </div>
                 </div>
               )}
@@ -5476,20 +5478,10 @@ export default function ModuloInformes({
                           </>
                         )}
                         <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
-                        {puedeValidarCcd && (
-                        <button
-                          type="button"
-                          style={btnCcdToolbar(firmaRegistroBusy === 'CC-SEM-002', 'firma')}
-                          onClick={() => registrarFirmaConc('CC-SEM-002', 'semana', semanaConcId)}
-                          disabled={firmaRegistroBusy === 'CC-SEM-002'}
-                          title="Registrar tu firma para memorias semanales"
-                          aria-label="Registrar mi firma CC-SEM-002"
-                        >
-                          {firmaRegistroBusy === 'CC-SEM-002'
-                            ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                            : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                        </button>
-                        )}
+                        {botonRegistrarFirma('CC-SEM-002', {
+                          busy: firmaRegistroBusy === 'CC-SEM-002',
+                          onClick: () => registrarFirmaConc('CC-SEM-002', 'semana', semanaConcId),
+                        })}
                       </div>
 
                       <div style={{ marginBottom: '8px' }}>
@@ -5815,20 +5807,10 @@ export default function ModuloInformes({
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
-                    {puedeValidarCcd && (
-                    <button
-                      type="button"
-                      style={btnCcdToolbar(firmaRegistroBusy === 'CC-GER-001', 'firma')}
-                      onClick={() => registrarFirmaConc('CC-GER-001', 'acta_rpo', gerAutoActaId)}
-                      disabled={firmaRegistroBusy === 'CC-GER-001'}
-                      title="Registrar mi firma según slot en biblioteca CCD"
-                      aria-label="Registrar firma CC-GER-001"
-                    >
-                      {firmaRegistroBusy === 'CC-GER-001'
-                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                    </button>
-                    )}
+                    {botonRegistrarFirma('CC-GER-001', {
+                      busy: firmaRegistroBusy === 'CC-GER-001',
+                      onClick: () => registrarFirmaConc('CC-GER-001', 'acta_rpo', gerAutoActaId),
+                    })}
                   </div>
                 </div>
               )}
@@ -6093,20 +6075,10 @@ export default function ModuloInformes({
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
-                    {puedeValidarCcd && (
-                    <button
-                      type="button"
-                      style={btnCcdToolbar(firmaRegistroBusy === 'CC-MES-001', 'firma')}
-                      onClick={() => registrarFirmaConc('CC-MES-001', 'acta_rpo', actaConcId)}
-                      disabled={firmaRegistroBusy === 'CC-MES-001'}
-                      title="Registrar tu firma (Elaboró, Revisó o Aprobó según biblioteca CCD)"
-                      aria-label="Registrar mi firma CC-MES-001"
-                    >
-                      {firmaRegistroBusy === 'CC-MES-001'
-                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                    </button>
-                    )}
+                    {botonRegistrarFirma('CC-MES-001', {
+                      busy: firmaRegistroBusy === 'CC-MES-001',
+                      onClick: () => registrarFirmaConc('CC-MES-001', 'acta_rpo', actaConcId),
+                    })}
                   </div>
                 </div>
               )}
@@ -6188,20 +6160,10 @@ export default function ModuloInformes({
                           </>
                         )}
                         <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
-                        {puedeValidarCcd && (
-                        <button
-                          type="button"
-                          style={btnCcdToolbar(firmaRegistroBusy === 'CC-MES-002', 'firma')}
-                          onClick={() => registrarFirmaConc('CC-MES-002', 'acta_rpo', actaConcId)}
-                          disabled={firmaRegistroBusy === 'CC-MES-002'}
-                          title="Registrar tu firma para memorias mensuales de este acta"
-                          aria-label="Registrar mi firma CC-MES-002"
-                        >
-                          {firmaRegistroBusy === 'CC-MES-002'
-                            ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                            : <IconoFirmaRegistrar size={ui.iconSvg} />}
-                        </button>
-                        )}
+                        {botonRegistrarFirma('CC-MES-002', {
+                          busy: firmaRegistroBusy === 'CC-MES-002',
+                          onClick: () => registrarFirmaConc('CC-MES-002', 'acta_rpo', actaConcId),
+                        })}
                       </div>
 
                       <div style={{ marginBottom: '8px' }}>

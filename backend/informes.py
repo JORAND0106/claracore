@@ -2844,8 +2844,8 @@ def ccd_registrar_firma_corte(
     formato_codigo: str,
     current_user: dict = Depends(_get_user),
 ):
-    """Guarda la URL de firma del perfil para Elaboró o Revisó según asignación en biblioteca CCD."""
-    _perm_informes_ccd(current_user, "validar")
+    """Guarda la URL de firma del perfil en el rol que la Biblioteca CCD asigna a este usuario."""
+    _perm_registrar_firma_formato(current_user, formato_codigo, contrato_id=contrato_id)
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     uid = _uid_session(current_user)
@@ -2854,16 +2854,20 @@ def ccd_registrar_firma_corte(
     if not _corte_pertenece_contrato(contrato_id, corte_id):
         raise HTTPException(status_code=404, detail="Corte no encontrado en este contrato")
     fc = _get_ccd_firma_config(contrato_id, formato_codigo)
-    slot = _slot_firma_usuario_en_config(fc, uid, current_user)
-    if not slot:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Tu usuario no coincide con Elaboró ni Revisó en la biblioteca CCD para este formato. "
-                "Elige al usuario en los desplegables (no solo el texto) y guarda, o revisa que el nombre "
-                "coincida con tu perfil."
-            ),
-        )
+    if _firma_sigue_asignacion_biblioteca(formato_codigo):
+        ocupados = _slots_firma_ocupados_corte(corte_id, formato_codigo)
+        slot = _resolver_slot_registrar_firma(formato_codigo, fc, uid, current_user, ocupados)
+    else:
+        slot = _slot_firma_usuario_en_config(fc, uid, current_user)
+        if not slot:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Tu usuario no coincide con Elaboró ni Revisó en la biblioteca CCD para este formato. "
+                    "Elige al usuario en los desplegables (no solo el texto) y guarda, o revisa que el nombre "
+                    "coincida con tu perfil."
+                ),
+            )
     if formato_codigo in (CODIGO_FORMATO_CCD_CC_SUB_001, CODIGO_FORMATO_CCD_CC_SUB_002) and slot == "aprobo":
         raise HTTPException(
             status_code=400,
@@ -2913,7 +2917,7 @@ def ccd_firmas_registradas_corte(
     current_user: dict = Depends(_get_user),
 ):
     """Quién ya registró firma en este corte (Elaboró / Revisó)."""
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if not _corte_pertenece_contrato(contrato_id, corte_id):
@@ -3426,7 +3430,7 @@ def ccd_registrar_firma_contexto(
     formato_codigo: str,
     current_user: dict = Depends(_get_user),
 ):
-    _perm_informes_ccd(current_user, "validar")
+    _perm_registrar_firma_formato(current_user, formato_codigo, contrato_id=contrato_id)
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if contexto_tipo not in ("semana", "acta_rpo"):
@@ -3439,16 +3443,22 @@ def ccd_registrar_firma_contexto(
     if contexto_tipo == "acta_rpo" and not _acta_pertenece_contrato(contrato_id, contexto_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
     fc = _get_ccd_firma_config(contrato_id, formato_codigo)
-    slot = _slot_firma_usuario_en_config(fc, uid, current_user)
-    if not slot:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Tu usuario no coincide con Elaboró, Revisó ni Aprobó configurados en la biblioteca CCD para este formato. "
-                "Vuelve a guardar la biblioteca (asigna tu usuario en el desplegable o revisa nombres). "
-                "Si al guardar falla el servidor, ejecuta en Supabase los ALTER de aprobo_* en backend/sql/ccd_formato_firma.sql."
-            ),
+    if _firma_sigue_asignacion_biblioteca(formato_codigo):
+        ocupados = _slots_firma_ocupados_contexto(
+            contrato_id, contexto_tipo, contexto_id, formato_codigo
         )
+        slot = _resolver_slot_registrar_firma(formato_codigo, fc, uid, current_user, ocupados)
+    else:
+        slot = _slot_firma_usuario_en_config(fc, uid, current_user)
+        if not slot:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Tu usuario no coincide con Elaboró, Revisó ni Aprobó configurados en la biblioteca CCD para este formato. "
+                    "Vuelve a guardar la biblioteca (asigna tu usuario en el desplegable o revisa nombres). "
+                    "Si al guardar falla el servidor, ejecuta en Supabase los ALTER de aprobo_* en backend/sql/ccd_formato_firma.sql."
+                ),
+            )
     url = _firma_imagen_url_usuario(uid)
     if not url:
         raise HTTPException(status_code=400, detail="Configura la imagen de firma en tu perfil antes de registrar.")
@@ -3514,7 +3524,7 @@ def ccd_firmas_registradas_contexto(
     formato_codigo: str,
     current_user: dict = Depends(_get_user),
 ):
-    _perm_informes_ccd_ver_o_validar(current_user)
+    _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if contexto_tipo not in ("semana", "acta_rpo"):
@@ -5890,10 +5900,186 @@ def _nombre_coincide_firma_cfg(nombre_en_config: str, current_user: Optional[dic
         return False
     if nom == nc or nom in nc or nc in nom:
         return True
-    # Tipos «Jaime» vs «Jaimes», espacios o puntuación
+    # Tipos «Jaime» vs «Jaimes», espacios o puntuación. Solo FO-EO-04 conserva este umbral.
     if difflib.SequenceMatcher(None, nom, nc).ratio() >= 0.82:
         return True
     return False
+
+
+def _nombre_asignado_sin_id(nombre_en_config: str, current_user: Optional[dict]) -> bool:
+    """Nombre legado, sin el umbral difuso: igualdad o que un texto contenga al otro."""
+    if not current_user:
+        return False
+    nc = _normalizar_nombre_firma_txt(nombre_en_config)
+    if not nc or nc in ("—", "ej. elaboró", "ej. revisó"):
+        return False
+    nom = _normalizar_nombre_firma_txt(_nombre_apellidos_usuario_sesion(current_user))
+    if not nom:
+        return False
+    return nom == nc or nom in nc or nc in nom
+
+
+_ORDEN_SLOTS_FIRMA = ("elaboro", "elaboro2", "reviso", "reviso2", "aprobo")
+
+
+def _firma_sigue_asignacion_biblioteca(formato_codigo: str) -> bool:
+    """True en los formatos del módulo salvo Formatos Entidades Externas."""
+    meta = FORMATOS_CCD.get(formato_codigo) or {}
+    return meta.get("grupo_ccd") != "entidades_externas"
+
+
+def _slots_firma_configurables(formato_codigo: str) -> List[str]:
+    meta = FORMATOS_CCD.get(formato_codigo) or {}
+    out: List[str] = []
+    for slot in meta.get("slots_firma") or []:
+        if str((slot or {}).get("origen") or "") != "configuracion":
+            continue
+        sid = str((slot or {}).get("id") or "").strip()
+        if sid:
+            out.append(sid)
+    return out
+
+
+def _slots_firma_del_usuario(
+    fc: Dict[str, Any],
+    uid: int,
+    current_user: dict,
+    formato_codigo: str,
+) -> List[str]:
+    """Roles de origen configuracion asignados a este usuario, en orden de bloque."""
+    configurables = set(_slots_firma_configurables(formato_codigo))
+    uid_i = int(uid)
+    out: List[str] = []
+    for slot_name in _ORDEN_SLOTS_FIRMA:
+        if slot_name not in configurables:
+            continue
+        sid = _opt_usuario_id(fc.get(f"{slot_name}_usuario_id"))
+        if sid and int(sid) == uid_i:
+            out.append(slot_name)
+            continue
+        if sid:
+            continue
+        nombre = str(fc.get(f"{slot_name}_nombre") or "")
+        if _nombre_asignado_sin_id(nombre, current_user):
+            out.append(slot_name)
+    return out
+
+
+def _slot_firma_pendiente(
+    fc: Dict[str, Any],
+    uid: int,
+    current_user: dict,
+    formato_codigo: str,
+    ocupados: set,
+) -> Optional[str]:
+    """Primer rol asignado que este documento todavía no tiene firmado."""
+    ya = {str(s or "").strip() for s in (ocupados or set()) if str(s or "").strip()}
+    for slot_name in _slots_firma_del_usuario(fc, uid, current_user, formato_codigo):
+        if slot_name not in ya:
+            return slot_name
+    return None
+
+
+def _perm_registrar_firma_formato(user: Any, formato_codigo: str, *, contrato_id: int) -> None:
+    """Entidades externas siguen exigiendo Validar. El resto, quien puede abrir Informes."""
+    if not _firma_sigue_asignacion_biblioteca(formato_codigo):
+        _perm_informes_ccd(user, "validar", contrato_id=contrato_id)
+        return
+    _perm_informes_ccd_lectura(user, contrato_id=contrato_id)
+
+
+def _resolver_slot_registrar_firma(
+    formato_codigo: str,
+    fc: Dict[str, Any],
+    uid: int,
+    current_user: dict,
+    ocupados: set,
+) -> str:
+    """Slot a persistir. 409 si el único rol asignado ya está firmado; 400 si no está asignado."""
+    coinciden = _slots_firma_del_usuario(fc, uid, current_user, formato_codigo)
+    ya = {str(s or "").strip() for s in (ocupados or set()) if str(s or "").strip()}
+    for slot_name in coinciden:
+        if slot_name not in ya:
+            return slot_name
+    if coinciden:
+        raise HTTPException(status_code=409, detail="Este rol ya está firmado.")
+    if formato_codigo in (CODIGO_FORMATO_CCD_CC_SUB_001, CODIGO_FORMATO_CCD_CC_SUB_002):
+        detail = (
+            "Tu usuario no coincide con Elaboró ni Revisó en la biblioteca CCD para este formato. "
+            "Elige al usuario en los desplegables (no solo el texto) y guarda, o revisa que el nombre "
+            "coincida con tu perfil."
+        )
+    else:
+        detail = (
+            "Tu usuario no coincide con Elaboró, Revisó ni Aprobó configurados en la biblioteca CCD para este formato. "
+            "Vuelve a guardar la biblioteca (asigna tu usuario en el desplegable o revisa nombres). "
+            "Si al guardar falla el servidor, ejecuta en Supabase los ALTER de aprobo_* en backend/sql/ccd_formato_firma.sql."
+        )
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _slots_desde_filas_firma(rows: List[dict]) -> set:
+    out: set = set()
+    for row in rows or []:
+        sl = str((row or {}).get("slot") or "").strip()
+        if sl:
+            out.add(sl)
+    return out
+
+
+def _slots_firma_ocupados_corte(corte_id: int, formato_codigo: str) -> set:
+    try:
+        rows = (
+            _sb.table("ccd_corte_firma_registro")
+            .select("slot")
+            .eq("corte_id", corte_id)
+            .eq("formato_codigo", formato_codigo)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        _log.exception("ccd_corte_firma_registro slots")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo consultar las firmas ya registradas. "
+                "Si la tabla no existe, ejecuta en Supabase backend/sql/ccd_corte_firma_registro.sql. "
+                f"Detalle: {e!s}"
+            ),
+        ) from e
+    return _slots_desde_filas_firma(rows)
+
+
+def _slots_firma_ocupados_contexto(
+    contrato_id: int,
+    contexto_tipo: str,
+    contexto_id: int,
+    formato_codigo: str,
+) -> set:
+    try:
+        rows = (
+            _sb.table("ccd_firma_registro")
+            .select("slot")
+            .eq("contrato_id", contrato_id)
+            .eq("contexto_tipo", contexto_tipo)
+            .eq("contexto_id", contexto_id)
+            .eq("formato_codigo", formato_codigo)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        _log.exception("ccd_firma_registro slots")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo consultar las firmas ya registradas. "
+                "Si falta la tabla, ejecuta backend/sql/ccd_firma_registro_contexto.sql. "
+                f"Detalle: {e!s}"
+            ),
+        ) from e
+    return _slots_desde_filas_firma(rows)
 
 
 def _slot_firma_usuario_en_config(fc: Dict[str, Any], uid: int, current_user: dict) -> Optional[str]:
