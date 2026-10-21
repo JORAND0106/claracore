@@ -97,17 +97,23 @@ export function coloresAuditoriaCelda(tono, theme, uiTheme = {}) {
 
 /**
  * Estilo de la celda td (fondo + tipografía) + title accesible.
+ * @param {object} [opts]
+ * @param {boolean} [opts.mostrarTonoAuditoria=true] — si false (auditoría oculta),
+ *   solo muestra el estado sin verde/amarillo.
  */
-export function estiloCeldaValidacion(row, theme, uiTheme, baseTd = {}) {
+export function estiloCeldaValidacion(row, theme, uiTheme, baseTd = {}, opts = {}) {
+  const mostrarTono = opts.mostrarTonoAuditoria !== false
   const estado = normalizarEstadoValidacion(row?.doc_validacion_estado)
   const label = LABELS[estado]
-  const tono = tonoAuditoriaCelda(row)
+  const tono = mostrarTono ? tonoAuditoriaCelda(row) : 'ninguna'
   const colores = coloresAuditoriaCelda(tono, theme, uiTheme)
 
   let title = `Validación: ${label}`
-  if (tono === 'ok') title += ' · Auditoría sin observaciones'
-  else if (tono === 'hallazgos') title += ' · Auditoría con observaciones'
-  else title += ' · Sin auditoría ejecutada'
+  if (mostrarTono) {
+    if (tono === 'ok') title += ' · Auditoría sin observaciones'
+    else if (tono === 'hallazgos') title += ' · Auditoría con observaciones'
+    else title += ' · Sin auditoría ejecutada'
+  }
 
   return {
     label,

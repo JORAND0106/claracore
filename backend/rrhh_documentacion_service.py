@@ -22,12 +22,14 @@ from rrhh_auditoria_docs import (
     ejecutar_auditoria_documentacion,
     slots_checklist_auditoria,
 )
+from rrhh_docs_obligatoriedad import docs_obligatorios_faltantes
 from rrhh_docs_service import (
     DOC_TIPO_LABEL,
     assert_documentacion_editable,
     list_contratos_generados,
     list_documentos,
 )
+from rrhh_feature_flags import auditoria_documental_activa
 from rrhh_service import get_trabajador, list_catalogo, trabajador_display_nombre
 
 _log = logging.getLogger("claracore.rrhh.doc_consolidacion")
@@ -380,6 +382,48 @@ def _blob_a_pdf_bytes(meta: dict, data: bytes) -> Optional[bytes]:
         return None
 
 
+def _custom_tipos_faltantes(sb, contrato_id: int) -> List[Tuple[str, str, str]]:
+    return _custom_tipos_auditoria(sb, contrato_id)
+
+
+def faltantes_documentacion(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    trab: Optional[dict] = None,
+) -> List[dict]:
+    """
+    Documentos obligatorios sin cargar (contrato + soporte + ingreso + afiliación/planilla).
+    Usado como puerta de aprobación y para mensajes de faltantes.
+    """
+    trabajador = trab or get_trabajador(sb, contrato_id, trabajador_id)
+    docs = list_documentos(sb, contrato_id, trabajador_id) or []
+    vigentes = {
+        (
+            str(d.get("categoria") or "").strip().lower(),
+            str(d.get("tipo") or "").strip().lower(),
+        )
+        for d in docs
+        if d.get("vigente") and not d.get("eliminado_en")
+        and d.get("categoria") and d.get("tipo")
+    }
+    tiene_cto = bool(_contrato_laboral_vigente_meta(sb, contrato_id, trabajador_id))
+    return docs_obligatorios_faltantes(
+        trabajador,
+        vigentes,
+        tiene_contrato=tiene_cto,
+        custom_tipos=_custom_tipos_faltantes(sb, contrato_id),
+    )
+
+
+def _mensaje_faltantes(faltantes: List[dict]) -> str:
+    if not faltantes:
+        return ""
+    labels = [str(f.get("label") or f.get("tipo") or "?") for f in faltantes]
+    return "Faltan documentos obligatorios: " + "; ".join(labels) + "."
+
+
 def consolidar_documentacion(
     sb,
     contrato_id: int,
@@ -390,6 +434,11 @@ def consolidar_documentacion(
     Ejecuta auditoría sobre el expediente (docs + contrato laboral).
     Guarda resultado e historial; NO cambia el estado de validación.
     """
+    if not auditoria_documental_activa():
+        raise ValueError(
+            "La auditoría documental está deshabilitada temporalmente. "
+            "Puede aprobar al colaborador cuando tenga completos los documentos obligatorios."
+        )
     trab = get_trabajador(sb, contrato_id, trabajador_id)
     assert_documentacion_editable(trab)
 
@@ -842,8 +891,10 @@ def set_validacion(
 ) -> dict:
     """
     Cambia estado de validación.
-    Aprobado exige haber ejecutado al menos una auditoría (los hallazgos
-    NO bloquean: la decisión queda bajo responsabilidad de quien aprueba).
+    Aprobado exige documentos obligatorios completos. Si la auditoría
+    documental está activa, también exige haberla ejecutado al menos una vez
+    (los hallazgos no bloquean). Con la auditoría oculta, solo cuenta el
+    expediente completo.
     """
     trab = get_trabajador(sb, contrato_id, trabajador_id)
     est = (estado or "").strip().lower()
@@ -854,12 +905,17 @@ def set_validacion(
         raise ValueError("La documentación está bloqueada; no se puede cambiar la validación.")
 
     if est == "aprobado":
-        if not auditoria_fue_ejecutada(trab):
+        if auditoria_documental_activa() and not auditoria_fue_ejecutada(trab):
             raise ValueError(
                 "No se puede aprobar: ejecute primero la auditoría documental "
                 "al menos una vez. Los hallazgos no impiden aprobar, pero la "
                 "plataforma debe haber alertado lo encontrado."
             )
+        faltantes = faltantes_documentacion(
+            sb, contrato_id, trabajador_id, trab=trab,
+        )
+        if faltantes:
+            raise ValueError(_mensaje_faltantes(faltantes))
         return _aprobar_y_consolidar_pdf(
             sb, contrato_id, trabajador_id, trab,
             observacion=observacion, current_user=current_user,
@@ -888,6 +944,121 @@ def set_validacion(
         or []
     )
     return rows[0] if rows else {**trab, **upd}
+
+
+def set_validacion_masiva(
+    sb,
+    contrato_id: int,
+    trabajador_ids: List[int],
+    *,
+    estado: str,
+    observacion: Optional[str] = None,
+    current_user=None,
+) -> dict:
+    """
+    Aplica validación a varios colaboradores de un contrato.
+    Reutiliza set_validacion (mismas reglas). Bloqueados no se modifican.
+    Retorna { actualizados, omitidos, errores }.
+    """
+    est = (estado or "").strip().lower()
+    if est not in ("pendiente", "aprobado", "rechazado"):
+        raise ValueError("Estado de validación inválido.")
+    if est in ("pendiente", "rechazado") and not (observacion or "").strip():
+        if est == "rechazado":
+            raise ValueError("Indique la causal/observación del rechazo.")
+        if est == "pendiente":
+            raise ValueError("Indique la causal/observación del estado Pendiente.")
+
+    ids: List[int] = []
+    seen: set = set()
+    for raw in trabajador_ids or []:
+        try:
+            tid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if tid <= 0 or tid in seen:
+            continue
+        seen.add(tid)
+        ids.append(tid)
+    if not ids:
+        raise ValueError("Seleccione al menos un colaborador.")
+    if len(ids) > 100:
+        raise ValueError("Máximo 100 colaboradores por validación masiva.")
+
+    actualizados: List[dict] = []
+    omitidos: List[dict] = []
+    errores: List[dict] = []
+
+    for tid in ids:
+        try:
+            trab = get_trabajador(sb, contrato_id, tid)
+        except Exception as exc:
+            errores.append({
+                "trabajador_id": tid,
+                "nombre": str(tid),
+                "detail": str(exc) or "Colaborador no encontrado.",
+                "faltantes": [],
+            })
+            continue
+        nombre = trabajador_display_nombre(trab) or str(tid)
+        if trab.get("doc_bloqueado") and str(trab.get("doc_validacion_estado") or "").lower() == "aprobado":
+            omitidos.append({
+                "trabajador_id": tid,
+                "nombre": nombre,
+                "detail": "Ya aprobado y bloqueado.",
+            })
+            continue
+        try:
+            row = set_validacion(
+                sb,
+                contrato_id,
+                tid,
+                estado=est,
+                observacion=observacion,
+                current_user=current_user,
+            )
+            actualizados.append({
+                "trabajador_id": tid,
+                "nombre": nombre,
+                "estado": est,
+                "trabajador": row,
+            })
+        except ValueError as exc:
+            msg = str(exc) or "No se pudo actualizar."
+            faltantes = []
+            if est == "aprobado":
+                try:
+                    faltantes = faltantes_documentacion(
+                        sb, contrato_id, tid, trab=trab,
+                    )
+                except Exception:
+                    faltantes = []
+            errores.append({
+                "trabajador_id": tid,
+                "nombre": nombre,
+                "detail": msg,
+                "faltantes": [
+                    {"categoria": f.get("categoria"), "tipo": f.get("tipo"), "label": f.get("label")}
+                    for f in (faltantes or [])
+                ],
+            })
+        except Exception as exc:
+            errores.append({
+                "trabajador_id": tid,
+                "nombre": nombre,
+                "detail": str(exc) or "Error inesperado.",
+                "faltantes": [],
+            })
+
+    return {
+        "estado": est,
+        "actualizados": actualizados,
+        "omitidos": omitidos,
+        "errores": errores,
+        "n_actualizados": len(actualizados),
+        "n_omitidos": len(omitidos),
+        "n_errores": len(errores),
+    }
 
 
 def _aprobar_y_consolidar_pdf(
@@ -1083,8 +1254,10 @@ def build_pdf_consolidado_bytes(
     portada = to_pdf_bytes(html, landscape=False)
     partes = list(adjuntos_pdf)
 
+    # Solo incluir sección de auditoría si hay informe con filas registradas.
+    # Colaboradores nunca auditados: el consolidado omite esa sección.
     filas_audit = _filas_ultima_auditoria(sb, trabajador)
-    if filas_audit or trabajador.get("doc_auditoria_en"):
+    if filas_audit:
         try:
             audit_html = _build_auditoria_tabla_html(trabajador, filas_audit)
             partes.append(to_pdf_bytes(audit_html, landscape=False))

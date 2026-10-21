@@ -2,7 +2,13 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import { tFrom, isDarkMode } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
-import { AFILIACION_ENTIDAD_BY_TIPO, buildDocChecklist, slugTipoDocumento } from './rrhhHelpers'
+import {
+  AFILIACION_ENTIDAD_BY_TIPO,
+  buildDocChecklist,
+  esDocOpcional,
+  estiloFaltanteObligatorio,
+  slugTipoDocumento,
+} from './rrhhHelpers'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
@@ -279,11 +285,12 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
   const showEntidad = Boolean(showAfiliacionEntidad && categoria === 'afiliacion')
   const colSpan = showEntidad ? 5 : 4
 
-  const renderEntidadCell = (meta) => {
+  const renderEntidadCell = (meta, { faltanteEntidad = false } = {}) => {
     const cfg = AFILIACION_ENTIDAD_BY_TIPO[meta?.tipo]
     if (!cfg) return <td style={ui.td}>—</td>
+    const cellStyle = faltanteEntidad ? estiloFaltanteObligatorio(ui.td) : ui.td
     return (
-      <td style={ui.td} onClick={(e) => e.stopPropagation()}>
+      <td style={cellStyle} onClick={(e) => e.stopPropagation()}>
         <CatalogSelect
           value={afiliacionValues?.[cfg.field] || ''}
           options={catalogo?.[cfg.catalogKey] || []}
@@ -322,14 +329,26 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
             {loading && <tr><td style={ui.td} colSpan={colSpan}>Cargando…</td></tr>}
             {!loading && displayRows.map((row) => {
               const meta = row._meta
+              const opcional = meta?.tipo && meta.tipo !== 'otro'
+                ? esDocOpcional(categoria, meta.tipo)
+                : true
               if (row._placeholder) {
+                const faltanteDoc = !opcional && meta.tipo !== 'otro' && !locked
+                const rowLbl = faltanteDoc ? estiloFaltanteObligatorio(lbl) : lbl
+                const rowTd = faltanteDoc ? estiloFaltanteObligatorio(ui.td) : ui.td
+                const cfgEnt = AFILIACION_ENTIDAD_BY_TIPO[meta?.tipo]
+                const faltanteEntidad = Boolean(
+                  showEntidad && cfgEnt && !opcional && !locked
+                  && !String(afiliacionValues?.[cfgEnt.field] || '').trim(),
+                )
                 return (
                   <tr
                     key={`ph-${meta.tipo}`}
                     onClick={() => onClickTipo(meta)}
                     style={{ cursor: editable && !busy ? 'pointer' : 'default' }}
+                    title={faltanteDoc ? 'Documento obligatorio sin cargar' : undefined}
                   >
-                    <td style={lbl}>
+                    <td style={rowLbl}>
                       {meta.label}
                       {meta.custom && editable && (
                         <button
@@ -341,15 +360,20 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
                         </button>
                       )}
                     </td>
-                    {showEntidad && renderEntidadCell(meta)}
-                    <td style={{ ...ui.td, color: tTok.textMuted }}>
+                    {showEntidad && renderEntidadCell(meta, { faltanteEntidad })}
+                    <td style={{ ...rowTd, color: faltanteDoc ? undefined : tTok.textMuted }}>
                       {editable ? (meta.tipo === 'otro' ? 'Clic para agregar tipo…' : 'Clic para seleccionar…') : 'Sin documento'}
                     </td>
-                    <td style={ui.td}>—</td>
-                    <td style={ui.td}>—</td>
+                    <td style={rowTd}>—</td>
+                    <td style={rowTd}>—</td>
                   </tr>
                 )
               }
+              const cfgEntOk = AFILIACION_ENTIDAD_BY_TIPO[meta?.tipo]
+              const faltanteEntidadOk = Boolean(
+                showEntidad && cfgEntOk && !opcional && !locked
+                && !String(afiliacionValues?.[cfgEntOk.field] || '').trim(),
+              )
               return (
                 <tr key={row._pending ? `pending-${meta.tipo}` : row.id}>
                   <td style={lbl}>
@@ -367,7 +391,7 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
                       <span style={{ marginLeft: 6, color: tTok.primary, fontSize: 'var(--cc-caption)', fontWeight: 700 }}>pendiente</span>
                     )}
                   </td>
-                  {showEntidad && renderEntidadCell(meta)}
+                  {showEntidad && renderEntidadCell(meta, { faltanteEntidad: faltanteEntidadOk })}
                   <td style={ui.td}>
                     {row._pending ? row.nombre_archivo : (
                       <button type="button" onClick={() => abrirPreview(row)} style={{ ...S.btnGhost, padding: '4px 8px', border: 'none', color: tTok.primary }}>

@@ -259,6 +259,12 @@ export function createRrhhApi(contratoId, token) {
         token,
         body,
       }),
+    setValidacionDocumentacionMasiva: (body) =>
+      apiJson(`${base}/documentacion/validacion-masiva`, {
+        method: 'POST',
+        token,
+        body,
+      }),
     docConsolidadoUrl: (trabajadorId) =>
       `${API_BASE}${base}/trabajadores/${trabajadorId}/documentacion/consolidado`,
     previewConsolidadoUrl: (trabajadorId) =>
