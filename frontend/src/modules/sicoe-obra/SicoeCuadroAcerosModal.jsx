@@ -11,6 +11,7 @@ import { buildDespieceAdjuntos } from '../../components/esquema/esquemaDespieceE
 import { resolveEsquemaUi } from '../../components/esquema/esquemaTheme.js'
 import { listaFotosRegistro } from './sicoeFotosHelpers.js'
 import { sicoeRegistrosDesdeCuadro } from './sicoeCuadroAceros.js'
+import SicoeFotoFuentesBotones from './SicoeFotoFuentesBotones.jsx'
 
 /**
  * Modal SicoeObra: cuadro de despiece + una foto compartida + Cargar.
@@ -69,17 +70,39 @@ export default function SicoeCuadroAcerosModal({
   const incompleto = despieceSchedulesIncomplete(schedules)
   const tieneFoto = fotosLocal.length > 0 || fotoFiles.length > 0
 
-  const onFiles = (e) => {
-    const list = Array.from(e.target.files || [])
-    e.target.value = ''
-    if (!list.length) return
-    setFotoFiles((prev) => [...prev, ...list])
-    const previews = list.map((f) => ({
+  const onFiles = (list, origen = 'archivo') => {
+    const files = Array.isArray(list) ? list.filter(Boolean) : []
+    if (!files.length) return
+    setFotoFiles((prev) => [...prev, ...files])
+    const previews = files.map((f) => ({
       url: URL.createObjectURL(f),
       numero: null,
-      origen: 'preview',
+      origen: origen || 'preview',
+      _localFileName: f.name || null,
     }))
     setFotosLocal((prev) => [...prev, ...previews])
+  }
+
+  const quitarFotoLocal = (idx) => {
+    setFotosLocal((prev) => {
+      const next = prev.slice()
+      const [removed] = next.splice(idx, 1)
+      if (removed?.url && String(removed.url).startsWith('blob:')) {
+        try { URL.revokeObjectURL(removed.url) } catch { /* noop */ }
+        setFotoFiles((ff) => {
+          // Quita un File pendiente alineado por orden de previews blob.
+          const blobs = prev
+            .map((f, i) => ({ f, i }))
+            .filter(({ f }) => f?.url && String(f.url).startsWith('blob:'))
+          const pos = blobs.findIndex(({ i }) => i === idx)
+          if (pos < 0) return ff
+          const copy = ff.slice()
+          copy.splice(pos, 1)
+          return copy
+        })
+      }
+      return next
+    })
   }
 
   const handleCargar = async () => {
@@ -186,32 +209,41 @@ export default function SicoeCuadroAcerosModal({
               <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: theme.textMuted, marginBottom: 6 }}>
                 Foto compartida *
               </div>
+              <div style={{ fontSize: 'var(--cc-caption)', color: theme.textMuted, marginBottom: 8 }} title="Misma carga que los registros">
+                Cámara, galería del dispositivo o archivo (varias a la vez).
+              </div>
               {fotosLocal.length > 0 && (
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', marginBottom: 8 }}>
                   {fotosLocal.map((f, i) => (
-                    <img
-                      key={`${f.url}-${i}`}
-                      src={f.url}
-                      alt=""
-                      style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6 }}
-                    />
+                    <div key={`${f.url}-${i}`} style={{ position: 'relative', flex: '0 0 auto' }}>
+                      <img
+                        src={f.url}
+                        alt=""
+                        style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, display: 'block' }}
+                      />
+                      <button
+                        type="button"
+                        title="Quitar antes de cargar"
+                        onClick={() => quitarFotoLocal(i)}
+                        style={{
+                          position: 'absolute', top: 2, right: 2,
+                          background: 'rgba(0,0,0,0.65)', color: '#fff',
+                          border: 'none', borderRadius: 4, width: 20, height: 20,
+                          cursor: 'pointer', fontSize: 12, lineHeight: '20px', padding: 0,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
-              <label style={{
-                display: 'inline-block',
-                border: `1px solid ${theme.border}`,
-                borderRadius: 8,
-                padding: '6px 12px',
-                cursor: 'pointer',
-                color: theme.primary,
-                fontWeight: 700,
-                fontSize: 'var(--cc-sm)',
-              }}
-              >
-                + Foto(s)
-                <input type="file" accept="image/*" multiple capture="environment" style={{ display: 'none' }} onChange={onFiles} />
-              </label>
+              <SicoeFotoFuentesBotones
+                t={theme}
+                disabled={busy}
+                multiple
+                onFiles={onFiles}
+              />
             </div>
           )}
 
