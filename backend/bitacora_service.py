@@ -721,7 +721,17 @@ _FLAG_ASISTENCIA_RRHH_SCHEMA: Dict[str, Any] = {"ok": None, "ts": 0.0}
 # Fallback JSON en contratos.ccd_firma_config cuando la columna DDL aún no
 # existe en PostgREST. Clave reservada (no es un código FO-* de firmas CCD).
 _FLAG_ASISTENCIA_RRHH_FALLBACK_KEY = "_claracore_bitacora_asistencia_rrhh_activa"
+_FLAG_ASISTENCIA_RRHH_META_KEY = "_claracore_bitacora_asistencia_rrhh_meta"
 _FLAG_ASISTENCIA_RRHH_COL = "bitacora_asistencia_rrhh_activa"
+_FLAG_ASISTENCIA_RRHH_EN_COL = "bitacora_asistencia_rrhh_activa_en"
+_FLAG_ASISTENCIA_RRHH_POR_COL = "bitacora_asistencia_rrhh_activa_por"
+_FLAG_ASISTENCIA_RRHH_APAGADA_COL = "bitacora_asistencia_rrhh_apagada_en"
+_FLAG_ASISTENCIA_RRHH_COLS = (
+    f"{_FLAG_ASISTENCIA_RRHH_COL},"
+    f"{_FLAG_ASISTENCIA_RRHH_EN_COL},"
+    f"{_FLAG_ASISTENCIA_RRHH_POR_COL},"
+    f"{_FLAG_ASISTENCIA_RRHH_APAGADA_COL}"
+)
 
 
 def _is_missing_asistencia_rrhh_col(exc: BaseException) -> bool:
@@ -747,7 +757,7 @@ def _try_reload_postgrest_schema(sb) -> bool:
 
 def _ensure_asistencia_rrhh_column(sb) -> bool:
     """
-    Asegura contratos.bitacora_asistencia_rrhh_activa.
+    Asegura contratos.bitacora_asistencia_rrhh_activa (+ columnas de auditoría).
     1) Si PostgREST ya la ve → True.
     2) Si hay SUPABASE_DB_URL → aplica la migración SQL + reload + re-chequeo.
     3) Si no → False (usar fallback JSON).
@@ -762,6 +772,15 @@ def _ensure_asistencia_rrhh_column(sb) -> bool:
         sb.table("contratos").select(_FLAG_ASISTENCIA_RRHH_COL).limit(1).execute()
         _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
         _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+        # Intentar DDL de auditoría en segundo plano (no tumba el flag si falla).
+        try:
+            from schema_migrations_runner import ensure_critical_migrations
+
+            ensure_critical_migrations(
+                only=("20261021220000_bitacora_asistencia_rrhh_toggle_audit.sql",),
+            )
+        except Exception:
+            pass
         return True
     except Exception as exc:
         if not _is_missing_asistencia_rrhh_col(exc):
@@ -773,7 +792,10 @@ def _ensure_asistencia_rrhh_column(sb) -> bool:
         from schema_migrations_runner import ensure_critical_migrations
 
         result = ensure_critical_migrations(
-            only=("20260925120000_bitacora_asistencia_rrhh_activa.sql",),
+            only=(
+                "20260925120000_bitacora_asistencia_rrhh_activa.sql",
+                "20261021220000_bitacora_asistencia_rrhh_toggle_audit.sql",
+            ),
         )
         if result.get("ok"):
             _try_reload_postgrest_schema(sb)
@@ -802,8 +824,23 @@ def _ensure_asistencia_rrhh_column(sb) -> bool:
     return False
 
 
-def _leer_flag_asistencia_rrhh_fallback(sb, contrato_id: int) -> bool:
-    """Lee el flag desde ccd_firma_config (reservado) si la columna DDL falta."""
+def _parse_ccd_firma_config(raw: Any) -> dict:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            raw = {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _leer_meta_asistencia_rrhh_fallback(sb, contrato_id: int) -> dict:
+    """Lee flag + meta de auditoría desde ccd_firma_config."""
+    out = {
+        "activa": False,
+        "activa_en": None,
+        "activa_por": None,
+        "apagada_en": None,
+    }
     try:
         rows = (
             sb.table("contratos")
@@ -815,23 +852,36 @@ def _leer_flag_asistencia_rrhh_fallback(sb, contrato_id: int) -> bool:
             or []
         )
     except Exception as exc:
-        _log.warning("_leer_flag_asistencia_rrhh_fallback: %s", exc)
-        return False
+        _log.warning("_leer_meta_asistencia_rrhh_fallback: %s", exc)
+        return out
     if not rows:
-        return False
-    raw = rows[0].get("ccd_firma_config")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw) if raw.strip() else {}
-        except Exception:
-            raw = {}
-    if not isinstance(raw, dict):
-        return False
-    return bool(raw.get(_FLAG_ASISTENCIA_RRHH_FALLBACK_KEY))
+        return out
+    cfg = _parse_ccd_firma_config(rows[0].get("ccd_firma_config"))
+    out["activa"] = bool(cfg.get(_FLAG_ASISTENCIA_RRHH_FALLBACK_KEY))
+    meta = cfg.get(_FLAG_ASISTENCIA_RRHH_META_KEY)
+    if isinstance(meta, dict):
+        out["activa_en"] = meta.get("activa_en")
+        out["activa_por"] = meta.get("activa_por")
+        out["apagada_en"] = meta.get("apagada_en")
+    return out
 
 
-def _guardar_flag_asistencia_rrhh_fallback(sb, contrato_id: int, activa: bool) -> bool:
-    """Persiste el flag en ccd_firma_config sin tocar claves FO-* de firmas."""
+def _leer_flag_asistencia_rrhh_fallback(sb, contrato_id: int) -> bool:
+    """Lee el flag desde ccd_firma_config (reservado) si la columna DDL falta."""
+    return bool(_leer_meta_asistencia_rrhh_fallback(sb, contrato_id).get("activa"))
+
+
+def _guardar_flag_asistencia_rrhh_fallback(
+    sb,
+    contrato_id: int,
+    activa: bool,
+    *,
+    user_id: Optional[int] = None,
+    ahora_iso: Optional[str] = None,
+) -> bool:
+    """Persiste el flag + meta en ccd_firma_config sin tocar claves FO-* de firmas."""
+    from rrhh_timezone import now_iso_bogota
+
     cid = int(contrato_id)
     rows = (
         sb.table("contratos")
@@ -842,16 +892,20 @@ def _guardar_flag_asistencia_rrhh_fallback(sb, contrato_id: int, activa: bool) -
         .data
         or []
     )
-    raw = rows[0].get("ccd_firma_config") if rows else {}
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw) if raw.strip() else {}
-        except Exception:
-            raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    cfg = dict(raw)
+    cfg = _parse_ccd_firma_config(rows[0].get("ccd_firma_config") if rows else {})
+    prev_meta = cfg.get(_FLAG_ASISTENCIA_RRHH_META_KEY)
+    if not isinstance(prev_meta, dict):
+        prev_meta = {}
+    stamp = ahora_iso or now_iso_bogota()
+    meta = {
+        "activa_en": stamp,
+        "activa_por": user_id,
+        "apagada_en": prev_meta.get("apagada_en"),
+    }
+    if not activa:
+        meta["apagada_en"] = stamp
     cfg[_FLAG_ASISTENCIA_RRHH_FALLBACK_KEY] = bool(activa)
+    cfg[_FLAG_ASISTENCIA_RRHH_META_KEY] = meta
     sb.table("contratos").update({"ccd_firma_config": cfg}).eq("id", cid).execute()
     return bool(activa)
 
@@ -874,14 +928,23 @@ def _contrato_numero(sb, contrato_id: int) -> str:
     return ""
 
 
-def _leer_flag_asistencia_rrhh_activa(sb, contrato_id: int) -> bool:
-    """Lee el flag del contrato exento (columna DDL o fallback JSON)."""
+def _leer_meta_asistencia_rrhh_activa(sb, contrato_id: int) -> dict:
+    """
+    Lee flag + auditoría del interruptor.
+    Retorna {activa, activa_en, activa_por, apagada_en}.
+    """
     cid = int(contrato_id)
+    empty = {
+        "activa": False,
+        "activa_en": None,
+        "activa_por": None,
+        "apagada_en": None,
+    }
     if _ensure_asistencia_rrhh_column(sb):
         try:
             rows = (
                 sb.table("contratos")
-                .select(_FLAG_ASISTENCIA_RRHH_COL)
+                .select(_FLAG_ASISTENCIA_RRHH_COLS)
                 .eq("id", cid)
                 .limit(1)
                 .execute()
@@ -889,38 +952,104 @@ def _leer_flag_asistencia_rrhh_activa(sb, contrato_id: int) -> bool:
                 or []
             )
             if not rows:
-                return False
-            return bool(rows[0].get(_FLAG_ASISTENCIA_RRHH_COL))
+                return empty
+            row = rows[0]
+            return {
+                "activa": bool(row.get(_FLAG_ASISTENCIA_RRHH_COL)),
+                "activa_en": row.get(_FLAG_ASISTENCIA_RRHH_EN_COL),
+                "activa_por": row.get(_FLAG_ASISTENCIA_RRHH_POR_COL),
+                "apagada_en": row.get(_FLAG_ASISTENCIA_RRHH_APAGADA_COL),
+            }
         except Exception as exc:
+            # Columnas de auditoría pueden faltar: intentar solo el flag.
+            if _FLAG_ASISTENCIA_RRHH_EN_COL in str(exc).lower() or _FLAG_ASISTENCIA_RRHH_APAGADA_COL in str(exc).lower():
+                try:
+                    rows = (
+                        sb.table("contratos")
+                        .select(_FLAG_ASISTENCIA_RRHH_COL)
+                        .eq("id", cid)
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if rows:
+                        empty["activa"] = bool(rows[0].get(_FLAG_ASISTENCIA_RRHH_COL))
+                    return empty
+                except Exception:
+                    pass
             if _is_missing_asistencia_rrhh_col(exc):
                 _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = False
                 _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
-                return _leer_flag_asistencia_rrhh_fallback(sb, cid)
-            _log.warning("_leer_flag_asistencia_rrhh_activa: %s", exc)
-            return False
-    return _leer_flag_asistencia_rrhh_fallback(sb, cid)
+                return _leer_meta_asistencia_rrhh_fallback(sb, cid)
+            _log.warning("_leer_meta_asistencia_rrhh_activa: %s", exc)
+            return empty
+    return _leer_meta_asistencia_rrhh_fallback(sb, cid)
 
 
-def set_asistencia_rrhh_activa(sb, contrato_id: int, activa: bool) -> bool:
+def _leer_flag_asistencia_rrhh_activa(sb, contrato_id: int) -> bool:
+    """Lee el flag del contrato exento (columna DDL o fallback JSON)."""
+    return bool(_leer_meta_asistencia_rrhh_activa(sb, contrato_id).get("activa"))
+
+
+def set_asistencia_rrhh_activa(
+    sb,
+    contrato_id: int,
+    activa: bool,
+    *,
+    current_user=None,
+) -> bool:
     """
-    Persiste el toggle del contrato exento.
+    Persiste el toggle del contrato exento + auditoría (fecha Colombia, usuario).
 
     Intenta la columna DDL (creándola vía SUPABASE_DB_URL si hace falta).
     Si PostgREST aún no la ve, guarda en ccd_firma_config (fallback) para que
-    el botón Desarrollador no dependa de un SQL manual en el editor.
+    el interruptor Desarrollador no dependa de un SQL manual en el editor.
     """
+    from rrhh_timezone import now_iso_bogota
+
     cid = int(contrato_id)
     val = bool(activa)
+    stamp = now_iso_bogota()
+    uid = None
+    if current_user is not None:
+        try:
+            uid = int(current_user.get("id") or current_user.get("user_id") or 0) or None
+        except (TypeError, ValueError, AttributeError):
+            uid = None
+
+    payload = {
+        _FLAG_ASISTENCIA_RRHH_COL: val,
+        _FLAG_ASISTENCIA_RRHH_EN_COL: stamp,
+        _FLAG_ASISTENCIA_RRHH_POR_COL: uid,
+    }
+    if not val:
+        payload[_FLAG_ASISTENCIA_RRHH_APAGADA_COL] = stamp
 
     if _ensure_asistencia_rrhh_column(sb):
         try:
-            sb.table("contratos").update(
-                {_FLAG_ASISTENCIA_RRHH_COL: val}
-            ).eq("id", cid).execute()
+            sb.table("contratos").update(payload).eq("id", cid).execute()
             _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
             _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
             return val
         except Exception as exc:
+            # Si fallan columnas de auditoría, intentar solo el flag booleano.
+            text = str(exc).lower()
+            if (
+                _FLAG_ASISTENCIA_RRHH_EN_COL in text
+                or _FLAG_ASISTENCIA_RRHH_APAGADA_COL in text
+                or _FLAG_ASISTENCIA_RRHH_POR_COL in text
+            ):
+                try:
+                    sb.table("contratos").update(
+                        {_FLAG_ASISTENCIA_RRHH_COL: val}
+                    ).eq("id", cid).execute()
+                    _guardar_flag_asistencia_rrhh_fallback(
+                        sb, cid, val, user_id=uid, ahora_iso=stamp,
+                    )
+                    return val
+                except Exception as exc2:
+                    exc = exc2
             if not _is_missing_asistencia_rrhh_col(exc):
                 raise ValueError(
                     f"No se pudo guardar {_FLAG_ASISTENCIA_RRHH_COL}. Detalle: {exc}"
@@ -930,7 +1059,9 @@ def set_asistencia_rrhh_activa(sb, contrato_id: int, activa: bool) -> bool:
             _try_reload_postgrest_schema(sb)
 
     try:
-        return _guardar_flag_asistencia_rrhh_fallback(sb, cid, val)
+        return _guardar_flag_asistencia_rrhh_fallback(
+            sb, cid, val, user_id=uid, ahora_iso=stamp,
+        )
     except Exception as exc:
         raise ValueError(
             f"No se pudo guardar {_FLAG_ASISTENCIA_RRHH_COL} "
@@ -941,8 +1072,19 @@ def set_asistencia_rrhh_activa(sb, contrato_id: int, activa: bool) -> bool:
 def get_asistencia_rrhh_policy(sb, contrato_id: int) -> dict:
     from bitacora_asistencia_rrhh_policy import policy_snapshot
 
-    flag = _leer_flag_asistencia_rrhh_activa(sb, contrato_id)
-    return policy_snapshot(contrato_id, activa_en_exento=flag)
+    meta = _leer_meta_asistencia_rrhh_activa(sb, contrato_id)
+    return policy_snapshot(
+        contrato_id,
+        activa_en_exento=bool(meta.get("activa")),
+        activa_en=meta.get("activa_en"),
+        activa_por=meta.get("activa_por"),
+        apagada_en=meta.get("apagada_en"),
+    )
+
+
+def get_apagada_en_asistencia_rrhh(sb, contrato_id: int):
+    """Cutoff: personal creado después solo se aprueba individualmente."""
+    return _leer_meta_asistencia_rrhh_activa(sb, contrato_id).get("apagada_en")
 
 
 def _puede_personal_manual(sb, current_user, contrato_id: int) -> bool:

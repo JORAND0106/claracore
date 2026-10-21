@@ -368,6 +368,11 @@ def marcar_documento_vigente(sb, contrato_id: int, trabajador_id: int, doc_id: i
 
 
 def soft_delete_documento(sb, contrato_id: int, trabajador_id: int, doc_id: int, current_user) -> dict:
+    """
+    Soft-delete de un adjunto (cualquier versión).
+    Si era la versión vigente, el slot queda sin documento cargado
+    (el listado solo considera vigente=true y no eliminados).
+    """
     trab = get_trabajador(sb, contrato_id, trabajador_id)
     assert_documentacion_editable(trab)
     rows = (
@@ -384,23 +389,39 @@ def soft_delete_documento(sb, contrato_id: int, trabajador_id: int, doc_id: int,
     )
     if not rows:
         raise ValueError("Documento no encontrado.")
+    doc = rows[0]
+    now = _now_iso()
+    uid = _uid(current_user)
+    patch = {
+        "eliminado_en": now,
+        "eliminado_por": uid,
+        "vigente": False,
+    }
     updated = (
         sb.table(_TABLE_DOCS)
-        .update(
-            {
-                "eliminado_en": _now_iso(),
-                "eliminado_por": _uid(current_user),
-                "vigente": False,
-            }
-        )
+        .update(patch)
         .eq("id", int(doc_id))
+        .eq("trabajador_id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
         .execute()
         .data
         or []
     )
-    if not updated:
-        raise ValueError("No se pudo eliminar el documento.")
-    return updated[0]
+    if updated:
+        return updated[0]
+    # PostgREST a veces no devuelve fila en UPDATE: verificar soft-delete.
+    check = (
+        sb.table(_TABLE_DOCS)
+        .select("id, eliminado_en, vigente")
+        .eq("id", int(doc_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if check and check[0].get("eliminado_en"):
+        return {**doc, **patch}
+    raise ValueError("No se pudo eliminar el documento.")
 
 
 def download_documento(sb, contrato_id: int, trabajador_id: int, doc_id: int) -> tuple[bytes, dict]:

@@ -32,6 +32,8 @@ import EstadoDocumentalInformeModal, {
 import { ESTADO_DOCUMENTAL_CODIGO } from './estadoDocumentalInformeOptions.js'
 import { auditoriaDocumentalActiva } from './rrhhFeatureFlags.js'
 import { PASTEL_ESTADO_VALIDACION } from '../sicoe-obra/sicoeReporteItemsTablaHelpers'
+import { createSeguimientoApi } from '../seguimiento/seguimientoApi'
+import { trabajadorEsNuevoTrasApagado } from '../seguimiento/bitacoraAsistenciaRrhhPolicy'
 import {
   estiloCeldaValidacion,
   labelEstadoValidacion,
@@ -128,8 +130,14 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const [smmlvVigente, setSmmlvVigente] = useState(null)
   const [selIds, setSelIds] = useState(() => new Set())
   const [busyMasiva, setBusyMasiva] = useState(false)
+  const [apagadaEnBitacora, setApagadaEnBitacora] = useState(null)
   const auditoriaActiva = auditoriaDocumentalActiva()
-  const canValidarMasivo = Boolean(permisos.validar || permisos.esDesarrollador)
+  // Validación masiva: exclusiva Desarrollador (no basta el permiso Validar).
+  const canValidarMasivo = Boolean(permisos.esDesarrollador)
+  const segApi = useMemo(
+    () => (cid && token ? createSeguimientoApi(cid, token) : null),
+    [cid, token],
+  )
 
   const flash = useCallback((type, text) => {
     setMsg({ type, text })
@@ -187,6 +195,22 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   useEffect(() => {
     cargarDetalle()
   }, [cargarDetalle])
+
+  useEffect(() => {
+    if (!canValidarMasivo || !segApi?.getBitacoraAsistenciaRrhhPolicy) {
+      setApagadaEnBitacora(null)
+      return
+    }
+    let cancelled = false
+    segApi.getBitacoraAsistenciaRrhhPolicy()
+      .then((p) => {
+        if (!cancelled) setApagadaEnBitacora(p?.apagada_en || null)
+      })
+      .catch(() => {
+        if (!cancelled) setApagadaEnBitacora(null)
+      })
+    return () => { cancelled = true }
+  }, [canValidarMasivo, segApi, empresaSel?.empresa_key])
 
   useEffect(() => {
     if (seccionModulo !== 'nomina' && seccionModulo !== 'liquidacion') return
@@ -364,7 +388,13 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const toggleSelAllPage = (checked) => {
     setSelIds((prev) => {
       const next = new Set(prev)
-      for (const id of idsPagina) {
+      for (const row of items) {
+        const id = Number(row.id)
+        if (!Number.isFinite(id) || id <= 0) continue
+        if (trabajadorEsNuevoTrasApagado(row?.created_at, apagadaEnBitacora)) {
+          next.delete(id)
+          continue
+        }
         if (checked) next.add(id)
         else next.delete(id)
       }
@@ -372,11 +402,22 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     })
   }
 
+  const esNuevoTrasApagado = useCallback((row) => (
+    trabajadorEsNuevoTrasApagado(row?.created_at, apagadaEnBitacora)
+  ), [apagadaEnBitacora])
+
   const validacionMasiva = async (estado) => {
     if (!api || !canValidarMasivo) return
-    const ids = [...selIds]
+    const elegibles = items.filter((r) => selIds.has(Number(r.id)) && !esNuevoTrasApagado(r))
+    const excluidosNuevos = items.filter((r) => selIds.has(Number(r.id)) && esNuevoTrasApagado(r))
+    const ids = elegibles.map((r) => Number(r.id))
     if (!ids.length) {
-      flash('error', 'Seleccione al menos un colaborador.')
+      flash(
+        'error',
+        excluidosNuevos.length
+          ? 'Los seleccionados son personal nuevo (tras apagar el interruptor): solo validación individual.'
+          : 'Seleccione al menos un colaborador.',
+      )
       return
     }
     let observacion = null
@@ -965,6 +1006,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     { mostrarTonoAuditoria: auditoriaActiva },
                   )
                   const selected = selIds.has(Number(row.id))
+                  const soloIndividual = esNuevoTrasApagado(row)
                   return (
                   <tr
                     key={row.id}
@@ -980,9 +1022,15 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                       >
                         <input
                           type="checkbox"
-                          checked={selected}
+                          checked={selected && !soloIndividual}
+                          disabled={soloIndividual}
+                          title={soloIndividual
+                            ? 'Personal nuevo: solo validación individual'
+                            : `Seleccionar ${nombreCompleto(row)}`}
                           onChange={(e) => toggleSel(row.id, e.target.checked)}
-                          aria-label={`Seleccionar ${nombreCompleto(row)}`}
+                          aria-label={soloIndividual
+                            ? `${nombreCompleto(row)} (solo validación individual)`
+                            : `Seleccionar ${nombreCompleto(row)}`}
                         />
                       </td>
                     )}

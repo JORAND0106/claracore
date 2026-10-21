@@ -985,6 +985,17 @@ def set_validacion_masiva(
     if len(ids) > 100:
         raise ValueError("Máximo 100 colaboradores por validación masiva.")
 
+    # Personal registrado después de apagar el interruptor Bitácora↔RRHH:
+    # solo validación individual (excluido de masiva).
+    apagada_en = None
+    try:
+        from bitacora_service import get_apagada_en_asistencia_rrhh
+
+        apagada_en = get_apagada_en_asistencia_rrhh(sb, contrato_id)
+    except Exception:
+        apagada_en = None
+    from bitacora_asistencia_rrhh_policy import trabajador_es_nuevo_tras_apagado
+
     actualizados: List[dict] = []
     omitidos: List[dict] = []
     errores: List[dict] = []
@@ -1006,6 +1017,17 @@ def set_validacion_masiva(
                 "trabajador_id": tid,
                 "nombre": nombre,
                 "detail": "Ya aprobado y bloqueado.",
+            })
+            continue
+        if trabajador_es_nuevo_tras_apagado(trab.get("created_at"), apagada_en):
+            errores.append({
+                "trabajador_id": tid,
+                "nombre": nombre,
+                "detail": (
+                    "Personal nuevo (registrado tras apagar el interruptor Bitácora↔RRHH): "
+                    "solo puede validarse de forma individual."
+                ),
+                "faltantes": [],
             })
             continue
         try:

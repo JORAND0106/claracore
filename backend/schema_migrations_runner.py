@@ -27,6 +27,7 @@ MIGRATIONS_DIR = ROOT / "migrations"
 # Migraciones críticas que el arranque / deploy deben asegurar (idempotentes).
 CRITICAL_MIGRATIONS = (
     "20260925120000_bitacora_asistencia_rrhh_activa.sql",
+    "20261021220000_bitacora_asistencia_rrhh_toggle_audit.sql",
     "20261009010000_bitacora_cierre_motivo_automatico_atrasado.sql",
     "20261009140000_almacen_solicitud_proveedor_seleccionado.sql",
     "20261009160000_almacen_oc_envio.sql",

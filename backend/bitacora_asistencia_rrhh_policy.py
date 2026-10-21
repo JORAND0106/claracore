@@ -71,6 +71,9 @@ def policy_snapshot(
     *,
     activa_en_exento: bool = False,
     now: Optional[datetime] = None,
+    activa_en: Any = None,
+    activa_por: Any = None,
+    apagada_en: Any = None,
 ) -> dict:
     """Payload estable para API / frontend."""
     corte_activo = cutover_asistencia_rrhh_activo(now)
@@ -86,4 +89,35 @@ def policy_snapshot(
         "activa_en_exento": bool(activa_en_exento) if exento else False,
         "requiere_rrhh_aprobado": gate,
         "permite_cargo_cuadrilla": (not gate) and exento,
+        # Auditoría del interruptor (solo relevante en contrato exento)
+        "activa_en": activa_en,
+        "activa_por": activa_por,
+        "apagada_en": apagada_en,
     }
+
+
+def trabajador_es_nuevo_tras_apagado(
+    created_at: Any,
+    apagada_en: Any,
+) -> bool:
+    """
+    True si el colaborador se registró después de apagar el interruptor.
+    Esos solo pueden aprobarse con validación individual (no masiva).
+    """
+    if not apagada_en or not created_at:
+        return False
+    try:
+        from rrhh_timezone import parse_to_bogota
+
+        c = parse_to_bogota(created_at)
+        a = parse_to_bogota(apagada_en)
+        if c is None or a is None:
+            return False
+        return c > a
+    except Exception:
+        try:
+            cs = str(created_at)
+            as_ = str(apagada_en)
+            return cs > as_
+        except Exception:
+            return False
