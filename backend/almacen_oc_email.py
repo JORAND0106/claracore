@@ -470,13 +470,22 @@ def enviar_oc_por_correo(
     pdf_nombre: Optional[str] = None,
 ) -> dict:
     """Genera (si hace falta) el PDF y lo envía. La OC no se deshace si el correo falla."""
-    from almacen_service import generar_y_guardar_pdf_oc, get_orden_compra, get_solicitud
+    from almacen_service import download_soporte, generar_y_guardar_pdf_oc, get_orden_compra, get_solicitud
 
     sb = _sb()
     _quitar_documento_sistema(sb, oc_id)
     oc = get_orden_compra(int(contrato_id), int(oc_id), incluir_entradas=False)
     sol_id = oc.get("solicitud_id")
     solicitud = get_solicitud(int(contrato_id), int(sol_id), ligera=True) if sol_id else {}
+    if not pdf_bytes and oc.get("pdf_blob_path"):
+        try:
+            guardado, _mime = download_soporte(oc.get("pdf_blob_path"))
+            if guardado:
+                pdf_bytes = guardado
+                pdf_nombre = pdf_nombre or oc.get("pdf_nombre")
+        except Exception as exc:
+            _log.warning("No se pudo leer el PDF guardado de la OC %s: %s", oc_id, exc)
+            pdf_bytes = b""
     if not pdf_bytes:
         try:
             saved = generar_y_guardar_pdf_oc(

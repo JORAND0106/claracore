@@ -125,67 +125,172 @@ def _ordenar_items_oc_por_insumo(
     return [it for _, it in indexed]
 
 
+def _codigo_item(it: dict, sol_it: dict, insumo: dict) -> str:
+    return (
+        (it.get("insumo_codigo") or "").strip()
+        or (sol_it.get("insumo_codigo") or "").strip()
+        or (insumo.get("codigo") or "").strip()
+    )
+
+
+def _clave_grupo_insumo(it: dict, sol_it: dict, insumo: dict) -> tuple:
+    """Un insumo, una línea. La ubicación (tramo, PK, abscisa) no parte el grupo."""
+    ins_id = sol_it.get("insumo_id") if sol_it else None
+    if ins_id in (None, ""):
+        ins_id = it.get("insumo_id")
+    if ins_id not in (None, ""):
+        try:
+            return ("id", int(ins_id))
+        except (TypeError, ValueError):
+            pass
+    codigo = _codigo_item(it, sol_it or {}, insumo or {})
+    if codigo:
+        return ("cod", codigo.casefold())
+    desc = (it.get("material_descripcion") or (sol_it or {}).get("material_descripcion") or "").strip()
+    return ("desc", desc.casefold())
+
+
+MOTIVO_TOTAL_NO_CUADRA = (
+    "El total del PDF nuevo no coincide con el total guardado de la orden. No se reemplazó nada."
+)
+MOTIVO_CANTIDAD_NO_CUADRA = (
+    "La cantidad de un insumo no coincide con la suma de sus líneas. No se reemplazó nada."
+)
+
+
+def evaluar_cuadre_numeros(pdf_total, oc_total, pdf_cantidades, oc_cantidades) -> dict:
+    """Compara presentación y orden sin devolver cifras."""
+    fallos: List[str] = []
+    try:
+        mismo_total = abs(round(float(pdf_total), 2) - round(float(oc_total), 2)) <= 0.01
+    except (TypeError, ValueError):
+        mismo_total = False
+    if not mismo_total:
+        fallos.append("El total del PDF nuevo no coincide con el total guardado de la orden.")
+    claves = set(pdf_cantidades or {}) | set(oc_cantidades or {})
+    for clave in claves:
+        try:
+            pedida = float((pdf_cantidades or {}).get(clave) or 0)
+            guardada = float((oc_cantidades or {}).get(clave) or 0)
+        except (TypeError, ValueError):
+            fallos.append("La cantidad de un insumo no coincide con la suma de sus líneas.")
+            break
+        if abs(pedida - guardada) > 0.0001:
+            fallos.append("La cantidad de un insumo no coincide con la suma de sus líneas.")
+            break
+    if not fallos:
+        return {"ok": True, "motivo": ""}
+    return {"ok": False, "motivo": " ".join(fallos) + " No se reemplazó nada."}
+
+
+def _contexto_linea(it: dict, sol_map: Dict[int, dict], ins_map: Dict[int, dict]) -> tuple:
+    sid = it.get("solicitud_item_id")
+    sol_it: dict = {}
+    if sid not in (None, ""):
+        try:
+            sol_it = sol_map.get(int(sid)) or {}
+        except (TypeError, ValueError):
+            sol_it = {}
+    if not sol_it:
+        anidado = it.get("almacen_solicitud_item")
+        if isinstance(anidado, dict):
+            sol_it = anidado
+    ins_id = sol_it.get("insumo_id") or it.get("insumo_id")
+    insumo: dict = {}
+    if ins_id not in (None, ""):
+        try:
+            insumo = ins_map.get(int(ins_id)) or {}
+        except (TypeError, ValueError):
+            insumo = {}
+    return sol_it, insumo
+
+
 def _lineas_y_totales(
     items: List[dict],
     solicitud_items: Optional[Dict[int, dict]] = None,
     insumo_map: Optional[Dict[int, dict]] = None,
 ) -> tuple[str, dict]:
+    """Una fila por insumo: cantidad total, valor unitario y total de la línea.
+
+    La suma de los totales de línea (redondeados a 2 decimales) es el total de la OC.
+    No imprime tramo, PK, abscisa ni ubicación.
+    """
     rows = []
     subtotal = 0.0
     impuestos: Dict[str, float] = {}
     sol_map = solicitud_items or {}
     ins_map = insumo_map or {}
-
     ordered = _ordenar_items_oc_por_insumo(items, sol_map, ins_map)
 
-    for i, it in enumerate(ordered, start=1):
-        sid = it.get("solicitud_item_id")
-        sol_it = sol_map.get(int(sid)) if sid else {}
-        ins_id = sol_it.get("insumo_id")
-        insumo = ins_map.get(int(ins_id)) if ins_id else {}
-        cant = float(it.get("cantidad") or 0)
-        vu_total = float(it.get("valor_unitario") or 0)
-        vu_base, tax_unit, tax_label = _split_line_tax(vu_total, insumo)
+    grupos: Dict[tuple, dict] = {}
+    orden_claves: List[tuple] = []
+    for it in ordered:
+        sol_it, insumo = _contexto_linea(it, sol_map, ins_map)
+        try:
+            cant = float(it.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        try:
+            vu_total = float(it.get("valor_unitario") or 0)
+        except (TypeError, ValueError):
+            vu_total = 0.0
+        vu_base, _tax_unit, tax_label = _split_line_tax(vu_total, insumo)
         line_total = round(cant * vu_total, 2)
         line_sub = round(cant * vu_base, 2)
-        # El impuesto absorbe el centavo para que base + impuesto = línea con IVA.
         line_tax = round(line_total - line_sub, 2)
         subtotal += line_sub
         if tax_label:
-            impuestos[tax_label] = impuestos.get(tax_label, 0.0) + line_tax
+            impuestos[tax_label] = round(impuestos.get(tax_label, 0.0) + line_tax, 2)
 
-        codigo = (
-            (it.get("insumo_codigo") or "").strip()
-            or (sol_it.get("insumo_codigo") or "").strip()
-            or (insumo.get("codigo") or "").strip()
-        )
-        desc = it.get("material_descripcion") or "—"
+        codigo = _codigo_item(it, sol_it, insumo)
+        desc = (it.get("material_descripcion") or sol_it.get("material_descripcion") or "—").strip() or "—"
         if codigo:
             desc = f"{codigo} — {desc}"
-        pk = sol_it.get("pk_id")
-        tramo = sol_it.get("tramo")
-        extra = []
-        if pk:
-            extra.append(f"PK {pk}")
-        if tramo:
-            extra.append(str(tramo))
-        if extra:
-            desc = f"{desc} ({', '.join(extra)})"
+        clave = _clave_grupo_insumo(it, sol_it, insumo)
+        unidad = (it.get("unidad") or sol_it.get("unidad") or "").strip()
+        if clave not in grupos:
+            grupos[clave] = {
+                "clave": clave,
+                "codigo": codigo,
+                "descripcion": desc,
+                "unidad": unidad,
+                "cantidad": 0.0,
+                "total_base": 0.0,
+                "total_con_iva": 0.0,
+            }
+            orden_claves.append(clave)
+        grupo = grupos[clave]
+        grupo["cantidad"] = round(grupo["cantidad"] + cant, 4)
+        grupo["total_base"] = round(grupo["total_base"] + line_sub, 2)
+        grupo["total_con_iva"] = round(grupo["total_con_iva"] + line_total, 2)
+        if unidad and not grupo["unidad"]:
+            grupo["unidad"] = unidad
 
-        # Precio unit. y Total de línea: valores antes de IVA.
+    lista = [grupos[k] for k in orden_claves]
+    for i, grupo in enumerate(lista, start=1):
+        cant = grupo["cantidad"]
+        line_sub = grupo["total_base"]
+        vu_base = round(line_sub / cant, 2) if cant else 0.0
+        grupo["valor_unitario_base"] = vu_base
         rows.append(
             f"<tr class=\"{'even' if i % 2 == 0 else ''}\">"
             f"<td class=\"num\">{_fmt_cant(cant)}</td>"
-            f"<td>{_esc(it.get('unidad') or '')}</td>"
-            f"<td>{_esc(desc)}</td>"
+            f"<td>{_esc(grupo.get('unidad') or '')}</td>"
+            f"<td>{_esc(grupo.get('descripcion') or '—')}</td>"
             f"<td class=\"num\">{_fmt_money(vu_base)}</td>"
             f"<td class=\"num\">{_fmt_money(line_sub)}</td>"
             f"</tr>"
         )
 
-    total_imp = round(sum(impuestos.values()), 2)
-    subtotal = round(subtotal, 2)
-    grand = round(subtotal + total_imp, 2)
+    subtotal = round(sum(g["total_base"] for g in lista), 2)
+    grand = round(sum(g["total_con_iva"] for g in lista), 2)
+    impreso = round(sum(impuestos.values()), 2)
+    ajuste = round((grand - subtotal) - impreso, 2)
+    if ajuste and impuestos:
+        etiqueta = sorted(impuestos)[0]
+        impuestos[etiqueta] = round(impuestos[etiqueta] + ajuste, 2)
+    elif ajuste and not impuestos:
+        subtotal = grand
     imp_rows = ""
     for label, amt in sorted(impuestos.items()):
         if amt:
@@ -203,7 +308,37 @@ def _lineas_y_totales(
   <td colspan="4" class="tot-lbl">Total (IVA incluido)</td>
   <td class="num">{_fmt_money(grand)}</td>
 </tr>"""
-    return "\n".join(rows), {"rows_html": totales_html, "subtotal": subtotal, "total": grand}
+    return "\n".join(rows), {
+        "rows_html": totales_html,
+        "subtotal": subtotal,
+        "total": grand,
+        "grupos": lista,
+    }
+
+
+def cuadrar_presentacion_oc(
+    items: List[dict],
+    solicitud_items: Optional[Dict[int, dict]] = None,
+    insumo_map: Optional[Dict[int, dict]] = None,
+) -> dict:
+    """El total del PDF y la cantidad por insumo tienen que coincidir con la OC guardada."""
+    _html, tot = _lineas_y_totales(items, solicitud_items, insumo_map)
+    sol_map = solicitud_items or {}
+    ins_map = insumo_map or {}
+    oc_total = 0.0
+    oc_qty: Dict[tuple, float] = {}
+    for it in items or []:
+        try:
+            cant = float(it.get("cantidad") or 0)
+            vu = float(it.get("valor_unitario") or 0)
+        except (TypeError, ValueError):
+            cant, vu = 0.0, 0.0
+        oc_total = round(oc_total + round(cant * vu, 2), 2)
+        sol_it, insumo = _contexto_linea(it, sol_map, ins_map)
+        clave = _clave_grupo_insumo(it, sol_it, insumo)
+        oc_qty[clave] = round(oc_qty.get(clave, 0.0) + cant, 4)
+    pdf_qty = {g["clave"]: g["cantidad"] for g in (tot.get("grupos") or [])}
+    return evaluar_cuadre_numeros(tot.get("total"), oc_total, pdf_qty, oc_qty)
 
 
 def _bloque_para(proveedores: List[dict]) -> str:
@@ -300,38 +435,14 @@ def generar_pdf_orden_compra(
     fecha_sol = _fmt_fecha_ts(solicitud.get("enviada_at") or solicitud.get("created_at"))
     fecha_apr = _fmt_fecha_ts(solicitud.get("validada_at") or orden_compra.get("created_at"))
 
-    pk_tramos: List[str] = []
-    seen = set()
-    for it in solicitud.get("items") or []:
-        pk = (it.get("pk_id") or "").strip()
-        tramo = (it.get("tramo") or "").strip()
-        if not pk and not tramo:
-            continue
-        key = f"{pk}|{tramo}"
-        if key in seen:
-            continue
-        seen.add(key)
-        if pk and tramo:
-            pk_tramos.append(f"{pk} · {tramo}")
-        elif pk:
-            pk_tramos.append(pk)
-        else:
-            pk_tramos.append(tramo)
-
-    punto_entrega = "; ".join(pk_tramos[:5]) if pk_tramos else "—"
-    if len(pk_tramos) > 5:
-        punto_entrega += f" (+{len(pk_tramos) - 5})"
-
+    # El proveedor no recibe el desglose por tramo, PK, abscisa ni punto de entrega.
+    _ = puntos_entrega
     medio_envio = "Entrega en obra"
     if not terminos:
         terminos = (solicitud.get("observaciones") or "").strip() or "Según cotización y condiciones del proveedor."
 
     para_html = _bloque_para(proveedores or [])
-    enviar_html = _bloque_enviar_a(
-        contrato,
-        puntos_entrega or pk_tramos,
-        solicitud.get("observaciones") or "",
-    )
+    enviar_html = _bloque_enviar_a(contrato, [], "")
 
     firma_sol_uri = firma_url_a_data_uri(solicitante_firma_url)
     firma_apr_uri = firma_url_a_data_uri(aprobador_firma_url)
@@ -387,14 +498,12 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
     <th>Fecha OC</th>
     <th>Solicitó</th>
     <th>Medio de envío</th>
-    <th>Punto de entrega</th>
     <th>Términos y condiciones</th>
   </tr>
   <tr>
     <td>{_esc(fecha_oc)}</td>
     <td>{_esc(solicitante)}</td>
     <td>{_esc(medio_envio)}</td>
-    <td>{_esc(punto_entrega)}</td>
     <td>{_esc(terminos[:120] + ('…' if len(terminos) > 120 else ''))}</td>
   </tr>
 </table>

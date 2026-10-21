@@ -25924,6 +25924,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                 eliminar: esDeveloper || Boolean(almacenPerm.eliminar),
                 verEconomicos: almacenVerEconomicos,
                 puedeGenerarOc: esDeveloper || Boolean(almacenAcceso.puedeGenerarOc),
+                puedeRegenerarPdfOc: esDeveloper || Boolean(almacenAcceso.puedeRegenerarPdfOc),
                 verSolicitudesInventario: esDeveloper || Boolean(almacenAcceso.verSolicitudesInventario),
                 verCatalogo: esDeveloper || Boolean(almacenAcceso.verCatalogo),
                 verEntradasSalidas: esDeveloper || Boolean(almacenAcceso.verEntradasSalidas),

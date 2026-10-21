@@ -41,6 +41,7 @@ from almacen_permissions import (
     require_acceso_ui_modulo_almacen,
     require_crear_o_editar_almacen,
     require_generar_orden_compra_almacen,
+    require_regenerar_pdf_oc,
     require_editar_cantidad_salida_almacen,
     require_lectura_almacen,
     require_permiso_almacen,
@@ -383,6 +384,15 @@ class CambiarProveedorLineaBody(BaseModel):
 
 
 class ReenviarOcBody(BaseModel):
+    correo: Optional[str] = None
+
+
+class RegenerarPdfOcBody(BaseModel):
+    orden_compra_ids: List[int] = Field(default_factory=list)
+
+
+class ReenvioPdfRegeneradoBody(BaseModel):
+    reenviar: bool = False
     correo: Optional[str] = None
 
 
@@ -1824,6 +1834,93 @@ def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get
     except Exception as exc:
         _log.exception("Error descargando PDF OC %s contrato %s", oc_id, contrato_id)
         raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/ordenes-compra/regenerar-pdf")
+def route_regenerar_pdf_ocs(
+    contrato_id: int,
+    solicitud_id: int,
+    body: RegenerarPdfOcBody,
+    current_user=Depends(get_current_user),
+):
+    """Reconstruye el PDF de las OC elegidas de esta solicitud. No cambia sus datos."""
+    _check_contrato(current_user, contrato_id)
+    require_regenerar_pdf_oc(current_user)
+    ids = []
+    for raw in body.orden_compra_ids or []:
+        try:
+            oc_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if oc_id not in ids:
+            ids.append(oc_id)
+    if not ids:
+        raise HTTPException(status_code=400, detail="Seleccione al menos una orden de compra.")
+    from almacen_oc_pdf_version import regenerar_pdfs_solicitud
+
+    try:
+        return regenerar_pdfs_solicitud(contrato_id, solicitud_id, ids, current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/versiones")
+def route_listar_versiones_pdf_oc(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_regenerar_pdf_oc(current_user)
+    from almacen_oc_pdf_version import listar_versiones_pdf
+
+    try:
+        return listar_versiones_pdf(contrato_id, oc_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/versiones/{version}/download")
+def route_download_version_pdf_oc(
+    contrato_id: int,
+    oc_id: int,
+    version: int,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_regenerar_pdf_oc(current_user)
+    from almacen_oc_pdf_version import descargar_version_pdf
+
+    try:
+        data, fname = descargar_version_pdf(contrato_id, oc_id, version)
+        safe_name = fname.replace('"', "'")
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/ordenes-compra/{oc_id}/pdf/reenvio-regenerado")
+def route_reenvio_pdf_regenerado(
+    contrato_id: int,
+    oc_id: int,
+    body: ReenvioPdfRegeneradoBody,
+    current_user=Depends(get_current_user),
+):
+    """Reenvía, o deja sin reenviar, el PDF ya regenerado. No genera otro archivo."""
+    _check_contrato(current_user, contrato_id)
+    require_regenerar_pdf_oc(current_user)
+    from almacen_oc_pdf_version import resolver_reenvio_pdf
+
+    try:
+        return resolver_reenvio_pdf(
+            contrato_id,
+            oc_id,
+            current_user,
+            reenviar=bool(body.reenviar),
+            correo=(body.correo or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.post("/{contrato_id}/ordenes-compra/{oc_id}/enviar-correo")
