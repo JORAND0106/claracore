@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import SolicitudFormExcelTable from './SolicitudFormExcelTable'
 import SolicitudTramoAccordion from './SolicitudTramoAccordion'
@@ -186,6 +186,8 @@ export default function SolicitudForm({
   const [items, setItems] = useState([emptyItem()])
   const [tramoFlow, setTramoFlow] = useState(null)
   const [busy, setBusy] = useState(false)
+  const guardandoRef = useRef(false)
+  const [tareasDemoradas, setTareasDemoradas] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
   const [modalExitoEnvio, setModalExitoEnvio] = useState(null)
@@ -233,6 +235,40 @@ export default function SolicitudForm({
       aplicarSolicitudServidor(s)
     }).catch((e) => setError(parseSolicitudApiError(e)))
   }, [api, solicitudId])
+
+  useEffect(() => {
+    const id = sol?.id
+    if (!id || sol?.tareas_fondo?.estado !== 'pendiente') {
+      setTareasDemoradas(false)
+      return undefined
+    }
+    setTareasDemoradas(false)
+    let stopped = false
+    const timers = [1500, 4000, 8000].map((ms, idx, arr) => setTimeout(async () => {
+      if (stopped) return
+      try {
+        const s = await api.getSolicitud(id, { ligera: true })
+        if (stopped || !s) return
+        setSol((prev) => {
+          if (!prev || prev.id !== id) return prev
+          return {
+            ...prev,
+            titulo: s.titulo || prev.titulo,
+            tareas_fondo: s.tareas_fondo || prev.tareas_fondo,
+          }
+        })
+        if (idx === arr.length - 1 && (s.tareas_fondo?.estado === 'pendiente' || !s.tareas_fondo)) {
+          setTareasDemoradas(true)
+        }
+      } catch {
+        if (idx === arr.length - 1) setTareasDemoradas(true)
+      }
+    }, ms))
+    return () => {
+      stopped = true
+      timers.forEach(clearTimeout)
+    }
+  }, [api, sol?.id, sol?.tareas_fondo?.estado])
 
   useEffect(() => {
     if (solicitudId) return undefined
@@ -744,7 +780,35 @@ export default function SolicitudForm({
     return true
   }
 
+  const reintentarTareas = async () => {
+    const id = sol?.id
+    if (!id || guardandoRef.current) return
+    guardandoRef.current = true
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.reintentarTareasSolicitud(id)
+      const siguiente = r?.solicitud?.id ? r.solicitud : null
+      if (siguiente) {
+        aplicarSolicitudServidor({ ...siguiente, tareas_fondo: r.tareas_fondo || siguiente.tareas_fondo })
+      } else if (r?.tareas_fondo) {
+        setSol((prev) => (prev ? { ...prev, tareas_fondo: r.tareas_fondo } : prev))
+      }
+      setTareasDemoradas(false)
+      if ((r?.tareas_fondo || siguiente?.tareas_fondo)?.estado === 'error') {
+        setError((r?.tareas_fondo || siguiente?.tareas_fondo)?.mensaje || 'No se pudo completar la actualización.')
+      }
+    } catch (e) {
+      setError(parseSolicitudApiError(e))
+    } finally {
+      guardandoRef.current = false
+      setBusy(false)
+    }
+  }
+
   const guardar = async () => {
+    if (guardandoRef.current) return
+    guardandoRef.current = true
     setError('')
     setOkMsg('')
     setBusy(true)
@@ -753,12 +817,10 @@ export default function SolicitudForm({
         const nuevas = items.filter((it) => !it.id)
         if (!nuevas.length) {
           setError('Agregue al menos una línea nueva de material.')
-          setBusy(false)
           return
         }
         const payload = buildPayload({ soloNuevas: true })
         if (!confirmarAlertasLinea({ soloNuevas: true })) {
-          setBusy(false)
           return
         }
         // Solo evaluar alertas sobre líneas nuevas.
@@ -774,7 +836,6 @@ export default function SolicitudForm({
       }
       const payload = buildPayload()
       if (!confirmarAlertasLinea()) {
-        setBusy(false)
         return
       }
       const idExistente = solicitudId || sol?.id || null
@@ -787,17 +848,19 @@ export default function SolicitudForm({
     } catch (e) {
       setError(parseSolicitudApiError(e))
     } finally {
+      guardandoRef.current = false
       setBusy(false)
     }
   }
 
   const solicitarAprobacion = async () => {
+    if (guardandoRef.current) return
+    guardandoRef.current = true
     setBusy(true)
     setError('')
     try {
       const payload = buildPayload()
       if (!confirmarAlertasLinea()) {
-        setBusy(false)
         return
       }
       let id = solicitudId || sol?.id || null
@@ -818,6 +881,7 @@ export default function SolicitudForm({
     } catch (e) {
       setError(parseSolicitudApiError(e))
     } finally {
+      guardandoRef.current = false
       setBusy(false)
     }
   }
@@ -986,6 +1050,38 @@ export default function SolicitudForm({
         </div>
       )}
 
+      {(sol?.tareas_fondo?.estado === 'pendiente' || sol?.tareas_fondo?.estado === 'error' || tareasDemoradas) && (
+        <div
+          data-testid={sol?.tareas_fondo?.estado === 'error' ? 'solicitud-tareas-fondo-error' : 'solicitud-tareas-fondo-pendiente'}
+          style={{
+            color: sol?.tareas_fondo?.estado === 'error' ? '#991b1b' : ui.text,
+            background: sol?.tareas_fondo?.estado === 'error' ? '#fef2f2' : ui.accentSoft,
+            border: `1px solid ${sol?.tareas_fondo?.estado === 'error' ? '#fecaca' : 'var(--cc-color-border, #e5e7eb)'}`,
+            borderRadius: 8,
+            padding: '10px 12px',
+            marginBottom: 10,
+            fontSize: 'var(--cc-sm)',
+          }}
+        >
+          <div>
+            {sol?.tareas_fondo?.estado === 'error'
+              ? (sol.tareas_fondo.mensaje || 'La solicitud está guardada, pero una actualización complementaria falló.')
+              : (sol?.tareas_fondo?.mensaje || 'La solicitud ya está guardada. Se están actualizando el nombre y el registro.')}
+          </div>
+          {(sol?.tareas_fondo?.estado === 'error' || tareasDemoradas) && (
+            <button
+              type="button"
+              data-testid="solicitud-reintentar-tareas"
+              style={{ ...ui.btnSecondary, marginTop: 8 }}
+              disabled={busy}
+              onClick={reintentarTareas}
+            >
+              {busy ? 'Reintentando…' : 'Reintentar'}
+            </button>
+          )}
+        </div>
+      )}
+
       {okMsg && (
         <div style={{
           color: 'var(--cc-color-success)',
@@ -1117,7 +1213,7 @@ export default function SolicitudForm({
 
       <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: (editable || puedeReenviar) ? 12 : 0 }}>
         {editable && puedeEscribir && (
-          <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
+          <button type="button" style={ui.btnPrimary} disabled={busy} aria-busy={busy} data-testid="solicitud-guardar" onClick={guardar}>
             {busy
               ? 'Guardando…'
               : modoReabrirOc

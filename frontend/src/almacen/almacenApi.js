@@ -275,6 +275,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }),
 
+    reintentarTareasSolicitud: (id) =>
+      fetchJson(`${base}/solicitudes/${id}/tareas-fondo`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({}),
+      }),
+
     /** Reabrir OC: solo líneas nuevas (sin id); no altera ítems ya en la OC. */
     agregarLineasPostOc: (id, body) =>
       fetchJson(`${base}/solicitudes/${id}/agregar-lineas-post-oc`, {

@@ -8,7 +8,7 @@ import io
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,7 @@ from almacen_insumos_service import (
     search_insumos_catalog,
     search_proveedores,
 )
+from almacen_solicitud_tareas import programar_tareas_tras_guardar, reintentar_tareas_solicitud
 from almacen_permissions import (
     es_contratista_gerencial,
     puede_ver_valores_economicos_almacen,
@@ -1130,17 +1131,26 @@ def route_reintentar_aviso_mensaje(
 
 
 @router.post("/{contrato_id}/solicitudes")
-def route_create_solicitud(contrato_id: int, body: SolicitudCreateBody, current_user=Depends(get_current_user)):
+def route_create_solicitud(
+    contrato_id: int,
+    body: SolicitudCreateBody,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "crear")
     try:
         result = create_solicitud(contrato_id, _uid(current_user), body.model_dump())
-        snap = snapshot_solicitud(result)
-        log_almacen(
-            current_user, "CREAR", "solicitud", result.get("id"),
-            {"consecutivo": result.get("consecutivo")},
+        programar_tareas_tras_guardar(
+            background_tasks,
+            contrato_id,
+            int(result["id"]),
+            current_user,
+            accion="CREAR",
+            detalle={"consecutivo": result.get("consecutivo")},
             valor_anterior=None,
-            valor_nuevo=snap,
+            valor_nuevo=snapshot_solicitud(result),
+            resultado=result,
         )
         return result
     except ValueError as exc:
@@ -1152,6 +1162,7 @@ def route_update_solicitud(
     contrato_id: int,
     solicitud_id: int,
     body: SolicitudCreateBody,
+    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
@@ -1160,13 +1171,33 @@ def route_update_solicitud(
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = update_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
-        log_almacen(
-            current_user, "EDITAR", "solicitud", solicitud_id,
-            {"consecutivo": result.get("consecutivo")},
+        programar_tareas_tras_guardar(
+            background_tasks,
+            contrato_id,
+            solicitud_id,
+            current_user,
+            accion="EDITAR",
+            detalle={"consecutivo": result.get("consecutivo")},
             valor_anterior=snapshot_solicitud(prev),
             valor_nuevo=snapshot_solicitud(result),
+            resultado=result,
         )
         return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/tareas-fondo")
+def route_reintentar_tareas_fondo(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Reintenta nombre, precio, proveedor o log sin volver a crear la solicitud."""
+    _check_contrato(current_user, contrato_id)
+    require_crear_o_editar_almacen(current_user)
+    try:
+        return reintentar_tareas_solicitud(contrato_id, solicitud_id, current_user)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
