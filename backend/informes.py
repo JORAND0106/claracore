@@ -13321,34 +13321,73 @@ def _memoria_infraestructura_txt(r: dict) -> str:
     return ""
 
 
+def _grafico_memoria_es_pdf(entrada: dict) -> bool:
+    """Un PDF de memoria de cálculo no es el gráfico que se dibuja en la hoja."""
+    mime = str(entrada.get("mime") or entrada.get("mime_type") or "").lower()
+    kind = str(entrada.get("kind") or "").lower()
+    nombre = str(entrada.get("nombre") or "")
+    url = str(entrada.get("url") or "")
+    if kind == "memoria-calculo":
+        return True
+    if "pdf" in mime:
+        return True
+    return bool(re.search(r"\.pdf(\?|$)", nombre, re.I) or re.search(r"\.pdf(\?|$)", url, re.I))
+
+
 def _lista_graficos_memoria_registro(r: dict) -> List[Dict[str, Any]]:
-    """Gráficos del registro: historial o grafico_url legacy (misma lógica que SICOE Obra)."""
-    out: List[Dict[str, Any]] = []
+    """Gráficos del registro para PDF y Excel.
+
+    ``grafico_url`` es el gráfico vigente (el que muestra la pantalla, también
+    después de rotar o de reemplazar). Si el historial conserva la URL anterior
+    del mismo número, esa versión no se imprime. El resto del historial —otros
+    gráficos que el registro sí conserva— sigue en la hoja, detrás del vigente.
+    """
     hist = r.get("graficos_historial")
     if isinstance(hist, str) and hist.strip():
         try:
             hist = json.loads(hist)
         except Exception:
             hist = []
-    if isinstance(hist, list) and hist:
-        items = [x for x in hist if isinstance(x, dict) and str(x.get("url") or "").strip()]
-        items.sort(key=lambda x: (str(x.get("creado_en") or ""), str(x.get("url") or "")))
-        for g in items:
-            out.append(
-                {
-                    "grafico_url": str(g.get("url") or "").strip(),
-                    "grafico_numero": g.get("numero"),
-                    "numero_registro": r.get("numero_registro"),
-                    "observacion": r.get("observacion") or "",
-                }
-            )
-        return out
-    gu = str(r.get("grafico_url") or "").strip()
-    if gu:
+    if not isinstance(hist, list):
+        hist = []
+    items = [x for x in hist if isinstance(x, dict) and str(x.get("url") or "").strip() and not _grafico_memoria_es_pdf(x)]
+    vigente = str(r.get("grafico_url") or "").strip()
+    vigente_num = r.get("grafico_numero")
+    if vigente and vigente_num not in (None, ""):
+        items = [
+            x
+            for x in items
+            if str(x.get("numero") if x.get("numero") is not None else "") != str(vigente_num)
+            or str(x.get("url") or "").strip() == vigente
+        ]
+    esquemas = [x for x in items if str(x.get("origen") or "") == "esquema"]
+    if len(esquemas) > 1:
+        def _cuando(x: dict) -> str:
+            return str(x.get("creado_en") or "")
+
+        ultimo = max(esquemas, key=_cuando)
+        items = [x for x in items if str(x.get("origen") or "") != "esquema" or x is ultimo]
+    if vigente and not any(str(x.get("url") or "").strip() == vigente for x in items):
+        items.append(
+            {
+                "url": vigente,
+                "numero": r.get("grafico_numero"),
+                "creado_en": "",
+                "origen": "vigente",
+            }
+        )
+    items.sort(key=lambda x: (0 if str(x.get("url") or "").strip() == vigente and vigente else 1, str(x.get("creado_en") or ""), str(x.get("url") or "")))
+    if not items and vigente:
+        items = [{"url": vigente, "numero": r.get("grafico_numero")}]
+    out: List[Dict[str, Any]] = []
+    for g in items:
+        url = str(g.get("url") or "").strip()
+        if not url:
+            continue
         out.append(
             {
-                "grafico_url": gu,
-                "grafico_numero": r.get("grafico_numero"),
+                "grafico_url": url,
+                "grafico_numero": g.get("numero") if g.get("numero") is not None else r.get("grafico_numero"),
                 "numero_registro": r.get("numero_registro"),
                 "observacion": r.get("observacion") or "",
             }
@@ -16711,24 +16750,87 @@ def _html_mem002_bloque_firmas(
 </div>"""
 
 
+# Medido en el PDF (letter landscape, márgenes 0,5 cm):
+# la primera fila de datos cae a 36 mm; una fila de una línea mide ~3,4 mm
+# y cada línea extra de la observación ~2,5 mm (la columna parte cerca de 74
+# caracteres). Del subtotal del tramo al pie de las firmas hay ~22 mm.
+_MEM002_HOJA_UTIL_MM = 205.9
+_MEM002_CABECERA_MM = 36.0
+_MEM002_BARRA_THEAD_MM = 11.0
+_MEM002_CIERRE_MM = 22.0
+_MEM002_FILA_BASE_MM = 3.4
+_MEM002_FILA_LINEA_MM = 2.55
+_MEM002_OBS_CHARS = 74
+
+
+def _memoria_altura_entrada_mm(entry: Any) -> float:
+    """Alto estimado de una fila del detalle, un poco por encima del medido."""
+    if not isinstance(entry, dict) or entry.get("kind") != "reg":
+        return 4.0
+    reg = entry.get("reg") if isinstance(entry.get("reg"), dict) else {}
+    obs = str(reg.get("observacion") or "")
+    if reg.get("foto_numero"):
+        obs = f"{obs} [Foto {reg.get('foto_numero')}]"
+    lineas = max(1, (len(obs) + _MEM002_OBS_CHARS - 1) // _MEM002_OBS_CHARS)
+    enlace = reg.get("enlace_soporte")
+    n_enl = len(enlace) if isinstance(enlace, list) else (1 if str(enlace or "").strip() else 0)
+    lineas = min(8, max(lineas, n_enl or 1))
+    return _MEM002_FILA_BASE_MM + (lineas - 1) * _MEM002_FILA_LINEA_MM
+
+
+def _memoria_presupuesto_hoja_mm(primera: bool) -> float:
+    if primera:
+        return _MEM002_HOJA_UTIL_MM - _MEM002_CABECERA_MM
+    return _MEM002_HOJA_UTIL_MM - _MEM002_BARRA_THEAD_MM
+
+
 def _chunks_memoria_detalle(registros: List[Any], rows_primera_hoja: int, rows_hoja_siguiente: int) -> List[List[Any]]:
-    """Trocea filas del detalle CC-SUB-002: la 1ª hoja lleva encabezado institucional (menos filas); el resto objetivo mayor.
-    No fuerza “cuota” rígida en la última hoja: el último bloque puede ser más corto."""
-    reg = list(registros or [])
-    if not reg:
+    """Parte el detalle según lo que cabe en la hoja, no con una cuota fija de filas.
+
+    26/30 filas cortaban aunque la hoja siguiera vacía: el «Total tramo» y las
+    firmas quedaban solos en la siguiente. Si el resto y el cierre caben en el
+    espacio que queda, siguen en la misma hoja. Los argumentos de cuota se
+    conservan por los llamadores; el corte lo decide la altura.
+    """
+    del rows_primera_hoja, rows_hoja_siguiente
+    filas = list(registros or [])
+    if not filas:
         return [[]]
-    rp = max(1, rows_primera_hoja)
-    rs = max(1, rows_hoja_siguiente)
-    out: List[List[Any]] = []
+    chunks: List[List[Any]] = []
     i = 0
-    take = min(rp, len(reg) - i)
-    out.append(reg[i : i + take])
-    i += take
-    while i < len(reg):
-        take = min(rs, len(reg) - i)
-        out.append(reg[i : i + take])
-        i += take
-    return out
+    n = len(filas)
+    primera = True
+    while i < n:
+        presupuesto = _memoria_presupuesto_hoja_mm(primera)
+        resto = sum(_memoria_altura_entrada_mm(filas[k]) for k in range(i, n))
+        if resto + _MEM002_CIERRE_MM <= presupuesto:
+            chunks.append(filas[i:])
+            break
+        # Esta hoja no es la última: se llena, y se deja al menos una fila
+        # para que el cierre no viaje solo.
+        usado = 0.0
+        j = i
+        while j < n - 1:
+            alto = _memoria_altura_entrada_mm(filas[j])
+            if j > i and usado + alto > presupuesto:
+                break
+            usado += alto
+            j += 1
+        if j == i:
+            j = i + 1
+        chunks.append(filas[i:j])
+        i = j
+        primera = False
+    if len(chunks) >= 2:
+        previo = chunks[-2]
+        ultimo = chunks[-1]
+        presupuesto = _memoria_presupuesto_hoja_mm(len(chunks) == 2)
+        usado = sum(_memoria_altura_entrada_mm(e) for e in previo)
+        extra = sum(_memoria_altura_entrada_mm(e) for e in ultimo)
+        if usado + extra + _MEM002_CIERRE_MM <= presupuesto:
+            chunks[-2] = previo + ultimo
+            chunks.pop()
+    return chunks
 
 
 def _memoria_pdf_estilo_css(est: Dict[str, str]) -> str:
@@ -16777,7 +16879,8 @@ def _html_memoria_item_body(
 ):
     total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in registros)
 
-    # 1ª hoja: encabezado + barras consumen altura — objetivo ~26 filas para evitar 1 sola fila en página siguiente.
+    # La altura de la fila decide el corte. 26/30 se conservan en la llamada;
+    # una cuota fija partía la hoja con el total y las firmas solos.
     ROWS_MEMORIA_PRIMERA_HOJA = 26
     ROWS_MEMORIA_SIGUIENTES = 30
     # Plantilla fija: 6 contenedores/página (3 columnas × 2 filas). Caja/pie = invariable;
