@@ -516,8 +516,29 @@ export default function EsquemaEditorModal({
   onClose,
 }) {
   const mapCtx = useMemo(() => normalizeMapContext(mapLocation), [mapLocation])
-  const huellaTipoRef = useRef(huellaDibujoTipo)
-  huellaTipoRef.current = huellaDibujoTipo
+  /**
+   * Tipo de dibujo por coordenadas (nodo | linea | poligono).
+   * En SicoeObra (huellaMode) lo controla el padre; en el resto de módulos es local.
+   * Referencias / sync portada / color por ítem siguen solo en huellaMode.
+   */
+  const [localDibujoTipo, setLocalDibujoTipo] = useState('nodo')
+  const effectiveDibujoTipo = huellaMode
+    ? (huellaDibujoTipo || 'poligono')
+    : localDibujoTipo
+  const dibujoTipoRef = useRef(effectiveDibujoTipo)
+  dibujoTipoRef.current = effectiveDibujoTipo
+  /** @deprecated alias — mismo ref que dibujoTipoRef (compat. huella). */
+  const huellaTipoRef = dibujoTipoRef
+
+  const setEffectiveDibujoTipo = (next) => {
+    const t = String(next || 'nodo').toLowerCase()
+    const normalized = (t === 'linea' || t === 'poligono' || t === 'nodo') ? t : 'nodo'
+    if (huellaMode && typeof onHuellaDibujoTipoChange === 'function') {
+      onHuellaDibujoTipoChange(normalized)
+      return
+    }
+    setLocalDibujoTipo(normalized)
+  }
 
   const authToken = useMemo(() => {
     try {
@@ -616,7 +637,8 @@ export default function EsquemaEditorModal({
   const [coordRows, setCoordRows] = useState([])
   const coordRowsRef = useRef([])
   coordRowsRef.current = coordRows
-  const [coordPanelOpen, setCoordPanelOpen] = useState(false)
+  // Abierto por defecto: la herramienta de coords debe verse en el panel (todos los módulos).
+  const [coordPanelOpen, setCoordPanelOpen] = useState(true)
   /** Agregar nodos tocando el plano → filas Gauss en la tabla. */
   const [pickNodoFromMap, setPickNodoFromMap] = useState(false)
   const pickNodoFromMapRef = useRef(false)
@@ -635,13 +657,12 @@ export default function EsquemaEditorModal({
   const [libNotice, setLibNotice] = useState('')
   // Biblioteca / mensaje de entidad solo aplican al tipo Nodo.
   useEffect(() => {
-    if (!huellaMode) return undefined
-    if (huellaDibujoTipo === 'nodo') return undefined
+    if (effectiveDibujoTipo === 'nodo') return undefined
     setLibOpen(false)
     setLibNotice('')
     setInsertHint('')
     return undefined
-  }, [huellaMode, huellaDibujoTipo])
+  }, [effectiveDibujoTipo])
 
   // Cambiar de herramienta desactiva el modo «nodo desde el plano».
   useEffect(() => {
@@ -671,6 +692,7 @@ export default function EsquemaEditorModal({
   const [cotaMode, setCotaMode] = useState('linear')
   const [mapActive, setMapActive] = useState(false)
   const [mapOpacity, setMapOpacity] = useState(huellaMode ? 0.3 : 0.72)
+  // Propiedades del mapa contraídas en su botón (misma UX de dibujo por coords que SicoeObra).
   /** Modo 3D (transversal). El mapa se oculta aquí y se restaura al salir. */
   const [mode3d, setMode3d] = useState(false)
   const [view3d, setView3d] = useState('top')
@@ -784,8 +806,8 @@ export default function EsquemaEditorModal({
   const [mapBasemap, setMapBasemap] = useState('calle')
   const [mapError, setMapError] = useState('')
   const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
-  /** En Dibujar (huella) el panel de mapa abre contraído (solo icono). */
-  const [mapPropsOpen, setMapPropsOpen] = useState(!huellaMode)
+  /** Propiedades del mapa contraídas en su botón (dibujo por coords en todos los módulos). */
+  const [mapPropsOpen, setMapPropsOpen] = useState(false)
   /** Lectura permanente: siempre hay objeto (valores null → "—"). */
   const [cursorCoords, setCursorCoords] = useState({
     norte: null, este: null, lat: null, lng: null,
@@ -1107,10 +1129,9 @@ export default function EsquemaEditorModal({
         drawMoveGuide(ctx, a, b, zoomRef.current, uiNow)
       }
     }
-    // Polígono (huellaMode): mientras dibuja, cerrar visualmente al primer punto.
+    // Polígono: mientras dibuja, cerrar visualmente al primer punto.
     if (
-      huellaMode
-      && huellaTipoRef.current === 'poligono'
+      dibujoTipoRef.current === 'poligono'
       && toolRef.current === 'polilinea'
       && extraDraft?.type === 'polilinea'
       && Array.isArray(extraDraft.points)
@@ -1751,7 +1772,7 @@ export default function EsquemaEditorModal({
     setMapActive(false)
     setMapError('')
     setMapPickInfo(null)
-    setMapPropsOpen(huellaMode ? false : true)
+    setMapPropsOpen(false)
     setMapOpacity(huellaMode ? 0.3 : 0.72)
     mapPlanoFcRef.current = null
     mapClickBoundRef.current = false
@@ -1793,7 +1814,6 @@ export default function EsquemaEditorModal({
       return
     }
     if (mapActiveRef.current) {
-      if (!huellaMode) setMapPropsOpen(true)
       setToolHint('Mapa ya activo. Use Paneo para mover/consultar PK; al Guardar capture el área de impresión.')
       return
     }
@@ -1806,10 +1826,10 @@ export default function EsquemaEditorModal({
     mapSyncZoomLabelRef.current = null
     setMapError('')
     setMapBasemap('calle')
-    // Dibujar reporte: plano tenue (30 %) y panel contraído. Otras vistas mantienen el flujo previo.
+    // Plano tenue en huella; panel de propiedades siempre contraído (botón).
     setMapOpacity(huellaMode ? 0.3 : 0.72)
     setMapPickInfo(null)
-    setMapPropsOpen(!huellaMode)
+    setMapPropsOpen(false)
     mapActiveRef.current = true
     setMapActive(true)
     setTool('paneo')
@@ -3091,8 +3111,8 @@ export default function EsquemaEditorModal({
     }
     pushHistory()
     const obj = { ...draft, points: pts }
-    // En dibujo de reporte tipo Polígono: cerrar automáticamente contra el primer punto.
-    if (huellaMode && huellaTipoRef.current === 'poligono' && pts.length >= 3) {
+    // Tipo Polígono: cerrar automáticamente contra el primer punto.
+    if (dibujoTipoRef.current === 'poligono' && pts.length >= 3) {
       obj.closed = true
     }
     objectsRef.current = [...objectsRef.current, obj]
@@ -3354,7 +3374,7 @@ export default function EsquemaEditorModal({
     const nodes = (nums || []).map((n) => findNodeByNum(n)).filter(Boolean)
     pushHistory()
     objectsRef.current = objectsRef.current.filter((o) => !o.joinSeq)
-    const isPoligono = huellaMode && huellaTipoRef.current === 'poligono'
+    const isPoligono = dibujoTipoRef.current === 'poligono'
     if (isPoligono) {
       // Misma geometría que validará el guardado: polilínea cerrada desde 3 nodos.
       const draft = buildJoinPolygonDraft(nodes, {
@@ -3442,7 +3462,7 @@ export default function EsquemaEditorModal({
   const finishJoinCircuit = () => {
     const nums = [...(joinSeqRef.current || [])]
     if (!nums.length) return
-    const isPoligono = huellaMode && huellaTipoRef.current === 'poligono'
+    const isPoligono = dibujoTipoRef.current === 'poligono'
     if (isPoligono && nums.length < 3) {
       setToolHint('Se necesitan al menos 3 nodos distintos para cerrar el polígono.')
       return
@@ -3510,9 +3530,9 @@ export default function EsquemaEditorModal({
     coordOriginRef.current = origin
     pushHistory()
     const keep = objectsRef.current.filter((o) => o.type !== 'nodo' && !o.joinSeq && !o.fromCoordTable)
-    const tipo = (huellaMode && !opts.skipTipoActions)
-      ? (huellaTipoRef.current || 'nodo')
-      : 'nodo'
+    const tipo = opts.skipTipoActions
+      ? 'nodo'
+      : (dibujoTipoRef.current || 'nodo')
     const accion = opts.skipTipoActions
       ? { unirEnOrden: false, abrirUnirPorNumero: false, preguntarSentidoEje: false }
       : accionDibujarNodosPorTipo(tipo)
@@ -3624,13 +3644,13 @@ export default function EsquemaEditorModal({
     setCoordPanelOpen(true)
     selectOne(null)
     setDirty(true)
-    if (!opts.skipTipoActions && huellaMode && tipo === 'nodo' && liveNodes.length) {
+    if (!opts.skipTipoActions && tipo === 'nodo' && liveNodes.length) {
       refreshLibrary()
       setLibOpen(true)
       setLibNotice('Seleccione una entidad para insertarla sobre el nodo (punto medio). Si no elige ninguna, se guarda el marcador legible.')
       setInsertHint('Elija una entidad de la biblioteca o guarde solo con el marcador del nodo.')
     }
-    if (!opts.skipTipoActions && huellaMode && tipo !== 'nodo') {
+    if (!opts.skipTipoActions && tipo !== 'nodo') {
       setLibOpen(false)
       setLibNotice('')
       setInsertHint('')
@@ -3655,9 +3675,9 @@ export default function EsquemaEditorModal({
   /** Botón Dibujar del panel compacto (y atajos): pregunta sentido del eje si tipo Línea o Polígono. */
   const requestDrawFromCoords = (rows = coordRows) => {
     pendingDrawRowsRef.current = rows
-    const tipo = huellaMode ? (huellaTipoRef.current || 'nodo') : 'nodo'
+    const tipo = dibujoTipoRef.current || 'nodo'
     const accion = accionDibujarNodosPorTipo(tipo)
-    if (huellaMode && accion.preguntarSentidoEje) {
+    if (accion.preguntarSentidoEje) {
       setCoordPanelOpen(true)
       setSentidoEjePrompt(true)
       return
@@ -3670,7 +3690,7 @@ export default function EsquemaEditorModal({
     const rows = pendingDrawRowsRef.current || coordRows
     pendingDrawRowsRef.current = null
     setSentidoEjePrompt(false)
-    const tipo = huellaTipoRef.current || 'nodo'
+    const tipo = dibujoTipoRef.current || 'nodo'
     if (tipo === 'poligono') {
       poligonoSentidoEjeRef.current = !!si
     } else {
@@ -5551,8 +5571,8 @@ export default function EsquemaEditorModal({
   const beginInsertLibraryItem = (item) => {
     if (!item?.objects?.length && !item?.children?.length) return
     const onPlane = !!(huellaMode || mapActiveRef.current)
-    // Huella nodo: insertar centrada en cada nodo (punto medio, escala 1:1).
-    if (huellaMode && huellaTipoRef.current === 'nodo') {
+    // Tipo Nodo: insertar centrada en cada nodo (punto medio, escala 1:1).
+    if (dibujoTipoRef.current === 'nodo') {
       const nodes = objectsRef.current.filter((o) => o?.type === 'nodo' && Number.isFinite(o.x) && Number.isFinite(o.y))
       if (nodes.length) {
         pushHistory()
@@ -6152,7 +6172,7 @@ export default function EsquemaEditorModal({
             ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
             : '')
     : ''
-  const insertHintVisible = !huellaMode || huellaTipoRef.current === 'nodo'
+  const insertHintVisible = dibujoTipoRef.current === 'nodo'
   const pickFromMapHint = pickNodoFromMap
     ? 'Toque un punto del plano para agregar un nodo con sus coordenadas Gauss.'
     : ''
@@ -6231,6 +6251,14 @@ export default function EsquemaEditorModal({
     if (!snap) return
     objectsRef.current = cloneScene(snap.objects || [])
     setCoordRows(Array.isArray(snap.coordRows) ? snap.coordRows : [])
+    if (!huellaMode && snap.dibujoTipo) {
+      const t = String(snap.dibujoTipo || '').toLowerCase()
+      if (t === 'nodo' || t === 'linea' || t === 'poligono') setLocalDibujoTipo(t)
+    }
+    if (Array.isArray(snap.coordRows) && snap.coordRows.length) {
+      setCoordPanelOpen(true)
+      setSectionCoordsOpen(true)
+    }
     const solids = Array.isArray(snap.solids3d) ? snap.solids3d : []
     solids3dRef.current = solids
     setSolids3d(solids)
@@ -6311,6 +6339,7 @@ export default function EsquemaEditorModal({
   const collectDraftSnapshot = useCallback(() => buildEsquemaDraftSnapshot({
     objects: cloneScene(objectsRef.current),
     coordRows: coordRowsRef.current || [],
+    dibujoTipo: dibujoTipoRef.current || 'nodo',
     mode3d: mode3dRef.current,
     view3d: view3dRef.current,
     solids3d: solids3dRef.current || [],
@@ -7645,21 +7674,19 @@ export default function EsquemaEditorModal({
                   }}
                 >
                   <CursorCoordsPanel t={t} coords={cursorCoords} embedded />
-                  {typeof onHuellaDibujoTipoChange === 'function' ? (
-                    <DibujoTipoCompactPanel
-                      t={t}
-                      tipo={huellaDibujoTipo}
-                      referenciasCount={referenciasCount}
-                      embedded
-                      onTipoChange={(next) => {
-                        setSentidoEjePrompt(false)
-                        pendingDrawRowsRef.current = null
-                        poligonoSentidoEjeRef.current = false
-                        onHuellaDibujoTipoChange(next)
-                      }}
-                      onDibujar={() => requestDrawFromCoords(coordRows)}
-                    />
-                  ) : null}
+                  <DibujoTipoCompactPanel
+                    t={t}
+                    tipo={effectiveDibujoTipo}
+                    referenciasCount={huellaMode ? referenciasCount : 0}
+                    embedded
+                    onTipoChange={(next) => {
+                      setSentidoEjePrompt(false)
+                      pendingDrawRowsRef.current = null
+                      poligonoSentidoEjeRef.current = false
+                      setEffectiveDibujoTipo(next)
+                    }}
+                    onDibujar={() => requestDrawFromCoords(coordRows)}
+                  />
                   {coordPanelOpen ? (
                     <CoordsPanel
                       t={t}
@@ -7954,6 +7981,31 @@ export default function EsquemaEditorModal({
                 window.addEventListener('touchend', onUpPersist)
               }}
             >
+              <div
+                data-testid="esquema-coords-tool-block"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  padding: '0 0 4px',
+                }}
+              >
+                <CursorCoordsPanel t={t} coords={cursorCoords} embedded />
+                <DibujoTipoCompactPanel
+                  t={t}
+                  tipo={effectiveDibujoTipo}
+                  referenciasCount={0}
+                  embedded
+                  onTipoChange={(next) => {
+                    setSentidoEjePrompt(false)
+                    pendingDrawRowsRef.current = null
+                    poligonoSentidoEjeRef.current = false
+                    setEffectiveDibujoTipo(next)
+                  }}
+                  onDibujar={() => requestDrawFromCoords(coordRows)}
+                />
+              </div>
+
               <EsquemaSidebarSection
                 t={t}
                 id="propiedades"
@@ -8165,14 +8217,14 @@ export default function EsquemaEditorModal({
                 </EsquemaSidebarSection>
               ) : null}
 
-              {coordPanelOpen ? (
-                <EsquemaSidebarSection
-                  t={t}
-                  id="coordenadas"
-                  title="Coordenadas"
-                  open={sectionCoordsOpen}
-                  onToggle={setSectionCoordsOpen}
-                >
+              <EsquemaSidebarSection
+                t={t}
+                id="coordenadas"
+                title="Coordenadas"
+                open={sectionCoordsOpen}
+                onToggle={setSectionCoordsOpen}
+              >
+                {coordPanelOpen ? (
                   <CoordsPanel
                     t={t}
                     rows={coordRows}
@@ -8197,8 +8249,23 @@ export default function EsquemaEditorModal({
                       }
                     }}
                   />
-                </EsquemaSidebarSection>
-              ) : null}
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="esquema-coords-open-sidebar"
+                    onClick={() => { setCoordPanelOpen(true); setSectionCoordsOpen(true) }}
+                    style={{
+                      ...ghost(t),
+                      fontSize: 11,
+                      fontWeight: 700,
+                      justifyContent: 'flex-start',
+                      padding: '8px 10px',
+                    }}
+                  >
+                    Abrir coordenadas
+                  </button>
+                )}
+              </EsquemaSidebarSection>
             </EsquemaContextSidebar>
           ))}
 
@@ -8239,9 +8306,6 @@ export default function EsquemaEditorModal({
             <div
               ref={mapHostRef}
               data-testid="esquema-mapa-host"
-              onPointerDown={() => {
-                if (!huellaMode) setMapPropsOpen(true)
-              }}
               onPointerMove={(e) => {
                 updateCursorCoordsFromScreen(screenPosFromEvent(e))
               }}
@@ -8460,7 +8524,8 @@ export default function EsquemaEditorModal({
             </button>
           ) : null}
 
-          {!huellaMode ? (
+          {/* Cursor Gauss/geo: en panel lateral (como SicoeObra). Flotante solo si el panel está colapsado. */}
+          {!huellaMode && contextSidebarCollapsed ? (
             <div
               data-testid="esquema-cursor-coords"
               style={{
@@ -8712,6 +8777,32 @@ export default function EsquemaEditorModal({
                 background: ui?.wrap || t.bgMuted || '#f8fafc',
               }}
             >
+              {!huellaMode ? (
+                <div
+                  data-testid="esquema-coords-tool-block"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    padding: '8px 10px 4px',
+                  }}
+                >
+                  <CursorCoordsPanel t={t} coords={cursorCoords} embedded />
+                  <DibujoTipoCompactPanel
+                    t={t}
+                    tipo={effectiveDibujoTipo}
+                    referenciasCount={0}
+                    embedded
+                    onTipoChange={(next) => {
+                      setSentidoEjePrompt(false)
+                      pendingDrawRowsRef.current = null
+                      poligonoSentidoEjeRef.current = false
+                      setEffectiveDibujoTipo(next)
+                    }}
+                    onDibujar={() => requestDrawFromCoords(coordRows)}
+                  />
+                </div>
+              ) : null}
               <EsquemaSidebarSection
                 t={t}
                 id="propiedades"
