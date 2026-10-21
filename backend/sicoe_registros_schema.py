@@ -26,6 +26,12 @@ SO_REGISTROS_OPTIONAL_COLUMNS = frozenset({
     "sector",
     # Hasta aplicar so_registros_fotos_historial.sql; sin columna se conserva foto_url.
     "fotos_historial",
+    # Hasta aplicar so_registros_cuadro_aceros.sql.
+    "cuadro_aceros_id",
+    "cuadro_aceros_nombre",
+    "cuadro_aceros_posicion",
+    "cuadro_aceros_posicion_id",
+    "cuadro_aceros_schedule",
 })
 
 SO_REPORTES_OPTIONAL_COLUMNS = frozenset({

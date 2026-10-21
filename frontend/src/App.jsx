@@ -258,6 +258,18 @@ import {
   sicoeUnidadEsKg,
   sicoeValidarDiametroOError,
 } from './modules/sicoe-obra/sicoeVarilla.js'
+import SicoeCuadroAcerosPregunta from './modules/sicoe-obra/SicoeCuadroAcerosPregunta.jsx'
+import SicoeCuadroAcerosModal from './modules/sicoe-obra/SicoeCuadroAcerosModal.jsx'
+import {
+  sicoeEsRegistroDeCuadroAceros,
+  sicoeEtiquetaCuadroPosicion,
+  SICOE_AVISO_EDITAR_DESDE_CUADRO,
+} from './modules/sicoe-obra/sicoeCuadroAceros.js'
+import {
+  sicoePersistirCuadroAcerosEnReporte,
+  sicoeExpandirRegistrosWizardConCuadro,
+  sicoeSubirFotosYPngCuadroLocal,
+} from './modules/sicoe-obra/sicoeCuadroAcerosPersist.js'
 import {
   sicoeNuevoReporteDraftClear,
   sicoeNuevoReporteDraftIsDirty,
@@ -2981,6 +2993,10 @@ function sicoeHojaRegistroSyncKey(reg) {
     reg.subcontratista_id,
     reg.corte_id,
     reg.nivel2_objeto_pago_sub,
+    reg.cuadro_aceros_id,
+    reg.cuadro_aceros_posicion,
+    reg.peso_kg_m,
+    reg.grafico_url,
   ]
     .map((x) => (x == null ? '' : String(x)))
     .join('|')
@@ -3002,6 +3018,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   panelExcelCompact = true,
   /** Abrir otro registro involucrado en alerta de traslapo (sin perder contexto). */
   onAbrirRegistroAuditoria = null,
+  /** Tras cargar/editar cuadro de aceros: recarga registros del reporte. */
+  onRecargar = null,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
@@ -3078,6 +3096,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
   const [esquemaCargando, setEsquemaCargando] = useState(false)
+  const [cuadroAcerosPreguntaOpen, setCuadroAcerosPreguntaOpen] = useState(false)
+  const [cuadroAcerosModal, setCuadroAcerosModal] = useState(null) // { modo, schedule, soloConsulta, placeholderId? }
+  const [cuadroAcerosAviso, setCuadroAcerosAviso] = useState(null)
+  const cuadroKgPreguntadoRef = useRef(false)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   const [modalActaRevalidacion, setModalActaRevalidacion] = useState(null)
   const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
@@ -3517,6 +3539,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   /** Sube una o varias fotos. mode: 'add' (no borra existentes) | 'replace' (solo la activa). */
   const subirFoto = async (fileOrFiles, opts = {}) => {
     if (!editableFoto) return
+    if (sicoeEsRegistroDeCuadroAceros(registro)) {
+      setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+      return
+    }
     const { mode = 'add' } = opts
     const files = (Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles]).filter(Boolean)
     if (!files.length) return
@@ -3728,6 +3754,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   // Subir gráfico (manual o pantallazo del plano)
   const subirGrafico = async (file, opts = {}) => {
     if (!editableGrafico && !autoAbrirEsquema) return
+    if (sicoeEsRegistroDeCuadroAceros(registro) && opts?.origen !== 'cuadro-aceros') {
+      setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+      return
+    }
     const { origen = 'manual' } = opts
     setUploadingGraf(true)
     try {
@@ -3875,8 +3905,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     peso_kg_m: opts.peso_kg_m,
   })
 
-  const unidadMedicion = itemSel?.unidad || registro.unidad || ''
-  const pesoVarillaCalc = esVarilla === true ? sicoePesoKgMPorDiametro(diametroVarilla) : null
+  const [unidadLocal, setUnidadLocal] = useState(registro.unidad || '')
+  useEffect(() => {
+    setUnidadLocal(registro.unidad || '')
+  }, [registro.id, registro.unidad])
+  const unidadMedicion = itemSel?.unidad || unidadLocal || registro.unidad || ''
+  const esRegistroCuadro = sicoeEsRegistroDeCuadroAceros(registro)
+  const etiquetaCuadro = sicoeEtiquetaCuadroPosicion(registro)
+  const pesoVarillaCalc = esVarilla === true
+    ? (esRegistroCuadro && registro.peso_kg_m != null
+      ? Number(registro.peso_kg_m)
+      : sicoePesoKgMPorDiametro(diametroVarilla))
+    : null
   const cantTotal = calcCantTotal(longitud, ancho, espesor, cantidad, {
     es_varilla: esVarilla === true,
     diametro_varilla: diametroVarilla,
@@ -3884,6 +3924,73 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   })
   const vlrUnitario = itemSel?.precio_unitario ?? registro.vlr_unitario ?? 0
   const costoDirecto = Math.round(cantTotal * vlrUnitario)
+
+  // Popup cuadro de aceros al pasar a unidad Kg (solo si aún no pertenece a un cuadro).
+  useEffect(() => {
+    if (esRegistroCuadro || regSelladoMax) return
+    if (!editableCamposDimensionales && !puedeEditar) return
+    if (!sicoeUnidadEsKg(unidadMedicion)) {
+      cuadroKgPreguntadoRef.current = false
+      return
+    }
+    if (cuadroKgPreguntadoRef.current) return
+    if (cuadroAcerosPreguntaOpen || cuadroAcerosModal) return
+    // Solo preguntar en registros «nuevos» (sin dims de varilla ya diligenciadas).
+    const sinDims = (longitud === '' || longitud == null)
+      && (cantidad === '' || cantidad == null)
+      && !diametroVarilla
+    if (!sinDims) return
+    cuadroKgPreguntadoRef.current = true
+    setCuadroAcerosPreguntaOpen(true)
+  }, [
+    unidadMedicion, esRegistroCuadro, regSelladoMax, editableCamposDimensionales, puedeEditar,
+    cuadroAcerosPreguntaOpen, cuadroAcerosModal, longitud, cantidad, diametroVarilla,
+  ])
+
+  const abrirCuadroAcerosEdicion = () => {
+    if (!esRegistroCuadro) return
+    const schedule = registro.cuadro_aceros_schedule
+      || (reporte?.registros || []).find((r) => String(r.cuadro_aceros_id) === String(registro.cuadro_aceros_id))?.cuadro_aceros_schedule
+      || null
+    setCuadroAcerosModal({
+      modo: regSelladoMax || !puedeEditar ? 'consulta' : 'editar',
+      schedule: schedule ? { ...schedule, id: registro.cuadro_aceros_id, nombre: registro.cuadro_aceros_nombre || schedule.nombre } : {
+        id: registro.cuadro_aceros_id,
+        nombre: registro.cuadro_aceros_nombre || '',
+        positions: [],
+      },
+      soloConsulta: !!(regSelladoMax || !puedeEditar),
+      fotoInicial: { foto_url: registro.foto_url, foto_numero: registro.foto_numero, fotos_historial: registro.fotos_historial },
+    })
+  }
+
+  const handleCargarCuadroAceros = async (payload) => {
+    try {
+      const result = await sicoePersistirCuadroAcerosEnReporte({
+        API_URL: API,
+        contratoId: contrato_id,
+        reporteId: reporte.id,
+        hdrs,
+        schedule: payload.schedule,
+        fotoFiles: payload.fotoFiles,
+        fotosExistentes: payload.fotosExistentes,
+        pngAdjunto: payload.pngAdjunto,
+        registrosExistentes: reporte?.registros || [],
+        placeholderRegistroId: cuadroAcerosModal?.placeholderId
+          ?? (esRegistroCuadro ? null : registro.id),
+      })
+      if (!result.ok) {
+        setCuadroAcerosAviso(result.error || 'No se pudo cargar el cuadro.')
+        return
+      }
+      setCuadroAcerosModal(null)
+      setCuadroAcerosPreguntaOpen(false)
+      if (typeof onRecargar === 'function') await onRecargar({ forzarSinFiltros: true, preservarIds: result.ids })
+      else try { onRefrescarListadoSicoe?.() } catch { /* noop */ }
+    } catch (e) {
+      setCuadroAcerosAviso(e?.message || String(e))
+    }
+  }
 
   const tieneCoordenadas = (reporte.puntos || []).length > 0
   /** Contrato 2 no exige topografía para aprobar N2; el resto sí (alineado con backend). */
@@ -3953,6 +4060,28 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     const espeN = redondearDimension(espesor)
     const cantN = redondearDimension(cantidad)
     const uni = unidadMedicion
+    // Dims/media de cuadro: solo desde el modal (ítem sí se puede asignar aquí).
+    if (esRegistroCuadro && editableCamposDimensionales) {
+      const dimsTocadas =
+        Number(longN) !== Number(registro.longitud ?? NaN)
+        || Number(cantN) !== Number(registro.cantidad ?? NaN)
+        || String(diametroVarilla || '') !== String(registro.diametro_varilla || '')
+        || Number(anchoN) !== Number(registro.ancho ?? NaN)
+        || Number(espeN) !== Number(registro.espesor ?? NaN)
+      if (dimsTocadas && !idItem) {
+        setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+        return
+      }
+      if (dimsTocadas && idItem) {
+        // Permitir solo asignación de ítem: no enviar dims modificadas.
+        setLongitud(registro.longitud ?? '')
+        setAncho(registro.ancho ?? '')
+        setEspesor(registro.espesor ?? '')
+        setCantidad(registro.cantidad ?? '')
+        setDiametroVarilla(registro.diametro_varilla ?? '')
+        setEsVarilla(registro.es_varilla === true ? true : registro.es_varilla === false ? false : null)
+      }
+    }
     if (sicoeUnidadEsKg(uni) && esVarilla == null) {
       alert('Indique si el registro en Kg es Varilla o No es varilla antes de guardar.')
       return
@@ -4011,16 +4140,30 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       let guardadoOk = false
       try {
         const locApi = esLocMultiple && editableCamposDimensionales ? localizacionToApiFields(locRegistro) : {}
-        const medPatch = {
-          longitud: longN,
-          ancho: esVarilla === true ? null : anchoN,
-          espesor: esVarilla === true ? null : espeN,
-          cantidad: cantN,
-          cantidad_total: cantTotal,
-          es_varilla: sicoeUnidadEsKg(uni) ? esVarilla : null,
-          diametro_varilla: esVarilla === true ? diamN : null,
-          peso_kg_m: esVarilla === true ? pesoN : null,
-        }
+        const medPatch = esRegistroCuadro
+          ? {
+              // Conservar dims del cuadro; solo ítem/obs/loc vía este guardado.
+              longitud: registro.longitud ?? null,
+              ancho: null,
+              espesor: null,
+              cantidad: registro.cantidad ?? null,
+              cantidad_total: registro.cantidad_total ?? null,
+              es_varilla: true,
+              diametro_varilla: registro.diametro_varilla ?? null,
+              peso_kg_m: registro.peso_kg_m ?? null,
+              unidad: 'kg',
+            }
+          : {
+              longitud: longN,
+              ancho: esVarilla === true ? null : anchoN,
+              espesor: esVarilla === true ? null : espeN,
+              cantidad: cantN,
+              cantidad_total: cantTotal,
+              es_varilla: sicoeUnidadEsKg(uni) ? esVarilla : null,
+              diametro_varilla: esVarilla === true ? diamN : null,
+              peso_kg_m: esVarilla === true ? pesoN : null,
+              ...(sicoeUnidadEsKg(uni) && !itemSel?.unidad ? { unidad: 'kg' } : {}),
+            }
         const patchOptimista = {
           ...medPatch,
           observacion: observacion || null,
@@ -4034,17 +4177,25 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             alert('Seleccione un ítem de la lista antes de guardar.')
             return
           }
-          const asigRes = await sicoeFetchWithRetry(
-            `${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`,
-            {
-              method: 'PUT', headers: hdrs,
-              body: JSON.stringify({
+          // Cuadro de aceros: solo ítem/competencia/loc — dims/media solo vía sync del cuadro.
+          const bodyAsignar = esRegistroCuadro
+            ? {
+                item_listado_id: idItem,
+                competencia: competencia || null,
+                ...locApi,
+              }
+            : {
                 item_listado_id: idItem,
                 competencia: competencia || null,
                 ...medPatch,
                 observacion: observacion || null,
                 ...locApi,
-              }),
+              }
+          const asigRes = await sicoeFetchWithRetry(
+            `${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`,
+            {
+              method: 'PUT', headers: hdrs,
+              body: JSON.stringify(bodyAsignar),
             },
             4,
           )
@@ -4068,6 +4219,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             if (asigData?.semana_id != null) patchOptimista.semana_id = asigData.semana_id
           }
         } else {
+          if (esRegistroCuadro) {
+            // Sin ítem nuevo: no hay dims editables en registros del cuadro.
+            setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+            setGuardando(false)
+            return
+          }
           const dimRes = await sicoeFetchWithRetry(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
             method: 'PUT', headers: hdrs,
             body: JSON.stringify({
@@ -4819,9 +4976,60 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </button>
               )
             })()}
+            {esRegistroCuadro && !regSelladoMax && puedeEditar && (
+              <button
+                type="button"
+                data-testid="sicoe-editar-cuadro-aceros"
+                onClick={abrirCuadroAcerosEdicion}
+                title="Editar cuadro de aceros"
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${t.primary}`,
+                  color: t.primary,
+                  borderRadius: 6,
+                  padding: '2px 8px',
+                  fontSize: 'var(--cc-caption)',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                ▦
+              </button>
+            )}
+            {esRegistroCuadro && (regSelladoMax || !puedeEditar) && (
+              <button
+                type="button"
+                data-testid="sicoe-consultar-cuadro-aceros"
+                onClick={abrirCuadroAcerosEdicion}
+                title="Consultar cuadro de aceros"
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${t.border}`,
+                  color: t.textMuted,
+                  borderRadius: 6,
+                  padding: '2px 8px',
+                  fontSize: 'var(--cc-caption)',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                ▦
+              </button>
+            )}
             {puedeEliminarRegistroReporte && typeof onDevEliminarRegistro === 'function' && (
-              <button type="button" disabled={devEliminando} onClick={() => onDevEliminarRegistro(registro.id)}
-                title="Eliminar este registro de la base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)"
+              <button
+                type="button"
+                disabled={devEliminando}
+                onClick={() => {
+                  if (esRegistroCuadro) {
+                    setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+                    return
+                  }
+                  onDevEliminarRegistro(registro.id)
+                }}
+                title={esRegistroCuadro
+                  ? SICOE_AVISO_EDITAR_DESDE_CUADRO
+                  : 'Eliminar este registro de la base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)'}
                 style={{
                   background:'transparent', border:'1px solid #F87171', color:'#F87171', borderRadius:'6px',
                   padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.5 : 1,
@@ -5307,12 +5515,46 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {/* ─ Sección: Dimensiones y Cantidades ─ */}
       <div style={{ marginBottom: secMb }}>
         <div style={secTitleSt('#F59E0B')}>📏 Dimensiones y Cantidades</div>
+        {esRegistroCuadro && etiquetaCuadro && (
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 700, marginBottom: 6 }} title="Cuadro y posición de origen">
+            {etiquetaCuadro}
+          </div>
+        )}
+        {!itemSel && !registro.item_numero && editableCamposDimensionales && !esRegistroCuadro && (
+          <div style={{ marginBottom: 8, maxWidth: 220 }}>
+            <div style={labSt}>Unidad</div>
+            <select
+              value={unidadLocal || ''}
+              onChange={(e) => {
+                const uni = e.target.value
+                setUnidadLocal(uni)
+                if (!sicoeUnidadEsKg(uni)) {
+                  setEsVarilla(null)
+                  setDiametroVarilla('')
+                }
+              }}
+              style={{ ...inpSt, width: '100%' }}
+              title="Unidad del registro (Kg abre el cuadro de aceros)"
+            >
+              <option value="">--</option>
+              {['m', 'm²', 'm³', 'ml', 'und', 'kg', 'ton', 'gl', 'vje', 'día', 'mes'].map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <SicoeCamposMedicion
           t={t}
-          editable={!!editableCamposDimensionales}
+          editable={!!editableCamposDimensionales && !esRegistroCuadro}
           unidad={unidadMedicion}
           esVarilla={esVarilla}
-          onEsVarillaChange={setEsVarilla}
+          onEsVarillaChange={(val) => {
+            if (esRegistroCuadro) {
+              setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+              return
+            }
+            setEsVarilla(val)
+          }}
           longitud={longitud}
           ancho={ancho}
           espesor={espesor}
@@ -5322,6 +5564,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           compact={!!excel}
           registro={registro}
           onChange={(patch) => {
+            if (esRegistroCuadro) {
+              setCuadroAcerosAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+              return
+            }
             if ('longitud' in patch) setLongitud(patch.longitud ?? '')
             if ('ancho' in patch) setAncho(patch.ancho ?? '')
             if ('espesor' in patch) setEspesor(patch.espesor ?? '')
@@ -5337,7 +5583,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         )}
         <div style={{ marginTop: excel ? 4 : 10 }}>
-          {editableObservacion ? (
+          {editableObservacion && !esRegistroCuadro ? (
             <div>
               <div style={labSt}>
                 Observación
@@ -5369,7 +5615,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               />
             </div>
           ) : (
-            <CampoRO label="Observación" valor={observacion || null} />
+            <div title={esRegistroCuadro ? SICOE_AVISO_EDITAR_DESDE_CUADRO : undefined}>
+              <CampoRO label="Observación" valor={observacion || null} />
+            </div>
           )}
         </div>
       </div>
@@ -5768,6 +6016,41 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         title={fotoMensaje?.title || 'Aviso'}
         message={fotoMensaje?.message || ''}
       />
+      <SicoeMensajeModal
+        open={!!cuadroAcerosAviso}
+        onClose={() => setCuadroAcerosAviso(null)}
+        t={t}
+        title="Cuadro de aceros"
+        message={cuadroAcerosAviso || ''}
+      />
+      <SicoeCuadroAcerosPregunta
+        open={cuadroAcerosPreguntaOpen}
+        t={t}
+        onNo={() => setCuadroAcerosPreguntaOpen(false)}
+        onSi={() => {
+          setCuadroAcerosPreguntaOpen(false)
+          setCuadroAcerosModal({
+            modo: 'crear',
+            schedule: null,
+            soloConsulta: false,
+            placeholderId: registro.id,
+            fotoInicial: { foto_url: registro.foto_url, fotos_historial: registro.fotos_historial },
+          })
+        }}
+      />
+      {cuadroAcerosModal && (
+        <SicoeCuadroAcerosModal
+          open
+          t={t}
+          contratoId={contrato_id}
+          modo={cuadroAcerosModal.modo || 'crear'}
+          scheduleInicial={cuadroAcerosModal.schedule}
+          fotoInicial={cuadroAcerosModal.fotoInicial}
+          soloConsulta={!!cuadroAcerosModal.soloConsulta}
+          onClose={() => setCuadroAcerosModal(null)}
+          onCargar={handleCargarCuadroAceros}
+        />
+      )}
 
       {/* ─ Sección: Validación ─ */}
       {nivelInfo.puedeValidar && nivelesValidablesReg.length > 0 && (() => {
@@ -8765,6 +9048,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           mostrarSeleccionValidacion={false}
                           onItemAsignado={recargar}
+                          onRecargar={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
@@ -8860,6 +9144,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     onToggleSeleccion={() => toggleSeleccion(reg.id)}
                     mostrarSeleccionValidacion={false}
                     onItemAsignado={recargar}
+                    onRecargar={recargar}
                     onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                     onOptimisticValidacion={aplicarOptimisticValidacion}
                     onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
@@ -15490,6 +15775,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [registros, setRegistros] = useState([])
   const [modalRegistro, setModalRegistro] = useState(null)
   const [wizardFotoMensaje, setWizardFotoMensaje] = useState(null)
+  const [wizardCuadroPreguntaIdx, setWizardCuadroPreguntaIdx] = useState(null)
+  const [wizardCuadroModal, setWizardCuadroModal] = useState(null) // { idx }
+  const [wizardCuadroAviso, setWizardCuadroAviso] = useState(null)
   /** Gráficos por lote de localización (clave 0 = única o lote 1). Se copian a cada registro al guardar. */
   const [graficosPorLote, setGraficosPorLote] = useState({ 0: [] })
   const [modalGaleria, setModalGaleria] = useState(false)
@@ -16394,6 +16682,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         es_varilla: sicoeUnidadEsKg(reg.unidad) ? (reg.es_varilla ?? null) : null,
         diametro_varilla: reg.es_varilla === true ? (reg.diametro_varilla || null) : null,
         peso_kg_m: reg.es_varilla === true ? (reg.peso_kg_m ?? sicoePesoKgMPorDiametro(reg.diametro_varilla)) : null,
+        ...(sicoeEsRegistroDeCuadroAceros(reg) ? {
+          cuadro_aceros_id: reg.cuadro_aceros_id,
+          cuadro_aceros_nombre: reg.cuadro_aceros_nombre,
+          cuadro_aceros_posicion: reg.cuadro_aceros_posicion,
+          cuadro_aceros_posicion_id: reg.cuadro_aceros_posicion_id,
+          cuadro_aceros_schedule: reg.cuadro_aceros_schedule,
+        } : {}),
         ...fotosPayloadDesdeHistorial(
           (Array.isArray(reg.fotos_historial) && reg.fotos_historial.length)
             ? reg.fotos_historial.filter((f) => f?.url && !esFotoPreviewLocal(f.url))
@@ -16401,7 +16696,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               ? [{ url: reg.foto_url, numero: reg.foto_numero ?? null }]
               : []),
         ),
-        ...payloadGraficosRegistro(reg),
+        // Gráfico del cuadro va solo en esos registros; no mezclar con lote compartido.
+        ...(sicoeEsRegistroDeCuadroAceros(reg) && reg.grafico_url
+          ? graficosPayloadDesdeHistorial(listaGraficosRegistro(reg))
+          : payloadGraficosRegistro(reg)),
         ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
       })
 
@@ -17056,21 +17354,26 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     const a=[...registros]
                     const uni = e.target.value
                     const prev = a[modalRegistro]
+                    const wasKg = sicoeUnidadEsKg(prev.unidad)
+                    const nowKg = sicoeUnidadEsKg(uni)
                     a[modalRegistro] = {
                       ...prev,
                       unidad: uni,
-                      es_varilla: sicoeUnidadEsKg(uni) ? (prev.es_varilla ?? null) : null,
-                      diametro_varilla: sicoeUnidadEsKg(uni) ? (prev.diametro_varilla ?? '') : null,
-                      peso_kg_m: sicoeUnidadEsKg(uni) && prev.es_varilla === true
+                      es_varilla: nowKg ? (prev.es_varilla ?? null) : null,
+                      diametro_varilla: nowKg ? (prev.diametro_varilla ?? '') : null,
+                      peso_kg_m: nowKg && prev.es_varilla === true
                         ? sicoePesoKgMPorDiametro(prev.diametro_varilla)
                         : null,
                     }
-                    if (!sicoeUnidadEsKg(uni)) {
+                    if (!nowKg) {
                       a[modalRegistro].es_varilla = null
                       a[modalRegistro].diametro_varilla = null
                       a[modalRegistro].peso_kg_m = null
                     }
                     setRegistros(a)
+                    if (nowKg && !wasKg && !sicoeEsRegistroDeCuadroAceros(prev)) {
+                      setWizardCuadroPreguntaIdx(modalRegistro)
+                    }
                   }}
                   style={{ width:'100%', maxWidth: 220, padding:'8px 10px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
                   <option value=''>--</option>
@@ -17085,12 +17388,21 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     style={{ width:'100%', maxWidth: 220, padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', marginTop:'4px' }} />
                 )}
               </div>
+              {sicoeEsRegistroDeCuadroAceros(registros[modalRegistro]) && (
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 700 }} title="Cuadro y posición">
+                  {sicoeEtiquetaCuadroPosicion(registros[modalRegistro])}
+                </div>
+              )}
               <SicoeCamposMedicion
                 t={t}
-                editable
+                editable={!sicoeEsRegistroDeCuadroAceros(registros[modalRegistro])}
                 unidad={registros[modalRegistro].unidad}
                 esVarilla={registros[modalRegistro].es_varilla === true ? true : registros[modalRegistro].es_varilla === false ? false : null}
                 onEsVarillaChange={(val) => {
+                  if (sicoeEsRegistroDeCuadroAceros(registros[modalRegistro])) {
+                    setWizardCuadroAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+                    return
+                  }
                   const a = [...registros]
                   a[modalRegistro] = {
                     ...a[modalRegistro],
@@ -17118,6 +17430,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 diametroVarilla={registros[modalRegistro].diametro_varilla ?? ''}
                 showPendienteBanner={false}
                 onChange={(patch) => {
+                  if (sicoeEsRegistroDeCuadroAceros(registros[modalRegistro])) {
+                    setWizardCuadroAviso(SICOE_AVISO_EDITAR_DESDE_CUADRO)
+                    return
+                  }
                   const a = [...registros]
                   const r = { ...a[modalRegistro], ...patch }
                   if (r.es_varilla === true) {
@@ -17358,6 +17674,68 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           </div>
         </div>
       )}
+
+      <SicoeCuadroAcerosPregunta
+        open={wizardCuadroPreguntaIdx != null}
+        t={t}
+        onNo={() => setWizardCuadroPreguntaIdx(null)}
+        onSi={() => {
+          const idx = wizardCuadroPreguntaIdx
+          setWizardCuadroPreguntaIdx(null)
+          setWizardCuadroModal({ idx })
+          setModalRegistro(null)
+        }}
+      />
+      {wizardCuadroModal && (
+        <SicoeCuadroAcerosModal
+          open
+          t={t}
+          contratoId={contrato_id}
+          modo="crear"
+          onClose={() => setWizardCuadroModal(null)}
+          onCargar={async (payload) => {
+            try {
+              const { fotoPayload, graficoPayload } = await sicoeSubirFotosYPngCuadroLocal({
+                API_URL,
+                contratoId: contrato_id,
+                hdrs,
+                fotoFiles: payload.fotoFiles,
+                fotosExistentes: payload.fotosExistentes,
+                pngAdjunto: payload.pngAdjunto,
+                observacion: payload.schedule?.nombre || 'Cuadro de aceros',
+              })
+              if (!fotoPayload?.foto_url) {
+                setWizardCuadroAviso('Agregue una foto para el cuadro.')
+                return
+              }
+              const stamp = stampLocEnRegistro()
+              const expanded = sicoeExpandirRegistrosWizardConCuadro({
+                registros,
+                indice: wizardCuadroModal.idx,
+                schedule: payload.schedule,
+                fotoPayload,
+                graficoPayload,
+                stampLoc: stamp,
+              })
+              if (!expanded.ok) {
+                setWizardCuadroAviso(expanded.error || 'No se pudo crear el cuadro.')
+                return
+              }
+              setRegistros(expanded.registros)
+              setWizardCuadroModal(null)
+            } catch (e) {
+              setWizardCuadroAviso(e?.message || String(e))
+            }
+          }}
+        />
+      )}
+      <SicoeMensajeModal
+        open={!!wizardCuadroAviso}
+        onClose={() => setWizardCuadroAviso(null)}
+        t={t}
+        title="Cuadro de aceros"
+        message={wizardCuadroAviso || ''}
+      />
 
       {/* ── Modal nueva localización (lote) ── */}
       {modalNuevoLoteLoc && (
