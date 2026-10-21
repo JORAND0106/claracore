@@ -113,25 +113,29 @@ export default function EsquemaCalcAdjuntoPreview({
     return base.filter(Boolean)
   }, [siblings, item])
 
-  const pdfItem = useMemo(
-    () => list.find((x) => isPdfItem(x)) || (isPdfItem(item) ? item : null),
-    [list, item],
-  )
-  const pngItem = useMemo(
-    () => list.find((x) => {
+  // El slide abierto manda: no buscar el «primer PNG» del carrusel completo
+  // (eso descargaba el gráfico 1/2 al previsualizar el 3.º).
+  const active = item || list[0] || null
+  const activeIsPdf = isPdfItem(active)
+  const rawUrl = resolveUrl(active)
+
+  /** Pares PDF/PNG solo de memoria de cálculo relacionada con el ítem activo. */
+  const pdfItem = useMemo(() => {
+    if (isPdfItem(active)) return active
+    return list.find((x) => x !== active && isPdfItem(x)) || null
+  }, [list, active])
+  const pngItem = useMemo(() => {
+    if (active && !isPdfItem(active) && resolveUrl(active)) return active
+    return list.find((x) => {
+      if (x === active) return false
       const kind = String(x?.kind || x?.source?.kind || '').toLowerCase()
       const mime = String(x?.mime || x?.mime_type || x?.source?.mime || '').toLowerCase()
       return isMemoriaPngItem(x)
         || kind === 'grafico-isometrico'
         || kind === 'esquema'
         || (mime.startsWith('image/') && !isPdfItem(x))
-    }) || (!isPdfItem(item) ? item : null),
-    [list, item],
-  )
-
-  const active = item || pdfItem || pngItem
-  const activeIsPdf = isPdfItem(active)
-  const rawUrl = resolveUrl(active)
+    }) || null
+  }, [list, active])
   const pdfUrl = resolveUrl(pdfItem)
   const pngUrl = resolveUrl(pngItem)
 
@@ -253,11 +257,26 @@ export default function EsquemaCalcAdjuntoPreview({
               Abrir PDF
             </button>
           ) : null}
-          {pdfUrl ? (
+          {rawUrl ? (
+            <button
+              type="button"
+              data-testid="esquema-calc-download-file"
+              style={btn.primary}
+              onClick={() => downloadFromUrl(
+                rawUrl,
+                downloadName,
+                activeIsPdf ? 'application/pdf' : 'image/png',
+              )}
+            >
+              Descargar
+            </button>
+          ) : null}
+          {/* Alternos de la misma memoria de cálculo (no otros slides del carrusel). */}
+          {pdfUrl && pdfUrl !== rawUrl ? (
             <button
               type="button"
               data-testid="esquema-calc-download-pdf"
-              style={btn.primary}
+              style={btn.ghost}
               onClick={() => downloadFromUrl(
                 pdfUrl,
                 pdfItem?.nombre || pdfItem?.source?.nombre || 'memoria_calculo.pdf',
@@ -267,7 +286,7 @@ export default function EsquemaCalcAdjuntoPreview({
               Descargar PDF
             </button>
           ) : null}
-          {pngUrl ? (
+          {pngUrl && pngUrl !== rawUrl ? (
             <button
               type="button"
               data-testid="esquema-calc-download-png"
@@ -279,16 +298,6 @@ export default function EsquemaCalcAdjuntoPreview({
               )}
             >
               Descargar PNG
-            </button>
-          ) : null}
-          {!pdfUrl && !pngUrl && rawUrl ? (
-            <button
-              type="button"
-              data-testid="esquema-calc-download-file"
-              style={btn.primary}
-              onClick={() => downloadFromUrl(rawUrl, downloadName, activeIsPdf ? 'application/pdf' : 'image/png')}
-            >
-              Descargar
             </button>
           ) : null}
           <button type="button" style={btn.ghost} onClick={onClose} aria-label="Cerrar">Cerrar</button>

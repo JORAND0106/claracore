@@ -44,7 +44,14 @@ export default function AdjuntosMediaSlider({
           if (u) enriched = { ...item, url: u, previewUrl: u }
         } catch { /* preview sin URL */ }
       }
-      setPreview({ item: enriched, siblings: lista })
+      // No pasar todo el carrusel como siblings: el modal buscaba el 1.er PNG y
+      // descargaba otro gráfico. Solo emparejar PDF+PNG de la misma memoria.
+      let siblings = [enriched]
+      if (isEsquemaCalcAdjunto(enriched)) {
+        const related = lista.filter((x) => isEsquemaCalcAdjunto(x))
+        if (related.length) siblings = related
+      }
+      setPreview({ item: enriched, siblings })
       return
     }
     if (typeof onClickItem === 'function') onClickItem(item, idx)
