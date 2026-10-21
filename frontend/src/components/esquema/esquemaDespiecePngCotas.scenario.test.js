@@ -40,7 +40,7 @@ function pos180(overrides = {}) {
 describe('caso a · PNG textos legibles', () => {
   it('export usa tipografía proporcional mayor y tabla a ancho completo', () => {
     const exp = readFileSync(join(__dirname, 'esquemaDespieceExport.js'), 'utf8')
-    assert.match(exp, /width = 2200/)
+    assert.match(exp, /2200 \* ESQUEMA_DOC_TYPE_SCALE/)
     assert.match(exp, /34 \* textScale/)
     assert.match(exp, /cellFont/)
     assert.match(exp, /tableWidthRatio/)

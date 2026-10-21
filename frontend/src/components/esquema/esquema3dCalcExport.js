@@ -6,6 +6,7 @@
 import { drawSolids3dLayered } from './esquema3dSolids.js'
 import { fmtMemoria } from './esquema3dCalc.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
+import { ESQUEMA_DOC_TYPE_SCALE } from './esquemaDocLegibility.js'
 
 const LOGO_URL = '/CLARA.CORE.png'
 
@@ -160,7 +161,7 @@ export function renderCalcIsoCanvas(solids, {
 } = {}) {
   if (typeof document === 'undefined') return null
   const list = (solids || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
-  const ts = Math.max(0.85, Math.min(2.2, Number(textScale) || 1))
+  const ts = Math.max(0.85, Math.min(4.4, Number(textScale) || 1))
   const captionH = viewCaption ? Math.round(22 * ts) : 0
   const bb = list.length ? solidsIsoBounds(list) : { w: 400, h: 300, viewId: 'iso-ne', orbit: null, x: 0, y: 0 }
   const aspect = bb.w / Math.max(1, bb.h)
@@ -286,7 +287,8 @@ export function renderMemoriaColorTableCanvas(snapshot, {
 } = {}) {
   if (typeof document === 'undefined') return null
   const C = MEMORIA_COLORS
-  const fs = Math.max(0.9, Math.min(2.0, Number(fontScale) || 1))
+  // Tipografía × DOC_TYPE_SCALE; tope alto para tablas densas en documentos.
+  const fs = Math.max(0.9, Math.min(4.4, Number(fontScale) || 1))
   const margin = Math.round(8 * fs)
   const baseCols = [
     { key: 'num', label: '#', w: 36 },
@@ -468,19 +470,19 @@ export async function composeCalcMemoriaPng({
   const nRows = Math.max(1, rows.length)
   const labels = labelsFromSnapshot(snapshot)
 
-  // Iso a ancho completo; tabla ~½ del ancho anterior, centrada debajo.
+  // Iso a ancho completo; tabla a todo el ancho útil (letra ×2 en documentos).
   const baseW = width != null
     ? width
     : Math.round(1280 + Math.min(240, Math.max(0, nRows - 4) * 24))
-  const textScale = baseW / 1280
+  const textScale = (baseW / 1280) * ESQUEMA_DOC_TYPE_SCALE
   const margin = Math.round(28 * textScale)
   const headerH = Math.round(78 * textScale)
   const footerH = Math.round(26 * textScale)
   const gap = Math.round(14 * textScale)
 
   const contentW = baseW - margin * 2
-  // Tabla compacta ≈ mitad del ancho del isométrico (legible sin ampliar).
-  const tableTargetW = Math.round(contentW * 0.52)
+  // Tabla a todo el ancho útil: tipografía grande sin cortar ni forzar muchas líneas.
+  const tableTargetW = Math.round(contentW * 1.0)
   const tableFontScale = textScale * (nRows <= 5 ? 1.12 : (nRows <= 9 ? 1.05 : 0.98))
   const table = renderMemoriaColorTableCanvas(snapshot, {
     width: tableTargetW,
@@ -499,6 +501,7 @@ export async function composeCalcMemoriaPng({
     viewCaption: 'Isométrica NE',
     labels,
     padRatio: 0.04,
+    // Caption/rótulos del iso siguen el factor DOC; el dibujo conserva proporción.
     textScale,
     labelScale: 1.15,
   })
@@ -547,6 +550,7 @@ export async function composeCalcMemoriaPng({
   }
 
   if (table) {
+    // Tabla a ancho completo (o centrada si midiera menos).
     const tx = margin + Math.max(0, (isoW - table.width) / 2)
     ctx.drawImage(table, tx, y)
     y += tableH
@@ -575,7 +579,10 @@ export async function composeCalcMemoriaPng({
       height,
       isoH,
       tableH,
+      tableW,
       textScale,
+      docTypeScale: ESQUEMA_DOC_TYPE_SCALE,
+      tableWidthRatio: tableW / Math.max(1, isoW),
       isoRatio: isoH / height,
     },
   }

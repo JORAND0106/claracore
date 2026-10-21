@@ -257,9 +257,10 @@ describe('fórmulas naturales y desglose · casos d–e', () => {
 })
 
 describe('tabla compacta memoria · caso f', () => {
-  it('compose usa ~½ ancho para la tabla; columnas Dimensiones y Fórmula', () => {
+  it('compose usa todo el ancho útil para la tabla; columnas Dimensiones y Fórmula', () => {
     const src = readFileSync(join(__dirname, 'esquema3dCalcExport.js'), 'utf8')
-    assert.match(src, /tableTargetW|contentW \* 0\.52/)
+    assert.match(src, /tableTargetW|contentW \* 1\.0/)
+    assert.match(src, /ESQUEMA_DOC_TYPE_SCALE/)
     assert.match(src, /Dimensiones/)
     assert.match(src, /Fórmula/)
     assert.doesNotMatch(src, /label: 'Long'/)

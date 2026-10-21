@@ -9,6 +9,13 @@ import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esque
 import { partitionBackgroundFirst } from './esquemaZOrder.js'
 import { drawSolids3dLayered, linkedSourceEntityIds, solidXyBounds } from './esquema3dSolids.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
+import {
+  ESQUEMA_DOC_CONTAINER_H,
+  ESQUEMA_DOC_CONTAINER_W,
+  ESQUEMA_DOC_MIN_SCREEN_PX,
+  ESQUEMA_DOC_TYPE_SCALE,
+  ESQUEMA_FO_EO_SLOT_H,
+} from './esquemaDocLegibility.js'
 
 export const EXPORT_MARGIN = 48
 export const EXPORT_TITLE_H = 56
@@ -158,17 +165,18 @@ export const EXPORT_TABLE_MIN_HEIGHT_FRAC = 0.36
 /**
  * Alto de referencia del contenedor PLANO/ESQUEMA en FO-EO-04 (px CSS).
  * Se usa para dimensionar el PNG de modo que el texto de la tabla quede
- * legible (~8 px) tras object-fit:contain.
+ * al menos del tamaño del cuerpo del documento tras object-fit:contain.
  */
-export const EXPORT_MEMORIA_CONTAINER_H = 240
-/** Tamaño mínimo deseado del texto de tabla ya reducido al contenedor. */
-export const EXPORT_TABLE_MIN_SCREEN_PX = 8
+/** @deprecated alias — slot FO-EO-04; la meta de legibilidad usa página completa. */
+export const EXPORT_MEMORIA_CONTAINER_H = ESQUEMA_FO_EO_SLOT_H
+/** Tamaño mínimo deseado del texto de tabla ya reducido al ancho útil de página. */
+export const EXPORT_TABLE_MIN_SCREEN_PX = ESQUEMA_DOC_MIN_SCREEN_PX
 
 /**
  * Métricas tipográficas de la tabla de coordenadas, proporcionales al ancho
- * del gráfico exportado. Factor mínimo 1.35 (≈ +35 % vs tipografía histórica
- * 11/12 px). `heightBoost` amplía filas/fuentes para alcanzar la fracción
- * mínima de alto sin deformar el dibujo.
+ * del gráfico exportado. Base histórica 1.35 × ESQUEMA_DOC_TYPE_SCALE (≈×2)
+ * para legibilidad en formatos. `heightBoost` amplía filas/fuentes para la
+ * fracción mínima de alto sin deformar el dibujo.
  *
  * @param {number} tableWidth
  * @param {{ heightBoost?: number }} [opts]
@@ -176,12 +184,12 @@ export const EXPORT_TABLE_MIN_SCREEN_PX = 8
 export function exportCoordTableMetrics(tableWidth, opts = {}) {
   const w = Number(tableWidth)
   const width = Number.isFinite(w) && w > 0 ? w : EXPORT_TABLE_BASE_WIDTH
-  // 1.35 en base 1100; crece con el ancho hasta 1.9 (tipografía ~22 px)
-  const raw = (width / EXPORT_TABLE_BASE_WIDTH) * 1.35
-  const base = Math.min(1.9, Math.max(1.35, raw))
+  // Histórico 1.35 en base 1100; × DOC_TYPE_SCALE ≈ tipografía al doble.
+  const raw = (width / EXPORT_TABLE_BASE_WIDTH) * 1.35 * ESQUEMA_DOC_TYPE_SCALE
+  const base = Math.min(3.8, Math.max(2.7, raw))
   const boost = Math.max(1, Number(opts.heightBoost) || 1)
-  // Tope práctico: tipografía ~36 px (sigue nítida al zoom del PDF)
-  const s = Math.min(3.2, base * boost)
+  // Tope práctico: tipografía nítida al zoom del PDF / documento.
+  const s = Math.min(6.4, base * boost)
   return {
     scale: s,
     heightBoost: boost,
@@ -211,7 +219,7 @@ export function exportCoordTableHeightBoost(rowCount, tableWidth, drawH, margin 
   const target = (frac / (1 - frac)) * dh
   if (scalable + fixed >= target) return 1
   // Solo la parte tipográfica escala; el margen inferior es fijo.
-  return Math.min(2.4, Math.max(1, (target - fixed) / Math.max(1, scalable)))
+  return Math.min(3.5, Math.max(1, (target - fixed) / Math.max(1, scalable)))
 }
 
 /** Alto total del bloque tabla (gap + título + filas + margen inferior). */
@@ -317,24 +325,33 @@ export function computeEsquemaExportSize({ objects, nodes, solids3d, view3d, orb
   let w = landscapeExportSize(Math.max(minW, drawW), h).w
   let tableMetrics = exportCoordTableMetrics(w - margin * 2, { heightBoost })
 
-  // Ajuste fino: tipografía efectiva en el contenedor FO-EO-04 (object-fit),
+  // Ajuste fino: tipografía efectiva al ancho útil de página (object-fit),
   // solo agrandando la tabla — nunca reduciendo la escala del dibujo.
-  // Se itera porque al crecer la tabla cambia el fit (object-fit:contain).
+  // Se itera porque al crecer la tabla cambia el fit; si el boost no mejora
+  // el px en pantalla, se detiene (evitar PNG enormes contraproducentes).
   if (rows.length) {
-    const memoriaW = 380
-    const memoriaH = EXPORT_MEMORIA_CONTAINER_H
-    for (let i = 0; i < 6; i += 1) {
-      const fit0 = Math.min(memoriaW / w, memoriaH / h)
+    const pageW = ESQUEMA_DOC_CONTAINER_W
+    const pageH = ESQUEMA_DOC_CONTAINER_H
+    let bestScreen = tableMetrics.bodyFontPx * Math.min(pageW / w, pageH / h)
+    for (let i = 0; i < 8; i += 1) {
+      const fit0 = Math.min(pageW / w, pageH / h)
       const screen0 = tableMetrics.bodyFontPx * fit0
       if (screen0 + 0.05 >= EXPORT_TABLE_MIN_SCREEN_PX) break
       const need = EXPORT_TABLE_MIN_SCREEN_PX / Math.max(0.25, screen0)
-      const nextBoost = Math.min(3.0, heightBoost * need)
+      const nextBoost = Math.min(3.5, heightBoost * need)
       if (nextBoost <= heightBoost + 1e-4) break
+      const nextBlock = exportCoordTableBlockHeight(rows.length, w - margin * 2, margin, nextBoost)
+      const nextH = titleH + drawH + nextBlock
+      const nextW = landscapeExportSize(Math.max(minW, drawW), nextH).w
+      const nextMetrics = exportCoordTableMetrics(nextW - margin * 2, { heightBoost: nextBoost })
+      const nextScreen = nextMetrics.bodyFontPx * Math.min(pageW / nextW, pageH / nextH)
+      if (nextScreen + 0.05 < bestScreen) break
       heightBoost = nextBoost
-      tableBlock = exportCoordTableBlockHeight(rows.length, w - margin * 2, margin, heightBoost)
-      h = titleH + drawH + tableBlock
-      w = landscapeExportSize(Math.max(minW, drawW), h).w
-      tableMetrics = exportCoordTableMetrics(w - margin * 2, { heightBoost })
+      tableBlock = nextBlock
+      h = nextH
+      w = nextW
+      tableMetrics = nextMetrics
+      bestScreen = nextScreen
     }
   }
 
