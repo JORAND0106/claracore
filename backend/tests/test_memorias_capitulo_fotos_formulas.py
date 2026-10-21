@@ -605,3 +605,136 @@ def test_lista_graficos_desde_historial():
     g = inf._lista_graficos_memoria_registro(r)
     assert [x["grafico_numero"] for x in g] == [2, 1]
     assert g[0]["numero_registro"] == 9
+
+
+def test_lista_graficos_usa_el_vigente_y_no_la_version_anterior():
+    inf = _import_informes_with_stubs()
+    r = {
+        "numero_registro": 12,
+        "observacion": "actualizado",
+        "grafico_url": "https://cdn/nuevo.png",
+        "grafico_numero": 5,
+        "graficos_historial": [
+            {"url": "https://cdn/viejo.png", "numero": 5, "creado_en": "2026-01-01", "origen": "esquema"},
+            {"url": "https://cdn/nuevo.png", "numero": 5, "creado_en": "2026-03-01", "origen": "esquema"},
+            {"url": "https://cdn/plano.png", "numero": 8, "creado_en": "2026-02-01", "origen": "mapa"},
+            {
+                "url": "https://cdn/memoria.pdf",
+                "numero": 9,
+                "origen": "esquema-calculo",
+                "kind": "memoria-calculo",
+                "mime": "application/pdf",
+            },
+        ],
+    }
+    g = inf._lista_graficos_memoria_registro(r)
+    urls = [x["grafico_url"] for x in g]
+    assert urls[0] == "https://cdn/nuevo.png"
+    assert "https://cdn/viejo.png" not in urls
+    assert "https://cdn/plano.png" in urls
+    assert "https://cdn/memoria.pdf" not in urls
+
+
+def test_lista_graficos_rotado_aunque_el_historial_siga_con_la_url_vieja():
+    inf = _import_informes_with_stubs()
+    r = {
+        "numero_registro": 4,
+        "grafico_url": "https://cdn/rotado.png",
+        "grafico_numero": 3,
+        "graficos_historial": [
+            {"url": "https://cdn/original.png", "numero": 3, "creado_en": "2026-01-01"},
+        ],
+    }
+    g = inf._lista_graficos_memoria_registro(r)
+    assert [x["grafico_url"] for x in g] == ["https://cdn/rotado.png"]
+
+
+def test_detalle_no_salta_de_hoja_si_el_cierre_cabe():
+    inf = _import_informes_with_stubs()
+    for n in (26, 32):
+        filas = [
+            {"kind": "reg", "reg": {"observacion": "demolicion de cabezal", "numero_registro": i}}
+            for i in range(n)
+        ]
+        filas.append({"kind": "subtramo", "tramo": "TRAMO 7", "regs": []})
+        chunks = inf._chunks_memoria_detalle(filas, 26, 30)
+        assert len(chunks) == 1, n
+        assert chunks[0][-1]["kind"] == "subtramo"
+
+
+def test_detalle_largo_no_deja_el_cierre_solo():
+    inf = _import_informes_with_stubs()
+    filas = [
+        {"kind": "reg", "reg": {"observacion": "demolicion de cabezal", "numero_registro": i}}
+        for i in range(80)
+    ]
+    filas.append({"kind": "subtramo", "tramo": "7", "regs": []})
+    chunks = inf._chunks_memoria_detalle(filas, 26, 30)
+    assert len(chunks) >= 2
+    assert any(e.get("kind") == "reg" for e in chunks[-1])
+    assert chunks[-1][-1]["kind"] == "subtramo"
+
+
+def test_lista_graficos_esquema_nuevo_reemplaza_al_anterior():
+    inf = _import_informes_with_stubs()
+    r = {
+        "numero_registro": 18,
+        "grafico_url": "https://cdn/esquema-nuevo.png",
+        "grafico_numero": 9,
+        "graficos_historial": [
+            {"url": "https://cdn/esquema-viejo.png", "numero": 4, "creado_en": "2026-01-01", "origen": "esquema"},
+            {"url": "https://cdn/esquema-nuevo.png", "numero": 9, "creado_en": "2026-04-01", "origen": "esquema"},
+            {"url": "https://cdn/plano.png", "numero": 2, "creado_en": "2026-02-01", "origen": "mapa"},
+        ],
+    }
+    urls = [x["grafico_url"] for x in inf._lista_graficos_memoria_registro(r)]
+    assert urls[0] == "https://cdn/esquema-nuevo.png"
+    assert "https://cdn/esquema-viejo.png" not in urls
+    assert "https://cdn/plano.png" in urls
+
+
+def test_excel_memoria_enlaza_el_grafico_vigente():
+    inf = _import_informes_with_stubs()
+    from openpyxl import Workbook
+
+    registros = [
+        {
+            "numero_registro": 12,
+            "abs_inicio": "10+935",
+            "abs_final": "10+945",
+            "tramo": "7",
+            "infraestructura": "BERM IZQ",
+            "longitud": 1,
+            "ancho": 1,
+            "espesor": 1,
+            "cantidad": 1,
+            "cantidad_total": 1,
+            "observacion": "actualizado",
+            "item_numero": "3.4",
+            "item_descripcion": "Demolicion",
+            "unidad": "M3",
+            "capitulo": "3",
+            "grafico_url": "https://cdn/nuevo.png",
+            "grafico_numero": 5,
+            "graficos_historial": [
+                {"url": "https://cdn/viejo.png", "numero": 5, "creado_en": "2026-01-01", "origen": "esquema"},
+                {"url": "https://cdn/nuevo.png", "numero": 5, "creado_en": "2026-03-01", "origen": "esquema"},
+            ],
+        }
+    ]
+    wb = Workbook()
+    inf._fill_memoria_excel_ws(
+        wb.active,
+        {"numero": "ICCU"},
+        {"razon_social": "Sub", "nombre_contacto": "Ana"},
+        {"consecutivo": 1, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-31"},
+        inf._item_info_desde_registros(registros, "3.4"),
+        registros,
+        None,
+    )
+    urls = []
+    for row in wb.active.iter_rows(min_row=1, max_row=wb.active.max_row, max_col=10):
+        for cell in row:
+            if isinstance(cell.value, str) and cell.value.startswith("https://cdn/"):
+                urls.append(cell.value)
+    assert urls == ["https://cdn/nuevo.png"]
