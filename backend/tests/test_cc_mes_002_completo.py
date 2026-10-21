@@ -129,7 +129,7 @@ def test_fetch_registros_memoria_cc_mes_acta_todos_one_matriz_call():
     ]
     matriz_calls = {"n": 0}
 
-    def fake_matriz(_sb, _cid):
+    def fake_matriz(_sb, _cid, **_kw):
         matriz_calls["n"] += 1
         return "nivel3_estado", [1, 2, 3]
 
