@@ -569,6 +569,52 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    regenerarPdfsOc: (solicitudId, ordenCompraIds) =>
+      fetch(`${base}/solicitudes/${solicitudId}/ordenes-compra/regenerar-pdf`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ orden_compra_ids: ordenCompraIds }),
+      }).then(parseJson),
+
+    resolverReenvioPdfOc: (ocId, body = {}) =>
+      fetch(`${base}/ordenes-compra/${ocId}/pdf/reenvio-regenerado`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
+    listarVersionesPdfOc: (ocId) =>
+      fetch(`${base}/ordenes-compra/${ocId}/pdf/versiones`, { headers: authHeaders() }).then(parseJson),
+
+    async openVersionPdfOc(ocId, version) {
+      const res = await fetch(`${base}/ordenes-compra/${ocId}/pdf/versiones/${version}/download`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) {
+        let msg = `Error ${res.status}`
+        try {
+          const data = await res.json()
+          const d = data.detail
+          msg = typeof d === 'string' ? d : JSON.stringify(d)
+        } catch {
+          const txt = await res.text().catch(() => '')
+          if (txt) msg = txt.slice(0, 240)
+        }
+        throw new Error(msg)
+      }
+      const blob = await res.blob()
+      if (!blob?.size) throw new Error('El PDF está vacío o no está disponible.')
+      const url = URL.createObjectURL(blob)
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `OC-${ocId}-v${version}.pdf`
+        a.click()
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120000)
+    },
+
     listInsumosPorProveedor: (proveedorId, q = '') =>
       fetch(`${base}/proveedores/${proveedorId}/insumos?q=${encodeURIComponent(q)}`, {
         headers: authHeaders(),

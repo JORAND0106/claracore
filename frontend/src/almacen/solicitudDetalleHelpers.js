@@ -214,6 +214,15 @@ export function etiquetaProveedorLinea(item) {
   return nombreProveedorGuardado(item)
 }
 
+/**
+ * Reabrir agrega insumos nuevos. No edita lo ya emitido.
+ * Si la pantalla no recibe la acción, el botón no debe quedar mudo.
+ */
+export const MOTIVO_REABRIR_OC_SIN_PANTALLA = (
+  'Reabrir no cambia una orden de compra ya emitida: no altera cantidades, proveedor ni valores. '
+  + 'Desde esta pantalla no se pueden agregar insumos. Ábrala en Almacén para sumar líneas nuevas a la OC.'
+)
+
 /** Puede reabrir OC para agregar insumos adicionales. */
 export function solicitudPuedeReabrirOc(sol, permisos) {
   if (!sol) return false

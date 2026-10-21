@@ -55,7 +55,7 @@ export default function SolicitudFormModal({
         style={{
           position: 'fixed',
           inset: 0,
-          zIndex: 100008,
+          zIndex: 100056,
           display: 'flex',
           alignItems: compact ? 'flex-end' : 'center',
           justifyContent: 'center',

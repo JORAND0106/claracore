@@ -10,6 +10,7 @@ import { esDesarrolladorUsuario, permisoFuncionContrato, tienePermisoAlgunaAccio
 import { permisosCatalogoInsumos, tieneAlgunaAccionCatalogoInsumos } from '../admin/catalogoInsumosPermisos'
 import { permisosEntradasSalidas, tieneAlgunaAccionEntradasSalidas } from './entradasSalidasPermisos'
 import { evaluarGenerarOc } from './generarOcRegla'
+import { evaluarRegenerarPdfOc } from './regenerarPdfOcRegla'
 
 export const ALMACEN_FUNCION = 'almacén'
 
@@ -115,6 +116,20 @@ export function puedeVerValoresEconomicosAlmacen(usuario) {
   return false
 }
 
+/**
+ * Regenerar el PDF de una OC ya generada.
+ * Basta cargo Administrador, rol Contratista Gerencial o desarrollador.
+ * No exige el permiso Validar y no cambia quién genera la OC.
+ */
+export function puedeRegenerarPdfOcAlmacen(usuario) {
+  return evaluarRegenerarPdfOc({
+    excluido: rolExcluidoAlmacen(usuario),
+    desarrollador: esDesarrolladorUsuario(usuario),
+    contratistaGerencial: esGerenciaContratistaRol(usuario),
+    cargoAdministrador: esCargoAdministrador(usuario),
+  })
+}
+
 /** Contratista Gerencial (o Desarrollador): aprueba y puede corregir insumo post-OC. */
 export function esContratistaGerencialUsuario(usuario) {
   if (esDesarrolladorUsuario(usuario)) return true
@@ -217,6 +232,7 @@ export function accesoAlmacen(usuario, contratoId) {
     entradasSalidas,
     verEconomicos: !bloqueado && puedeVerValoresEconomicosAlmacen(usuario),
     puedeGenerarOc: !bloqueado && puedeGenerarOrdenCompraAlmacen(usuario, cid),
+    puedeRegenerarPdfOc: !bloqueado && puedeRegenerarPdfOcAlmacen(usuario),
     esContratistaGerencial: esGerencial,
   }
 }

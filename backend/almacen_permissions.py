@@ -130,6 +130,39 @@ def require_cambiar_proveedor_linea_aprobada(current_user) -> None:
     )
 
 
+def puede_regenerar_pdf_oc(current_user) -> bool:
+    """Regenerar el PDF de una OC ya generada.
+
+    Basta una condición: cargo Administrador, rol Contratista Gerencial o
+    desarrollador. No es la regla de quién genera la OC (esa sigue exigiendo
+    Validar y el rol). No cambia quién ve los valores económicos.
+    """
+    if rol_excluido_almacen(current_user):
+        return False
+    if es_desarrollador_almacen(current_user):
+        return True
+    if es_cargo_administrador(current_user):
+        return True
+    return es_gerencia_contratista_rol(current_user)
+
+
+def require_regenerar_pdf_oc(current_user) -> None:
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if puede_regenerar_pdf_oc(current_user):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Solo el cargo Administrador, el rol Contratista Gerencial "
+            "o el desarrollador pueden regenerar el PDF de una orden de compra."
+        ),
+    )
+
+
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
     """
     Cifras en dinero para gerencia contratista, el rol Administrativo y Desarrollador.

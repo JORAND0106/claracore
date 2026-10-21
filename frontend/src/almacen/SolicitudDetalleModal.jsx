@@ -9,6 +9,7 @@ import OcNotificarProveedorModal from './OcNotificarProveedorModal'
 import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
 import { notificarProveedoresPayload } from './ocNotificarProveedor'
 import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
+import SolicitudRegenerarPdf from './SolicitudRegenerarPdf'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import { estadoProveedoresSolicitud, gruposProveedorPendientes } from './ocProveedoresSeleccion'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
@@ -28,6 +29,7 @@ import {
   resumenProveedoresSolicitud,
   totalesCompraSolicitud,
   solicitudOrdenesCompra,
+  MOTIVO_REABRIR_OC_SIN_PANTALLA,
   solicitudPuedeReabrirOc,
   solicitudPuedeRechazarCompleta,
   solicitudPuedeValidar,
@@ -166,6 +168,8 @@ export default function SolicitudDetalleModal({
   const puedeSeleccionar = puedeAsignar || puedeValidar
   const puedeRechazarCompleta = solicitudPuedeRechazarCompleta(sol, permisos)
   const puedeReabrir = solicitudPuedeReabrirOc(sol, permisos)
+  const reabrirDisponible = puedeReabrir && typeof onReabrirOc === 'function'
+  const puedeRegenerarPdf = Boolean(permisos?.puedeRegenerarPdfOc)
   const tieneOc = solicitudTieneOrdenCompra(sol)
   const esRolRevision = puedeAbrirRevisionLinea(permisos)
 
@@ -671,34 +675,49 @@ export default function SolicitudDetalleModal({
                       OC #{oc.numero_oc} · {ETIQUETA_DOCUMENTO_SISTEMA}
                     </span>
                   ))}
-                  {puedeReabrir && (
+                  {reabrirDisponible && (
                     <button
                       type="button"
                       style={{ ...ui.btnPrimary, padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
                       disabled={busy}
-                      onClick={() => onReabrirOc?.(sol)}
+                      onClick={() => onReabrirOc(sol)}
                       title="Agregar insumos adicionales. Si el proveedor es distinto, se genera otra OC."
                       data-testid="reabrir-oc-header"
                     >
                       🔓 Reabrir OC
                     </button>
                   )}
+                  <SolicitudRegenerarPdf
+                    solicitudId={sol.id}
+                    ordenes={solicitudOrdenesCompra(sol)}
+                    puedeRegenerar={puedeRegenerarPdf}
+                    contraste={contraste}
+                    onChanged={() => { void reload({ silent: true, full: true }) }}
+                  />
                 </div>
               )}
 
               {/* Garantiza visibilidad aunque el bloque OC no se renderice por flags parciales. */}
-              {puedeReabrir && !(tieneOc || (sol.estado === 'aprobada' && sol.orden_compra?.id)) && (
+              {reabrirDisponible && !(tieneOc || (sol.estado === 'aprobada' && sol.orden_compra?.id)) && (
                 <div style={{ marginBottom: 12 }}>
                   <button
                     type="button"
                     style={ui.btnPrimary}
                     disabled={busy}
-                    onClick={() => onReabrirOc?.(sol)}
+                    onClick={() => onReabrirOc(sol)}
                     data-testid="reabrir-oc-fallback"
                   >
                     🔓 Reabrir OC
                   </button>
                 </div>
+              )}
+              {puedeReabrir && !reabrirDisponible && (
+                <p
+                  data-testid="reabrir-oc-no-disponible"
+                  style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.45 }}
+                >
+                  {MOTIVO_REABRIR_OC_SIN_PANTALLA}
+                </p>
               )}
 
               {/* Nivel 1: encabezado expandible → Nivel 2: tabla Excel */}
@@ -852,12 +871,12 @@ export default function SolicitudDetalleModal({
                     {motivoAgregar}
                   </p>
                 )}
-                {puedeReabrir && (
+                {reabrirDisponible && (
                   <button
                     type="button"
                     style={ui.btnPrimary}
                     disabled={busy}
-                    onClick={() => onReabrirOc?.(sol)}
+                    onClick={() => onReabrirOc(sol)}
                     title="Agregar insumos adicionales a la misma Orden de Compra"
                   >
                     🔓 Reabrir OC

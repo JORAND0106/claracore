@@ -5659,13 +5659,14 @@ def get_orden_compra(contrato_id: int, oc_id: int, *, incluir_entradas: bool = T
     return oc
 
 
-def generar_y_guardar_pdf_oc(
+def _armar_pdf_oc(
     contrato_id: int,
     oc_id: int,
     oc: dict,
     solicitud: dict,
     user_id: int,
 ) -> dict:
+    """Arma el HTML y los bytes del PDF. No sube ni reemplaza el archivo guardado."""
     sb = _sb()
     contrato_rows = (
         sb.table("contratos")
@@ -5745,13 +5746,40 @@ def generar_y_guardar_pdf_oc(
     pdf_bytes = _pdf_desde_html(html)
     numero = oc.get("numero_oc") or oc_id
     nombre = f"OC-{numero}.pdf"
+    return {
+        "pdf_bytes": pdf_bytes,
+        "html": html,
+        "nombre": nombre,
+        "insumo_map": insumo_map,
+        "sol_items": sol_items,
+    }
+
+
+def generar_y_guardar_pdf_oc(
+    contrato_id: int,
+    oc_id: int,
+    oc: dict,
+    solicitud: dict,
+    user_id: int,
+) -> dict:
+    """Primera generación: escribe el PDF vigente. No usar para reemplazar uno ya guardado."""
+    sb = _sb()
+    armado = _armar_pdf_oc(contrato_id, oc_id, oc, solicitud, user_id)
+    nombre = armado["nombre"]
     blob_path = f"almacen-soportes/{contrato_id}/oc-pdf/{oc_id}/{_safe_filename(nombre)}"
-    upload_blob_private(blob_path, pdf_bytes, "application/pdf", overwrite=True)
+    upload_blob_private(blob_path, armado["pdf_bytes"], "application/pdf", overwrite=True)
     sb.table("almacen_orden_compra").update({
         "pdf_blob_path": blob_path,
         "pdf_nombre": nombre,
     }).eq("id", oc_id).execute()
-    return {"pdf_blob_path": blob_path, "pdf_nombre": nombre, "pdf_bytes": pdf_bytes, "html": html}
+    return {
+        "pdf_blob_path": blob_path,
+        "pdf_nombre": nombre,
+        "pdf_bytes": armado["pdf_bytes"],
+        "html": armado["html"],
+        "insumo_map": armado["insumo_map"],
+        "sol_items": armado["sol_items"],
+    }
 
 
 def _proveedores_de_esta_oc(oc: dict, candidatos: List[dict]) -> List[dict]:
@@ -5803,31 +5831,64 @@ def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, 
     return data, fname
 
 
+def _unir_pdfs(partes: List[bytes]) -> bytes:
+    """Concatena PDFs ya guardados. Cada uno conserva sus hojas."""
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    if not partes:
+        raise ValueError("No hay órdenes de compra para el PDF.")
+    if len(partes) == 1:
+        return partes[0]
+    writer = PdfWriter()
+    for parte in partes:
+        for page in PdfReader(io.BytesIO(parte)).pages:
+            writer.add_page(page)
+    buf = io.BytesIO()
+    writer.write(buf)
+    data = buf.getvalue()
+    if not data:
+        raise ValueError("No se pudo armar el PDF de las órdenes de compra.")
+    return data
+
+
 def download_pdf_conjunto_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> tuple[bytes, str]:
     """PDF de quien genera la OC: todas las órdenes de la solicitud, una por hoja.
 
+    Reutiliza el archivo ya guardado. Solo genera el PDF si esa OC todavía no tiene uno.
     El correo al proveedor sigue adjuntando solo el PDF de su propia OC.
     """
-    from almacen_orden_compra_pdf import generar_pdf_varias_ordenes
-
     sb = _sb()
     heads = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
     if not heads:
         raise ValueError("Esta solicitud no tiene órdenes de compra.")
     heads = sorted(heads, key=lambda o: (int(o.get("numero_oc") or 0), int(o.get("id") or 0)))
-    solicitud = get_solicitud(contrato_id, solicitud_id, ligera=True)
-    htmls: List[str] = []
+    solicitud = None
+    partes: List[bytes] = []
     for head in heads:
         oc = get_orden_compra(contrato_id, int(head["id"]), incluir_entradas=False)
-        saved = generar_y_guardar_pdf_oc(contrato_id, int(head["id"]), oc, solicitud, user_id)
-        html = saved.get("html") or ""
-        if not html:
-            raise ValueError(f"No se pudo armar el PDF de la OC {head.get('numero_oc') or head.get('id')}.")
-        htmls.append(html)
-    data = generar_pdf_varias_ordenes(htmls)
+        data = b""
+        if oc.get("pdf_blob_path"):
+            try:
+                data, _mime = download_soporte(oc.get("pdf_blob_path"))
+            except Exception:
+                data = b""
+        if not data:
+            if solicitud is None:
+                solicitud = get_solicitud(contrato_id, solicitud_id, ligera=True)
+            saved = generar_y_guardar_pdf_oc(
+                contrato_id, int(head["id"]), oc, solicitud or {}, user_id,
+            )
+            data = saved.get("pdf_bytes") or b""
+        if not data:
+            raise ValueError(
+                f"No se pudo armar el PDF de la OC {head.get('numero_oc') or head.get('id')}."
+            )
+        partes.append(data)
     nums = [str(o.get("numero_oc") or o.get("id")) for o in heads]
     fname = f"OC-{'-'.join(nums)}.pdf"
-    return data, fname
+    return _unir_pdfs(partes), fname
 
 
 def _upload_soporte(contrato_id: int, subcarpeta: str, ref_id: int, data: bytes, nombre: str, mime: str) -> dict:
