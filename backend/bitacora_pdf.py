@@ -38,10 +38,20 @@ _FOTO_MAX_DIARIO = 4
 # Resolución baja para PDF: xhtml2pdf escala mal con JPEG grandes embebidos.
 _FOTO_MAX_PX_W = 360
 _FOTO_MAX_PX_H = 240
+# Tablas de esquema (memoria / despiece / gráfico+coords): ancho útil de página.
+# «Compacto» ≠ achicar la letra: ocupan todo el ancho para texto ≥ cuerpo.
+_TABLA_BOX_W = 700.0
+_TABLA_BOX_H = 520.0
+_TABLA_MAX_PX_W = 1600
+_TABLA_MAX_PX_H = 2000
+_TABLA_JPEG_QUALITY = 85
 _LOGO_MAX_PX_W = 220
 _LOGO_MAX_PX_H = 80
 # Tope duro de bytes descargados/decodificados por foto (PDF no necesita multi-MB).
 _FOTO_BLOB_MAX_BYTES = 2_000_000
+# Tablas PNG hi-res pueden ser más pesadas que fotos de obra.
+_TABLA_BLOB_MAX_BYTES = 6_000_000
+_TABLA_DATA_URI_MAX_RAW = 3_500_000
 _FOTO_DATA_URI_MAX_RAW = 800_000
 # Azure sin timeout propio: acotar descarga o la generación cuelga minutos.
 _FOTO_BLOB_DOWNLOAD_TIMEOUT_S = 4.0
@@ -121,7 +131,13 @@ def _logo_uri(url: Optional[str]) -> str:
     )
 
 
-def _http_or_data_to_uri(src: str, max_px_w: int, max_px_h: int) -> str:
+def _http_or_data_to_uri(
+    src: str,
+    max_px_w: int,
+    max_px_h: int,
+    *,
+    jpeg_quality: int = 70,
+) -> str:
     """URL/data-URI → data-URI opaco, opcionalmente redimensionado."""
     u = str(src or "").strip()
     if not u:
@@ -134,7 +150,7 @@ def _http_or_data_to_uri(src: str, max_px_w: int, max_px_h: int) -> str:
             raw = base64.b64decode(m.group(1))
         except Exception:
             return u
-        return _bytes_to_pdf_data_uri(raw, max_px_w, max_px_h)
+        return _bytes_to_pdf_data_uri(raw, max_px_w, max_px_h, jpeg_quality=jpeg_quality)
     try:
         import httpx
 
@@ -142,12 +158,36 @@ def _http_or_data_to_uri(src: str, max_px_w: int, max_px_h: int) -> str:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             r = client.get(u)
             r.raise_for_status()
-            return _bytes_to_pdf_data_uri(r.content, max_px_w, max_px_h)
+            return _bytes_to_pdf_data_uri(
+                r.content, max_px_w, max_px_h, jpeg_quality=jpeg_quality,
+            )
     except Exception:
         return ""
 
 
-def _bytes_to_pdf_data_uri(raw: bytes, max_px_w: int, max_px_h: int) -> str:
+def _is_esquema_tabla_img(im: Optional[dict]) -> bool:
+    """Memoria de volúmenes, cuadro de despiece o gráfico de esquema (coords)."""
+    if not isinstance(im, dict):
+        return False
+    kind = str(im.get("kind") or "").strip().lower()
+    origen = str(im.get("origen") or "").strip().lower()
+    nombre = str(im.get("nombre") or "").strip().lower()
+    if kind in ("memoria-calculo", "despiece-acero", "esquema-calculo", "grafico-isometrico"):
+        return True
+    if origen in ("esquema", "esquema-calculo", "esquema-despiece"):
+        return True
+    if "memoria_calculo" in nombre or "cuadro_despiece" in nombre:
+        return True
+    return False
+
+
+def _bytes_to_pdf_data_uri(
+    raw: bytes,
+    max_px_w: int,
+    max_px_h: int,
+    *,
+    jpeg_quality: int = 70,
+) -> str:
     """Aplana alpha, fuerza JPEG compacto y reduce a tamaño de render PDF."""
     try:
         from PIL import Image
@@ -161,7 +201,8 @@ def _bytes_to_pdf_data_uri(raw: bytes, max_px_w: int, max_px_h: int) -> str:
             im = im.convert("RGB")
         im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
         out = io.BytesIO()
-        im.save(out, format="JPEG", quality=70, optimize=True)
+        q = max(55, min(92, int(jpeg_quality or 70)))
+        im.save(out, format="JPEG", quality=q, optimize=True)
         return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
     except Exception:
         from almacen_firma_pdf import _data_uri_from_bytes
@@ -214,9 +255,21 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
     2. Si hay ``blob_path``, descargar con timeout corto y tope de bytes.
     3. Si Azure falla/timeout/excede tope, NO reintentar data_uri multi-MB
        (eso era el camino de minutos en xhtml2pdf).
+
+    Tablas de esquema (memoria/despiece/gráfico) usan caja a ancho de página
+    y más px/calidad para que el texto siga legible.
     """
     if not isinstance(im, dict):
         return None
+    es_tabla = _is_esquema_tabla_img(im)
+    max_px_w = _TABLA_MAX_PX_W if es_tabla else _FOTO_MAX_PX_W
+    max_px_h = _TABLA_MAX_PX_H if es_tabla else _FOTO_MAX_PX_H
+    box_w = _TABLA_BOX_W if es_tabla else _FOTO_BOX_W
+    box_h = _TABLA_BOX_H if es_tabla else _FOTO_BOX_H
+    jpeg_q = _TABLA_JPEG_QUALITY if es_tabla else 70
+    data_uri_max = _TABLA_DATA_URI_MAX_RAW if es_tabla else _FOTO_DATA_URI_MAX_RAW
+    blob_max = _TABLA_BLOB_MAX_BYTES if es_tabla else _FOTO_BLOB_MAX_BYTES
+
     uri = ""
     path = str(im.get("blob_path") or "").strip()
     raw_data_uri = str(im.get("data_uri") or "").strip()
@@ -225,9 +278,11 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
     if raw_data_uri.startswith("data:image"):
         m = re.match(r"data:image/[^;]+;base64,(.+)$", raw_data_uri, re.I | re.S)
         b64_len = len(m.group(1)) if m else len(raw_data_uri)
-        if b64_len <= _FOTO_DATA_URI_MAX_RAW:
+        if b64_len <= data_uri_max:
             try:
-                uri = _http_or_data_to_uri(raw_data_uri, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+                uri = _http_or_data_to_uri(
+                    raw_data_uri, max_px_w, max_px_h, jpeg_quality=jpeg_q,
+                )
             except Exception:
                 uri = ""
 
@@ -235,8 +290,10 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
     if not uri and path:
         try:
             data, _mime = _leer_blob_con_timeout(int(contrato_id), path)
-            if data and len(data) <= _FOTO_BLOB_MAX_BYTES:
-                uri = _bytes_to_pdf_data_uri(data, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+            if data and len(data) <= blob_max:
+                uri = _bytes_to_pdf_data_uri(
+                    data, max_px_w, max_px_h, jpeg_quality=jpeg_q,
+                )
             elif data:
                 _log.warning(
                     "bitacora pdf: blob demasiado grande (%s bytes) path=%s — omitida",
@@ -253,11 +310,11 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
     if not uri:
         url = str(im.get("url") or "").strip()
         if url and not url.startswith("data:"):
-            uri = _http_or_data_to_uri(url, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+            uri = _http_or_data_to_uri(url, max_px_w, max_px_h, jpeg_quality=jpeg_q)
 
     if not uri:
         return None
-    w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
+    w, h = _fit_pt(uri, box_w, box_h)
     return uri, w, h
 
 
@@ -620,6 +677,51 @@ def _foto_cell(
     )
 
 
+def _tabla_esquema_block(
+    im: dict,
+    contrato_id: int,
+    pie: str,
+    pal: dict,
+    *,
+    prepared: Optional[Tuple[str, float, float]] = None,
+) -> str:
+    """Bloque a ancho de página para memoria / despiece / gráfico con coords."""
+    asset = prepared if prepared is not None else _prepare_img_asset(im, contrato_id)
+    t2 = pal["titulo_2"]
+    pie_txt = _pie_foto_label(im if isinstance(im, dict) else {}, pie)
+    if not asset:
+        return (
+            f'<div style="margin:3pt 0;page-break-inside:avoid;">'
+            f'<div style="width:100%;max-width:{_TABLA_BOX_W}pt;height:40pt;'
+            f'border:0.25pt dashed {t2["bg"]};"></div>'
+            f'<div style="font-size:6pt;color:{t2["text"]};margin-top:1pt;">{_esc(pie_txt)}</div>'
+            f"</div>"
+        )
+    uri, w, h = asset
+    return (
+        f'<div style="margin:4pt 0;page-break-inside:avoid;text-align:center;">'
+        f'<div style="width:100%;max-width:{_TABLA_BOX_W}pt;margin:0 auto;'
+        f'border:0.25pt solid {t2["bg"]};padding:2pt;background:#fff;">'
+        f'<img src="{uri}" style="width:{w}pt;height:{h}pt;border:0;max-width:100%;"/>'
+        f"</div>"
+        f'<div style="font-size:6.5pt;color:{t2["text"]};margin-top:2pt;">{_esc(pie_txt)}</div>'
+        f"</div>"
+    )
+
+
+def _split_fotos_y_tablas(items: List[dict]) -> Tuple[List[dict], List[dict]]:
+    fotos: List[dict] = []
+    tablas: List[dict] = []
+    for im in items or []:
+        if not isinstance(im, dict):
+            continue
+        if _is_esquema_tabla_img(im):
+            tablas.append(im)
+        else:
+            fotos.append(im)
+    return fotos, tablas
+
+
 def _html_registro_fotografico(
     fotos: List[dict],
     contrato_id: int,
@@ -627,32 +729,73 @@ def _html_registro_fotografico(
     max_n: int = _FOTO_MAX_DIARIO,
     *,
     prepared_map: Optional[Dict[int, Tuple[str, float, float]]] = None,
+    section_title: str = "Registro Fotográfico",
 ) -> str:
-    seleccion = [f for f in (fotos or []) if isinstance(f, dict)][:max_n]
-    title = _section_title("Registro Fotográfico", pal)
-    if not seleccion:
+    todos = [f for f in (fotos or []) if isinstance(f, dict)]
+    fotos_solo, tablas = _split_fotos_y_tablas(todos)
+    seleccion = fotos_solo[:max_n]
+    title = _section_title(section_title, pal) if section_title else ""
+    parts: List[str] = [title]
+
+    # Tablas de esquema: una debajo de otra a ancho útil (texto legible).
+    if tablas:
+        # Prefetch por índice en la lista original si no hay mapa.
+        for ti, im in enumerate(tablas):
+            prepared = None
+            if prepared_map is not None:
+                # prepared_map indexa la lista original `todos`
+                try:
+                    oi = todos.index(im)
+                    prepared = prepared_map.get(oi)
+                except ValueError:
+                    prepared = None
+            parts.append(
+                _tabla_esquema_block(
+                    im,
+                    contrato_id,
+                    im.get("_pie") or im.get("pie") or "Esquema",
+                    pal,
+                    prepared=prepared,
+                )
+            )
+
+    if not seleccion and not tablas:
         t2 = pal["titulo_2"]
         return title + f'<div style="font-size:6pt;color:{t2["text"]};padding:4pt;">Sin fotografías.</div>'
-    assets = prepared_map
-    if assets is None:
-        assets = _prefetch_fotos(seleccion, contrato_id)
-    cells = [
-        _foto_cell(
-            im,
-            contrato_id,
-            im.get("_pie") or "Reporte Diario",
-            pal,
-            prepared=assets.get(i),
+
+    if seleccion:
+        # Prefetch: si el mapa es de `todos`, remapear a índices de seleccion.
+        assets: Dict[int, Tuple[str, float, float]] = {}
+        if prepared_map is not None:
+            for i, im in enumerate(seleccion):
+                try:
+                    oi = todos.index(im)
+                    if oi in prepared_map:
+                        assets[i] = prepared_map[oi]
+                except ValueError:
+                    pass
+        else:
+            assets = _prefetch_fotos(seleccion, contrato_id)
+        cells = [
+            _foto_cell(
+                im,
+                contrato_id,
+                im.get("_pie") or "Reporte Diario",
+                pal,
+                prepared=assets.get(i),
+            )
+            for i, im in enumerate(seleccion)
+        ]
+        rows_html = []
+        for i in range(0, max(len(cells), 1), 2):
+            pair = cells[i:i + 2]
+            if len(pair) == 1:
+                pair.append('<td width="50%"></td>')
+            rows_html.append(f"<tr>{''.join(pair)}</tr>")
+        parts.append(
+            f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
         )
-        for i, im in enumerate(seleccion)
-    ]
-    rows_html = []
-    for i in range(0, max(len(cells), 1), 2):
-        pair = cells[i:i + 2]
-        if len(pair) == 1:
-            pair.append('<td width="50%"></td>')
-        rows_html.append(f"<tr>{''.join(pair)}</tr>")
-    return title + f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
+    return "".join(parts)
 
 
 def _fotos_diario(diario: Optional[dict]) -> List[dict]:
@@ -780,25 +923,18 @@ def _html_eventos_con_fotos(
             if prepared_by_evento is not None:
                 prepared = prepared_by_evento.get(ei)
             if prepared is None:
-                prepared = _prefetch_fotos(imgs[:4], contrato_id)
-            cells = [
-                _foto_cell(
-                    im, contrato_id, "Evento", pal,
-                    prepared=prepared.get(i) if prepared else None,
-                )
-                for i, im in enumerate(imgs[:4])
-            ]
-            rows_html = []
-            for i in range(0, len(cells), 2):
-                pair = cells[i:i + 2]
-                if len(pair) == 1:
-                    pair.append('<td width="50%"></td>')
-                rows_html.append(f"<tr>{''.join(pair)}</tr>")
+                prepared = _prefetch_fotos(imgs[:8], contrato_id)
             parts.append(
                 f'<div style="margin:0 0 4pt 8pt;">'
-                f'{_section_title("Registro Fotográfico del evento", pal)}'
-                f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
-                f"</div>"
+                + _html_registro_fotografico(
+                    imgs,
+                    contrato_id,
+                    pal,
+                    max_n=4,
+                    prepared_map=prepared,
+                    section_title="Registro Fotográfico del evento",
+                )
+                + "</div>"
             )
     return "".join(parts)
 

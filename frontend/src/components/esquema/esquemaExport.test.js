@@ -29,20 +29,20 @@ describe('esquemaExport · rotulado', () => {
     assert.ok(EXPORT_MIN_WIDTH >= 1400)
   })
 
-  it('tipografía de tabla es ≥ 35 % mayor que 11/12 px históricos', () => {
+  it('tipografía de tabla es ≈×2 vs 11/12 px históricos (≥ 2,7× escala base)', () => {
     const m = exportCoordTableMetrics(1100)
-    assert.ok(m.scale >= 1.35)
-    assert.ok(m.headerFontPx >= 14)
-    assert.ok(m.bodyFontPx >= 15)
-    assert.ok(m.rowH >= 30)
-    assert.ok(m.headerH >= 32)
+    assert.ok(m.scale >= 2.7)
+    assert.ok(m.headerFontPx >= 28)
+    assert.ok(m.bodyFontPx >= 30)
+    assert.ok(m.rowH >= 60)
+    assert.ok(m.headerH >= 64)
   })
 
   it('a mayor ancho de export, crece el texto de la tabla (con tope)', () => {
     const narrow = exportCoordTableMetrics(1100)
     const wide = exportCoordTableMetrics(2200)
     assert.ok(wide.bodyFontPx >= narrow.bodyFontPx)
-    assert.ok(wide.scale <= 1.9)
+    assert.ok(wide.scale <= 3.8)
   })
 
   it('bloque de tabla incluye todas las filas sin colapsar', () => {
@@ -66,7 +66,7 @@ describe('esquemaExport · rotulado', () => {
       ],
     })
     assert.ok(size.w >= EXPORT_MIN_WIDTH_WITH_TABLE)
-    assert.ok(size.tableMetrics.bodyFontPx >= 15)
+    assert.ok(size.tableMetrics.bodyFontPx >= 30)
     assert.ok(size.tableBlock > EXPORT_MARGIN)
     const below = size.drawH + size.tableBlock
     const frac = size.tableBlock / below
@@ -74,10 +74,10 @@ describe('esquemaExport · rotulado', () => {
       frac + 1e-3 >= EXPORT_TABLE_MIN_HEIGHT_FRAC,
       `tabla frac=${frac} < mínimo ${EXPORT_TABLE_MIN_HEIGHT_FRAC}`,
     )
-    // Contenedor memoria ~380×240 (object-fit:contain)
-    const fit = Math.min(380 / size.w, 240 / size.h)
+    // Ancho útil de página (~600×800, object-fit:contain) → ≥ cuerpo del documento
+    const fit = Math.min(600 / size.w, 800 / size.h)
     const screenPx = size.tableMetrics.bodyFontPx * fit
-    assert.ok(screenPx + 0.35 >= 8, `texto en contenedor ≈ ${screenPx}px < 8`)
+    assert.ok(screenPx + 0.35 >= 11, `texto en página ≈ ${screenPx}px < 11`)
   })
 
   it('con tabla NO aplasta la escala del dibujo (fidelidad hatch/trazos)', () => {
@@ -98,7 +98,7 @@ describe('esquemaExport · rotulado', () => {
     )
     // Trazo de 3 px-mundo debe mapear a ≥ 2 px de dispositivo
     assert.ok(size.scale * 3 >= 2, `escala ${size.scale} deja trazos ilegibles`)
-    assert.ok(size.tableMetrics.bodyFontPx >= 15)
+    assert.ok(size.tableMetrics.bodyFontPx >= 30)
   })
 
   it('ignora la imagen de fondo fit al calcular bounds', () => {

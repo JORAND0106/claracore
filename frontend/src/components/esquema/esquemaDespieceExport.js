@@ -19,6 +19,7 @@ import {
   estimateParrillaPngHeight,
   paintParrillaViews,
 } from './esquemaDespieceParrilla.js'
+import { ESQUEMA_DOC_TYPE_SCALE } from './esquemaDocLegibility.js'
 
 const C = {
   bg: '#ffffff',
@@ -81,11 +82,13 @@ export async function composeDespiecePng({
   schedule,
   contratoId = null,
   brandTitle = 'Clara Core',
-  width = 2200,
+  // Ancho × DOC_TYPE_SCALE: tipografía y columnas crecen juntas (sin cortes).
+  width = Math.round(2200 * ESQUEMA_DOC_TYPE_SCALE),
 } = {}) {
   if (typeof document === 'undefined' || !schedule) return null
   const positions = schedule.positions || []
   const n = Math.max(1, positions.length)
+  // textScale sigue width/1600 → con ancho ×2 la letra queda ≈×2.
   const textScale = width / 1600
   const margin = Math.round(18 * textScale)
   const headerH = Math.round(100 * textScale)
@@ -97,7 +100,7 @@ export async function composeDespiecePng({
   const imgW = width
   const parrillaDraw = schedule.parrillaDraw || null
   const parrillaH = parrillaDraw
-    ? Math.round(estimateParrillaPngHeight(parrillaDraw, width) + 28 * textScale)
+    ? Math.round(estimateParrillaPngHeight(parrillaDraw, width, ESQUEMA_DOC_TYPE_SCALE) + 28 * textScale)
     : 0
   const imgH = headerH + Math.round(8 * textScale) + tableH + parrillaH + footerH
 
@@ -266,6 +269,7 @@ export async function composeDespiecePng({
       x: margin,
       y: py + Math.round(10 * textScale),
       width: imgW - margin * 2,
+      fontScale: ESQUEMA_DOC_TYPE_SCALE,
     })
   }
 

@@ -485,25 +485,26 @@ export function serializeParrillaDraw(drawData) {
 export function paintParrillaViews(ctx, drawData, layout) {
   if (!ctx || !drawData?.views?.length) return { height: 0 }
   const { x: ox, y: oy, width } = layout
-  const pad = 18
+  const fs = Math.max(1, Number(layout.fontScale) || 1)
+  const pad = Math.round(18 * fs)
   let cy = oy
-  const gap = 22
+  const gap = Math.round(22 * fs)
 
   for (const view of drawData.views) {
     const bw = Math.max(0.01, drawData.boundsM.widthM)
     const bh = Math.max(0.01, drawData.boundsM.heightM)
-    const s = layout.scale || Math.min((width - pad * 2 - 120) / bw, 200 / bh)
+    const s = layout.scale || Math.min((width - pad * 2 - 120 * fs) / bw, (200 * fs) / bh)
     const plotW = bw * s
     const plotH = bh * s
-    const labelBand = 70
-    const titleH = 30
-    const blockH = titleH + plotH + labelBand + 20
+    const labelBand = Math.round(70 * fs)
+    const titleH = Math.round(30 * fs)
+    const blockH = titleH + plotH + labelBand + Math.round(20 * fs)
 
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(ox, cy, width, blockH)
     ctx.fillStyle = '#0f766e'
-    ctx.font = 'bold 20px "Segoe UI", system-ui, sans-serif'
-    ctx.fillText(view.title, ox + pad, cy + 22)
+    ctx.font = `bold ${Math.round(20 * fs)}px "Segoe UI", system-ui, sans-serif`
+    ctx.fillText(view.title, ox + pad, cy + Math.round(22 * fs))
 
     const px = ox + pad
     const py = cy + titleH + 6
@@ -538,7 +539,7 @@ export function paintParrillaViews(ctx, drawData, layout) {
         let lx = toX(lb.x)
         let ly = toY(lb.y)
         for (const prev of labelSlots) {
-          if (Math.abs(ly - prev.y) < 16 && Math.abs(lx - prev.x) < 200) ly = prev.y + 18
+          if (Math.abs(ly - prev.y) < 16 * fs && Math.abs(lx - prev.x) < 200 * fs) ly = prev.y + 18 * fs
         }
         labelSlots.push({ x: lx, y: ly })
         ctx.strokeStyle = bar.color
@@ -549,7 +550,7 @@ export function paintParrillaViews(ctx, drawData, layout) {
         ctx.lineTo(lx, ly)
         ctx.stroke()
         ctx.setLineDash([])
-        ctx.font = 'bold 14px "Segoe UI", system-ui, sans-serif'
+        ctx.font = `bold ${Math.round(14 * fs)}px "Segoe UI", system-ui, sans-serif`
         ctx.fillStyle = bar.color
         ctx.fillText(lb.text, lx + 4, ly + 4)
       }
@@ -557,11 +558,11 @@ export function paintParrillaViews(ctx, drawData, layout) {
 
     if (view.skipped?.length) {
       ctx.fillStyle = '#64748b'
-      ctx.font = '13px "Segoe UI", system-ui, sans-serif'
+      ctx.font = `${Math.round(13 * fs)}px "Segoe UI", system-ui, sans-serif`
       ctx.fillText(
         view.skipped.map((sk) => `${sk.name || 'Pos'}: ${sk.reason}`).join(' · '),
         px,
-        py + plotH + 40,
+        py + plotH + Math.round(40 * fs),
       )
     }
 
@@ -571,15 +572,16 @@ export function paintParrillaViews(ctx, drawData, layout) {
   return { height: Math.max(0, cy - oy - gap) }
 }
 
-export function estimateParrillaPngHeight(drawData, width = 2200) {
+export function estimateParrillaPngHeight(drawData, width = 2200, fontScale = 1) {
   if (!drawData?.views?.length) return 0
-  const pad = 18
+  const fs = Math.max(1, Number(fontScale) || 1)
+  const pad = Math.round(18 * fs)
   const bw = Math.max(0.01, drawData.boundsM?.widthM || 1)
   const bh = Math.max(0.01, drawData.boundsM?.heightM || 1)
-  const scale = Math.min((width - pad * 2 - 120) / bw, 200 / bh)
+  const scale = Math.min((width - pad * 2 - 120 * fs) / bw, (200 * fs) / bh)
   const plotH = bh * scale
-  const blockH = 30 + plotH + 70 + 20
-  return drawData.views.length * (blockH + 22) + 28
+  const blockH = Math.round(30 * fs) + plotH + Math.round(70 * fs) + Math.round(20 * fs)
+  return drawData.views.length * (blockH + Math.round(22 * fs)) + Math.round(28 * fs)
 }
 
 export function localMToWorld(ptM, bounds) {
