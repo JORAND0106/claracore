@@ -89,12 +89,18 @@ def es_cargo_administrador(current_user) -> bool:
 
 
 def puede_generar_orden_compra_almacen(current_user) -> bool:
-    """Generar la OC: cargo Administrador o rol/cargo Desarrollador. No cambia la visibilidad económica."""
+    """Generar la OC: Validar en Almacén y rol Contratista Gerencial.
+
+    El desarrollador conserva acceso total. El cargo Administrador por sí solo
+    no habilita la orden. No cambia quién ve los valores económicos.
+    """
     if rol_excluido_almacen(current_user):
         return False
     if es_desarrollador_almacen(current_user):
         return True
-    return es_cargo_administrador(current_user)
+    if not es_gerencia_contratista_rol(current_user):
+        return False
+    return tiene_permiso_almacen(current_user, "validar")
 
 
 def puede_cambiar_proveedor_linea_aprobada(current_user) -> bool:
@@ -159,11 +165,12 @@ def es_contratista_gerencial(current_user) -> bool:
 def require_contratista_gerencial_almacen(current_user) -> None:
     """Validar + Contratista Gerencial.
 
-    La aprobación de ítems, el rechazo y generar la OC ya no usan este gate:
-    bastan Almacén · validar y un estado que lo permita. El rol no reemplaza
-    ni anula Validar. La visibilidad de valores la definen gerencia
-    contratista, el rol Administrativo y Desarrollador. Este gate sigue en correcciones
-    post-OC y en la cantidad de salidas.
+    Aprobar o rechazar un ítem no usa este gate: basta Almacén · validar.
+    Generar la OC usa require_generar_orden_compra_almacen (Validar y el rol
+    Contratista Gerencial; el desarrollador conserva acceso total). El rol no
+    reemplaza ni anula Validar. La visibilidad de valores la definen gerencia
+    contratista, el rol Administrativo y Desarrollador. Este gate sigue en
+    correcciones post-OC y en la cantidad de salidas.
     """
     require_permiso_almacen(current_user, "validar")
     if not es_contratista_gerencial(current_user):
@@ -349,7 +356,7 @@ def es_rol_receptor_obra(rol_nombre: str, rol_id: int | None = None) -> bool:
 
 
 def require_generar_orden_compra_almacen(current_user) -> None:
-    """La generación de la OC no se autoriza solo con Validar."""
+    """Generar la OC, incluidas las pendientes y el envío posterior al comercial."""
     if rol_excluido_almacen(current_user):
         raise HTTPException(
             status_code=403,
@@ -359,8 +366,8 @@ def require_generar_orden_compra_almacen(current_user) -> None:
         raise HTTPException(
             status_code=403,
             detail=(
-                "Solo el cargo Administrador o el rol Desarrollador pueden generar "
-                "la orden de compra."
+                "Para generar la orden de compra hace falta el permiso Validar "
+                "en Almacén y el rol Contratista Gerencial."
             ),
         )
 

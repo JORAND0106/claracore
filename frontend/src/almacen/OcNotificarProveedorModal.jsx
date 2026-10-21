@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { almacenContraste } from './almacenContraste'
 import { useAlmacenTheme } from './almacenShared'
 import {
   aplicarRespuestaTodos,
@@ -17,6 +18,7 @@ export default function OcNotificarProveedorModal({
   onConfirm,
 }) {
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const [respuestas, setRespuestas] = useState({})
   const listo = respuestaNotificarCompleta(proveedores, respuestas)
 
@@ -140,7 +142,7 @@ export default function OcNotificarProveedorModal({
           )
         })}
         {error ? (
-          <div style={{ marginTop: 12, color: '#b91c1c', fontSize: 'var(--cc-sm)' }} data-testid="oc-notificar-error">
+          <div style={{ marginTop: 12, color: contraste.dangerText, fontSize: 'var(--cc-sm)' }} data-testid="oc-notificar-error">
             {error}
           </div>
         ) : null}

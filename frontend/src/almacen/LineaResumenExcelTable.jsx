@@ -1,3 +1,4 @@
+import { almacenContraste } from './almacenContraste'
 import { AlmacenHelpIcon, fmtCant, fmtCant2, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
 import { textoConversionPresupuesto } from './solicitudBancoSuelto'
 
@@ -15,6 +16,7 @@ export default function LineaResumenExcelTable({
   verEconomicos = true,
 }) {
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const tienePpto = Boolean(ctx)
   const tieneNeg = Boolean(ctxNeg?.tiene_negociado)
   const cant = analisis?.cantidad
@@ -36,8 +38,9 @@ export default function LineaResumenExcelTable({
   const wrap = {
     marginTop: 6,
     borderRadius: 6,
-    border: alert ? '1px solid #dc2626' : `1px solid ${ui.textMuted}33`,
-    background: alert ? '#fef2f2' : (ui.accentSoft || `${ui.accent}12`),
+    border: alert ? `1px solid ${contraste.dangerBorder}` : `1px solid ${ui.textMuted}33`,
+    background: alert ? contraste.dangerBg : (ui.accentSoft || `${ui.accent}12`),
+    color: alert ? contraste.dangerText : ui.text,
     overflow: 'hidden',
   }
   const th = {
@@ -45,7 +48,8 @@ export default function LineaResumenExcelTable({
     fontSize: 'var(--cc-xs)',
     padding: '4px 8px',
     whiteSpace: 'nowrap',
-    background: alert ? '#fee2e2' : undefined,
+    background: alert ? contraste.dangerBg : undefined,
+    color: alert ? contraste.dangerText : ui.th.color,
   }
   const td = {
     ...ui.td,
@@ -102,8 +106,8 @@ export default function LineaResumenExcelTable({
           padding: '5px 8px',
           fontSize: 'var(--cc-xs)',
           fontWeight: 700,
-          color: '#991b1b',
-          borderBottom: '1px solid #fecaca',
+          color: contraste.dangerText,
+          borderBottom: `1px solid ${contraste.dangerBorder}`,
         }}
         >
           {supera && '⚠ Supera presupuesto en este PK-ID'}
@@ -238,7 +242,7 @@ export default function LineaResumenExcelTable({
                 ) : (
                   <tr>
                     <td style={td}>Cobro</td>
-                    <td colSpan={3} style={{ ...td, fontStyle: 'italic', opacity: 0.9, color: 'var(--cc-color-warning, #b45309)' }}>
+                    <td colSpan={3} style={{ ...td, fontStyle: 'italic', opacity: 0.9, color: contraste.warnText }}>
                       {esPrincipal === false
                         ? 'Insumo asociado — no genera cobro'
                         : (analisis?.cobro_motivo === 'pendiente_aprobacion'

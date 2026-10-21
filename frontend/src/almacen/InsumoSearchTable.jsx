@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { almacenContraste } from './almacenContraste'
 import { AlmacenFieldLabel, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 /**
@@ -17,6 +18,7 @@ export default function InsumoSearchTable({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const [q, setQ] = useState('')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
@@ -140,7 +142,7 @@ export default function InsumoSearchTable({
         {loading ? (
           <div style={{ padding: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Buscando…</div>
         ) : errorMsg ? (
-          <div style={{ padding: 8, fontSize: 'var(--cc-xs)', color: '#991b1b' }}>{errorMsg}</div>
+          <div style={{ padding: 8, fontSize: 'var(--cc-xs)', color: contraste.dangerText }}>{errorMsg}</div>
         ) : rows.length === 0 ? (
           <div style={{ padding: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
             {effectiveQuery ? 'Sin coincidencias relevantes en el catálogo' : 'Escriba para buscar en el catálogo'}

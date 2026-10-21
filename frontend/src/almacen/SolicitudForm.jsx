@@ -19,9 +19,9 @@ import {
   parseSolicitudApiError,
   validateSolicitudItems,
 } from './solicitudFormHelpers'
+import { almacenContraste, colorEstadoSolicitud, estiloAvisoAlmacen, tonoFilaSinInsumo } from './almacenContraste'
 import {
   buildAlmacenConfirmTheme,
-  ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtCant,
   formatSolicitudLinea,
@@ -183,6 +183,8 @@ export default function SolicitudForm({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
+  const tonoFila = tonoFilaSinInsumo(ui)
   const [items, setItems] = useState([emptyItem()])
   const [tramoFlow, setTramoFlow] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -933,7 +935,7 @@ export default function SolicitudForm({
             <span style={{
               marginLeft: 10,
               fontSize: 'var(--cc-sm)',
-              color: ESTADO_SOLICITUD_COLOR[sol.estado],
+              color: colorEstadoSolicitud(sol.estado, tonoFila),
               fontWeight: 600,
             }}
             >
@@ -1011,12 +1013,8 @@ export default function SolicitudForm({
 
       {sol?.estado === 'rechazada' && editable && sol.motivo_rechazo && (
         <div style={{
+          ...estiloAvisoAlmacen(contraste, 'danger'),
           fontSize: 'var(--cc-sm)',
-          color: '#991b1b',
-          background: 'color-mix(in srgb, #dc2626 8%, var(--cc-almacen-bg-card, #fff))',
-          border: '1px solid color-mix(in srgb, #dc2626 25%, transparent)',
-          borderRadius: 8,
-          padding: '10px 12px',
           marginBottom: 14,
         }}
         >
@@ -1029,18 +1027,14 @@ export default function SolicitudForm({
       )}
 
       {sol && !editable && !embedded && sol.motivo_rechazo && (
-        <div style={{ fontSize: 'var(--cc-sm)', color: '#991b1b', marginBottom: 14 }}>
+        <div style={{ fontSize: 'var(--cc-sm)', color: contraste.dangerText, marginBottom: 14 }}>
           Motivo rechazo: {sol.motivo_rechazo}
         </div>
       )}
 
       {error && (
         <div style={{
-          color: '#991b1b',
-          background: '#fef2f2',
-          border: '1px solid #fecaca',
-          borderRadius: 8,
-          padding: '10px 12px',
+          ...estiloAvisoAlmacen(contraste, 'danger'),
           marginBottom: 10,
           fontSize: 'var(--cc-sm)',
           whiteSpace: 'pre-wrap',
@@ -1054,9 +1048,9 @@ export default function SolicitudForm({
         <div
           data-testid={sol?.tareas_fondo?.estado === 'error' ? 'solicitud-tareas-fondo-error' : 'solicitud-tareas-fondo-pendiente'}
           style={{
-            color: sol?.tareas_fondo?.estado === 'error' ? '#991b1b' : ui.text,
-            background: sol?.tareas_fondo?.estado === 'error' ? '#fef2f2' : ui.accentSoft,
-            border: `1px solid ${sol?.tareas_fondo?.estado === 'error' ? '#fecaca' : 'var(--cc-color-border, #e5e7eb)'}`,
+            color: sol?.tareas_fondo?.estado === 'error' ? contraste.dangerText : ui.text,
+            background: sol?.tareas_fondo?.estado === 'error' ? contraste.dangerBg : ui.accentSoft,
+            border: `1px solid ${sol?.tareas_fondo?.estado === 'error' ? contraste.dangerBorder : (ui.borderColor || 'var(--cc-color-border, #e5e7eb)')}`,
             borderRadius: 8,
             padding: '10px 12px',
             marginBottom: 10,
@@ -1191,7 +1185,7 @@ export default function SolicitudForm({
                   </div>
                 )}
                 {it.preview?.error && (
-                  <div style={{ color: '#dc2626', fontSize: 'var(--cc-sm)' }}>{it.preview.error}</div>
+                  <div style={{ color: contraste.dangerText, fontSize: 'var(--cc-sm)' }}>{it.preview.error}</div>
                 )}
                 <PresupuestoContextBox
                   ctx={esAiu ? null : it.preview?.contexto_presupuesto}
@@ -1236,7 +1230,7 @@ export default function SolicitudForm({
         {effectiveSolicitudId && sol && !modoReabrirOc && puedeAnularSolicitud(sol, permisos) && (
           <button
             type="button"
-            style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666' }}
+            style={{ ...ui.btnSecondary, color: contraste.dangerText, borderColor: contraste.dangerBorder }}
             disabled={busy}
             onClick={() => setConfirmAnular(true)}
           >
@@ -1284,7 +1278,7 @@ export default function SolicitudForm({
               </>
             )}
           {eliminarLineaAviso && !lineaBloqueada && (
-            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarLineaAviso}</div>
+            <div style={{ marginTop: 10, color: contraste.dangerText }}>{eliminarLineaAviso}</div>
           )}
         </CcConfirmModal>
       )}

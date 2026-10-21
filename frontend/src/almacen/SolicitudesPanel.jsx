@@ -18,7 +18,6 @@ import {
   filterSolicitudesLista,
 } from './solicitudesFiltros'
 import {
-  ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtFechaAlmacenCorta,
   fmtMoneySolicitud as fmtMoney,
@@ -29,6 +28,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
+import { colorEstadoSolicitud, tonoFilaSinInsumo } from './almacenContraste'
 import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
@@ -65,6 +65,7 @@ export default function SolicitudesPanel({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const tonoFila = tonoFilaSinInsumo(ui)
   const verEconomicos = permisos?.verEconomicos === true
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
@@ -76,6 +77,7 @@ export default function SolicitudesPanel({
   const [creating, setCreating] = useState(false)
   const [reabrirOc, setReabrirOc] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
+  const [seleccionId, setSeleccionId] = useState(null)
   const [detalleTab, setDetalleTab] = useState('portada')
   const [anularTarget, setAnularTarget] = useState(null)
   const [anularBusy, setAnularBusy] = useState(false)
@@ -181,6 +183,7 @@ export default function SolicitudesPanel({
   const abrirDetalle = (s, tab = 'portada') => {
     setDetalleTab(tab)
     setDetalleId(s.id)
+    setSeleccionId(s.id)
   }
 
   const ejecutarAnular = async () => {
@@ -380,7 +383,7 @@ export default function SolicitudesPanel({
           : ''}
       </div>
 
-      {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
+      {error && <div style={{ color: tonoFila.error, marginBottom: 12 }}>{error}</div>}
 
       {loading && lista.length === 0 ? (
         <div style={{ color: ui.textMuted }}>Cargando…</div>
@@ -441,8 +444,16 @@ export default function SolicitudesPanel({
                 const nItems = s.items_count != null ? s.items_count : (s.items || []).length
                 const sinInsumo = Number(s.lineas_sin_insumo) > 0
                 const vacia = nItems === 0
-                const fondo = sinInsumo ? '#e7e5e4' : 'transparent'
-                const fondoHover = sinInsumo ? '#d6d3d1' : ui.accentSoft
+                const seleccionada = String(seleccionId) === String(s.id)
+                const fondo = sinInsumo
+                  ? tonoFila.fondo
+                  : (seleccionada ? tonoFila.seleccionadoFondo : 'transparent')
+                const fondoHover = sinInsumo
+                  ? tonoFila.fondoHover
+                  : (seleccionada ? tonoFila.seleccionadoFondo : ui.accentSoft)
+                const sombras = []
+                if (sinInsumo) sombras.push(`inset 4px 0 0 ${tonoFila.barra}`)
+                if (seleccionada) sombras.push(`inset 0 0 0 2px ${tonoFila.seleccionadoBorde}`)
                 const cellEllipsis = {
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -457,11 +468,13 @@ export default function SolicitudesPanel({
                 <tr
                   key={s.id}
                   data-testid={sinInsumo ? 'solicitud-sin-insumo' : undefined}
+                  data-selected={seleccionada ? 'true' : undefined}
                   data-lineas-sin-insumo={sinInsumo ? String(s.lineas_sin_insumo) : undefined}
                   style={{
                     cursor: 'pointer',
                     background: fondo,
-                    boxShadow: sinInsumo ? 'inset 4px 0 0 #57534e' : undefined,
+                    color: ui.text,
+                    boxShadow: sombras.length ? sombras.join(', ') : undefined,
                   }}
                   onClick={() => abrirDetalle(s)}
                   onMouseEnter={(e) => { e.currentTarget.style.background = fondoHover }}
@@ -506,9 +519,9 @@ export default function SolicitudesPanel({
                         title="Esta solicitud quedó sin líneas al agrupar y se conserva"
                         style={{
                           marginLeft: 6,
-                          background: '#f5f5f4',
-                          color: '#44403c',
-                          border: '1px solid #a8a29e',
+                          background: tonoFila.vaciaBg,
+                          color: tonoFila.vaciaText,
+                          border: `1px solid ${tonoFila.vaciaBorder}`,
                           borderRadius: 10,
                           padding: '0 6px',
                           fontSize: 'var(--cc-xs)',
@@ -523,8 +536,8 @@ export default function SolicitudesPanel({
                         title={`${s.lineas_sin_insumo} línea(s) sin insumo asignado`}
                         style={{
                           marginLeft: 6,
-                          background: '#57534e',
-                          color: '#fff',
+                          background: tonoFila.badgeBg,
+                          color: tonoFila.badgeText,
                           borderRadius: 10,
                           padding: '0 6px',
                           fontSize: 'var(--cc-xs)',
@@ -538,7 +551,7 @@ export default function SolicitudesPanel({
                   <td
                     style={{
                       ...ui.td,
-                      color: ESTADO_SOLICITUD_COLOR[s.estado],
+                      color: colorEstadoSolicitud(s.estado, tonoFila),
                       fontWeight: 700,
                       whiteSpace: 'nowrap',
                     }}
@@ -601,9 +614,9 @@ export default function SolicitudesPanel({
                       fontWeight: s.estado_entrada ? 700 : 400,
                       whiteSpace: 'nowrap',
                       color: s.estado_entrada === 'total'
-                        ? '#15803d'
+                        ? tonoFila.movimientoTotal
                         : s.estado_entrada === 'parcial'
-                          ? '#b45309'
+                          ? tonoFila.movimientoParcial
                           : ui.textMuted,
                     }}
                     data-label="Entrada"
@@ -617,9 +630,9 @@ export default function SolicitudesPanel({
                       fontWeight: s.estado_salida ? 700 : 400,
                       whiteSpace: 'nowrap',
                       color: s.estado_salida === 'total'
-                        ? '#15803d'
+                        ? tonoFila.movimientoTotal
                         : s.estado_salida === 'parcial'
-                          ? '#b45309'
+                          ? tonoFila.movimientoParcial
                           : ui.textMuted,
                     }}
                     data-label="Salida"
@@ -666,8 +679,8 @@ export default function SolicitudesPanel({
                             padding: '4px 8px',
                             fontSize: 'var(--cc-caption)',
                             minHeight: 0,
-                            color: '#7c2d12',
-                            borderColor: '#7c2d1266',
+                            color: tonoFila.eliminar,
+                            borderColor: tonoFila.eliminar,
                           }}
                           title="Eliminar solicitud"
                           data-testid="eliminar-solicitud"
@@ -687,8 +700,8 @@ export default function SolicitudesPanel({
                             padding: '4px 8px',
                             fontSize: 'var(--cc-caption)',
                             minHeight: 0,
-                            color: '#dc2626',
-                            borderColor: '#dc262666',
+                            color: tonoFila.anular,
+                            borderColor: tonoFila.anular,
                           }}
                           onClick={() => setAnularTarget(s)}
                         >
@@ -866,7 +879,7 @@ export default function SolicitudesPanel({
             Se quitan la solicitud y sus líneas. Los totales del listado se actualizan. Si alguna línea ya está en una orden de compra, no se elimina nada.
           </div>
           {eliminarAviso && (
-            <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>
+            <div style={{ marginTop: 10, color: tonoFila.error }}>{eliminarAviso}</div>
           )}
         </CcConfirmModal>
       )}

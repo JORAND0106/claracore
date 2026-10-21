@@ -16,6 +16,7 @@ export function almacenStyles(t, compact = false) {
   return {
     text,
     textMuted,
+    borderColor: border,
     accent: primary,
     accentSoft: `${primary}22`,
     card: {

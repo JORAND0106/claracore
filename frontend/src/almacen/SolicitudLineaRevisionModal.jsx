@@ -271,7 +271,7 @@ export default function SolicitudLineaRevisionModal({
 
   const theme = t || {
     primary: ui.accent,
-    border: '#e2e8f0',
+    border: ui.borderColor,
     text: ui.text,
     textMuted: ui.textMuted,
     bgCard: ui.card?.background || '#fff',

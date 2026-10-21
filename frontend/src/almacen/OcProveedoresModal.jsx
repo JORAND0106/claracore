@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import { fmtCant, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
 import {
   itemIdsDeGrupos,
@@ -18,6 +19,7 @@ export default function OcProveedoresModal({
   onConfirm,
 }) {
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const [marcados, setMarcados] = useState(() => grupos.map((g) => g.key))
   const [abiertos, setAbiertos] = useState({})
 
@@ -75,7 +77,7 @@ export default function OcProveedoresModal({
           Se genera una OC por cada proveedor marcado. Los que queden sin marcar no generan orden y se pueden generar después.
         </div>
         {sinInsumoCount > 0 && (
-          <div style={{ marginBottom: 12, fontSize: 'var(--cc-sm)', color: '#92400e' }}>
+          <div style={{ ...estiloAvisoAlmacen(contraste, 'warn'), marginBottom: 12, fontSize: 'var(--cc-sm)' }}>
             {sinInsumoCount} línea(s) sin insumo del catálogo no entran en esta selección.
           </div>
         )}

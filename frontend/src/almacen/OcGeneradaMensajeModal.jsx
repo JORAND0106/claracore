@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import { useAlmacenApi, useAlmacenTheme } from './almacenShared'
 import {
   asuntoInicialOc,
@@ -22,6 +23,7 @@ export default function OcGeneradaMensajeModal({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const [destinatarios, setDestinatarios] = useState([])
   const [q, setQ] = useState('')
   const [opciones, setOpciones] = useState([])
@@ -182,9 +184,7 @@ export default function OcGeneradaMensajeModal({
               marginBottom: 12,
               padding: '8px 10px',
               borderRadius: 8,
-              background: '#fffbeb',
-              border: '1px solid #fcd34d',
-              color: '#92400e',
+              ...estiloAvisoAlmacen(contraste, 'warn'),
               fontSize: 'var(--cc-sm)',
               lineHeight: 1.45,
             }}
@@ -305,7 +305,7 @@ export default function OcGeneradaMensajeModal({
         />
 
         {error && (
-          <div style={{ color: '#dc2626', fontSize: 'var(--cc-sm)', marginBottom: 10 }}>{error}</div>
+          <div style={{ color: contraste.dangerText, fontSize: 'var(--cc-sm)', marginBottom: 10 }}>{error}</div>
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
