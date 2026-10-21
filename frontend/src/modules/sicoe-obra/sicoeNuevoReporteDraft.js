@@ -1,6 +1,11 @@
 /**
  * Borrador local del asistente «Nuevo reporte» (SicoeObra).
  * Evita pérdida total de datos de campo ante cierre accidental, sesión o red.
+ *
+ * Reglas (ticket nuevo-reporte-limpio):
+ * - «+ Nuevo reporte» siempre abre vacío: no se restaura la clave «nuevo».
+ * - Los borradores se retoman solo desde la lista (estado Borrador / reporteInicial).
+ * - Al cerrar X/Cancelar se conserva el borrador (local + servidor si aplica).
  */
 
 const KEY_PREFIX = 'cc_sicoe_nuevo_reporte_draft_v1'
@@ -90,6 +95,37 @@ export function sicoeNuevoReporteDraftClear(contratoId, userId, reporteId = null
   } catch { /* noop */ }
 }
 
+/**
+ * ¿Debe el asistente hidratar el formulario desde localStorage al montar?
+ * Solo al retomar un borrador de la lista (reporteInicialId).
+ * «+ Nuevo reporte» (sin id) NUNCA restaura la clave «nuevo».
+ */
+export function sicoeNuevoReporteDebeRestaurarLocal(reporteInicialId = null) {
+  return reporteInicialId != null && reporteInicialId !== ''
+}
+
+/**
+ * Mueve un borrador huérfano de la clave «nuevo» a la clave por id de servidor
+ * y limpia «nuevo», para que «+ Nuevo» no lo reabra y el listado lo conserve.
+ * Si aún no hay borradorId, el caller debe crearlo en servidor y pasar el id.
+ */
+export function sicoeNuevoReportePromoverClaveNuevo(contratoId, userId, borradorId) {
+  if (borradorId == null || borradorId === '') return false
+  const orphan = sicoeNuevoReporteDraftLoad(contratoId, userId, null)
+  if (!orphan) {
+    // Asegura que no quede clave «nuevo» vacía/sucia
+    sicoeNuevoReporteDraftClear(contratoId, userId, null)
+    return false
+  }
+  const snap = { ...orphan, borradorId }
+  sicoeNuevoReporteDraftSave(contratoId, userId, snap, borradorId)
+  // Solo quita «nuevo»; no borra la clave por id
+  try {
+    localStorage.removeItem(sicoeNuevoReporteDraftKey(contratoId, userId, null))
+  } catch { /* noop */ }
+  return true
+}
+
 /** Evento para forzar flush antes de logout por inactividad. */
 export const SICOE_NUEVO_REPORTE_FLUSH_EVENT = 'cc-sicoe-flush-nuevo-reporte-draft'
 
@@ -98,4 +134,30 @@ export function sicoeNuevoReporteRequestFlush() {
   try {
     window.dispatchEvent(new CustomEvent(SICOE_NUEVO_REPORTE_FLUSH_EVENT))
   } catch { /* noop */ }
+}
+
+/** Etiqueta segura para ítems de subcontratista (nombre | razon_social). */
+export function sicoeLabelSubcontratistaLista(s) {
+  if (!s || typeof s !== 'object') return ''
+  const n = String(s.nombre || s.razon_social || '').trim()
+  if (n) return n
+  return s.id != null ? `Sub #${s.id}` : ''
+}
+
+/** Normaliza filas del API/caché para el selector del wizard. */
+export function sicoeNormalizarListaSubcontratistas(rows) {
+  if (!Array.isArray(rows)) return []
+  return rows.map((s) => {
+    if (!s || typeof s !== 'object') return s
+    const nombre = sicoeLabelSubcontratistaLista(s)
+    return { ...s, nombre }
+  }).filter((s) => s && s.id != null)
+}
+
+/** Filtra lista sin lanzar si falta nombre. */
+export function sicoeFiltrarSubcontratistas(lista, busqueda) {
+  const q = String(busqueda || '').trim().toLowerCase()
+  const arr = Array.isArray(lista) ? lista : []
+  if (!q) return arr
+  return arr.filter((s) => sicoeLabelSubcontratistaLista(s).toLowerCase().includes(q))
 }
