@@ -6,7 +6,11 @@ import {
   sicoeNuevoReporteDraftKey,
   sicoeNuevoReporteDraftLoad,
   sicoeNuevoReporteDraftSave,
+  sicoeNuevoReporteDebeRestaurarLocal,
+  sicoeNuevoReportePromoverClaveNuevo,
   sicoeNuevoReporteRequestFlush,
+  sicoeFiltrarSubcontratistas,
+  sicoeNormalizarListaSubcontratistas,
   SICOE_NUEVO_REPORTE_FLUSH_EVENT,
 } from './sicoeNuevoReporteDraft.js'
 
@@ -132,6 +136,43 @@ describe('sicoeNuevoReporteDraft', () => {
 
   it('dirty con solo borradorId (cabecera servidor sin líneas aún)', () => {
     assert.equal(sicoeNuevoReporteDraftIsDirty({ borradorId: 123 }), true)
+  })
+
+  it('«+ Nuevo reporte» no debe restaurar borrador local; solo al retomar desde lista', () => {
+    assert.equal(sicoeNuevoReporteDebeRestaurarLocal(null), false)
+    assert.equal(sicoeNuevoReporteDebeRestaurarLocal(undefined), false)
+    assert.equal(sicoeNuevoReporteDebeRestaurarLocal(''), false)
+    assert.equal(sicoeNuevoReporteDebeRestaurarLocal(55), true)
+  })
+
+  it('promueve clave «nuevo» a id de servidor y deja «nuevo» limpia', () => {
+    sicoeNuevoReporteDraftSave(1, 2, {
+      descripcion: 'Huérfano local',
+      registros: [{ nombre: 'R' }],
+    }, null)
+    assert.ok(sicoeNuevoReporteDraftLoad(1, 2, null))
+    assert.equal(sicoeNuevoReportePromoverClaveNuevo(1, 2, 77), true)
+    assert.equal(sicoeNuevoReporteDraftLoad(1, 2, null), null)
+    const byId = sicoeNuevoReporteDraftLoad(1, 2, 77)
+    assert.ok(byId)
+    assert.equal(byId.descripcion, 'Huérfano local')
+    assert.equal(byId.borradorId, 77)
+  })
+
+  it('lista de subcontratistas: normaliza razon_social y filtra sin lanzar', () => {
+    const norm = sicoeNormalizarListaSubcontratistas([
+      { id: 1, razon_social: 'Alpha SAS' },
+      { id: 2, nombre: 'Beta' },
+      { id: 3 },
+    ])
+    assert.equal(norm[0].nombre, 'Alpha SAS')
+    assert.equal(norm[1].nombre, 'Beta')
+    assert.equal(norm[2].nombre, 'Sub #3')
+    const f = sicoeFiltrarSubcontratistas(norm, 'alp')
+    assert.equal(f.length, 1)
+    assert.equal(f[0].id, 1)
+    // Sin nombre en crudo: no debe lanzar
+    assert.equal(sicoeFiltrarSubcontratistas([{ id: 9 }], '').length, 1)
   })
 })
 
