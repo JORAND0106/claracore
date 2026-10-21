@@ -39,6 +39,7 @@ export function esquemaDraftKey({ module, entityId, userId, contratoId = null } 
 export function buildEsquemaDraftSnapshot({
   objects = [],
   coordRows = [],
+  dibujoTipo = 'nodo',
   mode3d = false,
   view3d = 'top',
   solids3d = [],
@@ -55,11 +56,14 @@ export function buildEsquemaDraftSnapshot({
   title = '',
   originLngLat = null,
 } = {}) {
+  const tipo = String(dibujoTipo || 'nodo').toLowerCase()
+  const dibujoTipoNorm = (tipo === 'linea' || tipo === 'poligono' || tipo === 'nodo') ? tipo : 'nodo'
   return {
     version: 1,
     title: String(title || ''),
     objects: Array.isArray(objects) ? objects : [],
     coordRows: Array.isArray(coordRows) ? coordRows : [],
+    dibujoTipo: dibujoTipoNorm,
     mode3d: !!mode3d,
     view3d: view3d || 'top',
     solids3d: Array.isArray(solids3d) ? solids3d : [],
