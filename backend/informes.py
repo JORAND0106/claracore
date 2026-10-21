@@ -12464,7 +12464,7 @@ BASE_CSS = PAGE_CSS_LETTER_PORTRAIT + BASE_CSS_SHARED
 MEMORIA002_CSS = """
 @page {
   size: letter landscape;
-  /* Márgenes para caber encabezado completo + plantilla 3×2 (contenedores más grandes). */
+  /* Márgenes para caber encabezado completo + plantilla 2×2 (4 imágenes por hoja). */
   margin: 0.5cm 0.65cm 0.5cm 0.65cm;
 }
 body.mem002-doc {
@@ -12547,7 +12547,7 @@ body.mem002-doc .doc-footer {
   padding-top: 2px;
   font-size: 6pt;
 }
-/* Registro fotográfico / gráfico: plantilla fija 3×2 (6 contenedores grandes por página). */
+/* Registro fotográfico / gráfico: plantilla fija 2×2 (4 imágenes por página). */
 body.mem002-doc .mem002-foto-grid {
   width: 100%;
   border-collapse: collapse;
@@ -12557,7 +12557,7 @@ body.mem002-doc .mem002-foto-grid {
 body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
   /* NO usar max-width:0 aquí: en xhtml2pdf colapsa la celda y las imgs desaparecen
      (mismo hallazgo documentado en el thead de gerencia matriz). */
-  width: 33.33%;
+  width: 50%;
   vertical-align: top;
   padding: 3px 5px;
   overflow: hidden;
@@ -13153,11 +13153,12 @@ def _memoria_enlace_txt(r: dict) -> str:
 # Evidencia: pdf_institucional.py docstring — «ignora max-height/max-width CSS →
 # fijar width/height en pt + attrs HTML». La vista previa de memorias es el PDF
 # (blob), así que la regla explícita en pt aplica a preview y descarga.
-# Letter landscape ~792×612 pt; márgenes MEMORIA002 0.5/0.65 cm → slot ~240 pt;
-# caja CSS 6.85 cm alto → img útil ~6.55 cm ≈ 185.7 pt.
-_MEMORIA_MEDIA_BOX_W_PT = 230.0
+# Letter landscape ~792×612 pt; márgenes MEMORIA002 0.5/0.65 cm.
+# Grilla 2×2: cada columna mide ~370 pt; la caja CSS sigue en 6.85 cm de alto
+# (img útil ~6.55 cm ≈ 185 pt) para que dos filas + encabezado quepan en la hoja.
+_MEMORIA_MEDIA_BOX_W_PT = 330.0
 _MEMORIA_MEDIA_BOX_H_PT = 185.0
-_MEMORIA_MEDIA_MAX_PX_W = 460
+_MEMORIA_MEDIA_MAX_PX_W = 660
 _MEMORIA_MEDIA_MAX_PX_H = 370
 _MEMORIA_MEDIA_PREFETCH_WORKERS = 8
 
@@ -16883,10 +16884,10 @@ def _html_memoria_item_body(
     # una cuota fija partía la hoja con el total y las firmas solos.
     ROWS_MEMORIA_PRIMERA_HOJA = 26
     ROWS_MEMORIA_SIGUIENTES = 30
-    # Plantilla fija: 6 contenedores/página (3 columnas × 2 filas). Caja/pie = invariable;
-    # el encabezado completo cabe gracias a márgenes @page más justos (ver MEMORIA002_CSS).
-    FOTOS_PER_PAGE = 6
-    FOTOS_COLS = 3
+    # Plantilla fija: 4 imágenes por página (2 columnas × 2 filas). La caja mantiene
+    # 6.85 cm de alto: con el encabezado institucional, dos filas llenan la hoja.
+    FOTOS_PER_PAGE = 4
+    FOTOS_COLS = 2
     FOTO_BOX_H = "6.85cm"
 
     fotos = _dedupe_fotos_memoria(registros)
@@ -17089,7 +17090,7 @@ def _html_memoria_item_body(
         aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
     )
 
-    # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 3×2.
+    # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 2×2.
     if pie_fotos_contexto:
         pie_foto = _h(pie_fotos_contexto)
     else:
