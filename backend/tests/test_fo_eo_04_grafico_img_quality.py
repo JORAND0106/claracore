@@ -34,15 +34,17 @@ def test_presupuesto_grafico_mayor_que_foto_en_fuente():
     graf_px = _env_default("FO_EO04_GRAFICO_IMG_MAX_PX")
     graf_q = _env_default("FO_EO04_GRAFICO_IMG_JPEG_Q")
     graf_b = _env_default("FO_EO04_GRAFICO_IMG_MAX_BYTES")
-    assert graf_px >= 1400
+    assert graf_px >= 4000
     assert graf_px > foto_px
     assert graf_q >= 85
     assert graf_q > foto_q
-    assert graf_b >= 250_000
+    assert graf_b >= 2_000_000
     assert graf_b > foto_b
     assert 'kind: str = "foto"' in INFORMES_SRC
     assert 'kind_norm in ("grafico", "esquema", "plano")' in INFORMES_SRC
     assert 'url_kind[gu] = "grafico"' in INFORMES_SRC
+    assert 'prefer_png' in INFORMES_SRC
+    assert '_FO_EO04_GRAFICO_LOSSLESS' in INFORMES_SRC
 
 
 def _comprimir_como_informes(

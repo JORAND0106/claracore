@@ -40,18 +40,19 @@ _FOTO_MAX_PX_W = 360
 _FOTO_MAX_PX_H = 240
 # Tablas de esquema (memoria / despiece / gráfico+coords): ancho útil de página.
 # «Compacto» ≠ achicar la letra: ocupan todo el ancho para texto ≥ cuerpo.
+# Resolución completa en PDF: PNG sin pérdida (sin JPEG ni thumbnail agresivo).
 _TABLA_BOX_W = 700.0
 _TABLA_BOX_H = 520.0
-_TABLA_MAX_PX_W = 1600
-_TABLA_MAX_PX_H = 2000
-_TABLA_JPEG_QUALITY = 85
+_TABLA_MAX_PX_W = 4800
+_TABLA_MAX_PX_H = 6400
+_TABLA_JPEG_QUALITY = 85  # solo fotos; tablas usan PNG lossless
 _LOGO_MAX_PX_W = 220
 _LOGO_MAX_PX_H = 80
 # Tope duro de bytes descargados/decodificados por foto (PDF no necesita multi-MB).
 _FOTO_BLOB_MAX_BYTES = 2_000_000
-# Tablas PNG hi-res pueden ser más pesadas que fotos de obra.
-_TABLA_BLOB_MAX_BYTES = 6_000_000
-_TABLA_DATA_URI_MAX_RAW = 3_500_000
+# Tablas PNG hi-res (líneas/texto): caben más bytes; se embeben sin recomprimir a JPEG.
+_TABLA_BLOB_MAX_BYTES = 12_000_000
+_TABLA_DATA_URI_MAX_RAW = 9_000_000
 _FOTO_DATA_URI_MAX_RAW = 800_000
 # Azure sin timeout propio: acotar descarga o la generación cuelga minutos.
 _FOTO_BLOB_DOWNLOAD_TIMEOUT_S = 4.0
@@ -137,6 +138,7 @@ def _http_or_data_to_uri(
     max_px_h: int,
     *,
     jpeg_quality: int = 70,
+    lossless: bool = False,
 ) -> str:
     """URL/data-URI → data-URI opaco, opcionalmente redimensionado."""
     u = str(src or "").strip()
@@ -150,7 +152,9 @@ def _http_or_data_to_uri(
             raw = base64.b64decode(m.group(1))
         except Exception:
             return u
-        return _bytes_to_pdf_data_uri(raw, max_px_w, max_px_h, jpeg_quality=jpeg_quality)
+        return _bytes_to_pdf_data_uri(
+            raw, max_px_w, max_px_h, jpeg_quality=jpeg_quality, lossless=lossless,
+        )
     try:
         import httpx
 
@@ -159,7 +163,8 @@ def _http_or_data_to_uri(
             r = client.get(u)
             r.raise_for_status()
             return _bytes_to_pdf_data_uri(
-                r.content, max_px_w, max_px_h, jpeg_quality=jpeg_quality,
+                r.content, max_px_w, max_px_h,
+                jpeg_quality=jpeg_quality, lossless=lossless,
             )
     except Exception:
         return ""
@@ -187,8 +192,14 @@ def _bytes_to_pdf_data_uri(
     max_px_h: int,
     *,
     jpeg_quality: int = 70,
+    lossless: bool = False,
 ) -> str:
-    """Aplana alpha, fuerza JPEG compacto y reduce a tamaño de render PDF."""
+    """Aplana alpha. Fotos → JPEG compacto; tablas de esquema → PNG sin pérdida.
+
+    ``lossless=True`` conserva la resolución completa (solo recorta si supera el
+    tope de seguridad) para que al ampliar el PDF al 400 % textos y líneas
+    sigan nítidos.
+    """
     try:
         from PIL import Image
         import io
@@ -199,8 +210,15 @@ def _bytes_to_pdf_data_uri(
         im.load()
         if im.mode != "RGB":
             im = im.convert("RGB")
-        im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
+        # Solo limitar tamaños absurdos; las tablas hi-res caben en el tope.
+        if max_px_w > 0 and max_px_h > 0 and (
+            im.width > max_px_w or im.height > max_px_h
+        ):
+            im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
         out = io.BytesIO()
+        if lossless:
+            im.save(out, format="PNG", optimize=True)
+            return f"data:image/png;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
         q = max(55, min(92, int(jpeg_quality or 70)))
         im.save(out, format="JPEG", quality=q, optimize=True)
         return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
@@ -257,7 +275,7 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
        (eso era el camino de minutos en xhtml2pdf).
 
     Tablas de esquema (memoria/despiece/gráfico) usan caja a ancho de página
-    y más px/calidad para que el texto siga legible.
+    y PNG sin pérdida a resolución completa (nitidez al ampliar el PDF).
     """
     if not isinstance(im, dict):
         return None
@@ -267,6 +285,7 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
     box_w = _TABLA_BOX_W if es_tabla else _FOTO_BOX_W
     box_h = _TABLA_BOX_H if es_tabla else _FOTO_BOX_H
     jpeg_q = _TABLA_JPEG_QUALITY if es_tabla else 70
+    lossless = bool(es_tabla)
     data_uri_max = _TABLA_DATA_URI_MAX_RAW if es_tabla else _FOTO_DATA_URI_MAX_RAW
     blob_max = _TABLA_BLOB_MAX_BYTES if es_tabla else _FOTO_BLOB_MAX_BYTES
 
@@ -281,7 +300,8 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
         if b64_len <= data_uri_max:
             try:
                 uri = _http_or_data_to_uri(
-                    raw_data_uri, max_px_w, max_px_h, jpeg_quality=jpeg_q,
+                    raw_data_uri, max_px_w, max_px_h,
+                    jpeg_quality=jpeg_q, lossless=lossless,
                 )
             except Exception:
                 uri = ""
@@ -292,7 +312,8 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
             data, _mime = _leer_blob_con_timeout(int(contrato_id), path)
             if data and len(data) <= blob_max:
                 uri = _bytes_to_pdf_data_uri(
-                    data, max_px_w, max_px_h, jpeg_quality=jpeg_q,
+                    data, max_px_w, max_px_h,
+                    jpeg_quality=jpeg_q, lossless=lossless,
                 )
             elif data:
                 _log.warning(
@@ -310,7 +331,10 @@ def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float,
     if not uri:
         url = str(im.get("url") or "").strip()
         if url and not url.startswith("data:"):
-            uri = _http_or_data_to_uri(url, max_px_w, max_px_h, jpeg_quality=jpeg_q)
+            uri = _http_or_data_to_uri(
+                url, max_px_w, max_px_h,
+                jpeg_quality=jpeg_q, lossless=lossless,
+            )
 
     if not uri:
         return None

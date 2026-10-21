@@ -92,6 +92,9 @@ describe('contrato · documento', () => {
     assert.match(md, /esquemaParrillaSoloDev/)
     assert.match(md, /Tablas PNG legibles/)
     assert.match(md, /esquemaTablasLegiblesFormato/)
+    assert.match(md, /C-OUT-07/)
+    assert.match(md, /PNG nítido/)
+    assert.match(md, /esquemaPngNitidoPdf/)
   })
 })
 
