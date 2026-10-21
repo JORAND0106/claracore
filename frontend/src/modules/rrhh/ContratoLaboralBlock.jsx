@@ -5,6 +5,7 @@ import { tFrom } from '../../theme/adminPanelTheme'
 import { formatFechaHoraColombia } from '../../utils/fechaColombia.js'
 import CatalogSelect from './CatalogSelect'
 import { PERIODICIDAD_RENOVACION_OPTS } from './rrhhCicloLogic'
+import { estiloFaltanteObligatorio } from './rrhhHelpers'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 const iconBtn = (base, extra = {}) => ({
@@ -67,6 +68,14 @@ export default function ContratoLaboralBlock({
   const cellPad = compact ? { padding: '4px 6px', minHeight: 28, lineHeight: 1.25 } : { padding: '6px 8px' }
   const cellLabel = { ...ui.tdLabel, ...cellPad, whiteSpace: 'nowrap', verticalAlign: 'middle' }
   const cell = { ...ui.td, ...cellPad, verticalAlign: 'middle' }
+  const faltanteTipo = canEdit && !String(tipoContrato || '').trim()
+  const faltanteFecha = canEdit && !String(fechaInicio || fechaIngreso || '').trim()
+  const tieneContratoPdf = (items || []).some((r) => r?.vigente && !r?.eliminado_en)
+  const faltantePdf = canEdit && !loading && !tieneContratoPdf
+  const cellTipo = faltanteTipo ? estiloFaltanteObligatorio(cell) : cell
+  const cellFecha = faltanteFecha ? estiloFaltanteObligatorio(cell) : cell
+  const labelTipo = faltanteTipo ? estiloFaltanteObligatorio(cellLabel) : cellLabel
+  const labelFecha = faltanteFecha ? estiloFaltanteObligatorio(cellLabel) : cellLabel
 
   useEffect(() => {
     if (fechaIngreso && !fechaInicio) setFechaInicio(fechaIngreso)
@@ -193,8 +202,8 @@ export default function ContratoLaboralBlock({
           <tbody>
             {/* Fila 1: Tipo de contrato | Número de contrato */}
             <tr>
-              <td style={cellLabel}>Tipo de contrato *</td>
-              <td style={cell}>
+              <td style={labelTipo}>Tipo de contrato *</td>
+              <td style={cellTipo} title={faltanteTipo ? 'Dato obligatorio sin diligenciar' : undefined}>
                 <CatalogSelect
                   value={tipoContrato || ''}
                   options={tipoOptions}
@@ -262,8 +271,8 @@ export default function ContratoLaboralBlock({
             </tr>
             {/* Fila 2: Fechas | Período de prueba | Renovación */}
             <tr>
-              <td style={cellLabel}>Fechas</td>
-              <td style={cell}>
+              <td style={labelFecha}>Fechas</td>
+              <td style={cellFecha} title={faltanteFecha ? 'Fecha de inicio obligatoria sin diligenciar' : undefined}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={lblMini}>Inicio</span>
                   <CcDatePickerInput
@@ -346,7 +355,22 @@ export default function ContratoLaboralBlock({
           <tbody>
             {loading && <tr><td style={ui.td} colSpan={5}>Cargando…</td></tr>}
             {!loading && items.length === 0 && (
-              <tr><td style={ui.td} colSpan={5}>Aún no hay contratos generados ni cargados.</td></tr>
+              <tr>
+                <td
+                  style={faltantePdf ? estiloFaltanteObligatorio(ui.td) : ui.td}
+                  colSpan={5}
+                  title={faltantePdf ? 'Contrato laboral obligatorio sin cargar' : undefined}
+                >
+                  Aún no hay contratos generados ni cargados.
+                </td>
+              </tr>
+            )}
+            {!loading && items.length > 0 && faltantePdf && (
+              <tr>
+                <td style={estiloFaltanteObligatorio(ui.td)} colSpan={5}>
+                  No hay contrato laboral vigente (genere o cargue un PDF).
+                </td>
+              </tr>
             )}
             {items.map((row) => (
               <tr key={row.id}>

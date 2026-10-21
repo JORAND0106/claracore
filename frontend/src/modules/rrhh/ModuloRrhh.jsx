@@ -30,10 +30,49 @@ import EstadoDocumentalInformeModal, {
   EstadoDocumentalInformeButton,
 } from './EstadoDocumentalInformeModal'
 import { ESTADO_DOCUMENTAL_CODIGO } from './estadoDocumentalInformeOptions.js'
+import { auditoriaDocumentalActiva } from './rrhhFeatureFlags.js'
+import { PASTEL_ESTADO_VALIDACION } from '../sicoe-obra/sicoeReporteItemsTablaHelpers'
 import {
   estiloCeldaValidacion,
+  labelEstadoValidacion,
   patchFilaValidacionAuditoria,
 } from './rrhhValidacionCelda.js'
+
+function iconBtnValidacion(pastel, disabled) {
+  return {
+    width: 36,
+    height: 36,
+    padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    border: `1px solid ${pastel.border}`,
+    background: pastel.bg,
+    color: pastel.color,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+    fontFamily: 'inherit',
+  }
+}
+
+function resumenValidacionMasiva(result) {
+  const nOk = result?.n_actualizados || 0
+  const nOmit = result?.n_omitidos || 0
+  const nErr = result?.n_errores || 0
+  const partes = [`${nOk} actualizado${nOk === 1 ? '' : 's'}`]
+  if (nOmit) partes.push(`${nOmit} omitido${nOmit === 1 ? '' : 's'} (ya bloqueados)`)
+  if (nErr) {
+    const detalle = (result.errores || []).slice(0, 5).map((e) => {
+      const falt = (e.faltantes || []).map((f) => f.label || f.tipo).filter(Boolean)
+      return falt.length
+        ? `${e.nombre}: falta ${falt.join(', ')}`
+        : `${e.nombre}: ${e.detail || 'error'}`
+    }).join(' · ')
+    partes.push(`${nErr} sin cambio${nErr === 1 ? '' : 's'}${detalle ? ` (${detalle}${nErr > 5 ? '…' : ''})` : ''}`)
+  }
+  return partes.join('. ') + '.'
+}
 
 function EmpresaLogoPlaceholder({ accent = '#4A7C94', size = 44 }) {
   return (
@@ -87,10 +126,14 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const [seccionModulo, setSeccionModulo] = useState('documentacion') // documentacion | nomina | liquidacion
 
   const [smmlvVigente, setSmmlvVigente] = useState(null)
+  const [selIds, setSelIds] = useState(() => new Set())
+  const [busyMasiva, setBusyMasiva] = useState(false)
+  const auditoriaActiva = auditoriaDocumentalActiva()
+  const canValidarMasivo = Boolean(permisos.validar || permisos.esDesarrollador)
 
   const flash = useCallback((type, text) => {
     setMsg({ type, text })
-    window.setTimeout(() => setMsg(null), 4200)
+    window.setTimeout(() => setMsg(null), type === 'error' || String(text || '').length > 120 ? 8000 : 4200)
   }, [])
 
   const cargar = useCallback(async () => {
@@ -129,6 +172,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       })
       setItems(trab?.items || [])
       setTotal(trab?.total || 0)
+      setSelIds(new Set())
     } catch (e) {
       flash('error', e.message || 'No se pudo cargar la grilla.')
     } finally {
@@ -298,6 +342,85 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       setTabDetalle('datos')
     } catch (e) {
       flash('error', e.message || 'No se pudo abrir el colaborador.')
+    }
+  }
+
+  const toggleSel = (id, checked) => {
+    setSelIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(Number(id))
+      else next.delete(Number(id))
+      return next
+    })
+  }
+
+  const idsPagina = useMemo(
+    () => items.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0),
+    [items],
+  )
+  const allPageSelected = idsPagina.length > 0 && idsPagina.every((id) => selIds.has(id))
+  const somePageSelected = idsPagina.some((id) => selIds.has(id))
+
+  const toggleSelAllPage = (checked) => {
+    setSelIds((prev) => {
+      const next = new Set(prev)
+      for (const id of idsPagina) {
+        if (checked) next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
+  }
+
+  const validacionMasiva = async (estado) => {
+    if (!api || !canValidarMasivo) return
+    const ids = [...selIds]
+    if (!ids.length) {
+      flash('error', 'Seleccione al menos un colaborador.')
+      return
+    }
+    let observacion = null
+    if (estado === 'rechazado' || estado === 'pendiente') {
+      const causal = window.prompt(
+        estado === 'rechazado'
+          ? 'Causal del rechazo (se aplica a todos los seleccionados):'
+          : 'Causal / observación de Pendiente (se aplica a todos los seleccionados):',
+      )
+      if (causal == null) return
+      observacion = String(causal).trim()
+      if (!observacion) {
+        flash('error', 'Indique la causal.')
+        return
+      }
+    }
+    if (estado === 'aprobado' && !window.confirm(
+      `¿Aprobar ${ids.length} colaborador(es)? Solo se aprobarán quienes tengan completos los documentos obligatorios. Se generará el PDF consolidado y se bloqueará cada registro aprobado.`,
+    )) return
+    setBusyMasiva(true)
+    try {
+      const result = await api.setValidacionDocumentacionMasiva({
+        trabajador_ids: ids,
+        estado,
+        observacion,
+      })
+      const byId = new Map(
+        (result.actualizados || [])
+          .filter((a) => a.trabajador)
+          .map((a) => [Number(a.trabajador_id), a.trabajador]),
+      )
+      if (byId.size) {
+        setItems((prev) => prev.map((r) => {
+          const full = byId.get(Number(r.id))
+          return full ? { ...r, ...patchFilaValidacionAuditoria(full) } : r
+        }))
+      }
+      setSelIds(new Set())
+      flash(result.n_errores ? 'error' : 'success', resumenValidacionMasiva(result))
+      await cargar()
+    } catch (e) {
+      flash('error', e.message || 'No se pudo completar la validación masiva.')
+    } finally {
+      setBusyMasiva(false)
     }
   }
 
@@ -580,7 +703,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
           <button
             type="button"
             style={S.btnGhost}
-            onClick={() => { setEmpresaSel(null); setPage(0); setItems([]); }}
+            onClick={() => { setEmpresaSel(null); setPage(0); setItems([]); setSelIds(new Set()) }}
           >
             ← Empresas
           </button>
@@ -740,7 +863,54 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
               {' · '}
               {empresaSel.activos} activos
             </div>
-            <DocsFillLegend theme={tTok} />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              {canValidarMasivo && (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, fontWeight: 600 }}>
+                    {selIds.size ? `${selIds.size} sel.` : 'Validar'}
+                  </span>
+                  <button
+                    type="button"
+                    style={iconBtnValidacion(PASTEL_ESTADO_VALIDACION.Aprobado, busyMasiva || !selIds.size)}
+                    disabled={busyMasiva || !selIds.size}
+                    title="Aprobar seleccionados (solo con documentación obligatoria completa)"
+                    aria-label="Aprobar seleccionados"
+                    onClick={() => validacionMasiva('aprobado')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    style={iconBtnValidacion(PASTEL_ESTADO_VALIDACION.Pendiente, busyMasiva || !selIds.size)}
+                    disabled={busyMasiva || !selIds.size}
+                    title="Marcar seleccionados como Pendiente"
+                    aria-label="Pendiente seleccionados"
+                    onClick={() => validacionMasiva('pendiente')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="2" />
+                      <path d="M12 8v5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                      <circle cx="12" cy="16.5" r="1.1" fill="currentColor" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    style={iconBtnValidacion(PASTEL_ESTADO_VALIDACION.Rechazado, busyMasiva || !selIds.size)}
+                    disabled={busyMasiva || !selIds.size}
+                    title="Rechazar seleccionados"
+                    aria-label="Rechazar seleccionados"
+                    onClick={() => validacionMasiva('rechazado')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M7 7l10 10M17 7L7 17" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              <DocsFillLegend theme={tTok} />
+            </div>
           </div>
           <div style={{
             flex: 1,
@@ -754,6 +924,21 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             <table style={{ ...sheetUi.sheetTable, tableLayout: 'auto' }}>
               <thead>
                 <tr>
+                  {canValidarMasivo && (
+                    <th style={{ ...sheetUi.th, width: 36, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={allPageSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = !allPageSelected && somePageSelected
+                        }}
+                        onChange={(e) => toggleSelAllPage(e.target.checked)}
+                        title="Seleccionar todos los de esta página"
+                        aria-label="Seleccionar todos"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </th>
+                  )}
                   <th style={sheetUi.th}>Trabajador</th>
                   <th style={sheetUi.th}>Documento</th>
                   <th style={sheetUi.th}>Cargo</th>
@@ -765,25 +950,42 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td style={sheetUi.td} colSpan={7}>Cargando…</td></tr>
+                  <tr><td style={sheetUi.td} colSpan={canValidarMasivo ? 8 : 7}>Cargando…</td></tr>
                 )}
                 {!loading && items.length === 0 && (
                   <tr>
-                    <td style={sheetUi.td} colSpan={7}>
+                    <td style={sheetUi.td} colSpan={canValidarMasivo ? 8 : 7}>
                       No hay colaboradores en esta empresa.
                     </td>
                   </tr>
                 )}
                 {items.map((row) => {
-                  const celdaVal = estiloCeldaValidacion(row, theme, uiTheme, sheetUi.td)
+                  const celdaVal = estiloCeldaValidacion(
+                    row, theme, uiTheme, sheetUi.td,
+                    { mostrarTonoAuditoria: auditoriaActiva },
+                  )
+                  const selected = selIds.has(Number(row.id))
                   return (
                   <tr
                     key={row.id}
                     onClick={() => abrirDetalle(row)}
-                    style={{ cursor: 'pointer' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}10` }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                    style={{ cursor: 'pointer', background: selected ? `${tTok.primary}14` : 'transparent' }}
+                    onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = `${tTok.primary}10` }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = selected ? `${tTok.primary}14` : 'transparent' }}
                   >
+                    {canValidarMasivo && (
+                      <td
+                        style={{ ...sheetUi.td, textAlign: 'center', width: 36 }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(e) => toggleSel(row.id, e.target.checked)}
+                          aria-label={`Seleccionar ${nombreCompleto(row)}`}
+                        />
+                      </td>
+                    )}
                     <td style={sheetUi.td}>{nombreCompleto(row)}</td>
                     <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
                     <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
@@ -792,7 +994,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                       <DocsFillBattery docsFill={row.docs_fill} />
                     </td>
                     <td style={celdaVal.style} title={celdaVal.title}>
-                      {celdaVal.label}
+                      {celdaVal.label || labelEstadoValidacion(row.doc_validacion_estado)}
                     </td>
                     <td style={sheetUi.td}>{row.estado}</td>
                   </tr>

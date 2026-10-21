@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -44,6 +44,7 @@ from rrhh_documentacion_service import (
     eliminar_tipo_documento_otro,
     preview_pdf_consolidado,
     set_validacion,
+    set_validacion_masiva,
 )
 from rrhh_nomina_service import (
     anular_nomina,
@@ -293,6 +294,12 @@ class GenerarContratoBody(BaseModel):
 
 
 class ValidacionDocBody(BaseModel):
+    estado: str = Field(..., max_length=20)
+    observacion: Optional[str] = None
+
+
+class ValidacionMasivaDocBody(BaseModel):
+    trabajador_ids: List[int] = Field(..., min_length=1)
     estado: str = Field(..., max_length=20)
     observacion: Optional[str] = None
 
@@ -1828,6 +1835,40 @@ def route_set_validacion(
         f"Validación documental → {body.estado}",
     )
     return row
+
+
+@router.post("/{contrato_id}/documentacion/validacion-masiva")
+def route_set_validacion_masiva(
+    contrato_id: int,
+    body: ValidacionMasivaDocBody,
+    current_user=Depends(get_current_user),
+):
+    """Validación masiva de colaboradores (mismo permiso Validar / Desarrollador)."""
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_validar_docs(current_user, contrato_id):
+        raise HTTPException(403, detail="Se requiere permiso Validar (o rol Desarrollador).")
+    try:
+        result = set_validacion_masiva(
+            supabase,
+            contrato_id,
+            list(body.trabajador_ids or []),
+            estado=body.estado,
+            observacion=body.observacion,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ACTUALIZAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        ",".join(str(x) for x in (body.trabajador_ids or [])[:20]),
+        f"Validación masiva → {body.estado} "
+        f"(ok={result.get('n_actualizados')}, err={result.get('n_errores')}, "
+        f"omit={result.get('n_omitidos')})",
+    )
+    return result
 
 
 @router.get("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/consolidado")

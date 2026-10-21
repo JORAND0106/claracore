@@ -4,6 +4,7 @@ import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
 import { PASTEL_ESTADO_VALIDACION } from '../sicoe-obra/sicoeReporteItemsTablaHelpers'
 import { DOC_TIPOS_PLANILLA, esPrestacionServicios } from './rrhhHelpers'
+import { auditoriaDocumentalActiva } from './rrhhFeatureFlags.js'
 import { rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 const panelStyle = (tTok) => ({
@@ -145,8 +146,14 @@ export default function DocumentacionTab({
     }
   }
 
+  const auditoriaActiva = auditoriaDocumentalActiva()
+
   const consolidar = async () => {
     if (!api || !detalle) return
+    if (!auditoriaActiva) {
+      flash('error', 'La auditoría documental está deshabilitada temporalmente.')
+      return
+    }
     if (!canValidar && !permisos.editar) {
       flash('error', 'Sin permiso para consolidar.')
       return
@@ -191,7 +198,7 @@ export default function DocumentacionTab({
 
   const setValidacion = async (estado) => {
     if (!api || !detalle || !canValidar) return
-    if (estado === 'aprobado' && !auditEjecutada) {
+    if (auditoriaActiva && estado === 'aprobado' && !auditEjecutada) {
       flash('error', 'Ejecute la auditoría documental al menos una vez antes de aprobar.')
       return
     }
@@ -200,7 +207,9 @@ export default function DocumentacionTab({
       return
     }
     if (estado === 'aprobado' && !window.confirm(
-      '¿Aprobar? Se generará el PDF consolidado (con el último informe de auditoría), se eliminarán los adjuntos individuales y se bloqueará la documentación. Los hallazgos no impiden aprobar.',
+      auditoriaActiva
+        ? '¿Aprobar? Se generará el PDF consolidado (con el último informe de auditoría si existe), se eliminarán los adjuntos individuales y se bloqueará la documentación.'
+        : '¿Aprobar? Se generará el PDF consolidado con los documentos cargados, se eliminarán los adjuntos individuales y se bloqueará la documentación. Debe tener completos los documentos obligatorios.',
     )) return
     setBusy(true)
     try {
@@ -419,23 +428,28 @@ export default function DocumentacionTab({
                   </svg>
                 </button>
               )}
+              {auditoriaActiva && (
+                <button
+                  type="button"
+                  style={esDesarrollador ? S.btnGhost : S.btnPrimary}
+                  disabled={busy || locked}
+                  onClick={consolidar}
+                >
+                  {esDesarrollador ? 'Ejecutar auditoría' : 'Consolidar documentación'}
+                </button>
+              )}
               <button
                 type="button"
-                style={esDesarrollador ? S.btnGhost : S.btnPrimary}
-                disabled={busy || locked}
-                onClick={consolidar}
-              >
-                {esDesarrollador ? 'Ejecutar auditoría' : 'Consolidar documentación'}
-              </button>
-              <button
-                type="button"
-                style={btnEstadoValidacion('Aprobado', busy || locked || !auditEjecutada)}
-                disabled={busy || locked || !auditEjecutada}
+                style={btnEstadoValidacion(
+                  'Aprobado',
+                  busy || locked || (auditoriaActiva && !auditEjecutada),
+                )}
+                disabled={busy || locked || (auditoriaActiva && !auditEjecutada)}
                 onClick={() => setValidacion('aprobado')}
                 title={
-                  !auditEjecutada
+                  auditoriaActiva && !auditEjecutada
                     ? 'Ejecute la auditoría al menos una vez (los hallazgos no bloquean la aprobación)'
-                    : 'Marcar documentación como aprobada'
+                    : 'Marcar documentación como aprobada (requiere documentos obligatorios completos)'
                 }
               >
                 Aprobado
@@ -461,16 +475,16 @@ export default function DocumentacionTab({
             </div>
             <div style={{ marginBottom: 8, fontSize: 'var(--cc-sm)' }}>
               Estado: <b>{detalle.doc_validacion_estado || 'pendiente'}</b>
-              {!auditEjecutada && (
+              {auditoriaActiva && !auditEjecutada && (
                 <span style={{ marginLeft: 8, color: tTok.textMuted }}>· Sin auditoría</span>
               )}
-              {auditEjecutada && detalle.doc_auditoria_ok === true && (
+              {auditoriaActiva && auditEjecutada && detalle.doc_auditoria_ok === true && (
                 <span style={{ marginLeft: 8, color: S.successColor }}>· Auditoría sin diferencias</span>
               )}
-              {auditEjecutada && detalle.doc_auditoria_ok === false && (
+              {auditoriaActiva && auditEjecutada && detalle.doc_auditoria_ok === false && (
                 <span style={{ marginLeft: 8, color: S.dangerColor }}>· Auditoría con hallazgos (no bloquean aprobación)</span>
               )}
-              {auditEjecutada && detalle.doc_auditoria_en && (
+              {auditoriaActiva && auditEjecutada && detalle.doc_auditoria_en && (
                 <span style={{ marginLeft: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
                   · {formatFechaHoraColombia(detalle.doc_auditoria_en)}
                 </span>

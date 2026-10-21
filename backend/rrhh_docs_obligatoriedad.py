@@ -102,6 +102,124 @@ def nombre_corto_colaborador(nombres: Any, apellidos: Any) -> str:
     return f"{n} {a}".strip() if a else n
 
 
+# Tipos base alineados con rrhh_docs_fill / checklist Documentación (sin bancario).
+_TIPOS_SOPORTE_BASE: Tuple[Tuple[str, str], ...] = (
+    ("cedula", "Cédula / Documento de identidad"),
+    ("hoja_vida", "Hoja de vida"),
+    ("certificados", "Certificados"),
+)
+_TIPOS_INGRESO_BASE: Tuple[Tuple[str, str], ...] = (
+    ("induccion", "Constancia de inducción"),
+    ("reglamento", "Entrega de reglamentos"),
+    ("examen_medico", "Examen médico de ingreso"),
+)
+_TIPOS_AFILIACION_BASE: Tuple[Tuple[str, str], ...] = (
+    ("cert_eps", "Certificación EPS"),
+    ("cert_pension", "Certificación Pensión / AFP"),
+    ("cert_arl", "Certificación ARL"),
+    ("cert_cesantias", "Certificación Cesantías"),
+    ("cert_caja", "Certificación Caja de Compensación"),
+)
+_TIPOS_PLANILLA: Tuple[Tuple[str, str], ...] = (
+    (PLANILLA_PAGO_TIPO, "Planilla de pago"),
+)
+
+
+def _label_tipo(cat: str, tipo: str, labels: dict | None = None) -> str:
+    if labels and (cat, tipo) in labels:
+        return labels[(cat, tipo)]
+    for c, pairs in (
+        ("soporte", _TIPOS_SOPORTE_BASE),
+        ("ingreso", _TIPOS_INGRESO_BASE),
+        ("afiliacion", _TIPOS_AFILIACION_BASE),
+    ):
+        if c == cat:
+            for t, lab in pairs:
+                if t == tipo:
+                    return lab
+    if tipo == PLANILLA_PAGO_TIPO:
+        return "Planilla de pago"
+    if cat == "contrato_laboral":
+        return "Contrato laboral"
+    return tipo.replace("ext_", "").replace("_", " ").strip().title() or tipo
+
+
+def docs_obligatorios_esperados(
+    trab: dict | None,
+    *,
+    custom_tipos: list[tuple[str, str, str]] | None = None,
+) -> list[dict]:
+    """
+    Slots documentales obligatorios u opcionales del colaborador
+    (misma base que el avance de grilla / TAB Documentación).
+    Cada ítem: {categoria, tipo, label, opcional}.
+    No incluye bancario (no figura en el TAB Documentación ni en docs_fill).
+    """
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(cat: str, tipo: str, label: str | None = None) -> None:
+        cat_n = (cat or "").strip().lower()
+        tipo_n = (tipo or "").strip().lower()
+        if not cat_n or not tipo_n or tipo_n == "otro":
+            return
+        if not doc_aplica_checklist(trab, cat_n, tipo_n):
+            return
+        key = (cat_n, tipo_n)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "categoria": cat_n,
+            "tipo": tipo_n,
+            "label": label or _label_tipo(cat_n, tipo_n),
+            "opcional": es_doc_opcional(cat_n, tipo_n),
+        })
+
+    add("contrato_laboral", "contrato_laboral", "Contrato laboral")
+    for tipo, label in _TIPOS_SOPORTE_BASE:
+        add("soporte", tipo, label)
+    for tipo, label in _TIPOS_INGRESO_BASE:
+        add("ingreso", tipo, label)
+    if trabajador_es_prestacion_servicios(trab):
+        for tipo, label in _TIPOS_PLANILLA:
+            add("afiliacion", tipo, label)
+    else:
+        for tipo, label in _TIPOS_AFILIACION_BASE:
+            add("afiliacion", tipo, label)
+    for cat, tipo, label in (custom_tipos or []):
+        if cat in ("soporte", "ingreso"):
+            add(cat, tipo, label)
+    return out
+
+
+def docs_obligatorios_faltantes(
+    trab: dict | None,
+    vigentes: set[tuple[str, str]] | frozenset,
+    *,
+    tiene_contrato: bool = False,
+    custom_tipos: list[tuple[str, str, str]] | None = None,
+) -> list[dict]:
+    """
+    Documentos obligatorios aplicables sin cargar.
+    Opcionales vacíos no aparecen. Contrato laboral usa `tiene_contrato`.
+    """
+    vig = {
+        (str(c or "").strip().lower(), str(t or "").strip().lower())
+        for c, t in (vigentes or set())
+    }
+    if tiene_contrato:
+        vig.add(("contrato_laboral", "contrato_laboral"))
+    faltan: list[dict] = []
+    for slot in docs_obligatorios_esperados(trab, custom_tipos=custom_tipos):
+        if slot["opcional"]:
+            continue
+        key = (slot["categoria"], slot["tipo"])
+        if key not in vig:
+            faltan.append(slot)
+    return faltan
+
+
 def iniciales_empresa(nombre: Any, *, max_len: int = 12) -> str:
     """
     Iniciales / abreviatura de la empresa contratante.

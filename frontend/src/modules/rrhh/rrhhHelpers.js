@@ -161,6 +161,31 @@ export function validateTrabajadorForm(form, opts = {}) {
   }
 }
 
+/** Opcionales alineados con backend/rrhh_docs_obligatoriedad.DOC_OPCIONALES */
+export const DOC_OPCIONALES = Object.freeze([
+  ['soporte', 'hoja_vida'],
+  ['soporte', 'certificados'],
+  ['afiliacion', 'cert_caja'],
+])
+
+export function esDocOpcional(categoria, tipo) {
+  const cat = String(categoria || '').trim().toLowerCase()
+  const t = String(tipo || '').trim().toLowerCase()
+  if (cat === 'contrato_laboral') return false
+  if (t === 'planilla_pago') return false
+  return DOC_OPCIONALES.some(([c, tip]) => c === cat && tip === t)
+}
+
+/** Fondo rojo suave (paleta plataforma) para faltantes obligatorios. */
+export function estiloFaltanteObligatorio(base = {}) {
+  return {
+    ...base,
+    background: 'color-mix(in srgb, var(--cc-color-danger, #dc2626) 14%, transparent)',
+    color: base.color || 'var(--cc-color-danger, #dc2626)',
+    fontWeight: base.fontWeight || 700,
+  }
+}
+
 export const DOC_TIPOS_SOPORTE = [
   { tipo: 'cedula', label: 'Cédula / Documento de identidad' },
   { tipo: 'hoja_vida', label: 'Hoja de vida' },

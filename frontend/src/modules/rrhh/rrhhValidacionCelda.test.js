@@ -89,6 +89,24 @@ describe('rrhhValidacionCelda — colores por tema', () => {
     assert.equal(celda.style.fontWeight, 700)
   })
 
+  it('sin tono de auditoría (flag off) solo muestra estado', () => {
+    const celda = estiloCeldaValidacion(
+      {
+        doc_validacion_estado: 'aprobado',
+        doc_auditoria_en: '2026-01-01',
+        doc_auditoria_ok: true,
+      },
+      'light',
+      { warnBg: '#FFFBEB', warnText: '#D97706' },
+      {},
+      { mostrarTonoAuditoria: false },
+    )
+    assert.equal(celda.label, 'Aprobado')
+    assert.equal(celda.tono, 'ninguna')
+    assert.equal(celda.style.background, 'transparent')
+    assert.equal(celda.title, 'Validación: Aprobado')
+  })
+
   it('sin auditoría no resalta aunque esté Pendiente', () => {
     const celda = estiloCeldaValidacion(
       { doc_validacion_estado: 'pendiente' },
@@ -124,6 +142,6 @@ describe('rrhhValidacionCelda — grilla', () => {
     assert.match(src, /Validación/)
     assert.match(src, /estiloCeldaValidacion/)
     assert.match(src, /patchFilaValidacionAuditoria/)
-    assert.match(src, /colSpan=\{7\}/)
+    assert.match(src, /colSpan=\{canValidarMasivo \? 8 : 7\}/)
   })
 })
