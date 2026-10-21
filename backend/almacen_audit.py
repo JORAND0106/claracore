@@ -76,6 +76,59 @@ def snapshot_devolucion(dev: Optional[dict]) -> Optional[dict]:
     ))
 
 
+def insertar_log_almacen(
+    usuario,
+    accion: str,
+    entidad_tipo: str,
+    entidad_id,
+    detalle: Optional[dict] = None,
+    *,
+    valor_anterior=None,
+    valor_nuevo=None,
+) -> bool:
+    """Escribe el log y dice si quedó guardado. El guardado de la solicitud no debe esperar esto."""
+    try:
+        from main import _default_severidad, _json_for_log, _logs_insert_row
+    except Exception:
+        return False
+    try:
+        usuario = usuario or {}
+        uid = usuario.get("sub") or usuario.get("id")
+        uid_int = None
+        if uid is not None and str(uid).strip() != "":
+            try:
+                uid_int = int(str(uid).strip())
+            except (ValueError, TypeError):
+                uid_int = None
+        row = {
+            "usuario_id": uid_int,
+            "usuario_nombre": usuario.get("nombre") or usuario.get("email", ""),
+            "cargo_nombre": usuario.get("cargo_nombre") or "",
+            "rol_nombre": usuario.get("rol_nombre"),
+            "contrato_id": usuario.get("contrato_id"),
+            "contrato_numero": usuario.get("contrato_numero"),
+            "accion": accion,
+            "modulo": "ALMACEN",
+            "entidad_tipo": entidad_tipo,
+            "entidad_id": str(entidad_id) if entidad_id is not None else None,
+            "detalle": _json_for_log(detalle) if detalle is not None else {},
+            "resultado": "ok",
+            "valor_anterior": _json_for_log(valor_anterior),
+            "valor_nuevo": _json_for_log(valor_nuevo),
+            "ip": None,
+            "categoria": "auditoria",
+            "severidad": _default_severidad(accion, "ALMACEN", "ok"),
+            "endpoint": None,
+            "metodo_http": None,
+            "stack_trace": None,
+            "duracion_ms": None,
+            "alerta_generada": False,
+        }
+        return bool(_logs_insert_row(row))
+    except Exception:
+        return False
+
+
 def log_almacen(
     usuario,
     accion: str,

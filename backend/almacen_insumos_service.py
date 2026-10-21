@@ -21,6 +21,17 @@ _LISTADO_TTL_SEC = 90.0
 _LISTADO_LOOKUP_CACHE: Dict[int, Tuple[float, Dict[Tuple[str, str], dict]]] = {}
 
 
+_IN_CHUNK = 80
+
+
+def _id_chunks(ids, size: int = _IN_CHUNK):
+    """Parte listas de un .in_() para no armar URLs enormes ni una consulta por fila."""
+    seq = [x for x in ids]
+    step = size if size and size > 0 else _IN_CHUNK
+    for i in range(0, len(seq), step):
+        yield seq[i:i + step]
+
+
 def clear_listado_cache(contrato_id: Optional[int] = None) -> None:
     """Invalida caché de listado (tests / tras cambios de precios)."""
     if contrato_id is None:
@@ -1520,6 +1531,48 @@ def _proveedor_nombre_fallback_desde_row(row: dict) -> Optional[str]:
     return None
 
 
+def prefetch_insumos_para_solicitud(contrato_id: int, insumo_ids: Sequence[int]) -> Dict[int, dict]:
+    """Una lectura del catálogo para todas las líneas que ya traen insumo_id."""
+    ids = sorted({int(x) for x in insumo_ids if x})
+    if not ids:
+        return {}
+    sb = _sb()
+    rows: List[dict] = []
+    for chunk in _id_chunks(ids):
+        rows.extend(
+            sb.table("almacen_insumo")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+    out: Dict[int, dict] = {}
+    for row in rows:
+        try:
+            out[int(row["id"])] = _row_from_almacen_insumo(row, "—")
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def _ppto_cache_sirve(row: Optional[dict], capitulo: str, item_numero: str, pk_id: str) -> bool:
+    """La fila precargada es la de la línea si capítulo, ítem y PK coinciden (o el cliente no los mandó)."""
+    if not row:
+        return False
+    cap = (capitulo or "").strip()
+    if cap and (row.get("capitulo") or "").strip() != cap:
+        return False
+    item = (item_numero or "").strip()
+    if item and _norm_item_key(row.get("item")) != _norm_item_key(item):
+        return False
+    pk = _norm_pk_id(pk_id)
+    if pk and _norm_pk_id(row.get("pk_id")) != pk:
+        return False
+    return True
+
+
 def get_insumo(contrato_id: int, insumo_id: int) -> dict:
     sb = _sb()
     rows = (
@@ -1978,13 +2031,22 @@ def list_presupuesto_registros(
     """Registros de presupuesto para un PK + capítulo + ítem, con acumulado por fila."""
     sb = _sb()
     rows = list_presupuesto_rows_combo(contrato_id, capitulo, item_numero, pk_id)
+    # Un solo lote para todos los registros del PK. Antes era una consulta de
+    # acumulado por abscisa: 3 líneas de un tramo podían ser miles de idas a la base.
+    pk_norm = _norm_pk_id(pk_id)
+    acum_map = batch_cantidad_solicitada_acumulada(
+        sb,
+        contrato_id,
+        [(int(r["id"]), pk_norm) for r in rows if r.get("id")],
+        exclude_solicitud_id,
+    )
     registros: List[dict] = []
     combo_total = 0.0
     for r in rows:
         pid = int(r["id"])
         cant = _to_float(r.get("cant_total"))
         combo_total += cant
-        acum = _cantidad_solicitada_acumulada(sb, contrato_id, pid, pk_id, exclude_solicitud_id)
+        acum = acum_map.get((pid, pk_norm), 0.0)
         ubic = _enrich_ppto_ubicacion(r)
         registros.append({
             "presupuesto_id": pid,
@@ -2287,47 +2349,44 @@ def batch_cantidad_solicitada_acumulada(
         return {}
     pids = list({k[0] for k in norm_keys})
     select_cols = "id, cantidad, solicitud_id, pk_id, presupuesto_id, es_principal"
+
+    def _items_por_presupuesto(columnas: str, usar_or: bool) -> List[dict]:
+        out: List[dict] = []
+        for chunk in _id_chunks(pids):
+            q = (
+                sb.table("almacen_solicitud_item")
+                .select(columnas)
+                .in_("presupuesto_id", chunk)
+            )
+            if usar_or and hasattr(q, "or_"):
+                q = q.or_("es_principal.eq.true,es_principal.is.null")
+            out.extend(q.execute().data or [])
+        return out
+
     items: List[dict] = []
     try:
         # Preferir excluir asociados en el servidor cuando la columna existe.
-        q = (
-            sb.table("almacen_solicitud_item")
-            .select(select_cols)
-            .in_("presupuesto_id", pids)
-        )
-        if hasattr(q, "or_"):
-            q = q.or_("es_principal.eq.true,es_principal.is.null")
-        items = q.execute().data or []
+        items = _items_por_presupuesto(select_cols, True)
     except Exception:
         try:
-            items = (
-                sb.table("almacen_solicitud_item")
-                .select(select_cols)
-                .in_("presupuesto_id", pids)
-                .execute()
-                .data
-                or []
-            )
+            items = _items_por_presupuesto(select_cols, False)
         except Exception:
             # Columna es_principal aún no migrada: tratar todas como principales.
-            items = (
-                sb.table("almacen_solicitud_item")
-                .select("id, cantidad, solicitud_id, pk_id, presupuesto_id")
-                .in_("presupuesto_id", pids)
-                .execute()
-                .data
-                or []
+            items = _items_por_presupuesto(
+                "id, cantidad, solicitud_id, pk_id, presupuesto_id", False,
             )
     # También líneas cuyo primario no está en pids pero sí un reparto.
     try:
-        rep_rows_probe = (
-            sb.table("almacen_solicitud_item_reparto")
-            .select("solicitud_item_id, presupuesto_id, cantidad")
-            .in_("presupuesto_id", pids)
-            .execute()
-            .data
-            or []
-        )
+        rep_rows_probe = []
+        for chunk in _id_chunks(pids):
+            rep_rows_probe.extend(
+                sb.table("almacen_solicitud_item_reparto")
+                .select("solicitud_item_id, presupuesto_id, cantidad")
+                .in_("presupuesto_id", chunk)
+                .execute()
+                .data
+                or []
+            )
     except Exception:
         rep_rows_probe = None  # tabla ausente → modo legado
 
@@ -2343,15 +2402,16 @@ def batch_cantidad_solicitada_acumulada(
                 extra_item_ids.add(iid)
         if extra_item_ids:
             try:
-                more = (
-                    sb.table("almacen_solicitud_item")
-                    .select(select_cols)
-                    .in_("id", list(extra_item_ids))
-                    .execute()
-                    .data
-                    or []
-                )
-                items.extend(more)
+                for chunk in _id_chunks(list(extra_item_ids)):
+                    more = (
+                        sb.table("almacen_solicitud_item")
+                        .select(select_cols)
+                        .in_("id", chunk)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    items.extend(more)
             except Exception:
                 pass
 
@@ -2365,14 +2425,17 @@ def batch_cantidad_solicitada_acumulada(
     if not filtered:
         return {k: 0.0 for k in norm_keys}
     sol_ids = list({it["solicitud_id"] for it in filtered if it.get("solicitud_id")})
-    sols = (
-        sb.table("almacen_solicitud")
-        .select("id, estado, contrato_id")
-        .in_("id", sol_ids)
-        .execute()
-        .data
-        or []
-    ) if sol_ids else []
+    sols: List[dict] = []
+    if sol_ids:
+        for chunk in _id_chunks(sol_ids):
+            sols.extend(
+                sb.table("almacen_solicitud")
+                .select("id, estado, contrato_id")
+                .in_("id", chunk)
+                .execute()
+                .data
+                or []
+            )
     sol_map = {s["id"]: s for s in sols}
 
     # Mapa de repartos por ítem (si la tabla existe).
@@ -2381,14 +2444,16 @@ def batch_cantidad_solicitada_acumulada(
         item_ids = [int(it["id"]) for it in filtered if it.get("id")]
         if item_ids:
             try:
-                all_reps = (
-                    sb.table("almacen_solicitud_item_reparto")
-                    .select("solicitud_item_id, presupuesto_id, cantidad")
-                    .in_("solicitud_item_id", item_ids)
-                    .execute()
-                    .data
-                    or []
-                )
+                all_reps = []
+                for chunk in _id_chunks(item_ids):
+                    all_reps.extend(
+                        sb.table("almacen_solicitud_item_reparto")
+                        .select("solicitud_item_id, presupuesto_id, cantidad")
+                        .in_("solicitud_item_id", chunk)
+                        .execute()
+                        .data
+                        or []
+                    )
             except Exception:
                 all_reps = rep_rows_probe
             for r in all_reps:
@@ -2436,25 +2501,29 @@ def batch_cantidad_consumida_insumo(
     ids = sorted({int(i) for i in insumo_ids if i})
     if not ids:
         return {}
-    items = (
-        sb.table("almacen_solicitud_item")
-        .select("cantidad, solicitud_id, insumo_id")
-        .in_("insumo_id", ids)
-        .execute()
-        .data
-        or []
-    )
+    items: List[dict] = []
+    for chunk in _id_chunks(ids):
+        items.extend(
+            sb.table("almacen_solicitud_item")
+            .select("cantidad, solicitud_id, insumo_id")
+            .in_("insumo_id", chunk)
+            .execute()
+            .data
+            or []
+        )
     if not items:
         return {i: 0.0 for i in ids}
     sol_ids = list({it["solicitud_id"] for it in items if it.get("solicitud_id")})
-    sols = (
-        sb.table("almacen_solicitud")
-        .select("id, estado, contrato_id")
-        .in_("id", sol_ids)
-        .execute()
-        .data
-        or []
-    ) if sol_ids else []
+    sols: List[dict] = []
+    for chunk in _id_chunks(sol_ids):
+        sols.extend(
+            sb.table("almacen_solicitud")
+            .select("id, estado, contrato_id")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
     sol_map = {s["id"]: s for s in sols}
     totals: Dict[int, float] = {i: 0.0 for i in ids}
     for it in items:
@@ -2904,11 +2973,18 @@ def resolve_insumo_for_solicitud(
     raw: dict,
     *,
     skip_context: bool = False,
+    skip_listado: bool = False,
+    defer_reparto: bool = False,
+    insumos_cache: Optional[Dict[int, dict]] = None,
+    ppto_por_id: Optional[Dict[int, dict]] = None,
 ) -> dict:
     """Resuelve insumo + ítem de cobro explícito + presupuesto + flags para una línea.
 
     ``skip_context=True`` omite get_presupuesto_context / negociado (útil en validación
     por lote donde ``apply_saldo_flags_batch`` rellena los flags una sola vez).
+    ``skip_listado=True`` no recorre listado_precios: el cobro sale de la línea o del
+    valor unitario de presupuesto. El saldo se valida igual en el lote.
+    ``defer_reparto=True`` deja el reparto multi-registro para una sola consulta del lote.
     """
     insumo_id = raw.get("insumo_id")
     listado_precio_id = raw.get("listado_precio_id")
@@ -2927,7 +3003,13 @@ def resolve_insumo_for_solicitud(
         raise ValueError("Seleccione capítulo e ítem de cobro del presupuesto.")
 
     if insumo_id:
-        insumo = get_insumo(contrato_id, int(insumo_id))
+        iid = int(insumo_id)
+        if insumos_cache is not None:
+            insumo = insumos_cache.get(iid)
+            if not insumo:
+                raise ValueError("Insumo no encontrado.")
+        else:
+            insumo = get_insumo(contrato_id, iid)
     elif listado_precio_id:
         insumo = ensure_insumo_from_listado(contrato_id, int(listado_precio_id), user_id)
         insumo_id = insumo.get("id")
@@ -2993,7 +3075,12 @@ def resolve_insumo_for_solicitud(
     pids = normalize_presupuesto_ids(raw.get("presupuesto_ids"), presupuesto_id)
     if pids:
         presupuesto_id = pids[0]
-    if presupuesto_id:
+    ppto = None
+    if presupuesto_id and ppto_por_id:
+        cand = ppto_por_id.get(int(presupuesto_id))
+        if _ppto_cache_sirve(cand, capitulo_ppto, item_ppto, pk_id):
+            ppto = cand
+    if ppto is None and presupuesto_id:
         ppto = resolve_presupuesto_row(
             contrato_id,
             capitulo_ppto,
@@ -3001,7 +3088,7 @@ def resolve_insumo_for_solicitud(
             pk_id,
             presupuesto_id=int(presupuesto_id),
         )
-    else:
+    elif ppto is None:
         ppto = resolve_presupuesto_row(contrato_id, capitulo_ppto, item_ppto, pk_id)
         pids = [int(ppto["id"])]
 
@@ -3052,18 +3139,30 @@ def resolve_insumo_for_solicitud(
         supera_presupuesto = ctx.get("supera_presupuesto")
         supera_negociado = (ctx_neg or {}).get("supera_negociado")
     else:
-        cobro_res = resolver_vlr_cobro_listado(
-            contrato_id,
-            capitulo_ppto or ppto.get("capitulo") or "",
-            item_ppto or ppto.get("item") or "",
-        )
-        vlr_cobro = _to_float(cobro_res.get("vlr_unitario_cobro"))
-        cobro_motivo = cobro_res.get("cobro_motivo")
-        if vlr_cobro <= 0:
-            ppto_vu = _to_float(ppto.get("vlr_unitario"))
-            if ppto_vu > 0:
-                vlr_cobro = ppto_vu
-                cobro_motivo = None
+        if skip_listado:
+            # Guardar no espera el escaneo de listado_precios (minutos en contratos grandes).
+            vlr_cobro = _to_float(raw.get("vlr_unitario_cobro"))
+            cobro_motivo = None
+            if vlr_cobro <= 0:
+                ppto_vu = _to_float(ppto.get("vlr_unitario"))
+                if ppto_vu > 0:
+                    vlr_cobro = ppto_vu
+                else:
+                    vlr_cobro = 0.0
+                    cobro_motivo = "sin_valor_listado"
+        else:
+            cobro_res = resolver_vlr_cobro_listado(
+                contrato_id,
+                capitulo_ppto or ppto.get("capitulo") or "",
+                item_ppto or ppto.get("item") or "",
+            )
+            vlr_cobro = _to_float(cobro_res.get("vlr_unitario_cobro"))
+            cobro_motivo = cobro_res.get("cobro_motivo")
+            if vlr_cobro <= 0:
+                ppto_vu = _to_float(ppto.get("vlr_unitario"))
+                if ppto_vu > 0:
+                    vlr_cobro = ppto_vu
+                    cobro_motivo = None
         cant_presupuestada = _to_float(ppto.get("cant_total"))
         supera_presupuesto = False
         supera_negociado = False
@@ -3073,7 +3172,13 @@ def resolve_insumo_for_solicitud(
         utilidad_estimada = (vlr_cobro * cant) - costo_insumos
 
     repartos = [{"presupuesto_id": int(ppto["id"]), "cantidad": cant}]
-    if len(pids) > 1:
+    if len(pids) > 1 and defer_reparto:
+        if ppto_por_id:
+            filas = [ppto_por_id.get(int(pid)) for pid in pids]
+            if all(filas):
+                cant_presupuestada = sum(_to_float(r.get("cant_total")) for r in filas)
+        repartos = []
+    elif len(pids) > 1:
         regs_data = list_presupuesto_registros(
             contrato_id,
             capitulo_ppto or ppto.get("capitulo") or "",

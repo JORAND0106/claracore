@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import re
 import threading
+import time
 import unicodedata
 from datetime import date, datetime, timezone
 
@@ -337,6 +338,7 @@ def _sync_solicitud_items(
         raise ValueError(MOTIVO_LINEA_AL_GUARDAR)
 
     to_insert: List[dict] = []
+    to_update: List[dict] = []
     autor = ""
     if user_id and any((it.get("observacion_residente") or "").strip() for it in items):
         autor = _nombre_usuario_id(sb, user_id)
@@ -375,12 +377,14 @@ def _sync_solicitud_items(
                 prev = existing_estado.get(iid)
                 if prev:
                     row["estado_validacion"] = prev
-            _update_solicitud_item_row(sb, iid, row)
+            to_update.append({"id": iid, **row})
         else:
             if estado in ("enviada", "rechazada") and not row.get("estado_validacion"):
                 row["estado_validacion"] = "pendiente"
             to_insert.append(row)
 
+    if to_update:
+        _update_solicitud_items_batch(sb, to_update)
     if to_insert:
         _insert_solicitud_items_batch(sb, to_insert)
     _sync_solicitud_item_repartos(sb, solicitud_id, items, congelados=congelados)
@@ -517,17 +521,20 @@ def _fetch_ppto_rows_batch(presupuesto_ids: List[int], contrato_id: int) -> Dict
     if not ids:
         return {}
     sb = _sb()
-    rows = (
-        sb.table("presupuesto")
-        .select(
-            "id, pk_id, capitulo, item, descripcion, und, cant_total, contrato_id, "
-            "tramo, abs_inicio, abs_final, no_inicio, no_final"
+    rows = []
+    for i in range(0, len(ids), 80):
+        chunk = ids[i:i + 80]
+        rows.extend(
+            sb.table("presupuesto")
+            .select(
+                "id, pk_id, capitulo, item, descripcion, und, cant_total, vlr_unitario, contrato_id, "
+                "tramo, abs_inicio, abs_final, no_inicio, no_final"
+            )
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
         )
-        .in_("id", ids)
-        .execute()
-        .data
-        or []
-    )
     out: Dict[int, dict] = {}
     for row in rows:
         if int(row.get("contrato_id") or 0) != int(contrato_id):
@@ -608,6 +615,111 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
     if text:
         return f"No se pudo guardar la solicitud en la base de datos: {text[:400]}"
     return "No se pudo guardar la solicitud en la base de datos (error desconocido)."
+
+
+def _attach_repartos_en_lote(
+    contrato_id: int,
+    pares: List[tuple],
+    *,
+    exclude_solicitud_id: Optional[int] = None,
+) -> None:
+    """Reparte varias líneas con la misma consulta de registros por capítulo, ítem y PK."""
+    from almacen_insumos_service import list_presupuesto_registros
+    from almacen_presupuesto_reparto import normalize_presupuesto_ids
+
+    multi: List[tuple] = []
+    for src, dst in pares:
+        if dst.get("presupuesto_id") is None and not (
+            src.get("presupuesto_ids") or src.get("presupuesto_id")
+        ):
+            dst.setdefault("presupuesto_ids", [])
+            dst.setdefault("repartos", [])
+            continue
+        pids = normalize_presupuesto_ids(
+            src.get("presupuesto_ids") or dst.get("presupuesto_ids"),
+            src.get("presupuesto_id") or dst.get("presupuesto_id"),
+        )
+        if len(pids) <= 1:
+            _attach_reparto_meta(
+                contrato_id,
+                dst,
+                src,
+                exclude_solicitud_id=exclude_solicitud_id,
+            )
+            continue
+        pk = (dst.get("pk_id") or src.get("pk_id") or "").strip()
+        cap = (dst.get("capitulo") or "").strip()
+        item_n = (dst.get("item") or "").strip()
+        if not (pk and cap and item_n):
+            raise ValueError("Seleccione capítulo, ítem y PK-ID para el reparto de presupuesto.")
+        try:
+            iid = int(dst.get("insumo_id") or 0)
+        except (TypeError, ValueError):
+            iid = 0
+        multi.append((dst, pids, pk, cap, item_n, iid))
+
+    grupos: Dict[tuple, List[tuple]] = {}
+    for dst, pids, pk, cap, item_n, iid in multi:
+        grupos.setdefault((cap, item_n, pk, iid), []).append((dst, pids))
+
+    for (cap, item_n, pk, iid), group in grupos.items():
+        data = list_presupuesto_registros(
+            contrato_id,
+            cap,
+            item_n,
+            pk,
+            exclude_solicitud_id=exclude_solicitud_id,
+            insumo_id=iid or None,
+        )
+        by_id = {int(r["presupuesto_id"]): r for r in (data.get("registros") or [])}
+        for dst, pids in group:
+            _aplicar_reparto_seleccionado(dst, pids, by_id, pk)
+
+
+def _aplicar_reparto_seleccionado(item: dict, pids: List[int], by_id: Dict[int, dict], pk: str) -> None:
+    from almacen_presupuesto_reparto import (
+        repartir_cantidad_proporcional,
+        total_saldo_registros,
+    )
+
+    selected = []
+    for pid in pids:
+        reg = by_id.get(int(pid))
+        if not reg:
+            raise ValueError(
+                f"El registro de presupuesto {pid} no coincide con capítulo, ítem y PK-ID."
+            )
+        selected.append(reg)
+    cant = _to_float(item.get("cantidad"))
+    if _coerce_es_principal(item.get("es_principal"), default=True):
+        shares = repartir_cantidad_proporcional(cant, selected)
+    else:
+        shares = [{"presupuesto_id": int(r["presupuesto_id"]), "cantidad": 0.0} for r in selected]
+    item["presupuesto_id"] = pids[0]
+    item["presupuesto_ids"] = pids
+    item["repartos"] = [
+        {"presupuesto_id": int(s["presupuesto_id"]), "cantidad": _to_float(s["cantidad"])}
+        for s in shares
+        if _to_float(s.get("cantidad")) > 0
+    ]
+    item["cant_presupuestada"] = sum(_to_float(r.get("cant_total")) for r in selected)
+    saldo_combo = total_saldo_registros(selected)
+    if _coerce_es_principal(item.get("es_principal"), default=True):
+        item["supera_presupuesto"] = (saldo_combo - cant) < -0.0001
+    item["contexto_presupuesto"] = {
+        **(item.get("contexto_presupuesto") or {}),
+        "presupuesto_id": pids[0],
+        "presupuesto_ids": pids,
+        "pk_id": pk,
+        "cant_presupuestada": item["cant_presupuestada"],
+        "cant_presupuestada_combo": item["cant_presupuestada"],
+        "registros_combo_count": len(pids),
+        "saldo_disponible_despues": saldo_combo - (
+            cant if _coerce_es_principal(item.get("es_principal"), default=True) else 0
+        ),
+        "supera_presupuesto": item.get("supera_presupuesto", False),
+        "repartos": item["repartos"],
+    }
 
 
 def _attach_reparto_meta(
@@ -729,6 +841,7 @@ def _sync_solicitud_item_repartos(
             pass
 
     congelados = congelados or set()
+    objetivos: List[tuple] = []
     for i, it in enumerate(items, start=1):
         iid = None
         if it.get("id") is not None:
@@ -753,43 +866,49 @@ def _sync_solicitud_item_repartos(
 
         repartos = it.get("repartos") or []
         pids = it.get("presupuesto_ids") or []
-        # Una sola selección: no hace falta tabla (el acumulado usa presupuesto_id de la línea).
-        if len(pids) <= 1 and len(repartos) <= 1:
-            try:
-                sb.table("almacen_solicitud_item_reparto").delete().eq(
-                    "solicitud_item_id", iid
-                ).execute()
-            except Exception as exc:
-                low = str(exc).lower()
-                if "almacen_solicitud_item_reparto" in low and any(
-                    tok in low for tok in ("does not exist", "pgrst205", "schema cache", "could not find")
-                ):
-                    return
-                raise ValueError(_humanize_solicitud_db_error(exc)) from exc
-            continue
-
         rows = []
-        for r in repartos:
-            try:
-                pid = int(r.get("presupuesto_id"))
-            except (TypeError, ValueError):
-                continue
-            cant = _to_float(r.get("cantidad"))
-            if pid <= 0 or cant <= 0:
-                continue
-            rows.append({
-                "solicitud_item_id": iid,
-                "presupuesto_id": pid,
-                "cantidad": cant,
-            })
-        try:
-            sb.table("almacen_solicitud_item_reparto").delete().eq(
-                "solicitud_item_id", iid
+        # Una sola selección: se limpia la tabla (el acumulado usa presupuesto_id de la línea).
+        if not (len(pids) <= 1 and len(repartos) <= 1):
+            for r in repartos:
+                try:
+                    pid = int(r.get("presupuesto_id"))
+                except (TypeError, ValueError):
+                    continue
+                cant = _to_float(r.get("cantidad"))
+                if pid <= 0 or cant <= 0:
+                    continue
+                rows.append({
+                    "solicitud_item_id": iid,
+                    "presupuesto_id": pid,
+                    "cantidad": cant,
+                })
+        objetivos.append((iid, rows))
+
+    if not objetivos:
+        return
+    ids = [iid for iid, _rows in objetivos]
+    try:
+        for i in range(0, len(ids), 80):
+            sb.table("almacen_solicitud_item_reparto").delete().in_(
+                "solicitud_item_id", ids[i:i + 80],
             ).execute()
-            if rows:
-                sb.table("almacen_solicitud_item_reparto").insert(rows).execute()
-        except Exception as exc:
-            raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+    except Exception as exc:
+        low = str(exc).lower()
+        if "almacen_solicitud_item_reparto" in low and any(
+            tok in low for tok in ("does not exist", "pgrst205", "schema cache", "could not find")
+        ):
+            return
+        raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+    inserts = []
+    for _iid, rows in objetivos:
+        inserts.extend(rows)
+    if not inserts:
+        return
+    try:
+        for i in range(0, len(inserts), 80):
+            sb.table("almacen_solicitud_item_reparto").insert(inserts[i:i + 80]).execute()
+    except Exception as exc:
+        raise ValueError(_humanize_solicitud_db_error(exc)) from exc
 
 
 def _attach_repartos_to_items(sb, items: List[dict]) -> None:
@@ -918,6 +1037,41 @@ def _update_solicitud_item_row(sb, item_id: int, row: dict) -> None:
     raise ValueError(
         "No se pudo actualizar el ítem de la solicitud: demasiadas columnas ausentes en el esquema."
     )
+
+
+def _update_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) -> None:
+    """Actualiza muchas líneas en pocos upserts. Sin upsert, cae al update de a una."""
+    if not rows:
+        return
+    probe = sb.table("almacen_solicitud_item")
+    upsert = getattr(probe, "upsert", None)
+    if not callable(upsert):
+        for row in rows:
+            iid = int(row["id"])
+            body = {k: v for k, v in row.items() if k != "id"}
+            _update_solicitud_item_row(sb, iid, body)
+        return
+    omitted: set[str] = set()
+    for i in range(0, len(rows), chunk_size):
+        chunk = [{k: v for k, v in row.items() if k not in omitted} for row in rows[i:i + chunk_size]]
+        strips = 0
+        while strips <= 16:
+            try:
+                sb.table("almacen_solicitud_item").upsert(chunk, on_conflict="id").execute()
+                break
+            except Exception as exc:
+                col = _pgrst_unknown_column(exc)
+                if not col or col in omitted:
+                    raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+                if col in _SOLICITUD_ITEM_CRITICAL_COLUMNS:
+                    raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+                omitted.add(col)
+                chunk = [{k: v for k, v in row.items() if k not in omitted} for row in chunk]
+                strips += 1
+        else:
+            raise ValueError(
+                "No se pudieron actualizar los ítems de la solicitud: demasiadas columnas ausentes en el esquema."
+            )
 
 
 def _cotizaciones_catalogo_batch(sb, insumo_ids: List[int]) -> Dict[int, dict]:
@@ -1109,6 +1263,7 @@ def _enrich_solicitud(
     ligera: bool = False,
     include_rentabilidad: bool = False,
     precios_fijados: Optional[set] = None,
+    diferir_secundarios: bool = False,
 ) -> dict:
     sid = sol["id"]
     items = (
@@ -1123,16 +1278,18 @@ def _enrich_solicitud(
     )
     # Antes de la OC la cotización vigente manda: se persiste para que la grilla
     # no siga mostrando el precio con el que se creó la línea.
-    try:
-        oc_rows_precio = _fetch_ocs_de_solicitud(sb, int(sol["contrato_id"]), int(sid))
-        ids_oc = (
-            _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in oc_rows_precio if o.get("id")])
-            if oc_rows_precio
-            else set()
-        )
-        sincronizar_precios_sin_oc(sb, items, ids_oc, omitir_ids=precios_fijados)
-    except Exception:
-        _log.exception("No se pudo sincronizar el precio vigente de la solicitud %s", sid)
+    # Al guardar, esto corre después de responder (no hace falta para confirmar el alta).
+    if not diferir_secundarios:
+        try:
+            oc_rows_precio = _fetch_ocs_de_solicitud(sb, int(sol["contrato_id"]), int(sid))
+            ids_oc = (
+                _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in oc_rows_precio if o.get("id")])
+                if oc_rows_precio
+                else set()
+            )
+            sincronizar_precios_sin_oc(sb, items, ids_oc, omitir_ids=precios_fijados)
+        except Exception:
+            _log.exception("No se pudo sincronizar el precio vigente de la solicitud %s", sid)
     if ligera:
         insumo_ids = sorted({int(it["insumo_id"]) for it in items if it.get("insumo_id")})
         insumo_codigos: Dict[int, str] = {}
@@ -1438,7 +1595,9 @@ def _enrich_solicitud(
     # Ligera: no resolver validadores (N+1); el detalle completo sí puede.
     vpend = [] if ligera else validadores_pendientes
     sol = _enrich_solicitud_usuarios(sb, sol, vpend)
-    _attach_proveedor_lineas(sb, sol.get("items") or [])
+    _attach_proveedor_lineas(
+        sb, sol.get("items") or [], persistir=not diferir_secundarios,
+    )
     sol["resumen_proveedores"] = _resumen_proveedores_solicitud(sol.get("items") or [])
     _attach_justificacion_visible(sol)
     return sol
@@ -1859,6 +2018,7 @@ def get_solicitud(
     ligera: bool = False,
     include_rentabilidad: bool = False,
     precios_fijados: Optional[set] = None,
+    diferir_secundarios: bool = False,
 ) -> dict:
     sb = _sb()
     rows = (
@@ -1873,31 +2033,52 @@ def get_solicitud(
     )
     if not rows:
         raise ValueError("Solicitud no encontrada.")
+    row = rows[0]
+    if not isinstance(row.get("tareas_fondo"), dict):
+        from almacen_solicitud_tareas import estado_en_memoria
+        mem = estado_en_memoria(row.get("id"))
+        if mem:
+            row["tareas_fondo"] = mem
+    fondo = row.get("tareas_fondo")
+    if isinstance(fondo, dict) and "log" in fondo:
+        row["tareas_fondo"] = {k: v for k, v in fondo.items() if k != "log"}
     return _enrich_solicitud(
         sb,
-        rows[0],
+        row,
         ver_economicos=ver_economicos,
         ligera=ligera,
         include_rentabilidad=include_rentabilidad,
         precios_fijados=precios_fijados,
+        diferir_secundarios=diferir_secundarios,
     )
 
 
 def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 0, exclude_solicitud_id: Optional[int] = None) -> List[dict]:
     if not items:
         raise ValueError("Debe incluir al menos un material en la solicitud.")
-    from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
+    from almacen_insumos_service import (
+        apply_saldo_flags_batch,
+        prefetch_insumos_para_solicitud,
+        resolve_insumo_for_solicitud,
+    )
 
-    # Prefetch presupuesto rows (una query) para líneas sin resolve_insumo.
+    # Presupuesto e insumos de todo el pedido, en lote. No uno por línea.
     from almacen_presupuesto_reparto import normalize_presupuesto_ids as _norm_pids_prefetch
     ppto_ids_prefetch = []
+    insumo_ids_prefetch = []
     for raw in items:
-        desc_sol = (raw.get("descripcion_solicitada") or "").strip()
-        if raw.get("insumo_id") or raw.get("listado_precio_id"):
-            continue
         for pid in _norm_pids_prefetch(raw.get("presupuesto_ids"), raw.get("presupuesto_id")):
             ppto_ids_prefetch.append(pid)
+        if raw.get("insumo_id"):
+            try:
+                insumo_ids_prefetch.append(int(raw["insumo_id"]))
+            except (TypeError, ValueError):
+                pass
     ppto_cache = _fetch_ppto_rows_batch(ppto_ids_prefetch, contrato_id)
+    insumos_cache = (
+        prefetch_insumos_para_solicitud(contrato_id, insumo_ids_prefetch)
+        if insumo_ids_prefetch else None
+    )
 
     out = []
     for raw in items:
@@ -1991,7 +2172,14 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             continue
         if raw.get("insumo_id") or raw.get("listado_precio_id"):
             resolved = resolve_insumo_for_solicitud(
-                contrato_id, user_id, raw, skip_context=True
+                contrato_id,
+                user_id,
+                raw,
+                skip_context=True,
+                skip_listado=True,
+                defer_reparto=True,
+                insumos_cache=insumos_cache,
+                ppto_por_id=ppto_cache,
             )
             # Conservar descripción solicitada si venía (legado / remapeo)
             if desc_sol:
@@ -2035,20 +2223,12 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "vlr_unitario_cobro": 0,
             "supera_presupuesto": False,
         })
-    # Multi-registro: calcular repartos proporcionales antes de flags de saldo.
-    for src, dst in zip(items, out):
-        if dst.get("presupuesto_id") is None and not (
-            src.get("presupuesto_ids") or src.get("presupuesto_id")
-        ):
-            dst.setdefault("presupuesto_ids", [])
-            dst.setdefault("repartos", [])
-            continue
-        _attach_reparto_meta(
-            contrato_id,
-            dst,
-            src,
-            exclude_solicitud_id=exclude_solicitud_id,
-        )
+    # Multi-registro: un solo listado de registros por capítulo/ítem/PK, no uno por línea.
+    _attach_repartos_en_lote(
+        contrato_id,
+        list(zip(items, out)),
+        exclude_solicitud_id=exclude_solicitud_id,
+    )
     if out:
         # Borrador/guardar: no escanear listado_precios (cobro se define al mapear Gerencial).
         # Solo acumulados + flags de sobrepresupuesto — evita 5–40s de full-scan.
@@ -3461,9 +3641,21 @@ def corregir_insumo_item_post_oc(
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
+def _tiempos_guardado(t0: float, t_val: float, t_per: float, t_fin: float, lineas: int) -> dict:
+    return {
+        "validar": round((t_val - t0) * 1000, 1),
+        "persistir": round((t_per - t_val) * 1000, 1),
+        "responder": round((t_fin - t_per) * 1000, 1),
+        "total": round((t_fin - t0) * 1000, 1),
+        "lineas": int(lineas),
+    }
+
+
 def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
+    t0 = time.perf_counter()
     sb = _sb()
     items = _validate_items_payload(body.get("items") or [], contrato_id, user_id)
+    t_val = time.perf_counter()
     consecutivo = _next_consecutivo(contrato_id, "almacen_solicitud", "consecutivo")
     sol_row = {
         "contrato_id": contrato_id,
@@ -3519,9 +3711,20 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         except Exception:
             _log.exception("No se pudo revertir solicitud %s tras fallo de ítems", sid)
         raise
-    _sincronizar_titulo_solicitud(sb, sid)
-    # Respuesta ligera: el formulario no necesita contexto/rentabilidad por línea.
-    return get_solicitud(contrato_id, sid, ligera=True)
+    t_per = time.perf_counter()
+    # El nombre, el precio vigente, el proveedor y el log siguen, pero no bloquean la respuesta.
+    sol = get_solicitud(contrato_id, sid, ligera=True, diferir_secundarios=True)
+    t_fin = time.perf_counter()
+    sol["tiempos_guardado_ms"] = _tiempos_guardado(t0, t_val, t_per, t_fin, len(items))
+    _log.info(
+        "almacen guardar crear lineas=%s validar_ms=%s persistir_ms=%s responder_ms=%s total_ms=%s",
+        len(items),
+        sol["tiempos_guardado_ms"]["validar"],
+        sol["tiempos_guardado_ms"]["persistir"],
+        sol["tiempos_guardado_ms"]["responder"],
+        sol["tiempos_guardado_ms"]["total"],
+    )
+    return sol
 
 
 def _solicitud_item_ids_en_oc(sb, oc_id: int) -> set:
@@ -3675,7 +3878,7 @@ def _clasificar_proveedor_linea(
     }
 
 
-def _attach_proveedor_lineas(sb, items: List[dict]) -> None:
+def _attach_proveedor_lineas(sb, items: List[dict], *, persistir: bool = True) -> None:
     """Proveedor por línea en el detalle (también en la carga ligera)."""
     if not items:
         return
@@ -3683,10 +3886,11 @@ def _attach_proveedor_lineas(sb, items: List[dict]) -> None:
         _hidratar_proveedor_desde_cotizacion(sb, items)
     except Exception:
         _log.exception("No se pudo hidratar el proveedor elegido")
-    try:
-        completar_proveedor_guardado(sb, items)
-    except Exception:
-        _log.exception("No se pudo guardar el proveedor de las líneas que ya tenían insumo")
+    if persistir:
+        try:
+            completar_proveedor_guardado(sb, items)
+        except Exception:
+            _log.exception("No se pudo guardar el proveedor de las líneas que ya tenían insumo")
     cat_map, prov_nombres = {}, {}
     for it in items:
         info = _clasificar_proveedor_linea(it, cat_map, prov_nombres)
@@ -4395,6 +4599,7 @@ def _marcar_solicitud_aprobada_y_respuesta_ocs(
 
 
 def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: dict) -> dict:
+    t0 = time.perf_counter()
     _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     head = (
@@ -4423,11 +4628,27 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
         sb.table("almacen_solicitud").update({
             "observaciones": (body.get("observaciones") or "").strip() or None,
         }).eq("id", solicitud_id).execute()
+    n_items = 0
+    t_val = t0
     if "items" in body:
         items = _validate_items_payload(body["items"], contrato_id, user_id, exclude_solicitud_id=solicitud_id)
+        t_val = time.perf_counter()
+        n_items = len(items)
         _sync_solicitud_items(sb, solicitud_id, estado, items, user_id)
-    _sincronizar_titulo_solicitud(sb, solicitud_id)
-    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+    t_per = time.perf_counter()
+    sol = get_solicitud(contrato_id, solicitud_id, ligera=True, diferir_secundarios=True)
+    t_fin = time.perf_counter()
+    sol["tiempos_guardado_ms"] = _tiempos_guardado(t0, t_val, t_per, t_fin, n_items)
+    _log.info(
+        "almacen guardar editar id=%s lineas=%s validar_ms=%s persistir_ms=%s responder_ms=%s total_ms=%s",
+        solicitud_id,
+        n_items,
+        sol["tiempos_guardado_ms"]["validar"],
+        sol["tiempos_guardado_ms"]["persistir"],
+        sol["tiempos_guardado_ms"]["responder"],
+        sol["tiempos_guardado_ms"]["total"],
+    )
+    return sol
 
 
 def add_cotizacion(
