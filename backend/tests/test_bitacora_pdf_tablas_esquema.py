@@ -28,6 +28,8 @@ def test_caja_tabla_mucho_mayor_que_foto():
     assert pdf._TABLA_BOX_W > pdf._FOTO_BOX_W * 3
     assert pdf._TABLA_BOX_H > pdf._FOTO_BOX_H * 3
     assert pdf._TABLA_MAX_PX_W > pdf._FOTO_MAX_PX_W
+    # Nitidez: tope de px suficiente para PNG hi-res sin thumbnail agresivo.
+    assert pdf._TABLA_MAX_PX_W >= 4000
 
 
 def test_html_registro_pone_tablas_a_ancho_completo():

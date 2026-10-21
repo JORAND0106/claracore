@@ -292,13 +292,14 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   const margin = Math.round(8 * fs)
   const baseCols = [
     { key: 'num', label: '#', w: 36 },
-    { key: 'color', label: 'Color', w: 40 },
-    { key: 'nombre', label: 'Nombre', w: 120 },
-    { key: 'op', label: 'Operación', w: 100 },
-    { key: 'from', label: 'Descuenta de', w: 110 },
-    { key: 'dims', label: 'Dimensiones', w: 168 },
-    { key: 'formula', label: 'Fórmula', w: 168 },
-    { key: 'vol', label: 'Volumen (m³)', w: 100 },
+    // Ancho mínimo para «Color» en tipografía × DOC_TYPE_SCALE (una sola línea).
+    { key: 'color', label: 'Color', w: 56 },
+    { key: 'nombre', label: 'Nombre', w: 118 },
+    { key: 'op', label: 'Operación', w: 98 },
+    { key: 'from', label: 'Descuenta de', w: 108 },
+    { key: 'dims', label: 'Dimensiones', w: 166 },
+    { key: 'formula', label: 'Fórmula', w: 166 },
+    { key: 'vol', label: 'Volumen (m³)', w: 98 },
   ]
   const baseW = baseCols.reduce((s, c) => s + c.w, 0)
   // Mismo ancho que el isométrico: estirar columnas al ancho pedido (fs solo tipografía).
@@ -309,6 +310,24 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   const targetW = Math.round(avail)
   if (sumW !== targetW && cols.length) {
     cols[cols.length - 1].w += (targetW - sumW)
+  }
+  // «Color» siempre en una línea a tipografía ×fs (no «Colo/r»).
+  {
+    const probe = typeof document !== 'undefined' ? document.createElement('canvas') : null
+    const pctx = probe ? probe.getContext('2d') : null
+    if (pctx) {
+      pctx.font = `bold ${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
+      const need = Math.ceil(pctx.measureText('Color').width) + 12
+      const colorCol = cols.find((c) => c.key === 'color')
+      const donor = cols.find((c) => c.key === 'formula') || cols[cols.length - 1]
+      if (colorCol && donor && colorCol.w < need) {
+        const delta = need - colorCol.w
+        if (donor.w - delta >= 80) {
+          colorCol.w = need
+          donor.w -= delta
+        }
+      }
+    }
   }
   const tableW = cols.reduce((s, c) => s + c.w, 0)
   const canvasW = tableW + margin * 2
@@ -376,9 +395,10 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   ctx.fillRect(x0, y0, tableW, colHeaderH)
   ctx.fillStyle = '#ffffff'
   ctx.font = `bold ${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
+  // Encabezados en una sola línea (sin partir «Color» ni celdas cortas).
   let x = x0
   for (const col of cols) {
-    const lines = wrapMemoriaText(ctx, col.label, Math.max(8, col.w - 8), 2)
+    const lines = wrapMemoriaText(ctx, col.label, Math.max(8, col.w - 8), 1)
     const blockH = lines.length * lineGap
     const yStart = y0 + (colHeaderH - blockH) / 2 + Math.round(11 * fs)
     lines.forEach((ln, li) => {

@@ -5530,12 +5530,16 @@ def _usuario_datos_firma_sello(uid: int) -> Dict[str, Any]:
 _FO_EO04_IMG_MAX_PX = int(_os.getenv("FO_EO04_IMG_MAX_PX", "480") or "480")
 _FO_EO04_IMG_JPEG_Q = int(_os.getenv("FO_EO04_IMG_JPEG_Q", "58") or "58")
 _FO_EO04_IMG_MAX_BYTES = int(_os.getenv("FO_EO04_IMG_MAX_BYTES", "70000") or "70000")
-# Gráficos/esquemas (texto de tabla de coordenadas): mayor resolución y calidad
-# que las fotos de obra. Env: FO_EO04_GRAFICO_IMG_* .
-_FO_EO04_GRAFICO_IMG_MAX_PX = int(_os.getenv("FO_EO04_GRAFICO_IMG_MAX_PX", "1600") or "1600")
-_FO_EO04_GRAFICO_IMG_JPEG_Q = int(_os.getenv("FO_EO04_GRAFICO_IMG_JPEG_Q", "88") or "88")
+# Gráficos/esquemas (tabla coords / memoria / despiece): PNG sin pérdida a
+# resolución completa. Env: FO_EO04_GRAFICO_IMG_* .
+_FO_EO04_GRAFICO_IMG_MAX_PX = int(_os.getenv("FO_EO04_GRAFICO_IMG_MAX_PX", "4800") or "4800")
+_FO_EO04_GRAFICO_IMG_JPEG_Q = int(_os.getenv("FO_EO04_GRAFICO_IMG_JPEG_Q", "92") or "92")
 _FO_EO04_GRAFICO_IMG_MAX_BYTES = int(
-    _os.getenv("FO_EO04_GRAFICO_IMG_MAX_BYTES", "320000") or "320000"
+    _os.getenv("FO_EO04_GRAFICO_IMG_MAX_BYTES", "2500000") or "2500000"
+)
+_FO_EO04_GRAFICO_LOSSLESS = (
+    str(_os.getenv("FO_EO04_GRAFICO_LOSSLESS", "1") or "1").strip().lower()
+    not in ("0", "false", "no", "off")
 )
 # Firmas/logos (se repiten por página; en pantalla miden ~38–92 px).
 _REPORT_IMG_MAX_PX = int(_os.getenv("REPORT_FIRMA_LOGO_MAX_PX", "320") or "320")
@@ -5550,6 +5554,7 @@ def _comprimir_img_bytes_para_pdf(
     jpeg_q: int = _REPORT_IMG_JPEG_Q,
     max_bytes: Optional[int] = None,
     force_jpeg: bool = False,
+    prefer_png: bool = False,
     min_px: int = 200,
     min_q: int = 38,
 ) -> Optional[Tuple[bytes, str]]:
@@ -5558,6 +5563,7 @@ def _comprimir_img_bytes_para_pdf(
     Si max_bytes está definido, reduce calidad y tamaño iterativamente hasta
     caber en el presupuesto (p. ej. fotos FO-EO-04 ~70 KB). force_jpeg aplana
     transparencia sobre blanco — útil para fotos de obra en PNG pesados.
+    prefer_png=True: PNG sin pérdida (gráficos/esquema nítidos al ampliar).
     """
     try:
         from PIL import Image
@@ -5567,7 +5573,7 @@ def _comprimir_img_bytes_para_pdf(
             img.load()
         except Exception:
             pass
-        has_alpha = (not force_jpeg) and (
+        has_alpha = (not force_jpeg) and (not prefer_png) and (
             img.mode in ("RGBA", "LA")
             or (img.mode == "P" and "transparency" in img.info)
         )
@@ -5581,6 +5587,20 @@ def _comprimir_img_bytes_para_pdf(
                     Image.Resampling.LANCZOS,
                 )
             buf = io.BytesIO()
+            if prefer_png:
+                if cur_img.mode in ("RGBA", "LA", "P"):
+                    bg = Image.new("RGB", cur_img.size, (255, 255, 255))
+                    if cur_img.mode == "P":
+                        cur_img = cur_img.convert("RGBA")
+                    if cur_img.mode in ("RGBA", "LA"):
+                        bg.paste(cur_img, mask=cur_img.split()[-1])
+                    else:
+                        bg.paste(cur_img)
+                    cur_img = bg
+                elif cur_img.mode != "RGB":
+                    cur_img = cur_img.convert("RGB")
+                cur_img.save(buf, format="PNG", optimize=True)
+                return buf.getvalue(), "image/png"
             if has_alpha:
                 cur_img = cur_img.convert("RGBA")
                 cur_img.save(buf, format="PNG", optimize=True)
@@ -5606,7 +5626,13 @@ def _comprimir_img_bytes_para_pdf(
             best = (out, ct)
             if max_bytes is None or len(out) <= max_bytes:
                 return best
-            if cur_q > min_q:
+            if prefer_png:
+                # Sin JPEG: solo bajar px si el PNG supera el presupuesto.
+                if cur_px > min_px:
+                    cur_px = max(min_px, int(cur_px * 0.88))
+                else:
+                    break
+            elif cur_q > min_q:
                 cur_q = max(min_q, cur_q - 7)
             elif cur_px > min_px:
                 cur_px = max(min_px, int(cur_px * 0.82))
@@ -8893,9 +8919,10 @@ def _url_a_data_url_pdf(
         return None
     u = str(url).strip()
     kind_norm = (kind or "foto").strip().lower()
+    es_grafico = kind_norm in ("grafico", "esquema", "plano")
     if for_logo:
         max_px, max_bytes, jpeg_q = 240, 12_000, 70
-    elif kind_norm in ("grafico", "esquema", "plano"):
+    elif es_grafico:
         max_px = _FO_EO04_GRAFICO_IMG_MAX_PX
         max_bytes = _FO_EO04_GRAFICO_IMG_MAX_BYTES
         jpeg_q = _FO_EO04_GRAFICO_IMG_JPEG_Q
@@ -8903,6 +8930,7 @@ def _url_a_data_url_pdf(
         max_px = _FO_EO04_IMG_MAX_PX
         max_bytes = _FO_EO04_IMG_MAX_BYTES
         jpeg_q = _FO_EO04_IMG_JPEG_Q
+    prefer_png = bool(es_grafico and _FO_EO04_GRAFICO_LOSSLESS and not for_logo)
     try:
         if u.startswith("data:") and ";base64," in u:
             raw = base64.b64decode(u.split(",", 1)[1])
@@ -8917,9 +8945,10 @@ def _url_a_data_url_pdf(
             max_px=max_px,
             jpeg_q=jpeg_q,
             max_bytes=max_bytes,
-            force_jpeg=not for_logo,
-            min_px=480 if kind_norm in ("grafico", "esquema", "plano") else 200,
-            min_q=72 if kind_norm in ("grafico", "esquema", "plano") else 38,
+            force_jpeg=(not for_logo) and (not prefer_png),
+            prefer_png=prefer_png,
+            min_px=1200 if es_grafico else 200,
+            min_q=72 if es_grafico else 38,
         )
         if comp:
             b, ct = comp
