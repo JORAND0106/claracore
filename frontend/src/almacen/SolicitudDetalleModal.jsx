@@ -108,7 +108,7 @@ export default function SolicitudDetalleModal({
   const modalTheme = useMemo(() => ({
     primary: ui.accent,
     bgCard: ui.card?.background || '#fff',
-    border: '#e2e8f0',
+    border: ui.borderColor,
     text: ui.text,
     textMuted: ui.textMuted,
   }), [ui])

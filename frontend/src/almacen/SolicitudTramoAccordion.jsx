@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import {
   AlmacenHelpIcon,
   almacenFormModalDialogStyle,
@@ -57,6 +58,7 @@ export default function SolicitudTramoAccordion({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const compact = useAlmacenCompact()
   const [tramos, setTramos] = useState([])
   const [loading, setLoading] = useState(true)
@@ -422,11 +424,7 @@ export default function SolicitudTramoAccordion({
 
         {error && (
           <div style={{
-            color: '#991b1b',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 8,
-            padding: '8px 10px',
+            ...estiloAvisoAlmacen(contraste, 'danger'),
             marginBottom: 10,
             fontSize: 'var(--cc-sm)',
             whiteSpace: 'pre-wrap',

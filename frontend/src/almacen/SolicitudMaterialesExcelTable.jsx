@@ -9,15 +9,8 @@ import {
   saldoNegociadoItem,
   saldoPresupuestadoItem,
 } from './solicitudDetalleHelpers'
-import { almacenContraste } from './almacenContraste'
+import { almacenContraste, colorEstadoLinea } from './almacenContraste'
 import { AlmacenHelpIcon, fmtCant, fmtCant2, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
-
-const ESTADO_COLOR = {
-  pendiente: '#d97706',
-  aprobado: '#059669',
-  rechazado: '#dc2626',
-  varios: '#64748b',
-}
 
 const ROW_H = 36
 
@@ -291,11 +284,16 @@ export default function SolicitudMaterialesExcelTable({
                     </tr>
                   )}
                   <tr
-                    style={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_H }}
+                    data-selected={marcada ? 'true' : undefined}
+                    style={{
+                      cursor: onRowClick ? 'pointer' : 'default',
+                      height: ROW_H,
+                      background: marcada ? ui.accentSoft : 'transparent',
+                    }}
                     data-testid={fila.items.length > 1 ? 'linea-grupo-insumo' : 'linea-solicitud'}
                     onClick={() => onRowClick?.(it, idx)}
                     onMouseEnter={(e) => { e.currentTarget.style.background = ui.accentSoft }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = marcada ? ui.accentSoft : 'transparent' }}
                   >
                     {puedeSeleccionar && (
                       <td
@@ -324,7 +322,7 @@ export default function SolicitudMaterialesExcelTable({
                           data-testid="eliminar-linea-solicitud"
                           title="Eliminar línea"
                           onClick={() => onEliminarLinea?.(fila.items)}
-                          style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24, color: '#b91c1c' }}
+                          style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0, height: 24, color: contraste.dangerText }}
                         >
                           Eliminar
                         </button>
@@ -384,7 +382,7 @@ export default function SolicitudMaterialesExcelTable({
                     </td>
                     <td style={{
                       ...cellBase(ui),
-                      color: ESTADO_COLOR[ev || 'pendiente'],
+                      color: colorEstadoLinea(ev || 'pendiente', contraste),
                       fontWeight: 700,
                       fontSize: 'var(--cc-xs)',
                     }}

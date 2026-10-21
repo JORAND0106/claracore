@@ -9,6 +9,7 @@ import { notificarProveedoresPayload } from './ocNotificarProveedor'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import { gruposProveedorPendientes } from './ocProveedoresSeleccion'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import {
   ESTADO_SOLICITUD_LABEL,
   almacenFormModalDialogStyle,
@@ -33,6 +34,7 @@ export default function SolicitudRevisionModal({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const compact = useAlmacenCompact()
   const [sol, setSol] = useState(solicitudInicial || null)
   const [motivo, setMotivo] = useState('')
@@ -47,7 +49,7 @@ export default function SolicitudRevisionModal({
 
   const theme = t || {
     primary: ui.accent,
-    border: '#e2e8f0',
+    border: ui.borderColor,
     text: ui.text,
     textMuted: ui.textMuted,
     bgCard: ui.card?.background || '#fff',
@@ -182,15 +184,12 @@ export default function SolicitudRevisionModal({
         </div>
 
         {loading && <div style={{ color: ui.textMuted, marginBottom: 12 }}>Cargando…</div>}
-        {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
+        {error && <div style={{ color: contraste.dangerText, marginBottom: 12 }}>{error}</div>}
 
         {superaPresupuesto && (
           <div style={{
-            background: '#fef2f2',
-            border: '2px solid #dc2626',
-            color: '#991b1b',
+            ...estiloAvisoAlmacen(contraste, 'danger'),
             padding: 12,
-            borderRadius: 8,
             marginBottom: 12,
             fontWeight: 700,
             fontSize: 'var(--cc-sm)',
@@ -203,11 +202,8 @@ export default function SolicitudRevisionModal({
 
         {superaNegociado && (
           <div style={{
-            background: '#fef2f2',
-            border: '2px solid #dc2626',
-            color: '#991b1b',
+            ...estiloAvisoAlmacen(contraste, 'danger'),
             padding: 12,
-            borderRadius: 8,
             marginBottom: 12,
             fontWeight: 700,
             fontSize: 'var(--cc-sm)',

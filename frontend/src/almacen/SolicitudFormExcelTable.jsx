@@ -2,6 +2,7 @@ import { useState } from 'react'
 import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import PresupuestoItemSelector from './PresupuestoItemSelector'
 import SolicitudLineaUbicacionEditor from './SolicitudLineaUbicacionEditor'
+import { almacenContraste } from './almacenContraste'
 import { AlmacenHelpIcon, useAlmacenTheme } from './almacenShared'
 import { coerceEsPrincipal, isAdministracionAiu, MIN_JUSTIFICACION_SUPERA_PPTO } from './solicitudFormHelpers'
 
@@ -103,6 +104,7 @@ export default function SolicitudFormExcelTable({
   isRowLocked,
 }) {
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   /** { idx, phase: 'mapa' | 'detalle' } */
   const [ubicacionFlow, setUbicacionFlow] = useState(null)
   const thBase = { ...ui.th, fontSize: 'var(--cc-xs)' }
@@ -302,9 +304,10 @@ export default function SolicitudFormExcelTable({
                           style={{
                             ...cellInp,
                             ...(falta ? {
-                              borderColor: '#dc2626',
-                              background: '#fef2f2',
-                              boxShadow: '0 0 0 1px #fecaca',
+                              borderColor: contraste.dangerBorder,
+                              background: contraste.dangerBg,
+                              color: contraste.dangerText,
+                              boxShadow: `0 0 0 1px ${contraste.dangerBorder}`,
                             } : {}),
                           }}
                           value={it.observacion_residente || ''}

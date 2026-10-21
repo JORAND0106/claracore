@@ -158,7 +158,7 @@ describe('Fuentes — asignación separada de la aprobación', () => {
     assert.match(antesDeAprobar, /puedeValidarLinea &&/)
   })
 
-  it('generar la OC exige el cargo autorizado; aprobar ítems sigue con Validar', () => {
+  it('generar la OC exige Validar y Contratista Gerencial; aprobar ítems sigue con Validar', () => {
     const detalle = readFileSync(join(dir, 'SolicitudDetalleModal.jsx'), 'utf8')
     const idx = detalle.indexOf('Aprobar y generar OC')
     assert.ok(idx > 0)

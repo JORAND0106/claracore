@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { almacenContraste } from './almacenContraste'
 import { useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 function fmtCuando(iso) {
@@ -26,6 +27,7 @@ export default function SolicitudBuzon({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const [abierto, setAbierto] = useState(false)
   const [mensajes, setMensajes] = useState([])
   const [noLeidos, setNoLeidos] = useState(Number(noLeidosInicial) || 0)
@@ -217,7 +219,7 @@ export default function SolicitudBuzon({
           </div>
         )}
         {error && (
-          <div style={{ color: '#991b1b', fontSize: 'var(--cc-sm)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>
+          <div style={{ color: contraste.dangerText, fontSize: 'var(--cc-sm)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>
             {error}
             {avisoPendiente?.id && (
               <div style={{ marginTop: 8 }}>
@@ -248,7 +250,8 @@ export default function SolicitudBuzon({
                 border: `1px solid ${ui.textMuted}22`,
                 borderRadius: 8,
                 padding: '8px 10px',
-                background: m.es_destinatario && !m.leido_para_mi ? '#eff6ff' : 'transparent',
+                background: m.es_destinatario && !m.leido_para_mi ? contraste.infoBg : 'transparent',
+                color: m.es_destinatario && !m.leido_para_mi ? contraste.infoText : ui.text,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
@@ -258,13 +261,13 @@ export default function SolicitudBuzon({
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
                 Para: {(m.destinatarios || []).map((d) => d.nombre).filter(Boolean).join(', ') || '—'}
                 {m.es_destinatario && (
-                  <span style={{ marginLeft: 8, fontWeight: 700, color: m.leido_para_mi ? '#065f46' : '#b45309' }}>
+                  <span style={{ marginLeft: 8, fontWeight: 700, color: m.leido_para_mi ? contraste.okText : contraste.warnText }}>
                     {m.leido_para_mi ? 'Leído' : 'Sin leer'}
                   </span>
                 )}
               </div>
               {m.linea_etiqueta && (
-                <div style={{ fontSize: 'var(--cc-xs)', marginTop: 4, color: '#1e3a8a' }}>
+                <div style={{ fontSize: 'var(--cc-xs)', marginTop: 4, color: contraste.infoText }}>
                   {m.linea_etiqueta}
                 </div>
               )}

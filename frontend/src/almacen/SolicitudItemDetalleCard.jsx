@@ -3,6 +3,7 @@ import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import LineaResumenExcelTable from './LineaResumenExcelTable'
 import { rentabilidadDesdeAnalisis, fmtAbscisasLinea } from './solicitudDetalleHelpers'
+import { almacenContraste } from './almacenContraste'
 import {
   fmtCant,
   formatSolicitudLinea,
@@ -23,6 +24,7 @@ export default function SolicitudItemDetalleCard({
   resaltarCantidad = false,
 }) {
   const ui = useAlmacenTheme()
+  const contraste = almacenContraste(ui)
   const [expanded, setExpanded] = useState(!accordion || defaultExpanded)
   const ctx = item.preview?.contexto_presupuesto || item.contexto_presupuesto
   const ctxNeg = item.preview?.contexto_negociado || item.contexto_negociado
@@ -206,10 +208,11 @@ export default function SolicitudItemDetalleCard({
   return (
     <div
       style={{
-        border: alerta ? '2px solid #dc2626' : `1px solid ${ui.textMuted}33`,
+        border: alerta ? `2px solid ${contraste.dangerBorder}` : `1px solid ${ui.textMuted}33`,
         borderRadius: 10,
         marginBottom: compact ? 8 : 10,
-        background: alerta ? '#fef2f2' : `${ui.accentSoft}88`,
+        background: alerta ? contraste.dangerBg : `${ui.accentSoft}88`,
+        color: alerta ? contraste.dangerText : ui.text,
         overflow: 'hidden',
       }}
     >

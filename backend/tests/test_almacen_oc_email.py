@@ -193,20 +193,49 @@ def test_correo_corregido_se_usa_en_el_reintento(monkeypatch):
     assert estados == [("enviado", "nuevo@obra.com")]
 
 
-def test_solo_administrador_o_desarrollador_generan_oc():
-    admin = {"rol": "Operativo Campo", "cargo": "Administrador"}
-    dev = {"rol": "Desarrollador", "cargo": "Dev"}
-    gerencia = {"rol": "Contratista Gerencial", "cargo": "Gerente"}
-    residente = {"rol": "Administrativo", "cargo": "Residente Administrativo"}
-    inter = {"rol": "Interventoría", "cargo": "Administrador"}
-    assert puede_generar_orden_compra_almacen(admin) is True
-    require_generar_orden_compra_almacen(admin)
+def test_generar_oc_exige_validar_y_contratista_gerencial(monkeypatch):
+    monkeypatch.setattr(
+        "almacen_permissions.tiene_permiso_almacen",
+        lambda user, accion: accion == "validar" and bool(user.get("_validar")),
+    )
+
+    def usuario(rol, cargo="", validar=False):
+        return {"sub": 1, "rol": rol, "cargo": cargo, "_validar": validar}
+
+    gerencia = usuario("Contratista Gerencial", "Residente", validar=True)
+    assert puede_generar_orden_compra_almacen(gerencia) is True
+    require_generar_orden_compra_almacen(gerencia)
+    assert puede_generar_orden_compra_almacen(usuario("Gerencia Contratista", validar=True)) is True
+
+    admin = usuario("Operativo Campo", "Administrador", validar=True)
+    assert puede_generar_orden_compra_almacen(admin) is False
+    assert puede_generar_orden_compra_almacen(usuario("Operativo Campo", "Administrador")) is False
+    assert puede_generar_orden_compra_almacen(usuario("Operativo Campo", "Residente", validar=True)) is False
+    assert puede_generar_orden_compra_almacen(usuario("Contratista Gerencial", "Gerente")) is False
+
+    dev = usuario("Desarrollador", "Dev")
     assert puede_generar_orden_compra_almacen(dev) is True
-    assert puede_generar_orden_compra_almacen(gerencia) is False
+    require_generar_orden_compra_almacen(dev)
+    assert puede_generar_orden_compra_almacen(usuario("Operativo", "Desarrollador")) is True
+
+    residente = usuario("Administrativo", "Residente Administrativo", validar=True)
     assert puede_generar_orden_compra_almacen(residente) is False
     assert puede_ver_valores_economicos_almacen(residente) is True
     assert puede_ver_valores_economicos_almacen(admin) is False
+    assert puede_ver_valores_economicos_almacen(gerencia) is True
+
+    inter = usuario("Interventoría", "Administrador", validar=True)
     assert puede_generar_orden_compra_almacen(inter) is False
+    externa = usuario("Supervisión Externa", "Administrador", validar=True)
+    assert puede_generar_orden_compra_almacen(externa) is False
+
     with pytest.raises(HTTPException) as exc:
-        require_generar_orden_compra_almacen(gerencia)
+        require_generar_orden_compra_almacen(admin)
     assert exc.value.status_code == 403
+    assert "Contratista Gerencial" in exc.value.detail
+    assert "Administrador" not in exc.value.detail
+
+    with pytest.raises(HTTPException) as bloqueado:
+        require_generar_orden_compra_almacen(inter)
+    assert bloqueado.value.status_code == 403
+    assert "no está disponible" in bloqueado.value.detail

@@ -9,6 +9,7 @@
 import { esDesarrolladorUsuario, permisoFuncionContrato, tienePermisoAlgunaAccion, tienePermisoFlag } from '../utils/permisosContrato'
 import { permisosCatalogoInsumos, tieneAlgunaAccionCatalogoInsumos } from '../admin/catalogoInsumosPermisos'
 import { permisosEntradasSalidas, tieneAlgunaAccionEntradasSalidas } from './entradasSalidasPermisos'
+import { evaluarGenerarOc } from './generarOcRegla'
 
 export const ALMACEN_FUNCION = 'almacén'
 
@@ -89,11 +90,17 @@ export function esCargoAdministrador(usuario) {
   return normRol(usuario?.cargo_nombre || usuario?.cargo) === 'administrador'
 }
 
-/** Generar la OC: cargo Administrador o rol/cargo Desarrollador. */
-export function puedeGenerarOrdenCompraAlmacen(usuario) {
-  if (rolExcluidoAlmacen(usuario)) return false
-  if (esDesarrolladorUsuario(usuario)) return true
-  return esCargoAdministrador(usuario)
+/**
+ * Generar la OC: permiso Validar en Almacén y rol Contratista Gerencial.
+ * El desarrollador conserva acceso total. El cargo Administrador por sí solo no basta.
+ */
+export function puedeGenerarOrdenCompraAlmacen(usuario, contratoId) {
+  return evaluarGenerarOc({
+    excluido: rolExcluidoAlmacen(usuario),
+    desarrollador: esDesarrolladorUsuario(usuario),
+    contratistaGerencial: esGerenciaContratistaRol(usuario),
+    validar: permisoAlmacen(usuario, 'validar', contratoId ?? usuario?.contrato_id),
+  })
 }
 
 /**
@@ -209,7 +216,7 @@ export function accesoAlmacen(usuario, contratoId) {
     catalogo,
     entradasSalidas,
     verEconomicos: !bloqueado && puedeVerValoresEconomicosAlmacen(usuario),
-    puedeGenerarOc: !bloqueado && puedeGenerarOrdenCompraAlmacen(usuario),
+    puedeGenerarOc: !bloqueado && puedeGenerarOrdenCompraAlmacen(usuario, cid),
     esContratistaGerencial: esGerencial,
   }
 }
