@@ -99,6 +99,8 @@ describe('contrato · documento', () => {
     assert.match(md, /sicoeCuadroAceros/)
     assert.match(md, /Cabezal descole/)
     assert.match(md, /Edítelo desde el cuadro de aceros/)
+    assert.match(md, /SicoeFotoFuentesBotones/)
+    assert.match(md, /Galería del dispositivo/)
   })
 })
 
