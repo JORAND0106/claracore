@@ -85,6 +85,14 @@ def so_registros_remember_omit(col: str) -> None:
     _remember_omit(_SO_REGISTROS_OMIT_COLUMNS, _SO_REGISTROS_OMIT_LOCK, col)
 
 
+def so_registros_column_omitted(col: str) -> bool:
+    """True si ya sabemos que la columna no existe en so_registros (PGRST204 previo)."""
+    if not col:
+        return False
+    with _SO_REGISTROS_OMIT_LOCK:
+        return col in _SO_REGISTROS_OMIT_COLUMNS
+
+
 def so_registros_clear_omit_cache() -> None:
     with _SO_REGISTROS_OMIT_LOCK:
         _SO_REGISTROS_OMIT_COLUMNS.clear()

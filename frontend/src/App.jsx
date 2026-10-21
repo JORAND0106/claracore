@@ -15372,10 +15372,22 @@ function GaleriaFotos({
       headers: hdrs,
       cache: 'no-store',
     })
-      .then(r => r.json())
-      .then(d => {
+      .then(async (r) => {
+        const d = await r.json().catch(() => null)
         if (cancelled) return
-        const list = Array.isArray(d) ? d : []
+        if (!r.ok || !Array.isArray(d)) {
+          const detail = d?.detail
+          const msg = typeof detail === 'string'
+            ? detail
+            : (detail && typeof detail === 'object' && detail.message)
+              ? detail.message
+              : 'No se pudo cargar la galería.'
+          setFotos([])
+          setLoading(false)
+          console.warn('galeria', msg)
+          return
+        }
+        const list = d
         if (!seeds.length) {
           setFotos(list)
         } else {

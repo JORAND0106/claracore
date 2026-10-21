@@ -1564,8 +1564,10 @@ def _logs_pgrst_unknown_column(err: Exception) -> Optional[str]:
 
 # Reexport / wrappers: escritura resiliente so_registros (coords_geojson / huella_* opcionales).
 from sicoe_registros_schema import (  # noqa: E402
+    so_registros_column_omitted as _so_registros_column_omitted,
     so_registros_insert_rows_omit_missing as _so_registros_insert_rows_omit_missing_impl,
     so_registros_pgrst_unknown_column as _so_registros_pgrst_unknown_column,
+    so_registros_remember_omit as _so_registros_remember_omit,
     so_registros_strip_omitted as _so_registros_strip_omitted,
     so_registros_write_omit_missing as _so_registros_write_omit_missing,
     so_reportes_write_omit_missing as _so_reportes_write_omit_missing,
@@ -27613,13 +27615,28 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
     """
     _ = current_user
 
-    def _q_regs():
+    # No exigir fotos_historial aquí: si la migración aún no está, un SELECT con esa
+    # columna tumba toda la galería (fotos y gráficos). foto_url + hashes bastan;
+    # fotos_historial se incluye solo si ya existe (cache de omit).
+    from sicoe_registros_schema import (
+        so_registros_column_omitted as _so_col_omitted,
+        so_registros_remember_omit as _so_remember_omit,
+        so_registros_pgrst_unknown_column as _so_unknown_col,
+    )
+
+    def _select_cols(incluir_fotos_hist: bool) -> str:
+        parts = [
+            "foto_url", "foto_numero", "foto_descripcion",
+            "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
+            "created_at",
+        ]
+        if incluir_fotos_hist and not _so_col_omitted("fotos_historial"):
+            parts.insert(3, "fotos_historial")
+        return ", ".join(parts)
+
+    def _q_regs(incluir_fotos_hist: bool = True):
         q = supabase.table("so_registros")\
-            .select(
-                "foto_url, foto_numero, foto_descripcion, fotos_historial, "
-                "grafico_url, grafico_numero, grafico_descripcion, graficos_historial, "
-                "created_at"
-            )\
+            .select(_select_cols(incluir_fotos_hist))\
             .eq("contrato_id", contrato_id)
         if desde:
             q = q.gte("created_at", desde)
@@ -27627,11 +27644,19 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
             q = q.lte("created_at", hasta + "T23:59:59")
         return q.order("created_at", desc=True).execute().data
 
-    rows = supabase_execute(_q_regs) or []
+    try:
+        rows = supabase_execute(lambda: _q_regs(True)) or []
+    except Exception as exc:
+        col = _so_unknown_col(exc)
+        if col == "fotos_historial" or (col is None and "fotos_historial" in str(exc).lower()):
+            _so_remember_omit("fotos_historial")
+            rows = supabase_execute(lambda: _q_regs(False)) or []
+        else:
+            raise
     if tipo == "grafico":
         return _galeria_extraer_graficos_unicos(rows)
 
-    # tipo == "foto": registros (foto_url + fotos_historial) + hashes
+    # tipo == "foto": registros (foto_url + fotos_historial si existe) + hashes
     desde_regs: List[dict] = []
     for r in rows:
         if r.get("foto_url"):
@@ -31429,10 +31454,13 @@ def sicoe_cantidades_por_item(
         ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
     )
 
+    # No listar fotos_historial aquí: el detalle del reporte usa select(*) y la
+    # galería ya reintenta sin esa columna. Un SELECT explícito tumba /analisis
+    # si la migración aún no está aplicada.
     cols = (
         "id,reporte_id,numero_registro,capitulo,item_numero,item_descripcion,unidad,"
         "competencia,longitud,ancho,espesor,cantidad,cantidad_total,observacion,"
-        "foto_url,foto_numero,fotos_historial,grafico_url,grafico_numero,graficos_historial,"
+        "foto_url,foto_numero,grafico_url,grafico_numero,graficos_historial,"
         "tramo,infraestructura,calzada,margen,abs_inicio,abs_final,nodo_ini,nodo_fin,"
         "pk_id_id,civ,ubicacion,coord_lat,coord_lng,bloqueado,acta_rpo_id,semana_id,"
         f"{SICOE_SELECT_NIVELES_ESTADO}"
