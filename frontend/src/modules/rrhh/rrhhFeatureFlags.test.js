@@ -23,9 +23,12 @@ describe('rrhhFeatureFlags', () => {
     const tab = readFileSync(join(dir, 'DocumentacionTab.jsx'), 'utf8')
     assert.match(tab, /auditoriaDocumentalActiva/)
     assert.match(tab, /auditoriaActiva && \(/)
+    assert.match(tab, /canDelete/)
     const mod = readFileSync(join(dir, 'ModuloRrhh.jsx'), 'utf8')
     assert.match(mod, /mostrarTonoAuditoria:\s*auditoriaActiva/)
     assert.match(mod, /setValidacionDocumentacionMasiva/)
     assert.match(mod, /validacionMasiva/)
+    assert.match(mod, /canValidarMasivo = Boolean\(permisos\.esDesarrollador\)/)
   })
 })
+

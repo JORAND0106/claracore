@@ -65,6 +65,9 @@ export function policySnapshotAsistenciaRrhh({
   contratoId,
   activaEnExento = false,
   now = new Date(),
+  activaEn = null,
+  activaPor = null,
+  apagadaEn = null,
 } = {}) {
   const corteActivo = cutoverAsistenciaRrhhActivo(now)
   const exento = esContratoExentoAsistenciaRrhh(contratoId)
@@ -77,7 +80,19 @@ export function policySnapshotAsistenciaRrhh({
     activa_en_exento: exento ? Boolean(activaEnExento) : false,
     requiere_rrhh_aprobado: gate,
     permite_cargo_cuadrilla: !gate && exento,
+    activa_en: activaEn,
+    activa_por: activaPor,
+    apagada_en: apagadaEn,
   }
+}
+
+/** Colaborador registrado después de apagar el interruptor → solo validación individual. */
+export function trabajadorEsNuevoTrasApagado(createdAt, apagadaEn) {
+  if (!createdAt || !apagadaEn) return false
+  const c = Date.parse(createdAt)
+  const a = Date.parse(apagadaEn)
+  if (!Number.isFinite(c) || !Number.isFinite(a)) return false
+  return c > a
 }
 
 /** Filtra catálogo RRHH a documentación Aprobada (cuando el gate está activo). */

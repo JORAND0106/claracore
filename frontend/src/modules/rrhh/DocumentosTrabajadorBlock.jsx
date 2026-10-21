@@ -22,6 +22,8 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
   trabajadorId,
   categoria = 'soporte',
   canEdit = true,
+  /** Borrar adjuntos: permiso Eliminar (Desarrollador tiene acceso pleno). */
+  canDelete = false,
   customTipos = [],
   onTiposChange,
   onMsg,
@@ -45,6 +47,7 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
   const catalogKey = categoria === 'ingreso' ? 'doc_ingreso' : 'doc_soporte'
   const allowOtro = (categoria === 'soporte' || categoria === 'ingreso') && !tiposFijos?.length
   const editable = canEdit && !locked
+  const deletable = Boolean(canDelete) && !locked
 
   const [pendingTipos, setPendingTipos] = useState([])
   const tipos = useMemo(() => {
@@ -128,7 +131,9 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
     for (const meta of tipos) {
       if (meta.tipo === 'otro') continue
       const ofTipo = rows.filter((r) => r.tipo === meta.tipo)
-      map[meta.tipo] = ofTipo.find((r) => r.vigente) || ofTipo[0] || null
+      // Solo la versión vigente cuenta como «cargado»; tras borrar el vigente
+      // el slot queda vacío (rojo si es obligatorio), aunque quede historial.
+      map[meta.tipo] = ofTipo.find((r) => r.vigente) || null
       map[`${meta.tipo}__hist`] = ofTipo
     }
     for (const r of rows) {
@@ -136,7 +141,8 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
         const slug = slugTipoDocumento(r.tipo_otro_texto)
         if (!map[`${slug}__hist`]) map[`${slug}__hist`] = []
         map[`${slug}__hist`].push(r)
-        if (!map[slug] || r.vigente) map[slug] = r
+        if (r.vigente) map[slug] = r
+        else if (!map[slug]) map[slug] = null
       }
     }
     return map
@@ -256,8 +262,8 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
   }
 
   const eliminar = async (doc) => {
-    if (!editable || !doc?.id) return
-    if (!window.confirm('¿Eliminar este documento?')) return
+    if (!deletable || !doc?.id) return
+    if (!window.confirm('¿Eliminar este documento? El tipo quedará como no cargado.')) return
     setBusy(true)
     try {
       await api.deleteDocumento(trabajadorId, doc.id)
@@ -419,8 +425,16 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
                           {row._pending ? 'Cambiar' : 'Reemplazar'}
                         </button>
                       )}
-                      {editable && !row._pending && row.id && (
-                        <button type="button" style={S.btnDanger} disabled={busy} onClick={() => eliminar(row)}>Eliminar</button>
+                      {deletable && !row._pending && row.id && (
+                        <button
+                          type="button"
+                          style={S.btnDanger}
+                          disabled={busy}
+                          title="Eliminar archivo adjunto"
+                          onClick={() => eliminar(row)}
+                        >
+                          Eliminar
+                        </button>
                       )}
                     </div>
                   </td>

@@ -39,6 +39,7 @@ export default function ContratoLaboralBlock({
   onFechaIngresoChange = null,
   compact = false,
   canEdit = true,
+  canDelete = false,
   canExport = true,
   onMsg,
   ciclo = {},
@@ -144,7 +145,7 @@ export default function ContratoLaboralBlock({
   }
 
   const eliminar = async (row) => {
-    if (!canEdit || !row?.id) return
+    if (!canDelete || !row?.id) return
     if (!window.confirm('¿Anular esta versión del contrato laboral?')) return
     setBusy(true)
     try {
@@ -401,7 +402,7 @@ export default function ContratoLaboralBlock({
                         </svg>
                       </button>
                     )}
-                    {canEdit && (
+                    {canDelete && (
                       <button
                         type="button"
                         style={iconBtn(S.btnDanger)}

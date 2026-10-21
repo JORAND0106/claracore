@@ -72,9 +72,13 @@ def test_set_usa_columna_cuando_existe(monkeypatch):
         def rpc(self, *_a, **_k):
             return type("R", (), {"execute": lambda self: None})()
 
-    out = svc.set_asistencia_rrhh_activa(Sb(), 3, True)
+    out = svc.set_asistencia_rrhh_activa(Sb(), 3, True, current_user={"id": 7})
     assert out is True
-    assert capture.get("update") == {"bitacora_asistencia_rrhh_activa": True}
+    upd = capture.get("update") or {}
+    assert upd.get("bitacora_asistencia_rrhh_activa") is True
+    assert upd.get("bitacora_asistencia_rrhh_activa_por") == 7
+    assert upd.get("bitacora_asistencia_rrhh_activa_en")
+    assert "bitacora_asistencia_rrhh_apagada_en" not in upd
 
 
 def test_set_fallback_json_si_columna_ausente(monkeypatch):

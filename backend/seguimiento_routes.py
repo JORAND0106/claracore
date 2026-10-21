@@ -2058,9 +2058,34 @@ def route_bitacora_asistencia_rrhh_activa(
             ),
         )
     try:
-        set_asistencia_rrhh_activa(supabase, contrato_id, bool(body.activa))
+        set_asistencia_rrhh_activa(
+            supabase,
+            contrato_id,
+            bool(body.activa),
+            current_user=current_user,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    estado = "encendido" if body.activa else "apagado"
+    try:
+        from rrhh_timezone import format_fecha_hora_colombia, now_iso_bogota
+
+        registrar_log(
+            current_user,
+            "ACTUALIZAR",
+            "BITACORA",
+            "contratos",
+            str(contrato_id),
+            {
+                "accion": f"interruptor_bitacora_rrhh_{estado}",
+                "activa": bool(body.activa),
+                "hora_colombia": format_fecha_hora_colombia(
+                    now_iso_bogota(), with_seconds=True,
+                ),
+            },
+        )
+    except Exception:
+        pass
     return get_asistencia_rrhh_policy(supabase, contrato_id)
 
 

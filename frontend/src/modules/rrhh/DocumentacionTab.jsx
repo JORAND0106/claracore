@@ -62,6 +62,8 @@ export default function DocumentacionTab({
   const ui = rrhhSheetStyles(tTok)
   const locked = Boolean(detalle?.doc_bloqueado)
   const canEdit = (permisos.crear || permisos.editar) && !locked
+  // Borrar adjuntos: permiso Eliminar (Desarrollador conserva acceso pleno).
+  const canDelete = Boolean(permisos.eliminar || permisos.esDesarrollador) && !locked
   const canValidar = Boolean(permisos.validar || permisos.esDesarrollador)
   const esDesarrollador = Boolean(permisos.esDesarrollador)
   const esPrestacion = useMemo(
@@ -318,6 +320,7 @@ export default function DocumentacionTab({
           fechaIngreso={editForm?.fecha_ingreso || ''}
           onFechaIngresoChange={(v) => setField('fecha_ingreso', v)}
           canEdit={canEdit}
+          canDelete={canDelete}
           canExport={permisos.exportar || permisos.ver}
           onMsg={(m) => flash(m.type, m.text)}
           ciclo={{
@@ -340,6 +343,7 @@ export default function DocumentacionTab({
           trabajadorId={detalle.id}
           categoria="soporte"
           canEdit={canEdit}
+          canDelete={canDelete}
           locked={locked}
           hideSave
           customTipos={catalogo?.doc_soporte || []}
@@ -357,6 +361,7 @@ export default function DocumentacionTab({
           trabajadorId={detalle.id}
           categoria="ingreso"
           canEdit={canEdit}
+          canDelete={canDelete}
           locked={locked}
           hideSave
           customTipos={catalogo?.doc_ingreso || []}
@@ -375,6 +380,7 @@ export default function DocumentacionTab({
             trabajadorId={detalle.id}
             categoria="afiliacion"
             canEdit={canEdit}
+            canDelete={canDelete}
             locked={locked}
             hideSave
             tituloOverride="Planilla de pago"
@@ -389,6 +395,7 @@ export default function DocumentacionTab({
             trabajadorId={detalle.id}
             categoria="afiliacion"
             canEdit={canEdit}
+            canDelete={canDelete}
             locked={locked}
             hideSave
             showAfiliacionEntidad

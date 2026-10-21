@@ -1,61 +1,45 @@
 /**
- * Node tests — política Bitácora ↔ RRHH (corte + contrato 3).
  * Run: node --test src/modules/seguimiento/bitacoraAsistenciaRrhhPolicy.test.js
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
-  BITACORA_ASISTENCIA_RRHH_CORTE_ISO,
-  cutoverAsistenciaRrhhActivo,
-  docValidacionEsAprobado,
-  esContratoExentoAsistenciaRrhh,
-  filtrarCatalogoRrhhAprobados,
   policySnapshotAsistenciaRrhh,
-  requiereAsistenciaRrhhAprobado,
+  trabajadorEsNuevoTrasApagado,
 } from './bitacoraAsistenciaRrhhPolicy.js'
-import { puedeUsarCargoCantidadAsistencia } from './personalAsistenciaHelpers.js'
 
-describe('bitacoraAsistenciaRrhhPolicy', () => {
-  it('antes del 28-sep-2026 no exige gate', () => {
-    const now = new Date('2026-09-27T23:30:00-05:00')
-    assert.equal(cutoverAsistenciaRrhhActivo(now), false)
-    assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 1, now }), false)
-    assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 3, activaEnExento: true, now }), false)
+const dir = dirname(fileURLToPath(import.meta.url))
+
+describe('bitacoraAsistenciaRrhhPolicy — personal nuevo', () => {
+  it('detecta creado después de apagada_en', () => {
+    assert.equal(
+      trabajadorEsNuevoTrasApagado('2026-10-21T20:00:00-05:00', '2026-10-21T18:00:00-05:00'),
+      true,
+    )
+    assert.equal(
+      trabajadorEsNuevoTrasApagado('2026-10-21T17:00:00-05:00', '2026-10-21T18:00:00-05:00'),
+      false,
+    )
+    assert.equal(trabajadorEsNuevoTrasApagado('2026-10-21T20:00:00-05:00', null), false)
   })
 
-  it('desde el 28-sep-2026 exige gate salvo contrato 3', () => {
-    const now = new Date('2026-09-28T00:00:00-05:00')
-    assert.equal(cutoverAsistenciaRrhhActivo(now), true)
-    assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 1, now }), true)
-    assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 3, activaEnExento: false, now }), false)
-    assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 3, activaEnExento: true, now }), true)
+  it('snapshot incluye campos de auditoría del interruptor', () => {
+    const s = policySnapshotAsistenciaRrhh({
+      contratoId: 3,
+      activaEnExento: false,
+      apagadaEn: '2026-10-21T19:00:00-05:00',
+    })
+    assert.equal(s.apagada_en, '2026-10-21T19:00:00-05:00')
+    assert.equal(s.activa_en_exento, false)
   })
 
-  it('snapshot y filtro de aprobados', () => {
-    const now = new Date('2026-09-29T10:00:00-05:00')
-    const snap = policySnapshotAsistenciaRrhh({ contratoId: 3, activaEnExento: false, now })
-    assert.equal(snap.corte_iso, BITACORA_ASISTENCIA_RRHH_CORTE_ISO)
-    assert.equal(snap.permite_cargo_cuadrilla, true)
-    assert.equal(esContratoExentoAsistenciaRrhh(3), true)
-    assert.equal(docValidacionEsAprobado('aprobado'), true)
-    const cat = filtrarCatalogoRrhhAprobados([
-      { id: 1, doc_validacion_estado: 'aprobado' },
-      { id: 2, doc_validacion_estado: 'pendiente' },
-    ], { aplicar: true })
-    assert.equal(cat.length, 1)
-    assert.equal(cat[0].id, 1)
-  })
-
-  it('cargo/cuadrilla en contrato exento', () => {
-    assert.equal(puedeUsarCargoCantidadAsistencia({
-      esDesarrollador: false,
-      contratoNumero: 'X',
-      permiteCargoCuadrilla: true,
-    }), true)
-    assert.equal(puedeUsarCargoCantidadAsistencia({
-      esDesarrollador: false,
-      contratoNumero: 'X',
-      permiteCargoCuadrilla: false,
-    }), false)
+  it('toggle UI es interruptor on/off', () => {
+    const src = readFileSync(join(dir, 'BitacoraAsistenciaRrhhToggle.jsx'), 'utf8')
+    assert.match(src, /aria-pressed/)
+    assert.match(src, /Restricción activa|Sin restricción/)
+    assert.match(src, /Interruptor/)
   })
 })

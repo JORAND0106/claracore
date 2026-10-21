@@ -1843,10 +1843,15 @@ def route_set_validacion_masiva(
     body: ValidacionMasivaDocBody,
     current_user=Depends(get_current_user),
 ):
-    """Validación masiva de colaboradores (mismo permiso Validar / Desarrollador)."""
+    """Validación masiva: exclusiva del rol Desarrollador."""
     _require_contract_access(current_user, contrato_id)
-    if not _puede_validar_docs(current_user, contrato_id):
-        raise HTTPException(403, detail="Se requiere permiso Validar (o rol Desarrollador).")
+    from rrhh_permissions import es_desarrollador_rrhh
+
+    if not es_desarrollador_rrhh(current_user):
+        raise HTTPException(
+            403,
+            detail="La validación masiva es exclusiva del rol Desarrollador.",
+        )
     try:
         result = set_validacion_masiva(
             supabase,
