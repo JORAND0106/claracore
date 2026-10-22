@@ -9,6 +9,10 @@ import { createPortal } from 'react-dom'
 import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
 import {
+  coordRowsFromSeedTramo,
+  seedTramoFromCoordRows,
+} from '../../esquema/esquemaTopoCoordsSync'
+import {
   CREAR_REPORTE_ESQUEMA_Z_INDEX,
   CREAR_REPORTE_Z_INDEX,
 } from './PlanillaTuberiaCrearReporteModal'
@@ -82,6 +86,8 @@ export default function PlanillaTuberiaAsociarReporteModal({
   coordsWgs84Inicio = null,
   coordsWgs84Fin = null,
   seedTramoGk = null,
+  /** Sync Inicio/Fin de la tabla del esquema → planilla. */
+  onTramoCoordsChange = null,
 }) {
   const [reportes, setReportes] = useState([])
   const [cargandoLista, setCargandoLista] = useState(false)
@@ -252,6 +258,11 @@ export default function PlanillaTuberiaAsociarReporteModal({
     if (![nIni, eIni, nFin, eFin].every(Number.isFinite)) return null
     return { norteIni: nIni, esteIni: eIni, norteFin: nFin, esteFin: eFin }
   }, [seedTramoGk])
+
+  const initialCoordRows = useMemo(
+    () => coordRowsFromSeedTramo(seedTramo),
+    [seedTramo],
+  )
 
   const pick = (rep) => {
     if (!rep) return
@@ -978,6 +989,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
             contratoId={contratoId}
             mapLocation={mapLocation}
             seedTramo={seedTramo}
+            initialCoordRows={initialCoordRows}
             autoActivateMap
             iaDoc={{
               ambito: 'topo_tuberia',
@@ -993,6 +1005,10 @@ export default function PlanillaTuberiaAsociarReporteModal({
               }
               setEsquemaDataUri(dataUrl)
               setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
+              const sync = seedTramoFromCoordRows(extras?.coordRows)
+              if (sync && typeof onTramoCoordsChange === 'function') {
+                try { onTramoCoordsChange(sync) } catch { /* planilla opcional */ }
+              }
               setEsquemaOpen(false)
               setErr('')
             }}

@@ -6465,6 +6465,11 @@ export default function EsquemaEditorModal({
         calcSnapshots: snapshots,
         mime: 'image/png',
         formato: 'png',
+        /** Tabla de coordenadas vigente (paridad / sync planilla topografía). */
+        coordRows: Array.isArray(coordRowsRef.current)
+          ? coordRowsRef.current.map((r) => ({ ...(r || {}) }))
+          : [],
+        dibujoTipo: dibujoTipoRef.current || 'nodo',
       })
       // Finalizar: el resultado queda fijo y se limpia el borrador.
       if (resolvedDraftKeyRef.current) {

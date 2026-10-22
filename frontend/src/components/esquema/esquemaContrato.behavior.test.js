@@ -104,6 +104,10 @@ describe('contrato · documento', () => {
     assert.match(md, /C-2D-13/)
     assert.match(md, /Dibujo por coordenadas/)
     assert.match(md, /esquemaCoordsTodosModulos/)
+    assert.match(md, /C-TX-08/)
+    assert.match(md, /paridad/i)
+    assert.match(md, /esquemaParidadInvocacion/)
+    assert.match(md, /esquemaInvocationPoints/)
   })
 })
 

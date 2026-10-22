@@ -8,6 +8,10 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
+import {
+  coordRowsFromSeedTramo,
+  seedTramoFromCoordRows,
+} from '../../esquema/esquemaTopoCoordsSync'
 import TopoConfirmModal from '../TopoConfirmModal'
 import { filtrarCapitulosPorTipoPlanilla } from './planillaTuberiaCrearReporteUi'
 import {
@@ -226,6 +230,11 @@ export default function PlanillaTuberiaCrearReporteModal({
   coordsWgs84Fin = null,
   /** Magna GK para sembrar nodos Inicio/Fin en el lienzo */
   seedTramoGk = null,
+  /**
+   * Sync bidireccional: al guardar el esquema, refleja Inicio/Fin en la planilla.
+   * (seed) => void  seed = { norteIni, esteIni, norteFin, esteFin }
+   */
+  onTramoCoordsChange = null,
 }) {
   const [subs, setSubs] = useState([])
   const [insps, setInsps] = useState([])
@@ -292,6 +301,12 @@ export default function PlanillaTuberiaCrearReporteModal({
     if (![nIni, eIni, nFin, eFin].every(Number.isFinite)) return null
     return { norteIni: nIni, esteIni: eIni, norteFin: nFin, esteFin: eFin }
   }, [seedTramoGk])
+
+  /** Tabla de coordenadas precargada (paridad: sin volver a digitar). */
+  const initialCoordRows = useMemo(
+    () => coordRowsFromSeedTramo(seedTramo),
+    [seedTramo],
+  )
 
   const esquemaListo = Boolean(esquemaDataUri)
   const nodosListos = Boolean(String(nodoIni || '').trim() && String(nodoFin || '').trim())
@@ -853,6 +868,7 @@ export default function PlanillaTuberiaCrearReporteModal({
             contratoId={contratoId}
             mapLocation={mapLocation}
             seedTramo={seedTramo}
+            initialCoordRows={initialCoordRows}
             autoActivateMap
             iaDoc={{
               ambito: 'topo_tuberia',
@@ -868,6 +884,10 @@ export default function PlanillaTuberiaCrearReporteModal({
               }
               setEsquemaDataUri(dataUrl)
               setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
+              const sync = seedTramoFromCoordRows(extras?.coordRows)
+              if (sync && typeof onTramoCoordsChange === 'function') {
+                try { onTramoCoordsChange(sync) } catch { /* planilla opcional */ }
+              }
               setEsquemaOpen(false)
               setErr('')
             }}
