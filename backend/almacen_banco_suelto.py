@@ -4,12 +4,13 @@ Conversión de presupuesto en banco (compactado) a cantidad suelta.
 El presupuesto guarda la cantidad en banco. La solicitud, la compra y el
 consumo están en suelto. El rendimiento del insumo es el factor:
 
-    disponible suelto = round(cantidad en banco × rendimiento, 2)
+    disponible suelto = cantidad en banco × rendimiento
 
 Si el rendimiento es 1, falta o no es válido, no hay conversión.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 TEXTO_SALDO_SIN_INSUMO = (
@@ -38,13 +39,25 @@ def factor_banco_a_suelto(rendimiento) -> Optional[float]:
 
 
 def fmt_cant_conversion(n) -> str:
-    """Cantidad de la conversión, siempre con 2 decimales y separador es-CO."""
+    """Cantidad de la conversión, con sus decimales y separador es-CO."""
     try:
-        v = float(n or 0)
-    except (TypeError, ValueError):
-        v = 0.0
-    texto = f"{v:,.2f}"
-    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
+        d = Decimal(str(n if n not in (None, "") else 0))
+    except Exception:
+        d = Decimal("0")
+    texto = format(d, "f")
+    if "." in texto:
+        texto = texto.rstrip("0").rstrip(".")
+    if not texto or texto == "-":
+        texto = "0"
+    signo = ""
+    if texto.startswith("-"):
+        signo = "-"
+        texto = texto[1:]
+    if "." in texto:
+        ent, frac = texto.split(".", 1)
+        entero = f"{int(ent):,}".replace(",", ".")
+        return f"{signo}{entero},{frac}"
+    return f"{signo}{int(texto):,}".replace(",", ".")
 
 
 def evaluar_conversion(cant_banco, rendimiento, unidad: str = "", *, tiene_insumo: bool) -> dict:
@@ -70,7 +83,7 @@ def evaluar_conversion(cant_banco, rendimiento, unidad: str = "", *, tiene_insum
             "conversion_pendiente": False,
             "texto_conversion": "",
         }
-    suelto = round(banco * factor, 2)
+    suelto = float(Decimal(str(banco)) * Decimal(str(factor)))
     und_txt = f" {und}" if und else ""
     texto = (
         f"Presupuesto {fmt_cant_conversion(banco)}{und_txt} en banco "

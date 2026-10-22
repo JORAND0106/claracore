@@ -23,6 +23,7 @@ from catalogo_insumos_cotizaciones_lib import (
     same_proveedor_ref,
 )
 from catalogo_insumos_cotizaciones_lib import _norm_text
+from almacen_dinero import producto
 from almacen_insumos_service import (
     _impuesto_etiqueta,
     _insumo_label,
@@ -1843,8 +1844,7 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     costo_base = _to_float(body.get("costo_base"))
     if body.get("costo_base") is None and body.get("costo") is not None:
         costo_base = _to_float(body.get("costo"))
-    # Costo directo / valor antes de AIU-IVA: pesos COP enteros.
-    costo_base = float(round(max(costo_base, 0.0)))
+    costo_base = float(max(costo_base, 0.0))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
     # Valor después de AIU/IVA: prioriza tributos unificados; si no hay, esquema legado.
     if tributos_tienen_datos(tributos):
@@ -1858,7 +1858,7 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     )
     valor_negociado_total = None
     if cantidad_negociada is not None and cantidad_negociada > 0 and valor_total > 0:
-        valor_negociado_total = float(round(cantidad_negociada * valor_total))
+        valor_negociado_total = producto(cantidad_negociada, valor_total)
     proveedor_id = body.get("proveedor_id")
     if body.get("razon_social") and body.get("nit") and not proveedor_id:
         prov = create_proveedor(contrato_id, user_id, {
@@ -1902,7 +1902,7 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
         gan = next((r for r in detalle if r.get("es_ganadora") and r.get("tipo") == "insumo"), None)
         if gan:
             if gan.get("valor") is not None:
-                gan_costo = float(round(max(float(gan["valor"]), 0.0)))
+                gan_costo = float(max(float(gan["valor"]), 0.0))
                 payload["costo_base"] = gan_costo
                 if tributos_tienen_datos(tributos):
                     payload["valor_compra_referencia"] = compute_valor_despues_aiu_iva(gan_costo, tributos)
@@ -1911,8 +1911,8 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
                         gan_costo, tipo_imp, imp_pct, impuestos
                     )
                 if cantidad_negociada is not None and cantidad_negociada > 0 and payload["valor_compra_referencia"] > 0:
-                    payload["valor_negociado_total"] = float(
-                        round(cantidad_negociada * payload["valor_compra_referencia"])
+                    payload["valor_negociado_total"] = producto(
+                        cantidad_negociada, payload["valor_compra_referencia"]
                     )
             if gan.get("proveedor_id"):
                 payload["proveedor_id"] = int(gan["proveedor_id"])
@@ -2893,7 +2893,7 @@ def _costo_desde_ganadora(row: dict, detalle: List[dict]) -> dict:
     _sync_legacy_cotizacion_from_detalle(update, detalle)
     if gan.get("valor") is None:
         return update
-    gan_costo = float(round(max(float(gan["valor"]), 0.0)))
+    gan_costo = float(max(float(gan["valor"]), 0.0))
     update["costo_base"] = gan_costo
     tributos = row.get("tributos")
     if tributos_tienen_datos(tributos):
@@ -2912,7 +2912,7 @@ def _costo_desde_ganadora(row: dict, detalle: List[dict]) -> dict:
         cantidad_n = 0.0
     ref = float(update.get("valor_compra_referencia") or 0)
     if cantidad_n > 0 and ref > 0:
-        update["valor_negociado_total"] = float(round(cantidad_n * ref))
+        update["valor_negociado_total"] = producto(cantidad_n, ref)
     if gan.get("proveedor_id"):
         update["proveedor_id"] = int(gan["proveedor_id"])
     return update

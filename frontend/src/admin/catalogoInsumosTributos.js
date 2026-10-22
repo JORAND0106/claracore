@@ -73,8 +73,10 @@ export const IVA_SOBRE_OPCIONES = [
  *    Utilidad; solo IVA si IVA Pleno; A+Í+U si AIU sin IVA.
  *    NUNCA usar fmtMoney ni Math.round a enteros.
  *
- * 2) Montos COP (Costo Directo, Valor después de AIU/IVA):
- *    Se redondean a 0 decimales (enteros). Usar computeValorDespuesAiuIva + fmtMoney.
+ * 2) Montos COP del catálogo de Almacén:
+ *    Se calculan con precisión completa (computeValorDespuesAiuIva con exacto: true).
+ *    El decimal se corta solo al mostrar, con fmtMoney.
+ *    Sin exacto, la función sigue redondeando a pesos: la usan otros módulos.
  */
 
 /** Fracción decimal (0.05) → puntos % (5) para persistencia/API (sin truncar a entero). */
@@ -409,19 +411,20 @@ export function computeValorDespuesAiuIva(costoBase, tributosOrForm, opts = {}) 
   const u = (Number(t.utilidad) || 0) / 100
   const iva = (Number(t.iva?.porcentaje) || 0) / 100
   const tipo = t.tipo
+  const dinero = (n) => (opts.exacto ? n : Math.round(n))
 
   if (tipo === TIPO_IMPUESTO.IVA_PLENO) {
-    return Math.round(base * (1 + iva))
+    return dinero(base * (1 + iva))
   }
   if (tipo === TIPO_IMPUESTO.AIU_SIN_IVA) {
-    return Math.round(base * (1 + a + i + u))
+    return dinero(base * (1 + a + i + u))
   }
   if (tipo === TIPO_IMPUESTO.IVA_SOBRE_UTILIDAD) {
     const aiuTotal = base * (a + i + u)
     const ivaUtil = base * u * iva
-    return Math.round(base + aiuTotal + ivaUtil)
+    return dinero(base + aiuTotal + ivaUtil)
   }
-  return Math.round(base)
+  return dinero(base)
 }
 
 export function etiquetaTributos(tributos, tipoImpuesto, impuestoPorcentaje) {

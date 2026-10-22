@@ -540,28 +540,27 @@ export function formatOcSaldoPendienteGrilla(oc) {
   return `${fmtCant(saldo)}${un ? ` ${un}` : ''}`
 }
 
-export function fmtMoney(n, digits = 0) {
+export function fmtMoney(n) {
   if (n == null || n === '') return '—'
   const v = Number(n)
   if (!Number.isFinite(v) || v === 0) return '—'
-  return v.toLocaleString('es-CO', {
+  const t = Math.trunc(v)
+  return t.toLocaleString('es-CO', {
     style: 'currency',
     currency: 'COP',
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
   })
 }
 
-/** Valores en dinero de la solicitud y de la orden de compra: 2 decimales. */
+/** Valores en dinero: sin decimales. Se corta el decimal, no se redondea. */
 export function fmtMoneySolicitud(n) {
-  return fmtMoney(n, 2)
+  return fmtMoney(n)
 }
 
-/** Cantidad ya convertida de banco a suelto. */
+/** Cantidad ya convertida de banco a suelto, con sus decimales. */
 export function fmtCant2(n) {
-  const v = Number(n)
-  if (!Number.isFinite(v)) return '—'
-  return v.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return fmtCant(n)
 }
 
 /** Mensaje explícito cuando no hay VU/Tot. cobro (evita confundir con error silencioso). */

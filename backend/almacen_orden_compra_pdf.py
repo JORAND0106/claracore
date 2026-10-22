@@ -8,6 +8,7 @@ import html
 from datetime import date
 
 from almacen_datetime import fmt_fecha_bogota, fmt_fecha_hora_bogota
+from almacen_dinero import a_decimal, casi_igual, fmt_dinero, producto
 from almacen_firma_pdf import firma_url_a_data_uri
 from typing import Any, Dict, List, Optional
 
@@ -22,13 +23,8 @@ def _esc(val) -> str:
 
 
 def _fmt_money(v) -> str:
-    """Pesos con 2 decimales, separador es-CO ($ 1.234,56)."""
-    try:
-        n = round(float(v or 0), 2)
-    except (TypeError, ValueError):
-        return "—"
-    texto = f"{n:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"$ {texto}"
+    """Pesos sin decimales. Se corta el decimal, no se redondea."""
+    return fmt_dinero(v)
 
 
 def _fmt_cant(v) -> str:
@@ -85,10 +81,11 @@ def _split_line_tax(unit_total: float, insumo: Optional[dict]) -> tuple[float, f
     except (TypeError, ValueError):
         pct = 0.0
     if tipo in ("iva", "aiu") and pct > 0 and unit_total > 0:
-        base = round(unit_total / (1 + pct / 100), 2)
-        tax = round(unit_total - base, 2)
+        bruto = a_decimal(unit_total)
+        base = bruto / (1 + a_decimal(pct) / 100)
+        tax = bruto - base
         label = "IVA" if tipo == "iva" else "AIU"
-        return base, tax, f"{label} {pct:g}%"
+        return float(base), float(tax), f"{label} {pct:g}%"
     return unit_total, 0.0, ""
 
 
@@ -112,7 +109,7 @@ def _ordenar_items_oc_por_insumo(
         if it.get("insumo_codigo"):
             return str(it.get("insumo_codigo") or "")
         sid = it.get("solicitud_item_id")
-        sol_it = sol_map.get(int(sid)) if sid else {}
+        sol_it = (sol_map.get(int(sid)) if sid else {}) or {}
         if sol_it.get("insumo_codigo"):
             return str(sol_it.get("insumo_codigo") or "")
         ins_id = sol_it.get("insumo_id") if sol_it else None
@@ -162,7 +159,7 @@ def evaluar_cuadre_numeros(pdf_total, oc_total, pdf_cantidades, oc_cantidades) -
     """Compara presentación y orden sin devolver cifras."""
     fallos: List[str] = []
     try:
-        mismo_total = abs(round(float(pdf_total), 2) - round(float(oc_total), 2)) <= 0.01
+        mismo_total = casi_igual(pdf_total, oc_total)
     except (TypeError, ValueError):
         mismo_total = False
     if not mismo_total:
@@ -212,7 +209,7 @@ def _lineas_y_totales(
 ) -> tuple[str, dict]:
     """Una fila por insumo: cantidad total, valor unitario y total de la línea.
 
-    La suma de los totales de línea (redondeados a 2 decimales) es el total de la OC.
+    La suma de los totales de línea exactos es el total de la OC.
     No imprime tramo, PK, abscisa ni ubicación.
     """
     rows = []
@@ -235,12 +232,12 @@ def _lineas_y_totales(
         except (TypeError, ValueError):
             vu_total = 0.0
         vu_base, _tax_unit, tax_label = _split_line_tax(vu_total, insumo)
-        line_total = round(cant * vu_total, 2)
-        line_sub = round(cant * vu_base, 2)
-        line_tax = round(line_total - line_sub, 2)
-        subtotal += line_sub
+        line_total = producto(cant, vu_total)
+        line_sub = producto(cant, vu_base)
+        line_tax = float(a_decimal(line_total) - a_decimal(line_sub))
+        subtotal = float(a_decimal(subtotal) + a_decimal(line_sub))
         if tax_label:
-            impuestos[tax_label] = round(impuestos.get(tax_label, 0.0) + line_tax, 2)
+            impuestos[tax_label] = float(a_decimal(impuestos.get(tax_label, 0)) + a_decimal(line_tax))
 
         codigo = _codigo_item(it, sol_it, insumo)
         desc = (it.get("material_descripcion") or sol_it.get("material_descripcion") or "—").strip() or "—"
@@ -261,8 +258,8 @@ def _lineas_y_totales(
             orden_claves.append(clave)
         grupo = grupos[clave]
         grupo["cantidad"] = round(grupo["cantidad"] + cant, 4)
-        grupo["total_base"] = round(grupo["total_base"] + line_sub, 2)
-        grupo["total_con_iva"] = round(grupo["total_con_iva"] + line_total, 2)
+        grupo["total_base"] = float(a_decimal(grupo["total_base"]) + a_decimal(line_sub))
+        grupo["total_con_iva"] = float(a_decimal(grupo["total_con_iva"]) + a_decimal(line_total))
         if unidad and not grupo["unidad"]:
             grupo["unidad"] = unidad
 
@@ -270,7 +267,7 @@ def _lineas_y_totales(
     for i, grupo in enumerate(lista, start=1):
         cant = grupo["cantidad"]
         line_sub = grupo["total_base"]
-        vu_base = round(line_sub / cant, 2) if cant else 0.0
+        vu_base = float(a_decimal(line_sub) / a_decimal(cant)) if cant else 0.0
         grupo["valor_unitario_base"] = vu_base
         rows.append(
             f"<tr class=\"{'even' if i % 2 == 0 else ''}\">"
@@ -282,15 +279,8 @@ def _lineas_y_totales(
             f"</tr>"
         )
 
-    subtotal = round(sum(g["total_base"] for g in lista), 2)
-    grand = round(sum(g["total_con_iva"] for g in lista), 2)
-    impreso = round(sum(impuestos.values()), 2)
-    ajuste = round((grand - subtotal) - impreso, 2)
-    if ajuste and impuestos:
-        etiqueta = sorted(impuestos)[0]
-        impuestos[etiqueta] = round(impuestos[etiqueta] + ajuste, 2)
-    elif ajuste and not impuestos:
-        subtotal = grand
+    subtotal = float(sum((a_decimal(g["total_base"]) for g in lista), start=a_decimal(0)))
+    grand = float(sum((a_decimal(g["total_con_iva"]) for g in lista), start=a_decimal(0)))
     imp_rows = ""
     for label, amt in sorted(impuestos.items()):
         if amt:
@@ -333,7 +323,7 @@ def cuadrar_presentacion_oc(
             vu = float(it.get("valor_unitario") or 0)
         except (TypeError, ValueError):
             cant, vu = 0.0, 0.0
-        oc_total = round(oc_total + round(cant * vu, 2), 2)
+        oc_total = float(a_decimal(oc_total) + a_decimal(producto(cant, vu)))
         sol_it, insumo = _contexto_linea(it, sol_map, ins_map)
         clave = _clave_grupo_insumo(it, sol_it, insumo)
         oc_qty[clave] = round(oc_qty.get(clave, 0.0) + cant, 4)

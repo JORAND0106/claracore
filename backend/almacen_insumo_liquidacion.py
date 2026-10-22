@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 _log = logging.getLogger(__name__)
 
-_EPS_PRECIO = 0.009  # ~1 centavo
+_EPS_PRECIO = 1e-9
 
 
 def _f(v) -> float:
@@ -27,7 +27,7 @@ def _f(v) -> float:
 
 
 def _round2(v: float) -> float:
-    return float(round(float(v) + 0.0, 2))
+    return float(v)
 
 
 def _round4(v: float) -> float:

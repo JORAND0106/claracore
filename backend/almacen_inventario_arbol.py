@@ -89,7 +89,7 @@ def _round4(v: float) -> float:
 
 
 def _round2(v: float) -> float:
-    return round(float(v), 2)
+    return float(v)
 
 
 def _unit_cost(qty: float, valor: Optional[float], vu_fallback: Optional[float] = None) -> float:
@@ -224,7 +224,7 @@ def _merge_mo_buckets(a: dict, b: dict) -> dict:
         "es_mo": True,
         "etiqueta_fila": a.get("etiqueta_fila") or b.get("etiqueta_fila") or "Mano de obra (subcontratistas)",
         "cantidad": round(cant, 4) if cant > 0 else None,
-        "costo_insumo_linea": round(costo, 2) if costo > 0 else None,
+        "costo_insumo_linea": float(costo) if costo > 0 else None,
         "costo_insumo_unitario": round(costo / cant, 4) if cant > 0 and costo > 0 else None,
         "desglose": desglose,
     }
@@ -445,7 +445,7 @@ def _rentabilidad_pct(vu_cobro: Optional[float], vu_costo: Optional[float]) -> O
     cobro = _f(vu_cobro)
     if cobro <= 0:
         return None
-    return _round2(((_f(vu_cobro) - _f(vu_costo)) / cobro) * 100)
+    return round(((_f(vu_cobro) - _f(vu_costo)) / cobro) * 100, 2)
 
 
 def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:

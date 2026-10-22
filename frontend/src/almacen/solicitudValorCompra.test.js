@@ -64,7 +64,7 @@ describe('valor de la línea y resumen por proveedor', () => {
     assert.equal(totalesCompraSolicitud(actual).total, 388)
   })
 
-  it('redondea cada línea a 2 decimales y la suma cuadra', () => {
+  it('multiplica cada línea sin redondear y la suma usa esos valores', () => {
     const lineas = [
       { cantidad: 1.5, valor_compra_unitario: 10.01 },
       { cantidad: 2, valor_compra_unitario: 119 },
@@ -72,7 +72,7 @@ describe('valor de la línea y resumen por proveedor', () => {
     const valores = lineas.map((it) => valorCompraLinea(it))
     assert.deepEqual(valores, [redondearDinero(1.5 * 10.01), redondearDinero(2 * 119)])
     assert.equal(totalesCompraSolicitud(lineas).total, valores[0] + valores[1])
-    assert.equal(valores[0], 15.02)
+    assert.equal(valores[0], 1.5 * 10.01)
   })
 
   it('explica por qué no se pueden agregar materiales', () => {

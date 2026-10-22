@@ -8,6 +8,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from almacen_dinero import a_decimal, producto
 from almacen_service import (
     CAPITULO_ADMINISTRACION_AIU,
     _sb,
@@ -259,7 +260,7 @@ def _pct_frac(puntos: Any) -> float:
 def compute_valor_despues_aiu_iva(costo_base: float, tributos: Any = None) -> float:
     """
     Valor unitario después de aplicar A/Í/U e IVA según tipo inferido.
-    Resultado en pesos COP enteros (0 decimales).
+    Resultado exacto. El decimal se corta solo al mostrar.
 
     - IVA Pleno: base × (1 + IVA%)
     - AIU sin IVA: base × (1 + A% + Í% + U%)
@@ -274,15 +275,18 @@ def compute_valor_despues_aiu_iva(costo_base: float, tributos: Any = None) -> fl
     u = _pct_frac(t.get("utilidad"))
     iva = _pct_frac((t.get("iva") or {}).get("porcentaje"))
 
+    from almacen_dinero import a_decimal
+
+    base_d = a_decimal(base)
     if tipo == TIPO_IMPUESTO_IVA_PLENO:
-        return float(round(base * (1.0 + iva)))
+        return float(base_d * (1 + a_decimal(iva)))
     if tipo == TIPO_IMPUESTO_AIU_SIN_IVA:
-        return float(round(base * (1.0 + a + i + u)))
+        return float(base_d * (1 + a_decimal(a) + a_decimal(i) + a_decimal(u)))
     if tipo == TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD:
-        aiu_total = base * (a + i + u)
-        iva_util = base * u * iva
-        return float(round(base + aiu_total + iva_util))
-    return float(round(base))
+        aiu_total = base_d * (a_decimal(a) + a_decimal(i) + a_decimal(u))
+        iva_util = base_d * a_decimal(u) * a_decimal(iva)
+        return float(base_d + aiu_total + iva_util)
+    return float(base_d)
 
 
 def tributos_tienen_datos(tributos: Any) -> bool:
@@ -291,14 +295,15 @@ def tributos_tienen_datos(tributos: Any) -> bool:
 
 
 def compute_valor_total_insumo(costo_base: float, impuestos: Optional[List[dict]] = None) -> float:
-    base = max(_to_float(costo_base), 0)
+    from almacen_dinero import a_decimal
+    base = a_decimal(max(_to_float(costo_base), 0))
     total = base
     for imp in _normalize_impuestos(impuestos):
         if imp["tipo"] == "porcentaje":
-            total += base * (imp["valor"] / 100.0)
+            total += base * (a_decimal(imp["valor"]) / 100)
         else:
-            total += imp["valor"]
-    return float(round(total))
+            total += a_decimal(imp["valor"])
+    return float(total)
 
 
 def compute_costo_total_insumo(
@@ -310,11 +315,12 @@ def compute_costo_total_insumo(
     base = max(_to_float(costo_base), 0)
     tipo = (tipo_impuesto or "").strip().lower()
     pct = _to_float(impuesto_porcentaje)
+    from almacen_dinero import a_decimal
     if tipo in ("iva", "aiu") and pct > 0:
-        return float(round(base * (1 + pct / 100.0)))
+        return float(a_decimal(base) * (1 + a_decimal(pct) / 100))
     if impuestos:
         return compute_valor_total_insumo(base, impuestos)
-    return float(round(base))
+    return float(a_decimal(base))
 
 
 def _impuesto_etiqueta(tipo_impuesto: Optional[str], impuesto_porcentaje: float, tributos: Any = None) -> str:
@@ -636,9 +642,9 @@ def _build_analisis_valor(
     vlr = _to_float(vlr_cobro)
     vc = _to_float(valor_compra) if valor_compra is not None else None
     tiene = vc is not None and vc > 0
-    costo_linea = round(vc * cant_f, 2) if tiene else None
-    cobro_linea = round(vlr * cant_f, 2) if vlr > 0 else None
-    util = round(cobro_linea - costo_linea, 2) if cobro_linea is not None and costo_linea is not None else None
+    costo_linea = producto(cant_f, vc) if tiene else None
+    cobro_linea = producto(cant_f, vlr) if vlr > 0 else None
+    util = float(a_decimal(cobro_linea) - a_decimal(costo_linea)) if cobro_linea is not None and costo_linea is not None else None
     pct = round((util / cobro_linea) * 100, 2) if util is not None and cobro_linea and cobro_linea > 0 else None
     motivo = None if vlr > 0 else (cobro_motivo or "sin_valor_listado")
     return {
@@ -660,10 +666,10 @@ def _columna_rentabilidad(cant: float, vu_cobro: float, vu_costo: Optional[float
     vlr = _to_float(vu_cobro)
     vc = _to_float(vu_costo) if vu_costo is not None else None
     tiene_costo = vc is not None and vc > 0
-    cobro_linea = round(vlr * cant_f, 2) if vlr > 0 and cant_f > 0 else None
-    costo_linea = round(vc * cant_f, 2) if tiene_costo and cant_f > 0 else None
+    cobro_linea = producto(cant_f, vlr) if vlr > 0 and cant_f > 0 else None
+    costo_linea = producto(cant_f, vc) if tiene_costo and cant_f > 0 else None
     util = (
-        round(cobro_linea - costo_linea, 2)
+        float(a_decimal(cobro_linea) - a_decimal(costo_linea))
         if cobro_linea is not None and costo_linea is not None
         else None
     )
@@ -690,14 +696,14 @@ def _merge_columnas_rentabilidad(a: dict, b: dict) -> dict:
     cobro_b = _to_float(b.get("valor_cobro_linea"))
     costo_a = a.get("costo_insumo_linea")
     costo_b = b.get("costo_insumo_linea")
-    cobro_linea = round(cobro_a + cobro_b, 2) if (cobro_a or cobro_b) else None
+    cobro_linea = float(a_decimal(cobro_a) + a_decimal(cobro_b)) if (cobro_a or cobro_b) else None
     costo_linea = None
     if costo_a is not None or costo_b is not None:
-        costo_linea = round(_to_float(costo_a) + _to_float(costo_b), 2)
-    vu_cobro = round(cobro_linea / cant, 4) if cobro_linea is not None and cant > 0 else None
-    vu_costo = round(costo_linea / cant, 4) if costo_linea is not None and cant > 0 else None
+        costo_linea = float(a_decimal(costo_a) + a_decimal(costo_b))
+    vu_cobro = float(a_decimal(cobro_linea) / a_decimal(cant)) if cobro_linea is not None and cant > 0 else None
+    vu_costo = float(a_decimal(costo_linea) / a_decimal(cant)) if costo_linea is not None and cant > 0 else None
     util = (
-        round(cobro_linea - costo_linea, 2)
+        float(a_decimal(cobro_linea) - a_decimal(costo_linea))
         if cobro_linea is not None and costo_linea is not None
         else None
     )
@@ -732,7 +738,6 @@ def get_analisis_rentabilidad_acumulada(
     Rentabilidad presente / acumulada anterior / actual para mismo insumo + ítem de cobro.
     Acumulado = otras líneas en solicitudes enviadas o aprobadas (excluye la línea actual).
     """
-    sb = _sb()
     cap = (capitulo or "").strip()
     itm = _norm_item_key(item_cobro)
     presente = _columna_rentabilidad(
@@ -740,18 +745,21 @@ def get_analisis_rentabilidad_acumulada(
         valor_cobro_unitario,
         valor_compra_unitario,
     )
-
-    q = sb.table("almacen_solicitud_item").select(
-        "id, cantidad, valor_compra_unitario, vlr_unitario_cobro, solicitud_id, insumo_id, capitulo, item"
-    )
-    if insumo_id:
-        q = q.eq("insumo_id", int(insumo_id))
-    else:
+    if not insumo_id:
         return {
             "presente": presente,
             "acumulado_anterior": _columna_rentabilidad(0, valor_cobro_unitario, valor_compra_unitario),
             "actual": presente,
         }
+
+    sb = _sb()
+    q = (
+        sb.table("almacen_solicitud_item")
+        .select(
+            "id, cantidad, valor_compra_unitario, vlr_unitario_cobro, solicitud_id, insumo_id, capitulo, item"
+        )
+        .eq("insumo_id", int(insumo_id))
+    )
     hist_rows = q.execute().data or []
     hist_rows = [
         r for r in hist_rows
@@ -903,7 +911,7 @@ def filas_rentabilidad_por_insumo(
         cant = _to_float(r.get("cantidad"))
         vc = _to_float(r.get("valor_compra_unitario"))
         es_principal = r.get("es_principal") is not False
-        costo_linea = round(cant * vc, 2) if cant > 0 and vc > 0 else None
+        costo_linea = producto(cant, vc) if cant > 0 and vc > 0 else None
         if costo_linea is not None:
             sum_costo += costo_linea
             tiene_costo = True
@@ -915,7 +923,7 @@ def filas_rentabilidad_por_insumo(
             vlr = _to_float(r.get("vlr_unitario_cobro"))
             if vlr > 0 and cant > 0:
                 vu_cobro = vlr
-                cobro_linea = round(cant * vlr, 2)
+                cobro_linea = producto(cant, vlr)
                 cobro_total = cobro_linea
                 vu_cobro_total = vu_cobro
                 cant_principal = cant
@@ -961,9 +969,9 @@ def filas_rentabilidad_por_insumo(
         sum_costo += _to_float(mo_fila.get("costo_insumo_linea"))
         tiene_costo = True
 
-    costo_total = round(sum_costo, 2) if tiene_costo else None
+    costo_total = float(a_decimal(sum_costo)) if tiene_costo else None
     util = (
-        round((cobro_total or 0) - costo_total, 2)
+        float(a_decimal(cobro_total or 0) - a_decimal(costo_total))
         if cobro_total is not None and costo_total is not None
         else None
     )
@@ -1205,7 +1213,7 @@ def _row_from_listado(lp: dict) -> dict:
 
 def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
     costo_raw = _to_float(row.get("costo_base") if row.get("costo_base") is not None else row.get("valor_compra_referencia"))
-    costo = float(round(max(costo_raw, 0.0)))
+    costo = float(a_decimal(max(costo_raw, 0.0)))
     tipo = row.get("tipo_impuesto")
     pct = _to_float(row.get("impuesto_porcentaje"))
     tributos = normalize_tributos(row.get("tributos"))
@@ -1216,7 +1224,7 @@ def _row_from_almacen_insumo(row: dict, proveedor_nombre: str = "—") -> dict:
             total = compute_valor_despues_aiu_iva(costo, tributos)
         else:
             stored = _to_float(row.get("valor_compra_referencia"))
-            total = float(round(stored)) if stored else compute_costo_total_insumo(
+            total = float(a_decimal(stored)) if stored else compute_costo_total_insumo(
                 costo, tipo, pct, row.get("impuestos"),
             )
     return {
@@ -1683,7 +1691,7 @@ def create_insumo(contrato_id: int, user_id: int, body: dict, soporte: Optional[
         costo_base = _to_float(body.get("costo"))
     if body.get("costo_base") is None and body.get("valor_compra_referencia") is not None:
         costo_base = _to_float(body.get("valor_compra_referencia"))
-    costo_base = float(round(max(costo_base, 0.0)))
+    costo_base = float(a_decimal(max(costo_base, 0.0)))
     imp_pct = _to_float(body.get("impuesto_porcentaje"))
     valor_total = compute_costo_total_insumo(costo_base, tipo_imp, imp_pct, impuestos)
     proveedor_id = body.get("proveedor_id")

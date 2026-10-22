@@ -134,19 +134,19 @@ def test_compute_valor_despues_solo_aiu():
     assert total == 11300.0
 
 
-def test_compute_valor_despues_redondeo_cop():
+def test_compute_valor_despues_sin_redondeo():
+    from decimal import Decimal
     from almacen_insumos_service import compute_valor_despues_aiu_iva
-    # 18500×1.13 + 18500×0.05×0.19 = 21080.75 → 21081
+    # 18500×1.13 + 18500×0.05×0.19 = 21080.75 exacto
     total = compute_valor_despues_aiu_iva(18500, {
         "administracion": 5,
         "imprevistos": 3,
         "utilidad": 5,
         "iva": 19,
     })
-    assert total == 21081.0
-    assert total == float(int(total))
-    # 10001 × 1.19 = 11901.19 → 11901
-    assert compute_valor_despues_aiu_iva(10001, {"iva": {"porcentaje": 19}}) == 11901.0
+    assert total == float(Decimal("18500") * Decimal("1.13") + Decimal("18500") * Decimal("0.05") * Decimal("0.19"))
+    assert total == 21080.75
+    assert compute_valor_despues_aiu_iva(10001, {"iva": {"porcentaje": 19}}) == float(Decimal("10001") * Decimal("1.19"))
 
 
 def test_csv_import_calcula_valor_despues():
@@ -164,7 +164,7 @@ def test_csv_import_calcula_valor_despues():
             "codigo": "CC-1-001",
             "descripcion": "Prueba",
             "unidad": "UND",
-            "costo_base": 18500.4,  # se redondea a entero (costo directo)
+            "costo_base": 18500.4,
             "tributos": {
                 "administracion": 5,
                 "imprevistos": 3,
@@ -176,6 +176,10 @@ def test_csv_import_calcula_valor_despues():
         contrato_id=1,
         user_id=1,
     )
-    assert payload["costo_base"] == 18500.0
-    assert payload["valor_compra_referencia"] == 21081.0
+    from decimal import Decimal
+    base = Decimal("18500.4")
+    assert payload["costo_base"] == float(base)
+    assert payload["valor_compra_referencia"] == float(
+        base * Decimal("1.13") + base * Decimal("0.05") * Decimal("0.19")
+    )
     assert payload["tributos"]["tipo"] == "iva_sobre_utilidad"

@@ -7,6 +7,8 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
+from almacen_dinero import a_decimal, producto
+
 
 def _norm_text(text: Any) -> str:
     s = unicodedata.normalize("NFD", str(text or ""))
@@ -146,8 +148,8 @@ def build_biblioteca_cotizaciones(refs: List[dict]) -> List[dict]:
             cant = 0.0
         if cant < 0:
             cant = 0.0
-        linea = float(round(cant * unitario))
-        cot["valor_total"] = float(round(cot["valor_total"] + linea))
+        linea = producto(cant, unitario)
+        cot["valor_total"] = float(a_decimal(cot["valor_total"]) + a_decimal(linea))
         cot["items"].append({
             "insumo_id": ref.get("insumo_id"),
             "codigo": ref.get("codigo"),
@@ -162,7 +164,7 @@ def build_biblioteca_cotizaciones(refs: List[dict]) -> List[dict]:
     out = []
     for bucket in by_prov.values():
         cot_list = sorted(bucket["cotizaciones"].values(), key=lambda c: c["numero"])
-        total = float(round(sum(c["valor_total"] for c in cot_list)))
+        total = float(sum((a_decimal(c["valor_total"]) for c in cot_list), start=a_decimal(0)))
         out.append({
             "proveedor_key": bucket.get("proveedor_key"),
             "proveedor_id": bucket.get("proveedor_id"),
