@@ -7,9 +7,15 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from catalogo_insumos_permissions import (
+    puede_crear_unidad_catalogo,
+    require_crear_unidad_catalogo,
+)
 from catalogo_insumos_service import (
     UNIDADES_INSUMO,
+    crear_unidad_catalogo,
     evaluar_cambio_unidad_rendimiento,
+    listar_unidades_catalogo,
     mensaje_cambio_unidad_rendimiento,
     propagar_unidad_solicitudes_sin_oc,
     rendimiento_insumo_para_guardar,
@@ -138,8 +144,9 @@ def test_unidades_coinciden_con_el_listado_de_la_plataforma():
 def test_unidad_rechaza_texto_libre_y_conserva_la_historica():
     assert unidad_insumo_para_guardar("m2") == "M2"
     assert unidad_insumo_para_guardar("bolsa", "bolsa") == "bolsa"
-    with pytest.raises(ValueError, match="texto libre"):
+    with pytest.raises(ValueError, match="Otra unidad"):
         unidad_insumo_para_guardar("CAJA", "UND")
+    assert unidad_insumo_para_guardar("caja", "UND", permitidas={"CAJA": "CAJA"}) == "CAJA"
     with pytest.raises(ValueError, match="obligatoria"):
         unidad_insumo_para_guardar("  ")
 
@@ -361,3 +368,75 @@ def test_rutas_exigen_editar_y_el_log_no_devuelve_el_cambio():
     assert "valor_nuevo=cambios.get(\"nuevo\")" in routes
     assert "propagar_unidad_solicitudes_sin_oc" in service
     assert "La descripción del insumo no se puede modificar." in service
+    assert "require_crear_unidad_catalogo" in routes
+
+
+def test_otra_unidad_se_guarda_y_el_duplicado_selecciona_la_existente(monkeypatch):
+    mem = Mem({"catalogo_unidad": []})
+    monkeypatch.setattr("catalogo_insumos_service._sb", lambda: mem)
+    nueva = crear_unidad_catalogo(1, "  caja ", 4)
+    assert nueva == {
+        "nombre": "CAJA",
+        "ya_existia": False,
+        "mensaje": "La unidad CAJA quedó disponible.",
+    }
+    repetida = crear_unidad_catalogo(1, "cája", 4)
+    assert repetida["ya_existia"] is True
+    assert repetida["nombre"] == "CAJA"
+    assert "Quedó seleccionada" in repetida["mensaje"]
+    fija = crear_unidad_catalogo(1, "m3", 4)
+    assert fija["nombre"] == "M3"
+    assert fija["ya_existia"] is True
+    assert len(mem.tables["catalogo_unidad"]) == 1
+    lista = listar_unidades_catalogo(1)
+    assert lista[-1] == "CAJA"
+    assert "M3" in lista
+    assert lista.count("CAJA") == 1
+    with pytest.raises(ValueError, match="Escriba la unidad"):
+        crear_unidad_catalogo(1, "   ", 4)
+    with pytest.raises(ValueError, match="solo admite"):
+        crear_unidad_catalogo(1, "m³", 4)
+
+
+def test_sin_tabla_no_crea_la_unidad_y_no_muestra_el_codigo(monkeypatch):
+    class _Roto:
+        def table(self, _name):
+            raise Exception(
+                "Could not find the table 'public.catalogo_unidad' in the schema cache (PGRST205)"
+            )
+
+    monkeypatch.setattr("catalogo_insumos_service._sb", lambda: _Roto())
+    with pytest.raises(ValueError) as exc:
+        crear_unidad_catalogo(1, "CAJA", 4)
+    assert "Falta en la base" in str(exc.value)
+    assert "PGRST" not in str(exc.value)
+    assert "17" not in str(exc.value)
+
+
+def test_ver_no_crea_unidad_y_el_rol_excluido_sigue_bloqueado(monkeypatch):
+    monkeypatch.setattr("almacen_permissions.rol_excluido_almacen", lambda _u: False)
+
+    def _solo_ver(_user, accion):
+        return accion == "ver"
+
+    monkeypatch.setattr(
+        "catalogo_insumos_permissions.tiene_permiso_catalogo_insumos",
+        _solo_ver,
+    )
+    assert puede_crear_unidad_catalogo({"sub": "1", "rol_nombre": "Almacenista"}) is False
+    with pytest.raises(HTTPException) as exc:
+        require_crear_unidad_catalogo({"sub": "1"})
+    assert exc.value.status_code == 403
+    assert "Crear o Editar" in exc.value.detail
+
+    monkeypatch.setattr(
+        "catalogo_insumos_permissions.tiene_permiso_catalogo_insumos",
+        lambda _user, accion: accion == "crear",
+    )
+    assert puede_crear_unidad_catalogo({"sub": "2"}) is True
+
+    monkeypatch.setattr("almacen_permissions.rol_excluido_almacen", lambda _u: True)
+    assert puede_crear_unidad_catalogo({"sub": "3", "rol_nombre": "Interventoría"}) is False
+    with pytest.raises(HTTPException) as exc:
+        require_crear_unidad_catalogo({"sub": "3", "rol_nombre": "Supervisión Externa"})
+    assert exc.value.status_code == 403

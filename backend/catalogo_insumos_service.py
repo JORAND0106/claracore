@@ -1952,31 +1952,186 @@ def _save_soporte_pdfs(
     return count
 
 
-# Mismo listado que frontend/src/utils/unidadesListadoPrecios.jsx (sin texto libre).
-UNIDADES_INSUMO = frozenset({
+# Mismo listado que frontend/src/utils/unidadesListadoPrecios.jsx.
+# Una unidad nueva entra por «Otra unidad» y queda en catalogo_unidad.
+UNIDADES_INSUMO_ORDEN = (
     "CM", "GL", "HORA", "KG", "KM-CARRIL", "LT", "M", "M2", "M3", "M3-KM",
     "ML", "TON", "TRAMO", "UN", "UN/ME", "UND",
-})
+)
+UNIDADES_INSUMO = frozenset(UNIDADES_INSUMO_ORDEN)
+_UNIDAD_MAX = 20
+_UNIDAD_RE = re.compile(r"^[A-Z0-9]+(?:[ /-][A-Z0-9]+)*$")
+
+
+def _clave_unidad(raw: Any) -> str:
+    """Comparación: mayúsculas, sin tildes y sin espacios sobrantes."""
+    texto = unicodedata.normalize("NFD", str(raw or ""))
+    texto = "".join(c for c in texto if unicodedata.category(c) != "Mn")
+    texto = texto.upper()
+    return re.sub(r"\s+", " ", texto).strip()
 
 
 def _norm_unidad_insumo(raw: Any) -> str:
-    return (str(raw or "").strip().upper())
+    return _clave_unidad(raw)
 
 
-def unidad_insumo_para_guardar(nueva: Any, existente: Any = None) -> str:
-    """Unidad del listado. Conserva una unidad histórica que ya no está en el listado si no cambia."""
-    nueva_n = _norm_unidad_insumo(nueva)
+def normalizar_unidad_nueva(raw: Any) -> str:
+    """Formato uniforme. Rechaza vacío y caracteres fuera de letras, números, espacio, guion y barra."""
+    if raw is None or str(raw).strip() == "":
+        raise ValueError("Escriba la unidad.")
+    nombre = _clave_unidad(raw)
+    if not nombre:
+        raise ValueError("Escriba la unidad.")
+    if len(nombre) > _UNIDAD_MAX or not _UNIDAD_RE.fullmatch(nombre):
+        raise ValueError("La unidad solo admite letras, números, espacio, guion y barra.")
+    return nombre
+
+
+def _tabla_unidad_ausente(exc: BaseException) -> bool:
+    text = str(exc or "").lower()
+    return any(token in text for token in (
+        "pgrst205", "42p01", "schema cache", "could not find the table",
+        "could not find the relation", "undefined_table", "undefinedtable",
+        "does not exist",
+    ))
+
+
+def _leer_unidades_guardadas(contrato_id: int, sb=None) -> List[str]:
+    sb = sb or _sb()
+    try:
+        rows = (
+            sb.table("catalogo_unidad")
+            .select("nombre")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if not _tabla_unidad_ausente(exc):
+            _log.warning("No se pudieron leer las unidades del contrato %s: %s", contrato_id, exc)
+        return []
+    out: List[str] = []
+    for row in rows:
+        nombre = str((row or {}).get("nombre") or "").strip()
+        if nombre:
+            out.append(nombre)
+    return out
+
+
+def _permitidas_unidad(contrato_id: int, sb=None) -> Dict[str, str]:
+    out = {_clave_unidad(u): u for u in UNIDADES_INSUMO_ORDEN}
+    for nombre in _leer_unidades_guardadas(contrato_id, sb):
+        out.setdefault(_clave_unidad(nombre), nombre)
+    return out
+
+
+def listar_unidades_catalogo(contrato_id: int, sb=None) -> List[str]:
+    """Listado fijo y, al final, las unidades creadas en este contrato."""
+    vistos = set()
+    out: List[str] = []
+    for nombre in list(UNIDADES_INSUMO_ORDEN) + _leer_unidades_guardadas(contrato_id, sb):
+        clave = _clave_unidad(nombre)
+        if not clave or clave in vistos:
+            continue
+        if nombre in UNIDADES_INSUMO:
+            canon = nombre
+        else:
+            try:
+                canon = normalizar_unidad_nueva(nombre)
+            except ValueError:
+                continue
+        vistos.add(clave)
+        out.append(canon)
+    return out
+
+
+def unidad_insumo_para_guardar(
+    nueva: Any,
+    existente: Any = None,
+    *,
+    permitidas: Optional[Dict[str, str]] = None,
+) -> str:
+    """Unidad del listado o ya creada en el contrato. Conserva una histórica si no cambia."""
+    nueva_n = _clave_unidad(nueva)
     exist_raw = str(existente or "").strip()
-    exist_n = _norm_unidad_insumo(exist_raw)
+    exist_n = _clave_unidad(exist_raw)
     if not nueva_n:
         raise ValueError("La unidad del insumo es obligatoria.")
-    if nueva_n in UNIDADES_INSUMO:
-        return nueva_n
+    mapa = permitidas if permitidas is not None else {_clave_unidad(u): u for u in UNIDADES_INSUMO_ORDEN}
+    if nueva_n in mapa:
+        return mapa[nueva_n]
     if exist_n and nueva_n == exist_n:
         return exist_raw
     raise ValueError(
-        "La unidad debe elegirse del listado de la plataforma. No se admite texto libre."
+        "La unidad debe elegirse del listado. Use Otra unidad para crear una que no esté."
     )
+
+
+def crear_unidad_catalogo(contrato_id: int, raw: Any, user_id: Optional[int]) -> dict:
+    """Guarda la unidad del contrato. Si ya hay una equivalente, devuelve esa."""
+    nombre = normalizar_unidad_nueva(raw)
+    clave = _clave_unidad(nombre)
+    for fija in UNIDADES_INSUMO_ORDEN:
+        if _clave_unidad(fija) == clave:
+            return {
+                "nombre": fija,
+                "ya_existia": True,
+                "mensaje": f"Ya existe la unidad {fija}. Quedó seleccionada.",
+            }
+    sb = _sb()
+    try:
+        previas = (
+            sb.table("catalogo_unidad")
+            .select("nombre, clave")
+            .eq("contrato_id", int(contrato_id))
+            .eq("clave", clave)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("No se pudo consultar las unidades del contrato %s: %s", contrato_id, exc)
+        if _tabla_unidad_ausente(exc):
+            raise ValueError(
+                "Falta en la base el listado donde se guardan las unidades nuevas. No se creó la unidad."
+            ) from exc
+        raise ValueError("No se pudo consultar el listado de unidades. No se creó la unidad.") from exc
+    if previas:
+        existente = str(previas[0].get("nombre") or nombre)
+        return {
+            "nombre": existente,
+            "ya_existia": True,
+            "mensaje": f"Ya existe la unidad {existente}. Quedó seleccionada.",
+        }
+    fila = {
+        "contrato_id": int(contrato_id),
+        "nombre": nombre,
+        "clave": clave,
+        "created_by": int(user_id) if user_id else None,
+    }
+    try:
+        sb.table("catalogo_unidad").insert(fila).execute()
+    except Exception as exc:
+        texto = str(exc).lower()
+        if "23505" in texto or "duplicate" in texto:
+            return {
+                "nombre": nombre,
+                "ya_existia": True,
+                "mensaje": f"Ya existe la unidad {nombre}. Quedó seleccionada.",
+            }
+        _log.warning("No se pudo guardar la unidad %s: %s", nombre, exc)
+        if _tabla_unidad_ausente(exc):
+            raise ValueError(
+                "Falta en la base el listado donde se guardan las unidades nuevas. No se creó la unidad."
+            ) from exc
+        raise ValueError("No se pudo guardar la unidad.") from exc
+    return {
+        "nombre": nombre,
+        "ya_existia": False,
+        "mensaje": f"La unidad {nombre} quedó disponible.",
+    }
 
 
 def rendimiento_insumo_para_guardar(raw: Any) -> Optional[float]:
@@ -2177,6 +2332,7 @@ def uso_insumo_catalogo(
         unidad_nueva = unidad_insumo_para_guardar(
             str(unidad or "").strip() or existing.get("unidad"),
             existing.get("unidad"),
+            permitidas=_permitidas_unidad(contrato_id, sb),
         )
         rend_raw = existing.get("rendimiento") if rendimiento is None else rendimiento
         rend_nuevo = rendimiento_insumo_para_guardar(rend_raw)
@@ -2249,7 +2405,11 @@ def evaluar_cambio_unidad_rendimiento(
     current_user=None,
 ) -> dict:
     """Valida unidad y rendimiento. Pide confirmación si el insumo ya está en uso."""
-    unidad = unidad_insumo_para_guardar(body.get("unidad") or existing.get("unidad"), existing.get("unidad"))
+    unidad = unidad_insumo_para_guardar(
+        body.get("unidad") or existing.get("unidad"),
+        existing.get("unidad"),
+        permitidas=_permitidas_unidad(contrato_id, sb),
+    )
     if "rendimiento" in body:
         rendimiento = rendimiento_insumo_para_guardar(body.get("rendimiento"))
     else:
@@ -2313,6 +2473,10 @@ def create_insumo_catalogo(
         )
     sb = _sb()
     payload = _build_insumo_payload(body, contrato_id, user_id)
+    payload["unidad"] = unidad_insumo_para_guardar(
+        payload.get("unidad"),
+        permitidas=_permitidas_unidad(contrato_id, sb),
+    )
     detalle_for_resolve = payload.get("cotizaciones_detalle") or []
     detalle_for_resolve = _upsert_proveedores_desde_detalle(
         contrato_id, user_id, detalle_for_resolve,

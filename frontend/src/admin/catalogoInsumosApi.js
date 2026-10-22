@@ -22,6 +22,14 @@ export function createCatalogoInsumosApi(contratoId, token) {
   return {
     getConfig: () => fetch(`${base}/config`, { headers: headers(token) }).then(parseJson),
 
+    listarUnidades: () => fetch(`${base}/unidades`, { headers: headers(token) }).then(parseJson),
+
+    crearUnidad: (nombre) => fetch(`${base}/unidades`, {
+      method: 'POST',
+      headers: headers(token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ nombre }),
+    }).then(parseJson),
+
     getNextCodigo: () => fetch(`${base}/next-codigo`, { headers: headers(token) }).then(parseJson),
 
     listInsumos: (q = '', limit = 80, offset = 0) =>

@@ -84,6 +84,33 @@ def tiene_alguna_accion_catalogo_insumos(current_user) -> bool:
     return False
 
 
+def puede_crear_unidad_catalogo(current_user) -> bool:
+    """Crear una unidad: Crear o Editar del catálogo, o el desarrollador. Ver no basta."""
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        return False
+    return (
+        tiene_permiso_catalogo_insumos(current_user, "crear")
+        or tiene_permiso_catalogo_insumos(current_user, "editar")
+    )
+
+
+def require_crear_unidad_catalogo(current_user) -> None:
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if not puede_crear_unidad_catalogo(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Para crear una unidad se requiere permiso de Crear o Editar en Catálogo de Insumos.",
+        )
+
+
 def require_permiso_catalogo_insumos(current_user, accion: CatalogoInsumosAccion) -> None:
     from almacen_permissions import rol_excluido_almacen
 

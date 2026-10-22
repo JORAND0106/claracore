@@ -14,11 +14,14 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from catalogo_insumos_permissions import (
+    puede_crear_unidad_catalogo,
+    require_crear_unidad_catalogo,
     require_permiso_catalogo_insumos,
     tiene_permiso_catalogo_insumos,
 )
 from catalogo_insumos_service import (
     check_cotizacion_numero_incongruencia,
+    crear_unidad_catalogo,
     create_insumo_catalogo,
     delete_insumo_catalogo,
     delete_proveedor_catalogo,
@@ -32,6 +35,7 @@ from catalogo_insumos_service import (
     import_csv_insumos,
     import_csv_proveedores,
     list_biblioteca_cotizaciones,
+    listar_unidades_catalogo,
     list_catalogo_insumos,
     list_cotizaciones_soporte,
     list_precio_historial,
@@ -89,6 +93,45 @@ def _registrar_edicion_insumo(current_user, accion: str, insumo_id, codigo: str,
 
 def _check_contrato(current_user, contrato_id: int) -> None:
     _require_contract_access(current_user, contrato_id)
+
+
+class UnidadNuevaBody(BaseModel):
+    nombre: str = ""
+
+
+@router.get("/{contrato_id}/unidades")
+def route_listar_unidades(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_catalogo_insumos(current_user, "ver")
+        or puede_crear_unidad_catalogo(current_user)
+    ):
+        require_permiso_catalogo_insumos(current_user, "ver")
+    return {"unidades": listar_unidades_catalogo(contrato_id)}
+
+
+@router.post("/{contrato_id}/unidades")
+def route_crear_unidad(
+    contrato_id: int,
+    body: UnidadNuevaBody,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_crear_unidad_catalogo(current_user)
+    try:
+        result = crear_unidad_catalogo(contrato_id, body.nombre, _uid(current_user))
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    if not result.get("ya_existia"):
+        registrar_log(
+            current_user,
+            "CREAR",
+            "CATALOGO_INSUMOS",
+            "catalogo_unidad",
+            result.get("nombre"),
+            {"registro": f"Unidad {result.get('nombre')}", "nombre": result.get("nombre")},
+        )
+    return result
 
 
 class DuplicadoCheckBody(BaseModel):
