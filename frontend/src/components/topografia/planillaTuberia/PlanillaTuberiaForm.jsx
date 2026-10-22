@@ -84,6 +84,7 @@ import {
   notifyAlertaSyncCantidades,
 } from './planillaTuberiaUtils'
 import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
+import { planillaParamsPatchFromSeed } from '../../esquema/esquemaTopoCoordsSync'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
 import { notifyPlanillaTopoGrillaChanged } from '../../../modules/sicoe-obra/sicoeGrillaReportesIndicadores'
 
@@ -2653,6 +2654,11 @@ export default function PlanillaTuberiaForm({
           norteFin: params.norte_abs_final,
           esteFin: params.este_abs_final,
         }}
+        onTramoCoordsChange={(seed) => {
+          const patch = planillaParamsPatchFromSeed(seed)
+          if (!patch) return
+          setParams((p) => ({ ...p, ...patch }))
+        }}
         ui={{
           text: ui.text,
           textMuted: ui.textMuted,
@@ -2716,6 +2722,11 @@ export default function PlanillaTuberiaForm({
           esteIni: params.este_abs_inicial,
           norteFin: params.norte_abs_final,
           esteFin: params.este_abs_final,
+        }}
+        onTramoCoordsChange={(seed) => {
+          const patch = planillaParamsPatchFromSeed(seed)
+          if (!patch) return
+          setParams((p) => ({ ...p, ...patch }))
         }}
         ui={{
           text: ui.text,

@@ -92,6 +92,26 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 | C-TX-05 | **Celular — popups:** Extruir, cálculo de volúmenes, Agregar posición del despiece (y equivalentes) a pantalla completa, con scroll vertical y botones confirmar/cancelar siempre visibles. |
 | C-TX-06 | **Celular — gestos:** un dedo dibuja o mueve según la herramienta; dos dedos hacen paneo/zoom (pellizco); giro libre con un dedo cuando está activo. Los gestos del lienzo no desplazan la página de atrás. Textos y botones cómodos al dedo. |
 | C-TX-07 | **Celular — orientación:** al girar el teléfono se conservan dibujo, vista y zoom; el layout se adapta a vertical u horizontal. |
+| C-TX-08 | **Paridad total de invocación:** existe **una sola** herramienta (`EsquemaEditorModal`). Inventario obligatorio en `esquemaInvocationPoints.js` (Bitácora, Actas, Seguimiento/tareas, SicoeObra registro y lote, SicoeObra dibujo de reporte/huella, Presupuesto grupos/lote, Topografía · planilla de tubería crear/asociar, y cualquier punto nuevo). En **todos** los puntos están disponibles: 2D (dibujo, estilos, texto, imagen/escala, giro, ortho, hatch, cotas/área, mapa/PK/GPS, zoom extendido/ventana, comandos con 2.º clic, panel ampliable); dibujo por coordenadas (C-2D-13); 3D (modo, 6 vistas pastel, iso, giro libre, Extruir, Solevar, Unir, Sustraer en cadena, Cortar, OSNAP, tonos/aristas); cálculo de volúmenes + PNG memoria; cuadro de despiece + PNG (parrilla solo desarrollador); borrador y PNG nítidas en PDF (C-OUT-07). **Solo SicoeObra huella:** refs a otros reportes, sync portada, color por ítem; **solo SicoeObra Kg:** C-DES-08. **Planilla de tubería:** coordenadas Magna GK de la planilla precargan la tabla (Inicio/Fin) y, al guardar el esquema, los cambios de Inicio/Fin se reflejan en la planilla. Toda función nueva del contrato debe añadirse al inventario y a `esquemaParidadInvocacion.scenario.test.js`. |
+
+### Inventario de invocación (C-TX-08)
+
+Fuente de verdad: `esquemaInvocationPoints.js`. Cada fila usa el mismo modal; los grupos 2D / coords / 3D / cálculo / despiece / borrador+PNG son obligatorios. Lo propio de SicoeObra (huella) y el sync de planilla se marcan aparte.
+
+| Módulo | Pantalla · acción | Notas |
+|--------|-------------------|-------|
+| Bitácora | Entrada / adjuntos · Esquema | — |
+| Actas | Editor · idea · Esquema | — |
+| Actas | Compromisos abiertos · evidencia | — |
+| Actas | Detalle de compromiso · evidencia | — |
+| Seguimiento | Tarea · checklist · Esquema | — |
+| Seguimiento | Tarea · partes · Esquema | — |
+| SicoeObra | Registro · gráfico | — |
+| SicoeObra | Asistente de gráficos (lote) | — |
+| SicoeObra | Dibujo del reporte (huella) | Solo aquí: refs, sync portada, color ítem |
+| Presupuesto | Grupo de gráfico (nuevo / editar) | — |
+| Presupuesto | Sincronización lote SicoeCAD | — |
+| Topografía | Planilla tubería · Crear / Asociar reporte · Gráfico | Precarga Inicio/Fin + sync al guardar |
 
 ## Casos de verificación obligatorios
 
@@ -128,8 +148,9 @@ Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` v
 31. **PNG nítido en PDF:** Gráfico 161 (memoria muro/pase, total 2,27 m³) en PDF Bitácora al 400 % nítido y «Color» en una línea; despiece ≥5 posiciones nítido; gráfico+coords ≥10 puntos nítido; peso PDF razonable vs. JPEG legacy; tipografía ×2 sin regresión.
 32. **SicoeObra cuadro Kg (C-DES-08):** registro Kg → Sí → Cabezal descole As1/As1a/As2 → Cant Total 31,01 / 9,46 / 47,31 (total 87,78); foto compartida desde Cámara / Galería dispositivo / Archivo (mismas reglas que registros; vista previa y quitar antes de Cargar; al editar se reemplaza igual); PNG solo en esos 3; ítem asignable después; editar As1→18→34,89 + As3 − As1a; aviso al editar/eliminar individual; No = flujo Kg; sellado = solo consulta.
 33. **Dibujo por coordenadas en todos los módulos (C-2D-13):** en Bitácora y Presupuesto el panel muestra coords + tipo Nodo/Línea/Polígono como en SicoeObra; pegar 5 puntos, dibujar línea (1–2) y polígono (5); nodo desde mapa; biblioteca 1:1 en nodo; guardar/reabrir conserva tabla y dibujo. En SicoeObra: refs, sync portada y color ítem sin cambios.
+34. **Paridad de invocación (C-TX-08):** inventario completo; cada punto usa el modal canónico con 2D+coords+3D+cálculo+despiece+borrador/PNG; planilla de tubería precarga Inicio/Fin y sincroniza al guardar; SicoeObra-only intacto; parrilla solo desarrollador.
 
-Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js`, `esquemaSolevar.scenario.test.js`, `esquemaSolevarPanel.scenario.test.js`, `esquemaDespiece.scenario.test.js`, `esquemaDespieceFleje180.scenario.test.js`, `esquemaDespieceMetros.scenario.test.js`, `esquemaDespiecePngCotas.scenario.test.js`, `esquemaMobileLayout.test.js`, `esquemaDespieceParrilla.scenario.test.js`, `esquemaParrillaSoloDev.scenario.test.js`, `esquemaTablasLegiblesFormato.scenario.test.js`, `esquemaPngNitidoPdf.scenario.test.js`, `sicoeCuadroAceros.test.js` / `SicoeFotoFuentesBotones.test.js` y `esquemaCoordsTodosModulos.scenario.test.js` bloquean el despliegue si se rompe 5–33.
+Las pruebas de `esquema3dRegresionPreSketchup.scenario.test.js`, `esquema3dTonosOsnapSustraer.scenario.test.js`, `esquemaComandosPaneoNombres.scenario.test.js`, `esquemaDibujoPointer.regression.test.js`, `esquemaCorreccionesZoomExcel.scenario.test.js`, `esquemaRenderMemoriaPopup.scenario.test.js`, `esquemaPastelRenderTabla.scenario.test.js`, `esquemaSolevar.scenario.test.js`, `esquemaSolevarPanel.scenario.test.js`, `esquemaDespiece.scenario.test.js`, `esquemaDespieceFleje180.scenario.test.js`, `esquemaDespieceMetros.scenario.test.js`, `esquemaDespiecePngCotas.scenario.test.js`, `esquemaMobileLayout.test.js`, `esquemaDespieceParrilla.scenario.test.js`, `esquemaParrillaSoloDev.scenario.test.js`, `esquemaTablasLegiblesFormato.scenario.test.js`, `esquemaPngNitidoPdf.scenario.test.js`, `sicoeCuadroAceros.test.js` / `SicoeFotoFuentesBotones.test.js`, `esquemaCoordsTodosModulos.scenario.test.js`, `esquemaParidadInvocacion.scenario.test.js` y `esquemaTopoCoordsSync.test.js` bloquean el despliegue si se rompe 5–34.
 
 ## Mantenimiento
 
