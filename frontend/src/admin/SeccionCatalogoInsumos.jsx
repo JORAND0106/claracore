@@ -21,7 +21,7 @@ import {
   valorTributarioLabelDesdeRow,
 } from './catalogoInsumosTributos'
 import { buildContratoUiTheme } from '../theme/adminPanelTheme'
-import { UnidadSelector } from '../utils/unidadesListadoPrecios'
+import { UnidadSelector, UNIDADES_LISTADO_PRECIOS } from '../utils/unidadesListadoPrecios'
 import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
 import CatalogoCotizacionAutocomplete from './CatalogoCotizacionAutocomplete'
@@ -928,6 +928,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [csvModo, setCsvModo] = useState('agregar')
   const [unidadModoCustom, setUnidadModoCustom] = useState(false)
   const [unidadCustom, setUnidadCustom] = useState('')
+  const [unidadCreando, setUnidadCreando] = useState(false)
+  const [avisoUnidad, setAvisoUnidad] = useState('')
+  const [unidadesCatalogo, setUnidadesCatalogo] = useState([])
+  const [unidadesRecientes, setUnidadesRecientes] = useState([])
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [confirmIdentidad, setConfirmIdentidad] = useState(null)
   const [deleteAviso, setDeleteAviso] = useState('')
@@ -955,6 +959,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
   const closeModal = useCallback(() => {
     setModalOpen(false)
+    setUnidadModoCustom(false)
+    setUnidadCustom('')
+    setAvisoUnidad('')
     setConfirmDiscard(false)
     setConfirmRevocarGanadora(null)
     setDupAlert(null)
@@ -1042,6 +1049,53 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const canVer = permsEfectivos?.ver
   const identidadSoloLectura = Boolean(editId && !canEditar)
   const puedeAbrirInsumo = Boolean(canVer || canEditar)
+  const puedeCrearUnidad = Boolean((canCrear || canEditar) && !identidadSoloLectura)
+  const unidadesOpciones = useMemo(() => {
+    const base = unidadesCatalogo.length ? unidadesCatalogo : UNIDADES_LISTADO_PRECIOS
+    const extras = unidadesRecientes.filter((u) => u && !base.includes(u))
+    return [...base, ...extras]
+  }, [unidadesCatalogo, unidadesRecientes])
+
+  useEffect(() => {
+    if (!api || !modalOpen) return undefined
+    let vivo = true
+    api.listarUnidades()
+      .then((data) => {
+        if (vivo && Array.isArray(data?.unidades) && data.unidades.length) {
+          setUnidadesCatalogo(data.unidades)
+        }
+      })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [api, modalOpen])
+
+  const confirmarOtraUnidad = async (texto) => {
+    const escrito = String(texto || '').trim()
+    if (!escrito) {
+      setAvisoUnidad('Escriba la unidad.')
+      return
+    }
+    if (!api) return
+    setUnidadCreando(true)
+    setAvisoUnidad('')
+    try {
+      const resp = await api.crearUnidad(escrito)
+      const nombre = resp?.nombre
+      if (!nombre) {
+        setAvisoUnidad('No se pudo guardar la unidad.')
+        return
+      }
+      setUnidadesRecientes((prev) => (prev.includes(nombre) ? prev : [...prev, nombre]))
+      setForm((f) => formConIdentidadPropagada({ ...f, unidad: nombre }))
+      setUnidadModoCustom(false)
+      setUnidadCustom('')
+      setAvisoUnidad(resp?.mensaje || `La unidad ${nombre} quedó seleccionada.`)
+    } catch (e) {
+      setAvisoUnidad(e.message || 'No se pudo guardar la unidad.')
+    } finally {
+      setUnidadCreando(false)
+    }
+  }
 
   const loadProveedores = useCallback(() => {
     if (!api || !canVer) return
@@ -2749,20 +2803,36 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           title="Solo lectura. Requiere permiso Editar de Catálogo de Insumos."
                         />
                       ) : (
-                        <UnidadSelector
-                          selectTestId="unidad-insumo"
-                          permitirCustom={!editId}
-                          value={form.unidad}
-                          onChange={(v) => setForm((f) => formConIdentidadPropagada({ ...f, unidad: v }))}
-                          selectStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
-                          inputStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
-                          btnPrimary={btnPrimary}
-                          btnSecondary={btnSecondary}
-                          modoCustom={unidadModoCustom}
-                          setModoCustom={setUnidadModoCustom}
-                          uCustom={unidadCustom}
-                          setUCustom={setUnidadCustom}
-                        />
+                        <>
+                          <UnidadSelector
+                            selectTestId="unidad-insumo"
+                            permitirCustom={puedeCrearUnidad}
+                            unidades={unidadesOpciones}
+                            value={form.unidad}
+                            onChange={(v) => {
+                              setAvisoUnidad('')
+                              setForm((f) => formConIdentidadPropagada({ ...f, unidad: v }))
+                            }}
+                            onConfirmar={confirmarOtraUnidad}
+                            confirmando={unidadCreando}
+                            selectStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
+                            inputStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
+                            btnPrimary={btnPrimary}
+                            btnSecondary={btnSecondary}
+                            modoCustom={unidadModoCustom}
+                            setModoCustom={setUnidadModoCustom}
+                            uCustom={unidadCustom}
+                            setUCustom={setUnidadCustom}
+                          />
+                          {avisoUnidad && (
+                            <div
+                              data-testid="aviso-otra-unidad"
+                              style={{ marginTop: 4, fontSize: 'var(--cc-xs)', lineHeight: 1.35, color: t.text }}
+                            >
+                              {avisoUnidad}
+                            </div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td style={{ ...td, overflow: 'visible' }}>
