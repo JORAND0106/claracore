@@ -425,18 +425,25 @@ def _items_solicitud_de_oc(sb, oc: dict) -> List[dict]:
 
 
 def _asunto_cuerpo(oc: dict, contrato: dict, contacto: dict) -> tuple[str, str]:
-    numero = oc.get("numero_oc") or oc.get("id")
-    contrato_txt = (contrato.get("numero") or "").strip() or f"#{contrato.get('id') or ''}"
+    numero = oc.get("numero_oc")
+    if numero is None or str(numero).strip() == "":
+        numero = None
+    contrato_txt = (contrato.get("numero") or "").strip() or "sin número"
     contratista = (contrato.get("contratista") or "").strip()
     objeto = (contrato.get("objeto") or "").strip()
-    asunto = f"Orden de compra N.° {numero} — contrato {contrato_txt}"
+    if numero is None:
+        asunto = f"Orden de compra — contrato {contrato_txt}"
+        apertura = "Adjuntamos la orden de compra."
+    else:
+        asunto = f"Orden de compra N.° {numero} — contrato {contrato_txt}"
+        apertura = f"Adjuntamos la orden de compra N.° {numero}."
     contacto_bits = [contacto.get("nombre") or ""]
     if contacto.get("email"):
         contacto_bits.append(contacto["email"])
     if contacto.get("telefono"):
         contacto_bits.append(contacto["telefono"])
     lineas = [
-        f"Adjuntamos la orden de compra N.° {numero}.",
+        apertura,
         f"Contrato: {contrato_txt}" + (f" — {contratista}" if contratista else ""),
     ]
     if objeto:
@@ -497,7 +504,8 @@ def enviar_oc_por_correo(
             _log.warning("PDF de la OC %s no disponible para el correo: %s", oc_id, exc)
             pdf_bytes = b""
     if not pdf_nombre:
-        pdf_nombre = oc.get("pdf_nombre") or f"OC-{oc.get('numero_oc') or oc_id}.pdf"
+        from almacen_oc_pdf_version import nombre_archivo_pdf_oc
+        pdf_nombre = oc.get("pdf_nombre") or nombre_archivo_pdf_oc(oc)
     contacto = _contacto_generador(sb, int(user_id))
     contrato = _contrato_breve(sb, int(contrato_id))
     asunto, cuerpo = _asunto_cuerpo(oc, contrato, contacto)

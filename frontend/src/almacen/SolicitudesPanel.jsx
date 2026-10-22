@@ -77,6 +77,7 @@ export default function SolicitudesPanel({
   const [creating, setCreating] = useState(false)
   const [reabrirOc, setReabrirOc] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
+  const [detalleEpoch, setDetalleEpoch] = useState(0)
   const [seleccionId, setSeleccionId] = useState(null)
   const [detalleTab, setDetalleTab] = useState('portada')
   const [anularTarget, setAnularTarget] = useState(null)
@@ -291,10 +292,11 @@ export default function SolicitudesPanel({
   }
 
   const abrirReabrirOc = (s) => {
-    setDetalleId(null)
+    const id = s?.id
+    if (id == null || id === '') return
     setCreating(false)
     setReabrirOc(true)
-    setEditId(s.id)
+    setEditId(id)
   }
 
   return (
@@ -796,10 +798,12 @@ export default function SolicitudesPanel({
           token={token}
           contratoId={contratoId}
           modoReabrirOc={reabrirOc}
+          zIndex={reabrirOc ? 100090 : 100056}
           onClose={cerrarFormModal}
           onSaved={(result) => {
             if (reabrirOc) {
               cerrarFormModal()
+              setDetalleEpoch((n) => n + 1)
               reload()
               return
             }
@@ -817,6 +821,7 @@ export default function SolicitudesPanel({
 
       {detalleId && (
         <SolicitudDetalleModal
+          key={`${detalleId || ''}-${detalleEpoch}`}
           solicitudId={detalleId}
           initialSeed={lista.find((s) => String(s.id) === String(detalleId)) || null}
           initialTab={detalleTab}

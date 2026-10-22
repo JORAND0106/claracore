@@ -198,7 +198,9 @@ export default function OcGeneradaMensajeModal({
                   style={{ ...ui.input, flex: 1, minWidth: 180, color: ui.text }}
                   value={correos[envio.orden_compra_id] || ''}
                   placeholder="Corregir correo y reintentar"
-                  aria-label={`Correo de la OC ${envio.numero_oc || envio.orden_compra_id}`}
+                  aria-label={envio.numero_oc != null && String(envio.numero_oc).trim() !== ''
+                    ? `Correo de la OC ${envio.numero_oc}`
+                    : 'Correo de la orden de compra'}
                   disabled={busy || reintentando != null}
                   onChange={(e) => setCorreos((prev) => ({ ...prev, [envio.orden_compra_id]: e.target.value }))}
                 />

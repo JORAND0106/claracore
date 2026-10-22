@@ -5744,8 +5744,8 @@ def _armar_pdf_oc(
         solo_html=True,
     )
     pdf_bytes = _pdf_desde_html(html)
-    numero = oc.get("numero_oc") or oc_id
-    nombre = f"OC-{numero}.pdf"
+    from almacen_oc_pdf_version import nombre_archivo_pdf_oc
+    nombre = nombre_archivo_pdf_oc(oc)
     return {
         "pdf_bytes": pdf_bytes,
         "html": html,
@@ -5807,7 +5807,8 @@ def _proveedores_de_esta_oc(oc: dict, candidatos: List[dict]) -> List[dict]:
 def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, str]:
     """Descarga el PDF de la OC. Reutiliza blob existente; solo regenera si falta."""
     oc = get_orden_compra(contrato_id, oc_id)
-    fname = oc.get("pdf_nombre") or f"OC-{oc.get('numero_oc') or oc_id}.pdf"
+    from almacen_oc_pdf_version import nombre_archivo_pdf_oc
+    fname = oc.get("pdf_nombre") or nombre_archivo_pdf_oc(oc)
     if oc.get("pdf_blob_path"):
         data, _mime = download_soporte(oc.get("pdf_blob_path"))
         if data:
@@ -5820,7 +5821,8 @@ def download_pdf_oc(contrato_id: int, oc_id: int, user_id: int) -> tuple[bytes, 
     try:
         generar_y_guardar_pdf_oc(contrato_id, oc_id, oc, solicitud, user_id)
     except Exception as exc:
-        raise ValueError(f"No se pudo generar el PDF de la Orden de Compra: {exc}") from exc
+        _log.warning("No se pudo generar el PDF de la OC %s: %s", oc_id, exc)
+        raise ValueError("No se pudo generar el PDF de la orden de compra.") from exc
     oc = get_orden_compra(contrato_id, oc_id)
     if not oc.get("pdf_blob_path"):
         raise ValueError("No se pudo generar el PDF de la Orden de Compra.")
@@ -5882,11 +5884,14 @@ def download_pdf_conjunto_solicitud(contrato_id: int, solicitud_id: int, user_id
             )
             data = saved.get("pdf_bytes") or b""
         if not data:
-            raise ValueError(
-                f"No se pudo armar el PDF de la OC {head.get('numero_oc') or head.get('id')}."
-            )
+            numero = head.get("numero_oc")
+            etiqueta = f"la OC {numero}" if numero not in (None, "") else "una orden de compra"
+            raise ValueError(f"No se pudo armar el PDF de {etiqueta}.")
         partes.append(data)
-    nums = [str(o.get("numero_oc") or o.get("id")) for o in heads]
+    nums = [
+        str(o.get("numero_oc")) if o.get("numero_oc") not in (None, "") else "sin-numero"
+        for o in heads
+    ]
     fname = f"OC-{'-'.join(nums)}.pdf"
     return _unir_pdfs(partes), fname
 

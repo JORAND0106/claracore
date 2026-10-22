@@ -40,6 +40,23 @@ describe('presentación de modificaciones', () => {
     assert.equal(cargaDeLog(log).corto, 'abc12345')
     assert.equal(registroDeLog(log), 'Rasante · 0+100')
   })
+
+  it('una OC de almacén se nombra con su número visible', () => {
+    const log = {
+      modulo: 'ALMACEN',
+      entidad_tipo: 'orden_compra',
+      entidad_id: '17',
+      detalle: { numero_oc: 2 },
+    }
+    assert.equal(registroDeLog(log), 'OC #2')
+    const sinNumero = {
+      modulo: 'ALMACEN',
+      entidad_tipo: 'orden_compra',
+      entidad_id: '17',
+      detalle: {},
+    }
+    assert.equal(registroDeLog(sinNumero), 'Orden de compra')
+  })
 })
 
 describe('vista de Logs', () => {

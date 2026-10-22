@@ -92,6 +92,7 @@ export default function SolicitudDetalleModal({
   const [eliminarLineaAviso, setEliminarLineaAviso] = useState('')
   const [eliminarLineaBusy, setEliminarLineaBusy] = useState(false)
   const [ocProgreso, setOcProgreso] = useState('')
+  const [avisoReabrir, setAvisoReabrir] = useState('')
 
   // El título de la fila queda en un tooltip institucional. Al abrir el popup
   // ese recuadro se queda encima de la grilla y se corta. Se cierra al montar.
@@ -420,6 +421,34 @@ export default function SolicitudDetalleModal({
 
   const tituloDisplay = sol?.titulo?.trim() || `Solicitud #${sol?.consecutivo || '…'}`
 
+  const pedirReabrir = (e) => {
+    e?.stopPropagation?.()
+    e?.preventDefault?.()
+    if (busy) {
+      setAvisoReabrir('Espere a que termine la acción en curso. Reabrir agrega insumos nuevos y no cambia la orden ya emitida.')
+      return
+    }
+    if (typeof onReabrirOc !== 'function') {
+      setAvisoReabrir(MOTIVO_REABRIR_OC_SIN_PANTALLA)
+      return
+    }
+    if (!sol?.id || !solicitudPuedeReabrirOc(sol, permisos)) {
+      setAvisoReabrir('Reabrir no aplica a esta solicitud: solo agrega insumos nuevos cuando ya hay una orden de compra y usted puede crear o editar en Almacén.')
+      return
+    }
+    setAvisoReabrir('Se abrió el formulario para agregar insumos nuevos. Las líneas ya incluidas en la orden no se modifican.')
+    onReabrirOc(sol)
+  }
+
+  const avisoReabrirNodo = avisoReabrir ? (
+    <p
+      data-testid="reabrir-oc-aviso"
+      style={{ margin: '8px 0 0', flexBasis: '100%', fontSize: 'var(--cc-sm)', color: ui.text, lineHeight: 1.45 }}
+    >
+      {avisoReabrir}
+    </p>
+  ) : null
+
   const guardarTitulo = async () => {
     if (!sol?.id || !puedeEditarTitulo) return
     const next = tituloDraft.trim()
@@ -679,14 +708,14 @@ export default function SolicitudDetalleModal({
                     <button
                       type="button"
                       style={{ ...ui.btnPrimary, padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
-                      disabled={busy}
-                      onClick={() => onReabrirOc(sol)}
+                      onClick={pedirReabrir}
                       title="Agregar insumos adicionales. Si el proveedor es distinto, se genera otra OC."
                       data-testid="reabrir-oc-header"
                     >
                       🔓 Reabrir OC
                     </button>
                   )}
+                  {avisoReabrirNodo}
                   <SolicitudRegenerarPdf
                     solicitudId={sol.id}
                     ordenes={solicitudOrdenesCompra(sol)}
@@ -703,8 +732,7 @@ export default function SolicitudDetalleModal({
                   <button
                     type="button"
                     style={ui.btnPrimary}
-                    disabled={busy}
-                    onClick={() => onReabrirOc(sol)}
+                    onClick={pedirReabrir}
                     data-testid="reabrir-oc-fallback"
                   >
                     🔓 Reabrir OC
@@ -875,13 +903,14 @@ export default function SolicitudDetalleModal({
                   <button
                     type="button"
                     style={ui.btnPrimary}
-                    disabled={busy}
-                    onClick={() => onReabrirOc(sol)}
+                    onClick={pedirReabrir}
                     title="Agregar insumos adicionales a la misma Orden de Compra"
+                    data-testid="reabrir-oc-footer"
                   >
                     🔓 Reabrir OC
                   </button>
                 )}
+                {avisoReabrirNodo}
                 {puedeEnviar && (
                   <button
                     type="button"

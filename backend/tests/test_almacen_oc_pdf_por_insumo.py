@@ -419,4 +419,64 @@ def test_varias_oc_de_la_solicitud_y_una_ajena_no_se_toca(monkeypatch):
     assert tocadas == [5, 6]
     assert [r["orden_compra_id"] for r in out["resultados"]] == [5, 6, 99]
     assert out["resultados"][-1]["ok"] is False
+    assert out["resultados"][-1]["numero_oc"] is None
     assert "No se reemplazó nada." in out["resultados"][-1]["motivo"]
+    assert "99" not in out["resultados"][-1]["motivo"]
+
+
+def test_fallo_de_versiones_conserva_el_numero_visible(monkeypatch):
+    def _una(*_a, **_k):
+        raise ValueError(
+            "Falta en la base la tabla donde se guardan las versiones del PDF, "
+            "o la base todavía no la tiene visible. No se reemplazó nada."
+        )
+
+    monkeypatch.setattr(ver, "_regenerar_una", _una)
+    monkeypatch.setattr(
+        svc, "_fetch_ocs_de_solicitud",
+        lambda *_a, **_k: [{"id": 17, "numero_oc": 2, "proveedor_nombre": "SERVIPERFILES CYS"}],
+    )
+    monkeypatch.setattr(svc, "_sb", lambda: object())
+    out = ver.regenerar_pdfs_solicitud(1, 19, [17], {"sub": 1})
+    fila = out["resultados"][0]
+    assert fila["orden_compra_id"] == 17
+    assert fila["numero_oc"] == 2
+    assert fila["ok"] is False
+    assert "17" not in fila["motivo"]
+    assert "No se reemplazó nada" in fila["motivo"]
+
+
+def test_motivo_si_falta_la_tabla_o_el_permiso():
+    class _Roto:
+        def __init__(self, mensaje):
+            self.mensaje = mensaje
+
+        def table(self, _name):
+            raise Exception(self.mensaje)
+
+    try:
+        ver._leer_versiones(
+            _Roto("Could not find the table 'public.almacen_orden_compra_pdf' in the schema cache (PGRST205)"),
+            17,
+            obligatorio=True,
+        )
+        raise AssertionError("debía fallar")
+    except ValueError as exc:
+        texto = str(exc)
+    assert "17" not in texto
+    assert "PGRST" not in texto
+    assert "schema" not in texto.lower()
+    assert "No se reemplazó nada" in texto
+
+    try:
+        ver._leer_versiones(_Roto("permission denied for table almacen_orden_compra_pdf (42501)"), 17, obligatorio=True)
+        raise AssertionError("debía fallar")
+    except ValueError as exc:
+        permiso = str(exc)
+    assert "17" not in permiso
+    assert "42501" not in permiso
+    assert "no permitió" in permiso
+
+    assert ver.nombre_archivo_pdf_oc({"numero_oc": 2}) == "OC-2.pdf"
+    assert ver.nombre_archivo_pdf_oc({"id": 17}) == "OC-sin-numero.pdf"
+    assert "17" not in ver.etiqueta_oc({"id": 17, "numero_oc": 2})

@@ -1,6 +1,9 @@
 -- Versiones del PDF de la orden de compra.
 -- La vigente sigue en almacen_orden_compra.pdf_blob_path.
--- Idempotente. La aplica schema_migrations_runner cuando existe SUPABASE_DB_URL.
+-- Idempotente. Pegar este archivo completo en el SQL Editor de Supabase
+-- si el backend no tiene SUPABASE_DB_URL: sin esta tabla, Regenerar PDF
+-- responde que no pudo consultar las versiones y no reemplaza nada.
+-- La aplica schema_migrations_runner cuando existe SUPABASE_DB_URL.
 
 CREATE TABLE IF NOT EXISTS public.almacen_orden_compra_pdf (
   id bigserial PRIMARY KEY,
@@ -31,5 +34,8 @@ COMMENT ON TABLE public.almacen_orden_compra_pdf IS
 
 COMMENT ON COLUMN public.almacen_orden_compra.pdf_proveedor_desactualizado IS
   'True: el PDF vigente cambió y el proveedor todavía tiene la versión anterior.';
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.almacen_orden_compra_pdf TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.almacen_orden_compra_pdf_id_seq TO service_role;
 
 NOTIFY pgrst, 'reload schema';
