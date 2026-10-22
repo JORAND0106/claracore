@@ -140,6 +140,11 @@ def log_almacen(
     valor_nuevo=None,
 ) -> None:
     """Envuelve registrar_log; nunca propaga fallos de auditoría."""
+    det = dict(detalle or {})
+    if entidad_tipo == "orden_compra":
+        numero = det.get("numero_oc")
+        if numero not in (None, "") and not det.get("registro"):
+            det["registro"] = f"OC #{numero}"
     try:
         registrar_log(
             usuario,
@@ -147,7 +152,7 @@ def log_almacen(
             "ALMACEN",
             entidad_tipo,
             entidad_id,
-            detalle or {},
+            det,
             valor_anterior=valor_anterior,
             valor_nuevo=valor_nuevo,
         )

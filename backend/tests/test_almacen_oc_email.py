@@ -88,6 +88,17 @@ def test_asunto_incluye_oc_contrato_y_contacto():
     assert "PDF" in cuerpo
 
 
+def test_asunto_sin_numero_visible_no_usa_el_id():
+    asunto, cuerpo = _asunto_cuerpo(
+        {"id": 17},
+        {"numero": "CT-9"},
+        {"nombre": "Ana Ruiz"},
+    )
+    assert "17" not in asunto
+    assert "17" not in cuerpo
+    assert "orden de compra" in asunto.lower()
+
+
 def _parche_envio(monkeypatch, *, email, smtp_ok=True):
     import almacen_oc_email as mod
     import almacen_service as svc

@@ -1814,7 +1814,10 @@ def route_download_pdf_ocs_solicitud(
         raise _http_value_error(exc) from exc
     except Exception as exc:
         _log.exception("Error descargando PDF de OCs solicitud %s", solicitud_id)
-        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar el PDF de la orden de compra.",
+        ) from exc
 
 
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/download")
@@ -1833,7 +1836,10 @@ def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get
         raise _http_value_error(exc) from exc
     except Exception as exc:
         _log.exception("Error descargando PDF OC %s contrato %s", oc_id, contrato_id)
-        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar el PDF de la orden de compra.",
+        ) from exc
 
 
 @router.post("/{contrato_id}/solicitudes/{solicitud_id}/ordenes-compra/regenerar-pdf")

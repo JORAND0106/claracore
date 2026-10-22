@@ -24,6 +24,7 @@ export default function SolicitudFormModal({
   onClose,
   onSaved,
   modoReabrirOc = false,
+  zIndex = 100056,
 }) {
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
@@ -55,7 +56,7 @@ export default function SolicitudFormModal({
         style={{
           position: 'fixed',
           inset: 0,
-          zIndex: 100056,
+          zIndex,
           display: 'flex',
           alignItems: compact ? 'flex-end' : 'center',
           justifyContent: 'center',
@@ -68,7 +69,10 @@ export default function SolicitudFormModal({
           aria-labelledby="solicitud-form-modal-title"
           className={`cc-almacen-form-modal cc-almacen-solicitud-form-modal${compact ? ' cc-almacen-modal-sheet' : ''}`}
           onClick={(e) => e.stopPropagation()}
-          style={almacenFormModalDialogStyle({ width: MODAL_WIDTH, compact })}
+          style={{
+            ...almacenFormModalDialogStyle({ width: MODAL_WIDTH, compact }),
+            ...(modoReabrirOc ? { minHeight: compact ? '72dvh' : '72vh' } : {}),
+          }}
         >
           <CcModalBrandHeader theme={t} />
           <div className="cc-almacen-form-modal__header cc-almacen-solicitud-form-modal__header cc-almacen-solicitud-form-modal__header--compact">

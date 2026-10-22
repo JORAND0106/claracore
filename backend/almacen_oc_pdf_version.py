@@ -12,10 +12,60 @@ from typing import List, Optional
 _log = logging.getLogger("claracore.almacen.oc_pdf")
 
 
+def nombre_archivo_pdf_oc(oc: Optional[dict]) -> str:
+    """Nombre de archivo con el número que ve el usuario. Nunca el id interno."""
+    numero = (oc or {}).get("numero_oc")
+    if numero is None or str(numero).strip() == "":
+        return "OC-sin-numero.pdf"
+    return f"OC-{numero}.pdf"
+
+
+def etiqueta_oc(oc: Optional[dict]) -> str:
+    numero = (oc or {}).get("numero_oc")
+    if numero is None or str(numero).strip() == "":
+        return "La orden de compra"
+    return f"OC #{numero}"
+
+
+def motivo_consulta_versiones(exc: BaseException) -> str:
+    """Causa en lenguaje claro. Sin códigos ni el id interno de la orden."""
+    text = str(exc or "").lower()
+    falta_tabla = any(token in text for token in (
+        "pgrst205",
+        "42p01",
+        "schema cache",
+        "could not find the table",
+        "could not find the relation",
+        "undefinedtable",
+        "undefined_table",
+    )) or ("does not exist" in text and any(
+        token in text for token in ("relation", "table", "almacen_orden_compra_pdf")
+    ))
+    if falta_tabla:
+        return (
+            "Falta en la base la tabla donde se guardan las versiones del PDF, "
+            "o la base todavía no la tiene visible. No se reemplazó nada."
+        )
+    if "42703" in text or ("column" in text and "does not exist" in text):
+        return (
+            "La base no tiene todas las columnas para guardar las versiones del PDF. "
+            "No se reemplazó nada."
+        )
+    if any(token in text for token in (
+        "42501",
+        "permission denied",
+        "row-level security",
+        "row level security",
+        "not authorized",
+    )):
+        return "La base no permitió consultar las versiones del PDF. No se reemplazó nada."
+    return "No se pudo consultar las versiones del PDF. No se reemplazó nada."
+
+
 def ruta_pdf_version(contrato_id: int, oc_id: int, nombre: str, version: int) -> str:
     from almacen_service import _safe_filename
 
-    safe = _safe_filename(nombre or f"OC-{oc_id}.pdf")
+    safe = _safe_filename(nombre or "OC-sin-numero.pdf")
     return f"almacen-soportes/{int(contrato_id)}/oc-pdf/{int(oc_id)}/v{int(version)}/{safe}"
 
 
@@ -126,9 +176,7 @@ def _leer_versiones(sb, oc_id: int, *, obligatorio: bool) -> List[dict]:
     except Exception as exc:
         if obligatorio:
             _log.warning("No se pudieron leer las versiones del PDF de la OC %s: %s", oc_id, exc)
-            raise ValueError(
-                "No se pudo consultar las versiones del PDF. No se reemplazó nada."
-            ) from exc
+            raise ValueError(motivo_consulta_versiones(exc)) from exc
         return []
     return rows
 
@@ -223,7 +271,7 @@ def _regenerar_una(contrato_id: int, oc_id: int, current_user) -> dict:
         raise ValueError("No se pudo generar el PDF. No se reemplazó nada.")
     versiones = _leer_versiones(sb, oc_id, obligatorio=True)
     plan = planificar_version(oc, versiones)
-    nombre = armado.get("nombre") or f"OC-{oc.get('numero_oc') or oc_id}.pdf"
+    nombre = armado.get("nombre") or nombre_archivo_pdf_oc(oc)
     blob_nuevo = ruta_pdf_version(contrato_id, oc_id, nombre, plan["version_nueva"])
     if blob_nuevo == (oc.get("pdf_blob_path") or ""):
         raise ValueError("No se pudo separar la versión nueva de la anterior. No se reemplazó nada.")
@@ -257,6 +305,7 @@ def _regenerar_una(contrato_id: int, oc_id: int, current_user) -> dict:
         oc_id,
         {
             "numero_oc": oc.get("numero_oc"),
+            "registro": etiqueta_oc(oc),
             "version_reemplazada": plan.get("version_anterior"),
             "version_vigente": plan.get("version_nueva"),
             "reenviado": False,
@@ -274,12 +323,32 @@ def _regenerar_una(contrato_id: int, oc_id: int, current_user) -> dict:
     )
 
 
+def _fallo_visible(oc_id: int, motivo: str, head: Optional[dict] = None) -> dict:
+    """El id interno viaja para la API. El número que se muestra es numero_oc."""
+    cabeza = head or {}
+    return {
+        "orden_compra_id": oc_id,
+        "numero_oc": cabeza.get("numero_oc"),
+        "proveedor_nombre": cabeza.get("proveedor_nombre"),
+        "ok": False,
+        "motivo": motivo,
+        "ya_enviada": False,
+        "documento_sistema": bool(cabeza.get("documento_sistema")),
+        "destinatarios": [],
+        "proveedor_desactualizado": False,
+    }
+
+
 def regenerar_pdfs_solicitud(contrato_id: int, solicitud_id: int, oc_ids: List[int], current_user) -> dict:
     from almacen_service import _fetch_ocs_de_solicitud, _sb
 
     sb = _sb()
     heads = _fetch_ocs_de_solicitud(sb, int(contrato_id), int(solicitud_id))
-    propios = {int(h["id"]) for h in heads if h.get("id")}
+    por_id = {}
+    for head in heads:
+        if not head.get("id"):
+            continue
+        por_id[int(head["id"])] = head
     vistos = set()
     resultados = []
     for raw in oc_ids or []:
@@ -290,29 +359,17 @@ def regenerar_pdfs_solicitud(contrato_id: int, solicitud_id: int, oc_ids: List[i
         if oc_id in vistos:
             continue
         vistos.add(oc_id)
-        if oc_id not in propios:
-            resultados.append({
-                "orden_compra_id": oc_id,
-                "ok": False,
-                "motivo": "Esa orden no pertenece a esta solicitud. No se reemplazó nada.",
-                "ya_enviada": False,
-                "documento_sistema": False,
-                "destinatarios": [],
-                "proveedor_desactualizado": False,
-            })
+        head = por_id.get(oc_id)
+        if head is None:
+            resultados.append(_fallo_visible(
+                oc_id,
+                "Esa orden no pertenece a esta solicitud. No se reemplazó nada.",
+            ))
             continue
         try:
             resultados.append(_regenerar_una(int(contrato_id), oc_id, current_user))
         except ValueError as exc:
-            resultados.append({
-                "orden_compra_id": oc_id,
-                "ok": False,
-                "motivo": str(exc),
-                "ya_enviada": False,
-                "documento_sistema": False,
-                "destinatarios": [],
-                "proveedor_desactualizado": False,
-            })
+            resultados.append(_fallo_visible(oc_id, str(exc), head))
     return {"resultados": resultados}
 
 
@@ -346,7 +403,7 @@ def descargar_version_pdf(contrato_id: int, oc_id: int, version: int) -> tuple[b
     data, _mime = download_soporte(match.get("blob_path"))
     if not data:
         raise ValueError("Esa versión del PDF no está disponible.")
-    nombre = (match.get("nombre") or f"OC-{oc.get('numero_oc') or oc_id}.pdf").strip()
+    nombre = (match.get("nombre") or nombre_archivo_pdf_oc(oc)).strip()
     if not nombre.lower().endswith(".pdf"):
         nombre = f"{nombre}.pdf"
     if not match.get("vigente"):
@@ -391,6 +448,7 @@ def resolver_reenvio_pdf(
             current_user, "REGENERAR_PDF_OC_REENVIO", oc_id,
             {
                 "numero_oc": oc.get("numero_oc"),
+                "registro": etiqueta_oc(oc),
                 "version_vigente": oc.get("pdf_version"),
                 "reenviado": False,
                 "resultado": "sistema",
@@ -416,6 +474,7 @@ def resolver_reenvio_pdf(
             current_user, "REGENERAR_PDF_OC_REENVIO", oc_id,
             {
                 "numero_oc": oc.get("numero_oc"),
+                "registro": etiqueta_oc(oc),
                 "version_vigente": oc.get("pdf_version"),
                 "reenviado": False,
                 "resultado": "omitido",
@@ -484,6 +543,7 @@ def resolver_reenvio_pdf(
         current_user, "REGENERAR_PDF_OC_REENVIO", oc_id,
         {
             "numero_oc": oc.get("numero_oc"),
+            "registro": etiqueta_oc(oc),
             "version_vigente": oc.get("pdf_version"),
             "reenviado": enviado,
             "resultado": (result or {}).get("resultado"),

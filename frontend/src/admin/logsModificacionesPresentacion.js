@@ -74,9 +74,12 @@ export function camposDeLog(log) {
 
 export function registroDeLog(log) {
   const det = detalleDe(log)
-  return det.registro || log?.registro_etiqueta || (
-    log?.entidad_tipo ? `${log.entidad_tipo}${log.entidad_id ? ` · ${log.entidad_id}` : ''}` : '—'
-  )
+  if (det.registro) return det.registro
+  if (log?.registro_etiqueta) return log.registro_etiqueta
+  if (det.numero_oc != null && String(det.numero_oc).trim() !== '') return `OC #${det.numero_oc}`
+  const modulo = String(log?.modulo || '').toUpperCase()
+  if (modulo === 'ALMACEN' && log?.entidad_tipo === 'orden_compra') return 'Orden de compra'
+  return log?.entidad_tipo ? `${log.entidad_tipo}${log.entidad_id ? ` · ${log.entidad_id}` : ''}` : '—'
 }
 
 export function cargaDeLog(log) {

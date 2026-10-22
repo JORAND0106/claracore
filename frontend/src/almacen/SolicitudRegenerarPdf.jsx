@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { estiloAvisoAlmacen } from './almacenContraste'
+import { etiquetaOcVisible } from './numeroOc'
 import { esDocumentoSistema } from './ocDocumentoSistema'
 import { useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
-function textoReporte(fila) {
-  const num = fila?.numero_oc ?? fila?.orden_compra_id ?? ''
+function textoReporte(fila, ordenes) {
+  const et = etiquetaOcVisible(fila, ordenes)
   if (fila?.ok) {
     const anterior = fila.version_anterior != null
       ? `La versión ${fila.version_anterior} quedó guardada. `
       : ''
     const vigente = fila.version_vigente != null ? `La versión vigente es la ${fila.version_vigente}.` : ''
-    return `OC #${num}: se regeneró el PDF. ${anterior}${vigente}`.trim()
+    return `${et}: se regeneró el PDF. ${anterior}${vigente}`.trim()
   }
-  return `OC #${num}: ${fila?.motivo || 'No se reemplazó el PDF.'}`
+  return `${et}: ${fila?.motivo || 'No se reemplazó el PDF.'}`
 }
 
 function destinatarioDe(fila) {
@@ -84,7 +85,7 @@ export default function SolicitudRegenerarPdf({
     try {
       const data = await api.regenerarPdfsOc(solicitudId, idsOc)
       const filas = data?.resultados || []
-      setReporte(filas.map(textoReporte))
+      setReporte(filas.map((fila) => textoReporte(fila, lista)))
       const pendientes = filas.filter((fila) => fila?.ok && fila?.ya_enviada && !fila?.documento_sistema)
       setReenvio(pendientes.length ? pendientes : null)
       setCorreoFaltante('')
@@ -108,8 +109,8 @@ export default function SolicitudRegenerarPdf({
         const correo = (correoFaltante || '').trim()
         if (reenviar && correo && !destinatarioDe(fila)) body.correo = correo
         const resp = await api.resolverReenvioPdfOc(fila.orden_compra_id, body)
-        const num = resp?.numero_oc ?? fila.numero_oc ?? fila.orden_compra_id
-        avisos.push(`OC #${num}: ${resp?.detalle || (reenviar ? 'Reenvío registrado.' : 'No se reenvió.')}`)
+        const et = etiquetaOcVisible(resp?.numero_oc != null ? resp : fila, lista)
+        avisos.push(`${et}: ${resp?.detalle || (reenviar ? 'Reenvío registrado.' : 'No se reenvió.')}`)
       }
       setReporte((prev) => [...prev, ...avisos])
       setReenvio(null)
@@ -232,11 +233,12 @@ export default function SolicitudRegenerarPdf({
               {reenvio.map((fila) => {
                 const correo = destinatarioDe(fila)
                 const quien = fila.proveedor_nombre ? ` (${fila.proveedor_nombre})` : ''
+                const et = etiquetaOcVisible(fila, lista)
                 return (
                   <div key={fila.orden_compra_id} style={{ marginBottom: 6 }}>
                     {correo
-                      ? `OC #${fila.numero_oc ?? fila.orden_compra_id}: el destinatario es ${correo}${quien}.`
-                      : `OC #${fila.numero_oc ?? fila.orden_compra_id}: no hay un correo registrado${quien}.`}
+                      ? `${et}: el destinatario es ${correo}${quien}.`
+                      : `${et}: no hay un correo registrado${quien}.`}
                   </div>
                 )
               })}
