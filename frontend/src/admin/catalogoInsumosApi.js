@@ -219,5 +219,9 @@ export function createCatalogoInsumosApi(contratoId, token) {
 
 export function fmtMoney(v) {
   if (v == null || v === '') return '—'
-  return `$${Math.round(Number(v)).toLocaleString('es-CO')}`
+  const n = Number(v)
+  if (!Number.isFinite(n) || n === 0) return '—'
+  const t = Math.trunc(n)
+  const signo = t < 0 ? '-' : ''
+  return `${signo}$${Math.abs(t).toLocaleString('es-CO')}`
 }

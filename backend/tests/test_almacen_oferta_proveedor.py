@@ -32,7 +32,7 @@ def test_ofertas_marcan_una_ganadora_y_el_precio_con_iva():
     assert gan["valor"] == 119
     otra = svc.elegir_oferta_proveedor(ofertas, proveedor_id=5)
     assert otra["numero"] == "C-9"
-    assert otra["valor"] == 95
+    assert otra["valor"] == 95.2
 
 
 def test_sin_eleccion_usa_la_ganadora():
@@ -85,7 +85,7 @@ def test_valor_linea_prioriza_proveedor_elegido_y_si_no_la_ganadora():
         ],
     })
     elegida = {"cantidad": 2, "proveedor_seleccionado_id": 5, "valor_compra_unitario": 119}
-    assert svc.valor_linea_proveedor(elegida, ofertas) == 190
+    assert svc.valor_linea_proveedor(elegida, ofertas) == 190.4
     sin_eleccion = {"cantidad": 3, "valor_compra_unitario": 1}
     assert svc.valor_linea_proveedor(sin_eleccion, ofertas) == 357
 

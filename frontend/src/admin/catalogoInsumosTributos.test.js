@@ -176,7 +176,19 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
     )
   })
 
-  it('redondea a 0 decimales (pesos COP)', () => {
+  it('Almacén conserva el decimal del valor después de AIU/IVA', () => {
+    const pleno = computeValorDespuesAiuIva(10001, { iva: { porcentaje: 19 } }, { exacto: true })
+    assert.ok(Math.abs(pleno - 11901.19) < 1e-8)
+    assert.notEqual(pleno, 11901)
+    const aiu = computeValorDespuesAiuIva(
+      18500,
+      { administracion: '0.05', imprevistos: '0.03', utilidad: '0.05', iva: '0.19' },
+      { valoresEnDecimal: true, exacto: true },
+    )
+    assert.equal(aiu, 21080.75)
+  })
+
+  it('sin exacto sigue redondeando a pesos (otros módulos)', () => {
     assert.equal(
       computeValorDespuesAiuIva(10001, { iva: { porcentaje: 19 } }),
       11901,

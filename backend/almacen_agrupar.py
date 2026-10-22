@@ -812,7 +812,7 @@ def _anexar_totales(plan: dict, items: List[dict], *, ver_economicos: bool) -> N
         except (TypeError, ValueError):
             por_item[iid] = None
             continue
-        por_item[iid] = round(cant * unit, 2) if cant > 0 and unit > 0 else None
+        por_item[iid] = float(cant * unit) if cant > 0 and unit > 0 else None
     for g in plan["grupos"]:
         total = 0.0
         alguno = False
@@ -822,7 +822,7 @@ def _anexar_totales(plan: dict, items: List[dict], *, ver_economicos: bool) -> N
                 continue
             total += val
             alguno = True
-        g["total"] = round(total, 2) if alguno else None
+        g["total"] = float(total) if alguno else None
 
 
 def frase_accion_agrupar(plan: dict) -> str:

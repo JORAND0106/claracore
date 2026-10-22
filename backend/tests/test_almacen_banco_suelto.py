@@ -1,4 +1,4 @@
-"""Banco × rendimiento y redondeo de la OC a 2 decimales."""
+"""Banco × rendimiento sin redondeo y total exacto de la OC."""
 from almacen_banco_suelto import (
     TEXTO_SALDO_SIN_INSUMO,
     aplicar_conversion_resumen,
@@ -22,7 +22,7 @@ def test_recebo_13_no_supera_y_13_01_si():
     assert meta["cant_disponible_suelto"] == 13.0
     assert meta["conversion_banco_suelto"] is True
     assert meta["texto_conversion"] == (
-        "Presupuesto 10,00 m³ en banco × rendimiento 1,30 = 13,00 m³ disponibles"
+        "Presupuesto 10 m³ en banco × rendimiento 1,3 = 13 m³ disponibles"
     )
     # 13 sueltos contra 13 disponibles: no supera.
     assert meta["cant_disponible_suelto"] - 13 >= -0.0001
@@ -148,9 +148,12 @@ def test_pdf_total_cuesta_igual_que_la_suma_de_lineas_con_iva():
         1: {"tipo_impuesto": "iva", "impuesto_porcentaje": 19},
         2: {"tipo_impuesto": "iva", "impuesto_porcentaje": 19},
     }
+    from decimal import Decimal
     _rows, tot = _lineas_y_totales(items, sol_items, insumo_map)
-    esperado = round(1.5 * 10.01, 2) + round(2 * 119, 2)
+    esperado = float(Decimal("1.5") * Decimal("10.01") + Decimal("2") * Decimal("119"))
     assert tot["total"] == esperado
-    assert _fmt_money(13) == "$ 13,00"
-    assert _fmt_money(1234.5) == "$ 1.234,50"
+    assert _fmt_money(13) == "$ 13"
+    assert _fmt_money(1234.5) == "$ 1.234"
+    assert _fmt_money(42979871.06) == "$ 42.979.871"
+    assert _fmt_money(100.60) == "$ 100"
     assert _fmt_money(tot["total"]) == _fmt_money(esperado)

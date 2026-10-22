@@ -4,11 +4,11 @@
  */
 import { nombreProveedorGuardado } from './proveedorLinea.js'
 
-/** Redondeo half-up a 2 decimales. La suma de líneas usa estos valores. */
+/** Conserva el valor. El decimal se corta solo al mostrar. */
 export function redondearDinero(n) {
   const x = Number(n)
   if (!Number.isFinite(x)) return null
-  return Math.round((x + Number.EPSILON) * 100) / 100
+  return x
 }
 
 export function valorCompraLinea(item) {

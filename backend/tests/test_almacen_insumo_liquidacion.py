@@ -10,7 +10,9 @@ from almacen_insumo_liquidacion import (
 def test_precio_ganadora_cambio_detecta_centavos():
     assert precio_ganadora_cambio(10, 8) is True
     assert precio_ganadora_cambio(10, 10) is False
-    assert precio_ganadora_cambio(10, 10.005) is False
+    # Medio centavo es un cambio real: el precio ya no se redondea a 2 decimales.
+    assert precio_ganadora_cambio(10, 10.005) is True
+    assert precio_ganadora_cambio(10, 10 + 1e-12) is False
     assert precio_ganadora_cambio(None, 5) is True
 
 

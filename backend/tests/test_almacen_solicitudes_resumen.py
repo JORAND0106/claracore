@@ -286,7 +286,7 @@ def test_resumen_valor_solicitud_usa_proveedor_elegido_o_ganadora(monkeypatch):
     out = _list_solicitudes_resumen(
         _FakeSb(store), rows, contrato_id=1, ver_economicos=True,
     )
-    # 2 × 95 (elegida) + 1 × 119 (ganadora) = 309
-    assert out[0]["valor_solicitud"] == 309
+    # 2 × 95,2 (80 × 1,19, elegida) + 1 × 119 (ganadora) = 309,4
+    assert out[0]["valor_solicitud"] == 309.4
     # Sin cotización de catálogo: cantidad × costo guardado.
     assert out[1]["valor_solicitud"] == 100

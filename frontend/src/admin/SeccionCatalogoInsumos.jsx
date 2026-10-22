@@ -162,7 +162,10 @@ function sheetCellInput(inputStyle, extra = {}) {
 
 /** Vista previa: valor después de AIU/IVA (solo lectura). */
 function computeTotal(costo, impuestoForm) {
-  return computeValorDespuesAiuIva(costo, impuestoForm || EMPTY_IMPUESTO, { valoresEnDecimal: true })
+  return computeValorDespuesAiuIva(costo, impuestoForm || EMPTY_IMPUESTO, {
+    valoresEnDecimal: true,
+    exacto: true,
+  })
 }
 
 /** Valor de cotización ganadora después de IVA/AIU (columna Valor de la grilla). */
@@ -173,7 +176,7 @@ function valorGanadoraDespuesImpuesto(gan, row) {
   }
   if (row?.costo_total != null && row.costo_total !== '') return Number(row.costo_total)
   if (row?.tributos) {
-    return computeValorDespuesAiuIva(gan.valor, row.tributos)
+    return computeValorDespuesAiuIva(gan.valor, row.tributos, { exacto: true })
   }
   return computeTotal(gan.valor, EMPTY_IMPUESTO)
 }
@@ -1034,7 +1037,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       : (form.impuesto || EMPTY_IMPUESTO)
     const unit = computeTotal(costo, imp)
     if (unit == null || !Number.isFinite(unit) || unit <= 0) return null
-    return Math.round(cant * unit)
+    return cant * unit
   }, [form.cantidad_negociada, form.cotizaciones_detalle, form.costo_base, form.impuesto])
 
   const permsEfectivos = useMemo(

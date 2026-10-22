@@ -15,6 +15,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from almacen_dinero import a_decimal, producto
+
 _log = logging.getLogger(__name__)
 
 _IN_CHUNK = 120
@@ -324,7 +326,7 @@ def costos_mo_desde_precios_pactados(sb, contrato_id: int) -> Dict[str, dict]:
     for ikey, opts in cand.items():
         preferidos = [o for o in opts if o["subcontratista_id"] in (assigned.get(ikey) or set())]
         pool = preferidos if preferidos else opts
-        precios_u = {round(o["vu"], 2) for o in pool}
+        precios_u = {o["vu"] for o in pool}
         chosen = None
         if len(pool) == 1:
             chosen = pool[0]
@@ -337,14 +339,14 @@ def costos_mo_desde_precios_pactados(sb, contrato_id: int) -> Dict[str, dict]:
             continue
         vu = chosen["vu"]
         cant = chosen.get("cantidad")
-        costo_linea = round(vu * cant, 2) if cant and cant > 0 else None
+        costo_linea = producto(cant, vu) if cant and cant > 0 else None
         out[ikey] = {
             "es_mo": True,
             "etiqueta_fila": "Mano de obra (subcontratistas)",
             "cantidad": cant,
-            "costo_insumo_unitario": round(vu, 4),
+            "costo_insumo_unitario": float(vu),
             "costo_insumo_linea": costo_linea if costo_linea and costo_linea > 0 else (
-                round(vu, 2)  # al menos el unitario como contribución visible
+                float(vu)
                 if vu > 0 else None
             ),
             "fuente": "precios_pactados",
@@ -359,7 +361,7 @@ def costos_mo_desde_precios_pactados(sb, contrato_id: int) -> Dict[str, dict]:
         # Si no hay cantidad, costo_insumo_linea = vu (1 und) para que Inventario
         # detecte costo_mo > 0; _mo_unit_costo usará costo_insumo_unitario.
         if out[ikey]["costo_insumo_linea"] is None and vu > 0:
-            out[ikey]["costo_insumo_linea"] = round(vu, 2)
+            out[ikey]["costo_insumo_linea"] = float(vu)
     return out
 
 
@@ -539,8 +541,8 @@ def calcular_costo_mo(
         precio = _precio_fila(price_map, sub_id, ikey, r)
         if precio is None or precio <= 0:
             continue
-        costo = round(cant * precio, 2)
-        sum_costo += costo
+        costo = producto(cant, precio)
+        sum_costo = float(a_decimal(sum_costo) + a_decimal(costo))
         sum_cant += cant
         tiene = True
         desglose.append({
@@ -561,8 +563,8 @@ def calcular_costo_mo(
         "es_mo": True,
         "etiqueta_fila": "Mano de obra (subcontratistas)",
         "cantidad": round(sum_cant, 4) if sum_cant > 0 else None,
-        "costo_insumo_unitario": round(sum_costo / sum_cant, 4) if sum_cant > 0 else None,
-        "costo_insumo_linea": round(sum_costo, 2),
+        "costo_insumo_unitario": float(a_decimal(sum_costo) / a_decimal(sum_cant)) if sum_cant > 0 else None,
+        "costo_insumo_linea": float(a_decimal(sum_costo)),
         "desglose": desglose,
     }
 
@@ -595,7 +597,7 @@ def calcular_costo_mo_por_items_contrato(
         precio = _precio_fila(precios, sub_id, ikey, r)
         if precio is None or precio <= 0:
             continue
-        costo = round(cant * precio, 2)
+        costo = producto(cant, precio)
         bucket = by_item.get(ikey)
         if not bucket:
             bucket = {
@@ -608,7 +610,7 @@ def calcular_costo_mo_por_items_contrato(
             }
             by_item[ikey] = bucket
         bucket["cantidad"] = round(_f(bucket["cantidad"]) + cant, 4)
-        bucket["costo_insumo_linea"] = round(_f(bucket["costo_insumo_linea"]) + costo, 2)
+        bucket["costo_insumo_linea"] = float(a_decimal(bucket["costo_insumo_linea"]) + a_decimal(costo))
         bucket["desglose"].append({
             "so_registro_id": r.get("id"),
             "subcontratista_id": sub_id,
@@ -628,7 +630,7 @@ def calcular_costo_mo_por_items_contrato(
         cant = _f(bucket.get("cantidad"))
         costo = _f(bucket.get("costo_insumo_linea"))
         if cant > 0 and costo > 0:
-            bucket["costo_insumo_unitario"] = round(costo / cant, 4)
+            bucket["costo_insumo_unitario"] = float(a_decimal(costo) / a_decimal(cant))
         else:
             bucket["costo_insumo_unitario"] = None
 
@@ -671,7 +673,7 @@ def fila_rentabilidad_mo(mo: dict, *, numero_oc=None, solicitud_id=None, solicit
         "valor_cobro_linea": None,
         "cobro_motivo": "mano_obra",
         "costo_insumo_unitario": None,
-        "costo_insumo_linea": round(_f(costo), 2),
+        "costo_insumo_linea": float(a_decimal(costo)),
         "utilidad_estimada_linea": None,
         "rentabilidad_pct": None,
     }

@@ -12,6 +12,7 @@ import unicodedata
 from datetime import date, datetime, timezone
 
 from almacen_datetime import format_solicitud_titulo, normalize_fecha_hora_bogota_to_utc_iso
+from almacen_dinero import a_decimal, fmt_dinero, producto
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -1215,7 +1216,7 @@ def _attach_valor_compra_linea(it: dict, cat_map: Optional[Dict[int, dict]] = No
         cat = cat_map.get(int(it["insumo_id"])) or {}
         unit = _to_float(cat.get("valor_compra_referencia"))
     if cant > 0 and unit > 0:
-        it["valor_compra_linea"] = round(cant * unit, 2)
+        it["valor_compra_linea"] = producto(cant, unit)
     else:
         it["valor_compra_linea"] = None
 
@@ -1768,7 +1769,7 @@ def valor_linea_proveedor(it: dict, ofertas: Optional[List[dict]] = None) -> Opt
     unit = valor_unitario_linea_proveedor(it, ofertas)
     if cant <= 0 or unit <= 0:
         return None
-    return round(cant * unit, 2)
+    return producto(cant, unit)
 
 
 def _fetch_solicitud_items_resumen(sb, ids: List[int], *, ver_economicos: bool) -> List[dict]:
@@ -1879,7 +1880,7 @@ def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
         valor = valor_linea_proveedor(it, ofertas)
         if valor is None:
             continue
-        totals[sid] = round(totals.get(sid, 0.0) + valor, 2)
+        totals[sid] = float(a_decimal(totals.get(sid, 0.0)) + a_decimal(valor))
     return {sid: totals.get(sid) for sid in vistos}
 
 
@@ -4758,7 +4759,7 @@ def add_cotizacion(
         "proveedor_id": int(proveedor_id) if proveedor_id else None,
         "proveedor_nombre": proveedor_nombre,
         "valor_unitario": vu,
-        "valor_total": round(vu * cant, 2),
+        "valor_total": producto(vu, cant),
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
     }
@@ -5971,16 +5972,16 @@ def _oc_item_saldos(item: dict) -> dict:
     cant = _to_float(item.get("cantidad"))
     rec = _to_float(item.get("cantidad_recibida"))
     vu = _to_float(item.get("valor_unitario"))
-    val_total = round(cant * vu, 2)
-    val_rec = round(_to_float(item.get("valor_recibido")), 2)
+    val_total = producto(cant, vu)
+    val_rec = float(a_decimal(item.get("valor_recibido")))
     saldo_cant = round(max(0.0, cant - rec), 4)
-    saldo_val = round(max(0.0, val_total - val_rec), 2)
+    saldo_val = float(max(a_decimal(0), a_decimal(val_total) - a_decimal(val_rec)))
     return {
         "saldo_cantidad": saldo_cant,
         "saldo_valor": saldo_val,
         "valor_total": val_total,
         "valor_recibido_acum": val_rec,
-        "tiene_saldo": saldo_cant > 0.0001 and saldo_val > 0.01,
+        "tiene_saldo": saldo_cant > 0.0001 and a_decimal(saldo_val) > Decimal("0.0000001"),
     }
 
 
@@ -7181,11 +7182,11 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
                 raise ValueError(
                     f"Cantidad recibida ({qty}) supera el saldo ({pendiente}) para «{oci.get('material_descripcion')}»."
                 )
-            valor_linea = round(qty * _to_float(oci.get("valor_unitario")), 2)
+            valor_linea = producto(qty, oci.get("valor_unitario"))
             val_pend = saldos["saldo_valor"]
-            if valor_linea > val_pend + 0.01:
+            if a_decimal(valor_linea) > a_decimal(val_pend) + Decimal("0.0000001"):
                 raise ValueError(
-                    f"El valor recibido (${valor_linea:,.0f}) supera el saldo valor (${val_pend:,.0f}) "
+                    f"El valor recibido ({fmt_dinero(valor_linea)}) supera el saldo valor ({fmt_dinero(val_pend)}) "
                     f"para «{oci.get('material_descripcion')}»."
                 )
             ei_row = {
@@ -7208,7 +7209,7 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
                 })
 
             new_rec = _to_float(oci.get("cantidad_recibida")) + qty
-            new_val_rec = round(_to_float(oci.get("valor_recibido")) + valor_linea, 2)
+            new_val_rec = float(a_decimal(oci.get("valor_recibido")) + a_decimal(valor_linea))
             sb.table("almacen_orden_compra_item").update({
                 "cantidad_recibida": new_rec,
                 "valor_recibido": new_val_rec,
@@ -7383,9 +7384,9 @@ def _rollback_entrada_item_line(sb, contrato_id: int, ent: dict, it: dict) -> No
             oci = oci_rows[0]
             val_linea = _to_float(it.get("valor_recibido"))
             if val_linea <= 0:
-                val_linea = round(qty * _to_float(oci.get("valor_unitario")), 2)
+                val_linea = producto(qty, oci.get("valor_unitario"))
             new_rec = max(0.0, _to_float(oci.get("cantidad_recibida")) - qty)
-            new_val = max(0.0, round(_to_float(oci.get("valor_recibido")) - val_linea, 2))
+            new_val = float(max(a_decimal(0), a_decimal(oci.get("valor_recibido")) - a_decimal(val_linea)))
             sb.table("almacen_orden_compra_item").update({
                 "cantidad_recibida": new_rec,
                 "valor_recibido": new_val,
@@ -7561,8 +7562,8 @@ def _actualizar_estado_oc(sb, oc_id: int) -> None:
         cant = _to_float(i.get("cantidad"))
         rec = _to_float(i.get("cantidad_recibida"))
         vu = _to_float(i.get("valor_unitario"))
-        val_total = round(cant * vu, 2)
-        val_rec = round(_to_float(i.get("valor_recibido")), 2)
+        val_total = producto(cant, vu)
+        val_rec = float(a_decimal(i.get("valor_recibido")))
         return rec >= cant - 0.0001 and val_rec >= val_total - 0.01
 
     completa = all(_linea_completa(i) for i in items)
