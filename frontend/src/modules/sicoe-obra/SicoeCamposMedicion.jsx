@@ -212,11 +212,11 @@ export default function SicoeCamposMedicion({
                   <div>
                     <label style={labSt}>Peso (kg/m)</label>
                     <input
-                      value={peso === '' ? '' : Number(peso).toFixed(2)}
+                      value={peso === '' ? '' : Number(peso).toFixed(3)}
                       readOnly
                       disabled
                       style={{ ...inpSt, opacity: 0.85, fontFamily: 'ui-monospace, Consolas, monospace' }}
-                      title="Autocalculado NTC 2289"
+                      title="Autocalculado NTC 2289 (3 decimales)"
                     />
                   </div>
                   <div>
@@ -279,7 +279,7 @@ export default function SicoeCamposMedicion({
               {modoVarilla ? (
                 <>
                   <Ro t={t} label="Diámetro Ø" valor={sicoeFmtDiametroDisplay(diametroVarilla, { empty: null })} />
-                  <Ro t={t} label="Peso (kg/m)" valor={peso === '' ? null : Number(peso).toFixed(2)} />
+                  <Ro t={t} label="Peso (kg/m)" valor={peso === '' ? null : Number(peso).toFixed(3)} />
                   <Ro t={t} label="Cantidad" valor={formatearDimension(cantidad, { locale: false, empty: null })} />
                 </>
               ) : (

@@ -66,7 +66,7 @@ function dobleGanchoPos({ name, pieces, segs }) {
 describe('despiece · diámetro NTC #4', () => {
   it('#4 resuelve a 1/2; despiece usa 0,994; tabla SicoeObra sigue en 0,99', () => {
     assert.equal(despieceResolverDiametro('#4'), '1/2')
-    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.99)
+    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.994)
     assert.equal(despiecePesoKgM('#4'), 0.994)
   })
 })

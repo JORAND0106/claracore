@@ -60,7 +60,7 @@ function scheduleCabezal() {
 
 describe('sicoeCuadroAceros · recorrido Cabezal descole', () => {
   it('crea 3 registros sin ítem con Cant Total 31,01 / 9,46 / 47,31 (total 87,78)', () => {
-    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.99, 'tabla SicoeObra intacta')
+    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.994, 'tabla SicoeObra NTC a 3 dp')
     const schedule = scheduleCabezal()
     assert.equal(computeScheduleTotalKg(schedule.positions), 87.78)
     const out = sicoeRegistrosDesdeCuadro(schedule, {

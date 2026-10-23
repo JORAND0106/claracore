@@ -3025,10 +3025,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   onAbrirRegistroAuditoria = null,
   /** Tras cargar/editar cuadro de aceros: recarga registros del reporte. */
   onRecargar = null,
-  /** Tras validar con éxito (ventana ítem → avanza al siguiente). */
-  onTrasValidacionExitosa = null,
-  /** Evidencia: todas las fotos/gráficos visibles a la vez (ventana ítem). */
-  evidenciaMosaico = false,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
@@ -4637,7 +4633,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           body,
         })
         onItemAsignado?.()
-        onTrasValidacionExitosa?.()
       } catch (e) {
         onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
         alert(`Error guardando validación offline: ${e.message}`)
@@ -4675,7 +4670,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         throw new Error(msg)
       }
       onItemAsignado?.()
-      onTrasValidacionExitosa?.()
     } catch(e) {
       // Revertir estado optimista si falló
       onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
@@ -4905,7 +4899,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   return (
     <div
-      className={`${excel ? 'cc-sicoe-hoja-excel' : ''}${evidenciaMosaico ? ' cc-sicoe-hoja-evidencia-mosaico' : ''}`.trim() || undefined}
+      className={excel ? 'cc-sicoe-hoja-excel' : undefined}
       style={{
       background: t.bgCard,
       borderRadius: excel ? 4 : 12,
@@ -5635,68 +5629,38 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       </div>{/* /.cc-sicoe-hoja-detalle-form */}
 
-      {/* ─ Columna media: slider (default) o mosaico (ventana ítem) ─ */}
+      {/* ─ Columna media 1/4: foto + gráficos + esquemas en un solo slider ─ */}
       <aside className="cc-sicoe-hoja-detalle-media" aria-label="Registros fotográficos">
         <div className="cc-sicoe-hoja-detalle-media-row">
           <div className="cc-sicoe-hoja-media-card" style={{ borderColor: C.borde }}>
             {mediaSlides.length ? (
               <>
-                {evidenciaMosaico ? (
-                  <div className="cc-sicoe-hoja-mosaico" data-testid="sicoe-hoja-evidencia-mosaico">
-                    {mediaSlides.map((slide, i) => (
-                      <button
-                        key={`${slide?.url || 'm'}-${i}`}
-                        type="button"
-                        title={slide?.kind === 'foto' ? 'Ampliar foto' : 'Ampliar gráfico'}
-                        onClick={() => setMediaLightbox({ items: mediaSlides, index: i })}
-                        style={{
-                          border: `1px solid ${C.borde}`,
-                          borderRadius: 6,
-                          padding: 0,
-                          overflow: 'hidden',
-                          background: '#fff',
-                          cursor: 'pointer',
-                          width: 112,
-                          height: 84,
-                          flex: '0 0 auto',
-                        }}
-                      >
-                        <img
-                          src={slide?.url}
-                          alt=""
-                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <AdjuntosMediaSlider
-                    t={t}
-                    items={mediaSlides}
-                    index={mediaIdx}
-                    aspectRatio="1 / 1"
-                    onIndexChange={(i) => {
-                      setMediaIdx(i)
-                      const slide = mediaSlides[i]
-                      if (slide?.kind === 'foto') {
-                        const fIdx = mediaSlides.slice(0, i + 1).filter((s) => s?.kind === 'foto').length - 1
-                        setFotoIdx(Math.max(0, fIdx))
-                      } else if (slide) {
-                        setGraficoIdx(Math.max(0, i - fotoOffset))
-                      }
-                    }}
-                    onClickItem={(_item, i) => setMediaLightbox({ items: mediaSlides, index: i })}
-                    overlay={(uploadingFoto || uploadingGraf) ? (
-                      <div style={{
-                        position:'absolute', left:0, right:0, bottom:0, padding:'2px 3px',
-                        background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:'var(--cc-caption)',
-                        fontWeight:600, textAlign:'center',
-                      }}>
-                        …
-                      </div>
-                    ) : null}
-                  />
-                )}
+                <AdjuntosMediaSlider
+                  t={t}
+                  items={mediaSlides}
+                  index={mediaIdx}
+                  aspectRatio="1 / 1"
+                  onIndexChange={(i) => {
+                    setMediaIdx(i)
+                    const slide = mediaSlides[i]
+                    if (slide?.kind === 'foto') {
+                      const fIdx = mediaSlides.slice(0, i + 1).filter((s) => s?.kind === 'foto').length - 1
+                      setFotoIdx(Math.max(0, fIdx))
+                    } else if (slide) {
+                      setGraficoIdx(Math.max(0, i - fotoOffset))
+                    }
+                  }}
+                  onClickItem={(_item, i) => setMediaLightbox({ items: mediaSlides, index: i })}
+                  overlay={(uploadingFoto || uploadingGraf) ? (
+                    <div style={{
+                      position:'absolute', left:0, right:0, bottom:0, padding:'2px 3px',
+                      background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:'var(--cc-caption)',
+                      fontWeight:600, textAlign:'center',
+                    }}>
+                      …
+                    </div>
+                  ) : null}
+                />
                 {fotoImgError && fotoVista && (
                   <div style={{ padding:'3px', fontSize:'var(--cc-caption)', color:'#B91C1C', background:'#FEF2F2' }}>
                     <a href={fotoVista} target="_blank" rel="noreferrer" style={{ color:t.primary, fontWeight:700 }}>Abrir</a>
@@ -5710,11 +5674,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}`
                         : 'Adjunto')}
                   >
-                    {evidenciaMosaico
-                      ? `📷${fotosLista.length} · 📐${graficosLista.length}`
-                      : (actualMedia?.kind === 'foto'
-                        ? `📷${strRefCarpeta ? ` #${strRefCarpeta}` : ''}${fotosLista.length > 1 ? ` · ${fotoIdx + 1}/${fotosLista.length}` : ''}`
-                        : `📐${graficoActual?.numero != null ? ` #${String(graficoActual.numero).padStart(4, '0')}` : ''}${graficosLista.length > 1 ? ` · ${graficoIdx + 1}/${graficosLista.length}` : ''}`)}
+                    {actualMedia?.kind === 'foto'
+                      ? `📷${strRefCarpeta ? ` #${strRefCarpeta}` : ''}${fotosLista.length > 1 ? ` · ${fotoIdx + 1}/${fotosLista.length}` : ''}`
+                      : `📐${graficoActual?.numero != null ? ` #${String(graficoActual.numero).padStart(4, '0')}` : ''}${graficosLista.length > 1 ? ` · ${graficoIdx + 1}/${graficosLista.length}` : ''}`}
                   </span>
                   <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
                     {editableFoto && (
@@ -9163,25 +9125,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   encabezado: encPorNivelHoja[n] || `Nivel ${n}`,
                 }))}
                 nivelUsuario={nvMasivo || nivelInfo.nivelValidacion}
-                nivelesActivos={nivelesActivosTabla}
-                API_URL={API_URL}
-                contratoId={contrato_id}
-                hdrs={hdrs}
-                fetchObservacionValidacion={async (regId) => {
-                  try {
-                    const rolOrigen = determinarNivelValidacion(usuario, contrato_id, nivelesContrato).rolOrigen
-                    const res = await fetch(
-                      `${API_URL}/sicoe-obra/${contrato_id}/registros/${regId}/comentarios?rol_solicitante=${encodeURIComponent(rolOrigen)}`,
-                      { headers: hdrs },
-                    )
-                    const d = await res.json().catch(() => [])
-                    if (!res.ok || !Array.isArray(d) || !d.length) return ''
-                    const last = d[d.length - 1]
-                    return String(last?.mensaje || last?.texto || last?.comentario || '').trim()
-                  } catch {
-                    return ''
-                  }
-                }}
                 onPedirEsquema={(reg) => {
                   const itemKey = normalizarItemNumSicoe(reg.item_numero)
                   setItemExpandidoNav(itemKey)
@@ -9189,7 +9132,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   setRegistroExpandido(reg.id)
                 }}
                 renderMenuAcciones={(reg) => renderMenuAccionesReg(reg)}
-                renderHojaRegistro={(reg, ctx = {}) => (
+                renderHojaRegistro={(reg) => (
                   <HojaRegistro
                     key={sicoeHojaRegistroSyncKey(reg)}
                     t={t}
@@ -9210,11 +9153,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                     onOptimisticValidacion={aplicarOptimisticValidacion}
                     onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
-                    onTrasValidacionExitosa={ctx.onTrasValidacionExitosa}
-                    evidenciaMosaico={!!ctx.evidenciaMosaico}
                     onAbrirRegistroAuditoria={(inv) => {
                       if (inv?.id == null) return
                       setRegistroExpandido(inv.id)
+                      try {
+                        const el = document.getElementById(`registro-${inv.id}`)
+                        el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+                      } catch { /* noop */ }
                     }}
                     hdrs={hdrs}
                     pkIdsContrato={listaPkIds}

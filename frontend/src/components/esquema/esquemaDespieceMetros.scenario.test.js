@@ -24,7 +24,7 @@ describe('caso a · Parrilla Superior en metros', () => {
     assert.equal(despiecePesoKgM('#4'), 0.994)
     assert.equal(despieceFmtPesoKgM(0.994), '0,994')
     // Tabla SicoeObra intacta
-    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.99)
+    assert.equal(SICOE_VARILLA_PESOS_KG_M['1/2'], 0.994)
 
     const shape = getBuiltinShape('doble_gancho_180')
     const segs = blankSegmentsForShape(shape)

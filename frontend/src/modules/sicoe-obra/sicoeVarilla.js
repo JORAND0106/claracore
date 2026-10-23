@@ -8,20 +8,23 @@ import {
   redondearDimension,
 } from './sicoeCantidadRedondeo.js'
 
-/** @type {Record<string, number>} */
+/**
+ * Pesos NTC 2289 / ASTM A615 a 3 decimales (p. ej. 1/2" = 0,994 kg/m).
+ * @type {Record<string, number>}
+ */
 export const SICOE_VARILLA_PESOS_KG_M = Object.freeze({
   '1/4': 0.25,
   '3/8': 0.56,
-  '1/2': 0.99,
-  '5/8': 1.55,
-  '3/4': 2.24,
-  '7/8': 3.04,
-  '1': 3.97,
+  '1/2': 0.994,
+  '5/8': 1.552,
+  '3/4': 2.235,
+  '7/8': 3.042,
+  '1': 3.973,
   '1 1/8': 5.06,
-  '1 1/4': 6.40,
-  '1 3/8': 7.91,
-  '1 3/4': 11.38,
-  '2 1/4': 20.24,
+  '1 1/4': 6.404,
+  '1 3/8': 7.907,
+  '1 3/4': 11.387,
+  '2 1/4': 20.239,
 })
 
 export const SICOE_VARILLA_DIAMETROS = Object.freeze(Object.keys(SICOE_VARILLA_PESOS_KG_M))
@@ -62,6 +65,12 @@ export function sicoePesoKgMPorDiametro(diametro) {
   const canon = sicoeNormalizarDiametroVarilla(diametro)
   if (!canon) return null
   return SICOE_VARILLA_PESOS_KG_M[canon]
+}
+
+/** Peso kg/m con 3 decimales (p. ej. 0.994). */
+export function sicoeFmtPesoKgM(peso, { empty = '—' } = {}) {
+  if (peso == null || peso === '' || !Number.isFinite(Number(peso))) return empty
+  return Number(peso).toFixed(3)
 }
 
 export function sicoeDiametrosValidosMsg() {
@@ -111,8 +120,9 @@ export function calcularCantidadVarilla(longitud, pesoKgM, cantidad) {
  */
 export function calcularCantidadRegistro(opts = {}) {
   if (opts.es_varilla === true) {
-    let peso = opts.peso_kg_m
-    if (_empty(peso)) peso = sicoePesoKgMPorDiametro(opts.diametro_varilla)
+    // Preferir tabla NTC (3 dp) por diámetro; fallback a peso guardado.
+    let peso = sicoePesoKgMPorDiametro(opts.diametro_varilla)
+    if (_empty(peso)) peso = opts.peso_kg_m
     return calcularCantidadVarilla(opts.longitud, peso, opts.cantidad)
   }
   return calcularCantidadConRedondeo(opts.longitud, opts.ancho, opts.espesor, opts.cantidad)
@@ -156,11 +166,13 @@ export function sicoeHeadersMedicion(regs) {
 /** Valores de celda col2/col3 según esquema del registro. */
 export function sicoeMedicionCeldasDisplay(reg) {
   if (sicoeEsVarillaRegistro(reg)) {
+    const pesoTabla = sicoePesoKgMPorDiametro(reg.diametro_varilla)
+    const peso = pesoTabla != null
+      ? pesoTabla
+      : (reg.peso_kg_m != null && reg.peso_kg_m !== '' ? Number(reg.peso_kg_m) : null)
     return {
       col2: sicoeFmtDiametroDisplay(reg.diametro_varilla),
-      col3: reg.peso_kg_m != null && reg.peso_kg_m !== ''
-        ? Number(reg.peso_kg_m).toFixed(2)
-        : '—',
+      col3: peso != null && Number.isFinite(peso) ? sicoeFmtPesoKgM(peso) : '—',
       esVarilla: true,
     }
   }

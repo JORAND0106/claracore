@@ -1,9 +1,9 @@
 /**
  * Cuadro de despiece de acero — cálculos y modelo.
  *
- * Diámetros: misma lista NTC 2289 de SicoeObra (`sicoeVarilla.js`), sin modificar esa tabla.
- * Peso kg/m en despiece: precisión real de cálculo (p. ej. #4 = 0,994), de modo que
- * longitud total × kg/m mostrado = peso mostrado. La tabla SicoeObra no se altera.
+ * Diámetros: misma lista NTC 2289 de SicoeObra (`sicoeVarilla.js`).
+ * Peso kg/m en despiece: precisión de cálculo a 3 decimales (p. ej. #4 = 0,994),
+ * alineada con la tabla de plataforma.
  *
  * Captura de segmentos: metros (unidad visible «m»). Columna Forma / PNG: cotas en cm.
  */
