@@ -1475,6 +1475,18 @@ select.cc-dashboard-acta-select--light option {
   margin-bottom: 16px;
 }
 
+/* Ventana ítem: datos arriba, evidencia abajo (todas las imágenes visibles). */
+.cc-sicoe-hoja-evidencia-mosaico .cc-sicoe-hoja-detalle-grid {
+  grid-template-columns: 1fr;
+}
+.cc-sicoe-hoja-mosaico {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  align-items: flex-start;
+}
+
 .cc-sicoe-hoja-detalle-grid.is-excel {
   gap: 6px;
   margin-bottom: 6px;
