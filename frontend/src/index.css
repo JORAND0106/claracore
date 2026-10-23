@@ -1475,31 +1475,6 @@ select.cc-dashboard-acta-select--light option {
   margin-bottom: 16px;
 }
 
-/* Ventana ítem: datos arriba, evidencia abajo (todas las imágenes visibles). */
-.cc-sicoe-hoja-evidencia-mosaico .cc-sicoe-hoja-detalle-grid {
-  grid-template-columns: 1fr;
-}
-.cc-sicoe-hoja-mosaico {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 4px 0 8px;
-  align-items: stretch;
-}
-.cc-sicoe-hoja-mosaico > button {
-  flex: 1 1 240px;
-  min-width: 200px;
-  max-width: 100%;
-  height: auto !important;
-  aspect-ratio: 4 / 3;
-  width: auto !important;
-  min-height: 160px;
-}
-.cc-sicoe-medicion-linea > div {
-  flex: 0 0 auto;
-  min-width: 72px;
-}
-
 .cc-sicoe-hoja-detalle-grid.is-excel {
   gap: 6px;
   margin-bottom: 6px;

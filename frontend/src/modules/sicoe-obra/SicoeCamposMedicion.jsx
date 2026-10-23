@@ -51,13 +51,9 @@ export default function SicoeCamposMedicion({
   diametroVarilla = '',
   onChange,
   compact = false,
-  /** Una sola línea horizontal (ventana compacta). */
-  layoutLinea = false,
   showPendienteBanner = true,
   registro = null,
   cantTotalOverride = null,
-  /** Campos extra al final de la línea (Vlr Un, Costo directo). */
-  extrasLinea = null,
 }) {
   const esKg = sicoeUnidadEsKg(unidad)
   const pendiente = esKg && (esVarilla == null) && (
@@ -177,22 +173,11 @@ export default function SicoeCamposMedicion({
       )}
 
       {(!esKg || esVarilla != null) && (
-        <div
-          className={layoutLinea ? 'cc-sicoe-medicion-linea' : undefined}
-          style={layoutLinea ? {
-            display: 'flex',
-            flexWrap: 'nowrap',
-            gap: 6,
-            alignItems: 'flex-end',
-            overflowX: 'auto',
-            WebkitOverflowScrolling: 'touch',
-            paddingBottom: 2,
-          } : { display: 'grid', gridTemplateColumns: gridCols, gap: compact ? 4 : 10 }}
-        >
+        <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: compact ? 4 : 10 }}>
           {editable ? (
             <>
               <div>
-                <label style={labSt}>{layoutLinea ? 'Long' : 'Longitud'}</label>
+                <label style={labSt}>Longitud</label>
                 <input
                   type="number"
                   step="0.001"
@@ -206,7 +191,7 @@ export default function SicoeCamposMedicion({
               {modoVarilla ? (
                 <>
                   <div>
-                    <label style={labSt}>{layoutLinea ? 'Ø' : 'Diámetro Ø'}</label>
+                    <label style={labSt}>Diámetro Ø</label>
                     <input
                       list="sicoe-varilla-diametros"
                       value={diametroVarilla ?? ''}
@@ -225,17 +210,17 @@ export default function SicoeCamposMedicion({
                     </datalist>
                   </div>
                   <div>
-                    <label style={labSt}>{layoutLinea ? 'Peso' : 'Peso (kg/m)'}</label>
+                    <label style={labSt}>Peso (kg/m)</label>
                     <input
-                      value={peso === '' ? '' : Number(peso).toFixed(2)}
+                      value={peso === '' ? '' : Number(peso).toFixed(3)}
                       readOnly
                       disabled
                       style={{ ...inpSt, opacity: 0.85, fontFamily: 'ui-monospace, Consolas, monospace' }}
-                      title="Autocalculado NTC 2289"
+                      title="Autocalculado NTC 2289 (3 decimales)"
                     />
                   </div>
                   <div>
-                    <label style={labSt}>{layoutLinea ? 'Cant' : 'Cantidad'}</label>
+                    <label style={labSt}>Cantidad</label>
                     <input
                       type="number"
                       step="0.001"
@@ -262,7 +247,7 @@ export default function SicoeCamposMedicion({
                     />
                   </div>
                   <div>
-                    <label style={labSt}>{layoutLinea ? 'Espe' : 'Espesor'}</label>
+                    <label style={labSt}>Espesor</label>
                     <input
                       type="number"
                       step="0.001"
@@ -274,7 +259,7 @@ export default function SicoeCamposMedicion({
                     />
                   </div>
                   <div>
-                    <label style={labSt}>{layoutLinea ? 'Cant' : 'Cantidad'}</label>
+                    <label style={labSt}>Cantidad</label>
                     <input
                       type="number"
                       step="0.001"
@@ -290,26 +275,23 @@ export default function SicoeCamposMedicion({
             </>
           ) : (
             <>
-              <Ro t={t} label={layoutLinea ? 'Long' : 'Longitud'} valor={formatearDimension(longitud, { locale: false, empty: null })} linea={layoutLinea} />
+              <Ro t={t} label="Longitud" valor={formatearDimension(longitud, { locale: false, empty: null })} />
               {modoVarilla ? (
                 <>
-                  <Ro t={t} label={layoutLinea ? 'Ø' : 'Diámetro Ø'} valor={sicoeFmtDiametroDisplay(diametroVarilla, { empty: null })} linea={layoutLinea} />
-                  <Ro t={t} label={layoutLinea ? 'Peso' : 'Peso (kg/m)'} valor={peso === '' ? null : Number(peso).toFixed(2)} linea={layoutLinea} />
-                  <Ro t={t} label={layoutLinea ? 'Cant' : 'Cantidad'} valor={formatearDimension(cantidad, { locale: false, empty: null })} linea={layoutLinea} />
+                  <Ro t={t} label="Diámetro Ø" valor={sicoeFmtDiametroDisplay(diametroVarilla, { empty: null })} />
+                  <Ro t={t} label="Peso (kg/m)" valor={peso === '' ? null : Number(peso).toFixed(3)} />
+                  <Ro t={t} label="Cantidad" valor={formatearDimension(cantidad, { locale: false, empty: null })} />
                 </>
               ) : (
                 <>
-                  <Ro t={t} label="Ancho" valor={formatearDimension(ancho, { locale: false, empty: null })} linea={layoutLinea} />
-                  <Ro t={t} label={layoutLinea ? 'Espe' : 'Espesor'} valor={formatearDimension(espesor, { locale: false, empty: null })} linea={layoutLinea} />
-                  <Ro t={t} label={layoutLinea ? 'Cant' : 'Cantidad'} valor={formatearDimension(cantidad, { locale: false, empty: null })} linea={layoutLinea} />
+                  <Ro t={t} label="Ancho" valor={formatearDimension(ancho, { locale: false, empty: null })} />
+                  <Ro t={t} label="Espesor" valor={formatearDimension(espesor, { locale: false, empty: null })} />
+                  <Ro t={t} label="Cantidad" valor={formatearDimension(cantidad, { locale: false, empty: null })} />
                 </>
               )}
             </>
           )}
-          <Ro t={t} label={layoutLinea ? 'Cant Total' : 'Cant. Total'} valor={formatearCantidadTotal(cantTotal, { locale: false })} color={t.primary} linea={layoutLinea} />
-          {layoutLinea && Array.isArray(extrasLinea) ? extrasLinea.map((ex, i) => (
-            <Ro key={ex?.label || i} t={t} label={ex.label} valor={ex.valor} color={ex.color} linea />
-          )) : null}
+          <Ro t={t} label="Cant. Total" valor={formatearCantidadTotal(cantTotal, { locale: false })} color={t.primary} />
         </div>
       )}
 
@@ -333,21 +315,20 @@ export default function SicoeCamposMedicion({
   )
 }
 
-function Ro({ t, label, valor, color, linea = false }) {
+function Ro({ t, label, valor, color }) {
   return (
-    <div style={linea ? { flex: '0 0 auto', minWidth: 72 } : undefined}>
-      <div style={{ ...labBase(t), marginBottom: linea ? 2 : 4, whiteSpace: linea ? 'nowrap' : undefined }}>{label}</div>
+    <div>
+      <div style={labBase(t)}>{label}</div>
       <div style={{
-        padding: linea ? '4px 6px' : '8px 10px',
+        padding: '8px 10px',
         borderRadius: 8,
         background: t.bg,
         border: `1px solid ${t.border}`,
         fontWeight: 700,
         color: color || t.text,
         fontSize: 'var(--cc-sm)',
-        minHeight: linea ? 30 : 36,
+        minHeight: 36,
         boxSizing: 'border-box',
-        whiteSpace: 'nowrap',
       }}>
         {valor == null || valor === '' ? '—' : valor}
       </div>
