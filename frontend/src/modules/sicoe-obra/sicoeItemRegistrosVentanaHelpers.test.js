@@ -5,6 +5,8 @@ import {
   ultimaValidacionRegistro,
   etiquetaNivelIniciales,
   colorDeEstadoValidacion,
+  fraseEstadoRegistro,
+  mostrarSemaforoValidacion,
   fotoMiniaturaRegistro,
   idRegistroSiguiente,
   idRegistroAnterior,
@@ -50,6 +52,17 @@ describe('sicoeItemRegistrosVentanaHelpers', () => {
     const map = mapaUsuariosPorId([{ id: 7, nombre: 'Luis', apellidos: 'López' }])
     assert.equal(etiquetaNivelIniciales(uv, map), 'N2 · LL')
     assert.equal(etiquetaNivelIniciales(uv, {}), 'N2')
+  })
+
+  it('fraseEstadoRegistro: Aprobado por N4 · OL', () => {
+    const uv = { etiqueta: 'N4', estado: 'Aprobado', usuarioId: 3 }
+    const map = mapaUsuariosPorId([{ id: 3, nombre: 'Olga', apellidos: 'Luna' }])
+    const f = fraseEstadoRegistro(uv, map)
+    assert.equal(f.estado, 'Aprobado')
+    assert.equal(f.sufijo, ' por N4 · OL')
+    assert.equal(mostrarSemaforoValidacion('Aprobado'), false)
+    assert.equal(mostrarSemaforoValidacion('Pendiente'), true)
+    assert.equal(mostrarSemaforoValidacion('No Revisado'), true)
   })
 
   it('colorDeEstadoValidacion y convención mínima', () => {
