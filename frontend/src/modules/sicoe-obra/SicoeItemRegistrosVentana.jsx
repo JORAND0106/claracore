@@ -8,10 +8,10 @@ import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 import { SicoeHojaRegistroErrorBoundary } from './SicoeHojaRegistroErrorBoundary.jsx'
 import {
-  ESTADOS_CONVENCION_VENTANA,
   colorDeEstadoValidacion,
   etiquetaNivelIniciales,
   fotoMiniaturaRegistro,
+  fraseEstadoRegistro,
   idRegistroAnterior,
   idRegistroSiguiente,
   indiceRegistroEnLista,
@@ -19,35 +19,32 @@ import {
   ultimaValidacionRegistro,
 } from './sicoeItemRegistrosVentanaHelpers.js'
 
-function LeyendaEstados({ t }) {
+function FraseEstadoRegistro({ t, uv, usuariosById, observacion, obsCargando, onNeedObs, regId }) {
+  const frase = fraseEstadoRegistro(uv, usuariosById)
   return (
     <div
-      data-testid="sicoe-item-ventana-leyenda"
+      data-testid="sicoe-item-ventana-frase-estado"
       style={{
         display: 'flex',
         flexWrap: 'wrap',
-        gap: '8px 14px',
+        gap: 8,
         alignItems: 'center',
-        fontSize: 'var(--cc-caption)',
+        fontSize: 'var(--cc-sm)',
         color: t.textMuted,
+        fontWeight: 600,
       }}
     >
-      {ESTADOS_CONVENCION_VENTANA.map((e) => (
-        <span key={e.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span
-            aria-hidden
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: 2,
-              background: e.color,
-              border: `1px solid ${e.color}`,
-              flexShrink: 0,
-            }}
-          />
-          {e.label}
-        </span>
-      ))}
+      <span>
+        {frase.prefijo}{' '}
+        <span style={{ color: frase.color, fontWeight: 800 }}>{frase.estado}</span>
+        {frase.sufijo ? <span style={{ color: t.text }}>{frase.sufijo}</span> : null}
+      </span>
+      <BotonInfoObservacion
+        t={t}
+        observacion={observacion}
+        cargando={obsCargando}
+        onNeedLoad={() => onNeedObs?.(regId)}
+      />
     </div>
   )
 }
@@ -279,6 +276,8 @@ export default function SicoeItemRegistrosVentana({
   t,
   itemNum,
   itemDescripcion = '',
+  /** Grupo de registros sin ítem (misma ventana). */
+  modoSinItem = false,
   registros = [],
   registroIdActivo = null,
   onRegistroIdActivo,
@@ -418,7 +417,9 @@ export default function SicoeItemRegistrosVentana({
 
   if (!open || typeof document === 'undefined') return null
 
-  const title = `Ítem ${itemNum}${itemDescripcion ? ` · ${itemDescripcion}` : ''}`
+  const title = modoSinItem
+    ? `Sin ítem asignado${regs.length ? ` · ${regs.length} reg.` : ''}`
+    : `Ítem ${itemNum}${itemDescripcion ? ` · ${itemDescripcion}` : ''}`
 
   return createPortal(
     <div
@@ -460,11 +461,11 @@ export default function SicoeItemRegistrosVentana({
 
         <div
           style={{
-            padding: '10px 14px',
+            padding: '8px 12px',
             borderBottom: `1px solid ${theme.border}`,
             display: 'flex',
             flexWrap: 'wrap',
-            gap: 10,
+            gap: 8,
             alignItems: 'center',
             justifyContent: 'space-between',
           }}
@@ -472,9 +473,6 @@ export default function SicoeItemRegistrosVentana({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: theme.primary }}>
               {title}
-            </div>
-            <div style={{ marginTop: 6 }}>
-              <LeyendaEstados t={theme} />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
@@ -576,28 +574,24 @@ export default function SicoeItemRegistrosVentana({
                   gap: 8,
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  padding: '8px 12px',
+                  padding: '6px 10px',
                   borderBottom: `1px solid ${theme.border}`,
                   background: theme.bgCard,
                 }}
               >
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 800, color: theme.primary }}>
-                    Registro #{regActivo.numero_registro}
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+                  <span style={{ fontWeight: 800, color: theme.primary, flexShrink: 0 }}>
+                    #{regActivo.numero_registro}
                   </span>
-                  <span
-                    style={{
-                      background: `${colorActivo}22`,
-                      color: colorActivo,
-                      border: `1px solid ${colorActivo}66`,
-                      borderRadius: 999,
-                      padding: '2px 8px',
-                      fontSize: 'var(--cc-caption)',
-                      fontWeight: 800,
-                    }}
-                  >
-                    {etiquetaNivelIniciales(uvActivo, usuariosById)}
-                  </span>
+                  <FraseEstadoRegistro
+                    t={theme}
+                    uv={uvActivo}
+                    usuariosById={usuariosById}
+                    observacion={obsMap[regActivo.id]}
+                    obsCargando={!!obsLoading[regActivo.id]}
+                    onNeedObs={loadObs}
+                    regId={regActivo.id}
+                  />
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   {typeof renderMenuAcciones === 'function' ? renderMenuAcciones(regActivo) : null}

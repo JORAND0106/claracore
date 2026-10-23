@@ -169,6 +169,7 @@ import {
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
+import SicoeItemRegistrosVentana from './modules/sicoe-obra/SicoeItemRegistrosVentana.jsx'
 import SicoePlanillaTuberiaOrigenTab from './modules/sicoe-obra/SicoePlanillaTuberiaOrigenTab'
 import {
   sicoeAutoRegistroNavState,
@@ -3113,6 +3114,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [modalActaRevalidacion, setModalActaRevalidacion] = useState(null)
   const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
   const [panelReversionExpandido, setPanelReversionExpandido] = useState(false)
+  const [modalAsignarItemOpen, setModalAsignarItemOpen] = useState(false)
+  const [modalReversionOpen, setModalReversionOpen] = useState(false)
   // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
   useEffect(() => {
     const fromRep = reporte?.registros?.find((r) => String(r.id) === String(registro.id))
@@ -4903,6 +4906,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     </div>
   )
 
+  const textoSelladoTooltip = regSelladoMax
+    ? `Sellado: el último nivel activo del contrato está aprobado (${encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'Nivel máximo'})${registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el subcontratista, el corte (y foto/gráfico si aplica).`
+    : ''
+  const sinItemAsignadoHoja = !String(registro?.item_numero || itemSel?.item_numero || '').trim()
+  const itemLabelHoja = itemSel?.item_numero || registro?.item_numero || null
+  const iconHdrBtn = (extra = {}) => ({
+    width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 8, cursor: 'pointer', padding: 0, lineHeight: 1,
+    background: 'transparent', border: `1px solid ${t.border}`, color: t.primary,
+    fontSize: 'var(--cc-md)', fontWeight: 800, flexShrink: 0,
+    ...extra,
+  })
+
   return (
     <div
       className={`${excel ? 'cc-sicoe-hoja-excel' : ''}${evidenciaMosaico ? ' cc-sicoe-hoja-evidencia-mosaico' : ''}`.trim() || undefined}
@@ -4928,9 +4944,56 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
             )}
             <span style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary }}>📄 Registro #{registro.numero_registro}</span>
-            {registro.item_numero && (
-              <span style={{ background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}44`, borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-label)', fontWeight:'700' }}>
-                {registro.item_numero}
+            {regSelladoMax && (
+              <span
+                title={textoSelladoTooltip}
+                aria-label={textoSelladoTooltip}
+                data-testid="sicoe-hoja-sello-indicador"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 28, height: 28, borderRadius: 8,
+                  background: '#0d948818', border: '1px solid #0d948855',
+                  color: '#0f766e', fontWeight: 900, fontSize: 'var(--cc-sm)', cursor: 'help',
+                }}
+              >
+                🔒
+              </span>
+            )}
+            {(itemLabelHoja || evidenciaMosaico) && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                {itemLabelHoja ? (
+                  <span
+                    style={{
+                      background: `${t.primary}22`,
+                      color: t.primary,
+                      border: `1px solid ${t.primary}44`,
+                      borderRadius: '12px',
+                      padding: '2px 10px',
+                      fontSize: evidenciaMosaico ? 'calc(var(--cc-label) + 3px)' : 'var(--cc-label)',
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={itemSel?.descripcion || registro?.item_descripcion || itemLabelHoja}
+                  >
+                    {itemLabelHoja}
+                  </span>
+                ) : evidenciaMosaico ? (
+                  <span style={{ fontSize: 'calc(var(--cc-label) + 3px)', fontWeight: 700, color: '#D97706' }}>
+                    Sin ítem
+                  </span>
+                ) : null}
+                {evidenciaMosaico && editableCamposFinancieros && (
+                  <button
+                    type="button"
+                    data-testid={sinItemAsignadoHoja ? 'sicoe-hoja-asignar-item' : 'sicoe-hoja-editar-item'}
+                    title={sinItemAsignadoHoja ? 'Asignar ítem' : 'Editar ítem'}
+                    aria-label={sinItemAsignadoHoja ? 'Asignar ítem' : 'Editar ítem'}
+                    onClick={() => setModalAsignarItemOpen(true)}
+                    style={iconHdrBtn()}
+                  >
+                    {sinItemAsignadoHoja ? '➕' : '✎'}
+                  </button>
+                )}
               </span>
             )}
             {strRefCarpeta && (
@@ -5027,6 +5090,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 ▦
               </button>
             )}
+            {evidenciaMosaico && muestraPanelDobleLlave && (
+              <button
+                type="button"
+                data-testid="sicoe-hoja-reversion-btn"
+                title="Reversión sellado · doble autorización"
+                aria-label="Reversión sellado · doble autorización"
+                onClick={() => setModalReversionOpen(true)}
+                style={iconHdrBtn({ border: '1px solid rgba(239,68,68,0.55)', color: '#b91c1c' })}
+              >
+                🔐
+              </button>
+            )}
             {puedeEliminarRegistroReporte && typeof onDevEliminarRegistro === 'function' && (
               <button
                 type="button"
@@ -5041,11 +5116,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 title={esRegistroCuadro
                   ? SICOE_AVISO_EDITAR_DESDE_CUADRO
                   : 'Eliminar este registro de la base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)'}
-                style={{
+                style={evidenciaMosaico ? iconHdrBtn({
+                  border: '1px solid #F87171', color: '#F87171',
+                  cursor: devEliminando ? 'not-allowed' : 'pointer',
+                  opacity: devEliminando ? 0.5 : 1,
+                }) : {
                   background:'transparent', border:'1px solid #F87171', color:'#F87171', borderRadius:'6px',
                   padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.5 : 1,
-                }}>
-                🗑️ Eliminar registro
+                }}
+              >
+                {evidenciaMosaico ? '🗑️' : '🗑️ Eliminar registro'}
               </button>
             )}
           </div>
@@ -5129,7 +5209,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       </div>
 
-      {regSelladoMax && (
+      {regSelladoMax && !evidenciaMosaico && (
         <div style={{ marginBottom: excel ? 6 : 12, background:'#0d948818', border:'1px solid #0d948855', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: 'var(--cc-sm)', color:t.text }}>
           Sellado: el último nivel activo del contrato está aprobado ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'Nivel máximo'})
           {registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el subcontratista, el corte (y foto/gráfico si aplica).
@@ -5178,7 +5258,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       )}
 
-      {muestraPanelDobleLlave && (
+      {muestraPanelDobleLlave && !evidenciaMosaico && (
         <div style={{
           marginBottom:'14px',
           borderRadius:'12px',
@@ -5341,6 +5421,107 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       )}
 
+      {evidenciaMosaico && (<>
+      {nivelInfo.puedeValidar && nivelesValidablesReg.length > 0 && (() => {
+        const nv = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
+        if (nv == null) return null
+        // Solo bloquear validación si el sello del nivel MÁXIMO está activo (no por N3 intermedio).
+        const bloqueado = !!registro.bloqueado && regSelladoMax
+        const sinItemAsignado = !String(registro?.item_numero || itemSel?.item_numero || '').trim()
+        const validacionDeshabilitada = bloqueado || sinItemAsignado
+        const campoNv = sicoeCampoEstadoNivel(nv)
+        const estadoActual = campoNv ? (registro[campoNv] || 'No Revisado') : 'No Revisado'
+        const titNv = encPorNivelHojaReg[nv] || `Nivel ${nv}`
+        if (evidenciaMosaico && estadoActual === 'Aprobado') return null
+        const tipEstado = {
+          Aprobado: 'Aprobado — el registro cumple los requisitos de este nivel',
+          Pendiente: 'Pendiente — requiere revisión o corrección',
+          Rechazado: 'Rechazado — no cumple; debe corregirse',
+          'No Objeto de Cobro': 'No Objeto de Cobro — no se cobra al subcontratista',
+        }
+        const BTNS = [
+          { estado: 'Aprobado',  icon: '✅', color: '#16a34a' },
+          { estado: 'Pendiente', icon: '🟡', color: '#d97706' },
+          { estado: 'Rechazado', icon: '🔴', color: '#dc2626' },
+          ...(nv === 2 ? [{ estado: 'No Objeto de Cobro', icon: '🚫', color: '#374151' }] : []),
+        ]
+        return (
+          <div
+            data-testid={evidenciaMosaico ? 'sicoe-hoja-semaforo-validacion' : undefined}
+            style={{
+              marginBottom: secMb,
+              background: evidenciaMosaico ? `${t.primary}10` : t.bg,
+              borderRadius: excel ? 2 : 10,
+              padding: evidenciaMosaico ? '8px 10px' : secPad,
+              border: evidenciaMosaico ? `2px solid ${t.primary}66` : `1px solid ${excel ? sheetGrid : C.borde}`,
+            }}
+          >
+            {esSelectorNivelAmplio && nivelesValidablesReg.length > 1 && (
+              <div style={{ marginBottom: excel ? 6 : 12, display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
+                <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>Validar en:</span>
+                <select
+                  value={nivelTargetValidacion ?? ''}
+                  onChange={(e) => setNivelTargetValidacion(parseInt(e.target.value, 10))}
+                  style={{ minWidth:'220px', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)' }}
+                >
+                  {nivelesValidablesReg.map((n) => (
+                    <option key={n} value={n}>{encPorNivelHojaReg[n] || `Nivel ${n}`}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div style={{ ...(evidenciaMosaico ? { fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.primary } : secTitleSt()), marginBottom: evidenciaMosaico ? 6 : (excel ? 4 : 12) }}>
+              {evidenciaMosaico ? <>Validación <span style={{ fontWeight: 600, color: t.textMuted }}>· {titNv}</span></> : <>🚦 Validación · {titNv}</>}
+              {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>🔒 Bloqueado</span>}
+              {sinItemAsignado && !bloqueado && (
+                <span style={{ marginLeft:'8px', background:'#d9770615', color:'#d97706', border:'1px solid #d9770633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>
+                  Sin ítem — no validable
+                </span>
+              )}
+            </div>
+            {sinItemAsignado && (
+              <div style={{ marginBottom:'10px', fontSize:'var(--cc-sm)', color:t.textMuted }}>
+                Asigna un ítem de presupuesto a este registro antes de poder validar (Aprobado / Pendiente / Rechazado).
+              </div>
+            )}
+            <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap: excel ? 4 : 8, flexWrap:'wrap' }}>
+              {BTNS.map(({ estado, icon, color }) => {
+                const activo = estadoActual === estado || (estado === 'No Objeto de Cobro' && estadoActual === 'Rechazado' && registro.nivel2_objeto_pago_sub === false)
+                const tip = sinItemAsignado
+                  ? 'Asigna un ítem antes de validar'
+                  : (bloqueado ? 'Registro bloqueado' : (tipEstado[estado] || estado))
+                return (
+                  <button key={estado} type="button" disabled={validacionDeshabilitada}
+                    title={tip}
+                    aria-label={tip}
+                    onClick={() => ejecutarValidacion(estado)}
+                    style={{
+                      padding: evidenciaMosaico ? '8px 14px' : (excel ? '4px 10px' : '8px 16px'),
+                      borderRadius: evidenciaMosaico ? 10 : (excel ? 4 : 8),
+                      fontSize: 'var(--cc-sm)', fontWeight: '700',
+                      cursor: validacionDeshabilitada ? 'not-allowed' : 'pointer', opacity: validacionDeshabilitada ? 0.5 : 1,
+                      background: activo ? `${color}22` : (evidenciaMosaico ? `${color}14` : 'transparent'),
+                      color, border: activo ? `2px solid ${color}` : `1px solid ${color}55`,
+                      transition: 'all 0.15s',
+                      minWidth: evidenciaMosaico ? 44 : undefined,
+                      minHeight: evidenciaMosaico ? 44 : undefined,
+                    }}>
+                    {evidenciaMosaico ? icon : <>{icon} {estado}</>}
+                  </button>
+                )
+              })}
+            </div>
+            {nv === 2 && !nivelInfo.esSubcontratista && (
+              <div style={{ marginTop: excel ? 6 : 12, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                Objeto de pago al subcontratista: use el botón {registro.nivel2_objeto_pago_sub ? '💰' : '🚫'} del encabezado del registro.
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      </>)}
+
       {/* ─ Formulario 3/4 + Foto/Gráfico 1/4 ─ */}
       <div
         className={`cc-sicoe-hoja-detalle-grid${excel ? ' is-excel' : ''}`}
@@ -5348,9 +5529,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       >
       <div className="cc-sicoe-hoja-detalle-form">
 
-      {/* ─ Sección: Asignación de Ítem ─ */}
+      {/* ─ Sección: Asignación de Ítem (oculto en ventana: botón Editar/Asignar en encabezado) ─ */}
       {/* Controles editables SOLO con permiso Editar. Crear/validar ven solo lectura. */}
-      {(editableCamposFinancieros || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario || itemSel?.item_numero || registro?.item_numero) && (
+      {!evidenciaMosaico && (editableCamposFinancieros || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario || itemSel?.item_numero || registro?.item_numero) && (
         <div style={{ background:t.bg, borderRadius: excel ? 2 : 10, padding: (!hojaCompact || asignacionExpandida) ? secPad : '6px 10px', marginBottom: secMb, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
           {hojaCompact ? (
             <button
@@ -5525,7 +5706,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Dimensiones y Cantidades ─ */}
       <div style={{ marginBottom: secMb }}>
-        <div style={secTitleSt('#F59E0B')}>📏 Dimensiones y Cantidades</div>
+        {!evidenciaMosaico && <div style={secTitleSt('#F59E0B')}>📏 Dimensiones y Cantidades</div>}
         {esRegistroCuadro && etiquetaCuadro && (
           <div style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 700, marginBottom: 6 }} title="Cuadro y posición de origen">
             {etiquetaCuadro}
@@ -5572,7 +5753,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           cantidad={cantidad}
           diametroVarilla={diametroVarilla}
           cantTotalOverride={cantTotal}
-          compact={!!excel}
+          compact={!!excel || !!evidenciaMosaico}
+          layoutLinea={!!evidenciaMosaico}
+          extrasLinea={evidenciaMosaico && nivelInfo.verValoresEconomicos ? [
+            { label: 'Vlr Un', valor: vlrUnitario ? fmtD(vlrUnitario) : null },
+            { label: 'Costo directo', valor: costoDirecto ? fmtD(costoDirecto) : null, color: '#10B981' },
+          ] : null}
           registro={registro}
           onChange={(patch) => {
             if (esRegistroCuadro) {
@@ -5587,7 +5773,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             if ('es_varilla' in patch) setEsVarilla(patch.es_varilla)
           }}
         />
-        {nivelInfo.verValoresEconomicos && (
+        {nivelInfo.verValoresEconomicos && !evidenciaMosaico && (
           <div style={{ display:'grid', gridTemplateColumns: excel ? 'repeat(auto-fit, minmax(88px, 1fr))' : 'repeat(auto-fill, minmax(130px,1fr))', gap: excel ? 4 : 10, marginTop: excel ? 4 : 10 }}>
             <CampoRO label="Vlr. Unitario" labelShort="Vlr. Un." valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
             <CampoRO label="Costo Directo" labelShort="Costo Dir." valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
@@ -5656,9 +5842,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                           overflow: 'hidden',
                           background: '#fff',
                           cursor: 'pointer',
-                          width: 112,
-                          height: 84,
-                          flex: '0 0 auto',
                         }}
                       >
                         <img
@@ -6095,6 +6278,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         />
       )}
 
+      {/* Validación: ver bloque arriba (ventana) o abajo */}
+      {!evidenciaMosaico && (<>
       {/* ─ Sección: Validación ─ */}
       {nivelInfo.puedeValidar && nivelesValidablesReg.length > 0 && (() => {
         const nv = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
@@ -6106,6 +6291,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         const campoNv = sicoeCampoEstadoNivel(nv)
         const estadoActual = campoNv ? (registro[campoNv] || 'No Revisado') : 'No Revisado'
         const titNv = encPorNivelHojaReg[nv] || `Nivel ${nv}`
+        if (evidenciaMosaico && estadoActual === 'Aprobado') return null
         const BTNS = [
           { estado: 'Aprobado',  icon: '✅', color: '#16a34a' },
           { estado: 'Pendiente', icon: '🟡', color: '#d97706' },
@@ -6113,7 +6299,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           ...(nv === 2 ? [{ estado: 'No Objeto de Cobro', icon: '🚫', color: '#374151' }] : []),
         ]
         return (
-          <div style={{ marginBottom: secMb, background:t.bg, borderRadius: excel ? 2 : 10, padding: secPad, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
+          <div
+            data-testid={evidenciaMosaico ? 'sicoe-hoja-semaforo-validacion' : undefined}
+            style={{
+              marginBottom: secMb,
+              background: evidenciaMosaico ? `${t.primary}10` : t.bg,
+              borderRadius: excel ? 2 : 10,
+              padding: evidenciaMosaico ? '8px 10px' : secPad,
+              border: evidenciaMosaico ? `2px solid ${t.primary}66` : `1px solid ${excel ? sheetGrid : C.borde}`,
+            }}
+          >
             {esSelectorNivelAmplio && nivelesValidablesReg.length > 1 && (
               <div style={{ marginBottom: excel ? 6 : 12, display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
                 <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>Validar en:</span>
@@ -6128,8 +6323,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </select>
               </div>
             )}
-            <div style={{ ...secTitleSt(), marginBottom: excel ? 4 : 12 }}>
-              🚦 Validación · {titNv}
+            <div style={{ ...(evidenciaMosaico ? { fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.primary } : secTitleSt()), marginBottom: evidenciaMosaico ? 6 : (excel ? 4 : 12) }}>
+              {evidenciaMosaico ? <>Validación <span style={{ fontWeight: 600, color: t.textMuted }}>· {titNv}</span></> : <>🚦 Validación · {titNv}</>}
               {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>🔒 Bloqueado</span>}
               {sinItemAsignado && !bloqueado && (
                 <span style={{ marginLeft:'8px', background:'#d9770615', color:'#d97706', border:'1px solid #d9770633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>
@@ -6147,16 +6342,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 const activo = estadoActual === estado || (estado === 'No Objeto de Cobro' && estadoActual === 'Rechazado' && registro.nivel2_objeto_pago_sub === false)
                 return (
                   <button key={estado} type="button" disabled={validacionDeshabilitada}
-                    title={sinItemAsignado ? 'Asigna un ítem antes de validar' : (bloqueado ? 'Registro bloqueado' : undefined)}
+                    title={sinItemAsignado ? 'Asigna un ítem antes de validar' : (bloqueado ? 'Registro bloqueado' : estado)}
                     onClick={() => ejecutarValidacion(estado)}
                     style={{
-                      padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: 'var(--cc-sm)', fontWeight: '700',
+                      padding: evidenciaMosaico ? '8px 14px' : (excel ? '4px 10px' : '8px 16px'),
+                      borderRadius: evidenciaMosaico ? 10 : (excel ? 4 : 8),
+                      fontSize: 'var(--cc-sm)', fontWeight: '700',
                       cursor: validacionDeshabilitada ? 'not-allowed' : 'pointer', opacity: validacionDeshabilitada ? 0.5 : 1,
-                      background: activo ? `${color}22` : 'transparent',
+                      background: activo ? `${color}22` : (evidenciaMosaico ? `${color}14` : 'transparent'),
                       color, border: activo ? `2px solid ${color}` : `1px solid ${color}55`,
                       transition: 'all 0.15s',
+                      minWidth: evidenciaMosaico ? 44 : undefined,
+                      minHeight: evidenciaMosaico ? 44 : undefined,
                     }}>
-                    {icon} {estado}
+                    {evidenciaMosaico ? icon : <>{icon} {estado}</>}
                   </button>
                 )
               })}
@@ -6169,6 +6368,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         )
       })()}
+
+      </>)}
 
       {/* ─ Sección: Solo comentar (sin validar) ─ */}
       {nivelInfo.nivelValidacionComentario && !nivelInfo.puedeValidar && (nivelInfo.esSoloComentarista || nivelInfo.esApoyoTecnico) && (
@@ -6479,6 +6680,141 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       )}
 
+
+      {evidenciaMosaico && modalAsignarItemOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={sinItemAsignadoHoja ? 'Asignar ítem' : 'Editar ítem'}
+          data-testid="sicoe-hoja-modal-item"
+          onClick={(e) => { if (e.target === e.currentTarget) setModalAsignarItemOpen(false) }}
+          style={{ position:'fixed', inset:0, zIndex:17000, background:'rgba(0,0,0,0.65)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:16, width:'100%', maxWidth:560, maxHeight:'90vh', overflow:'auto', color:t.text }}>
+            <CcModalBrandHeader theme={t} />
+            <div style={{ padding:'12px 16px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontWeight:800, color:t.primary }}>{sinItemAsignadoHoja ? 'Asignar ítem' : 'Editar ítem'}</span>
+              <button type="button" title="Cerrar" onClick={() => setModalAsignarItemOpen(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:8, width:32, height:32, cursor:'pointer', color:t.text }}>✕</button>
+            </div>
+            <div style={{ padding:16, display:'flex', flexDirection:'column', gap:12 }}>
+              <div>
+                <div style={labSt}>Capítulo</div>
+                <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }} style={inpSt}>
+                  <option value="">— Selecciona —</option>
+                  {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={labSt}>Competencia</div>
+                <CompetenciaSelect
+                  contratoId={contrato_id}
+                  call={apiCallSicoe}
+                  value={competencia}
+                  onChange={v => { setCompetencia(v); setItemSel(null); setItemBusqueda('') }}
+                  placeholder="— Todas —"
+                  allowEmpty
+                  opciones={competencias}
+                  style={inpSt}
+                />
+              </div>
+              <div style={{ position:'relative' }}>
+                <div style={labSt}>Ítem {buscando ? '⏳' : ''}</div>
+                <input
+                  value={itemBusqueda}
+                  onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
+                  onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
+                  placeholder="Buscar por número o descripción..."
+                  style={inpSt}
+                />
+                {mostrarLista && itemsLista.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:20, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:8, maxHeight:200, overflowY:'auto' }}>
+                    {itemsLista.map((item) => (
+                      <div key={item.id} onClick={() => seleccionarItem(item)} style={{ padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}` }}>
+                        <div style={{ fontWeight:700, color:t.primary }}>{item.item_numero}</div>
+                        <div style={{ fontSize:'var(--cc-label)' }}>{item.descripcion}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {itemSel && (
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 100px', gap:8 }}>
+                  <CampoRO label="Descripción" valor={itemSel.descripcion} />
+                  <CampoRO label="Unidad" valor={itemSel.unidad || null} />
+                  {nivelInfo.verValoresEconomicos && <CampoRO label="Vlr. Unitario" valor={fmtD(itemSel.precio_unitario)} color="#10B981" />}
+                </div>
+              )}
+              <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+                <button type="button" onClick={() => setModalAsignarItemOpen(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:8, padding:'8px 14px', cursor:'pointer', color:t.text, fontWeight:600 }}>Cancelar</button>
+                <button
+                  type="button"
+                  disabled={guardando || !itemSel}
+                  onClick={async () => {
+                    try {
+                      await guardarCambios()
+                      setModalAsignarItemOpen(false)
+                    } catch { /* guardarCambios ya alerta */ }
+                  }}
+                  style={{ background:t.primary, color:'#fff', border:'none', borderRadius:8, padding:'8px 14px', cursor: guardando || !itemSel ? 'not-allowed' : 'pointer', fontWeight:700, opacity: guardando || !itemSel ? 0.6 : 1 }}
+                >
+                  {guardando ? '…' : 'Guardar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {evidenciaMosaico && modalReversionOpen && muestraPanelDobleLlave && typeof document !== 'undefined' && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Reversión sellado"
+          data-testid="sicoe-hoja-modal-reversion"
+          onClick={(e) => { if (e.target === e.currentTarget) setModalReversionOpen(false) }}
+          style={{ position:'fixed', inset:0, zIndex:17000, background:'rgba(0,0,0,0.65)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:16, width:'100%', maxWidth:520, maxHeight:'90vh', overflow:'auto', color:t.text }}>
+            <CcModalBrandHeader theme={t} />
+            <div style={{ padding:'12px 16px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontWeight:800, color:'#b91c1c' }}>🔐 Reversión sellado</span>
+              <button type="button" title="Cerrar" onClick={() => setModalReversionOpen(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:8, width:32, height:32, cursor:'pointer', color:t.text }}>✕</button>
+            </div>
+            <div style={{ padding:16 }}>
+              <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, lineHeight:1.45, marginBottom:12 }}>
+                Residente de costos (N2) y un validador de interventoría con permiso en el nivel máximo del contrato ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'nivel máx.'}) deben registrar cada uno un comentario con destinatarios.
+              </div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:10, marginBottom:12 }}>
+                <span style={{ padding:'6px 12px', borderRadius:999, border:`2px solid ${arm2Llave ? '#16a34a' : t.border}`, background: arm2Llave ? '#16a34a18' : t.bg, color: arm2Llave ? '#15803d' : t.textMuted, fontWeight:700 }}>
+                  🔑 N2 {arm2Llave ? `✓ ${registro.reversion_arm_n2_nombre || ''}` : '···'}
+                </span>
+                <span style={{ padding:'6px 12px', borderRadius:999, border:`2px solid ${arm3Llave ? '#16a34a' : t.border}`, background: arm3Llave ? '#16a34a18' : t.bg, color: arm3Llave ? '#15803d' : t.textMuted, fontWeight:700 }}>
+                  🔑 {encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'N máx.'} {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || ''}` : '···'}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={!puedeTurnarLlaveMisil}
+                onClick={() => { setModalReversionOpen(false); setMostrarPopupValidacion(false); setMostrarPopupReversionN3(true) }}
+                title="Registrar autorización de reversión"
+                style={{
+                  width:'100%', padding:'10px 18px', borderRadius:10, fontSize:'var(--cc-sm)', fontWeight:800,
+                  cursor: puedeTurnarLlaveMisil ? 'pointer' : 'not-allowed', opacity: puedeTurnarLlaveMisil ? 1 : 0.5,
+                  background: puedeTurnarLlaveMisil ? 'linear-gradient(90deg,#7c3aed,#dc2626)' : t.bg,
+                  color: puedeTurnarLlaveMisil ? '#fff' : t.textMuted, border:`2px solid ${t.border}`,
+                }}
+              >
+                {puedeTurnarLlaveMisil
+                  ? (ambasLlavesSinDesbloquear ? '🔓 Completar desbloqueo' : '🔐 Registrar mi autorización')
+                  : 'Autorización no disponible'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {mediaLightbox && (
         <SicoeMediaLightbox
           open
@@ -6683,6 +7019,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [planoGeojsonPortada, setPlanoGeojsonPortada] = useState(null)
   const [seleccionados, setSeleccionados]         = useState([])
   const [registroExpandido, setRegistroExpandido] = useState(null)
+  const [ventanaSinItemOpen, setVentanaSinItemOpen] = useState(false)
   const [menuAccionesRegId, setMenuAccionesRegId] = useState(null)
   const [itemInfoPopup, setItemInfoPopup] = useState(null)
   const [itemExpandidoNav, setItemExpandidoNav] = useState(null)
@@ -6714,6 +7051,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setItemExpandidoNav(nav.itemKey)
     } else if (nav.tab === 'sin_asignar') {
       setTabActiva('sin_asignar')
+      setVentanaSinItemOpen(true)
     }
 
     const scrollId = nav.registroId != null ? nav.registroId : repoProp._autoRegistro
@@ -8981,7 +9319,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   ✅ Todos los registros tienen ítem asignado
                 </div>
               ) : regsSinAsignar.map(reg => {
-                const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
                 const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
                 const nivelesInfo = [
@@ -8993,15 +9330,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   })),
                   { emoji: '🔨', label: 'Sub', nivelNum: null, estado: reg.sub_estado || 'No Revisado' },
                 ]
+                const seleccionadoEnVentana = ventanaSinItemOpen && registroExpandido != null && String(registroExpandido) === String(reg.id)
                 return (
                   <div key={reg.id} id={`registro-${reg.id}`}>
                     <div
                       className="cc-sicoe-reg-card"
                       onClick={() => {
                         setMenuAccionesRegId(null)
-                        setRegistroExpandido(expandido ? null : reg.id)
+                        setRegistroExpandido(reg.id)
+                        setVentanaSinItemOpen(true)
                       }}
-                      style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:`4px solid ${colorNivel(nivelesInfo.find(n => n.nivelNum != null && nivelInfo.nivelValidacion === n.nivelNum)?.estado || 'No Revisado')}`, borderRadius: expandido ? '10px 10px 0 0' : '10px', padding: carpetaCompact ? '6px 8px' : '12px 14px', cursor:'pointer', transition:'border 0.15s', minHeight: carpetaCompact ? 0 : 52 }}
+                      style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:'#D9770626', border:`1px solid ${seleccionadoEnVentana ? '#D97706' : '#D9770644'}`, borderLeft:`4px solid ${colorNivel(nivelesInfo.find(n => n.nivelNum != null && nivelInfo.nivelValidacion === n.nivelNum)?.estado || 'No Revisado')}`, borderRadius: '10px', padding: carpetaCompact ? '6px 8px' : '12px 14px', cursor:'pointer', transition:'border 0.15s', minHeight: carpetaCompact ? 0 : 52 }}
                     >
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
@@ -9077,44 +9416,82 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       {String(reg.foto_url || '').trim() ? (
                         <span title={strRefCarpetaFoto(reg) ? `Ref. ${strRefCarpetaFoto(reg)} · ${regTieneFotoNumeroEnBd(reg) ? 'foto' : 'reg.'} (URL en BD)` : 'Foto vinculada (URL en BD)'} style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
                       ) : null}
-                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>▸</span>
                       {renderAccionesValidacionCard(reg)}
                     </div>
-                    {expandido && (
-                      <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
-                        <HojaRegistro
-                          key={sicoeHojaRegistroSyncKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
-                          contrato_id={contrato_id} reporte={reporte} registro={reg}
-                          puedeEditar={puedeEditar} puedeCrear={puedeCrear} actasList={actasList}
-                          nivelesContrato={nivelesContrato}
-                          seleccionado={seleccionados.includes(reg.id)}
-                          onToggleSeleccion={() => toggleSeleccion(reg.id)}
-                          mostrarSeleccionValidacion={false}
-                          onItemAsignado={recargar}
-                          onRecargar={recargar}
-                          onRefrescarListadoSicoe={onRefrescarListadoSicoe}
-                          onOptimisticValidacion={aplicarOptimisticValidacion}
-                          onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
-                          onAbrirRegistroAuditoria={(inv) => {
-                            if (inv?.id == null) return
-                            setRegistroExpandido(inv.id)
-                            try {
-                              const el = document.getElementById(`registro-${inv.id}`)
-                              el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
-                            } catch { /* noop */ }
-                          }}
-                          hdrs={hdrs}
-                          pkIdsContrato={listaPkIds}
-                          esDeveloper={esDeveloper}
-                          puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
-                          onDevEliminarRegistro={devEliminarRegistro}
-                          devEliminando={devEliminando}
-                        />
-                      </div>
-                    )}
+                    
                   </div>
                 )
               })}
+
+              {ventanaSinItemOpen && regsSinAsignar.length > 0 && (
+                <SicoeItemRegistrosVentana
+                  open
+                  modoSinItem
+                  onClose={() => { setVentanaSinItemOpen(false); setRegistroExpandido(null) }}
+                  t={t}
+                  itemNum="Sin ítem"
+                  itemDescripcion="Registros pendientes de asignación"
+                  registros={regsSinAsignar}
+                  registroIdActivo={registroExpandido}
+                  onRegistroIdActivo={(id) => setRegistroExpandido(id)}
+                  nivelesActivos={nivelesActivosTabla}
+                  seleccionados={seleccionados}
+                  onToggleSeleccion={toggleSeleccion}
+                  API_URL={API_URL}
+                  contratoId={contrato_id}
+                  hdrs={hdrs}
+                  fetchObservacionValidacion={async (regId) => {
+                    try {
+                      const rolOrigen = determinarNivelValidacion(usuario, contrato_id, nivelesContrato).rolOrigen
+                      const res = await fetch(
+                        `${API_URL}/sicoe-obra/${contrato_id}/registros/${regId}/comentarios?rol_solicitante=${encodeURIComponent(rolOrigen)}`,
+                        { headers: hdrs },
+                      )
+                      const d = await res.json().catch(() => [])
+                      if (!res.ok || !Array.isArray(d) || !d.length) return ''
+                      const last = d[d.length - 1]
+                      return String(last?.mensaje || last?.texto || last?.comentario || '').trim()
+                    } catch { return '' }
+                  }}
+                  renderMenuAcciones={(reg) => renderMenuAccionesReg(reg)}
+                  renderHojaRegistro={(reg, ctx = {}) => (
+                    <HojaRegistro
+                      key={sicoeHojaRegistroSyncKey(reg)}
+                      t={t}
+                      usuario={usuario}
+                      API_URL={API_URL}
+                      contrato_id={contrato_id}
+                      reporte={reporte}
+                      registro={reg}
+                      puedeEditar={puedeEditar}
+                      puedeCrear={puedeCrear}
+                      actasList={actasList}
+                      nivelesContrato={nivelesContrato}
+                      seleccionado={seleccionados.includes(reg.id)}
+                      onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                      mostrarSeleccionValidacion={false}
+                      onItemAsignado={recargar}
+                      onRecargar={recargar}
+                      onRefrescarListadoSicoe={onRefrescarListadoSicoe}
+                      onOptimisticValidacion={aplicarOptimisticValidacion}
+                      onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
+                      onTrasValidacionExitosa={ctx.onTrasValidacionExitosa}
+                      evidenciaMosaico={!!ctx.evidenciaMosaico}
+                      onAbrirRegistroAuditoria={(inv) => {
+                        if (inv?.id == null) return
+                        setRegistroExpandido(inv.id)
+                      }}
+                      hdrs={hdrs}
+                      pkIdsContrato={listaPkIds}
+                      esDeveloper={esDeveloper}
+                      puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
+                      onDevEliminarRegistro={devEliminarRegistro}
+                      devEliminando={devEliminando}
+                    />
+                  )}
+                />
+              )}
             </div>
           )}
 

@@ -130,6 +130,36 @@ export function etiquetaNivelIniciales(uv, usuariosById = {}) {
   return iniciales ? `${uv.etiqueta} · ${iniciales}` : uv.etiqueta
 }
 
+/**
+ * Frase del encabezado: "Estado del registro: Aprobado por N4 · OL"
+ * @returns {{ prefijo: string, estado: string, color: string, sufijo: string }}
+ */
+export function fraseEstadoRegistro(uv, usuariosById = {}) {
+  const estado = uv?.estado || 'No Revisado'
+  const color = colorDeEstadoValidacion(estado)
+  if (estado === 'No Revisado' || !uv?.etiqueta || uv.etiqueta === '—') {
+    return {
+      prefijo: 'Estado del registro:',
+      estado: 'No revisado',
+      color,
+      sufijo: '',
+    }
+  }
+  const etiqueta = etiquetaNivelIniciales(uv, usuariosById)
+  return {
+    prefijo: 'Estado del registro:',
+    estado,
+    color,
+    sufijo: ` por ${etiqueta}`,
+  }
+}
+
+/** ¿Mostrar el semáforo de validación? Se oculta solo si el estado actual del nivel es Aprobado. */
+export function mostrarSemaforoValidacion(estadoActual) {
+  const e = String(estadoActual || 'No Revisado').trim()
+  return e !== 'Aprobado'
+}
+
 export function fotoMiniaturaRegistro(reg) {
   const lista = listaFotosRegistro(reg)
   if (lista.length) return String(lista[lista.length - 1].url || '').trim() || null
