@@ -33,7 +33,7 @@ describe('SolicitudesPanel columnas Entrada/Salida', () => {
 
   it('reparte anchos: texto acotado y acciones amplias', () => {
     const src = readFileSync(join(dir, 'SolicitudesPanel.jsx'), 'utf8')
-    assert.match(src, /width: '16%'.*Título|Título[\s\S]*width: '16%'/)
+    assert.match(src, /width: '24%'.*Título|Título[\s\S]*width: '24%'/)
     assert.match(src, /width: '12%'.*Solicitante|Solicitante[\s\S]*width: '12%'/)
     assert.match(src, /width: '12%'.*Aprobación|Aprobación[\s\S]*width: '12%'/)
     assert.match(src, /width: 280.*Acciones|Acciones[\s\S]*width: 280/)
