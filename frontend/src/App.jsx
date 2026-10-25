@@ -3896,27 +3896,30 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           esquema_scene: scene,
         })
       }
+      // Solo memorias/despieces PNG al historial del registro (nunca PDF/DXF).
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('./components/esquema/esquemaSaveExtras.js')
-      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-        const kind = String(adj.kind || '')
-        // Escena JSON ya va en meta del PNG; no duplicar como gráfico público.
-        if (kind === 'esquema-scene') return
-        const f = adj.blob
-          ? new File([adj.blob], adj.nombre, { type: adj.mime })
-          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-        if (!f) return
-        const isPdf = kind === 'esquema-pdf' || String(adj.mime || '').includes('pdf')
-        const isDxf = kind === 'esquema-dxf' || String(adj.mime || '').includes('dxf')
-        await subirGrafico(f, {
-          origen: adj.origen || 'esquema-calculo',
-          kind: isPdf ? 'esquema-pdf' : (isDxf ? 'esquema-dxf' : (kind || 'memoria-calculo')),
-        })
-      })
-      // Carpeta privada del contrato (PNG/PDF/DXF) si hay token.
+      const { filterEsquemaRegistroAdjuntos } = await import('./components/esquema/esquemaRegistroAdjuntos.js')
+      await applyEsquemaCalcAdjuntos(
+        { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+        async (adj) => {
+          const kind = String(adj.kind || '')
+          if (kind === 'esquema-scene' || kind === 'esquema-pdf' || kind === 'esquema-dxf') return
+          const f = adj.blob
+            ? new File([adj.blob], adj.nombre, { type: adj.mime })
+            : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+          if (!f) return
+          await subirGrafico(f, {
+            origen: adj.origen || 'esquema-calculo',
+            kind: kind || 'memoria-calculo',
+          })
+        },
+      )
+      // Carpeta privada: PNG + PDF + DXF (exports) en cada guardado.
       try {
         const tok = typeof getToken === 'function' ? getToken() : null
         if (tok && contrato_id != null) {
           const { uploadEsquemaAssetBundle } = await import('./components/esquema/esquemaAssetsApi.js')
+          const exports = extras?.exports || {}
           await uploadEsquemaAssetBundle({
             token: tok,
             folder: {
@@ -3930,7 +3933,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             title: extras?.title || `esquema_reg${registro.numero_registro ?? registro.id}`,
             pngDataUri: dataUrl,
             scene,
-            adjuntos: extras?.adjuntos || [],
+            adjuntos: [
+              ...(extras?.adjuntos || []),
+              ...(exports.pdf ? [exports.pdf] : []),
+              ...(exports.dxf ? [exports.dxf] : []),
+            ],
           })
         }
       } catch (cloudErr) {

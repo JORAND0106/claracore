@@ -5,6 +5,7 @@ import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSav
 import EsquemaEditIcon from '../../components/esquema/EsquemaEditIcon'
 import EsquemaArchivosMenu from '../../components/esquema/EsquemaArchivosMenu'
 import { hasEditableEsquemaScene, parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
+import { repairEsquemaRegistroList } from '../../components/esquema/esquemaRegistroAdjuntos'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
@@ -48,7 +49,8 @@ export default function BitacoraAdjuntos({
   const pasteZoneRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
 
-  const list = Array.isArray(imagenes) ? imagenes : []
+  // C-OUT-13: oculta DXF/PDF-paquete mal guardados; el registro muestra PNG.
+  const list = repairEsquemaRegistroList(Array.isArray(imagenes) ? imagenes : [])
   const full = list.length >= MAX_FOTOS_BITACORA
 
   const pushLocal = (im) => {
