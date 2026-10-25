@@ -6,7 +6,7 @@
 import { drawSolids3dLayered } from './esquema3dSolids.js'
 import { fmtMemoria } from './esquema3dCalc.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
-import { ESQUEMA_DOC_TYPE_SCALE } from './esquemaDocLegibility.js'
+import { ESQUEMA_DOC_TYPE_SCALE, esquemaDocFontHierarchy } from './esquemaDocLegibility.js'
 
 const LOGO_URL = '/CLARA.CORE.png'
 
@@ -288,7 +288,14 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   if (typeof document === 'undefined') return null
   const C = MEMORIA_COLORS
   // Tipografía × DOC_TYPE_SCALE; tope alto para tablas densas en documentos.
-  const fs = Math.max(0.9, Math.min(4.4, Number(fontScale) || 1))
+  let fs = Math.max(0.9, Math.min(4.4, Number(fontScale) || 1))
+  // C-OUT-08: celdas ≥ ancho/55 → subir fs si hace falta (celda base ≈ 11*fs).
+  {
+    const hier = esquemaDocFontHierarchy(width, { cellPx: Math.round(11 * fs) })
+    if (hier.cellPx > 11 * fs) {
+      fs = Math.min(6.5, hier.cellPx / 11)
+    }
+  }
   const margin = Math.round(8 * fs)
   const baseCols = [
     { key: 'num', label: '#', w: 36 },
@@ -539,10 +546,11 @@ export async function composeCalcMemoriaPng({
   ctx.fillStyle = C.headerBg
   ctx.fillRect(0, 0, imgW, headerH)
   ctx.fillStyle = C.primary
-  ctx.font = `bold ${Math.round(26 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  const memHier = esquemaDocFontHierarchy(imgW, { cellPx: Math.round(13 * textScale) })
+  ctx.font = `bold ${Math.max(Math.round(26 * textScale), memHier.titlePx)}px "Segoe UI", system-ui, sans-serif`
   ctx.fillText('Memoria de cálculo de volúmenes', margin, Math.round(32 * textScale))
   ctx.fillStyle = C.text
-  ctx.font = `bold ${Math.round(16 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.font = `bold ${Math.max(Math.round(16 * textScale), memHier.headerPx)}px "Segoe UI", system-ui, sans-serif`
   ctx.fillText(String(snapshot.nombre || 'Cálculo'), margin, Math.round(58 * textScale))
   ctx.fillStyle = C.muted
   ctx.font = `${Math.round(13 * textScale)}px "Segoe UI", system-ui, sans-serif`

@@ -19,7 +19,7 @@ import {
   estimateParrillaPngHeight,
   paintParrillaViews,
 } from './esquemaDespieceParrilla.js'
-import { ESQUEMA_DOC_TYPE_SCALE } from './esquemaDocLegibility.js'
+import { ESQUEMA_DOC_TYPE_SCALE, esquemaDocFontHierarchy } from './esquemaDocLegibility.js'
 
 const C = {
   bg: '#ffffff',
@@ -93,9 +93,10 @@ export async function composeDespiecePng({
   const margin = Math.round(18 * textScale)
   const headerH = Math.round(100 * textScale)
   const footerH = Math.round(36 * textScale)
-  // Filas altas para forma + cotas legibles
-  const rowH = Math.round(150 * textScale)
-  const headRowH = Math.round(52 * textScale)
+  // C-OUT-08: filas/encabezado crecen con el piso de letra (≥ ancho/55).
+  const hierEarly = esquemaDocFontHierarchy(width, { cellPx: Math.round(16 * textScale) })
+  const rowH = Math.max(Math.round(150 * textScale), Math.round(hierEarly.cellPx * 4.2))
+  const headRowH = Math.max(Math.round(52 * textScale), Math.round(hierEarly.headerPx * 2.4))
   const tableH = headRowH + n * rowH
   const imgW = width
   const parrillaDraw = schedule.parrillaDraw || null
@@ -111,14 +112,21 @@ export async function composeDespiecePng({
   ctx.fillStyle = C.bg
   ctx.fillRect(0, 0, imgW, imgH)
 
+  // C-OUT-08: celdas ≥ ancho/55; encabezados y título mayores.
+  const hier = esquemaDocFontHierarchy(imgW, { cellPx: Math.round(16 * textScale) })
+  const cellFont = Math.round(hier.cellPx)
+  const cotaFont = Math.max(Math.round(15 * textScale), Math.round(cellFont * 0.92))
+  const headFont = Math.max(Math.round(15 * textScale), hier.headerPx)
+  const titleFont = Math.max(Math.round(34 * textScale), hier.titlePx)
+
   // Encabezado
   ctx.fillStyle = C.headerBg
   ctx.fillRect(0, 0, imgW, headerH)
   ctx.fillStyle = C.primary
-  ctx.font = `bold ${Math.round(34 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.font = `bold ${titleFont}px "Segoe UI", system-ui, sans-serif`
   ctx.fillText('Cuadro de despiece de acero', margin, Math.round(40 * textScale))
   ctx.fillStyle = C.text
-  ctx.font = `bold ${Math.round(22 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.font = `bold ${Math.max(Math.round(22 * textScale), hier.headerPx)}px "Segoe UI", system-ui, sans-serif`
   ctx.fillText(String(schedule.nombre || 'Cuadro'), margin, Math.round(72 * textScale))
   ctx.fillStyle = C.muted
   ctx.font = `${Math.round(18 * textScale)}px "Segoe UI", system-ui, sans-serif`
@@ -165,17 +173,15 @@ export async function composeDespiecePng({
   ctx.fillStyle = C.headBg
   ctx.fillRect(tableX, y, tableW, headRowH)
   ctx.fillStyle = C.headFg
-  ctx.font = `bold ${Math.round(15 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.font = `bold ${headFont}px "Segoe UI", system-ui, sans-serif`
   for (const c of colXs) {
-    wrapFillText(ctx, c.label, c.x + 5, y + Math.round(20 * textScale), c.width - 8, Math.round(16 * textScale))
+    wrapFillText(ctx, c.label, c.x + 5, y + Math.round(20 * textScale), c.width - 8, Math.round(headFont * 1.05))
   }
   y += headRowH
 
   const totalKg = computeScheduleTotalKg(positions)
   const midY0 = y
   const midY1 = y + n * rowH
-  const cellFont = Math.round(16 * textScale)
-  const cotaFont = Math.round(15 * textScale)
 
   positions.forEach((rawPos, idx) => {
     const pos = normalizeDespiecePosition(rawPos) || rawPos

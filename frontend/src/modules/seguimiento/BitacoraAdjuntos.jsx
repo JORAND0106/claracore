@@ -1,7 +1,10 @@
 import { useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
-import { applyEsquemaCalcAdjuntos } from '../../components/esquema/esquemaSaveExtras'
+import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
+import EsquemaEditIcon from '../../components/esquema/EsquemaEditIcon'
+import EsquemaArchivosMenu from '../../components/esquema/EsquemaArchivosMenu'
+import { hasEditableEsquemaScene, parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
@@ -23,13 +26,17 @@ export default function BitacoraAdjuntos({
   onChange,
   onUploadPersisted,
   disabled = false,
+  sealed = false,
   entradaId = null,
   singleLine = true,
   contratoId = null,
   mapLocation = null,
+  token = null,
 }) {
   const ui = bitacoraSheetStyles(t)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [editScene, setEditScene] = useState(null)
+  const [editTargetIdx, setEditTargetIdx] = useState(null)
   const [slideIdx, setSlideIdx] = useState(0)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const [galeriaItems, setGaleriaItems] = useState([])
@@ -61,9 +68,10 @@ export default function BitacoraAdjuntos({
     reader.readAsDataURL(file)
   })
 
-  const commitImage = async ({ dataUri, nombre, mime, origen, pie, kind }) => {
+  const commitImage = async ({ dataUri, nombre, mime, origen, pie, kind, scene, esquema_scene }) => {
     const pieTxt = String(pie || '').trim()
     const kindVal = kind || undefined
+    const sceneVal = scene || esquema_scene || undefined
     if (entradaId != null && onUploadPersisted) {
       setBusy(true)
       setError('')
@@ -75,6 +83,7 @@ export default function BitacoraAdjuntos({
           origen: origen || 'archivo',
           ...(kindVal ? { kind: kindVal } : {}),
           ...(pieTxt ? { pie: pieTxt } : {}),
+          ...(sceneVal ? { esquema_scene: sceneVal, scene: sceneVal } : {}),
         })
       } catch (e) {
         setError(e.message || 'No se pudo adjuntar')
@@ -93,6 +102,7 @@ export default function BitacoraAdjuntos({
       pending: true,
       created_at: new Date().toISOString(),
       ...(pieTxt ? { pie: pieTxt } : {}),
+      ...(sceneVal ? { esquema_scene: sceneVal, scene: sceneVal } : {}),
     })
   }
 
@@ -295,7 +305,7 @@ export default function BitacoraAdjuntos({
         />
       </div>
       {list.length > 0 && (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 8, position: 'relative' }}>
           <AdjuntosMediaSlider
             t={t}
             items={slidesFromImagenes(list)}
@@ -323,6 +333,36 @@ export default function BitacoraAdjuntos({
               />
             )}
           />
+          {(() => {
+            const im = list[Math.min(slideIdx, list.length - 1)]
+            const isEsquema = String(im?.origen || '') === 'esquema' || String(im?.kind || '') === 'esquema'
+            if (!isEsquema) return null
+            const scene = parseEsquemaScene(im?.esquema_scene || im?.scene)
+            return (
+              <div style={{
+                position: 'absolute', top: 6, right: 6, display: 'flex', gap: 6, zIndex: 2,
+              }}
+              >
+                <EsquemaEditIcon
+                  hasScene={hasEditableEsquemaScene(im) || !!scene}
+                  canEdit={!disabled}
+                  sealed={!!sealed}
+                  onClick={() => {
+                    setEditScene(scene)
+                    setEditTargetIdx(Math.min(slideIdx, list.length - 1))
+                    setEsquemaOpen(true)
+                  }}
+                />
+                <EsquemaArchivosMenu
+                  token={token || api?.token}
+                  contratoId={contratoId}
+                  modulo="bitacora"
+                  registroId={entradaId}
+                  files={Array.isArray(im?.esquema_files) ? im.esquema_files : null}
+                />
+              </div>
+            )
+          })()}
         </div>
       )}
       {error && (
@@ -421,32 +461,75 @@ export default function BitacoraAdjuntos({
           contratoId={contratoId}
           mapLocation={mapLocation}
           iaDoc={{ ambito: 'bitacora', docKey: `bitacora-${entradaId != null ? entradaId : 'draft'}` }}
-          onClose={() => setEsquemaOpen(false)}
+          draftModule="bitacora"
+          draftEntityId={entradaId != null ? entradaId : 'draft'}
+          initialSceneSnapshot={editScene}
+          onClose={() => {
+            setEsquemaOpen(false)
+            setEditScene(null)
+            setEditTargetIdx(null)
+          }}
           onSave={async (dataUrl, extras) => {
             setEsquemaOpen(false)
             if (!dataUrl) return
             try {
-              await commitImage({
-                dataUri: dataUrl,
-                nombre: `esquema-${Date.now()}.png`,
-                mime: 'image/png',
-                origen: 'esquema',
-                pie: '',
-              })
-              await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-                await commitImage({
-                  dataUri: adj.dataUri,
-                  nombre: adj.nombre,
-                  mime: adj.mime,
-                  origen: adj.origen || 'esquema-calculo',
-                  kind: adj.kind || 'memoria-calculo',
-                  pie: adj.kind === 'memoria-calculo'
-                    ? 'Memoria de cálculo (PNG)'
-                    : (adj.kind === 'despiece-acero' ? 'Cuadro de despiece (PNG)' : 'Gráfico isométrico'),
-                })
+              const tok = token || api?.token
+              await applyEsquemaSaveBundle(dataUrl, extras, {
+                commitImage: async (payload) => {
+                  // Al reeditar, el PNG principal reemplaza la entrada del mismo índice.
+                  if (
+                    editTargetIdx != null
+                    && payload?.origen === 'esquema'
+                    && payload?.kind === 'esquema'
+                    && list[editTargetIdx]
+                    && typeof onChange === 'function'
+                    && !(entradaId != null && onUploadPersisted)
+                  ) {
+                    const next = [...list]
+                    next[editTargetIdx] = {
+                      ...next[editTargetIdx],
+                      data_uri: payload.dataUri,
+                      mime_type: payload.mime || 'image/png',
+                      origen: 'esquema',
+                      kind: 'esquema',
+                      esquema_scene: payload.scene || payload.esquema_scene || extras?.scene || null,
+                      scene: payload.scene || payload.esquema_scene || extras?.scene || null,
+                      updated_at: new Date().toISOString(),
+                    }
+                    onChange(next)
+                    return
+                  }
+                  await commitImage({
+                    dataUri: payload.dataUri,
+                    nombre: payload.nombre,
+                    mime: payload.mime,
+                    origen: payload.origen || 'esquema',
+                    kind: payload.kind,
+                    pie: payload.pie || '',
+                    ...(payload.scene || payload.esquema_scene
+                      ? {
+                        esquema_scene: payload.scene || payload.esquema_scene,
+                        scene: payload.scene || payload.esquema_scene,
+                      }
+                      : {}),
+                  })
+                },
+                uploadToCloud: !!(tok && contratoId != null),
+                token: tok,
+                folder: {
+                  contratoId,
+                  modulo: 'bitacora',
+                  reporteId: null,
+                  reporteNombre: 'entrada',
+                  registroId: entradaId,
+                  registroNombre: extras?.title || 'esquema',
+                },
               })
             } catch {
               /* error en state */
+            } finally {
+              setEditScene(null)
+              setEditTargetIdx(null)
             }
           }}
         />

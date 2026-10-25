@@ -187,6 +187,14 @@ import {
 } from './esquemaLibraryScale'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import { composeEsquemaExport, isEsquemaPngDataUrl, sceneExportBounds, solidsExportBounds } from './esquemaExport'
+import { composeEsquemaPdf } from './esquemaExportPdf'
+import { composeEsquemaDxf, esquemaDxfToDataUri } from './esquemaExportDxf'
+import {
+  normalizeEsquemaScene,
+  esquemaSceneToDataUri,
+  ESQUEMA_SCENE_KIND,
+  ESQUEMA_SCENE_MIME,
+} from './esquemaScenePersist'
 import { generarEsquemaIa, fetchEsquemaIaUso } from './esquemaIaApi'
 import {
   hydrateIaObjects,
@@ -490,6 +498,11 @@ export default function EsquemaEditorModal({
   initialOriginLngLat = null,
   /** Escena completa previa (para recuperar origen / metadatos en huellaMode). */
   initialDibujoEscena = null,
+  /**
+   * Snapshot editable guardado con el PNG (C-OUT-09). Si viene, se restaura
+   * el dibujo completo al abrir (prioridad sobre initialDataUri / borrador).
+   */
+  initialSceneSnapshot = null,
   /** ({ objects, originLngLat }) => Promise — solo en huellaMode. */
   onSaveHuella = null,
   /**
@@ -6401,9 +6414,22 @@ export default function EsquemaEditorModal({
     }
   }, [collectDraftSnapshot, draftModule, draftEntityId, iaDoc, contratoIdProp])
 
+  // Al abrir con escena guardada (C-OUT-09): restaurar dibujo editable.
+  useEffect(() => {
+    if (draftHydratedRef.current) return undefined
+    const snap = normalizeEsquemaScene(initialSceneSnapshot)
+    if (!snap) return undefined
+    draftHydratedRef.current = true
+    applyDraftSnapshot(snap)
+    setDirty(false)
+    setToolHint('Esquema editable restaurado. Puede modificar y guardar de nuevo.')
+    return undefined
+  }, [initialSceneSnapshot, applyDraftSnapshot])
+
   // Al abrir: si hay borrador del usuario, ofrecer continuar o empezar de nuevo.
   useEffect(() => {
     if (draftHydratedRef.current) return undefined
+    if (normalizeEsquemaScene(initialSceneSnapshot)) return undefined
     const key = resolvedDraftKey
     if (!key) return undefined
     let cancelled = false
@@ -6421,7 +6447,7 @@ export default function EsquemaEditorModal({
       })
     })()
     return () => { cancelled = true }
-  }, [resolvedDraftKey])
+  }, [resolvedDraftKey, initialSceneSnapshot])
 
   const confirmarGuardar = async () => {
     const titleTxt = String(savePrompt?.title || '').trim() || 'Esquema'
@@ -6459,12 +6485,51 @@ export default function EsquemaEditorModal({
       const { adjuntos: calcAdj, snapshots } = await buildVolumeCalcAdjuntos()
       const despieceAdj = await buildDespieceScheduleAdjuntos()
       const adjuntos = [...(calcAdj || []), ...(despieceAdj || [])]
+      // Dibujo editable + PDF + DXF (C-OUT-09…12) junto al PNG.
+      const sceneSnap = normalizeEsquemaScene({
+        ...collectDraftSnapshot(),
+        title: titleTxt,
+      })
+      const sceneDataUri = sceneSnap ? esquemaSceneToDataUri(sceneSnap) : null
+      if (sceneDataUri) {
+        adjuntos.push({
+          dataUri: sceneDataUri,
+          mime: ESQUEMA_SCENE_MIME,
+          kind: ESQUEMA_SCENE_KIND,
+          origen: 'esquema',
+          nombre: `${titleTxt.replace(/[^\w\-áéíóúÁÉÍÓÚñÑ]+/g, '_').slice(0, 48) || 'esquema'}.scene.json`,
+        })
+      }
+      try {
+        const pdfAdj = await composeEsquemaPdf({
+          title: titleTxt,
+          esquemaPng: composed,
+          adjuntos: [...(calcAdj || []), ...(despieceAdj || [])],
+        })
+        if (pdfAdj?.dataUri) adjuntos.push(pdfAdj)
+      } catch { /* PDF opcional: no bloquea el PNG */ }
+      try {
+        const dxfRes = composeEsquemaDxf(sceneSnap || collectDraftSnapshot())
+        const dxfUri = esquemaDxfToDataUri(dxfRes.dxf)
+        if (dxfUri) {
+          adjuntos.push({
+            dataUri: dxfUri,
+            mime: 'application/dxf',
+            kind: 'esquema-dxf',
+            origen: 'esquema',
+            nombre: `${titleTxt.replace(/[^\w\-áéíóúÁÉÍÓÚñÑ]+/g, '_').slice(0, 48) || 'esquema'}.dxf`,
+            georeferenced: !!dxfRes.georeferenced,
+            layers: dxfRes.layers,
+          })
+        }
+      } catch { /* DXF opcional */ }
       await onSave?.(composed, {
         title: titleTxt,
         adjuntos,
         calcSnapshots: snapshots,
         mime: 'image/png',
         formato: 'png',
+        scene: sceneSnap,
         /** Tabla de coordenadas vigente (paridad / sync planilla topografía). */
         coordRows: Array.isArray(coordRowsRef.current)
           ? coordRowsRef.current.map((r) => ({ ...(r || {}) }))
