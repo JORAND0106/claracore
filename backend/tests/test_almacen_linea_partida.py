@@ -7,9 +7,12 @@ from almacen_linea_partida import (
     debe_separar_para_oc,
     estado_si_toda_la_solicitud_rechazada,
     evento_es_de_esta_linea,
+    ficha_linea,
     filas_para_devolver,
     filas_para_mover,
     proteger_autor_linea,
+    quien_pidio_de_items,
+    resumen_solicitantes_linea,
     sellar_solicitado_por,
 )
 
@@ -129,6 +132,52 @@ def test_reporte_no_inventa_solicitante():
     )
     assert incierto["lineas"][0]["accion"] == "marcado_incierto"
     assert incierto["lineas"][0]["restauraria_solicitado_por"] is None
+
+
+def test_ficha_trae_observacion_y_justificacion_con_autor():
+    ficha = ficha_linea(
+        {
+            "id": 8,
+            "numero_linea": 2,
+            "descripcion_solicitada": "Cemento",
+            "observacion_residente": "Falta en el tramo",
+            "justificacion_autor_nombre": "Ana",
+            "justificacion_at": "2026-10-25T15:00:00Z",
+            "cantidad": 3,
+            "unidad": "BTO",
+            "solicitado_por": 4,
+        },
+        {"id": 1, "consecutivo": 10, "created_by": 9},
+        {"codigo": "CEM", "descripcion": "Cemento gris"},
+        nombres={4: "Ana", 9: "Beto"},
+        ver_economicos=False,
+    )
+    assert ficha["observacion"] == "Falta en el tramo"
+    assert ficha["justificacion"] == "Falta en el tramo"
+    assert ficha["justificacion_autor_nombre"] == "Ana"
+    assert ficha["justificacion_at"] == "2026-10-25T15:00:00Z"
+    assert ficha["solicitado_por_nombre"] == "Ana"
+    vacia = ficha_linea(
+        {"id": 9, "descripcion_solicitada": "Arena"},
+        {"id": 1, "created_by": 9},
+        None,
+        nombres={9: "Beto"},
+        ver_economicos=False,
+    )
+    assert vacia["observacion"] is None
+    assert vacia["justificacion"] is None
+    assert vacia["justificacion_autor_nombre"] is None
+
+
+def test_quien_pidio_sale_de_la_linea():
+    items = [
+        {"id": 1, "solicitado_por_nombre": "Ana"},
+        {"id": 2, "solicitado_por_nombre": "Ana"},
+    ]
+    assert quien_pidio_de_items(items, {"solicitante_nombre": "Beto"}) == "Ana (solicitud de Beto)"
+    assert quien_pidio_de_items(items, {"solicitante_nombre": "Ana"}) == "Ana"
+    assert resumen_solicitantes_linea(["Ana"], "Ana") == "Ana"
+    assert resumen_solicitantes_linea(["Ana", "Beto"], "Ana") == "Varios"
 
 
 def test_mover_lineas_no_toca_solicitado_por():

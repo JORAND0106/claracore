@@ -4,6 +4,7 @@ import { useAlmacenApi, useAlmacenTheme } from './almacenShared'
 import {
   asuntoInicialOc,
   avisosDocumentoSistemaOc,
+  avisosEnvioEnProceso,
   avisosEnvioOc,
   etiquetasInicialesOc,
   mensajeInicialOc,
@@ -38,6 +39,7 @@ export default function OcGeneradaMensajeModal({
   const [reintentando, setReintentando] = useState(null)
 
   const avisos = useMemo(() => avisosEnvioOc(enviosLocal), [enviosLocal])
+  const avisosProceso = useMemo(() => avisosEnvioEnProceso(enviosLocal), [enviosLocal])
   const avisosSistema = useMemo(() => avisosDocumentoSistemaOc(enviosLocal), [enviosLocal])
   const pendientes = useMemo(
     () => (enviosLocal || []).filter((e) => e && e.resultado !== 'enviado' && e.resultado !== 'sistema' && e.orden_compra_id),
@@ -61,6 +63,48 @@ export default function OcGeneradaMensajeModal({
       setReintentando(null)
     }
   }
+
+  useEffect(() => {
+    const hayProceso = (enviosLocal || []).some((e) => e?.resultado === 'en_proceso' && e.orden_compra_id)
+    if (!hayProceso || !solicitudId) return undefined
+    let vivo = true
+    const leer = () => {
+      api.getSolicitud(solicitudId, { ligera: true })
+        .then((data) => {
+          if (!vivo) return
+          const ocs = data?.ordenes_compra || []
+          setEnviosLocal((prev) => {
+            let cambio = false
+            const next = prev.map((e) => {
+              if (e?.resultado !== 'en_proceso') return e
+              const oc = ocs.find((o) => String(o.id) === String(e.orden_compra_id))
+              const estado = oc?.envio_estado
+              if (estado === 'enviado') {
+                cambio = true
+                return { ...e, resultado: 'enviado', detalle: 'Correo enviado.', envio_estado: 'enviado' }
+              }
+              if (estado === 'pendiente' || estado === 'error') {
+                cambio = true
+                return {
+                  ...e,
+                  resultado: estado,
+                  detalle: 'El correo no se envió. Puede reintentarlo. La orden de compra sigue generada.',
+                  envio_estado: estado,
+                }
+              }
+              return e
+            })
+            return cambio ? next : prev
+          })
+        })
+        .catch(() => {})
+    }
+    const timer = setInterval(leer, 4000)
+    return () => {
+      vivo = false
+      clearInterval(timer)
+    }
+  }, [api, enviosLocal, solicitudId])
 
   useEffect(() => {
     const handle = setTimeout(() => {
@@ -158,6 +202,25 @@ export default function OcGeneradaMensajeModal({
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 12 }}>
           La orden ya quedó generada. Puede cerrar este aviso sin enviar el mensaje.
         </div>
+        {avisosProceso.length > 0 && (
+          <div
+            data-testid="oc-envio-en-proceso"
+            style={{
+              marginBottom: 12,
+              padding: '8px 10px',
+              borderRadius: 8,
+              background: ui.accentSoft,
+              border: `1px solid ${ui.textMuted}33`,
+              color: ui.text,
+              fontSize: 'var(--cc-sm)',
+              lineHeight: 1.45,
+            }}
+          >
+            {avisosProceso.map((t) => (
+              <div key={t}>{t}</div>
+            ))}
+          </div>
+        )}
         {avisosSistema.length > 0 && (
           <div
             data-testid="oc-documento-sistema-aviso"

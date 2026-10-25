@@ -32,6 +32,8 @@ import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
 import { colorEstadoSolicitud, tonoFilaSinInsumo } from './almacenContraste'
 import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
+import { escucharCambiosAlmacen, publicarCambioAlmacen } from './almacenContratoEvento'
+import { filaSolicitudTrasOc, ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import {
   partesResaltadas,
   textoConteoBusqueda,
@@ -189,6 +191,47 @@ export default function SolicitudesPanel({
 
   const reloadRef = useRef(reload)
   reloadRef.current = reload
+  const detalleIdRef = useRef(detalleId)
+  detalleIdRef.current = detalleId
+
+  const aplicarOcEnLista = useCallback((respuesta) => {
+    if (!respuesta) return
+    const ocs = ordenesDeRespuestaAprobar(respuesta)
+    const filas = [
+      filaSolicitudTrasOc(respuesta, ocs),
+      filaSolicitudTrasOc(respuesta.solicitud_origen, ocs),
+    ].filter(Boolean)
+    if (filas.length) {
+      setLista((prev) => {
+        const porId = new Map(prev.map((s) => [String(s.id), s]))
+        filas.forEach((fila) => {
+          const anterior = porId.get(String(fila.id))
+          porId.set(String(fila.id), { ...(anterior || {}), ...fila })
+        })
+        const idsNuevos = filas
+          .map((f) => String(f.id))
+          .filter((id) => !prev.some((s) => String(s.id) === id))
+        const nuevas = idsNuevos.map((id) => porId.get(id)).filter(Boolean)
+        const resto = prev.map((s) => porId.get(String(s.id)) || s)
+        return [...nuevas, ...resto]
+      })
+    }
+    publicarCambioAlmacen(contratoId, {
+      solicitudId: respuesta.id,
+      origenId: respuesta.solicitud_origen?.id,
+    })
+    reloadRef.current()
+  }, [contratoId])
+
+  useEffect(() => {
+    return escucharCambiosAlmacen(contratoId, (msg) => {
+      reloadRef.current()
+      const abierto = detalleIdRef.current
+      if (!abierto) return
+      const toca = [msg?.solicitudId, msg?.origenId].some((id) => id != null && String(id) === String(abierto))
+      if (toca) setDetalleEpoch((n) => n + 1)
+    })
+  }, [contratoId])
   useEffect(() => {
     if (refreshSignal > 0) {
       if (!creating && !editId && !detalleId) reloadRef.current()
@@ -606,15 +649,19 @@ export default function SolicitudesPanel({
                     style={{ ...ui.td, ...cellEllipsis }}
                     data-label="Solicitante"
                     title={
-                      s.solicitantes_linea_resumen && s.solicitantes_linea_resumen !== s.solicitante_nombre
-                        ? `Líneas pedidas por ${s.solicitantes_linea_resumen}. Solicitud de ${s.solicitante_nombre || '—'}`
+                      s.solicitantes_linea_resumen
+                        ? (s.solicitantes_linea_resumen !== s.solicitante_nombre
+                          ? `Líneas pedidas por ${s.solicitantes_linea_resumen}. Solicitud de ${s.solicitante_nombre || '—'}`
+                          : `Líneas pedidas por ${s.solicitantes_linea_resumen}`)
                         : (s.solicitante_nombre || undefined)
                     }
                   >
                     <ResalteBusqueda
                       texto={
-                        s.solicitantes_linea_resumen && s.solicitantes_linea_resumen !== s.solicitante_nombre
-                          ? `${s.solicitantes_linea_resumen} · solicitud de ${s.solicitante_nombre || '—'}`
+                        s.solicitantes_linea_resumen
+                          ? (s.solicitantes_linea_resumen !== s.solicitante_nombre
+                            ? `${s.solicitantes_linea_resumen} · solicitud de ${s.solicitante_nombre || '—'}`
+                            : s.solicitantes_linea_resumen)
                           : (s.solicitante_nombre || '—')
                       }
                       tokens={tokens}
@@ -892,6 +939,7 @@ export default function SolicitudesPanel({
             setDetalleId(null)
             reload()
           }}
+          onOcGenerada={aplicarOcEnLista}
           onEdit={(sol) => {
             setDetalleId(null)
             setReabrirOc(false)

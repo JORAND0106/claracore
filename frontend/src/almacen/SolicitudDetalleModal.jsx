@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
@@ -58,6 +58,7 @@ export default function SolicitudDetalleModal({
   contratoId,
   onClose,
   onUpdated,
+  onOcGenerada,
   onEdit,
   onReabrirOc,
   onMensajesLeidos,
@@ -94,6 +95,8 @@ export default function SolicitudDetalleModal({
   const [eliminarLineaAviso, setEliminarLineaAviso] = useState('')
   const [eliminarLineaBusy, setEliminarLineaBusy] = useState(false)
   const [ocProgreso, setOcProgreso] = useState('')
+  const [partidaOc, setPartidaOc] = useState(null)
+  const aprobandoRef = useRef(false)
   const [avisoReabrir, setAvisoReabrir] = useState('')
 
   // El título de la fila queda en un tooltip institucional. Al abrir el popup
@@ -269,11 +272,12 @@ export default function SolicitudDetalleModal({
   }
 
   const ejecutarAprobar = async (itemIds, notificarProveedores) => {
-    if (!sol) return
+    if (!sol || aprobandoRef.current) return
     if (!itemIds?.length) {
       setError('Seleccione al menos un proveedor.')
       return
     }
+    aprobandoRef.current = true
     setBusy(true)
     setOcProgreso(tieneOc ? 'Generando las órdenes pendientes…' : 'Generando orden de compra…')
     setError('')
@@ -285,22 +289,32 @@ export default function SolicitudDetalleModal({
       })
       setSelectorOc(false)
       setNotificarOc(null)
-      onUpdated?.(r)
       const ocs = ordenesDeRespuestaAprobar(r)
-      setSol(r)
+      const origen = r?.solicitud_origen
+      const parcial = Boolean(origen?.id && String(origen.id) !== String(r.id))
+      if (parcial && Array.isArray(origen.items)) {
+        setSol(origen)
+        setPartidaOc({
+          consecutivo: r.consecutivo,
+          ocs,
+        })
+      } else {
+        setSol(r)
+        setPartidaOc(null)
+      }
+      onOcGenerada?.(r)
       if (ocs.length) {
         setAvisoOc({
-          sol: r,
+          sol: parcial ? r : r,
           ocs,
           envios: Array.isArray(r.envios_oc) ? r.envios_oc : [],
         })
         setExpedienteOcId(ocs[0].id)
-      } else {
-        onClose?.()
       }
     } catch (e) {
       setError(e.message)
     } finally {
+      aprobandoRef.current = false
       setBusy(false)
       setOcProgreso('')
     }
@@ -661,6 +675,47 @@ export default function SolicitudDetalleModal({
           {loadingSaldos && sol && (
             <div style={{ color: ui.textMuted, marginBottom: 8, fontSize: 'var(--cc-xs)' }}>
               Actualizando saldos y contexto…
+            </div>
+          )}
+          {(sol?.ordenes_compra || []).some((o) => o?.envio_estado === 'pendiente' || o?.envio_estado === 'error') && (
+            <div
+              data-testid="oc-correo-fallo"
+              style={{
+                ...estiloAvisoAlmacen(contraste, 'warn'),
+                padding: '10px 12px',
+                marginBottom: 12,
+                fontSize: 'var(--cc-sm)',
+                lineHeight: 1.45,
+              }}
+            >
+              El correo de la orden de compra no se envió. La orden quedó generada.
+              {' '}
+              <button
+                type="button"
+                style={{ ...ui.btnSecondary, padding: '2px 8px', minHeight: 0 }}
+                onClick={() => {
+                  const oc = (sol.ordenes_compra || []).find((o) => o?.envio_estado === 'pendiente' || o?.envio_estado === 'error')
+                  if (oc?.id) setExpedienteOcId(oc.id)
+                }}
+              >
+                Reintentar envío
+              </button>
+            </div>
+          )}
+          {partidaOc && (
+            <div
+              data-testid="oc-parcial-aviso"
+              style={{
+                ...estiloAvisoAlmacen(contraste, 'ok'),
+                padding: '10px 12px',
+                marginBottom: 12,
+                fontSize: 'var(--cc-sm)',
+                lineHeight: 1.45,
+              }}
+            >
+              {`Las líneas elegidas quedaron con ${
+                (partidaOc.ocs || []).map((o) => (o.numero_oc != null ? `OC #${o.numero_oc}` : 'OC')).join(', ') || 'su orden de compra'
+              } en la solicitud #${partidaOc.consecutivo ?? '—'}. Esta solicitud sigue con lo que falta.`}
             </div>
           )}
           {error && (

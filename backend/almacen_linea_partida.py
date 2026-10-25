@@ -238,6 +238,9 @@ def ficha_linea(
         "insumo_codigo": (ins.get("codigo") or item.get("insumo_codigo") or "").strip() or None,
         "insumo_descripcion": (ins.get("descripcion") or "").strip() or None,
         "observacion": (item.get("observacion_residente") or "").strip() or None,
+        "justificacion": (item.get("observacion_residente") or "").strip() or None,
+        "justificacion_autor_nombre": (item.get("justificacion_autor_nombre") or "").strip() or None,
+        "justificacion_at": item.get("justificacion_at") or None,
         "cantidad": item.get("cantidad"),
         "unidad": item.get("unidad"),
         "proveedor": (item.get("proveedor_seleccionado_nombre") or "").strip() or None,
@@ -450,6 +453,7 @@ def armar_reporte_autoria(
 
 
 def resumen_solicitantes_linea(nombres_linea: Sequence[str], nombre_solicitud: Optional[str]) -> Optional[str]:
+    """Nombre de quien pidió la línea. La solicitud puede ser de otra persona."""
     distintos = []
     for nombre in nombres_linea or []:
         limpio = (nombre or "").strip()
@@ -459,6 +463,34 @@ def resumen_solicitantes_linea(nombres_linea: Sequence[str], nombre_solicitud: O
         return None
     if len(distintos) > 1:
         return "Varios"
-    if nombre_solicitud and distintos[0] == nombre_solicitud:
-        return None
     return distintos[0]
+
+
+def quien_pidio_de_items(items: Sequence[dict], solicitud: Optional[dict], ids_linea=None) -> str:
+    """Solicitante leído de las líneas. Si la solicitud es de otro, se nombra aparte."""
+    permitidos = None
+    if ids_linea is not None:
+        permitidos = set()
+        for raw in ids_linea:
+            n = _entero(raw)
+            if n:
+                permitidos.add(n)
+    nombres = []
+    for it in items or []:
+        if permitidos is not None and _entero(it.get("id")) not in permitidos:
+            continue
+        nombre = (it.get("solicitado_por_nombre") or "").strip()
+        if nombre and nombre not in nombres:
+            nombres.append(nombre)
+    dueno = ""
+    if solicitud:
+        dueno = (solicitud.get("solicitud_de_nombre") or solicitud.get("solicitante_nombre") or "").strip()
+    if not nombres:
+        return dueno or "—"
+    if len(nombres) == 1:
+        if dueno and dueno != nombres[0]:
+            return f"{nombres[0]} (solicitud de {dueno})"
+        return nombres[0]
+    if dueno:
+        return f"Varios (solicitud de {dueno})"
+    return "Varios"

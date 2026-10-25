@@ -173,7 +173,7 @@ export function validateSolicitudItems(items) {
     if (desc.length < 3) {
       errors.push(`Línea ${n}: describa el material que necesita (mínimo 3 caracteres).`)
     }
-    if (!it.pk_id) {
+    if (!esAiu && !String(it.pk_id || '').trim()) {
       errors.push(`Línea ${n}: seleccione la ubicación PK-ID en el mapa.`)
     }
     // AIU no tiene registro de presupuesto de obra: no exigir presupuesto_id.

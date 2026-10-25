@@ -3005,7 +3005,8 @@ def resolve_insumo_for_solicitud(
 
     if cant <= 0:
         raise ValueError("La cantidad debe ser mayor a cero.")
-    if not pk_id:
+    # AIU no exige PK-ID, tramo ni ubicación. El capítulo de obra sí.
+    if not pk_id and not es_aiu:
         raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
     if not es_aiu and not presupuesto_id and (not capitulo_ppto or not item_ppto):
         raise ValueError("Seleccione capítulo e ítem de cobro del presupuesto.")
@@ -3046,7 +3047,7 @@ def resolve_insumo_for_solicitud(
             "insumo_id": insumo_id,
             "listado_precio_id": insumo.get("listado_precio_id"),
             "presupuesto_id": None,
-            "pk_id": pk_id,
+            "pk_id": pk_id or None,
             "pk_id_id": raw.get("pk_id_id"),
             "tramo": (raw.get("tramo") or "").strip() or None,
             "costado": (raw.get("costado") or "").strip() or None,
