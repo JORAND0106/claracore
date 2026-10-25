@@ -1,10 +1,15 @@
 /**
- * Aplica el paquete de guardado del esquema: PNG principal + adjuntos
- * (memorias, despiece, escena editable, PDF, DXF) vía callbacks del módulo.
+ * Aplica el paquete de guardado del esquema.
+ * Registro/documento: SOLO PNG principal + memorias/despieces PNG (+ escena en meta).
+ * PDF/DXF NUNCA se adjuntan al registro; van a la nube y/o descarga (popup Exportar).
  */
 import { applyEsquemaCalcAdjuntos } from './esquemaSaveExtras.js'
 import { sceneFromSaveExtras, ESQUEMA_SCENE_KIND } from './esquemaScenePersist.js'
 import { uploadEsquemaAssetBundle } from './esquemaAssetsApi.js'
+import {
+  filterEsquemaRegistroAdjuntos,
+  isEsquemaPngPayload,
+} from './esquemaRegistroAdjuntos.js'
 
 /**
  * @param {string} dataUrl PNG principal
@@ -27,6 +32,10 @@ export async function applyEsquemaSaveBundle(dataUrl, extras, opts = {}) {
   } = opts
   if (typeof commitImage !== 'function') return { ok: false, error: 'sin commit' }
 
+  if (!isEsquemaPngPayload(dataUrl, extras?.mime || 'image/png')) {
+    return { ok: false, error: 'El esquema del registro debe ser PNG' }
+  }
+
   const title = String(extras?.title || 'esquema').trim() || 'Esquema'
   const scene = sceneFromSaveExtras(extras)
 
@@ -41,43 +50,47 @@ export async function applyEsquemaSaveBundle(dataUrl, extras, opts = {}) {
     esquema_scene: scene || undefined,
   })
 
-  const adjuntos = Array.isArray(extras?.adjuntos) ? extras.adjuntos : []
-  await applyEsquemaCalcAdjuntos({ adjuntos }, async (adj) => {
+  // Solo memorias / despieces PNG (nunca PDF/DXF/escena como archivo del registro).
+  const registroAdjuntos = filterEsquemaRegistroAdjuntos(extras?.adjuntos)
+    .filter((adj) => {
+      const kind = String(adj.kind || '').toLowerCase()
+      return kind !== 'esquema' && kind !== ESQUEMA_SCENE_KIND
+    })
+
+  await applyEsquemaCalcAdjuntos({ adjuntos: registroAdjuntos }, async (adj) => {
     const kind = adj.kind || 'esquema-calculo'
     const pie = kind === 'memoria-calculo'
       ? 'Memoria de cálculo (PNG)'
       : kind === 'despiece-acero'
         ? 'Cuadro de despiece (PNG)'
-        : kind === 'esquema-pdf'
-          ? 'PDF del esquema'
-          : kind === 'esquema-dxf'
-            ? 'DXF del esquema'
-            : kind === ESQUEMA_SCENE_KIND
-              ? 'Dibujo editable'
-              : 'Adjunto de esquema'
+        : 'Gráfico isométrico'
     await commitImage({
       dataUri: adj.dataUri,
       nombre: adj.nombre,
-      mime: adj.mime,
+      mime: adj.mime || 'image/png',
       origen: adj.origen || 'esquema-calculo',
       kind,
       pie,
       blob: adj.blob || null,
-      georeferenced: adj.georeferenced,
-      layers: adj.layers,
     })
   })
 
   let cloud = null
   if (uploadToCloud && folder && token) {
     try {
+      const exports = extras?.exports || {}
+      const cloudAdjuntos = [
+        ...(Array.isArray(extras?.adjuntos) ? extras.adjuntos : []),
+        ...(exports.pdf ? [{ ...exports.pdf, kind: 'esquema-pdf' }] : []),
+        ...(exports.dxf ? [{ ...exports.dxf, kind: 'esquema-dxf' }] : []),
+      ]
       cloud = await uploadEsquemaAssetBundle({
         token,
         folder,
         title,
         pngDataUri: dataUrl,
         scene,
-        adjuntos,
+        adjuntos: cloudAdjuntos,
         replacePaths,
       })
     } catch (e) {
@@ -85,5 +98,5 @@ export async function applyEsquemaSaveBundle(dataUrl, extras, opts = {}) {
     }
   }
 
-  return { ok: true, scene, cloud }
+  return { ok: true, scene, cloud, exports: extras?.exports || null }
 }

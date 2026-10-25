@@ -189,11 +189,10 @@ import CcModalBrandHeader from '../CcModalBrandHeader'
 import { composeEsquemaExport, isEsquemaPngDataUrl, sceneExportBounds, solidsExportBounds } from './esquemaExport'
 import { composeEsquemaPdf } from './esquemaExportPdf'
 import { composeEsquemaDxf, esquemaDxfToDataUri } from './esquemaExportDxf'
+import { presentEsquemaExportPopup } from './esquemaExportHost'
+import { filterEsquemaRegistroAdjuntos } from './esquemaRegistroAdjuntos'
 import {
   normalizeEsquemaScene,
-  esquemaSceneToDataUri,
-  ESQUEMA_SCENE_KIND,
-  ESQUEMA_SCENE_MIME,
 } from './esquemaScenePersist'
 import { generarEsquemaIa, fetchEsquemaIaUso } from './esquemaIaApi'
 import {
@@ -6484,43 +6483,47 @@ export default function EsquemaEditorModal({
       // Congela cálculos al guardar (ya no se recalculan tras cerrar).
       const { adjuntos: calcAdj, snapshots } = await buildVolumeCalcAdjuntos()
       const despieceAdj = await buildDespieceScheduleAdjuntos()
-      const adjuntos = [...(calcAdj || []), ...(despieceAdj || [])]
-      // Dibujo editable + PDF + DXF (C-OUT-09…12) junto al PNG.
+      // Registro: SOLO PNG (memoria/despiece). PDF/DXF NUNCA van al registro (C-OUT-13).
+      const adjuntos = filterEsquemaRegistroAdjuntos([
+        ...(calcAdj || []),
+        ...(despieceAdj || []),
+      ])
       const sceneSnap = normalizeEsquemaScene({
         ...collectDraftSnapshot(),
         title: titleTxt,
       })
-      const sceneDataUri = sceneSnap ? esquemaSceneToDataUri(sceneSnap) : null
-      if (sceneDataUri) {
-        adjuntos.push({
-          dataUri: sceneDataUri,
-          mime: ESQUEMA_SCENE_MIME,
-          kind: ESQUEMA_SCENE_KIND,
-          origen: 'esquema',
-          nombre: `${titleTxt.replace(/[^\w\-áéíóúÁÉÍÓÚñÑ]+/g, '_').slice(0, 48) || 'esquema'}.scene.json`,
-        })
-      }
+      const safeName = titleTxt.replace(/[^\w\-áéíóúÁÉÍÓÚñÑ]+/g, '_').slice(0, 48) || 'esquema'
+      let exportPdf = null
+      let exportDxf = null
       try {
         const pdfAdj = await composeEsquemaPdf({
           title: titleTxt,
           esquemaPng: composed,
           adjuntos: [...(calcAdj || []), ...(despieceAdj || [])],
         })
-        if (pdfAdj?.dataUri) adjuntos.push(pdfAdj)
+        if (pdfAdj?.dataUri) {
+          exportPdf = {
+            dataUri: pdfAdj.dataUri,
+            mime: 'application/pdf',
+            kind: 'esquema-pdf',
+            origen: 'esquema',
+            nombre: pdfAdj.nombre || `${safeName}.pdf`,
+          }
+        }
       } catch { /* PDF opcional: no bloquea el PNG */ }
       try {
         const dxfRes = composeEsquemaDxf(sceneSnap || collectDraftSnapshot())
         const dxfUri = esquemaDxfToDataUri(dxfRes.dxf)
         if (dxfUri) {
-          adjuntos.push({
+          exportDxf = {
             dataUri: dxfUri,
             mime: 'application/dxf',
             kind: 'esquema-dxf',
             origen: 'esquema',
-            nombre: `${titleTxt.replace(/[^\w\-áéíóúÁÉÍÓÚñÑ]+/g, '_').slice(0, 48) || 'esquema'}.dxf`,
+            nombre: `${safeName}.dxf`,
             georeferenced: !!dxfRes.georeferenced,
             layers: dxfRes.layers,
-          })
+          }
         }
       } catch { /* DXF opcional */ }
       await onSave?.(composed, {
@@ -6530,6 +6533,8 @@ export default function EsquemaEditorModal({
         mime: 'image/png',
         formato: 'png',
         scene: sceneSnap,
+        /** PDF/DXF para nube + popup Exportar; nunca como adjunto del registro. */
+        exports: { pdf: exportPdf, dxf: exportDxf },
         /** Tabla de coordenadas vigente (paridad / sync planilla topografía). */
         coordRows: Array.isArray(coordRowsRef.current)
           ? coordRowsRef.current.map((r) => ({ ...(r || {}) }))
@@ -6540,6 +6545,15 @@ export default function EsquemaEditorModal({
       if (resolvedDraftKeyRef.current) {
         await esquemaDraftClear(resolvedDraftKeyRef.current)
       }
+      // Popup Exportar (descarga al dispositivo); el PNG ya está en el registro.
+      try {
+        await presentEsquemaExportPopup({
+          t,
+          title: titleTxt,
+          pdf: exportPdf,
+          dxf: exportDxf,
+        })
+      } catch { /* no bloquea */ }
     } finally {
       setBusy(false)
     }

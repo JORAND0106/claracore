@@ -118,6 +118,9 @@ describe('contrato · documento', () => {
     assert.match(md, /Archivos del esquema/)
     assert.match(md, /esquemaEditablePdfDxf/)
     assert.match(md, /esquemaDocMinFont/)
+    assert.match(md, /C-OUT-13/)
+    assert.match(md, /siempre como PNG|SIEMPRE.*PNG|siempre.*PNG/i)
+    assert.match(md, /esquemaPngExportar|esquemaRegistroAdjuntos/)
   })
 })
 

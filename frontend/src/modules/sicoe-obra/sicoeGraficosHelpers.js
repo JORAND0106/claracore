@@ -4,13 +4,24 @@
  * Historial de gráficos en so_registros.graficos_historial (jsonb).
  * Si no hay historial pero sí grafico_url, se trata como un único ítem legacy.
  */
+function esExportMalEnHistorial(x) {
+  if (!x) return true
+  const kind = String(x.kind || '').toLowerCase()
+  const mime = String(x.mime || x.mime_type || '').toLowerCase()
+  const nombre = String(x.nombre || x.url || '').toLowerCase()
+  if (kind === 'esquema-dxf' || kind === 'esquema-pdf' || kind === 'esquema-scene') return true
+  if (mime.includes('dxf') || nombre.endsWith('.dxf')) return true
+  return false
+}
+
 export function parseGraficosHistorial(reg) {
   const raw = reg?.graficos_historial
-  if (Array.isArray(raw)) return raw.filter((x) => x && x.url)
+  const filterOk = (x) => x && x.url && !esExportMalEnHistorial(x)
+  if (Array.isArray(raw)) return raw.filter(filterOk)
   if (typeof raw === 'string' && raw.trim()) {
     try {
       const j = JSON.parse(raw)
-      return Array.isArray(j) ? j.filter((x) => x && x.url) : []
+      return Array.isArray(j) ? j.filter(filterOk) : []
     } catch {
       return []
     }

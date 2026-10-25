@@ -18,14 +18,16 @@ function read(rel) {
 }
 
 describe('caso · esquema editable + PDF + DXF + archivos', () => {
-  it('modal emite scene + PDF + DXF al guardar', () => {
+  it('modal emite scene + exports PDF/DXF (no adjuntos de registro)', () => {
     const modal = read('EsquemaEditorModal.jsx')
     assert.match(modal, /initialSceneSnapshot/)
     assert.match(modal, /normalizeEsquemaScene/)
     assert.match(modal, /composeEsquemaPdf/)
     assert.match(modal, /composeEsquemaDxf/)
     assert.match(modal, /scene:\s*sceneSnap/)
-    assert.match(modal, /kind:\s*['"]esquema-dxf['"]/)
+    assert.match(modal, /exports:\s*\{\s*pdf:\s*exportPdf/)
+    assert.match(modal, /presentEsquemaExportPopup/)
+    assert.match(modal, /filterEsquemaRegistroAdjuntos/)
   })
 
   it('Bitácora muestra Editar esquema y Archivos', () => {
@@ -86,13 +88,14 @@ describe('caso · esquema editable + PDF + DXF + archivos', () => {
     assert.equal(r.verify_other_contrato, false)
   })
 
-  it('contrato declara C-OUT-08…12', () => {
+  it('contrato declara C-OUT-08…13', () => {
     const md = read('CONTRATO_ESQUEMA.md')
     assert.match(md, /C-OUT-08/)
     assert.match(md, /C-OUT-09/)
     assert.match(md, /C-OUT-10/)
     assert.match(md, /C-OUT-11/)
     assert.match(md, /C-OUT-12/)
+    assert.match(md, /C-OUT-13/)
     assert.match(md, /1\/55|ancho\/55/)
     assert.match(md, /Editar esquema/)
     assert.match(md, /Archivos del esquema/)

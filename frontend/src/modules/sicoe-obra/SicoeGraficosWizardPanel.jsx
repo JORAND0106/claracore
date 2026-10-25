@@ -151,13 +151,18 @@ export default function SicoeGraficosWizardPanel({
       setEsquemaOpen(false)
       setEsquemaInitialDataUri(null)
       await subirArchivo(file, { origen: 'esquema' })
+      // Solo PNG de memoria/despiece al historial; PDF/DXF no van al registro (C-OUT-13).
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
-      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-        const f = adj.blob
-          ? new File([adj.blob], adj.nombre, { type: adj.mime })
-          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-        if (f) await subirArchivo(f, { origen: adj.origen || 'esquema-calculo' })
-      })
+      const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
+      await applyEsquemaCalcAdjuntos(
+        { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+        async (adj) => {
+          const f = adj.blob
+            ? new File([adj.blob], adj.nombre, { type: adj.mime })
+            : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+          if (f) await subirArchivo(f, { origen: adj.origen || 'esquema-calculo' })
+        },
+      )
     } catch (err) {
       alert('Error guardando esquema: ' + (err?.message || String(err)))
     }

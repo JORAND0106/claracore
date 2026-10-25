@@ -113,6 +113,17 @@ export function slidesFromRegistro(fotoUrlOrLista, graficos = []) {
 export function slidesFromImagenes(imagenes, getUrl) {
   const items = []
   for (const im of imagenes || []) {
+    // No mostrar DXF / paquete PDF / escena como «foto» del registro.
+    const kindLow = String(im?.kind || '').toLowerCase()
+    const mimeLow = String(im?.mime || im?.mime_type || '').toLowerCase()
+    const nameLow = String(im?.nombre || im?.url || im?.blob_path || '').toLowerCase()
+    if (
+      kindLow === 'esquema-dxf'
+      || kindLow === 'esquema-pdf'
+      || kindLow === 'esquema-scene'
+      || mimeLow.includes('dxf')
+      || nameLow.endsWith('.dxf')
+    ) continue
     const url = typeof getUrl === 'function'
       ? getUrl(im)
       : (im?.url || im?.previewUrl || im?.data_uri || im?.blob_url || null)
