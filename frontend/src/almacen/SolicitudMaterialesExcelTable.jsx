@@ -230,8 +230,10 @@ export default function SolicitudMaterialesExcelTable({
               const it = fila.items[0]
               const ev = estadoFilaInsumo(fila.items, sol)
               const desc = descripcionFilaInsumo(fila) || '—'
-              const descTitulo = fila.items.length > 1
-                ? `${desc} — pedido en ${fila.items.length} sectores`
+              const sectores = fila.items.length
+              const descVisible = sectores > 1 ? `${sectores} sectores · ${desc}` : desc
+              const descTitulo = sectores > 1
+                ? `${desc} — pedido en ${sectores} sectores. Cada sector conserva su línea.`
                 : desc
               const faltaInsumo = fila.items.length === 1 && !it.insumo_id && (puedeValidar || destacarSinInsumo)
               const just = fila.variasJustificaciones
@@ -343,7 +345,7 @@ export default function SolicitudMaterialesExcelTable({
                       <Trunc title={fila.capituloTitulo}>{fila.capitulo}</Trunc>
                     </td>
                     <td style={{ ...cellBase(ui), fontWeight: 600, color: faltaInsumo ? contraste.warnText : undefined }}>
-                      <Trunc title={descTitulo}>{desc}</Trunc>
+                      <Trunc title={descTitulo}>{descVisible}</Trunc>
                     </td>
                     <td style={cellBase(ui)} data-testid="linea-justificacion">
                       {just.completo

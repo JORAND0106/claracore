@@ -90,6 +90,41 @@ def test_valor_linea_prioriza_proveedor_elegido_y_si_no_la_ganadora():
     assert svc.valor_linea_proveedor(sin_eleccion, ofertas) == 357
 
 
+def test_listado_conserva_el_precio_guardado_aunque_el_catalogo_cambie():
+    """Solicitud #19: la grilla no revalúa las líneas que ya están en la OC."""
+    ofertas = svc.ofertas_proveedor_desde_row({
+        "cotizaciones_detalle": [
+            {
+                "tipo": "insumo",
+                "proveedor": "SERVIPERFILES CYS",
+                "proveedor_id": 27,
+                "numero": "C-1-59378",
+                "valor": 21260.5,
+                "es_ganadora": True,
+                "impuesto": {"iva": "0.19"},
+            },
+        ],
+    })
+    linea = {
+        "cantidad": 9999.97,
+        "valor_compra_unitario": 4298,
+        "proveedor_seleccionado_id": 27,
+        "proveedor_seleccionado_nombre": "SERVIPERFILES CYS",
+        "cotizacion_numero_seleccionada": "C-1-59378",
+    }
+    catalogo = svc.valor_linea_proveedor(linea, ofertas)
+    guardado = svc.valor_listado_linea(linea, ofertas)
+    assert int(catalogo) == 252999191
+    assert int(guardado) == 42979871
+    sin_precio = {
+        "cantidad": 2,
+        "valor_compra_unitario": 0,
+        "proveedor_seleccionado_id": 27,
+        "cotizacion_numero_seleccionada": "C-1-59378",
+    }
+    assert svc.valor_listado_linea(sin_precio, ofertas) == svc.valor_linea_proveedor(sin_precio, ofertas)
+
+
 class _Resp:
     def __init__(self, data):
         self.data = data

@@ -348,6 +348,28 @@ export function descripcionFilaInsumo(fila) {
   return nombre && nombre !== '—' ? nombre : descripcionCompletaLinea(lineas[0])
 }
 
+/** Cuántas líneas hay y en cuántas filas las dibuja el popup. */
+export function conteoMaterialesSolicitud(items) {
+  const lineas = Array.isArray(items) ? items.length : 0
+  const filas = agruparLineasMismoInsumo(items).length
+  return { lineas, filas, mismoInsumo: filas < lineas }
+}
+
+/** El encabezado dice las dos cifras cuando el mismo insumo se suma en una fila. */
+export function textoMaterialesSolicitados(items) {
+  const { lineas, filas, mismoInsumo } = conteoMaterialesSolicitud(items)
+  if (!mismoInsumo) return `Materiales solicitados (${lineas})`
+  const filasTxt = filas === 1 ? '1 fila' : `${filas} filas`
+  return `Materiales solicitados (${lineas} líneas en ${filasTxt}: el mismo insumo se suma)`
+}
+
+export function textoFilasMismoInsumo(items) {
+  const { lineas, filas, mismoInsumo } = conteoMaterialesSolicitud(items)
+  if (!mismoInsumo) return ''
+  const filasTxt = filas === 1 ? '1 fila' : `${filas} filas`
+  return `${lineas} líneas se ven en ${filasTxt}. Las del mismo insumo se suman; cada sector sigue en su línea y en la orden de compra.`
+}
+
 /** Hermanas del mismo insumo, en el orden de la solicitud. */
 export function sectoresMismoInsumo(items, item) {
   if (!item) return []

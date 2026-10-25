@@ -28,6 +28,8 @@ import {
   puedeAbrirRevisionLinea,
   resumenProveedoresSolicitud,
   totalesCompraSolicitud,
+  textoFilasMismoInsumo,
+  textoMaterialesSolicitados,
   solicitudOrdenesCompra,
   MOTIVO_REABRIR_OC_SIN_PANTALLA,
   solicitudPuedeReabrirOc,
@@ -883,7 +885,7 @@ export default function SolicitudDetalleModal({
                 }}
               >
                 <span style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
-                  📦 Materiales solicitados ({items.length})
+                  📦 {textoMaterialesSolicitados(items)}
                   {esRolRevision && (
                     <span style={{ fontWeight: 500, color: ui.textMuted, marginLeft: 8 }}>
                       — clic en una fila para revisar
@@ -897,6 +899,14 @@ export default function SolicitudDetalleModal({
 
               {materialesOpen && (
                 <>
+                  {textoFilasMismoInsumo(items) && (
+                    <p
+                      data-testid="materiales-mismo-insumo"
+                      style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}
+                    >
+                      {textoFilasMismoInsumo(items)}
+                    </p>
+                  )}
                   <div
                     data-testid="solicitud-resumen-proveedores"
                     style={{
