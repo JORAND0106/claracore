@@ -13,6 +13,8 @@ import {
   detalleSectorLinea,
   estadoFilaInsumo,
   sectoresMismoInsumo,
+  textoFilasMismoInsumo,
+  textoMaterialesSolicitados,
 } from './solicitudDetalleHelpers.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -81,6 +83,22 @@ describe('agrupar líneas del mismo insumo', () => {
     assert.equal(estadoFilaInsumo(filas[1].items, { estado: 'enviada' }), 'pendiente')
   })
 
+  it('el encabezado dice cuántas líneas caben en cada fila', () => {
+    const solo = [{ id: 1, insumo_id: 1, cantidad: 1 }]
+    assert.equal(textoMaterialesSolicitados(solo), 'Materiales solicitados (1)')
+    assert.equal(textoFilasMismoInsumo(solo), '')
+    assert.equal(
+      textoMaterialesSolicitados(items),
+      'Materiales solicitados (4 líneas en 3 filas: el mismo insumo se suma)',
+    )
+    assert.match(textoFilasMismoInsumo(items), /4 líneas se ven en 3 filas/)
+    const diez = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, insumo_id: 93, cantidad: 1 }))
+    assert.equal(
+      textoMaterialesSolicitados(diez),
+      'Materiales solicitados (10 líneas en 1 fila: el mismo insumo se suma)',
+    )
+  })
+
   it('la revisión recupera cada sector del mismo insumo', () => {
     const sectores = sectoresMismoInsumo(items, items[0])
     assert.deepEqual(sectores.map((it) => it.id), [1, 3])
@@ -97,6 +115,9 @@ describe('agrupar líneas del mismo insumo', () => {
     assert.match(tabla, /textoCantidadJuntoValor/)
     assert.match(tabla, /linea-cant-valor/)
     assert.match(tabla, /CANT\. \/ VALOR/)
+    assert.match(tabla, /sectores ·/)
+    assert.match(detalle, /textoMaterialesSolicitados/)
+    assert.match(detalle, /materiales-mismo-insumo/)
     assert.match(revision, /revision-sectores/)
     assert.match(revision, /Dónde se pidió/)
     assert.match(revision, /onSeleccionarSector/)

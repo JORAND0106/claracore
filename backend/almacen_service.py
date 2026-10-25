@@ -1870,6 +1870,18 @@ def valor_linea_proveedor(it: dict, ofertas: Optional[List[dict]] = None) -> Opt
     return producto(cant, unit)
 
 
+def valor_listado_linea(it: dict, ofertas: Optional[List[dict]] = None) -> Optional[float]:
+    """Total de una línea en la grilla. Misma fuente que el popup.
+
+    Si la línea ya tiene valor_compra_unitario, ese es el precio comprometido
+    (y el que copió la OC). La oferta vigente del catálogo solo cubre una línea
+    que todavía no tiene precio guardado.
+    """
+    if _to_float(it.get("valor_compra_unitario")) > 0:
+        return valor_linea_proveedor(it, None)
+    return valor_linea_proveedor(it, ofertas)
+
+
 def _fetch_solicitud_items_resumen(sb, ids: List[int], *, ver_economicos: bool) -> List[dict]:
     """Ítems del listado. Con visibilidad económica trae lo necesario para el total."""
     if not ids:
@@ -1951,7 +1963,7 @@ def _ofertas_insumos_batch(sb, insumo_ids: List[int]) -> Dict[int, List[dict]]:
 
 
 def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
-    """Total de cada solicitud: suma de cantidad × oferta del proveedor de la línea."""
+    """Total de cada solicitud, con la misma fuente que el total del popup."""
     try:
         _hidratar_proveedor_desde_cotizacion(sb, items)
     except Exception:
@@ -1975,7 +1987,7 @@ def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
                 ofertas = ofertas_map.get(int(iid))
             except (TypeError, ValueError):
                 ofertas = None
-        valor = valor_linea_proveedor(it, ofertas)
+        valor = valor_listado_linea(it, ofertas)
         if valor is None:
             continue
         totals[sid] = float(a_decimal(totals.get(sid, 0.0)) + a_decimal(valor))

@@ -205,7 +205,7 @@ def test_resumen_oculta_valor_sin_visibilidad_economica(monkeypatch):
     assert out[0]["lineas_sin_insumo"] == 1
 
 
-def test_resumen_valor_solicitud_usa_proveedor_elegido_o_ganadora(monkeypatch):
+def test_resumen_valor_solicitud_usa_el_precio_guardado(monkeypatch):
     import almacen_service as svc
 
     monkeypatch.setattr(svc, "_map_usuario_nombres", lambda sb, ids: {})
@@ -227,6 +227,15 @@ def test_resumen_valor_solicitud_usa_proveedor_elegido_o_ganadora(monkeypatch):
                 "cantidad": 1,
                 "insumo_id": 100,
                 "valor_compra_unitario": 10,
+            },
+            {
+                "id": 4,
+                "solicitud_id": 10,
+                "cantidad": 1,
+                "insumo_id": 100,
+                "valor_compra_unitario": 0,
+                "proveedor_seleccionado_id": 5,
+                "cotizacion_numero_seleccionada": "C-9",
             },
             {
                 "id": 3,
@@ -286,7 +295,7 @@ def test_resumen_valor_solicitud_usa_proveedor_elegido_o_ganadora(monkeypatch):
     out = _list_solicitudes_resumen(
         _FakeSb(store), rows, contrato_id=1, ver_economicos=True,
     )
-    # 2 × 95,2 (80 × 1,19, elegida) + 1 × 119 (ganadora) = 309,4
-    assert out[0]["valor_solicitud"] == 309.4
+    # Precio guardado: 2 × 119 + 1 × 10. Sin precio, la oferta elegida: 1 × 95,2.
+    assert out[0]["valor_solicitud"] == 343.2
     # Sin cotización de catálogo: cantidad × costo guardado.
     assert out[1]["valor_solicitud"] == 100
