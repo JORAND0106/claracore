@@ -1003,6 +1003,23 @@ def route_proximo_consecutivo_solicitud(contrato_id: int, current_user=Depends(g
     return preview_proximo_consecutivo_solicitud(contrato_id)
 
 
+@router.get("/{contrato_id}/solicitudes/autoria-lineas")
+def route_reporte_autoria_lineas(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Informe de líneas movidas. No escribe.
+
+    Va antes de /solicitudes/{solicitud_id}: si no, «autoria-lineas» se lee como id.
+    """
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return reporte_autoria_lineas(contrato_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/solicitudes/{solicitud_id}")
 def route_get_solicitud(
     contrato_id: int,
@@ -1629,20 +1646,6 @@ def route_trazabilidad_linea(
     if contrato_id is not None:
         _check_contrato(current_user, int(contrato_id))
     return data
-
-
-@router.get("/{contrato_id}/solicitudes/autoria-lineas")
-def route_reporte_autoria_lineas(
-    contrato_id: int,
-    current_user=Depends(get_current_user),
-):
-    """Informe de líneas movidas. No escribe."""
-    _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
-    try:
-        return reporte_autoria_lineas(contrato_id)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
 
 
 @router.post("/{contrato_id}/solicitudes/{solicitud_id}/anular")
