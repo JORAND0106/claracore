@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import { fmtCant, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
 import {
-  itemIdsDeGrupos,
+  itemIdsSeleccionOc,
   totalProveedoresSeleccionados,
 } from './ocProveedoresSeleccion'
 
@@ -21,7 +21,8 @@ export default function OcProveedoresModal({
   const ui = useAlmacenTheme()
   const contraste = almacenContraste(ui)
   const [marcados, setMarcados] = useState(() => grupos.map((g) => g.key))
-  const [abiertos, setAbiertos] = useState({})
+  const [excluidas, setExcluidas] = useState(() => [])
+  const [abiertos, setAbiertos] = useState(() => Object.fromEntries(grupos.map((g) => [g.key, true])))
 
   const total = useMemo(
     () => totalProveedoresSeleccionados(grupos, marcados),
@@ -33,8 +34,20 @@ export default function OcProveedoresModal({
     setMarcados((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
   }
 
+  const lineaIncluida = (id, proveedorMarcado) => (
+    proveedorMarcado && !excluidas.map(String).includes(String(id))
+  )
+
+  const toggleLinea = (id) => {
+    setExcluidas((prev) => (
+      prev.map(String).includes(String(id))
+        ? prev.filter((x) => String(x) !== String(id))
+        : [...prev, id]
+    ))
+  }
+
   const confirmar = () => {
-    const ids = itemIdsDeGrupos(grupos, marcados)
+    const ids = itemIdsSeleccionOc(grupos, marcados, excluidas)
     if (!ids.length) return
     onConfirm?.(ids)
   }
@@ -74,7 +87,7 @@ export default function OcProveedoresModal({
           Proveedores de la orden de compra
         </div>
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 12 }}>
-          Se genera una OC por cada proveedor marcado. Los que queden sin marcar no generan orden y se pueden generar después.
+          Se genera una OC por cada proveedor marcado. Puede dejar fuera líneas sueltas: esas se quedan en esta solicitud y se pueden generar después. Las elegidas pasan a un grupo derivado.
         </div>
         {sinInsumoCount > 0 && (
           <div style={{ ...estiloAvisoAlmacen(contraste, 'warn'), marginBottom: 12, fontSize: 'var(--cc-sm)' }}>
@@ -128,6 +141,7 @@ export default function OcProveedoresModal({
                 <table style={{ width: '100%', marginTop: 8, fontSize: 'var(--cc-sm)' }}>
                   <thead>
                     <tr>
+                      <th style={ui.th}> </th>
                       <th style={ui.th}>Insumo</th>
                       <th style={ui.th}>Cant.</th>
                       {verEconomicos && <th style={ui.th}>V. unit.</th>}
@@ -137,6 +151,16 @@ export default function OcProveedoresModal({
                   <tbody>
                     {g.lineas.map((linea) => (
                       <tr key={linea.id}>
+                        <td style={ui.td}>
+                          <input
+                            type="checkbox"
+                            data-testid="oc-linea-check"
+                            aria-label={`Incluir ${linea.insumo}`}
+                            checked={lineaIncluida(linea.id, marcados.includes(g.key))}
+                            disabled={busy || !marcados.includes(g.key)}
+                            onChange={() => toggleLinea(linea.id)}
+                          />
+                        </td>
                         <td style={ui.td}>{linea.insumo}</td>
                         <td style={ui.td}>{fmtCant(linea.cantidad)} {linea.unidad}</td>
                         {verEconomicos && <td style={ui.td}>{fmtMoney(linea.valorUnitario)}</td>}
@@ -166,7 +190,7 @@ export default function OcProveedoresModal({
             type="button"
             style={ui.btnPrimary}
             data-testid="oc-proveedores-confirmar"
-            disabled={busy || marcados.length === 0}
+            disabled={busy || itemIdsSeleccionOc(grupos, marcados, excluidas).length === 0}
             onClick={confirmar}
           >
             {busy ? 'Generando…' : 'Confirmar'}

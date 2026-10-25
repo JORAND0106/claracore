@@ -18,6 +18,7 @@ import {
   filterSolicitudesLista,
 } from './solicitudesFiltros'
 import {
+  AlmacenHelpIcon,
   ESTADO_SOLICITUD_LABEL,
   fmtFechaAlmacenCorta,
   fmtMoneySolicitud as fmtMoney,
@@ -87,6 +88,20 @@ export default function SolicitudesPanel({
   const [eliminarAviso, setEliminarAviso] = useState('')
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SOLICITUDES_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
+  const [autoriaOpen, setAutoriaOpen] = useState(false)
+  const [autoria, setAutoria] = useState(null)
+  const [autoriaError, setAutoriaError] = useState('')
+
+  useEffect(() => {
+    if (!autoriaOpen) return undefined
+    let vivo = true
+    setAutoria(null)
+    setAutoriaError('')
+    api.reporteAutoriaLineas()
+      .then((r) => { if (vivo) setAutoria(r) })
+      .catch((e) => { if (vivo) setAutoriaError(e.message || 'No se pudo leer el informe.') })
+    return () => { vivo = false }
+  }, [autoriaOpen, api])
   const [agrupar, setAgrupar] = useState(null)
   const [agruparBusy, setAgruparBusy] = useState(false)
   const [agruparError, setAgruparError] = useState('')
@@ -333,6 +348,17 @@ export default function SolicitudesPanel({
               </button>
             </>
           )}
+          {permisos?.esDesarrollador && (
+            <button
+              type="button"
+              style={ui.btnSecondary}
+              data-testid="reporte-autoria-lineas"
+              onClick={() => setAutoriaOpen(true)}
+              title="Informe de líneas movidas. No corrige nada."
+            >
+              Autoría
+            </button>
+          )}
           <button
             type="button"
             style={ui.btnSecondary}
@@ -427,7 +453,12 @@ export default function SolicitudesPanel({
               <tr>
                 <th style={{ ...ui.th, width: 44 }}>#</th>
                 <th style={{ ...ui.th, width: '24%' }}>Título</th>
-                <th style={{ ...ui.th, width: 96 }}>Estado</th>
+                <th style={{ ...ui.th, width: 118 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    Solicitud
+                    <AlmacenHelpIcon ayuda="Estado del documento de la solicitud: borrador, enviada, aprobada, rechazada u OC parcial. No indica si la orden de compra ya se envió al proveedor. Eso se ve en la columna OC." />
+                  </span>
+                </th>
                 <th style={{ ...ui.th, width: '12%' }}>Solicitante</th>
                 <th style={{ ...ui.th, width: '12%' }}>Aprobación</th>
                 <th style={{ ...ui.th, textAlign: 'right', width: 56 }}>Ítems</th>
@@ -507,6 +538,16 @@ export default function SolicitudesPanel({
                       </span>
                     )}
                     <ResalteBusqueda texto={titulo} tokens={tokens} accentSoft={ui.accentSoft} />
+                    {s.solicitud_origen?.consecutivo ? (
+                      <div style={{ fontWeight: 600, fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
+                        Derivada de #{s.solicitud_origen.consecutivo}
+                      </div>
+                    ) : null}
+                    {(s.solicitudes_derivadas || []).length > 0 ? (
+                      <div style={{ fontWeight: 600, fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
+                        Derivó {(s.solicitudes_derivadas || []).map((d) => `#${d.consecutivo}`).join(', ')}
+                      </div>
+                    ) : null}
                     {busquedaActiva && s.busqueda_donde ? (
                       <div
                         data-testid="solicitud-busqueda-donde"
@@ -557,16 +598,28 @@ export default function SolicitudesPanel({
                       fontWeight: 700,
                       whiteSpace: 'nowrap',
                     }}
-                    data-label="Estado"
+                    data-label="Solicitud"
                   >
                     <ResalteBusqueda texto={estadoTxt} tokens={tokens} accentSoft={ui.accentSoft} />
                   </td>
                   <td
                     style={{ ...ui.td, ...cellEllipsis }}
                     data-label="Solicitante"
-                    title={s.solicitante_nombre || undefined}
+                    title={
+                      s.solicitantes_linea_resumen && s.solicitantes_linea_resumen !== s.solicitante_nombre
+                        ? `Líneas pedidas por ${s.solicitantes_linea_resumen}. Solicitud de ${s.solicitante_nombre || '—'}`
+                        : (s.solicitante_nombre || undefined)
+                    }
                   >
-                    <ResalteBusqueda texto={s.solicitante_nombre || '—'} tokens={tokens} accentSoft={ui.accentSoft} />
+                    <ResalteBusqueda
+                      texto={
+                        s.solicitantes_linea_resumen && s.solicitantes_linea_resumen !== s.solicitante_nombre
+                          ? `${s.solicitantes_linea_resumen} · solicitud de ${s.solicitante_nombre || '—'}`
+                          : (s.solicitante_nombre || '—')
+                      }
+                      tokens={tokens}
+                      accentSoft={ui.accentSoft}
+                    />
                   </td>
                   <td
                     style={{ ...ui.td, ...cellEllipsis }}
@@ -846,6 +899,11 @@ export default function SolicitudesPanel({
             setCreating(false)
           }}
           onReabrirOc={(sol) => abrirReabrirOc(sol || { id: detalleId })}
+          onAbrirSolicitud={(id) => {
+            if (id == null) return
+            setDetalleId(id)
+            setDetalleEpoch((n) => n + 1)
+          }}
         />
       )}
 
@@ -887,6 +945,72 @@ export default function SolicitudesPanel({
             <div style={{ marginTop: 10, color: tonoFila.error }}>{eliminarAviso}</div>
           )}
         </CcConfirmModal>
+      )}
+
+      {autoriaOpen && (
+        <div
+          data-testid="reporte-autoria"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100060,
+            background: 'rgba(15,23,42,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => setAutoriaOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            style={{ ...ui.card, width: 'min(720px, 100%)', maxHeight: '90vh', overflow: 'auto', padding: 20 }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-title)', marginBottom: 8 }}>
+              Autoría de líneas movidas
+            </div>
+            <p style={{ margin: '0 0 12px', color: ui.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+              Informe de solo lectura. No restaura solicitantes ni modifica órdenes de compra ya emitidas.
+              Lo que no se puede reconstruir queda marcado.
+            </p>
+            {autoriaError && <div style={{ color: '#b91c1c' }}>{autoriaError}</div>}
+            {!autoria && !autoriaError && <div style={{ color: ui.textMuted }}>Leyendo el log…</div>}
+            {autoria && (
+              <>
+                <div style={{ marginBottom: 8 }}>
+                  Movidas: {autoria.total_movidas}. Se restauraría el solicitante en {autoria.restaurarian}.
+                  Inciertas: {autoria.inciertas}. Ya correctas: {autoria.ya_correctas}.
+                </div>
+                <div style={{ fontSize: 'var(--cc-sm)', marginBottom: 12 }}>{autoria.trazabilidad}</div>
+                <table style={{ width: '100%', fontSize: 'var(--cc-sm)' }}>
+                  <thead>
+                    <tr>
+                      <th style={ui.th}>Línea</th>
+                      <th style={ui.th}>Hoy</th>
+                      <th style={ui.th}>Se restauraría</th>
+                      <th style={ui.th}>Certeza</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(autoria.lineas || []).filter((f) => f.accion !== 'ya_correcto').map((f) => (
+                      <tr key={f.item_id}>
+                        <td style={ui.td}>#{f.item_id} {f.material}</td>
+                        <td style={ui.td}>{f.solicitud_actual_de_nombre || '—'}</td>
+                        <td style={ui.td}>{f.candidato_nombre || f.motivo || '—'}</td>
+                        <td style={ui.td}>{f.cierto ? 'Sí' : 'No'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button type="button" style={ui.btnSecondary} onClick={() => setAutoriaOpen(false)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

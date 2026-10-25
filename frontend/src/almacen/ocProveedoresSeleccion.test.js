@@ -11,6 +11,7 @@ import {
   estadoProveedoresSolicitud,
   gruposProveedorPendientes,
   itemIdsDeGrupos,
+  itemIdsSeleccionOc,
   totalProveedoresSeleccionados,
 } from './ocProveedoresSeleccion.js'
 
@@ -81,7 +82,10 @@ describe('selección de proveedores para la OC', () => {
     const modal = readFileSync(join(dir, 'OcProveedoresModal.jsx'), 'utf8')
     assert.match(modal, /data-testid="oc-proveedores"/)
     assert.match(modal, /data-testid="oc-proveedores-confirmar"/)
-    assert.match(modal, /marcados.length === 0/)
+    assert.match(modal, /data-testid="oc-linea-check"/)
+    const { grupos } = gruposProveedorPendientes(items)
+    assert.deepEqual(itemIdsSeleccionOc(grupos, ['id:8'], [2]), [])
+    assert.match(modal, /itemIdsSeleccionOc\(grupos, marcados, excluidas\)\.length === 0/)
     assert.match(modal, /verEconomicos/)
     const pdf = readFileSync(join(dir, 'SolicitudOcsPdfButton.jsx'), 'utf8')
     assert.match(pdf, /openSolicitudOcsPdf/)

@@ -139,7 +139,10 @@ from almacen_service import (
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
     preview_proximo_consecutivo_solicitud,
+    rechazar_lineas_seleccion,
     rechazar_solicitud,
+    reporte_autoria_lineas,
+    trazabilidad_linea,
     search_transportadores,
     update_config,
     update_solicitud,
@@ -363,6 +366,11 @@ class ValidarItemBody(BaseModel):
 
 class RechazarBody(BaseModel):
     motivo: str = Field(..., min_length=3)
+
+
+class RechazarLineasBody(BaseModel):
+    motivo: str = Field(..., min_length=3)
+    item_ids: List[int]
 
 
 class MensajeSolicitudBody(BaseModel):
@@ -1285,6 +1293,20 @@ def route_aprobar_solicitud(
             valor_nuevo=snapshot_solicitud(result if isinstance(result, dict) else {**prev, "estado": "aprobada"}),
         )
         if isinstance(result, dict):
+            for mov in result.get("movimientos_linea") or []:
+                log_almacen(
+                    current_user,
+                    "MOVER_LINEA_OC",
+                    "solicitud_item",
+                    mov.get("item_id"),
+                    {
+                        "solicitud_origen_id": solicitud_id,
+                        "solicitud_destino_id": (mov.get("despues") or {}).get("solicitud_id"),
+                    },
+                    valor_anterior=mov.get("antes"),
+                    valor_nuevo=mov.get("despues"),
+                )
+        if isinstance(result, dict):
             for oc in result.get("ordenes_compra_generadas") or []:
                 if not isinstance(oc, dict) or not isinstance(oc.get("notificar"), bool):
                     continue
@@ -1323,10 +1345,10 @@ def route_mapear_item_gerencial(
             payload,
         )
         log_almacen(
-            current_user, "MAPEAR_ITEM", "solicitud", solicitud_id,
-            {"item_id": item_id, **{k: payload.get(k) for k in ("insumo_id", "cantidad") if k in payload}},
-            valor_anterior={"item_id": item_id},
-            valor_nuevo={"item_id": item_id, **(payload or {})},
+            current_user, "MAPEAR_ITEM", "solicitud_item", item_id,
+            {"item_id": item_id, "solicitud_id": solicitud_id, **{k: payload.get(k) for k in ("insumo_id", "cantidad") if k in payload}},
+            valor_anterior={"item_id": item_id, "solicitud_id": solicitud_id},
+            valor_nuevo={"item_id": item_id, "solicitud_id": solicitud_id, **(payload or {})},
         )
         return result
     except ValueError as exc:
@@ -1489,11 +1511,12 @@ def route_validar_item_solicitud(
         )
         accion_log = "APROBAR_ITEM" if (body.accion or "").lower().startswith("aprob") else "RECHAZAR_ITEM"
         log_almacen(
-            current_user, accion_log, "solicitud", solicitud_id,
-            {"item_id": item_id, "accion": body.accion, "motivo": body.motivo},
-            valor_anterior={"item_id": item_id, "estado_validacion": "pendiente"},
+            current_user, accion_log, "solicitud_item", item_id,
+            {"item_id": item_id, "solicitud_id": solicitud_id, "accion": body.accion, "motivo": body.motivo},
+            valor_anterior={"item_id": item_id, "solicitud_id": solicitud_id, "estado_validacion": "pendiente"},
             valor_nuevo={
                 "item_id": item_id,
+                "solicitud_id": solicitud_id,
                 "estado_validacion": "aprobado" if accion_log == "APROBAR_ITEM" else "rechazado",
                 "motivo": body.motivo,
             },
@@ -1543,6 +1566,81 @@ def route_rechazar_solicitud(
             valor_nuevo=snapshot_solicitud(result),
         )
         return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/rechazar-lineas")
+def route_rechazar_lineas_solicitud(
+    contrato_id: int,
+    solicitud_id: int,
+    body: RechazarLineasBody,
+    current_user=Depends(get_current_user),
+):
+    """Rechaza solo las líneas enviadas. No rechaza el resto de la solicitud."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "validar")
+    try:
+        result = rechazar_lineas_seleccion(
+            contrato_id, solicitud_id, _uid(current_user), body.item_ids, body.motivo,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    for item_id in result.get("lineas_rechazadas") or []:
+        log_almacen(
+            current_user,
+            "RECHAZAR_LINEA",
+            "solicitud_item",
+            item_id,
+            {"item_id": item_id, "solicitud_id": solicitud_id, "motivo": body.motivo},
+            valor_anterior={"item_id": item_id, "estado_validacion": "pendiente"},
+            valor_nuevo={
+                "item_id": item_id,
+                "estado_validacion": "rechazado",
+                "motivo_rechazo_linea": body.motivo,
+            },
+        )
+    return result
+
+
+@router.get("/lineas/{item_id}/trazabilidad")
+def route_trazabilidad_linea(
+    item_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Ficha de la línea. Visible con Ver en Almacén o con acceso al módulo de Logs."""
+    if not tiene_permiso_almacen(current_user, "ver"):
+        try:
+            from main import _cargo_puede_auditar_logs
+            if not _cargo_puede_auditar_logs(current_user):
+                require_permiso_almacen(current_user, "ver")
+        except HTTPException:
+            raise
+        except Exception:
+            require_permiso_almacen(current_user, "ver")
+    try:
+        data = trazabilidad_linea(
+            item_id,
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    contrato_id = data.get("contrato_id")
+    if contrato_id is not None:
+        _check_contrato(current_user, int(contrato_id))
+    return data
+
+
+@router.get("/{contrato_id}/solicitudes/autoria-lineas")
+def route_reporte_autoria_lineas(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Informe de líneas movidas. No escribe."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    try:
+        return reporte_autoria_lineas(contrato_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

@@ -41,6 +41,7 @@ CRITICAL_MIGRATIONS = (
     "20261021220000_almacen_oc_pdf_version.sql",
     "20261022180000_catalogo_unidad.sql",
     "20261022220000_almacen_dinero_exacto.sql",
+    "20261025150000_almacen_linea_identidad.sql",
 )
 
 _ENSURE_TABLE_SQL = """

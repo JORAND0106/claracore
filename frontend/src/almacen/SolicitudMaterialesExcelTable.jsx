@@ -11,6 +11,7 @@ import {
 } from './solicitudDetalleHelpers'
 import { almacenContraste, colorEstadoLinea } from './almacenContraste'
 import { AlmacenHelpIcon, fmtCant, fmtCant2, fmtMoneySolicitud as fmtMoney, useAlmacenTheme } from './almacenShared'
+import { LineaTrazabilidadButton } from './LineaTrazabilidadModal'
 
 const ROW_H = 36
 
@@ -19,10 +20,12 @@ const COLS = [
   { key: 'item', abbr: 'ÍTEM', tip: 'Ítem y descripción. El texto completo aparece al pasar el cursor.', width: 280 },
   { key: 'just', abbr: 'JUST.', tip: 'Justificación. Se ven las primeras palabras; el texto completo aparece al pasar el cursor.', width: 150 },
   { key: 'prov', abbr: 'PROV.', tip: 'Proveedor elegido en la revisión de línea', width: 150 },
+  { key: 'pidio', abbr: 'PIDIÓ', tip: 'Quién pidió esta línea. No cambia al moverla. La solicitud puede ser de otra persona.', width: 120 },
   { key: 'valor', abbr: 'CANT. / VALOR', tip: 'Cantidad pedida junto al valor de esa cantidad, con IVA incluido', width: 220, align: 'right' },
   { key: 'ubi', abbr: 'UBIC.', tip: 'Abscisa, tramo, PK-ID y mapa', width: 64, align: 'center' },
   { key: 'saldos', abbr: 'SALDOS', tip: 'Saldo negociado y saldo de presupuesto, en cantidades', width: 72, align: 'center' },
-  { key: 'est', abbr: 'EST.', tip: 'Estado de la línea: Aprobado, Rechazado o Pendiente', width: 88 },
+  { key: 'est', abbr: 'EST.', tip: 'Validación de la línea: Aprobado, Rechazado o Pendiente. No es el estado de la solicitud ni el de la orden de compra.', width: 88 },
+  { key: 'traz', abbr: 'TRAZ.', tip: 'Trazabilidad de esta línea: insumo, observación y recorrido.', width: 64 },
 ]
 
 function cellBase(ui, { align = 'left', mono = false } = {}) {
@@ -89,6 +92,14 @@ function textoCantidadJuntoValor(cantidad, unidad, valor, verEconomicos) {
   const cant = `${fmtCant(cantidad)}${unidad ? ` ${unidad}` : ''}`
   if (!verEconomicos || valor == null) return cant
   return `${cant} · ${fmtMoney(valor)}`
+}
+
+function textoPidio(fila, sol) {
+  const nombres = [...new Set((fila?.items || []).map((it) => it.solicitado_por_nombre || 'Sin registro'))]
+  const quien = nombres.length === 1 ? nombres[0] : 'Varios'
+  const de = sol?.solicitante_nombre || sol?.solicitud_de_nombre
+  if (de && quien !== de) return `${quien} · solicitud de ${de}`
+  return quien
 }
 
 function etiquetaEstado(ev) {
@@ -347,6 +358,9 @@ export default function SolicitudMaterialesExcelTable({
                     >
                       <Trunc title={fila.proveedorTitulo}>{fila.proveedor}</Trunc>
                     </td>
+                    <td style={cellBase(ui)} data-testid="linea-pidio">
+                      <Trunc title={textoPidio(fila, sol)}>{textoPidio(fila, sol)}</Trunc>
+                    </td>
                     <td style={cellBase(ui, { align: 'right', mono: true })} data-testid="linea-cant-valor">
                       <Trunc title={cantValor}>{cantValor}</Trunc>
                     </td>
@@ -390,6 +404,20 @@ export default function SolicitudMaterialesExcelTable({
                       <Trunc title={ev === 'varios' ? 'Hay sectores en estados distintos' : etiquetaEstado(ev)}>
                         {etiquetaEstado(ev)}
                       </Trunc>
+                    </td>
+                    <td
+                      style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {fila.items.map((row) => (
+                        <LineaTrazabilidadButton
+                          key={row.id}
+                          token={token}
+                          itemId={row.id}
+                          ui={ui}
+                          compact
+                        />
+                      ))}
                     </td>
                   </tr>
                 </Fragment>

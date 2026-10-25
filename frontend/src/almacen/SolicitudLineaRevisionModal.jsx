@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
+import { LineaTrazabilidadButton } from './LineaTrazabilidadModal'
 import InsumoSearchTable from './InsumoSearchTable'
 import ProveedorOfertaField from './ProveedorOfertaField'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
@@ -446,10 +447,17 @@ export default function SolicitudLineaRevisionModal({
         }}
         >
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div id="solicitud-linea-revision-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
-              {sectores.length > 1
-                ? `Revisión del insumo · ${sectores.length} sectores`
-                : `Revisión de línea ${item.numero_linea != null ? `#${item.numero_linea}` : ''}`}
+            <div id="solicitud-linea-revision-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>
+                {sectores.length > 1
+                  ? `Revisión del insumo · ${sectores.length} sectores`
+                  : `Revisión de línea ${item.numero_linea != null ? `#${item.numero_linea}` : ''}`}
+              </span>
+              <LineaTrazabilidadButton token={token} itemId={item?.id} ui={ui} compact />
+            </div>
+            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
+              Pidió: {item?.solicitado_por_nombre || 'Sin registro'}
+              {sol?.solicitante_nombre ? ` · Solicitud de ${sol.solicitante_nombre}` : ''}
             </div>
             {metaLinea && (
               <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>

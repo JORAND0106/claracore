@@ -384,6 +384,16 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify({ motivo }),
       }).then(parseJson),
 
+    rechazarLineasSolicitud: (id, itemIds, motivo) =>
+      fetch(`${base}/solicitudes/${id}/rechazar-lineas`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ item_ids: itemIds || [], motivo }),
+      }).then(parseJson),
+
+    reporteAutoriaLineas: () =>
+      fetchJson(`${base}/solicitudes/autoria-lineas`, { headers: authHeaders() }),
+
     anularSolicitud: (id) =>
       fetch(`${base}/solicitudes/${id}/anular`, {
         method: 'POST',

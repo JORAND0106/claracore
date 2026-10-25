@@ -104,3 +104,9 @@ export function itemIdsDeGrupos(grupos, claves) {
   }
   return ids
 }
+
+/** Líneas marcadas dentro de los proveedores marcados. */
+export function itemIdsSeleccionOc(grupos, claves, excluidas) {
+  const off = new Set((excluidas || []).map((id) => String(id)))
+  return itemIdsDeGrupos(grupos, claves).filter((id) => !off.has(String(id)))
+}
