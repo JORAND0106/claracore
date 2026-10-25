@@ -14,6 +14,8 @@ import {
   ESQUEMA_DOC_CONTAINER_W,
   ESQUEMA_DOC_MIN_SCREEN_PX,
   ESQUEMA_DOC_TYPE_SCALE,
+  enforceEsquemaMinFontPx,
+  esquemaDocFontHierarchy,
   ESQUEMA_FO_EO_SLOT_H,
 } from './esquemaDocLegibility.js'
 
@@ -190,15 +192,21 @@ export function exportCoordTableMetrics(tableWidth, opts = {}) {
   const boost = Math.max(1, Number(opts.heightBoost) || 1)
   // Tope práctico: tipografía nítida al zoom del PDF / documento.
   const s = Math.min(6.4, base * boost)
+  // C-OUT-08: celdas ≥ ancho/55; encabezados > celdas; título > encabezados.
+  const hier = esquemaDocFontHierarchy(width, { cellPx: Math.round(12 * s) })
+  const bodyFontPx = Math.round(hier.cellPx)
+  const headerFontPx = Math.max(hier.headerPx, Math.round(11 * s))
+  const titleFontPx = Math.max(hier.titlePx, Math.round(13 * s))
+  const rowScale = bodyFontPx / Math.max(1, Math.round(12 * s))
   return {
     scale: s,
     heightBoost: boost,
-    headerH: Math.round(26 * s),
-    rowH: Math.round(24 * s),
-    headerFontPx: Math.round(11 * s),
-    bodyFontPx: Math.round(12 * s),
-    titleFontPx: Math.round(13 * s),
-    titleBlockH: Math.round(22 * s),
+    headerH: Math.round(26 * s * Math.max(1, rowScale)),
+    rowH: Math.round(24 * s * Math.max(1, rowScale)),
+    headerFontPx,
+    bodyFontPx,
+    titleFontPx,
+    titleBlockH: Math.round(22 * s * Math.max(1, titleFontPx / Math.max(1, Math.round(13 * s)))),
     padX: Math.round(8 * s),
     tableGap: Math.round(20 * s),
   }

@@ -3100,6 +3100,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [eliminandoGraf, setEliminandoGraf] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
+  const [esquemaInitialScene, setEsquemaInitialScene] = useState(null)
   const [esquemaCargando, setEsquemaCargando] = useState(false)
   const [cuadroAcerosPreguntaOpen, setCuadroAcerosPreguntaOpen] = useState(false)
   const [cuadroAcerosModal, setCuadroAcerosModal] = useState(null) // { modo, schedule, soloConsulta, placeholderId? }
@@ -3723,6 +3724,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       ...(meta.mime ? { mime: meta.mime, mime_type: meta.mime } : {}),
       ...(meta.nombre ? { nombre: meta.nombre } : {}),
       ...(meta.kind ? { kind: meta.kind } : {}),
+      ...(meta.scene || meta.esquema_scene
+        ? { scene: meta.scene || meta.esquema_scene, esquema_scene: meta.scene || meta.esquema_scene }
+        : {}),
+      ...(meta.esquema_files ? { esquema_files: meta.esquema_files } : {}),
     }
     let baseHist = graficosHistLocal
     if (!baseHist.length && registro.grafico_url && registro.grafico_url !== url) {
@@ -3786,11 +3791,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
-      const meta = origen === 'esquema-calculo'
+      const kindOpt = opts?.kind || null
+      const isDxf = String(file?.type || '').includes('dxf')
+        || String(file?.name || '').toLowerCase().endsWith('.dxf')
+        || kindOpt === 'esquema-dxf'
+      const meta = (origen === 'esquema-calculo' || kindOpt)
         ? {
-          mime: file?.type || (isPdf ? 'application/pdf' : 'image/png'),
+          mime: file?.type || (isPdf ? 'application/pdf' : (isDxf ? 'application/dxf' : 'image/png')),
           nombre: file?.name || null,
-          kind: isPdf ? 'memoria-calculo' : 'grafico-isometrico',
+          kind: kindOpt || (isPdf ? 'memoria-calculo' : (isDxf ? 'esquema-dxf' : 'grafico-isometrico')),
         }
         : {}
       await persistirGraficoEnRegistro(res.url, res.numero ?? numero, origen, meta)
@@ -3821,13 +3830,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if ((!editableGrafico && !autoAbrirEsquema) || esquemaCargando || uploadingGraf) return
     setEsquemaCargando(true)
     try {
+      const { parseEsquemaScene } = await import('./components/esquema/esquemaScenePersist.js')
+      const hist = Array.isArray(graficosHistLocal) ? graficosHistLocal : []
+      const withScene = [...hist].reverse().find((g) => g?.scene || g?.esquema_scene)
+      const scene = parseEsquemaScene(withScene?.scene || withScene?.esquema_scene)
+      setEsquemaInitialScene(scene)
       const base = grafVista || null
-      const dataUri = base ? await urlADataUriParaEsquema(base) : null
+      const dataUri = scene ? null : (base ? await urlADataUriParaEsquema(base) : null)
       setEsquemaInitialDataUri(dataUri)
       setEsquemaOpen(true)
     } catch (e) {
       console.error('abrirEsquemaEditor', e)
       setEsquemaInitialDataUri(null)
+      setEsquemaInitialScene(null)
       setEsquemaOpen(true)
     } finally {
       setEsquemaCargando(false)
@@ -3855,16 +3870,72 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       if (!file) throw new Error('No se pudo convertir el esquema')
       setEsquemaOpen(false)
       setEsquemaInitialDataUri(null)
-      await subirGrafico(file, { origen: 'esquema' })
+      setEsquemaInitialScene(null)
+      const scene = extras?.scene || extras?.esquema_scene || null
+      // Subida directa del PNG principal con escena editable en el historial.
+      {
+        const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-grafico`, { method: 'POST', headers: hdrs })
+        const numRes = await sicoeFetchJsonOThrow(resNum)
+        const numero = sicoeNumeroDesdeNextApi(numRes)
+        if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
+        const prepared = await prepararEsquemaParaUpload(file)
+        const fd = new FormData()
+        fd.append('file', prepared)
+        fd.append('numero', String(numero))
+        fd.append('descripcion', '')
+        const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, {
+          method: 'POST',
+          headers: { Authorization: hdrs.Authorization },
+          body: fd,
+        })
+        const res = await sicoeFetchJsonOThrow(up)
+        await persistirGraficoEnRegistro(res.url, res.numero ?? numero, 'esquema', {
+          mime: 'image/png',
+          kind: 'esquema',
+          scene,
+          esquema_scene: scene,
+        })
+      }
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('./components/esquema/esquemaSaveExtras.js')
       await applyEsquemaCalcAdjuntos(extras, async (adj) => {
+        const kind = String(adj.kind || '')
+        // Escena JSON ya va en meta del PNG; no duplicar como gráfico público.
+        if (kind === 'esquema-scene') return
         const f = adj.blob
           ? new File([adj.blob], adj.nombre, { type: adj.mime })
           : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
         if (!f) return
-        // PNG isométrico y PDF de memoria al historial del registro
-        await subirGrafico(f, { origen: adj.origen || 'esquema-calculo' })
+        const isPdf = kind === 'esquema-pdf' || String(adj.mime || '').includes('pdf')
+        const isDxf = kind === 'esquema-dxf' || String(adj.mime || '').includes('dxf')
+        await subirGrafico(f, {
+          origen: adj.origen || 'esquema-calculo',
+          kind: isPdf ? 'esquema-pdf' : (isDxf ? 'esquema-dxf' : (kind || 'memoria-calculo')),
+        })
       })
+      // Carpeta privada del contrato (PNG/PDF/DXF) si hay token.
+      try {
+        const tok = typeof getToken === 'function' ? getToken() : null
+        if (tok && contrato_id != null) {
+          const { uploadEsquemaAssetBundle } = await import('./components/esquema/esquemaAssetsApi.js')
+          await uploadEsquemaAssetBundle({
+            token: tok,
+            folder: {
+              contratoId: contrato_id,
+              modulo: 'sicoe-obra',
+              reporteId: registro?.reporte_id ?? registro?.numero_reporte,
+              reporteNombre: `reporte-${registro?.numero_reporte ?? registro?.reporte_id ?? ''}`,
+              registroId: registro?.numero_registro ?? registro?.id,
+              registroNombre: extras?.title || 'esquema',
+            },
+            title: extras?.title || `esquema_reg${registro.numero_registro ?? registro.id}`,
+            pngDataUri: dataUrl,
+            scene,
+            adjuntos: extras?.adjuntos || [],
+          })
+        }
+      } catch (cloudErr) {
+        console.warn('esquema assets cloud', cloudErr)
+      }
     } catch (e) {
       alert('Error guardando esquema: ' + (e?.message || String(e)))
     }
@@ -5834,7 +5905,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 ? `Editar esquema · registro ${registro.numero_registro ?? ''}`
                 : `Crear esquema · registro ${registro.numero_registro ?? ''}`}
               initialDataUri={esquemaInitialDataUri}
-              contratoId={registro?.contrato_id}
+              initialSceneSnapshot={esquemaInitialScene}
+              draftModule="sicoe-obra"
+              draftEntityId={registro?.id ?? registro?.numero_registro ?? 'draft'}
+              contratoId={registro?.contrato_id ?? contrato_id}
               iaDoc={{ ambito: 'sicoe_registro', docKey: `sicoe-reg-${registro?.id || registro?.numero_registro || 'local'}` }}
               mapLocation={(() => {
                 const lat = Number(locRegistro?.coordLat ?? registro?.coord_lat)
@@ -5857,7 +5931,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   absFinal,
                 }
               })()}
-              onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
+              onClose={() => {
+                setEsquemaOpen(false)
+                setEsquemaInitialDataUri(null)
+                setEsquemaInitialScene(null)
+              }}
               onSave={guardarEsquemaComoGrafico}
             />
           )}

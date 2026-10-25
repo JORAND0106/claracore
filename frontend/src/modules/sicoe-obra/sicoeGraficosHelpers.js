@@ -106,10 +106,11 @@ function esAdjuntoPdfGrafico(g) {
   const kind = String(g?.kind || '').toLowerCase()
   const nombre = String(g?.nombre || '').toLowerCase()
   const url = String(g?.url || '')
-  // Memoria (PNG o PDF legacy) no debe ser el gráfico principal del registro.
-  if (kind === 'memoria-calculo') return true
-  if (mime.includes('pdf')) return true
+  // Memoria / PDF / DXF / escena no deben ser el gráfico principal del registro.
+  if (kind === 'memoria-calculo' || kind === 'esquema-pdf' || kind === 'esquema-dxf' || kind === 'esquema-scene') return true
+  if (mime.includes('pdf') || mime.includes('dxf') || mime.includes('json')) return true
   if (/\.pdf(\?|$)/i.test(nombre) || /\.pdf(\?|$)/i.test(url)) return true
+  if (/\.dxf(\?|$)/i.test(nombre) || /\.dxf(\?|$)/i.test(url)) return true
   return false
 }
 
