@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
 import OcNotificarProveedorModal from './OcNotificarProveedorModal'
 import SolicitudDetalleModal from './SolicitudDetalleModal'
+import SolicitudFormModal from './SolicitudFormModal'
 import { escucharCambiosAlmacen, publicarCambioAlmacen } from './almacenContratoEvento'
+import { motivoAgregarMaterialesAlmacen, puedeCrearSolicitudAlmacen, puedeEditarSolicitudFormAlmacen, solicitudAlmacenEditable } from './almacenPermisos'
 import { fmtCant, fmtMoneySolicitud as fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import { notificarProveedoresPayload } from './ocNotificarProveedor'
-import { armarTarjetas, lineasSeleccionadasPorSolicitud } from './resumenProveedores'
+import { armarTarjetas, lineasSeleccionadasPorSolicitud, solicitudesOrigen, solicitudesPropiasEditables } from './resumenProveedores'
 
 const COLORES = {
   aprobado: { bg: '#dcfce7', fg: '#166534', label: 'Aprobados' },
@@ -110,6 +112,8 @@ function LineaResumen({
 
 export default function ResumenProveedoresPanel({
   permisos,
+  t,
+  token,
   contratoId,
   refreshSignal = 0,
   onDataLoaded,
@@ -136,6 +140,11 @@ export default function ResumenProveedoresPanel({
   const [notificar, setNotificar] = useState(null)
   const [avisoOc, setAvisoOc] = useState(null)
   const [detalleId, setDetalleId] = useState(null)
+  const [editId, setEditId] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [reabrirOc, setReabrirOc] = useState(false)
+  const [elegir, setElegir] = useState(false)
+  const [propias, setPropias] = useState([])
   const [ajuste, setAjuste] = useState(null)
   const [ofertas, setOfertas] = useState([])
   const [insumos, setInsumos] = useState([])
@@ -186,6 +195,37 @@ export default function ResumenProveedoresPanel({
   }
 
   const seleccion = (tarjeta?.enviados || []).filter((l) => sel.has(l.id))
+  const puedeEscribir = puedeEditarSolicitudFormAlmacen(permisos)
+  const puedeNueva = puedeCrearSolicitudAlmacen(permisos)
+  const origenes = useMemo(() => solicitudesOrigen(tarjeta?.lineas || []), [tarjeta])
+  const idsOrigen = useMemo(() => new Set(origenes.map((s) => String(s.id))), [origenes])
+  const propiasFuera = propias.filter((s) => !idsOrigen.has(String(s.id)) && solicitudAlmacenEditable(s))
+
+  const cerrarForm = () => {
+    setEditId(null)
+    setCreating(false)
+    setReabrirOc(false)
+  }
+
+  const abrirForm = (id, reabrir = false) => {
+    setElegir(false)
+    setDetalleId(null)
+    setCreating(!id)
+    setReabrirOc(Boolean(reabrir && id))
+    setEditId(id || null)
+  }
+
+  const abrirElegir = async () => {
+    setElegir(true)
+    setError('')
+    try {
+      const r = await api.listSolicitudes(null, { resumen: true, limit: 200 })
+      setPropias(solicitudesPropiasEditables(r?.items || [], permisos?.userId))
+    } catch (e) {
+      setPropias([])
+      setError(e.message || 'No se pudieron cargar sus solicitudes.')
+    }
+  }
 
   const generarOc = async (respuestas) => {
     if (!tarjeta || !seleccion.length) return
@@ -431,6 +471,21 @@ export default function ResumenProveedoresPanel({
           <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>
             {[tarjeta.contacto_nombre, tarjeta.contacto_email, tarjeta.contacto_telefono].filter(Boolean).join(' · ') || 'Sin datos de contacto'}
           </div>
+          {puedeEscribir ? (
+            <button
+              type="button"
+              data-testid="resumen-editar-materiales"
+              style={{ ...ui.btnPrimary, marginBottom: 12 }}
+              disabled={busy}
+              onClick={() => { void abrirElegir() }}
+            >
+              Editar / agregar materiales
+            </button>
+          ) : (
+            <p data-testid="motivo-agregar-materiales" style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+              {motivoAgregarMaterialesAlmacen(null, permisos)}
+            </p>
+          )}
 
           <section data-testid="resumen-enviados" style={{ ...ui.card, padding: 12, marginBottom: 10 }}>
             <div style={{ fontWeight: 800, color: COLORES.enviado.fg }}>
@@ -548,10 +603,108 @@ export default function ResumenProveedoresPanel({
         <SolicitudDetalleModal
           solicitudId={detalleId}
           permisos={permisos}
+          token={token}
+          t={t}
+          contratoId={contratoId}
           onClose={() => setDetalleId(null)}
           onOcGenerada={() => { void despues() }}
           onUpdated={() => { void despues() }}
+          onEdit={(sol) => abrirForm(sol?.id || detalleId, false)}
+          onReabrirOc={(sol) => abrirForm(sol?.id || detalleId, true)}
         />
+      )}
+      {(creating || editId) && (
+        <SolicitudFormModal
+          solicitudId={creating ? null : editId}
+          permisos={permisos}
+          t={t}
+          token={token}
+          contratoId={contratoId}
+          modoReabrirOc={reabrirOc}
+          zIndex={reabrirOc ? 100090 : 100056}
+          onClose={cerrarForm}
+          onSaved={(result) => {
+            if (reabrirOc) {
+              cerrarForm()
+              void despues()
+              return
+            }
+            if (result?.estado === 'borrador' && result?.id && creating) {
+              setCreating(false)
+              setEditId(result.id)
+              void despues()
+              return
+            }
+            cerrarForm()
+            void despues()
+          }}
+        />
+      )}
+      {elegir && (
+        <div
+          role="dialog"
+          aria-label="Elegir solicitud"
+          data-testid="resumen-elegir-solicitud"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100040, padding: 16 }}
+          onClick={() => !busy && setElegir(false)}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ ...ui.card, width: 'min(520px, 100%)', padding: 16, maxHeight: '80vh', overflow: 'auto' }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Editar / agregar materiales</div>
+            <p style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+              Editar una línea usa su solicitud de origen: no cambia de solicitud, de número ni de solicitante.
+              Un material nuevo se agrega en una solicitud suya que siga editable, o en una nueva.
+            </p>
+            {error && <div style={{ color: '#991b1b', marginTop: 8, fontSize: 'var(--cc-xs)' }}>{error}</div>}
+            <div style={{ fontWeight: 700, marginTop: 10, fontSize: 'var(--cc-sm)' }}>Solicitudes de estas líneas</div>
+            {origenes.length === 0 && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Este proveedor no tiene líneas todavía.</div>
+            )}
+            {origenes.map((sol) => {
+              const editable = solicitudAlmacenEditable(sol)
+              const motivo = motivoAgregarMaterialesAlmacen(sol, permisos)
+              return (
+                <div key={sol.id} style={{ marginTop: 8 }}>
+                  {editable ? (
+                    <button type="button" style={{ ...ui.btnSecondary, width: '100%', textAlign: 'left' }} onClick={() => abrirForm(sol.id, false)}>
+                      Editar solicitud #{sol.consecutivo}{sol.titulo ? ` · ${sol.titulo}` : ''}
+                    </button>
+                  ) : (
+                    <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                      Solicitud #{sol.consecutivo}: {motivo}
+                      {sol.enOc && (
+                        <button type="button" style={{ ...ui.btnSecondary, marginLeft: 8 }} onClick={() => abrirForm(sol.id, true)}>
+                          Reabrir OC
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            <div style={{ fontWeight: 700, marginTop: 14, fontSize: 'var(--cc-sm)' }}>Agregar en una solicitud mía</div>
+            {propiasFuera.map((sol) => (
+              <button
+                key={sol.id}
+                type="button"
+                style={{ ...ui.btnSecondary, display: 'block', width: '100%', textAlign: 'left', marginTop: 8 }}
+                onClick={() => abrirForm(sol.id, false)}
+              >
+                Solicitud #{sol.consecutivo}{sol.titulo ? ` · ${sol.titulo}` : ''} · {sol.estado}
+              </button>
+            ))}
+            {propiasFuera.length === 0 && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 6 }}>No hay otra solicitud suya en estado editable.</div>
+            )}
+            {puedeNueva && (
+              <button type="button" style={{ ...ui.btnPrimary, marginTop: 12 }} onClick={() => abrirForm(null, false)}>
+                Nueva solicitud
+              </button>
+            )}
+            <div style={{ marginTop: 12 }}>
+              <button type="button" style={ui.btnSecondary} onClick={() => setElegir(false)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
       )}
       {ajuste && (
         <div

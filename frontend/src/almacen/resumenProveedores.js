@@ -125,6 +125,38 @@ export function armarTarjetas(lineas, directorio, opciones = {}) {
   }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
 }
 
+/** Solicitudes de las líneas del proveedor, sin repetir. */
+export function solicitudesOrigen(lineas) {
+  const map = new Map()
+  for (const linea of lineas || []) {
+    const id = linea?.solicitud_id
+    if (id == null || id === '') continue
+    const key = String(id)
+    const enOc = (linea?.numero_oc != null && linea.numero_oc !== '') || Boolean(linea?.en_oc)
+    if (!map.has(key)) {
+      map.set(key, {
+        id,
+        consecutivo: linea.consecutivo,
+        estado: linea.estado_solicitud || '',
+        titulo: linea.titulo || '',
+        enOc,
+      })
+      continue
+    }
+    if (enOc) map.get(key).enOc = true
+  }
+  return [...map.values()]
+}
+
+/** Solicitudes creadas por el usuario y todavía editables. */
+export function solicitudesPropiasEditables(solicitudes, userId) {
+  if (userId == null || userId === '') return []
+  const mio = String(userId)
+  return (solicitudes || []).filter((sol) => (
+    String(sol?.created_by) === mio && String(sol?.estado || '') !== 'aprobada'
+  ))
+}
+
 export function lineasSeleccionadasPorSolicitud(lineas, ids) {
   const elegidos = new Set((ids || []).map((id) => String(id)))
   const porSolicitud = new Map()

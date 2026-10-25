@@ -144,6 +144,226 @@ export function crearLineasPorPk({
   }).filter((ln) => toNum(ln.cantidad) > 0)
 }
 
+function textoVacio(v) {
+  return v == null || String(v).trim() === ''
+}
+
+/**
+ * Reparte `total` según los pesos. El último absorbe el residuo para que
+ * la suma de las partes sea exactamente `total`, sin redondear.
+ */
+export function repartirExacto(total, pesos) {
+  const t = toNum(total)
+  const lista = (pesos || []).map((p) => Math.max(0, toNum(p)))
+  if (!lista.length || !(t > 0)) return lista.map(() => 0)
+  const sumaPesos = lista.reduce((a, b) => a + b, 0)
+  const base = sumaPesos > 0 ? lista : lista.map(() => 1)
+  const sumaBase = base.reduce((a, b) => a + b, 0)
+  let acumulado = 0
+  return base.map((peso, i) => {
+    if (i === base.length - 1) return t - acumulado
+    const parte = t * (peso / sumaBase)
+    acumulado += parte
+    return parte
+  })
+}
+
+function sumaNumeros(valores) {
+  return (valores || []).reduce((a, b) => a + toNum(b), 0)
+}
+
+function resolverRegistros(regs, objetivo, manualReg) {
+  const fijos = []
+  const libres = []
+  for (const reg of regs || []) {
+    if (textoVacio(manualReg[reg.key])) libres.push(reg)
+    else fijos.push(reg)
+  }
+  const sumaFijos = sumaNumeros(fijos.map((r) => manualReg[r.key]))
+  const pedir = {}
+  if (!(regs || []).length) {
+    return { pedir, total: objetivo, ajustado: false }
+  }
+  if (objetivo == null) {
+    if (!fijos.length) return { pedir, total: null, ajustado: false }
+    fijos.forEach((r) => { pedir[r.key] = toNum(manualReg[r.key]) })
+    libres.forEach((r) => { pedir[r.key] = 0 })
+    return { pedir, total: sumaFijos, ajustado: true }
+  }
+  if (!libres.length) {
+    fijos.forEach((r) => { pedir[r.key] = toNum(manualReg[r.key]) })
+    return { pedir, total: sumaFijos, ajustado: Math.abs(sumaFijos - objetivo) > 1e-9 }
+  }
+  const resto = objetivo - sumaFijos
+  if (resto < -1e-9) {
+    fijos.forEach((r) => { pedir[r.key] = toNum(manualReg[r.key]) })
+    libres.forEach((r) => { pedir[r.key] = 0 })
+    return { pedir, total: sumaFijos, ajustado: true }
+  }
+  const partes = repartirExacto(resto, libres.map((r) => r.saldo))
+  fijos.forEach((r) => { pedir[r.key] = toNum(manualReg[r.key]) })
+  libres.forEach((r, i) => { pedir[r.key] = partes[i] || 0 })
+  return { pedir, total: objetivo, ajustado: false }
+}
+
+function asignarPk(pks, objetivoTramo, manualPk, manualReg) {
+  const fijos = pks.filter((pk) => !textoVacio(manualPk[pk.key]))
+  const libres = pks.filter((pk) => textoVacio(manualPk[pk.key]))
+  const sumaFijos = sumaNumeros(fijos.map((pk) => manualPk[pk.key]))
+  const pkTarget = {}
+  fijos.forEach((pk) => { pkTarget[pk.key] = toNum(manualPk[pk.key]) })
+  if (objetivoTramo != null && libres.length) {
+    const resto = objetivoTramo - sumaFijos
+    const partes = resto < -1e-9
+      ? libres.map(() => 0)
+      : repartirExacto(resto, libres.map((pk) => pk.saldo))
+    libres.forEach((pk, i) => { pkTarget[pk.key] = partes[i] || 0 })
+  }
+  const resueltos = {}
+  for (const pk of pks) {
+    const tiene = Object.prototype.hasOwnProperty.call(pkTarget, pk.key)
+    resueltos[pk.key] = resolverRegistros(
+      pk.regs || [],
+      tiene ? pkTarget[pk.key] : null,
+      manualReg,
+    )
+  }
+  return resueltos
+}
+
+/**
+ * Cantidad escrita a mano en tramo, PK-ID o registro.
+ * Lo fijado a mano no se vuelve a repartir. El sobrante del nivel superior
+ * se reparte solo entre lo que sigue libre, en proporción al saldo.
+ * Si lo fijado en un nivel inferior cambia el total, ese nivel queda fijo
+ * y los hermanos libres se recalculan. Si no caben, el total de arriba es la suma.
+ */
+export function calcularRepartoManual(arbol, manual = {}) {
+  const pedir = { tramo: {}, pk: {}, reg: {} }
+  const excede = { tramo: {}, pk: {}, reg: {} }
+  const manualTramo = manual.tramo || {}
+  const manualPk = manual.pk || {}
+  const manualReg = manual.reg || {}
+
+  for (const tramo of arbol || []) {
+    const pks = tramo.pks || []
+    const escrito = !textoVacio(manualTramo[tramo.key])
+    const objetivo = escrito ? toNum(manualTramo[tramo.key]) : null
+    let resueltos = asignarPk(pks, objetivo, manualPk, manualReg)
+
+    if (objetivo != null) {
+      let guard = 0
+      while (guard < pks.length + 2) {
+        guard += 1
+        const bloqueados = new Set(
+          pks
+            .filter((pk) => !textoVacio(manualPk[pk.key]) || resueltos[pk.key]?.ajustado)
+            .map((pk) => pk.key),
+        )
+        const libres = pks.filter((pk) => !bloqueados.has(pk.key))
+        if (!libres.length) break
+        const sumaBloqueados = sumaNumeros(
+          pks.filter((pk) => bloqueados.has(pk.key)).map((pk) => resueltos[pk.key]?.total),
+        )
+        const resto = objetivo - sumaBloqueados
+        const partes = resto < -1e-9
+          ? libres.map(() => 0)
+          : repartirExacto(resto, libres.map((pk) => pk.saldo))
+        const estable = libres.every((pk, i) => (
+          Math.abs(toNum(resueltos[pk.key]?.total) - (partes[i] || 0)) <= 1e-9
+        ))
+        if (estable) break
+        const siguiente = { ...resueltos }
+        libres.forEach((pk, i) => {
+          siguiente[pk.key] = resolverRegistros(pk.regs || [], partes[i] || 0, manualReg)
+        })
+        resueltos = siguiente
+      }
+    }
+
+    let sumaPk = 0
+    let algunPk = false
+    for (const pk of pks) {
+      const res = resueltos[pk.key]
+      if (res?.total == null) continue
+      algunPk = true
+      pedir.pk[pk.key] = res.total
+      sumaPk += toNum(res.total)
+      Object.assign(pedir.reg, res.pedir)
+      if (toNum(res.total) - toNum(pk.saldo) > 1e-9) excede.pk[pk.key] = true
+      for (const reg of pk.regs || []) {
+        if (toNum(res.pedir[reg.key]) - toNum(reg.saldo) > 1e-9) excede.reg[reg.key] = true
+      }
+    }
+    if (objetivo != null) pedir.tramo[tramo.key] = pks.length ? sumaPk : objetivo
+    else if (algunPk && sumaPk > 0) pedir.tramo[tramo.key] = sumaPk
+    if (toNum(pedir.tramo[tramo.key]) - toNum(tramo.saldo) > 1e-9) excede.tramo[tramo.key] = true
+  }
+  return { pedir, excede }
+}
+
+function lineaDePk(pk, registros, cantidad, plantilla, grupoId, grupoEtiqueta) {
+  const regs = registros || []
+  const primary = regs[0] || {}
+  const iniNums = regs.map((r) => toNum(r.abscisa_inicial)).filter((n) => n > 0)
+  const finNums = regs.map((r) => toNum(r.abscisa_final)).filter((n) => n > 0)
+  const ultimo = regs[regs.length - 1] || primary
+  return {
+    descripcion_solicitada: '',
+    es_principal: true,
+    es_recurrente: false,
+    observacion_residente: '',
+    insumo: null,
+    preview: null,
+    valor_compra_unitario: '',
+    ...plantilla,
+    presupuesto_id: primary.presupuesto_id ?? null,
+    presupuesto_ids: regs.map((r) => Number(r.presupuesto_id)),
+    registros_presupuesto: regs,
+    pk_id: String(pk.pk_id).trim(),
+    pk_label: String(pk.pk_id).trim(),
+    pk_id_id: pk.pk_id_id || null,
+    tramo: claveTramo(pk.tramo || primary.tramo),
+    costado: pk.costado || primary.calzada || primary.costado || '',
+    abscisa_inicial: iniNums.length ? Math.min(...iniNums) : (primary.abscisa_inicial ?? ''),
+    abscisa_final: finNums.length ? Math.max(...finNums) : (primary.abscisa_final ?? ''),
+    abs_inicio_display: primary.abs_inicio || '',
+    abs_final_display: ultimo.abs_final || primary.abs_final || '',
+    nodo_inicio: primary.nodo_inicio || '',
+    nodo_final: ultimo.nodo_final || primary.nodo_final || '',
+    cantidad,
+    unidad: primary.unidad || plantilla.unidad || '',
+    grupo_seleccion: grupoId || '',
+    grupo_etiqueta: grupoEtiqueta || '',
+  }
+}
+
+/** Una línea por PK-ID con cantidad pedida mayor que cero. El cero no genera línea. */
+export function lineasDesdePedido({
+  tramos = [],
+  pksByTramo = {},
+  regsByPk = {},
+  pedir = {},
+  plantilla = {},
+  grupoId,
+  grupoEtiqueta,
+}) {
+  const lineas = []
+  for (const trow of tramos) {
+    const tKey = claveTramo(trow.tramo)
+    for (const pk of pksByTramo[tKey] || []) {
+      const pKey = clavePk(pk.tramo ?? trow.tramo, pk.pk_id)
+      const cant = toNum(pedir.pk?.[pKey])
+      if (!(cant > 0)) continue
+      const regs = (regsByPk[pKey] || [])
+        .map((r) => ({ ...r, cantidad: toNum(pedir.reg?.[String(r.presupuesto_id)]) }))
+        .filter((r) => toNum(r.cantidad) > 0)
+      lineas.push(lineaDePk(pk, regs, cant, plantilla, grupoId, grupoEtiqueta))
+    }
+  }
+  return lineas
+}
+
 /** Grupos automáticos presentes en una solicitud (orden de aparición). */
 export function gruposDeLineas(items) {
   const map = new Map()

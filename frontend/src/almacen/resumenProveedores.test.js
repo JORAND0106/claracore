@@ -8,6 +8,8 @@ import {
   armarTarjetas,
   esMiPedido,
   lineasSeleccionadasPorSolicitud,
+  solicitudesOrigen,
+  solicitudesPropiasEditables,
 } from './resumenProveedores.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -85,6 +87,24 @@ describe('resumen por proveedor', () => {
     const porId = Object.fromEntries(grupos.map((g) => [g.solicitudId, g.itemIds]))
     assert.deepEqual(porId[40], [1, 2])
     assert.deepEqual(porId[32], [4])
+  })
+
+  it('elige la solicitud de origen y, para agregar, solo las editables del usuario', () => {
+    const origen = solicitudesOrigen([
+      { solicitud_id: 40, consecutivo: 19, estado_solicitud: 'enviada', numero_oc: null },
+      { solicitud_id: 40, consecutivo: 19, estado_solicitud: 'enviada', numero_oc: 2 },
+      { solicitud_id: 41, consecutivo: 20, estado_solicitud: 'aprobada' },
+    ])
+    assert.equal(origen.length, 2)
+    assert.equal(origen[0].enOc, true)
+    assert.equal(origen[0].estado, 'enviada')
+    assert.equal(origen[1].estado, 'aprobada')
+    const propias = solicitudesPropiasEditables([
+      { id: 1, created_by: 5, estado: 'borrador', consecutivo: 3 },
+      { id: 2, created_by: 5, estado: 'aprobada', consecutivo: 4 },
+      { id: 3, created_by: 9, estado: 'enviada', consecutivo: 5 },
+    ], 5)
+    assert.deepEqual(propias.map((s) => s.id), [1])
   })
 
   it('la pestaña existe y Agrupar ya no está en la grilla', () => {
