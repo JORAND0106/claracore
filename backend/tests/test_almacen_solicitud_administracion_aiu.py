@@ -37,6 +37,42 @@ def test_validate_items_payload_aiu_sin_presupuesto_id():
     assert out[0]["cant_presupuestada"] is None
 
 
+def test_validate_items_payload_aiu_sin_pk_id():
+    raw = [{
+        "presupuesto_capitulo": svc.CAPITULO_ADMINISTRACION_AIU,
+        "presupuesto_item": svc.CAPITULO_ADMINISTRACION_AIU,
+        "cantidad": 2,
+        "descripcion_solicitada": "Papelería de oficina",
+    }]
+
+    def _flags(contrato_id, items, exclude_solicitud_id=None, descontar_linea_actual=True, **_kw):
+        for it in items:
+            it.setdefault("supera_presupuesto", False)
+
+    with patch("almacen_insumos_service.apply_saldo_flags_batch", side_effect=_flags):
+        out = svc._validate_items_payload(raw, contrato_id=1, user_id=7)
+    assert out[0]["pk_id"] is None
+    assert out[0]["presupuesto_id"] is None
+    assert out[0]["tramo"] is None
+
+
+def test_validate_items_payload_obra_sin_pk_id_falla():
+    raw = [{
+        "presupuesto_id": 11,
+        "presupuesto_capitulo": "1",
+        "presupuesto_item": "1.01",
+        "cantidad": 2,
+        "descripcion_solicitada": "Arena lavada",
+    }]
+    ppto = {"id": 11, "capitulo": "1", "item": "1.01", "und": "M3", "cant_total": 10, "contrato_id": 1}
+    with patch.object(svc, "_fetch_ppto_rows_batch", return_value={11: ppto}):
+        try:
+            svc._validate_items_payload(raw, contrato_id=1, user_id=1)
+            assert False, "debía exigir PK-ID"
+        except ValueError as exc:
+            assert "PK-ID" in str(exc)
+
+
 def test_item_for_db_insert_aiu_limpia_presupuesto_id():
     row = svc._item_for_db_insert({
         "capitulo": svc.CAPITULO_ADMINISTRACION_AIU,

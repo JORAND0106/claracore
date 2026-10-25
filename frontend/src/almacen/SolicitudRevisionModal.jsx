@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
@@ -31,6 +31,7 @@ export default function SolicitudRevisionModal({
   contratoId,
   onClose,
   onUpdated,
+  onOcGenerada,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -39,6 +40,7 @@ export default function SolicitudRevisionModal({
   const [sol, setSol] = useState(solicitudInicial || null)
   const [motivo, setMotivo] = useState('')
   const [busy, setBusy] = useState(false)
+  const aprobandoRef = useRef(false)
   const [error, setError] = useState('')
   const [selectorOc, setSelectorOc] = useState(false)
   const [notificarOc, setNotificarOc] = useState(null)
@@ -85,11 +87,12 @@ export default function SolicitudRevisionModal({
   }
 
   const ejecutarAprobar = async (itemIds, notificarProveedores) => {
-    if (!sol) return
+    if (!sol || aprobandoRef.current) return
     if (!itemIds?.length) {
       setError('Seleccione al menos un proveedor.')
       return
     }
+    aprobandoRef.current = true
     setBusy(true)
     setOcProgreso('Generando orden de compra…')
     setError('')
@@ -101,8 +104,9 @@ export default function SolicitudRevisionModal({
       })
       setSelectorOc(false)
       setNotificarOc(null)
-      onUpdated?.(r)
       const ocs = ordenesDeRespuestaAprobar(r)
+      setSol(r)
+      onOcGenerada?.(r)
       if (ocs.length) {
         setAvisoOc({
           sol: r,
@@ -110,12 +114,11 @@ export default function SolicitudRevisionModal({
           envios: Array.isArray(r.envios_oc) ? r.envios_oc : [],
         })
         setExpedienteOcId(ocs[0].id)
-      } else {
-        onClose?.()
       }
     } catch (e) {
       setError(e.message)
     } finally {
+      aprobandoRef.current = false
       setBusy(false)
       setOcProgreso('')
     }

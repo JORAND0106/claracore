@@ -240,7 +240,9 @@ export default function SolicitudFormExcelTable({
                         type="button"
                         title={locked
                           ? 'Línea bloqueada. Use + para agregar un material nuevo.'
-                          : ubicacionResumen(it)}
+                          : esAiu
+                            ? 'Ubicación opcional. Administración (AIU) no exige PK-ID, tramo ni ubicación.'
+                            : ubicacionResumen(it)}
                         disabled={rowDisabled}
                         onClick={() => setUbicacionFlow({ idx, phase: 'mapa' })}
                         style={{
@@ -263,7 +265,7 @@ export default function SolicitudFormExcelTable({
                           marginLeft: 4,
                         }}
                         >
-                          {it.pk_label || it.pk_id || 'PK'}
+                          {it.pk_label || it.pk_id || (esAiu ? 'Opcional' : 'PK')}
                         </span>
                       </button>
                       {!esAiu && (

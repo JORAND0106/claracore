@@ -2262,9 +2262,8 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 raise ValueError("La cantidad debe ser mayor a cero.")
             if len(desc_sol) < 3:
                 raise ValueError("Describa el material solicitado (mínimo 3 caracteres).")
+            # Administración (AIU): la ubicación es opcional. No bloquea guardar ni enviar.
             pk = (raw.get("pk_id") or "").strip()
-            if not pk:
-                raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
             out.append({
                 "presupuesto_id": None,
                 "pk_id": pk or None,
@@ -2305,6 +2304,8 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             if len(desc_sol) < 3:
                 raise ValueError("Describa el material solicitado (mínimo 3 caracteres).")
             pk = (raw.get("pk_id") or ppto.get("pk_id") or "").strip()
+            if not pk:
+                raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
             cap_cobro = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or ppto.get("capitulo") or "").strip()
             item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
             out.append({
@@ -2368,6 +2369,8 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         if not mat:
             raise ValueError("Cada material debe tener descripción.")
         pk = (raw.get("pk_id") or ppto.get("pk_id") or "").strip()
+        if not pk:
+            raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
         cap_cobro = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or ppto.get("capitulo") or "").strip()
         item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
         out.append({
@@ -4325,7 +4328,16 @@ def _crear_oc_con_items(
         proveedor_id=proveedor_id,
         proveedor_nombre=proveedor_nombre,
     )
-    solicitante_firma = _usuario_firma_url(sb, sol.get("created_by"))
+    pidieron = []
+    for it in items or []:
+        try:
+            uid_linea = int(it.get("solicitado_por")) if it.get("solicitado_por") else None
+        except (TypeError, ValueError):
+            uid_linea = None
+        if uid_linea and uid_linea not in pidieron:
+            pidieron.append(uid_linea)
+    firma_de = pidieron[0] if len(pidieron) == 1 else sol.get("created_by")
+    solicitante_firma = _usuario_firma_url(sb, firma_de)
     oc_row = {
         "solicitud_id": solicitud_id,
         "contrato_id": contrato_id,
@@ -4392,20 +4404,71 @@ def _regenerar_pdfs_oc(
             _log.warning("PDF OC %s no regenerado: %s", oc_id, exc)
 
 
+def _resumen_envio_oc_inmediato(oc: dict) -> dict:
+    """Lo que ve el usuario al confirmar la OC, antes del PDF y del correo."""
+    if oc.get("documento_sistema") or oc.get("notificar") is False:
+        return {
+            "orden_compra_id": oc.get("id"),
+            "numero_oc": oc.get("numero_oc"),
+            "proveedor_nombre": oc.get("proveedor_nombre"),
+            "resultado": "sistema",
+            "detalle": "Documento de sistema. El PDF se prepara en segundo plano y no se envía correo.",
+            "destinatarios": [],
+            "envio_estado": None,
+            "documento_sistema": True,
+            "persistido": True,
+        }
+    return {
+        "orden_compra_id": oc.get("id"),
+        "numero_oc": oc.get("numero_oc"),
+        "proveedor_nombre": oc.get("proveedor_nombre"),
+        "resultado": "en_proceso",
+        "detalle": "El PDF y el correo al proveedor se preparan en segundo plano.",
+        "destinatarios": [],
+        "envio_estado": "en_proceso",
+        "persistido": True,
+    }
+
+
 def _lanzar_pdfs_oc(
     contrato_id: int,
     solicitud_id: int,
     user_id: int,
     ocs: List[dict],
+    regenerar: Optional[List[dict]] = None,
 ) -> List[dict]:
-    """Genera el PDF y lo envía al correo de la cotización. No corre en segundo plano."""
-    from almacen_oc_email import publicar_envios_oc
+    """Confirma la OC al instante. El PDF y el correo siguen después, en otro hilo."""
+    pendientes = [_resumen_envio_oc_inmediato(oc) for oc in (ocs or []) if oc.get("id")]
+    ocs_nuevas = [oc for oc in (ocs or []) if oc.get("id")]
+    ocs_regen = [oc for oc in (regenerar or []) if oc.get("id")]
+    if not ocs_nuevas and not ocs_regen:
+        return pendientes
 
-    try:
-        return publicar_envios_oc(contrato_id, solicitud_id, user_id, ocs)
-    except Exception as exc:
-        _log.warning("Envío de OCs solicitud %s: %s", solicitud_id, exc)
-        return []
+    def _trabajo():
+        t0 = time.perf_counter()
+        try:
+            if ocs_regen:
+                _regenerar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_regen)
+            if ocs_nuevas:
+                from almacen_oc_email import publicar_envios_oc
+                publicar_envios_oc(contrato_id, solicitud_id, user_id, ocs_nuevas)
+        except Exception:
+            _log.exception("PDF o correo de la OC, solicitud %s", solicitud_id)
+        else:
+            _log.info(
+                "almacen oc fondo solicitud=%s nuevas=%s regen=%s ms=%s",
+                solicitud_id,
+                len(ocs_nuevas),
+                len(ocs_regen),
+                int((time.perf_counter() - t0) * 1000),
+            )
+
+    threading.Thread(
+        target=_trabajo,
+        name=f"oc-pdf-{solicitud_id}",
+        daemon=True,
+    ).start()
+    return pendientes
 
 
 def agregar_lineas_post_oc(
@@ -4721,7 +4784,7 @@ def append_aprobados_a_oc(
         sb, solicitud_id, user_id, [int(o["id"]) for o in todas],
     )
 
-    result = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    result = get_solicitud(contrato_id, solicitud_id, ligera=True, diferir_secundarios=True)
     primaria = ocs_afectadas[0]
     result["orden_compra_generada"] = primaria
     result["ordenes_compra_generadas"] = ocs_afectadas
@@ -4729,14 +4792,14 @@ def append_aprobados_a_oc(
     result["lineas_agregadas_oc"] = lineas_total
 
     nuevas = {int(o["id"]) for o in ocs_creadas if o.get("id")}
-    _regenerar_pdfs_oc(
-        contrato_id,
-        solicitud_id,
-        user_id,
-        [o for o in ocs_afectadas if int(o.get("id") or 0) not in nuevas],
-    )
     result["envios_oc"] = _envios_oc_respuesta(
-        _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_creadas)
+        _lanzar_pdfs_oc(
+            contrato_id,
+            solicitud_id,
+            user_id,
+            ocs_creadas,
+            regenerar=[o for o in ocs_afectadas if int(o.get("id") or 0) not in nuevas],
+        )
     )
     return result
 
@@ -4758,7 +4821,7 @@ def _marcar_solicitud_aprobada_y_respuesta_ocs(
         sb, solicitud_id, user_id, [int(o["id"]) for o in todas],
     )
 
-    result = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    result = get_solicitud(contrato_id, solicitud_id, ligera=True, diferir_secundarios=True)
     primaria = ocs_creadas[0]
     result["orden_compra_generada"] = primaria
     result["ordenes_compra_generadas"] = ocs_creadas
@@ -5465,6 +5528,7 @@ def _revertir_separacion_oc(sb, separacion: dict, oc_ids: List[int]) -> None:
 
 
 def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: Optional[dict] = None) -> dict:
+    t_oc = time.perf_counter()
     _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     body = body or {}
@@ -5626,6 +5690,11 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             contrato_id, solicitud_id, user_id, items_aprobados, ocs_creadas,
         )
         result["movimientos_linea"] = []
+        result["tiempos_oc_ms"] = {"confirmar": int((time.perf_counter() - t_oc) * 1000)}
+        _log.info(
+            "almacen oc confirmar solicitud=%s lineas=%s ms=%s fondo=pdf_correo",
+            solicitud_id, len(items_aprobados), result["tiempos_oc_ms"]["confirmar"],
+        )
         return result
 
     result = _marcar_solicitud_aprobada_y_respuesta_ocs(
@@ -5635,7 +5704,8 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         _aplicar_estado_tras_generar_oc(
             sb, solicitud_id, user_id, [int(o["id"]) for o in existing_ocs if o.get("id")],
         )
-        padre = get_solicitud(contrato_id, solicitud_id, ligera=True)
+        padre = get_solicitud(contrato_id, solicitud_id, ligera=True, diferir_secundarios=True)
+        result["solicitud_origen"] = padre
         result["solicitud_origen_resultado"] = {
             "id": padre.get("id"),
             "consecutivo": padre.get("consecutivo"),
@@ -5664,6 +5734,11 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         }
         for fila in separacion["filas"]
     ]
+    result["tiempos_oc_ms"] = {"confirmar": int((time.perf_counter() - t_oc) * 1000)}
+    _log.info(
+        "almacen oc confirmar solicitud=%s parcial=1 lineas=%s ms=%s fondo=pdf_correo",
+        solicitud_id, len(items_aprobados), result["tiempos_oc_ms"]["confirmar"],
+    )
     return result
 
 
@@ -6410,11 +6485,33 @@ def _armar_pdf_oc(
         raise ValueError("Contrato no encontrado.")
     aprobador = "—"
     uid_apr = solicitud.get("validada_by") or oc.get("aprobada_por") or user_id
-    names = _map_usuario_nombres(sb, [uid_apr, solicitud.get("created_by")])
+    ids_nombre = [uid_apr, solicitud.get("created_by")]
+    for it in solicitud.get("items") or []:
+        if it.get("solicitado_por") and not it.get("solicitado_por_nombre"):
+            ids_nombre.append(it.get("solicitado_por"))
+    names = _map_usuario_nombres(sb, ids_nombre)
     if uid_apr:
         aprobador = names.get(int(uid_apr), "—")
     if solicitud.get("created_by") and not solicitud.get("solicitante_nombre"):
         solicitud["solicitante_nombre"] = names.get(int(solicitud["created_by"]))
+    for it in solicitud.get("items") or []:
+        if it.get("solicitado_por") and not it.get("solicitado_por_nombre"):
+            try:
+                it["solicitado_por_nombre"] = names.get(int(it["solicitado_por"]))
+            except (TypeError, ValueError):
+                pass
+    from almacen_linea_partida import quien_pidio_de_items
+    ids_oc = {
+        int(it["solicitud_item_id"])
+        for it in (oc.get("items") or [])
+        if it.get("solicitud_item_id")
+    }
+    dueno_solicitud = solicitud.get("solicitante_nombre")
+    solicitud["solicitante_nombre"] = quien_pidio_de_items(
+        solicitud.get("items") or [],
+        {"solicitante_nombre": dueno_solicitud},
+        ids_oc or None,
+    )
 
     sol_items = {int(it["id"]): it for it in (solicitud.get("items") or []) if it.get("id")}
     insumo_ids = sorted({

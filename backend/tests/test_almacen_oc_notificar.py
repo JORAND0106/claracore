@@ -157,3 +157,33 @@ def test_enviar_despues_quita_la_marca(monkeypatch):
     out = enviar_oc_por_correo(1, 8, 7, correo_override="prov@obra.com")
     assert quitados == [8]
     assert out["resultado"] == "enviado"
+
+
+def test_lanzar_pdfs_oc_responde_sin_esperar_el_correo(monkeypatch):
+    import almacen_service as svc
+
+    lanzados = []
+
+    class _Hilo:
+        def __init__(self, target=None, name=None, daemon=None):
+            lanzados.append({"target": target, "name": name, "daemon": daemon})
+
+        def start(self):
+            lanzados[-1]["started"] = True
+
+    monkeypatch.setattr(svc.threading, "Thread", _Hilo)
+    monkeypatch.setattr(
+        "almacen_oc_email.publicar_envios_oc",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no debe correr en la petición")),
+    )
+    out = svc._lanzar_pdfs_oc(1, 2, 7, [{
+        "id": 8, "numero_oc": 4, "proveedor_nombre": "Aceros", "notificar": True,
+    }])
+    assert out[0]["resultado"] == "en_proceso"
+    assert out[0]["numero_oc"] == 4
+    assert lanzados[0]["started"] is True
+    assert lanzados[0]["daemon"] is True
+    sistema = svc._resumen_envio_oc_inmediato({
+        "id": 9, "numero_oc": 5, "documento_sistema": True,
+    })
+    assert sistema["resultado"] == "sistema"

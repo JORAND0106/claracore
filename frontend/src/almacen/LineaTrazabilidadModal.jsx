@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react'
 import { API_BASE } from '../apiBase'
 import { useAlmacenTheme } from './almacenShared'
 
+function textoJustificacion(ficha) {
+  const texto = String(ficha?.justificacion || '').trim()
+  if (!texto) return 'Sin justificación'
+  const autor = [ficha.justificacion_autor_nombre, ficha.justificacion_at].filter(Boolean).join(' · ')
+  return autor ? `${texto} — ${autor}` : texto
+}
+
 function textoValor(valor) {
   if (valor == null || valor === '') return '—'
   if (typeof valor === 'object') {
@@ -45,7 +52,8 @@ export default function LineaTrazabilidadModal({ token, itemId, onClose }) {
   const filas = [
     ['Material solicitado', ficha.material],
     ['Insumo', [ficha.insumo_codigo, ficha.insumo_descripcion].filter(Boolean).join(' — ') || 'Sin insumo'],
-    ['Observación', ficha.observacion || '—'],
+    ['Observación', ficha.observacion || 'Sin observación'],
+    ['Justificación', textoJustificacion(ficha)],
     ['Cantidad', [ficha.cantidad, ficha.unidad].filter((v) => v != null && v !== '').join(' ')],
     ['Proveedor', ficha.proveedor || '—'],
     ['Solicitud', ficha.solicitud_consecutivo != null ? `#${ficha.solicitud_consecutivo}` : '—'],

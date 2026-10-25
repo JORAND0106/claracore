@@ -77,6 +77,14 @@ describe('Administración (AIU)', () => {
     assert.match(src, /isAdministracionAiu\(cap\)/)
   })
 
+  it('la validación real no exige PK-ID en AIU y sí en capítulo de obra', () => {
+    const helpers = readFileSync(join(dir, 'solicitudFormHelpers.js'), 'utf8')
+    const servicio = readFileSync(join(dir, '../../../backend/almacen_service.py'), 'utf8')
+    assert.match(helpers, /if \(!esAiu && !String\(it\.pk_id \|\| ''\)\.trim\(\)\)/)
+    const rama = servicio.split('if es_aiu and desc_sol')[1].split('if desc_sol and not raw')[0]
+    assert.doesNotMatch(rama, /Seleccione la ubicación PK-ID/)
+  })
+
   it('formulario omite control Ppto/Acum/Saldo en AIU', () => {
     const form = readFileSync(join(dir, 'SolicitudForm.jsx'), 'utf8')
     const excel = readFileSync(join(dir, 'SolicitudFormExcelTable.jsx'), 'utf8')

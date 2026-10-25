@@ -39,9 +39,18 @@ export function avisosDocumentoSistemaOc(envios) {
     })
 }
 
+export function avisosEnvioEnProceso(envios) {
+  return (envios || [])
+    .filter((e) => e && e.resultado === 'en_proceso')
+    .map((e) => {
+      const n = e.numero_oc != null ? `OC #${e.numero_oc}` : 'La orden de compra'
+      return `${n}: el PDF y el correo al proveedor se envían en segundo plano.`
+    })
+}
+
 export function avisosEnvioOc(envios) {
   return (envios || [])
-    .filter((e) => e && e.resultado !== 'enviado' && e.resultado !== 'sistema')
+    .filter((e) => e && e.resultado !== 'enviado' && e.resultado !== 'sistema' && e.resultado !== 'en_proceso')
     .map((e) => {
       const n = e.numero_oc != null ? `OC #${e.numero_oc}` : 'La orden de compra'
       const detalle = e.detalle || 'No se pudo enviar el correo al proveedor.'
@@ -51,6 +60,23 @@ export function avisosEnvioOc(envios) {
       }
       return base
     })
+}
+
+/** Fila de la grilla a partir de la solicitud que acaba de quedar con OC, sin esperar el listado. */
+export function filaSolicitudTrasOc(sol, ocsExtra) {
+  if (!sol?.id) return null
+  const propias = Array.isArray(sol.ordenes_compra) ? sol.ordenes_compra.filter((o) => o?.id) : []
+  const extra = (ocsExtra || []).filter((o) => o?.id && String(o.solicitud_id || sol.id) === String(sol.id))
+  const ordenes = propias.length ? propias : extra
+  const items = Array.isArray(sol.items) ? sol.items : []
+  return {
+    ...sol,
+    items: [],
+    items_count: sol.items_count ?? (items.length || undefined),
+    ordenes_compra: ordenes,
+    orden_compra: ordenes[0] || sol.orden_compra || null,
+    tiene_orden_compra: ordenes.length > 0 || Boolean(sol.tiene_orden_compra),
+  }
 }
 
 /** OCs devueltas por aprobar la solicitud (una por proveedor, o la que recibió líneas). */

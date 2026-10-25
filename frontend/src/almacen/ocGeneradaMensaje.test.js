@@ -9,8 +9,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   asuntoInicialOc,
+  avisosEnvioEnProceso,
   avisosEnvioOc,
   etiquetasInicialesOc,
+  filaSolicitudTrasOc,
   mensajeInicialOc,
   ordenesDeRespuestaAprobar,
 } from './ocGeneradaMensaje.js'
@@ -64,5 +66,20 @@ describe('aviso de OC generada', () => {
     assert.match(exp, /data-testid="oc-envios"/)
     assert.match(exp, /data-testid="oc-reenviar-correo"/)
     assert.match(exp, /puedeReenviar/)
+  })
+
+  it('el correo en segundo plano no se muestra como fallo y la grilla toma el número de OC', () => {
+    const proceso = avisosEnvioEnProceso([{ numero_oc: 40, resultado: 'en_proceso' }])
+    assert.equal(proceso.length, 1)
+    assert.match(proceso[0], /OC #40/)
+    assert.equal(avisosEnvioOc([{ numero_oc: 40, resultado: 'en_proceso' }]).length, 0)
+    const fila = filaSolicitudTrasOc(
+      { id: 9, consecutivo: 3, estado: 'aprobada', items: [{ id: 1 }] },
+      [{ id: 70, numero_oc: 40, solicitud_id: 9 }],
+    )
+    assert.equal(fila.orden_compra.numero_oc, 40)
+    assert.equal(fila.tiene_orden_compra, true)
+    assert.deepEqual(fila.items, [])
+    assert.equal(fila.items_count, 1)
   })
 })
