@@ -180,6 +180,35 @@ def test_quien_pidio_sale_de_la_linea():
     assert resumen_solicitantes_linea(["Ana", "Beto"], "Ana") == "Varios"
 
 
+def test_ruta_autoria_se_registra_antes_del_id_de_solicitud():
+    """Si la ruta fija queda después, FastAPI lee «autoria-lineas» como solicitud_id."""
+    src = Path(__file__).resolve().parents[1].joinpath("almacen_routes.py").read_text(encoding="utf-8")
+    autoria = src.index('@router.get("/{contrato_id}/solicitudes/autoria-lineas")')
+    por_id = src.index('@router.get("/{contrato_id}/solicitudes/{solicitud_id}")')
+    assert autoria < por_id
+
+
+def test_autoria_lineas_no_se_parsea_como_entero():
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+
+    router = APIRouter()
+
+    @router.get("/{contrato_id}/solicitudes/autoria-lineas")
+    def fijo(contrato_id: int):
+        return {"ok": True, "contrato_id": contrato_id}
+
+    @router.get("/{contrato_id}/solicitudes/{solicitud_id}")
+    def por_id(contrato_id: int, solicitud_id: int):
+        return {"solicitud_id": solicitud_id}
+
+    app = FastAPI()
+    app.include_router(router)
+    res = TestClient(app).get("/7/solicitudes/autoria-lineas")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+
+
 def test_mover_lineas_no_toca_solicitado_por():
     src = Path(__file__).resolve().parents[1].joinpath("almacen_agrupar.py").read_text(encoding="utf-8")
     bloque = src.split("def _mover_lineas_update", 1)[1].split("def _mover_lineas_bloque", 1)[0]
