@@ -1,6 +1,7 @@
 /**
  * Popup institucional «Exportar» tras Guardar el PNG en el registro.
  * Casillas PDF y DXF; Exportar descarga lo marcado; Cerrar no descarga.
+ * El PNG NO se descarga aquí: ya quedó en el registro (Bitácora, etc.).
  */
 import { useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
@@ -51,12 +52,13 @@ export default function EsquemaExportPopup({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Exportar"
+      aria-label="Exportar esquema"
+      data-testid="esquema-export-popup"
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 20050,
-        background: 'rgba(15,23,42,0.45)',
+        zIndex: 2147483000,
+        background: 'rgba(15,23,42,0.55)',
         display: 'grid',
         placeItems: 'center',
         padding: 16,
@@ -64,22 +66,31 @@ export default function EsquemaExportPopup({
     >
       <div
         style={{
-          width: 'min(400px, 100%)',
+          width: 'min(420px, 100%)',
           background: ui.bg,
           borderRadius: 12,
           border: `1px solid ${ui.border}`,
           padding: 16,
-          boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+          boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
         }}
       >
         <CcModalBrandHeader theme={t} />
-        <div style={{ fontWeight: 800, color: ui.text, fontSize: 16, margin: '8px 0 4px' }}>
+        <div style={{ fontWeight: 800, color: ui.text, fontSize: 17, margin: '8px 0 6px' }}>
           Exportar
         </div>
-        <p style={{ margin: '0 0 14px', color: ui.muted, fontSize: 13, lineHeight: 1.4 }}>
-          El esquema ya quedó guardado como PNG en el registro. Elija los formatos
-          adicionales para descargar a su dispositivo.
+        <p style={{ margin: '0 0 8px', color: ui.text, fontSize: 13, lineHeight: 1.45, fontWeight: 600 }}>
+          El esquema ya quedó guardado como PNG en el registro (Bitácora / documento).
+          No se descarga el PNG aquí.
         </p>
+        <p style={{ margin: '0 0 14px', color: ui.muted, fontSize: 13, lineHeight: 1.4 }}>
+          Si desea además bajar archivos a su computador, marque PDF y/o DXF y oprima Exportar.
+          Si no necesita ninguno, oprima Cerrar.
+        </p>
+        {!hasPdf && !hasDxf && (
+          <p style={{ margin: '0 0 12px', color: '#b91c1c', fontSize: 12 }}>
+            No se pudieron preparar PDF ni DXF en este momento. El PNG del registro sí quedó guardado.
+          </p>
+        )}
         <label style={{
           display: 'flex', alignItems: 'center', gap: 10,
           marginBottom: 10, color: ui.text, fontSize: 14, cursor: hasPdf ? 'pointer' : 'not-allowed',
@@ -92,7 +103,7 @@ export default function EsquemaExportPopup({
             disabled={!hasPdf}
             onChange={(e) => setWantPdf(e.target.checked)}
           />
-          PDF
+          PDF {hasPdf ? '(descargar al computador)' : '(no disponible)'}
         </label>
         <label style={{
           display: 'flex', alignItems: 'center', gap: 10,
@@ -106,7 +117,7 @@ export default function EsquemaExportPopup({
             disabled={!hasDxf}
             onChange={(e) => setWantDxf(e.target.checked)}
           />
-          DXF
+          DXF {hasDxf ? '(descargar al computador)' : '(no disponible)'}
         </label>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
+import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
 import EsquemaEditIcon from '../../components/esquema/EsquemaEditIcon'
 import EsquemaArchivosMenu from '../../components/esquema/EsquemaArchivosMenu'
 import { hasEditableEsquemaScene, parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
@@ -472,6 +473,7 @@ export default function BitacoraAdjuntos({
             setEditTargetIdx(null)
           }}
           onSave={async (dataUrl, extras) => {
+            // Cierra el editor; el PNG se guarda en la entrada (no se descarga al PC).
             setEsquemaOpen(false)
             if (!dataUrl) return
             try {
@@ -526,6 +528,13 @@ export default function BitacoraAdjuntos({
                   registroId: entradaId,
                   registroNombre: extras?.title || 'esquema',
                 },
+              })
+              // Popup Exportar: elegir PDF y/o DXF para bajar al computador.
+              await presentEsquemaExportPopup({
+                t,
+                title: extras?.title || 'Esquema',
+                pdf: extras?.exports?.pdf || null,
+                dxf: extras?.exports?.dxf || null,
               })
             } catch {
               /* error en state */
