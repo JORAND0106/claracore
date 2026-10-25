@@ -6545,7 +6545,8 @@ export default function EsquemaEditorModal({
       if (resolvedDraftKeyRef.current) {
         await esquemaDraftClear(resolvedDraftKeyRef.current)
       }
-      // Popup Exportar (descarga al dispositivo); el PNG ya está en el registro.
+      // Popup Exportar (PDF/DXF al computador). Si el caller (p. ej. Bitácora)
+      // también lo muestra tras onSave, el host evita duplicar.
       try {
         await presentEsquemaExportPopup({
           t,
@@ -6553,7 +6554,9 @@ export default function EsquemaEditorModal({
           pdf: exportPdf,
           dxf: exportDxf,
         })
-      } catch { /* no bloquea */ }
+      } catch (err) {
+        console.error('presentEsquemaExportPopup', err)
+      }
     } finally {
       setBusy(false)
     }

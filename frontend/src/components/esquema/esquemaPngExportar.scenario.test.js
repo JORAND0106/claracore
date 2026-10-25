@@ -41,15 +41,26 @@ describe('caso · PNG siempre + popup Exportar (C-OUT-13)', () => {
     assert.match(src, /extras\?\.exports/)
   })
 
-  it('Bitácora repara lista y no muestra DXF', () => {
+  it('Bitácora repara lista, no muestra DXF y abre popup Exportar tras guardar', () => {
     const bit = readSrc('modules/seguimiento/BitacoraAdjuntos.jsx')
     assert.match(bit, /repairEsquemaRegistroList/)
+    assert.match(bit, /presentEsquemaExportPopup/)
+    assert.match(bit, /extras\?\.exports/)
     const repaired = repairEsquemaRegistroList([
       { origen: 'esquema', kind: 'esquema', url: 'u.dxf', mime: 'application/dxf', nombre: 'a.dxf' },
       { origen: 'esquema', kind: 'esquema', url: 'u.png', mime: 'image/png', nombre: 'a.png' },
     ])
     assert.equal(repaired.length, 1)
     assert.match(repaired[0].url, /\.png/)
+  })
+
+  it('popup Exportar siempre se monta (aunque falte PDF/DXF)', () => {
+    const host = readFileSync(join(__dirname, 'esquemaExportHost.js'), 'utf8')
+    assert.match(host, /data-esquema-export-host/)
+    assert.doesNotMatch(host, /if\s*\(\s*!hasPdf\s*&&\s*!hasDxf\s*\)/)
+    const popup = readFileSync(join(__dirname, 'EsquemaExportPopup.jsx'), 'utf8')
+    assert.match(popup, /No se descarga el PNG aquí/)
+    assert.match(popup, /data-testid="esquema-export-popup"/)
   })
 
   it('cada punto de invocación usa EsquemaEditorModal (paridad PNG)', () => {
