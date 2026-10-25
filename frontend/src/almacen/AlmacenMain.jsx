@@ -5,6 +5,7 @@ import SeccionCatalogoInsumos from '../admin/SeccionCatalogoInsumos'
 import EntradasPanel from './EntradasPanel'
 import InventarioPanel from './InventarioPanel'
 import SalidasPanel from './SalidasPanel'
+import ResumenProveedoresPanel from './ResumenProveedoresPanel'
 import SolicitudesPanel from './SolicitudesPanel'
 import { esCargoAdministrador, puedeCrearSolicitudAlmacen } from './almacenPermisos'
 import {
@@ -17,6 +18,7 @@ import {
 
 const TABS = [
   { id: 'solicitudes', label: 'Solicitudes', icon: '📋', ayuda: 'Crear, consultar y revisar solicitudes de materiales.', ambito: 'almacen' },
+  { id: 'resumen', label: 'Resumen', icon: '🏷️', ayuda: 'Ver las líneas por proveedor, sin moverlas de su solicitud.', ambito: 'almacen' },
   { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso de material contra OC.', ambito: 'entsal' },
   { id: 'salidas', label: 'Salidas', icon: '📤', ayuda: 'Despachar material hacia obra contra entradas por PK-ID.', ambito: 'entsal' },
   { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Capítulo → Ítem → Insumos: valores financieros y rentabilidad.', ambito: 'almacen' },
@@ -297,6 +299,15 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           contratoId={permisos?.contratoId}
           refreshSignal={refreshSignal}
           onDataLoaded={onDataLoaded}
+        />
+      )}
+      {tab === 'resumen' && puedeVerSolicitudesInventario && (
+        <ResumenProveedoresPanel
+          permisos={solicitudesPerms}
+          contratoId={permisos?.contratoId}
+          refreshSignal={refreshSignal}
+          onDataLoaded={onDataLoaded}
+          onVerSolicitudes={() => setTab('solicitudes')}
         />
       )}
       {tab === 'entradas' && puedeVerEntsal && (

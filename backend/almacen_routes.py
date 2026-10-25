@@ -779,6 +779,22 @@ def route_presupuesto_context(
         raise _http_value_error(exc) from exc
 
 
+@router.get("/{contrato_id}/resumen-proveedores")
+def route_resumen_proveedores(contrato_id: int, current_user=Depends(get_current_user)):
+    """Líneas con insumo, agrupadas en el cliente por el proveedor guardado. No escribe."""
+    from almacen_resumen import cargar_resumen_proveedores
+
+    _check_contrato(current_user, contrato_id)
+    require_lectura_almacen(current_user)
+    try:
+        return cargar_resumen_proveedores(
+            contrato_id,
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/solicitudes")
 def route_list_solicitudes(
     contrato_id: int,
@@ -1412,6 +1428,44 @@ def route_cambiar_proveedor_linea_aprobada(
             valor_nuevo=despues,
         )
     return result
+
+
+@router.patch("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/proveedor-resumen")
+def route_cambiar_proveedor_resumen(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    body: CambiarProveedorLineaBody,
+    current_user=Depends(get_current_user),
+):
+    """Cambia el proveedor guardado. La línea sigue en su solicitud y la OC no se toca."""
+    from almacen_resumen import cambiar_proveedor_desde_resumen
+
+    _check_contrato(current_user, contrato_id)
+    try:
+        meta = cambiar_proveedor_desde_resumen(
+            contrato_id,
+            solicitud_id,
+            item_id,
+            _uid(current_user),
+            body.model_dump(exclude_none=True),
+            current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    if meta.get("cambio"):
+        antes = dict(meta.get("antes") or {})
+        despues = dict(meta.get("despues") or {})
+        log_almacen(
+            current_user,
+            "CAMBIAR_PROVEEDOR_LINEA",
+            "solicitud_item",
+            item_id,
+            {"solicitud_id": solicitud_id, "item_id": item_id, "origen": "resumen"},
+            valor_anterior=antes,
+            valor_nuevo=despues,
+        )
+    return meta
 
 
 @router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/mapear-bloque")

@@ -218,6 +218,16 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         })
     },
 
+    resumenProveedores: () =>
+      fetchJson(`${base}/resumen-proveedores`, { headers: authHeaders() }),
+
+    cambiarProveedorResumen: (solicitudId, itemId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/${itemId}/proveedor-resumen`, {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
     countSolicitudes: (estado) => {
       const q = estado ? `?estado=${encodeURIComponent(estado)}` : ''
       return fetch(`${base}/solicitudes-count${q}`, { headers: authHeaders() })

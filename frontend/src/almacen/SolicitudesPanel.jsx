@@ -3,8 +3,6 @@ import SolicitudFormModal from './SolicitudFormModal'
 import SolicitudDetalleModal from './SolicitudDetalleModal'
 import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
 import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
-import AgruparSolicitudesModal from './AgruparSolicitudesModal'
-import DeshacerAgruparModal from './DeshacerAgruparModal'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
   solicitudPuedeReabrirOc,
@@ -104,14 +102,6 @@ export default function SolicitudesPanel({
       .catch((e) => { if (vivo) setAutoriaError(e.message || 'No se pudo leer el informe.') })
     return () => { vivo = false }
   }, [autoriaOpen, api])
-  const [agrupar, setAgrupar] = useState(null)
-  const [agruparBusy, setAgruparBusy] = useState(false)
-  const [agruparError, setAgruparError] = useState('')
-  const [agruparResumen, setAgruparResumen] = useState('')
-  const [agruparFase, setAgruparFase] = useState('')
-  const [deshacer, setDeshacer] = useState(null)
-  const [deshacerError, setDeshacerError] = useState('')
-  const [deshacerResumen, setDeshacerResumen] = useState('')
   const [qInput, setQInput] = useState('')
   const [q, setQ] = useState('')
   const [buscando, setBuscando] = useState(false)
@@ -275,72 +265,6 @@ export default function SolicitudesPanel({
     }
   }
 
-  const abrirAgrupar = async () => {
-    setAgruparBusy(true)
-    setAgruparFase('Leyendo las solicitudes y sus proveedores…')
-    setAgruparError('')
-    setAgruparResumen('')
-    try {
-      const vista = await api.vistaPreviaAgruparSolicitudes()
-      setAgrupar(vista)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setAgruparBusy(false)
-      setAgruparFase('')
-    }
-  }
-
-  const confirmarAgrupar = async (body) => {
-    setAgruparBusy(true)
-    setAgruparFase('Moviendo las líneas y actualizando los nombres…')
-    setAgruparError('')
-    try {
-      const r = await api.agruparSolicitudes(body)
-      setAgrupar(r)
-      setAgruparResumen(r?.resumen || 'Listo.')
-      reload()
-    } catch (e) {
-      setAgruparError(e.message)
-    } finally {
-      setAgruparBusy(false)
-      setAgruparFase('')
-    }
-  }
-
-  const abrirDeshacer = async () => {
-    setAgruparBusy(true)
-    setAgruparFase('Revisando la última agrupación…')
-    setDeshacerError('')
-    setDeshacerResumen('')
-    try {
-      const vista = await api.vistaPreviaDeshacerAgrupar()
-      setDeshacer(vista)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setAgruparBusy(false)
-      setAgruparFase('')
-    }
-  }
-
-  const confirmarDeshacer = async () => {
-    setAgruparBusy(true)
-    setAgruparFase('Devolviendo las líneas a sus solicitudes…')
-    setDeshacerError('')
-    try {
-      const r = await api.deshacerAgrupar()
-      setDeshacer(r)
-      setDeshacerResumen(r?.resumen || 'Listo.')
-      reload()
-    } catch (e) {
-      setDeshacerError(e.message)
-    } finally {
-      setAgruparBusy(false)
-      setAgruparFase('')
-    }
-  }
-
   const formModalOpen = creating || editId
 
   const cerrarFormModal = () => {
@@ -367,30 +291,6 @@ export default function SolicitudesPanel({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {permisos?.editar && (
-            <>
-              <button
-                type="button"
-                style={ui.btnSecondary}
-                data-testid="agrupar-solicitudes"
-                disabled={agruparBusy}
-                onClick={abrirAgrupar}
-                title="Reúne las solicitudes sin OC por proveedor"
-              >
-                {agruparBusy && agruparFase.startsWith('Leyendo') ? 'Leyendo…' : 'Agrupar'}
-              </button>
-              <button
-                type="button"
-                style={ui.btnSecondary}
-                data-testid="deshacer-agrupar"
-                disabled={agruparBusy}
-                onClick={abrirDeshacer}
-                title="Devuelve la última ejecución de Agrupar"
-              >
-                {agruparBusy && agruparFase.startsWith('Revisando') ? 'Revisando…' : 'Deshacer'}
-              </button>
-            </>
-          )}
           {permisos?.esDesarrollador && (
             <button
               type="button"
@@ -837,45 +737,6 @@ export default function SolicitudesPanel({
         <div style={{ textAlign: 'center', marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           Mostrando {lista.length} de {totalCount} solicitudes
         </div>
-      )}
-
-      {agruparBusy && agruparFase && (
-        <div data-testid="agrupar-progreso" style={{ marginBottom: 10, fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
-          {agruparFase}
-        </div>
-      )}
-
-      {agrupar && (
-        <AgruparSolicitudesModal
-          vista={agrupar}
-          verEconomicos={verEconomicos}
-          busy={agruparBusy}
-          error={agruparError}
-          resumen={agruparResumen}
-          fase={agruparFase}
-          onCancel={() => {
-            setAgrupar(null)
-            setAgruparError('')
-            setAgruparResumen('')
-          }}
-          onConfirm={confirmarAgrupar}
-        />
-      )}
-
-      {deshacer && (
-        <DeshacerAgruparModal
-          vista={deshacer}
-          busy={agruparBusy}
-          error={deshacerError}
-          resumen={deshacerResumen}
-          fase={agruparFase}
-          onCancel={() => {
-            setDeshacer(null)
-            setDeshacerError('')
-            setDeshacerResumen('')
-          }}
-          onConfirm={confirmarDeshacer}
-        />
       )}
 
       {filtrosOpen && (
