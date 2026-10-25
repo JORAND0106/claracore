@@ -67,6 +67,8 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "cotizacion_numero_seleccionada",
     "numero_linea",
     "estado_validacion",
+    "motivo_rechazo_linea",
+    "solicitado_por",
     "grupo_seleccion",
     "grupo_etiqueta",
 })
@@ -378,10 +380,16 @@ def _sync_solicitud_items(
                 prev = existing_estado.get(iid)
                 if prev:
                     row["estado_validacion"] = prev
+            from almacen_linea_partida import proteger_autor_linea
+
+            proteger_autor_linea(row)
             to_update.append({"id": iid, **row})
         else:
             if estado in ("enviada", "rechazada") and not row.get("estado_validacion"):
                 row["estado_validacion"] = "pendiente"
+            from almacen_linea_partida import sellar_solicitado_por
+
+            sellar_solicitado_por(row, user_id)
             to_insert.append(row)
 
     if to_update:
@@ -1049,12 +1057,15 @@ def _update_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) ->
     if not callable(upsert):
         for row in rows:
             iid = int(row["id"])
-            body = {k: v for k, v in row.items() if k != "id"}
+            body = {k: v for k, v in row.items() if k != "id" and k != "solicitado_por"}
             _update_solicitud_item_row(sb, iid, body)
         return
     omitted: set[str] = set()
     for i in range(0, len(rows), chunk_size):
-        chunk = [{k: v for k, v in row.items() if k not in omitted} for row in rows[i:i + chunk_size]]
+        chunk = [
+            {k: v for k, v in row.items() if k not in omitted and k != "solicitado_por"}
+            for row in rows[i:i + chunk_size]
+        ]
         strips = 0
         while strips <= 16:
             try:
@@ -1067,7 +1078,10 @@ def _update_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) ->
                 if col in _SOLICITUD_ITEM_CRITICAL_COLUMNS:
                     raise ValueError(_humanize_solicitud_db_error(exc)) from exc
                 omitted.add(col)
-                chunk = [{k: v for k, v in row.items() if k not in omitted} for row in chunk]
+                chunk = [
+                    {k: v for k, v in row.items() if k not in omitted and k != "solicitado_por"}
+                    for row in chunk
+                ]
                 strips += 1
         else:
             raise ValueError(
@@ -1601,7 +1615,91 @@ def _enrich_solicitud(
     )
     sol["resumen_proveedores"] = _resumen_proveedores_solicitud(sol.get("items") or [])
     _attach_justificacion_visible(sol)
+    _attach_parentesco_solicitud(sb, sol)
+    _attach_solicitante_linea(sb, sol)
     return sol
+
+
+def _attach_parentesco_solicitud(sb, sol: dict) -> None:
+    """La solicitud original y el grupo derivado se ven el uno al otro."""
+    origen_id = sol.get("solicitud_origen_id")
+    if origen_id:
+        try:
+            rows = (
+                sb.table("almacen_solicitud")
+                .select("id, consecutivo, titulo, estado")
+                .eq("id", int(origen_id))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if rows:
+                sol["solicitud_origen"] = {
+                    "id": rows[0].get("id"),
+                    "consecutivo": rows[0].get("consecutivo"),
+                    "titulo": rows[0].get("titulo"),
+                    "estado": rows[0].get("estado"),
+                }
+        except Exception:
+            _log.exception("No se pudo leer la solicitud de origen %s", origen_id)
+    try:
+        hijas = (
+            sb.table("almacen_solicitud")
+            .select("id, consecutivo, titulo, estado")
+            .eq("solicitud_origen_id", int(sol["id"]))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _pgrst_unknown_column(exc):
+            hijas = []
+        else:
+            _log.exception("No se pudieron leer los grupos derivados de %s", sol.get("id"))
+            hijas = []
+    sol["solicitudes_derivadas"] = [
+        {
+            "id": h.get("id"),
+            "consecutivo": h.get("consecutivo"),
+            "titulo": h.get("titulo"),
+            "estado": h.get("estado"),
+        }
+        for h in hijas
+    ]
+    if hijas and (sol.get("items") or []) and not sol.get("tiene_orden_compra"):
+        sol["oc_parcial"] = True
+
+
+def _attach_solicitante_linea(sb, sol: dict) -> None:
+    from almacen_linea_partida import resumen_solicitantes_linea
+
+    ids = []
+    for it in sol.get("items") or []:
+        if it.get("solicitado_por"):
+            try:
+                ids.append(int(it["solicitado_por"]))
+            except (TypeError, ValueError):
+                pass
+    nombres = _map_usuario_nombres(sb, ids) if ids else {}
+    de_linea = []
+    for it in sol.get("items") or []:
+        uid = it.get("solicitado_por")
+        try:
+            uid_int = int(uid) if uid not in (None, "") else None
+        except (TypeError, ValueError):
+            uid_int = None
+        if uid_int and nombres.get(uid_int):
+            it["solicitado_por_nombre"] = nombres[uid_int]
+            it["solicitante_linea"] = "linea"
+            de_linea.append(nombres[uid_int])
+        else:
+            it["solicitado_por_nombre"] = None
+            it["solicitante_linea"] = "sin_registro"
+    sol["solicitud_de_nombre"] = sol.get("solicitante_nombre")
+    sol["solicitantes_linea_resumen"] = resumen_solicitantes_linea(
+        de_linea, sol.get("solicitante_nombre"),
+    )
 
 
 def _solicitud_tiene_orden_compra(sol: dict) -> bool:
@@ -1780,7 +1878,7 @@ def _fetch_solicitud_items_resumen(sb, ids: List[int], *, ver_economicos: bool) 
         [
             "id, solicitud_id, estado_validacion, cantidad, valor_compra_unitario, insumo_id, "
             "proveedor_seleccionado_id, proveedor_seleccionado_nombre, "
-            "cotizacion_numero_seleccionada, cotizacion_seleccionada_id",
+            "cotizacion_numero_seleccionada, cotizacion_seleccionada_id, solicitado_por",
             "id, solicitud_id, estado_validacion, cantidad, valor_compra_unitario, insumo_id, "
             "cotizacion_seleccionada_id",
             "id, solicitud_id, estado_validacion, cantidad, valor_compra_unitario, insumo_id",
@@ -1961,7 +2059,44 @@ def _list_solicitudes_resumen(
             user_ids.append(int(r["created_by"]))
         if r.get("validada_by"):
             user_ids.append(int(r["validada_by"]))
+    for it in item_rows:
+        if it.get("solicitado_por"):
+            try:
+                user_ids.append(int(it["solicitado_por"]))
+            except (TypeError, ValueError):
+                pass
+    derivadas_por: Dict[int, List[dict]] = {}
+    if ids:
+        try:
+            hijas = (
+                sb.table("almacen_solicitud")
+                .select("id, consecutivo, titulo, estado, solicitud_origen_id")
+                .in_("solicitud_origen_id", ids)
+                .execute()
+                .data
+                or []
+            )
+            for h in hijas:
+                origen = int(h.get("solicitud_origen_id") or 0)
+                if origen:
+                    derivadas_por.setdefault(origen, []).append(h)
+        except Exception as exc:
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudieron leer solicitudes derivadas: %s", exc)
     names = _map_usuario_nombres(sb, user_ids)
+    sols_por_id = {int(r["id"]): r for r in rows if r.get("id")}
+    padre_de: Dict[int, dict] = {}
+    for origen, hijas_origen in derivadas_por.items():
+        padre = sols_por_id.get(origen) or {}
+        for h in hijas_origen:
+            if not h.get("id"):
+                continue
+            padre_de[int(h["id"])] = {
+                "id": origen,
+                "consecutivo": padre.get("consecutivo"),
+                "titulo": padre.get("titulo"),
+                "estado": padre.get("estado"),
+            }
     # No resolver validadores aquí: _destinatarios_validadores_almacen hace N+1
     # por usuario y ralentiza la grilla incluso con pocas solicitudes.
     # El detalle (GET) sí carga la lista completa para trazabilidad.
@@ -2007,6 +2142,34 @@ def _list_solicitudes_resumen(
             sol["validador_nombre"] = names.get(int(sol["validada_by"]))
         if sol.get("estado") == "enviada":
             sol["validadores_pendientes"] = []
+        hijas = derivadas_por.get(sid) or []
+        sol["solicitudes_derivadas"] = [
+            {
+                "id": h.get("id"),
+                "consecutivo": h.get("consecutivo"),
+                "titulo": h.get("titulo"),
+                "estado": h.get("estado"),
+            }
+            for h in hijas
+        ]
+        if hijas and sol.get("items_count") and not sol.get("tiene_orden_compra"):
+            sol["oc_parcial"] = True
+        if sid in padre_de:
+            sol["solicitud_origen"] = padre_de[sid]
+        from almacen_linea_partida import resumen_solicitantes_linea
+
+        de_linea = []
+        for it in items_por_sol.get(sid) or []:
+            uid = it.get("solicitado_por")
+            try:
+                uid_int = int(uid) if uid not in (None, "") else None
+            except (TypeError, ValueError):
+                uid_int = None
+            if uid_int and names.get(uid_int):
+                de_linea.append(names[uid_int])
+        sol["solicitantes_linea_resumen"] = resumen_solicitantes_linea(
+            de_linea, sol.get("solicitante_nombre"),
+        )
         out.append(sol)
     return out
 
@@ -3699,6 +3862,9 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         row = _item_for_db_insert(it)
         row["solicitud_id"] = sid
         row["numero_linea"] = i
+        from almacen_linea_partida import sellar_solicitado_por
+
+        sellar_solicitado_por(row, user_id)
         if "observacion_residente" in it:
             _aplicar_sello_justificacion(row, None, user_id, autor)
         rows.append(row)
@@ -4299,6 +4465,9 @@ def agregar_lineas_post_oc(
         row["solicitud_id"] = solicitud_id
         row["numero_linea"] = max_linea + i
         row["estado_validacion"] = "pendiente"
+        from almacen_linea_partida import sellar_solicitado_por
+
+        sellar_solicitado_por(row, user_id)
         to_insert.append(row)
     _insert_solicitud_items_batch(sb, to_insert)
 
@@ -5144,7 +5313,16 @@ def validar_item_solicitud(
     if accion == "rechazar" and not (motivo or "").strip():
         raise ValueError("Indique el motivo del rechazo del ítem.")
     upd = {"estado_validacion": nuevo}
-    sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
+    if accion == "rechazar":
+        upd["motivo_rechazo_linea"] = (motivo or "").strip()
+    try:
+        sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
+    except Exception as exc:
+        if _pgrst_unknown_column(exc) == "motivo_rechazo_linea":
+            upd.pop("motivo_rechazo_linea", None)
+            sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
+        else:
+            raise
     _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
@@ -5186,6 +5364,106 @@ def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: 
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
+def _insertar_solicitud_derivada(sb, contrato_id: int, user_id: int, origen: dict) -> dict:
+    """Solicitud nueva que recibe solo las líneas elegidas para la OC."""
+    from almacen_datetime import format_solicitud_titulo
+
+    consecutivo = _next_consecutivo(contrato_id, "almacen_solicitud", "consecutivo")
+    created_at = _now_iso()
+    # El documento derivado sigue siendo de quien pidió la solicitud original.
+    # Quien genera la OC queda como validador, no reemplaza al solicitante.
+    creador = origen.get("created_by") or user_id
+    row = {
+        "contrato_id": int(contrato_id),
+        "consecutivo": consecutivo,
+        "estado": "enviada",
+        "titulo": format_solicitud_titulo(consecutivo, created_at),
+        "created_by": int(creador),
+        "created_at": created_at,
+        "enviada_at": created_at,
+        "solicitud_origen_id": int(origen["id"]),
+    }
+    try:
+        ins = sb.table("almacen_solicitud").insert(row).execute().data or []
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col == "solicitud_origen_id":
+            row.pop("solicitud_origen_id", None)
+            ins = sb.table("almacen_solicitud").insert(row).execute().data or []
+        else:
+            raise
+    if not ins:
+        raise ValueError("No se pudo crear el grupo derivado de la solicitud.")
+    creada = dict(ins[0])
+    creada.setdefault("consecutivo", consecutivo)
+    creada.setdefault("estado", "enviada")
+    creada.setdefault("titulo", row["titulo"])
+    creada.setdefault("created_by", int(creador))
+    return creada
+
+
+def _borrar_solicitud_si_vacia(sb, solicitud_id: int) -> None:
+    lineas = (
+        sb.table("almacen_solicitud_item")
+        .select("id")
+        .eq("solicitud_id", int(solicitud_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if lineas:
+        return
+    sb.table("almacen_solicitud").delete().eq("id", int(solicitud_id)).execute()
+
+
+def _descartar_ocs_recien_creadas(sb, oc_ids: List[int]) -> None:
+    for oc_id in oc_ids or []:
+        try:
+            sb.table("almacen_orden_compra_item").delete().eq("orden_compra_id", int(oc_id)).execute()
+        except Exception:
+            _log.exception("No se pudo retirar las líneas de la OC %s", oc_id)
+        try:
+            sb.table("almacen_orden_compra").delete().eq("id", int(oc_id)).execute()
+        except Exception:
+            _log.exception("No se pudo retirar la OC %s", oc_id)
+
+
+def _abrir_solicitud_derivada_y_mover(
+    sb, contrato_id: int, user_id: int, origen: dict, items: List[dict], item_ids: List[int],
+) -> dict:
+    from almacen_agrupar import _mover_lineas_bloque, _reasignar_mensajes_bloque
+    from almacen_linea_partida import filas_para_mover
+
+    hija = _insertar_solicitud_derivada(sb, contrato_id, user_id, origen)
+    filas = filas_para_mover(items, item_ids, int(hija["id"]))
+    if len(filas) != len({int(x) for x in item_ids}):
+        _borrar_solicitud_si_vacia(sb, int(hija["id"]))
+        raise ValueError("No se pudieron identificar todas las líneas elegidas. No se movió ninguna.")
+    try:
+        _mover_lineas_bloque(sb, filas)
+        _reasignar_mensajes_bloque(sb, filas)
+    except Exception:
+        try:
+            _revertir_separacion_oc(sb, {"solicitud_id": int(hija["id"]), "filas": filas}, [])
+        except Exception:
+            _log.exception("No se pudo devolver las líneas a la solicitud %s", origen.get("id"))
+        raise
+    return {"solicitud_id": int(hija["id"]), "solicitud": hija, "filas": filas}
+
+
+def _revertir_separacion_oc(sb, separacion: dict, oc_ids: List[int]) -> None:
+    from almacen_agrupar import _mover_lineas_bloque, _reasignar_mensajes_bloque
+    from almacen_linea_partida import filas_para_devolver
+
+    _descartar_ocs_recien_creadas(sb, oc_ids)
+    vuelta = filas_para_devolver(separacion.get("filas") or [])
+    if vuelta:
+        _mover_lineas_bloque(sb, vuelta)
+        _reasignar_mensajes_bloque(sb, vuelta)
+    _borrar_solicitud_si_vacia(sb, int(separacion["solicitud_id"]))
+
+
 def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: Optional[dict] = None) -> dict:
     _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
@@ -5196,8 +5474,25 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
     if seleccion is not None and not seleccion:
         raise ValueError("Seleccione al menos un proveedor para generar la orden de compra.")
 
-    # Reapertura: ya hay OC(s) → agregar líneas nuevas (misma OC por proveedor o nueva).
-    if existing_ocs:
+    from almacen_linea_partida import destino_oc, marcar_en_oc
+
+    en_oc_ids = (
+        _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in existing_ocs if o.get("id")])
+        if existing_ocs else set()
+    )
+    decision_rows = (
+        sb.table("almacen_solicitud_item")
+        .select("id, estado_validacion, numero_linea, solicitud_id")
+        .eq("solicitud_id", solicitud_id)
+        .execute()
+        .data
+        or []
+    )
+    modo = destino_oc(marcar_en_oc(decision_rows, en_oc_ids), seleccion, bool(existing_ocs))
+
+    # Reapertura: ya hay OC y se incluyen todas las líneas que todavía faltan.
+    # Una parte de esas líneas no se agrega aquí: pasa a una solicitud derivada.
+    if existing_ocs and modo != "derivada":
         if sol["estado"] not in ("enviada", "aprobada"):
             raise ValueError("Solo se pueden agregar líneas a la OC en solicitudes enviadas o aprobadas.")
         return append_aprobados_a_oc(
@@ -5281,27 +5576,95 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
         )
     _exigir_decision_notificar(body.get("notificar_proveedores"), grupos)
-    ocs_creadas: List[dict] = []
-    for g in grupos:
-        created = _crear_oc_con_items(
-            sb,
-            contrato_id=contrato_id,
-            solicitud_id=solicitud_id,
-            user_id=user_id,
-            sol=sol,
-            body=body,
-            items=g["items"],
-            proveedor_id=g["proveedor_id"],
-            proveedor_nombre=g["proveedor_nombre"],
-            cat_map=g.get("_cat_map"),
-            prov_nombres=g.get("_prov_nombres"),
-            notificaciones=body.get("notificar_proveedores"),
+    separacion = None
+    solicitud_oc_id = solicitud_id
+    sol_oc = sol
+    if modo == "derivada":
+        items_aprobados = [it for it in items_aprobados if int(it["id"]) not in en_oc_ids]
+        if not items_aprobados:
+            raise ValueError("Las líneas elegidas ya están en una orden de compra.")
+        grupos = _agrupar_items_por_proveedor(sb, items_aprobados)
+        separacion = _abrir_solicitud_derivada_y_mover(
+            sb, contrato_id, user_id, sol, fresh_items,
+            [int(it["id"]) for it in items_aprobados],
         )
-        ocs_creadas.append(created)
+        solicitud_oc_id = int(separacion["solicitud_id"])
+        sol_oc = separacion["solicitud"]
+        nuevos = {int(f["item_id"]): f["numero_linea"] for f in separacion["filas"]}
+        for it in items_aprobados:
+            iid = int(it["id"])
+            if iid in nuevos:
+                it["numero_linea"] = nuevos[iid]
+                it["solicitud_id"] = solicitud_oc_id
+    ocs_creadas: List[dict] = []
+    try:
+        for g in grupos:
+            created = _crear_oc_con_items(
+                sb,
+                contrato_id=contrato_id,
+                solicitud_id=solicitud_oc_id,
+                user_id=user_id,
+                sol=sol_oc,
+                body=body,
+                items=g["items"],
+                proveedor_id=g["proveedor_id"],
+                proveedor_nombre=g["proveedor_nombre"],
+                cat_map=g.get("_cat_map"),
+                prov_nombres=g.get("_prov_nombres"),
+                notificaciones=body.get("notificar_proveedores"),
+            )
+            ocs_creadas.append(created)
+    except Exception:
+        if separacion:
+            _revertir_separacion_oc(
+                sb, separacion, [int(o["id"]) for o in ocs_creadas if o.get("id")],
+            )
+        raise
 
-    return _marcar_solicitud_aprobada_y_respuesta_ocs(
-        contrato_id, solicitud_id, user_id, items_aprobados, ocs_creadas,
+    if not separacion:
+        result = _marcar_solicitud_aprobada_y_respuesta_ocs(
+            contrato_id, solicitud_id, user_id, items_aprobados, ocs_creadas,
+        )
+        result["movimientos_linea"] = []
+        return result
+
+    result = _marcar_solicitud_aprobada_y_respuesta_ocs(
+        contrato_id, solicitud_oc_id, user_id, items_aprobados, ocs_creadas,
     )
+    try:
+        _aplicar_estado_tras_generar_oc(
+            sb, solicitud_id, user_id, [int(o["id"]) for o in existing_ocs if o.get("id")],
+        )
+        padre = get_solicitud(contrato_id, solicitud_id, ligera=True)
+        result["solicitud_origen_resultado"] = {
+            "id": padre.get("id"),
+            "consecutivo": padre.get("consecutivo"),
+            "estado": padre.get("estado"),
+            "oc_parcial": padre.get("oc_parcial"),
+            "items_count": len(padre.get("items") or []),
+        }
+    except Exception:
+        _log.exception("La OC quedó creada; no se pudo refrescar la solicitud de origen %s", solicitud_id)
+        result["solicitud_origen_resultado"] = {
+            "id": solicitud_id,
+            "consecutivo": sol.get("consecutivo"),
+        }
+    result["movimientos_linea"] = [
+        {
+            "item_id": fila["item_id"],
+            "antes": {
+                **(fila.get("antes") or {}),
+                "consecutivo": sol.get("consecutivo"),
+            },
+            "despues": {
+                "solicitud_id": solicitud_oc_id,
+                "numero_linea": fila["numero_linea"],
+                "consecutivo": sol_oc.get("consecutivo"),
+            },
+        }
+        for fila in separacion["filas"]
+    ]
+    return result
 
 
 def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo: str) -> dict:
@@ -5321,6 +5684,371 @@ def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo
     }).eq("id", solicitud_id).execute()
     _sincronizar_titulo_solicitud(sb, solicitud_id)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
+
+
+def rechazar_lineas_seleccion(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    item_ids: List[int],
+    motivo: str,
+) -> dict:
+    """Rechaza solo las líneas indicadas. La solicitud completa se rechaza aparte."""
+    from almacen_linea_partida import estado_si_toda_la_solicitud_rechazada
+
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
+    sb = _sb()
+    head = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
+    if head.get("estado") not in ("enviada", "aprobada"):
+        raise ValueError("Solo se pueden rechazar líneas de una solicitud enviada o aprobada.")
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise ValueError("Indique el motivo del rechazo.")
+    ids = []
+    for raw in item_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        raise ValueError("Seleccione al menos una línea.")
+
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id, estado_validacion, numero_linea")
+        .eq("solicitud_id", solicitud_id)
+        .execute()
+        .data
+        or []
+    )
+    por_id = {int(it["id"]): it for it in items if it.get("id")}
+    ajenas = [i for i in ids if i not in por_id]
+    if ajenas:
+        raise ValueError("Hay líneas seleccionadas que no pertenecen a esta solicitud. No se rechazó ninguna.")
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")]) if ocs else set()
+    en_orden = [i for i in ids if i in en_oc]
+    if en_orden:
+        raise ValueError("Hay líneas seleccionadas que ya están en una orden de compra. No se rechazó ninguna.")
+
+    upd = {"estado_validacion": "rechazado", "motivo_rechazo_linea": motivo}
+    try:
+        sb.table("almacen_solicitud_item").update(upd).in_("id", ids).execute()
+    except Exception as exc:
+        if _pgrst_unknown_column(exc) == "motivo_rechazo_linea":
+            upd.pop("motivo_rechazo_linea", None)
+            sb.table("almacen_solicitud_item").update(upd).in_("id", ids).execute()
+        else:
+            raise
+
+    despues = (
+        sb.table("almacen_solicitud_item")
+        .select("id, estado_validacion")
+        .eq("solicitud_id", solicitud_id)
+        .execute()
+        .data
+        or []
+    )
+    paso = estado_si_toda_la_solicitud_rechazada(despues)
+    if paso == "rechazada":
+        sb.table("almacen_solicitud").update({
+            "estado": "rechazada",
+            "validada_at": _now_iso(),
+            "validada_by": user_id,
+            "motivo_rechazo": motivo,
+        }).eq("id", solicitud_id).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
+    sol = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    sol["lineas_rechazadas"] = ids
+    sol["lineas_sin_cambio"] = [int(it["id"]) for it in despues if int(it["id"]) not in set(ids)]
+    sol["solicitud_paso_a_rechazada"] = paso == "rechazada"
+    return sol
+
+
+def _trozos_ids(ids: List[int], size: int = 80):
+    for i in range(0, len(ids), size):
+        yield ids[i:i + size]
+
+
+def trazabilidad_linea(item_id: int, *, ver_economicos: bool = True) -> dict:
+    """Ficha e historial de una línea, solo de esa línea."""
+    from almacen_linea_partida import (
+        evento_es_de_esta_linea,
+        eventos_sinteticos,
+        ficha_linea,
+        presentar_evento,
+    )
+
+    sb = _sb()
+    rows = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Línea de solicitud no encontrada.")
+    item = dict(rows[0])
+    try:
+        sols = (
+            sb.table("almacen_solicitud")
+            .select("id, contrato_id, consecutivo, titulo, created_by, estado, solicitud_origen_id")
+            .eq("id", int(item["solicitud_id"]))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if not _pgrst_unknown_column(exc):
+            raise
+        sols = (
+            sb.table("almacen_solicitud")
+            .select("id, contrato_id, consecutivo, titulo, created_by, estado")
+            .eq("id", int(item["solicitud_id"]))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    if not sols:
+        raise ValueError("Solicitud de la línea no encontrada.")
+    sol = dict(sols[0])
+    insumo = {}
+    if item.get("insumo_id"):
+        ins_rows = (
+            sb.table("almacen_insumo")
+            .select("id, codigo, descripcion")
+            .eq("id", int(item["insumo_id"]))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ins_rows:
+            insumo = dict(ins_rows[0])
+    nombres = _map_usuario_nombres(sb, [item.get("solicitado_por"), sol.get("created_by")])
+    ficha = ficha_linea(item, sol, insumo, nombres=nombres, ver_economicos=ver_economicos)
+
+    logs: List[dict] = []
+    for tipo in ("solicitud_item", "almacen_solicitud_item"):
+        try:
+            logs.extend(
+                sb.table("logs")
+                .select("*")
+                .eq("entidad_tipo", tipo)
+                .eq("entidad_id", str(item_id))
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            _log.exception("No se pudo leer el log %s de la línea %s", tipo, item_id)
+    try:
+        de_solicitud = (
+            sb.table("logs")
+            .select("*")
+            .eq("entidad_tipo", "solicitud")
+            .eq("entidad_id", str(sol["id"]))
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        de_solicitud = []
+    vistos = {row.get("id") for row in logs if row.get("id") is not None}
+    for row in de_solicitud:
+        if row.get("id") in vistos:
+            continue
+        if evento_es_de_esta_linea(row, int(item_id)):
+            logs.append(row)
+
+    oc_items = (
+        sb.table("almacen_orden_compra_item")
+        .select("id, orden_compra_id, solicitud_item_id, cantidad, valor_unitario")
+        .eq("solicitud_item_id", int(item_id))
+        .execute()
+        .data
+        or []
+    )
+    oc_ids = sorted({int(r["orden_compra_id"]) for r in oc_items if r.get("orden_compra_id")})
+    ordenes = []
+    if oc_ids:
+        ordenes = (
+            sb.table("almacen_orden_compra")
+            .select("id, numero_oc, created_at, estado")
+            .in_("id", oc_ids)
+            .execute()
+            .data
+            or []
+        )
+    entrada_items: List[dict] = []
+    entradas: List[dict] = []
+    salidas: List[dict] = []
+    oci_ids = [int(r["id"]) for r in oc_items if r.get("id")]
+    if oci_ids:
+        try:
+            entrada_items = (
+                sb.table("almacen_entrada_item")
+                .select("id, entrada_id, orden_compra_item_id, cantidad_recibida")
+                .in_("orden_compra_item_id", oci_ids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            entrada_items = []
+        ent_ids = sorted({int(r["entrada_id"]) for r in entrada_items if r.get("entrada_id")})
+        if ent_ids:
+            try:
+                entradas = (
+                    sb.table("almacen_entrada")
+                    .select("id, fecha_entrada, created_at")
+                    .in_("id", ent_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception:
+                entradas = []
+        ei_ids = [int(r["id"]) for r in entrada_items if r.get("id")]
+        if ei_ids:
+            try:
+                salidas = (
+                    sb.table("almacen_salida")
+                    .select("id, numero_salida, entrada_item_id, cantidad_salida, fecha_hora_salida, created_at")
+                    .in_("entrada_item_id", ei_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception:
+                salidas = []
+    sinteticos = eventos_sinteticos(
+        int(item_id), oc_items, ordenes, entradas, entrada_items, salidas,
+    )
+    eventos = [presentar_evento(row, ver_economicos=ver_economicos) for row in logs]
+    eventos.extend(presentar_evento(row, ver_economicos=ver_economicos) for row in sinteticos)
+    eventos.sort(key=lambda ev: str(ev.get("cuando") or ""))
+    return {
+        "ficha": ficha,
+        "eventos": eventos,
+        "contrato_id": sol.get("contrato_id"),
+    }
+
+
+def reporte_autoria_lineas(contrato_id: int) -> dict:
+    """Informe de solo lectura. No corrige líneas ni órdenes de compra."""
+    from almacen_linea_partida import armar_reporte_autoria
+
+    sb = _sb()
+    sols = (
+        sb.table("almacen_solicitud")
+        .select("id, consecutivo, created_by, titulo")
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    ids = [int(s["id"]) for s in sols if s.get("id")]
+    items: List[dict] = []
+    selects = (
+        "id, solicitud_id, numero_linea, descripcion_solicitada, material_descripcion, solicitado_por",
+        "id, solicitud_id, numero_linea, descripcion_solicitada, material_descripcion",
+        "id, solicitud_id, numero_linea",
+    )
+    for select in selects:
+        try:
+            items = []
+            for chunk in _trozos_ids(ids, 80):
+                items.extend(
+                    sb.table("almacen_solicitud_item")
+                    .select(select)
+                    .in_("solicitud_id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+            break
+        except Exception as exc:
+            if not _pgrst_unknown_column(exc):
+                raise
+            items = []
+    logs: List[dict] = []
+    item_ids = [int(it["id"]) for it in items if it.get("id")]
+    for chunk in _trozos_ids(item_ids, 50):
+        try:
+            logs.extend(
+                sb.table("logs")
+                .select("id, accion, entidad_tipo, entidad_id, valor_anterior, valor_nuevo, created_at")
+                .eq("accion", "AGRUPAR")
+                .eq("entidad_tipo", "solicitud_item")
+                .in_("entidad_id", [str(i) for i in chunk])
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            _log.exception("No se pudo leer Agrupar para el reporte de autoría")
+            break
+    user_ids = []
+    for s in sols:
+        if s.get("created_by"):
+            user_ids.append(int(s["created_by"]))
+    for it in items:
+        if it.get("solicitado_por"):
+            user_ids.append(int(it["solicitado_por"]))
+    nombres = _map_usuario_nombres(sb, user_ids)
+    reporte = armar_reporte_autoria(items, sols, logs, nombres)
+    reporte["consulta_sql"] = _SQL_REPORTE_AUTORIA
+    reporte["oc_emitidas"] = "No se modifican."
+    return reporte
+
+
+_SQL_REPORTE_AUTORIA = """
+-- Solo lectura. No corrige solicitantes ni órdenes de compra.
+-- Ejecutar después de la migración que agrega almacen_solicitud_item.solicitado_por.
+WITH movimientos AS (
+  SELECT
+    l.entidad_id::bigint AS item_id,
+    l.created_at,
+    NULLIF(l.valor_anterior->>'solicitud_id', '')::bigint AS origen_id,
+    NULLIF(l.valor_nuevo->>'solicitud_id', '')::bigint AS destino_id
+  FROM public.logs l
+  WHERE l.accion = 'AGRUPAR'
+    AND l.entidad_tipo = 'solicitud_item'
+    AND l.entidad_id ~ '^[0-9]+$'
+),
+primero AS (
+  SELECT DISTINCT ON (item_id) item_id, created_at, origen_id
+  FROM movimientos
+  WHERE origen_id IS NOT NULL
+  ORDER BY item_id, created_at ASC
+)
+SELECT
+  i.id AS item_id,
+  i.solicitud_id AS solicitud_actual_id,
+  sa.created_by AS solicitud_actual_de,
+  i.solicitado_por,
+  p.origen_id,
+  so.created_by AS candidato_solicitado_por,
+  CASE
+    WHEN so.created_by IS NULL THEN 'incierto'
+    WHEN i.solicitado_por IS NOT NULL AND i.solicitado_por <> so.created_by THEN 'incierto_conflicto'
+    WHEN i.solicitado_por IS NOT NULL AND i.solicitado_por = so.created_by THEN 'ya_correcto'
+    WHEN sa.created_by IS NOT DISTINCT FROM so.created_by THEN 'ya_correcto'
+    ELSE 'restauraria'
+  END AS certeza
+FROM primero p
+JOIN public.almacen_solicitud_item i ON i.id = p.item_id
+JOIN public.almacen_solicitud sa ON sa.id = i.solicitud_id
+LEFT JOIN public.almacen_solicitud so ON so.id = p.origen_id
+ORDER BY i.id;
+""".strip()
 
 
 def anular_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:

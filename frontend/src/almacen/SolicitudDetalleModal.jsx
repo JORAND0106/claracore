@@ -61,6 +61,7 @@ export default function SolicitudDetalleModal({
   onEdit,
   onReabrirOc,
   onMensajesLeidos,
+  onAbrirSolicitud,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -73,6 +74,7 @@ export default function SolicitudDetalleModal({
   const [selectorOc, setSelectorOc] = useState(false)
   const [notificarOc, setNotificarOc] = useState(null)
   const [selIds, setSelIds] = useState(() => new Set())
+  const [rechazoSel, setRechazoSel] = useState(null)
   const [asignar, setAsignar] = useState(null)
   const [insumoSel, setInsumoSel] = useState(null)
   const [costoBloque, setCostoBloque] = useState('')
@@ -400,6 +402,40 @@ export default function SolicitudDetalleModal({
     }
   }
 
+  const pedirRechazoSeleccion = () => {
+    const ids = [...selIds]
+    if (!ids.length) {
+      setError('Seleccione al menos una línea.')
+      return
+    }
+    if (!motivo.trim()) {
+      setError('Indique el motivo del rechazo.')
+      return
+    }
+    setRechazoSel({
+      ids,
+      rechazan: ids.length,
+      sinCambio: Math.max(0, items.length - ids.length),
+    })
+  }
+
+  const confirmarRechazoSeleccion = async () => {
+    if (!sol || !rechazoSel) return
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.rechazarLineasSolicitud(sol.id, rechazoSel.ids, motivo.trim())
+      setRechazoSel(null)
+      setSelIds(new Set())
+      setMotivo('')
+      setSol(r)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const rechazar = async () => {
     if (!sol) return
     if (!motivo.trim()) {
@@ -479,7 +515,7 @@ export default function SolicitudDetalleModal({
         justifyContent: 'center',
         padding: compact ? 0 : 16,
       }}
-      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && !selectorOc && !mensajesAbiertos && onClose?.()}
+      onClick={() => !busy && !revisionItem && !mapaItem && !avisoOc && !expedienteOcId && !selectorOc && !mensajesAbiertos && !rechazoSel && onClose?.()}
     >
       <div
         role="dialog"
@@ -501,11 +537,34 @@ export default function SolicitudDetalleModal({
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 6 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
+              {(sol?.solicitud_origen?.consecutivo || (sol?.solicitudes_derivadas || []).length > 0) && (
+                <div data-testid="solicitud-parentesco" style={{ fontSize: 'var(--cc-sm)', marginBottom: 6 }}>
+                  {sol?.solicitud_origen?.id && (
+                    <button
+                      type="button"
+                      style={{ ...ui.btnSecondary, marginRight: 8 }}
+                      onClick={() => onAbrirSolicitud?.(sol.solicitud_origen.id)}
+                    >
+                      Derivada de la solicitud #{sol.solicitud_origen.consecutivo}
+                    </button>
+                  )}
+                  {(sol?.solicitudes_derivadas || []).map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      style={{ ...ui.btnSecondary, marginRight: 8 }}
+                      onClick={() => onAbrirSolicitud?.(d.id)}
+                    >
+                      Grupo derivado #{d.consecutivo}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 2 }}>
                 {sol?.consecutivo ? `#${sol.consecutivo}` : ''}
                 {sol?.oc_parcial || (sol?.estado === 'enviada' && tieneOc)
-                  ? ' · OC parcial'
-                  : (sol?.estado ? ` · ${ESTADO_SOLICITUD_LABEL[sol.estado]}` : '')}
+                  ? ' · Solicitud: OC parcial'
+                  : (sol?.estado ? ` · Solicitud: ${ESTADO_SOLICITUD_LABEL[sol.estado]}` : '')}
                 {Number(sol?.mensajes_no_leidos) > 0 && (
                   <span
                     data-testid="solicitud-detalle-no-leidos"
@@ -824,6 +883,17 @@ export default function SolicitudDetalleModal({
                           Aprobar selección
                         </button>
                       )}
+                      {puedeValidar && (
+                        <button
+                          type="button"
+                          data-testid="rechazar-seleccion"
+                          style={{ ...ui.btnSecondary, color: '#b91c1c', borderColor: '#b91c1c' }}
+                          disabled={busy || selIds.size === 0}
+                          onClick={pedirRechazoSeleccion}
+                        >
+                          Rechazar selección
+                        </button>
+                      )}
                     </div>
                   )}
                 <SolicitudMaterialesExcelTable
@@ -953,30 +1023,31 @@ export default function SolicitudDetalleModal({
                 </div>
               )}
 
+              {puedeValidar && (
+                <div style={{ marginTop: 16 }}>
+                  <label style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+                    Motivo de rechazo, si va a rechazar líneas o la solicitud completa
+                  </label>
+                  <input
+                    style={{ ...ui.input, marginTop: 4 }}
+                    value={motivo}
+                    disabled={busy}
+                    onChange={(e) => setMotivo(e.target.value)}
+                  />
+                </div>
+              )}
               {puedeRechazarCompleta && (
-                <>
-                  <div style={{ marginTop: 16 }}>
-                    <label style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
-                      Motivo rechazo de la solicitud (si aplica)
-                    </label>
-                    <input
-                      style={{ ...ui.input, marginTop: 4 }}
-                      value={motivo}
-                      disabled={busy}
-                      onChange={(e) => setMotivo(e.target.value)}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      style={{ ...ui.btnPrimary, background: '#dc2626' }}
-                      disabled={busy}
-                      onClick={rechazar}
-                    >
-                      ✕ Rechazar solicitud completa
-                    </button>
-                  </div>
-                </>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    data-testid="rechazar-solicitud-completa"
+                    style={{ ...ui.btnPrimary, background: '#dc2626' }}
+                    disabled={busy}
+                    onClick={rechazar}
+                  >
+                    ✕ Rechazar solicitud completa
+                  </button>
+                </div>
               )}
 
             </>
@@ -1059,6 +1130,51 @@ export default function SolicitudDetalleModal({
               </button>
               <button type="button" style={btnSuccessStyle(ui.btnPrimary)} disabled={busy} onClick={() => { void ejecutarAsignarBloque() }}>
                 {busy ? 'Asignando…' : 'Asignar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rechazoSel && (
+        <div
+          data-testid="rechazar-seleccion-aviso"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100070,
+            background: 'rgba(15,23,42,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => !busy && setRechazoSel(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            style={{ ...ui.card, width: 'min(480px, 100%)', padding: 20 }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-title)', marginBottom: 8 }}>
+              Rechazar la selección
+            </div>
+            <p style={{ margin: '0 0 12px', lineHeight: 1.45 }}>
+              Se rechazarán {rechazoSel.rechazan} línea(s). {rechazoSel.sinCambio} quedarán sin cambios.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => setRechazoSel(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                data-testid="rechazar-seleccion-confirmar"
+                style={{ ...ui.btnSecondary, color: '#b91c1c', borderColor: '#b91c1c' }}
+                disabled={busy}
+                onClick={() => { void confirmarRechazoSeleccion() }}
+              >
+                {busy ? 'Rechazando…' : 'Rechazar estas líneas'}
               </button>
             </div>
           </div>

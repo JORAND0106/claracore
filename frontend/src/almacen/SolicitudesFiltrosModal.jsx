@@ -50,7 +50,7 @@ export default function SolicitudesFiltrosModal({
         </FiltroCampo>
       </div>
 
-      <FiltroCampo label="Estado">
+      <FiltroCampo label="Solicitud">
         <select
           value={draft.estado}
           onChange={(e) => set('estado', e.target.value)}

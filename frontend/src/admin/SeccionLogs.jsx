@@ -13,6 +13,7 @@ import {
   registroDeLog,
   tonoAccion,
 } from './logsModificacionesPresentacion'
+import { LineaTrazabilidadButton } from '../almacen/LineaTrazabilidadModal'
 
 const API = API_BASE
 const LIMIT = 40
@@ -55,7 +56,12 @@ function CampoValor({ etiqueta, valor, tok }) {
   )
 }
 
-function TarjetaLog({ log, tok, apilado }) {
+function esLineaAlmacen(log) {
+  const tipo = String(log?.entidad_tipo || '')
+  return tipo === 'solicitud_item' || tipo === 'almacen_solicitud_item'
+}
+
+function TarjetaLog({ log, tok, apilado, token }) {
   const campos = camposDeLog(log)
   const carga = cargaDeLog(log)
   const color = tonoAccion(log.accion)
@@ -101,8 +107,13 @@ function TarjetaLog({ log, tok, apilado }) {
           </span>
         )}
       </div>
-      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: tok.text, marginBottom: 10, wordBreak: 'break-word' }}>
-        {registroDeLog(log)}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: tok.text, wordBreak: 'break-word', flex: 1 }}>
+          {registroDeLog(log)}
+        </div>
+        {esLineaAlmacen(log) && (
+          <LineaTrazabilidadButton token={token} itemId={log.entidad_id} compact />
+        )}
       </div>
       {campos.length === 0 ? (
         <div style={{ fontSize: 'var(--cc-sm)', color: tok.textMuted }}>Sin campos registrados</div>
@@ -336,7 +347,7 @@ export default function SeccionLogs({ call, theme, t: tProp, user = null }) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
           {logs.map((log) => (
-            <TarjetaLog key={log.id} log={log} tok={tok} apilado={apilado} />
+            <TarjetaLog key={log.id} log={log} tok={tok} apilado={apilado} token={token} />
           ))}
         </div>
       )}
