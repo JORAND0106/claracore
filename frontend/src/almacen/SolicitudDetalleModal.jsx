@@ -16,10 +16,12 @@ import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
 import SolicitudMaterialesExcelTable from './SolicitudMaterialesExcelTable'
 import InsumoSearchTable from './InsumoSearchTable'
+import ProveedorOfertaField from './ProveedorOfertaField'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import SolicitudBuzon from './SolicitudBuzon'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
+import { publicarCambioAlmacen } from './almacenContratoEvento'
 import { motivoAgregarMaterialesAlmacen, puedeEditarSolicitudFormAlmacen, puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPermisos'
 import { resumenAccionBloque } from './solicitudTramoSeleccion'
 import {
@@ -80,8 +82,10 @@ export default function SolicitudDetalleModal({
   const [rechazoSel, setRechazoSel] = useState(null)
   const [asignar, setAsignar] = useState(null)
   const [insumoSel, setInsumoSel] = useState(null)
+  const [proveedorBloque, setProveedorBloque] = useState(null)
   const [costoBloque, setCostoBloque] = useState('')
   const [cobroBloque, setCobroBloque] = useState('')
+  const [asignarConfirm, setAsignarConfirm] = useState(null)
   const [expedienteOcId, setExpedienteOcId] = useState(null)
   const [avisoOc, setAvisoOc] = useState(null)
   const [mensajesAbiertos, setMensajesAbiertos] = useState(false)
@@ -361,11 +365,39 @@ export default function SolicitudDetalleModal({
       (lineas || []).find((it) => String(it?.descripcion_solicitada || '').trim())?.descripcion_solicitada
       || '',
     ).trim()
+    const seleccion = (lineas || []).filter((it) => ids.includes(it?.id))
+    const conInsumo = seleccion.filter((it) => it?.insumo_id).length
+    const aprobadas = seleccion.filter((it) => estadoValidacionItem(it) === 'aprobado').length
     setInsumoSel(null)
+    setProveedorBloque(null)
     setCostoBloque('')
     setCobroBloque('')
-    setAsignar({ ids, suggest: desc })
+    setAsignarConfirm(null)
+    setAsignar({ ids, suggest: desc, conInsumo, aprobadas })
     setError('')
+  }
+
+  const bodyAsignarBloque = () => {
+    if (!asignar || !insumoSel?.insumo_id) return null
+    const costo = Number(costoBloque)
+    if (verEconomicos && !(costo > 0)) return null
+    const body = {
+      item_ids: asignar.ids,
+      insumo_id: Number(insumoSel.insumo_id),
+    }
+    if (costo > 0) body.valor_compra_unitario = costo
+    const cobro = cobroBloque !== '' && cobroBloque != null ? Number(cobroBloque) : NaN
+    if (Number.isFinite(cobro) && cobro > 0) body.vlr_unitario_cobro = cobro
+    if (proveedorBloque?.proveedor_id != null && proveedorBloque.proveedor_id !== '') {
+      body.proveedor_seleccionado_id = Number(proveedorBloque.proveedor_id)
+    }
+    if (proveedorBloque?.proveedor_nombre) {
+      body.proveedor_seleccionado_nombre = String(proveedorBloque.proveedor_nombre)
+    }
+    if (proveedorBloque?.numero) {
+      body.cotizacion_numero_seleccionada = String(proveedorBloque.numero)
+    }
+    return body
   }
 
   const ejecutarAsignarBloque = async () => {
@@ -374,24 +406,28 @@ export default function SolicitudDetalleModal({
       setError('Seleccione el insumo del catálogo.')
       return
     }
-    const costo = Number(costoBloque)
-    if (verEconomicos && !(costo > 0)) {
-      setError('Defina el costo de compra unitario.')
+    const body = bodyAsignarBloque()
+    if (!body) {
+      setError(verEconomicos ? 'Defina el costo de compra unitario.' : 'Seleccione el insumo del catálogo.')
       return
     }
-    const body = {
-      item_ids: asignar.ids,
-      insumo_id: Number(insumoSel.insumo_id),
+    if (!asignarConfirm && (asignar.conInsumo > 0 || asignar.aprobadas > 0)) {
+      setAsignarConfirm({
+        conInsumo: asignar.conInsumo || 0,
+        aprobadas: asignar.aprobadas || 0,
+        total: asignar.ids.length,
+      })
+      return
     }
-    if (costo > 0) body.valor_compra_unitario = costo
-    const cobro = cobroBloque !== '' && cobroBloque != null ? Number(cobroBloque) : NaN
-    if (Number.isFinite(cobro) && cobro > 0) body.vlr_unitario_cobro = cobro
+    setAsignarConfirm(null)
     setBusy(true)
     setError('')
     try {
       const r = await api.mapearItemsBloque(sol.id, body)
       setAsignar(null)
+      setProveedorBloque(null)
       aplicarResultadoBloque(r, 'Insumo asignado')
+      publicarCambioAlmacen(contratoId, { origen: 'asignar-bloque' })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1132,7 +1168,11 @@ export default function SolicitudDetalleModal({
             justifyContent: 'center',
             padding: compact ? 0 : 20,
           }}
-          onClick={() => !busy && setAsignar(null)}
+          onClick={() => {
+            if (busy) return
+            setAsignar(null)
+            setAsignarConfirm(null)
+          }}
         >
           <div
             role="dialog"
@@ -1148,7 +1188,7 @@ export default function SolicitudDetalleModal({
               Asignar insumo
             </div>
             <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', marginBottom: 12 }}>
-              El mismo insumo se aplica a {asignar.ids.length} línea(s), con la cotización ganadora. El proveedor se puede cambiar después en cada línea.
+              El mismo insumo y proveedor se aplican a {asignar.ids.length} línea(s). Por defecto queda la cotización ganadora; puede elegir otro proveedor de este insumo. Después se puede ajustar en cada línea.
             </div>
             <InsumoSearchTable
               value={insumoSel}
@@ -1156,11 +1196,29 @@ export default function SolicitudDetalleModal({
               suggestFrom={asignar.suggest}
               onChange={(ins) => {
                 setInsumoSel(ins)
+                setProveedorBloque(null)
                 if (ins?.tiene_precio_compra && ins.valor_compra_referencia != null) {
                   setCostoBloque(String(ins.valor_compra_referencia))
+                } else if (verEconomicos) {
+                  setCostoBloque('')
                 }
               }}
             />
+            <div style={{ marginTop: 12 }} data-testid="asignar-bloque-proveedor">
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 4 }}>Proveedor</div>
+              <ProveedorOfertaField
+                insumoId={insumoSel?.insumo_id}
+                value={proveedorBloque}
+                disabled={busy || !insumoSel?.insumo_id}
+                verEconomicos={verEconomicos}
+                onChange={(oferta) => {
+                  setProveedorBloque(oferta)
+                  if (verEconomicos && oferta?.valor != null && oferta.valor !== '') {
+                    setCostoBloque(String(oferta.valor))
+                  }
+                }}
+              />
+            </div>
             {verEconomicos && (
               <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
                 <label style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
@@ -1190,15 +1248,51 @@ export default function SolicitudDetalleModal({
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => setAsignar(null)}>
+              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => { setAsignar(null); setAsignarConfirm(null) }}>
                 Cancelar
               </button>
-              <button type="button" style={btnSuccessStyle(ui.btnPrimary)} disabled={busy} onClick={() => { void ejecutarAsignarBloque() }}>
+              <button
+                type="button"
+                data-testid="asignar-bloque-confirmar"
+                style={btnSuccessStyle(ui.btnPrimary)}
+                disabled={busy || !insumoSel?.insumo_id}
+                onClick={() => { void ejecutarAsignarBloque() }}
+              >
                 {busy ? 'Asignando…' : 'Asignar'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {asignarConfirm && (
+        <CcConfirmModal
+          theme={t}
+          tipo="warn"
+          titulo="Confirmar reasignación"
+          confirmar="Sí, asignar"
+          cancelar="Cancelar"
+          procesando={busy}
+          onCancel={() => !busy && setAsignarConfirm(null)}
+          onConfirm={() => { void ejecutarAsignarBloque() }}
+        >
+          <div data-testid="asignar-bloque-aviso-remapear">
+            {`Se asignará el insumo a ${asignarConfirm.total} línea(s).`}
+            {asignarConfirm.conInsumo > 0 && (
+              <div style={{ marginTop: 8 }}>
+                {`${asignarConfirm.conInsumo} línea(s) ya tienen insumo asignado y se reemplazará.`}
+              </div>
+            )}
+            {asignarConfirm.aprobadas > 0 && (
+              <div style={{ marginTop: 8 }}>
+                {`${asignarConfirm.aprobadas} línea(s) ya están aprobadas y también se verán afectadas.`}
+              </div>
+            )}
+            <div style={{ marginTop: 8, opacity: 0.9 }}>
+              ¿Desea continuar?
+            </div>
+          </div>
+        </CcConfirmModal>
       )}
 
       {rechazoSel && (
