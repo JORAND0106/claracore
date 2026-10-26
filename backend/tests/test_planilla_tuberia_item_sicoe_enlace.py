@@ -189,11 +189,13 @@ class TestAsignacionYHerencia(unittest.TestCase):
 
     def test_precio_por_capitulo_e_item_bloquea_si_falta(self):
         from sicoe_valor_canonico import cap_item_key
+        from topografia_planilla_sicoe_enlace import capitulo_para_precio_item
 
         lineas = _lineas()
         items = _items()
         cap_ok = "Alcantarillado"
         cap_otro = "Filtros"
+        cap_reporte = "3. OBRAS DE ARTE (ALCANTARILLA)"
         # Índice: EXC tiene precio solo en Alcantarillado; TRI solo en Filtros.
         idx = {
             cap_item_key(cap_ok, "1.01"): {
@@ -219,25 +221,40 @@ class TestAsignacionYHerencia(unittest.TestCase):
             {cap_item_key(cap_ok, "1.01"): {"vlr_unitario": 0}}, cap_ok, "1.01",
         ))
 
-        # Con precio: reporte en Alcantarillado — TRI (1.02) falta (solo está en Filtros).
-        faltan = lineas_sin_precio(lineas, items, cap_ok, idx, "ALCANTARILLA")
+        # TRI (1.02) tiene capítulo Alcantarillado en el ítem, pero el precio solo
+        # está en Filtros → bloquea (busca en el capítulo del ítem, no en otro).
+        faltan = lineas_sin_precio(lineas, items, cap_reporte, idx, "ALCANTARILLA")
         nums = {f["item_numero"] for f in faltan}
         self.assertIn("1.02", nums)
         self.assertNotIn("1.01", nums)
         self.assertIn("faltan precios en el listado", mensaje_faltan_precios(faltan))
 
-        # Todos los ítems asignados con precio en el capítulo del reporte → vacío.
-        for it in items.values():
+        # Caso real: reporte en cap 3; ítems 1.01/1.02 con precio en su propio capítulo.
+        items_propios = dict(items)
+        items_propios["cantidades:TRI"] = {
+            **items["cantidades:TRI"],
+            "capitulo": cap_otro,
+        }
+        for it in items_propios.values():
             num = it["item_numero"]
-            idx[cap_item_key(cap_ok, num)] = {
+            cap_it = capitulo_para_precio_item(it, cap_reporte)
+            idx[cap_item_key(cap_it, num)] = {
                 "id": int(it["item_listado_id"]),
-                "capitulo": cap_ok,
+                "capitulo": cap_it,
                 "item_numero": num,
                 "vlr_unitario": float(it["precio_unitario"]),
             }
         self.assertEqual(
-            lineas_sin_precio(lineas, items, cap_ok, idx, "ALCANTARILLA"),
+            lineas_sin_precio(lineas, items_propios, cap_reporte, idx, "ALCANTARILLA"),
             [],
+        )
+        # Sin precio en el capítulo propio del ítem → sí bloquea.
+        idx.pop(cap_item_key(cap_otro, "1.02"), None)
+        faltan2 = lineas_sin_precio(lineas, items_propios, cap_reporte, idx, "ALCANTARILLA")
+        self.assertIn("1.02", {f["item_numero"] for f in faltan2})
+        self.assertEqual(
+            capitulo_para_precio_item(items_propios["cantidades:TRI"], cap_reporte),
+            cap_otro,
         )
 
 

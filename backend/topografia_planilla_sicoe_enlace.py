@@ -191,6 +191,15 @@ def precio_listado_cap_item(
     return None
 
 
+def capitulo_para_precio_item(item: Optional[dict[str, Any]], capitulo_reporte: Any = None) -> str:
+    """Capítulo con el que se busca el precio: el del ítem; si falta, el del reporte (legacy)."""
+    if isinstance(item, dict):
+        cap_item = str(item.get("capitulo") or "").strip()
+        if cap_item:
+            return cap_item
+    return str(capitulo_reporte or "").strip()
+
+
 def lineas_sin_precio(
     lineas: list[dict[str, Any]],
     items: dict[str, dict[str, Any]],
@@ -198,14 +207,15 @@ def lineas_sin_precio(
     listado_idx: Any,
     tipo: Optional[str] = None,
 ) -> list[dict[str, str]]:
-    """Líneas con ítem asignado cuyo (capítulo del reporte, ítem) no tiene precio en listado.
+    """Líneas con ítem cuyo (capítulo del ítem, ítem) no tiene precio en listado.
 
-    La búsqueda es por capítulo + ítem: el mismo código en otro capítulo no cuenta.
+    La búsqueda usa el capítulo propio del ítem asignado (no el del reporte).
+    El mismo código en otro capítulo no cuenta. Sin capítulo en el ítem, se
+    usa el del reporte solo como respaldo de datos legacy.
     """
-    cap = str(capitulo_reporte or "").strip()
     faltan: list[dict[str, str]] = []
-    # Un aviso por ítem (varias líneas pueden heredar el mismo ítem de cobro).
-    vistos_item: set[str] = set()
+    # Un aviso por (capítulo, ítem): el mismo código en dos capítulos son dos precios.
+    vistos: set[tuple[str, str]] = set()
     for linea in lineas or []:
         if not isinstance(linea, dict):
             continue
@@ -213,15 +223,20 @@ def lineas_sin_precio(
         if not item:
             continue
         numero = str(item.get("item_numero") or "").strip()
-        if not numero or numero in vistos_item:
+        if not numero:
+            continue
+        cap = capitulo_para_precio_item(item, capitulo_reporte)
+        clave = (cap, numero)
+        if clave in vistos:
             continue
         if precio_listado_cap_item(listado_idx, cap, numero) is not None:
             continue
-        vistos_item.add(numero)
+        vistos.add(clave)
         faltan.append({
             "origen": origen_key_linea_sicoe(linea),
             "nombre": str(linea.get("nombre") or linea.get("_origen_codigo") or "").strip(),
             "item_numero": numero,
+            "capitulo": cap,
         })
     return faltan
 
