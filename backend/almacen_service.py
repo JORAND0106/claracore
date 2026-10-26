@@ -4604,9 +4604,27 @@ def _update_orden_compra_proveedor(sb, oc_id: int, patch: dict) -> None:
             raise
 
 
+def _exc_text_for_humanize(exc: BaseException) -> str:
+    """Junta message/details/args de PostgREST APIError y excepciones normales."""
+    parts: List[str] = [str(exc or "")]
+    for attr in ("message", "details", "detail", "code", "hint"):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            parts.append(str(val))
+    for arg in getattr(exc, "args", ()) or ():
+        if isinstance(arg, dict):
+            parts.append(str(arg))
+            for key in ("message", "details", "detail", "code", "hint"):
+                if arg.get(key) is not None:
+                    parts.append(str(arg.get(key)))
+        elif arg is not None:
+            parts.append(str(arg))
+    return " ".join(parts)
+
+
 def _humanize_oc_db_error(exc: BaseException) -> Optional[str]:
     """Mensaje claro (no técnico) ante UNIQUE u otros fallos al crear la OC."""
-    text = str(exc or "").strip()
+    text = _exc_text_for_humanize(exc).strip()
     low = text.lower()
     if not text:
         return None
@@ -4623,8 +4641,8 @@ def _humanize_oc_db_error(exc: BaseException) -> Optional[str]:
         return (
             "No se pudieron generar las órdenes de compra: la base aún permite "
             "solo una OC por solicitud, y esta solicitud ya tiene una registrada. "
-            "No quedó ninguna OC nueva a medias. Hay que actualizar la restricción "
-            "en la base (una OC por proveedor) y volver a generar."
+            "No quedó ninguna OC nueva a medias. Hay que ejecutar en Supabase el "
+            "script backend/sql/almacen_oc_ARREGLAR_multi_proveedor.sql y volver a generar."
         )
     # Ya existe OC del mismo proveedor en la solicitud.
     if (
