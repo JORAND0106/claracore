@@ -8,9 +8,12 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  calcularRepartoManual,
   crearLineasPorPk,
   etiquetaGrupo,
   gruposDeLineas,
+  lineasDesdePedido,
+  repartirExacto,
   resumenAccionBloque,
   saldoSeleccion,
 } from './solicitudTramoSeleccion.js'
@@ -123,6 +126,154 @@ describe('saldoSeleccion', () => {
   })
 })
 
+function suma(valores) {
+  return valores.reduce((a, b) => a + b, 0)
+}
+
+describe('reparto manual exacto', () => {
+  const arbol = [{
+    key: '7',
+    saldo: 100,
+    pks: [
+      { key: '7||1', saldo: 25, regs: [{ key: '11', saldo: 10 }, { key: '12', saldo: 15 }] },
+      { key: '7||2', saldo: 75, regs: [{ key: '21', saldo: 75 }] },
+    ],
+  }]
+
+  it('la suma de repartirExacto es el total escrito', () => {
+    const partes = repartirExacto(100, [1, 3])
+    assert.deepEqual(partes, [25, 75])
+    assert.equal(suma(partes), 100)
+    const tercios = repartirExacto(1, [1, 1, 1])
+    assert.ok(Math.abs(suma(tercios) - 1) < 1e-9)
+    assert.notEqual(Math.round(tercios[0] * 10000) / 10000, tercios[0])
+  })
+
+  it('un tramo de 100 con saldos 1:3 reparte 25 y 75, y cada PK entre sus registros', () => {
+    const { pedir } = calcularRepartoManual(arbol, { tramo: { 7: '100' }, pk: {}, reg: {} })
+    assert.equal(pedir.pk['7||1'], 25)
+    assert.equal(pedir.pk['7||2'], 75)
+    assert.equal(pedir.tramo['7'], 100)
+    assert.equal(suma([pedir.reg['11'], pedir.reg['12']]), 25)
+    assert.equal(pedir.reg['21'], 75)
+    assert.ok(pedir.reg['12'] > pedir.reg['11'])
+  })
+
+  it('un PK fijado en 40 deja 60 para el hermano libre', () => {
+    const { pedir } = calcularRepartoManual(arbol, {
+      tramo: { 7: '100' },
+      pk: { '7||1': '40' },
+      reg: {},
+    })
+    assert.equal(pedir.pk['7||1'], 40)
+    assert.equal(pedir.pk['7||2'], 60)
+    assert.equal(pedir.tramo['7'], 100)
+    assert.equal(suma(Object.values(pedir.pk)), 100)
+  })
+
+  it('un registro fijado no se vuelve a repartir', () => {
+    const { pedir } = calcularRepartoManual([{
+      key: '7',
+      saldo: 100,
+      pks: [{
+        key: '7||1',
+        saldo: 100,
+        regs: [
+          { key: '11', saldo: 10 },
+          { key: '12', saldo: 20 },
+          { key: '13', saldo: 20 },
+        ],
+      }],
+    }], { tramo: {}, pk: { '7||1': '60' }, reg: { 11: '10' } })
+    assert.equal(pedir.reg['11'], 10)
+    assert.equal(pedir.reg['12'], 25)
+    assert.equal(pedir.reg['13'], 25)
+    assert.equal(suma([pedir.reg['11'], pedir.reg['12'], pedir.reg['13']]), 60)
+  })
+
+  it('si un registro sube el PK, el hermano libre se recalcula y la suma sigue siendo lo escrito', () => {
+    const { pedir, excede } = calcularRepartoManual([{
+      key: '7',
+      saldo: 100,
+      pks: [
+        { key: '7||1', saldo: 50, regs: [{ key: 'a', saldo: 50 }] },
+        { key: '7||2', saldo: 50, regs: [{ key: 'b', saldo: 50 }] },
+      ],
+    }], { tramo: { 7: '100' }, pk: {}, reg: { a: '90' } })
+    assert.equal(pedir.reg.a, 90)
+    assert.equal(pedir.pk['7||1'], 90)
+    assert.equal(pedir.pk['7||2'], 10)
+    assert.equal(pedir.reg.b, 10)
+    assert.equal(pedir.tramo['7'], 100)
+    assert.equal(excede.pk['7||1'], true)
+    assert.equal(excede.reg.a, true)
+  })
+
+  it('si lo fijado supera lo escrito, el total del tramo pasa a ser la suma', () => {
+    const { pedir, excede } = calcularRepartoManual([{
+      key: '7',
+      saldo: 100,
+      pks: [
+        { key: '7||1', saldo: 80, regs: [] },
+        { key: '7||2', saldo: 50, regs: [] },
+      ],
+    }], { tramo: { 7: '100' }, pk: { '7||1': '80', '7||2': '50' }, reg: {} })
+    assert.equal(pedir.pk['7||1'], 80)
+    assert.equal(pedir.pk['7||2'], 50)
+    assert.equal(pedir.tramo['7'], 130)
+    assert.equal(excede.tramo['7'], true)
+  })
+
+  it('escribir en un PK reparte solo entre sus registros', () => {
+    const { pedir } = calcularRepartoManual(arbol, { tramo: {}, pk: { '7||1': '20' }, reg: {} })
+    assert.equal(pedir.pk['7||1'], 20)
+    assert.equal(pedir.pk['7||2'], undefined)
+    assert.equal(suma([pedir.reg['11'], pedir.reg['12']]), 20)
+    assert.equal(pedir.tramo['7'], 20)
+  })
+
+  it('una fila en cero no genera línea y el manual conserva material y principal', () => {
+    const tramos = [{ tramo: '7' }]
+    const pksByTramo = {
+      7: [
+        { pk_id: '1', tramo: '7' },
+        { pk_id: '2', tramo: '7' },
+      ],
+    }
+    const regsByPk = {
+      '7||1': [{ presupuesto_id: 11, saldo_disponible: 10, abscisa_inicial: 1, abscisa_final: 2 }],
+      '7||2': [{ presupuesto_id: 21, saldo_disponible: 30, abscisa_inicial: 3, abscisa_final: 4 }],
+    }
+    const { pedir } = calcularRepartoManual(arbol, { tramo: { 7: '20' }, pk: {}, reg: {} })
+    const lineas = lineasDesdePedido({
+      tramos,
+      pksByTramo,
+      regsByPk,
+      pedir,
+      plantilla: {
+        descripcion_solicitada: 'cemento',
+        es_principal: false,
+        observacion_residente: 'nota',
+      },
+      grupoId: 'g',
+      grupoEtiqueta: 'Tramo 7',
+    })
+    assert.equal(lineas.length, 2)
+    assert.equal(suma(lineas.map((l) => l.cantidad)), 20)
+    assert.equal(lineas[0].descripcion_solicitada, 'cemento')
+    assert.equal(lineas[0].es_principal, false)
+    assert.equal(lineas[0].observacion_residente, 'nota')
+    const soloCero = lineasDesdePedido({
+      tramos,
+      pksByTramo,
+      regsByPk,
+      pedir: { pk: { '7||1': 0, '7||2': 0 }, reg: {} },
+      plantilla: {},
+    })
+    assert.equal(soloCero.length, 0)
+  })
+})
+
 describe('grupos y resultado en bloque', () => {
   it('etiqueta varios tramos y agrupa por id', () => {
     assert.match(etiquetaGrupo(['7'], 'cemento gris'), /^Tramo 7 · cemento gris/)
@@ -162,6 +313,24 @@ describe('cableado de la solicitud', () => {
     assert.match(excel, /onAbrirTramos/)
     assert.match(excel, /!esAiu &&/)
     assert.match(excel, /AlmacenPkMapaSelector/)
+  })
+
+  it('el acordeón pide a mano y Resumen abre el mismo editor', () => {
+    const acordeon = readFileSync(join(dir, 'SolicitudTramoAccordion.jsx'), 'utf8')
+    const resumen = readFileSync(join(dir, 'ResumenProveedoresPanel.jsx'), 'utf8')
+    const main = readFileSync(join(dir, 'AlmacenMain.jsx'), 'utf8')
+    assert.match(acordeon, /Pedir/)
+    assert.match(acordeon, /Repartir de nuevo/)
+    assert.match(acordeon, /justificación/)
+    assert.doesNotMatch(acordeon, /La cantidad no puede superar el saldo disponible/)
+    assert.doesNotMatch(acordeon, /fmtMoney/)
+    assert.match(resumen, /data-testid="resumen-editar-materiales"/)
+    assert.match(resumen, /SolicitudFormModal/)
+    assert.match(resumen, /onEdit=/)
+    assert.match(resumen, /onReabrirOc=/)
+    const bloque = main.slice(main.indexOf('<ResumenProveedoresPanel'), main.indexOf("tab === 'entradas'"))
+    assert.match(bloque, /token=\{token\}/)
+    assert.match(bloque, /t=\{t\}/)
   })
 
   it('asignar en bloque exige editar y aprobar en bloque exige validar', () => {

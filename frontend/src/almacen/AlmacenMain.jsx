@@ -304,6 +304,8 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
       {tab === 'resumen' && puedeVerSolicitudesInventario && (
         <ResumenProveedoresPanel
           permisos={solicitudesPerms}
+          t={t}
+          token={token}
           contratoId={permisos?.contratoId}
           refreshSignal={refreshSignal}
           onDataLoaded={onDataLoaded}

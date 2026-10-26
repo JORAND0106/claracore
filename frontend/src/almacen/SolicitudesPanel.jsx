@@ -762,6 +762,7 @@ export default function SolicitudesPanel({
           zIndex={reabrirOc ? 100090 : 100056}
           onClose={cerrarFormModal}
           onSaved={(result) => {
+            publicarCambioAlmacen(contratoId, { solicitudId: result?.id, origen: 'solicitudes' })
             if (reabrirOc) {
               cerrarFormModal()
               setDetalleEpoch((n) => n + 1)
