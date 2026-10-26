@@ -148,6 +148,11 @@ function textoVacio(v) {
   return v == null || String(v).trim() === ''
 }
 
+/** Solo el insumo principal descuenta presupuesto y se compara con el saldo. */
+export function compararCantidadConSaldo(esPrincipal) {
+  return esPrincipal !== false
+}
+
 /**
  * Reparte `total` según los pesos. El último absorbe el residuo para que
  * la suma de las partes sea exactamente `total`, sin redondear.

@@ -144,7 +144,10 @@ export default function SolicitudRevisionModal({
   }
 
   const items = sol?.items || []
-  const superaPresupuesto = items.some((it) => it.supera_presupuesto || it.contexto_presupuesto?.supera_presupuesto)
+  const superaPresupuesto = items.some((it) => (
+    it.es_principal !== false
+    && (it.supera_presupuesto || it.contexto_presupuesto?.supera_presupuesto)
+  ))
   const superaNegociado = items.some((it) => it.supera_negociado || it.contexto_negociado?.supera_negociado)
 
   return (

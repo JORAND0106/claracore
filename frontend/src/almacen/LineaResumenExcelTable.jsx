@@ -34,7 +34,8 @@ export default function LineaResumenExcelTable({
 
   if (!tienePpto && !tieneNeg && !tieneEco && esPrincipal) return null
 
-  const alert = supera || superaNegociado
+  const alertaPresupuesto = Boolean(supera) && esPrincipal !== false
+  const alert = alertaPresupuesto || superaNegociado
   const wrap = {
     marginTop: 6,
     borderRadius: 6,
@@ -101,7 +102,7 @@ export default function LineaResumenExcelTable({
           Insumo asociado — no descuenta presupuesto del ítem
         </div>
       )}
-      {(supera || superaNegociado) && (
+      {(alertaPresupuesto || superaNegociado) && (
         <div style={{
           padding: '5px 8px',
           fontSize: 'var(--cc-xs)',
@@ -110,8 +111,8 @@ export default function LineaResumenExcelTable({
           borderBottom: `1px solid ${contraste.dangerBorder}`,
         }}
         >
-          {supera && '⚠ Supera presupuesto en este PK-ID'}
-          {supera && superaNegociado && ' · '}
+          {alertaPresupuesto && '⚠ Supera presupuesto en este PK-ID'}
+          {alertaPresupuesto && superaNegociado && ' · '}
           {superaNegociado && ctxNeg?.tiene_negociado && (
             `⚠ Supera cantidad negociada (${fmtCant(ctxNeg.consumo_total_despues)} / ${fmtCant(ctxNeg.cantidad_negociada)} ${ctxNeg.unidad || ''})`
           )}
@@ -168,7 +169,7 @@ export default function LineaResumenExcelTable({
                   <td style={{
                     ...tdNum,
                     fontWeight: 700,
-                    color: supera ? danger : posColor,
+                    color: alertaPresupuesto ? danger : posColor,
                   }}
                   >
                     {ctx.conversion_banco_suelto
