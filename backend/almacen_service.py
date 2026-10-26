@@ -4604,11 +4604,58 @@ def _update_orden_compra_proveedor(sb, oc_id: int, patch: dict) -> None:
             raise
 
 
+def _humanize_oc_db_error(exc: BaseException) -> Optional[str]:
+    """Mensaje claro (no técnico) ante UNIQUE u otros fallos al crear la OC."""
+    text = str(exc or "").strip()
+    low = text.lower()
+    if not text:
+        return None
+    # Restricción legacy: una sola OC por solicitud.
+    if (
+        "almacen_orden_compra_solicitud_id_key" in low
+        or (
+            "solicitud_id" in low
+            and ("23505" in low or "duplicate key" in low or "unique" in low)
+            and "proveedor" not in low
+            and "numero_oc" not in low
+        )
+    ):
+        return (
+            "No se pudieron generar las órdenes de compra: la base aún permite "
+            "solo una OC por solicitud, y esta solicitud ya tiene una registrada. "
+            "No quedó ninguna OC nueva a medias. Hay que actualizar la restricción "
+            "en la base (una OC por proveedor) y volver a generar."
+        )
+    # Ya existe OC del mismo proveedor en la solicitud.
+    if (
+        "idx_almacen_oc_solicitud_proveedor" in low
+        or (
+            ("proveedor_id" in low or "proveedor_nombre" in low)
+            and ("23505" in low or "duplicate key" in low or "unique" in low)
+        )
+    ):
+        return (
+            "Ya existe una orden de compra de ese proveedor en esta solicitud. "
+            "No se creó una OC duplicada. Recargue la solicitud y genere solo "
+            "los proveedores o líneas que aún falten."
+        )
+    if "23505" in low or "duplicate key" in low:
+        return (
+            "No se pudo generar la orden de compra por un conflicto de datos "
+            "en la base. No quedó ninguna OC nueva a medias. Recargue e intente "
+            "de nuevo; si el problema continúa, contacte a soporte."
+        )
+    return None
+
+
 def _insert_orden_compra_row(sb, oc_row: dict) -> List[dict]:
     """Inserta encabezado de OC; si falta proveedor_id en el esquema, reintenta sin esa columna."""
     try:
         return sb.table("almacen_orden_compra").insert(oc_row).execute().data or []
     except Exception as exc:
+        msg = _humanize_oc_db_error(exc)
+        if msg:
+            raise ValueError(msg) from exc
         col = _pgrst_unknown_column(exc)
         if col == "proveedor_id" and "proveedor_id" in oc_row:
             row2 = {k: v for k, v in oc_row.items() if k != "proveedor_id"}
@@ -4621,6 +4668,9 @@ def _insert_orden_compra_row(sb, oc_row: dict) -> List[dict]:
             try:
                 return sb.table("almacen_orden_compra").insert(row2).execute().data or []
             except Exception as exc2:
+                msg2 = _humanize_oc_db_error(exc2)
+                if msg2:
+                    raise ValueError(msg2) from exc2
                 col2 = _pgrst_unknown_column(exc2)
                 if col2 == "proveedor_id" and "proveedor_id" in row2:
                     row3 = {k: v for k, v in row2.items() if k != "proveedor_id"}
