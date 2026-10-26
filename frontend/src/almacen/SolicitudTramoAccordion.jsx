@@ -541,8 +541,8 @@ export default function SolicitudTramoAccordion({
   const td = { ...ui.td, padding: '4px 6px', fontSize: 'var(--cc-xs)' }
   const tdNum = { ...ui.tdNum, padding: '4px 6px', fontSize: 'var(--cc-xs)' }
   const ocupado = busy || confirmando
-  const esPrincipal = compararCantidadConSaldo(prinLocal)
-  const excedeFila = (nivel, key) => esPrincipal && Boolean(reparto.excede[nivel]?.[key])
+  const marcaSobreSaldo = compararCantidadConSaldo(prinLocal)
+  const excedeFila = (nivel, key) => marcaSobreSaldo && Boolean(reparto.excede[nivel]?.[key])
 
   const valorPedir = (nivel, key) => {
     const draft = manual[nivel]?.[key]
