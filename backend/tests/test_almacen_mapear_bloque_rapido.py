@@ -108,7 +108,7 @@ def test_mapear_items_bloque_aplica_proveedor_a_todas(monkeypatch):
             return self
 
         def upsert(self, rows, **_k):
-            store["upserts"] = list(rows)
+            store.setdefault("upserts", []).extend(list(rows))
             self._pending = _Resp(rows)
             return self
 
@@ -187,14 +187,34 @@ def test_mapear_items_bloque_aplica_proveedor_a_todas(monkeypatch):
     assert len(result["resultados"]) == 2
     assert "timing" in result
     upserts = store.get("upserts") or []
-    assert len(upserts) == 2
-    for row in upserts:
+    principales = [row for row in upserts if "insumo_id" in row]
+    assert len(principales) == 2
+    for row in principales:
         assert row["insumo_id"] == 42
+        assert row["solicitud_id"] == 1
         assert row["proveedor_seleccionado_id"] == 7
         assert row["proveedor_seleccionado_nombre"] == "Proveedor B"
         assert row["cotizacion_numero_seleccionada"] == "COT-B"
         assert float(row["valor_compra_unitario"]) == 55.5
     assert len(store.get("cot_insert") or []) == 2
+    assert any("cotizacion_seleccionada_id" in row for row in upserts)
+
+
+def test_update_batch_exige_solicitud_id():
+    with pytest.raises(ValueError, match="sin su solicitud"):
+        svc._update_solicitud_items_batch(object(), [{"id": 1, "insumo_id": 2}])
+
+
+def test_humanize_solicitud_id_null_es_claro():
+    msg = svc._humanize_solicitud_db_error(
+        Exception(
+            'null value in column "solicitud_id" of relation '
+            '"almacen_solicitud_item" violates not-null constraint'
+        )
+    )
+    assert "sin su solicitud" in msg.lower()
+    assert "null value" not in msg.lower()
+    assert "recargue" in msg.lower()
 
 
 def test_mapear_items_bloque_falla_antes_de_escribir_si_hay_oc(monkeypatch):
