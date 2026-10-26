@@ -72,21 +72,133 @@ def _html_firma_oc_celda(lbl: str, nombre: str, fecha: str, firma_data_uri: str 
     )
 
 
-def _split_line_tax(unit_total: float, insumo: Optional[dict]) -> tuple[float, float, str]:
-    """Separa base e impuesto cuando valor unitario incluye IVA/AIU."""
+def _descripcion_con_codigo(codigo: str, desc: str) -> str:
+    """Código una sola vez: evita «CC-1614-080 — CC-1614-080 — …»."""
+    codigo = (codigo or "").strip()
+    desc = (desc or "").strip() or "—"
+    if not codigo:
+        return desc
+    resto = desc
+    low_c = codigo.casefold()
+    # Quita prefijos repetidos del código (con o sin guión/raya).
+    while resto.casefold().startswith(low_c):
+        resto = resto[len(codigo):].lstrip(" \t—–-·|:")
+        if not resto:
+            return codigo
+    return f"{codigo} — {resto}"
+
+
+def _desglose_linea_oc(
+    cantidad: float,
+    valor_unitario_oc: float,
+    insumo: Optional[dict],
+) -> tuple[float, float, float, Dict[str, float]]:
+    """Precio unitario sin impuesto = Valor (costo_base) del catálogo.
+
+    ``valor_unitario_oc`` es el precio comprometido de la línea (con impuestos),
+    el mismo que usa la solicitud / OC. El IVA/AIU se discrimina a partir del
+    catálogo (tributos o tipo_impuesto legado); no se trata el valor con IVA
+    como si fuera la base.
+    """
+    from almacen_insumos_service import (
+        TIPO_IMPUESTO_AIU_SIN_IVA,
+        TIPO_IMPUESTO_IVA_PLENO,
+        TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD,
+        compute_costo_total_insumo,
+        compute_valor_despues_aiu_iva,
+        normalize_tributos,
+        tributos_tienen_datos,
+    )
+
     insumo = insumo or {}
-    tipo = (insumo.get("tipo_impuesto") or "").strip().lower()
+    cant = a_decimal(cantidad)
+    vu_oc = a_decimal(valor_unitario_oc)
+    costo = a_decimal(insumo.get("costo_base") or 0)
+    tributos = normalize_tributos(insumo.get("tributos"))
+    impuestos: Dict[str, float] = {}
+
+    tipo_leg = (insumo.get("tipo_impuesto") or "").strip().lower()
     try:
-        pct = float(insumo.get("impuesto_porcentaje") or 0)
+        pct_leg = float(insumo.get("impuesto_porcentaje") or 0)
     except (TypeError, ValueError):
-        pct = 0.0
-    if tipo in ("iva", "aiu") and pct > 0 and unit_total > 0:
-        bruto = a_decimal(unit_total)
-        base = bruto / (1 + a_decimal(pct) / 100)
-        tax = bruto - base
-        label = "IVA" if tipo == "iva" else "AIU"
-        return float(base), float(tax), f"{label} {pct:g}%"
-    return unit_total, 0.0, ""
+        pct_leg = 0.0
+
+    if costo > 0:
+        vu_base = costo
+    elif tributos_tienen_datos(tributos) and vu_oc > 0:
+        # Sin costo_base: no inventar base; usar OC y etiquetar diferencia si aplica.
+        vu_base = vu_oc
+    elif tipo_leg in ("iva", "aiu") and pct_leg > 0 and vu_oc > 0:
+        vu_base = vu_oc / (1 + a_decimal(pct_leg) / 100)
+    else:
+        vu_base = vu_oc
+
+    line_sub = cant * vu_base
+
+    if vu_oc > 0:
+        line_total = cant * vu_oc
+    elif costo > 0 and tributos_tienen_datos(tributos):
+        line_total = cant * a_decimal(compute_valor_despues_aiu_iva(float(costo), tributos))
+    elif costo > 0 and tipo_leg in ("iva", "aiu") and pct_leg > 0:
+        line_total = cant * a_decimal(
+            compute_costo_total_insumo(float(costo), tipo_leg, pct_leg, insumo.get("impuestos"))
+        )
+    else:
+        line_total = line_sub
+
+    if tributos_tienen_datos(tributos) and costo > 0:
+        tipo = tributos.get("tipo")
+        iva_pct = None
+        iva_block = tributos.get("iva") if isinstance(tributos.get("iva"), dict) else {}
+        try:
+            iva_pct = float(iva_block.get("porcentaje")) if iva_block.get("porcentaje") is not None else None
+        except (TypeError, ValueError):
+            iva_pct = None
+        if tipo == TIPO_IMPUESTO_IVA_PLENO and iva_pct and iva_pct > 0:
+            tax = line_total - line_sub
+            if tax:
+                impuestos[f"IVA {iva_pct:g}%"] = float(tax)
+        elif tipo == TIPO_IMPUESTO_AIU_SIN_IVA:
+            tax = line_total - line_sub
+            if tax:
+                impuestos["AIU"] = float(tax)
+        elif tipo == TIPO_IMPUESTO_IVA_SOBRE_UTILIDAD:
+            u = a_decimal(tributos.get("utilidad") or 0) / 100
+            a = a_decimal(tributos.get("administracion") or 0) / 100
+            i = a_decimal(tributos.get("imprevistos") or 0) / 100
+            iva_f = a_decimal(iva_pct or 0) / 100
+            aiu_amt = cant * vu_base * (a + i + u)
+            iva_amt = cant * vu_base * u * iva_f
+            if aiu_amt:
+                impuestos["AIU"] = float(a_decimal(impuestos.get("AIU", 0)) + aiu_amt)
+            if iva_amt and iva_pct:
+                impuestos[f"IVA {iva_pct:g}%"] = float(
+                    a_decimal(impuestos.get(f"IVA {iva_pct:g}%", 0)) + iva_amt
+                )
+        else:
+            tax = line_total - line_sub
+            if tax:
+                impuestos["Impuesto"] = float(tax)
+    elif tipo_leg in ("iva", "aiu") and pct_leg > 0:
+        tax = line_total - line_sub
+        if tax:
+            label = f"IVA {pct_leg:g}%" if tipo_leg == "iva" else f"AIU {pct_leg:g}%"
+            impuestos[label] = float(tax)
+    else:
+        # Sin regla de impuesto en catálogo: si OC > base, no inventar etiqueta IVA.
+        tax = line_total - line_sub
+        if tax > a_decimal("0.0000001") and costo > 0:
+            impuestos["Impuesto"] = float(tax)
+
+    return float(vu_base), float(line_sub), float(line_total), impuestos
+
+
+def _split_line_tax(unit_total: float, insumo: Optional[dict]) -> tuple[float, float, str]:
+    """Compat: base e impuesto unitario. Preferir ``_desglose_linea_oc``."""
+    _vu, line_sub, line_total, impuestos = _desglose_linea_oc(1.0, unit_total, insumo)
+    tax = float(a_decimal(line_total) - a_decimal(line_sub))
+    label = next(iter(impuestos.keys()), "") if impuestos else ""
+    return float(line_sub), tax, label
 
 
 def _insumo_codigo_sort_key(codigo: Optional[str]) -> tuple:
@@ -231,18 +343,17 @@ def _lineas_y_totales(
             vu_total = float(it.get("valor_unitario") or 0)
         except (TypeError, ValueError):
             vu_total = 0.0
-        vu_base, _tax_unit, tax_label = _split_line_tax(vu_total, insumo)
-        line_total = producto(cant, vu_total)
-        line_sub = producto(cant, vu_base)
-        line_tax = float(a_decimal(line_total) - a_decimal(line_sub))
+        _vu_base, line_sub, line_total, tax_parts = _desglose_linea_oc(cant, vu_total, insumo)
         subtotal = float(a_decimal(subtotal) + a_decimal(line_sub))
-        if tax_label:
-            impuestos[tax_label] = float(a_decimal(impuestos.get(tax_label, 0)) + a_decimal(line_tax))
+        for tax_label, line_tax in (tax_parts or {}).items():
+            if line_tax:
+                impuestos[tax_label] = float(
+                    a_decimal(impuestos.get(tax_label, 0)) + a_decimal(line_tax)
+                )
 
         codigo = _codigo_item(it, sol_it, insumo)
-        desc = (it.get("material_descripcion") or sol_it.get("material_descripcion") or "—").strip() or "—"
-        if codigo:
-            desc = f"{codigo} — {desc}"
+        desc_raw = (it.get("material_descripcion") or sol_it.get("material_descripcion") or "—").strip() or "—"
+        desc = _descripcion_con_codigo(codigo, desc_raw)
         clave = _clave_grupo_insumo(it, sol_it, insumo)
         unidad = (it.get("unidad") or sol_it.get("unidad") or "").strip()
         if clave not in grupos:
@@ -262,6 +373,9 @@ def _lineas_y_totales(
         grupo["total_con_iva"] = float(a_decimal(grupo["total_con_iva"]) + a_decimal(line_total))
         if unidad and not grupo["unidad"]:
             grupo["unidad"] = unidad
+        # Si el mismo insumo aparece en varias filas, conservar una sola descripción limpia.
+        if codigo and grupo.get("descripcion"):
+            grupo["descripcion"] = _descripcion_con_codigo(codigo, grupo["descripcion"])
 
     lista = [grupos[k] for k in orden_claves]
     for i, grupo in enumerate(lista, start=1):
@@ -488,7 +602,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
     <th>Fecha OC</th>
     <th>Solicitó</th>
     <th>Medio de envío</th>
-    <th>Términos y condiciones</th>
+    <th>Vigencia de la cotización</th>
   </tr>
   <tr>
     <td>{_esc(fecha_oc)}</td>
