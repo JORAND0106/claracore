@@ -260,6 +260,7 @@ import {
 } from './modules/sicoe-obra/sicoeVarilla.js'
 import SicoeCuadroAcerosPregunta from './modules/sicoe-obra/SicoeCuadroAcerosPregunta.jsx'
 import SicoeCuadroAcerosModal from './modules/sicoe-obra/SicoeCuadroAcerosModal.jsx'
+import SicoeFotoFuentesBotones from './modules/sicoe-obra/SicoeFotoFuentesBotones.jsx'
 import {
   sicoeEsRegistroDeCuadroAceros,
   sicoeEtiquetaCuadroPosicion,
@@ -3708,13 +3709,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
   }
 
-  const onInputFotosChange = (e, mode = 'add') => {
-    const list = Array.from(e.target.files || [])
-    e.target.value = ''
-    if (!list.length) return
-    void subirFoto(mode === 'replace' ? list[0] : list, { mode })
-  }
-
   const persistirGraficoEnRegistro = async (url, numero, origen = 'manual', meta = {}) => {
     const entrada = {
       url,
@@ -5759,27 +5753,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
                     {editableFoto && (
                       <>
-                        <label style={{ cursor: uploadingFoto ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Agregar foto(s)">
-                          +
-                          <input type="file" accept="image/*" multiple capture="environment" style={{ display:'none' }} disabled={uploadingFoto}
-                            onChange={e => onInputFotosChange(e, 'add')} />
-                        </label>
+                        <SicoeFotoFuentesBotones
+                          t={t}
+                          disabled={uploadingFoto}
+                          multiple
+                          compact
+                          iconOnly
+                          showContratoGaleria
+                          onGaleriaContrato={() => {
+                            setGaleriaHojaModo('add')
+                            setGaleriaHojaRefreshKey((k) => k + 1)
+                            setModalGaleriaHoja(true)
+                          }}
+                          onFiles={(files) => void subirFoto(files, { mode: 'add' })}
+                        />
                         {fotoVista && (
-                          <label style={{ cursor: uploadingFoto ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Reemplazar foto actual">
-                            Foto
-                            <input type="file" accept="image/*" capture="environment" style={{ display:'none' }} disabled={uploadingFoto}
-                              onChange={e => onInputFotosChange(e, 'replace')} />
-                          </label>
+                          <SicoeFotoFuentesBotones
+                            t={t}
+                            disabled={uploadingFoto}
+                            multiple={false}
+                            compact
+                            iconOnly
+                            mode="replace"
+                            onFiles={(files) => void subirFoto(files[0], { mode: 'replace' })}
+                          />
                         )}
-                        <button type="button" onClick={() => {
-                          setGaleriaHojaModo('add')
-                          setGaleriaHojaRefreshKey((k) => k + 1)
-                          setModalGaleriaHoja(true)
-                        }}
-                          title="Agregar desde galería de fotos"
-                          style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
-                          Galería
-                        </button>
                       </>
                     )}
                     {editableGrafico && (
@@ -5826,28 +5824,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       <span style={{ fontSize: 'var(--cc-md)' }}>🖼</span>
                       <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center' }}>
                         {editableFoto && (
-                          <label style={{
-                            background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
-                            borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', cursor: uploadingFoto ? 'wait' : 'pointer', fontWeight:600,
-                          }} title="Agregar foto(s) — dispositivo, cámara o varias a la vez">
-                            📷+
-                            <input type="file" accept="image/*" multiple capture="environment" style={{ display:'none' }} disabled={uploadingFoto}
-                              onChange={e => onInputFotosChange(e, 'add')} />
-                          </label>
-                        )}
-                        {editableFoto && (
-                          <button type="button" onClick={() => {
-                            setGaleriaHojaModo('add')
-                            setGaleriaHojaRefreshKey((k) => k + 1)
-                            setModalGaleriaHoja(true)
-                          }}
-                            title="Agregar desde galería de fotos"
-                            style={{
-                              background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
-                              borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', fontWeight:600, cursor:'pointer',
-                            }}>
-                            Galería
-                          </button>
+                          <SicoeFotoFuentesBotones
+                            t={t}
+                            disabled={uploadingFoto}
+                            multiple
+                            compact
+                            iconOnly
+                            showContratoGaleria
+                            onGaleriaContrato={() => {
+                              setGaleriaHojaModo('add')
+                              setGaleriaHojaRefreshKey((k) => k + 1)
+                              setModalGaleriaHoja(true)
+                            }}
+                            onFiles={(files) => void subirFoto(files, { mode: 'add' })}
+                          />
                         )}
                         {editableGrafico && (
                           <button
@@ -17654,23 +17644,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     ))}
                   </div>
                 )}
-                <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
-                  <button type="button" onClick={() => {
-                    setGaleriaRefreshKey((k) => k + 1)
-                    setModalGaleria(true)
-                  }} style={{
-                    background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                    borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer'
-                  }}>🖼️ Galería</button>
-                  <label style={{
-                    background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
-                    borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', fontWeight:600,
-                  }}>
-                    + Agregar foto(s)
-                    <input type='file' accept='image/*' multiple capture="environment" style={{ display:'none' }} onChange={async e => {
-                      const files = Array.from(e.target.files || [])
-                      e.target.value = ''
-                      if (!files.length) return
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6, alignItems:'center' }}>
+                  <SicoeFotoFuentesBotones
+                    t={t}
+                    multiple
+                    iconOnly
+                    showContratoGaleria
+                    onGaleriaContrato={() => {
+                      setGaleriaRefreshKey((k) => k + 1)
+                      setModalGaleria(true)
+                    }}
+                    onFiles={async (files) => {
+                      if (!files?.length) return
                       const idxReg = modalRegistro
                       let hist = listaFotosRegistro(registros[idxReg])
                       const errores = []
@@ -17761,8 +17746,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                             : `${errores.length} foto(s) fallaron:\n• ${errores.join('\n• ')}`,
                         })
                       }
-                    }} />
-                  </label>
+                    }}
+                  />
                 </div>
                 {!registros[modalRegistro]._fotoOk && (
                   <div style={{ color:'#F59E0B', fontSize:'var(--cc-label)', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
