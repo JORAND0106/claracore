@@ -1,17 +1,29 @@
 /**
- * Selector de origen de foto para SicoeObra:
- * Cámara | Galería del dispositivo | Archivo (+ opcional Galería del contrato).
- * Misma UX en registros y en el cuadro de aceros.
+ * Selector de origen de foto para SicoeObra.
+ *
+ * Causa del bug (Lenovo TB311FU / algunos Android): un solo
+ * input de imagen con atributo capture (environment) hace que Chrome abra
+ * directamente la cámara trasera, sin chooser de galería/archivos.
+ *
+ * Aquí se separan las fuentes:
+ * - Cámara → input CON capture (abre cámara)
+ * - Galería / Archivo → input SIN capture (abre selector del sistema)
+ * - Opcional: galería de fotos del contrato
+ *
+ * Por defecto: solo icono + tooltip (title / aria-label).
  */
 import { useRef } from 'react'
 
-const btnBase = (theme, disabled) => ({
+const btnBase = (theme, disabled, { iconOnly = true } = {}) => ({
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 4,
+  justifyContent: 'center',
+  gap: iconOnly ? 0 : 4,
   border: `1px solid ${theme.border}`,
   borderRadius: 8,
-  padding: '6px 10px',
+  padding: iconOnly ? '6px 8px' : '6px 10px',
+  minWidth: iconOnly ? 34 : undefined,
+  minHeight: iconOnly ? 34 : undefined,
   cursor: disabled ? 'wait' : 'pointer',
   color: theme.primary,
   fontWeight: 700,
@@ -19,6 +31,7 @@ const btnBase = (theme, disabled) => ({
   background: 'transparent',
   opacity: disabled ? 0.55 : 1,
   margin: 0,
+  lineHeight: 1,
 })
 
 /**
@@ -29,7 +42,9 @@ const btnBase = (theme, disabled) => ({
  *   onFiles: (files: File[], origen: 'camara'|'galeria-dispositivo'|'archivo') => void,
  *   onGaleriaContrato?: () => void,
  *   compact?: boolean,
+ *   iconOnly?: boolean,
  *   showContratoGaleria?: boolean,
+ *   mode?: 'add'|'replace',
  * }} props
  */
 export default function SicoeFotoFuentesBotones({
@@ -39,7 +54,9 @@ export default function SicoeFotoFuentesBotones({
   onFiles,
   onGaleriaContrato = null,
   compact = false,
+  iconOnly = true,
   showContratoGaleria = false,
+  mode = 'add',
 }) {
   const theme = t || {
     border: '#334155',
@@ -49,6 +66,8 @@ export default function SicoeFotoFuentesBotones({
   const camRef = useRef(null)
   const galRef = useRef(null)
   const archRef = useRef(null)
+  const replacing = mode === 'replace'
+  const verb = replacing ? 'Reemplazar con' : 'Tomar / elegir'
 
   const emit = (fileList, origen) => {
     const list = Array.from(fileList || []).filter(Boolean)
@@ -56,22 +75,34 @@ export default function SicoeFotoFuentesBotones({
     onFiles?.(list, origen)
   }
 
-  const st = btnBase(theme, disabled)
+  const st = btnBase(theme, disabled, { iconOnly })
   if (compact) {
-    st.padding = '2px 6px'
+    st.padding = iconOnly ? '2px 6px' : '2px 6px'
     st.fontSize = 'var(--cc-caption)'
     st.borderRadius = 4
+    st.minWidth = iconOnly ? 28 : undefined
+    st.minHeight = iconOnly ? 28 : undefined
   }
+
+  const labelCam = iconOnly ? '📷' : '📷 Cámara'
+  const labelGal = iconOnly ? '🖼' : '🖼 Galería'
+  const labelArch = iconOnly ? '📎' : '📎 Archivo'
+  const labelContrato = iconOnly ? '🗂️' : '🗂️ Galería contrato'
 
   return (
     <div
       data-testid="sicoe-foto-fuentes"
+      data-mode={mode}
       style={{ display: 'flex', flexWrap: 'wrap', gap: compact ? 4 : 6, alignItems: 'center' }}
       role="group"
-      aria-label="Origen de la foto"
+      aria-label={replacing ? 'Reemplazar foto — origen' : 'Agregar foto — origen'}
     >
-      <label style={st} title="Tomar con la cámara">
-        {compact ? '📷' : '📷 Cámara'}
+      <label
+        style={st}
+        title={`${verb} la cámara`}
+        aria-label={`${verb} la cámara`}
+      >
+        {labelCam}
         <input
           ref={camRef}
           type="file"
@@ -87,8 +118,12 @@ export default function SicoeFotoFuentesBotones({
           }}
         />
       </label>
-      <label style={st} title="Elegir de la galería del dispositivo">
-        {compact ? '🖼' : '🖼 Galería'}
+      <label
+        style={st}
+        title={`${verb} la galería del dispositivo`}
+        aria-label={`${verb} la galería del dispositivo`}
+      >
+        {labelGal}
         <input
           ref={galRef}
           type="file"
@@ -103,8 +138,12 @@ export default function SicoeFotoFuentesBotones({
           }}
         />
       </label>
-      <label style={st} title="Cargar desde archivos">
-        {compact ? '📎' : '📎 Archivo'}
+      <label
+        style={st}
+        title={`${verb} un archivo de la tablet / PC`}
+        aria-label={`${verb} un archivo`}
+      >
+        {labelArch}
         <input
           ref={archRef}
           type="file"
@@ -125,10 +164,11 @@ export default function SicoeFotoFuentesBotones({
           disabled={disabled}
           onClick={onGaleriaContrato}
           title="Elegir de la galería de fotos del contrato"
+          aria-label="Elegir de la galería de fotos del contrato"
           data-testid="sicoe-foto-fuente-galeria-contrato"
           style={{ ...st, borderStyle: 'dashed' }}
         >
-          {compact ? '🗂️' : '🗂️ Galería contrato'}
+          {labelContrato}
         </button>
       )}
     </div>
