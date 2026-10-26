@@ -6948,14 +6948,31 @@ def _armar_pdf_oc(
     insumo_map: dict = {}
     prov_ids: set = set()
     if insumo_ids:
-        ins_rows = (
-            sb.table("almacen_insumo")
-            .select("id, codigo, tipo_impuesto, impuesto_porcentaje, costo_base, proveedor_id, cotizacion_vigencia")
-            .in_("id", insumo_ids)
-            .execute()
-            .data
-            or []
+        selects_ins = (
+            "id, codigo, tipo_impuesto, impuesto_porcentaje, costo_base, "
+            "tributos, impuestos, proveedor_id, cotizacion_vigencia",
+            "id, codigo, tipo_impuesto, impuesto_porcentaje, costo_base, "
+            "tributos, proveedor_id, cotizacion_vigencia",
+            "id, codigo, tipo_impuesto, impuesto_porcentaje, costo_base, "
+            "proveedor_id, cotizacion_vigencia",
+            "id, codigo, tipo_impuesto, impuesto_porcentaje, costo_base, proveedor_id",
+            "id, codigo, costo_base, proveedor_id",
         )
+        ins_rows = []
+        for cols in selects_ins:
+            try:
+                ins_rows = (
+                    sb.table("almacen_insumo")
+                    .select(cols)
+                    .in_("id", insumo_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+                break
+            except Exception as exc:
+                if not _pgrst_unknown_column(exc):
+                    raise
         for r in ins_rows:
             insumo_map[int(r["id"])] = r
             if r.get("proveedor_id"):
@@ -6973,6 +6990,8 @@ def _armar_pdf_oc(
             .data
             or []
         )
+    # cotizacion_vigencia del catálogo = vigencia de la cotización (p. ej. «15 días»),
+    # no plazos de pago. Si falta, no inventar otro dato.
     for ins in insumo_map.values():
         vig = (ins.get("cotizacion_vigencia") or "").strip()
         if vig and not terminos:

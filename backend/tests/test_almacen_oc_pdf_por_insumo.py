@@ -54,6 +54,92 @@ def test_dos_tramos_del_mismo_insumo_son_una_linea_y_el_total_cuadra():
     assert cuadre["motivo"] == ""
 
 
+def test_argos_usa_costo_base_y_discrimina_iva_pleno():
+    """Valor catálogo 25.480; con IVA 19% → total 165.007.970 (no 30.321 como base)."""
+    vu_con_iva = 25480 * 1.19  # 30321.2
+    items = [{
+        "solicitud_item_id": 1,
+        "cantidad": 5442,
+        "valor_unitario": vu_con_iva,
+        "unidad": "BULTO",
+        "material_descripcion": "CC-1614-080 — CC-1614-080 — Cemento",
+    }]
+    sol = {1: {"id": 1, "insumo_id": 80, "insumo_codigo": "CC-1614-080"}}
+    insumos = {
+        80: {
+            "codigo": "CC-1614-080",
+            "costo_base": 25480,
+            "tributos": {"iva": {"porcentaje": 19}},
+            "tipo_impuesto": "iva",
+            "impuesto_porcentaje": 19,
+        },
+    }
+    rows, tot = pdf._lineas_y_totales(items, sol, insumos)
+    assert rows.count("CC-1614-080") == 1
+    assert "CC-1614-080 — CC-1614-080" not in rows
+    assert abs(tot["subtotal"] - 138_662_160) < 0.01
+    assert abs(tot["total"] - 165_007_970.4) < 0.01 or abs(tot["total"] - 165_007_970) < 0.5
+    assert "IVA 19%" in tot["rows_html"]
+    assert abs(tot["total"] - tot["subtotal"] - 26_345_810.4) < 0.01 or abs(
+        tot["total"] - tot["subtotal"] - 26_345_810
+    ) < 0.5
+    assert pdf.cuadrar_presentacion_oc(items, sol, insumos)["ok"] is True
+    vu_base = tot["grupos"][0]["valor_unitario_base"]
+    assert abs(vu_base - 25480) < 0.01
+
+
+def test_descripcion_no_repite_codigo():
+    assert pdf._descripcion_con_codigo("CC-1", "CC-1 — CC-1 — Arena") == "CC-1 — Arena"
+    assert pdf._descripcion_con_codigo("CC-1", "Arena") == "CC-1 — Arena"
+    assert pdf._descripcion_con_codigo("CC-1", "CC-1") == "CC-1"
+
+
+def test_pdf_etiqueta_vigencia_cotizacion():
+    html = pdf.generar_pdf_orden_compra(
+        contrato={"numero": "CT-1", "contratista": "Vías"},
+        orden_compra={"numero_oc": 1, "items": []},
+        solicitud={"consecutivo": 1, "items": []},
+        terminos="15 días",
+        solo_html=True,
+    )
+    assert "Vigencia de la cotización" in html
+    assert "15 días" in html
+    assert "Términos y condiciones" not in html
+
+
+def test_aiu_sin_iva_y_sin_impuesto():
+    items_aiu = [{
+        "solicitud_item_id": 1, "cantidad": 10, "valor_unitario": 113,
+        "unidad": "m", "material_descripcion": "Obra",
+    }]
+    sol = {1: {"id": 1, "insumo_id": 1, "insumo_codigo": "CC-A"}}
+    # AIU 5+3+5 = 13% sobre base 100 → 113
+    insumos_aiu = {
+        1: {
+            "codigo": "CC-A",
+            "costo_base": 100,
+            "tributos": {"administracion": 5, "imprevistos": 3, "utilidad": 5},
+        },
+    }
+    _rows, tot = pdf._lineas_y_totales(items_aiu, sol, insumos_aiu)
+    assert abs(tot["subtotal"] - 1000) < 0.01
+    assert abs(tot["total"] - 1130) < 0.01
+    assert "AIU" in tot["rows_html"]
+
+    items_sin = [{
+        "solicitud_item_id": 2, "cantidad": 2, "valor_unitario": 50,
+        "unidad": "u", "material_descripcion": "Nada",
+    }]
+    sol2 = {2: {"id": 2, "insumo_id": 2, "insumo_codigo": "CC-B"}}
+    insumos_sin = {2: {"codigo": "CC-B", "costo_base": 50}}
+    _r2, tot2 = pdf._lineas_y_totales(items_sin, sol2, insumos_sin)
+    assert abs(tot2["subtotal"] - 100) < 0.01
+    assert abs(tot2["total"] - 100) < 0.01
+    assert "IVA 19%" not in tot2["rows_html"]
+    assert "AIU" not in tot2["rows_html"]
+    assert tot2["subtotal"] == tot2["total"]
+
+
 def test_precios_distintos_siguen_siendo_una_linea_y_suman_el_total():
     items = [
         {"solicitud_item_id": 1, "cantidad": 1, "valor_unitario": 119, "unidad": "m", "material_descripcion": "Tubería"},
