@@ -2600,6 +2600,7 @@ def crear_reporte_sicoe_desde_planilla(
     from topografia_planilla_sicoe_enlace import (
         ESTADO_REPORTE_CON_ITEM,
         campos_item_en_registro,
+        capitulo_para_precio_item,
         construir_enlace,
         item_de_linea,
         items_desde_meta,
@@ -2621,7 +2622,7 @@ def crear_reporte_sicoe_desde_planilla(
     faltan_item = lineas_sin_item(lineas, items_cobro, p.get("tipo"))
     if faltan_item:
         raise HTTPException(422, mensaje_faltan_items(faltan_item))
-    # Precio por (capítulo del reporte, ítem): mismo código en otro capítulo no vale.
+    # Precio por (capítulo del ítem, ítem): el capítulo del reporte no define el V.U.
     listado_idx: dict = {}
     try:
         from sicoe_valor_canonico import load_listado_vu_by_cap_item
@@ -2640,7 +2641,8 @@ def crear_reporte_sicoe_desde_planilla(
     if faltan_precio:
         raise HTTPException(422, mensaje_faltan_precios(faltan_precio))
     # Un ítem de otro capítulo no bloquea: el formulario lo confirma y, si el
-    # usuario sigue, el reporte queda con el capítulo seleccionado y esos ítems.
+    # usuario sigue, el reporte queda con el capítulo seleccionado y cada
+    # registro con el capítulo/precio de su ítem.
 
     lat, lng = _coords_wgs_planilla(p)
     # costado del maestro PK («Derecho») → catálogo so_reportes.margen («Derecha»)
@@ -2776,9 +2778,10 @@ def crear_reporte_sicoe_desde_planilla(
         # cantidad_total ya viene del Resumen (2 dec) — no recalcular PRODUCT.
         data["cantidad"] = None
         item_line = dict(item_de_linea(line, items_cobro, p.get("tipo")) or {})
-        # V.U. del listado para el capítulo del reporte (no el del ítem asignado).
+        # Capítulo y V.U. del ítem asignado (no del capítulo general del reporte).
+        cap_item = capitulo_para_precio_item(item_line, capitulo)
         vu_cap = precio_listado_cap_item(
-            listado_idx, capitulo, item_line.get("item_numero"),
+            listado_idx, cap_item, item_line.get("item_numero"),
         )
         if vu_cap is not None:
             item_line["precio_unitario"] = vu_cap
@@ -2792,7 +2795,7 @@ def crear_reporte_sicoe_desde_planilla(
             "creado_por_reg": uid,
             "modificado_por_reg": uid,
             "bloqueado": False,
-            "capitulo": capitulo,
+            "capitulo": cap_item or capitulo,
             "pk_id_id": pk_id_id,
             "margen": margen,
             **ubicacion_pk,

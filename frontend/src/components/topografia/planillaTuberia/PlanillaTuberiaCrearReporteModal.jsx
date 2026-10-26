@@ -15,11 +15,10 @@ import {
 import TopoConfirmModal from '../TopoConfirmModal'
 import { filtrarCapitulosPorTipoPlanilla } from './planillaTuberiaCrearReporteUi'
 import {
-  fetchPreciosPorItemCapitulo,
+  fetchPreciosPorItemsAsignados,
   lineasSinPrecio,
   mensajeCapituloDistinto,
   mensajeFaltanPrecios,
-  padreDeDescuento,
 } from './planillaTuberiaItemSicoe'
 
 /** Por encima del editor de planilla (100030) y del mapa PK (100050). */
@@ -396,25 +395,15 @@ export default function PlanillaTuberiaCrearReporteModal({
     setBusy(true); setErr('')
     try {
       const cap = String(capitulo).trim()
-      const numeros = []
-      for (const l of lineasPreview || []) {
-        const codigo = String(l?.codigo || '').toUpperCase()
-        const scope = String(l?.scope || 'cantidades').toLowerCase()
-        const origen = `${scope}:${codigo}`
-        const padre = scope === 'descuentos'
-          ? padreDeDescuento(codigo, l?.item_cant_codigo)
-          : origen
-        const item = padre && itemsPorLinea ? itemsPorLinea[padre] : null
-        if (item?.item_numero) numeros.push(item.item_numero)
-      }
-      const precios = await fetchPreciosPorItemCapitulo({
+      // Precio por capítulo del ítem (no por el capítulo general del reporte).
+      const precios = await fetchPreciosPorItemsAsignados({
         contratoId,
         token,
-        capitulo: cap,
-        itemNumeros: numeros,
+        items: itemsPorLinea,
         apiBase: API_BASE,
+        capituloFallback: cap,
       })
-      const sinPrecio = lineasSinPrecio(lineasPreview, itemsPorLinea, precios)
+      const sinPrecio = lineasSinPrecio(lineasPreview, itemsPorLinea, precios, cap)
       if (sinPrecio.length) {
         setAvisoCapitulo('')
         setErr(mensajeFaltanPrecios(sinPrecio))

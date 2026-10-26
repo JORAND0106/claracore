@@ -8,6 +8,8 @@ import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   aplicarDimsEnlace,
+  capituloParaPrecioItem,
+  clavePrecioCapItem,
   etiquetaItem,
   capituloItemDistinto,
   lineasSinItem,
@@ -57,31 +59,44 @@ describe('ítem de cobro en la planilla', () => {
     assert.match(app, /IconoModuloConAlerta icon=\{icon\} total=\{alertaIcono\}/)
   })
 
-  it('bloquea crear reporte si el ítem no tiene precio en el capítulo', () => {
+  it('bloquea crear reporte si el ítem no tiene precio en su propio capítulo', () => {
     assert.equal(precioListadoUsable(0), false)
     assert.equal(precioListadoUsable(null), false)
     assert.equal(precioListadoUsable(12.5), true)
+    const capReporte = '3. OBRAS DE ARTE (ALCANTARILLA)'
+    const capExc = '1. ACTIVIDADES PRELIMINARES'
+    const capTri = 'Filtros'
     const lineas = [
       { scope: 'cantidades', codigo: 'EXC', nombre: 'Excavación Varias' },
       { scope: 'cantidades', codigo: 'TRI', nombre: 'Atraque' },
       { scope: 'descuentos', codigo: 'DESC_A1', nombre: 'Area 1', item_cant_codigo: 'TRI' },
     ]
     const items = {
-      'cantidades:EXC': { item_numero: '1.01', precio_unitario: 1000, capitulo: 'Alc' },
-      'cantidades:TRI': { item_numero: '1.02', precio_unitario: 2000, capitulo: 'Filtros' },
+      'cantidades:EXC': { item_numero: '1.1.', precio_unitario: 1000, capitulo: capExc },
+      'cantidades:TRI': { item_numero: 'NP-08.', precio_unitario: 2000, capitulo: capTri },
     }
-    // Precio de 1.02 solo existiría en otro capítulo → mapa del capítulo del reporte sin 1.02.
-    const preciosCapReporte = { '1.01': 1000 }
-    const faltan = lineasSinPrecio(lineas, items, preciosCapReporte)
-    assert.deepEqual(faltan.map((f) => f.item_numero), ['1.02'])
+    assert.equal(capituloParaPrecioItem(items['cantidades:EXC'], capReporte), capExc)
+    // Mapa con precio solo en el capítulo del reporte → no vale para ítems de otro cap.
+    const preciosSoloReporte = {
+      [clavePrecioCapItem(capReporte, '1.1.')]: 1000,
+      [clavePrecioCapItem(capReporte, 'NP-08.')]: 2000,
+    }
+    const faltan = lineasSinPrecio(lineas, items, preciosSoloReporte, capReporte)
+    assert.deepEqual(faltan.map((f) => f.item_numero).sort(), ['1.1.', 'NP-08.'])
     assert.match(mensajeFaltanPrecios(faltan), /faltan precios en el listado/)
-    assert.match(mensajeFaltanPrecios(faltan), /1\.02/)
-    // Con precio en el capítulo del reporte → no bloquea.
+    // Con precio en el capítulo propio de cada ítem → no bloquea (aunque el reporte sea otro).
+    const preciosPropios = {
+      [clavePrecioCapItem(capExc, '1.1.')]: 1000,
+      [clavePrecioCapItem(capTri, 'NP-08.')]: 2100,
+    }
+    assert.deepEqual(lineasSinPrecio(lineas, items, preciosPropios, capReporte), [])
+    // Sin precio en el capítulo propio → sí bloquea.
+    const sinTri = { [clavePrecioCapItem(capExc, '1.1.')]: 1000 }
     assert.deepEqual(
-      lineasSinPrecio(lineas, items, { '1.01': 1000, '1.02': 2100 }),
-      [],
+      lineasSinPrecio(lineas, items, sinTri, capReporte).map((f) => f.item_numero),
+      ['NP-08.'],
     )
-    assert.match(modal, /fetchPreciosPorItemCapitulo/)
+    assert.match(modal, /fetchPreciosPorItemsAsignados/)
     assert.match(modal, /lineasSinPrecio/)
     assert.match(modal, /mensajeFaltanPrecios/)
   })

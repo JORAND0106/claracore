@@ -46,27 +46,49 @@ export function precioListadoUsable(precio) {
   return Number.isFinite(n) && n > 0
 }
 
+/** Clave capítulo+ítem para el mapa de precios (mismo código en otro cap ≠ mismo precio). */
+export function clavePrecioCapItem(capitulo, itemNumero) {
+  return `${String(capitulo || '').trim()}\0${String(itemNumero || '').trim()}`
+}
+
 /**
- * Líneas con ítem cuyo (capítulo del reporte, ítem) no tiene precio en el mapa
- * `preciosPorItem` (item_numero → precio_unitario del listado en ese capítulo).
- * Un aviso por ítem (descuentos heredan el del padre).
+ * Capítulo con el que se busca el precio del ítem: el propio; si falta, el del reporte.
  */
-export function lineasSinPrecio(lineas, items, preciosPorItem) {
-  const precios = preciosPorItem && typeof preciosPorItem === 'object' ? preciosPorItem : {}
+export function capituloParaPrecioItem(item, capituloReporteFallback = '') {
+  const capItem = String(item?.capitulo || '').trim()
+  if (capItem) return capItem
+  return String(capituloReporteFallback || '').trim()
+}
+
+/**
+ * Líneas con ítem cuyo (capítulo del ítem, ítem) no tiene precio en el mapa
+ * `preciosPorCapItem` (clave `capitulo\\0item` → precio_unitario).
+ * Un aviso por (capítulo, ítem); descuentos heredan el del padre.
+ * Acepta mapa legacy plano item_numero → precio solo si no hay clave compuesta.
+ */
+export function lineasSinPrecio(lineas, items, preciosPorCapItem, capituloReporteFallback = '') {
+  const precios = preciosPorCapItem && typeof preciosPorCapItem === 'object' ? preciosPorCapItem : {}
   const faltan = []
   const vistos = new Set()
   for (const l of lineas || []) {
     const item = itemDeLineaPreview(l, items)
     const numero = String(item?.item_numero || '').trim()
-    if (!numero || vistos.has(numero)) continue
-    if (precioListadoUsable(precios[numero])) continue
-    vistos.add(numero)
+    if (!numero) continue
+    const cap = capituloParaPrecioItem(item, capituloReporteFallback)
+    const clave = clavePrecioCapItem(cap, numero)
+    if (vistos.has(clave)) continue
+    const precio = Object.prototype.hasOwnProperty.call(precios, clave)
+      ? precios[clave]
+      : precios[numero]
+    if (precioListadoUsable(precio)) continue
+    vistos.add(clave)
     const codigo = String(l?.codigo || '').toUpperCase()
     const scope = String(l?.scope || 'cantidades').toLowerCase()
     faltan.push({
       origen: `${scope}:${codigo}`,
       nombre: l?.nombre || codigo,
       item_numero: numero,
+      capitulo: cap,
     })
   }
   return faltan
@@ -118,6 +140,44 @@ export async function fetchPreciosPorItemCapitulo({
       }
     } catch {
       /* el backend vuelve a validar al crear */
+    }
+  }))
+  return out
+}
+
+/**
+ * Precio por (capítulo del ítem, ítem). Agrupa los ítems asignados por su propio
+ * capítulo (no el del reporte) y consulta el listado en cada uno.
+ * `capituloFallback` solo aplica a ítems legacy sin capítulo guardado.
+ */
+export async function fetchPreciosPorItemsAsignados({
+  contratoId,
+  token,
+  items,
+  apiBase,
+  capituloFallback = '',
+}) {
+  const map = items && typeof items === 'object' ? items : {}
+  const byCap = new Map()
+  for (const it of Object.values(map)) {
+    const numero = String(it?.item_numero || '').trim()
+    if (!numero) continue
+    const cap = capituloParaPrecioItem(it, capituloFallback)
+    if (!cap) continue
+    if (!byCap.has(cap)) byCap.set(cap, new Set())
+    byCap.get(cap).add(numero)
+  }
+  const out = {}
+  await Promise.all([...byCap.entries()].map(async ([cap, nums]) => {
+    const parcial = await fetchPreciosPorItemCapitulo({
+      contratoId,
+      token,
+      capitulo: cap,
+      itemNumeros: [...nums],
+      apiBase,
+    })
+    for (const [numero, precio] of Object.entries(parcial)) {
+      out[clavePrecioCapItem(cap, numero)] = precio
     }
   }))
   return out
