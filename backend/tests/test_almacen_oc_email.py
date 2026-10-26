@@ -88,6 +88,69 @@ def test_asunto_incluye_oc_contrato_y_contacto():
     assert "PDF" in cuerpo
 
 
+def test_smtp_oc_usa_contacto_claracore(monkeypatch):
+    """La OC usa el mismo SMTP que bienvenida (contactenos@claracore.co), no solo CCD_NOTIFY."""
+    import almacen_oc_email as mod
+
+    monkeypatch.delenv("CCD_NOTIFY_SMTP_HOST", raising=False)
+    monkeypatch.setenv("CLARACORE_CONTACTO_SMTP_HOST", "smtp.zoho.com")
+    monkeypatch.setenv("CLARACORE_CONTACTO_SMTP_USER", "contactenos@claracore.co")
+    monkeypatch.setenv("CLARACORE_CONTACTO_SMTP_PASSWORD", "secret")
+    monkeypatch.setenv("CLARACORE_CONTACTO_FROM_EMAIL", "contactenos@claracore.co")
+    monkeypatch.setenv("CLARACORE_CONTACTO_FROM_NAME", "ClaraCore")
+    cfg = mod._smtp_plataforma_oc()
+    assert cfg["from_email"] == "contactenos@claracore.co"
+    assert cfg["host"] == "smtp.zoho.com"
+    assert cfg["user"] == "contactenos@claracore.co"
+
+
+def test_enviar_pdf_correo_from_contacto(monkeypatch):
+    import almacen_oc_email as mod
+
+    enviados = []
+
+    class _Smtp:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def ehlo(self):
+            return None
+
+        def starttls(self):
+            return None
+
+        def login(self, user, password):
+            enviados.append(("login", user))
+
+        def send_message(self, msg):
+            enviados.append(("from", msg["From"]))
+            enviados.append(("to", msg["To"]))
+
+    monkeypatch.setattr(mod.smtplib, "SMTP", _Smtp)
+    monkeypatch.setattr(
+        mod, "_smtp_plataforma_oc",
+        lambda: {
+            "host": "smtp.zoho.com",
+            "port": 587,
+            "user": "contactenos@claracore.co",
+            "password": "x",
+            "from_email": "contactenos@claracore.co",
+            "from_name": "ClaraCore",
+            "use_tls": True,
+        },
+    )
+    mod.enviar_pdf_correo("prov@obra.com", "Asunto", "Cuerpo", b"%PDF", "oc.pdf")
+    assert ("login", "contactenos@claracore.co") in enviados
+    assert ("from", "ClaraCore <contactenos@claracore.co>") in enviados
+    assert ("to", "prov@obra.com") in enviados
+
+
 def test_asunto_sin_numero_visible_no_usa_el_id():
     asunto, cuerpo = _asunto_cuerpo(
         {"id": 17},

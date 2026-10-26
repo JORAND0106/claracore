@@ -193,6 +193,40 @@ def correos_de_lineas(detalle_por_insumo: Dict[int, List[dict]], items: List[dic
     return vistos
 
 
+def _smtp_plataforma_oc() -> dict:
+    """Mismo SMTP que bienvenida / Seguimiento: contactenos@claracore.co.
+
+    Prioridad: CLARACORE_CONTACTO_* (con fallback a facturación en ese módulo).
+    Si no hay contacto, CCD_NOTIFY_* (legado).
+    """
+    try:
+        from usuario_bienvenida_email import contacto_smtp_configured, _smtp_settings
+
+        if contacto_smtp_configured():
+            return _smtp_settings()
+    except Exception as exc:
+        _log.warning("SMTP de contacto no disponible para OC: %s", exc)
+
+    host = (os.getenv("CCD_NOTIFY_SMTP_HOST") or "").strip()
+    user = (os.getenv("CCD_NOTIFY_SMTP_USER") or "").strip()
+    password = (os.getenv("CCD_NOTIFY_SMTP_PASSWORD") or "").strip()
+    from_email = (os.getenv("CCD_NOTIFY_FROM_EMAIL") or user or "").strip()
+    if not (host and from_email):
+        raise RuntimeError("El correo de la plataforma no está configurado.")
+    return {
+        "host": host,
+        "port": int(os.getenv("CCD_NOTIFY_SMTP_PORT") or "587"),
+        "user": user,
+        "password": password,
+        "from_email": from_email,
+        "from_name": (os.getenv("CCD_NOTIFY_FROM_NAME") or "ClaraCore").strip(),
+        "use_tls": (
+            os.getenv("CCD_NOTIFY_SMTP_TLS", "1").strip().lower()
+            not in ("0", "false", "no")
+        ),
+    }
+
+
 def enviar_pdf_correo(
     destinatario: str,
     subject: str,
@@ -200,35 +234,25 @@ def enviar_pdf_correo(
     pdf_bytes: bytes,
     pdf_nombre: str,
 ) -> None:
-    """Envía el PDF. Lanza si SMTP no está configurado o el envío falla."""
-    host = (os.getenv("CCD_NOTIFY_SMTP_HOST") or "").strip()
-    if not host:
-        raise RuntimeError("El correo de la plataforma no está configurado.")
+    """Envía el PDF desde contactenos@claracore.co (mismo flujo que el resto de ClaraCore)."""
     to_addr = correo_valido(destinatario)
     if not to_addr:
         raise RuntimeError("El correo del destinatario no es válido.")
-    port = int(os.getenv("CCD_NOTIFY_SMTP_PORT") or "587")
-    user = (os.getenv("CCD_NOTIFY_SMTP_USER") or "").strip()
-    password = (os.getenv("CCD_NOTIFY_SMTP_PASSWORD") or "").strip()
-    from_email = (os.getenv("CCD_NOTIFY_FROM_EMAIL") or user or "").strip()
-    if not from_email:
-        raise RuntimeError("El correo de la plataforma no está configurado.")
-    from_name = (os.getenv("CCD_NOTIFY_FROM_NAME") or "ClaraCore").strip()
+    cfg = _smtp_plataforma_oc()
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = f"{from_name} <{from_email}>"
+    msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
     msg["To"] = to_addr
     msg.set_content(body)
     nombre = (pdf_nombre or "orden-de-compra.pdf").strip() or "orden-de-compra.pdf"
     msg.add_attachment(pdf_bytes or b"", maintype="application", subtype="pdf", filename=nombre)
-    use_tls = (os.getenv("CCD_NOTIFY_SMTP_TLS", "1").strip().lower() not in ("0", "false", "no"))
-    with smtplib.SMTP(host, port, timeout=45) as smtp:
+    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=45) as smtp:
         smtp.ehlo()
-        if use_tls:
+        if cfg.get("use_tls"):
             smtp.starttls()
             smtp.ehlo()
-        if user and password:
-            smtp.login(user, password)
+        if cfg.get("user") and cfg.get("password"):
+            smtp.login(cfg["user"], cfg["password"])
         smtp.send_message(msg)
 
 
