@@ -49,6 +49,16 @@ describe('confirmación de notificación al proveedor', () => {
     })
   })
 
+  it('incluye redirección temporal solo cuando se notifica', () => {
+    const payload = notificarProveedoresPayload(
+      proveedores,
+      { 'id:7': true, 'nombre:cementos': false },
+      { 'id:7': 'yo@obra.com', 'nombre:cementos': 'no@obra.com' },
+    )
+    assert.equal(payload[0].correo_override, 'yo@obra.com')
+    assert.equal(payload[1].correo_override, undefined)
+  })
+
   it('documento de sistema no es pendiente ni enviado', () => {
     assert.equal(esDocumentoSistema({ documento_sistema: true, envio_estado: null }), true)
     assert.equal(esDocumentoSistema({ documento_sistema: true, envio_estado: 'pendiente' }), false)
@@ -80,12 +90,17 @@ describe('confirmación de notificación al proveedor', () => {
     assert.match(modal, /Sí a todos/)
     assert.match(modal, /No a todos/)
     assert.match(modal, /data-testid="oc-notificar-continuar"/)
+    assert.match(modal, /data-testid="oc-notificar-correo"/)
+    assert.match(modal, /data-testid="oc-notificar-redirect"/)
+    assert.match(modal, /Correo de destino/)
+    assert.match(modal, /Redirigir solo esta vez/)
     assert.match(modal, /disabled=\{busy \|\| !listo\}/)
     assert.doesNotMatch(modal, /fmtMoney|valor_unitario|valorLinea|verEconomicos/)
     for (const archivo of ['SolicitudDetalleModal.jsx', 'SolicitudRevisionModal.jsx']) {
       const src = leer(archivo)
       assert.match(src, /OcNotificarProveedorModal/)
       assert.match(src, /notificar_proveedores: notificarProveedores/)
+      assert.match(src, /correosNotificarOc/)
       assert.match(src, /onCancel=\{\(\) => !busy && setNotificarOc\(null\)\}/)
       assert.match(src, /puedeGenerarOc &&/)
     }

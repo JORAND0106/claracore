@@ -227,9 +227,9 @@ export default function ResumenProveedoresPanel({
     }
   }
 
-  const generarOc = async (respuestas) => {
+  const generarOc = async (respuestas, redirects) => {
     if (!tarjeta || !seleccion.length) return
-    const payload = notificarProveedoresPayload(notificar?.proveedores || [], respuestas)
+    const payload = notificarProveedoresPayload(notificar?.proveedores || [], respuestas, redirects)
     setBusy(true)
     setError('')
     try {
@@ -504,6 +504,8 @@ export default function ResumenProveedoresPanel({
                       proveedores: [{
                         key: tarjeta.proveedorId != null ? `id:${tarjeta.proveedorId}` : `nom:${tarjeta.nombre}`,
                         nombre: tarjeta.nombre,
+                        correo: tarjeta.contacto_email || null,
+                        sin_correo: !tarjeta.contacto_email,
                       }],
                     })}
                   >

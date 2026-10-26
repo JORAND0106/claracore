@@ -339,6 +339,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       })
     },
 
+    correosNotificarOc: (solicitudId, itemIds) =>
+      fetch(`${base}/solicitudes/${solicitudId}/correos-notificar-oc`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ item_ids: itemIds || [] }),
+      }).then(parseJson),
+
     aprobarSolicitud: (id, body = {}) =>
       fetch(`${base}/solicitudes/${id}/aprobar`, {
         method: 'POST',

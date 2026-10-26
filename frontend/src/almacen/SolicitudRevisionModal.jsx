@@ -5,7 +5,7 @@ import ExpedienteCompraModal from './ExpedienteCompraModal'
 import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
 import OcProveedoresModal from './OcProveedoresModal'
 import OcNotificarProveedorModal from './OcNotificarProveedorModal'
-import { notificarProveedoresPayload } from './ocNotificarProveedor'
+import { enriquecerProveedoresConCorreo, notificarProveedoresPayload } from './ocNotificarProveedor'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
 import { gruposProveedorPendientes } from './ocProveedoresSeleccion'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
@@ -74,7 +74,7 @@ export default function SolicitudRevisionModal({
     [sol?.items],
   )
 
-  const abrirNotificarOc = (itemIds) => {
+  const abrirNotificarOc = async (itemIds) => {
     const elegidos = gruposOc.grupos.filter((g) => (
       g.lineas.some((linea) => itemIds.includes(linea.id))
     ))
@@ -83,7 +83,23 @@ export default function SolicitudRevisionModal({
       return
     }
     setSelectorOc(false)
-    setNotificarOc({ grupos: elegidos, itemIds })
+    setError('')
+    setBusy(true)
+    try {
+      const r = await api.correosNotificarOc(sol.id, itemIds)
+      setNotificarOc({
+        grupos: enriquecerProveedoresConCorreo(elegidos, r?.proveedores),
+        itemIds,
+      })
+    } catch (e) {
+      setNotificarOc({
+        grupos: elegidos.map((g) => ({ ...g, correo: null, sin_correo: true })),
+        itemIds,
+      })
+      setError(e.message || 'No se pudo cargar el correo de destino; puede indicarlo al generar.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const ejecutarAprobar = async (itemIds, notificarProveedores) => {
@@ -306,10 +322,10 @@ export default function SolicitudRevisionModal({
           busy={busy}
           error={error}
           onCancel={() => !busy && setNotificarOc(null)}
-          onConfirm={(respuestas) => {
+          onConfirm={(respuestas, redirects) => {
             void ejecutarAprobar(
               notificarOc.itemIds,
-              notificarProveedoresPayload(notificarOc.grupos, respuestas),
+              notificarProveedoresPayload(notificarOc.grupos, respuestas, redirects),
             )
           }}
         />

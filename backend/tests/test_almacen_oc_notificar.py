@@ -50,19 +50,59 @@ def test_documento_sistema_no_envia_correo(monkeypatch):
 
     enviados = []
     pdfs = []
-    monkeypatch.setattr(mod, "enviar_oc_por_correo", lambda *a, **k: enviados.append(a) or {"resultado": "enviado"})
+    monkeypatch.setattr(
+        mod, "enviar_oc_por_correo",
+        lambda *a, **k: enviados.append((a, k)) or {"resultado": "enviado"},
+    )
     monkeypatch.setattr(mod, "_publicar_pdf_sin_correo", lambda *a, **k: pdfs.append(a) or True)
     out = publicar_envios_oc(1, 2, 7, [
-        {"id": 10, "numero_oc": 3, "proveedor_nombre": "Aceros", "documento_sistema": False},
+        {
+            "id": 10, "numero_oc": 3, "proveedor_nombre": "Aceros",
+            "documento_sistema": False, "correo_override": "yo@obra.com",
+        },
         {"id": 11, "numero_oc": 4, "proveedor_nombre": "Cementos", "documento_sistema": True},
     ])
     assert len(enviados) == 1
-    assert enviados[0][1] == 10
+    assert enviados[0][0][1] == 10
+    assert enviados[0][1].get("correo_override") == "yo@obra.com"
     assert len(pdfs) == 1
     assert out[1]["resultado"] == "sistema"
     assert out[1]["envio_estado"] is None
     assert "pendiente" not in out[1]["detalle"]
     assert out[1]["documento_sistema"] is True
+
+
+def test_crear_oc_guarda_override_en_memoria(monkeypatch):
+    import almacen_service as svc
+
+    rows = []
+    monkeypatch.setattr(svc, "_next_consecutivo", lambda *_a, **_k: 4)
+    monkeypatch.setattr(svc, "_usuario_firma_url", lambda *_a, **_k: "https://cdn.test/firma.png")
+    monkeypatch.setattr(svc, "_insertar_items_en_oc", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc, "_insert_orden_compra_row",
+        lambda _sb, row: rows.append(row) or [{"id": 11}],
+    )
+    out = svc._crear_oc_con_items(
+        object(),
+        contrato_id=1,
+        solicitud_id=2,
+        user_id=7,
+        sol={"created_by": 3},
+        body={},
+        items=[{"id": 1}],
+        proveedor_id=5,
+        proveedor_nombre="Aceros",
+        notificaciones=[{
+            "proveedor_id": 5,
+            "proveedor_nombre": "Aceros",
+            "notificar": True,
+            "correo_override": "prueba@obra.com",
+        }],
+    )
+    assert "correo_override" not in rows[0]
+    assert out["correo_override"] == "prueba@obra.com"
+    assert out["documento_sistema"] is False
 
 
 def test_sin_respuesta_no_inserta_y_no_marca_por_defecto(monkeypatch):
