@@ -605,6 +605,14 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
             "backend/sql/almacen_solicitud_administracion_aiu.sql "
             "(ALTER COLUMN … DROP NOT NULL + NOTIFY pgrst) y reintente."
         )
+    if "solicitud_id" in low and any(
+        tok in low for tok in ("null value", "not-null", "not null", "23502")
+    ):
+        return (
+            "No se pudo guardar porque una línea llegó sin su solicitud. "
+            "No se creó ninguna línea nueva. Recargue la solicitud, vuelva a seleccionar "
+            "las líneas originales e intente de nuevo."
+        )
     if "almacen_solicitud_item_reparto" in low and any(
         tok in low for tok in ("does not exist", "pgrst205", "schema cache", "could not find")
     ):
@@ -1049,9 +1057,24 @@ def _update_solicitud_item_row(sb, item_id: int, row: dict) -> None:
 
 
 def _update_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) -> None:
-    """Actualiza muchas líneas en pocos upserts. Sin upsert, cae al update de a una."""
+    """Actualiza muchas líneas en pocos upserts. Sin upsert, cae al update de a una.
+
+    Cada fila debe traer ``id`` y ``solicitud_id``: el upsert de PostgREST intenta
+    INSERT primero y, sin solicitud_id, choca el NOT NULL aunque la línea ya exista.
+    """
     if not rows:
         return
+    for row in rows:
+        if row.get("id") in (None, ""):
+            raise ValueError(
+                "No se puede actualizar una línea sin su identidad. "
+                "Recargue la solicitud e intente de nuevo."
+            )
+        if row.get("solicitud_id") in (None, ""):
+            raise ValueError(
+                "No se puede guardar una línea sin su solicitud. "
+                "Recargue la solicitud e intente de nuevo; si el problema continúa, avise a soporte."
+            )
     probe = sb.table("almacen_solicitud_item")
     upsert = getattr(probe, "upsert", None)
     if not callable(upsert):
@@ -3714,9 +3737,6 @@ def mapear_items_bloque(
     ):
         costo_body["valor_compra_unitario"] = sel_proto.get("valor")
 
-    cot_ids = _persistir_cotizaciones_bloque(sb, lineas, sel_proto)
-    t = _marca("cotizaciones_bloque", t)
-
     patches: List[dict] = []
     for existing, resolved, m in zip(lineas, resolved_list, meta):
         iid = int(existing["id"])
@@ -3727,6 +3747,8 @@ def mapear_items_bloque(
         ).strip()
         patch = {
             "id": iid,
+            # Obligatorio en el upsert: sin esto Postgres intenta INSERT con solicitud_id NULL.
+            "solicitud_id": int(solicitud_id),
             "insumo_id": resolved.get("insumo_id"),
             "listado_precio_id": resolved.get("listado_precio_id"),
             "material_descripcion": resolved.get("material_descripcion"),
@@ -3755,19 +3777,29 @@ def mapear_items_bloque(
             patch["proveedor_seleccionado_id"] = sel_proto.get("proveedor_seleccionado_id")
             patch["proveedor_seleccionado_nombre"] = sel_proto.get("proveedor_seleccionado_nombre")
             patch["cotizacion_numero_seleccionada"] = sel_proto.get("cotizacion_numero_seleccionada")
-        cot_sel_id = cot_ids.get(iid)
-        if cot_sel_id:
-            patch["cotizacion_seleccionada_id"] = cot_sel_id
         if patch["valor_compra_unitario"] is not None and _to_float(patch["valor_compra_unitario"]) < 0:
             raise ValueError("El costo de compra no puede ser negativo.")
         if patch["vlr_unitario_cobro"] is not None and _to_float(patch["vlr_unitario_cobro"]) < 0:
             raise ValueError("El valor de cobro no puede ser negativo.")
         patches.append(patch)
 
-    # Escritura atómica a efectos prácticos: un solo upsert por lote.
-    # Si falla, no hubo updates parciales previos (cotizaciones huérfanas no afectan líneas).
+    # Primero las líneas (con solicitud_id). Cotizaciones después: si el lote falla,
+    # no quedan filas nuevas sin solicitud ni cotizaciones huérfanas de este intento.
     _update_solicitud_items_batch(sb, patches)
     t = _marca("update_lineas_batch", t)
+
+    cot_ids = _persistir_cotizaciones_bloque(sb, lineas, sel_proto)
+    if cot_ids:
+        cot_patches = [
+            {
+                "id": iid,
+                "solicitud_id": int(solicitud_id),
+                "cotizacion_seleccionada_id": cid,
+            }
+            for iid, cid in cot_ids.items()
+        ]
+        _update_solicitud_items_batch(sb, cot_patches)
+    t = _marca("cotizaciones_bloque", t)
 
     _sincronizar_titulo_solicitud(sb, solicitud_id)
     t = _marca("titulo", t)
