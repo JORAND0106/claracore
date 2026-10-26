@@ -1386,6 +1386,14 @@ def route_aprobar_solicitud(
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    except Exception as exc:
+        # Si el UNIQUE de BD aún no se aplicó, no devolver el APIError crudo al usuario.
+        from almacen_service import _humanize_oc_db_error
+
+        msg = _humanize_oc_db_error(exc)
+        if msg:
+            raise HTTPException(status_code=400, detail=msg) from exc
+        raise
 
 
 @router.patch("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/mapear")

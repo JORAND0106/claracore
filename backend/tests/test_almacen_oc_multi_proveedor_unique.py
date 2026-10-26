@@ -22,6 +22,9 @@ def test_migracion_critica_existe_y_quita_unique_solicitud():
     assert "NOTIFY pgrst" in text
     assert SQL_MANUAL.is_file()
     assert SQL_DIAG.is_file()
+    arreglo = ROOT / "sql" / "almacen_oc_ARREGLAR_multi_proveedor.sql"
+    assert arreglo.is_file()
+    assert "DROP CONSTRAINT" in arreglo.read_text(encoding="utf-8")
     legacy = SQL_LEGACY.read_text(encoding="utf-8")
     assert "idx_almacen_oc_solicitud_proveedor_id_uq" in legacy
 
@@ -38,6 +41,27 @@ def test_humanize_legacy_unique_solicitud_id():
     assert "solo una OC por solicitud" in msg
     assert "23505" not in msg
     assert "almacen_orden_compra_solicitud_id_key" not in msg
+
+
+def test_humanize_apierror_dict_args():
+    """Formato típico PostgREST que llega como APIError al front."""
+    class APIError(Exception):
+        def __init__(self, payload):
+            self.message = payload.get("message")
+            self.code = payload.get("code")
+            self.details = payload.get("details")
+            self.hint = payload.get("hint")
+            super().__init__(payload)
+
+    msg = svc._humanize_oc_db_error(APIError({
+        "message": 'duplicate key value violates unique constraint "almacen_orden_compra_solicitud_id_key"',
+        "code": "23505",
+        "hint": None,
+        "details": "Key (solicitud_id)=(17) already exists.",
+    }))
+    assert msg is not None
+    assert "solo una OC por solicitud" in msg
+    assert "ARREGLAR" in msg
 
 
 def test_humanize_unique_mismo_proveedor():
