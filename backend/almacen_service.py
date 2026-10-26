@@ -3476,6 +3476,66 @@ def cambiar_proveedor_linea_aprobada(
     }
 
 
+def _persistir_cotizaciones_bloque(
+    sb,
+    lineas: List[dict],
+    sel: dict,
+) -> Dict[int, int]:
+    """
+    Una sola inserción de cotizaciones para el bloque.
+    Devuelve item_id -> cotizacion_seleccionada_id.
+    """
+    if not sel.get("aplicar") or not lineas:
+        return {}
+    nombre = (sel.get("proveedor_seleccionado_nombre") or "").strip() or "Proveedor"
+    valor = max(_to_float(sel.get("valor")), 0.0)
+    numero = (sel.get("cotizacion_numero_seleccionada") or "").strip() or None
+    base = {
+        "proveedor_nombre": nombre,
+        "valor_unitario": valor,
+        "observaciones": numero,
+    }
+    pid = sel.get("proveedor_seleccionado_id")
+    if pid not in (None, ""):
+        try:
+            base["proveedor_id"] = int(pid)
+        except (TypeError, ValueError):
+            pass
+    rows = [{"solicitud_item_id": int(it["id"]), **base} for it in lineas]
+    omitted: set = set()
+    for _ in range(6):
+        payload = [
+            {k: v for k, v in row.items() if k not in omitted}
+            for row in rows
+        ]
+        try:
+            inserted = sb.table("almacen_cotizacion").insert(payload).execute().data or []
+            out: Dict[int, int] = {}
+            for row in inserted:
+                iid = row.get("solicitud_item_id")
+                cid = row.get("id")
+                if iid and cid:
+                    out[int(iid)] = int(cid)
+            if len(out) == len(lineas):
+                return out
+            # Si el insert no devolvió representación, no bloqueamos la asignación.
+            if not inserted:
+                _log.warning(
+                    "Inserción de cotizaciones en bloque sin representación; se continúa sin cotizacion_seleccionada_id"
+                )
+                return {}
+            return out
+        except Exception as exc:
+            col = _pgrst_unknown_column(exc)
+            if col and col in base and col != "solicitud_item_id":
+                omitted.add(col)
+                base.pop(col, None)
+                continue
+            _log.warning("No se pudieron crear las cotizaciones del bloque: %s", exc)
+            return {}
+    return {}
+
+
 def mapear_items_bloque(
     contrato_id: int,
     solicitud_id: int,
@@ -3483,60 +3543,255 @@ def mapear_items_bloque(
     item_ids: List[int],
     body: dict,
 ) -> dict:
-    """Asigna el mismo insumo a varias líneas. Las que no se pueden mapear se informan."""
+    """
+    Asigna el mismo insumo (y proveedor elegido) a varias líneas en lote.
+    Todo o nada: si alguna línea no se puede mapear, no se escribe ninguna.
+    """
+    from almacen_insumos_service import (
+        apply_saldo_flags_batch,
+        prefetch_insumos_para_solicitud,
+        resolve_insumo_for_solicitud,
+    )
+
+    t0 = time.perf_counter()
+    etapas: Dict[str, float] = {}
+
+    def _marca(nombre: str, t_prev: float) -> float:
+        ahora = time.perf_counter()
+        etapas[nombre] = round(ahora - t_prev, 4)
+        return ahora
+
     _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
     sb = _sb()
     ids: List[int] = []
+    seen = set()
     for raw in item_ids or []:
         try:
-            ids.append(int(raw))
+            iid = int(raw)
         except (TypeError, ValueError):
             continue
+        if iid in seen:
+            continue
+        seen.add(iid)
+        ids.append(iid)
     if not ids:
         raise ValueError("Seleccione al menos una línea.")
+
+    insumo_id = body.get("insumo_id")
+    if not insumo_id:
+        raise ValueError("Seleccione el insumo del catálogo.")
+    try:
+        insumo_id = int(insumo_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Seleccione el insumo del catálogo.") from exc
+
+    t = _marca("validacion_ids", t0)
+
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
+    if sol["estado"] not in ("enviada", "borrador", "rechazada", "aprobada"):
+        raise ValueError("No se puede mapear ítems en el estado actual de la solicitud.")
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    en_oc: set = set()
+    if ocs and sol["estado"] == "aprobada":
+        en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+    elif ocs and sol["estado"] != "aprobada":
+        raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
+    t = _marca("cabecera_y_ocs", t)
+
     rows = (
         sb.table("almacen_solicitud_item")
-        .select("id, numero_linea")
+        .select("*")
         .eq("solicitud_id", int(solicitud_id))
         .in_("id", ids)
         .execute()
         .data
         or []
     )
-    numeros = {int(r["id"]): r.get("numero_linea") for r in rows if r.get("id")}
-    payload = {
-        "insumo_id": body.get("insumo_id"),
-    }
-    if body.get("valor_compra_unitario") is not None:
-        payload["valor_compra_unitario"] = body.get("valor_compra_unitario")
-    if body.get("vlr_unitario_cobro") is not None:
-        payload["vlr_unitario_cobro"] = body.get("vlr_unitario_cobro")
-    resultados = []
-    for iid in ids:
-        try:
-            mapear_item_solicitud_gerencial(
-                contrato_id,
-                solicitud_id,
-                iid,
-                user_id,
-                payload,
-                return_solicitud=False,
+    by_id = {int(r["id"]): r for r in rows if r.get("id")}
+    faltan = [iid for iid in ids if iid not in by_id]
+    if faltan:
+        raise ValueError("Una o más líneas no pertenecen a esta solicitud.")
+    lineas = [by_id[iid] for iid in ids]
+    for existing in lineas:
+        iid = int(existing["id"])
+        if iid in en_oc:
+            raise ValueError(
+                f"La línea #{existing.get('numero_linea') or iid} ya forma parte de la Orden de Compra "
+                "y no se puede remapear."
             )
-            resultados.append({
-                "item_id": iid,
-                "numero_linea": numeros.get(iid),
-                "ok": True,
-            })
-        except ValueError as exc:
-            resultados.append({
-                "item_id": iid,
-                "numero_linea": numeros.get(iid),
-                "ok": False,
-                "error": str(exc),
-            })
+        cantidad = _to_float(existing.get("cantidad"))
+        if cantidad <= 0:
+            raise ValueError(
+                f"La línea #{existing.get('numero_linea') or iid} tiene cantidad inválida."
+            )
+    t = _marca("lectura_lineas", t)
+
+    insumos_cache = prefetch_insumos_para_solicitud(contrato_id, [insumo_id])
+    if insumo_id not in insumos_cache:
+        raise ValueError("Insumo no encontrado.")
+    t = _marca("prefetch_insumo", t)
+
+    # Proveedor una sola vez para todo el bloque (ganadora si no se envía).
+    sel_proto = _resolver_proveedor_mapeo(sb, body, {"insumo_id": None}, insumo_id)
+    if not sel_proto.get("aplicar"):
+        # Sin cotizaciones: se asigna el insumo sin proveedor.
+        sel_proto = {"aplicar": False}
+    t = _marca("resolver_proveedor", t)
+
+    body_cobro = body.get("vlr_unitario_cobro", None)
+    override_cobro = None
+    if body_cobro is not None and body_cobro != "":
+        try:
+            override_cobro = float(body_cobro)
+        except (TypeError, ValueError):
+            override_cobro = None
+    if override_cobro is not None and override_cobro <= 0:
+        override_cobro = None
+
+    resolved_list: List[dict] = []
+    meta: List[dict] = []
+    for existing in lineas:
+        cantidad = _to_float(existing.get("cantidad"))
+        raw = {
+            "insumo_id": insumo_id,
+            "presupuesto_id": existing.get("presupuesto_id"),
+            "presupuesto_capitulo": existing.get("capitulo"),
+            "presupuesto_item": existing.get("item"),
+            "pk_id": existing.get("pk_id"),
+            "pk_id_id": existing.get("pk_id_id"),
+            "cantidad": cantidad,
+            "es_recurrente": bool(existing.get("es_recurrente")),
+            "es_principal": _coerce_es_principal(existing.get("es_principal"), default=True),
+            "exclude_solicitud_id": solicitud_id,
+            "tramo": existing.get("tramo"),
+            "costado": existing.get("costado"),
+            "abscisa_inicial": existing.get("abscisa_inicial"),
+            "abscisa_final": existing.get("abscisa_final"),
+            "observacion_residente": existing.get("observacion_residente"),
+        }
+        if body.get("valor_compra_unitario") is not None:
+            raw["valor_compra_unitario"] = body.get("valor_compra_unitario")
+        resolved = resolve_insumo_for_solicitud(
+            contrato_id,
+            user_id,
+            raw,
+            skip_context=True,
+            skip_listado=True,
+            defer_reparto=True,
+            insumos_cache=insumos_cache,
+        )
+        if override_cobro is not None:
+            resolved["vlr_unitario_cobro"] = override_cobro
+            resolved["cobro_motivo"] = None
+        resolved_list.append(resolved)
+        meta.append({"existing": existing, "cantidad": cantidad})
+
+    apply_saldo_flags_batch(
+        contrato_id,
+        resolved_list,
+        exclude_solicitud_id=solicitud_id,
+        descontar_linea_actual=True,
+        refresh_listado=any(_to_float(r.get("vlr_unitario_cobro")) <= 0 for r in resolved_list),
+    )
+    t = _marca("resolver_y_saldos", t)
+
+    costo_body = dict(body)
+    if sel_proto.get("forzar_costo") and _to_float(sel_proto.get("valor")) > 0:
+        costo_body["valor_compra_unitario"] = sel_proto.get("valor")
+    # Si el cliente eligió proveedor y no mandó costo, usar el de esa oferta.
+    pide_prov = any(
+        body.get(k) not in (None, "")
+        for k in (
+            "proveedor_seleccionado_id",
+            "proveedor_seleccionado_nombre",
+            "cotizacion_numero_seleccionada",
+        )
+    )
+    if (
+        pide_prov
+        and body.get("valor_compra_unitario") is None
+        and _to_float(sel_proto.get("valor")) > 0
+    ):
+        costo_body["valor_compra_unitario"] = sel_proto.get("valor")
+
+    cot_ids = _persistir_cotizaciones_bloque(sb, lineas, sel_proto)
+    t = _marca("cotizaciones_bloque", t)
+
+    patches: List[dict] = []
+    for existing, resolved, m in zip(lineas, resolved_list, meta):
+        iid = int(existing["id"])
+        desc_sol = (
+            existing.get("descripcion_solicitada")
+            or existing.get("material_descripcion")
+            or ""
+        ).strip()
+        patch = {
+            "id": iid,
+            "insumo_id": resolved.get("insumo_id"),
+            "listado_precio_id": resolved.get("listado_precio_id"),
+            "material_descripcion": resolved.get("material_descripcion"),
+            "descripcion_solicitada": desc_sol or resolved.get("material_descripcion"),
+            "unidad": resolved.get("unidad") or existing.get("unidad"),
+            "cantidad": m["cantidad"],
+            "valor_compra_unitario": _costo_al_mapear(
+                costo_body,
+                existing,
+                resolved,
+                insumo_id,
+                oferta_valor=sel_proto.get("valor") if sel_proto.get("aplicar") else None,
+            ),
+            "vlr_unitario_cobro": _cobro_al_mapear(
+                override_cobro, existing, resolved, insumo_id,
+            ),
+            "supera_presupuesto": resolved.get("supera_presupuesto", False),
+            "supera_negociado": resolved.get("supera_negociado", False),
+            "es_recurrente": bool(existing.get("es_recurrente")),
+            "es_principal": _coerce_es_principal(
+                resolved.get("es_principal", existing.get("es_principal")),
+                default=True,
+            ),
+        }
+        if sel_proto.get("aplicar"):
+            patch["proveedor_seleccionado_id"] = sel_proto.get("proveedor_seleccionado_id")
+            patch["proveedor_seleccionado_nombre"] = sel_proto.get("proveedor_seleccionado_nombre")
+            patch["cotizacion_numero_seleccionada"] = sel_proto.get("cotizacion_numero_seleccionada")
+        cot_sel_id = cot_ids.get(iid)
+        if cot_sel_id:
+            patch["cotizacion_seleccionada_id"] = cot_sel_id
+        if patch["valor_compra_unitario"] is not None and _to_float(patch["valor_compra_unitario"]) < 0:
+            raise ValueError("El costo de compra no puede ser negativo.")
+        if patch["vlr_unitario_cobro"] is not None and _to_float(patch["vlr_unitario_cobro"]) < 0:
+            raise ValueError("El valor de cobro no puede ser negativo.")
+        patches.append(patch)
+
+    # Escritura atómica a efectos prácticos: un solo upsert por lote.
+    # Si falla, no hubo updates parciales previos (cotizaciones huérfanas no afectan líneas).
+    _update_solicitud_items_batch(sb, patches)
+    t = _marca("update_lineas_batch", t)
+
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
+    t = _marca("titulo", t)
+
+    solicitud = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    t = _marca("get_solicitud", t)
+    total = round(time.perf_counter() - t0, 4)
+    _log.info(
+        "mapear_items_bloque contrato=%s solicitud=%s n=%s total=%.3fs etapas=%s",
+        contrato_id, solicitud_id, len(ids), total, etapas,
+    )
+
+    resultados = [
+        {
+            "item_id": int(existing["id"]),
+            "numero_linea": existing.get("numero_linea"),
+            "ok": True,
+        }
+        for existing in lineas
+    ]
     return {
-        "solicitud": get_solicitud(contrato_id, solicitud_id, ligera=True),
+        "solicitud": solicitud,
         "resultados": resultados,
+        "timing": {"total_s": total, "etapas_s": etapas, "lineas": len(ids)},
     }
 
 

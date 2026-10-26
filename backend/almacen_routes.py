@@ -265,6 +265,9 @@ class MapearBloqueBody(BaseModel):
     insumo_id: int = Field(..., gt=0)
     valor_compra_unitario: Optional[float] = Field(None, ge=0)
     vlr_unitario_cobro: Optional[float] = Field(None, ge=0)
+    proveedor_seleccionado_id: Optional[int] = None
+    proveedor_seleccionado_nombre: Optional[str] = None
+    cotizacion_numero_seleccionada: Optional[str] = None
 
 
 class AprobarBloqueBody(BaseModel):
@@ -1488,9 +1491,19 @@ def route_mapear_items_bloque(
         )
         log_almacen(
             current_user, "MAPEAR_BLOQUE", "solicitud", solicitud_id,
-            {"item_ids": body.item_ids, "insumo_id": body.insumo_id},
+            {
+                "item_ids": body.item_ids,
+                "insumo_id": body.insumo_id,
+                "proveedor_seleccionado_id": body.proveedor_seleccionado_id,
+                "proveedor_seleccionado_nombre": body.proveedor_seleccionado_nombre,
+            },
             valor_anterior=None,
-            valor_nuevo={"item_ids": body.item_ids, "insumo_id": body.insumo_id},
+            valor_nuevo={
+                "item_ids": body.item_ids,
+                "insumo_id": body.insumo_id,
+                "proveedor_seleccionado_id": body.proveedor_seleccionado_id,
+                "proveedor_seleccionado_nombre": body.proveedor_seleccionado_nombre,
+            },
         )
         return result
     except ValueError as exc:
