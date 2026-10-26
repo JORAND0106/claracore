@@ -378,3 +378,17 @@ def test_sobrepresupuesto_sigue_exigiendo_justificacion():
             "observacion_residente": "corta",
             "numero_linea": 1,
         }])
+
+
+def test_asociado_no_exige_justificacion_aunque_el_cliente_marque_supera():
+    for marca in (False, "false", 0, "0"):
+        linea = {
+            "supera_presupuesto": True,
+            "es_principal": marca,
+            "observacion_residente": "",
+            "contexto_presupuesto": {"supera_presupuesto": True},
+            "numero_linea": 2,
+        }
+        svc._require_justificacion_sobrepresupuesto([linea])
+        assert linea["supera_presupuesto"] is False
+        assert linea["contexto_presupuesto"]["supera_presupuesto"] is False

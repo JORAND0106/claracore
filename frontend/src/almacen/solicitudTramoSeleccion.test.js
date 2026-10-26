@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   calcularRepartoManual,
+  compararCantidadConSaldo,
   crearLineasPorPk,
   etiquetaGrupo,
   gruposDeLineas,
@@ -129,6 +130,14 @@ describe('saldoSeleccion', () => {
 function suma(valores) {
   return valores.reduce((a, b) => a + b, 0)
 }
+
+describe('alerta de saldo solo en principal', () => {
+  it('el asociado no se compara con el saldo y el principal sí', () => {
+    assert.equal(compararCantidadConSaldo(false), false)
+    assert.equal(compararCantidadConSaldo(true), true)
+    assert.equal(compararCantidadConSaldo(undefined), true)
+  })
+})
 
 describe('reparto manual exacto', () => {
   const arbol = [{
@@ -322,6 +331,8 @@ describe('cableado de la solicitud', () => {
     assert.match(acordeon, /Pedir/)
     assert.match(acordeon, /Repartir de nuevo/)
     assert.match(acordeon, /justificación/)
+    assert.match(acordeon, /compararCantidadConSaldo\(prinLocal\)/)
+    assert.match(acordeon, /solo a insumos Principales/)
     assert.doesNotMatch(acordeon, /La cantidad no puede superar el saldo disponible/)
     assert.doesNotMatch(acordeon, /fmtMoney/)
     assert.match(resumen, /data-testid="resumen-editar-materiales"/)

@@ -1190,7 +1190,7 @@ export default function SolicitudForm({
                 <PresupuestoContextBox
                   ctx={esAiu ? null : it.preview?.contexto_presupuesto}
                   analisis={esAiu ? null : it.preview?.analisis_valor}
-                  supera={esAiu ? false : it.preview?.supera_presupuesto}
+                  supera={esAiu || !coerceEsPrincipal(it.es_principal) ? false : it.preview?.supera_presupuesto}
                   superaNegociado={esAiu ? false : it.preview?.supera_negociado}
                   ctxNeg={esAiu ? null : it.preview?.contexto_negociado}
                   sinPrecio={false}
