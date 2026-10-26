@@ -86,6 +86,8 @@ export default function SolicitudDetalleModal({
   const [costoBloque, setCostoBloque] = useState('')
   const [cobroBloque, setCobroBloque] = useState('')
   const [asignarConfirm, setAsignarConfirm] = useState(null)
+  const [asignarError, setAsignarError] = useState('')
+  const [avisoAsignarOk, setAvisoAsignarOk] = useState('')
   const [expedienteOcId, setExpedienteOcId] = useState(null)
   const [avisoOc, setAvisoOc] = useState(null)
   const [mensajesAbiertos, setMensajesAbiertos] = useState(false)
@@ -157,6 +159,12 @@ export default function SolicitudDetalleModal({
   useEffect(() => {
     setTituloDraft(sol?.titulo || '')
   }, [sol?.titulo, sol?.id])
+
+  useEffect(() => {
+    if (!avisoAsignarOk) return undefined
+    const tmr = setTimeout(() => setAvisoAsignarOk(''), 5000)
+    return () => clearTimeout(tmr)
+  }, [avisoAsignarOk])
 
   const items = sol?.items || []
   const puedeEscribir = puedeEditarSolicitudFormAlmacen(permisos)
@@ -373,6 +381,7 @@ export default function SolicitudDetalleModal({
     setCostoBloque('')
     setCobroBloque('')
     setAsignarConfirm(null)
+    setAsignarError('')
     setAsignar({ ids, suggest: desc, conInsumo, aprobadas })
     setError('')
   }
@@ -403,12 +412,12 @@ export default function SolicitudDetalleModal({
   const ejecutarAsignarBloque = async () => {
     if (!sol || !asignar) return
     if (!insumoSel?.insumo_id) {
-      setError('Seleccione el insumo del catálogo.')
+      setAsignarError('Seleccione el insumo del catálogo.')
       return
     }
     const body = bodyAsignarBloque()
     if (!body) {
-      setError(verEconomicos ? 'Defina el costo de compra unitario.' : 'Seleccione el insumo del catálogo.')
+      setAsignarError(verEconomicos ? 'Defina el costo de compra unitario.' : 'Seleccione el insumo del catálogo.')
       return
     }
     if (!asignarConfirm && (asignar.conInsumo > 0 || asignar.aprobadas > 0)) {
@@ -421,15 +430,32 @@ export default function SolicitudDetalleModal({
     }
     setAsignarConfirm(null)
     setBusy(true)
+    setAsignarError('')
     setError('')
+    const nLineas = asignar.ids.length
     try {
       const r = await api.mapearItemsBloque(sol.id, body)
+      const okN = (r?.resultados || []).filter((row) => row.ok).length
+      const fallo = resumenAccionBloque(r?.resultados, 'Insumo asignado')
+      if (fallo) {
+        // Todo o nada en servidor: si hay fallo parcial, no cerrar y mostrar detalle.
+        setAsignarError(fallo)
+        if (r?.solicitud) setSol(r.solicitud)
+        return
+      }
       setAsignar(null)
       setProveedorBloque(null)
+      setInsumoSel(null)
       aplicarResultadoBloque(r, 'Insumo asignado')
+      setAvisoAsignarOk(
+        okN > 0
+          ? `Insumo asignado a ${okN} línea${okN === 1 ? '' : 's'}.`
+          : `Insumo asignado a ${nLineas} línea${nLineas === 1 ? '' : 's'}.`,
+      )
       publicarCambioAlmacen(contratoId, { origen: 'asignar-bloque' })
     } catch (e) {
-      setError(e.message)
+      // Popup permanece abierto con la selección y el error claro.
+      setAsignarError(e.message || 'No se pudo asignar el insumo. Intente de nuevo.')
     } finally {
       setBusy(false)
     }
@@ -754,6 +780,21 @@ export default function SolicitudDetalleModal({
               {`Las líneas elegidas quedaron con ${
                 (partidaOc.ocs || []).map((o) => (o.numero_oc != null ? `OC #${o.numero_oc}` : 'OC')).join(', ') || 'su orden de compra'
               } en la solicitud #${partidaOc.consecutivo ?? '—'}. Esta solicitud sigue con lo que falta.`}
+            </div>
+          )}
+          {avisoAsignarOk && (
+            <div
+              data-testid="asignar-bloque-ok"
+              role="status"
+              style={{
+                ...estiloAvisoAlmacen(contraste, 'ok'),
+                padding: '10px 12px',
+                marginBottom: 12,
+                fontSize: 'var(--cc-sm)',
+                lineHeight: 1.45,
+              }}
+            >
+              {avisoAsignarOk}
             </div>
           )}
           {error && (
@@ -1172,6 +1213,7 @@ export default function SolicitudDetalleModal({
             if (busy) return
             setAsignar(null)
             setAsignarConfirm(null)
+            setAsignarError('')
           }}
         >
           <div
@@ -1247,8 +1289,23 @@ export default function SolicitudDetalleModal({
                 </label>
               </div>
             )}
+            {asignarError && (
+              <div
+                data-testid="asignar-bloque-error"
+                style={{
+                  ...estiloAvisoAlmacen(contraste, 'danger'),
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  fontSize: 'var(--cc-sm)',
+                  whiteSpace: 'pre-wrap',
+                  lineHeight: 1.45,
+                }}
+              >
+                {asignarError}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => { setAsignar(null); setAsignarConfirm(null) }}>
+              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => { setAsignar(null); setAsignarConfirm(null); setAsignarError('') }}>
                 Cancelar
               </button>
               <button
