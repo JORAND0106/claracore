@@ -16,6 +16,15 @@ describe('SolicitudForm Excel + título automático', () => {
     assert.match(src, /MODAL_WIDTH\s*=\s*'min\(1560px, 100%\)'/)
   })
 
+  it('el aviso de cerrar queda por encima del formulario', () => {
+    const src = readFileSync(join(dir, 'SolicitudFormModal.jsx'), 'utf8')
+    assert.match(src, /zIndex = 100056/)
+    assert.match(src, /zIndex=\{Number\(zIndex\) \+ 40\}/)
+    assert.doesNotMatch(src, /zIndex=\{100030\}/)
+    assert.match(src, /aria-label="Cerrar"/)
+    assert.match(src, /onCancel=\{requestClose\}/)
+  })
+
   it('formulario usa título automático y grilla Excel', () => {
     const src = readFileSync(join(dir, 'SolicitudForm.jsx'), 'utf8')
     assert.match(src, /formatSolicitudTituloAuto/)
