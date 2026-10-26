@@ -40,6 +40,9 @@ export default function SolicitudFormModal({
     || solEstado === 'borrador'
     || solEstado === 'rechazada'
   )
+  const avisoCambios = Boolean(
+    dirty && solEstado && solEstado !== 'borrador' && solEstado !== 'rechazada',
+  )
 
   const requestClose = () => {
     if (needsApprovalWarn) {
@@ -135,17 +138,19 @@ export default function SolicitudFormModal({
         <CcConfirmModal
           theme={theme}
           tipo="warn"
-          titulo="Solicitud sin enviar"
+          titulo={avisoCambios ? 'Cambios sin guardar' : 'Solicitud sin enviar'}
           confirmar="Cerrar de todos modos"
           cancelar="Volver al formulario"
-          zIndex={100030}
+          zIndex={Number(zIndex) + 40}
           onCancel={() => setConfirmClose(false)}
           onConfirm={() => {
             setConfirmClose(false)
             onClose()
           }}
         >
-          La solicitud no ha sido enviada para aprobación. Si cierra ahora, podría perder la información diligenciada.
+          {avisoCambios
+            ? 'Hay cambios sin guardar. Si cierra ahora, no se conservan.'
+            : 'La solicitud no ha sido enviada para aprobación. Si cierra ahora, podría perder la información diligenciada.'}
         </CcConfirmModal>
       )}
     </>
