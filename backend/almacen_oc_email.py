@@ -69,11 +69,9 @@ def resolver_notificar_proveedores(raw, grupos: List[dict]) -> Dict[str, bool]:
     return out
 
 
-def notificar_para_grupo(raw, *, proveedor_id, proveedor_nombre: str) -> bool:
-    """Resuelve Sí/No de un proveedor. La firma de la OC se valida antes de llamar esto."""
-    pid = proveedor_id
+def _clave_grupo_proveedor(*, proveedor_id, proveedor_nombre: str) -> tuple:
     try:
-        pid_i = int(pid) if pid not in (None, "") else None
+        pid_i = int(proveedor_id) if proveedor_id not in (None, "") else None
     except (TypeError, ValueError):
         pid_i = None
     nom = str(proveedor_nombre or "").strip()
@@ -83,12 +81,52 @@ def notificar_para_grupo(raw, *, proveedor_id, proveedor_nombre: str) -> bool:
         key = "recurrente"
     else:
         key = f"nombre:{nom.casefold()}"
+    return key, pid_i, nom
+
+
+def notificar_para_grupo(raw, *, proveedor_id, proveedor_nombre: str) -> bool:
+    """Resuelve Sí/No de un proveedor. La firma de la OC se valida antes de llamar esto."""
+    key, pid_i, nom = _clave_grupo_proveedor(
+        proveedor_id=proveedor_id, proveedor_nombre=proveedor_nombre,
+    )
     decisiones = resolver_notificar_proveedores(raw, [{
         "key": key,
         "proveedor_id": pid_i,
         "proveedor_nombre": nom or "Proveedor",
     }])
     return decisiones[key]
+
+
+def correo_override_para_grupo(raw, *, proveedor_id, proveedor_nombre: str) -> Optional[str]:
+    """Correo de redirección de esta generación (solo esta vez). No modifica la cotización."""
+    if not isinstance(raw, list):
+        return None
+    key, pid_i, nom = _clave_grupo_proveedor(
+        proveedor_id=proveedor_id, proveedor_nombre=proveedor_nombre,
+    )
+    nom_cf = nom.casefold()
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        match = False
+        rpid = row.get("proveedor_id")
+        if pid_i is not None and rpid not in (None, ""):
+            try:
+                match = int(rpid) == pid_i
+            except (TypeError, ValueError):
+                match = False
+        if not match:
+            rnom = str(row.get("proveedor_nombre") or "").strip().casefold()
+            match = bool(nom_cf) and rnom == nom_cf
+        if not match:
+            continue
+        override = correo_valido(row.get("correo_override"))
+        if row.get("correo_override") and not override:
+            raise ValueError(
+                f"El correo de redirección de {nom or 'Proveedor'} no es válido."
+            )
+        return override
+    return None
 
 
 def correo_valido(value) -> Optional[str]:
@@ -623,6 +661,7 @@ def publicar_envios_oc(contrato_id: int, solicitud_id: int, user_id: int, ocs: L
     """Envía el PDF de cada OC recién generada. Un fallo de correo no revierte la orden.
 
     Documento de sistema: se guarda el PDF y no se envía correo.
+    ``correo_override`` en la OC (si viene) redirige solo este envío, sin tocar la cotización.
     """
     out: List[dict] = []
     for oc in ocs or []:
@@ -633,7 +672,12 @@ def publicar_envios_oc(contrato_id: int, solicitud_id: int, user_id: int, ocs: L
             out.append(_resumen_sistema(oc, pdf_ok=pdf_ok))
             continue
         try:
-            out.append(enviar_oc_por_correo(int(contrato_id), int(oc["id"]), int(user_id)))
+            out.append(enviar_oc_por_correo(
+                int(contrato_id),
+                int(oc["id"]),
+                int(user_id),
+                correo_override=oc.get("correo_override"),
+            ))
         except Exception as exc:
             _log.exception("Envío de la OC %s: %s", oc.get("id"), exc)
             out.append(_resumen(
@@ -641,4 +685,63 @@ def publicar_envios_oc(contrato_id: int, solicitud_id: int, user_id: int, ocs: L
                 detalle=f"La orden quedó pendiente de envío. {exc}",
                 destinatarios=[], persistido=False,
             ))
+    return out
+
+
+def correos_destino_grupos_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    item_ids: List[int],
+) -> List[dict]:
+    """Correo de la cotización elegida por cada proveedor de las líneas indicadas."""
+    from almacen_service import _agrupar_items_por_proveedor, _sb
+
+    sb = _sb()
+    ids = []
+    seen = set()
+    for raw in item_ids or []:
+        try:
+            iid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if iid in seen:
+            continue
+        seen.add(iid)
+        ids.append(iid)
+    if not ids:
+        return []
+    rows = (
+        sb.table("almacen_solicitud_item")
+        .select(
+            "id, solicitud_id, insumo_id, es_recurrente, proveedor_seleccionado_id, "
+            "proveedor_seleccionado_nombre, cotizacion_numero_seleccionada"
+        )
+        .eq("solicitud_id", int(solicitud_id))
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    if len(rows) != len(ids):
+        raise ValueError("Una o más líneas no pertenecen a esta solicitud.")
+    try:
+        from almacen_service import _hidratar_proveedor_desde_cotizacion
+        _hidratar_proveedor_desde_cotizacion(sb, rows)
+    except Exception:
+        _log.exception("No se pudo hidratar el proveedor para previsualizar el correo")
+    grupos = _agrupar_items_por_proveedor(sb, rows)
+    detalle_map = _detalle_cotizaciones(sb, [it.get("insumo_id") for it in rows])
+    out: List[dict] = []
+    for g in grupos:
+        correos = correos_de_lineas(detalle_map, g.get("items") or [])
+        correo = correos[0] if correos else None
+        out.append({
+            "key": g.get("key"),
+            "proveedor_id": g.get("proveedor_id"),
+            "proveedor_nombre": g.get("proveedor_nombre"),
+            "correo": correo,
+            "correos": correos,
+            "sin_correo": not bool(correo),
+            "lineas": len(g.get("items") or []),
+        })
     return out

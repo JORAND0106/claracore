@@ -343,6 +343,12 @@ class NotificarProveedorOcBody(BaseModel):
     proveedor_id: Optional[int] = None
     proveedor_nombre: Optional[str] = None
     notificar: Optional[bool] = None
+    # Solo este envío: no modifica la cotización del proveedor.
+    correo_override: Optional[str] = None
+
+
+class CorreosNotificarOcBody(BaseModel):
+    item_ids: List[int] = Field(..., min_length=1)
 
 
 class AprobarBody(BaseModel):
@@ -1305,6 +1311,28 @@ def route_agregar_lineas_post_oc(
             valor_nuevo=snapshot_solicitud(result),
         )
         return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/correos-notificar-oc")
+def route_correos_notificar_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    body: CorreosNotificarOcBody,
+    current_user=Depends(get_current_user),
+):
+    """Correo de destino por proveedor (cotización elegida) antes de generar la OC."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "validar")
+    require_generar_orden_compra_almacen(current_user)
+    try:
+        from almacen_oc_email import correos_destino_grupos_oc
+
+        proveedores = correos_destino_grupos_oc(
+            contrato_id, solicitud_id, body.item_ids,
+        )
+        return {"proveedores": proveedores}
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

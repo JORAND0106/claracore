@@ -7,7 +7,7 @@ import OcGeneradaMensajeModal from './OcGeneradaMensajeModal'
 import OcProveedoresModal from './OcProveedoresModal'
 import OcNotificarProveedorModal from './OcNotificarProveedorModal'
 import { esDocumentoSistema, ETIQUETA_DOCUMENTO_SISTEMA } from './ocDocumentoSistema'
-import { notificarProveedoresPayload } from './ocNotificarProveedor'
+import { enriquecerProveedoresConCorreo, notificarProveedoresPayload } from './ocNotificarProveedor'
 import SolicitudOcsPdfButton from './SolicitudOcsPdfButton'
 import SolicitudRegenerarPdf from './SolicitudRegenerarPdf'
 import { ordenesDeRespuestaAprobar } from './ocGeneradaMensaje'
@@ -273,7 +273,7 @@ export default function SolicitudDetalleModal({
     setSelectorOc(true)
   }
 
-  const abrirNotificarOc = (itemIds) => {
+  const abrirNotificarOc = async (itemIds) => {
     const elegidos = gruposOc.grupos.filter((g) => (
       g.lineas.some((linea) => itemIds.includes(linea.id))
     ))
@@ -282,7 +282,22 @@ export default function SolicitudDetalleModal({
       return
     }
     setSelectorOc(false)
-    setNotificarOc({ grupos: elegidos, itemIds })
+    setError('')
+    setBusy(true)
+    try {
+      const r = await api.correosNotificarOc(sol.id, itemIds)
+      const conCorreo = enriquecerProveedoresConCorreo(elegidos, r?.proveedores)
+      setNotificarOc({ grupos: conCorreo, itemIds })
+    } catch (e) {
+      // Si falla la precarga, igual se puede generar; el correo se resuelve al enviar.
+      setNotificarOc({
+        grupos: elegidos.map((g) => ({ ...g, correo: null, sin_correo: true })),
+        itemIds,
+      })
+      setError(e.message || 'No se pudo cargar el correo de destino; puede indicarlo al generar.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const ejecutarAprobar = async (itemIds, notificarProveedores) => {
@@ -1414,10 +1429,10 @@ export default function SolicitudDetalleModal({
           busy={busy}
           error={error}
           onCancel={() => !busy && setNotificarOc(null)}
-          onConfirm={(respuestas) => {
+          onConfirm={(respuestas, redirects) => {
             void ejecutarAprobar(
               notificarOc.itemIds,
-              notificarProveedoresPayload(notificarOc.grupos, respuestas),
+              notificarProveedoresPayload(notificarOc.grupos, respuestas, redirects),
             )
           }}
         />

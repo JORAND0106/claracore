@@ -4660,13 +4660,20 @@ def _crear_oc_con_items(
         raise ValueError(
             "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
         )
-    from almacen_oc_email import notificar_para_grupo
+    from almacen_oc_email import correo_override_para_grupo, notificar_para_grupo
 
     notificar = notificar_para_grupo(
         notificaciones,
         proveedor_id=proveedor_id,
         proveedor_nombre=proveedor_nombre,
     )
+    correo_override = None
+    if notificar:
+        correo_override = correo_override_para_grupo(
+            notificaciones,
+            proveedor_id=proveedor_id,
+            proveedor_nombre=proveedor_nombre,
+        )
     pidieron = []
     for it in items or []:
         try:
@@ -4711,6 +4718,8 @@ def _crear_oc_con_items(
         "lineas": len(items),
         "notificar": notificar,
         "documento_sistema": notificar is False,
+        # Solo en memoria / hilo de envío; no se persiste en la tabla.
+        "correo_override": correo_override,
     }
 
 
@@ -5056,67 +5065,73 @@ def append_aprobados_a_oc(
     ocs_creadas: List[dict] = []
     lineas_total = 0
 
-    for g in grupos:
-        key = g["key"]
-        pid = g["proveedor_id"]
-        pname = g["proveedor_nombre"]
-        items_g = g["items"]
-        cat_map = g.get("_cat_map")
-        prov_nombres = g.get("_prov_nombres")
-        match = next(
-            (oc for oc in ocs if _oc_match_proveedor(oc, key, pid, pname)),
-            None,
+    try:
+        for g in grupos:
+            key = g["key"]
+            pid = g["proveedor_id"]
+            pname = g["proveedor_nombre"]
+            items_g = g["items"]
+            cat_map = g.get("_cat_map")
+            prov_nombres = g.get("_prov_nombres")
+            match = next(
+                (oc for oc in ocs if _oc_match_proveedor(oc, key, pid, pname)),
+                None,
+            )
+            if match:
+                _insertar_items_en_oc(
+                    sb, contrato_id, int(match["id"]), items_g,
+                    cat_map=cat_map, prov_nombres=prov_nombres,
+                )
+                # Completar encabezado si era legacy sin proveedor.
+                if match.get("proveedor_id") is None and pid is not None:
+                    _update_orden_compra_proveedor(sb, int(match["id"]), {
+                        "proveedor_id": int(pid),
+                        "proveedor_nombre": pname,
+                    })
+                    match["proveedor_id"] = pid
+                    match["proveedor_nombre"] = pname
+                elif not (match.get("proveedor_nombre") or "").strip() and pname:
+                    _update_orden_compra_proveedor(sb, int(match["id"]), {
+                        "proveedor_nombre": pname,
+                    })
+                    match["proveedor_nombre"] = pname
+                summary = {
+                    "id": int(match["id"]),
+                    "numero_oc": match.get("numero_oc"),
+                    "estado": match.get("estado") or "aprobada",
+                    "solicitud_id": solicitud_id,
+                    "proveedor_id": match.get("proveedor_id") or pid,
+                    "proveedor_nombre": match.get("proveedor_nombre") or pname,
+                    "tiene_pdf_oc": False,
+                    "pdf_generando": True,
+                    "lineas_agregadas_oc": len(items_g),
+                }
+                ocs_afectadas.append(summary)
+            else:
+                created = _crear_oc_con_items(
+                    sb,
+                    contrato_id=contrato_id,
+                    solicitud_id=solicitud_id,
+                    user_id=user_id,
+                    sol=sol,
+                    body=None,
+                    items=items_g,
+                    proveedor_id=pid,
+                    proveedor_nombre=pname,
+                    cat_map=cat_map,
+                    prov_nombres=prov_nombres,
+                    notificaciones=notificaciones,
+                )
+                created["lineas_agregadas_oc"] = len(items_g)
+                ocs_creadas.append(created)
+                ocs_afectadas.append(created)
+                ocs.append({**created, "_key": key})
+            lineas_total += len(items_g)
+    except Exception:
+        _descartar_ocs_recien_creadas(
+            sb, [int(o["id"]) for o in ocs_creadas if o.get("id")],
         )
-        if match:
-            _insertar_items_en_oc(
-                sb, contrato_id, int(match["id"]), items_g,
-                cat_map=cat_map, prov_nombres=prov_nombres,
-            )
-            # Completar encabezado si era legacy sin proveedor.
-            if match.get("proveedor_id") is None and pid is not None:
-                _update_orden_compra_proveedor(sb, int(match["id"]), {
-                    "proveedor_id": int(pid),
-                    "proveedor_nombre": pname,
-                })
-                match["proveedor_id"] = pid
-                match["proveedor_nombre"] = pname
-            elif not (match.get("proveedor_nombre") or "").strip() and pname:
-                _update_orden_compra_proveedor(sb, int(match["id"]), {
-                    "proveedor_nombre": pname,
-                })
-                match["proveedor_nombre"] = pname
-            summary = {
-                "id": int(match["id"]),
-                "numero_oc": match.get("numero_oc"),
-                "estado": match.get("estado") or "aprobada",
-                "solicitud_id": solicitud_id,
-                "proveedor_id": match.get("proveedor_id") or pid,
-                "proveedor_nombre": match.get("proveedor_nombre") or pname,
-                "tiene_pdf_oc": False,
-                "pdf_generando": True,
-                "lineas_agregadas_oc": len(items_g),
-            }
-            ocs_afectadas.append(summary)
-        else:
-            created = _crear_oc_con_items(
-                sb,
-                contrato_id=contrato_id,
-                solicitud_id=solicitud_id,
-                user_id=user_id,
-                sol=sol,
-                body=None,
-                items=items_g,
-                proveedor_id=pid,
-                proveedor_nombre=pname,
-                cat_map=cat_map,
-                prov_nombres=prov_nombres,
-                notificaciones=notificaciones,
-            )
-            created["lineas_agregadas_oc"] = len(items_g)
-            ocs_creadas.append(created)
-            ocs_afectadas.append(created)
-            ocs.append({**created, "_key": key})
-        lineas_total += len(items_g)
+        raise
 
     todas = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
     _aplicar_estado_tras_generar_oc(
@@ -6018,10 +6033,12 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
             )
             ocs_creadas.append(created)
     except Exception:
+        creadas_ids = [int(o["id"]) for o in ocs_creadas if o.get("id")]
         if separacion:
-            _revertir_separacion_oc(
-                sb, separacion, [int(o["id"]) for o in ocs_creadas if o.get("id")],
-            )
+            _revertir_separacion_oc(sb, separacion, creadas_ids)
+        else:
+            # Todo o nada: si falla la 2.ª OC, no queda la 1.ª a medias.
+            _descartar_ocs_recien_creadas(sb, creadas_ids)
         raise
 
     if not separacion:
