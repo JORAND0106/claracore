@@ -35,7 +35,8 @@ export default function SolicitudItemDetalleCard({
       numeroOc: item.orden_compra?.numero_oc ?? item.numero_oc ?? null,
       consecutivo: consecutivo,
     }) : null)
-  const supera = item.preview?.supera_presupuesto || item.supera_presupuesto || ctx?.supera_presupuesto
+  const esPrincipal = item.es_principal !== false
+  const supera = esPrincipal && (item.preview?.supera_presupuesto || item.supera_presupuesto || ctx?.supera_presupuesto)
   const superaNeg = item.preview?.supera_negociado || item.supera_negociado || ctxNeg?.supera_negociado
   const alerta = supera || superaNeg
   const numeroLinea = item.numero_linea ?? lineIndex
@@ -184,7 +185,7 @@ export default function SolicitudItemDetalleCard({
           analisis={analisis}
           supera={supera}
           superaNegociado={superaNeg}
-          esPrincipal={item.es_principal !== false}
+          esPrincipal={esPrincipal}
           verEconomicos={verEconomicos && !tablaRentabilidad}
         />
       )}

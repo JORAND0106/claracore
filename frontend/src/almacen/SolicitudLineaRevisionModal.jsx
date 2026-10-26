@@ -604,7 +604,7 @@ export default function SolicitudLineaRevisionModal({
             }}
           >
             <div style={{ fontWeight: 700, marginBottom: 4 }}>
-              {item?.supera_presupuesto ? 'Justificación (supera presupuesto)' : 'Justificación'}
+              {item?.supera_presupuesto && item?.es_principal !== false ? 'Justificación (supera presupuesto)' : 'Justificación'}
             </div>
             <div style={{ whiteSpace: 'pre-wrap' }}>{justTxt}</div>
             <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>

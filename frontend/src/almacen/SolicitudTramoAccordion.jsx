@@ -15,6 +15,7 @@ import {
   calcularRepartoManual,
   clavePk,
   claveTramo,
+  compararCantidadConSaldo,
   crearLineasPorPk,
   etiquetaGrupo,
   etiquetaTramo,
@@ -421,11 +422,12 @@ export default function SolicitudTramoAccordion({
         return { key: tKey, saldo: Number(trow.saldo_disponible) || 0, pks }
       })
       const calc = calcularRepartoManual(arbolActual, manual)
+      const esPrincipal = compararCantidadConSaldo(prinLocal)
       const superaManual = ['tramo', 'pk', 'reg'].some((nivel) => (
         Object.entries(calc.excede[nivel] || {}).some(([k, v]) => v && Number(calc.pedir[nivel]?.[k]) > 0)
       ))
       const superaSel = haySeleccion && cant - disponible > 0.0001
-      if ((superaManual || superaSel) && String(obsLocal || '').trim().length < 15) {
+      if (esPrincipal && (superaManual || superaSel) && String(obsLocal || '').trim().length < 15) {
         setError('La cantidad supera el saldo disponible. Escriba la justificación (mínimo 15 caracteres) en Observación para poder generarla.')
         setConfirmando(false)
         return
@@ -539,6 +541,8 @@ export default function SolicitudTramoAccordion({
   const td = { ...ui.td, padding: '4px 6px', fontSize: 'var(--cc-xs)' }
   const tdNum = { ...ui.tdNum, padding: '4px 6px', fontSize: 'var(--cc-xs)' }
   const ocupado = busy || confirmando
+  const esPrincipal = compararCantidadConSaldo(prinLocal)
+  const excedeFila = (nivel, key) => esPrincipal && Boolean(reparto.excede[nivel]?.[key])
 
   const valorPedir = (nivel, key) => {
     const draft = manual[nivel]?.[key]
@@ -549,7 +553,7 @@ export default function SolicitudTramoAccordion({
   }
 
   const celdaPedir = (nivel, key, tramo, etiqueta) => {
-    const excede = Boolean(reparto.excede[nivel]?.[key])
+    const excede = excedeFila(nivel, key)
     return (
       <td style={{ ...tdNum, background: excede ? '#fee2e2' : undefined, minWidth: 108 }}>
         <input
@@ -665,7 +669,7 @@ export default function SolicitudTramoAccordion({
                   const marcado = selTramos.has(tKey)
                   return (
                     <Fragment key={`t-${tKey}`}>
-                      <tr style={{ background: reparto.excede.tramo[tKey] ? '#fee2e2' : (marcado ? ui.accentSoft : undefined) }}>
+                      <tr style={{ background: excedeFila('tramo', tKey) ? '#fee2e2' : (marcado ? ui.accentSoft : undefined) }}>
                         <td style={td}>
                           <input
                             type="checkbox"
@@ -716,7 +720,7 @@ export default function SolicitudTramoAccordion({
                         const pkOn = pkMarcado(pk.tramo, pk.pk_id)
                         return (
                           <Fragment key={`p-${pKey}`}>
-                            <tr style={{ background: reparto.excede.pk[pKey] ? '#fee2e2' : (pkOn ? `${ui.accent}10` : undefined) }}>
+                            <tr style={{ background: excedeFila('pk', pKey) ? '#fee2e2' : (pkOn ? `${ui.accent}10` : undefined) }}>
                               <td style={td} />
                               <td style={td}>
                                 <input
@@ -758,7 +762,7 @@ export default function SolicitudTramoAccordion({
                             {pkAbierto && regs.map((r) => {
                               const on = regMarcado(pk.tramo, pk.pk_id, r.presupuesto_id)
                               return (
-                                <tr key={`r-${r.presupuesto_id}`} style={{ background: reparto.excede.reg[String(r.presupuesto_id)] ? '#fee2e2' : undefined }}>
+                                <tr key={`r-${r.presupuesto_id}`} style={{ background: excedeFila('reg', String(r.presupuesto_id)) ? '#fee2e2' : undefined }}>
                                   <td style={td} />
                                   <td style={td}>
                                     <input
@@ -880,7 +884,7 @@ export default function SolicitudTramoAccordion({
           En Pedir puede escribir la cantidad del tramo, del PK-ID o del registro: se reparte al instante según el saldo y la suma coincide con lo escrito.
           Lo que fije a mano no se vuelve a mover; Repartir de nuevo devuelve ese nivel al reparto automático.
           Si también usa las casillas, la cantidad escrita en la fila manda.
-          Si pide más que el saldo, la fila se marca y escriba la justificación en Observación (mínimo 15 caracteres).
+          La alerta «Supera el saldo» y la justificación aplican solo a insumos Principales: si la casilla está marcada y pide más que el saldo, la fila se marca y escriba la justificación en Observación (mínimo 15 caracteres). Un insumo asociado no se compara contra el saldo ni descuenta presupuesto.
           El mapa sigue disponible como camino alterno.
           {tramos.some((t) => t.conversion_pendiente) && !insumoId ? (
             <div style={{ marginTop: 6 }}>

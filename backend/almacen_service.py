@@ -2442,12 +2442,19 @@ _MIN_JUSTIFICACION_SUPERA_PPTO = 15
 
 
 def _require_justificacion_sobrepresupuesto(items: List[dict]) -> None:
-    """Exige comentario cuando la línea principal supera el presupuesto del PK-ID."""
+    """Exige comentario cuando la línea principal supera el presupuesto del PK-ID.
+
+    Un asociado no descuenta saldo: se apaga el aviso aunque el cliente lo envíe.
+    """
     faltantes = []
     for it in items or []:
-        if not it.get("supera_presupuesto"):
+        if not _coerce_es_principal(it.get("es_principal"), default=True):
+            it["supera_presupuesto"] = False
+            ctx = it.get("contexto_presupuesto")
+            if isinstance(ctx, dict):
+                ctx["supera_presupuesto"] = False
             continue
-        if it.get("es_principal") is False:
+        if not it.get("supera_presupuesto"):
             continue
         obs = (it.get("observacion_residente") or "").strip()
         if len(obs) < _MIN_JUSTIFICACION_SUPERA_PPTO:
