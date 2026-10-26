@@ -1,4 +1,4 @@
-"""Asignación en bloque: proveedor elegido y pocas consultas (no N× mapear)."""
+"""Asignación en bloque: proveedor elegido y UPDATE por id (no upsert parcial)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,11 +25,12 @@ def test_mapear_bloque_body_acepta_proveedor():
     assert "cotizacion_numero_seleccionada" in src_body
 
 
-def test_mapear_items_bloque_no_llama_mapear_por_linea():
+def test_mapear_items_bloque_usa_update_no_upsert():
     src = (ROOT / "almacen_service.py").read_text(encoding="utf-8")
     fn = _fn(src, "mapear_items_bloque")
     assert "mapear_item_solicitud_gerencial" not in fn
-    assert "_update_solicitud_items_batch" in fn
+    assert "_patch_solicitud_items_by_id" in fn
+    assert "_update_solicitud_items_batch" not in fn
     assert "apply_saldo_flags_batch" in fn
     assert "_resolver_proveedor_mapeo" in fn
     assert "_persistir_cotizaciones_bloque" in fn
@@ -72,7 +73,7 @@ def test_mapear_items_bloque_aplica_proveedor_a_todas(monkeypatch):
             "valor_compra_unitario": 100,
         },
     ]
-    store: dict = {}
+    store: dict = {"patches": [], "cot_insert": []}
 
     class _Resp:
         def __init__(self, data):
@@ -86,11 +87,15 @@ def test_mapear_items_bloque_aplica_proveedor_a_todas(monkeypatch):
             self.table = table
             self._ids = None
             self._pending = None
+            self._update_body = None
 
         def select(self, *_a, **_k):
             return self
 
-        def eq(self, *_a, **_k):
+        def eq(self, col, val):
+            if self._update_body is not None and col == "id":
+                store["patches"].append({"id": int(val), **self._update_body})
+                self._update_body = None
             return self
 
         def in_(self, col, vals):
@@ -104,13 +109,12 @@ def test_mapear_items_bloque_aplica_proveedor_a_todas(monkeypatch):
             self._pending = _Resp(out)
             return self
 
-        def update(self, *_a, **_k):
+        def update(self, body):
+            self._update_body = dict(body)
             return self
 
-        def upsert(self, rows, **_k):
-            store.setdefault("upserts", []).extend(list(rows))
-            self._pending = _Resp(rows)
-            return self
+        def upsert(self, *_a, **_k):
+            raise AssertionError("mapear en bloque no debe usar upsert")
 
         def execute(self):
             if self._pending is not None:
@@ -186,26 +190,30 @@ def test_mapear_items_bloque_aplica_proveedor_a_todas(monkeypatch):
     assert all(r["ok"] for r in result["resultados"])
     assert len(result["resultados"]) == 2
     assert "timing" in result
-    upserts = store.get("upserts") or []
-    principales = [row for row in upserts if "insumo_id" in row]
+    principales = [row for row in store["patches"] if "insumo_id" in row]
     assert len(principales) == 2
     for row in principales:
         assert row["insumo_id"] == 42
-        assert row["solicitud_id"] == 1
+        assert "solicitud_id" not in row  # UPDATE no reescribe identidad
+        assert "numero_linea" not in row
         assert row["proveedor_seleccionado_id"] == 7
         assert row["proveedor_seleccionado_nombre"] == "Proveedor B"
         assert row["cotizacion_numero_seleccionada"] == "COT-B"
         assert float(row["valor_compra_unitario"]) == 55.5
     assert len(store.get("cot_insert") or []) == 2
-    assert any("cotizacion_seleccionada_id" in row for row in upserts)
+    assert any("cotizacion_seleccionada_id" in row for row in store["patches"])
 
 
-def test_update_batch_exige_solicitud_id():
+def test_update_batch_exige_solicitud_id_y_numero():
     with pytest.raises(ValueError, match="sin su solicitud"):
         svc._update_solicitud_items_batch(object(), [{"id": 1, "insumo_id": 2}])
+    with pytest.raises(ValueError, match="sin su número"):
+        svc._update_solicitud_items_batch(
+            object(), [{"id": 1, "solicitud_id": 9, "insumo_id": 2}],
+        )
 
 
-def test_humanize_solicitud_id_null_es_claro():
+def test_humanize_nulls_de_identidad_son_claros():
     msg = svc._humanize_solicitud_db_error(
         Exception(
             'null value in column "solicitud_id" of relation '
@@ -214,7 +222,15 @@ def test_humanize_solicitud_id_null_es_claro():
     )
     assert "sin su solicitud" in msg.lower()
     assert "null value" not in msg.lower()
-    assert "recargue" in msg.lower()
+
+    msg2 = svc._humanize_solicitud_db_error(
+        Exception(
+            'null value in column "numero_linea" of relation '
+            '"almacen_solicitud_item" violates not-null constraint'
+        )
+    )
+    assert "sin su número" in msg2.lower()
+    assert "null value" not in msg2.lower()
 
 
 def test_mapear_items_bloque_falla_antes_de_escribir_si_hay_oc(monkeypatch):
@@ -262,7 +278,7 @@ def test_mapear_items_bloque_falla_antes_de_escribir_si_hay_oc(monkeypatch):
     monkeypatch.setattr(svc, "_fetch_ocs_de_solicitud", lambda *_a, **_k: [{"id": 9}])
     monkeypatch.setattr(svc, "_solicitud_item_ids_en_ocs", lambda *_a, **_k: {21})
     monkeypatch.setattr(
-        svc, "_update_solicitud_items_batch",
+        svc, "_patch_solicitud_items_by_id",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no debe escribir")),
     )
 
