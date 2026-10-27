@@ -129,7 +129,8 @@ export function planFilasResumenConSubtotales(resumen, competencias = []) {
           costoDirecto: cd,
         })
         for (const row of itemsComp) {
-          // Cantidad del ítem ya es solo de esta competencia: no usar fórmula a memoria completa.
+          // cantidadAbsoluta: el Excel igual enlaza al TOTAL CANT. de la memoria del ítem
+          // (una hoja por ítem). El flag queda por compatibilidad del plan.
           out.push({ tipo: 'item', row, cantidadAbsoluta: true })
         }
       }
