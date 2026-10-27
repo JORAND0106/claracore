@@ -13501,6 +13501,7 @@ def exportar_presupuesto_informe(
                 "item": it,
                 "descripcion": (r.get("descripcion") or "").strip(),
                 "und": (r.get("und") or "").strip(),
+                "vlr_unitario": float(r.get("vlr_unitario") or 0),
                 "origen": origen,
                 "registros": [],
             }
@@ -13509,6 +13510,12 @@ def exportar_presupuesto_informe(
             im["descripcion"] = str(r.get("descripcion")).strip()
         if not im["und"] and r.get("und"):
             im["und"] = str(r.get("und")).strip()
+        vlr_item = r.get("vlr_unitario")
+        if vlr_item is not None:
+            try:
+                im["vlr_unitario"] = float(vlr_item)
+            except (TypeError, ValueError):
+                pass
 
         obs_parts = []
         if r.get("observacion"):
@@ -13534,6 +13541,7 @@ def exportar_presupuesto_informe(
             "ancho": r.get("ancho"),
             "espesor": r.get("espesor"),
             "cant_total": r.get("cant_total"),
+            "vlr_unitario": r.get("vlr_unitario"),
             "tipo_entidad": (r.get("tipo_entidad") or "").strip(),
             "competencia": competencia,
             "pre_interv_por": (r.get("pre_interv_por") or "").strip(),

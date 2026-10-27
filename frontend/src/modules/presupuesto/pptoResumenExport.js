@@ -1,10 +1,13 @@
 /**
  * Helpers puros para la pestaña Resumen del Excel de presupuesto.
  *
- * Congruencia de Costo directo:
- * - Plataforma: Σ costo_directo por registro (ya redondeado por fila).
- * - Backend export (resumen[]): agrupa por (capítulo, ítem, competencia).
- * - Excel debe usar ese costo_directo agregado, NO recalcular ROUND(vlr × Σcant).
+ * Costo directo en Excel (diseño original restaurado):
+ * - Cada fila de ítem escribe la fórmula visible ROUND(VU×Cantidad, 0).
+ * - Cantidad enlaza al TOTAL CANT. de la hoja de memoria del ítem (si existe).
+ * - Subtotales / totales del informe = SUM de esas celdas formuladas.
+ *
+ * Nota: ROUND(VU×Σcant) puede diferir del Σ costo_directo de la plataforma
+ * (redondeo por registro). El informe Excel prioriza trazabilidad formulada.
  *
  * Desglose por competencia (funcional, no solo etiqueta):
  * - Si el capítulo tiene ≥2 competencias (o ≥1 nombrada), el plan emite por cada
@@ -21,7 +24,8 @@ import {
 } from './pptoCompetenciaExport.js'
 
 /**
- * Costo directo de una fila de resumen (mismo criterio que la plataforma).
+ * Costo directo agregado del backend/plataforma (Σ por registro).
+ * Útil para plan de filas / diagnósticos; el Excel escribe fórmula, no este valor.
  * @param {{ costo_directo?: unknown }} row
  * @returns {number}
  */
@@ -30,8 +34,7 @@ export function costoDirectoResumenFila(row) {
 }
 
 /**
- * Cálculo incorrecto histórico del Excel: ROUND(Math.round(vlr) × cantidad, 0).
- * Se mantiene solo para tests de regresión / diagnóstico.
+ * Valor que produce la fórmula Excel ROUND(round(VU)×Cantidad, 0).
  * @param {{ vlr_unitario?: unknown, cantidad?: unknown }} row
  * @returns {number}
  */
@@ -39,6 +42,31 @@ export function costoDirectoResumenFilaRecalcLegacy(row) {
   const e = Math.round(Number(row?.vlr_unitario) || 0)
   const f = Number(row?.cantidad) || 0
   return Math.round(e * f)
+}
+
+/**
+ * Fórmula Excel de costo directo en Resumen: ROUND(VU×Cantidad, 0).
+ * Columnas fijas de plantilla: E = valor unitario, F = cantidad.
+ * @param {number} rowNum
+ * @returns {string}
+ */
+export function formulaCostoDirectoResumen(rowNum) {
+  const r = Number(rowNum)
+  if (!Number.isFinite(r) || r < 1) return '0'
+  return `ROUND(E${r}*F${r},0)`
+}
+
+/**
+ * Fórmula Excel de costo directo en memorias: ROUND(Cant×VU, 0).
+ * @param {string} cantRef  p. ej. "L12"
+ * @param {string} vuRef    p. ej. "$E$8" (celda fijada del VU del ítem)
+ * @returns {string}
+ */
+export function formulaCostoDirectoCantVu(cantRef, vuRef) {
+  const cant = String(cantRef || '').trim()
+  const vu = String(vuRef || '').trim()
+  if (!cant || !vu) return '0'
+  return `ROUND(${cant}*${vu},0)`
 }
 
 /**

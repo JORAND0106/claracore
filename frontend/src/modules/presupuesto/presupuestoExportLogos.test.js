@@ -156,19 +156,20 @@ describe('resolverAnchosPlantillaResumen (regla de plataforma)', () => {
 })
 
 describe('planLayoutItemEncabezado', () => {
-  it('fija A1:D1 | E1:L1 | M1 (13 cols; ex-M eliminada)', () => {
+  it('fija A1:D1 | E1:M1 | N1 (14 cols; incluye Costo directo)', () => {
     const layout = planLayoutItemEncabezado({
       contratista: { imageId: 0 },
       interventoria: { imageId: 1 },
       entidad: { imageId: 2 },
     })
-    assert.equal(layout.cols, 13)
+    assert.equal(layout.cols, 14)
     assert.equal(layout.leftSpan, 4)
     assert.equal(layout.rightSpan, 1)
     assert.equal(layout.titleStart, ITEM_HEADER_TITLE_START)
     assert.equal(layout.titleEnd, ITEM_HEADER_TITLE_END)
     assert.equal(layout.entidadStart, ITEM_HEADER_ENTIDAD_COL)
-    assert.equal(ITEM_HEADER_ENTIDAD_COL, 13)
+    assert.equal(ITEM_HEADER_ENTIDAD_COL, 14)
+    assert.equal(ITEM_HEADER_TITLE_END, 13)
     assert.equal(ITEM_HEADER_LEFT_END, 4)
   })
 })

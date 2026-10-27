@@ -79,7 +79,7 @@ describe('Excel Resumen: anchos idénticos entre contratos con distinto contenid
 })
 
 describe('Excel Memorias: anchos fijos de plantilla entre contratos', () => {
-  it('A–L=11/14 y M=45 con o sin textos largos', () => {
+  it('A–M=11/14 y N=45 con o sin textos largos', () => {
     const wsA = hojaMock()
     aplicarAnchosMemoria(wsA)
     const wsB = hojaMock()
@@ -90,6 +90,6 @@ describe('Excel Memorias: anchos fijos de plantilla entre contratos', () => {
     const anchosA = wsA._anchos(ITEM_HEADER_COLS)
     const anchosB = wsB._anchos(ITEM_HEADER_COLS)
     assert.deepEqual(anchosA, anchosB)
-    assert.deepEqual(anchosA, [14, 14, 14, 14, 11, 11, 11, 11, 11, 11, 11, 11, 45])
+    assert.deepEqual(anchosA, [14, 14, 14, 14, 11, 11, 11, 11, 11, 11, 11, 11, 11, 45])
   })
 })

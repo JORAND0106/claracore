@@ -47,7 +47,8 @@ import {
 import { subagruparRegistrosPorGrupoGrafico } from './pptoGraficosExport.js'
 import { pptoOrdenarFilasPorCapituloItem } from './pptoFiltroCatalogo.js'
 import {
-  costoDirectoResumenFila,
+  formulaCostoDirectoCantVu,
+  formulaCostoDirectoResumen,
   formulaSumaFilas,
   planFilasResumenConSubtotales,
 } from './pptoResumenExport.js'
@@ -279,7 +280,7 @@ function leerAnchosColumnasPx(ws, colCount) {
 
 /**
  * Logos de memoria de ítem tras anchos definitivos:
- * C+I en extremos de A:D; entidad centrada en M1 (col 13, ex-N tras borrar M).
+ * C+I en extremos de A:D; entidad centrada en N1 (col 14).
  * @param {number} [nativeRow=0] fila 0-based (0 = fila 1; para 2.º encabezado usar startRow-1)
  */
 function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt, nativeRow = 0 }) {
@@ -294,7 +295,7 @@ function insertarLogosEncabezadoItem(ws, { logoC, logoI, logoE, rowHeightPt, nat
   if (par.contratista) insertarImagenFlotante(ws, logoC, par.contratista)
   if (par.interventoria) insertarImagenFlotante(ws, logoI, par.interventoria)
 
-  // Entidad en última columna (= M1 con 13 cols).
+  // Entidad en última columna (= N1 con 14 cols).
   const posE = posicionLogoCentradoEnRango({
     logo: logoE,
     colStart: ITEM_HEADER_ENTIDAD_COL,
@@ -410,9 +411,9 @@ function estiloTitulo2Cell(cell, { bold = true, align = 'left', size = 11 } = {}
   cell.alignment = { vertical: 'middle', horizontal: align, indent: align === 'left' ? 1 : 0, wrapText: true }
 }
 
-function estiloItemBloqueCell(cell, { bold = false } = {}) {
+function estiloItemBloqueCell(cell, { bold = false, align = 'left' } = {}) {
   cell.font = { bold, size: 11, color: { argb: CC.rowText } }
-  cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
+  cell.alignment = { vertical: 'middle', horizontal: align, wrapText: true }
   cell.border = {
     top: BORDER_OUTLINE,
     left: BORDER_VERT,
@@ -443,7 +444,7 @@ function aplicarBordesTabla(ws, fromRow, toRow, colCount) {
 }
 
 /**
- * Filas meta del encabezado memorias de ítem (13 cols), relativas a baseRow (=2 en encabezado inicial):
+ * Filas meta del encabezado memorias de ítem (14 cols), relativas a baseRow (=2 en encabezado inicial):
  * base: Contrato | número | Objeto: | objeto
  * base+1: Contratista / nombre / NIT / nit
  * base+2: Interventoría / nombre / NIT / —
@@ -478,7 +479,7 @@ function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS, baseRow = 2) {
   ws.getCell(r3, 7).value = 'NIT'
   ws.mergeCells(r3, 7, r3, 8)
   ws.getCell(r3, 9).value = safeStr(meta?.nit).trim() || '—'
-  ws.mergeCells(r3, 9, r3, 11)
+  ws.mergeCells(r3, 9, r3, 12)
   ws.getRow(r3).height = 22
   estiloMetaCell(ws.getCell(r3, 1), { bold: true, rowNum: r3 })
   estiloMetaCell(ws.getCell(r3, 3), { rowNum: r3 })
@@ -493,7 +494,7 @@ function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS, baseRow = 2) {
   ws.getCell(r4, 7).value = 'NIT'
   ws.mergeCells(r4, 7, r4, 8)
   ws.getCell(r4, 9).value = '—'
-  ws.mergeCells(r4, 9, r4, 11)
+  ws.mergeCells(r4, 9, r4, 12)
   ws.getRow(r4).height = 22
   estiloMetaCell(ws.getCell(r4, 1), { bold: true, rowNum: r4 })
   estiloMetaCell(ws.getCell(r4, 3), { rowNum: r4 })
@@ -502,13 +503,13 @@ function escribirFilasMetaItem(ws, meta, cols = ITEM_HEADER_COLS, baseRow = 2) {
 }
 
 /**
- * Slots de 4 columnas (aprox. iguales) en hoja de 13 cols.
+ * Slots de columnas (aprox. iguales) en hoja de 14 cols.
  * La imagen se escala con contain al ancho real del merge (no a una caja fija pequeña).
  */
 const GRAFICO_COLS_POR_CELDA = [
   { start: 1, end: 4 },
-  { start: 5, end: 8 },
-  { start: 9, end: 13 },
+  { start: 5, end: 9 },
+  { start: 10, end: 14 },
 ]
 /** Padding interior del área combinada (px). */
 const GRAFICO_PAD_PX = 6
@@ -749,7 +750,7 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).font = { bold: true, size: 14, color: { argb: CC.titleText } }
     ws.getCell(1, RESUMEN_HEADER_TITLE_START).alignment = { horizontal: 'center', vertical: 'middle' }
   } else if (isItemMemoria) {
-    // A1:D1 logos | E1:L1 título | M1 entidad (ex-N1 tras eliminar columna M).
+    // A1:D1 logos | E1:M1 título | N1 entidad.
     ws.mergeCells(1, ITEM_HEADER_LEFT_START, 1, ITEM_HEADER_LEFT_END)
     ws.mergeCells(1, ITEM_HEADER_TITLE_START, 1, ITEM_HEADER_TITLE_END)
     ws.getCell(1, ITEM_HEADER_TITLE_START).value = titulo
@@ -982,8 +983,8 @@ function estiloFilaDatos(row, colCount, rowNum, { wrapAll = false } = {}) {
 }
 
 /**
- * Memorias de ítem (13 cols): anchos fijos de plantilla (plataforma).
- * A–L = 11, M = 45; A–D mín. 14 si hay logos. No dependen del contrato ni del contenido.
+ * Memorias de ítem (14 cols): anchos fijos de plantilla (plataforma).
+ * A–M = 11, N = 45; A–D mín. 14 si hay logos. No dependen del contrato ni del contenido.
  */
 function ajustarAnchosMemoriaItem(ws, colCount = ITEM_HEADER_COLS, { logoLeftSpan = 0 } = {}) {
   for (let c = 1; c <= colCount; c += 1) {
@@ -1023,18 +1024,26 @@ function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
   const it = safeStr(itemInfo.item)
   const desc = safeStr(itemInfo.descripcion)
   const und = safeStr(itemInfo.und)
+  const vu = Math.round(Number(itemInfo.vlr_unitario) || 0)
   const cols = Math.max(totalCols, 7)
 
   ws.getCell(startRow, 1).value = `Capítulo: ${cap}`
   ws.getCell(startRow, 4).value = `Ítem: ${it}`
   ws.getCell(startRow, 6).value = `Unidad: ${und}`
+  ws.getCell(startRow, 9).value = 'Valor unitario:'
+  ws.getCell(startRow, 11).value = vu
+  estiloMoneda(ws.getCell(startRow, 11))
   ws.mergeCells(startRow, 1, startRow, 3)
   ws.mergeCells(startRow, 4, startRow, 5)
-  ws.mergeCells(startRow, 6, startRow, cols)
+  ws.mergeCells(startRow, 6, startRow, 8)
+  ws.mergeCells(startRow, 9, startRow, 10)
+  ws.mergeCells(startRow, 11, startRow, cols)
   ws.getRow(startRow).height = 22
   estiloItemBloqueCell(ws.getCell(startRow, 1), { bold: true })
   estiloItemBloqueCell(ws.getCell(startRow, 4), { bold: true })
   estiloItemBloqueCell(ws.getCell(startRow, 6), { bold: true })
+  estiloItemBloqueCell(ws.getCell(startRow, 9), { bold: true })
+  estiloItemBloqueCell(ws.getCell(startRow, 11), { bold: true, align: 'right' })
 
   const descRow = startRow + 1
   ws.getCell(descRow, 1).value = `Descripción: ${desc}`
@@ -1042,7 +1051,9 @@ function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
   ws.getRow(descRow).height = Math.min(22 + Math.floor(desc.length / 70) * 10, 48)
   estiloItemBloqueCell(ws.getCell(descRow, 1), { bold: true })
 
-  return descRow + 1
+  // Referencia absoluta al VU del ítem (usada por fórmulas de costo directo por fila).
+  const vuRef = `$${colToLetter(11)}$${startRow}`
+  return { nextRow: descRow + 1, vuRef, vuRow: startRow, vuCol: 11 }
 }
 
 function moverHojaAlInicio(wb, sheetName) {
@@ -1197,7 +1208,7 @@ function escribirBloqueFirmas(ws, startRow, totalCols, firmantes) {
   return rRol
 }
 
-// Sin columna «Validación Dep. / Int.» (ex-M eliminada); Observación queda en M.
+// Costo directo formulado entre Cant. Total y Observación (14 cols A–N).
 // Columna 9 (Área/Long/Nodo) se renombra por subtabla según tipo_entidad.
 const DET_HEADERS_BASE = [
   'ID_POL',
@@ -1212,6 +1223,7 @@ const DET_HEADERS_BASE = [
   'Ancho',
   'Espesor',
   'Cant. Total',
+  'Costo directo',
   'Observación',
 ]
 const TOTAL_COLS_DET = DET_HEADERS_BASE.length
@@ -1219,6 +1231,7 @@ const COL_AREA_LONG = 9
 const COL_ANCHO = DET_HEADERS_BASE.indexOf('Ancho') + 1
 const COL_ESPESOR = DET_HEADERS_BASE.indexOf('Espesor') + 1
 const COL_CANT_TOTAL = DET_HEADERS_BASE.indexOf('Cant. Total') + 1
+const COL_COSTO_DIRECTO = DET_HEADERS_BASE.indexOf('Costo directo') + 1
 
 function headersDetallePorGrupo(colLabel, { idColLabel = 'ID_POL' } = {}) {
   const headers = DET_HEADERS_BASE.slice()
@@ -1227,7 +1240,7 @@ function headersDetallePorGrupo(colLabel, { idColLabel = 'ID_POL' } = {}) {
   return headers
 }
 
-function escribirFilaRegistroDetalle(ws, reg) {
+function escribirFilaRegistroDetalle(ws, reg, { vuRef = null } = {}) {
   const r = ws.addRow([
     reg.id_pol,
     reg.pk_id,
@@ -1241,12 +1254,24 @@ function escribirFilaRegistroDetalle(ws, reg) {
     reg.ancho,
     reg.espesor,
     reg.cant_total,
+    null,
     reg.observacion,
   ])
   estiloCantidad(r.getCell(COL_AREA_LONG))
   estiloCantidad(r.getCell(COL_ANCHO))
   estiloCantidad(r.getCell(COL_ESPESOR))
   estiloCantidad(r.getCell(COL_CANT_TOTAL))
+  const cantRef = `${colToLetter(COL_CANT_TOTAL)}${r.number}`
+  if (vuRef) {
+    r.getCell(COL_COSTO_DIRECTO).value = {
+      formula: formulaCostoDirectoCantVu(cantRef, vuRef),
+    }
+  } else {
+    const vu = Math.round(Number(reg.vlr_unitario) || 0)
+    const cant = Number(reg.cant_total) || 0
+    r.getCell(COL_COSTO_DIRECTO).value = Math.round(vu * cant)
+  }
+  estiloMoneda(r.getCell(COL_COSTO_DIRECTO))
   estiloFilaDatos(r, TOTAL_COLS_DET, r.number, { wrapAll: true })
   return r
 }
@@ -1278,10 +1303,12 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     regs.length,
     generatedAt,
     logoLegacy,
-    { soloCantidad: true, totalsTier: 'titulo_2', logos, headerLayout: 'item13' },
+    { soloCantidad: false, totalsTier: 'titulo_2', logos, headerLayout: 'item14' },
   )
 
-  const afterItemMeta = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
+  const itemMeta = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
+  const afterItemMeta = itemMeta.nextRow
+  const vuRef = itemMeta.vuRef
   // Anchos definitivos antes de embutir gráficos (contain usa el ancho real del merge).
   ajustarAnchosMemoriaItem(ws, TOTAL_COLS_DET, {
     logoLeftSpan: enc.logoLeftSpan || 0,
@@ -1295,8 +1322,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     gruposEntidad: agruparRegistrosPorTipoEntidad(b.registros),
   }))
 
-  let firstDataRowGlobal = null
-  let lastDataRowGlobal = null
+  /** Filas de datos de registro (para SUM de totales; excluye subtablas/gráficos). */
+  const filasDatosCant = []
+  const filasDatosCosto = []
   let firstHeaderRow = null
   let lastTableRow = afterItemMeta - 1
   /** Filas de encabezado breve por grupo (Título 1): no deben quedar con wrap forzado. */
@@ -1313,6 +1341,27 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       const cell = ws.getCell(sepRow, c)
       cell.border = { bottom: { style: 'medium', color: { argb: 'FF64748B' } } }
     }
+  }
+
+  const escribirSubtotalFilas = (filasSub) => {
+    if (!filasSub.length) return
+    ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
+    const subRow = ws.rowCount
+    ws.getCell(subRow, 1).value = 'SUBTOTAL'
+    ws.getCell(subRow, COL_CANT_TOTAL).value = {
+      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasSub),
+    }
+    ws.getCell(subRow, COL_COSTO_DIRECTO).value = {
+      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasSub),
+    }
+    estiloTitulo2Cell(ws.getCell(subRow, 1))
+    estiloCantidad(ws.getCell(subRow, COL_CANT_TOTAL))
+    estiloMoneda(ws.getCell(subRow, COL_COSTO_DIRECTO))
+    ws.getCell(subRow, COL_CANT_TOTAL).font = { bold: true, size: 10, color: { argb: CC.headerText } }
+    ws.getCell(subRow, COL_COSTO_DIRECTO).font = { bold: true, size: 10, color: { argb: CC.headerText } }
+    ws.getCell(subRow, COL_CANT_TOTAL).fill = FILL_HEADER
+    ws.getCell(subRow, COL_COSTO_DIRECTO).fill = FILL_HEADER
+    lastTableRow = subRow
   }
 
   bloquesTrabajo.forEach((bloqueComp) => {
@@ -1350,16 +1399,20 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
         if (firstHeaderRow == null) firstHeaderRow = headerRow
         estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
 
+        const filasSub = []
         const firstDet = headerRow + 1
         for (const reg of sub.registros) {
-          escribirFilaRegistroDetalle(ws, reg)
+          const r = escribirFilaRegistroDetalle(ws, reg, { vuRef })
+          filasSub.push(r.number)
+          filasDatosCant.push(r.number)
+          filasDatosCosto.push(r.number)
         }
-        const lastDet = sub.registros.length > 0 ? firstDet + sub.registros.length - 1 : null
+        const lastDet = filasSub.length > 0 ? filasSub[filasSub.length - 1] : null
         if (lastDet != null) {
-          if (firstDataRowGlobal == null) firstDataRowGlobal = firstDet
-          lastDataRowGlobal = lastDet
           aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
           lastTableRow = lastDet
+          // Subtotal formulado sobre las filas de este bloque de registros.
+          escribirSubtotalFilas(filasSub)
         } else {
           lastTableRow = headerRow
         }
@@ -1389,29 +1442,36 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 
   let cantTotalRow = null
-  if (firstDataRowGlobal != null && lastDataRowGlobal != null) {
+  if (filasDatosCant.length) {
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     cantTotalRow = ws.rowCount
     ws.getCell(cantTotalRow, 1).value = 'TOTAL CANT.'
-    // Suma única al final del ítem (cubre todas las subtablas; encabezados/texto/gráficos se ignoran en SUM).
+    // Suma solo filas de registro (no subtítulos ni celdas de gráficos).
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
-      formula: `SUM(${colToLetter(COL_CANT_TOTAL)}${firstDataRowGlobal}:${colToLetter(COL_CANT_TOTAL)}${lastDataRowGlobal})`,
+      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasDatosCant),
+    }
+    ws.getCell(cantTotalRow, COL_COSTO_DIRECTO).value = {
+      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasDatosCosto),
     }
     estiloTitulo2Cell(ws.getCell(cantTotalRow, 1))
     estiloCantidad(ws.getCell(cantTotalRow, COL_CANT_TOTAL))
+    estiloMoneda(ws.getCell(cantTotalRow, COL_COSTO_DIRECTO))
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).font = { bold: true, size: 11, color: { argb: CC.headerText } }
+    ws.getCell(cantTotalRow, COL_COSTO_DIRECTO).font = { bold: true, size: 11, color: { argb: CC.headerText } }
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).fill = FILL_HEADER
+    ws.getCell(cantTotalRow, COL_COSTO_DIRECTO).fill = FILL_HEADER
     completarFormulasTotales(
       ws,
       enc.totalsSummaryRow,
       null,
-      firstDataRowGlobal,
-      lastDataRowGlobal,
+      null,
+      null,
       5,
-      null,
+      7,
       COL_CANT_TOTAL,
-      null,
+      COL_COSTO_DIRECTO,
       enc.totalsTier,
+      filasDatosCant,
     )
     lastTableRow = cantTotalRow
   }
@@ -1504,18 +1564,39 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   let filasItemCap = []
 
   const plan = planFilasResumenConSubtotales(resumen, resumenCompetencias)
+  /** Cabecera COMPETENCIA pendiente de rellenar con SUM de sus ítems. */
+  let filaCompPendiente = null
+  let filasItemComp = []
+
+  const cerrarBloqueCompetencia = () => {
+    if (filaCompPendiente == null) return
+    const rComp = filaCompPendiente
+    if (filasItemComp.length) {
+      wsRes.getCell(rComp, 6).value = { formula: formulaSumaFilas(colToLetter(6), filasItemComp) }
+      wsRes.getCell(rComp, 7).value = { formula: formulaSumaFilas(colToLetter(7), filasItemComp) }
+    } else {
+      wsRes.getCell(rComp, 6).value = 0
+      wsRes.getCell(rComp, 7).value = 0
+    }
+    estiloCantidad(wsRes.getCell(rComp, 6))
+    estiloMoneda(wsRes.getCell(rComp, 7))
+    filaCompPendiente = null
+    filasItemComp = []
+  }
+
   for (const entry of plan) {
     if (entry.tipo === 'competencia') {
+      cerrarBloqueCompetencia()
       const label = `COMPETENCIA · ${entry.label || '—'}`.trim()
-      const rComp = wsRes.addRow([label, '', '', '', '', Number(entry.cantidad) || 0, entry.costoDirecto || 0])
-      estiloCantidad(rComp.getCell(6))
-      estiloMoneda(rComp.getCell(7))
+      const rComp = wsRes.addRow([label, '', '', '', '', null, null])
       estiloFilaSubtotalCapitulo(rComp, totalColsResumen)
       try {
         wsRes.mergeCells(rowNum, 1, rowNum, 4)
       } catch {
         /* merge opcional */
       }
+      filaCompPendiente = rowNum
+      filasItemComp = []
       rowNum += 1
       continue
     }
@@ -1534,7 +1615,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       estiloMoneda(r.getCell(5))
 
       // Con desglose por competencia la cantidad es del par (ítem, competencia): valor absoluto.
-      // Sin desglose se puede enlazar al TOTAL CANT. de la memoria del ítem.
+      // Sin desglose se enlaza al TOTAL CANT. de la memoria del ítem.
       if (entry.cantidadAbsoluta) {
         r.getCell(6).value = Number(row.cantidad) || 0
       } else {
@@ -1549,15 +1630,18 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       }
       estiloCantidad(r.getCell(6))
 
-      r.getCell(7).value = costoDirectoResumenFila(row)
+      // Diseño original: costo directo = ROUND(VU × Cantidad, 0) visible en barra de fórmulas.
+      r.getCell(7).value = { formula: formulaCostoDirectoResumen(rowNum) }
       estiloMoneda(r.getCell(7))
       estiloFilaDatos(r, totalColsResumen, rowNum)
       filasItemCap.push(rowNum)
+      if (filaCompPendiente != null) filasItemComp.push(rowNum)
       rowNum += 1
       continue
     }
 
     // Subtotal de capítulo: suma solo filas de ítem (excluye cabeceras COMPETENCIA).
+    cerrarBloqueCompetencia()
     const label = `SUBTOTAL ${entry.capitulo || '—'}`.trim()
     const rSub = wsRes.addRow([label, '', '', '', '', null, null])
     if (filasItemCap.length) {
@@ -1565,7 +1649,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       rSub.getCell(7).value = { formula: formulaSumaFilas(colToLetter(7), filasItemCap) }
     } else {
       rSub.getCell(6).value = 0
-      rSub.getCell(7).value = entry.costoDirecto || 0
+      rSub.getCell(7).value = 0
     }
     estiloCantidad(rSub.getCell(6))
     estiloMoneda(rSub.getCell(7))
@@ -1579,6 +1663,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     filasItemCap = []
     rowNum += 1
   }
+  cerrarBloqueCompetencia()
 
   const lastDataRow = plan.length > 0 ? rowNum - 1 : firstDataRow - 1
   let totalsFooterRow = null
