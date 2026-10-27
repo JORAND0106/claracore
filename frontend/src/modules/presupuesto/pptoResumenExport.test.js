@@ -3,13 +3,27 @@ import assert from 'node:assert/strict'
 import {
   costoDirectoResumenFila,
   costoDirectoResumenFilaRecalcLegacy,
+  formulaCostoDirectoCantVu,
+  formulaCostoDirectoResumen,
   formulaSumaFilas,
   planFilasResumenConSubtotales,
   totalesDesdeSubtotalesCapitulo,
 } from './pptoResumenExport.js'
 
-describe('costoDirectoResumenFila — congruencia con plataforma', () => {
-  it('usa Σ costo_directo y no ROUND(vlr×Σcant)', () => {
+describe('fórmulas Excel restauradas (Resumen / memorias)', () => {
+  it('costo directo Resumen = ROUND(E×F,0)', () => {
+    assert.equal(formulaCostoDirectoResumen(9), 'ROUND(E9*F9,0)')
+    assert.equal(formulaCostoDirectoResumen(0), '0')
+  })
+
+  it('costo directo memoria = ROUND(cant×VU,0)', () => {
+    assert.equal(formulaCostoDirectoCantVu('L12', '$K$7'), 'ROUND(L12*$K$7,0)')
+    assert.equal(formulaCostoDirectoCantVu('', '$K$7'), '0')
+  })
+})
+
+describe('costoDirectoResumenFila — valor de plataforma (diagnóstico)', () => {
+  it('documenta divergencia Σ costo_directo vs ROUND(vlr×Σcant)', () => {
     // Caso típico de divergencia: vlr con decimales + Math.round en Excel legacy.
     const row = {
       vlr_unitario: 1250.75,

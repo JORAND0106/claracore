@@ -18,6 +18,7 @@ const DET_HEADERS_BASE = [
   'Ancho',
   'Espesor',
   'Cant. Total',
+  'Costo directo',
   'Observación',
 ]
 

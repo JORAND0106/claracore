@@ -79,16 +79,17 @@ export function resolverAnchosPlantillaResumen(colCount, { logoLeftSpan = 0, log
 }
 
 /**
- * Encabezado fijo memorias de ítem (13 cols A–M tras eliminar ex-columna M):
- * A1:D1 logos C+I · E1:L1 título · M1 entidad (antes N1; corrimiento al borrar M).
+ * Encabezado fijo memorias de ítem (14 cols A–N):
+ * A1:D1 logos C+I · E1:M1 título · N1 entidad.
+ * Columna extra = Costo directo formulado (entre Cant. Total y Observación).
  */
 export const ITEM_HEADER_LEFT_START = 1
 export const ITEM_HEADER_LEFT_END = 4
 export const ITEM_HEADER_TITLE_START = 5
-export const ITEM_HEADER_TITLE_END = 12
-/** Columna final (M): logo de entidad. */
-export const ITEM_HEADER_ENTIDAD_COL = 13
-export const ITEM_HEADER_COLS = 13
+export const ITEM_HEADER_TITLE_END = 13
+/** Columna final (N): logo de entidad. */
+export const ITEM_HEADER_ENTIDAD_COL = 14
+export const ITEM_HEADER_COLS = 14
 
 /** @param {...(string|null|undefined)} candidates */
 export function pickLogoUrl(...candidates) {
@@ -331,7 +332,7 @@ export function posicionParLogosExtremosBloque({
   return { contratista, interventoria, blockWidthPx: blockW, colWidthsPx: widths }
 }
 
-/** Layout fijo fila 1 de memorias de ítem: A1:D1 | E1:L1 | M1. */
+/** Layout fijo fila 1 de memorias de ítem: A1:D1 | E1:M1 | N1. */
 export function planLayoutItemEncabezado(logos = null) {
   const hasC = logoImageId(logos?.contratista) != null
   const hasI = logoImageId(logos?.interventoria) != null
