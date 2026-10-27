@@ -50,6 +50,7 @@ import {
   formulaCostoDirectoCantVu,
   formulaCostoDirectoResumen,
   formulaSumaFilas,
+  formulaSumaRango,
   planFilasResumenConSubtotales,
 } from './pptoResumenExport.js'
 
@@ -1368,9 +1369,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     gruposEntidad: agruparRegistrosPorTipoEntidad(b.registros),
   }))
 
-  /** Filas de datos de registro (para SUM de totales; excluye subtablas/gráficos). */
-  const filasDatosCant = []
-  const filasDatosCosto = []
+  /** Filas SUBTOTAL de cada bloque de registros; el TOTAL CANT. suma estas (no cada registro). */
+  const filasSubtotal = []
   let firstHeaderRow = null
   let lastTableRow = afterItemMeta - 1
   /** Filas de encabezado breve por grupo (Título 1): no deben quedar con wrap forzado. */
@@ -1389,16 +1389,19 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     }
   }
 
+  /** Subtotal = SUMA(rango continuo) de registros del bloque. Devuelve la fila escrita. */
   const escribirSubtotalFilas = (filasSub) => {
-    if (!filasSub.length) return
+    if (!filasSub.length) return null
+    const first = filasSub[0]
+    const last = filasSub[filasSub.length - 1]
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     const subRow = ws.rowCount
     ws.getCell(subRow, 1).value = 'SUBTOTAL'
     ws.getCell(subRow, COL_CANT_TOTAL).value = {
-      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasSub),
+      formula: formulaSumaRango(colToLetter(COL_CANT_TOTAL), first, last),
     }
     ws.getCell(subRow, COL_COSTO_DIRECTO).value = {
-      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasSub),
+      formula: formulaSumaRango(colToLetter(COL_COSTO_DIRECTO), first, last),
     }
     estiloTitulo2Cell(ws.getCell(subRow, 1))
     estiloCantidad(ws.getCell(subRow, COL_CANT_TOTAL))
@@ -1408,6 +1411,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     ws.getCell(subRow, COL_CANT_TOTAL).fill = FILL_HEADER
     ws.getCell(subRow, COL_COSTO_DIRECTO).fill = FILL_HEADER
     lastTableRow = subRow
+    filasSubtotal.push(subRow)
+    return subRow
   }
 
   bloquesTrabajo.forEach((bloqueComp) => {
@@ -1446,18 +1451,15 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
         estiloFilaHeader(ws.getRow(headerRow), TOTAL_COLS_DET)
 
         const filasSub = []
-        const firstDet = headerRow + 1
         for (const reg of sub.registros) {
           const r = escribirFilaRegistroDetalle(ws, reg, { vuRef })
           filasSub.push(r.number)
-          filasDatosCant.push(r.number)
-          filasDatosCosto.push(r.number)
         }
         const lastDet = filasSub.length > 0 ? filasSub[filasSub.length - 1] : null
         if (lastDet != null) {
           aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
           lastTableRow = lastDet
-          // Subtotal formulado sobre las filas de este bloque de registros.
+          // Subtotal = SUMA(rango) de este bloque; el TOTAL de la hoja suma estos subtotales.
           escribirSubtotalFilas(filasSub)
         } else {
           lastTableRow = headerRow
@@ -1488,16 +1490,16 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 
   let cantTotalRow = null
-  if (filasDatosCant.length) {
+  if (filasSubtotal.length) {
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     cantTotalRow = ws.rowCount
     ws.getCell(cantTotalRow, 1).value = 'TOTAL CANT.'
-    // Suma solo filas de registro (no subtítulos ni celdas de gráficos).
+    // TOTAL = suma de subtotales de la hoja (no de cada registro individual).
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
-      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasDatosCant),
+      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasSubtotal),
     }
     ws.getCell(cantTotalRow, COL_COSTO_DIRECTO).value = {
-      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasDatosCosto),
+      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasSubtotal),
     }
     estiloTitulo2Cell(ws.getCell(cantTotalRow, 1))
     estiloCantidad(ws.getCell(cantTotalRow, COL_CANT_TOTAL))
@@ -1517,7 +1519,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       COL_CANT_TOTAL,
       COL_COSTO_DIRECTO,
       enc.totalsTier,
-      filasDatosCant,
+      filasSubtotal,
     )
     lastTableRow = cantTotalRow
   }

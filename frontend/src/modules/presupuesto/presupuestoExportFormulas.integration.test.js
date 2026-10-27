@@ -49,6 +49,40 @@ function totalCantRow(wsMem) {
   return row
 }
 
+/** Filas etiquetadas SUBTOTAL en una hoja de memoria. */
+function filasSubtotal(wsMem) {
+  const rows = []
+  wsMem.eachRow((r, rn) => {
+    if (r.getCell(1).value === 'SUBTOTAL') rows.push(rn)
+  })
+  return rows
+}
+
+function makeRegs(n, { competencia = '', tipo_entidad = 'Area', cant = 1 } = {}) {
+  const out = []
+  for (let i = 0; i < n; i += 1) {
+    out.push({
+      id: i + 1,
+      id_pol: `P${i + 1}`,
+      pk_id: 'PK1',
+      tramo: '1',
+      infraestructura: '',
+      abs_inicio: i * 10,
+      abs_final: (i + 1) * 10,
+      no_inicio: '',
+      no_final: '',
+      area_long_nod: cant,
+      ancho: 1,
+      espesor: 1,
+      cant_total: cant,
+      tipo_entidad,
+      competencia,
+      observacion: '',
+    })
+  }
+  return out
+}
+
 describe('informe Excel integración fórmulas', () => {
   it('escribe fórmulas visibles en Resumen y memorias', async () => {
     const wb = await generarLibro({
@@ -201,5 +235,130 @@ describe('informe Excel integración fórmulas', () => {
       // Nombre con punto → comillas simples obligatorias
       assert.match(String(cant.formula), /^'/)
     }
+  })
+
+  it('memoria con muchos registros: SUBTOTAL=SUM(rango) y TOTAL CANT.=suma de subtotales', async () => {
+    const nRegs = 400
+    const wb = await generarLibro({
+      modo: 'presupuesto_obra',
+      modo_label: 'Presupuesto de obra',
+      total_registros: nRegs,
+      resumen: [
+        {
+          capitulo: '1. PRELIMINARES',
+          item: '1.1',
+          descripcion: 'Excavación',
+          und: 'M3',
+          vlr_unitario: 1000,
+          cantidad: nRegs,
+          costo_directo: nRegs * 1000,
+        },
+      ],
+      resumen_competencias: [],
+      items: [
+        {
+          capitulo: '1. PRELIMINARES',
+          item: '1.1',
+          descripcion: 'Excavación',
+          und: 'M3',
+          vlr_unitario: 1000,
+          registros: makeRegs(nRegs),
+        },
+      ],
+    })
+
+    const wsMem = wb.worksheets.find((w) => w.name !== 'Resumen')
+    assert.ok(wsMem)
+    const subs = filasSubtotal(wsMem)
+    assert.ok(subs.length >= 1, 'debe existir al menos un SUBTOTAL')
+    for (const rn of subs) {
+      const fCant = wsMem.getCell(rn, 12).value?.formula
+      const fCd = wsMem.getCell(rn, 13).value?.formula
+      assert.match(String(fCant), /^SUM\(L\d+:L\d+\)$/, `SUBTOTAL L${rn}: ${fCant}`)
+      assert.match(String(fCd), /^SUM\(M\d+:M\d+\)$/, `SUBTOTAL M${rn}: ${fCd}`)
+      // No debe ser suma celda por celda de cientos de registros
+      assert.equal(String(fCant).includes('+'), false)
+    }
+
+    const totRow = totalCantRow(wsMem)
+    assert.ok(totRow)
+    const totCant = wsMem.getCell(totRow, 12).value?.formula
+    const totCd = wsMem.getCell(totRow, 13).value?.formula
+    // TOTAL = suma de subtotales (referencia o Lsuba+Lsubb…), no de cada registro
+    const expectedTot = subs.length === 1
+      ? `L${subs[0]}`
+      : subs.map((r) => `L${r}`).join('+')
+    assert.equal(totCant, expectedTot, `TOTAL CANT. debe sumar subtotales: ${totCant}`)
+    assert.equal(
+      totCd,
+      expectedTot.replaceAll('L', 'M'),
+      `TOTAL costo debe sumar subtotales: ${totCd}`,
+    )
+    assert.ok(String(totCant).length < 200, 'fórmula TOTAL no debe ser enorme')
+
+    const wsRes = wb.getWorksheet('Resumen')
+    let itemRow = null
+    wsRes.eachRow((row, rn) => {
+      if (row.getCell(2).value === '1.1') itemRow = rn
+    })
+    assert.ok(itemRow)
+    assert.equal(
+      wsRes.getCell(itemRow, 6).value?.formula,
+      `'${wsMem.name}'!L${totRow}`,
+    )
+  })
+
+  it('memoria con varios grupos: TOTAL = subtotal1+subtotal2…', async () => {
+    const wb = await generarLibro({
+      modo: 'presupuesto_obra',
+      modo_label: 'Presupuesto de obra',
+      total_registros: 5,
+      resumen: [
+        {
+          capitulo: '1. PRELIMINARES',
+          item: '1.02',
+          descripcion: 'Excavación',
+          und: 'M3',
+          vlr_unitario: 1000,
+          cantidad: 5,
+          costo_directo: 5000,
+        },
+      ],
+      resumen_competencias: [],
+      items: [
+        {
+          capitulo: '1. PRELIMINARES',
+          item: '1.02',
+          descripcion: 'Excavación',
+          und: 'M3',
+          vlr_unitario: 1000,
+          registros: [
+            ...makeRegs(3, { tipo_entidad: 'Area', cant: 1 }),
+            ...makeRegs(2, { tipo_entidad: 'Linea', cant: 1 }).map((r, i) => ({
+              ...r,
+              id: 100 + i,
+              id_pol: `L${i + 1}`,
+            })),
+          ],
+        },
+      ],
+    })
+
+    const wsMem = wb.worksheets.find((w) => w.name !== 'Resumen')
+    const subs = filasSubtotal(wsMem)
+    assert.ok(subs.length >= 2, `esperaba ≥2 subtotales, got ${subs.length}`)
+    for (const rn of subs) {
+      assert.match(String(wsMem.getCell(rn, 12).value?.formula), /^SUM\(L\d+:L\d+\)$/)
+    }
+    const totRow = totalCantRow(wsMem)
+    const totCant = wsMem.getCell(totRow, 12).value?.formula
+    assert.equal(totCant, subs.map((r) => `L${r}`).join('+'))
+
+    const wsRes = wb.getWorksheet('Resumen')
+    let itemRow = null
+    wsRes.eachRow((row, rn) => {
+      if (row.getCell(2).value === '1.02') itemRow = rn
+    })
+    assert.equal(wsRes.getCell(itemRow, 6).value?.formula, `'${wsMem.name}'!L${totRow}`)
   })
 })

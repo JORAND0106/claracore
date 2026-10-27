@@ -6,6 +6,7 @@ import {
   formulaCostoDirectoCantVu,
   formulaCostoDirectoResumen,
   formulaSumaFilas,
+  formulaSumaRango,
   planFilasResumenConSubtotales,
   totalesDesdeSubtotalesCapitulo,
 } from './pptoResumenExport.js'
@@ -151,5 +152,13 @@ describe('formulaSumaFilas', () => {
     assert.equal(formulaSumaFilas('G', [10, 15, 20]), 'G10+G15+G20')
     assert.equal(formulaSumaFilas('F', [12]), 'F12')
     assert.equal(formulaSumaFilas('F', []), '0')
+  })
+})
+
+describe('formulaSumaRango', () => {
+  it('siempre SUMA inclusiva first:last', () => {
+    assert.equal(formulaSumaRango('L', 10, 510), 'SUM(L10:L510)')
+    assert.equal(formulaSumaRango('L', 12, 12), 'SUM(L12:L12)')
+    assert.equal(formulaSumaRango('M', 0, 5), '0')
   })
 })

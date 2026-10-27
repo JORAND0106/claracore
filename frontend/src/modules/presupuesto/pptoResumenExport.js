@@ -176,7 +176,28 @@ export function totalesDesdeSubtotalesCapitulo(plan) {
 }
 
 /**
+ * Formula Excel SUM sobre un rango continuo (inclusive).
+ * Siempre usa SUMA(rango), incluso si first === last (p. ej. un solo registro).
+ * @param {string} colLetter
+ * @param {number} firstRow
+ * @param {number} lastRow
+ * @returns {string}
+ */
+export function formulaSumaRango(colLetter, firstRow, lastRow) {
+  const a = Number(firstRow)
+  const b = Number(lastRow)
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a < 1 || b < 1) return '0'
+  const lo = Math.min(a, b)
+  const hi = Math.max(a, b)
+  return `SUM(${colLetter}${lo}:${colLetter}${hi})`
+}
+
+/**
  * Formula Excel SUM sobre filas no necesariamente contiguas.
+ * Contiguo → SUM(rango). Una sola fila → referencia directa.
+ * No contiguo → suma celda a celda (evita SUM(a,b) que algunos Excel marcan al reparar).
+ * Usar para totales que suman subtotales (pocas celdas). Para subtotales de registros
+ * contiguos preferir {@link formulaSumaRango}.
  * @param {string} colLetter
  * @param {number[]} rowNums
  * @returns {string}
@@ -196,7 +217,7 @@ export function formulaSumaFilas(colLetter, rowNums) {
     }
   }
   if (contiguous) {
-    return `SUM(${colLetter}${rows[0]}:${colLetter}${rows[rows.length - 1]})`
+    return formulaSumaRango(colLetter, rows[0], rows[rows.length - 1])
   }
   // No contiguo: suma celda a celda (evita SUM(a,b) que algunos Excel marcan al reparar).
   return rows.map((r) => `${colLetter}${r}`).join('+')
