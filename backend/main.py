@@ -2822,7 +2822,17 @@ def _require_contract_access(current_user, contrato_id: int):
     raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
 
 
-COMPETENCIAS_BASE = ["Alumbrado P.", "EAB", "ENEL-CODENSA", "ETB", "Gas Natural", "ICCU", "IDU", "MOVISTAR"]
+COMPETENCIAS_BASE = [
+    "Alumbrado P.",
+    "EAB",
+    "ENEL-CODENSA",
+    "ETB",
+    "Gas Natural",
+    "ICCU",
+    "IDU",
+    "MOVISTAR",
+    "Red Matriz IDU",
+]
 
 
 def _comentario_sicoe_visible_para_usuario(

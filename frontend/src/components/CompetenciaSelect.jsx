@@ -2,10 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 const OPT_AGREGAR = '__agregar_entidad__'
 
-const FALLBACK_COMPETENCIAS = ['Alumbrado P.', 'EAB', 'ENEL-CODENSA', 'ETB', 'Gas Natural', 'ICCU', 'IDU', 'MOVISTAR']
+const FALLBACK_COMPETENCIAS = [
+  'Alumbrado P.',
+  'EAB',
+  'ENEL-CODENSA',
+  'ETB',
+  'Gas Natural',
+  'ICCU',
+  'IDU',
+  'MOVISTAR',
+  'Red Matriz IDU',
+]
 
 /**
- * Dropdown de competencia con ICCU + lista del contrato + «Agregar entidad».
+ * Dropdown de competencia: catálogo base del contrato + «Agregar entidad».
  * Requiere GET/POST /contratos/{id}/competencias (salvo si se pasa `opciones`).
  */
 export default function CompetenciaSelect({
