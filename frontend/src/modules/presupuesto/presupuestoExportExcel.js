@@ -109,12 +109,25 @@ function safeSheetName(raw, fallback = 'Item') {
 }
 
 function sheetFormulaRef(sheetName) {
+  // Siempre entre comillas: nombres con puntos/espacios (1.02_1) rompen sin ellas.
   const escaped = String(sheetName).replace(/'/g, "''")
   return `'${escaped}'`
 }
 
 function itemMapKey(capitulo, item) {
   return `${safeStr(capitulo)}\x1e${safeStr(item)}`
+}
+
+/**
+ * Cantidad del Resumen = referencia al TOTAL CANT. de la hoja de memoria del ítem.
+ * @param {{ sheetName?: string, cantTotalRow?: number }|null|undefined} ref
+ * @returns {string|null} fórmula sin «=», o null si no hay memoria
+ */
+function formulaCantidadResumenDesdeMemoria(ref) {
+  const row = Number(ref?.cantTotalRow)
+  const name = ref?.sheetName
+  if (!name || !Number.isFinite(row) || row < 1) return null
+  return `${sheetFormulaRef(name)}!${colToLetter(COL_CANT_TOTAL)}${row}`
 }
 
 function aplicarPaginaHorizontal(ws) {
@@ -1597,6 +1610,8 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const filasSubtotalCap = []
   /** Filas de ítem del capítulo actual (no cabeceras COMPETENCIA) para SUM del subtotal. */
   let filasItemCap = []
+  /** Evita contar dos veces el mismo (cap, ítem) cuando el desglose por competencia lo repite. */
+  const itemsEnSubtotalCap = new Set()
 
   const plan = planFilasResumenConSubtotales(resumen, resumenCompetencias)
   /** Cabecera COMPETENCIA pendiente de rellenar con SUM de sus ítems. */
@@ -1649,27 +1664,27 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       ])
       estiloMoneda(r.getCell(5))
 
-      // Con desglose por competencia la cantidad es del par (ítem, competencia): valor absoluto.
-      // Sin desglose se enlaza al TOTAL CANT. de la memoria del ítem.
-      if (entry.cantidadAbsoluta) {
-        r.getCell(6).value = Number(row.cantidad) || 0
+      // Cantidad = siempre fórmula al TOTAL CANT. de la memoria del ítem (misma hoja
+      // para todas las filas del ítem, p. ej. desglose por competencia).
+      const itemKey = itemMapKey(row.capitulo, row.item)
+      const ref = itemRefs.get(itemKey)
+      const fCant = formulaCantidadResumenDesdeMemoria(ref)
+      if (fCant) {
+        r.getCell(6).value = { formula: fCant }
       } else {
-        const ref = itemRefs.get(itemMapKey(row.capitulo, row.item))
-        if (ref?.cantTotalRow) {
-          r.getCell(6).value = {
-            formula: `${sheetFormulaRef(ref.sheetName)}!${colToLetter(COL_CANT_TOTAL)}${ref.cantTotalRow}`,
-          }
-        } else {
-          r.getCell(6).value = Number(row.cantidad) || 0
-        }
+        r.getCell(6).value = Number(row.cantidad) || 0
       }
       estiloCantidad(r.getCell(6))
 
-      // Diseño original: costo directo = ROUND(VU × Cantidad, 0) visible en barra de fórmulas.
+      // Costo directo = ROUND(VU × Cantidad, 0) sobre la cantidad referenciada.
       r.getCell(7).value = { formula: formulaCostoDirectoResumen(rowNum) }
       estiloMoneda(r.getCell(7))
       estiloFilaDatos(r, totalColsResumen, rowNum)
-      filasItemCap.push(rowNum)
+      // Subtotal de capítulo: una sola fila por ítem (la memoria ya consolida competencias).
+      if (!itemsEnSubtotalCap.has(itemKey)) {
+        itemsEnSubtotalCap.add(itemKey)
+        filasItemCap.push(rowNum)
+      }
       if (filaCompPendiente != null) filasItemComp.push(rowNum)
       rowNum += 1
       continue
@@ -1696,6 +1711,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     }
     filasSubtotalCap.push(rowNum)
     filasItemCap = []
+    itemsEnSubtotalCap.clear()
     rowNum += 1
   }
   cerrarBloqueCompetencia()
