@@ -147,7 +147,15 @@ describe('informe Excel integración fórmulas', () => {
     assert.match(String(cantCell.formula), /!L\d+/)
     assert.equal(cdCell?.formula, `ROUND(E${itemRow}*F${itemRow},0)`)
 
+    // Cabecera TOTALES: E=cantidad, G=costo (celdas sin merge sobre la fórmula).
+    const totCant = wsRes.getCell(5, 5).value
     const totCd = wsRes.getCell(5, 7).value
-    assert.ok(totCd?.formula)
+    assert.ok(totCant?.formula, 'E5 cantidad total formulada')
+    assert.ok(totCd?.formula, 'G5 costo total formulado')
+    // No debe haber merges D5:E5 / F5:G5 / F5:N5 (causaban reparación en Excel).
+    const merges = [...(wsRes.model?.merges || [])]
+    for (const bad of ['D5:E5', 'F5:G5', 'F5:N5']) {
+      assert.equal(merges.includes(bad), false, `merge prohibido ${bad}`)
+    }
   })
 })

@@ -831,21 +831,40 @@ function escribirEncabezadoCompacto(ws, totalCols, titulo, meta, modoLabel, tota
     estiloMetaCell(ws.getCell(4, 1), { rowNum: 4 })
   }
 
-  ws.addRow(['TOTALES DEL INFORME', '', '', soloCantidad ? 'Cant. total ítem:' : 'Cantidad total:', '', soloCantidad ? '' : 'Costo directo total:', ''])
+  // Fila TOTALES: etiquetas y fórmulas en celdas SEPARADAS (sin merge sobre la fórmula).
+  // Causa del «problema de contenido»: merges D5:E5 / F5:N5 (o F5:G5) con fórmulas
+  // escritas dentro del rango combinado. Excel repara/elimina esas celdas.
+  // Diseño seguro:
+  //   A–C título | D etiqueta cant | E fórmula cant | F etiqueta costo | G fórmula costo
+  ws.addRow([
+    'TOTALES DEL INFORME',
+    null,
+    null,
+    soloCantidad ? 'Cant. total ítem:' : 'Cantidad total:',
+    null,
+    soloCantidad ? null : 'Costo directo total:',
+    null,
+  ])
   ws.mergeCells(5, 1, 5, 3)
-  ws.mergeCells(5, 4, 5, soloCantidad ? cols : 5)
-  if (!soloCantidad) ws.mergeCells(5, 6, 5, cols)
   ws.getRow(5).height = 22
   const estiloTotales = totalsTier === 'titulo_1' ? estiloTitulo1Cell : estiloTitulo2Cell
   estiloTotales(ws.getCell(5, 1))
   estiloTotales(ws.getCell(5, 4), { align: 'right' })
-  if (!soloCantidad) estiloTotales(ws.getCell(5, 6), { align: 'right' })
+  estiloTotales(ws.getCell(5, 5), { align: 'right' })
+  if (!soloCantidad) {
+    estiloTotales(ws.getCell(5, 6), { align: 'right' })
+    estiloTotales(ws.getCell(5, 7), { align: 'right' })
+  }
 
   ws.addRow([])
 
   return {
     tableHeaderRow: 7,
     totalsSummaryRow: 5,
+    /** Columna fórmula cantidad en fila 5 TOTALES (E). */
+    totalsCantCol: 5,
+    /** Columna fórmula costo en fila 5 TOTALES (G); null si soloCantidad. */
+    totalsCostoCol: soloCantidad ? null : 7,
     totalsTier,
     logoLeftSpan: leftSpan,
     logoRightSpan: rightSpan,
@@ -871,9 +890,17 @@ function completarFormulasTotales(
   totalsTier = 'titulo_1',
   /** @type {number[]|null} Si se indica, el total general suma solo estas filas (p. ej. subtotales de capítulo). */
   filasSuma = null,
+  /**
+   * Columnas del pie TOTALES (alineadas a la grilla de datos).
+   * Por defecto = colDisplay*; en Resumen la cabecera usa E/G y el pie F/G.
+   */
+  colFooterCant = null,
+  colFooterCosto = null,
 ) {
   const srcCant = colSumaCant || colDisplayCant
   const srcCosto = colSumaCosto || colDisplayCosto
+  const footCant = colFooterCant != null ? colFooterCant : colDisplayCant
+  const footCosto = colFooterCosto !== undefined ? colFooterCosto : colDisplayCosto
   let sumCant
   let sumCosto
   if (Array.isArray(filasSuma) && filasSuma.length) {
@@ -887,12 +914,14 @@ function completarFormulasTotales(
   const fillTot = fillTotalesTier(totalsTier)
   const textTot = textoTotalesTier(totalsTier)
 
-  ws.getCell(totalsSummaryRow, colDisplayCant).value = { formula: sumCant }
-  estiloCantidad(ws.getCell(totalsSummaryRow, colDisplayCant))
-  ws.getCell(totalsSummaryRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: textTot } }
-  ws.getCell(totalsSummaryRow, colDisplayCant).fill = fillTot
+  if (totalsSummaryRow && colDisplayCant != null) {
+    ws.getCell(totalsSummaryRow, colDisplayCant).value = { formula: sumCant }
+    estiloCantidad(ws.getCell(totalsSummaryRow, colDisplayCant))
+    ws.getCell(totalsSummaryRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: textTot } }
+    ws.getCell(totalsSummaryRow, colDisplayCant).fill = fillTot
+  }
 
-  if (colDisplayCosto != null) {
+  if (totalsSummaryRow && colDisplayCosto != null) {
     ws.getCell(totalsSummaryRow, colDisplayCosto).value = { formula: sumCosto }
     estiloMoneda(ws.getCell(totalsSummaryRow, colDisplayCosto))
     ws.getCell(totalsSummaryRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: textTot } }
@@ -901,19 +930,21 @@ function completarFormulasTotales(
 
   if (totalsFooterRow) {
     ws.getCell(totalsFooterRow, 1).value = 'TOTALES'
-    ws.getCell(totalsFooterRow, colDisplayCant).value = { formula: sumCant }
     ws.getCell(totalsFooterRow, 1).font = { bold: true, size: 11, color: { argb: textTot } }
     ws.getCell(totalsFooterRow, 1).fill = fillTot
-    estiloCantidad(ws.getCell(totalsFooterRow, colDisplayCant))
-    ws.getCell(totalsFooterRow, colDisplayCant).font = { bold: true, size: 11, color: { argb: textTot } }
-    ws.getCell(totalsFooterRow, colDisplayCant).fill = fillTot
-    if (colDisplayCosto != null) {
-      ws.getCell(totalsFooterRow, colDisplayCosto).value = { formula: sumCosto }
-      estiloMoneda(ws.getCell(totalsFooterRow, colDisplayCosto))
-      ws.getCell(totalsFooterRow, colDisplayCosto).font = { bold: true, size: 11, color: { argb: textTot } }
-      ws.getCell(totalsFooterRow, colDisplayCosto).fill = fillTot
+    if (footCant != null) {
+      ws.getCell(totalsFooterRow, footCant).value = { formula: sumCant }
+      estiloCantidad(ws.getCell(totalsFooterRow, footCant))
+      ws.getCell(totalsFooterRow, footCant).font = { bold: true, size: 11, color: { argb: textTot } }
+      ws.getCell(totalsFooterRow, footCant).fill = fillTot
     }
-    const maxCol = Math.max(colDisplayCant, colDisplayCosto || 0)
+    if (footCosto != null) {
+      ws.getCell(totalsFooterRow, footCosto).value = { formula: sumCosto }
+      estiloMoneda(ws.getCell(totalsFooterRow, footCosto))
+      ws.getCell(totalsFooterRow, footCosto).font = { bold: true, size: 11, color: { argb: textTot } }
+      ws.getCell(totalsFooterRow, footCosto).fill = fillTot
+    }
+    const maxCol = Math.max(footCant || 0, footCosto || 0, 1)
     for (let c = 1; c <= maxCol; c += 1) {
       bordeCeldaTabla(ws.getCell(totalsFooterRow, c), { esTotal: true })
     }
@@ -1031,13 +1062,15 @@ function escribirEncabezadoItemCompacto(ws, startRow, totalCols, itemInfo) {
   ws.getCell(startRow, 4).value = `Ítem: ${it}`
   ws.getCell(startRow, 6).value = `Unidad: ${und}`
   ws.getCell(startRow, 9).value = 'Valor unitario:'
+  // VU en celda propia (K), sin merge: las fórmulas ROUND(cant×$K$row) deben
+  // referenciar una celda no combinada (merge K:N provocaba reparación en Excel).
   ws.getCell(startRow, 11).value = vu
   estiloMoneda(ws.getCell(startRow, 11))
   ws.mergeCells(startRow, 1, startRow, 3)
   ws.mergeCells(startRow, 4, startRow, 5)
   ws.mergeCells(startRow, 6, startRow, 8)
   ws.mergeCells(startRow, 9, startRow, 10)
-  ws.mergeCells(startRow, 11, startRow, cols)
+  if (cols > 11) ws.mergeCells(startRow, 12, startRow, cols)
   ws.getRow(startRow).height = 22
   estiloItemBloqueCell(ws.getCell(startRow, 1), { bold: true })
   estiloItemBloqueCell(ws.getCell(startRow, 4), { bold: true })
@@ -1466,8 +1499,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       null,
       null,
       null,
-      5,
-      7,
+      enc.totalsCantCol ?? 5,
+      enc.totalsCostoCol ?? 7,
       COL_CANT_TOTAL,
       COL_COSTO_DIRECTO,
       enc.totalsTier,
@@ -1533,6 +1566,8 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const {
     tableHeaderRow,
     totalsSummaryRow,
+    totalsCantCol,
+    totalsCostoCol,
     totalsTier,
     logoLeftSpan,
     logoRightSpan,
@@ -1670,18 +1705,21 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   if (plan.length > 0) {
     totalsFooterRow = lastDataRow + 1
     wsRes.addRow(new Array(totalColsResumen).fill(''))
+    // Cabecera TOTALES: fórmulas en E/G (sin merge). Pie: F/G alineado a columnas de datos.
     completarFormulasTotales(
       wsRes,
       totalsSummaryRow,
       totalsFooterRow,
       firstDataRow,
       lastDataRow,
+      totalsCantCol ?? 5,
+      totalsCostoCol ?? 7,
       6,
       7,
-      null,
-      null,
       totalsTier,
       filasSubtotalCap.length ? filasSubtotalCap : null,
+      6,
+      7,
     )
     aplicarBordesTabla(wsRes, tableHeaderRow, totalsFooterRow, totalColsResumen)
   }
