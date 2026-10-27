@@ -28,10 +28,10 @@ describe('informe Excel — builders de fórmulas', () => {
     assert.equal(formulaSumaFilas('L', [10, 11, 12]), 'SUM(L10:L12)')
     assert.equal(formulaSumaFilas('M', [10, 11, 12]), 'SUM(M10:M12)')
     // Filas no contiguas (subtítulos / gráficos entre medias)
-    assert.equal(formulaSumaFilas('L', [10, 11, 20, 21]), 'SUM(L10,L11,L20,L21)')
+    assert.equal(formulaSumaFilas('L', [10, 11, 20, 21]), 'L10+L11+L20+L21')
   })
 
   it('Totales del informe Resumen suman subtotales de capítulo', () => {
-    assert.equal(formulaSumaFilas('G', [10, 15]), 'SUM(G10,G15)')
+    assert.equal(formulaSumaFilas('G', [10, 15]), 'G10+G15')
   })
 })

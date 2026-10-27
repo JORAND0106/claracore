@@ -197,5 +197,6 @@ export function formulaSumaFilas(colLetter, rowNums) {
   if (contiguous) {
     return `SUM(${colLetter}${rows[0]}:${colLetter}${rows[rows.length - 1]})`
   }
-  return `SUM(${rows.map((r) => `${colLetter}${r}`).join(',')})`
+  // No contiguo: suma celda a celda (evita SUM(a,b) que algunos Excel marcan al reparar).
+  return rows.map((r) => `${colLetter}${r}`).join('+')
 }
