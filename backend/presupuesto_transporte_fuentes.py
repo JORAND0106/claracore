@@ -120,6 +120,10 @@ def filas_oe_combinadas(
 ) -> List[dict]:
     """
     Presupuesto OE + fill SicoeObra vía `_presupuesto_export_merge_sicoe_obra`.
+
+    El merge es ítem-a-ítem (prioridad presupuesto) **sin** filtrar competencia
+    dentro del merge — así un ítem cubierto en ppto no se rellena con SicoeObra.
+    Luego, si ``filtrar_competencia``, se dejan solo filas de esa competencia.
     """
     # Import diferido: evita ciclo al cargar rutas desde main.
     from main import ExportarPresupuestoInformeBody, _presupuesto_export_merge_sicoe_obra, supabase
@@ -129,13 +133,14 @@ def filas_oe_combinadas(
     if not cap:
         return []
 
+    # Merge OE: traer ppto del capítulo/ítems sin filtrar competencia (cubre el ítem).
     ppto = fetch_ppto_obra_ejecutada(
         supabase,
         contrato_id,
         cap,
         items=items,
-        competencia=comp,
-        filtrar_competencia=filtrar_competencia,
+        competencia=None,
+        filtrar_competencia=False,
     )
 
     body_kwargs: Dict[str, Any] = {
@@ -146,10 +151,6 @@ def filas_oe_combinadas(
     }
     if items:
         body_kwargs["items"] = list(items)
-    if filtrar_competencia and comp:
-        # Misma semántica que export: filtro competencia no vacío.
-        body_kwargs["competencia"] = comp
-        body_kwargs["competencias"] = [comp]
 
     body = ExportarPresupuestoInformeBody(**body_kwargs)
     merged = _presupuesto_export_merge_sicoe_obra(contrato_id, body, ppto, current_user) or []
@@ -186,8 +187,19 @@ def filas_oe_combinadas(
     return merged
 
 
-def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[str, Any]:
-    """Competencias e ítems con cantidad en la fuente combinada del capítulo."""
+def opciones_oe_capitulo(
+    contrato_id: int,
+    capitulo: str,
+    current_user,
+    *,
+    competencia: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Cascada Fase 1:
+      - competencias: union de ambas fuentes en el capítulo (sin duplicados).
+      - items: si se pasa competencia, solo ítems con cantidad en cap+comp.
+    Merge OE completo primero (ppto prioriza ítem); luego se filtra competencia.
+    """
     cap = str(capitulo or "").strip()
     rows = filas_oe_combinadas(
         contrato_id,
@@ -215,6 +227,11 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
                 return False
         return False
 
+    # competencia=None → solo lista competencias (ítems vacíos, cascada).
+    # competencia str (incluso "") → ítems de esa competencia.
+    filtrar_items_por_comp = competencia is not None
+    comp_filtro = str(competencia).strip() if filtrar_items_por_comp else None
+
     comps: Set[str] = set()
     items_map: Dict[str, dict] = {}
     for r in rows:
@@ -227,8 +244,11 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
         if cant <= 0:
             continue
         c = str(r.get("competencia") or "").strip()
-        if c:
-            comps.add(c)
+        comps.add(c)
+        if not filtrar_items_por_comp:
+            continue
+        if not _comp_eq(c, comp_filtro or ""):
+            continue
         it = str(r.get("item") or "").strip()
         if not it:
             continue
@@ -240,10 +260,10 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
                 "descripcion": str(r.get("descripcion") or "").strip(),
                 "unidad": str(r.get("und") or "").strip(),
                 "capitulo": cap,
+                "competencia": c,
                 "origen": origen,
             }
         else:
-            # Preferir etiqueta presupuesto si el ítem ya estaba cubierto.
             if origen == ORIGEN_PRESUPUESTO:
                 prev["origen"] = ORIGEN_PRESUPUESTO
             if not prev.get("descripcion") and r.get("descripcion"):
@@ -251,18 +271,28 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
             if not prev.get("unidad") and r.get("und"):
                 prev["unidad"] = str(r.get("und") or "").strip()
 
-    competencias = sorted(comps, key=lambda x: x.lower())
+    # Lista de competencias: no vacías primero; "" al final si hay filas sin competencia.
+    comps_nonempty = sorted((c for c in comps if c), key=lambda x: x.lower())
+    competencias = list(comps_nonempty)
+    if "" in comps:
+        competencias.append("")
+
     items = sorted(
         items_map.values(),
         key=lambda x: str(x.get("item_numero") or ""),
     )
-    return {"capitulo": cap, "competencias": competencias, "items": items}
+    return {
+        "capitulo": cap,
+        "competencia": comp_filtro if filtrar_items_por_comp else None,
+        "competencias": competencias,
+        "items": items,
+    }
 
 
 def agregar_por_pk(rows: List[dict], pk_ubic: Dict[str, dict]) -> List[dict]:
     """
     Agrega cant_total por PK_ID y elige ubicación del registro de mayor cantidad.
-    Si la fila viene de SicoeObra, prioriza sus campos de ubicación (incl. CIV).
+    Incluye competencia y origen (presupuesto / sicoe_obra) del registro elegido.
     """
     by_pk: Dict[str, List[dict]] = {}
     for r in rows or []:
@@ -284,6 +314,7 @@ def agregar_por_pk(rows: List[dict], pk_ubic: Dict[str, dict]) -> List[dict]:
         ubi = elegir_ubicacion_origen(regs)
         info = pk_ubic.get(pk) or {}
         origen = ubi.get("_origen_export") or ORIGEN_PRESUPUESTO
+        competencia = str(ubi.get("competencia") or "").strip()
         civ = ""
         if ubi.get("civ") is not None and str(ubi.get("civ")).strip():
             civ = str(ubi.get("civ")).strip()
@@ -297,6 +328,7 @@ def agregar_por_pk(rows: List[dict], pk_ubic: Dict[str, dict]) -> List[dict]:
             "pk_id": pk,
             "cant_compacta": round(cant, 6),
             "origen": origen,
+            "competencia": competencia,
             "ubicacion": {
                 "pk_id": pk,
                 "civ": civ,
@@ -308,6 +340,7 @@ def agregar_por_pk(rows: List[dict], pk_ubic: Dict[str, dict]) -> List[dict]:
                 "no_inicio": ubi.get("no_inicio"),
                 "no_final": ubi.get("no_final"),
                 "origen": origen,
+                "competencia": competencia,
             },
         })
     filas.sort(key=lambda x: x["pk_id"])

@@ -48,9 +48,10 @@ describe('repartirTransportePorPk', () => {
 })
 
 describe('claveReporteTransporte', () => {
-  it('normaliza orden de ítems e incluye destino', () => {
+  it('normaliza orden de ítems e incluye destino y competencia de origen', () => {
     const a = claveReporteTransporte({
       capituloOrigen: '8.X',
+      competenciaOrigen: 'CODENSA',
       itemsOrigen: ['8.02', '8.01'],
       capituloDestino: '9.Y',
       competenciaDestino: 'IDU',
@@ -58,6 +59,7 @@ describe('claveReporteTransporte', () => {
     })
     const b = claveReporteTransporte({
       capituloOrigen: '8.X',
+      competenciaOrigen: 'CODENSA',
       itemsOrigen: ['8.01', '8.02', '8.01'],
       capituloDestino: '9.Y',
       competenciaDestino: 'IDU',
@@ -65,5 +67,15 @@ describe('claveReporteTransporte', () => {
     })
     assert.equal(a, b)
     assert.ok(a.includes('9.Y'))
+    assert.ok(a.includes('CODENSA'))
+    const otra = claveReporteTransporte({
+      capituloOrigen: '8.X',
+      competenciaOrigen: 'IDU',
+      itemsOrigen: ['8.01', '8.02'],
+      capituloDestino: '9.Y',
+      competenciaDestino: 'IDU',
+      itemDestino: '8.99',
+    })
+    assert.notEqual(a, otra)
   })
 })

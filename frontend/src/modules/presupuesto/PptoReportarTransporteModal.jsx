@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { pptoCmpItemNumero, pptoMatchItemNumero } from './pptoFiltroCatalogo'
 import { pptoSheetStyles } from './pptoSheetStyles'
 import {
+  etiquetaOrigenCantidad,
   fmtCantTransporte,
   fmtPesoPct,
   repartirTransportePorPk,
@@ -266,8 +267,10 @@ export default function PptoReportarTransporteModal({
   const sheet = pptoSheetStyles(t)
   const API = apiBase || ''
 
-  // Fase 1
+  // Fase 1 — cascada: capítulo → competencia → ítems
   const [capituloOrigen, setCapituloOrigen] = useState('')
+  /** null = aún no elegida; string (puede ser '') = elegida */
+  const [competenciaOrigen, setCompetenciaOrigen] = useState(null)
   const [itemsOrigen, setItemsOrigen] = useState([])
   const [itemAdd, setItemAdd] = useState('')
   const [cantidadReportar, setCantidadReportar] = useState('')
@@ -283,11 +286,12 @@ export default function PptoReportarTransporteModal({
   const [confirmando, setConfirmando] = useState(false)
   const [error, setError] = useState('')
   const [alertaPrevio, setAlertaPrevio] = useState(null)
-  const [opcionesCap, setOpcionesCap] = useState({ items: [] })
+  const [opcionesCap, setOpcionesCap] = useState({ competencias: [], items: [] })
   const [loadingOpciones, setLoadingOpciones] = useState(false)
 
   const qtyNum = Number(cantidadReportar)
   const fase2Visible = Number.isFinite(qtyNum) && qtyNum > 0
+  const competenciaOrigenElegida = competenciaOrigen !== null
 
   const capitulos = useMemo(() => {
     const set = new Set()
@@ -303,32 +307,52 @@ export default function PptoReportarTransporteModal({
     [capitulos],
   )
 
+  const competenciaOrigenOpts = useMemo(() => {
+    const fromOe = Array.isArray(opcionesCap.competencias) ? opcionesCap.competencias : []
+    return fromOe.map((c) => {
+      const v = String(c ?? '')
+      return {
+        value: v,
+        label: v || '(Sin competencia)',
+        descripcion: v ? '' : 'Registros sin competencia',
+      }
+    })
+  }, [opcionesCap.competencias])
+
   const competenciaDestinoOpts = useMemo(() => {
     const base = (competenciasOpciones || []).map((c) => String(c || '').trim()).filter(Boolean)
     return base.map((c) => ({ value: c, label: c }))
   }, [competenciasOpciones])
 
-  // Catálogo estricto por capítulo (listado de precios): origen y destino.
+  // Ítems de origen: los que existen en capítulo+competencia (OE), enriquecidos con listado.
   const itemsOrigenOpts = useMemo(() => {
+    if (!competenciaOrigenElegida) return []
+    const oeItems = Array.isArray(opcionesCap.items) ? opcionesCap.items : []
     const delCap = itemsListadoDelCapitulo(listadoPrecios, capituloOrigen)
-    const oeByItem = Array.isArray(opcionesCap.items) ? opcionesCap.items : []
-    return delCap
-      .filter((o) => !itemsOrigen.some((sel) => pptoMatchItemNumero(sel, o.value)))
-      .map((o) => {
-        const oe = oeByItem.find((x) => pptoMatchItemNumero(x.item_numero || x.value, o.value))
+    return oeItems
+      .filter((oe) => {
+        const num = String(oe.item_numero || oe.value || '').trim()
+        return num && !itemsOrigen.some((sel) => pptoMatchItemNumero(sel, num))
+      })
+      .map((oe) => {
+        const num = String(oe.item_numero || oe.value || '').trim()
+        const lp = delCap.find((o) => pptoMatchItemNumero(o.value, num))
         return {
-          value: o.value,
-          descripcion: o.descripcion || oe?.descripcion || '',
-          meta: oe?.origen
-            ? `Fuente: ${oe.origen === 'sicoe_obra' ? 'SicoeObra' : 'Presupuesto'}`
+          value: num,
+          descripcion: lp?.descripcion || oe.descripcion || '',
+          meta: oe.origen
+            ? `Fuente: ${etiquetaOrigenCantidad(oe.origen)}`
             : undefined,
         }
       })
-  }, [listadoPrecios, capituloOrigen, itemsOrigen, opcionesCap.items])
+      .sort((a, b) => pptoCmpItemNumero(a.value, b.value))
+  }, [
+    listadoPrecios, capituloOrigen, itemsOrigen,
+    opcionesCap.items, competenciaOrigenElegida,
+  ])
 
   const itemsDestinoOpts = useMemo(() => {
     const cap = String(capituloDestino || '').trim()
-    // Sin capítulo destino no se listan ítems (evita mezclar capítulos).
     if (!cap) return []
     return itemsListadoDelCapitulo(listadoPrecios, cap).map((o) => ({
       value: o.value,
@@ -339,6 +363,7 @@ export default function PptoReportarTransporteModal({
 
   const reset = useCallback(() => {
     setCapituloOrigen('')
+    setCompetenciaOrigen(null)
     setItemsOrigen([])
     setItemAdd('')
     setCantidadReportar('')
@@ -350,7 +375,7 @@ export default function PptoReportarTransporteModal({
     setError('')
     setAlertaPrevio(null)
     setConfirmando(false)
-    setOpcionesCap({ items: [] })
+    setOpcionesCap({ competencias: [], items: [] })
   }, [])
 
   useEffect(() => {
@@ -358,13 +383,21 @@ export default function PptoReportarTransporteModal({
   }, [open, reset])
 
   useEffect(() => {
+    setCompetenciaOrigen(null)
     setItemsOrigen([])
     setItemAdd('')
-    setOpcionesCap({ items: [] })
+    setOpcionesCap({ competencias: [], items: [] })
     setPreview(null)
     setAlertaPrevio(null)
     setItemDestino('')
   }, [capituloOrigen])
+
+  useEffect(() => {
+    setItemsOrigen([])
+    setItemAdd('')
+    setPreview(null)
+    setAlertaPrevio(null)
+  }, [competenciaOrigen])
 
   // Por defecto el capítulo destino sigue al de origen hasta que el usuario lo cambie.
   useEffect(() => {
@@ -390,9 +423,10 @@ export default function PptoReportarTransporteModal({
     })
   }, [capituloDestino, listadoPrecios])
 
+  // Carga competencias del capítulo; si hay competencia, también ítems de cap+comp.
   useEffect(() => {
     if (!open || !contratoId || !token || !capituloOrigen) {
-      setOpcionesCap({ items: [] })
+      setOpcionesCap({ competencias: [], items: [] })
       return undefined
     }
     let cancelled = false
@@ -400,25 +434,26 @@ export default function PptoReportarTransporteModal({
     ;(async () => {
       try {
         const q = new URLSearchParams({ capitulo: capituloOrigen })
+        if (competenciaOrigen !== null) q.set('competencia', competenciaOrigen)
         const res = await fetch(
           `${API}/presupuesto/${contratoId}/transporte/opciones?${q}`,
           { headers: { Authorization: `Bearer ${token}` } },
         )
         const data = await res.json().catch(() => ({}))
-        // Opciones OE son enriquecimiento; el catálogo ya viene del listado por capítulo.
         if (!cancelled) {
           setOpcionesCap({
+            competencias: res.ok && Array.isArray(data.competencias) ? data.competencias : [],
             items: res.ok && Array.isArray(data.items) ? data.items : [],
           })
         }
       } catch {
-        if (!cancelled) setOpcionesCap({ items: [] })
+        if (!cancelled) setOpcionesCap({ competencias: [], items: [] })
       } finally {
         if (!cancelled) setLoadingOpciones(false)
       }
     })()
     return () => { cancelled = true }
-  }, [open, API, contratoId, token, capituloOrigen])
+  }, [open, API, contratoId, token, capituloOrigen, competenciaOrigen])
 
   const addItemOrigen = (val = itemAdd) => {
     const v = String(val || '').trim()
@@ -432,7 +467,10 @@ export default function PptoReportarTransporteModal({
   }
 
   const fetchPreview = useCallback(async () => {
-    if (!contratoId || !token || !capituloOrigen || !itemsOrigen.length) {
+    if (
+      !contratoId || !token || !capituloOrigen
+      || competenciaOrigen === null || !itemsOrigen.length
+    ) {
       setPreview(null)
       return
     }
@@ -448,6 +486,7 @@ export default function PptoReportarTransporteModal({
         },
         body: JSON.stringify({
           capitulo: capituloOrigen,
+          competencia: competenciaOrigen,
           items_origen: itemsOrigen,
           cantidad_reportar: Number.isFinite(qty) ? qty : null,
           capitulo_destino: capituloDestino || capituloOrigen || null,
@@ -474,7 +513,7 @@ export default function PptoReportarTransporteModal({
       setLoadingPreview(false)
     }
   }, [
-    API, contratoId, token, capituloOrigen, itemsOrigen,
+    API, contratoId, token, capituloOrigen, competenciaOrigen, itemsOrigen,
     cantidadReportar, capituloDestino, competenciaDestino, itemDestino,
   ])
 
@@ -498,6 +537,7 @@ export default function PptoReportarTransporteModal({
     && !!reparto?.ok
     && !compactaCero
     && destinoOk
+    && competenciaOrigenElegida
     && itemsOrigen.length > 0
     && !loadingPreview
     && !confirmando
@@ -514,6 +554,7 @@ export default function PptoReportarTransporteModal({
         },
         body: JSON.stringify({
           capitulo: capituloOrigen,
+          competencia: competenciaOrigen,
           items_origen: itemsOrigen,
           cantidad_reportar: qtyNum,
           capitulo_destino: capituloDestino || capituloOrigen,
@@ -688,24 +729,46 @@ export default function PptoReportarTransporteModal({
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
             <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-              Ítems de origen{loadingOpciones ? ' · …' : ''}
+              Competencia{loadingOpciones && !competenciaOrigenElegida ? ' · …' : ''}
             </span>
             <TransporteSelectMenu
-              value={itemAdd}
-              onChange={(v) => {
-                setItemAdd(v)
-                if (v) addItemOrigen(v)
-              }}
-              options={itemsOrigenOpts}
-              placeholder={capituloOrigen ? '— Agregar ítem —' : 'Elija capítulo primero'}
-              disabled={!capituloOrigen}
+              value={competenciaOrigenElegida ? competenciaOrigen : null}
+              onChange={(v) => setCompetenciaOrigen(String(v ?? ''))}
+              options={competenciaOrigenOpts}
+              placeholder={capituloOrigen ? '— Selecciona competencia —' : 'Elija capítulo primero'}
+              disabled={!capituloOrigen || (!loadingOpciones && !competenciaOrigenOpts.length)}
               sheet={sheet}
               t={t}
-              allowEmpty
-              emptyLabel="— Agregar ítem —"
+              allowEmpty={false}
             />
           </label>
         </div>
+
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 12, minWidth: 0 }}>
+          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
+            Ítems de origen{loadingOpciones && competenciaOrigenElegida ? ' · …' : ''}
+          </span>
+          <TransporteSelectMenu
+            value={itemAdd}
+            onChange={(v) => {
+              setItemAdd(v)
+              if (v) addItemOrigen(v)
+            }}
+            options={itemsOrigenOpts}
+            placeholder={
+              !capituloOrigen
+                ? 'Elija capítulo primero'
+                : (!competenciaOrigenElegida
+                  ? 'Elija competencia primero'
+                  : '— Agregar ítem —')
+            }
+            disabled={!competenciaOrigenElegida}
+            sheet={sheet}
+            t={t}
+            allowEmpty
+            emptyLabel="— Agregar ítem —"
+          />
+        </label>
         {itemsOrigen.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
             {itemsOrigen.map((it) => (
@@ -740,7 +803,7 @@ export default function PptoReportarTransporteModal({
             <input
               readOnly
               value={
-                !itemsOrigen.length
+                !itemsOrigen.length || !competenciaOrigenElegida
                   ? '—'
                   : (loadingPreview && preview == null
                     ? 'Calculando…'
@@ -760,7 +823,7 @@ export default function PptoReportarTransporteModal({
               value={cantidadReportar}
               onChange={(e) => setCantidadReportar(e.target.value)}
               placeholder="Ej. 6950"
-              disabled={!itemsOrigen.length}
+              disabled={!itemsOrigen.length || !competenciaOrigenElegida}
               style={sheetInp(sheet, t, !!cantidadReportar)}
             />
           </label>
@@ -781,7 +844,9 @@ export default function PptoReportarTransporteModal({
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>Costado</th>
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>Infraestructura</th>
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ubicación</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Competencia</th>
                   <th style={{ textAlign: 'right', padding: '6px 8px', whiteSpace: 'nowrap' }}>Cant. compacta</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', whiteSpace: 'nowrap' }}>Origen</th>
                 </tr>
               </thead>
               <tbody>
@@ -796,6 +861,7 @@ export default function PptoReportarTransporteModal({
                       ? `Nodos ${nIni ?? '—'} → ${nFin ?? '—'}`
                       : '',
                   ].filter(Boolean).join(' · ') || '—'
+                  const compTxt = String(f.competencia ?? ubi.competencia ?? '').trim()
                   return (
                     <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
                       <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>{f.pk_id}</td>
@@ -803,18 +869,24 @@ export default function PptoReportarTransporteModal({
                       <td style={{ padding: '5px 8px' }}>{f.calzada || ubi.calzada || '—'}</td>
                       <td style={{ padding: '5px 8px' }}>{f.infraestructura || ubi.infraestructura || '—'}</td>
                       <td style={{ padding: '5px 8px' }}>{ubicTxt}</td>
+                      <td style={{ padding: '5px 8px' }}>{compTxt || '—'}</td>
                       <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700 }}>
                         {fmtCantTransporte(f.cant_compacta, 4)}
+                      </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        {f.origen_etiqueta || etiquetaOrigenCantidad(f.origen)}
                       </td>
                     </tr>
                   )
                 })}
                 {!loadingPreview && !filasOrigen.length ? (
                   <tr>
-                    <td colSpan={6} style={{ padding: 12, color: t.textMuted }}>
-                      {itemsOrigen.length
-                        ? 'Sin registros con cantidad en obra ejecutada para la selección.'
-                        : 'Seleccione capítulo e ítems para ver el detalle.'}
+                    <td colSpan={8} style={{ padding: 12, color: t.textMuted }}>
+                      {!competenciaOrigenElegida
+                        ? 'Seleccione capítulo y competencia para continuar.'
+                        : (itemsOrigen.length
+                          ? 'Sin registros con cantidad en obra ejecutada para la selección.'
+                          : 'Seleccione ítems de origen para ver el detalle.')}
                     </td>
                   </tr>
                 ) : null}
