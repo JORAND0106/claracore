@@ -1280,7 +1280,7 @@ function escribirBloqueFirmas(ws, startRow, totalCols, firmantes) {
 // Columna 9 (Área/Long/Nodo) se renombra por subtabla según tipo_entidad.
 const DET_HEADERS_BASE = [
   'ID_POL',
-  'PK_ID',
+  'CIV',
   'Tramo',
   'Infraestructura',
   'Abscisa Inicial',
@@ -1309,9 +1309,11 @@ function headersDetallePorGrupo(colLabel, { idColLabel = 'ID_POL' } = {}) {
 }
 
 function escribirFilaRegistroDetalle(ws, reg, { vuRef = null } = {}) {
+  // Columna CIV: solo el campo civ (vacío si falta; nunca sustituir por pk_id).
+  const civVal = String(reg?.civ ?? '').trim()
   const r = ws.addRow([
     reg.id_pol,
-    reg.pk_id,
+    civVal || '',
     reg.tramo,
     reg.infraestructura,
     reg.abs_inicio,

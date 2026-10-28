@@ -36,7 +36,7 @@ SO_REGISTROS_EXPORT_SELECT_BASE = (
     "id, numero_registro, capitulo, competencia, item_numero, item_descripcion, unidad, "
     "vlr_unitario, longitud, ancho, espesor, cantidad, cantidad_total, costo_directo, "
     "observacion, tramo, calzada, abs_inicio, abs_final, nodo_ini, nodo_fin, "
-    "pk_id_id, pk_ids(pk_id, infraestructura)"
+    "pk_id_id, pk_ids(pk_id, civ, infraestructura)"
 )
 
 
@@ -97,6 +97,21 @@ def _pk_display_from_sicoe(reg: dict) -> str:
         v = reg.get(key)
         if v not in (None, ""):
             return str(v).strip()
+    return ""
+
+
+def _civ_from_sicoe(reg: dict) -> str:
+    """CIV desde maestro pk_ids (join) o campo propio; vacío si no hay (sin fallback a pk_id)."""
+    if not isinstance(reg, dict):
+        return ""
+    join = reg.get("pk_ids")
+    if isinstance(join, dict):
+        civ = join.get("civ")
+        if civ is not None and str(civ).strip():
+            return str(civ).strip()
+    v = reg.get("civ")
+    if v is not None and str(v).strip():
+        return str(v).strip()
     return ""
 
 
@@ -186,6 +201,8 @@ def map_sicoe_registro_a_fila_export(
         # Columna Excel «Registro» (misma posición que ID_POL).
         "id_pol": id_label,
         "pk_id": _pk_display_from_sicoe(reg),
+        # Columna Excel «CIV» en memorias de informe (vacío si no hay CIV).
+        "civ": _civ_from_sicoe(reg),
         "tramo": (reg.get("tramo") or "").strip(),
         "calzada": (reg.get("calzada") or "").strip(),
         "abs_inicio": reg.get("abs_inicio"),
