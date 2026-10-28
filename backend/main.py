@@ -3047,9 +3047,6 @@ app.include_router(avi_router)
 from presupuesto_versiones_routes import router as presupuesto_versiones_router
 app.include_router(presupuesto_versiones_router)
 
-from presupuesto_transporte_routes import router as presupuesto_transporte_router
-app.include_router(presupuesto_transporte_router)
-
 from presupuesto_graficos_routes import (
     router as presupuesto_graficos_router,
     register_deps as register_presupuesto_graficos_deps,
@@ -37180,6 +37177,26 @@ def _invalidate_dashboard_financial_caches(contrato_id: int) -> None:
         invalidate_scan_presupuesto_cache(cid)
     except Exception:
         pass
+
+
+# Reportar transporte: registrar rutas aquí (tras deps) para evitar import circular /
+# NameError si se incluye demasiado temprano — misma causa típica de «Not Found» en cliente.
+from presupuesto_transporte_routes import (
+    router as presupuesto_transporte_router,
+    register_deps as register_presupuesto_transporte_deps,
+)
+register_presupuesto_transporte_deps(
+    supabase,
+    get_current_user,
+    _require_contract_access,
+    _es_desarrollador,
+    _cargo_permiso_editar_registros_presupuesto,
+    _cargo_permiso_crear_registros_presupuesto,
+    _pk_ids_ubicacion_por_codigo,
+    _invalidate_dashboard_financial_caches,
+    registrar_log,
+)
+app.include_router(presupuesto_transporte_router)
 
 
 def _trim_dashboard_rpc_cache() -> None:

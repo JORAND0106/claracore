@@ -113,12 +113,16 @@ function TransporteSelectMenu({
           {selected ? (
             <>
               <strong>{selected.value}</strong>
-              {selected.descripcion || selected.label ? (
-                <span style={{ color: t.textMuted }}>
-                  {' — '}
-                  {selected.descripcion || selected.label}
-                </span>
-              ) : null}
+              {(() => {
+                const extra = String(selected.descripcion || selected.label || '').trim()
+                if (!extra || extra === String(selected.value).trim()) return null
+                return (
+                  <span style={{ color: t.textMuted }}>
+                    {' — '}
+                    {extra}
+                  </span>
+                )
+              })()}
             </>
           ) : (
             <span style={{ color: t.textMuted }}>{placeholder}</span>
@@ -401,15 +405,14 @@ export default function PptoReportarTransporteModal({
           { headers: { Authorization: `Bearer ${token}` } },
         )
         const data = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(data?.detail || data?.message || `Error ${res.status}`)
+        // Opciones OE son enriquecimiento; el catálogo ya viene del listado por capítulo.
         if (!cancelled) {
-          setOpcionesCap({ items: Array.isArray(data.items) ? data.items : [] })
+          setOpcionesCap({
+            items: res.ok && Array.isArray(data.items) ? data.items : [],
+          })
         }
-      } catch (e) {
-        if (!cancelled) {
-          setOpcionesCap({ items: [] })
-          setError(e?.message || 'No se pudieron cargar ítems de origen.')
-        }
+      } catch {
+        if (!cancelled) setOpcionesCap({ items: [] })
       } finally {
         if (!cancelled) setLoadingOpciones(false)
       }
@@ -454,11 +457,14 @@ export default function PptoReportarTransporteModal({
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(
-          typeof data?.detail === 'string'
-            ? data.detail
-            : (data?.detail?.message || data?.message || `Error ${res.status}`),
-        )
+        const det = data?.detail
+        let msg = typeof det === 'string'
+          ? det
+          : (det?.message || data?.message || `Error ${res.status}`)
+        if (res.status === 404 || /^not\s*found$/i.test(String(msg))) {
+          msg = 'No se encontró el servicio de transporte en el servidor. Verifique que el backend esté actualizado e inténtelo de nuevo.'
+        }
+        throw new Error(msg)
       }
       setPreview(data)
     } catch (e) {
@@ -667,25 +673,23 @@ export default function PptoReportarTransporteModal({
 
         <SectionTitle t={t}>Fase 1 · Origen de las cantidades</SectionTitle>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>1. Capítulo</span>
-          <TransporteSelectMenu
-            value={capituloOrigen}
-            onChange={setCapituloOrigen}
-            options={capituloOpts}
-            placeholder="— Selecciona —"
-            sheet={sheet}
-            t={t}
-            allowEmpty
-          />
-        </label>
-
-        <div style={{ marginTop: 12, minWidth: 0 }}>
-          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
-            2. Ítems de origen
-            {loadingOpciones ? ' · cargando…' : ''}
-          </div>
-          <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Capítulo</span>
+            <TransporteSelectMenu
+              value={capituloOrigen}
+              onChange={setCapituloOrigen}
+              options={capituloOpts}
+              placeholder="— Selecciona —"
+              sheet={sheet}
+              t={t}
+              allowEmpty
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
+              Ítems de origen{loadingOpciones ? ' · …' : ''}
+            </span>
             <TransporteSelectMenu
               value={itemAdd}
               onChange={(v) => {
@@ -694,13 +698,15 @@ export default function PptoReportarTransporteModal({
               }}
               options={itemsOrigenOpts}
               placeholder={capituloOrigen ? '— Agregar ítem —' : 'Elija capítulo primero'}
-              disabled={!capituloOrigen || loadingOpciones}
+              disabled={!capituloOrigen}
               sheet={sheet}
               t={t}
               allowEmpty
               emptyLabel="— Agregar ítem —"
             />
-          </div>
+          </label>
+        </div>
+        {itemsOrigen.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
             {itemsOrigen.map((it) => (
               <span
@@ -724,21 +730,21 @@ export default function PptoReportarTransporteModal({
               </span>
             ))}
           </div>
-        </div>
+        ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
             <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-              Cantidad compacta total (solo lectura)
+              Cantidad obra ejecutada (compacta)
             </span>
             <input
               readOnly
               value={
                 !itemsOrigen.length
-                  ? ''
-                  : (preview == null
-                    ? (loadingPreview ? 'Calculando…' : '')
-                    : fmtCantTransporte(preview.total_compacta, 4))
+                  ? '—'
+                  : (loadingPreview && preview == null
+                    ? 'Calculando…'
+                    : (preview == null ? '—' : fmtCantTransporte(preview.total_compacta, 4)))
               }
               style={{ ...sheetInp(sheet, t, false), background: '#f1f5f9' }}
             />
@@ -760,49 +766,49 @@ export default function PptoReportarTransporteModal({
           </label>
         </div>
 
-        {itemsOrigen.length > 0 ? (
-          <div style={{ marginTop: 12, minWidth: 0 }}>
-            <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-              Detalle por PK_ID
-              {preview?.n_pk != null ? ` · ${preview.n_pk}` : ''}
-              {loadingPreview ? ' · actualizando…' : ''}
-            </div>
-            <div style={{ overflow: 'auto', maxHeight: 200, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
-                <thead>
-                  <tr style={{ background: sheet.headerBg || '#e2e8f0' }}>
-                    <th style={{ textAlign: 'left', padding: '6px 8px' }}>PK_ID</th>
-                    <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. compacta</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filasOrigen.map((f) => (
-                    <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
-                      <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace' }}>{f.pk_id}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtCantTransporte(f.cant_compacta, 4)}</td>
-                    </tr>
-                  ))}
-                  {!loadingPreview && !filasOrigen.length ? (
-                    <tr>
-                      <td colSpan={2} style={{ padding: 12, color: t.textMuted }}>
-                        Sin PK_ID con cantidad compacta (todas las competencias).
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+        <div style={{ marginTop: 12, minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+            Detalle por PK_ID
+            {preview?.n_pk != null ? ` · ${preview.n_pk}` : ''}
+            {loadingPreview ? ' · actualizando…' : ''}
           </div>
-        ) : null}
+          <div style={{ overflow: 'auto', maxHeight: 200, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
+              <thead>
+                <tr style={{ background: sheet.headerBg || '#e2e8f0' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>PK_ID</th>
+                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. compacta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filasOrigen.map((f) => (
+                  <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
+                    <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace' }}>{f.pk_id}</td>
+                    <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtCantTransporte(f.cant_compacta, 4)}</td>
+                  </tr>
+                ))}
+                {!loadingPreview && !filasOrigen.length ? (
+                  <tr>
+                    <td colSpan={2} style={{ padding: 12, color: t.textMuted }}>
+                      {itemsOrigen.length
+                        ? 'Sin PK_ID con cantidad en obra ejecutada para la selección.'
+                        : 'Seleccione capítulo e ítems para ver el detalle.'}
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         {fase2Visible ? (
           <>
             <SectionTitle t={t}>Fase 2 · Destino de los registros nuevos</SectionTitle>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
                 <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-                  1. Capítulo destino
+                  Capítulo destino
                 </span>
                 <TransporteSelectMenu
                   value={capituloDestino || capituloOrigen}
@@ -819,34 +825,34 @@ export default function PptoReportarTransporteModal({
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
                 <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-                  2. Competencia destino
+                  Ítem de transporte destino
                 </span>
                 <TransporteSelectMenu
-                  value={competenciaDestino}
-                  onChange={setCompetenciaDestino}
-                  options={competenciaDestinoOpts}
-                  placeholder="(Sin competencia / vacía)"
-                  emptyLabel="(Sin competencia / vacía)"
+                  value={itemDestino}
+                  onChange={setItemDestino}
+                  options={itemsDestinoOpts}
+                  placeholder="— Selecciona ítem del listado —"
                   sheet={sheet}
                   t={t}
                   allowEmpty
+                  emptyLabel="— Selecciona ítem del listado —"
                 />
               </label>
             </div>
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 12, minWidth: 0 }}>
               <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-                3. Ítem de transporte destino
+                Competencia destino
               </span>
               <TransporteSelectMenu
-                value={itemDestino}
-                onChange={setItemDestino}
-                options={itemsDestinoOpts}
-                placeholder="— Selecciona ítem del listado —"
+                value={competenciaDestino}
+                onChange={setCompetenciaDestino}
+                options={competenciaDestinoOpts}
+                placeholder="(Sin competencia / vacía)"
+                emptyLabel="(Sin competencia / vacía)"
                 sheet={sheet}
                 t={t}
                 allowEmpty
-                emptyLabel="— Selecciona ítem del listado —"
               />
             </label>
 

@@ -4,28 +4,16 @@ GET  /presupuesto/{contrato_id}/transporte/opciones
 POST /presupuesto/{contrato_id}/transporte/preview
 POST /presupuesto/{contrato_id}/transporte/confirmar
 
-Fase 1 (origen): capítulo + ítems → cantidades (todas las competencias).
-Fase 2 (destino): capítulo/competencia/ítem donde nacen los registros nuevos.
+Sin import circular de main: dependencias vía register_deps (igual que gráficos).
 """
 from __future__ import annotations
 
 import uuid
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from main import (
-    _cargo_permiso_crear_registros_presupuesto,
-    _cargo_permiso_editar_registros_presupuesto,
-    _es_desarrollador,
-    _invalidate_dashboard_financial_caches,
-    _pk_ids_ubicacion_por_codigo,
-    _require_contract_access,
-    get_current_user,
-    registrar_log,
-    supabase,
-)
 from presupuesto_papelera import aplicar_update_baja
 from presupuesto_transporte import (
     normalizar_items_origen,
@@ -42,39 +30,45 @@ router = APIRouter(tags=["presupuesto-transporte"])
 TIPO_OBRA = "Obra Ejecutada"
 ESTADO_NO_REVISADO = "No Revisado"
 
+# Inyectados desde main.register_deps
+_supabase: Any = None
+_get_current_user: Optional[Callable] = None
+_require_contract_access: Optional[Callable] = None
+_es_desarrollador: Optional[Callable] = None
+_cargo_permiso_editar: Optional[Callable] = None
+_cargo_permiso_crear: Optional[Callable] = None
+_pk_ids_ubicacion_por_codigo: Optional[Callable] = None
+_invalidate_dashboard_financial_caches: Optional[Callable] = None
+_registrar_log: Optional[Callable] = None
+
 
 class TransportePreviewBody(BaseModel):
-    # Fase 1 — origen
-    capitulo: str  # capítulo de origen
+    capitulo: str
     items_origen: List[str] = Field(default_factory=list)
     cantidad_reportar: Optional[float] = None
-    # Fase 2 — destino (opcionales en preview temprano)
     capitulo_destino: Optional[str] = None
     competencia_destino: Optional[str] = ""
     item_destino: Optional[str] = None
-    # Legacy (ignorados): competencia de origen ya no se usa
     competencia: Optional[str] = None
 
 
 class TransporteConfirmarBody(BaseModel):
-    capitulo: str  # origen
+    capitulo: str
     items_origen: List[str] = Field(default_factory=list)
     cantidad_reportar: float
     capitulo_destino: str
     competencia_destino: Optional[str] = ""
     item_destino: str
-    modo: str = "create"  # create | replace | sum
+    modo: str = "create"
     lote_previo_id: Optional[str] = None
-    competencia: Optional[str] = None  # legacy
+    competencia: Optional[str] = None
 
 
 def _assert_puede_reportar(current_user, contrato_id: int) -> None:
     _require_contract_access(current_user, contrato_id)
     if _es_desarrollador(current_user):
         return
-    if _cargo_permiso_editar_registros_presupuesto(current_user, contrato_id) or _cargo_permiso_crear_registros_presupuesto(
-        current_user, contrato_id
-    ):
+    if _cargo_permiso_editar(current_user, contrato_id) or _cargo_permiso_crear(current_user, contrato_id):
         return
     raise HTTPException(status_code=403, detail="Sin permiso para editar presupuesto.")
 
@@ -85,7 +79,6 @@ def _fetch_origen_rows(
     items: List[str],
     current_user,
 ) -> List[dict]:
-    """Todas las competencias del capítulo + ítems (fuente combinada OE)."""
     if not items:
         return []
     return filas_oe_combinadas(
@@ -108,7 +101,7 @@ def _buscar_lote_previo(
 ) -> Optional[dict]:
     try:
         rows = (
-            supabase.table("presupuesto_transporte_lotes")
+            _supabase.table("presupuesto_transporte_lotes")
             .select(
                 "id, capitulo, competencia, items_origen, item_destino, "
                 "capitulo_origen, capitulo_destino, competencia_destino, "
@@ -151,14 +144,13 @@ def _buscar_lote_previo(
 
 
 def _listado_destino(contrato_id: int, item_destino: str, capitulo_destino: Optional[str] = None) -> dict:
-    """Resuelve ítem del listado; si hay capítulo destino, solo dentro de ese capítulo."""
     candidatos = [item_destino]
     if not item_destino.endswith("."):
         candidatos.append(f"{item_destino}.")
     cap = str(capitulo_destino or "").strip()
     for cand in candidatos:
         q = (
-            supabase.table("listado_precios")
+            _supabase.table("listado_precios")
             .select("item_numero, descripcion, unidad, precio_unitario, capitulo, competencia")
             .eq("contrato_id", contrato_id)
             .eq("item_numero", cand)
@@ -196,7 +188,7 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
 
     pk_ubic = {}
     try:
-        pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
+        pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id) or {}
     except Exception:
         pk_ubic = {}
 
@@ -241,42 +233,68 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
     }
 
 
-@router.get("/presupuesto/{contrato_id}/transporte/opciones")
-def opciones_transporte(
-    contrato_id: int,
-    capitulo: str = Query(..., min_length=1),
-    current_user=Depends(get_current_user),
-):
-    """Ítems de origen del capítulo (fuente combinada OE; todas las competencias)."""
-    _assert_puede_reportar(current_user, contrato_id)
-    cap = str(capitulo or "").strip()
-    if not cap:
-        raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
-    try:
-        return opciones_oe_capitulo(contrato_id, cap, current_user)
-    except Exception as ex:
-        raise HTTPException(
-            status_code=500,
-            detail=f"No se pudieron cargar opciones de transporte: {ex}",
-        ) from ex
+def register_deps(
+    supabase,
+    get_current_user,
+    require_contract_access,
+    es_desarrollador,
+    cargo_permiso_editar_registros_presupuesto,
+    cargo_permiso_crear_registros_presupuesto,
+    pk_ids_ubicacion_por_codigo,
+    invalidate_dashboard_financial_caches,
+    registrar_log,
+) -> None:
+    """Inyecta deps desde main y registra las rutas (evita import circular)."""
+    global _supabase, _get_current_user, _require_contract_access
+    global _es_desarrollador, _cargo_permiso_editar, _cargo_permiso_crear
+    global _pk_ids_ubicacion_por_codigo, _invalidate_dashboard_financial_caches, _registrar_log
+    _supabase = supabase
+    _get_current_user = get_current_user
+    _require_contract_access = require_contract_access
+    _es_desarrollador = es_desarrollador
+    _cargo_permiso_editar = cargo_permiso_editar_registros_presupuesto
+    _cargo_permiso_crear = cargo_permiso_crear_registros_presupuesto
+    _pk_ids_ubicacion_por_codigo = pk_ids_ubicacion_por_codigo
+    _invalidate_dashboard_financial_caches = invalidate_dashboard_financial_caches
+    _registrar_log = registrar_log
+
+    @router.get("/presupuesto/{contrato_id}/transporte/opciones")
+    def opciones_transporte(
+        contrato_id: int,
+        capitulo: str = Query(..., min_length=1),
+        current_user=Depends(get_current_user),
+    ):
+        _assert_puede_reportar(current_user, contrato_id)
+        cap = str(capitulo or "").strip()
+        if not cap:
+            raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
+        try:
+            return opciones_oe_capitulo(contrato_id, cap, current_user)
+        except Exception as ex:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudieron cargar opciones de transporte: {ex}",
+            ) from ex
+
+    @router.post("/presupuesto/{contrato_id}/transporte/preview")
+    def preview_transporte(
+        contrato_id: int,
+        body: TransportePreviewBody,
+        current_user=Depends(get_current_user),
+    ):
+        _assert_puede_reportar(current_user, contrato_id)
+        return _build_preview_core(contrato_id, body, current_user)
+
+    @router.post("/presupuesto/{contrato_id}/transporte/confirmar")
+    def confirmar_transporte(
+        contrato_id: int,
+        body: TransporteConfirmarBody,
+        current_user=Depends(get_current_user),
+    ):
+        return _confirmar_transporte_impl(contrato_id, body, current_user)
 
 
-@router.post("/presupuesto/{contrato_id}/transporte/preview")
-def preview_transporte(
-    contrato_id: int,
-    body: TransportePreviewBody,
-    current_user=Depends(get_current_user),
-):
-    _assert_puede_reportar(current_user, contrato_id)
-    return _build_preview_core(contrato_id, body, current_user)
-
-
-@router.post("/presupuesto/{contrato_id}/transporte/confirmar")
-def confirmar_transporte(
-    contrato_id: int,
-    body: TransporteConfirmarBody,
-    current_user=Depends(get_current_user),
-):
+def _confirmar_transporte_impl(contrato_id: int, body: TransporteConfirmarBody, current_user):
     _assert_puede_reportar(current_user, contrato_id)
 
     capitulo_origen = str(body.capitulo or "").strip()
@@ -302,12 +320,11 @@ def confirmar_transporte(
     und = (destino.get("unidad") or "").strip()
     descripcion = (destino.get("descripcion") or "").strip()
     item_num = (destino.get("item_numero") or item_destino).strip()
-    # Capítulo efectivo del registro = destino elegido (o el del listado si coincide).
     cap_reg = capitulo_destino or str(destino.get("capitulo") or "").strip() or capitulo_origen
 
     pk_ubic = {}
     try:
-        pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
+        pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id) or {}
     except Exception:
         pk_ubic = {}
     rows = _fetch_origen_rows(contrato_id, capitulo_origen, items, current_user)
@@ -352,13 +369,12 @@ def confirmar_transporte(
     lote_prev_id = str(body.lote_previo_id or (previo or {}).get("id") or "").strip() or None
     ids_baja: List[int] = []
 
-    # 1) Crear lote
     try:
-        supabase.table("presupuesto_transporte_lotes").insert({
+        _supabase.table("presupuesto_transporte_lotes").insert({
             "id": lote_id,
             "contrato_id": contrato_id,
-            "capitulo": capitulo_origen,  # legacy / origen
-            "competencia": competencia_destino,  # legacy = destino
+            "capitulo": capitulo_origen,
+            "competencia": competencia_destino,
             "capitulo_origen": capitulo_origen,
             "capitulo_destino": cap_reg,
             "competencia_destino": competencia_destino,
@@ -376,7 +392,6 @@ def confirmar_transporte(
             detail=f"No se pudo crear el lote de transporte (¿migración aplicada?): {ex}",
         ) from ex
 
-    # 2) Insertar registros (campos de catálogo = destino; ubicación = origen)
     nuevos: List[dict] = []
     for a in asignaciones:
         cant = float(a["cant_transporte"])
@@ -418,7 +433,7 @@ def confirmar_transporte(
         BATCH = 200
         for i in range(0, len(nuevos), BATCH):
             batch = nuevos[i : i + BATCH]
-            res = supabase.table("presupuesto").insert(batch).execute()
+            res = _supabase.table("presupuesto").insert(batch).execute()
             data = getattr(res, "data", None) or []
             for row in data if isinstance(data, list) else [data]:
                 if isinstance(row, dict) and row.get("id") is not None:
@@ -428,7 +443,7 @@ def confirmar_transporte(
                         pass
         if len(created_ids) < len(nuevos):
             check = (
-                supabase.table("presupuesto")
+                _supabase.table("presupuesto")
                 .select("id")
                 .eq("transporte_lote_id", lote_id)
                 .eq("dado_de_baja", False)
@@ -443,20 +458,19 @@ def confirmar_transporte(
                 )
     except Exception as ex:
         try:
-            supabase.table("presupuesto").delete().eq("transporte_lote_id", lote_id).execute()
+            _supabase.table("presupuesto").delete().eq("transporte_lote_id", lote_id).execute()
         except Exception:
             pass
         try:
-            supabase.table("presupuesto_transporte_lotes").delete().eq("id", lote_id).execute()
+            _supabase.table("presupuesto_transporte_lotes").delete().eq("id", lote_id).execute()
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=f"Error al crear registros de transporte: {ex}") from ex
 
-    # 3) Reemplazo: baja del lote previo solo tras creación exitosa
     if modo == "replace" and lote_prev_id:
         try:
             prev_regs = (
-                supabase.table("presupuesto")
+                _supabase.table("presupuesto")
                 .select("id")
                 .eq("contrato_id", contrato_id)
                 .eq("transporte_lote_id", lote_prev_id)
@@ -475,10 +489,10 @@ def confirmar_transporte(
                 rid = int(r["id"])
             except (TypeError, ValueError, KeyError):
                 continue
-            aplicar_update_baja(supabase, rid)
+            aplicar_update_baja(_supabase, rid)
             ids_baja.append(rid)
         try:
-            supabase.table("presupuesto_transporte_lotes").update(
+            _supabase.table("presupuesto_transporte_lotes").update(
                 {"activo": False, "reemplazado_por": lote_id}
             ).eq("id", lote_prev_id).execute()
         except Exception:
@@ -490,7 +504,7 @@ def confirmar_transporte(
         pass
 
     try:
-        registrar_log(
+        _registrar_log(
             current_user,
             "CREAR",
             "PRESUPUESTO",
