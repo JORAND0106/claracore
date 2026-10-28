@@ -187,7 +187,7 @@ function TransporteSelectMenu({
           ) : null}
           {filtrados.map((o) => (
             <button
-              key={o.value}
+              key={o.value === '' || o.value == null ? '__sin_comp__' : String(o.value)}
               type="button"
               role="option"
               onClick={() => pick(o.value)}
@@ -208,12 +208,18 @@ function TransporteSelectMenu({
                 boxSizing: 'border-box',
               }}
             >
-              <strong style={{ color: t.primary || '#2563EB' }}>{o.value}</strong>
-              {o.descripcion || o.label ? (
+              <strong style={{ color: t.primary || '#2563EB' }}>
+                {o.value === '' || o.value == null ? (o.label || '(Sin competencia)') : o.value}
+              </strong>
+              {o.descripcion && o.descripcion !== o.label && o.descripcion !== String(o.value) ? (
                 <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontWeight: 400 }}>
-                  {o.descripcion || o.label}
+                  {o.descripcion}
                 </span>
-              ) : null}
+              ) : (o.label && o.label !== String(o.value) && o.value !== '' && o.value != null ? (
+                <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontWeight: 400 }}>
+                  {o.label}
+                </span>
+              ) : null)}
               {o.meta ? (
                 <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
                   {o.meta}
@@ -307,17 +313,37 @@ export default function PptoReportarTransporteModal({
     [capitulos],
   )
 
+  // Competencias del capítulo: API (ppto+SicoeObra+listado) + fallbacks locales.
   const competenciaOrigenOpts = useMemo(() => {
-    const fromOe = Array.isArray(opcionesCap.competencias) ? opcionesCap.competencias : []
-    return fromOe.map((c) => {
-      const v = String(c ?? '')
-      return {
-        value: v,
-        label: v || '(Sin competencia)',
-        descripcion: v ? '' : 'Registros sin competencia',
+    const set = new Set()
+    for (const c of (Array.isArray(opcionesCap.competencias) ? opcionesCap.competencias : [])) {
+      set.add(String(c ?? '').trim())
+    }
+    // Fallback: competencias del listado de precios en ese capítulo.
+    const cap = String(capituloOrigen || '').trim()
+    if (cap) {
+      for (const p of listadoPrecios || []) {
+        if (String(p?.capitulo || '').trim() !== cap) continue
+        const c = String(p?.competencia || '').trim()
+        if (c) set.add(c)
       }
+    }
+    // Fallback: competencias habilitadas del contrato (prop del módulo).
+    for (const c of competenciasOpciones || []) {
+      const v = String(c || '').trim()
+      if (v) set.add(v)
+    }
+    const list = [...set].sort((a, b) => {
+      if (!a) return 1
+      if (!b) return -1
+      return a.localeCompare(b, 'es', { sensitivity: 'base' })
     })
-  }, [opcionesCap.competencias])
+    return list.map((v) => ({
+      value: v,
+      label: v || '(Sin competencia)',
+      descripcion: v ? '' : 'Registros sin competencia',
+    }))
+  }, [opcionesCap.competencias, listadoPrecios, capituloOrigen, competenciasOpciones])
 
   const competenciaDestinoOpts = useMemo(() => {
     const base = (competenciasOpciones || []).map((c) => String(c || '').trim()).filter(Boolean)
@@ -441,13 +467,32 @@ export default function PptoReportarTransporteModal({
         )
         const data = await res.json().catch(() => ({}))
         if (!cancelled) {
-          setOpcionesCap({
-            competencias: res.ok && Array.isArray(data.competencias) ? data.competencias : [],
-            items: res.ok && Array.isArray(data.items) ? data.items : [],
-          })
+          if (!res.ok) {
+            const det = data?.detail
+            const msg = typeof det === 'string'
+              ? det
+              : (det?.message || data?.message || `Error ${res.status}`)
+            setError(msg)
+            // Conservar competencias ya conocidas; ítems vacíos si falló con filtro.
+            setOpcionesCap((prev) => ({
+              competencias: Array.isArray(prev.competencias) ? prev.competencias : [],
+              items: [],
+            }))
+          } else {
+            setOpcionesCap({
+              competencias: Array.isArray(data.competencias) ? data.competencias : [],
+              items: Array.isArray(data.items) ? data.items : [],
+            })
+          }
         }
-      } catch {
-        if (!cancelled) setOpcionesCap({ competencias: [], items: [] })
+      } catch (e) {
+        if (!cancelled) {
+          setError(e?.message || 'No se pudieron cargar competencias/ítems de origen.')
+          setOpcionesCap((prev) => ({
+            competencias: Array.isArray(prev.competencias) ? prev.competencias : [],
+            items: [],
+          }))
+        }
       } finally {
         if (!cancelled) setLoadingOpciones(false)
       }
@@ -735,8 +780,16 @@ export default function PptoReportarTransporteModal({
               value={competenciaOrigenElegida ? competenciaOrigen : null}
               onChange={(v) => setCompetenciaOrigen(String(v ?? ''))}
               options={competenciaOrigenOpts}
-              placeholder={capituloOrigen ? '— Selecciona competencia —' : 'Elija capítulo primero'}
-              disabled={!capituloOrigen || (!loadingOpciones && !competenciaOrigenOpts.length)}
+              placeholder={
+                !capituloOrigen
+                  ? 'Elija capítulo primero'
+                  : (loadingOpciones && !competenciaOrigenOpts.length
+                    ? 'Cargando competencias…'
+                    : (competenciaOrigenOpts.length
+                      ? '— Selecciona competencia —'
+                      : 'Sin competencias en este capítulo'))
+              }
+              disabled={!capituloOrigen || (loadingOpciones && !competenciaOrigenOpts.length)}
               sheet={sheet}
               t={t}
               allowEmpty={false}
