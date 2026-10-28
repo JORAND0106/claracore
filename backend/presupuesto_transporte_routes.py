@@ -1,5 +1,6 @@
 """
 Rutas — Reportar transporte (Obra Ejecutada).
+GET  /presupuesto/{contrato_id}/transporte/opciones
 POST /presupuesto/{contrato_id}/transporte/preview
 POST /presupuesto/{contrato_id}/transporte/confirmar
 """
@@ -8,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from main import (
@@ -24,9 +25,13 @@ from main import (
 )
 from presupuesto_papelera import aplicar_update_baja
 from presupuesto_transporte import (
-    elegir_ubicacion_origen,
     normalizar_items_origen,
     repartir_transporte_por_pk,
+)
+from presupuesto_transporte_fuentes import (
+    agregar_por_pk,
+    filas_oe_combinadas,
+    opciones_oe_capitulo,
 )
 
 router = APIRouter(tags=["presupuesto-transporte"])
@@ -65,81 +70,24 @@ def _assert_puede_reportar(current_user, contrato_id: int) -> None:
     raise HTTPException(status_code=403, detail="Sin permiso para editar presupuesto.")
 
 
-def _fetch_origen_rows(contrato_id: int, capitulo: str, competencia: str, items: List[str]) -> List[dict]:
+def _fetch_origen_rows(
+    contrato_id: int,
+    capitulo: str,
+    competencia: str,
+    items: List[str],
+    current_user,
+) -> List[dict]:
+    """Fuente combinada OE (presupuesto + SicoeObra) — misma regla que export."""
     if not items:
         return []
-    out: List[dict] = []
-    PAGE = 1000
-    for i in range(0, len(items), 80):
-        chunk = items[i : i + 80]
-        off = 0
-        while True:
-            batch = (
-                supabase.table("presupuesto")
-                .select(
-                    "id, pk_id, cant_total, tramo, calzada, abs_inicio, abs_final, "
-                    "no_inicio, no_final, infraestructura, item, competencia, capitulo"
-                )
-                .eq("contrato_id", contrato_id)
-                .eq("tipo_ejecucion", TIPO_OBRA)
-                .eq("dado_de_baja", False)
-                .eq("capitulo", capitulo)
-                .eq("competencia", competencia)
-                .in_("item", chunk)
-                .order("id")
-                .range(off, off + PAGE - 1)
-                .execute()
-                .data
-                or []
-            )
-            out.extend(batch)
-            if len(batch) < PAGE:
-                break
-            off += PAGE
-    return out
-
-
-def _agregar_por_pk(rows: List[dict], pk_ubic: Dict[str, dict]) -> List[dict]:
-    by_pk: Dict[str, List[dict]] = {}
-    for r in rows:
-        pk = str(r.get("pk_id") or "").strip()
-        if not pk:
-            continue
-        by_pk.setdefault(pk, []).append(r)
-
-    filas = []
-    for pk, regs in by_pk.items():
-        cant = 0.0
-        for r in regs:
-            try:
-                cant += float(r.get("cant_total") or 0)
-            except (TypeError, ValueError):
-                pass
-        if cant <= 0:
-            continue
-        ubi = elegir_ubicacion_origen(regs)
-        info = pk_ubic.get(pk) or {}
-        civ = ""
-        if info.get("civ") is not None and str(info.get("civ")).strip():
-            civ = str(info.get("civ")).strip()
-        infra = (ubi.get("infraestructura") or "").strip() or str(info.get("infraestructura") or "").strip()
-        filas.append({
-            "pk_id": pk,
-            "cant_compacta": round(cant, 6),
-            "ubicacion": {
-                "pk_id": pk,
-                "civ": civ,
-                "tramo": (ubi.get("tramo") or info.get("tramo") or "") or "",
-                "calzada": (ubi.get("calzada") or info.get("calzada") or "") or "",
-                "infraestructura": infra,
-                "abs_inicio": ubi.get("abs_inicio"),
-                "abs_final": ubi.get("abs_final"),
-                "no_inicio": ubi.get("no_inicio"),
-                "no_final": ubi.get("no_final"),
-            },
-        })
-    filas.sort(key=lambda x: x["pk_id"])
-    return filas
+    return filas_oe_combinadas(
+        contrato_id,
+        capitulo,
+        competencia,
+        items,
+        current_user,
+        filtrar_competencia=True,
+    )
 
 
 def _buscar_lote_previo(
@@ -211,7 +159,7 @@ def _usuario_nombre(current_user) -> str:
     return full or (current_user.get("email") or "") or str(current_user.get("sub") or "")
 
 
-def _build_preview_core(contrato_id: int, body: TransportePreviewBody) -> dict:
+def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_user) -> dict:
     capitulo = str(body.capitulo or "").strip()
     competencia = str(body.competencia or "").strip()
     items = normalizar_items_origen(body.items_origen)
@@ -226,8 +174,8 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody) -> dict:
     except Exception:
         pk_ubic = {}
 
-    rows = _fetch_origen_rows(contrato_id, capitulo, competencia, items)
-    filas_pk = _agregar_por_pk(rows, pk_ubic)
+    rows = _fetch_origen_rows(contrato_id, capitulo, competencia, items, current_user)
+    filas_pk = agregar_por_pk(rows, pk_ubic)
     total_compacta = round(sum(f["cant_compacta"] for f in filas_pk), 6)
 
     reparto = None
@@ -260,6 +208,26 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody) -> dict:
     }
 
 
+@router.get("/presupuesto/{contrato_id}/transporte/opciones")
+def opciones_transporte(
+    contrato_id: int,
+    capitulo: str = Query(..., min_length=1),
+    current_user=Depends(get_current_user),
+):
+    """Competencias e ítems de origen del capítulo (fuente combinada OE)."""
+    _assert_puede_reportar(current_user, contrato_id)
+    cap = str(capitulo or "").strip()
+    if not cap:
+        raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
+    try:
+        return opciones_oe_capitulo(contrato_id, cap, current_user)
+    except Exception as ex:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudieron cargar opciones de transporte: {ex}",
+        ) from ex
+
+
 @router.post("/presupuesto/{contrato_id}/transporte/preview")
 def preview_transporte(
     contrato_id: int,
@@ -267,7 +235,7 @@ def preview_transporte(
     current_user=Depends(get_current_user),
 ):
     _assert_puede_reportar(current_user, contrato_id)
-    return _build_preview_core(contrato_id, body)
+    return _build_preview_core(contrato_id, body, current_user)
 
 
 @router.post("/presupuesto/{contrato_id}/transporte/confirmar")
@@ -303,8 +271,8 @@ def confirmar_transporte(
         pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
     except Exception:
         pk_ubic = {}
-    rows = _fetch_origen_rows(contrato_id, capitulo, competencia, items)
-    filas_pk = _agregar_por_pk(rows, pk_ubic)
+    rows = _fetch_origen_rows(contrato_id, capitulo, competencia, items, current_user)
+    filas_pk = agregar_por_pk(rows, pk_ubic)
     reparto = repartir_transporte_por_pk(filas_pk, body.cantidad_reportar)
     if not reparto.get("ok"):
         raise HTTPException(status_code=422, detail=reparto.get("error") or "No se pudo repartir.")
