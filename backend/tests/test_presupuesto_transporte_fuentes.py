@@ -66,3 +66,11 @@ def test_comp_eq_trim():
     assert _comp_eq(" IDU ", "IDU")
     assert _comp_eq("", "")
     assert not _comp_eq("IDU", "CODENSA")
+
+
+def test_ordenar_competencias_vacia_al_final():
+    from presupuesto_transporte_fuentes import _ordenar_competencias
+    out = _ordenar_competencias({"Zebra", "", "Alpha", "beta"})
+    assert out[-1] == ""
+    assert out[0] == "Alpha"
+    assert "Zebra" in out and "beta" in out

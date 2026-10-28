@@ -84,10 +84,18 @@ function TransporteSelectMenu({
   }, [options, busq])
 
   const pick = (val) => {
-    onChange(val)
+    // Cerrar antes del onChange para que un re-render del padre no deje el menú abierto
+    // (y evitar que el click “caiga” sobre el botón y lo reabra).
     setOpen(false)
     setBusq('')
+    onChange(val)
   }
+
+  // Si el valor cambia desde fuera (p. ej. se limpia tras agregar ítem), cerrar.
+  useEffect(() => {
+    setOpen(false)
+    setBusq('')
+  }, [value])
 
   return (
     <div ref={rootRef} style={{ position: 'relative', width: '100%', minWidth: 0 }}>
@@ -113,10 +121,17 @@ function TransporteSelectMenu({
         <span style={{ flex: 1, minWidth: 0 }}>
           {selected ? (
             <>
-              <strong>{selected.value}</strong>
+              <strong>
+                {selected.value === '' || selected.value == null
+                  ? (selected.label || '(Sin competencia)')
+                  : selected.value}
+              </strong>
               {(() => {
+                const shown = selected.value === '' || selected.value == null
+                  ? (selected.label || '(Sin competencia)')
+                  : String(selected.value)
                 const extra = String(selected.descripcion || selected.label || '').trim()
-                if (!extra || extra === String(selected.value).trim()) return null
+                if (!extra || extra === shown) return null
                 return (
                   <span style={{ color: t.textMuted }}>
                     {' — '}
@@ -166,7 +181,11 @@ function TransporteSelectMenu({
             <button
               type="button"
               role="option"
-              onClick={() => pick('')}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                pick('')
+              }}
               style={{
                 display: 'block',
                 width: '100%',
@@ -187,10 +206,14 @@ function TransporteSelectMenu({
           ) : null}
           {filtrados.map((o) => (
             <button
-              key={o.value}
+              key={o.value === '' || o.value == null ? '__sin_comp__' : String(o.value)}
               type="button"
               role="option"
-              onClick={() => pick(o.value)}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                pick(o.value)
+              }}
               style={{
                 display: 'block',
                 width: '100%',
@@ -208,12 +231,18 @@ function TransporteSelectMenu({
                 boxSizing: 'border-box',
               }}
             >
-              <strong style={{ color: t.primary || '#2563EB' }}>{o.value}</strong>
-              {o.descripcion || o.label ? (
+              <strong style={{ color: t.primary || '#2563EB' }}>
+                {o.value === '' || o.value == null ? (o.label || '(Sin competencia)') : o.value}
+              </strong>
+              {o.descripcion && o.descripcion !== o.label && o.descripcion !== String(o.value) ? (
                 <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontWeight: 400 }}>
-                  {o.descripcion || o.label}
+                  {o.descripcion}
                 </span>
-              ) : null}
+              ) : (o.label && o.label !== String(o.value) && o.value !== '' && o.value != null ? (
+                <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontWeight: 400 }}>
+                  {o.label}
+                </span>
+              ) : null)}
               {o.meta ? (
                 <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
                   {o.meta}
@@ -287,7 +316,9 @@ export default function PptoReportarTransporteModal({
   const [error, setError] = useState('')
   const [alertaPrevio, setAlertaPrevio] = useState(null)
   const [opcionesCap, setOpcionesCap] = useState({ competencias: [], items: [] })
-  const [loadingOpciones, setLoadingOpciones] = useState(false)
+  const [loadingCompetencias, setLoadingCompetencias] = useState(false)
+  const [loadingItemsOe, setLoadingItemsOe] = useState(false)
+  const loadingOpciones = loadingCompetencias || loadingItemsOe
 
   const qtyNum = Number(cantidadReportar)
   const fase2Visible = Number.isFinite(qtyNum) && qtyNum > 0
@@ -307,35 +338,53 @@ export default function PptoReportarTransporteModal({
     [capitulos],
   )
 
+  // Competencias del capítulo: API (ppto+SicoeObra+listado) + fallbacks locales.
   const competenciaOrigenOpts = useMemo(() => {
-    const fromOe = Array.isArray(opcionesCap.competencias) ? opcionesCap.competencias : []
-    return fromOe.map((c) => {
-      const v = String(c ?? '')
-      return {
-        value: v,
-        label: v || '(Sin competencia)',
-        descripcion: v ? '' : 'Registros sin competencia',
+    const set = new Set()
+    for (const c of (Array.isArray(opcionesCap.competencias) ? opcionesCap.competencias : [])) {
+      set.add(String(c ?? '').trim())
+    }
+    // Fallback: competencias del listado de precios en ese capítulo.
+    const cap = String(capituloOrigen || '').trim()
+    if (cap) {
+      for (const p of listadoPrecios || []) {
+        if (String(p?.capitulo || '').trim() !== cap) continue
+        const c = String(p?.competencia || '').trim()
+        if (c) set.add(c)
       }
+    }
+    // Fallback: competencias habilitadas del contrato (prop del módulo).
+    for (const c of competenciasOpciones || []) {
+      const v = String(c || '').trim()
+      if (v) set.add(v)
+    }
+    const list = [...set].sort((a, b) => {
+      if (!a) return 1
+      if (!b) return -1
+      return a.localeCompare(b, 'es', { sensitivity: 'base' })
     })
-  }, [opcionesCap.competencias])
+    return list.map((v) => ({
+      value: v,
+      label: v || '(Sin competencia)',
+      descripcion: v ? '' : 'Registros sin competencia',
+    }))
+  }, [opcionesCap.competencias, listadoPrecios, capituloOrigen, competenciasOpciones])
 
   const competenciaDestinoOpts = useMemo(() => {
     const base = (competenciasOpciones || []).map((c) => String(c || '').trim()).filter(Boolean)
     return base.map((c) => ({ value: c, label: c }))
   }, [competenciasOpciones])
 
-  // Ítems de origen: los que existen en capítulo+competencia (OE), enriquecidos con listado.
+  // Ítems de origen: respuesta rápida del API (ppto/sicoe) enriquecida con listado.
   const itemsOrigenOpts = useMemo(() => {
     if (!competenciaOrigenElegida) return []
     const oeItems = Array.isArray(opcionesCap.items) ? opcionesCap.items : []
     const delCap = itemsListadoDelCapitulo(listadoPrecios, capituloOrigen)
-    return oeItems
-      .filter((oe) => {
-        const num = String(oe.item_numero || oe.value || '').trim()
-        return num && !itemsOrigen.some((sel) => pptoMatchItemNumero(sel, num))
-      })
+    const fromOe = oeItems
       .map((oe) => {
         const num = String(oe.item_numero || oe.value || '').trim()
+        if (!num) return null
+        if (itemsOrigen.some((sel) => pptoMatchItemNumero(sel, num))) return null
         const lp = delCap.find((o) => pptoMatchItemNumero(o.value, num))
         return {
           value: num,
@@ -345,10 +394,30 @@ export default function PptoReportarTransporteModal({
             : undefined,
         }
       })
-      .sort((a, b) => pptoCmpItemNumero(a.value, b.value))
+      .filter(Boolean)
+    // Mientras llega el API, mostrar ítems del listado del capítulo (catálogo).
+    if (!fromOe.length && !loadingItemsOe) {
+      return delCap
+        .filter((o) => !itemsOrigen.some((sel) => pptoMatchItemNumero(sel, o.value)))
+        .map((o) => ({
+          value: o.value,
+          descripcion: o.descripcion || '',
+          meta: 'Catálogo listado',
+        }))
+    }
+    if (!fromOe.length && loadingItemsOe) {
+      return delCap
+        .filter((o) => !itemsOrigen.some((sel) => pptoMatchItemNumero(sel, o.value)))
+        .map((o) => ({
+          value: o.value,
+          descripcion: o.descripcion || '',
+          meta: 'Cargando cantidades…',
+        }))
+    }
+    return fromOe.sort((a, b) => pptoCmpItemNumero(a.value, b.value))
   }, [
     listadoPrecios, capituloOrigen, itemsOrigen,
-    opcionesCap.items, competenciaOrigenElegida,
+    opcionesCap.items, competenciaOrigenElegida, loadingItemsOe,
   ])
 
   const itemsDestinoOpts = useMemo(() => {
@@ -423,33 +492,83 @@ export default function PptoReportarTransporteModal({
     })
   }, [capituloDestino, listadoPrecios])
 
-  // Carga competencias del capítulo; si hay competencia, también ítems de cap+comp.
+  // Competencias: enriquecimiento rápido al cambiar capítulo (listado local ya pinta al instante).
   useEffect(() => {
     if (!open || !contratoId || !token || !capituloOrigen) {
       setOpcionesCap({ competencias: [], items: [] })
       return undefined
     }
     let cancelled = false
-    setLoadingOpciones(true)
+    setLoadingCompetencias(true)
     ;(async () => {
       try {
         const q = new URLSearchParams({ capitulo: capituloOrigen })
-        if (competenciaOrigen !== null) q.set('competencia', competenciaOrigen)
         const res = await fetch(
           `${API}/presupuesto/${contratoId}/transporte/opciones?${q}`,
           { headers: { Authorization: `Bearer ${token}` } },
         )
         const data = await res.json().catch(() => ({}))
-        if (!cancelled) {
-          setOpcionesCap({
-            competencias: res.ok && Array.isArray(data.competencias) ? data.competencias : [],
-            items: res.ok && Array.isArray(data.items) ? data.items : [],
-          })
+        if (cancelled) return
+        if (!res.ok) {
+          const det = data?.detail
+          setError(typeof det === 'string' ? det : (det?.message || `Error ${res.status}`))
+          return
         }
-      } catch {
-        if (!cancelled) setOpcionesCap({ competencias: [], items: [] })
+        setOpcionesCap((prev) => ({
+          ...prev,
+          competencias: Array.isArray(data.competencias) ? data.competencias : [],
+        }))
+      } catch (e) {
+        if (!cancelled) setError(e?.message || 'No se pudieron cargar competencias.')
       } finally {
-        if (!cancelled) setLoadingOpciones(false)
+        if (!cancelled) setLoadingCompetencias(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, API, contratoId, token, capituloOrigen])
+
+  // Ítems: solo cuando hay competencia elegida (consulta acotada cap+comp).
+  useEffect(() => {
+    if (!open || !contratoId || !token || !capituloOrigen || competenciaOrigen === null) {
+      setOpcionesCap((prev) => ({ ...prev, items: [] }))
+      setLoadingItemsOe(false)
+      return undefined
+    }
+    let cancelled = false
+    setLoadingItemsOe(true)
+    ;(async () => {
+      try {
+        const q = new URLSearchParams({
+          capitulo: capituloOrigen,
+          competencia: competenciaOrigen,
+        })
+        const res = await fetch(
+          `${API}/presupuesto/${contratoId}/transporte/opciones?${q}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (!res.ok) {
+          const det = data?.detail
+          setError(typeof det === 'string' ? det : (det?.message || `Error ${res.status}`))
+          setOpcionesCap((prev) => ({ ...prev, items: [] }))
+          return
+        }
+        setOpcionesCap((prev) => ({
+          ...prev,
+          items: Array.isArray(data.items) ? data.items : [],
+          // Por si el backend también devuelve competencias actualizadas
+          competencias: Array.isArray(data.competencias) && data.competencias.length
+            ? data.competencias
+            : prev.competencias,
+        }))
+      } catch (e) {
+        if (!cancelled) {
+          setError(e?.message || 'No se pudieron cargar ítems de origen.')
+          setOpcionesCap((prev) => ({ ...prev, items: [] }))
+        }
+      } finally {
+        if (!cancelled) setLoadingItemsOe(false)
       }
     })()
     return () => { cancelled = true }
@@ -735,8 +854,16 @@ export default function PptoReportarTransporteModal({
               value={competenciaOrigenElegida ? competenciaOrigen : null}
               onChange={(v) => setCompetenciaOrigen(String(v ?? ''))}
               options={competenciaOrigenOpts}
-              placeholder={capituloOrigen ? '— Selecciona competencia —' : 'Elija capítulo primero'}
-              disabled={!capituloOrigen || (!loadingOpciones && !competenciaOrigenOpts.length)}
+              placeholder={
+                !capituloOrigen
+                  ? 'Elija capítulo primero'
+                  : (loadingOpciones && !competenciaOrigenOpts.length
+                    ? 'Cargando competencias…'
+                    : (competenciaOrigenOpts.length
+                      ? '— Selecciona competencia —'
+                      : 'Sin competencias en este capítulo'))
+              }
+              disabled={!capituloOrigen || (loadingOpciones && !competenciaOrigenOpts.length)}
               sheet={sheet}
               t={t}
               allowEmpty={false}
@@ -751,8 +878,10 @@ export default function PptoReportarTransporteModal({
           <TransporteSelectMenu
             value={itemAdd}
             onChange={(v) => {
-              setItemAdd(v)
+              // Solo agregar; el menú ya se cerró en pick. No dejar el valor
+              // seleccionado en el input (vuelve a placeholder para el siguiente).
               if (v) addItemOrigen(v)
+              else setItemAdd('')
             }}
             options={itemsOrigenOpts}
             placeholder={
