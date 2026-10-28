@@ -152,6 +152,9 @@ def filas_oe_combinadas(
     body = ExportarPresupuestoInformeBody(**body_kwargs)
     merged = _presupuesto_export_merge_sicoe_obra(contrato_id, body, ppto, current_user) or []
 
+    # Capítulo exacto del request (sin mezclar otros capítulos del contrato).
+    merged = [r for r in merged if str(r.get("capitulo") or "").strip() == cap]
+
     if filtrar_competencia:
         # Incluye competencia vacía (export no filtra string vacío).
         merged = [r for r in merged if _comp_eq(r.get("competencia"), comp)]
@@ -174,9 +177,10 @@ def filas_oe_combinadas(
 
 def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[str, Any]:
     """Competencias e ítems con cantidad en la fuente combinada del capítulo."""
+    cap = str(capitulo or "").strip()
     rows = filas_oe_combinadas(
         contrato_id,
-        capitulo,
+        cap,
         "",
         None,
         current_user,
@@ -185,6 +189,9 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
     comps: Set[str] = set()
     items_map: Dict[str, dict] = {}
     for r in rows:
+        # Solo filas del capítulo pedido (evita fugas por normalización).
+        if str(r.get("capitulo") or "").strip() != cap:
+            continue
         try:
             cant = float(r.get("cant_total") or 0)
         except (TypeError, ValueError):
@@ -204,6 +211,7 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
                 "item_numero": it,
                 "descripcion": str(r.get("descripcion") or "").strip(),
                 "unidad": str(r.get("und") or "").strip(),
+                "capitulo": cap,
                 "origen": origen,
             }
         else:
@@ -220,7 +228,7 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
         items_map.values(),
         key=lambda x: str(x.get("item_numero") or ""),
     )
-    return {"capitulo": capitulo, "competencias": competencias, "items": items}
+    return {"capitulo": cap, "competencias": competencias, "items": items}
 
 
 def agregar_por_pk(rows: List[dict], pk_ubic: Dict[str, dict]) -> List[dict]:

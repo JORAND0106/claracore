@@ -1,10 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { pptoCmpItemNumero, pptoMatchItemNumero } from './pptoFiltroCatalogo'
 import { pptoSheetStyles } from './pptoSheetStyles'
 import {
   fmtCantTransporte,
   fmtPesoPct,
   repartirTransportePorPk,
 } from './pptoTransporte'
+
+/** Ítems del listado de precios restringidos al capítulo elegido. */
+function itemsListadoDelCapitulo(listadoPrecios, capitulo) {
+  const cap = String(capitulo || '').trim()
+  if (!cap) return []
+  const map = new Map()
+  for (const p of listadoPrecios || []) {
+    if (String(p?.capitulo || '').trim() !== cap) continue
+    const num = String(p?.item_numero || '').trim()
+    if (!num || map.has(num)) continue
+    map.set(num, {
+      value: num,
+      descripcion: p.descripcion || '',
+      unidad: p.unidad || '',
+      precio_unitario: p.precio_unitario,
+    })
+  }
+  return [...map.values()].sort((a, b) => pptoCmpItemNumero(a.value, b.value))
+}
 
 function sheetInp(sheet, t, active) {
   return {
@@ -284,49 +304,34 @@ export default function PptoReportarTransporteModal({
     return base.map((c) => ({ value: c, label: c }))
   }, [competenciasOpciones])
 
+  // Catálogo estricto por capítulo (listado de precios): origen y destino.
   const itemsOrigenOpts = useMemo(() => {
-    const fromApi = Array.isArray(opcionesCap.items) ? opcionesCap.items : []
-    if (fromApi.length) {
-      return fromApi
-        .filter((p) => !itemsOrigen.includes(String(p.item_numero || p.value || '')))
-        .map((p) => ({
-          value: String(p.item_numero || p.value || '').trim(),
-          descripcion: p.descripcion || '',
-          meta: p.origen ? `Fuente: ${p.origen === 'sicoe_obra' ? 'SicoeObra' : 'Presupuesto'}` : undefined,
-        }))
-        .filter((o) => o.value)
-    }
-    if (!capituloOrigen) return []
-    const map = new Map()
-    for (const p of listadoPrecios || []) {
-      if (String(p?.capitulo || '').trim() !== capituloOrigen) continue
-      const num = String(p?.item_numero || '').trim()
-      if (!num || map.has(num) || itemsOrigen.includes(num)) continue
-      map.set(num, { value: num, descripcion: p.descripcion || '' })
-    }
-    return [...map.values()].sort((a, b) =>
-      String(a.value).localeCompare(String(b.value), 'es', { numeric: true }),
-    )
-  }, [opcionesCap.items, listadoPrecios, capituloOrigen, itemsOrigen])
+    const delCap = itemsListadoDelCapitulo(listadoPrecios, capituloOrigen)
+    const oeByItem = Array.isArray(opcionesCap.items) ? opcionesCap.items : []
+    return delCap
+      .filter((o) => !itemsOrigen.some((sel) => pptoMatchItemNumero(sel, o.value)))
+      .map((o) => {
+        const oe = oeByItem.find((x) => pptoMatchItemNumero(x.item_numero || x.value, o.value))
+        return {
+          value: o.value,
+          descripcion: o.descripcion || oe?.descripcion || '',
+          meta: oe?.origen
+            ? `Fuente: ${oe.origen === 'sicoe_obra' ? 'SicoeObra' : 'Presupuesto'}`
+            : undefined,
+        }
+      })
+  }, [listadoPrecios, capituloOrigen, itemsOrigen, opcionesCap.items])
 
   const itemsDestinoOpts = useMemo(() => {
-    const cap = String(capituloDestino || capituloOrigen || '').trim()
+    const cap = String(capituloDestino || '').trim()
+    // Sin capítulo destino no se listan ítems (evita mezclar capítulos).
     if (!cap) return []
-    const map = new Map()
-    for (const p of listadoPrecios || []) {
-      if (String(p?.capitulo || '').trim() !== cap) continue
-      const num = String(p?.item_numero || '').trim()
-      if (!num || map.has(num)) continue
-      map.set(num, {
-        value: num,
-        descripcion: p.descripcion || '',
-        meta: `${p.unidad || '—'} · VU ${fmtCantTransporte(p.precio_unitario, 0)}`,
-      })
-    }
-    return [...map.values()].sort((a, b) =>
-      String(a.value).localeCompare(String(b.value), 'es', { numeric: true }),
-    )
-  }, [listadoPrecios, capituloDestino, capituloOrigen])
+    return itemsListadoDelCapitulo(listadoPrecios, cap).map((o) => ({
+      value: o.value,
+      descripcion: o.descripcion || '',
+      meta: `${o.unidad || '—'} · VU ${fmtCantTransporte(o.precio_unitario, 0)}`,
+    }))
+  }, [listadoPrecios, capituloDestino])
 
   const reset = useCallback(() => {
     setCapituloOrigen('')
@@ -351,6 +356,7 @@ export default function PptoReportarTransporteModal({
   useEffect(() => {
     setItemsOrigen([])
     setItemAdd('')
+    setOpcionesCap({ items: [] })
     setPreview(null)
     setAlertaPrevio(null)
     setItemDestino('')
@@ -367,6 +373,18 @@ export default function PptoReportarTransporteModal({
       return prev
     })
   }, [capituloOrigen])
+
+  // Al cambiar capítulo destino, solo quedan ítems de ese capítulo.
+  useEffect(() => {
+    setItemDestino((prev) => {
+      if (!prev) return prev
+      const cap = String(capituloDestino || '').trim()
+      if (!cap) return ''
+      const ok = itemsListadoDelCapitulo(listadoPrecios, cap)
+        .some((o) => pptoMatchItemNumero(o.value, prev))
+      return ok ? prev : ''
+    })
+  }, [capituloDestino, listadoPrecios])
 
   useEffect(() => {
     if (!open || !contratoId || !token || !capituloOrigen) {
