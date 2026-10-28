@@ -38,9 +38,12 @@ describe('informe Excel — builders de fórmulas', () => {
     // Varios subtotales no contiguos → celda+celda (no cada registro)
     assert.equal(formulaSumaFilas('L', [20, 45, 80]), 'L20+L45+L80')
     assert.equal(formulaSumaFilas('M', [20, 45]), 'M20+M45')
+    // Datos con huecos entre bloques → SUM por corrida
+    assert.equal(formulaSumaFilas('L', [10, 11, 20, 21]), 'SUM(L10:L11)+SUM(L20:L21)')
   })
 
-  it('Totales del informe Resumen suman subtotales de capítulo', () => {
+  it('Totales del informe Resumen suman encabezados de competencia', () => {
     assert.equal(formulaSumaFilas('G', [10, 15]), 'G10+G15')
+    assert.equal(formulaSumaFilas('F', [8, 9, 10]), 'SUM(F8:F10)')
   })
 })

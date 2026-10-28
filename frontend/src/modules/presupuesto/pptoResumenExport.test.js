@@ -147,9 +147,10 @@ describe('planFilasResumenConSubtotales', () => {
 })
 
 describe('formulaSumaFilas', () => {
-  it('rango contiguo y lista no contigua', () => {
+  it('rango contiguo, corridas y lista no contigua', () => {
     assert.equal(formulaSumaFilas('G', [8, 9, 10]), 'SUM(G8:G10)')
     assert.equal(formulaSumaFilas('G', [10, 15, 20]), 'G10+G15+G20')
+    assert.equal(formulaSumaFilas('L', [10, 11, 20, 21]), 'SUM(L10:L11)+SUM(L20:L21)')
     assert.equal(formulaSumaFilas('F', [12]), 'F12')
     assert.equal(formulaSumaFilas('F', []), '0')
   })

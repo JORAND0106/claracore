@@ -43,6 +43,7 @@ import {
   debeMostrarDesgloseCompetencia,
   encabezadoGrupoCompetencia,
   filtrarGraficosPorRegistrosBloque,
+  normalizarCompetenciaKey,
 } from './pptoCompetenciaExport.js'
 import { subagruparRegistrosPorGrupoGrafico } from './pptoGraficosExport.js'
 import { pptoOrdenarFilasPorCapituloItem } from './pptoFiltroCatalogo.js'
@@ -120,15 +121,35 @@ function itemMapKey(capitulo, item) {
 }
 
 /**
- * Cantidad del Resumen = referencia al TOTAL CANT. de la hoja de memoria del ítem.
- * @param {{ sheetName?: string, cantTotalRow?: number }|null|undefined} ref
+ * Cantidad del Resumen = referencia al SUBTOTAL de capítulo+competencia en la memoria del ítem.
+ * @param {{
+ *   sheetName?: string,
+ *   cantTotalRow?: number,
+ *   subtotalPorCompetencia?: Map<string, number>|Record<string, number>,
+ * }|null|undefined} ref
+ * @param {unknown} [competencia]
  * @returns {string|null} fórmula sin «=», o null si no hay memoria
  */
-function formulaCantidadResumenDesdeMemoria(ref) {
-  const row = Number(ref?.cantTotalRow)
+function formulaCantidadResumenDesdeMemoria(ref, competencia) {
   const name = ref?.sheetName
-  if (!name || !Number.isFinite(row) || row < 1) return null
-  return `${sheetFormulaRef(name)}!${colToLetter(COL_CANT_TOTAL)}${row}`
+  if (!name) return null
+  const compKey = normalizarCompetenciaKey(competencia)
+  let row = null
+  const map = ref?.subtotalPorCompetencia
+  if (map instanceof Map) {
+    if (map.has(compKey)) row = map.get(compKey)
+    else if (map.size === 1) row = [...map.values()][0]
+  } else if (map && typeof map === 'object') {
+    if (Object.prototype.hasOwnProperty.call(map, compKey)) row = map[compKey]
+    else {
+      const vals = Object.values(map)
+      if (vals.length === 1) row = vals[0]
+    }
+  }
+  if (row == null) row = ref?.cantTotalRow
+  const n = Number(row)
+  if (!Number.isFinite(n) || n < 1) return null
+  return `${sheetFormulaRef(name)}!${colToLetter(COL_CANT_TOTAL)}${n}`
 }
 
 function aplicarPaginaHorizontal(ws) {
@@ -1369,8 +1390,14 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     gruposEntidad: agruparRegistrosPorTipoEntidad(b.registros),
   }))
 
-  /** Filas SUBTOTAL de cada bloque de registros; el TOTAL CANT. suma estas (no cada registro). */
-  const filasSubtotal = []
+  /**
+   * Filas SUBTOTAL por (capítulo + competencia). El TOTAL CANT. suma estas;
+   * el Resumen enlaza a la fila de la competencia correspondiente.
+   */
+  const filasSubtotalComp = []
+  /** @type {Map<string, number>} competencia → fila SUBTOTAL */
+  const subtotalPorCompetencia = new Map()
+  const capituloHoja = safeStr(itemInfo.capitulo)
   let firstHeaderRow = null
   let lastTableRow = afterItemMeta - 1
   /** Filas de encabezado breve por grupo (Título 1): no deben quedar con wrap forzado. */
@@ -1389,19 +1416,40 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     }
   }
 
-  /** Subtotal = SUMA(rango continuo) de registros del bloque. Devuelve la fila escrita. */
-  const escribirSubtotalFilas = (filasSub) => {
-    if (!filasSub.length) return null
-    const first = filasSub[0]
-    const last = filasSub[filasSub.length - 1]
+  /**
+   * Fórmula de subtotal cap+comp: un solo bloque contiguo → SUM(first:last)
+   * (también con 1 fila); varios bloques con huecos → SUM+SUM vía formulaSumaFilas.
+   */
+  const formulaSubtotalBloque = (colLetter, filasDatos) => {
+    const rows = [...filasDatos].map(Number).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b)
+    if (!rows.length) return '0'
+    let contiguous = true
+    for (let i = 1; i < rows.length; i += 1) {
+      if (rows[i] !== rows[i - 1] + 1) {
+        contiguous = false
+        break
+      }
+    }
+    if (contiguous) return formulaSumaRango(colLetter, rows[0], rows[rows.length - 1])
+    return formulaSumaFilas(colLetter, rows)
+  }
+
+  /**
+   * Subtotal de capítulo + competencia = SUMA sobre las filas de registro del bloque.
+   */
+  const escribirSubtotalCapComp = (filasDatos, competenciaKey) => {
+    if (!filasDatos.length) return null
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     const subRow = ws.rowCount
-    ws.getCell(subRow, 1).value = 'SUBTOTAL'
+    const labelComp = competenciaKey || ''
+    ws.getCell(subRow, 1).value = labelComp
+      ? `SUBTOTAL · ${labelComp}`
+      : 'SUBTOTAL'
     ws.getCell(subRow, COL_CANT_TOTAL).value = {
-      formula: formulaSumaRango(colToLetter(COL_CANT_TOTAL), first, last),
+      formula: formulaSubtotalBloque(colToLetter(COL_CANT_TOTAL), filasDatos),
     }
     ws.getCell(subRow, COL_COSTO_DIRECTO).value = {
-      formula: formulaSumaRango(colToLetter(COL_COSTO_DIRECTO), first, last),
+      formula: formulaSubtotalBloque(colToLetter(COL_COSTO_DIRECTO), filasDatos),
     }
     estiloTitulo2Cell(ws.getCell(subRow, 1))
     estiloCantidad(ws.getCell(subRow, COL_CANT_TOTAL))
@@ -1411,7 +1459,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     ws.getCell(subRow, COL_CANT_TOTAL).fill = FILL_HEADER
     ws.getCell(subRow, COL_COSTO_DIRECTO).fill = FILL_HEADER
     lastTableRow = subRow
-    filasSubtotal.push(subRow)
+    filasSubtotalComp.push(subRow)
+    subtotalPorCompetencia.set(normalizarCompetenciaKey(competenciaKey), subRow)
     return subRow
   }
 
@@ -1426,6 +1475,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       )
       filasEncabezadoGrupo.push(filaComp)
     }
+
+    /** Filas de registro de esta competencia (pueden haber huecos entre subtablas de entidad). */
+    const filasDatosComp = []
 
     bloqueComp.gruposEntidad.forEach((grupo, gIdx) => {
       // Sep entre subtablas de entidad; tras banner de competencia no hace falta sep extra.
@@ -1454,13 +1506,12 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
         for (const reg of sub.registros) {
           const r = escribirFilaRegistroDetalle(ws, reg, { vuRef })
           filasSub.push(r.number)
+          filasDatosComp.push(r.number)
         }
         const lastDet = filasSub.length > 0 ? filasSub[filasSub.length - 1] : null
         if (lastDet != null) {
           aplicarBordesTabla(ws, headerRow, lastDet, TOTAL_COLS_DET)
           lastTableRow = lastDet
-          // Subtotal = SUMA(rango) de este bloque; el TOTAL de la hoja suma estos subtotales.
-          escribirSubtotalFilas(filasSub)
         } else {
           lastTableRow = headerRow
         }
@@ -1474,6 +1525,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       })
       hayBloquePrevio = true
     })
+
+    // Un SUBTOTAL por competencia (capítulo de la hoja + competencia del bloque).
+    escribirSubtotalCapComp(filasDatosComp, bloqueComp.competencia)
   })
 
   // Fallback: gráficos del ítem que no coincidieron con ningún subgrupo (p. ej. sin ids).
@@ -1490,16 +1544,16 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 
   let cantTotalRow = null
-  if (filasSubtotal.length) {
+  if (filasSubtotalComp.length) {
     ws.addRow(new Array(TOTAL_COLS_DET).fill(''))
     cantTotalRow = ws.rowCount
     ws.getCell(cantTotalRow, 1).value = 'TOTAL CANT.'
-    // TOTAL = suma de subtotales de la hoja (no de cada registro individual).
+    // TOTAL = suma de subtotales por competencia (no de cada registro individual).
     ws.getCell(cantTotalRow, COL_CANT_TOTAL).value = {
-      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasSubtotal),
+      formula: formulaSumaFilas(colToLetter(COL_CANT_TOTAL), filasSubtotalComp),
     }
     ws.getCell(cantTotalRow, COL_COSTO_DIRECTO).value = {
-      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasSubtotal),
+      formula: formulaSumaFilas(colToLetter(COL_COSTO_DIRECTO), filasSubtotalComp),
     }
     estiloTitulo2Cell(ws.getCell(cantTotalRow, 1))
     estiloCantidad(ws.getCell(cantTotalRow, COL_CANT_TOTAL))
@@ -1519,7 +1573,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       COL_CANT_TOTAL,
       COL_COSTO_DIRECTO,
       enc.totalsTier,
-      filasSubtotal,
+      filasSubtotalComp,
     )
     lastTableRow = cantTotalRow
   }
@@ -1559,7 +1613,8 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   return {
     sheetName,
     cantTotalRow,
-    key: itemMapKey(itemInfo.capitulo, itemInfo.item),
+    key: itemMapKey(capituloHoja, itemInfo.item),
+    subtotalPorCompetencia,
   }
 }
 
@@ -1608,12 +1663,12 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
 
   const firstDataRow = tableHeaderRow + 1
   let rowNum = firstDataRow
-  /** Filas de subtotal por capítulo: el total general (fila 5) suma solo estas. */
+  /** Filas de subtotal por capítulo (fallback si no hay cabeceras COMPETENCIA). */
   const filasSubtotalCap = []
-  /** Filas de ítem del capítulo actual (no cabeceras COMPETENCIA) para SUM del subtotal. */
+  /** Encabezados COMPETENCIA · …: los TOTALES DEL INFORME suman estas filas. */
+  const filasEncabezadoComp = []
+  /** Filas de ítem del capítulo actual (todas las competencias) para SUM del subtotal. */
   let filasItemCap = []
-  /** Evita contar dos veces el mismo (cap, ítem) cuando el desglose por competencia lo repite. */
-  const itemsEnSubtotalCap = new Set()
 
   const plan = planFilasResumenConSubtotales(resumen, resumenCompetencias)
   /** Cabecera COMPETENCIA pendiente de rellenar con SUM de sus ítems. */
@@ -1648,6 +1703,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
         /* merge opcional */
       }
       filaCompPendiente = rowNum
+      filasEncabezadoComp.push(rowNum)
       filasItemComp = []
       rowNum += 1
       continue
@@ -1666,11 +1722,10 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       ])
       estiloMoneda(r.getCell(5))
 
-      // Cantidad = siempre fórmula al TOTAL CANT. de la memoria del ítem (misma hoja
-      // para todas las filas del ítem, p. ej. desglose por competencia).
+      // Cantidad = SUBTOTAL de capítulo + competencia en la memoria del ítem (no TOTAL CANT.).
       const itemKey = itemMapKey(row.capitulo, row.item)
       const ref = itemRefs.get(itemKey)
-      const fCant = formulaCantidadResumenDesdeMemoria(ref)
+      const fCant = formulaCantidadResumenDesdeMemoria(ref, row.competencia)
       if (fCant) {
         r.getCell(6).value = { formula: fCant }
       } else {
@@ -1682,11 +1737,8 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       r.getCell(7).value = { formula: formulaCostoDirectoResumen(rowNum) }
       estiloMoneda(r.getCell(7))
       estiloFilaDatos(r, totalColsResumen, rowNum)
-      // Subtotal de capítulo: una sola fila por ítem (la memoria ya consolida competencias).
-      if (!itemsEnSubtotalCap.has(itemKey)) {
-        itemsEnSubtotalCap.add(itemKey)
-        filasItemCap.push(rowNum)
-      }
+      // Cada fila (cap+comp+ítem) aporta su cantidad al subtotal de capítulo.
+      filasItemCap.push(rowNum)
       if (filaCompPendiente != null) filasItemComp.push(rowNum)
       rowNum += 1
       continue
@@ -1713,7 +1765,6 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
     }
     filasSubtotalCap.push(rowNum)
     filasItemCap = []
-    itemsEnSubtotalCap.clear()
     rowNum += 1
   }
   cerrarBloqueCompetencia()
@@ -1723,6 +1774,10 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   if (plan.length > 0) {
     totalsFooterRow = lastDataRow + 1
     wsRes.addRow(new Array(totalColsResumen).fill(''))
+    // TOTALES DEL INFORME = suma de encabezados COMPETENCIA (si hay); si no, subtotales de capítulo.
+    const filasTotalesInforme = filasEncabezadoComp.length
+      ? filasEncabezadoComp
+      : (filasSubtotalCap.length ? filasSubtotalCap : null)
     // Cabecera TOTALES: fórmulas en E/G (sin merge). Pie: F/G alineado a columnas de datos.
     completarFormulasTotales(
       wsRes,
@@ -1735,7 +1790,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
       6,
       7,
       totalsTier,
-      filasSubtotalCap.length ? filasSubtotalCap : null,
+      filasTotalesInforme,
       6,
       7,
     )
@@ -1926,7 +1981,9 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
       logos,
       graficosPrep,
     )
-    if (ref.cantTotalRow) itemRefs.set(ref.key, ref)
+    if (ref.cantTotalRow || (ref.subtotalPorCompetencia && ref.subtotalPorCompetencia.size)) {
+      itemRefs.set(ref.key, ref)
+    }
     for (const reg of itemInfo.registros || []) todosRegistros.push(reg)
   }
 
