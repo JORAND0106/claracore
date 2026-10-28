@@ -113,10 +113,17 @@ function TransporteSelectMenu({
         <span style={{ flex: 1, minWidth: 0 }}>
           {selected ? (
             <>
-              <strong>{selected.value}</strong>
+              <strong>
+                {selected.value === '' || selected.value == null
+                  ? (selected.label || '(Sin competencia)')
+                  : selected.value}
+              </strong>
               {(() => {
+                const shown = selected.value === '' || selected.value == null
+                  ? (selected.label || '(Sin competencia)')
+                  : String(selected.value)
                 const extra = String(selected.descripcion || selected.label || '').trim()
-                if (!extra || extra === String(selected.value).trim()) return null
+                if (!extra || extra === shown) return null
                 return (
                   <span style={{ color: t.textMuted }}>
                     {' — '}
