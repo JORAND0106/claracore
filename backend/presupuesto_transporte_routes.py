@@ -419,6 +419,7 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
         cant = float(a["cant_transporte"])
         costo = round(cant * vu, 0)
         ubi = ubi_by_pk.get(a["pk_id"]) or {"pk_id": a["pk_id"]}
+        # infraestructura/civ no son columnas de presupuesto: viven en pk_ids.
         nuevos.append({
             "contrato_id": contrato_id,
             "tipo_ejecucion": TIPO_OBRA,
@@ -437,7 +438,6 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
             "pk_id": ubi.get("pk_id") or a["pk_id"],
             "tramo": ubi.get("tramo") or "",
             "calzada": ubi.get("calzada") or "",
-            "infraestructura": ubi.get("infraestructura") or "",
             "abs_inicio": ubi.get("abs_inicio"),
             "abs_final": ubi.get("abs_final"),
             "no_inicio": ubi.get("no_inicio"),
