@@ -106,29 +106,47 @@ def _assert_puede_reportar(current_user, contrato_id: int) -> None:
     raise HTTPException(status_code=403, detail="Sin permiso para editar presupuesto.")
 
 
-def _fetch_origen_rows(contrato_id: int, capitulo: str, items: List[str], current_user) -> List[dict]:
-    """Cantidades del ítem/capítulo (todas las competencias): presupuesto o SicoeObra."""
+def _etiqueta_origen(origen: Any) -> str:
+    o = str(origen or "").strip().lower()
+    if o == "sicoe_obra":
+        return "SicoeObra"
+    if o == "presupuesto":
+        return "Presupuesto"
+    return str(origen or "").strip() or "Presupuesto"
+
+
+def _fetch_origen_rows(
+    contrato_id: int,
+    capitulo: str,
+    competencia: str,
+    items: List[str],
+    current_user,
+) -> List[dict]:
+    """Cantidades del capítulo+competencia+ítems: presupuesto o SicoeObra (merge OE)."""
     if not items:
         return []
     return filas_oe_combinadas(
         contrato_id,
         capitulo,
-        "",
+        competencia,
         items,
         current_user,
-        filtrar_competencia=False,
+        filtrar_competencia=True,
     )
 
 
 def _filas_preview_out(filas_pk: List[dict]) -> List[dict]:
-    """Aplana ubicación para la grilla de Fase 1."""
+    """Aplana ubicación + competencia/origen para la grilla de Fase 1."""
     out = []
     for f in filas_pk or []:
         ubi = f.get("ubicacion") or {}
+        origen = f.get("origen")
         out.append({
             "pk_id": f.get("pk_id"),
             "cant_compacta": f.get("cant_compacta"),
-            "origen": f.get("origen"),
+            "origen": origen,
+            "origen_etiqueta": _etiqueta_origen(origen),
+            "competencia": f.get("competencia") or ubi.get("competencia") or "",
             "peso": f.get("peso"),
             "cant_transporte": f.get("cant_transporte"),
             "civ": ubi.get("civ") or "",
@@ -147,6 +165,7 @@ def _filas_preview_out(filas_pk: List[dict]) -> List[dict]:
 def _buscar_lote_previo(
     contrato_id: int,
     capitulo_origen: str,
+    competencia_origen: str,
     items: List[str],
     capitulo_destino: str,
     competencia_destino: str,
@@ -157,7 +176,7 @@ def _buscar_lote_previo(
             _supabase.table("presupuesto_transporte_lotes")
             .select(
                 "id, capitulo, competencia, items_origen, item_destino, "
-                "capitulo_origen, capitulo_destino, competencia_destino, "
+                "capitulo_origen, capitulo_destino, competencia_origen, competencia_destino, "
                 "cantidad_reportada, n_registros, usuario_nombre, created_at, activo"
             )
             .eq("contrato_id", contrato_id)
@@ -170,13 +189,33 @@ def _buscar_lote_previo(
             or []
         )
     except Exception as ex:
-        raise HTTPException(
-            status_code=500,
-            detail=f"No se pudo consultar lotes de transporte (¿migración aplicada?): {ex}",
-        ) from ex
+        # Columna competencia_origen puede faltar si migración no aplicada: reintento legacy.
+        try:
+            rows = (
+                _supabase.table("presupuesto_transporte_lotes")
+                .select(
+                    "id, capitulo, competencia, items_origen, item_destino, "
+                    "capitulo_origen, capitulo_destino, competencia_destino, "
+                    "cantidad_reportada, n_registros, usuario_nombre, created_at, activo"
+                )
+                .eq("contrato_id", contrato_id)
+                .eq("item_destino", item_destino)
+                .eq("activo", True)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as ex2:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudo consultar lotes de transporte (¿migración aplicada?): {ex2}",
+            ) from ex2
 
     want_items = set(items)
     want_cap_o = str(capitulo_origen or "").strip()
+    want_comp_o = str(competencia_origen or "").strip()
     want_cap_d = str(capitulo_destino or "").strip()
     want_comp_d = str(competencia_destino or "").strip()
 
@@ -191,6 +230,11 @@ def _buscar_lote_previo(
             if row.get("competencia_destino") is not None
             else (row.get("competencia") or "")
         ).strip()
+        # competencia_origen: si la columna no existe / es null en lotes viejos, no restringe.
+        if "competencia_origen" in row and row.get("competencia_origen") is not None:
+            comp_o = str(row.get("competencia_origen") or "").strip()
+            if comp_o != want_comp_o:
+                continue
         if cap_o == want_cap_o and cap_d == want_cap_d and comp_d == want_comp_d:
             return row
     return None
@@ -227,15 +271,26 @@ def _usuario_nombre(current_user) -> str:
     return full or (current_user.get("email") or "") or str(current_user.get("sub") or "")
 
 
-def opciones_transporte(contrato_id: int, capitulo: str, current_user) -> dict:
-    """Fase 1 auxiliar: ítems con cantidad OE en el capítulo (no ítems de transporte)."""
+def opciones_transporte(
+    contrato_id: int,
+    capitulo: str,
+    current_user,
+    competencia: Optional[str] = None,
+) -> dict:
+    """Fase 1 auxiliar: competencias del capítulo; ítems si hay competencia."""
     _ensure_deps()
     _assert_puede_reportar(current_user, contrato_id)
     cap = str(capitulo or "").strip()
     if not cap:
         raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
     try:
-        return opciones_oe_capitulo(contrato_id, cap, current_user)
+        # competencia=None → solo competencias; si viene query (aunque vacía) → ítems de esa comp.
+        return opciones_oe_capitulo(
+            contrato_id,
+            cap,
+            current_user,
+            competencia=competencia,
+        )
     except Exception as ex:
         raise HTTPException(
             status_code=500,
@@ -244,14 +299,18 @@ def opciones_transporte(contrato_id: int, capitulo: str, current_user) -> dict:
 
 
 def preview_transporte(contrato_id: int, body: TransportePreviewBody, current_user) -> dict:
-    """Fase 1: cantidades del capítulo+ítems (presupuesto o SicoeObra)."""
+    """Fase 1: cantidades del capítulo+competencia+ítems (presupuesto o SicoeObra)."""
     _ensure_deps()
     _assert_puede_reportar(current_user, contrato_id)
 
     capitulo_origen = str(body.capitulo or "").strip()
+    # competencia de origen: body.competencia (Fase 1). No confundir con destino.
+    competencia_origen = str(body.competencia if body.competencia is not None else "").strip()
     items = normalizar_items_origen(body.items_origen)
     if not capitulo_origen:
         raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
+    if body.competencia is None:
+        raise HTTPException(status_code=422, detail="Seleccione una competencia de origen.")
     if not items:
         raise HTTPException(status_code=422, detail="Seleccione al menos un ítem de origen.")
 
@@ -265,7 +324,9 @@ def preview_transporte(contrato_id: int, body: TransportePreviewBody, current_us
     except Exception:
         pk_ubic = {}
 
-    rows = _fetch_origen_rows(contrato_id, capitulo_origen, items, current_user)
+    rows = _fetch_origen_rows(
+        contrato_id, capitulo_origen, competencia_origen, items, current_user,
+    )
     filas_pk = agregar_por_pk(rows, pk_ubic)
     total_compacta = round(sum(f["cant_compacta"] for f in filas_pk), 6)
 
@@ -273,7 +334,6 @@ def preview_transporte(contrato_id: int, body: TransportePreviewBody, current_us
     if body.cantidad_reportar is not None:
         reparto = repartir_transporte_por_pk(filas_pk, body.cantidad_reportar)
         if reparto and reparto.get("ok"):
-            # fusionar peso/cant_transporte en filas de salida
             by_pk = {f["pk_id"]: f for f in reparto.get("filas") or []}
             for f in filas_pk:
                 r = by_pk.get(f["pk_id"])
@@ -293,6 +353,7 @@ def preview_transporte(contrato_id: int, body: TransportePreviewBody, current_us
         previo = _buscar_lote_previo(
             contrato_id,
             capitulo_origen,
+            competencia_origen,
             items,
             capitulo_destino,
             competencia_destino,
@@ -303,6 +364,8 @@ def preview_transporte(contrato_id: int, body: TransportePreviewBody, current_us
         "ok": True,
         "capitulo": capitulo_origen,
         "capitulo_origen": capitulo_origen,
+        "competencia": competencia_origen,
+        "competencia_origen": competencia_origen,
         "items_origen": items,
         "capitulo_destino": capitulo_destino,
         "competencia_destino": competencia_destino,
@@ -320,6 +383,7 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
     _assert_puede_reportar(current_user, contrato_id)
 
     capitulo_origen = str(body.capitulo or "").strip()
+    competencia_origen = str(body.competencia if body.competencia is not None else "").strip()
     items = normalizar_items_origen(body.items_origen)
     capitulo_destino = str(body.capitulo_destino or capitulo_origen).strip()
     competencia_destino = str(body.competencia_destino or "").strip()
@@ -327,6 +391,8 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
     modo = str(body.modo or "create").strip().lower()
     if modo not in ("create", "replace", "sum"):
         raise HTTPException(status_code=422, detail="modo debe ser create, replace o sum.")
+    if body.competencia is None:
+        raise HTTPException(status_code=422, detail="Seleccione una competencia de origen.")
     if not capitulo_origen or not items or not item_destino or not capitulo_destino:
         raise HTTPException(
             status_code=422,
@@ -349,7 +415,9 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
         pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id) or {}
     except Exception:
         pk_ubic = {}
-    rows = _fetch_origen_rows(contrato_id, capitulo_origen, items, current_user)
+    rows = _fetch_origen_rows(
+        contrato_id, capitulo_origen, competencia_origen, items, current_user,
+    )
     filas_pk = agregar_por_pk(rows, pk_ubic)
     reparto = repartir_transporte_por_pk(filas_pk, body.cantidad_reportar)
     if not reparto.get("ok"):
@@ -363,6 +431,7 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
     previo = _buscar_lote_previo(
         contrato_id,
         capitulo_origen,
+        competencia_origen,
         items,
         cap_reg,
         competencia_destino,
@@ -391,28 +460,35 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
     lote_prev_id = str(body.lote_previo_id or (previo or {}).get("id") or "").strip() or None
     ids_baja: List[int] = []
 
+    lote_payload = {
+        "id": lote_id,
+        "contrato_id": contrato_id,
+        "capitulo": capitulo_origen,
+        "competencia": competencia_destino,
+        "capitulo_origen": capitulo_origen,
+        "capitulo_destino": cap_reg,
+        "competencia_origen": competencia_origen,
+        "competencia_destino": competencia_destino,
+        "items_origen": items,
+        "item_destino": item_num,
+        "cantidad_reportada": reparto["total_asignado"],
+        "n_registros": len(asignaciones),
+        "usuario_id": uid,
+        "usuario_nombre": u_nombre,
+        "activo": True,
+    }
     try:
-        _supabase.table("presupuesto_transporte_lotes").insert({
-            "id": lote_id,
-            "contrato_id": contrato_id,
-            "capitulo": capitulo_origen,
-            "competencia": competencia_destino,
-            "capitulo_origen": capitulo_origen,
-            "capitulo_destino": cap_reg,
-            "competencia_destino": competencia_destino,
-            "items_origen": items,
-            "item_destino": item_num,
-            "cantidad_reportada": reparto["total_asignado"],
-            "n_registros": len(asignaciones),
-            "usuario_id": uid,
-            "usuario_nombre": u_nombre,
-            "activo": True,
-        }).execute()
-    except Exception as ex:
-        raise HTTPException(
-            status_code=500,
-            detail=f"No se pudo crear el lote de transporte (¿migración aplicada?): {ex}",
-        ) from ex
+        _supabase.table("presupuesto_transporte_lotes").insert(lote_payload).execute()
+    except Exception:
+        # Sin columna competencia_origen aún: insert legacy.
+        lote_payload.pop("competencia_origen", None)
+        try:
+            _supabase.table("presupuesto_transporte_lotes").insert(lote_payload).execute()
+        except Exception as ex:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudo crear el lote de transporte (¿migración aplicada?): {ex}",
+            ) from ex
 
     nuevos: List[dict] = []
     for a in asignaciones:
@@ -536,6 +612,7 @@ def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, curren
                 "contrato_id": contrato_id,
                 "modo": modo,
                 "capitulo_origen": capitulo_origen,
+                "competencia_origen": competencia_origen,
                 "items_origen": items,
                 "capitulo_destino": cap_reg,
                 "competencia_destino": competencia_destino,

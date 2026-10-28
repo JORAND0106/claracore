@@ -18,6 +18,7 @@ def test_agregar_por_pk_suma_y_ubicacion_mayor_cant():
             "cant_total": 2,
             "tramo": "T1",
             "calzada": "C1",
+            "competencia": "IDU",
             "_origen_export": ORIGEN_PRESUPUESTO,
         },
         {
@@ -29,9 +30,16 @@ def test_agregar_por_pk_suma_y_ubicacion_mayor_cant():
             "infraestructura": "Red",
             "no_inicio": "N1",
             "no_final": "N2",
+            "competencia": "CODENSA",
             "_origen_export": ORIGEN_SICOE_OBRA,
         },
-        {"pk_id": "B", "cant_total": 5, "tramo": "TB", "_origen_export": ORIGEN_PRESUPUESTO},
+        {
+            "pk_id": "B",
+            "cant_total": 5,
+            "tramo": "TB",
+            "competencia": "IDU",
+            "_origen_export": ORIGEN_PRESUPUESTO,
+        },
     ]
     filas = agregar_por_pk(rows, {})
     by = {f["pk_id"]: f for f in filas}
@@ -40,7 +48,10 @@ def test_agregar_por_pk_suma_y_ubicacion_mayor_cant():
     assert by["A"]["ubicacion"]["civ"] == "CIV-9"
     assert by["A"]["ubicacion"]["no_inicio"] == "N1"
     assert by["A"]["origen"] == ORIGEN_SICOE_OBRA
+    assert by["A"]["competencia"] == "CODENSA"
     assert by["B"]["cant_compacta"] == 5
+    assert by["B"]["competencia"] == "IDU"
+    assert by["B"]["origen"] == ORIGEN_PRESUPUESTO
 
 
 def test_agregar_por_pk_civ_desde_maestro_si_falta():
@@ -48,3 +59,10 @@ def test_agregar_por_pk_civ_desde_maestro_si_falta():
     filas = agregar_por_pk(rows, {"P1": {"civ": "CIV-M", "infraestructura": "Inf"}})
     assert filas[0]["ubicacion"]["civ"] == "CIV-M"
     assert filas[0]["ubicacion"]["infraestructura"] == "Inf"
+
+
+def test_comp_eq_trim():
+    from presupuesto_transporte_fuentes import _comp_eq
+    assert _comp_eq(" IDU ", "IDU")
+    assert _comp_eq("", "")
+    assert not _comp_eq("IDU", "CODENSA")

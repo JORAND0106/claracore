@@ -65,10 +65,11 @@ export function repartirTransportePorPk(filas, cantidadReportar) {
 
 /**
  * Clave estable para detectar reportes repetidos.
- * Origen: capítulo + ítems. Destino: capítulo + competencia + ítem.
+ * Origen: capítulo + competencia + ítems. Destino: capítulo + competencia + ítem.
  * @param {{
  *   capitulo?: unknown,
  *   capituloOrigen?: unknown,
+ *   competenciaOrigen?: unknown,
  *   itemsOrigen?: unknown[],
  *   capituloDestino?: unknown,
  *   competenciaDestino?: unknown,
@@ -78,12 +79,21 @@ export function repartirTransportePorPk(filas, cantidadReportar) {
  */
 export function claveReporteTransporte(sel) {
   const capO = String(sel?.capituloOrigen ?? sel?.capitulo ?? '').trim()
+  const compO = String(sel?.competenciaOrigen ?? '').trim()
   const capD = String(sel?.capituloDestino ?? capO).trim()
   const compD = String(sel?.competenciaDestino ?? sel?.competencia ?? '').trim()
   const dest = String(sel?.itemDestino ?? '').trim()
   const origen = [...new Set((sel?.itemsOrigen || []).map((x) => String(x ?? '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'es', { numeric: true }))
-  return `${capO}\x1e${origen.join(',')}\x1e${capD}\x1e${compD}\x1e${dest}`
+  return `${capO}\x1e${compO}\x1e${origen.join(',')}\x1e${capD}\x1e${compD}\x1e${dest}`
+}
+
+/** Etiqueta de fuente de cantidad OE. */
+export function etiquetaOrigenCantidad(origen) {
+  const o = String(origen || '').trim().toLowerCase()
+  if (o === 'sicoe_obra') return 'SicoeObra'
+  if (o === 'presupuesto') return 'Presupuesto'
+  return String(origen || '').trim() || 'Presupuesto'
 }
 
 export function fmtCantTransporte(v, maxFrac = 2) {

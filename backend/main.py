@@ -37206,10 +37206,11 @@ register_presupuesto_transporte_deps(
 def presupuesto_transporte_opciones(
     contrato_id: int,
     capitulo: str = Query(..., min_length=1),
+    competencia: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
-    """Fase 1: ítems del capítulo con cantidad en OE (presupuesto o SicoeObra)."""
-    return _transporte_opciones(contrato_id, capitulo, current_user)
+    """Fase 1: competencias del capítulo; con competencia, ítems de cap+comp (OE)."""
+    return _transporte_opciones(contrato_id, capitulo, current_user, competencia=competencia)
 
 
 @app.post("/presupuesto/{contrato_id}/transporte/preview")
@@ -37218,7 +37219,7 @@ def presupuesto_transporte_preview(
     body: TransportePreviewBody,
     current_user=Depends(get_current_user),
 ):
-    """Fase 1: cantidades compactas por PK_ID del capítulo+ítems (todas las competencias)."""
+    """Fase 1: cantidades por PK_ID del capítulo+competencia+ítems."""
     return _transporte_preview(contrato_id, body, current_user)
 
 

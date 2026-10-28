@@ -1,7 +1,7 @@
 -- Reportes de transporte (Obra Ejecutada): lote + enlace en presupuesto.
 -- Ejecutar en Supabase SQL Editor (idempotente).
--- Clave de reporte: capitulo_origen + items_origen + capitulo_destino +
--- competencia_destino + item_destino.
+-- Clave de reporte: capitulo_origen + competencia_origen + items_origen +
+-- capitulo_destino + competencia_destino + item_destino.
 
 CREATE TABLE IF NOT EXISTS presupuesto_transporte_lotes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,6 +31,8 @@ ALTER TABLE presupuesto_transporte_lotes
   ADD COLUMN IF NOT EXISTS capitulo_destino TEXT;
 ALTER TABLE presupuesto_transporte_lotes
   ADD COLUMN IF NOT EXISTS competencia_destino TEXT;
+ALTER TABLE presupuesto_transporte_lotes
+  ADD COLUMN IF NOT EXISTS competencia_origen TEXT;
 
 -- Backfill desde columnas legacy (capitulo / competencia).
 UPDATE presupuesto_transporte_lotes
