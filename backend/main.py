@@ -2376,6 +2376,17 @@ def _ppto_tiene_id_pol(row: dict) -> bool:
     return v is not None and str(v).strip() != ""
 
 
+def _ppto_es_lote_transporte(row: dict) -> bool:
+    """Registros creados por «Reportar transporte»: no aplican reglas CAD/plano."""
+    return row.get("transporte_lote_id") not in (None, "")
+
+
+def _ppto_bloquea_cad_web(row: dict) -> bool:
+    if _ppto_es_lote_transporte(row):
+        return False
+    return _ppto_tiene_id_pol(row)
+
+
 def _cad_sesion_usuario_activa(contrato_id: int, current_user) -> bool:
     """True si el usuario autenticado tiene heartbeat CAD reciente (SicoeCAD / ClaraLink)."""
     my_uid = 0
@@ -2560,7 +2571,7 @@ def _ppto_validar_edicion_dimensiones(contrato_id, prev_row: dict, data: dict) -
             continue
         if _ppto_val_eq(data.get(k), prev_row.get(k)):
             continue
-        if k == "area_long_nod" and _ppto_tiene_id_pol(prev_row):
+        if k == "area_long_nod" and _ppto_bloquea_cad_web(prev_row):
             raise HTTPException(status_code=400, detail=_PPTO_MSG_AREA_LONG_PLANO)
 
 
@@ -3035,6 +3046,9 @@ app.include_router(avi_router)
 
 from presupuesto_versiones_routes import router as presupuesto_versiones_router
 app.include_router(presupuesto_versiones_router)
+
+from presupuesto_transporte_routes import router as presupuesto_transporte_router
+app.include_router(presupuesto_transporte_router)
 
 from presupuesto_graficos_routes import (
     router as presupuesto_graficos_router,
@@ -13995,7 +14009,8 @@ def dar_baja_presupuesto(
 ):
     """Soft delete: marca el registro como dado de baja y renombra sus layers en CAD."""
     row = supabase.table("presupuesto").select(
-        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, rev_block_handle, sellado, id_pol"
+        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, "
+        "rev_block_handle, sellado, id_pol, transporte_lote_id"
     ).eq("id", item_id).execute().data
     if not row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -14006,7 +14021,7 @@ def dar_baja_presupuesto(
             detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
         )
     cid = r.get("contrato_id")
-    if _ppto_aplica_reglas_cad(cid) and _ppto_tiene_id_pol(r):
+    if _ppto_aplica_reglas_cad(cid) and _ppto_bloquea_cad_web(r):
         motivo_cad = str((body.motivo_cad if body else None) or "").strip()
         if not motivo_cad and not _cad_sesion_usuario_activa(int(cid), current_user):
             raise HTTPException(status_code=400, detail=_PPTO_MSG_BAJA_PLANO)
