@@ -16,9 +16,11 @@ from presupuesto_transporte import elegir_ubicacion_origen
 
 TIPO_OBRA = "Obra Ejecutada"
 
+# infraestructura NO existe en tabla presupuesto (vive en pk_ids); se completa vía
+# _pk_ids_ubicacion_por_codigo / agregar_por_pk.
 _PPTO_SELECT = (
     "id, pk_id, cant_total, tramo, calzada, abs_inicio, abs_final, "
-    "no_inicio, no_final, infraestructura, item, competencia, capitulo, descripcion, und"
+    "no_inicio, no_final, item, competencia, capitulo, descripcion, und"
 )
 
 
