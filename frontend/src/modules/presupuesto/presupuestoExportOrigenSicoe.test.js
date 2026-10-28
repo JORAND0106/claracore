@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 
 const DET_HEADERS_BASE = [
   'ID_POL',
-  'PK_ID',
+  'CIV',
   'Tramo',
   'Infraestructura',
   'Abscisa Inicial',
@@ -33,6 +33,7 @@ describe('memorias Excel: columna identificador según origen', () => {
   it('ítem presupuesto mantiene ID_POL', () => {
     const h = headersDetallePorGrupo('Área', { idColLabel: 'ID_POL' })
     assert.equal(h[0], 'ID_POL')
+    assert.equal(h[1], 'CIV')
     assert.equal(h[8], 'Área')
   })
 
@@ -41,5 +42,6 @@ describe('memorias Excel: columna identificador según origen', () => {
     const idColLabel = origen === 'sicoe_obra' ? 'Registro' : 'ID_POL'
     const h = headersDetallePorGrupo('Área/Long/Nodo', { idColLabel })
     assert.equal(h[0], 'Registro')
+    assert.equal(h[1], 'CIV')
   })
 })

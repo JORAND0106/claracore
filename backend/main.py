@@ -7099,13 +7099,14 @@ def _pk_ids_map_id_por_codigo(contrato_id: int) -> Dict[str, int]:
 
 
 def _pk_ids_ubicacion_por_codigo(contrato_id: int) -> Dict[str, dict]:
-    """Mapa pk_id (CAPA) → tramo/calzada/infraestructura vigentes en el maestro pk_ids."""
+    """Mapa pk_id (CAPA) → civ/tramo/calzada/infraestructura vigentes en el maestro pk_ids."""
     out: Dict[str, dict] = {}
     for r in _pk_ids_maestro_filas(contrato_id):
         code = str(r.get("pk_id") or "").strip()
         if not code:
             continue
         out[code] = {
+            "civ": r.get("civ"),
             "tramo": r.get("tramo"),
             "calzada": r.get("calzada"),
             "infraestructura": r.get("infraestructura"),
@@ -13434,13 +13435,17 @@ def exportar_presupuesto_informe(
     # presupuesto.descripcion aunque el listado ya tenga el nombre actualizado.
     rows = _overlay_presupuesto_meta_vivo(contrato_id, rows)
 
-    # Infraestructura no vive en presupuesto: enriquecer desde maestro pk_ids
+    # Infraestructura / CIV no viven en presupuesto: enriquecer desde maestro pk_ids
     pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
     for r in rows:
         pk = str(r.get("pk_id") or "").strip()
         info = pk_ubic.get(pk) or {}
         if not (r.get("infraestructura") or "").strip():
             r["infraestructura"] = (info.get("infraestructura") or "") or ""
+        # CIV para memorias Excel (columna CIV); no rellenar con pk_id si falta.
+        if not str(r.get("civ") or "").strip():
+            civ_m = info.get("civ")
+            r["civ"] = str(civ_m).strip() if civ_m is not None and str(civ_m).strip() else ""
 
     # Obra Ejecutada (informe, no versión histórica): completar ítems solo cobrados
     # en SICOE Obra — misma prioridad ítem-a-ítem que Dashboard Ppto vs Capítulo.
@@ -13541,6 +13546,8 @@ def exportar_presupuesto_informe(
             "id": _pid,
             "id_pol": r.get("id_pol") or "",
             "pk_id": r.get("pk_id") or "",
+            # CIV de maestro pk_ids (o vacío). Memorias Excel muestran CIV, no pk_id.
+            "civ": str(r.get("civ") or "").strip(),
             "tramo": r.get("tramo") or "",
             "infraestructura": (r.get("infraestructura") or "").strip(),
             "abs_inicio": r.get("abs_inicio"),
