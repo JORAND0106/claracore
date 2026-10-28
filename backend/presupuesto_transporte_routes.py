@@ -151,6 +151,7 @@ def _buscar_lote_previo(
 
 
 def _listado_destino(contrato_id: int, item_destino: str, capitulo_destino: Optional[str] = None) -> dict:
+    """Resuelve ítem del listado; si hay capítulo destino, solo dentro de ese capítulo."""
     candidatos = [item_destino]
     if not item_destino.endswith("."):
         candidatos.append(f"{item_destino}.")
@@ -167,24 +168,10 @@ def _listado_destino(contrato_id: int, item_destino: str, capitulo_destino: Opti
         rows = q.limit(5).execute().data or []
         if rows:
             return rows[0]
-    # Sin filtro de capítulo (ítem único en el listado)
-    if cap:
-        for cand in candidatos:
-            rows = (
-                supabase.table("listado_precios")
-                .select("item_numero, descripcion, unidad, precio_unitario, capitulo, competencia")
-                .eq("contrato_id", contrato_id)
-                .eq("item_numero", cand)
-                .limit(5)
-                .execute()
-                .data
-                or []
-            )
-            if rows:
-                return rows[0]
+    detalle = f" del capítulo «{cap}»" if cap else ""
     raise HTTPException(
         status_code=404,
-        detail=f"Ítem destino «{item_destino}» no está en el listado de precios.",
+        detail=f"Ítem destino «{item_destino}» no está en el listado de precios{detalle}.",
     )
 
 
