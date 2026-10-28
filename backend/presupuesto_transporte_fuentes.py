@@ -209,12 +209,19 @@ def _norm_cap_helpers(cap: str):
     return cap_key, _mismo_capitulo
 
 
-def _competencias_ligeras_capitulo(contrato_id: int, capitulo: str) -> Set[str]:
+def _ordenar_competencias(comps: Set[str]) -> List[str]:
+    comps_nonempty = sorted((c for c in comps if c), key=lambda x: x.lower())
+    out = list(comps_nonempty)
+    if "" in comps:
+        out.append("")
+    return out
+
+
+def _competencias_rapidas_capitulo(contrato_id: int, capitulo: str) -> Set[str]:
     """
-    Union de competencias del capítulo sin merge OE completo:
-      - presupuesto (Obra Ejecutada, cant > 0)
-      - so_registros del capítulo (cobro)
-      - listado_precios del capítulo
+    Competencias del capítulo — solo consultas acotadas (sin paginar so_registros).
+      1) listado_precios del capítulo
+      2) presupuesto OE del capítulo (una pasada filtrada por capitulo)
     """
     from main import supabase
 
@@ -223,109 +230,14 @@ def _competencias_ligeras_capitulo(contrato_id: int, capitulo: str) -> Set[str]:
     if not cap:
         return comps
     _, mismo = _norm_cap_helpers(cap)
-    PAGE = 1000
 
-    # 1) Presupuesto OE
-    try:
-        off = 0
-        while True:
-            batch = (
-                supabase.table("presupuesto")
-                .select("competencia, capitulo, cant_total")
-                .eq("contrato_id", contrato_id)
-                .eq("tipo_ejecucion", TIPO_OBRA)
-                .eq("dado_de_baja", False)
-                .eq("capitulo", cap)
-                .order("id")
-                .range(off, off + PAGE - 1)
-                .execute()
-                .data
-                or []
-            )
-            for r in batch:
-                if not mismo(r.get("capitulo")):
-                    continue
-                try:
-                    if float(r.get("cant_total") or 0) <= 0:
-                        continue
-                except (TypeError, ValueError):
-                    continue
-                comps.add(str(r.get("competencia") or "").strip())
-            if len(batch) < PAGE:
-                break
-            off += PAGE
-    except Exception:
-        pass
-
-    # Si el capítulo exacto no trajo filas, reintentar por contrato y filtrar normalizado.
-    if not comps:
-        try:
-            off = 0
-            while True:
-                batch = (
-                    supabase.table("presupuesto")
-                    .select("competencia, capitulo, cant_total")
-                    .eq("contrato_id", contrato_id)
-                    .eq("tipo_ejecucion", TIPO_OBRA)
-                    .eq("dado_de_baja", False)
-                    .order("id")
-                    .range(off, off + PAGE - 1)
-                    .execute()
-                    .data
-                    or []
-                )
-                for r in batch:
-                    if not mismo(r.get("capitulo")):
-                        continue
-                    try:
-                        if float(r.get("cant_total") or 0) <= 0:
-                            continue
-                    except (TypeError, ValueError):
-                        continue
-                    comps.add(str(r.get("competencia") or "").strip())
-                if len(batch) < PAGE:
-                    break
-                off += PAGE
-        except Exception:
-            pass
-
-    # 2) SicoeObra (so_registros) — competencias del capítulo
-    try:
-        off = 0
-        while True:
-            batch = (
-                supabase.table("so_registros")
-                .select("competencia, capitulo, cantidad_total")
-                .eq("contrato_id", contrato_id)
-                .eq("capitulo", cap)
-                .order("id")
-                .range(off, off + PAGE - 1)
-                .execute()
-                .data
-                or []
-            )
-            for r in batch:
-                if not mismo(r.get("capitulo")):
-                    continue
-                try:
-                    if float(r.get("cantidad_total") or 0) <= 0:
-                        continue
-                except (TypeError, ValueError):
-                    continue
-                comps.add(str(r.get("competencia") or "").strip())
-            if len(batch) < PAGE:
-                break
-            off += PAGE
-    except Exception:
-        pass
-
-    # 3) Listado de precios del capítulo (catálogo)
     try:
         rows = (
             supabase.table("listado_precios")
             .select("competencia, capitulo")
             .eq("contrato_id", contrato_id)
             .eq("capitulo", cap)
+            .limit(2000)
             .execute()
             .data
             or []
@@ -339,15 +251,181 @@ def _competencias_ligeras_capitulo(contrato_id: int, capitulo: str) -> Set[str]:
     except Exception:
         pass
 
+    try:
+        # Una sola página grande basta para armar el set de competencias.
+        batch = (
+            supabase.table("presupuesto")
+            .select("competencia, capitulo, cant_total")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", TIPO_OBRA)
+            .eq("dado_de_baja", False)
+            .eq("capitulo", cap)
+            .limit(3000)
+            .execute()
+            .data
+            or []
+        )
+        for r in batch:
+            if not mismo(r.get("capitulo")):
+                continue
+            try:
+                if float(r.get("cant_total") or 0) <= 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            comps.add(str(r.get("competencia") or "").strip())
+    except Exception:
+        pass
+
     return comps
 
 
-def _ordenar_competencias(comps: Set[str]) -> List[str]:
-    comps_nonempty = sorted((c for c in comps if c), key=lambda x: x.lower())
-    out = list(comps_nonempty)
-    if "" in comps:
-        out.append("")
-    return out
+def _items_rapidos_capitulo_comp(
+    contrato_id: int,
+    capitulo: str,
+    competencia: str,
+) -> Dict[str, dict]:
+    """
+    Ítems con cantidad en cap+comp sin merge OE completo.
+    Presupuesto primero; SicoeObra solo aporta ítems aún no cubiertos (1 query acotada).
+    """
+    from main import supabase
+
+    cap = str(capitulo or "").strip()
+    comp = str(competencia or "").strip()
+    _, mismo = _norm_cap_helpers(cap)
+    items_map: Dict[str, dict] = {}
+
+    def _put(it: str, *, descripcion: str, unidad: str, origen: str, competencia_row: str):
+        if not it:
+            return
+        prev = items_map.get(it)
+        if prev is None:
+            items_map[it] = {
+                "item_numero": it,
+                "descripcion": descripcion,
+                "unidad": unidad,
+                "capitulo": cap,
+                "competencia": competencia_row,
+                "origen": origen,
+            }
+            return
+        if origen == ORIGEN_PRESUPUESTO:
+            prev["origen"] = ORIGEN_PRESUPUESTO
+        if not prev.get("descripcion") and descripcion:
+            prev["descripcion"] = descripcion
+        if not prev.get("unidad") and unidad:
+            prev["unidad"] = unidad
+
+    # 1) Presupuesto OE del capítulo+competencia
+    try:
+        q = (
+            supabase.table("presupuesto")
+            .select("item, competencia, capitulo, cant_total, descripcion, und")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", TIPO_OBRA)
+            .eq("dado_de_baja", False)
+            .eq("capitulo", cap)
+            .limit(4000)
+        )
+        # competencia vacía: PostgREST eq "" 
+        q = q.eq("competencia", comp)
+        batch = q.execute().data or []
+        for r in batch:
+            if not mismo(r.get("capitulo")):
+                continue
+            if not _comp_eq(r.get("competencia"), comp):
+                continue
+            try:
+                if float(r.get("cant_total") or 0) <= 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            _put(
+                str(r.get("item") or "").strip(),
+                descripcion=str(r.get("descripcion") or "").strip(),
+                unidad=str(r.get("und") or "").strip(),
+                origen=ORIGEN_PRESUPUESTO,
+                competencia_row=str(r.get("competencia") or "").strip(),
+            )
+    except Exception:
+        pass
+
+    covered = {str(k).strip().rstrip(".") for k in items_map.keys()}
+
+    # 2) Listado: metadatos / ítems del capítulo con esa competencia
+    try:
+        rows = (
+            supabase.table("listado_precios")
+            .select("item_numero, descripcion, unidad, competencia, capitulo")
+            .eq("contrato_id", contrato_id)
+            .eq("capitulo", cap)
+            .limit(2000)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            if not mismo(r.get("capitulo")):
+                continue
+            c = str(r.get("competencia") or "").strip()
+            if c and not _comp_eq(c, comp):
+                continue
+            it = str(r.get("item_numero") or "").strip()
+            if not it:
+                continue
+            # Solo enriquecer si ya está cubierto por ppto; no inventar ítems solo de listado.
+            if it.rstrip(".") not in covered and it not in items_map:
+                continue
+            _put(
+                it,
+                descripcion=str(r.get("descripcion") or "").strip(),
+                unidad=str(r.get("unidad") or "").strip(),
+                origen=items_map.get(it, {}).get("origen") or ORIGEN_PRESUPUESTO,
+                competencia_row=comp,
+            )
+    except Exception:
+        pass
+
+    # 3) SicoeObra: ítems del capítulo+comp aún no en presupuesto (una sola página)
+    try:
+        batch = (
+            supabase.table("so_registros")
+            .select("item_numero, competencia, capitulo, cantidad_total, item_descripcion, unidad")
+            .eq("contrato_id", contrato_id)
+            .eq("capitulo", cap)
+            .eq("competencia", comp)
+            .limit(3000)
+            .execute()
+            .data
+            or []
+        )
+        for r in batch:
+            if not mismo(r.get("capitulo")):
+                continue
+            if not _comp_eq(r.get("competencia"), comp):
+                continue
+            try:
+                if float(r.get("cantidad_total") or 0) <= 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            it = str(r.get("item_numero") or "").strip()
+            if not it:
+                continue
+            if it.rstrip(".") in covered:
+                continue
+            _put(
+                it,
+                descripcion=str(r.get("item_descripcion") or "").strip(),
+                unidad=str(r.get("unidad") or "").strip(),
+                origen=ORIGEN_SICOE_OBRA,
+                competencia_row=comp,
+            )
+    except Exception:
+        pass
+
+    return items_map
 
 
 def opciones_oe_capitulo(
@@ -358,61 +436,23 @@ def opciones_oe_capitulo(
     competencia: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Cascada Fase 1:
-      - competencias: union ligera ppto + SicoeObra + listado (sin merge completo).
-      - items: si se pasa competencia, merge OE filtrado por cap+comp.
+    Cascada Fase 1 (rápida, sin merge OE):
+      - competencias: listado + ppto del capítulo
+      - items: ppto + sicoe acotados por cap+comp (merge completo solo en preview)
     """
+    del current_user  # reserved for parity / future auth-scoped filters
     cap = str(capitulo or "").strip()
     filtrar_items_por_comp = competencia is not None
     comp_filtro = str(competencia).strip() if filtrar_items_por_comp else None
 
-    comps = _competencias_ligeras_capitulo(contrato_id, cap)
+    comps = _competencias_rapidas_capitulo(contrato_id, cap)
     items_map: Dict[str, dict] = {}
 
     if filtrar_items_por_comp:
-        _, mismo = _norm_cap_helpers(cap)
-        rows = filas_oe_combinadas(
-            contrato_id,
-            cap,
-            comp_filtro or "",
-            None,
-            current_user,
-            filtrar_competencia=True,
-        )
-        for r in rows:
-            if not mismo(r.get("capitulo")):
-                continue
-            try:
-                cant = float(r.get("cant_total") or 0)
-            except (TypeError, ValueError):
-                cant = 0.0
-            if cant <= 0:
-                continue
-            c = str(r.get("competencia") or "").strip()
+        items_map = _items_rapidos_capitulo_comp(contrato_id, cap, comp_filtro or "")
+        for it in items_map.values():
+            c = str(it.get("competencia") or "").strip()
             comps.add(c)
-            if not _comp_eq(c, comp_filtro or ""):
-                continue
-            it = str(r.get("item") or "").strip()
-            if not it:
-                continue
-            prev = items_map.get(it)
-            origen = r.get("_origen_export") or ORIGEN_PRESUPUESTO
-            if prev is None:
-                items_map[it] = {
-                    "item_numero": it,
-                    "descripcion": str(r.get("descripcion") or "").strip(),
-                    "unidad": str(r.get("und") or "").strip(),
-                    "capitulo": cap,
-                    "competencia": c,
-                    "origen": origen,
-                }
-            else:
-                if origen == ORIGEN_PRESUPUESTO:
-                    prev["origen"] = ORIGEN_PRESUPUESTO
-                if not prev.get("descripcion") and r.get("descripcion"):
-                    prev["descripcion"] = str(r.get("descripcion") or "").strip()
-                if not prev.get("unidad") and r.get("und"):
-                    prev["unidad"] = str(r.get("und") or "").strip()
 
     items = sorted(
         items_map.values(),
