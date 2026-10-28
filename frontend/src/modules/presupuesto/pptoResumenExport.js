@@ -129,8 +129,8 @@ export function planFilasResumenConSubtotales(resumen, competencias = []) {
           costoDirecto: cd,
         })
         for (const row of itemsComp) {
-          // cantidadAbsoluta: el Excel igual enlaza al TOTAL CANT. de la memoria del ítem
-          // (una hoja por ítem). El flag queda por compatibilidad del plan.
+          // cantidadAbsoluta: el Excel enlaza al SUBTOTAL de (cap+competencia) en la memoria.
+          // El flag queda por compatibilidad del plan.
           out.push({ tipo: 'item', row, cantidadAbsoluta: true })
         }
       }
@@ -194,10 +194,10 @@ export function formulaSumaRango(colLetter, firstRow, lastRow) {
 
 /**
  * Formula Excel SUM sobre filas no necesariamente contiguas.
- * Contiguo → SUM(rango). Una sola fila → referencia directa.
- * No contiguo → suma celda a celda (evita SUM(a,b) que algunos Excel marcan al reparar).
- * Usar para totales que suman subtotales (pocas celdas). Para subtotales de registros
- * contiguos preferir {@link formulaSumaRango}.
+ * Agrupa corridas contiguas en SUM(rango); una sola fila → referencia directa;
+ * varias corridas → se unen con «+» (evita SUM(a,b) que algunos Excel marcan al reparar).
+ * Usar para totales que suman subtotales (pocas celdas) o datos con huecos entre bloques.
+ * Para un bloque de registros ya contiguo preferir {@link formulaSumaRango}.
  * @param {string} colLetter
  * @param {number[]} rowNums
  * @returns {string}
@@ -208,17 +208,29 @@ export function formulaSumaFilas(colLetter, rowNums) {
     .filter((n) => Number.isFinite(n) && n > 0)
     .sort((a, b) => a - b)
   if (!rows.length) return '0'
-  if (rows.length === 1) return `${colLetter}${rows[0]}`
-  let contiguous = true
-  for (let i = 1; i < rows.length; i += 1) {
-    if (rows[i] !== rows[i - 1] + 1) {
-      contiguous = false
-      break
+  // Deduplicar por si el caller repite filas.
+  const uniq = []
+  for (const r of rows) {
+    if (!uniq.length || uniq[uniq.length - 1] !== r) uniq.push(r)
+  }
+  if (uniq.length === 1) return `${colLetter}${uniq[0]}`
+
+  /** @type {Array<[number, number]>} */
+  const runs = []
+  let start = uniq[0]
+  let prev = uniq[0]
+  for (let i = 1; i < uniq.length; i += 1) {
+    if (uniq[i] === prev + 1) {
+      prev = uniq[i]
+      continue
     }
+    runs.push([start, prev])
+    start = uniq[i]
+    prev = uniq[i]
   }
-  if (contiguous) {
-    return formulaSumaRango(colLetter, rows[0], rows[rows.length - 1])
-  }
-  // No contiguo: suma celda a celda (evita SUM(a,b) que algunos Excel marcan al reparar).
-  return rows.map((r) => `${colLetter}${r}`).join('+')
+  runs.push([start, prev])
+
+  return runs
+    .map(([a, b]) => (a === b ? `${colLetter}${a}` : formulaSumaRango(colLetter, a, b)))
+    .join('+')
 }
