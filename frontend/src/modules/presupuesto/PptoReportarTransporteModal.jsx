@@ -768,30 +768,52 @@ export default function PptoReportarTransporteModal({
 
         <div style={{ marginTop: 12, minWidth: 0 }}>
           <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-            Detalle por PK_ID
-            {preview?.n_pk != null ? ` · ${preview.n_pk}` : ''}
+            Detalle por registro
+            {preview?.n_pk != null ? ` · ${preview.n_pk} PK_ID` : ''}
             {loadingPreview ? ' · actualizando…' : ''}
           </div>
-          <div style={{ overflow: 'auto', maxHeight: 200, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
+          <div style={{ overflow: 'auto', maxHeight: 240, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
               <thead>
                 <tr style={{ background: sheet.headerBg || '#e2e8f0' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>PK_ID</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. compacta</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', whiteSpace: 'nowrap' }}>PK_ID</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>CIV</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Costado</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Infraestructura</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ubicación</th>
+                  <th style={{ textAlign: 'right', padding: '6px 8px', whiteSpace: 'nowrap' }}>Cant. compacta</th>
                 </tr>
               </thead>
               <tbody>
-                {filasOrigen.map((f) => (
-                  <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
-                    <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace' }}>{f.pk_id}</td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtCantTransporte(f.cant_compacta, 4)}</td>
-                  </tr>
-                ))}
+                {filasOrigen.map((f) => {
+                  const ubi = f.ubicacion || {}
+                  const tramo = f.tramo || ubi.tramo || ''
+                  const nIni = f.no_inicio ?? ubi.no_inicio
+                  const nFin = f.no_final ?? ubi.no_final
+                  const ubicTxt = [
+                    tramo ? `Tramo ${tramo}` : '',
+                    (nIni != null && nIni !== '') || (nFin != null && nFin !== '')
+                      ? `Nodos ${nIni ?? '—'} → ${nFin ?? '—'}`
+                      : '',
+                  ].filter(Boolean).join(' · ') || '—'
+                  return (
+                    <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
+                      <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>{f.pk_id}</td>
+                      <td style={{ padding: '5px 8px' }}>{f.civ || ubi.civ || '—'}</td>
+                      <td style={{ padding: '5px 8px' }}>{f.calzada || ubi.calzada || '—'}</td>
+                      <td style={{ padding: '5px 8px' }}>{f.infraestructura || ubi.infraestructura || '—'}</td>
+                      <td style={{ padding: '5px 8px' }}>{ubicTxt}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700 }}>
+                        {fmtCantTransporte(f.cant_compacta, 4)}
+                      </td>
+                    </tr>
+                  )
+                })}
                 {!loadingPreview && !filasOrigen.length ? (
                   <tr>
-                    <td colSpan={2} style={{ padding: 12, color: t.textMuted }}>
+                    <td colSpan={6} style={{ padding: 12, color: t.textMuted }}>
                       {itemsOrigen.length
-                        ? 'Sin PK_ID con cantidad en obra ejecutada para la selección.'
+                        ? 'Sin registros con cantidad en obra ejecutada para la selección.'
                         : 'Seleccione capítulo e ítems para ver el detalle.'}
                     </td>
                   </tr>
