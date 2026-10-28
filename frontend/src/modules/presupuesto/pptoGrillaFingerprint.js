@@ -30,6 +30,7 @@ export const PPTO_GRILLA_FP_KEYS = Object.freeze([
   'competencia',
   'id_pol',
   'pk_id',
+  'transporte_lote_id',
 ])
 
 function cellFp(v) {

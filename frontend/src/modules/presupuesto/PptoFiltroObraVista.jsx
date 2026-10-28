@@ -46,6 +46,9 @@ export default function PptoFiltroObraVista({
   puedeSincronizarVlr = false,
   onSincronizarVlrUnitario,
   sincronizarVlrBusy = false,
+  /** Solo Obra Ejecutada + permiso editar: abre modal Reportar transporte. */
+  puedeReportarTransporte = false,
+  onReportarTransporte,
   tramoOptions: _tramoOptions,
   calzadaOptions: _calzadaOptions,
   listadoPrecios = [],
@@ -248,6 +251,16 @@ export default function PptoFiltroObraVista({
       {typeof onExportarExcel === 'function' && (
         <button type="button" onClick={onExportarExcel} disabled={!!exportandoExcel} style={{ ...btnSec, background: '#0077B618', borderColor: '#0077B6', color: '#0077B6', fontWeight: 700 }}>
           {exportandoExcel ? '⏳…' : '📥 Excel'}
+        </button>
+      )}
+      {puedeReportarTransporte && tipoEjecucionActivo === 'Obra Ejecutada' && typeof onReportarTransporte === 'function' && (
+        <button
+          type="button"
+          onClick={onReportarTransporte}
+          title="Distribuir cantidad de transporte entre los PK_ID de la selección"
+          style={{ ...btnSec, background: '#7C3AED18', borderColor: '#7C3AED', color: '#7C3AED', fontWeight: 700 }}
+        >
+          🚛 Transporte
         </button>
       )}
       {onRestablecerPksItem && hayFiltroFinoPks && hayCap && (

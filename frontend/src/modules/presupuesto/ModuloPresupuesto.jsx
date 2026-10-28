@@ -19,6 +19,7 @@ import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
 import PptoSubRedistribucionModal from './PptoSubRedistribucionModal'
+import PptoReportarTransporteModal from './PptoReportarTransporteModal'
 import PptoGraficosModal from './PptoGraficosModal'
 import PptoGruposGraficosModal from './PptoGruposGraficosModal'
 import PptoSincroSicoeLoteModal from './PptoSincroSicoeLoteModal'
@@ -339,9 +340,11 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [subcontratistasEdicionMasiva, setSubcontratistasEdicionMasiva] = useState([])
   const [redistribucionState, setRedistribucionState] = useState(null) // { preview, ids, subcontratistaId }
   const [redistribucionAplicando, setRedistribucionAplicando] = useState(false)
+  const [modalReportarTransporte, setModalReportarTransporte] = useState(false)
+  const [competenciasTransporte, setCompetenciasTransporte] = useState([])
 
   useEffect(() => {
-    if (!modalEdicionMasiva || !contratoId) return
+    if ((!modalEdicionMasiva && !modalReportarTransporte) || !contratoId) return
     let cancelled = false
     ;(async () => {
       try {
@@ -359,27 +362,35 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
         const cleaned = [...new Set(
           lista.map((x) => String(x || '').trim()).filter(Boolean),
         )].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
-        if (!cancelled) setCompetenciasEdicionMasiva(cleaned)
-      } catch {
-        if (!cancelled) setCompetenciasEdicionMasiva([])
-      }
-      try {
-        const tok = getToken()
-        // Activos del contrato (misma fuente que SICOE); no requiere permiso admin de Subcontratistas.
-        const resSub = await fetch(`${API}/sicoe-obra/${contratoId}/subcontratistas-activos`, {
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-        let rows = []
-        if (resSub.ok) {
-          rows = await resSub.json()
+        if (!cancelled) {
+          if (modalEdicionMasiva) setCompetenciasEdicionMasiva(cleaned)
+          if (modalReportarTransporte) setCompetenciasTransporte(cleaned)
         }
-        if (!cancelled) setSubcontratistasEdicionMasiva(pptoNormalizarSubcontratistasOpciones(rows))
       } catch {
-        if (!cancelled) setSubcontratistasEdicionMasiva([])
+        if (!cancelled) {
+          if (modalEdicionMasiva) setCompetenciasEdicionMasiva([])
+          if (modalReportarTransporte) setCompetenciasTransporte([])
+        }
+      }
+      if (modalEdicionMasiva) {
+        try {
+          const tok = getToken()
+          // Activos del contrato (misma fuente que SICOE); no requiere permiso admin de Subcontratistas.
+          const resSub = await fetch(`${API}/sicoe-obra/${contratoId}/subcontratistas-activos`, {
+            headers: { Authorization: `Bearer ${tok}` },
+          })
+          let rows = []
+          if (resSub.ok) {
+            rows = await resSub.json()
+          }
+          if (!cancelled) setSubcontratistasEdicionMasiva(pptoNormalizarSubcontratistasOpciones(rows))
+        } catch {
+          if (!cancelled) setSubcontratistasEdicionMasiva([])
+        }
       }
     })()
     return () => { cancelled = true }
-  }, [modalEdicionMasiva, contratoId, API])
+  }, [modalEdicionMasiva, modalReportarTransporte, contratoId, API])
   const [modalGraficos, setModalGraficos] = useState(false)
   const [modalGruposGraficos, setModalGruposGraficos] = useState(false)
   const [modalBuscarObjetivo, setModalBuscarObjetivo] = useState(false)
@@ -950,6 +961,8 @@ useEffect(() => {
   const MSG_AREA_LONG_DESDE_PLANO = 'El campo Área/Long/Nodo debe modificarse desde ClaraLink/DWG en este contrato.'
   const TITULO_DIM_CAD = 'Modificar desde ClaraLink/DWG (plano CAD)'
   const registroEnlazadoPlano = (r) => {
+    // Lotes de «Reportar transporte» no vienen del plano.
+    if (r?.transporte_lote_id) return false
     const v = r?.id_pol
     return v != null && String(v).trim() !== ''
   }
@@ -7631,6 +7644,22 @@ async function darDeBaja(id) {
         onApplyDepuracion={aplicarMasivoDepuracion}
         onApplyInterventoria={aplicarMasivoInterventoria}
       />
+      <PptoReportarTransporteModal
+        open={modalReportarTransporte}
+        theme={t}
+        contratoId={contratoId}
+        token={getToken()}
+        apiBase={API}
+        listadoPrecios={listadoPrecios}
+        competenciasOpciones={competenciasTransporte}
+        onClose={() => setModalReportarTransporte(false)}
+        onDone={({ n, cantidad }) => {
+          window.alert(
+            `Transporte reportado: ${n} registro${n === 1 ? '' : 's'} · cantidad ${Number(cantidad).toLocaleString('es-CO', { maximumFractionDigits: 2 })}`,
+          )
+          void recargarCapActual(true)
+        }}
+      />
       <PptoSubRedistribucionModal
         open={!!redistribucionState}
         theme={t}
@@ -8024,6 +8053,8 @@ async function darDeBaja(id) {
           puedeSincronizarVlr={puedeSincronizarVlrUnitario}
           onSincronizarVlrUnitario={puedeSincronizarVlrUnitario ? abrirSincronizarVlrUnitario : undefined}
           sincronizarVlrBusy={syncVlrBusy}
+          puedeReportarTransporte={puedeEditar && !verPapelera}
+          onReportarTransporte={puedeEditar ? () => setModalReportarTransporte(true) : undefined}
         />
       )}
 
