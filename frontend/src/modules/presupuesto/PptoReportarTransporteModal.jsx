@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { pptoSheetStyles } from './pptoSheetStyles'
 import {
   fmtCantTransporte,
@@ -22,8 +22,210 @@ function sheetInp(sheet, t, active) {
 }
 
 /**
- * Reportar transporte — solo Obra Ejecutada.
- * Selección → preview proporcional → confirmar (o reemplazar/sumar si hay lote previo).
+ * Desplegable contenido en el popup: ancho 100%, texto multilínea, sin desbordar.
+ */
+function TransporteSelectMenu({
+  value,
+  onChange,
+  options,
+  placeholder = '— Selecciona —',
+  disabled = false,
+  sheet,
+  t,
+  allowEmpty = true,
+  emptyLabel = '— Selecciona —',
+}) {
+  const [open, setOpen] = useState(false)
+  const [busq, setBusq] = useState('')
+  const rootRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDoc = (e) => {
+      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) setBusq('')
+  }, [open])
+
+  const selected = options.find((o) => String(o.value) === String(value))
+  const filtrados = useMemo(() => {
+    const q = busq.trim().toLowerCase()
+    if (!q) return options
+    return options.filter((o) => {
+      const hay = `${o.value} ${o.label || ''} ${o.descripcion || ''}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [options, busq])
+
+  const pick = (val) => {
+    onChange(val)
+    setOpen(false)
+    setBusq('')
+  }
+
+  return (
+    <div ref={rootRef} style={{ position: 'relative', width: '100%', minWidth: 0 }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && setOpen((v) => !v)}
+        style={{
+          ...sheetInp(sheet, t, open || !!value),
+          textAlign: 'left',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.55 : 1,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 8,
+          whiteSpace: 'normal',
+          wordBreak: 'break-word',
+          lineHeight: 1.35,
+          minHeight: 36,
+        }}
+      >
+        <span style={{ flex: 1, minWidth: 0 }}>
+          {selected ? (
+            <>
+              <strong>{selected.value}</strong>
+              {selected.descripcion || selected.label ? (
+                <span style={{ color: t.textMuted }}>
+                  {' — '}
+                  {selected.descripcion || selected.label}
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <span style={{ color: t.textMuted }}>{placeholder}</span>
+          )}
+        </span>
+        <span style={{ flexShrink: 0, color: t.textMuted }}>{open ? '▴' : '▾'}</span>
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 'calc(100% + 4px)',
+            zIndex: 20,
+            maxHeight: 260,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            background: sheet.bg || '#fff',
+            border: `1px solid ${sheet.border}`,
+            borderRadius: 8,
+            boxShadow: '0 10px 28px rgba(15,23,42,0.18)',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
+          {options.length > 8 ? (
+            <div style={{ padding: 8, borderBottom: `1px solid ${sheet.border}`, position: 'sticky', top: 0, background: sheet.bg || '#fff' }}>
+              <input
+                autoFocus
+                value={busq}
+                onChange={(e) => setBusq(e.target.value)}
+                placeholder="Buscar…"
+                style={{ ...sheetInp(sheet, t, true), minHeight: 30 }}
+              />
+            </div>
+          ) : null}
+          {allowEmpty ? (
+            <button
+              type="button"
+              role="option"
+              onClick={() => pick('')}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                border: 'none',
+                borderBottom: `1px solid ${sheet.border}55`,
+                background: !value ? `${t.primary || '#2563EB'}12` : 'transparent',
+                padding: '8px 10px',
+                cursor: 'pointer',
+                color: t.textMuted,
+                fontSize: 'var(--cc-sm)',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+              }}
+            >
+              {emptyLabel}
+            </button>
+          ) : null}
+          {filtrados.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              onClick={() => pick(o.value)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                border: 'none',
+                borderBottom: `1px solid ${sheet.border}55`,
+                background: String(o.value) === String(value) ? `${t.primary || '#2563EB'}14` : 'transparent',
+                padding: '8px 10px',
+                cursor: 'pointer',
+                color: sheet.text,
+                fontSize: 'var(--cc-sm)',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                lineHeight: 1.35,
+                boxSizing: 'border-box',
+              }}
+            >
+              <strong style={{ color: t.primary || '#2563EB' }}>{o.value}</strong>
+              {o.descripcion || o.label ? (
+                <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontWeight: 400 }}>
+                  {o.descripcion || o.label}
+                </span>
+              ) : null}
+              {o.meta ? (
+                <span style={{ display: 'block', marginTop: 2, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                  {o.meta}
+                </span>
+              ) : null}
+            </button>
+          ))}
+          {!filtrados.length ? (
+            <div style={{ padding: 12, color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+              Sin coincidencias.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SectionTitle({ children, t }) {
+  return (
+    <div style={{
+      fontSize: 'var(--cc-sm)',
+      fontWeight: 800,
+      color: t.text || '#0f172a',
+      marginTop: 16,
+      marginBottom: 8,
+      paddingBottom: 4,
+      borderBottom: `1px solid ${(t.border || '#e2e8f0')}`,
+    }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/**
+ * Reportar transporte — dos fases (origen → destino).
  */
 export default function PptoReportarTransporteModal({
   open,
@@ -40,17 +242,28 @@ export default function PptoReportarTransporteModal({
   const sheet = pptoSheetStyles(t)
   const API = apiBase || ''
 
-  const [capitulo, setCapitulo] = useState('')
-  const [competencia, setCompetencia] = useState('')
+  // Fase 1
+  const [capituloOrigen, setCapituloOrigen] = useState('')
   const [itemsOrigen, setItemsOrigen] = useState([])
   const [itemAdd, setItemAdd] = useState('')
   const [cantidadReportar, setCantidadReportar] = useState('')
+
+  // Fase 2
+  const [capituloDestino, setCapituloDestino] = useState('')
+  const [competenciaDestino, setCompetenciaDestino] = useState('')
   const [itemDestino, setItemDestino] = useState('')
+  const destinoInitRef = useRef('')
+
   const [preview, setPreview] = useState(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [confirmando, setConfirmando] = useState(false)
   const [error, setError] = useState('')
-  const [alertaPrevio, setAlertaPrevio] = useState(null) // reporte_previo pendiente de decisión
+  const [alertaPrevio, setAlertaPrevio] = useState(null)
+  const [opcionesCap, setOpcionesCap] = useState({ items: [] })
+  const [loadingOpciones, setLoadingOpciones] = useState(false)
+
+  const qtyNum = Number(cantidadReportar)
+  const fase2Visible = Number.isFinite(qtyNum) && qtyNum > 0
 
   const capitulos = useMemo(() => {
     const set = new Set()
@@ -61,43 +274,74 @@ export default function PptoReportarTransporteModal({
     return [...set].sort((a, b) => a.localeCompare(b, 'es', { numeric: true }))
   }, [listadoPrecios])
 
-  const itemsDelCapitulo = useMemo(() => {
-    if (!capitulo) return []
+  const capituloOpts = useMemo(
+    () => capitulos.map((c) => ({ value: c, label: c })),
+    [capitulos],
+  )
+
+  const competenciaDestinoOpts = useMemo(() => {
+    const base = (competenciasOpciones || []).map((c) => String(c || '').trim()).filter(Boolean)
+    return base.map((c) => ({ value: c, label: c }))
+  }, [competenciasOpciones])
+
+  const itemsOrigenOpts = useMemo(() => {
+    const fromApi = Array.isArray(opcionesCap.items) ? opcionesCap.items : []
+    if (fromApi.length) {
+      return fromApi
+        .filter((p) => !itemsOrigen.includes(String(p.item_numero || p.value || '')))
+        .map((p) => ({
+          value: String(p.item_numero || p.value || '').trim(),
+          descripcion: p.descripcion || '',
+          meta: p.origen ? `Fuente: ${p.origen === 'sicoe_obra' ? 'SicoeObra' : 'Presupuesto'}` : undefined,
+        }))
+        .filter((o) => o.value)
+    }
+    if (!capituloOrigen) return []
     const map = new Map()
     for (const p of listadoPrecios || []) {
-      if (String(p?.capitulo || '').trim() !== capitulo) continue
+      if (String(p?.capitulo || '').trim() !== capituloOrigen) continue
       const num = String(p?.item_numero || '').trim()
-      if (!num || map.has(num)) continue
-      map.set(num, p)
+      if (!num || map.has(num) || itemsOrigen.includes(num)) continue
+      map.set(num, { value: num, descripcion: p.descripcion || '' })
     }
     return [...map.values()].sort((a, b) =>
-      String(a.item_numero).localeCompare(String(b.item_numero), 'es', { numeric: true }),
+      String(a.value).localeCompare(String(b.value), 'es', { numeric: true }),
     )
-  }, [listadoPrecios, capitulo])
+  }, [opcionesCap.items, listadoPrecios, capituloOrigen, itemsOrigen])
 
   const itemsDestinoOpts = useMemo(() => {
+    const cap = String(capituloDestino || capituloOrigen || '').trim()
+    if (!cap) return []
     const map = new Map()
     for (const p of listadoPrecios || []) {
+      if (String(p?.capitulo || '').trim() !== cap) continue
       const num = String(p?.item_numero || '').trim()
       if (!num || map.has(num)) continue
-      map.set(num, p)
+      map.set(num, {
+        value: num,
+        descripcion: p.descripcion || '',
+        meta: `${p.unidad || '—'} · VU ${fmtCantTransporte(p.precio_unitario, 0)}`,
+      })
     }
     return [...map.values()].sort((a, b) =>
-      String(a.item_numero).localeCompare(String(b.item_numero), 'es', { numeric: true }),
+      String(a.value).localeCompare(String(b.value), 'es', { numeric: true }),
     )
-  }, [listadoPrecios])
+  }, [listadoPrecios, capituloDestino, capituloOrigen])
 
   const reset = useCallback(() => {
-    setCapitulo('')
-    setCompetencia('')
+    setCapituloOrigen('')
     setItemsOrigen([])
     setItemAdd('')
     setCantidadReportar('')
+    setCapituloDestino('')
+    setCompetenciaDestino('')
     setItemDestino('')
+    destinoInitRef.current = ''
     setPreview(null)
     setError('')
     setAlertaPrevio(null)
     setConfirmando(false)
+    setOpcionesCap({ items: [] })
   }, [])
 
   useEffect(() => {
@@ -109,10 +353,54 @@ export default function PptoReportarTransporteModal({
     setItemAdd('')
     setPreview(null)
     setAlertaPrevio(null)
-  }, [capitulo])
+    setItemDestino('')
+  }, [capituloOrigen])
 
-  const addItemOrigen = () => {
-    const v = String(itemAdd || '').trim()
+  // Por defecto el capítulo destino sigue al de origen hasta que el usuario lo cambie.
+  useEffect(() => {
+    if (!capituloOrigen) return
+    setCapituloDestino((prev) => {
+      if (!prev || prev === destinoInitRef.current) {
+        destinoInitRef.current = capituloOrigen
+        return capituloOrigen
+      }
+      return prev
+    })
+  }, [capituloOrigen])
+
+  useEffect(() => {
+    if (!open || !contratoId || !token || !capituloOrigen) {
+      setOpcionesCap({ items: [] })
+      return undefined
+    }
+    let cancelled = false
+    setLoadingOpciones(true)
+    ;(async () => {
+      try {
+        const q = new URLSearchParams({ capitulo: capituloOrigen })
+        const res = await fetch(
+          `${API}/presupuesto/${contratoId}/transporte/opciones?${q}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data?.detail || data?.message || `Error ${res.status}`)
+        if (!cancelled) {
+          setOpcionesCap({ items: Array.isArray(data.items) ? data.items : [] })
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setOpcionesCap({ items: [] })
+          setError(e?.message || 'No se pudieron cargar ítems de origen.')
+        }
+      } finally {
+        if (!cancelled) setLoadingOpciones(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, API, contratoId, token, capituloOrigen])
+
+  const addItemOrigen = (val = itemAdd) => {
+    const v = String(val || '').trim()
     if (!v) return
     setItemsOrigen((prev) => (prev.includes(v) ? prev : [...prev, v]))
     setItemAdd('')
@@ -123,7 +411,7 @@ export default function PptoReportarTransporteModal({
   }
 
   const fetchPreview = useCallback(async () => {
-    if (!contratoId || !token || !capitulo || !itemsOrigen.length) {
+    if (!contratoId || !token || !capituloOrigen || !itemsOrigen.length) {
       setPreview(null)
       return
     }
@@ -138,16 +426,21 @@ export default function PptoReportarTransporteModal({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          capitulo,
-          competencia: competencia || '',
+          capitulo: capituloOrigen,
           items_origen: itemsOrigen,
-          item_destino: itemDestino || null,
           cantidad_reportar: Number.isFinite(qty) ? qty : null,
+          capitulo_destino: capituloDestino || capituloOrigen || null,
+          competencia_destino: competenciaDestino || '',
+          item_destino: itemDestino || null,
         }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(data?.detail || data?.message || `Error ${res.status}`)
+        throw new Error(
+          typeof data?.detail === 'string'
+            ? data.detail
+            : (data?.detail?.message || data?.message || `Error ${res.status}`),
+        )
       }
       setPreview(data)
     } catch (e) {
@@ -156,7 +449,10 @@ export default function PptoReportarTransporteModal({
     } finally {
       setLoadingPreview(false)
     }
-  }, [API, contratoId, token, capitulo, competencia, itemsOrigen, itemDestino, cantidadReportar])
+  }, [
+    API, contratoId, token, capituloOrigen, itemsOrigen,
+    cantidadReportar, capituloDestino, competenciaDestino, itemDestino,
+  ])
 
   useEffect(() => {
     if (!open) return
@@ -166,16 +462,16 @@ export default function PptoReportarTransporteModal({
 
   const repartoLocal = useMemo(() => {
     if (!preview?.filas?.length) return null
-    const qty = Number(cantidadReportar)
-    if (!Number.isFinite(qty) || qty <= 0) return null
-    return repartirTransportePorPk(preview.filas, qty)
-  }, [preview, cantidadReportar])
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) return null
+    return repartirTransportePorPk(preview.filas, qtyNum)
+  }, [preview, qtyNum])
 
   const reparto = preview?.reparto?.ok ? preview.reparto : repartoLocal
   const compactaCero = preview != null && !(Number(preview.total_compacta) > 0)
-  const destinoOk = !!String(itemDestino || '').trim()
+  const destinoOk = !!String(itemDestino || '').trim() && !!String(capituloDestino || capituloOrigen || '').trim()
   const puedeConfirmar =
-    !!reparto?.ok
+    fase2Visible
+    && !!reparto?.ok
     && !compactaCero
     && destinoOk
     && itemsOrigen.length > 0
@@ -193,11 +489,12 @@ export default function PptoReportarTransporteModal({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          capitulo,
-          competencia: competencia || '',
+          capitulo: capituloOrigen,
           items_origen: itemsOrigen,
+          cantidad_reportar: qtyNum,
+          capitulo_destino: capituloDestino || capituloOrigen,
+          competencia_destino: competenciaDestino || '',
           item_destino: itemDestino,
-          cantidad_reportar: Number(cantidadReportar),
           modo,
           lote_previo_id: lotePrevioId,
         }),
@@ -232,7 +529,6 @@ export default function PptoReportarTransporteModal({
 
   const onClickConfirmar = async () => {
     if (!puedeConfirmar) return
-    // Si el preview ya trajo un previo, mostrar alerta antes de crear.
     if (preview?.reporte_previo) {
       setAlertaPrevio(preview.reporte_previo)
       return
@@ -262,6 +558,9 @@ export default function PptoReportarTransporteModal({
     color: sheet.text,
   }
 
+  const filasOrigen = preview?.filas || []
+  const filasReparto = reparto?.filas || []
+
   return (
     <div
       style={{
@@ -283,21 +582,23 @@ export default function PptoReportarTransporteModal({
         style={{
           width: 'min(920px, 100%)',
           maxHeight: '92vh',
-          overflow: 'auto',
+          overflowX: 'hidden',
+          overflowY: 'auto',
           background: sheet.bg || '#fff',
           borderRadius: 12,
           border: `1px solid ${sheet.border}`,
           boxShadow: '0 18px 50px rgba(0,0,0,0.25)',
           padding: 18,
+          boxSizing: 'border-box',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-          <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+          <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: sheet.text }}>
               Reportar transporte
             </div>
             <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
-              Obra Ejecutada · reparto proporcional por PK_ID
+              Obra Ejecutada · origen de cantidades → destino de registros
             </div>
           </div>
           <button type="button" onClick={() => !confirmando && onClose?.()} style={btnSec}>✕</button>
@@ -310,7 +611,9 @@ export default function PptoReportarTransporteModal({
             borderRadius: 8,
             padding: 14,
             marginBottom: 14,
-          }}>
+            marginTop: 12,
+          }}
+          >
             <div style={{ fontWeight: 800, color: '#B45309', marginBottom: 8 }}>
               Ya existe un reporte de transporte para esta combinación
             </div>
@@ -344,57 +647,41 @@ export default function PptoReportarTransporteModal({
           </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>1. Capítulo</span>
-            <select
-              value={capitulo}
-              onChange={(e) => setCapitulo(e.target.value)}
-              style={sheetInp(sheet, t, !!capitulo)}
-            >
-              <option value="">— Selecciona —</option>
-              {capitulos.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
+        <SectionTitle t={t}>Fase 1 · Origen de las cantidades</SectionTitle>
 
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>2. Competencia</span>
-            <select
-              value={competencia}
-              onChange={(e) => setCompetencia(e.target.value)}
-              style={sheetInp(sheet, t, true)}
-            >
-              <option value="">(Sin competencia / vacía)</option>
-              {(competenciasOpciones || []).map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>1. Capítulo</span>
+          <TransporteSelectMenu
+            value={capituloOrigen}
+            onChange={setCapituloOrigen}
+            options={capituloOpts}
+            placeholder="— Selecciona —"
+            sheet={sheet}
+            t={t}
+            allowEmpty
+          />
+        </label>
 
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 12, minWidth: 0 }}>
           <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>
-            3. Ítems de origen
+            2. Ítems de origen
+            {loadingOpciones ? ' · cargando…' : ''}
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select
+          <div style={{ minWidth: 0 }}>
+            <TransporteSelectMenu
               value={itemAdd}
-              onChange={(e) => setItemAdd(e.target.value)}
-              disabled={!capitulo}
-              style={{ ...sheetInp(sheet, t, !!itemAdd), maxWidth: 420 }}
-            >
-              <option value="">— Agregar ítem —</option>
-              {itemsDelCapitulo
-                .filter((p) => !itemsOrigen.includes(String(p.item_numero)))
-                .map((p) => (
-                  <option key={p.item_numero} value={p.item_numero}>
-                    {p.item_numero} — {p.descripcion || ''}
-                  </option>
-                ))}
-            </select>
-            <button type="button" style={btnSec} onClick={addItemOrigen} disabled={!itemAdd}>Agregar</button>
+              onChange={(v) => {
+                setItemAdd(v)
+                if (v) addItemOrigen(v)
+              }}
+              options={itemsOrigenOpts}
+              placeholder={capituloOrigen ? '— Agregar ítem —' : 'Elija capítulo primero'}
+              disabled={!capituloOrigen || loadingOpciones}
+              sheet={sheet}
+              t={t}
+              allowEmpty
+              emptyLabel="— Agregar ítem —"
+            />
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
             {itemsOrigen.map((it) => (
@@ -410,6 +697,8 @@ export default function PptoReportarTransporteModal({
                   border: `1px solid ${t.primary || '#2563EB'}55`,
                   fontSize: 'var(--cc-caption)',
                   fontWeight: 700,
+                  maxWidth: '100%',
+                  wordBreak: 'break-word',
                 }}
               >
                 {it}
@@ -420,19 +709,25 @@ export default function PptoReportarTransporteModal({
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
             <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-              4. Cantidad compacta (solo lectura)
+              Cantidad compacta total (solo lectura)
             </span>
             <input
               readOnly
-              value={preview == null ? (loadingPreview ? 'Calculando…' : '') : fmtCantTransporte(preview.total_compacta, 4)}
+              value={
+                !itemsOrigen.length
+                  ? ''
+                  : (preview == null
+                    ? (loadingPreview ? 'Calculando…' : '')
+                    : fmtCantTransporte(preview.total_compacta, 4))
+              }
               style={{ ...sheetInp(sheet, t, false), background: '#f1f5f9' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
             <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-              5. Cantidad a reportar
+              Cantidad a reportar
             </span>
             <input
               type="number"
@@ -441,75 +736,144 @@ export default function PptoReportarTransporteModal({
               value={cantidadReportar}
               onChange={(e) => setCantidadReportar(e.target.value)}
               placeholder="Ej. 6950"
+              disabled={!itemsOrigen.length}
               style={sheetInp(sheet, t, !!cantidadReportar)}
             />
           </label>
         </div>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 12 }}>
-          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
-            6. Ítem de transporte destino
-          </span>
-          <select
-            value={itemDestino}
-            onChange={(e) => setItemDestino(e.target.value)}
-            style={sheetInp(sheet, t, !!itemDestino)}
-          >
-            <option value="">— Selecciona ítem del listado —</option>
-            {itemsDestinoOpts.map((p) => (
-              <option key={p.item_numero} value={p.item_numero}>
-                {p.item_numero} — {p.descripcion || ''} ({p.unidad || '—'}) · VU {fmtCantTransporte(p.precio_unitario, 0)}
-              </option>
-            ))}
-          </select>
-        </label>
+        {itemsOrigen.length > 0 ? (
+          <div style={{ marginTop: 12, minWidth: 0 }}>
+            <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+              Detalle por PK_ID
+              {preview?.n_pk != null ? ` · ${preview.n_pk}` : ''}
+              {loadingPreview ? ' · actualizando…' : ''}
+            </div>
+            <div style={{ overflow: 'auto', maxHeight: 200, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
+                <thead>
+                  <tr style={{ background: sheet.headerBg || '#e2e8f0' }}>
+                    <th style={{ textAlign: 'left', padding: '6px 8px' }}>PK_ID</th>
+                    <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. compacta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasOrigen.map((f) => (
+                    <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
+                      <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace' }}>{f.pk_id}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtCantTransporte(f.cant_compacta, 4)}</td>
+                    </tr>
+                  ))}
+                  {!loadingPreview && !filasOrigen.length ? (
+                    <tr>
+                      <td colSpan={2} style={{ padding: 12, color: t.textMuted }}>
+                        Sin PK_ID con cantidad compacta (todas las competencias).
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
 
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-            7. Vista previa
-            {preview?.n_pk != null ? ` · ${preview.n_pk} PK_ID` : ''}
-            {loadingPreview ? ' · actualizando…' : ''}
-          </div>
-          <div style={{ overflow: 'auto', maxHeight: 280, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
-              <thead>
-                <tr style={{ background: sheet.headerBg || '#e2e8f0' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>PK_ID</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. compacta</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Peso</th>
-                  <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. transporte</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(reparto?.filas || preview?.filas || []).map((f) => (
-                  <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
-                    <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace' }}>{f.pk_id}</td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtCantTransporte(f.cant_compacta, 4)}</td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtPesoPct(f.peso)}</td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700 }}>
-                      {f.cant_transporte != null ? fmtCantTransporte(f.cant_transporte) : '—'}
-                    </td>
-                  </tr>
-                ))}
-                {!loadingPreview && !(reparto?.filas || preview?.filas || []).length ? (
-                  <tr>
-                    <td colSpan={4} style={{ padding: 12, color: t.textMuted }}>
-                      Sin PK_ID con cantidad compacta en la selección.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-              {reparto?.ok ? (
-                <tfoot>
-                  <tr style={{ borderTop: `2px solid ${sheet.border}`, fontWeight: 800 }}>
-                    <td style={{ padding: '6px 8px' }} colSpan={3}>Total asignado</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmtCantTransporte(reparto.totalAsignado ?? reparto.total_asignado)}</td>
-                  </tr>
-                </tfoot>
-              ) : null}
-            </table>
-          </div>
-        </div>
+        {fase2Visible ? (
+          <>
+            <SectionTitle t={t}>Fase 2 · Destino de los registros nuevos</SectionTitle>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
+                  1. Capítulo destino
+                </span>
+                <TransporteSelectMenu
+                  value={capituloDestino || capituloOrigen}
+                  onChange={(v) => {
+                    setCapituloDestino(v)
+                    setItemDestino('')
+                  }}
+                  options={capituloOpts}
+                  placeholder="— Selecciona —"
+                  sheet={sheet}
+                  t={t}
+                  allowEmpty={false}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
+                  2. Competencia destino
+                </span>
+                <TransporteSelectMenu
+                  value={competenciaDestino}
+                  onChange={setCompetenciaDestino}
+                  options={competenciaDestinoOpts}
+                  placeholder="(Sin competencia / vacía)"
+                  emptyLabel="(Sin competencia / vacía)"
+                  sheet={sheet}
+                  t={t}
+                  allowEmpty
+                />
+              </label>
+            </div>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 12, minWidth: 0 }}>
+              <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
+                3. Ítem de transporte destino
+              </span>
+              <TransporteSelectMenu
+                value={itemDestino}
+                onChange={setItemDestino}
+                options={itemsDestinoOpts}
+                placeholder="— Selecciona ítem del listado —"
+                sheet={sheet}
+                t={t}
+                allowEmpty
+                emptyLabel="— Selecciona ítem del listado —"
+              />
+            </label>
+
+            <div style={{ marginTop: 14, minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+                Vista previa del reparto
+                {loadingPreview ? ' · actualizando…' : ''}
+              </div>
+              <div style={{ overflow: 'auto', maxHeight: 260, border: `1px solid ${sheet.border}`, borderRadius: 8 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
+                  <thead>
+                    <tr style={{ background: sheet.headerBg || '#e2e8f0' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 8px' }}>PK_ID</th>
+                      <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. compacta</th>
+                      <th style={{ textAlign: 'right', padding: '6px 8px' }}>Peso</th>
+                      <th style={{ textAlign: 'right', padding: '6px 8px' }}>Cant. transporte</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(filasReparto.length ? filasReparto : filasOrigen).map((f) => (
+                      <tr key={f.pk_id} style={{ borderTop: `1px solid ${sheet.border}` }}>
+                        <td style={{ padding: '5px 8px', fontFamily: 'ui-monospace, monospace' }}>{f.pk_id}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtCantTransporte(f.cant_compacta, 4)}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmtPesoPct(f.peso)}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700 }}>
+                          {f.cant_transporte != null ? fmtCantTransporte(f.cant_transporte) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {reparto?.ok ? (
+                    <tfoot>
+                      <tr style={{ borderTop: `2px solid ${sheet.border}`, fontWeight: 800 }}>
+                        <td style={{ padding: '6px 8px' }} colSpan={3}>Total asignado</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                          {fmtCantTransporte(reparto.totalAsignado ?? reparto.total_asignado)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+            </div>
+          </>
+        ) : null}
 
         {compactaCero ? (
           <div style={{ marginTop: 10, color: '#B91C1C', fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
