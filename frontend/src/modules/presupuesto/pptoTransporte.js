@@ -65,15 +65,25 @@ export function repartirTransportePorPk(filas, cantidadReportar) {
 
 /**
  * Clave estable para detectar reportes repetidos.
- * @param {{ capitulo?: unknown, competencia?: unknown, itemsOrigen?: unknown[], itemDestino?: unknown }} sel
+ * Origen: capítulo + ítems. Destino: capítulo + competencia + ítem.
+ * @param {{
+ *   capitulo?: unknown,
+ *   capituloOrigen?: unknown,
+ *   itemsOrigen?: unknown[],
+ *   capituloDestino?: unknown,
+ *   competenciaDestino?: unknown,
+ *   competencia?: unknown,
+ *   itemDestino?: unknown,
+ * }} sel
  */
 export function claveReporteTransporte(sel) {
-  const cap = String(sel?.capitulo ?? '').trim()
-  const comp = String(sel?.competencia ?? '').trim()
+  const capO = String(sel?.capituloOrigen ?? sel?.capitulo ?? '').trim()
+  const capD = String(sel?.capituloDestino ?? capO).trim()
+  const compD = String(sel?.competenciaDestino ?? sel?.competencia ?? '').trim()
   const dest = String(sel?.itemDestino ?? '').trim()
   const origen = [...new Set((sel?.itemsOrigen || []).map((x) => String(x ?? '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'es', { numeric: true }))
-  return `${cap}\x1e${comp}\x1e${origen.join(',')}\x1e${dest}`
+  return `${capO}\x1e${origen.join(',')}\x1e${capD}\x1e${compD}\x1e${dest}`
 }
 
 export function fmtCantTransporte(v, maxFrac = 2) {

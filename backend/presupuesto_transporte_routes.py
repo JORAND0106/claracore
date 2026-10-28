@@ -1,13 +1,16 @@
 """
-Rutas — Reportar transporte (Obra Ejecutada).
+Rutas — Reportar transporte (Obra Ejecutada), popup en dos fases.
 GET  /presupuesto/{contrato_id}/transporte/opciones
 POST /presupuesto/{contrato_id}/transporte/preview
 POST /presupuesto/{contrato_id}/transporte/confirmar
+
+Fase 1 (origen): capítulo + ítems → cantidades (todas las competencias).
+Fase 2 (destino): capítulo/competencia/ítem donde nacen los registros nuevos.
 """
 from __future__ import annotations
 
 import uuid
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -41,22 +44,28 @@ ESTADO_NO_REVISADO = "No Revisado"
 
 
 class TransportePreviewBody(BaseModel):
-    capitulo: str
-    competencia: Optional[str] = ""
+    # Fase 1 — origen
+    capitulo: str  # capítulo de origen
     items_origen: List[str] = Field(default_factory=list)
-    item_destino: Optional[str] = None
     cantidad_reportar: Optional[float] = None
+    # Fase 2 — destino (opcionales en preview temprano)
+    capitulo_destino: Optional[str] = None
+    competencia_destino: Optional[str] = ""
+    item_destino: Optional[str] = None
+    # Legacy (ignorados): competencia de origen ya no se usa
+    competencia: Optional[str] = None
 
 
 class TransporteConfirmarBody(BaseModel):
-    capitulo: str
-    competencia: Optional[str] = ""
+    capitulo: str  # origen
     items_origen: List[str] = Field(default_factory=list)
-    item_destino: str
     cantidad_reportar: float
-    # create | replace | sum
-    modo: str = "create"
+    capitulo_destino: str
+    competencia_destino: Optional[str] = ""
+    item_destino: str
+    modo: str = "create"  # create | replace | sum
     lote_previo_id: Optional[str] = None
+    competencia: Optional[str] = None  # legacy
 
 
 def _assert_puede_reportar(current_user, contrato_id: int) -> None:
@@ -73,28 +82,28 @@ def _assert_puede_reportar(current_user, contrato_id: int) -> None:
 def _fetch_origen_rows(
     contrato_id: int,
     capitulo: str,
-    competencia: str,
     items: List[str],
     current_user,
 ) -> List[dict]:
-    """Fuente combinada OE (presupuesto + SicoeObra) — misma regla que export."""
+    """Todas las competencias del capítulo + ítems (fuente combinada OE)."""
     if not items:
         return []
     return filas_oe_combinadas(
         contrato_id,
         capitulo,
-        competencia,
+        "",
         items,
         current_user,
-        filtrar_competencia=True,
+        filtrar_competencia=False,
     )
 
 
 def _buscar_lote_previo(
     contrato_id: int,
-    capitulo: str,
-    competencia: str,
+    capitulo_origen: str,
     items: List[str],
+    capitulo_destino: str,
+    competencia_destino: str,
     item_destino: str,
 ) -> Optional[dict]:
     try:
@@ -102,15 +111,14 @@ def _buscar_lote_previo(
             supabase.table("presupuesto_transporte_lotes")
             .select(
                 "id, capitulo, competencia, items_origen, item_destino, "
+                "capitulo_origen, capitulo_destino, competencia_destino, "
                 "cantidad_reportada, n_registros, usuario_nombre, created_at, activo"
             )
             .eq("contrato_id", contrato_id)
-            .eq("capitulo", capitulo)
-            .eq("competencia", competencia)
             .eq("item_destino", item_destino)
             .eq("activo", True)
             .order("created_at", desc=True)
-            .limit(30)
+            .limit(50)
             .execute()
             .data
             or []
@@ -121,31 +129,59 @@ def _buscar_lote_previo(
             detail=f"No se pudo consultar lotes de transporte (¿migración aplicada?): {ex}",
         ) from ex
 
-    want = set(items)
+    want_items = set(items)
+    want_cap_o = str(capitulo_origen or "").strip()
+    want_cap_d = str(capitulo_destino or "").strip()
+    want_comp_d = str(competencia_destino or "").strip()
+
     for row in rows:
-        got = set(normalizar_items_origen(row.get("items_origen") or []))
-        if got == want:
+        got_items = set(normalizar_items_origen(row.get("items_origen") or []))
+        if got_items != want_items:
+            continue
+        cap_o = str(row.get("capitulo_origen") or row.get("capitulo") or "").strip()
+        cap_d = str(row.get("capitulo_destino") or row.get("capitulo") or "").strip()
+        comp_d = str(
+            row.get("competencia_destino")
+            if row.get("competencia_destino") is not None
+            else (row.get("competencia") or "")
+        ).strip()
+        if cap_o == want_cap_o and cap_d == want_cap_d and comp_d == want_comp_d:
             return row
     return None
 
 
-def _listado_destino(contrato_id: int, item_destino: str) -> dict:
+def _listado_destino(contrato_id: int, item_destino: str, capitulo_destino: Optional[str] = None) -> dict:
     candidatos = [item_destino]
     if not item_destino.endswith("."):
         candidatos.append(f"{item_destino}.")
+    cap = str(capitulo_destino or "").strip()
     for cand in candidatos:
-        rows = (
+        q = (
             supabase.table("listado_precios")
             .select("item_numero, descripcion, unidad, precio_unitario, capitulo, competencia")
             .eq("contrato_id", contrato_id)
             .eq("item_numero", cand)
-            .limit(5)
-            .execute()
-            .data
-            or []
         )
+        if cap:
+            q = q.eq("capitulo", cap)
+        rows = q.limit(5).execute().data or []
         if rows:
             return rows[0]
+    # Sin filtro de capítulo (ítem único en el listado)
+    if cap:
+        for cand in candidatos:
+            rows = (
+                supabase.table("listado_precios")
+                .select("item_numero, descripcion, unidad, precio_unitario, capitulo, competencia")
+                .eq("contrato_id", contrato_id)
+                .eq("item_numero", cand)
+                .limit(5)
+                .execute()
+                .data
+                or []
+            )
+            if rows:
+                return rows[0]
     raise HTTPException(
         status_code=404,
         detail=f"Ítem destino «{item_destino}» no está en el listado de precios.",
@@ -160,13 +196,16 @@ def _usuario_nombre(current_user) -> str:
 
 
 def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_user) -> dict:
-    capitulo = str(body.capitulo or "").strip()
-    competencia = str(body.competencia or "").strip()
+    capitulo_origen = str(body.capitulo or "").strip()
     items = normalizar_items_origen(body.items_origen)
-    if not capitulo:
+    if not capitulo_origen:
         raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
     if not items:
         raise HTTPException(status_code=422, detail="Seleccione al menos un ítem de origen.")
+
+    capitulo_destino = str(body.capitulo_destino or capitulo_origen).strip()
+    competencia_destino = str(body.competencia_destino or "").strip()
+    item_destino = str(body.item_destino or "").strip() or None
 
     pk_ubic = {}
     try:
@@ -174,7 +213,7 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
     except Exception:
         pk_ubic = {}
 
-    rows = _fetch_origen_rows(contrato_id, capitulo, competencia, items, current_user)
+    rows = _fetch_origen_rows(contrato_id, capitulo_origen, items, current_user)
     filas_pk = agregar_por_pk(rows, pk_ubic)
     total_compacta = round(sum(f["cant_compacta"] for f in filas_pk), 6)
 
@@ -183,22 +222,29 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
         reparto = repartir_transporte_por_pk(filas_pk, body.cantidad_reportar)
 
     destino_meta = None
-    if body.item_destino and str(body.item_destino).strip():
+    if item_destino:
         try:
-            destino_meta = _listado_destino(contrato_id, str(body.item_destino).strip())
+            destino_meta = _listado_destino(contrato_id, item_destino, capitulo_destino)
         except HTTPException:
             destino_meta = None
 
     previo = None
-    if body.item_destino and str(body.item_destino).strip():
+    if item_destino:
         previo = _buscar_lote_previo(
-            contrato_id, capitulo, competencia, items, str(body.item_destino).strip()
+            contrato_id,
+            capitulo_origen,
+            items,
+            capitulo_destino,
+            competencia_destino,
+            item_destino,
         )
 
     return {
-        "capitulo": capitulo,
-        "competencia": competencia,
+        "capitulo": capitulo_origen,
+        "capitulo_origen": capitulo_origen,
         "items_origen": items,
+        "capitulo_destino": capitulo_destino,
+        "competencia_destino": competencia_destino,
         "total_compacta": total_compacta,
         "n_pk": len(filas_pk),
         "filas": filas_pk,
@@ -214,7 +260,7 @@ def opciones_transporte(
     capitulo: str = Query(..., min_length=1),
     current_user=Depends(get_current_user),
 ):
-    """Competencias e ítems de origen del capítulo (fuente combinada OE)."""
+    """Ítems de origen del capítulo (fuente combinada OE; todas las competencias)."""
     _assert_puede_reportar(current_user, contrato_id)
     cap = str(capitulo or "").strip()
     if not cap:
@@ -246,17 +292,21 @@ def confirmar_transporte(
 ):
     _assert_puede_reportar(current_user, contrato_id)
 
-    capitulo = str(body.capitulo or "").strip()
-    competencia = str(body.competencia or "").strip()
+    capitulo_origen = str(body.capitulo or "").strip()
     items = normalizar_items_origen(body.items_origen)
+    capitulo_destino = str(body.capitulo_destino or capitulo_origen).strip()
+    competencia_destino = str(body.competencia_destino or "").strip()
     item_destino = str(body.item_destino or "").strip()
     modo = str(body.modo or "create").strip().lower()
     if modo not in ("create", "replace", "sum"):
         raise HTTPException(status_code=422, detail="modo debe ser create, replace o sum.")
-    if not capitulo or not items or not item_destino:
-        raise HTTPException(status_code=422, detail="Capítulo, ítems de origen e ítem destino son obligatorios.")
+    if not capitulo_origen or not items or not item_destino or not capitulo_destino:
+        raise HTTPException(
+            status_code=422,
+            detail="Capítulo de origen, ítems de origen, capítulo destino e ítem destino son obligatorios.",
+        )
 
-    destino = _listado_destino(contrato_id, item_destino)
+    destino = _listado_destino(contrato_id, item_destino, capitulo_destino)
     try:
         vu = float(destino.get("precio_unitario") or 0)
     except (TypeError, ValueError):
@@ -265,13 +315,15 @@ def confirmar_transporte(
     und = (destino.get("unidad") or "").strip()
     descripcion = (destino.get("descripcion") or "").strip()
     item_num = (destino.get("item_numero") or item_destino).strip()
+    # Capítulo efectivo del registro = destino elegido (o el del listado si coincide).
+    cap_reg = capitulo_destino or str(destino.get("capitulo") or "").strip() or capitulo_origen
 
     pk_ubic = {}
     try:
         pk_ubic = _pk_ids_ubicacion_por_codigo(contrato_id)
     except Exception:
         pk_ubic = {}
-    rows = _fetch_origen_rows(contrato_id, capitulo, competencia, items, current_user)
+    rows = _fetch_origen_rows(contrato_id, capitulo_origen, items, current_user)
     filas_pk = agregar_por_pk(rows, pk_ubic)
     reparto = repartir_transporte_por_pk(filas_pk, body.cantidad_reportar)
     if not reparto.get("ok"):
@@ -282,7 +334,14 @@ def confirmar_transporte(
     if not asignaciones:
         raise HTTPException(status_code=422, detail="No hay PK_ID con asignación mayor a cero.")
 
-    previo = _buscar_lote_previo(contrato_id, capitulo, competencia, items, item_destino)
+    previo = _buscar_lote_previo(
+        contrato_id,
+        capitulo_origen,
+        items,
+        cap_reg,
+        competencia_destino,
+        item_num,
+    )
     if previo and modo == "create":
         raise HTTPException(
             status_code=409,
@@ -306,13 +365,16 @@ def confirmar_transporte(
     lote_prev_id = str(body.lote_previo_id or (previo or {}).get("id") or "").strip() or None
     ids_baja: List[int] = []
 
-    # 1) Crear lote (los registros previos se dan de baja solo tras insert exitoso)
+    # 1) Crear lote
     try:
         supabase.table("presupuesto_transporte_lotes").insert({
             "id": lote_id,
             "contrato_id": contrato_id,
-            "capitulo": capitulo,
-            "competencia": competencia,
+            "capitulo": capitulo_origen,  # legacy / origen
+            "competencia": competencia_destino,  # legacy = destino
+            "capitulo_origen": capitulo_origen,
+            "capitulo_destino": cap_reg,
+            "competencia_destino": competencia_destino,
             "items_origen": items,
             "item_destino": item_num,
             "cantidad_reportada": reparto["total_asignado"],
@@ -327,7 +389,7 @@ def confirmar_transporte(
             detail=f"No se pudo crear el lote de transporte (¿migración aplicada?): {ex}",
         ) from ex
 
-    # 2) Insertar registros (sin id_pol → no bloqueo CAD)
+    # 2) Insertar registros (campos de catálogo = destino; ubicación = origen)
     nuevos: List[dict] = []
     for a in asignaciones:
         cant = float(a["cant_transporte"])
@@ -336,8 +398,8 @@ def confirmar_transporte(
         nuevos.append({
             "contrato_id": contrato_id,
             "tipo_ejecucion": TIPO_OBRA,
-            "capitulo": capitulo,
-            "competencia": competencia,
+            "capitulo": cap_reg,
+            "competencia": competencia_destino,
             "item": item_num,
             "descripcion": descripcion,
             "und": und,
@@ -378,7 +440,6 @@ def confirmar_transporte(
                     except (TypeError, ValueError):
                         pass
         if len(created_ids) < len(nuevos):
-            # Algunos drivers no retornan filas; verificar por lote.
             check = (
                 supabase.table("presupuesto")
                 .select("id")
@@ -394,7 +455,6 @@ def confirmar_transporte(
                     f"Se esperaban {len(nuevos)} registros, hay {len(created_ids)} en el lote."
                 )
     except Exception as ex:
-        # Rollback best-effort: nada del lote nuevo queda persistido.
         try:
             supabase.table("presupuesto").delete().eq("transporte_lote_id", lote_id).execute()
         except Exception:
@@ -405,7 +465,7 @@ def confirmar_transporte(
             pass
         raise HTTPException(status_code=500, detail=f"Error al crear registros de transporte: {ex}") from ex
 
-    # 3) Reemplazo: dar de baja el lote previo solo tras creación exitosa
+    # 3) Reemplazo: baja del lote previo solo tras creación exitosa
     if modo == "replace" and lote_prev_id:
         try:
             prev_regs = (
@@ -452,9 +512,10 @@ def confirmar_transporte(
             {
                 "contrato_id": contrato_id,
                 "modo": modo,
-                "capitulo": capitulo,
-                "competencia": competencia,
+                "capitulo_origen": capitulo_origen,
                 "items_origen": items,
+                "capitulo_destino": cap_reg,
+                "competencia_destino": competencia_destino,
                 "item_destino": item_num,
                 "cantidad_reportada": reparto["total_asignado"],
                 "n_registros": len(created_ids),
