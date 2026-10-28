@@ -152,8 +152,17 @@ def filas_oe_combinadas(
     body = ExportarPresupuestoInformeBody(**body_kwargs)
     merged = _presupuesto_export_merge_sicoe_obra(contrato_id, body, ppto, current_user) or []
 
-    # Capítulo exacto del request (sin mezclar otros capítulos del contrato).
-    merged = [r for r in merged if str(r.get("capitulo") or "").strip() == cap]
+    # Filtrar por capítulo normalizado (misma clave que Dashboard/export OE).
+    try:
+        from main import _dash_norm_capitulo_key_py
+        cap_key = _dash_norm_capitulo_key_py(cap)
+        merged = [
+            r for r in merged
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) == cap_key
+            or str(r.get("capitulo") or "").strip() == cap
+        ]
+    except Exception:
+        merged = [r for r in merged if str(r.get("capitulo") or "").strip() == cap]
 
     if filtrar_competencia:
         # Incluye competencia vacía (export no filtra string vacío).
@@ -186,11 +195,28 @@ def opciones_oe_capitulo(contrato_id: int, capitulo: str, current_user) -> Dict[
         current_user,
         filtrar_competencia=False,
     )
+    try:
+        from main import _dash_norm_capitulo_key_py
+        cap_key = _dash_norm_capitulo_key_py(cap)
+    except Exception:
+        _dash_norm_capitulo_key_py = None  # type: ignore
+        cap_key = None
+
+    def _mismo_capitulo(row_cap: Any) -> bool:
+        s = str(row_cap or "").strip()
+        if s == cap:
+            return True
+        if cap_key and _dash_norm_capitulo_key_py is not None:
+            try:
+                return _dash_norm_capitulo_key_py(row_cap) == cap_key
+            except Exception:
+                return False
+        return False
+
     comps: Set[str] = set()
     items_map: Dict[str, dict] = {}
     for r in rows:
-        # Solo filas del capítulo pedido (evita fugas por normalización).
-        if str(r.get("capitulo") or "").strip() != cap:
+        if not _mismo_capitulo(r.get("capitulo")):
             continue
         try:
             cant = float(r.get("cant_total") or 0)

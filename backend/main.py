@@ -37179,15 +37179,19 @@ def _invalidate_dashboard_financial_caches(contrato_id: int) -> None:
         pass
 
 
-# Reportar transporte: registrar rutas aquí (tras deps) para evitar import circular /
-# NameError si se incluye demasiado temprano — misma causa típica de «Not Found» en cliente.
+# Reportar transporte — rutas en `app` (mismo patrón que subcontratista-redistribucion)
+# para que OpenAPI/proxy las vean y no respondan 404 «Not Found».
 from presupuesto_transporte_routes import (
-    router as presupuesto_transporte_router,
+    TransporteConfirmarBody,
+    TransportePreviewBody,
+    confirmar_transporte as _transporte_confirmar,
+    opciones_transporte as _transporte_opciones,
+    preview_transporte as _transporte_preview,
     register_deps as register_presupuesto_transporte_deps,
 )
+
 register_presupuesto_transporte_deps(
     supabase,
-    get_current_user,
     _require_contract_access,
     _es_desarrollador,
     _cargo_permiso_editar_registros_presupuesto,
@@ -37196,7 +37200,36 @@ register_presupuesto_transporte_deps(
     _invalidate_dashboard_financial_caches,
     registrar_log,
 )
-app.include_router(presupuesto_transporte_router)
+
+
+@app.get("/presupuesto/{contrato_id}/transporte/opciones")
+def presupuesto_transporte_opciones(
+    contrato_id: int,
+    capitulo: str = Query(..., min_length=1),
+    current_user=Depends(get_current_user),
+):
+    """Fase 1: ítems del capítulo con cantidad en OE (presupuesto o SicoeObra)."""
+    return _transporte_opciones(contrato_id, capitulo, current_user)
+
+
+@app.post("/presupuesto/{contrato_id}/transporte/preview")
+def presupuesto_transporte_preview(
+    contrato_id: int,
+    body: TransportePreviewBody,
+    current_user=Depends(get_current_user),
+):
+    """Fase 1: cantidades compactas por PK_ID del capítulo+ítems (todas las competencias)."""
+    return _transporte_preview(contrato_id, body, current_user)
+
+
+@app.post("/presupuesto/{contrato_id}/transporte/confirmar")
+def presupuesto_transporte_confirmar(
+    contrato_id: int,
+    body: TransporteConfirmarBody,
+    current_user=Depends(get_current_user),
+):
+    """Crea registros de transporte en el ítem destino (Fase 2)."""
+    return _transporte_confirmar(contrato_id, body, current_user)
 
 
 def _trim_dashboard_rpc_cache() -> None:

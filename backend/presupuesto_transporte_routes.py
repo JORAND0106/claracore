@@ -1,17 +1,20 @@
 """
-Rutas — Reportar transporte (Obra Ejecutada), popup en dos fases.
-GET  /presupuesto/{contrato_id}/transporte/opciones
-POST /presupuesto/{contrato_id}/transporte/preview
-POST /presupuesto/{contrato_id}/transporte/confirmar
+Lógica HTTP — Reportar transporte (Obra Ejecutada).
 
-Sin import circular de main: dependencias vía register_deps (igual que gráficos).
+Las rutas se registran en main.py con @app.get/@app.post (mismo patrón que
+subcontratista-redistribucion) para que aparezcan en OpenAPI y no den 404.
+
+Endpoints:
+  GET  /presupuesto/{contrato_id}/transporte/opciones
+  POST /presupuesto/{contrato_id}/transporte/preview
+  POST /presupuesto/{contrato_id}/transporte/confirmar
 """
 from __future__ import annotations
 
 import uuid
 from typing import Any, Callable, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from presupuesto_papelera import aplicar_update_baja
@@ -25,14 +28,10 @@ from presupuesto_transporte_fuentes import (
     opciones_oe_capitulo,
 )
 
-router = APIRouter(tags=["presupuesto-transporte"])
-
 TIPO_OBRA = "Obra Ejecutada"
 ESTADO_NO_REVISADO = "No Revisado"
 
-# Inyectados desde main.register_deps
 _supabase: Any = None
-_get_current_user: Optional[Callable] = None
 _require_contract_access: Optional[Callable] = None
 _es_desarrollador: Optional[Callable] = None
 _cargo_permiso_editar: Optional[Callable] = None
@@ -40,6 +39,40 @@ _cargo_permiso_crear: Optional[Callable] = None
 _pk_ids_ubicacion_por_codigo: Optional[Callable] = None
 _invalidate_dashboard_financial_caches: Optional[Callable] = None
 _registrar_log: Optional[Callable] = None
+_deps_ready = False
+
+
+def register_deps(
+    supabase,
+    require_contract_access,
+    es_desarrollador,
+    cargo_permiso_editar_registros_presupuesto,
+    cargo_permiso_crear_registros_presupuesto,
+    pk_ids_ubicacion_por_codigo,
+    invalidate_dashboard_financial_caches,
+    registrar_log,
+) -> None:
+    global _supabase, _require_contract_access, _es_desarrollador
+    global _cargo_permiso_editar, _cargo_permiso_crear
+    global _pk_ids_ubicacion_por_codigo, _invalidate_dashboard_financial_caches
+    global _registrar_log, _deps_ready
+    _supabase = supabase
+    _require_contract_access = require_contract_access
+    _es_desarrollador = es_desarrollador
+    _cargo_permiso_editar = cargo_permiso_editar_registros_presupuesto
+    _cargo_permiso_crear = cargo_permiso_crear_registros_presupuesto
+    _pk_ids_ubicacion_por_codigo = pk_ids_ubicacion_por_codigo
+    _invalidate_dashboard_financial_caches = invalidate_dashboard_financial_caches
+    _registrar_log = registrar_log
+    _deps_ready = True
+
+
+def _ensure_deps() -> None:
+    if not _deps_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de transporte no inicializado en el servidor.",
+        )
 
 
 class TransportePreviewBody(BaseModel):
@@ -73,12 +106,8 @@ def _assert_puede_reportar(current_user, contrato_id: int) -> None:
     raise HTTPException(status_code=403, detail="Sin permiso para editar presupuesto.")
 
 
-def _fetch_origen_rows(
-    contrato_id: int,
-    capitulo: str,
-    items: List[str],
-    current_user,
-) -> List[dict]:
+def _fetch_origen_rows(contrato_id: int, capitulo: str, items: List[str], current_user) -> List[dict]:
+    """Cantidades del ítem/capítulo (todas las competencias): presupuesto o SicoeObra."""
     if not items:
         return []
     return filas_oe_combinadas(
@@ -89,6 +118,30 @@ def _fetch_origen_rows(
         current_user,
         filtrar_competencia=False,
     )
+
+
+def _filas_preview_out(filas_pk: List[dict]) -> List[dict]:
+    """Aplana ubicación para la grilla de Fase 1."""
+    out = []
+    for f in filas_pk or []:
+        ubi = f.get("ubicacion") or {}
+        out.append({
+            "pk_id": f.get("pk_id"),
+            "cant_compacta": f.get("cant_compacta"),
+            "origen": f.get("origen"),
+            "peso": f.get("peso"),
+            "cant_transporte": f.get("cant_transporte"),
+            "civ": ubi.get("civ") or "",
+            "calzada": ubi.get("calzada") or "",
+            "infraestructura": ubi.get("infraestructura") or "",
+            "tramo": ubi.get("tramo") or "",
+            "abs_inicio": ubi.get("abs_inicio"),
+            "abs_final": ubi.get("abs_final"),
+            "no_inicio": ubi.get("no_inicio"),
+            "no_final": ubi.get("no_final"),
+            "ubicacion": ubi,
+        })
+    return out
 
 
 def _buscar_lote_previo(
@@ -174,7 +227,27 @@ def _usuario_nombre(current_user) -> str:
     return full or (current_user.get("email") or "") or str(current_user.get("sub") or "")
 
 
-def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_user) -> dict:
+def opciones_transporte(contrato_id: int, capitulo: str, current_user) -> dict:
+    """Fase 1 auxiliar: ítems con cantidad OE en el capítulo (no ítems de transporte)."""
+    _ensure_deps()
+    _assert_puede_reportar(current_user, contrato_id)
+    cap = str(capitulo or "").strip()
+    if not cap:
+        raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
+    try:
+        return opciones_oe_capitulo(contrato_id, cap, current_user)
+    except Exception as ex:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudieron cargar opciones de transporte: {ex}",
+        ) from ex
+
+
+def preview_transporte(contrato_id: int, body: TransportePreviewBody, current_user) -> dict:
+    """Fase 1: cantidades del capítulo+ítems (presupuesto o SicoeObra)."""
+    _ensure_deps()
+    _assert_puede_reportar(current_user, contrato_id)
+
     capitulo_origen = str(body.capitulo or "").strip()
     items = normalizar_items_origen(body.items_origen)
     if not capitulo_origen:
@@ -199,6 +272,14 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
     reparto = None
     if body.cantidad_reportar is not None:
         reparto = repartir_transporte_por_pk(filas_pk, body.cantidad_reportar)
+        if reparto and reparto.get("ok"):
+            # fusionar peso/cant_transporte en filas de salida
+            by_pk = {f["pk_id"]: f for f in reparto.get("filas") or []}
+            for f in filas_pk:
+                r = by_pk.get(f["pk_id"])
+                if r:
+                    f["peso"] = r.get("peso")
+                    f["cant_transporte"] = r.get("cant_transporte")
 
     destino_meta = None
     if item_destino:
@@ -219,6 +300,7 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
         )
 
     return {
+        "ok": True,
         "capitulo": capitulo_origen,
         "capitulo_origen": capitulo_origen,
         "items_origen": items,
@@ -226,75 +308,15 @@ def _build_preview_core(contrato_id: int, body: TransportePreviewBody, current_u
         "competencia_destino": competencia_destino,
         "total_compacta": total_compacta,
         "n_pk": len(filas_pk),
-        "filas": filas_pk,
+        "filas": _filas_preview_out(filas_pk),
         "reparto": reparto,
         "item_destino": destino_meta,
         "reporte_previo": previo,
     }
 
 
-def register_deps(
-    supabase,
-    get_current_user,
-    require_contract_access,
-    es_desarrollador,
-    cargo_permiso_editar_registros_presupuesto,
-    cargo_permiso_crear_registros_presupuesto,
-    pk_ids_ubicacion_por_codigo,
-    invalidate_dashboard_financial_caches,
-    registrar_log,
-) -> None:
-    """Inyecta deps desde main y registra las rutas (evita import circular)."""
-    global _supabase, _get_current_user, _require_contract_access
-    global _es_desarrollador, _cargo_permiso_editar, _cargo_permiso_crear
-    global _pk_ids_ubicacion_por_codigo, _invalidate_dashboard_financial_caches, _registrar_log
-    _supabase = supabase
-    _get_current_user = get_current_user
-    _require_contract_access = require_contract_access
-    _es_desarrollador = es_desarrollador
-    _cargo_permiso_editar = cargo_permiso_editar_registros_presupuesto
-    _cargo_permiso_crear = cargo_permiso_crear_registros_presupuesto
-    _pk_ids_ubicacion_por_codigo = pk_ids_ubicacion_por_codigo
-    _invalidate_dashboard_financial_caches = invalidate_dashboard_financial_caches
-    _registrar_log = registrar_log
-
-    @router.get("/presupuesto/{contrato_id}/transporte/opciones")
-    def opciones_transporte(
-        contrato_id: int,
-        capitulo: str = Query(..., min_length=1),
-        current_user=Depends(get_current_user),
-    ):
-        _assert_puede_reportar(current_user, contrato_id)
-        cap = str(capitulo or "").strip()
-        if not cap:
-            raise HTTPException(status_code=422, detail="Seleccione un capítulo.")
-        try:
-            return opciones_oe_capitulo(contrato_id, cap, current_user)
-        except Exception as ex:
-            raise HTTPException(
-                status_code=500,
-                detail=f"No se pudieron cargar opciones de transporte: {ex}",
-            ) from ex
-
-    @router.post("/presupuesto/{contrato_id}/transporte/preview")
-    def preview_transporte(
-        contrato_id: int,
-        body: TransportePreviewBody,
-        current_user=Depends(get_current_user),
-    ):
-        _assert_puede_reportar(current_user, contrato_id)
-        return _build_preview_core(contrato_id, body, current_user)
-
-    @router.post("/presupuesto/{contrato_id}/transporte/confirmar")
-    def confirmar_transporte(
-        contrato_id: int,
-        body: TransporteConfirmarBody,
-        current_user=Depends(get_current_user),
-    ):
-        return _confirmar_transporte_impl(contrato_id, body, current_user)
-
-
-def _confirmar_transporte_impl(contrato_id: int, body: TransporteConfirmarBody, current_user):
+def confirmar_transporte(contrato_id: int, body: TransporteConfirmarBody, current_user) -> dict:
+    _ensure_deps()
     _assert_puede_reportar(current_user, contrato_id)
 
     capitulo_origen = str(body.capitulo or "").strip()
