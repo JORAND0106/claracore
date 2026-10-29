@@ -4,7 +4,11 @@ import { fmtMoneySolicitud as fmtMoney, useAlmacenApi, useAlmacenTheme } from '.
 
 /**
  * Proveedor de la cotización a comprar. Por defecto la ganadora.
- * Lista solo proveedores que cotizaron ese insumo. Las cifras dependen del rol.
+ * Lista todos los proveedores que cotizaron ese insumo. Las cifras dependen del rol.
+ *
+ * Causa del bug «sola cotización»: mientras cargaba (ofertas=[]) se trataba como
+ * única (`length <= 1`), se marcaba readOnly y se mostraba el mensaje aunque hubiera
+ * varias cotizaciones. Ahora se distingue cargando / error / lista real.
  */
 export default function ProveedorOfertaField({
   insumoId,
@@ -17,6 +21,8 @@ export default function ProveedorOfertaField({
   const ui = useAlmacenTheme()
   const inputRef = useRef(null)
   const [ofertas, setOfertas] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
   const [menuPos, setMenuPos] = useState(null)
@@ -24,14 +30,19 @@ export default function ProveedorOfertaField({
   useEffect(() => {
     if (!insumoId) {
       setOfertas([])
+      setLoading(false)
+      setLoadError('')
       return undefined
     }
     let cancel = false
+    setLoading(true)
+    setLoadError('')
     api.listOfertasProveedorInsumo(insumoId)
       .then((r) => {
         if (cancel) return
-        const list = Array.isArray(r?.ofertas) ? r.ofertas : []
+        const list = Array.isArray(r?.ofertas) ? r.ofertas : (Array.isArray(r) ? r : [])
         setOfertas(list)
+        setLoading(false)
         const misma = value
           && Number(value.insumo_id) === Number(insumoId)
           && (value.proveedor_id || value.proveedor_nombre)
@@ -40,8 +51,11 @@ export default function ProveedorOfertaField({
           if (gan) onChange?.({ ...gan, insumo_id: Number(insumoId) })
         }
       })
-      .catch(() => {
-        if (!cancel) setOfertas([])
+      .catch((e) => {
+        if (cancel) return
+        setOfertas([])
+        setLoading(false)
+        setLoadError(e?.message || 'No se pudieron cargar las cotizaciones.')
       })
     return () => { cancel = true }
     // value/onChange se leen al cambiar el insumo; no deben re-disparar la carga.
@@ -52,7 +66,11 @@ export default function ProveedorOfertaField({
     setQ(value?.proveedor_nombre || '')
   }, [value?.proveedor_nombre, value?.numero, value?.proveedor_id])
 
-  const unica = ofertas.length <= 1
+  const listaLista = !loading && !loadError
+  const unica = listaLista && ofertas.length === 1
+  const sinOfertas = listaLista && ofertas.length === 0
+  const puedeAbrirLista = listaLista && ofertas.length > 1
+
   const filtradas = useMemo(() => {
     const n = q.trim().toLowerCase()
     const actual = String(value?.proveedor_nombre || '').trim().toLowerCase()
@@ -82,7 +100,7 @@ export default function ProveedorOfertaField({
   }, [filtradas.length])
 
   useLayoutEffect(() => {
-    if (!open || unica) {
+    if (!open || !puedeAbrirLista) {
       setMenuPos(null)
       return undefined
     }
@@ -93,32 +111,41 @@ export default function ProveedorOfertaField({
       window.removeEventListener('scroll', updateMenuPos, true)
       window.removeEventListener('resize', updateMenuPos)
     }
-  }, [open, unica, updateMenuPos])
+  }, [open, puedeAbrirLista, updateMenuPos])
 
   const etiquetaValor = (o) => {
     if (!verEconomicos || o?.valor == null || o.valor === '') return null
     return fmtMoney(o.valor)
   }
 
+  let title = 'Proveedores que cotizaron este insumo'
+  if (loading) title = 'Cargando cotizaciones…'
+  else if (loadError) title = loadError
+  else if (unica) title = 'Este insumo tiene una sola cotización'
+  else if (sinOfertas) title = 'Este insumo no tiene cotizaciones registradas'
+
   return (
     <div style={{ position: 'relative', minWidth: 0 }} data-testid="revision-linea-proveedor">
       <input
         ref={inputRef}
         style={{ ...ui.input, width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: 'var(--cc-xs)', height: 30 }}
-        value={q}
-        disabled={disabled || !insumoId}
-        readOnly={unica}
+        value={loading ? (q || 'Cargando…') : q}
+        disabled={disabled || !insumoId || loading}
+        readOnly={unica || sinOfertas || Boolean(loadError)}
         placeholder={insumoId ? 'Proveedor de la cotización' : 'Primero elija el insumo'}
         aria-label="Proveedor"
-        title={unica ? 'Este insumo tiene una sola cotización' : 'Proveedores que cotizaron este insumo'}
+        title={title}
+        data-unica={unica ? 'true' : 'false'}
+        data-loading={loading ? 'true' : 'false'}
         onChange={(e) => {
+          if (!puedeAbrirLista) return
           setQ(e.target.value)
           setOpen(true)
         }}
-        onFocus={() => { if (!unica) setOpen(true) }}
+        onFocus={() => { if (puedeAbrirLista) setOpen(true) }}
         onBlur={() => { setTimeout(() => setOpen(false), 160) }}
       />
-      {(value?.numero || etiquetaValor(value)) && (
+      {(value?.numero || etiquetaValor(value)) && !loading && (
         <div style={{ marginTop: 2, fontSize: 10, color: ui.textMuted, lineHeight: 1.3 }}>
           {[
             value?.numero ? `Cot. ${value.numero}` : null,
@@ -126,7 +153,15 @@ export default function ProveedorOfertaField({
           ].filter(Boolean).join(' · ')}
         </div>
       )}
-      {open && !unica && menuPos && typeof document !== 'undefined' && createPortal(
+      {unica && (
+        <div
+          data-testid="revision-linea-proveedor-unica"
+          style={{ marginTop: 2, fontSize: 10, color: ui.textMuted, lineHeight: 1.3 }}
+        >
+          Este insumo tiene una sola cotización
+        </div>
+      )}
+      {open && puedeAbrirLista && menuPos && typeof document !== 'undefined' && createPortal(
         <div
           data-testid="revision-linea-proveedor-lista"
           style={{

@@ -389,10 +389,11 @@ export function SemaforoDot({ estado }) {
   )
 }
 
+/** Cantidades en pantalla: 2 decimales. El cálculo y lo guardado conservan precisión completa. */
 export function fmtCant(n) {
   const v = Number(n)
   if (!Number.isFinite(v)) return '—'
-  return v.toLocaleString('es-CO', { maximumFractionDigits: 4 })
+  return v.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** Formato placa vehículo: AAA-000 */

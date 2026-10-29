@@ -25,7 +25,7 @@ const COLS = [
   { key: 'ubi', abbr: 'UBIC.', tip: 'Abscisa, tramo, PK-ID y mapa', width: 64, align: 'center' },
   { key: 'saldos', abbr: 'SALDOS', tip: 'Saldo negociado y saldo de presupuesto, en cantidades', width: 72, align: 'center' },
   { key: 'est', abbr: 'EST.', tip: 'Validación de la línea: Aprobado, Rechazado o Pendiente. No es el estado de la solicitud ni el de la orden de compra.', width: 88 },
-  { key: 'traz', abbr: 'TRAZ.', tip: 'Trazabilidad de esta línea: insumo, observación y recorrido.', width: 64 },
+  { key: 'traz', abbr: 'TRAZ.', tip: 'Un icono por fila. Si agrupa varios sectores, abre la trazabilidad de todos.', width: 64 },
 ]
 
 function cellBase(ui, { align = 'left', mono = false } = {}) {
@@ -411,15 +411,13 @@ export default function SolicitudMaterialesExcelTable({
                       style={{ ...cellBase(ui, { align: 'center' }), overflow: 'visible' }}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {fila.items.map((row) => (
-                        <LineaTrazabilidadButton
-                          key={row.id}
-                          token={token}
-                          itemId={row.id}
-                          ui={ui}
-                          compact
-                        />
-                      ))}
+                      <LineaTrazabilidadButton
+                        token={token}
+                        itemId={fila.items[0]?.id}
+                        itemIds={ids}
+                        ui={ui}
+                        compact
+                      />
                     </td>
                   </tr>
                 </Fragment>

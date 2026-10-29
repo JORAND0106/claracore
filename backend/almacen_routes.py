@@ -36,6 +36,7 @@ from almacen_insumos_service import (
 from almacen_solicitud_tareas import programar_tareas_tras_guardar, reintentar_tareas_solicitud
 from almacen_permissions import (
     es_contratista_gerencial,
+    puede_cambiar_proveedor_linea_aprobada,
     puede_ver_valores_economicos_almacen,
     require_cambiar_proveedor_linea_aprobada,
     require_acceso_ui_modulo_almacen,
@@ -263,11 +264,14 @@ class MapearItemGerencialBody(BaseModel):
 class MapearBloqueBody(BaseModel):
     item_ids: List[int] = Field(..., min_length=1)
     insumo_id: int = Field(..., gt=0)
+    cantidad: Optional[float] = Field(None, gt=0)
     valor_compra_unitario: Optional[float] = Field(None, ge=0)
     vlr_unitario_cobro: Optional[float] = Field(None, ge=0)
     proveedor_seleccionado_id: Optional[int] = None
     proveedor_seleccionado_nombre: Optional[str] = None
     cotizacion_numero_seleccionada: Optional[str] = None
+    # Revisión masiva: solo líneas del mismo insumo (no aplica a «Asignar insumo»).
+    requerir_mismo_insumo: bool = False
 
 
 class AprobarBloqueBody(BaseModel):
@@ -392,6 +396,18 @@ class CambiarProveedorLineaBody(BaseModel):
     proveedor_seleccionado_id: Optional[int] = None
     proveedor_seleccionado_nombre: Optional[str] = None
     cotizacion_numero_seleccionada: Optional[str] = None
+
+
+class CambiarProveedorBloqueBody(BaseModel):
+    item_ids: List[int]
+    proveedor_seleccionado_id: Optional[int] = None
+    proveedor_seleccionado_nombre: Optional[str] = None
+    cotizacion_numero_seleccionada: Optional[str] = None
+    confirmar_aprobadas: bool = False
+
+
+class DeshacerProveedorBloqueBody(BaseModel):
+    confirmar: bool = False
 
 
 class ReenviarOcBody(BaseModel):
@@ -1389,6 +1405,157 @@ def route_mapear_item_gerencial(
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/proveedor-bloque/vista-previa")
+def route_vista_previa_proveedor_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    body: CambiarProveedorBloqueBody,
+    current_user=Depends(get_current_user),
+):
+    """Ofertas y totales para cambiar proveedor de un solo insumo (varias líneas)."""
+    from almacen_proveedor_bloque import vista_previa_cambio_proveedor
+
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_almacen(current_user, "editar")
+        or puede_cambiar_proveedor_linea_aprobada(current_user)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para cambiar el proveedor de las líneas.",
+        )
+    try:
+        return vista_previa_cambio_proveedor(
+            contrato_id,
+            solicitud_id,
+            body.item_ids,
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/proveedor-bloque")
+def route_cambiar_proveedor_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    body: CambiarProveedorBloqueBody,
+    current_user=Depends(get_current_user),
+):
+    """Cambia el proveedor de todas las líneas de un mismo insumo. Todo o nada."""
+    from almacen_proveedor_bloque import ACCION_CAMBIO, cambiar_proveedor_bloque
+
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_almacen(current_user, "editar")
+        or puede_cambiar_proveedor_linea_aprobada(current_user)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para cambiar el proveedor de las líneas.",
+        )
+    try:
+        out = cambiar_proveedor_bloque(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            body.item_ids,
+            {
+                "proveedor_seleccionado_id": body.proveedor_seleccionado_id,
+                "proveedor_seleccionado_nombre": body.proveedor_seleccionado_nombre,
+                "cotizacion_numero_seleccionada": body.cotizacion_numero_seleccionada,
+            },
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+            confirmar_aprobadas=bool(body.confirmar_aprobadas),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+    antes = {"lineas": out.get("antes") or []}
+    despues = {"lineas": out.get("despues") or []}
+    if not puede_ver_valores_economicos_almacen(current_user):
+        for lado in (antes["lineas"], despues["lineas"]):
+            for row in lado:
+                if isinstance(row, dict):
+                    row.pop("valor_compra_unitario", None)
+    log_almacen(
+        current_user,
+        ACCION_CAMBIO,
+        "solicitud",
+        solicitud_id,
+        {
+            "ejecucion_id": out.get("ejecucion_id"),
+            "insumo_id": out.get("insumo_id"),
+            "lineas_cambiadas": out.get("lineas_cambiadas"),
+            "lineas_en_oc": out.get("lineas_en_oc"),
+            "proveedor_nuevo_nombre": out.get("proveedor_nuevo_nombre"),
+        },
+        valor_anterior=antes,
+        valor_nuevo=despues,
+    )
+    return out
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/proveedor-bloque/deshacer/vista-previa")
+def route_vista_previa_deshacer_proveedor(
+    contrato_id: int,
+    solicitud_id: int,
+    current_user=Depends(get_current_user),
+):
+    from almacen_proveedor_bloque import vista_previa_deshacer_proveedor
+
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_almacen(current_user, "editar")
+        or puede_cambiar_proveedor_linea_aprobada(current_user)
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para deshacer el cambio de proveedor.")
+    try:
+        return vista_previa_deshacer_proveedor(contrato_id, solicitud_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/proveedor-bloque/deshacer")
+def route_deshacer_proveedor_bloque(
+    contrato_id: int,
+    solicitud_id: int,
+    body: DeshacerProveedorBloqueBody,
+    current_user=Depends(get_current_user),
+):
+    from almacen_proveedor_bloque import ACCION_DESHACER, ejecutar_deshacer_proveedor
+
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_almacen(current_user, "editar")
+        or puede_cambiar_proveedor_linea_aprobada(current_user)
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para deshacer el cambio de proveedor.")
+    try:
+        out = ejecutar_deshacer_proveedor(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            confirmar=bool(body.confirmar),
+            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    log_almacen(
+        current_user,
+        ACCION_DESHACER,
+        "solicitud",
+        solicitud_id,
+        {
+            "lineas_revertidas": out.get("lineas_revertidas"),
+            "proveedor_volver": out.get("proveedor_volver"),
+        },
+        valor_anterior={"lineas": out.get("antes") or []},
+        valor_nuevo=None,
+    )
+    return out
 
 
 @router.patch("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/proveedor")
