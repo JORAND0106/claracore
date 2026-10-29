@@ -6298,6 +6298,104 @@ def rechazar_lineas_seleccion(
     return sol
 
 
+def revocar_aprobacion_lineas(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    item_ids: List[int],
+    *,
+    confirmar: bool = False,
+) -> dict:
+    """
+    Devuelve a pendiente las líneas aprobadas seleccionadas.
+    Todo o nada. No toca líneas que ya están en una OC.
+    """
+    if not confirmar:
+        raise ValueError("Confirme antes de revocar la aprobación de las líneas.")
+    _exigir_agrupacion_libre(contrato_id, solicitud_id, user_id)
+    sb = _sb()
+    head = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
+    if head.get("estado") not in ("enviada", "aprobada"):
+        raise ValueError(
+            "Solo se puede revocar la aprobación en solicitudes enviadas o reabiertas."
+        )
+    ids: List[int] = []
+    for raw in item_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        raise ValueError("Seleccione al menos una línea aprobada.")
+
+    items = (
+        sb.table("almacen_solicitud_item")
+        .select("id, estado_validacion, numero_linea")
+        .eq("solicitud_id", int(solicitud_id))
+        .execute()
+        .data
+        or []
+    )
+    por_id = {int(it["id"]): it for it in items if it.get("id")}
+    ajenas = [i for i in ids if i not in por_id]
+    if ajenas:
+        raise ValueError(
+            "Hay líneas seleccionadas que no pertenecen a esta solicitud. "
+            "No se revocó ninguna."
+        )
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    en_oc = (
+        _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+        if ocs else set()
+    )
+    en_orden = [i for i in ids if i in en_oc]
+    if en_orden:
+        nums = []
+        for i in en_orden[:5]:
+            n = (por_id.get(i) or {}).get("numero_linea")
+            nums.append(str(n if n is not None else i))
+        detalle = ", ".join(nums)
+        mas = f" y {len(en_orden) - 5} más" if len(en_orden) > 5 else ""
+        raise ValueError(
+            "No se puede revocar la aprobación: hay líneas seleccionadas que ya "
+            f"están en una orden de compra (línea(s) {detalle}{mas}). "
+            "No se revocó ninguna."
+        )
+
+    no_aprobadas = []
+    for i in ids:
+        ev = ((por_id.get(i) or {}).get("estado_validacion") or "pendiente").strip().lower()
+        if ev != "aprobado":
+            no_aprobadas.append(i)
+    if no_aprobadas:
+        raise ValueError(
+            "Solo se puede revocar la aprobación de líneas ya aprobadas. "
+            f"{len(no_aprobadas)} de la selección no está(n) aprobada(s). "
+            "No se revocó ninguna."
+        )
+
+    snapshots = [
+        {
+            "item_id": i,
+            "numero_linea": (por_id.get(i) or {}).get("numero_linea"),
+            "estado_validacion": "aprobado",
+        }
+        for i in ids
+    ]
+    sb.table("almacen_solicitud_item").update({
+        "estado_validacion": "pendiente",
+    }).in_("id", ids).execute()
+    _sincronizar_titulo_solicitud(sb, solicitud_id)
+    sol = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    return {
+        "solicitud": sol,
+        "lineas_revocadas": ids,
+        "lineas": len(ids),
+        "antes": snapshots,
+    }
+
+
 def _trozos_ids(ids: List[int], size: int = 80):
     for i in range(0, len(ids), size):
         yield ids[i:i + size]

@@ -30,7 +30,9 @@ import {
   motivoAprobacionNoDisponible,
   puedeAbrirRevisionLinea,
   puedeCambiarProveedorBloque,
+  puedeRevocarAprobacion,
   resumenProveedoresSolicitud,
+  seleccionRevocableAprobacion,
   seleccionUnSoloInsumo,
   totalesCompraSolicitud,
   textoFilasMismoInsumo,
@@ -114,7 +116,10 @@ export default function SolicitudDetalleModal({
   const [deshacerProv, setDeshacerProv] = useState(null)
   const [deshacerProvError, setDeshacerProvError] = useState('')
   const [avisoDeshacerProv, setAvisoDeshacerProv] = useState('')
+  const [deshacerInfo, setDeshacerInfo] = useState(null)
   const [confirmarAprobadasProv, setConfirmarAprobadasProv] = useState(null)
+  const [revocarSel, setRevocarSel] = useState(null)
+  const [avisoRevocar, setAvisoRevocar] = useState('')
 
   // El título de la fila queda en un tooltip institucional. Al abrir el popup
   // ese recuadro se queda encima de la grilla y se corta. Se cierra al montar.
@@ -181,6 +186,12 @@ export default function SolicitudDetalleModal({
     return () => clearTimeout(tmr)
   }, [avisoDeshacerProv])
 
+  useEffect(() => {
+    if (!avisoRevocar) return undefined
+    const tmr = setTimeout(() => setAvisoRevocar(''), 6000)
+    return () => clearTimeout(tmr)
+  }, [avisoRevocar])
+
   const items = sol?.items || []
   const puedeEscribir = puedeEditarSolicitudFormAlmacen(permisos)
   const editable = Boolean(puedeEscribir && solicitudAlmacenEditable(sol))
@@ -201,11 +212,16 @@ export default function SolicitudDetalleModal({
   )
   const puedeAsignar = Boolean(permisos?.editar)
   const puedeCambiarProv = puedeCambiarProveedorBloque(permisos)
-  const puedeSeleccionar = puedeAsignar || puedeValidar || puedeCambiarProv
+  const puedeRevocar = puedeRevocarAprobacion(permisos)
+  const puedeSeleccionar = puedeAsignar || puedeValidar || puedeCambiarProv || puedeRevocar
   const puedeRechazarCompleta = solicitudPuedeRechazarCompleta(sol, permisos)
   const selUnInsumo = useMemo(
     () => seleccionUnSoloInsumo(items, selIds),
     [items, selIds],
+  )
+  const selRevocar = useMemo(
+    () => seleccionRevocableAprobacion(items, selIds, sol),
+    [items, selIds, sol],
   )
   const puedeReabrir = solicitudPuedeReabrirOc(sol, permisos)
   const reabrirDisponible = puedeReabrir && typeof onReabrirOc === 'function'
@@ -398,6 +414,27 @@ export default function SolicitudDetalleModal({
     (lineas || []).map((it) => it?.id).filter((id) => id != null)
   )
 
+  const refrescarDeshacerInfo = useCallback(async () => {
+    if (!sol?.id || !puedeCambiarProv) {
+      setDeshacerInfo(null)
+      return
+    }
+    try {
+      const vista = await api.vistaPreviaDeshacerProveedorBloque(sol.id)
+      setDeshacerInfo(vista)
+    } catch {
+      setDeshacerInfo({
+        puede: false,
+        resumen: 'No se pudo comprobar si hay un cambio de proveedor para deshacer.',
+        ayuda: 'No se pudo comprobar si hay un cambio de proveedor para deshacer.',
+      })
+    }
+  }, [api, sol?.id, puedeCambiarProv])
+
+  useEffect(() => {
+    void refrescarDeshacerInfo()
+  }, [refrescarDeshacerInfo])
+
   const abrirCambiarProveedor = async () => {
     if (!sol || !puedeCambiarProv) return
     const sel = seleccionUnSoloInsumo(items, selIds)
@@ -441,6 +478,7 @@ export default function SolicitudDetalleModal({
       onUpdated?.(r?.solicitud || r)
       publicarCambioAlmacen(contratoId, { origen: 'cambiar-proveedor-bloque' })
       void reload({ silent: true })
+      void refrescarDeshacerInfo()
     } catch (e) {
       const msg = e.message || 'No se pudo cambiar el proveedor.'
       if (/aprobad/i.test(msg) && !confirmarAprobadas) {
@@ -455,11 +493,16 @@ export default function SolicitudDetalleModal({
 
   const abrirDeshacerProveedor = async () => {
     if (!sol || !puedeCambiarProv) return
+    if (deshacerInfo && !deshacerInfo.puede) {
+      setError(deshacerInfo.resumen || deshacerInfo.ayuda || 'No hay nada que deshacer.')
+      return
+    }
     setBusy(true)
     setDeshacerProvError('')
     setError('')
     try {
       const vista = await api.vistaPreviaDeshacerProveedorBloque(sol.id)
+      setDeshacerInfo(vista)
       setDeshacerProv({ vista })
     } catch (e) {
       setError(e.message || 'No se pudo preparar el deshacer.')
@@ -484,8 +527,48 @@ export default function SolicitudDetalleModal({
       onUpdated?.(r?.solicitud || r)
       publicarCambioAlmacen(contratoId, { origen: 'deshacer-proveedor-bloque' })
       void reload({ silent: true })
+      void refrescarDeshacerInfo()
     } catch (e) {
       setDeshacerProvError(e.message || 'No se pudo deshacer.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pedirRevocarAprobacion = () => {
+    if (!sol || !puedeRevocar) return
+    if (!selRevocar.ok) {
+      setError(selRevocar.motivo)
+      return
+    }
+    setError('')
+    setRevocarSel({
+      ids: selRevocar.itemIds,
+      n: selRevocar.itemIds.length,
+    })
+  }
+
+  const confirmarRevocarAprobacion = async () => {
+    if (!sol || !revocarSel) return
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.revocarAprobacionLineas(sol.id, {
+        item_ids: revocarSel.ids,
+        confirmar: true,
+      })
+      if (r?.solicitud) setSol(r.solicitud)
+      else if (r && r.items) setSol(r)
+      setRevocarSel(null)
+      setSelIds(new Set())
+      setAvisoRevocar(
+        `Se revocó la aprobación de ${r?.lineas ?? revocarSel.ids.length} línea(s). Quedaron en Pendiente.`,
+      )
+      onUpdated?.(r?.solicitud || r)
+      publicarCambioAlmacen(contratoId, { origen: 'revocar-aprobacion' })
+      void reload({ silent: true })
+    } catch (e) {
+      setError(e.message || 'No se pudo revocar la aprobación.')
     } finally {
       setBusy(false)
     }
@@ -1159,12 +1242,29 @@ export default function SolicitudDetalleModal({
                         <button
                           type="button"
                           data-testid="deshacer-proveedor-seleccion"
-                          style={ui.btnSecondary}
-                          disabled={busy}
-                          title="Deshacer el último cambio de proveedor de esta solicitud"
+                          style={{
+                            ...ui.btnSecondary,
+                            padding: '4px 8px',
+                            minWidth: 36,
+                            minHeight: 36,
+                            lineHeight: 1,
+                            fontSize: '1.15rem',
+                            opacity: (deshacerInfo && !deshacerInfo.puede) ? 0.45 : 1,
+                          }}
+                          disabled={busy || Boolean(deshacerInfo && !deshacerInfo.puede)}
+                          title={
+                            deshacerInfo?.ayuda
+                            || deshacerInfo?.resumen
+                            || 'Deshacer el último cambio de proveedor de esta solicitud'
+                          }
+                          aria-label={
+                            deshacerInfo?.ayuda
+                            || deshacerInfo?.resumen
+                            || 'Deshacer el último cambio de proveedor'
+                          }
                           onClick={() => { void abrirDeshacerProveedor() }}
                         >
-                          Deshacer
+                          ↶
                         </button>
                       )}
                       {puedeValidar && (
@@ -1175,6 +1275,24 @@ export default function SolicitudDetalleModal({
                           onClick={() => { void aprobarLineas(items.filter((it) => selIds.has(it.id))) }}
                         >
                           Aprobar selección
+                        </button>
+                      )}
+                      {puedeRevocar && (
+                        <button
+                          type="button"
+                          data-testid="revocar-aprobacion-seleccion"
+                          style={ui.btnSecondary}
+                          disabled={busy || selIds.size === 0 || !selRevocar.ok}
+                          title={
+                            selIds.size === 0
+                              ? 'Seleccione líneas aprobadas para revocar la aprobación'
+                              : (selRevocar.ok
+                                ? `Revocar aprobación de ${selRevocar.itemIds.length} línea(s) → Pendiente`
+                                : selRevocar.motivo)
+                          }
+                          onClick={pedirRevocarAprobacion}
+                        >
+                          Revocar aprobación
                         </button>
                       )}
                       {puedeValidar && (
@@ -1214,6 +1332,19 @@ export default function SolicitudDetalleModal({
                       }}
                     >
                       {avisoDeshacerProv}
+                    </div>
+                  )}
+                  {avisoRevocar && (
+                    <div
+                      data-testid="aviso-revocar-aprobacion"
+                      style={{
+                        ...estiloAvisoAlmacen(contraste, 'info'),
+                        marginBottom: 8,
+                        fontSize: 'var(--cc-xs)',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {avisoRevocar}
                     </div>
                   )}
                 <SolicitudMaterialesExcelTable
@@ -1580,6 +1711,27 @@ export default function SolicitudDetalleModal({
           }}
           onConfirm={() => { void ejecutarDeshacerProveedor() }}
         />
+      )}
+
+      {revocarSel && (
+        <CcConfirmModal
+          theme={t}
+          tipo="warn"
+          titulo="Revocar aprobación"
+          confirmar="Sí, revocar"
+          cancelar="Cancelar"
+          procesando={busy}
+          onCancel={() => !busy && setRevocarSel(null)}
+          onConfirm={() => { void confirmarRevocarAprobacion() }}
+        >
+          <div data-testid="revocar-aprobacion-aviso">
+            {`Se devolverá a Pendiente ${revocarSel.n} línea(s) aprobada(s).`}
+            <div style={{ marginTop: 8 }}>
+              Esta acción no se puede deshacer con el icono ↶ (ese solo aplica al cambio de proveedor).
+            </div>
+            <div style={{ marginTop: 8, opacity: 0.9 }}>¿Desea continuar?</div>
+          </div>
+        </CcConfirmModal>
       )}
 
       {rechazoSel && (

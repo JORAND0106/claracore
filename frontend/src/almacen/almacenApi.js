@@ -357,6 +357,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body || {}),
       }).then(parseJson),
 
+    revocarAprobacionLineas: (solicitudId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/revocar-aprobacion`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
     buscarDestinatariosMensaje: (q) => {
       const params = new URLSearchParams()
       if (q) params.set('q', q)
