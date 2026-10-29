@@ -306,6 +306,7 @@ import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
 import ModuloRrhh, { accesoRrhh } from './modules/rrhh'
 import EmojiPicker from './EmojiPicker'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
+import DeployVersionBadge from './components/DeployVersionBadge'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import CompetenciaSelect from './components/CompetenciaSelect'
 import CcConfirmModal from './components/CcConfirmModal'
@@ -27093,6 +27094,7 @@ export default function App() {
           initialPaso={olvideDeepLink?.paso || 'email'}
         />
       )}
+      <DeployVersionBadge t={t} />
       <DevPanelTrigger onClick={() => setDevPanelView('gate')} />
       {devPanelView === 'gate' && (
         <DevPanelGate

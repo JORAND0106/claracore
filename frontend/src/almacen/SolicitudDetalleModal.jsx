@@ -15,6 +15,7 @@ import { estadoProveedoresSolicitud, gruposProveedorPendientes } from './ocProve
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import SolicitudLineaRevisionModal from './SolicitudLineaRevisionModal'
 import SolicitudMaterialesExcelTable from './SolicitudMaterialesExcelTable'
+import CambiarProveedorBloqueModal, { DeshacerProveedorBloqueModal } from './CambiarProveedorBloqueModal'
 import InsumoSearchTable from './InsumoSearchTable'
 import ProveedorOfertaField from './ProveedorOfertaField'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
@@ -28,7 +29,9 @@ import {
   estadoValidacionItem,
   motivoAprobacionNoDisponible,
   puedeAbrirRevisionLinea,
+  puedeCambiarProveedorBloque,
   resumenProveedoresSolicitud,
+  seleccionUnSoloInsumo,
   totalesCompraSolicitud,
   textoFilasMismoInsumo,
   textoMaterialesSolicitados,
@@ -106,6 +109,12 @@ export default function SolicitudDetalleModal({
   const [partidaOc, setPartidaOc] = useState(null)
   const aprobandoRef = useRef(false)
   const [avisoReabrir, setAvisoReabrir] = useState('')
+  const [cambiarProv, setCambiarProv] = useState(null)
+  const [cambiarProvError, setCambiarProvError] = useState('')
+  const [deshacerProv, setDeshacerProv] = useState(null)
+  const [deshacerProvError, setDeshacerProvError] = useState('')
+  const [avisoDeshacerProv, setAvisoDeshacerProv] = useState('')
+  const [confirmarAprobadasProv, setConfirmarAprobadasProv] = useState(null)
 
   // El título de la fila queda en un tooltip institucional. Al abrir el popup
   // ese recuadro se queda encima de la grilla y se corta. Se cierra al montar.
@@ -166,6 +175,12 @@ export default function SolicitudDetalleModal({
     return () => clearTimeout(tmr)
   }, [avisoAsignarOk])
 
+  useEffect(() => {
+    if (!avisoDeshacerProv) return undefined
+    const tmr = setTimeout(() => setAvisoDeshacerProv(''), 6000)
+    return () => clearTimeout(tmr)
+  }, [avisoDeshacerProv])
+
   const items = sol?.items || []
   const puedeEscribir = puedeEditarSolicitudFormAlmacen(permisos)
   const editable = Boolean(puedeEscribir && solicitudAlmacenEditable(sol))
@@ -185,8 +200,13 @@ export default function SolicitudDetalleModal({
     [items, verEconomicos],
   )
   const puedeAsignar = Boolean(permisos?.editar)
-  const puedeSeleccionar = puedeAsignar || puedeValidar
+  const puedeCambiarProv = puedeCambiarProveedorBloque(permisos)
+  const puedeSeleccionar = puedeAsignar || puedeValidar || puedeCambiarProv
   const puedeRechazarCompleta = solicitudPuedeRechazarCompleta(sol, permisos)
+  const selUnInsumo = useMemo(
+    () => seleccionUnSoloInsumo(items, selIds),
+    [items, selIds],
+  )
   const puedeReabrir = solicitudPuedeReabrirOc(sol, permisos)
   const reabrirDisponible = puedeReabrir && typeof onReabrirOc === 'function'
   const puedeRegenerarPdf = Boolean(permisos?.puedeRegenerarPdfOc)
@@ -377,6 +397,99 @@ export default function SolicitudDetalleModal({
   const idsDeLineas = (lineas) => (
     (lineas || []).map((it) => it?.id).filter((id) => id != null)
   )
+
+  const abrirCambiarProveedor = async () => {
+    if (!sol || !puedeCambiarProv) return
+    const sel = seleccionUnSoloInsumo(items, selIds)
+    if (!sel.ok) {
+      setError(sel.motivo)
+      return
+    }
+    setBusy(true)
+    setCambiarProvError('')
+    setError('')
+    try {
+      const vista = await api.vistaPreviaProveedorBloque(sol.id, { item_ids: sel.itemIds })
+      setCambiarProv({ vista, itemIds: sel.itemIds })
+      setConfirmarAprobadasProv(null)
+    } catch (e) {
+      setError(e.message || 'No se pudo preparar el cambio de proveedor.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ejecutarCambiarProveedor = async (oferta, { confirmarAprobadas = false } = {}) => {
+    if (!sol || !cambiarProv || !oferta) return
+    setBusy(true)
+    setCambiarProvError('')
+    try {
+      const r = await api.cambiarProveedorBloque(sol.id, {
+        item_ids: cambiarProv.itemIds,
+        proveedor_seleccionado_id: oferta.proveedor_id ?? null,
+        proveedor_seleccionado_nombre: oferta.proveedor_nombre || null,
+        cotizacion_numero_seleccionada: oferta.numero || null,
+        confirmar_aprobadas: confirmarAprobadas,
+      })
+      if (r?.solicitud) setSol(r.solicitud)
+      setCambiarProv(null)
+      setConfirmarAprobadasProv(null)
+      setSelIds(new Set())
+      setAvisoDeshacerProv(
+        `Proveedor actualizado en ${r?.lineas_cambiadas ?? 0} línea(s). Puede deshacer esta acción.`,
+      )
+      onUpdated?.(r?.solicitud || r)
+      publicarCambioAlmacen(contratoId, { origen: 'cambiar-proveedor-bloque' })
+      void reload({ silent: true })
+    } catch (e) {
+      const msg = e.message || 'No se pudo cambiar el proveedor.'
+      if (/aprobad/i.test(msg) && !confirmarAprobadas) {
+        setConfirmarAprobadasProv({ oferta, mensaje: msg })
+      } else {
+        setCambiarProvError(msg)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const abrirDeshacerProveedor = async () => {
+    if (!sol || !puedeCambiarProv) return
+    setBusy(true)
+    setDeshacerProvError('')
+    setError('')
+    try {
+      const vista = await api.vistaPreviaDeshacerProveedorBloque(sol.id)
+      setDeshacerProv({ vista })
+    } catch (e) {
+      setError(e.message || 'No se pudo preparar el deshacer.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ejecutarDeshacerProveedor = async () => {
+    if (!sol || !deshacerProv) return
+    setBusy(true)
+    setDeshacerProvError('')
+    try {
+      const r = await api.deshacerProveedorBloque(sol.id, { confirmar: true })
+      if (r?.solicitud) setSol(r.solicitud)
+      setDeshacerProv(null)
+      setAvisoDeshacerProv(
+        `Se revirtió el proveedor en ${r?.lineas_revertidas ?? 0} línea(s)`
+        + (r?.proveedor_volver ? ` → ${r.proveedor_volver}` : '')
+        + '.',
+      )
+      onUpdated?.(r?.solicitud || r)
+      publicarCambioAlmacen(contratoId, { origen: 'deshacer-proveedor-bloque' })
+      void reload({ silent: true })
+    } catch (e) {
+      setDeshacerProvError(e.message || 'No se pudo deshacer.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const abrirAsignar = (lineas) => {
     const ids = idsDeLineas(lineas)
@@ -1019,7 +1132,7 @@ export default function SolicitudDetalleModal({
                     )}
                   </div>
                   {puedeSeleccionar && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
                       {puedeAsignar && (
                         <button
                           type="button"
@@ -1028,6 +1141,30 @@ export default function SolicitudDetalleModal({
                           onClick={() => abrirAsignar(items.filter((it) => selIds.has(it.id)))}
                         >
                           Asignar insumo a la selección
+                        </button>
+                      )}
+                      {puedeCambiarProv && (
+                        <button
+                          type="button"
+                          data-testid="cambiar-proveedor-seleccion"
+                          style={ui.btnSecondary}
+                          disabled={busy || !selUnInsumo.ok}
+                          title={selUnInsumo.ok ? 'Cambiar proveedor de este insumo' : selUnInsumo.motivo}
+                          onClick={() => { void abrirCambiarProveedor() }}
+                        >
+                          Cambiar proveedor
+                        </button>
+                      )}
+                      {puedeCambiarProv && (
+                        <button
+                          type="button"
+                          data-testid="deshacer-proveedor-seleccion"
+                          style={ui.btnSecondary}
+                          disabled={busy}
+                          title="Deshacer el último cambio de proveedor de esta solicitud"
+                          onClick={() => { void abrirDeshacerProveedor() }}
+                        >
+                          Deshacer
                         </button>
                       )}
                       {puedeValidar && (
@@ -1051,6 +1188,32 @@ export default function SolicitudDetalleModal({
                           Rechazar selección
                         </button>
                       )}
+                    </div>
+                  )}
+                  {puedeCambiarProv && selIds.size > 0 && !selUnInsumo.ok && (
+                    <div
+                      data-testid="cambiar-proveedor-aviso-seleccion"
+                      style={{
+                        ...estiloAvisoAlmacen(contraste, 'warn'),
+                        marginBottom: 8,
+                        fontSize: 'var(--cc-xs)',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {selUnInsumo.motivo}
+                    </div>
+                  )}
+                  {avisoDeshacerProv && (
+                    <div
+                      data-testid="aviso-deshacer-proveedor"
+                      style={{
+                        ...estiloAvisoAlmacen(contraste, 'info'),
+                        marginBottom: 8,
+                        fontSize: 'var(--cc-xs)',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {avisoDeshacerProv}
                     </div>
                   )}
                 <SolicitudMaterialesExcelTable
@@ -1365,6 +1528,58 @@ export default function SolicitudDetalleModal({
             </div>
           </div>
         </CcConfirmModal>
+      )}
+
+      {cambiarProv && (
+        <CambiarProveedorBloqueModal
+          vista={cambiarProv.vista}
+          busy={busy}
+          error={cambiarProvError}
+          verEconomicos={verEconomicos}
+          onCancel={() => {
+            if (busy) return
+            setCambiarProv(null)
+            setCambiarProvError('')
+            setConfirmarAprobadasProv(null)
+          }}
+          onAsignar={(oferta) => { void ejecutarCambiarProveedor(oferta) }}
+        />
+      )}
+
+      {confirmarAprobadasProv && (
+        <CcConfirmModal
+          theme={t}
+          tipo="warn"
+          titulo="Líneas ya aprobadas"
+          confirmar="Sí, cambiar proveedor"
+          cancelar="Cancelar"
+          procesando={busy}
+          onCancel={() => !busy && setConfirmarAprobadasProv(null)}
+          onConfirm={() => {
+            const oferta = confirmarAprobadasProv.oferta
+            setConfirmarAprobadasProv(null)
+            void ejecutarCambiarProveedor(oferta, { confirmarAprobadas: true })
+          }}
+        >
+          <div data-testid="cambiar-proveedor-aviso-aprobadas">
+            {confirmarAprobadasProv.mensaje}
+            <div style={{ marginTop: 8 }}>Las líneas que ya tienen OC no se modificarán.</div>
+          </div>
+        </CcConfirmModal>
+      )}
+
+      {deshacerProv && (
+        <DeshacerProveedorBloqueModal
+          vista={deshacerProv.vista}
+          busy={busy}
+          error={deshacerProvError}
+          onCancel={() => {
+            if (busy) return
+            setDeshacerProv(null)
+            setDeshacerProvError('')
+          }}
+          onConfirm={() => { void ejecutarDeshacerProveedor() }}
+        />
       )}
 
       {rechazoSel && (

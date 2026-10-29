@@ -6020,16 +6020,48 @@ def root():
     return {"message": "ClaraCore API funcionando"}
 
 
+def _deploy_git_sha() -> Optional[str]:
+    """SHA del commit desplegado (env de CI o archivo escrito en el pipeline)."""
+    for key in ("CLARACORE_GIT_SHA", "GIT_SHA", "GITHUB_SHA"):
+        val = (os.getenv(key) or "").strip()
+        if val:
+            return val
+    try:
+        path = os.path.join(os.path.dirname(__file__), ".deploy_sha")
+        with open(path, "r", encoding="utf-8") as fh:
+            val = (fh.read() or "").strip()
+            return val or None
+    except OSError:
+        return None
+
+
 @app.get("/healthz")
 def healthz():
     """Sin Supabase ni lógica pesada — útil para keep-alive y comprobar que el worker responde (Azure cold start)."""
-    return {
+    out = {
         "ok": True,
         "acta_cierre_v2": True,
         "acta_cierre_defer_mover": True,
         "acta_mover_residuales_lote": True,
         "cors_asgi_wrap": True,
         "supabase_threadlocal": True,
+    }
+    sha = _deploy_git_sha()
+    if sha:
+        out["git_sha"] = sha
+        out["version_deploy"] = sha
+    return out
+
+
+@app.get("/version")
+def version_publica():
+    """Identificador público de la versión del servidor (sin autenticación)."""
+    sha = _deploy_git_sha()
+    return {
+        "ok": True,
+        "git_sha": sha,
+        "version_deploy": sha,
+        "short": (sha[:7] if sha else None),
     }
 
 

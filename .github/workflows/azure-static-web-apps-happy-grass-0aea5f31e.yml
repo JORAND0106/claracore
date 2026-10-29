@@ -70,6 +70,7 @@ jobs:
           output_location: "dist" # Built app content directory - optional
           ###### End of Repository/Build Configurations ######
         env:
+          VITE_GIT_SHA: ${{ github.sha }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
           VITE_MAPTILER_KEY: ${{ secrets.VITE_MAPTILER_KEY }}
           VITE_DEVELOPER_PANEL_KEY: ${{ secrets.VITE_DEVELOPER_PANEL_KEY }}

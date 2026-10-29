@@ -330,6 +330,33 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body || {}),
       }).then(parseJson),
 
+    vistaPreviaProveedorBloque: (solicitudId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/proveedor-bloque/vista-previa`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
+    cambiarProveedorBloque: (solicitudId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/proveedor-bloque`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
+    vistaPreviaDeshacerProveedorBloque: (solicitudId) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/proveedor-bloque/deshacer/vista-previa`, {
+        method: 'POST',
+        headers: authHeaders(),
+      }).then(parseJson),
+
+    deshacerProveedorBloque: (solicitudId, body = {}) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/proveedor-bloque/deshacer`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
     buscarDestinatariosMensaje: (q) => {
       const params = new URLSearchParams()
       if (q) params.set('q', q)
