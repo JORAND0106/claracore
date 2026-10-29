@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../apiBase'
 import { useAlmacenTheme } from './almacenShared'
 
@@ -20,34 +20,7 @@ function textoValor(valor) {
   return String(valor)
 }
 
-/**
- * Historial de una línea de almacén, identificado por su id.
- */
-export default function LineaTrazabilidadModal({ token, itemId, onClose }) {
-  const ui = useAlmacenTheme()
-  const [data, setData] = useState(null)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    let vivo = true
-    const auth = token || localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
-    fetch(`${API_BASE}/almacen/lineas/${itemId}/trazabilidad`, {
-      headers: { Authorization: `Bearer ${auth}` },
-    })
-      .then(async (res) => {
-        const body = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(body.detail || body.message || `Error ${res.status}`)
-        return body
-      })
-      .then((body) => {
-        if (vivo) setData(body)
-      })
-      .catch((e) => {
-        if (vivo) setError(e.message || 'No se pudo leer la trazabilidad.')
-      })
-    return () => { vivo = false }
-  }, [itemId, token])
-
+function FichaYEventos({ data, error, ui }) {
   const ficha = data?.ficha || {}
   const filas = [
     ['Material solicitado', ficha.material],
@@ -66,6 +39,105 @@ export default function LineaTrazabilidadModal({ token, itemId, onClose }) {
   if (ficha.motivo_rechazo_linea) {
     filas.push(['Motivo de rechazo', ficha.motivo_rechazo_linea])
   }
+
+  return (
+    <>
+      {error && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{error}</div>}
+      {!data && !error && <div style={{ color: ui.textMuted }}>Cargando…</div>}
+      {data && (
+        <>
+          <table style={{ width: '100%', fontSize: 'var(--cc-sm)', marginBottom: 16 }}>
+            <tbody>
+              {filas.map(([etiqueta, valor]) => (
+                <tr key={etiqueta}>
+                  <td style={{ ...ui.td, fontWeight: 700, width: 180 }}>{etiqueta}</td>
+                  <td style={ui.td}>{valor || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Recorrido</div>
+          {(data.eventos || []).length === 0 ? (
+            <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>No hay movimientos registrados para esta línea.</div>
+          ) : (data.eventos || []).map((ev) => (
+            <div key={ev.id || `${ev.accion}-${ev.cuando}`} style={{ borderTop: `1px solid ${ui.textMuted}33`, padding: '8px 0' }}>
+              <div style={{ fontWeight: 700 }}>{ev.accion}{ev.texto ? ` · ${ev.texto}` : ''}</div>
+              <div style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>{ev.cuando || ''}</div>
+              {(ev.anterior && Object.keys(ev.anterior).length > 0) && (
+                <div style={{ fontSize: 'var(--cc-sm)' }}>Antes: {textoValor(ev.anterior)}</div>
+              )}
+              {(ev.nuevo && Object.keys(ev.nuevo).length > 0) && (
+                <div style={{ fontSize: 'var(--cc-sm)' }}>Después: {textoValor(ev.nuevo)}</div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  )
+}
+
+function useTrazabilidad(token, itemId) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (itemId == null || itemId === '') {
+      setData(null)
+      setError('')
+      return undefined
+    }
+    let vivo = true
+    setData(null)
+    setError('')
+    const auth = token || localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+    fetch(`${API_BASE}/almacen/lineas/${itemId}/trazabilidad`, {
+      headers: { Authorization: `Bearer ${auth}` },
+    })
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(body.detail || body.message || `Error ${res.status}`)
+        return body
+      })
+      .then((body) => {
+        if (vivo) setData(body)
+      })
+      .catch((e) => {
+        if (vivo) setError(e.message || 'No se pudo leer la trazabilidad.')
+      })
+    return () => { vivo = false }
+  }, [itemId, token])
+
+  return { data, error }
+}
+
+/**
+ * Historial de una línea de almacén, identificado por su id.
+ * Con varios ids (fila agrupada), muestra todas con filtro/búsqueda.
+ */
+export default function LineaTrazabilidadModal({ token, itemId, itemIds, onClose }) {
+  const ui = useAlmacenTheme()
+  const ids = useMemo(() => {
+    const raw = itemIds?.length ? itemIds : (itemId != null && itemId !== '' ? [itemId] : [])
+    return [...new Set(raw.map((x) => Number(x) || x).filter((x) => x != null && x !== ''))]
+  }, [itemId, itemIds])
+
+  const [activo, setActivo] = useState(ids[0] ?? null)
+  const [filtro, setFiltro] = useState('')
+  const { data, error } = useTrazabilidad(token, activo)
+
+  useEffect(() => {
+    if (!ids.includes(activo)) setActivo(ids[0] ?? null)
+  }, [ids, activo])
+
+  const idsFiltrados = useMemo(() => {
+    const q = filtro.trim().toLowerCase()
+    if (!q) return ids
+    return ids.filter((id) => String(id).includes(q))
+  }, [ids, filtro])
+
+  const multi = ids.length > 1
+  const ficha = data?.ficha || {}
 
   return (
     <div
@@ -90,42 +162,48 @@ export default function LineaTrazabilidadModal({ token, itemId, onClose }) {
         style={{ ...ui.card, width: 'min(840px, 100%)', maxHeight: '90vh', overflow: 'auto', padding: 20 }}
       >
         <div id="linea-trazabilidad-titulo" style={{ fontWeight: 800, fontSize: 'var(--cc-title)', marginBottom: 8 }}>
-          Trazabilidad de la línea {ficha.numero_linea != null ? `#${ficha.numero_linea}` : ''}
+          {multi
+            ? `Trazabilidad · ${ids.length} líneas`
+            : `Trazabilidad de la línea ${ficha.numero_linea != null ? `#${ficha.numero_linea}` : ''}`}
         </div>
         <p style={{ margin: '0 0 12px', color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>
-          Esta es la línea {ficha.item_id != null ? `id ${ficha.item_id}` : ''}. El número puede repetirse en otra solicitud; el historial es solo de esta.
+          {multi
+            ? 'Cada línea conserva su propio historial. Elija una para ver el detalle.'
+            : `Esta es la línea ${ficha.item_id != null ? `id ${ficha.item_id}` : ''}. El número puede repetirse en otra solicitud; el historial es solo de esta.`}
         </p>
-        {error && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{error}</div>}
-        {!data && !error && <div style={{ color: ui.textMuted }}>Cargando…</div>}
-        {data && (
-          <>
-            <table style={{ width: '100%', fontSize: 'var(--cc-sm)', marginBottom: 16 }}>
-              <tbody>
-                {filas.map(([etiqueta, valor]) => (
-                  <tr key={etiqueta}>
-                    <td style={{ ...ui.td, fontWeight: 700, width: 180 }}>{etiqueta}</td>
-                    <td style={ui.td}>{valor || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Recorrido</div>
-            {(data.eventos || []).length === 0 ? (
-              <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>No hay movimientos registrados para esta línea.</div>
-            ) : (data.eventos || []).map((ev) => (
-              <div key={ev.id || `${ev.accion}-${ev.cuando}`} style={{ borderTop: `1px solid ${ui.textMuted}33`, padding: '8px 0' }}>
-                <div style={{ fontWeight: 700 }}>{ev.accion}{ev.texto ? ` · ${ev.texto}` : ''}</div>
-                <div style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>{ev.cuando || ''}</div>
-                {(ev.anterior && Object.keys(ev.anterior).length > 0) && (
-                  <div style={{ fontSize: 'var(--cc-sm)' }}>Antes: {textoValor(ev.anterior)}</div>
-                )}
-                {(ev.nuevo && Object.keys(ev.nuevo).length > 0) && (
-                  <div style={{ fontSize: 'var(--cc-sm)' }}>Después: {textoValor(ev.nuevo)}</div>
-                )}
-              </div>
-            ))}
-          </>
+        {multi && (
+          <div data-testid="linea-trazabilidad-filtro" style={{ marginBottom: 12 }}>
+            <input
+              style={{ ...ui.input, width: '100%', boxSizing: 'border-box', marginBottom: 8 }}
+              placeholder="Buscar por id de línea…"
+              value={filtro}
+              onChange={(e) => setFiltro(e.target.value)}
+              aria-label="Filtrar líneas"
+            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflow: 'auto' }}>
+              {idsFiltrados.length === 0 ? (
+                <span style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>Sin coincidencias</span>
+              ) : idsFiltrados.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  data-testid="linea-trazabilidad-tab"
+                  onClick={() => setActivo(id)}
+                  style={{
+                    ...(ui.btnSecondary || {}),
+                    padding: '4px 10px',
+                    minHeight: 0,
+                    fontWeight: String(activo) === String(id) ? 800 : 500,
+                    background: String(activo) === String(id) ? ui.accentSoft : undefined,
+                  }}
+                >
+                  Línea {id}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
+        <FichaYEventos data={data} error={error} ui={ui} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
           <button type="button" style={ui.btnSecondary} onClick={() => onClose?.()}>Cerrar</button>
         </div>
@@ -134,18 +212,22 @@ export default function LineaTrazabilidadModal({ token, itemId, onClose }) {
   )
 }
 
-export function LineaTrazabilidadButton({ token, itemId, compact = false, ui }) {
+export function LineaTrazabilidadButton({ token, itemId, itemIds, compact = false, ui }) {
   const [open, setOpen] = useState(false)
-  if (itemId == null || itemId === '') return null
+  const ids = itemIds?.length
+    ? itemIds
+    : (itemId != null && itemId !== '' ? [itemId] : [])
+  if (!ids.length) return null
   const auth = token || (typeof localStorage !== 'undefined' && localStorage.getItem('cc_token'))
   if (!auth) return null
+  const multi = ids.length > 1
   return (
     <>
       <button
         type="button"
         data-testid="linea-trazabilidad-btn"
-        title="Trazabilidad de esta línea"
-        aria-label="Ver trazabilidad de la línea"
+        title={multi ? `Trazabilidad de ${ids.length} líneas` : 'Trazabilidad de esta línea'}
+        aria-label={multi ? `Ver trazabilidad de ${ids.length} líneas` : 'Ver trazabilidad de la línea'}
         onClick={(e) => {
           e.stopPropagation()
           setOpen(true)
@@ -160,7 +242,12 @@ export function LineaTrazabilidadButton({ token, itemId, compact = false, ui }) 
         📜
       </button>
       {open && (
-        <LineaTrazabilidadModal token={auth} itemId={itemId} onClose={() => setOpen(false)} />
+        <LineaTrazabilidadModal
+          token={auth}
+          itemId={ids[0]}
+          itemIds={ids}
+          onClose={() => setOpen(false)}
+        />
       )}
     </>
   )

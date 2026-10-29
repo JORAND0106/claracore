@@ -3675,6 +3675,35 @@ def mapear_items_bloque(
     if faltan:
         raise ValueError("Una o más líneas no pertenecen a esta solicitud.")
     lineas = [by_id[iid] for iid in ids]
+    if body.get("requerir_mismo_insumo"):
+        insumos_previos = set()
+        for existing in lineas:
+            raw_ins = existing.get("insumo_id")
+            if raw_ins in (None, ""):
+                raise ValueError(
+                    "La edición masiva solo admite líneas del mismo insumo. "
+                    "Alguna línea aún no tiene insumo asignado."
+                )
+            try:
+                insumos_previos.add(int(raw_ins))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "La edición masiva solo admite líneas del mismo insumo."
+                ) from exc
+        if len(insumos_previos) > 1:
+            raise ValueError(
+                "La edición masiva solo puede incluir filas del mismo insumo. "
+                "Seleccione sectores de un solo insumo."
+            )
+    cant_bloque = body.get("cantidad")
+    cant_bloque_f = None
+    if cant_bloque not in (None, ""):
+        try:
+            cant_bloque_f = float(cant_bloque)
+        except (TypeError, ValueError):
+            cant_bloque_f = None
+        if cant_bloque_f is not None and cant_bloque_f <= 0:
+            raise ValueError("La cantidad debe ser mayor a cero.")
     for existing in lineas:
         iid = int(existing["id"])
         if iid in en_oc:
@@ -3682,7 +3711,7 @@ def mapear_items_bloque(
                 f"La línea #{existing.get('numero_linea') or iid} ya forma parte de la Orden de Compra "
                 "y no se puede remapear."
             )
-        cantidad = _to_float(existing.get("cantidad"))
+        cantidad = cant_bloque_f if cant_bloque_f is not None else _to_float(existing.get("cantidad"))
         if cantidad <= 0:
             raise ValueError(
                 f"La línea #{existing.get('numero_linea') or iid} tiene cantidad inválida."
@@ -3714,7 +3743,11 @@ def mapear_items_bloque(
     resolved_list: List[dict] = []
     meta: List[dict] = []
     for existing in lineas:
-        cantidad = _to_float(existing.get("cantidad"))
+        cantidad = (
+            cant_bloque_f
+            if cant_bloque_f is not None
+            else _to_float(existing.get("cantidad"))
+        )
         raw = {
             "insumo_id": insumo_id,
             "presupuesto_id": existing.get("presupuesto_id"),

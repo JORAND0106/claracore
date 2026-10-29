@@ -133,6 +133,59 @@ export function puedeCambiarProveedorLineaAprobada(item, permisos) {
   )
 }
 
+/** Quién puede usar «Cambiar proveedor» / Deshacer en el popup de la solicitud. */
+export function puedeCambiarProveedorBloque(permisos) {
+  return Boolean(
+    permisos?.editar
+    || permisos?.esContratistaGerencial
+    || permisos?.esDesarrollador
+    || permisos?.esCargoAdministrador,
+  )
+}
+
+/**
+ * La selección del popup debe ser exactamente una fila (un solo insumo).
+ * Devuelve { ok, itemIds, motivo, insumos }.
+ */
+export function seleccionUnSoloInsumo(items, selIds) {
+  const ids = [...(selIds || [])].filter((id) => id != null)
+  if (!ids.length) {
+    return { ok: false, itemIds: [], motivo: 'Seleccione una fila (un solo insumo) para cambiar el proveedor.', insumos: [] }
+  }
+  const set = new Set(ids.map(String))
+  const seleccion = (items || []).filter((it) => set.has(String(it?.id)))
+  if (!seleccion.length) {
+    return { ok: false, itemIds: [], motivo: 'Seleccione una fila (un solo insumo) para cambiar el proveedor.', insumos: [] }
+  }
+  const insumos = []
+  const seen = new Set()
+  for (const it of seleccion) {
+    const raw = it?.insumo_id
+    if (raw == null || raw === '') {
+      return {
+        ok: false,
+        itemIds: seleccion.map((x) => x.id),
+        motivo: 'Asigne el insumo antes de cambiar el proveedor.',
+        insumos: [],
+      }
+    }
+    const key = String(raw)
+    if (!seen.has(key)) {
+      seen.add(key)
+      insumos.push(Number(raw) || raw)
+    }
+  }
+  if (insumos.length !== 1) {
+    return {
+      ok: false,
+      itemIds: seleccion.map((x) => x.id),
+      motivo: 'Seleccione una sola fila. «Cambiar proveedor» actúa sobre un solo insumo a la vez.',
+      insumos,
+    }
+  }
+  return { ok: true, itemIds: seleccion.map((x) => x.id), motivo: '', insumos }
+}
+
 export const MOTIVO_PROVEEDOR_EN_OC = (
   'Esta línea ya hace parte de una orden de compra generada. El proveedor no se puede cambiar.'
 )
