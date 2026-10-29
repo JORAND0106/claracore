@@ -60,6 +60,28 @@ def _exigir_mismo_insumo(lineas: List[dict]) -> int:
     return next(iter(ids))
 
 
+def _raise_db_clara(exc: BaseException, *, contexto: str) -> None:
+    """Convierte errores técnicos de PostgREST/Postgres en mensaje claro."""
+    from almacen_service import _humanize_solicitud_db_error, _pgrst_unknown_column
+
+    col = _pgrst_unknown_column(exc)
+    text = str(exc or "")
+    low = text.lower()
+    if col == "en_orden_compra" or "en_orden_compra" in low:
+        raise ValueError(
+            f"{contexto} No se pudo comprobar si las líneas ya tienen orden de compra. "
+            "Recargue la solicitud e intente de nuevo."
+        ) from exc
+    if col or any(
+        tok in low
+        for tok in ("does not exist", "pgrst204", "pgrst205", "schema cache", "could not find", "42703")
+    ):
+        raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+    raise ValueError(
+        f"{contexto} {text.strip()[:220] or 'Error inesperado. Intente de nuevo.'}"
+    ) from exc
+
+
 def vista_previa_cambio_proveedor(
     contrato_id: int,
     solicitud_id: int,
@@ -81,27 +103,34 @@ def vista_previa_cambio_proveedor(
         raise ValueError("Seleccione las líneas del insumo.")
     sb = _sb()
     _fetch_solicitud_head(contrato_id, solicitud_id)
-    rows = (
-        sb.table("almacen_solicitud_item")
-        .select(
-            "id, solicitud_id, insumo_id, cantidad, valor_compra_unitario, estado_validacion, "
-            "proveedor_seleccionado_id, proveedor_seleccionado_nombre, "
-            "cotizacion_numero_seleccionada, numero_linea, en_orden_compra"
+    # en_orden_compra NO es columna de BD: se calcula con almacen_orden_compra_item.
+    try:
+        rows = (
+            sb.table("almacen_solicitud_item")
+            .select(
+                "id, solicitud_id, insumo_id, cantidad, valor_compra_unitario, estado_validacion, "
+                "proveedor_seleccionado_id, proveedor_seleccionado_nombre, "
+                "cotizacion_numero_seleccionada, numero_linea"
+            )
+            .eq("solicitud_id", int(solicitud_id))
+            .in_("id", ids)
+            .execute()
+            .data
+            or []
         )
-        .eq("solicitud_id", int(solicitud_id))
-        .in_("id", ids)
-        .execute()
-        .data
-        or []
-    )
+    except Exception as exc:
+        _raise_db_clara(exc, contexto="No se pudo preparar el cambio de proveedor.")
     if len(rows) != len(ids):
         raise ValueError("Alguna línea no pertenece a esta solicitud.")
     insumo_id = _exigir_mismo_insumo(rows)
-    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
-    en_oc = (
-        _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
-        if ocs else set()
-    )
+    try:
+        ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+        en_oc = (
+            _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs if o.get("id")])
+            if ocs else set()
+        )
+    except Exception as exc:
+        _raise_db_clara(exc, contexto="No se pudo preparar el cambio de proveedor.")
     bloqueadas = [int(r["id"]) for r in rows if int(r["id"]) in en_oc]
     editables = [r for r in rows if int(r["id"]) not in en_oc]
     cant_total = sum(_to_float(r.get("cantidad")) for r in editables)
@@ -377,6 +406,21 @@ def _leer_ultimo_cambio(sb, contrato_id: int, solicitud_id: int) -> Optional[dic
     return {"ya_deshecho": False, "log": top}
 
 
+def _ayuda_deshacer(*, puede: bool, resumen: str, proveedor_nuevo: Optional[str] = None,
+                    proveedor_volver: Optional[str] = None, lineas: int = 0) -> str:
+    """Texto de ayuda del icono Deshacer (último cambio de proveedor en bloque)."""
+    if not puede:
+        return resumen or "No hay nada que deshacer."
+    partes = ["Deshacer el último cambio de proveedor"]
+    if proveedor_nuevo:
+        partes.append(f"«{proveedor_nuevo}»")
+    if lineas:
+        partes.append(f"({lineas} línea{'s' if lineas != 1 else ''})")
+    if proveedor_volver:
+        partes.append(f"→ volver a «{proveedor_volver}»")
+    return " ".join(partes) + "."
+
+
 def vista_previa_deshacer_proveedor(contrato_id: int, solicitud_id: int) -> dict:
     from almacen_service import (
         _fetch_ocs_de_solicitud,
@@ -388,20 +432,37 @@ def vista_previa_deshacer_proveedor(contrato_id: int, solicitud_id: int) -> dict
     _fetch_solicitud_head(contrato_id, solicitud_id)
     info = _leer_ultimo_cambio(sb, contrato_id, solicitud_id)
     if not info:
+        resumen = "No hay un cambio de proveedor reciente para deshacer."
         return {
             "puede": False,
-            "resumen": "No hay un cambio de proveedor reciente para deshacer.",
+            "resumen": resumen,
+            "ayuda": _ayuda_deshacer(puede=False, resumen=resumen),
             "lineas": 0,
             "bloqueos": [],
         }
     if info.get("ya_deshecho"):
+        resumen = (
+            "El último cambio de proveedor ya se deshizo. "
+            "Solo se puede deshacer la acción más reciente."
+        )
         return {
             "puede": False,
-            "resumen": "El último cambio de proveedor ya se deshizo. Solo se puede deshacer la acción más reciente.",
+            "resumen": resumen,
+            "ayuda": _ayuda_deshacer(puede=False, resumen=resumen),
             "lineas": 0,
             "bloqueos": [],
         }
     log = info["log"]
+    detalle = log.get("detalle") or {}
+    if isinstance(detalle, str):
+        import json
+        try:
+            detalle = json.loads(detalle)
+        except Exception:
+            detalle = {}
+    proveedor_nuevo = None
+    if isinstance(detalle, dict):
+        proveedor_nuevo = (detalle.get("proveedor_nuevo_nombre") or "").strip() or None
     antes = log.get("valor_anterior") or {}
     if isinstance(antes, str):
         import json
@@ -411,11 +472,14 @@ def vista_previa_deshacer_proveedor(contrato_id: int, solicitud_id: int) -> dict
             antes = {}
     lineas = antes.get("lineas") if isinstance(antes, dict) else None
     if not isinstance(lineas, list) or not lineas:
+        resumen = "El historial del cambio no tiene el detalle para deshacer."
         return {
             "puede": False,
-            "resumen": "El historial del cambio no tiene el detalle para deshacer.",
+            "resumen": resumen,
+            "ayuda": _ayuda_deshacer(puede=False, resumen=resumen),
             "lineas": 0,
             "bloqueos": [],
+            "proveedor_nuevo": proveedor_nuevo,
         }
 
     ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
@@ -483,37 +547,53 @@ def vista_previa_deshacer_proveedor(contrato_id: int, solicitud_id: int) -> dict
         proveedor_volver = (restaurables[0].get("proveedor_seleccionado_nombre") or "").strip() or None
 
     if bloqueos and not restaurables:
+        resumen = "No se puede deshacer: " + " ".join(bloqueos[:3])
         return {
             "puede": False,
-            "resumen": "No se puede deshacer: " + " ".join(bloqueos[:3]),
+            "resumen": resumen,
+            "ayuda": _ayuda_deshacer(puede=False, resumen=resumen),
             "lineas": 0,
             "bloqueos": bloqueos,
             "proveedor_volver": proveedor_volver,
+            "proveedor_nuevo": proveedor_nuevo,
         }
     if bloqueos:
+        resumen = (
+            "No se puede deshacer completo: algunas líneas ya no están en el estado "
+            "del cambio. " + " ".join(bloqueos[:2])
+        )
         return {
             "puede": False,
-            "resumen": (
-                "No se puede deshacer completo: algunas líneas ya no están en el estado "
-                "del cambio. " + " ".join(bloqueos[:2])
-            ),
+            "resumen": resumen,
+            "ayuda": _ayuda_deshacer(puede=False, resumen=resumen),
             "lineas": len(restaurables),
             "bloqueos": bloqueos,
             "proveedor_volver": proveedor_volver,
+            "proveedor_nuevo": proveedor_nuevo,
         }
+    resumen = (
+        f"Se revertirán {len(restaurables)} línea(s)"
+        + (f" al proveedor «{proveedor_volver}»" if proveedor_volver else "")
+        + "."
+    )
     return {
         "puede": True,
-        "resumen": (
-            f"Se revertirán {len(restaurables)} línea(s)"
-            + (f" al proveedor «{proveedor_volver}»" if proveedor_volver else "")
-            + "."
+        "resumen": resumen,
+        "ayuda": _ayuda_deshacer(
+            puede=True,
+            resumen=resumen,
+            proveedor_nuevo=proveedor_nuevo,
+            proveedor_volver=proveedor_volver,
+            lineas=len(restaurables),
         ),
         "lineas": len(restaurables),
         "bloqueos": [],
         "proveedor_volver": proveedor_volver,
+        "proveedor_nuevo": proveedor_nuevo,
         "item_ids": [int(s["item_id"]) for s in restaurables],
-        "ejecucion_id": (log.get("detalle") or {}).get("ejecucion_id")
-        if isinstance(log.get("detalle"), dict) else None,
+        "ejecucion_id": (detalle.get("ejecucion_id") if isinstance(detalle, dict) else None)
+        or ((log.get("detalle") or {}).get("ejecucion_id")
+            if isinstance(log.get("detalle"), dict) else None),
     }
 
 

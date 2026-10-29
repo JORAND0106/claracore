@@ -36,6 +36,7 @@ from almacen_insumos_service import (
 from almacen_solicitud_tareas import programar_tareas_tras_guardar, reintentar_tareas_solicitud
 from almacen_permissions import (
     es_contratista_gerencial,
+    es_desarrollador_almacen,
     puede_cambiar_proveedor_linea_aprobada,
     puede_ver_valores_economicos_almacen,
     require_cambiar_proveedor_linea_aprobada,
@@ -143,6 +144,7 @@ from almacen_service import (
     rechazar_lineas_seleccion,
     rechazar_solicitud,
     reporte_autoria_lineas,
+    revocar_aprobacion_lineas,
     trazabilidad_linea,
     search_transportadores,
     update_config,
@@ -413,6 +415,11 @@ class CambiarProveedorBloqueBody(BaseModel):
 
 
 class DeshacerProveedorBloqueBody(BaseModel):
+    confirmar: bool = False
+
+
+class RevocarAprobacionBody(BaseModel):
+    item_ids: List[int] = Field(..., min_length=1)
     confirmar: bool = False
 
 
@@ -1888,6 +1895,51 @@ def route_rechazar_lineas_solicitud(
             },
         )
     return result
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/items/revocar-aprobacion")
+def route_revocar_aprobacion_lineas(
+    contrato_id: int,
+    solicitud_id: int,
+    body: RevocarAprobacionBody,
+    current_user=Depends(get_current_user),
+):
+    """Revoca la aprobación de líneas seleccionadas → Pendiente. Validar o Desarrollador."""
+    _check_contrato(current_user, contrato_id)
+    if not (
+        tiene_permiso_almacen(current_user, "validar")
+        or es_desarrollador_almacen(current_user)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para revocar la aprobación de las líneas.",
+        )
+    try:
+        out = revocar_aprobacion_lineas(
+            contrato_id,
+            solicitud_id,
+            _uid(current_user),
+            body.item_ids,
+            confirmar=bool(body.confirmar),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    log_almacen(
+        current_user,
+        "REVOCAR_APROBACION",
+        "solicitud",
+        solicitud_id,
+        {
+            "item_ids": out.get("lineas_revocadas"),
+            "lineas": out.get("lineas"),
+        },
+        valor_anterior={"lineas": out.get("antes") or []},
+        valor_nuevo={
+            "estado_validacion": "pendiente",
+            "item_ids": out.get("lineas_revocadas"),
+        },
+    )
+    return out
 
 
 @router.get("/lineas/{item_id}/trazabilidad")

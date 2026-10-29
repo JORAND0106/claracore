@@ -144,6 +144,82 @@ export function puedeCambiarProveedorBloque(permisos) {
 }
 
 /**
+ * Revocar aprobación de líneas seleccionadas → Pendiente.
+ * Permiso Validar o desarrollador. No aplica a líneas ya en OC.
+ */
+export function puedeRevocarAprobacion(permisos) {
+  return Boolean(permisos?.validar || permisos?.esDesarrollador)
+}
+
+/**
+ * Evalúa si la selección se puede revocar (todo o nada).
+ * Devuelve { ok, itemIds, motivo }.
+ */
+export function seleccionRevocableAprobacion(items, selIds, sol) {
+  const ids = [...(selIds || [])].filter((id) => id != null)
+  if (!ids.length) {
+    return {
+      ok: false,
+      itemIds: [],
+      motivo: 'Seleccione al menos una línea aprobada para revocar la aprobación.',
+    }
+  }
+  const set = new Set(ids.map(String))
+  const seleccion = (items || []).filter((it) => set.has(String(it?.id)))
+  if (!seleccion.length) {
+    return {
+      ok: false,
+      itemIds: [],
+      motivo: 'Seleccione al menos una línea aprobada para revocar la aprobación.',
+    }
+  }
+  const enOc = seleccion.filter((it) => it?.en_orden_compra)
+  if (enOc.length) {
+    const nums = enOc
+      .slice(0, 5)
+      .map((it) => it.numero_linea ?? it.id)
+      .join(', ')
+    const mas = enOc.length > 5 ? ` y ${enOc.length - 5} más` : ''
+    return {
+      ok: false,
+      itemIds: seleccion.map((x) => x.id),
+      motivo: (
+        `No se puede revocar: hay líneas que ya están en una orden de compra `
+        + `(línea(s) ${nums}${mas}). No se revocará ninguna.`
+      ),
+    }
+  }
+  const noAprobadas = seleccion.filter((it) => (it?.estado_validacion || 'pendiente') !== 'aprobado')
+  if (noAprobadas.length === seleccion.length) {
+    return {
+      ok: false,
+      itemIds: seleccion.map((x) => x.id),
+      motivo: 'Ninguna de las líneas seleccionadas está aprobada.',
+    }
+  }
+  if (noAprobadas.length) {
+    return {
+      ok: false,
+      itemIds: seleccion.map((x) => x.id),
+      motivo: (
+        `Solo se puede revocar líneas ya aprobadas. `
+        + `${noAprobadas.length} de la selección no está(n) aprobada(s). No se revocará ninguna.`
+      ),
+    }
+  }
+  // sol se usa para coherencia de estado (enviada/aprobada) en UI.
+  const estado = String(sol?.estado || '')
+  if (estado && !['enviada', 'aprobada'].includes(estado)) {
+    return {
+      ok: false,
+      itemIds: seleccion.map((x) => x.id),
+      motivo: 'Solo se puede revocar la aprobación en solicitudes enviadas o reabiertas.',
+    }
+  }
+  return { ok: true, itemIds: seleccion.map((x) => x.id), motivo: '' }
+}
+
+/**
  * La selección del popup debe ser exactamente una fila (un solo insumo).
  * Devuelve { ok, itemIds, motivo, insumos }.
  */

@@ -1,12 +1,17 @@
 /**
- * Cambiar proveedor (un insumo), Deshacer, 2 decimales, TRAZ único, bug cotización.
+ * Cambiar proveedor (un insumo), Deshacer icono, revocar aprobación, 2dp, TRAZ.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { seleccionUnSoloInsumo, puedeCambiarProveedorBloque } from './solicitudDetalleHelpers.js'
+import {
+  seleccionUnSoloInsumo,
+  puedeCambiarProveedorBloque,
+  puedeRevocarAprobacion,
+  seleccionRevocableAprobacion,
+} from './solicitudDetalleHelpers.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 
@@ -36,6 +41,30 @@ describe('seleccionUnSoloInsumo', () => {
   })
 })
 
+describe('revocar aprobación', () => {
+  it('permiso Validar o desarrollador', () => {
+    assert.equal(puedeRevocarAprobacion({ validar: true }), true)
+    assert.equal(puedeRevocarAprobacion({ esDesarrollador: true }), true)
+    assert.equal(puedeRevocarAprobacion({ editar: true }), false)
+  })
+
+  it('bloquea líneas en OC y no aprobadas (todo o nada)', () => {
+    const sol = { estado: 'enviada' }
+    const items = [
+      { id: 1, estado_validacion: 'aprobado', numero_linea: 1 },
+      { id: 2, estado_validacion: 'aprobado', en_orden_compra: true, numero_linea: 2 },
+      { id: 3, estado_validacion: 'pendiente', numero_linea: 3 },
+    ]
+    assert.equal(seleccionRevocableAprobacion(items, new Set([1]), sol).ok, true)
+    const oc = seleccionRevocableAprobacion(items, new Set([1, 2]), sol)
+    assert.equal(oc.ok, false)
+    assert.match(oc.motivo, /orden de compra/i)
+    const mix = seleccionRevocableAprobacion(items, new Set([1, 3]), sol)
+    assert.equal(mix.ok, false)
+    assert.match(mix.motivo, /aprobad/i)
+  })
+})
+
 describe('fmtCant presentación', () => {
   it('muestra 2 decimales (solo presentación)', () => {
     const shared = readFileSync(join(dir, 'almacenShared.jsx'), 'utf8')
@@ -47,15 +76,19 @@ describe('fmtCant presentación', () => {
 })
 
 describe('UI cableado', () => {
-  it('popup solicitud: Cambiar proveedor, Deshacer y un solo icono TRAZ', () => {
+  it('popup solicitud: Cambiar proveedor, Deshacer icono y revocar', () => {
     const detalle = readFileSync(join(dir, 'SolicitudDetalleModal.jsx'), 'utf8')
     const tabla = readFileSync(join(dir, 'SolicitudMaterialesExcelTable.jsx'), 'utf8')
     const api = readFileSync(join(dir, 'almacenApi.js'), 'utf8')
     assert.match(detalle, /CambiarProveedorBloqueModal/)
     assert.match(detalle, /cambiar-proveedor-seleccion/)
     assert.match(detalle, /deshacer-proveedor-seleccion/)
+    assert.match(detalle, /revocar-aprobacion-seleccion/)
     assert.match(detalle, /cambiarProveedorBloque/)
+    assert.match(detalle, /revocarAprobacionLineas/)
+    assert.match(detalle, /↶/)
     assert.match(api, /proveedor-bloque/)
+    assert.match(api, /revocar-aprobacion/)
     assert.match(tabla, /itemIds=\{ids\}/)
     assert.doesNotMatch(tabla, /fila\.items\.map\(\(row\) => \(\s*<LineaTrazabilidadButton/)
   })
