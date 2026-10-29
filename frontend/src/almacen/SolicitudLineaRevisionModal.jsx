@@ -41,11 +41,18 @@ import {
 
 const LINEA_MODAL_WIDTH = 'min(1622px, 100%)'
 
-function EconomiaRevisionLinea({ verEconomicos, valorLinea, totales }) {
+function EconomiaRevisionLinea({
+  verEconomicos,
+  valorLinea,
+  totales,
+  cantidadTotal = null,
+  unidad = '',
+  etiquetaValor = 'Valor de la línea',
+}) {
   const ui = useAlmacenTheme()
-  if (!verEconomicos) return null
+  if (!verEconomicos && cantidadTotal == null) return null
   const grupos = totales?.grupos || []
-  if (valorLinea == null && !totales?.alguna) return null
+  if (verEconomicos && valorLinea == null && !totales?.alguna && cantidadTotal == null) return null
   const fila = {
     display: 'flex',
     justifyContent: 'space-between',
@@ -60,13 +67,19 @@ function EconomiaRevisionLinea({ verEconomicos, valorLinea, totales }) {
         marginBottom: 12,
       }}
     >
-      {valorLinea != null && (
+      {cantidadTotal != null && (
+        <div data-testid="revision-linea-cant-sel" style={{ ...fila, marginBottom: 6 }}>
+          <span>Cantidad total</span>
+          <strong>{fmtCant(cantidadTotal)}{unidad ? ` ${unidad}` : ''}</strong>
+        </div>
+      )}
+      {verEconomicos && valorLinea != null && (
         <div data-testid="revision-linea-valor" style={{ ...fila, fontWeight: 700, marginBottom: totales?.alguna ? 8 : 0 }}>
-          <span>Valor de la línea</span>
+          <span>{etiquetaValor}</span>
           <span>{fmtMoney(valorLinea)}</span>
         </div>
       )}
-      {totales?.alguna && (
+      {verEconomicos && totales?.alguna && grupos.length > 1 && (
         <div data-testid="revision-linea-resumen-proveedor">
           {grupos.map((g) => (
             <div key={g.key} style={{ ...fila, marginBottom: 4 }}>
@@ -135,6 +148,8 @@ export default function SolicitudLineaRevisionModal({
   const [error, setError] = useState('')
   const [motivo, setMotivo] = useState('')
   const [mapaOpen, setMapaOpen] = useState(false)
+  const [selSectorIds, setSelSectorIds] = useState(() => new Set())
+  const [confirmMasivo, setConfirmMasivo] = useState(null)
   const [draft, setDraft] = useState({
     insumo: null,
     proveedor: null,
@@ -159,6 +174,7 @@ export default function SolicitudLineaRevisionModal({
     setMotivo('')
     setError('')
     setMapaOpen(false)
+    setConfirmMasivo(null)
     setDraft({
       insumo: item.insumo_id
         ? {
@@ -193,6 +209,23 @@ export default function SolicitudLineaRevisionModal({
   const descItem = useMemo(() => descripcionItemPresupuesto(item), [item])
   const sectores = useMemo(() => sectoresMismoInsumo(sol?.items, item), [sol?.items, item])
 
+  useEffect(() => {
+    if (!item?.id) {
+      setSelSectorIds(new Set())
+      return
+    }
+    // Por defecto la línea abierta; al cambiar de sector se mantiene lo seleccionado si sigue existiendo.
+    setSelSectorIds((prev) => {
+      if (prev.size > 0) {
+        const vivos = new Set(
+          [...prev].filter((id) => sectores.some((s) => String(s.id) === String(id))),
+        )
+        if (vivos.size) return vivos
+      }
+      return new Set([item.id])
+    })
+  }, [item?.id, sectores])
+
   const metaLinea = useMemo(() => {
     if (!item) return ''
     const parts = [
@@ -204,15 +237,57 @@ export default function SolicitudLineaRevisionModal({
     return parts.join(' · ')
   }, [item])
 
-  const economiaLinea = useMemo(() => {
-    if (!verEconomicos || !item) return null
-    const overlay = itemsConBorradorProveedor(sol?.items, item, draft)
-    const actual = overlay.find((it) => String(it?.id) === String(item.id))
-    return {
-      valorLinea: valorCompraLinea(actual),
-      totales: totalesCompraSolicitud(overlay),
+  const sectoresSeleccionados = useMemo(() => {
+    if (!selSectorIds.size) return []
+    return sectores.filter((s) => selSectorIds.has(s.id) || selSectorIds.has(String(s.id)))
+  }, [sectores, selSectorIds])
+
+  const seleccionMismoInsumo = useMemo(() => {
+    const ids = new Set()
+    for (const s of sectoresSeleccionados) {
+      if (s?.insumo_id == null || s.insumo_id === '') continue
+      ids.add(String(s.insumo_id))
     }
-  }, [verEconomicos, sol?.items, item, draft])
+    // Sin insumo aún: se permite editar la fila abierta sola.
+    if (!ids.size) return { ok: sectoresSeleccionados.length <= 1, motivo: '' }
+    if (ids.size > 1) {
+      return {
+        ok: false,
+        motivo: 'La selección masiva solo puede incluir filas del mismo insumo.',
+      }
+    }
+    return { ok: true, motivo: '' }
+  }, [sectoresSeleccionados])
+
+  const economiaLinea = useMemo(() => {
+    if (!item) return null
+    const overlay = itemsConBorradorProveedor(sol?.items, item, draft)
+    const haySel = sectoresSeleccionados.length > 0
+    const baseItems = haySel
+      ? overlay.filter((it) => selSectorIds.has(it.id) || selSectorIds.has(String(it.id)))
+      : overlay.filter((it) => String(it?.id) === String(item.id))
+    let valorLinea = 0
+    let conValor = false
+    let cant = 0
+    for (const it of baseItems) {
+      cant += Number(it?.cantidad) || 0
+      const v = valorCompraLinea(it)
+      if (v != null) {
+        valorLinea += v
+        conValor = true
+      }
+    }
+    const totales = verEconomicos ? totalesCompraSolicitud(baseItems) : null
+    return {
+      valorLinea: verEconomicos && conValor ? valorLinea : null,
+      totales,
+      cantidadTotal: cant,
+      unidad: item.unidad || '',
+      etiquetaValor: haySel && sectoresSeleccionados.length > 1
+        ? `Valor de la selección (${sectoresSeleccionados.length})`
+        : 'Valor de la línea',
+    }
+  }, [verEconomicos, sol?.items, item, draft, sectoresSeleccionados, selSectorIds])
 
   const tablaRentabilidad = useMemo(() => {
     if (!item) return null
@@ -386,8 +461,68 @@ export default function SolicitudLineaRevisionModal({
     }
   }
 
+  const bodyMapeoBloque = () => {
+    if (!draft.insumo?.insumo_id) return null
+    const cant = Number(draft.cantidad)
+    if (!(cant > 0)) return null
+    const costo = Number(draft.valor_compra_unitario)
+    if (verEconomicos && !(costo > 0)) return null
+    const ids = sectoresSeleccionados.map((s) => s.id).filter((id) => id != null)
+    if (!ids.length) return null
+    const body = {
+      item_ids: ids,
+      insumo_id: Number(draft.insumo.insumo_id),
+      cantidad: cant,
+      requerir_mismo_insumo: true,
+    }
+    if (verEconomicos && costo > 0) body.valor_compra_unitario = costo
+    if (draft.proveedor?.proveedor_id) body.proveedor_seleccionado_id = Number(draft.proveedor.proveedor_id)
+    if (draft.proveedor?.proveedor_nombre) body.proveedor_seleccionado_nombre = draft.proveedor.proveedor_nombre
+    if (draft.proveedor?.numero) body.cotizacion_numero_seleccionada = draft.proveedor.numero
+    const cobroNum = draft.vlr_unitario_cobro !== '' && draft.vlr_unitario_cobro != null
+      ? Number(draft.vlr_unitario_cobro)
+      : NaN
+    if (Number.isFinite(cobroNum) && cobroNum > 0) body.vlr_unitario_cobro = cobroNum
+    return body
+  }
+
+  const ejecutarGuardarMasivo = async () => {
+    const body = bodyMapeoBloque()
+    if (!body) {
+      setError(verEconomicos
+        ? 'Complete insumo, cantidad y costo antes de guardar.'
+        : 'Complete insumo y cantidad antes de guardar.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.mapearItemsBloque(sol.id, body)
+      setConfirmMasivo(null)
+      onUpdated?.(r)
+      if (puedeCorregirPostOc && !puedeValidarLinea) onClose?.()
+    } catch (e) {
+      setError(e.message || 'No se pudo guardar el mapeo en bloque.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const soloGuardar = async () => {
     if (!puedeEditarMapeo) return
+    if (!seleccionMismoInsumo.ok) {
+      setError(seleccionMismoInsumo.motivo)
+      return
+    }
+    const nSel = sectoresSeleccionados.length
+    if (nSel > 1) {
+      if (!confirmMasivo) {
+        setConfirmMasivo({ n: nSel })
+        return
+      }
+      await ejecutarGuardarMasivo()
+      return
+    }
     setBusy(true)
     setError('')
     try {
@@ -533,17 +668,45 @@ export default function SolicitudLineaRevisionModal({
           <div data-testid="revision-sectores" style={{ marginBottom: 14 }}>
             <div style={{ fontWeight: 800, marginBottom: 4 }}>Dónde se pidió</div>
             <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-              Afuera esta solicitud muestra la cantidad y el valor sumados. Aquí está cada sector. La fila marcada es la que se revisa.
+              Afuera esta solicitud muestra la cantidad y el valor sumados. Aquí está cada sector.
+              Marque varios del mismo insumo para editarlos juntos; el valor inferior suma solo la selección.
             </div>
+            {!seleccionMismoInsumo.ok && (
+              <div
+                data-testid="revision-sel-mismo-insumo"
+                style={{
+                  ...estiloAvisoAlmacen(contraste, 'warn'),
+                  marginBottom: 8,
+                  fontSize: 'var(--cc-xs)',
+                  lineHeight: 1.4,
+                }}
+              >
+                {seleccionMismoInsumo.motivo}
+              </div>
+            )}
             <div style={{ ...ui.sheetWrap, overflow: 'auto' }} className="cc-almacen-table-scroll">
-              <table style={{ ...ui.sheetTable, minWidth: 720, tableLayout: 'fixed' }}>
+              <table style={{ ...ui.sheetTable, minWidth: 760, tableLayout: 'fixed' }}>
                 <thead>
                   <tr>
+                    <th style={{ ...th, width: 36, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        data-testid="revision-sectores-sel-todas"
+                        checked={sectores.length > 0 && sectores.every((s) => selSectorIds.has(s.id))}
+                        aria-label="Seleccionar todos los sectores"
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setSelSectorIds(checked
+                            ? new Set(sectores.map((s) => s.id))
+                            : new Set(item?.id != null ? [item.id] : []))
+                        }}
+                      />
+                    </th>
                     <ExcelHeader abbr="ÍTEM" tip="Capítulo e ítem de presupuesto de ese sector" style={th} />
                     <ExcelHeader abbr="LUGAR" tip="Tramo y costado" style={th} />
                     <ExcelHeader abbr="ABSCISA" tip="Abscisa inicial y final" style={th} />
                     <ExcelHeader abbr="PK" tip="PK-ID del sector" style={th} />
-                    <ExcelHeader abbr="CANT." tip="Cantidad pedida en ese sector" style={th} align="right" />
+                    <ExcelHeader abbr="CANT." tip="Cantidad pedida en ese sector (2 decimales en pantalla)" style={th} align="right" />
                     {verEconomicos && (
                       <ExcelHeader abbr="VALOR" tip="Costo de la cantidad pedida en ese sector" style={th} align="right" />
                     )}
@@ -553,20 +716,45 @@ export default function SolicitudLineaRevisionModal({
                   {sectores.map((sec) => {
                     const det = detalleSectorLinea(sec)
                     const activo = String(sec.id) === String(item.id)
+                    const marcada = selSectorIds.has(sec.id) || selSectorIds.has(String(sec.id))
                     const valorSec = valorCompraLinea(sec)
                     return (
                       <tr
                         key={sec.id ?? `${det.pk}-${det.abscisa}`}
                         data-testid="revision-sector"
+                        data-selected={marcada ? 'true' : undefined}
                         onClick={() => {
                           if (!activo) onSeleccionarSector?.(sec)
                         }}
                         style={{
                           cursor: activo ? 'default' : 'pointer',
-                          background: activo ? ui.accentSoft : 'transparent',
+                          background: marcada || activo ? ui.accentSoft : 'transparent',
                           fontWeight: activo ? 700 : 500,
                         }}
                       >
+                        <td
+                          style={{ ...td, textAlign: 'center' }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={marcada}
+                            aria-label={`Seleccionar sector ${det.pk}`}
+                            onChange={(e) => {
+                              const checked = e.target.checked
+                              setSelSectorIds((prev) => {
+                                const next = new Set(prev)
+                                if (checked) next.add(sec.id)
+                                else {
+                                  next.delete(sec.id)
+                                  next.delete(String(sec.id))
+                                  if (next.size === 0 && item?.id != null) next.add(item.id)
+                                }
+                                return next
+                              })
+                            }}
+                          />
+                        </td>
                         <td style={td}>{det.capitulo} · {det.item}</td>
                         <td style={td}>{det.lugar}</td>
                         <td style={td}>{det.abscisa}</td>
@@ -628,7 +816,24 @@ export default function SolicitudLineaRevisionModal({
 
         {puedeEditarMapeo ? (
           <>
-            <div style={{ ...ui.sheetWrap, overflow: 'visible', marginBottom: 12 }} className="cc-almacen-table-scroll">
+            <div
+              data-testid="revision-editar-seleccion"
+              style={{
+                marginBottom: 12,
+                padding: 12,
+                borderRadius: 10,
+                border: `2px solid ${ui.accent || ui.borderColor || '#2563eb'}`,
+                background: ui.accentSoft || 'rgba(37, 99, 235, 0.08)',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35)',
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
+                Editar registros seleccionados
+                {sectoresSeleccionados.length > 1
+                  ? ` (${sectoresSeleccionados.length})`
+                  : ''}
+              </div>
+            <div style={{ ...ui.sheetWrap, overflow: 'visible', marginBottom: 0, background: ui.card?.background || 'transparent' }} className="cc-almacen-table-scroll">
               <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 1120 : 860, tableLayout: 'fixed' }}>
                 <colgroup>
                   <col style={{ width: 200 }} />
@@ -742,11 +947,15 @@ export default function SolicitudLineaRevisionModal({
                 </tbody>
               </table>
             </div>
+            </div>
 
             <EconomiaRevisionLinea
               verEconomicos={verEconomicos}
               valorLinea={economiaLinea?.valorLinea}
               totales={economiaLinea?.totales}
+              cantidadTotal={economiaLinea?.cantidadTotal}
+              unidad={economiaLinea?.unidad}
+              etiquetaValor={economiaLinea?.etiquetaValor}
             />
 
             {verEconomicos && tablaRentabilidad && (
@@ -805,13 +1014,18 @@ export default function SolicitudLineaRevisionModal({
               <button
                 type="button"
                 style={{ ...ui.btnSecondary, padding: '10px 16px' }}
-                disabled={busy}
+                disabled={busy || !seleccionMismoInsumo.ok}
                 data-testid="revision-linea-guardar-mapeo"
+                title={!seleccionMismoInsumo.ok ? seleccionMismoInsumo.motivo : undefined}
                 onClick={() => { void soloGuardar() }}
               >
                 {busy
                   ? 'Guardando…'
-                  : (puedeCorregirPostOc && !puedeValidarLinea ? 'Corregir insumo y actualizar OC' : 'Guardar mapeo')}
+                  : (puedeCorregirPostOc && !puedeValidarLinea
+                    ? 'Corregir insumo y actualizar OC'
+                    : (sectoresSeleccionados.length > 1
+                      ? `Guardar mapeo (${sectoresSeleccionados.length})`
+                      : 'Guardar mapeo'))}
               </button>
               {puedeValidarLinea && (
                 <>
@@ -907,6 +1121,9 @@ export default function SolicitudLineaRevisionModal({
               verEconomicos={verEconomicos}
               valorLinea={economiaLinea?.valorLinea}
               totales={economiaLinea?.totales}
+              cantidadTotal={economiaLinea?.cantidadTotal}
+              unidad={economiaLinea?.unidad}
+              etiquetaValor={economiaLinea?.etiquetaValor}
             />
             {puedeValidarLinea ? (
               <>
@@ -1009,6 +1226,52 @@ export default function SolicitudLineaRevisionModal({
           t={theme}
           onClose={() => setMapaOpen(false)}
         />
+      )}
+
+      {confirmMasivo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          data-testid="revision-confirm-masivo"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100090,
+            background: 'rgba(15,23,42,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => !busy && setConfirmMasivo(null)}
+        >
+          <div
+            style={{ ...ui.card, width: 'min(440px, 100%)', padding: 20 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-title)', marginBottom: 8 }}>
+              Confirmar edición masiva
+            </div>
+            <p style={{ margin: '0 0 14px', lineHeight: 1.45, fontSize: 'var(--cc-sm)' }}>
+              Se aplicarán los cambios a {confirmMasivo.n} registro(s) del mismo insumo.
+              Cada línea conserva su ubicación, observación, justificación y solicitante.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" style={ui.btnSecondary} disabled={busy} onClick={() => setConfirmMasivo(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                data-testid="revision-confirm-masivo-ok"
+                style={ui.btnPrimary}
+                disabled={busy}
+                onClick={() => { void ejecutarGuardarMasivo() }}
+              >
+                {busy ? 'Guardando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
