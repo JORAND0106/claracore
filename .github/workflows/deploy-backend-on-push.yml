@@ -60,6 +60,12 @@ jobs:
         working-directory: ./backend
         run: bash scripts/fetch_ffmpeg_static.sh
 
+      - name: Write deploy SHA for /healthz and /version
+        working-directory: ./backend
+        run: |
+          echo -n "${GITHUB_SHA}" > .deploy_sha
+          echo "deploy_sha=${GITHUB_SHA}"
+
       - name: Deploy backend package to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
@@ -71,11 +77,17 @@ jobs:
         run: |
           set -e
           URL="https://claracore-backend.azurewebsites.net/healthz"
+          EXPECT="${GITHUB_SHA}"
           for i in 1 2 3 4 5 6 7 8 9 10; do
             code=$(curl -sS -o /tmp/healthz_body.txt -w "%{http_code}" --max-time 20 "$URL" || echo "000")
             echo "attempt $i → HTTP $code"
             if [ "$code" = "200" ]; then
-              head -c 200 /tmp/healthz_body.txt; echo
+              head -c 400 /tmp/healthz_body.txt; echo
+              if grep -q "$EXPECT" /tmp/healthz_body.txt; then
+                echo "git_sha coincide con GITHUB_SHA"
+              else
+                echo "aviso: healthz 200 pero git_sha aún no refleja ${EXPECT:0:7} (posible instancia fría)"
+              fi
               exit 0
             fi
             sleep 15
