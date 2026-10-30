@@ -77,6 +77,19 @@ export default function EntradasFiltrosModal({
           <option value="rojo">Rojo</option>
         </select>
       </FiltroCampo>
+
+      <FiltroCampo label="Por revisar">
+        <select
+          value={draft.por_revisar || ''}
+          onChange={(e) => set('por_revisar', e.target.value)}
+          style={inp}
+          data-testid="filtro-por-revisar"
+        >
+          <option value="">Todas</option>
+          <option value="si">Solo por revisar</option>
+          <option value="no">Sin marca</option>
+        </select>
+      </FiltroCampo>
     </AlmacenFiltrosModal>
   )
 }

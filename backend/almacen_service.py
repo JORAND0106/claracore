@@ -8439,6 +8439,21 @@ def _regenerar_pdf_pos_entrada(contrato_id: int, entrada_id: int, ent: Optional[
 
 def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Optional[bytes] = None,
                    remision_nombre: Optional[str] = None, remision_mime: Optional[str] = None) -> dict:
+    """
+    Registra una entrada. Nunca bloquea por OC/saldo/foto/proveedor:
+    si algo no cuadra, guarda igual con marca «por revisar».
+    """
+    from almacen_entrada_por_revisar import (
+        MOTIVO_OC_CONSUMIDA,
+        MOTIVO_PROVEEDOR_MANUAL,
+        MOTIVO_SIN_FOTO,
+        MOTIVO_SIN_INSUMO,
+        MOTIVO_SIN_OC,
+        MOTIVO_SUPERA_SALDO,
+        MOTIVO_VEHICULO_NUEVO,
+        patch_por_revisar,
+    )
+
     sb = _sb()
     lineas = body.get("items") or []
     if not lineas:
@@ -8448,6 +8463,7 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     if tipo not in ("disposicion", "recibo"):
         raise ValueError("Tipo de entrada inválido.")
 
+    motivos: List[str] = []
     pk_id = (body.get("pk_id") or "").strip()
     oc_id_raw = body.get("orden_compra_id")
     oc_id = int(oc_id_raw) if oc_id_raw not in (None, "", 0) else None
@@ -8457,51 +8473,72 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     oc: Optional[dict] = None
 
     if oc_id:
-        oc = get_orden_compra(contrato_id, oc_id, incluir_entradas=False)
-        if oc.get("estado") == "anulada":
-            raise ValueError("La orden de compra está anulada.")
-        items_oc = oc.get("items") or []
-        if not any(_oc_item_saldos(it)["tiene_saldo"] for it in items_oc):
-            raise ValueError("La orden de compra no tiene saldo pendiente por recibir.")
-        body = _enriquecer_entrada_desde_oc(contrato_id, oc, lineas, body)
+        try:
+            oc = get_orden_compra(contrato_id, oc_id, incluir_entradas=False)
+        except ValueError:
+            oc = None
+            oc_id = None
+            motivos.append(MOTIVO_SIN_OC)
+        if oc and oc.get("estado") == "anulada":
+            oc = None
+            oc_id = None
+            motivos.append(MOTIVO_SIN_OC)
+        elif oc:
+            items_oc = oc.get("items") or []
+            if not any(_oc_item_saldos(it)["tiene_saldo"] for it in items_oc):
+                motivos.append(MOTIVO_OC_CONSUMIDA)
+                alerta_codigo = ALERTA_OC_CONSUMIDA
+                alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_OC_CONSUMIDA]
+            body = _enriquecer_entrada_desde_oc(contrato_id, oc, lineas, body)
     else:
-        if not pk_id:
-            raise ValueError("Indique el PK-ID o seleccione una orden de compra vigente.")
-        flags = _contexto_oc_pk_flags(contrato_id, pk_id)
-        if flags.get("sin_oc_gestionada"):
-            alerta_codigo = ALERTA_SIN_OC_GESTIONADA
-            alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_SIN_OC_GESTIONADA]
-        elif flags.get("oc_consumida"):
-            alerta_codigo = ALERTA_OC_CONSUMIDA
-            alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_OC_CONSUMIDA]
+        if pk_id:
+            flags = _contexto_oc_pk_flags(contrato_id, pk_id)
+            if flags.get("oc_consumida"):
+                motivos.append(MOTIVO_OC_CONSUMIDA)
+                alerta_codigo = ALERTA_OC_CONSUMIDA
+                alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_OC_CONSUMIDA]
+            else:
+                motivos.append(MOTIVO_SIN_OC)
+                if flags.get("sin_oc_gestionada"):
+                    alerta_codigo = ALERTA_SIN_OC_GESTIONADA
+                    alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_SIN_OC_GESTIONADA]
         else:
-            raise ValueError("Debe seleccionar una orden de compra vigente con saldo disponible.")
+            motivos.append(MOTIVO_SIN_OC)
 
     pk_id = _norm_pk_id(body.get("pk_id") or pk_id) or None
-    if oc_id and not pk_id:
-        raise ValueError(
-            "No se pudo determinar el PK-ID de la entrada. Verifique la solicitud asociada a la orden de compra."
-        )
 
     proveedor_id = body.get("proveedor_id")
-    if proveedor_id is not None:
-        prov_check = (
-            sb.table("almacen_proveedor")
-            .select("id")
-            .eq("id", int(proveedor_id))
-            .eq("contrato_id", contrato_id)
-            .eq("activo", True)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if not prov_check:
-            raise ValueError("Proveedor no inscrito en el directorio.")
+    proveedor_nombre_texto = (body.get("proveedor_nombre_texto") or body.get("proveedor_nombre") or "").strip() or None
+    if proveedor_id is not None and proveedor_id != "":
+        try:
+            proveedor_id = int(proveedor_id)
+        except (TypeError, ValueError):
+            proveedor_id = None
+        if proveedor_id is not None:
+            prov_check = (
+                sb.table("almacen_proveedor")
+                .select("id")
+                .eq("id", proveedor_id)
+                .eq("contrato_id", contrato_id)
+                .eq("activo", True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if not prov_check:
+                proveedor_id = None
+                motivos.append(MOTIVO_PROVEEDOR_MANUAL)
+    else:
+        proveedor_id = None
+    if proveedor_id is None and proveedor_nombre_texto:
+        motivos.append(MOTIVO_PROVEEDOR_MANUAL)
+    elif proveedor_id is None and not oc_id:
+        motivos.append(MOTIVO_PROVEEDOR_MANUAL)
 
     insumo_id = int(body["insumo_id"]) if body.get("insumo_id") else None
     if not insumo_id and not oc_id:
-        raise ValueError("Indique el insumo recibido.")
+        motivos.append(MOTIVO_SIN_INSUMO)
 
     numero_doc = _resolve_numero_documento_entrada(
         contrato_id,
@@ -8509,14 +8546,15 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
         body.get("numero_documento"),
     )
 
-    if tipo == "recibo":
-        if not remision_data:
-            raise ValueError("Adjunte el soporte fotográfico o PDF de la remisión.")
-        if len(remision_data) > REMISION_SOPORTE_MAX_BYTES:
-            raise ValueError("El soporte de remisión no puede superar 300 KB.")
+    if remision_data and len(remision_data) > REMISION_SOPORTE_MAX_BYTES:
+        # Comprimir no es responsabilidad del servidor aquí; se rechaza solo el exceso técnico.
+        raise ValueError("El soporte de remisión no puede superar 300 KB.")
+    if tipo == "recibo" and not remision_data:
+        motivos.append(MOTIVO_SIN_FOTO)
 
     numero_entrada = _next_consecutivo(contrato_id, "almacen_entrada", "numero_entrada")
     codigo_entrada = _format_codigo_entrada(contrato_id, numero_entrada)
+    por_rev = patch_por_revisar(motivos)
 
     entrada_row = {
         "orden_compra_id": oc_id,
@@ -8539,8 +8577,24 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
         "transportador": (body.get("transportador") or "").strip() or None,
         "alerta_silenciosa_codigo": alerta_codigo,
         "alerta_silenciosa_detalle": alerta_detalle,
+        "por_revisar": por_rev["por_revisar"],
+        "por_revisar_motivos": por_rev["por_revisar_motivos"],
+        "proveedor_nombre_texto": proveedor_nombre_texto,
     }
-    ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
+    try:
+        ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
+    except Exception as exc:
+        # Migración pendiente: guardar sin columnas nuevas.
+        col = _pgrst_unknown_column(exc)
+        if col in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto"):
+            for k in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto"):
+                entrada_row.pop(k, None)
+            ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
+            entrada_row["por_revisar"] = por_rev["por_revisar"]
+            entrada_row["por_revisar_motivos"] = por_rev["por_revisar_motivos"]
+            entrada_row["proveedor_nombre_texto"] = proveedor_nombre_texto
+        else:
+            raise
     if not ent_ins:
         raise ValueError("No se pudo crear la entrada.")
     entrada_id = ent_ins[0]["id"]
@@ -8567,138 +8621,147 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
         oci_id_raw = ln.get("orden_compra_item_id")
         oci_id = int(oci_id_raw) if oci_id_raw not in (None, "", 0) else None
 
-        if oci_id:
+        if oci_id and oc:
             oci = oc_items_map.get(oci_id)
             if not oci:
-                raise ValueError(f"Línea OC {oci_id} no válida.")
-            saldos = _oc_item_saldos(oci)
-            if not saldos["tiene_saldo"]:
-                raise ValueError(
-                    f"La orden de compra no tiene saldo disponible para «{oci.get('material_descripcion')}»."
-                )
-            pendiente = saldos["saldo_cantidad"]
-            if qty > pendiente + 0.0001:
-                raise ValueError(
-                    f"Cantidad recibida ({qty}) supera el saldo ({pendiente}) para «{oci.get('material_descripcion')}»."
-                )
-            valor_linea = producto(qty, oci.get("valor_unitario"))
-            val_pend = saldos["saldo_valor"]
-            if a_decimal(valor_linea) > a_decimal(val_pend) + Decimal("0.0000001"):
-                raise ValueError(
-                    f"El valor recibido ({fmt_dinero(valor_linea)}) supera el saldo valor ({fmt_dinero(val_pend)}) "
-                    f"para «{oci.get('material_descripcion')}»."
-                )
-            ei_row = {
-                "entrada_id": entrada_id,
-                "orden_compra_item_id": oci_id,
-                "presupuesto_id": oci["presupuesto_id"],
-                "cantidad_recibida": qty,
-                "valor_recibido": valor_linea,
-                "lote": (ln.get("lote") or "").strip() or None,
-                "fecha_vencimiento": ln.get("fecha_vencimiento") or None,
-            }
-            ei_ins = sb.table("almacen_entrada_item").insert(ei_row).execute().data
-            ei_id = ei_ins[0]["id"] if ei_ins else None
-            if ei_id is not None:
-                created_items.append({
-                    **ei_row,
-                    "id": ei_id,
-                    "material_descripcion": oci.get("material_descripcion"),
-                    "unidad": oci.get("unidad"),
-                })
-
-            new_rec = _to_float(oci.get("cantidad_recibida")) + qty
-            new_val_rec = float(a_decimal(oci.get("valor_recibido")) + a_decimal(valor_linea))
-            sb.table("almacen_orden_compra_item").update({
-                "cantidad_recibida": new_rec,
-                "valor_recibido": new_val_rec,
-            }).eq("id", oci_id).execute()
-            oci["cantidad_recibida"] = new_rec
-            oci["valor_recibido"] = new_val_rec
-
-            if primera_oci is None:
-                primera_cantidad = qty
-                primera_oci = oci
-
-            # AIU / sin presupuesto_id: no hay saldo físico de obra ni inventario por ítem.
-            if oci.get("presupuesto_id"):
-                sb.table("almacen_movimiento").insert({
-                    "contrato_id": contrato_id,
-                    "presupuesto_id": oci["presupuesto_id"],
-                    "material_descripcion": oci["material_descripcion"],
-                    "unidad": oci["unidad"],
-                    "tipo": "entrada",
-                    "cantidad": qty,
-                    "entrada_item_id": ei_id,
-                    "referencia_tipo": "entrada",
-                    "referencia_id": entrada_id,
-                    "lote": ei_row["lote"],
-                    "fecha_vencimiento": ei_row["fecha_vencimiento"],
-                    "created_by": user_id,
-                }).execute()
-
-                _upsert_inventario(
-                    contrato_id,
-                    oci["presupuesto_id"],
-                    oci["material_descripcion"],
-                    oci["unidad"],
-                    qty,
-                    _to_float(oci.get("cantidad")),
-                )
-        else:
-            meta_mat = _presupuesto_material_pk_insumo(contrato_id, pk_id, insumo_id)
-            material = meta_mat.get("material_descripcion") or "—"
-            unidad = meta_mat.get("unidad") or "UND"
-            presupuesto_id = meta_mat.get("presupuesto_id")
-            ei_row = {
-                "entrada_id": entrada_id,
-                "orden_compra_item_id": None,
-                "presupuesto_id": presupuesto_id,
-                "cantidad_recibida": qty,
-                "valor_recibido": None,
-                "lote": (ln.get("lote") or "").strip() or None,
-                "fecha_vencimiento": ln.get("fecha_vencimiento") or None,
-            }
-            ei_ins = sb.table("almacen_entrada_item").insert(ei_row).execute().data
-            ei_id = ei_ins[0]["id"] if ei_ins else None
-            if ei_id is not None:
-                created_items.append({
-                    **ei_row,
-                    "id": ei_id,
-                    "material_descripcion": material,
-                    "unidad": unidad,
-                })
-
-            if presupuesto_id:
-                sb.table("almacen_movimiento").insert({
-                    "contrato_id": contrato_id,
-                    "presupuesto_id": presupuesto_id,
-                    "material_descripcion": material,
-                    "unidad": unidad,
-                    "tipo": "entrada",
-                    "cantidad": qty,
-                    "entrada_item_id": ei_id,
-                    "referencia_tipo": "entrada",
-                    "referencia_id": entrada_id,
-                    "lote": ei_row["lote"],
-                    "fecha_vencimiento": ei_row["fecha_vencimiento"],
-                    "created_by": user_id,
-                }).execute()
-                _upsert_inventario(
-                    contrato_id,
-                    presupuesto_id,
-                    material,
-                    unidad,
-                    qty,
-                    qty,
-                )
-
-            if primera_oci is None:
-                primera_cantidad = qty
-                primera_oci = {
-                    "material_descripcion": material,
-                    "unidad": unidad,
+                # Línea no válida → guardar como sin OC item, marcar revisión.
+                motivos.append(MOTIVO_SIN_OC)
+                oci_id = None
+            else:
+                saldos = _oc_item_saldos(oci)
+                pendiente = saldos["saldo_cantidad"]
+                if (not saldos["tiene_saldo"]) or qty > pendiente + 0.0001:
+                    if MOTIVO_SUPERA_SALDO not in motivos and MOTIVO_OC_CONSUMIDA not in motivos:
+                        motivos.append(MOTIVO_SUPERA_SALDO if saldos["tiene_saldo"] else MOTIVO_OC_CONSUMIDA)
+                valor_linea = producto(qty, oci.get("valor_unitario"))
+                ei_row = {
+                    "entrada_id": entrada_id,
+                    "orden_compra_item_id": oci_id,
+                    "presupuesto_id": oci.get("presupuesto_id"),
+                    "cantidad_recibida": qty,
+                    "valor_recibido": valor_linea,
+                    "lote": (ln.get("lote") or "").strip() or None,
+                    "fecha_vencimiento": ln.get("fecha_vencimiento") or None,
                 }
+                ei_ins = sb.table("almacen_entrada_item").insert(ei_row).execute().data
+                ei_id = ei_ins[0]["id"] if ei_ins else None
+                if ei_id is not None:
+                    created_items.append({
+                        **ei_row,
+                        "id": ei_id,
+                        "material_descripcion": oci.get("material_descripcion"),
+                        "unidad": oci.get("unidad"),
+                    })
+
+                new_rec = _to_float(oci.get("cantidad_recibida")) + qty
+                new_val_rec = float(a_decimal(oci.get("valor_recibido")) + a_decimal(valor_linea))
+                sb.table("almacen_orden_compra_item").update({
+                    "cantidad_recibida": new_rec,
+                    "valor_recibido": new_val_rec,
+                }).eq("id", oci_id).execute()
+                oci["cantidad_recibida"] = new_rec
+                oci["valor_recibido"] = new_val_rec
+
+                if primera_oci is None:
+                    primera_cantidad = qty
+                    primera_oci = oci
+
+                if oci.get("presupuesto_id"):
+                    sb.table("almacen_movimiento").insert({
+                        "contrato_id": contrato_id,
+                        "presupuesto_id": oci["presupuesto_id"],
+                        "material_descripcion": oci["material_descripcion"],
+                        "unidad": oci["unidad"],
+                        "tipo": "entrada",
+                        "cantidad": qty,
+                        "entrada_item_id": ei_id,
+                        "referencia_tipo": "entrada",
+                        "referencia_id": entrada_id,
+                        "lote": ei_row["lote"],
+                        "fecha_vencimiento": ei_row["fecha_vencimiento"],
+                        "created_by": user_id,
+                    }).execute()
+
+                    _upsert_inventario(
+                        contrato_id,
+                        oci["presupuesto_id"],
+                        oci["material_descripcion"],
+                        oci["unidad"],
+                        qty,
+                        _to_float(oci.get("cantidad")),
+                    )
+                continue
+
+        meta_mat = _presupuesto_material_pk_insumo(contrato_id, pk_id, insumo_id) if (pk_id or insumo_id) else {}
+        material = meta_mat.get("material_descripcion") or body.get("material_descripcion") or "—"
+        unidad = meta_mat.get("unidad") or body.get("unidad") or "UND"
+        presupuesto_id = meta_mat.get("presupuesto_id")
+        ei_row = {
+            "entrada_id": entrada_id,
+            "orden_compra_item_id": None,
+            "presupuesto_id": presupuesto_id,
+            "cantidad_recibida": qty,
+            "valor_recibido": None,
+            "lote": (ln.get("lote") or "").strip() or None,
+            "fecha_vencimiento": ln.get("fecha_vencimiento") or None,
+        }
+        ei_ins = sb.table("almacen_entrada_item").insert(ei_row).execute().data
+        ei_id = ei_ins[0]["id"] if ei_ins else None
+        if ei_id is not None:
+            created_items.append({
+                **ei_row,
+                "id": ei_id,
+                "material_descripcion": material,
+                "unidad": unidad,
+            })
+
+        if presupuesto_id:
+            sb.table("almacen_movimiento").insert({
+                "contrato_id": contrato_id,
+                "presupuesto_id": presupuesto_id,
+                "material_descripcion": material,
+                "unidad": unidad,
+                "tipo": "entrada",
+                "cantidad": qty,
+                "entrada_item_id": ei_id,
+                "referencia_tipo": "entrada",
+                "referencia_id": entrada_id,
+                "lote": ei_row["lote"],
+                "fecha_vencimiento": ei_row["fecha_vencimiento"],
+                "created_by": user_id,
+            }).execute()
+            _upsert_inventario(
+                contrato_id,
+                presupuesto_id,
+                material,
+                unidad,
+                qty,
+                qty,
+            )
+
+        if primera_oci is None:
+            primera_cantidad = qty
+            primera_oci = {
+                "material_descripcion": material,
+                "unidad": unidad,
+            }
+
+    # Motivos finales (p. ej. supera saldo detectado en el bucle).
+    por_rev_final = patch_por_revisar(motivos)
+    if (
+        por_rev_final.get("por_revisar") != entrada_row.get("por_revisar")
+        or por_rev_final.get("por_revisar_motivos") != entrada_row.get("por_revisar_motivos")
+    ):
+        try:
+            sb.table("almacen_entrada").update({
+                "por_revisar": por_rev_final["por_revisar"],
+                "por_revisar_motivos": por_rev_final["por_revisar_motivos"],
+            }).eq("id", entrada_id).execute()
+            entrada_row["por_revisar"] = por_rev_final["por_revisar"]
+            entrada_row["por_revisar_motivos"] = por_rev_final["por_revisar_motivos"]
+        except Exception as exc:
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudo actualizar por_revisar entrada %s: %s", entrada_id, exc)
 
     if oc_id:
         _actualizar_estado_oc(sb, oc_id)
@@ -8747,16 +8810,159 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     if result.get("created_by"):
         names = _map_usuario_nombres(sb, [result["created_by"]])
         result["usuario_nombre"] = names.get(int(result["created_by"]))
+    if result.get("proveedor_id"):
+        pr = (
+            sb.table("almacen_proveedor")
+            .select("razon_social")
+            .eq("id", int(result["proveedor_id"]))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        result["proveedor_nombre"] = pr[0].get("razon_social") if pr else proveedor_nombre_texto
+    elif proveedor_nombre_texto:
+        result["proveedor_nombre"] = proveedor_nombre_texto
     placa_val = entrada_row.get("placa")
     transportador_val = entrada_row.get("transportador")
     if placa_val and transportador_val:
-        _, transportador_nuevo = upsert_transportador(
-            contrato_id, user_id, placa_val, transportador_val
-        )
-        if transportador_nuevo:
-            result["transportador_registrado"] = True
+        try:
+            _, transportador_nuevo = upsert_transportador(
+                contrato_id, user_id, placa_val, transportador_val
+            )
+            if transportador_nuevo:
+                result["transportador_registrado"] = True
+                if MOTIVO_VEHICULO_NUEVO not in motivos:
+                    motivos.append(MOTIVO_VEHICULO_NUEVO)
+                    por_rev_v = patch_por_revisar(motivos)
+                    try:
+                        sb.table("almacen_entrada").update({
+                            "por_revisar": por_rev_v["por_revisar"],
+                            "por_revisar_motivos": por_rev_v["por_revisar_motivos"],
+                        }).eq("id", entrada_id).execute()
+                        result["por_revisar"] = por_rev_v["por_revisar"]
+                        result["por_revisar_motivos"] = por_rev_v["por_revisar_motivos"]
+                    except Exception:
+                        pass
+        except ValueError:
+            # Placa inválida no debe tumbar la entrada ya guardada.
+            pass
     _invalidar_graficos_inventario(contrato_id)
     return result
+
+
+def list_ocs_pendientes_tarjeta(contrato_id: int, *, ver_economicos: bool = False) -> List[dict]:
+    """Tarjetas de OC con saldo para el registro tablet (una tarjeta por línea con saldo)."""
+    ocs = list_ordenes_compra(contrato_id)
+    tarjetas: List[dict] = []
+    for oc in ocs:
+        if (oc.get("estado") or "") == "anulada":
+            continue
+        if not oc.get("tiene_saldo_recepcion"):
+            continue
+        oc_full = get_orden_compra(contrato_id, int(oc["id"]), incluir_entradas=False)
+        for it in oc_full.get("items") or []:
+            saldos = _oc_item_saldos(it)
+            if not saldos.get("tiene_saldo"):
+                continue
+            sol = it.get("almacen_solicitud_item") or {}
+            card = {
+                "orden_compra_id": int(oc["id"]),
+                "orden_compra_item_id": int(it["id"]),
+                "numero_oc": oc.get("numero_oc"),
+                "proveedor_id": oc.get("proveedor_id"),
+                "proveedor_nombre": oc.get("proveedor_nombre"),
+                "insumo_id": it.get("insumo_id") or sol.get("insumo_id"),
+                "material_descripcion": it.get("material_descripcion") or sol.get("material_descripcion"),
+                "unidad": it.get("unidad") or sol.get("unidad") or "UND",
+                "saldo_cantidad": saldos.get("saldo_cantidad"),
+                "pk_id": sol.get("pk_id") or oc.get("pk_id"),
+                "tramo": sol.get("tramo"),
+                "costado": sol.get("costado"),
+                "abscisa_inicial": sol.get("abscisa_inicial"),
+                "abscisa_final": sol.get("abscisa_final"),
+            }
+            if ver_economicos:
+                card["saldo_valor"] = saldos.get("saldo_valor")
+                card["valor_unitario"] = it.get("valor_unitario")
+            tarjetas.append(card)
+    return tarjetas
+
+
+def completar_revision_entrada(
+    contrato_id: int,
+    entrada_id: int,
+    user_id: int,
+    body: Optional[dict] = None,
+) -> dict:
+    """
+    Completa una entrada «por revisar»: asocia OC, proveedor del directorio y/o quita la marca.
+    Todo queda en el log vía la ruta.
+    """
+    body = body or {}
+    sb = _sb()
+    ent = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
+    if not ent.get("por_revisar") and not ent.get("alerta_silenciosa_codigo"):
+        raise ValueError("Esta entrada no está marcada por revisar.")
+
+    patch: Dict[str, Any] = {}
+    if body.get("orden_compra_id") not in (None, "", 0):
+        oc_id = int(body["orden_compra_id"])
+        oc = get_orden_compra(contrato_id, oc_id, incluir_entradas=False)
+        if oc.get("estado") == "anulada":
+            raise ValueError("La orden de compra está anulada.")
+        patch["orden_compra_id"] = oc_id
+        if oc.get("proveedor_id") and not ent.get("proveedor_id"):
+            patch["proveedor_id"] = int(oc["proveedor_id"])
+        if not ent.get("insumo_id"):
+            for it in oc.get("items") or []:
+                if it.get("insumo_id"):
+                    patch["insumo_id"] = int(it["insumo_id"])
+                    break
+        patch["alerta_silenciosa_codigo"] = None
+        patch["alerta_silenciosa_detalle"] = None
+
+    if body.get("proveedor_id") not in (None, "", 0):
+        pid = int(body["proveedor_id"])
+        prov = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .eq("id", pid)
+            .eq("contrato_id", contrato_id)
+            .eq("activo", True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not prov:
+            raise ValueError("Proveedor no inscrito en el directorio.")
+        patch["proveedor_id"] = pid
+        patch["proveedor_nombre_texto"] = None
+
+    if body.get("limpiar_marca") or body.get("quitar_marca") or patch:
+        # Si el validador confirma, se limpia la marca (tras asociar lo faltante).
+        if body.get("limpiar_marca") is not False and (
+            body.get("limpiar_marca") or body.get("quitar_marca") or body.get("confirmar")
+        ):
+            patch["por_revisar"] = False
+            patch["por_revisar_motivos"] = None
+
+    if not patch:
+        raise ValueError("Indique qué completar (OC, proveedor) o confirme quitar la marca.")
+
+    try:
+        sb.table("almacen_entrada").update(patch).eq("id", int(entrada_id)).execute()
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto"):
+            for k in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto"):
+                patch.pop(k, None)
+            if patch:
+                sb.table("almacen_entrada").update(patch).eq("id", int(entrada_id)).execute()
+        else:
+            raise
+    return get_entrada(contrato_id, entrada_id)
 
 
 def _rollback_entrada_item_line(sb, contrato_id: int, ent: dict, it: dict) -> None:
@@ -9003,6 +9209,8 @@ def list_entradas(contrato_id: int) -> List[dict]:
                 or []
             )
             r["proveedor_nombre"] = pr[0].get("razon_social") if pr else None
+        if not r.get("proveedor_nombre") and r.get("proveedor_nombre_texto"):
+            r["proveedor_nombre"] = r.get("proveedor_nombre_texto")
         if r.get("created_by"):
             names = _map_usuario_nombres(sb, [r.get("created_by")])
             r["usuario_nombre"] = names.get(int(r["created_by"]))
@@ -9118,6 +9326,8 @@ def get_entrada(
         if pr:
             ent["proveedor_nombre"] = pr[0].get("razon_social")
             ent["proveedor_nit"] = pr[0].get("nit")
+    if not ent.get("proveedor_nombre") and ent.get("proveedor_nombre_texto"):
+        ent["proveedor_nombre"] = ent.get("proveedor_nombre_texto")
     if ent.get("insumo_id"):
         ins = (
             sb.table("almacen_insumo")

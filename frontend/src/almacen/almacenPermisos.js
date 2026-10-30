@@ -264,6 +264,11 @@ export function puedeVerAlertasEntrada(permisos) {
   return Boolean(permisos?.validar || permisos?.editar)
 }
 
+/** Vista «Por revisar» y completar entradas: Validar en Entradas y Salidas. */
+export function puedeCompletarRevisionEntrada(permisos) {
+  return Boolean(permisos?.validar)
+}
+
 /** Solicitud editable hasta generar OC (no aprobada). */
 export function solicitudAlmacenEditable(sol) {
   if (!sol) return true

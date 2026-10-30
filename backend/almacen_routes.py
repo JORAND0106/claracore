@@ -92,6 +92,7 @@ from almacen_service import (
     aprobar_todos_items_solicitud,
     buscar_ordenes_compra_vigentes,
     buscar_ordenes_compra_por_pk,
+    completar_revision_entrada,
     contexto_ordenes_compra_por_pk,
     create_entrada,
     create_salida,
@@ -122,6 +123,7 @@ from almacen_service import (
     listar_ofertas_proveedor_insumo,
     list_entradas,
     list_inventario,
+    list_ocs_pendientes_tarjeta,
     list_movimientos,
     list_ordenes_compra,
     list_presupuesto_items,
@@ -2413,12 +2415,75 @@ def route_list_entradas(contrato_id: int, current_user=Depends(get_current_user)
     return list_entradas(contrato_id)
 
 
+@router.get("/{contrato_id}/entradas/ocs-pendientes")
+def route_ocs_pendientes_entrada(contrato_id: int, current_user=Depends(get_current_user)):
+    """Tarjetas de OC con saldo para el registro tablet."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "crear")
+    return list_ocs_pendientes_tarjeta(
+        contrato_id,
+        ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+    )
+
+
 @router.get("/{contrato_id}/entradas/{entrada_id}")
 def route_get_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
     require_lectura_entradas_salidas(current_user)
     try:
         return get_entrada(contrato_id, entrada_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+class CompletarRevisionEntradaBody(BaseModel):
+    orden_compra_id: Optional[int] = None
+    proveedor_id: Optional[int] = None
+    confirmar: bool = True
+    limpiar_marca: bool = True
+
+
+@router.post("/{contrato_id}/entradas/{entrada_id}/completar-revision")
+def route_completar_revision_entrada(
+    contrato_id: int,
+    entrada_id: int,
+    body: CompletarRevisionEntradaBody,
+    current_user=Depends(get_current_user),
+):
+    """Completa una entrada «por revisar». Exige Validar en Entradas y Salidas."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "validar")
+    try:
+        prev = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
+        result = completar_revision_entrada(
+            contrato_id,
+            entrada_id,
+            _uid(current_user),
+            body.model_dump(exclude_none=True),
+        )
+        log_almacen(
+            current_user,
+            "COMPLETAR_REVISION_ENTRADA",
+            "entrada",
+            entrada_id,
+            {
+                "orden_compra_id": body.orden_compra_id,
+                "proveedor_id": body.proveedor_id,
+            },
+            valor_anterior={
+                "por_revisar": prev.get("por_revisar"),
+                "por_revisar_motivos": prev.get("por_revisar_motivos"),
+                "orden_compra_id": prev.get("orden_compra_id"),
+                "proveedor_id": prev.get("proveedor_id"),
+            },
+            valor_nuevo={
+                "por_revisar": result.get("por_revisar"),
+                "por_revisar_motivos": result.get("por_revisar_motivos"),
+                "orden_compra_id": result.get("orden_compra_id"),
+                "proveedor_id": result.get("proveedor_id"),
+            },
+        )
+        return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 
@@ -2433,6 +2498,9 @@ async def route_create_entrada(
     tipo: Optional[str] = Form("recibo"),
     numero_documento: Optional[str] = Form(None),
     proveedor_id: Optional[int] = Form(None),
+    proveedor_nombre_texto: Optional[str] = Form(None),
+    material_descripcion: Optional[str] = Form(None),
+    unidad: Optional[str] = Form(None),
     insumo_id: Optional[int] = Form(None),
     pk_id: Optional[str] = Form(None),
     tramo: Optional[str] = Form(None),
@@ -2453,22 +2521,13 @@ async def route_create_entrada(
         raise HTTPException(status_code=400, detail="items_json inválido") from exc
     tipo_norm = (tipo or "recibo").strip().lower()
     numero_norm = (numero_documento or "").strip()
-    if tipo_norm == "recibo" and not numero_norm:
-        raise HTTPException(
-            status_code=400,
-            detail="Indique el número de remisión del proveedor.",
-        )
-    if tipo_norm == "recibo" and (not remision or not remision.filename):
-        raise HTTPException(
-            status_code=400,
-            detail="Adjunte el soporte fotográfico o PDF de la remisión.",
-        )
+    # Foto y nº remisión ya no bloquean: create_entrada marca «por revisar».
     rem_data = rem_mime = rem_nombre = None
     if remision and remision.filename:
         rem_data = await remision.read()
         rem_mime = remision.content_type or "image/jpeg"
         rem_nombre = remision.filename
-        if tipo_norm == "recibo" and len(rem_data) > 300 * 1024:
+        if len(rem_data) > 300 * 1024:
             raise HTTPException(
                 status_code=400,
                 detail="El soporte de remisión no puede superar 300 KB.",
@@ -2481,6 +2540,9 @@ async def route_create_entrada(
         "tipo": tipo_norm,
         "numero_documento": numero_norm or None,
         "proveedor_id": proveedor_id,
+        "proveedor_nombre_texto": (proveedor_nombre_texto or "").strip() or None,
+        "material_descripcion": (material_descripcion or "").strip() or None,
+        "unidad": (unidad or "").strip() or None,
         "insumo_id": insumo_id,
         "pk_id": pk_id,
         "tramo": tramo,
