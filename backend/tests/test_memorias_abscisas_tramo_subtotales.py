@@ -249,7 +249,7 @@ def test_html_memoria_abscisas_subtotales_y_unidad():
         conc_meta={
             "titulo": "MEMORIA MENSUAL",
             "codigo": "CC-MES-002",
-            "cells": [("CONTRATO", "C-1"), ("ACTA RPO", "1"), ("CONSECUTIVO", "1"), ("FECHA ACTA", "—")],
+            "cells": [("CONTRATO", "C-1"), ("ACTA RPO", "1"), ("CONSECUTIVO", "1"), ("PERÍODO", "2025-01-01 → 2025-01-31")],
         },
         aprobo_interventoria_desde_config=True,
         pie_fotos_contexto="Acta RPO 1",
@@ -400,7 +400,7 @@ def test_paridad_html_excel_item_multitramo_desordenado():
             ("CONTRATO", "C-1"),
             ("ACTA RPO", "1"),
             ("CONSECUTIVO", "1"),
-            ("FECHA ACTA", "—"),
+            ("PERÍODO", "2025-01-01 → 2025-01-31"),
         ],
     }
 

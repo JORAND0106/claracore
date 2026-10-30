@@ -81,7 +81,7 @@ def _regs_base(n_fotos=3, with_grafico=False, with_enlace=False, shared_foto_url
 def test_memoria_cells_con_capitulo_agrega_sin_duplicar():
     inf = _import_informes_with_stubs()
     cells = inf._memoria_cells_con_capitulo(
-        [("CONTRATO", "C1"), ("ACTA RPO", "10"), ("CONSECUTIVO", "1"), ("FECHA ACTA", "—")],
+        [("CONTRATO", "C1"), ("ACTA RPO", "10"), ("CONSECUTIVO", "1"), ("PERÍODO", "2025-01-01 → 2025-01-31")],
         "2. PLUVIAL",
     )
     assert len(cells) == 5
@@ -380,7 +380,7 @@ def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
                 ("CONTRATO", "IDU-1"),
                 ("ACTA RPO", "72"),
                 ("CONSECUTIVO", "1"),
-                ("FECHA ACTA", "—"),
+                ("PERÍODO", "2025-01-01 → 2025-01-31"),
             ],
         },
         pie_fotos_contexto="Acta RPO 72",

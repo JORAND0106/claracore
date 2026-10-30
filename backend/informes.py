@@ -7515,20 +7515,10 @@ def pdf_cc_mes_002_acta(
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
     item_info = _item_info_desde_registros(registros, item_numero)
-    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    fa = "—"
-    conc_meta = {
-        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
-        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
-        "cells": [
-            ("CONTRATO", str(contrato.get("numero") or "")),
-            ("ACTA RPO", nrpo),
-            ("CONSECUTIVO", cons),
-            ("FECHA ACTA", fa),
-        ],
-    }
+    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
@@ -8086,20 +8076,10 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
     item_info = _item_info_desde_registros(registros, item_numero)
-    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    fa = "—"
-    conc_meta = {
-        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
-        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
-        "cells": [
-            ("CONTRATO", str(contrato.get("numero") or "")),
-            ("ACTA RPO", nrpo),
-            ("CONSECUTIVO", cons),
-            ("FECHA ACTA", fa),
-        ],
-    }
+    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
@@ -8201,19 +8181,10 @@ def _cc_mes_002_acta_completo_ctx(
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = {
-        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
-        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
-        "cells": [
-            ("CONTRATO", str(contrato.get("numero") or "")),
-            ("ACTA RPO", nrpo),
-            ("CONSECUTIVO", cons),
-            ("FECHA ACTA", "—"),
-        ],
-    }
+    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
@@ -12515,6 +12486,69 @@ def _fd(d):
     try:    return datetime.fromisoformat(str(d)).strftime("%d/%m/%Y")
     except: return str(d)
 
+
+def _fecha_acta_yyyy_mm_dd(val: Any) -> str:
+    """Fecha de acta como en Admin › Actas: solo YYYY-MM-DD (sin hora)."""
+    if val is None or val == "":
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    return s[:10]
+
+
+def _periodo_acta_admin_fmt(acta: Optional[dict]) -> str:
+    """
+    Periodo del acta (Admin › Actas): ``YYYY-MM-DD → YYYY-MM-DD``.
+
+    Si faltan ambas fechas → ``—`` (mismo vacío del formato).
+    """
+    if not isinstance(acta, dict):
+        return "—"
+    fi = _fecha_acta_yyyy_mm_dd(acta.get("fecha_inicio"))
+    ff = _fecha_acta_yyyy_mm_dd(acta.get("fecha_fin"))
+    if fi and ff:
+        return f"{fi} → {ff}"
+    if fi or ff:
+        return f"{fi or '—'} → {ff or '—'}"
+    return "—"
+
+
+def _conc_meta_cc_mes_002(contrato_numero: Any, acta: Optional[dict]) -> Dict[str, Any]:
+    """Banda de identificación CC-MES-002: CONTRATO · ACTA RPO · CONSECUTIVO · PERÍODO · (+ CAPÍTULO)."""
+    ac = acta if isinstance(acta, dict) else {}
+    nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or "—")
+    cons = str(ac.get("consecutivo") or "—")
+    return {
+        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
+        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
+        "cells": [
+            ("CONTRATO", str(contrato_numero or "")),
+            ("ACTA RPO", nrpo),
+            ("CONSECUTIVO", cons),
+            ("PERÍODO", _periodo_acta_admin_fmt(ac)),
+        ],
+    }
+
+
+def _excel_row_height_wrapped_text(
+    text: Any,
+    *,
+    chars_per_line: int = 52,
+    line_pt: float = 12.0,
+    min_pt: float = 22.0,
+    max_pt: float = 120.0,
+) -> float:
+    """Altura de fila Excel para celda con wrap_text (descripción completa visible)."""
+    t = "" if text is None else str(text).strip()
+    if not t:
+        return min_pt
+    lines = 0
+    for para in t.splitlines() or [""]:
+        n = len(para)
+        lines += max(1, (n + max(chars_per_line, 1) - 1) // max(chars_per_line, 1))
+    return float(min(max_pt, max(min_pt, lines * line_pt + 8.0)))
+
 def _fn(n, dec=2):
     """Formatea número con decimales (inf/nan no rompen el PDF: format ',.' falla con inf)."""
     if n is None: return "—"
@@ -12692,6 +12726,22 @@ body.mem002-doc .mem002-head-wrap {
   page-break-inside: avoid;
   page-break-after: avoid;
   margin-bottom: 1px;
+}
+/* Descripción del ítem: completa, multilínea; la fila crece (sin ellipsis ni max-height). */
+body.mem002-doc .mem002-item-desc {
+  display: block;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  overflow: visible;
+  max-height: none;
+  line-height: 1.18;
+  margin: 1px 0 0 0;
+  padding: 0;
+  font-size: 6.5pt;
+  font-weight: normal;
+  color: #1a1a2e;
+  text-transform: none;
 }
 body.mem002-doc .mem002-section {
   page-break-after: avoid;
@@ -13832,13 +13882,18 @@ def _fill_memoria_excel_ws(
     ws["D5"] = "DESCRIPCIÓN"
     ws["D5"].font = lbl_font
     ws.merge_cells("E5:H5")
-    ws["E5"] = str(item_info.get("item_descripcion") or "").strip()
+    desc_txt = str(item_info.get("item_descripcion") or "").strip()
+    ws["E5"] = desc_txt
     ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[5].height = _excel_row_height_wrapped_text(desc_txt)
     ws["I5"] = "UNIDAD"
     ws["I5"].font = lbl_font
     ws["J5"] = str(item_info.get("unidad") or "—")
     for cc in (1, 2, 4, 5, 9, 10):
         ws.cell(row=5, column=cc).border = bd
+        ws.cell(row=5, column=cc).alignment = Alignment(
+            wrap_text=(cc == 5), vertical="top"
+        )
     r0 = 7
     ws.merge_cells(start_row=r0, start_column=1, end_row=r0, end_column=10)
     bar = ws.cell(row=r0, column=1, value="DETALLE DE CANTIDADES APROBADAS")
@@ -14394,19 +14449,10 @@ def _cc_mes_002_item_excel_bytes(
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
     item_info = _item_info_desde_registros(registros, item_numero)
-    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = {
-        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
-        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
-        "cells": [
-            ("CONTRATO", str(contrato.get("numero") or "")),
-            ("ACTA RPO", nrpo),
-            ("CONSECUTIVO", cons),
-            ("FECHA ACTA", "—"),
-        ],
-    }
+    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     sub, corte = _sub_corte_dummy_memoria()
@@ -14466,19 +14512,10 @@ def _cc_mes_002_acta_completo_excel_bytes(
     )
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
-    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = {
-        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
-        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
-        "cells": [
-            ("CONTRATO", str(contrato.get("numero") or "")),
-            ("ACTA RPO", nrpo),
-            ("CONSECUTIVO", cons),
-            ("FECHA ACTA", "—"),
-        ],
-    }
+    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     sub, corte = _sub_corte_dummy_memoria()
@@ -15635,6 +15672,7 @@ def _cc_sem_mes_integral_excel_bytes(
     modo = (modo or "").strip().lower()
     if modo not in ("sem", "mes"):
         raise HTTPException(400, "modo integral inválido")
+    mes_acta: Optional[dict] = None
     if modo == "sem":
         if semana_id is None:
             raise HTTPException(400, "semana_id requerido")
@@ -15692,22 +15730,14 @@ def _cc_sem_mes_integral_excel_bytes(
             f"Acta RPO {nrpo} · consecutivo {cons} · {niv_txt} · "
             "4 bloques + resumen conciliación (acumulado solo actas enviadas)"
         )
-        conc_meta = {
-            "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
-            "codigo": codigo_002,
-            "cells": [
-                ("CONTRATO", None),
-                ("ACTA RPO", nrpo),
-                ("CONSECUTIVO", cons),
-                ("FECHA ACTA", "—"),
-            ],
-        }
         pie_fotos = f"Acta RPO {nrpo} · cons. {cons}"
         ctx_tipo, ctx_id = "acta_rpo", acta_id
         sheet_ejec = "CC-MES-001"
         mes_resumen_4cols = ctx_mes.get("resumen_4cols")
         mes_otros = ctx_mes.get("otros_conceptos") or []
         mes_acta = ac
+        # conc_meta se completa abajo con número de contrato + periodo del acta.
+        conc_meta = None
 
 
     contrato = _row(
@@ -15717,11 +15747,14 @@ def _cc_sem_mes_integral_excel_bytes(
     )
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
-    # Completar CONTRATO en meta de memorias
-    cells = list(conc_meta.get("cells") or [])
-    if cells:
-        cells[0] = (cells[0][0], str(contrato.get("numero") or ""))
-        conc_meta["cells"] = cells
+    if codigo_002 == CODIGO_FORMATO_CCD_CC_MES_002 and conc_meta is None:
+        conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), mes_acta or {})
+    else:
+        # Completar CONTRATO en meta de memorias (SEM / otros)
+        cells = list((conc_meta or {}).get("cells") or [])
+        if cells:
+            cells[0] = (cells[0][0], str(contrato.get("numero") or ""))
+            conc_meta["cells"] = cells
 
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
@@ -17138,14 +17171,11 @@ def _html_memoria_item_body(
             cells.append(("", ""))
         c5 = cells[:5]
         it_num = _h(str(item_info.get("item_numero") or ""))
+        # Descripción completa del listado (sin recorte ni ellipsis).
         it_desc = _h(str(item_info.get("item_descripcion") or "").strip())
         it_und = _h(str(item_info.get("unidad") or ""))
         lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
         val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
-        val_desc = (
-            "font-size:6.5pt;font-weight:normal;color:#1a1a2e;line-height:1.04;"
-            "text-transform:none;word-wrap:break-word;margin:1px 0 0 0;padding:0;display:block;"
-        )
         fila1_h = "1.14cm"
         logo_box_h = "1.08cm"
         logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
@@ -17181,13 +17211,14 @@ def _html_memoria_item_body(
 <td colspan="3" style="padding:0;">
 <table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;">
 <tr>
-<td style="width:13%;{bd};padding:1px 4px;vertical-align:top;">
+<td style="width:13%;{bd};padding:2px 4px;vertical-align:top;">
 <span style="{lbl_blk}">ÍTEM</span><span style="{val};display:block;margin:1px 0 0 0;padding:0;">{it_num}</span>
 </td>
-<td style="width:74%;{bd};padding:1px 4px;vertical-align:top;">
-<span style="{lbl_blk}">DESCRIPCIÓN</span><span style="{val_desc}">{it_desc}</span>
+<td style="width:74%;{bd};padding:2px 4px;vertical-align:top;">
+<span style="{lbl_blk}">DESCRIPCIÓN</span>
+<div class="mem002-item-desc">{it_desc}</div>
 </td>
-<td style="width:13%;{bd};padding:1px 4px;vertical-align:top;">
+<td style="width:13%;{bd};padding:2px 4px;vertical-align:top;">
 <span style="{lbl_blk}">UNIDAD</span><span style="{val};display:block;margin:1px 0 0 0;padding:0;">{it_und}</span>
 </td>
 </tr>
