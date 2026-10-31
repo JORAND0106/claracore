@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
-import { puedeVerAlertasEntrada } from './almacenPermisos'
+import { puedeCompletarRevisionEntrada, puedeVerAlertasEntrada } from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
   AlmacenFieldLabel,
@@ -47,6 +47,8 @@ export default function EntradaDetalleModal({
   const [ent, setEnt] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(true)
+  const [revBusy, setRevBusy] = useState(false)
+  const puedeRevisar = puedeCompletarRevisionEntrada(permisos)
 
   useEffect(() => {
     if (!entradaId) return
@@ -56,6 +58,20 @@ export default function EntradaDetalleModal({
       .catch((e) => setError(e.message))
       .finally(() => setBusy(false))
   }, [api, entradaId])
+
+  const completarRevision = async () => {
+    if (!entradaId) return
+    setRevBusy(true)
+    setError('')
+    try {
+      const r = await api.completarRevisionEntrada(entradaId, { confirmar: true, limpiar_marca: true })
+      setEnt(r)
+    } catch (e) {
+      setError(e.message || 'No se pudo completar la revisión')
+    } finally {
+      setRevBusy(false)
+    }
+  }
 
   const overlay = {
     position: 'fixed',
@@ -142,6 +158,43 @@ export default function EntradaDetalleModal({
 
         {ent && (
           <>
+            {(ent.por_revisar || ent.alerta_silenciosa_codigo) && (
+              <div
+                data-testid="entrada-por-revisar-banner"
+                style={{
+                  marginBottom: 12,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: '#fef3c7',
+                  color: '#78350f',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>
+                  <span style={{ marginRight: 8 }}>!</span>
+                  Por revisar
+                  {ent.por_revisar_motivos ? ` · ${ent.por_revisar_motivos}` : ''}
+                  {!ent.por_revisar_motivos && ent.alerta_silenciosa_detalle
+                    ? ` · ${ent.alerta_silenciosa_detalle}`
+                    : ''}
+                </div>
+                {puedeRevisar && (
+                  <button
+                    type="button"
+                    data-testid="entrada-completar-revision"
+                    style={{ ...ui.btnPrimary, minHeight: 40 }}
+                    disabled={revBusy}
+                    onClick={() => { void completarRevision() }}
+                  >
+                    {revBusy ? '…' : 'Quitar marca'}
+                  </button>
+                )}
+              </div>
+            )}
             <div style={{ ...ui.sheetWrap, marginBottom: 14 }} className="cc-almacen-table-scroll">
               <table style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
                 <thead>

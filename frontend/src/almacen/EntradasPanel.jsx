@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
-import EntradaFormModal from './EntradaFormModal'
 import DespachadorModal from './DespachadorModal'
 import DevolucionesListModal from './DevolucionesListModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
+import EntradaRegistroTablet from './EntradaRegistroTablet'
 import EntradasFiltrosModal from './EntradasFiltrosModal'
 import {
   countEntradasFiltrosActivos,
   EMPTY_ENTRADAS_FILTROS,
   filterEntradasLista,
 } from './entradasFiltros'
-import { puedeRegistrarEntradaAlmacen, puedeVerAlertasEntrada } from './almacenPermisos'
+import {
+  puedeCompletarRevisionEntrada,
+  puedeRegistrarEntradaAlmacen,
+  puedeVerAlertasEntrada,
+} from './almacenPermisos'
 import { invalidateSalidasCache } from './salidasListCache'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
@@ -80,6 +84,7 @@ export default function EntradasPanel({
   const ui = useAlmacenTheme()
   const verAlertas = puedeVerAlertasEntrada(permisos)
   const puedeEntrada = puedeRegistrarEntradaAlmacen(permisos)
+  const puedeRevisar = puedeCompletarRevisionEntrada(permisos)
   const puedeEliminar = Boolean(permisos?.eliminar)
   const [lista, setLista] = useState([])
   const [creating, setCreating] = useState(false)
@@ -140,12 +145,27 @@ export default function EntradasPanel({
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📥 Entradas de material</div>
-          <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
-            Registre ingresos contra órdenes de compra con soporte de remisión o disposición.
-          </div>
+          <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📥 Entradas</div>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {puedeRevisar && (
+            <button
+              type="button"
+              data-testid="filtro-rapido-por-revisar"
+              style={{
+                ...ui.btnSecondary,
+                background: filtros.por_revisar === 'si' ? '#fbbf24' : undefined,
+                fontWeight: 700,
+              }}
+              title="Solo entradas por revisar"
+              onClick={() => setFiltros((f) => ({
+                ...f,
+                por_revisar: f.por_revisar === 'si' ? '' : 'si',
+              }))}
+            >
+              ! Por revisar
+            </button>
+          )}
           <button
             type="button"
             style={ui.btnSecondary}
@@ -168,8 +188,13 @@ export default function EntradasPanel({
             </button>
           )}
           {puedeEntrada && (
-            <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
-              + Nueva entrada
+            <button
+              type="button"
+              data-testid="entrada-registrar-tablet"
+              style={ui.btnPrimary}
+              onClick={() => setCreating(true)}
+            >
+              📦 Registrar
             </button>
           )}
         </div>
@@ -249,6 +274,7 @@ export default function EntradasPanel({
                 >
                   Usuario
                 </ThHelp>
+                <th style={{ ...ui.th, width: 40, textAlign: 'center', whiteSpace: 'nowrap' }} title="Por revisar">!</th>
                 {verAlertas && <th style={{ ...ui.th, width: 40, textAlign: 'center', whiteSpace: 'nowrap' }}>⚠</th>}
                 <th style={{ ...ui.th, width: 44, textAlign: 'center', whiteSpace: 'nowrap' }} title="Trazabilidad">📜</th>
                 <th style={{ ...ui.th, width: 72, textAlign: 'center', whiteSpace: 'nowrap' }}>PDF</th>
@@ -313,6 +339,29 @@ export default function EntradasPanel({
                     </td>
                     <td style={tdAlert} data-label="Usuario" title={usuarioFull || undefined}>
                       {nombreUsuarioCorto(usuarioFull)}
+                    </td>
+                    <td
+                      style={{ ...tdAlert, textAlign: 'center' }}
+                      data-label="Por revisar"
+                      title={e.por_revisar_motivos || e.alerta_silenciosa_detalle || ''}
+                    >
+                      {(e.por_revisar || e.alerta_silenciosa_codigo) ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          width: 22,
+                          height: 22,
+                          borderRadius: 999,
+                          background: '#fbbf24',
+                          color: '#78350f',
+                          fontWeight: 900,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 12,
+                        }}
+                        >
+                          !
+                        </span>
+                      ) : '—'}
                     </td>
                     {verAlertas && (
                       <td style={{ ...tdAlert, textAlign: 'center', color: '#d97706' }} data-label="Alerta" title={e.alerta_silenciosa_detalle || ''}>
@@ -423,13 +472,11 @@ export default function EntradasPanel({
       )}
 
       {creating && (
-        <EntradaFormModal
+        <EntradaRegistroTablet
           permisos={permisos}
-          t={t}
-          token={token}
-          contratoId={permisos?.contratoId}
+          theme={t}
           onClose={() => setCreating(false)}
-          onSaved={() => { setCreating(false); reload() }}
+          onSaved={() => { reload() }}
         />
       )}
 

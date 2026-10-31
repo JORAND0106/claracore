@@ -11,6 +11,7 @@ export const EMPTY_ENTRADAS_FILTROS = {
   usuario: '',
   pk_id: '',
   alerta_saldo: '', // '' | normal | naranja | rojo
+  por_revisar: '', // '' | si | no
 }
 
 export function countEntradasFiltrosActivos(filtros) {
@@ -59,6 +60,12 @@ export function matchEntradaFiltros(row, filtros) {
   if (f.alerta_saldo) {
     const alerta = String(row?.alerta_saldo || 'normal').toLowerCase()
     if (alerta !== f.alerta_saldo) return false
+  }
+
+  if (f.por_revisar === 'si') {
+    if (!row?.por_revisar && !row?.alerta_silenciosa_codigo) return false
+  } else if (f.por_revisar === 'no') {
+    if (row?.por_revisar || row?.alerta_silenciosa_codigo) return false
   }
 
   return true

@@ -563,6 +563,16 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
     listEntradas: () =>
       fetch(`${base}/entradas`, { headers: authHeaders() }).then(parseJsonList),
 
+    listOcsPendientesEntrada: () =>
+      fetch(`${base}/entradas/ocs-pendientes`, { headers: authHeaders() }).then(parseJsonList),
+
+    completarRevisionEntrada: (entradaId, body) =>
+      fetch(`${base}/entradas/${entradaId}/completar-revision`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
     getEntrada: (entradaId) =>
       fetch(`${base}/entradas/${entradaId}`, { headers: authHeaders() }).then(parseJson),
 
