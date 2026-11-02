@@ -12678,33 +12678,37 @@ def _excel_row_height_objeto_banda(objeto: Any) -> float:
     )
 
 
-def _excel_row_height_observacion(obs: Any) -> float:
-    """Altura fila de detalle por OBSERVACIÓN (columna J, ancho 28)."""
-    return _excel_row_height_wrapped_text(
-        obs or "",
-        chars_per_line=28,
-        line_pt=15.0,
-        min_pt=15.0,
-        max_pt=120.0,
-        padding_pt=1.0,
-    )
-
-
-def _excel_try_add_logo_contratista(ws, contrato: Optional[dict], *, anchor: str = "A1", max_h_px: int = 36) -> None:
+def _excel_try_add_logo_contratista(
+    ws,
+    contrato: Optional[dict],
+    *,
+    anchor: str = "A1",
+    max_h_px: int = 28,
+    max_w_px: int = 110,
+    inset_px: int = 3,
+) -> None:
     """Inserta el logo real del contratista en Excel (mismo pipeline que PDF).
 
-    Sin URL o si falla la descarga, deja la celda vacía (no escribe «LOGO»).
+    Se escala en modo *contain* para caber entero en el ancla (p. ej. A1:B2 con
+    filas de 15 pt) con un pequeño inset, sin recortar ni deformar. Sin URL o
+    si falla la descarga, deja la celda vacía (no escribe «LOGO»).
     """
     url = str((contrato or {}).get("logo_contratista") or "").strip()
     if not url:
         return
     try:
         from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+        from openpyxl.drawing.xdr import XDRPositiveSize2D
+        from openpyxl.utils.cell import coordinate_to_tuple
+        from openpyxl.utils.units import pixels_to_EMU
         from pdf_institucional import prepare_image_for_pdf
 
-        uri = prepare_image_for_pdf(url, allow_http=True, max_px_w=160, max_px_h=max_h_px)
+        # Pedir un poco más grande y reescalar nosotros con margen (evita recorte).
+        prep_h = max(int(max_h_px) + 8, 24)
+        prep_w = max(int(max_w_px) + 16, 48)
+        uri = prepare_image_for_pdf(url, allow_http=True, max_px_w=prep_w, max_px_h=prep_h)
         if not uri or ";base64," not in uri:
-            # Fallback: HTTP directo
             if url.startswith("http"):
                 import requests
 
@@ -12716,16 +12720,30 @@ def _excel_try_add_logo_contratista(ws, contrato: Optional[dict], *, anchor: str
         else:
             raw = base64.b64decode(uri.split(",", 1)[1])
         img = XLImage(io.BytesIO(raw))
-        # Ajuste contain al rango A1:B2 (~2×15 pt ≈ 40 px de alto útil).
-        target_h = float(max_h_px)
-        target_w = 120.0  # A+B ≈ 19 de ancho
+        target_h = float(max(8, int(max_h_px)))
+        target_w = float(max(8, int(max_w_px)))
         ih = float(img.height or target_h)
         iw = float(img.width or target_w)
         if ih > 0 and iw > 0:
             scale = min(target_h / ih, target_w / iw, 1.0)
-            img.height = max(8, int(ih * scale))
-            img.width = max(8, int(iw * scale))
-        ws.add_image(img, anchor)
+            img.height = max(8, int(round(ih * scale)))
+            img.width = max(8, int(round(iw * scale)))
+        # Ancla OneCell con inset: evita que el borde superior/izquierdo se recorte
+        # contra el borde de la celda combinada.
+        row_1based, col_1based = coordinate_to_tuple(anchor)
+        off = max(0, int(inset_px))
+        marker = AnchorMarker(
+            col=col_1based - 1,
+            colOff=pixels_to_EMU(off),
+            row=row_1based - 1,
+            rowOff=pixels_to_EMU(off),
+        )
+        size = XDRPositiveSize2D(
+            cx=pixels_to_EMU(int(img.width)),
+            cy=pixels_to_EMU(int(img.height)),
+        )
+        img.anchor = OneCellAnchor(_from=marker, ext=size)
+        ws.add_image(img)
     except Exception as exc:
         _log.warning("excel logo contratista: %s", exc)
 
@@ -14075,7 +14093,10 @@ def _fill_memoria_excel_ws(
         ws.merge_cells("A1:B2")
         ws["A1"].alignment = align_ctr
         ws["A1"].border = bd
-        _excel_try_add_logo_contratista(ws, contrato, anchor="A1", max_h_px=36)
+        # A1:B2 = 2×15 pt ≈ 40 px de alto; logo contain con margen (sin recorte).
+        _excel_try_add_logo_contratista(
+            ws, contrato, anchor="A1", max_h_px=28, max_w_px=110, inset_px=3
+        )
         ws.merge_cells("C1:I2")
         ws["C1"] = f"{_MEMORIA_MES_TITULO_L1}\n{_MEMORIA_MES_TITULO_L2}"
         ws["C1"].font = Font(bold=True, size=10, color="111827")
@@ -14322,8 +14343,8 @@ def _fill_memoria_excel_ws(
                     cell.alignment = Alignment(wrap_text=True, vertical="center")
                 else:
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            # Altura exacta según líneas de OBSERVACIÓN (Excel no autoajusta).
-            ws.row_dimensions[row].height = _excel_row_height_observacion(obs)
+            # Altura de detalle: comportamiento previo (sin fijar row_dimensions;
+            # el ajuste exacto aplica solo a Objeto/Descripción del encabezado).
             if reg_parity % 2 == 0:
                 for col in range(1, 11):
                     ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
