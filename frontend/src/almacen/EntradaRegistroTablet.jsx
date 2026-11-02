@@ -25,6 +25,10 @@ import {
   splitInsumoCodigoDesc,
 } from './entradaOcExcelHelpers'
 import {
+  medirVistaTablaOc,
+  textoAlertaVistaTablaOc,
+} from './entradaOcTablaVista'
+import {
   formatRemisionNumeroInput,
   normalizeRemisionNumero,
   remisionNumeroOk,
@@ -126,6 +130,8 @@ export default function EntradaRegistroTablet({
   const contraste = useMemo(() => almacenContraste(ui), [ui])
   const themeCssVars = useMemo(() => buildAlmacenCssVars(theme || {}), [theme])
   const qtyInputRefs = useRef({})
+  const ocRowRefs = useRef({})
+  const ocTableScrollRef = useRef(null)
   const continuarCapturaRef = useRef(null)
   const numeroRemisionRef = useRef(null)
   const contrato = contratoId || permisos?.contratoId
@@ -176,6 +182,8 @@ export default function EntradaRegistroTablet({
   const [numeroRemision, setNumeroRemision] = useState('')
   const [remisionDupHint, setRemisionDupHint] = useState('')
   const [galeriaKind, setGaleriaKind] = useState(null) // 'remision' | 'material' | null
+  const [previewSoporte, setPreviewSoporte] = useState(null) // 'remision' | 'material' | null
+  const [tablaVista, setTablaVista] = useState({ visible: 0, total: 0, hayOcultas: false, marcadasOcultas: 0 })
 
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
@@ -352,6 +360,8 @@ export default function EntradaRegistroTablet({
     setNumeroRemision('')
     setRemisionDupHint('')
     setGaleriaKind(null)
+    setPreviewSoporte(null)
+    setTablaVista({ visible: 0, total: 0, hayOcultas: false, marcadasOcultas: 0 })
   }
 
   const elegirTipo = (t) => {
@@ -433,15 +443,42 @@ export default function EntradaRegistroTablet({
     )))
   }
 
+  const refreshTablaVista = useCallback(() => {
+    const scrollEl = ocTableScrollRef.current
+    const rows = ocSeleccion.map((r) => ocRowRefs.current[r.key]).filter(Boolean)
+    const marked = new Set(ocSeleccion.filter((r) => r.marked).map((r) => r.key))
+    setTablaVista(medirVistaTablaOc(scrollEl, rows, marked))
+  }, [ocSeleccion])
+
+  useEffect(() => {
+    if (paso !== PASO.CAPTURA || !modoMultiOc) return undefined
+    refreshTablaVista()
+    const el = ocTableScrollRef.current
+    if (!el) return undefined
+    const onScroll = () => refreshTablaVista()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => refreshTablaVista()) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      ro?.disconnect()
+    }
+  }, [paso, modoMultiOc, refreshTablaVista, ocSeleccion.length])
+
   const focusQtyAt = (idx) => {
     const keys = ocSeleccion.map((r) => r.key)
     const k = keys[idx]
     if (!k) return
+    const row = ocRowRefs.current[k]
+    try {
+      row?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+    } catch { /* ignore */ }
     const el = qtyInputRefs.current[k]
     if (el) {
       el.focus()
       el.select?.()
     }
+    requestAnimationFrame(() => refreshTablaVista())
   }
 
   const focusNumeroRemision = () => {
@@ -1181,30 +1218,51 @@ export default function EntradaRegistroTablet({
               }}
             >
               {modoMultiOc ? (
-                <div data-testid="entrada-tablet-oc-lineas" style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, flex: '1 1 auto', maxHeight: 'min(32vh, 240px)' }}>
-                  <div style={{ fontWeight: 800, fontSize: '0.9rem', flexShrink: 0 }}>
-                    ¿Qué llegó?
-                    {ocCard?.numero_oc != null ? ` · OC #${ocCard.numero_oc}` : ''}
-                    <span style={{ fontWeight: 600, color: ui.textMuted, marginLeft: 8 }}>
+                <div data-testid="entrada-tablet-oc-lineas" style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, flex: '1 1 auto', maxHeight: 'min(34vh, 260px)' }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8 }}>
+                    <span>
+                      ¿Qué llegó?
+                      {ocCard?.numero_oc != null ? ` · OC #${ocCard.numero_oc}` : ''}
+                    </span>
+                    <span data-testid="entrada-tablet-oc-marcadas" style={{ fontWeight: 700, color: ui.textMuted }}>
                       {lineasResumen.length}/{ocSeleccion.length}
                     </span>
                   </div>
+                  {tablaVista.hayOcultas && (
+                    <div
+                      data-testid="entrada-tablet-oc-vista-alerta"
+                      style={{
+                        ...estiloAvisoAlmacen(contraste, 'warn'),
+                        fontWeight: 800,
+                        fontSize: '0.8rem',
+                        flexShrink: 0,
+                        padding: '6px 8px',
+                      }}
+                    >
+                      {textoAlertaVistaTablaOc(tablaVista)}
+                    </div>
+                  )}
                   <div
+                    ref={ocTableScrollRef}
                     className="cc-almacen-table-scroll"
+                    data-testid="entrada-tablet-oc-scroll"
                     style={{
                       flex: 1,
-                      minHeight: 0,
-                      overflow: 'auto',
+                      minHeight: 72,
+                      overflowY: 'scroll',
+                      overflowX: 'auto',
                       border: `1px solid ${ui.borderColor}`,
                       borderRadius: 8,
                       WebkitOverflowScrolling: 'touch',
+                      scrollbarWidth: 'thin',
                     }}
                   >
                     <table
                       data-testid="entrada-tablet-oc-excel"
                       style={{
                         width: '100%',
-                        borderCollapse: 'collapse',
+                        borderCollapse: 'separate',
+                        borderSpacing: 0,
                         fontSize: 'var(--cc-sm, 0.9rem)',
                         background: 'var(--cc-almacen-bg-card)',
                         color: 'var(--cc-almacen-text)',
@@ -1216,17 +1274,19 @@ export default function EntradaRegistroTablet({
                             <th
                               key={h}
                               style={{
-                                border: '1px solid var(--cc-almacen-border)',
-                                padding: '4px 6px',
+                                borderBottom: '1px solid var(--cc-almacen-border)',
+                                borderRight: '1px solid var(--cc-almacen-border)',
+                                padding: '6px 6px',
                                 textAlign: h === 'Cantidad' || h === 'Saldo' ? 'right' : 'left',
                                 fontWeight: 800,
                                 whiteSpace: 'nowrap',
                                 position: 'sticky',
                                 top: 0,
-                                zIndex: 1,
+                                zIndex: 2,
                                 background: 'var(--cc-almacen-sheet-head)',
                                 color: 'var(--cc-almacen-sheet-head-text)',
                                 fontSize: '0.8rem',
+                                boxShadow: '0 1px 0 var(--cc-almacen-border)',
                               }}
                             >
                               {h}
@@ -1244,6 +1304,8 @@ export default function EntradaRegistroTablet({
                           return (
                             <tr
                               key={row.key}
+                              ref={(el) => { ocRowRefs.current[row.key] = el }}
+                              data-row-key={row.key}
                               data-testid="entrada-tablet-oc-linea"
                               style={{
                                 background: row.marked
@@ -1252,7 +1314,7 @@ export default function EntradaRegistroTablet({
                                 color: 'var(--cc-almacen-text)',
                               }}
                             >
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 2, textAlign: 'center' }}>
+                              <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: 2, textAlign: 'center' }}>
                                 <button
                                   type="button"
                                   aria-pressed={row.marked}
@@ -1272,18 +1334,19 @@ export default function EntradaRegistroTablet({
                                   {row.marked ? '✓' : ''}
                                 </button>
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '2px 4px', fontVariantNumeric: 'tabular-nums', fontSize: '0.8rem' }}>
+                              <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: '4px 4px', fontVariantNumeric: 'tabular-nums', fontSize: '0.8rem' }}>
                                 {codigo || '—'}
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '2px 4px', maxWidth: 200, fontSize: '0.8rem' }}>
+                              <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: '4px 4px', maxWidth: 200, fontSize: '0.8rem' }}>
                                 {descripcion}
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '2px 4px', fontSize: '0.8rem' }}>
+                              <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: '4px 4px', fontSize: '0.8rem' }}>
                                 {ins.unidad || ''}
                               </td>
                               <td style={{
-                                border: '1px solid var(--cc-almacen-border)',
-                                padding: '2px 4px',
+                                borderBottom: '1px solid var(--cc-almacen-border)',
+                                borderRight: '1px solid var(--cc-almacen-border)',
+                                padding: '4px 4px',
                                 textAlign: 'right',
                                 fontVariantNumeric: 'tabular-nums',
                                 fontWeight: 700,
@@ -1292,7 +1355,7 @@ export default function EntradaRegistroTablet({
                               >
                                 {fmtCant(ins.saldo_cantidad)}
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 1 }}>
+                              <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', padding: 2 }}>
                                 <input
                                   ref={(el) => { qtyInputRefs.current[row.key] = el }}
                                   inputMode="decimal"
@@ -1314,7 +1377,13 @@ export default function EntradaRegistroTablet({
                                   }}
                                   value={row.cantidad}
                                   onChange={(e) => setOcLineaCantidad(row.key, e.target.value)}
-                                  onFocus={(e) => e.target.select?.()}
+                                  onFocus={(e) => {
+                                    e.target.select?.()
+                                    try {
+                                      ocRowRefs.current[row.key]?.scrollIntoView?.({ block: 'nearest' })
+                                    } catch { /* ignore */ }
+                                    requestAnimationFrame(() => refreshTablaVista())
+                                  }}
                                   onKeyDown={(e) => onQtyKeyDown(e, idx)}
                                   placeholder="0"
                                   title={supera ? `Máximo ${fmtCant(saldoMax)}` : undefined}
@@ -1383,8 +1452,8 @@ export default function EntradaRegistroTablet({
               <div
                 data-testid="entrada-tablet-captura-fila"
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'auto repeat(auto-fit, minmax(110px, 1fr))',
+                  display: 'flex',
+                  flexWrap: 'wrap',
                   gap: 6,
                   alignItems: 'end',
                   width: '100%',
@@ -1397,12 +1466,13 @@ export default function EntradaRegistroTablet({
                   aria-pressed={llegadaDomicilio}
                   style={{
                     ...ui.btnSecondary,
-                    minHeight: 42,
+                    minHeight: 36,
                     fontWeight: 800,
                     justifyContent: 'center',
-                    gap: 6,
-                    padding: '6px 10px',
-                    fontSize: '0.85rem',
+                    gap: 4,
+                    padding: '4px 8px',
+                    fontSize: '0.78rem',
+                    flex: '0 0 auto',
                     background: llegadaDomicilio ? 'var(--cc-almacen-accent-soft)' : undefined,
                     borderColor: llegadaDomicilio ? 'var(--cc-almacen-accent)' : undefined,
                   }}
@@ -1424,10 +1494,10 @@ export default function EntradaRegistroTablet({
                 </button>
                 {!llegadaDomicilio && (
                   <>
-                    <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.75rem', color: ui.textMuted }}>Placa</div>
+                    <div style={{ display: 'grid', gap: 1, minWidth: 88, flex: '1 1 88px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.68rem', color: ui.textMuted }}>Placa</div>
                       <input
-                        style={{ ...inputGiant(ui), textTransform: 'uppercase', letterSpacing: 1, minHeight: 40, fontSize: '1rem' }}
+                        style={{ ...inputGiant(ui), textTransform: 'uppercase', letterSpacing: 1, minHeight: 36, fontSize: '0.95rem', padding: '4px 6px' }}
                         value={placa}
                         onChange={(e) => { void onPlacaChange(e.target.value) }}
                         placeholder="AAA-000"
@@ -1435,10 +1505,10 @@ export default function EntradaRegistroTablet({
                         autoCapitalize="characters"
                       />
                     </div>
-                    <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.75rem', color: ui.textMuted }}>Conductor</div>
+                    <div style={{ display: 'grid', gap: 1, minWidth: 100, flex: '1 1 110px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.68rem', color: ui.textMuted }}>Conductor</div>
                       <input
-                        style={{ ...inputGiant(ui), minHeight: 40, fontSize: '1rem' }}
+                        style={{ ...inputGiant(ui), minHeight: 36, fontSize: '0.95rem', padding: '4px 6px' }}
                         value={conductor}
                         onChange={(e) => {
                           setConductor(e.target.value)
@@ -1450,8 +1520,53 @@ export default function EntradaRegistroTablet({
                     </div>
                   </>
                 )}
-                <div style={{ display: 'grid', gap: 2, minWidth: 0 }} data-testid="entrada-tablet-mapa">
-                  <div style={{ fontWeight: 700, fontSize: '0.75rem', color: ui.textMuted }}>Sector</div>
+                <div data-testid="entrada-tablet-numero-remision-wrap" style={{ display: 'grid', gap: 1, minWidth: 120, flex: '1 1 130px' }}>
+                  <label
+                    htmlFor="entrada-tablet-numero-remision"
+                    style={{ fontWeight: 800, fontSize: '0.68rem', color: 'var(--cc-almacen-text)' }}
+                  >
+                    🔢 N.º remisión *
+                  </label>
+                  <input
+                    id="entrada-tablet-numero-remision"
+                    ref={numeroRemisionRef}
+                    data-testid="entrada-tablet-numero-remision"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    inputMode="text"
+                    placeholder="REM-123"
+                    aria-required="true"
+                    aria-invalid={!numeroRemisionListo || undefined}
+                    value={numeroRemision}
+                    onChange={(e) => onNumeroRemisionChange(e.target.value)}
+                    onFocus={(e) => {
+                      try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { /* ignore */ }
+                    }}
+                    onKeyDown={onNumeroRemisionKeyDown}
+                    style={{
+                      ...inputGiant(ui),
+                      fontSize: '0.95rem',
+                      minHeight: 36,
+                      letterSpacing: 0.4,
+                      textTransform: 'uppercase',
+                      fontWeight: 800,
+                      padding: '4px 6px',
+                      border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
+                      background: 'var(--cc-almacen-bg-card)',
+                      color: 'var(--cc-almacen-text)',
+                    }}
+                  />
+                  {!numeroRemisionListo && (
+                    <div
+                      data-testid="entrada-tablet-numero-remision-falta"
+                      style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.65rem' }}
+                    >
+                      Falta N.º
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gap: 1, minWidth: 100, flex: '1 1 120px' }} data-testid="entrada-tablet-mapa">
+                  <div style={{ fontWeight: 700, fontSize: '0.68rem', color: ui.textMuted }}>Sector</div>
                   <AlmacenPkMapaSelector
                     t={theme || ui}
                     token={token}
@@ -1536,56 +1651,9 @@ export default function EntradaRegistroTablet({
                   onPickFile={(e) => { void takeSoporte('remision', e) }}
                   onPasteFile={(f, msg) => { onPasteEnSoporte('remision', f, msg) }}
                   onOpenGaleriaPlataforma={() => setGaleriaKind('remision')}
+                  onOpenPreview={() => setPreviewSoporte('remision')}
                   labelReady="Remisión ✓"
                   labelEmpty="Falta"
-                  leading={(
-                    <div data-testid="entrada-tablet-numero-remision-wrap" style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-                      <label
-                        htmlFor="entrada-tablet-numero-remision"
-                        style={{ fontWeight: 800, fontSize: '0.72rem', color: 'var(--cc-almacen-text)' }}
-                      >
-                        🔢 N.º remisión *
-                      </label>
-                      <input
-                        id="entrada-tablet-numero-remision"
-                        ref={numeroRemisionRef}
-                        data-testid="entrada-tablet-numero-remision"
-                        autoComplete="off"
-                        autoCapitalize="characters"
-                        inputMode="text"
-                        placeholder="REM-123"
-                        aria-required="true"
-                        aria-invalid={!numeroRemisionListo || undefined}
-                        value={numeroRemision}
-                        onChange={(e) => onNumeroRemisionChange(e.target.value)}
-                        onFocus={(e) => {
-                          try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { /* ignore */ }
-                        }}
-                        onKeyDown={onNumeroRemisionKeyDown}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          ...inputGiant(ui),
-                          fontSize: '1.05rem',
-                          minHeight: 40,
-                          letterSpacing: 0.5,
-                          textTransform: 'uppercase',
-                          fontWeight: 800,
-                          border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
-                          background: 'var(--cc-almacen-bg-card)',
-                          color: 'var(--cc-almacen-text)',
-                          padding: '6px 8px',
-                        }}
-                      />
-                      {!numeroRemisionListo && (
-                        <div
-                          data-testid="entrada-tablet-numero-remision-falta"
-                          style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.68rem' }}
-                        >
-                          Falta N.º
-                        </div>
-                      )}
-                    </div>
-                  )}
                 />
                 <EntradaSoportePicker
                   kind="material"
@@ -1597,6 +1665,7 @@ export default function EntradaRegistroTablet({
                   onPickFile={(e) => { void takeSoporte('material', e) }}
                   onPasteFile={(f, msg) => { onPasteEnSoporte('material', f, msg) }}
                   onOpenGaleriaPlataforma={() => setGaleriaKind('material')}
+                  onOpenPreview={() => setPreviewSoporte('material')}
                   labelReady="Descargue ✓"
                   labelEmpty="Falta"
                 />
@@ -1628,6 +1697,137 @@ export default function EntradaRegistroTablet({
               )
             }}
           />
+
+          {previewSoporte && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              data-testid="entrada-soporte-preview-modal"
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 100070,
+                background: 'var(--cc-almacen-overlay)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 16,
+              }}
+              onClick={(e) => { if (e.target === e.currentTarget) setPreviewSoporte(null) }}
+            >
+              <div
+                style={{
+                  width: 'min(720px, 96%)',
+                  maxHeight: 'min(85dvh, 640px)',
+                  background: 'var(--cc-almacen-bg-card)',
+                  color: 'var(--cc-almacen-text)',
+                  borderRadius: 14,
+                  border: '1px solid var(--cc-almacen-border)',
+                  boxShadow: 'var(--cc-almacen-shadow-modal)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 12px',
+                  borderBottom: '1px solid var(--cc-almacen-border)',
+                  gap: 8,
+                }}
+                >
+                  <div style={{ fontWeight: 800 }}>
+                    {previewSoporte === 'remision' ? '📄 Remisión' : '📷 Descargue'}
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="entrada-soporte-preview-cerrar"
+                    style={{ ...ui.btnSecondary, minHeight: 40 }}
+                    onClick={() => setPreviewSoporte(null)}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+                <div style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: 'auto',
+                  padding: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'var(--cc-almacen-input-bg)',
+                }}
+                >
+                  {previewSoporte === 'remision' && (
+                    (fotoRemision?.type || '').includes('pdf') || /\.pdf$/i.test(fotoRemision?.name || '')
+                      ? (
+                        <div style={{ textAlign: 'center', fontWeight: 800 }}>
+                          <div style={{ fontSize: '3rem' }} aria-hidden>📎</div>
+                          <div>{fotoRemision?.name || 'remision.pdf'}</div>
+                        </div>
+                      )
+                      : (fotoRemisionPreview ? (
+                        <img
+                          src={fotoRemisionPreview}
+                          alt="Remisión"
+                          style={{ maxWidth: '100%', maxHeight: 'min(60dvh, 480px)', objectFit: 'contain', borderRadius: 8 }}
+                        />
+                      ) : null)
+                  )}
+                  {previewSoporte === 'material' && fotoMaterialPreview && (
+                    <img
+                      src={fotoMaterialPreview}
+                      alt="Descargue"
+                      style={{ maxWidth: '100%', maxHeight: 'min(60dvh, 480px)', objectFit: 'contain', borderRadius: 8 }}
+                    />
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12, borderTop: '1px solid var(--cc-almacen-border)' }}>
+                  <button
+                    type="button"
+                    data-testid="entrada-soporte-preview-reemplazar"
+                    style={{ ...ui.btnPrimary, minHeight: 44, flex: 1 }}
+                    onClick={() => {
+                      const kind = previewSoporte
+                      setPreviewSoporte(null)
+                      setSoporteFocus(kind)
+                      // Dispara Archivo del picker correspondiente.
+                      const input = document.querySelector(`[data-testid="entrada-soporte-${kind}-file-input"]`)
+                      input?.click?.()
+                    }}
+                  >
+                    Reemplazar
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="entrada-soporte-preview-quitar"
+                    style={{ ...ui.btnSecondary, minHeight: 44, flex: 1 }}
+                    onClick={() => {
+                      const kind = previewSoporte
+                      setPreviewSoporte(null)
+                      if (kind === 'remision') {
+                        revokeUrl(fotoRemisionPreview)
+                        setFotoRemision(null)
+                        setFotoRemisionPreview('')
+                        setFotoRemisionHash('')
+                      } else {
+                        revokeUrl(fotoMaterialPreview)
+                        setFotoMaterial(null)
+                        setFotoMaterialPreview('')
+                        setFotoMaterialHash('')
+                      }
+                    }}
+                  >
+                    Quitar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {paso === PASO.CONFIRMAR && tipo === 'recibo' && (
             <div data-testid="entrada-tablet-resumen" style={{ display: 'grid', gap: 12, width: '100%', maxWidth: 900, margin: '0 auto' }}>
