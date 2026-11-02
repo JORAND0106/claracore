@@ -36,12 +36,16 @@ function clearSalidaDraft(contratoId) {
 
 export default function SalidasPanel({
   permisos, token, t, refreshSignal = 0, onDataLoaded, onSalidaMutated,
+  embedded = false,
+  hideNuevaSalida = false,
+  onRequestRegistrar,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
   const puedeEliminar = Boolean(permisos?.eliminar)
   const puedeEditarCantidad = puedeEditarCantidadSalidaAlmacen(permisos)
+  const puedeValidar = Boolean(permisos?.validar)
   const contratoId = permisos?.contratoId
   const [lista, setLista] = useState(() => readSalidasCache(contratoId) || [])
   const [creating, setCreating] = useState(false)
@@ -57,6 +61,8 @@ export default function SalidasPanel({
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SALIDAS_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
   const [devolucionesSalidaId, setDevolucionesSalidaId] = useState(null)
+  const [completarTarget, setCompletarTarget] = useState(null)
+  const [completarBusy, setCompletarBusy] = useState(false)
   const lastRefreshSignal = useRef(refreshSignal)
   const mountedRef = useRef(true)
 
@@ -262,16 +268,65 @@ export default function SalidasPanel({
     }
   }
 
+  const abrirNueva = () => {
+    if (onRequestRegistrar) {
+      onRequestRegistrar()
+      return
+    }
+    setCreating(true)
+  }
+
+  const completarRevision = async () => {
+    if (!completarTarget) return
+    setCompletarBusy(true)
+    setError('')
+    try {
+      await api.completarRevisionSalida(completarTarget.id, {
+        confirmar: true,
+        receptor_usuario_id: completarTarget.receptor_usuario_id || undefined,
+        pk_id: completarTarget.pk_id || undefined,
+      })
+      setCompletarTarget(null)
+      invalidateSalidasCache(contratoId)
+      await reload({ force: true })
+      notifySalidaMutated()
+    } catch (err) {
+      setError(err.message || String(err))
+    } finally {
+      setCompletarBusy(false)
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-        <div>
-          <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📤 Salidas de material</div>
-          <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
-            Entrega de material desde almacén hacia obra, descontando contra entradas por PK-ID.
+        {!embedded && (
+          <div>
+            <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📤 Salidas de material</div>
+            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+              Entrega de material desde almacén hacia obra, descontando contra entradas por PK-ID.
+            </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        )}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginLeft: embedded ? 0 : 'auto' }}>
+          {puedeValidar && (
+            <button
+              type="button"
+              data-testid="salidas-filtro-por-revisar"
+              style={{
+                ...ui.btnSecondary,
+                background: filtros.por_revisar === 'si' ? '#fbbf24' : undefined,
+                fontWeight: 700,
+              }}
+              title="Solo salidas por revisar"
+              onClick={() => setFiltros((f) => ({
+                ...f,
+                por_revisar: f.por_revisar === 'si' ? '' : 'si',
+              }))}
+            >
+              ! Por revisar
+            </button>
+          )}
           <button
             type="button"
             style={ui.btnSecondary}
@@ -280,13 +335,23 @@ export default function SalidasPanel({
           >
             🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
           </button>
-          {puedeSalida && (
-            <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
+          {puedeSalida && !hideNuevaSalida && (
+            <button type="button" style={ui.btnPrimary} onClick={abrirNueva}>
               + Nueva salida
             </button>
           )}
         </div>
       </div>
+
+      {embedded && (
+        <input
+          data-testid="salidas-historial-search"
+          style={{ ...ui.input, marginBottom: 12, width: '100%', boxSizing: 'border-box' }}
+          placeholder="Buscar por palabra clave…"
+          value={filtros.q || ''}
+          onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
+        />
+      )}
 
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
 
@@ -311,6 +376,7 @@ export default function SalidasPanel({
               <tr>
                 <th style={ui.th}>N.º</th>
                 <th style={ui.th}>Fecha y hora</th>
+                <th style={{ ...ui.th, width: 36, textAlign: 'center' }} title="Por revisar">!</th>
                 <th style={ui.th}>PK-ID</th>
                 <th style={ui.th}>Material</th>
                 <th style={ui.th}>Cantidad</th>
@@ -336,6 +402,29 @@ export default function SalidasPanel({
                   <tr key={s.id}>
                     <td style={ui.td} data-label="N.º">{formatSalidaNumero(s)}</td>
                     <td style={ui.td} data-label="Fecha">{fmtFechaAlmacen(s.fecha_hora_salida) || '—'}</td>
+                    <td style={{ ...ui.td, textAlign: 'center' }} data-label="!">
+                      {s.por_revisar ? (
+                        <button
+                          type="button"
+                          title={s.por_revisar_motivos || 'Por revisar'}
+                          style={{
+                            background: '#fbbf24',
+                            border: 'none',
+                            borderRadius: 6,
+                            fontWeight: 800,
+                            cursor: puedeValidar ? 'pointer' : 'default',
+                            padding: '2px 6px',
+                          }}
+                          disabled={!puedeValidar}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (puedeValidar) setCompletarTarget(s)
+                          }}
+                        >
+                          !
+                        </button>
+                      ) : '—'}
+                    </td>
                     <td style={ui.td} data-label="PK-ID">{s.pk_id || '—'}</td>
                     <td style={ui.td} data-label="Material">{s.material_descripcion || '—'}</td>
                     <td style={{ ...ui.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-label="Cantidad">
@@ -560,6 +649,38 @@ export default function SalidasPanel({
           {eliminarAviso && (
             <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>
           )}
+        </CcConfirmModal>
+      )}
+
+      {completarTarget && (
+        <CcConfirmModal
+          theme={t}
+          tipo="warn"
+          titulo="Completar revisión de salida"
+          confirmar="Quitar marca"
+          cancelar="Cancelar"
+          procesando={completarBusy}
+          onCancel={() => {
+            if (completarBusy) return
+            setCompletarTarget(null)
+          }}
+          onConfirm={completarRevision}
+        >
+          <div style={{ fontSize: 'var(--cc-sm)' }}>
+            {formatSalidaNumero(completarTarget)}
+            {completarTarget.material_descripcion ? ` · ${completarTarget.material_descripcion}` : ''}
+          </div>
+          <div style={{ marginTop: 8, color: ui.textMuted, fontSize: 'var(--cc-sm)' }}>
+            Motivos: {completarTarget.por_revisar_motivos || 'Por revisar'}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)' }}>
+            Receptor: {completarTarget.receptor_nombre || '—'}
+            {' · '}
+            Sector: {completarTarget.pk_id || '—'}
+          </div>
+          <div style={{ marginTop: 10, opacity: 0.9, fontSize: 'var(--cc-sm)' }}>
+            Si aún faltan receptor o sector, complete esos datos antes de quitar la marca.
+          </div>
         </CcConfirmModal>
       )}
     </div>

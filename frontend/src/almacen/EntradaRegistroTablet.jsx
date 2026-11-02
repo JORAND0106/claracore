@@ -1,7 +1,7 @@
 /**
  * Registro de Entradas — popup amplio independiente (tablet 10").
  * Recibo («Llegó material»): OC consolidada → captura única (cant+placa+2 fotos) → confirmar.
- * Disposición («Salió material»): flujo previo (sector / escombrera) sin cambio de alcance.
+ * «Salió material» abre el popup de salidas (onAbrirSalioMaterial); no usa el flujo disposicion.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
@@ -95,6 +95,7 @@ export default function EntradaRegistroTablet({
   theme,
   token,
   contratoId,
+  onAbrirSalioMaterial,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -138,8 +139,10 @@ export default function EntradaRegistroTablet({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
+  const [salidasPorRevisar, setSalidasPorRevisar] = useState(0)
 
   const puedeCrear = Boolean(permisos?.crear)
+  const puedeValidar = Boolean(permisos?.validar)
   const cantNum = Number(cantidad)
   const saldoOc = insumoSel ? Number(insumoSel.saldo_cantidad || 0) : (ocCard ? Number(ocCard.saldo_cantidad_total || 0) : null)
   const superaSaldo = Boolean(insumoSel && cantNum > 0 && cantNum > saldoOc + 0.0001)
@@ -299,10 +302,28 @@ export default function EntradaRegistroTablet({
   }
 
   const elegirTipo = (t) => {
+    if (t === 'disposicion' || t === 'salida') {
+      // Salió material → popup de salidas (Tab migrado).
+      onAbrirSalioMaterial?.({ mode: 'registrar' })
+      onClose?.()
+      return
+    }
     resetFlujo()
     setTipo(t)
     setPaso(t === 'recibo' ? PASO.OC : PASO.SECTOR)
   }
+
+  useEffect(() => {
+    if (!puedeValidar) {
+      setSalidasPorRevisar(0)
+      return undefined
+    }
+    let cancelled = false
+    api.countSalidasPorRevisar()
+      .then((n) => { if (!cancelled) setSalidasPorRevisar(n) })
+      .catch(() => { if (!cancelled) setSalidasPorRevisar(0) })
+    return () => { cancelled = true }
+  }, [api, puedeValidar, paso])
 
   const elegirInsumoDeOc = (card, insumo) => {
     setOcCard(card)
@@ -597,11 +618,34 @@ export default function EntradaRegistroTablet({
               <button
                 type="button"
                 data-testid="entrada-tablet-disposicion"
-                style={btnHome('#ea580c')}
-                onClick={() => elegirTipo('disposicion')}
+                style={{ ...btnHome('#ea580c'), position: 'relative' }}
+                onClick={() => elegirTipo('salida')}
               >
                 <span style={{ fontSize: '2.2rem' }} aria-hidden>🚚</span>
                 Salió material
+                {puedeValidar && salidasPorRevisar > 0 && (
+                  <span
+                    data-testid="salio-material-por-revisar-badge"
+                    style={{
+                      position: 'absolute',
+                      top: 8,
+                      right: 10,
+                      background: '#dc2626',
+                      color: '#fff',
+                      borderRadius: 12,
+                      minWidth: 24,
+                      height: 24,
+                      padding: '0 6px',
+                      fontSize: '0.85rem',
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {salidasPorRevisar}
+                  </span>
+                )}
               </button>
             </div>
           )}

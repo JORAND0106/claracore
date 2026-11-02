@@ -181,7 +181,7 @@ export const MAPA_NAVEGACION_SUBTEMAS = [
   {
     id: 'almacen_mueve_obra',
     nombre: 'Mueve materiales en obra',
-    resumen: 'Entradas, despachador, devoluciones y salidas.',
+    resumen: 'Entradas, Salió material, despachador y devoluciones.',
     icono: '🚚',
     grupo: 'almacen',
     orden: 18,

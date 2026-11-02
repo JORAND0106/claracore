@@ -10554,12 +10554,13 @@ def _enriquecer_entrada_item_opcion(
     }
 
 
-def entradas_disponibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
-    """Entradas con saldo despachable para un PK-ID."""
+def _entradas_disponibles_base(contrato_id: int, pk_id: Optional[str] = None) -> List[dict]:
+    """
+    Líneas de entrada con saldo despachable.
+    Si pk_id se indica, filtra por ubicación efectiva; si no, todas las del contrato.
+    """
     sb = _sb()
-    pk_query = _norm_pk_id(pk_id)
-    if not pk_query:
-        raise ValueError("Indique el PK-ID.")
+    pk_query = _norm_pk_id(pk_id) if pk_id is not None else ""
 
     entradas = (
         sb.table("almacen_entrada")
@@ -10592,7 +10593,7 @@ def entradas_disponibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
         ei_id = int(it["id"])
         ubic = ubicacion_map.get(ei_id) or {}
         pk_eff = ubic.get("pk_id")
-        if not _pk_id_coincide(pk_eff, pk_query):
+        if pk_query and not _pk_id_coincide(pk_eff, pk_query):
             continue
         ent = ent_by_id.get(int(it["entrada_id"]), {})
         opc = _enriquecer_entrada_item_opcion(sb, contrato_id, ent, it, salidas_map)
@@ -10608,6 +10609,19 @@ def entradas_disponibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
         -(int(x.get("entrada_item_id") or 0)),
     ))
     return out
+
+
+def entradas_disponibles(contrato_id: int) -> List[dict]:
+    """Todas las líneas de entrada con saldo despachable (material-first / Salió material)."""
+    return _entradas_disponibles_base(contrato_id, pk_id=None)
+
+
+def entradas_disponibles_por_pk(contrato_id: int, pk_id: str) -> List[dict]:
+    """Entradas con saldo despachable para un PK-ID."""
+    pk_query = _norm_pk_id(pk_id)
+    if not pk_query:
+        raise ValueError("Indique el PK-ID.")
+    return _entradas_disponibles_base(contrato_id, pk_id=pk_query)
 
 
 def list_usuarios_receptor_obra(contrato_id: int, q: str = "", limit: int = 30) -> List[dict]:
@@ -10849,10 +10863,14 @@ def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
 
 
 def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
+    from almacen_salida_por_revisar import (
+        MOTIVO_SIN_RECEPTOR,
+        MOTIVO_SIN_SECTOR,
+        patch_por_revisar,
+    )
+
     sb = _sb()
-    pk_id = _norm_pk_id(body.get("pk_id"))
-    if not pk_id:
-        raise ValueError("Seleccione la ubicación (PK-ID) en el mapa.")
+    pk_id = _norm_pk_id(body.get("pk_id")) or None
 
     entrada_item_id = body.get("entrada_item_id")
     if not entrada_item_id:
@@ -10864,9 +10882,12 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         raise ValueError("Indique una cantidad de salida mayor a cero.")
 
     receptor_id = body.get("receptor_usuario_id")
-    if not receptor_id:
-        raise ValueError("Indique quién recibe el material en obra.")
-    receptor = _validar_receptor_obra(sb, contrato_id, int(receptor_id))
+    receptor = None
+    if receptor_id not in (None, "", 0):
+        receptor = _validar_receptor_obra(sb, contrato_id, int(receptor_id))
+        receptor_id = int(receptor_id)
+    else:
+        receptor_id = None
 
     ei_rows = (
         sb.table("almacen_entrada_item")
@@ -10895,10 +10916,8 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         raise ValueError("La entrada asociada no pertenece a este contrato.")
     ent = ent_rows[0]
     ubic_map = _ubicacion_efectiva_entrada_items(sb, [ei], {int(ent["id"]): ent})
-    pk_eff = (ubic_map.get(entrada_item_id) or {}).get("pk_id")
-    if not _pk_id_coincide(pk_eff, pk_id):
-        raise ValueError("La entrada seleccionada no corresponde al PK-ID indicado.")
     ubic_eff = ubic_map.get(entrada_item_id) or {}
+    # Destino puede diferir del PK de la entrada; sin PK → por revisar (no bloquea).
 
     salidas_map = _despacho_neto_por_entrada_item(sb, [entrada_item_id])
     recibida = _cantidad_recibida_entrada_item(sb, entrada_item_id)
@@ -10907,8 +10926,15 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
     if qty > disponible + 1e-9:
         raise ValueError(
             f"La cantidad a despachar ({qty}) supera el disponible para salida ({disponible}) "
-            f"de esta entrada en el PK-ID {pk_id}. Máximo permitido: {disponible}."
+            f"de esta entrada. Máximo permitido: {disponible}."
         )
+
+    motivos: List[str] = []
+    if not pk_id:
+        motivos.append(MOTIVO_SIN_SECTOR)
+    if not receptor_id:
+        motivos.append(MOTIVO_SIN_RECEPTOR)
+    por_rev = patch_por_revisar(motivos)
 
     fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(
         (body.get("fecha_hora_salida") or "").strip()
@@ -10921,7 +10947,7 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         "numero_salida": numero_salida,
         "codigo": codigo_salida,
         "fecha_hora_salida": fecha_hora,
-        "receptor_usuario_id": int(receptor_id),
+        "receptor_usuario_id": receptor_id,
         "pk_id": pk_id,
         "pk_id_id": int(body["pk_id_id"]) if body.get("pk_id_id") else None,
         "tramo": (body.get("tramo") or ubic_eff.get("tramo") or ent.get("tramo") or "").strip() or None,
@@ -10932,11 +10958,38 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         "cantidad_salida": qty,
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
+        "por_revisar": por_rev["por_revisar"],
+        "por_revisar_motivos": por_rev["por_revisar_motivos"],
     }
-    ins = sb.table("almacen_salida").insert(salida_row).execute().data
+    try:
+        ins = sb.table("almacen_salida").insert(salida_row).execute().data
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col in ("por_revisar", "por_revisar_motivos"):
+            for k in ("por_revisar", "por_revisar_motivos"):
+                salida_row.pop(k, None)
+            if receptor_id is None:
+                raise ValueError(
+                    "Indique quién recibe el material en obra "
+                    "(migración por_revisar pendiente en almacen_salida)."
+                ) from exc
+            if not pk_id:
+                raise ValueError(
+                    "Seleccione la ubicación (PK-ID) en el mapa "
+                    "(migración por_revisar pendiente en almacen_salida)."
+                ) from exc
+            ins = sb.table("almacen_salida").insert(salida_row).execute().data
+        elif col == "receptor_usuario_id" or "receptor_usuario_id" in str(exc).lower():
+            if receptor_id is None:
+                raise ValueError("Indique quién recibe el material en obra.") from exc
+            raise
+        else:
+            raise
     if not ins:
         raise ValueError("No se pudo registrar la salida.")
     salida_id = int(ins[0]["id"])
+    salida_row["por_revisar"] = por_rev["por_revisar"]
+    salida_row["por_revisar_motivos"] = por_rev["por_revisar_motivos"]
 
     material = "—"
     unidad = "UND"
@@ -11031,13 +11084,15 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
     if desp_rows:
         desp_firma = desp_rows[0].get("firma_imagen_url")
 
+    receptor_nombre = (receptor or {}).get("label") or "—"
+    receptor_firma = (receptor or {}).get("firma_imagen_url")
     pdf_ctx = {
         "numero_oc": numero_oc,
         "insumo_label": insumo_label,
         "presupuesto_label": presupuesto_label,
         "unidad": unidad,
-        "receptor_nombre": receptor.get("label"),
-        "receptor_firma": receptor.get("firma_imagen_url"),
+        "receptor_nombre": receptor_nombre,
+        "receptor_firma": receptor_firma,
         "despachador_nombre": despachador,
         "despachador_firma": desp_firma,
     }
@@ -11059,7 +11114,7 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
     return {
         **salida_row,
         "id": salida_id,
-        "receptor_nombre": receptor.get("label"),
+        "receptor_nombre": receptor_nombre if receptor_id else None,
         "despachador_nombre": despachador,
         "material_descripcion": material,
         "unidad": unidad,
@@ -11070,27 +11125,146 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         "alerta_proximidad_consumo": alerta_proximidad,
         "pdf_generando": pdf_generando,
         "tiene_pdf_salida": False,
+        "por_revisar": por_rev["por_revisar"],
+        "por_revisar_motivos": por_rev["por_revisar_motivos"],
     }
 
 
 def list_salidas(contrato_id: int) -> List[dict]:
     sb = _sb()
     # Columnas necesarias para grilla + PDF flag (evita arrastrar blobs/metadatos pesados).
-    rows = (
-        sb.table("almacen_salida")
-        .select(
-            "id, contrato_id, numero_salida, codigo, fecha_hora_salida, pk_id, pk_id_id, "
-            "tramo, costado, abscisa_inicial, abscisa_final, entrada_item_id, cantidad_salida, "
-            "observaciones, receptor_usuario_id, created_by, created_at, "
-            "salida_pdf_blob_path, salida_pdf_nombre, salida_pdf_mime"
-        )
-        .eq("contrato_id", contrato_id)
-        .order("created_at", desc=True)
-        .execute()
-        .data
-        or []
+    select_cols = (
+        "id, contrato_id, numero_salida, codigo, fecha_hora_salida, pk_id, pk_id_id, "
+        "tramo, costado, abscisa_inicial, abscisa_final, entrada_item_id, cantidad_salida, "
+        "observaciones, receptor_usuario_id, created_by, created_at, "
+        "salida_pdf_blob_path, salida_pdf_nombre, salida_pdf_mime, "
+        "por_revisar, por_revisar_motivos"
     )
+    try:
+        rows = (
+            sb.table("almacen_salida")
+            .select(select_cols)
+            .eq("contrato_id", contrato_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col in ("por_revisar", "por_revisar_motivos"):
+            rows = (
+                sb.table("almacen_salida")
+                .select(
+                    "id, contrato_id, numero_salida, codigo, fecha_hora_salida, pk_id, pk_id_id, "
+                    "tramo, costado, abscisa_inicial, abscisa_final, entrada_item_id, cantidad_salida, "
+                    "observaciones, receptor_usuario_id, created_by, created_at, "
+                    "salida_pdf_blob_path, salida_pdf_nombre, salida_pdf_mime"
+                )
+                .eq("contrato_id", contrato_id)
+                .order("created_at", desc=True)
+                .execute()
+                .data
+                or []
+            )
+        else:
+            raise
     return _enrich_salidas_rows(sb, contrato_id, rows)
+
+
+def count_salidas_por_revisar(contrato_id: int) -> int:
+    """Cuántas salidas están pendientes de validación (badge Salió material)."""
+    sb = _sb()
+    try:
+        rows = (
+            sb.table("almacen_salida")
+            .select("id", count="exact")
+            .eq("contrato_id", contrato_id)
+            .eq("por_revisar", True)
+            .execute()
+        )
+        if getattr(rows, "count", None) is not None:
+            return int(rows.count)
+        return len(rows.data or [])
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col in ("por_revisar", "por_revisar_motivos"):
+            return 0
+        raise
+
+
+def completar_revision_salida(
+    contrato_id: int,
+    salida_id: int,
+    user_id: int,
+    body: Optional[dict] = None,
+) -> dict:
+    """Completa una salida «por revisar»: receptor, sector y/o limpia la marca."""
+    from almacen_salida_por_revisar import (
+        MOTIVO_SIN_RECEPTOR,
+        MOTIVO_SIN_SECTOR,
+        patch_por_revisar,
+    )
+
+    body = body or {}
+    sb = _sb()
+    sal = get_salida(contrato_id, salida_id)
+    if not sal.get("por_revisar"):
+        raise ValueError("Esta salida no está marcada por revisar.")
+
+    patch: Dict[str, Any] = {}
+    if body.get("receptor_usuario_id") not in (None, "", 0):
+        receptor = _validar_receptor_obra(sb, contrato_id, int(body["receptor_usuario_id"]))
+        patch["receptor_usuario_id"] = int(receptor["id"])
+
+    pk_in = _norm_pk_id(body.get("pk_id")) if body.get("pk_id") is not None else None
+    if pk_in:
+        patch["pk_id"] = pk_in
+        if body.get("pk_id_id") not in (None, ""):
+            patch["pk_id_id"] = int(body["pk_id_id"])
+        for k in ("tramo", "costado", "abscisa_inicial", "abscisa_final"):
+            if body.get(k) is not None:
+                v = str(body.get(k) or "").strip()
+                patch[k] = v or None
+
+    pk_final = patch.get("pk_id", sal.get("pk_id"))
+    receptor_final = patch.get("receptor_usuario_id", sal.get("receptor_usuario_id"))
+    motivos: List[str] = []
+    if not _norm_pk_id(pk_final):
+        motivos.append(MOTIVO_SIN_SECTOR)
+    if not receptor_final:
+        motivos.append(MOTIVO_SIN_RECEPTOR)
+    por_rev = patch_por_revisar(motivos)
+
+    if body.get("limpiar_marca") or body.get("quitar_marca") or body.get("confirmar"):
+        if motivos and not (body.get("forzar_limpiar")):
+            raise ValueError(
+                f"Aún faltan datos: {por_rev['por_revisar_motivos']}. "
+                "Complete receptor y/o sector antes de quitar la marca."
+            )
+        patch["por_revisar"] = False
+        patch["por_revisar_motivos"] = None
+    else:
+        patch["por_revisar"] = por_rev["por_revisar"]
+        patch["por_revisar_motivos"] = por_rev["por_revisar_motivos"]
+
+    if not patch:
+        raise ValueError("Indique receptor, sector o confirme quitar la marca.")
+
+    try:
+        sb.table("almacen_salida").update(patch).eq("id", int(salida_id)).execute()
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col in ("por_revisar", "por_revisar_motivos"):
+            for k in ("por_revisar", "por_revisar_motivos"):
+                patch.pop(k, None)
+            if patch:
+                sb.table("almacen_salida").update(patch).eq("id", int(salida_id)).execute()
+        else:
+            raise
+
+    _ = user_id  # audit vía ruta
+    return get_salida(contrato_id, salida_id)
 
 
 def get_salida(contrato_id: int, salida_id: int) -> dict:

@@ -773,6 +773,11 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
     listSalidas: () =>
       fetch(`${base}/salidas`, { headers: authHeaders() }).then(parseJsonList),
 
+    countSalidasPorRevisar: () =>
+      fetch(`${base}/salidas/por-revisar/count`, { headers: authHeaders() })
+        .then(parseJson)
+        .then((d) => Number(d?.count) || 0),
+
     getSalida: (salidaId) =>
       fetch(`${base}/salidas/${salidaId}`, { headers: authHeaders() }).then(parseJson),
 
@@ -781,6 +786,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
+      }).then(parseJson),
+
+    completarRevisionSalida: (salidaId, body) =>
+      fetch(`${base}/salidas/${salidaId}/completar-revision`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
       }).then(parseJson),
 
     updateSalidaCantidad: (salidaId, cantidad_salida) =>
@@ -800,6 +812,9 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       fetch(`${base}/usuarios-receptor-obra?q=${encodeURIComponent(q)}`, {
         headers: authHeaders(),
       }).then(parseJsonList),
+
+    listEntradasDisponibles: () =>
+      fetch(`${base}/entradas/disponibles`, { headers: authHeaders() }).then(parseJsonList),
 
     listEntradasDisponiblesPorPk: (pkId) =>
       fetch(`${base}/entradas/disponibles-por-pk?pk_id=${encodeURIComponent(pkId)}`, {

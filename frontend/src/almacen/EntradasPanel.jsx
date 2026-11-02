@@ -4,6 +4,7 @@ import DespachadorModal from './DespachadorModal'
 import DevolucionesListModal from './DevolucionesListModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
 import EntradaRegistroTablet from './EntradaRegistroTablet'
+import SalioMaterialPopup from './SalioMaterialPopup'
 import EntradasFiltrosModal from './EntradasFiltrosModal'
 import {
   countEntradasFiltrosActivos,
@@ -78,7 +79,9 @@ function ThHelp({ children, ayuda, style }) {
 }
 
 export default function EntradasPanel({
-  permisos, token, t, refreshSignal = 0, onDataLoaded,
+  permisos, token, t, refreshSignal = 0, onDataLoaded, onSalidaMutated,
+  openSalioMaterialRequest = null,
+  onSalioMaterialRequestHandled,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -88,6 +91,8 @@ export default function EntradasPanel({
   const puedeEliminar = Boolean(permisos?.eliminar)
   const [lista, setLista] = useState([])
   const [creating, setCreating] = useState(false)
+  const [salioOpen, setSalioOpen] = useState(false)
+  const [salioMode, setSalioMode] = useState('registrar')
   const [despachadorOpen, setDespachadorOpen] = useState(false)
   const [devolucionesListOpen, setDevolucionesListOpen] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
@@ -136,10 +141,24 @@ export default function EntradasPanel({
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      if (!creating && !despachadorOpen && !devolucionesListOpen) reload()
+      if (!creating && !salioOpen && !despachadorOpen && !devolucionesListOpen) reload()
       else onDataLoaded?.()
     }
-  }, [refreshSignal, creating, despachadorOpen, devolucionesListOpen, reload, onDataLoaded])
+  }, [refreshSignal, creating, salioOpen, despachadorOpen, devolucionesListOpen, reload, onDataLoaded])
+
+  useEffect(() => {
+    if (!openSalioMaterialRequest) return
+    setCreating(false)
+    setSalioMode(openSalioMaterialRequest.mode === 'historial' ? 'historial' : 'registrar')
+    setSalioOpen(true)
+    onSalioMaterialRequestHandled?.()
+  }, [openSalioMaterialRequest, onSalioMaterialRequestHandled])
+
+  const abrirSalioMaterial = (mode = 'registrar') => {
+    setCreating(false)
+    setSalioMode(mode === 'historial' ? 'historial' : 'registrar')
+    setSalioOpen(true)
+  }
 
   return (
     <div>
@@ -488,6 +507,26 @@ export default function EntradasPanel({
           contratoId={permisos?.contratoId}
           onClose={() => setCreating(false)}
           onSaved={() => { reload() }}
+          onAbrirSalioMaterial={(opts) => {
+            abrirSalioMaterial(opts?.mode || 'registrar')
+          }}
+        />
+      )}
+
+      {salioOpen && (
+        <SalioMaterialPopup
+          permisos={permisos}
+          theme={t}
+          token={token}
+          contratoId={permisos?.contratoId}
+          initialMode={salioMode}
+          refreshSignal={refreshSignal}
+          onClose={() => setSalioOpen(false)}
+          onSaved={() => {
+            invalidateSalidasCache(permisos?.contratoId)
+            reload()
+            onSalidaMutated?.()
+          }}
         />
       )}
 
