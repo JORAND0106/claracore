@@ -8,9 +8,38 @@ export const PASO = {
   PLACA: 'placa',
   FOTO: 'foto',
   CONFIRMAR: 'confirmar',
-  // Disposición
+  // Disposición («Salió material»)
   SECTOR: 'sector',
   ESCOMBRERA: 'escombrera',
+}
+
+export function foldSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+/** Todas las palabras de `query` deben aparecer en el texto (sin tildes ni mayúsculas). */
+export function matchesAllTerms(haystack, query) {
+  const terms = foldSearchText(query).split(/\s+/).filter(Boolean)
+  if (!terms.length) return true
+  const h = foldSearchText(haystack)
+  return terms.every((t) => h.includes(t))
+}
+
+export function ocCardSearchBlob(card) {
+  if (!card) return ''
+  return [
+    card.numero_oc != null ? `OC ${card.numero_oc}` : '',
+    card.proveedor_nombre,
+    card.material_descripcion,
+    card.insumo_id,
+    card.solicitud_consecutivo != null ? `Sol ${card.solicitud_consecutivo}` : '',
+    card.solicitud_titulo,
+    card.pk_id,
+  ].filter(Boolean).join(' ')
 }
 
 export function motivosPorRevisarPreview(draft) {
@@ -18,6 +47,7 @@ export function motivosPorRevisarPreview(draft) {
   if (!draft?.orden_compra_id) m.push('Sin orden de compra')
   if (draft?.supera_saldo) m.push('Supera saldo OC')
   if (draft?.proveedor_manual) m.push('Proveedor a mano')
+  if (draft?.sin_insumo) m.push('Sin insumo')
   if (!draft?.foto) m.push('Sin foto')
   if (draft?.vehiculo_nuevo) m.push('Vehículo nuevo')
   return m

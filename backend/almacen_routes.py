@@ -124,6 +124,8 @@ from almacen_service import (
     list_entradas,
     list_inventario,
     list_ocs_pendientes_tarjeta,
+    list_materiales_solicitados_contrato,
+    list_proveedores_solicitados_contrato,
     list_movimientos,
     list_ordenes_compra,
     list_presupuesto_items,
@@ -2417,12 +2419,51 @@ def route_list_entradas(contrato_id: int, current_user=Depends(get_current_user)
 
 @router.get("/{contrato_id}/entradas/ocs-pendientes")
 def route_ocs_pendientes_entrada(contrato_id: int, current_user=Depends(get_current_user)):
-    """Tarjetas de OC con saldo para el registro tablet."""
+    """Tarjetas de OC con saldo para el registro tablet (consulta liviana + timing)."""
     _check_contrato(current_user, contrato_id)
     require_permiso_entradas_salidas(current_user, "crear")
     return list_ocs_pendientes_tarjeta(
         contrato_id,
         ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+        include_timing=True,
+    )
+
+
+@router.get("/{contrato_id}/entradas/materiales-solicitados")
+def route_materiales_solicitados_entrada(
+    contrato_id: int,
+    q: str = "",
+    proveedor_id: Optional[int] = None,
+    limit: int = 40,
+    current_user=Depends(get_current_user),
+):
+    """Autocompletar: solo materiales que figuran en solicitudes del contrato."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "crear")
+    return list_materiales_solicitados_contrato(
+        contrato_id,
+        q=q or "",
+        proveedor_id=proveedor_id,
+        limit=limit,
+    )
+
+
+@router.get("/{contrato_id}/entradas/proveedores-solicitados")
+def route_proveedores_solicitados_entrada(
+    contrato_id: int,
+    q: str = "",
+    insumo_id: Optional[int] = None,
+    limit: int = 40,
+    current_user=Depends(get_current_user),
+):
+    """Autocompletar: proveedores con solicitud/OC del contrato (filtrable por material)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "crear")
+    return list_proveedores_solicitados_contrato(
+        contrato_id,
+        q=q or "",
+        insumo_id=insumo_id,
+        limit=limit,
     )
 
 

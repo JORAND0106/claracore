@@ -563,8 +563,34 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
     listEntradas: () =>
       fetch(`${base}/entradas`, { headers: authHeaders() }).then(parseJsonList),
 
-    listOcsPendientesEntrada: () =>
-      fetch(`${base}/entradas/ocs-pendientes`, { headers: authHeaders() }).then(parseJsonList),
+    listOcsPendientesEntrada: async () => {
+      const data = await fetchJson(`${base}/entradas/ocs-pendientes`, { headers: authHeaders() })
+      if (Array.isArray(data)) {
+        return { items: data, timing_ms: null }
+      }
+      return {
+        items: Array.isArray(data?.items) ? data.items : [],
+        timing_ms: data?.timing_ms || null,
+      }
+    },
+
+    searchMaterialesSolicitados: (q = '', { proveedorId, limit = 40 } = {}) => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (proveedorId) params.set('proveedor_id', String(proveedorId))
+      params.set('limit', String(limit))
+      return fetchJson(`${base}/entradas/materiales-solicitados?${params}`, { headers: authHeaders() })
+        .then((data) => (Array.isArray(data) ? data : []))
+    },
+
+    searchProveedoresSolicitados: (q = '', { insumoId, limit = 40 } = {}) => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (insumoId) params.set('insumo_id', String(insumoId))
+      params.set('limit', String(limit))
+      return fetchJson(`${base}/entradas/proveedores-solicitados?${params}`, { headers: authHeaders() })
+        .then((data) => (Array.isArray(data) ? data : []))
+    },
 
     completarRevisionEntrada: (entradaId, body) =>
       fetch(`${base}/entradas/${entradaId}/completar-revision`, {

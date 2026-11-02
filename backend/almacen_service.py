@@ -8851,42 +8851,434 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     return result
 
 
-def list_ocs_pendientes_tarjeta(contrato_id: int, *, ver_economicos: bool = False) -> List[dict]:
-    """Tarjetas de OC con saldo para el registro tablet (una tarjeta por línea con saldo)."""
-    ocs = list_ordenes_compra(contrato_id)
+def _chunked_ids(ids: List[int], size: int = 80) -> List[List[int]]:
+    if not ids:
+        return []
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+def list_ocs_pendientes_tarjeta(
+    contrato_id: int,
+    *,
+    ver_economicos: bool = False,
+    include_timing: bool = True,
+) -> dict:
+    """
+    Tarjetas livianas de OC con saldo (una por línea pendiente).
+    Consulta en lote: sin get_orden_compra por cada OC.
+    """
+    t0 = time.perf_counter()
+    stages: Dict[str, float] = {}
+    sb = _sb()
+
+    t = time.perf_counter()
+    ocs = (
+        sb.table("almacen_orden_compra")
+        .select("id, numero_oc, proveedor_id, proveedor_nombre, estado, solicitud_id")
+        .eq("contrato_id", contrato_id)
+        .neq("estado", "anulada")
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    stages["ocs_ms"] = round((time.perf_counter() - t) * 1000, 1)
+    if not ocs:
+        total_ms = round((time.perf_counter() - t0) * 1000, 1)
+        out = {"items": [], "timing_ms": {"total": total_ms, **stages}}
+        return out if include_timing else out["items"]
+
+    oc_by_id = {int(r["id"]): r for r in ocs}
+    oc_ids = list(oc_by_id.keys())
+
+    t = time.perf_counter()
+    all_items: List[dict] = []
+    item_selects = (
+        "id, orden_compra_id, solicitud_item_id, material_descripcion, unidad, "
+        "cantidad, cantidad_recibida, valor_unitario, valor_recibido, proveedor_nombre",
+        "id, orden_compra_id, solicitud_item_id, material_descripcion, unidad, "
+        "cantidad, cantidad_recibida, valor_unitario, proveedor_nombre",
+    )
+    for chunk in _chunked_ids(oc_ids):
+        rows: List[dict] = []
+        last_exc: Optional[Exception] = None
+        for cols in item_selects:
+            try:
+                rows = (
+                    sb.table("almacen_orden_compra_item")
+                    .select(cols)
+                    .in_("orden_compra_id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if not _pgrst_unknown_column(exc):
+                    raise
+        if last_exc is not None:
+            raise last_exc
+        all_items.extend(rows)
+    stages["items_ms"] = round((time.perf_counter() - t) * 1000, 1)
+
+    pending: List[dict] = []
+    sol_item_ids: List[int] = []
+    for it in all_items:
+        saldos = _oc_item_saldos(it)
+        if not saldos.get("tiene_saldo"):
+            continue
+        pending.append({**it, "_saldos": saldos})
+        sid = it.get("solicitud_item_id")
+        if sid not in (None, ""):
+            sol_item_ids.append(int(sid))
+
+    sol_item_map: Dict[int, dict] = {}
+    t = time.perf_counter()
+    for chunk in _chunked_ids(sorted(set(sol_item_ids))):
+        sol_rows = (
+            sb.table("almacen_solicitud_item")
+            .select(
+                "id, solicitud_id, pk_id, tramo, costado, abscisa_inicial, abscisa_final, "
+                "insumo_id, material_descripcion, unidad"
+            )
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for r in sol_rows:
+            sol_item_map[int(r["id"])] = r
+    stages["solicitud_items_ms"] = round((time.perf_counter() - t) * 1000, 1)
+
+    sol_ids = sorted({
+        int(oc.get("solicitud_id"))
+        for oc in ocs
+        if oc.get("solicitud_id") not in (None, "")
+    } | {
+        int(s["solicitud_id"])
+        for s in sol_item_map.values()
+        if s.get("solicitud_id") not in (None, "")
+    })
+    sol_meta: Dict[int, dict] = {}
+    t = time.perf_counter()
+    for chunk in _chunked_ids(sol_ids):
+        srows = (
+            sb.table("almacen_solicitud")
+            .select("id, consecutivo, titulo")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for r in srows:
+            sol_meta[int(r["id"])] = r
+    stages["solicitudes_ms"] = round((time.perf_counter() - t) * 1000, 1)
+
+    prov_ids = sorted({
+        int(oc["proveedor_id"])
+        for oc in ocs
+        if oc.get("proveedor_id") not in (None, "")
+    })
+    prov_names: Dict[int, str] = {}
+    t = time.perf_counter()
+    for chunk in _chunked_ids(prov_ids):
+        prows = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for r in prows:
+            prov_names[int(r["id"])] = (r.get("razon_social") or "").strip()
+    stages["proveedores_ms"] = round((time.perf_counter() - t) * 1000, 1)
+
     tarjetas: List[dict] = []
-    for oc in ocs:
-        if (oc.get("estado") or "") == "anulada":
+    for it in pending:
+        oc = oc_by_id.get(int(it["orden_compra_id"]))
+        if not oc:
             continue
-        if not oc.get("tiene_saldo_recepcion"):
-            continue
-        oc_full = get_orden_compra(contrato_id, int(oc["id"]), incluir_entradas=False)
-        for it in oc_full.get("items") or []:
-            saldos = _oc_item_saldos(it)
-            if not saldos.get("tiene_saldo"):
-                continue
-            sol = it.get("almacen_solicitud_item") or {}
-            card = {
-                "orden_compra_id": int(oc["id"]),
-                "orden_compra_item_id": int(it["id"]),
-                "numero_oc": oc.get("numero_oc"),
-                "proveedor_id": oc.get("proveedor_id"),
-                "proveedor_nombre": oc.get("proveedor_nombre"),
-                "insumo_id": it.get("insumo_id") or sol.get("insumo_id"),
-                "material_descripcion": it.get("material_descripcion") or sol.get("material_descripcion"),
-                "unidad": it.get("unidad") or sol.get("unidad") or "UND",
-                "saldo_cantidad": saldos.get("saldo_cantidad"),
-                "pk_id": sol.get("pk_id") or oc.get("pk_id"),
-                "tramo": sol.get("tramo"),
-                "costado": sol.get("costado"),
-                "abscisa_inicial": sol.get("abscisa_inicial"),
-                "abscisa_final": sol.get("abscisa_final"),
-            }
-            if ver_economicos:
-                card["saldo_valor"] = saldos.get("saldo_valor")
-                card["valor_unitario"] = it.get("valor_unitario")
-            tarjetas.append(card)
+        saldos = it["_saldos"]
+        sid = it.get("solicitud_item_id")
+        sol = sol_item_map.get(int(sid), {}) if sid not in (None, "") else {}
+        sol_head_id = oc.get("solicitud_id") or sol.get("solicitud_id")
+        sol_head = sol_meta.get(int(sol_head_id), {}) if sol_head_id not in (None, "") else {}
+        pid = oc.get("proveedor_id")
+        prov_nombre = (
+            (oc.get("proveedor_nombre") or "").strip()
+            or (it.get("proveedor_nombre") or "").strip()
+            or (prov_names.get(int(pid)) if pid not in (None, "") else "")
+            or ""
+        )
+        card = {
+            "orden_compra_id": int(oc["id"]),
+            "orden_compra_item_id": int(it["id"]),
+            "numero_oc": oc.get("numero_oc"),
+            "proveedor_id": pid,
+            "proveedor_nombre": prov_nombre,
+            "insumo_id": sol.get("insumo_id"),
+            "material_descripcion": it.get("material_descripcion") or sol.get("material_descripcion"),
+            "unidad": it.get("unidad") or sol.get("unidad") or "UND",
+            "saldo_cantidad": saldos.get("saldo_cantidad"),
+            "pk_id": sol.get("pk_id"),
+            "tramo": sol.get("tramo"),
+            "costado": sol.get("costado"),
+            "abscisa_inicial": sol.get("abscisa_inicial"),
+            "abscisa_final": sol.get("abscisa_final"),
+            "solicitud_id": sol_head_id,
+            "solicitud_consecutivo": sol_head.get("consecutivo"),
+            "solicitud_titulo": sol_head.get("titulo"),
+        }
+        if ver_economicos:
+            card["saldo_valor"] = saldos.get("saldo_valor")
+            card["valor_unitario"] = it.get("valor_unitario")
+        tarjetas.append(card)
+
+    total_ms = round((time.perf_counter() - t0) * 1000, 1)
+    stages["total"] = total_ms
+    _log.info(
+        "list_ocs_pendientes_tarjeta contrato=%s items=%s timing_ms=%s",
+        contrato_id,
+        len(tarjetas),
+        stages,
+    )
+    if include_timing:
+        return {"items": tarjetas, "timing_ms": stages}
     return tarjetas
+
+
+def list_materiales_solicitados_contrato(
+    contrato_id: int,
+    *,
+    q: str = "",
+    proveedor_id: Optional[int] = None,
+    limit: int = 40,
+) -> List[dict]:
+    """
+    Autocompletar de materiales: solo insumos/descripciones presentes en solicitudes
+    del contrato (no el catálogo completo).
+    """
+    sb = _sb()
+    sols = (
+        sb.table("almacen_solicitud")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    if not sols:
+        return []
+    sol_ids = [int(s["id"]) for s in sols]
+    items: List[dict] = []
+    for chunk in _chunked_ids(sol_ids):
+        rows = (
+            sb.table("almacen_solicitud_item")
+            .select(
+                "id, insumo_id, material_descripcion, unidad, "
+                "proveedor_seleccionado_id, proveedor_seleccionado_nombre, solicitud_id"
+            )
+            .in_("solicitud_id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        items.extend(rows)
+
+    if proveedor_id not in (None, "", 0):
+        try:
+            pid = int(proveedor_id)
+        except (TypeError, ValueError):
+            pid = None
+        if pid is not None:
+            # Ítems con ese proveedor seleccionado o con OC de ese proveedor.
+            linked_sids: set = set()
+            ocs = (
+                sb.table("almacen_orden_compra")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("proveedor_id", pid)
+                .execute()
+                .data
+                or []
+            )
+            oc_ids = [int(o["id"]) for o in ocs]
+            for chunk in _chunked_ids(oc_ids):
+                oci = (
+                    sb.table("almacen_orden_compra_item")
+                    .select("solicitud_item_id")
+                    .in_("orden_compra_id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+                for r in oci:
+                    if r.get("solicitud_item_id") not in (None, ""):
+                        linked_sids.add(int(r["solicitud_item_id"]))
+            filtered = []
+            for it in items:
+                sel = it.get("proveedor_seleccionado_id")
+                if sel not in (None, "") and int(sel) == pid:
+                    filtered.append(it)
+                elif it.get("id") is not None and int(it["id"]) in linked_sids:
+                    filtered.append(it)
+            items = filtered
+
+    qn = _norm(q)
+    seen: set = set()
+    out: List[dict] = []
+    for it in items:
+        iid = it.get("insumo_id")
+        label = (it.get("material_descripcion") or "").strip()
+        if not iid and not label:
+            continue
+        key = ("i", int(iid)) if iid not in (None, "") else ("d", _norm(label))
+        if key in seen:
+            continue
+        if qn:
+            blob = _norm(f"{label} {iid or ''}")
+            if not all(tok in blob for tok in qn.split()):
+                continue
+        seen.add(key)
+        out.append({
+            "insumo_id": int(iid) if iid not in (None, "") else None,
+            "id": int(iid) if iid not in (None, "") else None,
+            "label": label or (f"Insumo {iid}" if iid else ""),
+            "descripcion": label,
+            "material_descripcion": label,
+            "unidad": it.get("unidad") or "UND",
+        })
+        if len(out) >= max(1, min(int(limit or 40), 100)):
+            break
+    return out
+
+
+def list_proveedores_solicitados_contrato(
+    contrato_id: int,
+    *,
+    q: str = "",
+    insumo_id: Optional[int] = None,
+    limit: int = 40,
+) -> List[dict]:
+    """
+    Autocompletar de proveedores vinculados a solicitudes/OC del contrato.
+    Si hay insumo_id, se limitan a los que tienen solicitud u OC de ese material.
+    """
+    sb = _sb()
+    qn = _norm(q)
+    try:
+        iid = int(insumo_id) if insumo_id not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        iid = None
+
+    prov_ids: set = set()
+    nombres_extra: Dict[int, str] = {}
+
+    sols = (
+        sb.table("almacen_solicitud")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    sol_ids = [int(s["id"]) for s in sols]
+    items: List[dict] = []
+    for chunk in _chunked_ids(sol_ids):
+        rows = (
+            sb.table("almacen_solicitud_item")
+            .select("id, insumo_id, proveedor_seleccionado_id, proveedor_seleccionado_nombre")
+            .in_("solicitud_id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        items.extend(rows)
+
+    if iid is not None:
+        items = [it for it in items if it.get("insumo_id") not in (None, "") and int(it["insumo_id"]) == iid]
+
+    for it in items:
+        pid = it.get("proveedor_seleccionado_id")
+        if pid not in (None, ""):
+            pi = int(pid)
+            prov_ids.add(pi)
+            nom = (it.get("proveedor_seleccionado_nombre") or "").strip()
+            if nom and pi not in nombres_extra:
+                nombres_extra[pi] = nom
+
+    # Proveedores de OC (filtrados por insumo vía ítems de solicitud si aplica).
+    ocs = (
+        sb.table("almacen_orden_compra")
+        .select("id, proveedor_id, proveedor_nombre")
+        .eq("contrato_id", contrato_id)
+        .neq("estado", "anulada")
+        .execute()
+        .data
+        or []
+    )
+    if iid is not None:
+        item_ids = {int(it["id"]) for it in items if it.get("id") is not None}
+        oc_ids_ok: set = set()
+        all_oc_ids = [int(o["id"]) for o in ocs]
+        for chunk in _chunked_ids(all_oc_ids):
+            oci = (
+                sb.table("almacen_orden_compra_item")
+                .select("orden_compra_id, solicitud_item_id")
+                .in_("orden_compra_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for r in oci:
+                sid = r.get("solicitud_item_id")
+                if sid not in (None, "") and int(sid) in item_ids:
+                    oc_ids_ok.add(int(r["orden_compra_id"]))
+        ocs = [o for o in ocs if int(o["id"]) in oc_ids_ok]
+
+    for o in ocs:
+        pid = o.get("proveedor_id")
+        if pid not in (None, ""):
+            pi = int(pid)
+            prov_ids.add(pi)
+            nom = (o.get("proveedor_nombre") or "").strip()
+            if nom and pi not in nombres_extra:
+                nombres_extra[pi] = nom
+
+    if not prov_ids:
+        return []
+
+    out: List[dict] = []
+    for chunk in _chunked_ids(sorted(prov_ids)):
+        prows = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit")
+            .eq("contrato_id", contrato_id)
+            .eq("activo", True)
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for r in prows:
+            nombre = (r.get("razon_social") or "").strip() or nombres_extra.get(int(r["id"]), "")
+            if qn:
+                blob = _norm(f"{nombre} {r.get('nit') or ''}")
+                if not all(tok in blob for tok in qn.split()):
+                    continue
+            out.append({
+                "id": int(r["id"]),
+                "proveedor_id": int(r["id"]),
+                "razon_social": nombre,
+                "nombre": nombre,
+                "nit": r.get("nit"),
+            })
+
+    out.sort(key=lambda x: _norm(x.get("razon_social") or ""))
+    return out[: max(1, min(int(limit or 40), 100))]
 
 
 def completar_revision_entrada(
