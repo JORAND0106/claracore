@@ -131,18 +131,15 @@ describe('entradaSoportePaste', () => {
     }
   })
 
-  it('UI cablea zona Pegar aquí, botón Pegar y Ctrl/Cmd+V en dialog', () => {
+  it('UI cablea Pegar compacto y Ctrl/Cmd+V en dialog', () => {
     const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
     const picker = readFileSync(join(dir, 'EntradaSoportePicker.jsx'), 'utf8')
     assert.match(wiz, /onPasteSoporte/)
     assert.match(wiz, /onPasteEnSoporte/)
     assert.match(wiz, /fileFromClipboardEvent/)
     assert.match(wiz, /resolvePasteTarget/)
-    assert.match(wiz, /entrada-tablet-paste-hint/)
     assert.match(wiz, /onPasteFile/)
-    assert.match(wiz, /pegar-zona/)
-    assert.match(picker, /Pegar aquí/)
-    assert.match(picker, /entrada-soporte-\$\{kind\}-pegar-zona/)
+    assert.doesNotMatch(picker, /Pegar aquí/)
     assert.match(picker, /entrada-soporte-\$\{kind\}-pegar/)
     assert.match(picker, /contentEditable/)
     assert.match(picker, /fileFromClipboardApi/)

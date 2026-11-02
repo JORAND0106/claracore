@@ -116,6 +116,7 @@ from almacen_service import (
     count_salidas_por_revisar,
     lookup_entrada_soporte_hash,
     lookup_entrada_por_numero_remision,
+    list_entrada_soportes_galeria,
     enviar_solicitud,
     _fetch_solicitud_head,
     get_config,
@@ -2585,6 +2586,19 @@ def route_check_entrada_soporte_hash(
             "Cargue otro distinto."
         ),
     }
+
+
+@router.get("/{contrato_id}/entradas/soportes-galeria")
+def route_list_entrada_soportes_galeria(
+    contrato_id: int,
+    tipo: str = Query("remision"),
+    current_user=Depends(get_current_user),
+):
+    """Galería del módulo: soportes de entradas (marcados en uso / Ent-…)."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    items = list_entrada_soportes_galeria(contrato_id, tipo)
+    return {"items": items, "tipo": (tipo or "remision").strip().lower()}
 
 
 @router.post("/{contrato_id}/entradas/check-numero-remision")

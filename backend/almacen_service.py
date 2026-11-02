@@ -8061,6 +8061,61 @@ def _resolve_numero_documento_entrada(contrato_id: int, tipo: str, numero_raw: O
     raise ValueError("Tipo de entrada inválido.")
 
 
+def list_entrada_soportes_galeria(
+    contrato_id: int,
+    tipo_soporte: str = "remision",
+    *,
+    limit: int = 40,
+) -> List[dict]:
+    """
+    Galería del módulo: remisiones o fotos de descargue ya guardadas en entradas.
+    Todas están «en uso» (asociadas a Ent-…); la UI debe rechazar reutilizarlas.
+    """
+    tipo = (tipo_soporte or "remision").strip().lower()
+    if tipo not in ("remision", "material"):
+        tipo = "remision"
+    path_col = "remision_blob_path" if tipo == "remision" else "material_foto_blob_path"
+    nombre_col = "remision_nombre" if tipo == "remision" else "material_foto_nombre"
+    mime_col = "remision_mime" if tipo == "remision" else "material_foto_mime"
+    sb = _sb()
+    try:
+        rows = (
+            sb.table("almacen_entrada")
+            .select(
+                f"id, codigo, numero_entrada, fecha_entrada, {path_col}, {nombre_col}, {mime_col}"
+            )
+            .eq("contrato_id", int(contrato_id))
+            .eq("tipo", "recibo")
+            .not_.is_(path_col, "null")
+            .order("id", desc=True)
+            .limit(max(1, min(int(limit or 40), 80)))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("list_entrada_soportes_galeria falló: %s", exc)
+        return []
+    out: List[dict] = []
+    for r in rows:
+        if not r.get(path_col):
+            continue
+        _asegurar_codigo_entrada(contrato_id, r)
+        codigo = (r.get("codigo") or "").strip()
+        if not codigo and r.get("numero_entrada"):
+            codigo = _format_codigo_entrada(contrato_id, int(r["numero_entrada"]))
+        out.append({
+            "entrada_id": r.get("id"),
+            "codigo_entrada": codigo or None,
+            "fecha_entrada": r.get("fecha_entrada"),
+            "tipo_soporte": tipo,
+            "nombre": r.get(nombre_col) or ("remision" if tipo == "remision" else "descargue"),
+            "mime": r.get(mime_col),
+            "en_uso": True,
+        })
+    return out
+
+
 def lookup_entrada_por_numero_remision(
     contrato_id: int,
     numero_documento: Optional[str],
