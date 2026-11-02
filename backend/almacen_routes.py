@@ -2551,6 +2551,7 @@ async def route_create_entrada(
     placa: Optional[str] = Form(None),
     transportador: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
+    material_foto: Optional[UploadFile] = File(None),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
@@ -2562,7 +2563,6 @@ async def route_create_entrada(
         raise HTTPException(status_code=400, detail="items_json inválido") from exc
     tipo_norm = (tipo or "recibo").strip().lower()
     numero_norm = (numero_documento or "").strip()
-    # Foto y nº remisión ya no bloquean: create_entrada marca «por revisar».
     rem_data = rem_mime = rem_nombre = None
     if remision and remision.filename:
         rem_data = await remision.read()
@@ -2573,6 +2573,22 @@ async def route_create_entrada(
                 status_code=400,
                 detail="El soporte de remisión no puede superar 300 KB.",
             )
+    mat_data = mat_mime = mat_nombre = None
+    if material_foto and material_foto.filename:
+        mat_data = await material_foto.read()
+        mat_mime = material_foto.content_type or "image/jpeg"
+        mat_nombre = material_foto.filename
+        if len(mat_data) > 300 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail="La foto del material no puede superar 300 KB.",
+            )
+    # Recibo: ambas fotos obligatorias (única excepción a no bloquear).
+    if tipo_norm == "recibo":
+        if not rem_data:
+            raise HTTPException(status_code=400, detail="La foto del recibo (remisión) es obligatoria.")
+        if not mat_data:
+            raise HTTPException(status_code=400, detail="La foto del material descargado es obligatoria.")
     body = {
         "orden_compra_id": orden_compra_id,
         "fecha_entrada": fecha_entrada,
@@ -2597,6 +2613,7 @@ async def route_create_entrada(
         result = create_entrada(
             contrato_id, _uid(current_user), body,
             remision_data=rem_data, remision_nombre=rem_nombre, remision_mime=rem_mime,
+            material_foto_data=mat_data, material_foto_nombre=mat_nombre, material_foto_mime=mat_mime,
         )
         cab = snapshot_entrada_cabecera(result)
         items = result.get("items") or []
@@ -2664,6 +2681,26 @@ def route_download_remision(contrato_id: int, entrada_id: int, current_user=Depe
         ent = get_entrada(contrato_id, entrada_id)
         data, mime = download_soporte(ent.get("remision_blob_path"))
         fname = ent.get("remision_nombre") or "remision"
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type=mime,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/entradas/{entrada_id}/material-foto/download")
+def route_download_material_foto(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    try:
+        ent = get_entrada(contrato_id, entrada_id)
+        path = ent.get("material_foto_blob_path")
+        if not path:
+            raise ValueError("Esta entrada no tiene foto del material.")
+        data, mime = download_soporte(path)
+        fname = ent.get("material_foto_nombre") or "material.jpg"
         return StreamingResponse(
             io.BytesIO(data),
             media_type=mime,

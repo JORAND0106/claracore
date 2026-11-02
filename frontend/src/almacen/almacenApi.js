@@ -617,6 +617,8 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
 
     remisionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/remision/download`,
 
+    materialFotoDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/material-foto/download`,
+
     listInventario: () =>
       fetch(`${base}/inventario`, { headers: authHeaders() }).then(parseJsonList),
 

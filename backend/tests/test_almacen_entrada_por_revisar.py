@@ -25,12 +25,15 @@ def test_motivos_helpers():
     assert patch_por_revisar([])["por_revisar"] is False
 
 
-def test_create_entrada_no_bloquea_por_foto_ni_saldo_en_codigo():
+def test_create_entrada_motivos_y_recibo_fotos():
     src = (ROOT / "almacen_service.py").read_text(encoding="utf-8")
-    # La función debe marcar motivos, no raise por remisión faltante en recibo.
+    create = src.split("def create_entrada")[1].split("\ndef ")[0]
     assert "MOTIVO_SIN_FOTO" in src
     assert "MOTIVO_SUPERA_SALDO" in src
-    assert "Adjunte el soporte fotográfico o PDF de la remisión." not in src.split("def create_entrada")[1].split("def ")[0]
+    # Mensaje legacy de remisión como PDF/foto genérico ya no aplica.
+    assert "Adjunte el soporte fotográfico o PDF de la remisión." not in create
+    # Recibo: dos fotos obligatorias (única excepción a no bloquear).
+    assert "material descargado" in create.lower()
     assert "def list_ocs_pendientes_tarjeta" in src
     assert "def completar_revision_entrada" in src
 
@@ -48,9 +51,10 @@ def test_migration_y_rutas():
     assert "proveedor_nombre_texto" in routes
 
 
-def test_ruta_create_ya_no_exige_remision():
+def test_ruta_create_recibo_exige_dos_fotos_no_numero():
     routes = (ROOT / "almacen_routes.py").read_text(encoding="utf-8")
-    # El bloque duro de remisión obligatoria debe haber desaparecido del POST entradas.
     create = routes.split("async def route_create_entrada")[1].split("@router.")[0]
     assert "Adjunte el soporte fotográfico" not in create
     assert "Indique el número de remisión" not in create
+    assert "material_foto" in create
+    assert "material descargado" in create.lower()

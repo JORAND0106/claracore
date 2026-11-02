@@ -38,6 +38,8 @@ def snapshot_entrada_cabecera(ent: Optional[dict]) -> Optional[dict]:
         "fecha_entrada", "pk_id", "tramo", "costado",
         "abscisa_inicial", "abscisa_final", "proveedor_id",
         "orden_compra_id", "observaciones", "placa", "transportador",
+        "remision_nombre", "material_foto_nombre",
+        "tiene_remision", "tiene_material_foto",
     ))
 
 

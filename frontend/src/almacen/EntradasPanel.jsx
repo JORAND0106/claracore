@@ -305,7 +305,14 @@ export default function EntradasPanel({
                     <td style={{ ...tdAlert, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e)}</td>
                     <td style={tdAlert} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
                     <td style={tdAlert} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
-                    <td style={tdAlert} data-label="Remisión">{e.numero_documento || (e.remision_nombre ? '✓ Remisión' : '—')}</td>
+                    <td style={tdAlert} data-label="Remisión">
+                      {e.numero_documento
+                        || [
+                          (e.tiene_remision || e.remision_nombre) ? '📄' : null,
+                          (e.tiene_material_foto || e.material_foto_nombre) ? '📷' : null,
+                        ].filter(Boolean).join(' ')
+                        || '—'}
+                    </td>
                     <td style={tdAlert} data-label="OC">#{oc.numero_oc || '—'}</td>
                     <td
                       style={{
