@@ -208,13 +208,14 @@ describe('UI cableado', () => {
     assert.match(salio, /buildAlmacenCssVars/)
   })
 
-  it('soportes compactos: Cámara, Archivo, Galería, Pegar + preview fijo', () => {
+  it('soportes compactos: lado a lado, Cámara/Archivo/Galería/Pegar + preview debajo', () => {
     const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
     const picker = readFileSync(join(dir, 'EntradaSoportePicker.jsx'), 'utf8')
     assert.match(wiz, /onPasteSoporte/)
     assert.match(wiz, /EntradaSoporteGaleriaModal/)
     assert.match(wiz, /onOpenGaleriaPlataforma/)
     assert.match(wiz, /entrada-soporte-preview-modal/)
+    assert.match(wiz, /entrada-tablet-soportes-fila/)
     assert.match(wiz, /overflow: paso === PASO\.CAPTURA \? 'hidden'/)
     assert.doesNotMatch(picker, /Pegar aquí/)
     assert.doesNotMatch(picker, /Módulo/)
@@ -224,9 +225,10 @@ describe('UI cableado', () => {
     assert.match(picker, /entrada-soporte-\$\{kind\}-pegar/)
     assert.match(picker, /entrada-soporte-\$\{kind\}-galeria/)
     assert.match(picker, /contentEditable/)
+    assert.match(picker, /justifySelf: 'start'/)
   })
 
-  it('tabla OC: scroll visible, alerta X de N y N.º remisión en línea de captura', () => {
+  it('tabla OC: scroll visible, alerta X de N y N.º remisión en columna Remisión', () => {
     const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
     const routes = readFileSync(join(dir, '../../../backend/almacen_routes.py'), 'utf8')
     assert.match(wiz, /entrada-tablet-oc-vista-alerta/)
@@ -235,6 +237,7 @@ describe('UI cableado', () => {
     assert.match(wiz, /borderCollapse: 'separate'/)
     assert.match(wiz, /scrollIntoView/)
     assert.match(wiz, /entrada-tablet-numero-remision/)
+    assert.match(wiz, /entrada-tablet-soportes-fila/)
     assert.match(wiz, /entrada-tablet-captura-fila/)
     assert.match(wiz, /fd\.append\('numero_documento'/)
     // Ruta literal antes de la parametrizada por id

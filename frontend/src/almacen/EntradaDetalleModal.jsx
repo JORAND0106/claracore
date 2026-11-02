@@ -40,6 +40,7 @@ export default function EntradaDetalleModal({
   contratoId,
   theme,
   permisos,
+  onCompletarSalidaInmediata,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -171,6 +172,59 @@ export default function EntradaDetalleModal({
 
         {ent && (
           <>
+            {ent.salida_inmediata_pendiente && (
+              <div
+                data-testid="entrada-salida-inmediata-banner"
+                style={{
+                  marginBottom: 12,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: '#fef3c7',
+                  color: '#78350f',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>
+                  ⚡ Salida inmediata pendiente
+                  {' · '}
+                  El stock de salida no se descuenta hasta confirmar.
+                </div>
+                {onCompletarSalidaInmediata && (
+                  <button
+                    type="button"
+                    data-testid="entrada-completar-salida-inmediata"
+                    style={{ ...ui.btnPrimary, minHeight: 40 }}
+                    onClick={() => onCompletarSalidaInmediata(ent)}
+                  >
+                    Completar salida
+                  </button>
+                )}
+              </div>
+            )}
+            {(Array.isArray(ent.salidas_enlazadas) && ent.salidas_enlazadas.length > 0) && (
+              <div
+                data-testid="entrada-salidas-enlazadas"
+                style={{
+                  marginBottom: 12,
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  border: `1px solid ${ui.borderColor}`,
+                  fontWeight: 700,
+                }}
+              >
+                Salidas enlazadas:{' '}
+                {ent.salidas_enlazadas.map((s, i) => (
+                  <span key={s.id || s.salida_id || i}>
+                    {i > 0 ? ', ' : ''}
+                    {s.codigo || (s.numero_salida != null ? `Sal-${s.numero_salida}` : `#${s.id || s.salida_id}`)}
+                  </span>
+                ))}
+              </div>
+            )}
             {(ent.por_revisar || ent.alerta_silenciosa_codigo) && (
               <div
                 data-testid="entrada-por-revisar-banner"

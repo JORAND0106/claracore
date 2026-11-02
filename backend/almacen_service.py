@@ -8866,6 +8866,7 @@ def create_entrada(
         "por_revisar": por_rev["por_revisar"],
         "por_revisar_motivos": por_rev["por_revisar_motivos"],
         "proveedor_nombre_texto": proveedor_nombre_texto,
+        "salida_inmediata_pendiente": bool(body.get("salida_inmediata_pendiente")),
     }
     if entrada_row["llegada_domicilio"]:
         # Domicilio: no exigir ni persistir placa/conductor.
@@ -8876,14 +8877,22 @@ def create_entrada(
     except Exception as exc:
         # Migración pendiente: guardar sin columnas nuevas.
         col = _pgrst_unknown_column(exc)
-        if col in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto", "llegada_domicilio"):
-            for k in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto", "llegada_domicilio"):
+        drop_cols = (
+            "por_revisar",
+            "por_revisar_motivos",
+            "proveedor_nombre_texto",
+            "llegada_domicilio",
+            "salida_inmediata_pendiente",
+        )
+        if col in drop_cols:
+            for k in drop_cols:
                 entrada_row.pop(k, None)
             ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
             entrada_row["por_revisar"] = por_rev["por_revisar"]
             entrada_row["por_revisar_motivos"] = por_rev["por_revisar_motivos"]
             entrada_row["proveedor_nombre_texto"] = proveedor_nombre_texto
             entrada_row["llegada_domicilio"] = bool(body.get("llegada_domicilio"))
+            entrada_row["salida_inmediata_pendiente"] = bool(body.get("salida_inmediata_pendiente"))
         else:
             raise
     if not ent_ins:
@@ -9173,6 +9182,7 @@ def create_entrada(
         "tiene_pdf_disposicion": False,
         "tiene_remision": bool(entrada_row.get("remision_blob_path")),
         "tiene_material_foto": bool(entrada_row.get("material_foto_blob_path")),
+        "salida_inmediata_pendiente": bool(entrada_row.get("salida_inmediata_pendiente")),
     }
     if oc_id:
         result["almacen_orden_compra"] = {
@@ -10228,6 +10238,18 @@ def get_entrada(
     ent["tiene_pdf_disposicion"] = bool(ent.get("disposicion_pdf_blob_path"))
     ent["tiene_remision"] = bool(ent.get("remision_blob_path"))
     ent["tiene_material_foto"] = bool(ent.get("material_foto_blob_path"))
+    salidas_enlazadas: List[dict] = []
+    seen_sal = set()
+    for it in items:
+        for s in (it.get("salidas") or []):
+            sid = s.get("id") or s.get("salida_id")
+            key = sid if sid is not None else (s.get("numero_salida"), s.get("codigo"))
+            if key in seen_sal:
+                continue
+            seen_sal.add(key)
+            salidas_enlazadas.append(s)
+    ent["salidas_enlazadas"] = salidas_enlazadas
+    ent["salida_inmediata_pendiente"] = bool(ent.get("salida_inmediata_pendiente"))
     return _asegurar_codigo_entrada(contrato_id, ent)
 
 
@@ -11153,6 +11175,33 @@ def _normalize_salida_items(body: dict) -> List[dict]:
     return [{"entrada_item_id": int(entrada_item_id), "cantidad_salida": qty}]
 
 
+def clear_salida_inmediata_pendiente(contrato_id: int, entrada_id: int) -> dict:
+    """Quita la marca de salida inmediata pendiente (tras confirmar o cancelar el aviso)."""
+    sb = _sb()
+    try:
+        sb.table("almacen_entrada").update({
+            "salida_inmediata_pendiente": False,
+        }).eq("id", int(entrada_id)).eq("contrato_id", int(contrato_id)).execute()
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col == "salida_inmediata_pendiente":
+            return {"id": int(entrada_id), "salida_inmediata_pendiente": False, "omitido": True}
+        raise
+    return {"id": int(entrada_id), "salida_inmediata_pendiente": False}
+
+
+def _clear_salida_inmediata_si_aplica(contrato_id: int, entrada_id: Optional[int]) -> None:
+    if not entrada_id:
+        return
+    try:
+        clear_salida_inmediata_pendiente(contrato_id, int(entrada_id))
+    except Exception as exc:
+        _log.warning(
+            "No se pudo limpiar salida_inmediata_pendiente entrada %s: %s",
+            entrada_id, exc,
+        )
+
+
 def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
     """
     Registra una o varias salidas en un mismo envío.
@@ -11161,12 +11210,19 @@ def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
     """
     items = _normalize_salida_items(body)
     created: List[dict] = []
+    entrada_ids = set()
     for it in items:
         single = dict(body)
         single.pop("items", None)
         single["entrada_item_id"] = it["entrada_item_id"]
         single["cantidad_salida"] = it["cantidad_salida"]
-        created.append(_create_salida_single(contrato_id, user_id, single))
+        row = _create_salida_single(contrato_id, user_id, single)
+        created.append(row)
+        if row.get("entrada_id"):
+            entrada_ids.add(int(row["entrada_id"]))
+
+    for eid in entrada_ids:
+        _clear_salida_inmediata_si_aplica(contrato_id, eid)
 
     if len(created) == 1:
         return created[0]
@@ -11432,6 +11488,8 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
     return {
         **salida_row,
         "id": salida_id,
+        "entrada_id": int(ent["id"]),
+        "codigo_entrada": ent.get("codigo") or ent.get("numero_entrada"),
         "receptor_nombre": receptor_nombre if receptor_id else None,
         "despachador_nombre": despachador,
         "material_descripcion": material,

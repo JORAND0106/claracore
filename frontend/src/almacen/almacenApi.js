@@ -615,6 +615,12 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: formData,
       }).then(parseJson),
 
+    clearSalidaInmediataPendiente: (entradaId) =>
+      fetch(`${base}/entradas/${entradaId}/salida-inmediata/completar`, {
+        method: 'POST',
+        headers: authHeaders(),
+      }).then(parseJson),
+
     checkEntradaSoporteHash: async (contentHash) => {
       const fd = new FormData()
       fd.append('content_hash', contentHash)
