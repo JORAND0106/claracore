@@ -311,6 +311,36 @@ export default function EntradaDetalleModal({
               </div>
             )}
 
+            {(ent.tiene_remision || ent.tiene_material_foto || ent.remision_nombre || ent.material_foto_nombre) && (
+              <div style={{ marginTop: 14, marginBottom: 8 }}>
+                <AlmacenFieldLabel icon="📷" label="Soportes fotográficos" />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  {(ent.tiene_remision || ent.remision_nombre) && (
+                    <a
+                      data-testid="entrada-detalle-remision"
+                      href={api.remisionDownloadUrl(ent.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ ...ui.btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+                    >
+                      📄 Recibo / remisión
+                    </a>
+                  )}
+                  {(ent.tiene_material_foto || ent.material_foto_nombre) && (
+                    <a
+                      data-testid="entrada-detalle-material-foto"
+                      href={api.materialFotoDownloadUrl(ent.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ ...ui.btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+                    >
+                      🧱 Material descargado
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
               {ent.tiene_pdf_disposicion && (
                 <>

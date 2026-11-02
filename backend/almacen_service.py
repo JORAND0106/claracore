@@ -8437,8 +8437,17 @@ def _regenerar_pdf_pos_entrada(contrato_id: int, entrada_id: int, ent: Optional[
     )
 
 
-def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Optional[bytes] = None,
-                   remision_nombre: Optional[str] = None, remision_mime: Optional[str] = None) -> dict:
+def create_entrada(
+    contrato_id: int,
+    user_id: int,
+    body: dict,
+    remision_data: Optional[bytes] = None,
+    remision_nombre: Optional[str] = None,
+    remision_mime: Optional[str] = None,
+    material_foto_data: Optional[bytes] = None,
+    material_foto_nombre: Optional[str] = None,
+    material_foto_mime: Optional[str] = None,
+) -> dict:
     """
     Registra una entrada. Nunca bloquea por OC/saldo/foto/proveedor:
     si algo no cuadra, guarda igual con marca «por revisar».
@@ -8549,7 +8558,15 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
     if remision_data and len(remision_data) > REMISION_SOPORTE_MAX_BYTES:
         # Comprimir no es responsabilidad del servidor aquí; se rechaza solo el exceso técnico.
         raise ValueError("El soporte de remisión no puede superar 300 KB.")
-    if tipo == "recibo" and not remision_data:
+    if material_foto_data and len(material_foto_data) > REMISION_SOPORTE_MAX_BYTES:
+        raise ValueError("La foto del material no puede superar 300 KB.")
+    # Recibo («Llegó material»): las dos fotos son la única excepción que bloquea.
+    if tipo == "recibo":
+        if not remision_data:
+            raise ValueError("La foto del recibo (remisión) es obligatoria.")
+        if not material_foto_data:
+            raise ValueError("La foto del material descargado es obligatoria.")
+    elif not remision_data:
         motivos.append(MOTIVO_SIN_FOTO)
 
     numero_entrada = _next_consecutivo(contrato_id, "almacen_entrada", "numero_entrada")
@@ -8606,6 +8623,38 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
             "remision_nombre": meta["nombre"],
             "remision_mime": meta["mime"],
         }).eq("id", entrada_id).execute()
+        entrada_row["remision_blob_path"] = meta["blob_path"]
+        entrada_row["remision_nombre"] = meta["nombre"]
+        entrada_row["remision_mime"] = meta["mime"]
+
+    if material_foto_data:
+        try:
+            meta_m = _upload_soporte(
+                contrato_id,
+                "material-fotos",
+                entrada_id,
+                material_foto_data,
+                material_foto_nombre or "material.jpg",
+                material_foto_mime or "image/jpeg",
+            )
+            sb.table("almacen_entrada").update({
+                "material_foto_blob_path": meta_m["blob_path"],
+                "material_foto_nombre": meta_m["nombre"],
+                "material_foto_mime": meta_m["mime"],
+            }).eq("id", entrada_id).execute()
+            entrada_row["material_foto_blob_path"] = meta_m["blob_path"]
+            entrada_row["material_foto_nombre"] = meta_m["nombre"]
+            entrada_row["material_foto_mime"] = meta_m["mime"]
+        except Exception as exc:
+            col = _pgrst_unknown_column(exc)
+            if col and col.startswith("material_foto"):
+                _log.warning(
+                    "Columnas material_foto_* ausentes al guardar entrada %s: %s",
+                    entrada_id,
+                    exc,
+                )
+            else:
+                raise
 
     oc_items_map = {int(x["id"]): x for x in (oc.get("items") or [])} if oc else {}
     primera_cantidad = 0.0
@@ -8799,6 +8848,8 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
         "cantidad_recibida_total": sum(_to_float(ln.get("cantidad_recibida")) for ln in lineas),
         "pdf_generando": pdf_generando,
         "tiene_pdf_disposicion": False,
+        "tiene_remision": bool(entrada_row.get("remision_blob_path")),
+        "tiene_material_foto": bool(entrada_row.get("material_foto_blob_path")),
     }
     if oc_id:
         result["almacen_orden_compra"] = {
@@ -8857,6 +8908,35 @@ def _chunked_ids(ids: List[int], size: int = 80) -> List[List[int]]:
     return [ids[i : i + size] for i in range(0, len(ids), size)]
 
 
+def _insumo_group_key(insumo_id, material_descripcion: str, unidad: str) -> str:
+    if insumo_id not in (None, ""):
+        return f"i:{int(insumo_id)}"
+    return f"d:{_norm(material_descripcion) or 'material'}|{_norm(unidad) or 'und'}"
+
+
+def _list_ocs_pendientes_via_rpc(sb, contrato_id: int) -> Optional[List[dict]]:
+    """RPC SQL consolidada (una OC = una tarjeta). None si no está desplegada."""
+    try:
+        res = sb.rpc("almacen_ocs_pendientes_tarjeta", {"p_contrato_id": int(contrato_id)}).execute()
+    except Exception as exc:
+        _log.info("RPC almacen_ocs_pendientes_tarjeta no disponible: %s", exc)
+        return None
+    data = res.data
+    if data is None:
+        return []
+    if isinstance(data, str):
+        import json
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(data, dict) and "items" in data:
+        data = data.get("items")
+    if not isinstance(data, list):
+        return None
+    return data
+
+
 def list_ocs_pendientes_tarjeta(
     contrato_id: int,
     *,
@@ -8864,12 +8944,45 @@ def list_ocs_pendientes_tarjeta(
     include_timing: bool = True,
 ) -> dict:
     """
-    Tarjetas livianas de OC con saldo (una por línea pendiente).
-    Consulta en lote: sin get_orden_compra por cada OC.
+    Tarjetas de OC con saldo: **una tarjeta por OC**, insumos consolidados
+    (suma de saldos de todas las líneas del mismo material).
+
+    Causa histórica de repetición: se emitía una tarjeta por cada
+    ``almacen_orden_compra_item`` con saldo (p. ej. OC #10 × 6 líneas).
+
+    Preferencia: RPC SQL ``almacen_ocs_pendientes_tarjeta`` (una ida a BD).
+    Fallback Python en lote si la RPC aún no está migrada.
     """
     t0 = time.perf_counter()
     stages: Dict[str, float] = {}
     sb = _sb()
+
+    t = time.perf_counter()
+    rpc_items = _list_ocs_pendientes_via_rpc(sb, contrato_id)
+    stages["rpc_ms"] = round((time.perf_counter() - t) * 1000, 1)
+    if rpc_items is not None:
+        tarjetas = []
+        for card in rpc_items:
+            row = dict(card)
+            if not ver_economicos:
+                for ins in row.get("insumos") or []:
+                    if isinstance(ins, dict):
+                        ins.pop("saldo_valor", None)
+            tarjetas.append(row)
+        total_ms = round((time.perf_counter() - t0) * 1000, 1)
+        stages["total"] = total_ms
+        stages["source"] = "rpc"
+        _log.info(
+            "list_ocs_pendientes_tarjeta contrato=%s ocs=%s timing_ms=%s",
+            contrato_id,
+            len(tarjetas),
+            stages,
+        )
+        if include_timing:
+            return {"items": tarjetas, "timing_ms": stages}
+        return tarjetas
+
+    from concurrent.futures import ThreadPoolExecutor
 
     t = time.perf_counter()
     ocs = (
@@ -8885,42 +8998,46 @@ def list_ocs_pendientes_tarjeta(
     stages["ocs_ms"] = round((time.perf_counter() - t) * 1000, 1)
     if not ocs:
         total_ms = round((time.perf_counter() - t0) * 1000, 1)
-        out = {"items": [], "timing_ms": {"total": total_ms, **stages}}
+        out = {"items": [], "timing_ms": {"total": total_ms, "source": "python", **stages}}
         return out if include_timing else out["items"]
 
     oc_by_id = {int(r["id"]): r for r in ocs}
     oc_ids = list(oc_by_id.keys())
 
+    def _fetch_items() -> List[dict]:
+        all_items: List[dict] = []
+        item_selects = (
+            "id, orden_compra_id, solicitud_item_id, material_descripcion, unidad, "
+            "cantidad, cantidad_recibida, valor_unitario, valor_recibido, proveedor_nombre",
+            "id, orden_compra_id, solicitud_item_id, material_descripcion, unidad, "
+            "cantidad, cantidad_recibida, valor_unitario, proveedor_nombre",
+        )
+        for chunk in _chunked_ids(oc_ids, 200):
+            rows: List[dict] = []
+            last_exc: Optional[Exception] = None
+            for cols in item_selects:
+                try:
+                    rows = (
+                        sb.table("almacen_orden_compra_item")
+                        .select(cols)
+                        .in_("orden_compra_id", chunk)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if not _pgrst_unknown_column(exc):
+                        raise
+            if last_exc is not None:
+                raise last_exc
+            all_items.extend(rows)
+        return all_items
+
     t = time.perf_counter()
-    all_items: List[dict] = []
-    item_selects = (
-        "id, orden_compra_id, solicitud_item_id, material_descripcion, unidad, "
-        "cantidad, cantidad_recibida, valor_unitario, valor_recibido, proveedor_nombre",
-        "id, orden_compra_id, solicitud_item_id, material_descripcion, unidad, "
-        "cantidad, cantidad_recibida, valor_unitario, proveedor_nombre",
-    )
-    for chunk in _chunked_ids(oc_ids):
-        rows: List[dict] = []
-        last_exc: Optional[Exception] = None
-        for cols in item_selects:
-            try:
-                rows = (
-                    sb.table("almacen_orden_compra_item")
-                    .select(cols)
-                    .in_("orden_compra_id", chunk)
-                    .execute()
-                    .data
-                    or []
-                )
-                last_exc = None
-                break
-            except Exception as exc:
-                last_exc = exc
-                if not _pgrst_unknown_column(exc):
-                    raise
-        if last_exc is not None:
-            raise last_exc
-        all_items.extend(rows)
+    all_items = _fetch_items()
     stages["items_ms"] = round((time.perf_counter() - t) * 1000, 1)
 
     pending: List[dict] = []
@@ -8934,113 +9051,160 @@ def list_ocs_pendientes_tarjeta(
         if sid not in (None, ""):
             sol_item_ids.append(int(sid))
 
-    sol_item_map: Dict[int, dict] = {}
-    t = time.perf_counter()
-    for chunk in _chunked_ids(sorted(set(sol_item_ids))):
-        sol_rows = (
-            sb.table("almacen_solicitud_item")
-            .select(
-                "id, solicitud_id, pk_id, tramo, costado, abscisa_inicial, abscisa_final, "
-                "insumo_id, material_descripcion, unidad"
-            )
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
-        )
-        for r in sol_rows:
-            sol_item_map[int(r["id"])] = r
-    stages["solicitud_items_ms"] = round((time.perf_counter() - t) * 1000, 1)
-
     sol_ids = sorted({
         int(oc.get("solicitud_id"))
         for oc in ocs
         if oc.get("solicitud_id") not in (None, "")
-    } | {
-        int(s["solicitud_id"])
-        for s in sol_item_map.values()
-        if s.get("solicitud_id") not in (None, "")
     })
-    sol_meta: Dict[int, dict] = {}
-    t = time.perf_counter()
-    for chunk in _chunked_ids(sol_ids):
-        srows = (
-            sb.table("almacen_solicitud")
-            .select("id, consecutivo, titulo")
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
-        )
-        for r in srows:
-            sol_meta[int(r["id"])] = r
-    stages["solicitudes_ms"] = round((time.perf_counter() - t) * 1000, 1)
-
-    prov_ids = sorted({
+    need_prov = [
         int(oc["proveedor_id"])
         for oc in ocs
         if oc.get("proveedor_id") not in (None, "")
-    })
-    prov_names: Dict[int, str] = {}
-    t = time.perf_counter()
-    for chunk in _chunked_ids(prov_ids):
-        prows = (
-            sb.table("almacen_proveedor")
-            .select("id, razon_social")
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
-        )
-        for r in prows:
-            prov_names[int(r["id"])] = (r.get("razon_social") or "").strip()
-    stages["proveedores_ms"] = round((time.perf_counter() - t) * 1000, 1)
+        and not (oc.get("proveedor_nombre") or "").strip()
+    ]
 
-    tarjetas: List[dict] = []
+    def _fetch_sol_items() -> Dict[int, dict]:
+        out: Dict[int, dict] = {}
+        for chunk in _chunked_ids(sorted(set(sol_item_ids)), 200):
+            sol_rows = (
+                sb.table("almacen_solicitud_item")
+                .select(
+                    "id, solicitud_id, pk_id, tramo, costado, abscisa_inicial, abscisa_final, "
+                    "insumo_id, material_descripcion, unidad"
+                )
+                .in_("id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for r in sol_rows:
+                out[int(r["id"])] = r
+        return out
+
+    def _fetch_sols() -> Dict[int, dict]:
+        out: Dict[int, dict] = {}
+        for chunk in _chunked_ids(sol_ids, 200):
+            srows = (
+                sb.table("almacen_solicitud")
+                .select("id, consecutivo, titulo")
+                .in_("id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for r in srows:
+                out[int(r["id"])] = r
+        return out
+
+    def _fetch_provs() -> Dict[int, str]:
+        out: Dict[int, str] = {}
+        for chunk in _chunked_ids(sorted(set(need_prov)), 200):
+            prows = (
+                sb.table("almacen_proveedor")
+                .select("id, razon_social")
+                .in_("id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for r in prows:
+                out[int(r["id"])] = (r.get("razon_social") or "").strip()
+        return out
+
+    t = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_si = pool.submit(_fetch_sol_items)
+        f_sol = pool.submit(_fetch_sols)
+        f_prov = pool.submit(_fetch_provs)
+        sol_item_map = f_si.result()
+        sol_meta = f_sol.result()
+        prov_names = f_prov.result()
+    stages["enrich_ms"] = round((time.perf_counter() - t) * 1000, 1)
+
+    # Agrupar: OC → insumo_key → líneas
+    by_oc: Dict[int, dict] = {}
     for it in pending:
         oc = oc_by_id.get(int(it["orden_compra_id"]))
         if not oc:
             continue
+        oid = int(oc["id"])
         saldos = it["_saldos"]
         sid = it.get("solicitud_item_id")
         sol = sol_item_map.get(int(sid), {}) if sid not in (None, "") else {}
-        sol_head_id = oc.get("solicitud_id") or sol.get("solicitud_id")
-        sol_head = sol_meta.get(int(sol_head_id), {}) if sol_head_id not in (None, "") else {}
-        pid = oc.get("proveedor_id")
-        prov_nombre = (
-            (oc.get("proveedor_nombre") or "").strip()
-            or (it.get("proveedor_nombre") or "").strip()
-            or (prov_names.get(int(pid)) if pid not in (None, "") else "")
-            or ""
-        )
-        card = {
-            "orden_compra_id": int(oc["id"]),
+        mat = (it.get("material_descripcion") or sol.get("material_descripcion") or "Material").strip()
+        und = (it.get("unidad") or sol.get("unidad") or "UND").strip()
+        iid = sol.get("insumo_id")
+        key = _insumo_group_key(iid, mat, und)
+
+        if oid not in by_oc:
+            pid = oc.get("proveedor_id")
+            prov_nombre = (
+                (oc.get("proveedor_nombre") or "").strip()
+                or (it.get("proveedor_nombre") or "").strip()
+                or (prov_names.get(int(pid)) if pid not in (None, "") else "")
+                or ""
+            )
+            sol_head_id = oc.get("solicitud_id")
+            sol_head = sol_meta.get(int(sol_head_id), {}) if sol_head_id not in (None, "") else {}
+            by_oc[oid] = {
+                "orden_compra_id": oid,
+                "numero_oc": oc.get("numero_oc"),
+                "proveedor_id": pid,
+                "proveedor_nombre": prov_nombre,
+                "solicitud_id": sol_head_id,
+                "solicitud_consecutivo": sol_head.get("consecutivo"),
+                "solicitud_titulo": sol_head.get("titulo"),
+                "insumos_map": {},
+            }
+        card = by_oc[oid]
+        imap = card["insumos_map"]
+        if key not in imap:
+            imap[key] = {
+                "key": key,
+                "insumo_id": int(iid) if iid not in (None, "") else None,
+                "material_descripcion": mat,
+                "unidad": und,
+                "saldo_cantidad": 0.0,
+                "saldo_valor": 0.0,
+                "pk_id": sol.get("pk_id"),
+                "tramo": sol.get("tramo"),
+                "costado": sol.get("costado"),
+                "abscisa_inicial": sol.get("abscisa_inicial"),
+                "abscisa_final": sol.get("abscisa_final"),
+                "lineas": [],
+            }
+        grp = imap[key]
+        grp["saldo_cantidad"] = round(grp["saldo_cantidad"] + float(saldos.get("saldo_cantidad") or 0), 4)
+        grp["saldo_valor"] = round(grp["saldo_valor"] + float(saldos.get("saldo_valor") or 0), 2)
+        if not grp.get("pk_id") and sol.get("pk_id"):
+            grp["pk_id"] = sol.get("pk_id")
+        grp["lineas"].append({
             "orden_compra_item_id": int(it["id"]),
-            "numero_oc": oc.get("numero_oc"),
-            "proveedor_id": pid,
-            "proveedor_nombre": prov_nombre,
-            "insumo_id": sol.get("insumo_id"),
-            "material_descripcion": it.get("material_descripcion") or sol.get("material_descripcion"),
-            "unidad": it.get("unidad") or sol.get("unidad") or "UND",
             "saldo_cantidad": saldos.get("saldo_cantidad"),
             "pk_id": sol.get("pk_id"),
-            "tramo": sol.get("tramo"),
-            "costado": sol.get("costado"),
-            "abscisa_inicial": sol.get("abscisa_inicial"),
-            "abscisa_final": sol.get("abscisa_final"),
-            "solicitud_id": sol_head_id,
-            "solicitud_consecutivo": sol_head.get("consecutivo"),
-            "solicitud_titulo": sol_head.get("titulo"),
-        }
-        if ver_economicos:
-            card["saldo_valor"] = saldos.get("saldo_valor")
-            card["valor_unitario"] = it.get("valor_unitario")
+        })
+
+    tarjetas = []
+    for oid in oc_ids:
+        card = by_oc.get(oid)
+        if not card:
+            continue
+        insumos = list(card.pop("insumos_map").values())
+        insumos.sort(key=lambda x: _norm(x.get("material_descripcion") or ""))
+        if not ver_economicos:
+            for ins in insumos:
+                ins.pop("saldo_valor", None)
+        card["insumos"] = insumos
+        card["saldo_cantidad_total"] = round(
+            sum(float(i.get("saldo_cantidad") or 0) for i in insumos), 4
+        )
         tarjetas.append(card)
 
     total_ms = round((time.perf_counter() - t0) * 1000, 1)
     stages["total"] = total_ms
+    stages["source"] = "python"
     _log.info(
-        "list_ocs_pendientes_tarjeta contrato=%s items=%s timing_ms=%s",
+        "list_ocs_pendientes_tarjeta contrato=%s ocs=%s timing_ms=%s",
         contrato_id,
         len(tarjetas),
         stages,
@@ -9606,6 +9770,8 @@ def list_entradas(contrato_id: int) -> List[dict]:
         if r.get("created_by"):
             names = _map_usuario_nombres(sb, [r.get("created_by")])
             r["usuario_nombre"] = names.get(int(r["created_by"]))
+        r["tiene_remision"] = bool(r.get("remision_blob_path"))
+        r["tiene_material_foto"] = bool(r.get("material_foto_blob_path"))
         _asegurar_codigo_entrada(contrato_id, r)
     return _enriquecer_entradas_listado(sb, rows)
 
@@ -9738,6 +9904,7 @@ def get_entrada(
         ent["usuario_nombre"] = names.get(int(ent["created_by"]))
     ent["tiene_pdf_disposicion"] = bool(ent.get("disposicion_pdf_blob_path"))
     ent["tiene_remision"] = bool(ent.get("remision_blob_path"))
+    ent["tiene_material_foto"] = bool(ent.get("material_foto_blob_path"))
     return _asegurar_codigo_entrada(contrato_id, ent)
 
 
