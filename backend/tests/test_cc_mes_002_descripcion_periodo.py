@@ -1,4 +1,4 @@
-"""CC-MES-002: descripción completa + Periodo (banda 3 filas sin Fecha acta / Consecutivo)."""
+"""CC-MES-002: descripción completa + Periodo (banda con CONTRATO/OBJETO)."""
 from __future__ import annotations
 
 import sys
@@ -62,7 +62,7 @@ def test_periodo_acta_admin_fmt_igual_admin_actas():
 def test_conc_meta_cc_mes_002_usa_periodo_no_fecha_acta():
     inf = _import_informes_with_stubs()
     meta = inf._conc_meta_cc_mes_002(
-        "ICCU-CTO-1614-2025",
+        {"numero": "ICCU-CTO-1614-2025", "objeto": "Obra vial"},
         {
             "numero_rpo": 1,
             "consecutivo": 1,
@@ -74,9 +74,10 @@ def test_conc_meta_cc_mes_002_usa_periodo_no_fecha_acta():
     labels = [c[0] for c in meta["cells"]]
     assert "FECHA ACTA" not in labels
     assert "CONSECUTIVO" not in labels
-    assert "CTO." in labels
+    assert "CONTRATO" in labels
+    assert "OBJETO" in labels
     assert "PERÍODO" in labels
-    assert meta["cells"][2] == ("PERÍODO", "2025-01-01 → 2025-01-31")
+    assert meta["cells"][3] == ("PERÍODO", "2025-01-01 → 2025-01-31")
 
 
 def test_html_memoria_muestra_descripcion_completa_y_periodo():
@@ -86,7 +87,11 @@ def test_html_memoria_muestra_descripcion_completa_y_periodo():
         "INCLUYE SUMINISTRO, ANCLAJE, EXPANSIÓN, FIJACIÓN Y RELLENO CON MATERIAL "
         "SELECCIONADO SEGÚN ESPECIFICACIÓN TÉCNICA DEL LISTADO DE PRECIOS"
     )
-    contrato = {"numero": "ICCU-CTO-1614-2025", "logo_contratista": None}
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": "Mantenimiento vial",
+        "logo_contratista": None,
+    }
     item_info = {
         "item_numero": "NP-04",
         "item_descripcion": desc,
@@ -104,7 +109,7 @@ def test_html_memoria_muestra_descripcion_completa_y_periodo():
         }
     ]
     conc_meta = inf._conc_meta_cc_mes_002(
-        contrato["numero"],
+        contrato,
         {
             "numero_rpo": 1,
             "consecutivo": 1,
@@ -127,12 +132,12 @@ def test_html_memoria_muestra_descripcion_completa_y_periodo():
     )
     assert "FECHA ACTA" not in html
     assert "CONSECUTIVO" not in html
-    assert "CTO." in html
+    assert "CONTRATO" in html
+    assert "OBJETO" in html
     assert "PERÍODO" in html
     assert "2025-02-01 → 2025-02-28" in html
     assert "mem002-item-desc" in html
     assert desc in html
-    assert html.count(desc) >= 1
 
 
 def test_excel_memoria_descripcion_wrap_y_altura_y_periodo():
@@ -141,7 +146,10 @@ def test_excel_memoria_descripcion_wrap_y_altura_y_periodo():
         "EXCAVACION MANUAL EN MATERIAL COMUN H=0.0-2.0M (INCLUYE RETIRO DE SOBRANTES "
         "A UNA DISTANCIA MENOR DE 5 KM) SEGUN LISTADO DE PRECIOS VIGENTE DEL CONTRATO"
     )
-    contrato = {"numero": "ICCU-CTO-1614-2025"}
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": "Mantenimiento y rehabilitacion de malla vial",
+    }
     item_info = {
         "item_numero": "NP-09",
         "item_descripcion": desc,
@@ -161,7 +169,7 @@ def test_excel_memoria_descripcion_wrap_y_altura_y_periodo():
         }
     ]
     conc_meta = inf._conc_meta_cc_mes_002(
-        contrato["numero"],
+        contrato,
         {
             "numero_rpo": 1,
             "consecutivo": 1,
@@ -184,7 +192,7 @@ def test_excel_memoria_descripcion_wrap_y_altura_y_periodo():
         pie_fotos_contexto="Acta RPO 1",
         aprobo_interventoria_desde_config=True,
     )
-    assert ws["E3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
+    assert ws["J3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
     assert ws["A5"].value == f"DESCRIPCIÓN\n{desc}"
     assert ws["A5"].alignment.wrap_text is True
     assert (ws.row_dimensions[5].height or 0) >= 34
@@ -198,13 +206,16 @@ def test_excel_row_height_crece_con_descripcion_larga():
 
 
 def test_html_encabezado_periodo_y_desc_en_fotos_y_graficos():
-    """El encabezado repetido en fotos/gráficos también lleva Periodo y descripción completa."""
     inf = _import_informes_with_stubs()
     desc = (
         "SUMINISTRO E INSTALACION DE TUBERIA EN PVC CORRUGADO DOBLE PARED DE DIAMETRO "
         "NOMINAL 24 PULGADAS TIPO S INCLUYE UNIONES SELLOS Y PRUEBAS SEGUN LISTADO"
     )
-    contrato = {"numero": "ICCU-CTO-1614-2025", "logo_contratista": None}
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": "Mantenimiento vial ICCU",
+        "logo_contratista": None,
+    }
     item_info = {
         "item_numero": "NP-08",
         "item_descripcion": desc,
@@ -226,7 +237,7 @@ def test_html_encabezado_periodo_y_desc_en_fotos_y_graficos():
         }
     ]
     conc_meta = inf._conc_meta_cc_mes_002(
-        contrato["numero"],
+        contrato,
         {
             "numero_rpo": 1,
             "consecutivo": 1,

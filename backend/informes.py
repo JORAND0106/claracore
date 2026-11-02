@@ -7518,7 +7518,7 @@ def pdf_cc_mes_002_acta(
     ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
+    conc_meta = _conc_meta_cc_mes_002(contrato, ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
@@ -8079,7 +8079,7 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
+    conc_meta = _conc_meta_cc_mes_002(contrato, ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
@@ -8184,7 +8184,7 @@ def _cc_mes_002_acta_completo_ctx(
     ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
+    conc_meta = _conc_meta_cc_mes_002(contrato, ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
@@ -12514,16 +12514,32 @@ def _periodo_acta_admin_fmt(acta: Optional[dict]) -> str:
     return "—"
 
 
-def _conc_meta_cc_mes_002(contrato_numero: Any, acta: Optional[dict]) -> Dict[str, Any]:
-    """Banda CC-MES-002 (3 filas): CTO. · ACTA RPO · PERÍODO; luego CAPÍTULO · ÍTEM · UNIDAD; DESCRIPCIÓN."""
+# Título institucional CC-MES-002 (dos líneas, igual PDF y Excel).
+_MEMORIA_MES_TITULO_L1 = "RESUMEN ACTIVIDADES"
+_MEMORIA_MES_TITULO_L2 = "CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)"
+_MEMORIA_MES_TITULO = f"{_MEMORIA_MES_TITULO_L1} — {_MEMORIA_MES_TITULO_L2}"
+
+
+def _conc_meta_cc_mes_002(contrato: Any, acta: Optional[dict] = None) -> Dict[str, Any]:
+    """Banda CC-MES-002: CONTRATO · OBJETO · ACTA RPO · PERÍODO; Cap.|Ítem|Und.; Descripción.
+
+    ``contrato`` puede ser dict (numero/objeto) o el número (legado).
+    """
     ac = acta if isinstance(acta, dict) else {}
+    if isinstance(contrato, dict):
+        numero = contrato.get("numero")
+        objeto = contrato.get("objeto")
+    else:
+        numero = contrato
+        objeto = None
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or "—")
     return {
-        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
+        "titulo": _MEMORIA_MES_TITULO,
         "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
         "banda": "mes_3filas",
         "cells": [
-            ("CTO.", str(contrato_numero or "") or "—"),
+            ("CONTRATO", str(numero or "") or "—"),
+            ("OBJETO", str(objeto or "").strip() or "—"),
             ("ACTA RPO", nrpo),
             ("PERÍODO", _periodo_acta_admin_fmt(ac)),
         ],
@@ -12531,7 +12547,7 @@ def _conc_meta_cc_mes_002(contrato_numero: Any, acta: Optional[dict]) -> Dict[st
 
 
 def _memoria_es_banda_mes_3filas(conc_meta: Optional[Dict[str, Any]], codigo: Any = None) -> bool:
-    """True si la memoria usa la banda CC-MES-002 de 3 filas (CTO/Acta/Período · Cap/Ítem/Und · Desc)."""
+    """True si la memoria usa la banda CC-MES-002 de 3 filas."""
     if isinstance(conc_meta, dict):
         if str(conc_meta.get("banda") or "").strip().lower() == "mes_3filas":
             return True
@@ -12540,7 +12556,7 @@ def _memoria_es_banda_mes_3filas(conc_meta: Optional[Dict[str, Any]], codigo: An
 
 
 def _memoria_mes_3filas_id_cells(conc_meta: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
-    """CTO. · ACTA RPO · PERÍODO desde conc_meta (tolera celdas legadas CONTRATO/CONSECUTIVO)."""
+    """CONTRATO · OBJETO · ACTA RPO · PERÍODO (tolera celdas legadas CTO./sin OBJETO)."""
     raw = list((conc_meta or {}).get("cells") or [])
     by: Dict[str, Any] = {}
     for c in raw:
@@ -12568,7 +12584,8 @@ def _memoria_mes_3filas_id_cells(conc_meta: Optional[Dict[str, Any]]) -> List[Tu
         return "—"
 
     return [
-        ("CTO.", _v("CTO", "CONTRATO")),
+        ("CONTRATO", _v("CONTRATO", "CTO")),
+        ("OBJETO", _v("OBJETO")),
         ("ACTA RPO", _v("ACTA RPO")),
         ("PERÍODO", _v("PERIODO")),
     ]
@@ -12614,6 +12631,49 @@ def _excel_row_height_desc_banda_completa(desc: Any) -> float:
         min_pt=34.0,
         max_pt=200.0,
     )
+
+
+def _excel_row_height_objeto_banda(objeto: Any) -> float:
+    """Altura fila 3 por OBJETO en C:H (~54 de ancho → ~48 chars/línea)."""
+    cuerpo = str(objeto or "").strip()
+    return _excel_row_height_wrapped_text(
+        _memoria_celda_etiqueta_valor("OBJETO", cuerpo or "—"),
+        chars_per_line=48,
+        line_pt=12.0,
+        min_pt=28.0,
+        max_pt=140.0,
+    )
+
+
+def _excel_try_add_logo_contratista(ws, contrato: Optional[dict], *, anchor: str = "A1", max_h_px: int = 70) -> None:
+    """Inserta logo del contratista en Excel; si falla, deja texto LOGO."""
+    url = str((contrato or {}).get("logo_contratista") or "").strip()
+    if not url:
+        cell = ws[anchor]
+        if cell.value in (None, ""):
+            cell.value = "LOGO"
+            cell.font = Font(size=9, color="94A3B8")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        return
+    try:
+        import requests
+        from openpyxl.drawing.image import Image as XLImage
+
+        resp = requests.get(url, timeout=8)
+        resp.raise_for_status()
+        img = XLImage(io.BytesIO(resp.content))
+        if img.height and img.height > max_h_px:
+            ratio = max_h_px / float(img.height)
+            img.height = max_h_px
+            img.width = int((img.width or max_h_px) * ratio)
+        ws.add_image(img, anchor)
+    except Exception as exc:
+        _log.debug("excel logo contratista: %s", exc)
+        cell = ws[anchor]
+        if cell.value in (None, ""):
+            cell.value = "LOGO"
+            cell.font = Font(size=9, color="94A3B8")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
 
 def _fn(n, dec=2):
     """Formatea número con decimales (inf/nan no rompen el PDF: format ',.' falla con inf)."""
@@ -12813,6 +12873,20 @@ body.mem002-doc .mem002-item-desc {
 body.mem002-doc .mem002-banda-mes td {
   vertical-align: top;
   overflow: visible;
+}
+body.mem002-doc .mem002-objeto {
+  display: block;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  overflow: visible;
+  max-height: none;
+  height: auto;
+  line-height: 1.2;
+  font-size: 6.5pt;
+  font-weight: normal;
+  color: #1a1a2e;
+  text-transform: none;
 }
 body.mem002-doc .mem002-section {
   page-break-after: avoid;
@@ -13899,45 +13973,66 @@ def _fill_memoria_excel_ws(
         titulo_h = str(conc_meta.get("titulo") or titulo_h)
         codigo_h = str(conc_meta.get("codigo") or codigo_h)
 
-    ws.merge_cells("A1:J1")
-    c = ws["A1"]
-    c.value = titulo_h
-    c.font = Font(bold=True, size=12)
-    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    ws.merge_cells("A2:J2")
-    ws["A2"] = f"{codigo_h} · CCD · Memoria por ítem"
-    ws["A2"].font = Font(bold=True, size=10, color="1E40AF")
-    ws["A2"].alignment = Alignment(horizontal="center")
-
     desc_txt = str(item_info.get("item_descripcion") or "").strip()
     it_num = str(item_info.get("item_numero") or "—")
     it_und = str(item_info.get("unidad") or "—")
     val_font = Font(size=9, bold=True, color="1A1A2E")
     align_lv = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    align_ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     if _memoria_es_banda_mes_3filas(conc_meta, codigo_h):
-        # Fila 3: CTO. (A–C) | ACTA RPO (D, una celda) | PERÍODO (E–J)
+        # Encabezado institucional = PDF: logo A1:B2 | título C1:I2 | código J1:J2
+        # Filas 1–2 a doble altura.
+        ws.merge_cells("A1:B2")
+        ws["A1"].alignment = align_ctr
+        ws["A1"].border = bd
+        _excel_try_add_logo_contratista(ws, contrato, anchor="A1", max_h_px=70)
+        ws.merge_cells("C1:I2")
+        ws["C1"] = f"{_MEMORIA_MES_TITULO_L1}\n{_MEMORIA_MES_TITULO_L2}"
+        ws["C1"].font = Font(bold=True, size=11, color="111827")
+        ws["C1"].alignment = align_ctr
+        ws["C1"].border = bd
+        ws.merge_cells("J1:J2")
+        ws["J1"] = str(codigo_h or CODIGO_FORMATO_CCD_CC_MES_002)
+        ws["J1"].font = Font(bold=True, size=12, color="1E40AF")
+        ws["J1"].alignment = align_ctr
+        ws["J1"].border = bd
+        ws.row_dimensions[1].height = 30
+        ws.row_dimensions[2].height = 30
+        for cc in (1, 3, 10):
+            ws.cell(row=1, column=cc).border = bd
+
+        # Fila 3: CONTRATO A:B | OBJETO C:H | ACTA RPO I | PERÍODO J
         cells3 = _memoria_mes_3filas_id_cells(conc_meta)
-        cto_lab, cto_val = cells3[0][0], cells3[0][1]
-        acta_lab, acta_val = cells3[1][0], cells3[1][1]
-        per_lab, per_val = cells3[2][0], cells3[2][1]
-        ws.merge_cells("A3:C3")
-        ws["A3"] = _memoria_celda_etiqueta_valor(cto_lab or "CTO.", cto_val)
+        ctr_lab, ctr_val = cells3[0][0], cells3[0][1]
+        obj_lab, obj_val = cells3[1][0], cells3[1][1]
+        acta_lab, acta_val = cells3[2][0], cells3[2][1]
+        per_lab, per_val = cells3[3][0], cells3[3][1]
+        # Si meta no trae objeto, usar el del contrato vivo.
+        if obj_val in (None, "", "—"):
+            obj_val = str((contrato or {}).get("objeto") or "").strip() or "—"
+        if ctr_val in (None, "", "—"):
+            ctr_val = str((contrato or {}).get("numero") or "").strip() or "—"
+
+        ws.merge_cells("A3:B3")
+        ws["A3"] = _memoria_celda_etiqueta_valor(ctr_lab or "CONTRATO", ctr_val)
         ws["A3"].font = val_font
         ws["A3"].alignment = align_lv
-        ws["D3"] = _memoria_celda_etiqueta_valor(acta_lab or "ACTA RPO", acta_val)
-        ws["D3"].font = val_font
-        ws["D3"].alignment = align_lv
-        ws.merge_cells("E3:J3")
-        ws["E3"] = _memoria_celda_etiqueta_valor(per_lab or "PERÍODO", per_val)
-        ws["E3"].font = val_font
-        ws["E3"].alignment = align_lv
-        ws.row_dimensions[3].height = 28
-        for cc in (1, 4, 5):
+        ws.merge_cells("C3:H3")
+        ws["C3"] = _memoria_celda_etiqueta_valor(obj_lab or "OBJETO", obj_val)
+        ws["C3"].font = Font(size=9, color="1A1A2E")
+        ws["C3"].alignment = align_lv
+        ws["I3"] = _memoria_celda_etiqueta_valor(acta_lab or "ACTA RPO", acta_val)
+        ws["I3"].font = val_font
+        ws["I3"].alignment = align_lv
+        ws["J3"] = _memoria_celda_etiqueta_valor(per_lab or "PERÍODO", per_val)
+        ws["J3"].font = val_font
+        ws["J3"].alignment = align_lv
+        ws.row_dimensions[3].height = _excel_row_height_objeto_banda(obj_val)
+        for cc in (1, 3, 9, 10):
             ws.cell(row=3, column=cc).border = bd
 
-        # Fila 4: CAPÍTULO (A–H, mayor ancho) | ÍTEM (I) | UNIDAD (J)
+        # Fila 4: CAPÍTULO (A–H) | ÍTEM (I) | UNIDAD (J) — sin cambios de concepto
         ws.merge_cells("A4:H4")
         ws["A4"] = _memoria_celda_etiqueta_valor("CAPÍTULO", cap_val)
         ws["A4"].font = val_font
@@ -13952,7 +14047,7 @@ def _fill_memoria_excel_ws(
         for cc in (1, 9, 10):
             ws.cell(row=4, column=cc).border = bd
 
-        # Fila 5: DESCRIPCIÓN a todo el ancho (A–J); altura fijada (Excel no autoajusta merges).
+        # Fila 5: DESCRIPCIÓN a todo el ancho (A–J)
         ws.merge_cells("A5:J5")
         ws["A5"] = _memoria_celda_etiqueta_valor("DESCRIPCIÓN", desc_txt or "—")
         ws["A5"].font = Font(size=9, color="1A1A2E")
@@ -13960,6 +14055,17 @@ def _fill_memoria_excel_ws(
         ws["A5"].border = bd
         ws.row_dimensions[5].height = _excel_row_height_desc_banda_completa(desc_txt)
     else:
+        ws.merge_cells("A1:J1")
+        c = ws["A1"]
+        c.value = titulo_h
+        c.font = Font(bold=True, size=12)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        ws.merge_cells("A2:J2")
+        ws["A2"] = f"{codigo_h} · CCD · Memoria por ítem"
+        ws["A2"].font = Font(bold=True, size=10, color="1E40AF")
+        ws["A2"].alignment = Alignment(horizontal="center")
+
         if conc_meta:
             cells = _memoria_cells_con_capitulo(list(conc_meta.get("cells") or []), cap_val)
         else:
@@ -14572,7 +14678,7 @@ def _cc_mes_002_item_excel_bytes(
     ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
+    conc_meta = _conc_meta_cc_mes_002(contrato, ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     sub, corte = _sub_corte_dummy_memoria()
@@ -14635,7 +14741,7 @@ def _cc_mes_002_acta_completo_excel_bytes(
     ac = _row("actas", "numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
-    conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), ac)
+    conc_meta = _conc_meta_cc_mes_002(contrato, ac)
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
     firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     sub, corte = _sub_corte_dummy_memoria()
@@ -15868,7 +15974,7 @@ def _cc_sem_mes_integral_excel_bytes(
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
     if codigo_002 == CODIGO_FORMATO_CCD_CC_MES_002 and conc_meta is None:
-        conc_meta = _conc_meta_cc_mes_002(contrato.get("numero"), mes_acta or {})
+        conc_meta = _conc_meta_cc_mes_002(contrato, mes_acta or {})
     else:
         # Completar CONTRATO en meta de memorias (SEM / otros)
         cells = list((conc_meta or {}).get("cells") or [])
@@ -17269,7 +17375,8 @@ def _html_memoria_item_body(
 
     def encabezado():
         # Encabezado institucional + banda de identificación.
-        # CC-MES-002: 3 filas (CTO.|Acta|Período · Cap.|Ítem|Und. · Descripción full-width).
+        # CC-MES-002: logo|título 2 líneas|código (altura doble) +
+        #   CONTRATO|OBJETO|Acta|Período · Cap.|Ítem|Und. · Descripción.
         # CC-SUB/SEM-002: banda 5 campos + fila ítem|descripción|unidad.
         bd = "border:1px solid #9ca3af"
         titulo = "RESUMEN ACTIVIDADES CONCILIACIÓN CORTE SUBCONTRATISTA"
@@ -17284,11 +17391,37 @@ def _html_memoria_item_body(
         it_und = _h(str(item_info.get("unidad") or ""))
         lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
         val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
-        fila1_h = "1.14cm"
-        logo_box_h = "1.08cm"
-        logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
         lbl_blk = "font-size:6pt;color:#555;font-weight:normal;display:block;margin:0;padding:0;line-height:1.05;"
-        head_inst = f"""<tr>
+        es_mes = _memoria_es_banda_mes_3filas(conc_meta, codigo_raw)
+
+        if es_mes:
+            fila1_h = "2.28cm"  # doble de la altura previa (1.14cm)
+            logo_box_h = "2.05cm"
+            logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
+            titulo_html = (
+                f'<div style="font-size:8pt;font-weight:bold;color:#111827;text-transform:uppercase;'
+                f'line-height:1.15;">{_h(_MEMORIA_MES_TITULO_L1)}</div>'
+                f'<div style="font-size:7pt;font-weight:bold;color:#111827;text-transform:uppercase;'
+                f'line-height:1.15;margin-top:2px;">{_h(_MEMORIA_MES_TITULO_L2)}</div>'
+            )
+            # Anchos alineados a Excel: A:B≈16% · C:I≈69% · J≈15%
+            head_inst = f"""<tr>
+<td style="width:16%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+{logo_html}
+</td>
+<td style="width:69%;{bd};padding:4px 8px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+{titulo_html}
+</td>
+<td style="width:15%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+<div style="font-size:11pt;font-weight:bold;color:#1e40af;line-height:1.05;">{codigo_h}</div>
+<div style="font-size:6pt;color:#64748b;margin-top:2px;">CCD</div>
+</td>
+</tr>"""
+        else:
+            fila1_h = "1.14cm"
+            logo_box_h = "1.08cm"
+            logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
+            head_inst = f"""<tr>
 <td style="width:17%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
 {logo_html}
 </td>
@@ -17301,40 +17434,60 @@ def _html_memoria_item_body(
 </td>
 </tr>"""
 
-        def _td_lv(lab: str, celval: Any, width_pct: str, *, bold_val: bool = True) -> str:
+        def _td_lv(
+            lab: str,
+            celval: Any,
+            width_pct: str,
+            *,
+            bold_val: bool = True,
+            extra_class: str = "",
+        ) -> str:
             vstyle = val if bold_val else (
                 "font-size:6.5pt;font-weight:normal;color:#1a1a2e;line-height:1.18;"
                 "text-transform:none;word-wrap:break-word;overflow-wrap:break-word;"
             )
             shown = _h(str(celval) if celval not in (None, "") else "—")
+            cls = f' class="{extra_class}"' if extra_class else ""
+            inner = (
+                f'<div{cls} style="{vstyle};margin:1px 0 0 0;padding:0;">{shown}</div>'
+                if extra_class
+                else f'<span style="{vstyle};display:block;margin:1px 0 0 0;padding:0;">{shown}</span>'
+            )
             return (
                 f'<td style="width:{width_pct};{bd};padding:2px 4px;vertical-align:top;">'
                 f'<span style="{lbl_blk}">{_h(lab)}</span>'
-                f'<span style="{vstyle};display:block;margin:1px 0 0 0;padding:0;">{shown}</span>'
+                f"{inner}"
                 f"</td>"
             )
 
-        if _memoria_es_banda_mes_3filas(conc_meta, codigo_raw):
+        if es_mes:
             cells3 = _memoria_mes_3filas_id_cells(conc_meta)
-            # Anchos: CTO. ~36% · Acta RPO una celda ~14% · Período ~50%.
-            # Cap. ~72% (mayor importancia) · Ítem ~14% · Unidad ~14%.
-            # Descripción 100% full-width, altura adaptable.
+            ctr_val = cells3[0][1]
+            obj_val = cells3[1][1]
+            if obj_val in (None, "", "—"):
+                obj_val = str((contrato or {}).get("objeto") or "").strip() or "—"
+            if ctr_val in (None, "", "—"):
+                ctr_val = str((contrato or {}).get("numero") or "").strip() or "—"
+            # Anchos ≈ Excel: CONTRATO A:B ~16% · OBJETO C:H ~45% · Acta I ~15% · Período J ~24%
             r_id = (
                 "<tr>"
-                + _td_lv(str(cells3[0][0] or "CTO."), cells3[0][1], "36%")
-                + _td_lv(str(cells3[1][0] or "ACTA RPO"), cells3[1][1], "14%")
-                + _td_lv(str(cells3[2][0] or "PERÍODO"), cells3[2][1], "50%")
+                + _td_lv("CONTRATO", ctr_val, "16%")
+                + _td_lv("OBJETO", obj_val, "45%", bold_val=False, extra_class="mem002-objeto")
+                + _td_lv("ACTA RPO", cells3[2][1], "15%")
+                + _td_lv("PERÍODO", cells3[3][1], "24%")
                 + "</tr>"
             )
-            r_cap = (
-                "<tr>"
-                + _td_lv("CAPÍTULO", cap_val, "72%")
-                + _td_lv("ÍTEM", item_info.get("item_numero") or "", "14%")
-                + _td_lv("UNIDAD", item_info.get("unidad") or "", "14%")
-                + "</tr>"
-            )
+            # Misma grilla de 4 cols que CONTRATO|OBJETO|Acta|Período (Capítulo ocupa 2).
+            r_cap = f"""<tr>
+<td colspan="2" style="width:61%;{bd};padding:2px 4px;vertical-align:top;">
+<span style="{lbl_blk}">CAPÍTULO</span>
+<span style="{val};display:block;margin:1px 0 0 0;padding:0;">{_h(str(cap_val) if cap_val not in (None, '') else '—')}</span>
+</td>
+{_td_lv("ÍTEM", item_info.get("item_numero") or "", "15%")}
+{_td_lv("UNIDAD", item_info.get("unidad") or "", "24%")}
+</tr>"""
             r_desc = f"""<tr>
-<td colspan="3" style="{bd};padding:2px 4px;vertical-align:top;">
+<td colspan="4" style="{bd};padding:2px 4px;vertical-align:top;">
 <span style="{lbl_blk}">DESCRIPCIÓN</span>
 <div class="mem002-item-desc">{it_desc}</div>
 </td>

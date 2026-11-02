@@ -81,11 +81,16 @@ def _regs_base(n_fotos=3, with_grafico=False, with_enlace=False, shared_foto_url
 def test_memoria_cells_con_capitulo_agrega_sin_duplicar():
     inf = _import_informes_with_stubs()
     cells = inf._memoria_cells_con_capitulo(
-        [("CTO.", "C1"), ("ACTA RPO", "10"), ("PERÍODO", "2025-01-01 → 2025-01-31")],
+        [
+            ("CONTRATO", "C1"),
+            ("OBJETO", "Obra"),
+            ("ACTA RPO", "10"),
+            ("PERÍODO", "2025-01-01 → 2025-01-31"),
+        ],
         "2. PLUVIAL",
     )
-    assert len(cells) == 4
-    assert cells[3] == ("CAPÍTULO", "2. PLUVIAL")
+    assert len(cells) == 5
+    assert cells[4] == ("CAPÍTULO", "2. PLUVIAL")
 
 
 def test_excel_formula_cantidad_total_columnas_defg():
@@ -378,7 +383,8 @@ def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
             "codigo": "CC-MES-002",
             "banda": "mes_3filas",
             "cells": [
-                ("CTO.", "IDU-1"),
+                ("CONTRATO", "IDU-1"),
+                ("OBJETO", "Obra IDU"),
                 ("ACTA RPO", "72"),
                 ("PERÍODO", "2025-01-01 → 2025-01-31"),
             ],
@@ -541,7 +547,8 @@ def test_fotos_y_graficos_siguen_el_orden_de_la_tabla():
             "codigo": "CC-MES-002",
             "banda": "mes_3filas",
             "cells": [
-                ("CTO.", "ICCU-CTO-1614-2025"),
+                ("CONTRATO", "ICCU-CTO-1614-2025"),
+                ("OBJETO", "Mantenimiento vial"),
                 ("ACTA RPO", "1"),
                 ("PERÍODO", "2025-01-01 → 2025-01-31"),
             ],
