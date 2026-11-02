@@ -145,19 +145,35 @@ export function buildAlmacenCssVars(t) {
   const primary = t.primary || '#2563eb'
   const bgCard = t.bgCard || '#ffffff'
   const isDark = isLikelyDarkBackground(bgCard) || bgCard === '#0F2038'
+  const text = t.text || (isDark ? '#E0F2FE' : '#0f172a')
+  const textMuted = t.textMuted || (isDark ? '#7FB3D3' : '#64748b')
+  const inputBg = t.inputBg || (isDark ? '#0A1628' : '#f8fafc')
+  const headerBg = t.headerBg || inputBg
   return {
     '--cc-almacen-bg': t.bg || bgCard,
     '--cc-almacen-bg-card': bgCard,
-    '--cc-almacen-bg-header': t.headerBg || bgCard,
-    '--cc-almacen-input-bg': t.inputBg || (isDark ? '#0A1628' : '#f8fafc'),
-    '--cc-almacen-text': t.text || (isDark ? '#E0F2FE' : '#0f172a'),
-    '--cc-almacen-text-muted': t.textMuted || (isDark ? '#7FB3D3' : '#64748b'),
+    '--cc-almacen-bg-header': headerBg,
+    '--cc-almacen-input-bg': inputBg,
+    '--cc-almacen-text': text,
+    '--cc-almacen-text-muted': textMuted,
     '--cc-almacen-border': t.border || (isDark ? '#1E3A5F' : '#e2e8f0'),
     '--cc-almacen-accent': primary,
     '--cc-almacen-accent-soft': `${primary}22`,
     '--cc-almacen-overlay': t.overlay || (isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(15, 23, 42, 0.52)'),
     '--cc-almacen-shadow-modal': t.shadow || (isDark ? '0 24px 64px rgba(0, 0, 0, 0.55)' : '0 24px 64px rgba(0, 0, 0, 0.28)'),
     '--cc-almacen-shadow-sheet': isDark ? '0 -12px 40px rgba(0, 0, 0, 0.45)' : '0 -12px 40px rgba(0, 0, 0, 0.25)',
+    /* Tabla Excel / hojas: contraste AA en claro y oscuro (sin fallbacks claros fijos). */
+    '--cc-almacen-sheet-head': headerBg,
+    '--cc-almacen-sheet-head-text': text,
+    '--cc-almacen-row-marked': isDark ? 'rgba(52, 211, 153, 0.2)' : 'rgba(34, 197, 94, 0.14)',
+    '--cc-almacen-row-error': isDark ? 'rgba(248, 113, 113, 0.22)' : 'rgba(254, 202, 202, 0.65)',
+    '--cc-almacen-qty-error-bg': isDark ? 'rgba(248, 113, 113, 0.28)' : '#fef2f2',
+    '--cc-almacen-qty-error-border': isDark ? '#f87171' : '#dc2626',
+    '--cc-almacen-qty-error-text': isDark ? '#fecaca' : '#991b1b',
+    '--cc-almacen-qty-focus-bg': isDark ? 'rgba(56, 189, 248, 0.22)' : 'rgba(37, 99, 235, 0.1)',
+    '--cc-almacen-warn-text': isDark ? '#fde68a' : '#92400e',
+    '--cc-almacen-danger-text': isDark ? '#fecaca' : '#991b1b',
+    '--cc-almacen-ok-text': isDark ? '#6ee7b7' : '#065f46',
     colorScheme: isDark ? 'dark' : 'light',
   }
 }

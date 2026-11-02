@@ -113,7 +113,7 @@ export function highlightSegments(text, query) {
 
 /**
  * Reparte una cantidad recibida entre las líneas de un insumo consolidado (FIFO por id).
- * Si sobra respecto al saldo total, la última línea absorbe el exceso (supera saldo).
+ * No supera el saldo de cada línea (el exceso queda sin repartir; la UI/servidor lo bloquean).
  */
 export function distributeCantidadOverLineas(lineas, cantidad) {
   const qty = Number(cantidad)
@@ -129,11 +129,8 @@ export function distributeCantidadOverLineas(lineas, cantidad) {
   let left = qty
   for (let i = 0; i < rows.length; i += 1) {
     const ln = rows[i]
-    const isLast = i === rows.length - 1
     if (left <= 0) break
-    let take = isLast ? left : Math.min(ln.saldo, left)
-    if (!isLast && take <= 0) continue
-    if (isLast && take <= 0 && left > 0) take = left
+    const take = Math.min(Math.max(0, ln.saldo), left)
     if (take > 0) {
       out.push({
         orden_compra_item_id: ln.orden_compra_item_id,
@@ -148,7 +145,7 @@ export function distributeCantidadOverLineas(lineas, cantidad) {
 export function motivosPorRevisarPreview(draft) {
   const m = []
   if (!draft?.orden_compra_id) m.push('Sin orden de compra')
-  if (draft?.supera_saldo) m.push('Supera saldo OC')
+  // supera_saldo ya no es «por revisar»: la UI/servidor lo bloquean.
   if (draft?.proveedor_manual) m.push('Proveedor a mano')
   if (draft?.sin_insumo) m.push('Sin insumo')
   if (draft?.sin_sector) m.push('Sin sector')

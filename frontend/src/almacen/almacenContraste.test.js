@@ -50,6 +50,14 @@ describe('contraste de popups de almacén', () => {
     }
     const css = readFileSync(join(dir, '../index.css'), 'utf8')
     assert.match(css, /\.cc-almacen-rentabilidad-toggle[\s\S]*--cc-almacen-bg-card/)
+    assert.match(css, /\.cc-almacen-qty-cell:focus/)
+  })
+
+  it('vars de hoja Excel se definen en buildAlmacenCssVars', () => {
+    const shared = readFileSync(join(dir, 'almacenShared.jsx'), 'utf8')
+    assert.match(shared, /--cc-almacen-sheet-head':/)
+    assert.match(shared, /--cc-almacen-row-marked':/)
+    assert.match(shared, /--cc-almacen-qty-focus-bg':/)
   })
 
   it('el resaltado sin insumo es gris legible en oscuro y sigue gris en claro', () => {

@@ -97,7 +97,8 @@ export default function EntradaDetalleModal({
   const border = ui.sheetWrap?.border?.split(' ').slice(1).join(' ') || 'var(--cc-border, #d1d5db)'
   const th = {
     ...cellStyle(border),
-    background: 'var(--cc-almacen-sheet-head, #f3f4f6)',
+    background: 'var(--cc-almacen-sheet-head)',
+    color: 'var(--cc-almacen-sheet-head-text)',
     fontWeight: 700,
     color: ui.textMuted,
     whiteSpace: 'nowrap',
