@@ -208,10 +208,18 @@ describe('UI cableado', () => {
     assert.match(salio, /buildAlmacenCssVars/)
   })
 
-  it('soportes aceptan Ctrl+V', () => {
+  it('soportes: zona Pegar aquí, botón Pegar y Ctrl/Cmd+V', () => {
     const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
+    const picker = readFileSync(join(dir, 'EntradaSoportePicker.jsx'), 'utf8')
     assert.match(wiz, /onPasteSoporte/)
+    assert.match(wiz, /onPasteEnSoporte/)
     assert.match(wiz, /fileFromClipboardEvent/)
     assert.match(wiz, /entrada-tablet-paste-hint/)
+    assert.match(wiz, /onPasteFile/)
+    assert.match(picker, /entrada-soporte-\$\{kind\}-pegar-zona/)
+    assert.match(picker, /entrada-soporte-\$\{kind\}-pegar/)
+    assert.match(picker, /Pegar aquí/)
+    assert.match(picker, /fileFromClipboardApi/)
+    assert.match(picker, /contentEditable/)
   })
 })

@@ -1,8 +1,10 @@
 /**
- * Selector de soporte Remisión / Foto descargue: cámara, galería, archivo o pegar (Ctrl+V).
+ * Selector de soporte Remisión / Foto descargue:
+ * cámara, galería, archivo, zona «Pegar aquí» (iPad) y botón Pegar.
  */
 import { useRef } from 'react'
 import { useAlmacenTheme } from './almacenShared'
+import { fileFromClipboardApi, fileFromClipboardEvent, MSG_PEGADO_VACIO } from './entradaSoportePaste'
 
 const btnMini = (ui, active) => ({
   ...ui.btnSecondary,
@@ -11,7 +13,9 @@ const btnMini = (ui, active) => ({
   fontSize: 'var(--cc-xs, 0.8rem)',
   fontWeight: 700,
   flex: 1,
-  background: active ? (ui.accentSoft || 'rgba(0,119,182,0.12)') : undefined,
+  background: active ? (ui.accentSoft || 'var(--cc-almacen-accent-soft)') : undefined,
+  color: 'var(--cc-almacen-text)',
+  borderColor: 'var(--cc-almacen-border)',
 })
 
 export default function EntradaSoportePicker({
@@ -20,6 +24,8 @@ export default function EntradaSoportePicker({
   previewUrl,
   busy,
   onPickFile,
+  /** (file: File) => void — pegado desde zona o botón de ESTE soporte */
+  onPasteFile,
   labelReady,
   labelEmpty,
   selected = false,
@@ -29,37 +35,124 @@ export default function EntradaSoportePicker({
   const camRef = useRef(null)
   const galRef = useRef(null)
   const fileRef = useRef(null)
+  const pasteZoneRef = useRef(null)
   const isRemision = kind === 'remision'
   const isPdf = Boolean(file && ((file.type || '').includes('pdf') || /\.pdf$/i.test(file.name || '')))
+
+  /** Evita que contentEditable deje texto/imagen nativa; el rótulo vive en capa no editable. */
+  const clearPasteZone = () => {
+    const el = pasteZoneRef.current
+    if (el) el.textContent = ''
+  }
+
+  const handleZonePaste = (e) => {
+    onSelect?.(kind)
+    const f = fileFromClipboardEvent(e)
+    e.preventDefault()
+    e.stopPropagation()
+    clearPasteZone()
+    if (!f) {
+      onPasteFile?.(null, MSG_PEGADO_VACIO)
+      return
+    }
+    onPasteFile?.(f)
+  }
+
+  const handlePegarClick = async () => {
+    onSelect?.(kind)
+    const r = await fileFromClipboardApi()
+    if (!r.ok) {
+      onPasteFile?.(null, r.message)
+      return
+    }
+    onPasteFile?.(r.file)
+  }
 
   return (
     <div
       data-testid={`entrada-soporte-${kind}`}
       role="group"
-      tabIndex={0}
-      aria-pressed={selected}
-      onFocus={() => { onSelect?.(kind) }}
-      onClick={() => { onSelect?.(kind) }}
       style={{
         display: 'grid',
         gap: 6,
-        outline: selected ? `2px solid ${ui.accent}` : '1px solid transparent',
+        outline: selected ? `2px solid var(--cc-almacen-accent, ${ui.accent})` : '1px solid transparent',
         outlineOffset: 2,
         borderRadius: 10,
         padding: 4,
       }}
     >
-      <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>
+      <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--cc-almacen-text)' }}>
         {isRemision ? '📄 Remisión' : '📷 Foto del descargue'}
-        <span style={{ fontWeight: 500, color: ui.textMuted }}> (obligatoria)</span>
+        <span style={{ fontWeight: 500, color: 'var(--cc-almacen-text-muted)' }}> (obligatoria)</span>
       </div>
+
+      {/* Zona visible: contentEditable vacío + rótulo en capa; iPad Safari muestra menú «Pegar». */}
       <div
-        data-testid={`entrada-soporte-${kind}-pegar-hint`}
-        style={{ fontSize: '0.8rem', color: ui.textMuted, fontWeight: 600 }}
+        data-testid={`entrada-soporte-${kind}-pegar-zona`}
+        onClick={() => {
+          onSelect?.(kind)
+          pasteZoneRef.current?.focus?.()
+        }}
+        style={{
+          position: 'relative',
+          minHeight: 72,
+          border: `2px dashed ${selected ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-border)'}`,
+          borderRadius: 10,
+          background: 'var(--cc-almacen-input-bg)',
+          cursor: 'text',
+        }}
       >
-        📋 Ctrl+V / Cmd+V para pegar
-        {isRemision ? ' (imagen o PDF)' : ' (imagen)'}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+            padding: '12px 10px',
+            pointerEvents: 'none',
+            textAlign: 'center',
+            fontWeight: 700,
+            fontSize: '0.9rem',
+            color: 'var(--cc-almacen-text-muted)',
+          }}
+        >
+          <span style={{ fontSize: '1.4rem' }}>📋</span>
+          <span style={{ color: 'var(--cc-almacen-text)' }}>Pegar aquí</span>
+          <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>
+            {isRemision
+              ? 'Mantenga y Pegar · imagen o PDF'
+              : 'Mantenga y Pegar · imagen'}
+          </span>
+        </div>
+        <div
+          ref={pasteZoneRef}
+          role="textbox"
+          tabIndex={0}
+          contentEditable
+          suppressContentEditableWarning
+          aria-label={isRemision ? 'Pegar remisión aquí' : 'Pegar foto del descargue aquí'}
+          onFocus={() => { onSelect?.(kind) }}
+          onPaste={handleZonePaste}
+          onInput={clearPasteZone}
+          onBlur={clearPasteZone}
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            minHeight: 72,
+            padding: '12px 10px',
+            outline: 'none',
+            color: 'transparent',
+            caretColor: 'var(--cc-almacen-accent)',
+            WebkitUserSelect: 'text',
+            userSelect: 'text',
+          }}
+        />
       </div>
+
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <input
           ref={camRef}
@@ -116,15 +209,26 @@ export default function EntradaSoportePicker({
         >
           📁 Archivo
         </button>
+        <button
+          type="button"
+          data-testid={`entrada-soporte-${kind}-pegar`}
+          style={btnMini(ui, selected)}
+          disabled={busy}
+          onClick={() => { void handlePegarClick() }}
+          title="Leer imagen o PDF del portapapeles"
+        >
+          📋 Pegar
+        </button>
       </div>
       {file ? (
         <div
           data-testid={`entrada-soporte-${kind}-preview`}
           style={{
-            border: `1px solid ${ui.borderColor}`,
+            border: '1px solid var(--cc-almacen-border)',
             borderRadius: 10,
             padding: 8,
-            background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+            background: 'var(--cc-almacen-bg-card)',
+            color: 'var(--cc-almacen-text)',
           }}
         >
           {isPdf ? (
@@ -139,14 +243,14 @@ export default function EntradaSoportePicker({
               style={{ width: '100%', maxHeight: 100, objectFit: 'cover', borderRadius: 8 }}
             />
           ) : null}
-          <div style={{ marginTop: 4, fontSize: '0.85rem', color: '#15803d', fontWeight: 700 }}>
-            {labelReady || 'Listo'} · Cámara/Galería/Archivo/Ctrl+V para reemplazar
+          <div style={{ marginTop: 4, fontSize: '0.85rem', color: 'var(--cc-almacen-ok-text, #15803d)', fontWeight: 700 }}>
+            {labelReady || 'Listo'} · toque Pegar aquí / Pegar / Cámara / Galería / Archivo para reemplazar
           </div>
         </div>
       ) : (
         <div
           data-testid={`entrada-soporte-${kind}-falta`}
-          style={{ color: '#b45309', fontWeight: 700, fontSize: '0.85rem' }}
+          style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.85rem' }}
         >
           {labelEmpty || (isRemision ? 'Falta la remisión' : 'Falta la foto del descargue')}
         </div>
