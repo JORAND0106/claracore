@@ -25,6 +25,7 @@ import {
 } from './entradaOcExcelHelpers'
 import {
   fileFromClipboardEvent,
+  MSG_PEGADO_VACIO,
   resolvePasteTarget,
   validateSoportePaste,
 } from './entradaSoportePaste'
@@ -538,22 +539,45 @@ export default function EntradaRegistroTablet({
     return takeSoporteFile(which, f)
   }
 
-  const onPasteSoporte = (e) => {
-    if (paso !== PASO.CAPTURA || tipo !== 'recibo') return
-    const f = fileFromClipboardEvent(e)
-    if (!f) {
-      // Sin archivo en el portapapeles: no interferir con pegar texto en inputs.
-      return
-    }
-    e.preventDefault()
+  const applyPasteToTarget = (whichForced, file, emptyMessage) => {
     const target = resolvePasteTarget({
-      focusedKind: soporteFocus,
+      focusedKind: whichForced || soporteFocus,
       hasRemision: Boolean(fotoRemision),
       hasMaterial: Boolean(fotoMaterial),
     })
-    setPasteHint(`Pegado en ${target.label}${target.replaced ? ' (reemplazo)' : ''}.`)
-    setSoporteFocus(target.which)
-    void takeSoporteFile(target.which, f)
+    const which = whichForced || target.which
+    const label = which === 'remision' ? 'Remisión' : 'Foto del descargue'
+    const replaced = which === 'remision' ? Boolean(fotoRemision) : Boolean(fotoMaterial)
+    if (!file) {
+      setError(emptyMessage || MSG_PEGADO_VACIO)
+      setPasteHint('')
+      return
+    }
+    setPasteHint(`Pegado en ${label}${replaced ? ' (reemplazo)' : ''}.`)
+    setSoporteFocus(which)
+    void takeSoporteFile(which, file)
+  }
+
+  const onPasteSoporte = (e) => {
+    if (paso !== PASO.CAPTURA || tipo !== 'recibo') return
+    // Si el pegado ocurre dentro de la zona «Pegar aquí», ese handler ya lo procesó.
+    const zone = e.target?.closest?.('[data-testid$="-pegar-zona"]')
+    if (zone) return
+    const f = fileFromClipboardEvent(e)
+    if (!f) {
+      // Sin archivo: no interferir con pegar texto en inputs (placa, cantidad…).
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+      e.preventDefault()
+      applyPasteToTarget(null, null, MSG_PEGADO_VACIO)
+      return
+    }
+    e.preventDefault()
+    applyPasteToTarget(null, f)
+  }
+
+  const onPasteEnSoporte = (which, fileOrNull, message) => {
+    applyPasteToTarget(which, fileOrNull, message)
   }
 
   const hayLineasOc = modoMultiOc && lineasResumen.length > 0
@@ -1389,6 +1413,7 @@ export default function EntradaRegistroTablet({
                   selected={soporteFocus === 'remision'}
                   onSelect={setSoporteFocus}
                   onPickFile={(e) => { void takeSoporte('remision', e) }}
+                  onPasteFile={(f, msg) => { onPasteEnSoporte('remision', f, msg) }}
                   labelReady="Remisión ✓"
                   labelEmpty="Falta la remisión"
                 />
@@ -1400,6 +1425,7 @@ export default function EntradaRegistroTablet({
                   selected={soporteFocus === 'material'}
                   onSelect={setSoporteFocus}
                   onPickFile={(e) => { void takeSoporte('material', e) }}
+                  onPasteFile={(f, msg) => { onPasteEnSoporte('material', f, msg) }}
                   labelReady="Descargue ✓"
                   labelEmpty="Falta la foto del descargue"
                 />
