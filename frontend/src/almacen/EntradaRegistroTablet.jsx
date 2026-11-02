@@ -1,6 +1,7 @@
 /**
  * Registro de Entradas pensado para tablet 10" (dedo, poco texto, sin bloqueos).
- * Recibo («Llegó material») y disposición («Sale escombro»).
+ * Recibo («Llegó material») y disposición («Salió material»).
+ * Conserva el panel superior de la plataforma (tema / fuente).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
@@ -14,48 +15,53 @@ import {
 import { prepareRemisionSoporte } from './almacenRemisionSoporte'
 import {
   formatPlacaInput,
+  matchesAllTerms,
   motivosPorRevisarPreview,
+  ocCardSearchBlob,
   placaValida,
   PASO,
 } from './entradaRegistroTabletHelpers'
 
-const btnGiant = (bg, color = '#fff') => ({
+const btnHome = (bg, color = '#fff') => ({
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 10,
-  minHeight: 140,
+  gap: 8,
+  minHeight: 120,
   width: '100%',
-  borderRadius: 16,
+  borderRadius: 14,
   border: 'none',
   background: bg,
   color,
-  fontSize: '1.35rem',
+  fontSize: 'var(--cc-md, 1.15rem)',
   fontWeight: 800,
   cursor: 'pointer',
-  padding: 20,
-  boxShadow: '0 4px 16px rgba(15,23,42,0.18)',
+  padding: 16,
+  boxShadow: 'var(--cc-almacen-shadow-modal, 0 4px 14px rgba(15,23,42,0.14))',
 })
 
 const cardTouch = (ui, selected) => ({
   ...ui.card,
-  padding: 16,
-  marginBottom: 10,
+  padding: 14,
+  marginBottom: 0,
   cursor: 'pointer',
-  border: selected ? `3px solid ${ui.accent}` : `2px solid ${ui.borderColor}`,
+  border: selected ? `3px solid ${ui.accent}` : `1px solid ${ui.borderColor}`,
+  borderRadius: 12,
   minHeight: 72,
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
   WebkitTapHighlightColor: 'transparent',
+  background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+  color: ui.text,
 })
 
 const inputGiant = (ui) => ({
   ...ui.input,
-  fontSize: '1.6rem',
-  padding: '16px 14px',
-  minHeight: 56,
+  fontSize: 'var(--cc-title, 1.35rem)',
+  padding: '14px 12px',
+  minHeight: 52,
   width: '100%',
   boxSizing: 'border-box',
 })
@@ -73,7 +79,11 @@ export default function EntradaRegistroTablet({
   const [paso, setPaso] = useState(PASO.INICIO)
   const [tipo, setTipo] = useState(null) // recibo | disposicion
   const [ocs, setOcs] = useState([])
+  const [ocsLoaded, setOcsLoaded] = useState(false)
   const [loadingOc, setLoadingOc] = useState(false)
+  const [ocTimingMs, setOcTimingMs] = useState(null)
+  const [ocSearch, setOcSearch] = useState('')
+  const [chromeTop, setChromeTop] = useState(0)
   const [ocCard, setOcCard] = useState(null)
   const [proveedorId, setProveedorId] = useState(null)
   const [proveedorNombre, setProveedorNombre] = useState('')
@@ -85,6 +95,7 @@ export default function EntradaRegistroTablet({
   const [insumoUnidad, setInsumoUnidad] = useState('m³')
   const [insumoQuery, setInsumoQuery] = useState('')
   const [insumoOpts, setInsumoOpts] = useState([])
+  const [materialManual, setMaterialManual] = useState(false)
   const [cantidad, setCantidad] = useState('')
   const [placa, setPlaca] = useState('')
   const [conductor, setConductor] = useState('')
@@ -101,58 +112,117 @@ export default function EntradaRegistroTablet({
   const cantNum = Number(cantidad)
   const saldoOc = ocCard ? Number(ocCard.saldo_cantidad || 0) : null
   const superaSaldo = Boolean(ocCard && cantNum > 0 && cantNum > saldoOc + 0.0001)
+  const sinInsumo = Boolean(!ocCard && !insumoId)
 
   const draft = useMemo(() => ({
     orden_compra_id: ocCard?.orden_compra_id || null,
     supera_saldo: superaSaldo,
     proveedor_manual: proveedorManual || (!proveedorId && Boolean(proveedorNombre)),
+    sin_insumo: sinInsumo,
     foto,
     vehiculo_nuevo: vehiculoNuevo,
-  }), [ocCard, superaSaldo, proveedorManual, proveedorId, proveedorNombre, foto, vehiculoNuevo])
+  }), [ocCard, superaSaldo, proveedorManual, proveedorId, proveedorNombre, sinInsumo, foto, vehiculoNuevo])
 
   const motivosPrev = motivosPorRevisarPreview(draft)
 
-  const loadOcs = useCallback(() => {
-    setLoadingOc(true)
+  const ocsFiltradas = useMemo(() => {
+    if (!ocSearch.trim()) return ocs
+    return ocs.filter((c) => matchesAllTerms(ocCardSearchBlob(c), ocSearch))
+  }, [ocs, ocSearch])
+
+  const mostrarSinOc = useMemo(() => {
+    if (loadingOc && !ocsLoaded) return false
+    if (ocs.length === 0) return true
+    return Boolean(ocSearch.trim()) && ocsFiltradas.length === 0
+  }, [loadingOc, ocsLoaded, ocs.length, ocSearch, ocsFiltradas.length])
+
+  useEffect(() => {
+    const measure = () => {
+      const el = document.querySelector('.cc-app-header')
+      if (!el) {
+        setChromeTop(0)
+        return
+      }
+      setChromeTop(Math.round(el.getBoundingClientRect().bottom))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('orientationchange', measure)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('orientationchange', measure)
+    }
+  }, [])
+
+  const loadOcs = useCallback((opts = {}) => {
+    const silent = Boolean(opts.silent)
+    if (!silent) setLoadingOc(true)
+    const tClient = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     api.listOcsPendientesEntrada()
-      .then((rows) => setOcs(Array.isArray(rows) ? rows : []))
-      .catch((e) => setError(e.message || 'No se pudieron cargar las OC'))
-      .finally(() => setLoadingOc(false))
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (res?.items || [])
+        setOcs(rows)
+        setOcsLoaded(true)
+        const server = res?.timing_ms || null
+        const clientMs = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - tClient)
+        setOcTimingMs({ client_ms: clientMs, server: server })
+        if (typeof console !== 'undefined' && console.info) {
+          console.info('[almacen] ocs-pendientes', { client_ms: clientMs, server })
+        }
+      })
+      .catch((e) => {
+        if (!silent) setError(e.message || 'No se pudieron cargar las OC')
+      })
+      .finally(() => {
+        if (!silent) setLoadingOc(false)
+      })
   }, [api])
 
   useEffect(() => {
-    if (paso === PASO.OC) loadOcs()
-  }, [paso, loadOcs])
-
-  useEffect(() => {
-    if (!provQuery.trim()) {
-      setProvOpts([])
+    if (paso !== PASO.OC) return undefined
+    if (ocsLoaded) {
+      // Lista en memoria al instante; refresco en segundo plano.
+      loadOcs({ silent: true })
       return undefined
     }
+    loadOcs({ silent: false })
+    return undefined
+  }, [paso, ocsLoaded, loadOcs])
+
+  useEffect(() => {
+    if (paso !== PASO.SIN_OC && paso !== PASO.ESCOMBRERA) return undefined
+    if (paso === PASO.ESCOMBRERA) {
+      // Disposición: directorio de proveedores (sin filtro por solicitud).
+      if (!provQuery.trim()) {
+        setProvOpts([])
+        return undefined
+      }
+      const t = setTimeout(() => {
+        api.searchProveedores(provQuery)
+          .then((rows) => setProvOpts(Array.isArray(rows) ? rows : []))
+          .catch(() => setProvOpts([]))
+      }, 220)
+      return () => clearTimeout(t)
+    }
+    // Sin OC: solo proveedores con solicitud/OC (filtrados por material si hay).
     const t = setTimeout(() => {
-      api.searchProveedores(provQuery)
+      api.searchProveedoresSolicitados(provQuery, { insumoId: insumoId || undefined })
         .then((rows) => setProvOpts(Array.isArray(rows) ? rows : []))
         .catch(() => setProvOpts([]))
     }, 220)
     return () => clearTimeout(t)
-  }, [api, provQuery])
+  }, [api, provQuery, paso, insumoId])
 
   useEffect(() => {
-    if (!insumoQuery.trim()) {
-      setInsumoOpts([])
-      return undefined
-    }
+    if (paso !== PASO.SIN_OC) return undefined
+    if (materialManual) return undefined
     const t = setTimeout(() => {
-      const fn = api.searchInsumosCatalog || api.searchInsumos
-      Promise.resolve(fn.call(api, insumoQuery))
-        .then((rows) => {
-          const list = Array.isArray(rows) ? rows : (rows?.items || [])
-          setInsumoOpts(list)
-        })
+      api.searchMaterialesSolicitados(insumoQuery, { proveedorId: proveedorId || undefined })
+        .then((rows) => setInsumoOpts(Array.isArray(rows) ? rows : []))
         .catch(() => setInsumoOpts([]))
     }, 220)
     return () => clearTimeout(t)
-  }, [api, insumoQuery])
+  }, [api, insumoQuery, paso, proveedorId, materialManual])
 
   const resetFlujo = () => {
     setOcCard(null)
@@ -162,6 +232,8 @@ export default function EntradaRegistroTablet({
     setInsumoId(null)
     setInsumoLabel('')
     setInsumoUnidad('m³')
+    setInsumoQuery('')
+    setMaterialManual(false)
     setCantidad('')
     setPlaca('')
     setConductor('')
@@ -171,6 +243,7 @@ export default function EntradaRegistroTablet({
     setPkId('')
     setError('')
     setOkMsg('')
+    setOcSearch('')
   }
 
   const elegirTipo = (t) => {
@@ -269,7 +342,7 @@ export default function EntradaRegistroTablet({
       if (foto) fd.append('remision', foto)
 
       const r = await api.createEntrada(fd)
-      setOkMsg(r?.por_revisar ? `Guardado · por revisar` : 'Guardado')
+      setOkMsg(r?.por_revisar ? 'Guardado · por revisar' : 'Guardado')
       onSaved?.(r)
       if (r?.id) {
         try {
@@ -280,6 +353,8 @@ export default function EntradaRegistroTablet({
       }
       setTimeout(() => {
         resetFlujo()
+        setOcsLoaded(false)
+        setOcs([])
         setTipo(null)
         setPaso(PASO.INICIO)
         setOkMsg('')
@@ -294,24 +369,33 @@ export default function EntradaRegistroTablet({
   if (!puedeCrear) return null
 
   const headerTitle = tipo === 'disposicion'
-    ? 'Sale escombro'
+    ? 'Salió material'
     : tipo === 'recibo'
       ? 'Llegó material'
       : 'Registrar entrada'
+
+  const puedeSeguirSinOc = Boolean(
+    proveedorNombre.trim()
+    && (insumoId || (materialManual && insumoLabel.trim())),
+  )
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       data-testid="entrada-registro-tablet"
+      className="cc-almacen-theme-scope"
       style={{
         position: 'fixed',
-        inset: 0,
-        zIndex: 100050,
-        background: ui.card?.background || '#fff',
+        top: chromeTop || 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 30,
+        background: 'var(--cc-almacen-bg, var(--cc-bg, #fff))',
         display: 'flex',
         flexDirection: 'column',
-        color: ui.text,
+        color: 'var(--cc-almacen-text, var(--cc-text, #0f172a))',
       }}
     >
       <CcModalBrandHeader theme={theme} />
@@ -322,6 +406,7 @@ export default function EntradaRegistroTablet({
         padding: '10px 14px',
         borderBottom: `1px solid ${ui.borderColor}`,
         gap: 8,
+        background: 'var(--cc-almacen-bg-card, transparent)',
       }}
       >
         <button
@@ -332,13 +417,22 @@ export default function EntradaRegistroTablet({
             else if (paso === PASO.OC || paso === PASO.SECTOR) {
               setTipo(null)
               setPaso(PASO.INICIO)
-            } else setPaso(tipo === 'disposicion' && paso === PASO.CANTIDAD ? PASO.ESCOMBRERA : PASO.OC)
+            } else if (paso === PASO.SIN_OC) setPaso(PASO.OC)
+            else if (paso === PASO.ESCOMBRERA) setPaso(PASO.SECTOR)
+            else if (paso === PASO.CANTIDAD) {
+              if (tipo === 'disposicion') setPaso(PASO.ESCOMBRERA)
+              else if (ocCard) setPaso(PASO.OC)
+              else setPaso(PASO.SIN_OC)
+            } else if (paso === PASO.PLACA) setPaso(PASO.CANTIDAD)
+            else if (paso === PASO.FOTO) setPaso(PASO.PLACA)
+            else if (paso === PASO.CONFIRMAR) setPaso(PASO.FOTO)
+            else setPaso(PASO.INICIO)
           }}
           aria-label="Atrás"
         >
           ←
         </button>
-        <div style={{ fontWeight: 800, fontSize: '1.15rem', textAlign: 'center', flex: 1 }}>{headerTitle}</div>
+        <div style={{ fontWeight: 800, fontSize: 'var(--cc-md, 1.1rem)', textAlign: 'center', flex: 1 }}>{headerTitle}</div>
         <button
           type="button"
           style={{ ...ui.btnSecondary, minWidth: 48, minHeight: 48 }}
@@ -349,7 +443,16 @@ export default function EntradaRegistroTablet({
         </button>
       </div>
 
-      <div style={{ flex: 1, overflow: 'auto', padding: 16, maxWidth: 720, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+      <div style={{
+        flex: 1,
+        overflow: 'auto',
+        padding: 16,
+        maxWidth: paso === PASO.OC ? 1100 : 720,
+        width: '100%',
+        margin: '0 auto',
+        boxSizing: 'border-box',
+      }}
+      >
         {error && (
           <div data-testid="entrada-tablet-error" style={{ color: '#b91c1c', marginBottom: 12, fontWeight: 600 }}>{error}</div>
         )}
@@ -358,57 +461,102 @@ export default function EntradaRegistroTablet({
         )}
 
         {paso === PASO.INICIO && (
-          <div style={{ display: 'grid', gap: 16, marginTop: 24 }}>
+          <div
+            data-testid="entrada-tablet-inicio-botones"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 12,
+              marginTop: 20,
+              alignItems: 'stretch',
+            }}
+          >
             <button
               type="button"
               data-testid="entrada-tablet-recibo"
-              style={btnGiant('#16a34a')}
+              style={btnHome('#16a34a')}
               onClick={() => elegirTipo('recibo')}
             >
-              <span style={{ fontSize: '2.4rem' }} aria-hidden>📦</span>
+              <span style={{ fontSize: '2.2rem' }} aria-hidden>📦</span>
               Llegó material
             </button>
             <button
               type="button"
               data-testid="entrada-tablet-disposicion"
-              style={btnGiant('#ea580c')}
+              style={btnHome('#ea580c')}
               onClick={() => elegirTipo('disposicion')}
             >
-              <span style={{ fontSize: '2.4rem' }} aria-hidden>🚚</span>
-              Sale escombro
+              <span style={{ fontSize: '2.2rem' }} aria-hidden>🚚</span>
+              Salió material
             </button>
           </div>
         )}
 
         {paso === PASO.OC && (
           <div>
-            <div style={{ fontWeight: 800, marginBottom: 12, fontSize: '1.1rem' }}>¿Cuál orden?</div>
-            {loadingOc && <div style={{ color: ui.textMuted }}>Cargando…</div>}
-            {!loadingOc && ocs.map((c) => (
-              <button
-                key={`${c.orden_compra_id}-${c.orden_compra_item_id}`}
-                type="button"
-                data-testid="entrada-tablet-oc-card"
-                style={{ ...cardTouch(ui, false), textAlign: 'left', width: '100%' }}
-                onClick={() => elegirOc(c)}
-              >
-                <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>🏭 {c.proveedor_nombre || 'Proveedor'}</div>
-                <div style={{ fontSize: '1rem' }}>🧱 {c.material_descripcion || 'Material'}</div>
-                <div style={{ fontWeight: 700, color: ui.accent }}>
-                  Falta {fmtCant(c.saldo_cantidad)} {c.unidad || ''}
-                  {c.numero_oc != null ? ` · OC #${c.numero_oc}` : ''}
-                </div>
-              </button>
-            ))}
-            <button
-              type="button"
-              data-testid="entrada-tablet-sin-oc"
-              style={{ ...cardTouch(ui, false), textAlign: 'left', width: '100%', borderStyle: 'dashed' }}
-              onClick={elegirSinOc}
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-md, 1.05rem)' }}>¿Cuál orden?</div>
+              <div data-testid="entrada-tablet-oc-count" style={{ color: ui.textMuted, fontWeight: 600, fontSize: 'var(--cc-sm, 0.9rem)' }}>
+                {loadingOc && !ocsLoaded
+                  ? 'Cargando…'
+                  : `${ocsFiltradas.length} de ${ocs.length}`}
+                {ocTimingMs?.client_ms != null && ocsLoaded ? ` · ${ocTimingMs.client_ms} ms` : ''}
+              </div>
+            </div>
+            <input
+              data-testid="entrada-tablet-oc-search"
+              style={{ ...inputGiant(ui), marginBottom: 14 }}
+              placeholder="Buscar OC, proveedor, material, solicitud…"
+              value={ocSearch}
+              onChange={(e) => setOcSearch(e.target.value)}
+              autoComplete="off"
+            />
+            {loadingOc && !ocsLoaded && (
+              <div style={{ color: ui.textMuted, marginBottom: 12 }}>Cargando órdenes…</div>
+            )}
+            <div
+              data-testid="entrada-tablet-oc-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 12,
+              }}
             >
-              <div style={{ fontWeight: 800 }}>📋 Sin orden de compra</div>
-              <div style={{ color: ui.textMuted, fontSize: '0.95rem' }}>Quedará por revisar</div>
-            </button>
+              {ocsFiltradas.map((c) => (
+                <button
+                  key={`${c.orden_compra_id}-${c.orden_compra_item_id}`}
+                  type="button"
+                  data-testid="entrada-tablet-oc-card"
+                  style={{ ...cardTouch(ui, false), textAlign: 'left', width: '100%' }}
+                  onClick={() => elegirOc(c)}
+                >
+                  <div style={{ fontWeight: 800, fontSize: '1rem' }}>
+                    📋 OC {c.numero_oc != null ? `#${c.numero_oc}` : '—'}
+                  </div>
+                  <div style={{ fontWeight: 700 }}>🏭 {c.proveedor_nombre || 'Proveedor'}</div>
+                  <div style={{ fontSize: '0.95rem' }}>🧱 {c.material_descripcion || 'Material'}</div>
+                  <div style={{ fontWeight: 700, color: ui.accent }}>
+                    Falta {fmtCant(c.saldo_cantidad)} {c.unidad || ''}
+                  </div>
+                </button>
+              ))}
+              {mostrarSinOc && (
+                <button
+                  type="button"
+                  data-testid="entrada-tablet-sin-oc"
+                  style={{
+                    ...cardTouch(ui, false),
+                    textAlign: 'left',
+                    width: '100%',
+                    borderStyle: 'dashed',
+                  }}
+                  onClick={elegirSinOc}
+                >
+                  <div style={{ fontWeight: 800 }}>📋 Sin orden de compra</div>
+                  <div style={{ color: ui.textMuted, fontSize: '0.95rem' }}>Quedará por revisar</div>
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -417,7 +565,7 @@ export default function EntradaRegistroTablet({
             <div style={{ fontWeight: 800 }}>Proveedor</div>
             <input
               style={inputGiant(ui)}
-              placeholder="Buscar o escribir nombre"
+              placeholder="Buscar proveedor"
               value={proveedorManual ? proveedorNombre : provQuery}
               onChange={(e) => {
                 const v = e.target.value
@@ -426,6 +574,7 @@ export default function EntradaRegistroTablet({
                 setProvQuery(v)
                 setProveedorNombre(v)
               }}
+              data-testid="entrada-tablet-prov-search"
             />
             {provOpts.slice(0, 6).map((p) => (
               <button
@@ -455,29 +604,54 @@ export default function EntradaRegistroTablet({
             <div style={{ fontWeight: 800, marginTop: 8 }}>Material</div>
             <input
               style={inputGiant(ui)}
-              placeholder="Buscar material"
+              placeholder="Buscar material solicitado"
               value={insumoQuery}
-              onChange={(e) => setInsumoQuery(e.target.value)}
+              onChange={(e) => {
+                setMaterialManual(false)
+                setInsumoId(null)
+                setInsumoQuery(e.target.value)
+                setInsumoLabel(e.target.value)
+              }}
+              data-testid="entrada-tablet-mat-search"
             />
-            {insumoOpts.slice(0, 6).map((row) => {
+            {!materialManual && insumoOpts.slice(0, 6).map((row) => {
               const id = row.insumo_id || row.id
-              const label = row.label || row.descripcion || row.codigo || String(id)
+              const label = row.label || row.descripcion || row.material_descripcion || row.codigo || String(id || '')
               return (
                 <button
-                  key={id}
+                  key={id || label}
                   type="button"
                   style={cardTouch(ui, Number(insumoId) === Number(id))}
                   onClick={() => {
-                    setInsumoId(id)
+                    setInsumoId(id || null)
                     setInsumoLabel(label)
                     setInsumoUnidad(row.unidad || 'm³')
                     setInsumoQuery(label)
+                    setMaterialManual(false)
                   }}
                 >
                   {label}
                 </button>
               )
             })}
+            {insumoQuery.trim() && !insumoId && (
+              <button
+                type="button"
+                data-testid="entrada-tablet-mat-manual"
+                style={{ ...ui.btnSecondary, minHeight: 48 }}
+                onClick={() => {
+                  setMaterialManual(true)
+                  setInsumoId(null)
+                  setInsumoLabel(insumoQuery.trim())
+                  setInsumoOpts([])
+                }}
+              >
+                Usar «{insumoQuery.trim()}» (por revisar)
+              </button>
+            )}
+            {materialManual && (
+              <div style={{ color: '#b45309', fontWeight: 700 }}>Material no listado · por revisar</div>
+            )}
 
             <div style={{ fontWeight: 800, marginTop: 8 }}>Sector (opcional)</div>
             <input
@@ -490,7 +664,7 @@ export default function EntradaRegistroTablet({
             <button
               type="button"
               style={{ ...ui.btnPrimary, minHeight: 56, fontSize: '1.1rem', marginTop: 8 }}
-              disabled={!proveedorNombre.trim() || !insumoId}
+              disabled={!puedeSeguirSinOc}
               onClick={() => setPaso(PASO.CANTIDAD)}
             >
               Siguiente
@@ -664,7 +838,7 @@ export default function EntradaRegistroTablet({
             <button
               type="button"
               data-testid="entrada-tablet-foto"
-              style={btnGiant('#0077B6')}
+              style={btnHome('#0077B6')}
               disabled={busy}
               onClick={() => camRef.current?.click()}
             >
@@ -721,7 +895,7 @@ export default function EntradaRegistroTablet({
             <button
               type="button"
               data-testid="entrada-tablet-guardar"
-              style={btnGiant('#16a34a')}
+              style={btnHome('#16a34a')}
               disabled={busy}
               onClick={() => { void guardar() }}
             >
