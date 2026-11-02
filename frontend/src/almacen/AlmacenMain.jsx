@@ -4,7 +4,6 @@ import { useModulo } from '../context/ModuloContext'
 import SeccionCatalogoInsumos from '../admin/SeccionCatalogoInsumos'
 import EntradasPanel from './EntradasPanel'
 import InventarioPanel from './InventarioPanel'
-import SalidasPanel from './SalidasPanel'
 import ResumenProveedoresPanel from './ResumenProveedoresPanel'
 import SolicitudesPanel from './SolicitudesPanel'
 import { esCargoAdministrador, puedeCrearSolicitudAlmacen } from './almacenPermisos'
@@ -19,8 +18,8 @@ import {
 const TABS = [
   { id: 'solicitudes', label: 'Solicitudes', icon: '📋', ayuda: 'Crear, consultar y revisar solicitudes de materiales.', ambito: 'almacen' },
   { id: 'resumen', label: 'Resumen', icon: '🏷️', ayuda: 'Ver las líneas por proveedor, sin moverlas de su solicitud.', ambito: 'almacen' },
-  { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso de material contra OC.', ambito: 'entsal' },
-  { id: 'salidas', label: 'Salidas', icon: '📤', ayuda: 'Despachar material hacia obra contra entradas por PK-ID.', ambito: 'entsal' },
+  { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso / salida de material (Llegó / Salió).', ambito: 'entsal' },
+  // Tab Salidas retirado: funcionalidad en popup «Salió material» (Entradas → Registrar).
   { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Capítulo → Ítem → Insumos: valores financieros y rentabilidad.', ambito: 'almacen' },
 ]
 
@@ -34,6 +33,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [refreshSignal, setRefreshSignal] = useState(0)
+  const [salioMaterialRequest, setSalioMaterialRequest] = useState(null)
   const refreshPendingRef = useRef(false)
 
   const catalogoPerms = useMemo(() => ({
@@ -135,7 +135,19 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   }), [puedeVerEntsal, puedeVerSolicitudesInventario])
 
   // Tab / vista inicial según permisos (sin mezclar ámbitos).
+  // Accesos legacy a Tab Salidas → Entradas + popup historial «Salió material».
   useEffect(() => {
+    if (tab === 'salidas') {
+      if (puedeVerEntsal) {
+        setTab('entradas')
+        setSalioMaterialRequest({ mode: 'historial', ts: Date.now() })
+      } else if (visibleTabs.length) {
+        setTab(visibleTabs[0].id)
+      } else {
+        setTab(null)
+      }
+      return
+    }
     if (visibleTabs.length) {
       if (!tab || !visibleTabs.some((tb) => tb.id === tab)) {
         setTab(visibleTabs[0].id)
@@ -146,7 +158,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
       setVistaCatalogo(true)
       setTab(null)
     }
-  }, [visibleTabs, tab, puedeVerCatalogo])
+  }, [visibleTabs, tab, puedeVerCatalogo, puedeVerEntsal])
 
   const cssVars = useMemo(() => buildAlmacenCssVars(t), [t])
 
@@ -319,16 +331,9 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           token={token}
           refreshSignal={refreshSignal}
           onDataLoaded={onDataLoaded}
-        />
-      )}
-      {tab === 'salidas' && puedeVerEntsal && (
-        <SalidasPanel
-          permisos={entsalPerms}
-          t={t}
-          token={token}
-          refreshSignal={refreshSignal}
-          onDataLoaded={onDataLoaded}
           onSalidaMutated={bumpRelatedPanels}
+          openSalioMaterialRequest={salioMaterialRequest}
+          onSalioMaterialRequestHandled={() => setSalioMaterialRequest(null)}
         />
       )}
       {tab === 'inventario' && puedeVerSolicitudesInventario && (

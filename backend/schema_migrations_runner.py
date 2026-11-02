@@ -45,6 +45,7 @@ CRITICAL_MIGRATIONS = (
     "20261026200000_almacen_oc_multi_proveedor_unique.sql",
     "20261030120000_almacen_entrada_por_revisar.sql",
     "20261102180000_almacen_entrada_foto_material.sql",
+    "20261102190000_almacen_salida_por_revisar.sql",
 )
 
 _ENSURE_TABLE_SQL = """

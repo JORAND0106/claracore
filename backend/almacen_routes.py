@@ -110,7 +110,10 @@ from almacen_service import (
     eliminar_solicitud,
     eliminar_solicitud_desarrollador,
     update_salida_cantidad,
+    entradas_disponibles,
     entradas_disponibles_por_pk,
+    completar_revision_salida,
+    count_salidas_por_revisar,
     enviar_solicitud,
     _fetch_solicitud_head,
     get_config,
@@ -2410,6 +2413,14 @@ def route_entradas_disponibles_por_pk(
         raise _http_value_error(exc) from exc
 
 
+@router.get("/{contrato_id}/entradas/disponibles")
+def route_entradas_disponibles(contrato_id: int, current_user=Depends(get_current_user)):
+    """Líneas con saldo despachable (material-first / Salió material)."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    return entradas_disponibles(contrato_id)
+
+
 @router.get("/{contrato_id}/entradas")
 def route_list_entradas(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
@@ -2475,6 +2486,20 @@ def route_get_entrada(contrato_id: int, entrada_id: int, current_user=Depends(ge
         return get_entrada(contrato_id, entrada_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+class CompletarRevisionSalidaBody(BaseModel):
+    receptor_usuario_id: Optional[int] = None
+    pk_id: Optional[str] = None
+    pk_id_id: Optional[int] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    abscisa_inicial: Optional[str] = None
+    abscisa_final: Optional[str] = None
+    limpiar_marca: Optional[bool] = None
+    quitar_marca: Optional[bool] = None
+    confirmar: Optional[bool] = None
+    forzar_limpiar: Optional[bool] = None
 
 
 class CompletarRevisionEntradaBody(BaseModel):
@@ -2731,9 +2756,9 @@ class SalidaItemBody(BaseModel):
 
 
 class SalidaCreateBody(BaseModel):
-    receptor_usuario_id: int
+    receptor_usuario_id: Optional[int] = None
     fecha_hora_salida: Optional[str] = None
-    pk_id: str = Field(..., min_length=1)
+    pk_id: Optional[str] = None
     pk_id_id: Optional[int] = None
     tramo: Optional[str] = None
     costado: Optional[str] = None
@@ -2768,6 +2793,58 @@ def route_list_salidas(contrato_id: int, current_user=Depends(get_current_user))
     _check_contrato(current_user, contrato_id)
     require_lectura_entradas_salidas(current_user)
     return list_salidas(contrato_id)
+
+
+@router.get("/{contrato_id}/salidas/por-revisar/count")
+def route_count_salidas_por_revisar(contrato_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    return {"count": count_salidas_por_revisar(contrato_id)}
+
+
+@router.post("/{contrato_id}/salidas/{salida_id}/completar-revision")
+def route_completar_revision_salida(
+    contrato_id: int,
+    salida_id: int,
+    body: CompletarRevisionSalidaBody,
+    current_user=Depends(get_current_user),
+):
+    """Completa una salida «por revisar». Exige Validar en Entradas y Salidas."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "validar")
+    try:
+        prev = get_salida(contrato_id, salida_id)
+        result = completar_revision_salida(
+            contrato_id,
+            salida_id,
+            _uid(current_user),
+            body.model_dump(exclude_none=True),
+        )
+        log_almacen(
+            current_user,
+            "COMPLETAR_REVISION_SALIDA",
+            "salida",
+            salida_id,
+            {
+                "receptor_usuario_id": body.receptor_usuario_id,
+                "pk_id": body.pk_id,
+            },
+            valor_anterior={
+                "por_revisar": prev.get("por_revisar"),
+                "por_revisar_motivos": prev.get("por_revisar_motivos"),
+                "receptor_usuario_id": prev.get("receptor_usuario_id"),
+                "pk_id": prev.get("pk_id"),
+            },
+            valor_nuevo={
+                "por_revisar": result.get("por_revisar"),
+                "por_revisar_motivos": result.get("por_revisar_motivos"),
+                "receptor_usuario_id": result.get("receptor_usuario_id"),
+                "pk_id": result.get("pk_id"),
+            },
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.get("/{contrato_id}/salidas/devolvibles-por-pk")

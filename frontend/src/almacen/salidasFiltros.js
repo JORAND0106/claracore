@@ -1,4 +1,4 @@
-import { countActiveFilters, includesTxt, inDateRange } from './almacenFiltrosShared.js'
+import { countActiveFilters, includesTxt, inDateRange, normTxt } from './almacenFiltrosShared.js'
 
 export const EMPTY_SALIDAS_FILTROS = {
   fecha_desde: '',
@@ -10,6 +10,8 @@ export const EMPTY_SALIDAS_FILTROS = {
   despachador: '',
   con_devolucion: '', // '' | 'si' | 'no'
   numero_salida: '',
+  por_revisar: '', // '' | 'si' | 'no'
+  q: '', // búsqueda por palabra clave (historial popup)
 }
 
 export function countSalidasFiltrosActivos(filtros) {
@@ -51,6 +53,27 @@ export function matchSalidaFiltros(row, filtros) {
   if (f.con_devolucion === 'no' && tieneDev) return false
 
   if (f.numero_salida && !includesTxt(textoNumeroSalida(row), f.numero_salida)) return false
+
+  if (f.por_revisar === 'si') {
+    if (!row?.por_revisar) return false
+  } else if (f.por_revisar === 'no') {
+    if (row?.por_revisar) return false
+  }
+
+  if (f.q) {
+    const blob = normTxt([
+      textoNumeroSalida(row),
+      row?.pk_id,
+      row?.material_descripcion,
+      row?.numero_oc,
+      row?.receptor_nombre,
+      row?.despachador_nombre,
+      row?.por_revisar_motivos,
+      row?.observaciones,
+    ].filter(Boolean).join(' '))
+    const terms = normTxt(f.q).split(/\s+/).filter(Boolean)
+    if (terms.some((t) => !blob.includes(t))) return false
+  }
 
   return true
 }

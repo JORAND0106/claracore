@@ -53,4 +53,27 @@ describe('filtros salidas', () => {
       material: 'cemento',
     }).length, 0)
   })
+
+  it('filtra por revisar y palabra clave', () => {
+    assert.equal(matchSalidaFiltros({ ...base, por_revisar: true }, {
+      ...EMPTY_SALIDAS_FILTROS,
+      por_revisar: 'si',
+    }), true)
+    assert.equal(matchSalidaFiltros(base, {
+      ...EMPTY_SALIDAS_FILTROS,
+      por_revisar: 'si',
+    }), false)
+    assert.equal(matchSalidaFiltros(base, {
+      ...EMPTY_SALIDAS_FILTROS,
+      q: 'grava sofia',
+    }), true)
+    assert.equal(matchSalidaFiltros(base, {
+      ...EMPTY_SALIDAS_FILTROS,
+      q: 'Luis',
+    }), true)
+    assert.equal(matchSalidaFiltros(base, {
+      ...EMPTY_SALIDAS_FILTROS,
+      q: 'asfalto',
+    }), false)
+  })
 })
