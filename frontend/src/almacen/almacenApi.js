@@ -631,6 +631,11 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       return data
     },
 
+    listEntradaSoportesGaleria: (tipo = 'remision') => {
+      const q = new URLSearchParams({ tipo: String(tipo || 'remision') })
+      return fetch(`${base}/entradas/soportes-galeria?${q}`, { headers: authHeaders() }).then(parseJson)
+    },
+
     checkEntradaNumeroRemision: async ({ numeroDocumento, proveedorId, proveedorNombre } = {}) => {
       const fd = new FormData()
       fd.append('numero_documento', String(numeroDocumento || '').trim())

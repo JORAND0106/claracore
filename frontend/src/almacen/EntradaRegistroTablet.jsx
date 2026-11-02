@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { sha256Hex } from '../comprimirImagen'
 import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
+import EntradaSoporteGaleriaModal from './EntradaSoporteGaleriaModal'
 import EntradaSoportePicker from './EntradaSoportePicker'
 import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import {
@@ -174,6 +175,7 @@ export default function EntradaRegistroTablet({
   const [pasteHint, setPasteHint] = useState('')
   const [numeroRemision, setNumeroRemision] = useState('')
   const [remisionDupHint, setRemisionDupHint] = useState('')
+  const [galeriaKind, setGaleriaKind] = useState(null) // 'remision' | 'material' | null
 
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
@@ -349,6 +351,7 @@ export default function EntradaRegistroTablet({
     setPasteHint('')
     setNumeroRemision('')
     setRemisionDupHint('')
+    setGaleriaKind(null)
   }
 
   const elegirTipo = (t) => {
@@ -589,9 +592,9 @@ export default function EntradaRegistroTablet({
 
   const onPasteSoporte = (e) => {
     if (paso !== PASO.CAPTURA || tipo !== 'recibo') return
-    // Si el pegado ocurre dentro de la zona «Pegar aquí», ese handler ya lo procesó.
-    const zone = e.target?.closest?.('[data-testid$="-pegar-zona"]')
-    if (zone) return
+    // Si el pegado ocurre en el control Pegar del soporte, ese handler ya lo procesó.
+    const pegarCtrl = e.target?.closest?.('[data-testid$="-pegar"]')
+    if (pegarCtrl) return
     const f = fileFromClipboardEvent(e)
     if (!f) {
       // Sin archivo: no interferir con pegar texto en inputs (placa, cantidad…).
@@ -867,13 +870,18 @@ export default function EntradaRegistroTablet({
           </button>
         </div>
 
-        <div style={{
-          flex: 1,
-          overflow: 'auto',
-          padding: 16,
-          WebkitOverflowScrolling: 'touch',
-          overscrollBehavior: 'contain',
-        }}
+        <div
+          data-testid="entrada-tablet-body"
+          style={{
+            flex: 1,
+            overflow: paso === PASO.CAPTURA ? 'hidden' : 'auto',
+            padding: paso === PASO.CAPTURA ? 10 : 16,
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehavior: 'contain',
+            display: paso === PASO.CAPTURA ? 'flex' : undefined,
+            flexDirection: paso === PASO.CAPTURA ? 'column' : undefined,
+            minHeight: 0,
+          }}
         >
           {error && (
             <div data-testid="entrada-tablet-error" style={{ color: 'var(--cc-almacen-danger-text)', marginBottom: 12, fontWeight: 600 }}>{error}</div>
@@ -1160,20 +1168,35 @@ export default function EntradaRegistroTablet({
           )}
 
           {paso === PASO.CAPTURA && (
-            <div data-testid="entrada-tablet-captura" style={{ display: 'grid', gap: 10, width: '100%' }}>
+            <div
+              data-testid="entrada-tablet-captura"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                width: '100%',
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+              }}
+            >
               {modoMultiOc ? (
-                <div data-testid="entrada-tablet-oc-lineas" style={{ display: 'grid', gap: 8 }}>
-                  <div style={{ fontWeight: 800 }}>
+                <div data-testid="entrada-tablet-oc-lineas" style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, flex: '1 1 auto', maxHeight: 'min(32vh, 240px)' }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', flexShrink: 0 }}>
                     ¿Qué llegó?
                     {ocCard?.numero_oc != null ? ` · OC #${ocCard.numero_oc}` : ''}
+                    <span style={{ fontWeight: 600, color: ui.textMuted, marginLeft: 8 }}>
+                      {lineasResumen.length}/{ocSeleccion.length}
+                    </span>
                   </div>
                   <div
                     className="cc-almacen-table-scroll"
                     style={{
-                      maxHeight: 'min(42vh, 380px)',
+                      flex: 1,
+                      minHeight: 0,
                       overflow: 'auto',
                       border: `1px solid ${ui.borderColor}`,
-                      borderRadius: 10,
+                      borderRadius: 8,
                       WebkitOverflowScrolling: 'touch',
                     }}
                   >
@@ -1194,7 +1217,7 @@ export default function EntradaRegistroTablet({
                               key={h}
                               style={{
                                 border: '1px solid var(--cc-almacen-border)',
-                                padding: '6px 8px',
+                                padding: '4px 6px',
                                 textAlign: h === 'Cantidad' || h === 'Saldo' ? 'right' : 'left',
                                 fontWeight: 800,
                                 whiteSpace: 'nowrap',
@@ -1203,6 +1226,7 @@ export default function EntradaRegistroTablet({
                                 zIndex: 1,
                                 background: 'var(--cc-almacen-sheet-head)',
                                 color: 'var(--cc-almacen-sheet-head-text)',
+                                fontSize: '0.8rem',
                               }}
                             >
                               {h}
@@ -1228,14 +1252,14 @@ export default function EntradaRegistroTablet({
                                 color: 'var(--cc-almacen-text)',
                               }}
                             >
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 4, textAlign: 'center' }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 2, textAlign: 'center' }}>
                                 <button
                                   type="button"
                                   aria-pressed={row.marked}
                                   data-testid="entrada-tablet-oc-check"
                                   style={{
-                                    width: 36,
-                                    height: 36,
+                                    width: 32,
+                                    height: 32,
                                     borderRadius: 6,
                                     border: `2px solid ${row.marked ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-border)'}`,
                                     background: row.marked ? 'var(--cc-almacen-accent)' : 'transparent',
@@ -1248,26 +1272,27 @@ export default function EntradaRegistroTablet({
                                   {row.marked ? '✓' : ''}
                                 </button>
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '2px 4px', fontVariantNumeric: 'tabular-nums', fontSize: '0.8rem' }}>
                                 {codigo || '—'}
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '4px 6px', maxWidth: 220 }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '2px 4px', maxWidth: 200, fontSize: '0.8rem' }}>
                                 {descripcion}
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '4px 6px' }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '2px 4px', fontSize: '0.8rem' }}>
                                 {ins.unidad || ''}
                               </td>
                               <td style={{
                                 border: '1px solid var(--cc-almacen-border)',
-                                padding: '4px 6px',
+                                padding: '2px 4px',
                                 textAlign: 'right',
                                 fontVariantNumeric: 'tabular-nums',
                                 fontWeight: 700,
+                                fontSize: '0.8rem',
                               }}
                               >
                                 {fmtCant(ins.saldo_cantidad)}
                               </td>
-                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 2 }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 1 }}>
                                 <input
                                   ref={(el) => { qtyInputRefs.current[row.key] = el }}
                                   inputMode="decimal"
@@ -1277,11 +1302,11 @@ export default function EntradaRegistroTablet({
                                   style={{
                                     ...ui.input,
                                     width: '100%',
-                                    minWidth: 72,
+                                    minWidth: 64,
                                     boxSizing: 'border-box',
-                                    fontSize: '1.15rem',
+                                    fontSize: '1.05rem',
                                     textAlign: 'right',
-                                    minHeight: 44,
+                                    minHeight: 36,
                                     fontVariantNumeric: 'tabular-nums',
                                     background: supera ? 'var(--cc-almacen-qty-error-bg)' : 'var(--cc-almacen-input-bg)',
                                     color: supera ? 'var(--cc-almacen-qty-error-text)' : 'var(--cc-almacen-text)',
@@ -1298,10 +1323,9 @@ export default function EntradaRegistroTablet({
                                   <div
                                     data-testid="entrada-tablet-qty-error"
                                     style={{
-                                      fontSize: '0.75rem',
+                                      fontSize: '0.7rem',
                                       fontWeight: 700,
                                       color: 'var(--cc-almacen-qty-error-text)',
-                                      marginTop: 2,
                                       textAlign: 'right',
                                     }}
                                   >
@@ -1317,7 +1341,8 @@ export default function EntradaRegistroTablet({
                   </div>
                   <div
                     data-testid="entrada-tablet-oc-total"
-                    style={{ fontWeight: 800, fontSize: '0.95rem', color: ui.textMuted }}
+                    style={{ display: 'none' }}
+                    aria-hidden
                   >
                     Marcadas: {lineasResumen.length} de {ocSeleccion.length}
                   </div>
@@ -1327,17 +1352,18 @@ export default function EntradaRegistroTablet({
                   data-testid="entrada-tablet-captura-fila"
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                    gap: 10,
+                    gridTemplateColumns: 'minmax(120px, 160px) 1fr',
+                    gap: 8,
                     alignItems: 'end',
                     width: '100%',
+                    flexShrink: 0,
                   }}
                 >
-                  <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Cantidad ({insumoUnidad || 'm³'})</div>
+                  <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>Cantidad ({insumoUnidad || 'm³'})</div>
                     <input
                       inputMode="decimal"
-                      style={{ ...inputGiant(ui), fontSize: '1.6rem', textAlign: 'center', minHeight: 52 }}
+                      style={{ ...inputGiant(ui), fontSize: '1.35rem', textAlign: 'center', minHeight: 42 }}
                       value={cantidad}
                       onChange={(e) => setCantidad(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.'))}
                       onKeyDown={onCantidadSimpleKeyDown}
@@ -1345,9 +1371,9 @@ export default function EntradaRegistroTablet({
                       data-testid="entrada-tablet-cantidad"
                     />
                   </div>
-                  <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Material</div>
-                    <div style={{ ...inputGiant(ui), display: 'flex', alignItems: 'center', fontWeight: 700, minHeight: 52 }}>
+                  <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>Material</div>
+                    <div style={{ ...inputGiant(ui), display: 'flex', alignItems: 'center', fontWeight: 700, minHeight: 42, fontSize: '0.95rem' }}>
                       {insumoLabel || '—'}
                     </div>
                   </div>
@@ -1358,49 +1384,50 @@ export default function EntradaRegistroTablet({
                 data-testid="entrada-tablet-captura-fila"
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                  gap: 10,
+                  gridTemplateColumns: 'auto repeat(auto-fit, minmax(110px, 1fr))',
+                  gap: 6,
                   alignItems: 'end',
                   width: '100%',
+                  flexShrink: 0,
                 }}
               >
-                <div style={{ display: 'grid', gap: 4, minWidth: 0, gridColumn: '1 / -1' }}>
-                  <button
-                    type="button"
-                    data-testid="entrada-tablet-domicilio"
-                    aria-pressed={llegadaDomicilio}
-                    style={{
-                      ...ui.btnSecondary,
-                      minHeight: 52,
-                      fontWeight: 800,
-                      justifyContent: 'flex-start',
-                      gap: 10,
-                      background: llegadaDomicilio ? 'var(--cc-almacen-accent-soft)' : undefined,
-                      borderColor: llegadaDomicilio ? 'var(--cc-almacen-accent)' : undefined,
-                    }}
-                    onClick={() => {
-                      setLlegadaDomicilio((v) => {
-                        const next = !v
-                        if (next) {
-                          setPlaca('')
-                          setConductor('')
-                          setPlacaOpts([])
-                          setVehiculoNuevo(false)
-                        }
-                        return next
-                      })
-                    }}
-                  >
-                    <span style={{ fontSize: '1.35rem' }} aria-hidden>🏠</span>
-                    {llegadaDomicilio ? 'Llegó por domicilio ✓' : 'Llegó por domicilio'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  data-testid="entrada-tablet-domicilio"
+                  aria-pressed={llegadaDomicilio}
+                  style={{
+                    ...ui.btnSecondary,
+                    minHeight: 42,
+                    fontWeight: 800,
+                    justifyContent: 'center',
+                    gap: 6,
+                    padding: '6px 10px',
+                    fontSize: '0.85rem',
+                    background: llegadaDomicilio ? 'var(--cc-almacen-accent-soft)' : undefined,
+                    borderColor: llegadaDomicilio ? 'var(--cc-almacen-accent)' : undefined,
+                  }}
+                  onClick={() => {
+                    setLlegadaDomicilio((v) => {
+                      const next = !v
+                      if (next) {
+                        setPlaca('')
+                        setConductor('')
+                        setPlacaOpts([])
+                        setVehiculoNuevo(false)
+                      }
+                      return next
+                    })
+                  }}
+                >
+                  <span aria-hidden>🏠</span>
+                  {llegadaDomicilio ? 'Domicilio ✓' : 'Domicilio'}
+                </button>
                 {!llegadaDomicilio && (
                   <>
-                    <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Placa <span style={{ fontWeight: 500, color: ui.textMuted }}>(opc.)</span></div>
+                    <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.75rem', color: ui.textMuted }}>Placa</div>
                       <input
-                        style={{ ...inputGiant(ui), textTransform: 'uppercase', letterSpacing: 2, minHeight: 52 }}
+                        style={{ ...inputGiant(ui), textTransform: 'uppercase', letterSpacing: 1, minHeight: 40, fontSize: '1rem' }}
                         value={placa}
                         onChange={(e) => { void onPlacaChange(e.target.value) }}
                         placeholder="AAA-000"
@@ -1408,10 +1435,10 @@ export default function EntradaRegistroTablet({
                         autoCapitalize="characters"
                       />
                     </div>
-                    <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Conductor <span style={{ fontWeight: 500, color: ui.textMuted }}>(opc.)</span></div>
+                    <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.75rem', color: ui.textMuted }}>Conductor</div>
                       <input
-                        style={{ ...inputGiant(ui), minHeight: 52 }}
+                        style={{ ...inputGiant(ui), minHeight: 40, fontSize: '1rem' }}
                         value={conductor}
                         onChange={(e) => {
                           setConductor(e.target.value)
@@ -1423,8 +1450,8 @@ export default function EntradaRegistroTablet({
                     </div>
                   </>
                 )}
-                <div style={{ display: 'grid', gap: 4, minWidth: 0 }} data-testid="entrada-tablet-mapa">
-                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Sector</div>
+                <div style={{ display: 'grid', gap: 2, minWidth: 0 }} data-testid="entrada-tablet-mapa">
+                  <div style={{ fontWeight: 700, fontSize: '0.75rem', color: ui.textMuted }}>Sector</div>
                   <AlmacenPkMapaSelector
                     t={theme || ui}
                     token={token}
@@ -1451,126 +1478,54 @@ export default function EntradaRegistroTablet({
               {superaSaldo && (
                 <div
                   data-testid="entrada-tablet-supera-saldo"
-                  style={{ ...estiloAvisoAlmacen(contraste, 'danger'), fontWeight: 700 }}
+                  style={{ ...estiloAvisoAlmacen(contraste, 'danger'), fontWeight: 700, fontSize: '0.85rem', flexShrink: 0 }}
                 >
-                  Cantidad mayor al saldo de la OC. Corrija para continuar.
+                  Cantidad mayor al saldo de la OC.
                 </div>
               )}
               {!llegadaDomicilio && vehiculoNuevo && placaValida(placa) && (
-                <div style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700 }}>Vehículo nuevo · por revisar</div>
+                <div style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>Vehículo nuevo · por revisar</div>
               )}
               {!llegadaDomicilio && placa.trim() && !placaValida(placa) && (
-                <div style={{ color: 'var(--cc-almacen-danger-text)', fontWeight: 700 }}>Placa incompleta (AAA-000)</div>
+                <div style={{ color: 'var(--cc-almacen-danger-text)', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>Placa incompleta (AAA-000)</div>
               )}
               {!llegadaDomicilio && placaOpts.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {placaOpts.slice(0, 5).map((r) => (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flexShrink: 0 }}>
+                  {placaOpts.slice(0, 4).map((r) => (
                     <button
                       key={r.placa}
                       type="button"
-                      style={{ ...ui.btnSecondary, minHeight: 40 }}
+                      style={{ ...ui.btnSecondary, minHeight: 34, fontSize: '0.8rem' }}
                       onClick={() => {
                         setPlaca(formatPlacaInput(r.placa))
                         setConductor(formatNombrePropio(r.nombre))
                         setVehiculoNuevo(false)
                       }}
                     >
-                      🚛 {formatPlacaInput(r.placa)} · {formatNombrePropio(r.nombre)}
+                      🚛 {formatPlacaInput(r.placa)}
                     </button>
                   ))}
                 </div>
               )}
 
-              <div
-                data-testid="entrada-tablet-numero-remision-wrap"
-                style={{
-                  display: 'grid',
-                  gap: 6,
-                  border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-border)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
-                  borderRadius: 12,
-                  padding: 12,
-                  background: 'var(--cc-almacen-input-bg)',
-                }}
-              >
-                <label
-                  htmlFor="entrada-tablet-numero-remision"
-                  style={{
-                    fontWeight: 800,
-                    fontSize: '1.05rem',
-                    color: 'var(--cc-almacen-text)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                  }}
-                >
-                  <span aria-hidden style={{ fontSize: '1.35rem' }}>🔢</span>
-                  N.º de remisión
-                  <span style={{ fontWeight: 500, color: 'var(--cc-almacen-text-muted)', fontSize: '0.9rem' }}>
-                    (obligatorio)
-                  </span>
-                </label>
-                <input
-                  id="entrada-tablet-numero-remision"
-                  ref={numeroRemisionRef}
-                  data-testid="entrada-tablet-numero-remision"
-                  autoComplete="off"
-                  autoCapitalize="characters"
-                  inputMode="text"
-                  placeholder="Ej. REM-123456"
-                  aria-required="true"
-                  aria-invalid={!numeroRemisionListo || undefined}
-                  value={numeroRemision}
-                  onChange={(e) => onNumeroRemisionChange(e.target.value)}
-                  onFocus={(e) => {
-                    try {
-                      e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })
-                    } catch { /* ignore */ }
-                  }}
-                  onKeyDown={onNumeroRemisionKeyDown}
-                  style={{
-                    ...inputGiant(ui),
-                    fontSize: '1.45rem',
-                    minHeight: 56,
-                    letterSpacing: 1,
-                    textTransform: 'uppercase',
-                    fontWeight: 800,
-                    border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
-                    background: 'var(--cc-almacen-bg-card)',
-                    color: 'var(--cc-almacen-text)',
-                  }}
-                />
-                {!numeroRemisionListo ? (
-                  <div
-                    data-testid="entrada-tablet-numero-remision-falta"
-                    style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.9rem' }}
-                  >
-                    Falta el número de remisión
-                  </div>
-                ) : (
-                  <div style={{ color: 'var(--cc-almacen-ok-text, #15803d)', fontWeight: 700, fontSize: '0.85rem' }}>
-                    N.º listo
-                  </div>
-                )}
-                {remisionDupHint && (
-                  <div
-                    data-testid="entrada-tablet-numero-remision-dup"
-                    style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700, fontSize: '0.9rem' }}
-                  >
-                    {remisionDupHint}
-                  </div>
-                )}
-              </div>
-
-              <div style={{ fontWeight: 800, marginTop: 2 }}>Soportes</div>
               {pasteHint && (
                 <div
                   data-testid="entrada-tablet-paste-hint"
-                  style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 700, fontSize: '0.9rem' }}
+                  style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}
                 >
                   {pasteHint}
                 </div>
               )}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {remisionDupHint && (
+                <div
+                  data-testid="entrada-tablet-numero-remision-dup"
+                  style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}
+                >
+                  {remisionDupHint}
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gap: 6, flexShrink: 0 }}>
                 <EntradaSoportePicker
                   kind="remision"
                   file={fotoRemision}
@@ -1580,8 +1535,57 @@ export default function EntradaRegistroTablet({
                   onSelect={setSoporteFocus}
                   onPickFile={(e) => { void takeSoporte('remision', e) }}
                   onPasteFile={(f, msg) => { onPasteEnSoporte('remision', f, msg) }}
+                  onOpenGaleriaPlataforma={() => setGaleriaKind('remision')}
                   labelReady="Remisión ✓"
-                  labelEmpty="Falta la remisión"
+                  labelEmpty="Falta"
+                  leading={(
+                    <div data-testid="entrada-tablet-numero-remision-wrap" style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                      <label
+                        htmlFor="entrada-tablet-numero-remision"
+                        style={{ fontWeight: 800, fontSize: '0.72rem', color: 'var(--cc-almacen-text)' }}
+                      >
+                        🔢 N.º remisión *
+                      </label>
+                      <input
+                        id="entrada-tablet-numero-remision"
+                        ref={numeroRemisionRef}
+                        data-testid="entrada-tablet-numero-remision"
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                        inputMode="text"
+                        placeholder="REM-123"
+                        aria-required="true"
+                        aria-invalid={!numeroRemisionListo || undefined}
+                        value={numeroRemision}
+                        onChange={(e) => onNumeroRemisionChange(e.target.value)}
+                        onFocus={(e) => {
+                          try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { /* ignore */ }
+                        }}
+                        onKeyDown={onNumeroRemisionKeyDown}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          ...inputGiant(ui),
+                          fontSize: '1.05rem',
+                          minHeight: 40,
+                          letterSpacing: 0.5,
+                          textTransform: 'uppercase',
+                          fontWeight: 800,
+                          border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
+                          background: 'var(--cc-almacen-bg-card)',
+                          color: 'var(--cc-almacen-text)',
+                          padding: '6px 8px',
+                        }}
+                      />
+                      {!numeroRemisionListo && (
+                        <div
+                          data-testid="entrada-tablet-numero-remision-falta"
+                          style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.68rem' }}
+                        >
+                          Falta N.º
+                        </div>
+                      )}
+                    </div>
+                  )}
                 />
                 <EntradaSoportePicker
                   kind="material"
@@ -1592,8 +1596,9 @@ export default function EntradaRegistroTablet({
                   onSelect={setSoporteFocus}
                   onPickFile={(e) => { void takeSoporte('material', e) }}
                   onPasteFile={(f, msg) => { onPasteEnSoporte('material', f, msg) }}
+                  onOpenGaleriaPlataforma={() => setGaleriaKind('material')}
                   labelReady="Descargue ✓"
-                  labelEmpty="Falta la foto del descargue"
+                  labelEmpty="Falta"
                 />
               </div>
 
@@ -1601,21 +1606,28 @@ export default function EntradaRegistroTablet({
                 ref={continuarCapturaRef}
                 type="button"
                 data-testid="entrada-tablet-captura-siguiente"
-                style={{ ...ui.btnPrimary, minHeight: 52, fontSize: '1.1rem' }}
+                style={{ ...ui.btnPrimary, minHeight: 44, fontSize: '1rem', flexShrink: 0 }}
                 disabled={!capturaLista || busy}
                 onClick={() => setPaso(PASO.CONFIRMAR)}
               >
                 Revisar y confirmar
               </button>
-              {!capturaLista && (
-                <div style={{ color: ui.textMuted, fontSize: '0.9rem' }}>
-                  {modoMultiOc
-                    ? 'Escriba cantidades (Enter/Tab → N.º remisión), N.º de remisión, archivo de remisión y foto del descargue. Placa y conductor son opcionales.'
-                    : 'Complete cantidad, N.º de remisión, archivo de remisión y foto del descargue. Placa y conductor son opcionales.'}
-                </div>
-              )}
             </div>
           )}
+
+          <EntradaSoporteGaleriaModal
+            open={Boolean(galeriaKind)}
+            kind={galeriaKind || 'remision'}
+            contraste={contraste}
+            onClose={() => setGaleriaKind(null)}
+            onPickUsed={(codigo) => {
+              setGaleriaKind(null)
+              setError(
+                `Esa imagen ya se usó en la entrada ${codigo}. `
+                + 'Cargue otra con Cámara, Archivo o Pegar.',
+              )
+            }}
+          />
 
           {paso === PASO.CONFIRMAR && tipo === 'recibo' && (
             <div data-testid="entrada-tablet-resumen" style={{ display: 'grid', gap: 12, width: '100%', maxWidth: 900, margin: '0 auto' }}>
