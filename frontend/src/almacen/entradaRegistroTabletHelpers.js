@@ -4,7 +4,7 @@ export const PASO = {
   INICIO: 'inicio',
   OC: 'oc',
   SIN_OC: 'sin_oc',
-  /** Recibo: cantidad + placa + conductor + 2 fotos en un solo espacio */
+  /** Recibo: insumos marcados + cantidades + transportador/domicilio + 2 fotos */
   CAPTURA: 'captura',
   CONFIRMAR: 'confirmar',
   // Disposición («Salió material») — pasos previos sin cambio de alcance
@@ -169,4 +169,66 @@ export function formatPlacaInput(raw) {
 
 export function placaValida(placa) {
   return /^[A-Z]{3}-\d{3}$/.test(String(placa || ''))
+}
+
+/**
+ * Inicializa el estado de selección de insumos de una OC.
+ * `premarcarKey`: clave del insumo a marcar al entrar por búsqueda de línea.
+ */
+export function initOcLineasSeleccion(insumos, premarcarKey = null) {
+  const list = Array.isArray(insumos) ? insumos : []
+  return list.map((ins) => {
+    const key = ins.key || `${ins.insumo_id}-${ins.material_descripcion}`
+    const marked = premarcarKey != null && String(key) === String(premarcarKey)
+    return {
+      key,
+      marked,
+      cantidad: '',
+      insumo: ins,
+    }
+  })
+}
+
+/** Ítems API a partir de la selección (solo marcados con cantidad > 0). */
+export function buildItemsFromOcSeleccion(seleccion) {
+  const out = []
+  for (const row of Array.isArray(seleccion) ? seleccion : []) {
+    if (!row?.marked) continue
+    const cant = Number(String(row.cantidad || '').replace(',', '.'))
+    if (!(cant > 0)) continue
+    const ins = row.insumo || {}
+    if (Array.isArray(ins.lineas) && ins.lineas.length) {
+      const parts = distributeCantidadOverLineas(ins.lineas, cant)
+      if (parts.length) {
+        out.push(...parts)
+        continue
+      }
+      if (ins.lineas[0]?.orden_compra_item_id) {
+        out.push({
+          orden_compra_item_id: ins.lineas[0].orden_compra_item_id,
+          cantidad_recibida: cant,
+        })
+        continue
+      }
+    }
+    out.push({ cantidad_recibida: cant })
+  }
+  return out
+}
+
+export function resumenLineasSeleccion(seleccion) {
+  return (Array.isArray(seleccion) ? seleccion : [])
+    .filter((row) => row?.marked && Number(String(row.cantidad || '').replace(',', '.')) > 0)
+    .map((row) => {
+      const cant = Number(String(row.cantidad || '').replace(',', '.'))
+      const ins = row.insumo || {}
+      return {
+        key: row.key,
+        material_descripcion: ins.material_descripcion || 'Material',
+        unidad: ins.unidad || '',
+        cantidad: cant,
+        saldo: Number(ins.saldo_cantidad) || 0,
+        supera: cant > (Number(ins.saldo_cantidad) || 0) + 0.0001,
+      }
+    })
 }

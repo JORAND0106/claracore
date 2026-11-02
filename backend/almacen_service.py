@@ -8206,6 +8206,7 @@ def _generar_pdf_pos_entrada(
     cantidad: float,
     user_id: int,
     tipo: str,
+    lineas: Optional[List[dict]] = None,
 ) -> None:
     from almacen_disposicion_pdf import generar_pdf_despachador_pos
 
@@ -8243,6 +8244,8 @@ def _generar_pdf_pos_entrada(
             prov_name = pr[0].get("razon_social") or "—"
     elif oc_item.get("proveedor_nombre"):
         prov_name = oc_item.get("proveedor_nombre") or "—"
+    elif entrada_row.get("proveedor_nombre_texto"):
+        prov_name = entrada_row.get("proveedor_nombre_texto") or "—"
     ts_rows = (
         sb.table("almacen_entrada")
         .select("created_at")
@@ -8253,7 +8256,17 @@ def _generar_pdf_pos_entrada(
         or []
     )
     created_at = ts_rows[0].get("created_at") if ts_rows else None
-    pdf_ctx = {**entrada_row, "cantidad_recibida": cantidad, "created_at": created_at}
+    pdf_lineas = lineas or [{
+        "material_descripcion": oc_item.get("material_descripcion") or "—",
+        "unidad": oc_item.get("unidad") or "",
+        "cantidad_recibida": cantidad,
+    }]
+    total_qty = sum(_to_float(ln.get("cantidad_recibida")) for ln in pdf_lineas) or cantidad
+    pdf_ctx = {
+        **entrada_row,
+        "cantidad_recibida": total_qty,
+        "created_at": created_at,
+    }
     pdf_bytes = generar_pdf_despachador_pos(
         tipo,
         contrato_pdf,
@@ -8263,6 +8276,7 @@ def _generar_pdf_pos_entrada(
         prov_name,
         u_name,
         oc_item.get("unidad") or "",
+        lineas=pdf_lineas,
     )
     t = (tipo or "disposicion").strip().lower()
     doc_ref = entrada_row.get("numero_documento") or entrada_id
@@ -8413,6 +8427,14 @@ def _regenerar_pdf_pos_entrada(contrato_id: int, entrada_id: int, ent: Optional[
     material = oci.get("material_descripcion") or first.get("material_descripcion") or "—"
     unidad = oci.get("unidad") or first.get("unidad") or ""
     cantidad = _to_float(first.get("cantidad_recibida") or ent.get("cantidad_recibida_total"))
+    pdf_lineas = []
+    for it in items:
+        oci_i = it.get("almacen_orden_compra_item") or {}
+        pdf_lineas.append({
+            "material_descripcion": oci_i.get("material_descripcion") or it.get("material_descripcion") or "—",
+            "unidad": oci_i.get("unidad") or it.get("unidad") or "",
+            "cantidad_recibida": _to_float(it.get("cantidad_recibida")),
+        })
     oc = ent.get("almacen_orden_compra") or {}
     if ent.get("orden_compra_id") and not oc.get("numero_oc"):
         try:
@@ -8434,6 +8456,7 @@ def _regenerar_pdf_pos_entrada(contrato_id: int, entrada_id: int, ent: Optional[
         cantidad,
         user_id or 0,
         tipo,
+        lineas=pdf_lineas,
     )
 
 
@@ -8597,24 +8620,30 @@ def create_entrada(
         "abscisa_final": (body.get("abscisa_final") or "").strip() or None,
         "placa": (body.get("placa") or "").strip() or None,
         "transportador": (body.get("transportador") or "").strip() or None,
+        "llegada_domicilio": bool(body.get("llegada_domicilio")),
         "alerta_silenciosa_codigo": alerta_codigo,
         "alerta_silenciosa_detalle": alerta_detalle,
         "por_revisar": por_rev["por_revisar"],
         "por_revisar_motivos": por_rev["por_revisar_motivos"],
         "proveedor_nombre_texto": proveedor_nombre_texto,
     }
+    if entrada_row["llegada_domicilio"]:
+        # Domicilio: no exigir ni persistir placa/conductor.
+        entrada_row["placa"] = None
+        entrada_row["transportador"] = None
     try:
         ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
     except Exception as exc:
         # Migración pendiente: guardar sin columnas nuevas.
         col = _pgrst_unknown_column(exc)
-        if col in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto"):
-            for k in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto"):
+        if col in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto", "llegada_domicilio"):
+            for k in ("por_revisar", "por_revisar_motivos", "proveedor_nombre_texto", "llegada_domicilio"):
                 entrada_row.pop(k, None)
             ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
             entrada_row["por_revisar"] = por_rev["por_revisar"]
             entrada_row["por_revisar_motivos"] = por_rev["por_revisar_motivos"]
             entrada_row["proveedor_nombre_texto"] = proveedor_nombre_texto
+            entrada_row["llegada_domicilio"] = bool(body.get("llegada_domicilio"))
         else:
             raise
     if not ent_ins:
@@ -8840,6 +8869,7 @@ def create_entrada(
                     primera_cantidad,
                     user_id,
                     tipo,
+                    lineas=created_items,
                 )
             except Exception as exc:
                 _log.warning("PDF POS entrada %s no generado: %s", entrada_id, exc)

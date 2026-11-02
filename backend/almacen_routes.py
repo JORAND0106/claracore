@@ -2575,6 +2575,7 @@ async def route_create_entrada(
     abscisa_final: Optional[str] = Form(None),
     placa: Optional[str] = Form(None),
     transportador: Optional[str] = Form(None),
+    llegada_domicilio: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
     material_foto: Optional[UploadFile] = File(None),
     current_user=Depends(get_current_user),
@@ -2633,6 +2634,7 @@ async def route_create_entrada(
         "abscisa_final": abscisa_final,
         "placa": placa,
         "transportador": transportador,
+        "llegada_domicilio": str(llegada_domicilio or "").strip().lower() in ("1", "true", "si", "yes"),
     }
     try:
         result = create_entrada(

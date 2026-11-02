@@ -127,8 +127,16 @@ export default function EntradaDetalleModal({
       label: 'Abscisas',
       value: [ent.abscisa_inicial, ent.abscisa_final].filter(Boolean).join(' → ') || '—',
     },
-    { key: 'placa', label: 'Placa', value: ent.placa || '—' },
-    { key: 'trans', label: 'Transportador', value: ent.transportador || '—' },
+    {
+      key: 'placa',
+      label: 'Placa',
+      value: ent.llegada_domicilio ? 'Domicilio' : (ent.placa || '—'),
+    },
+    {
+      key: 'trans',
+      label: 'Transportador',
+      value: ent.llegada_domicilio ? 'Domicilio' : (ent.transportador || '—'),
+    },
     { key: 'user', label: 'Registrado por', value: ent.usuario_nombre || '—' },
   ] : []
 
