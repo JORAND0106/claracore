@@ -321,7 +321,7 @@ export default function EntradaDetalleModal({
 
             {(ent.tiene_remision || ent.tiene_material_foto || ent.remision_nombre || ent.material_foto_nombre) && (
               <div style={{ marginTop: 14, marginBottom: 8 }}>
-                <AlmacenFieldLabel icon="📷" label="Soportes fotográficos" />
+                <AlmacenFieldLabel icon="📷" label="Soportes" />
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                   {(ent.tiene_remision || ent.remision_nombre) && (
                     <a
@@ -331,7 +331,7 @@ export default function EntradaDetalleModal({
                       rel="noreferrer"
                       style={{ ...ui.btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
                     >
-                      📄 Recibo / remisión
+                      📄 Remisión
                     </a>
                   )}
                   {(ent.tiene_material_foto || ent.material_foto_nombre) && (
@@ -342,7 +342,7 @@ export default function EntradaDetalleModal({
                       rel="noreferrer"
                       style={{ ...ui.btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
                     >
-                      🧱 Material descargado
+                      📷 Foto del descargue
                     </a>
                   )}
                 </div>

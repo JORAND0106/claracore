@@ -114,6 +114,7 @@ from almacen_service import (
     entradas_disponibles_por_pk,
     completar_revision_salida,
     count_salidas_por_revisar,
+    lookup_entrada_soporte_hash,
     enviar_solicitud,
     _fetch_solicitud_head,
     get_config,
@@ -2554,6 +2555,37 @@ def route_completar_revision_entrada(
         raise _http_value_error(exc) from exc
 
 
+@router.post("/{contrato_id}/entradas/check-soporte-hash")
+def route_check_entrada_soporte_hash(
+    contrato_id: int,
+    content_hash: str = Form(...),
+    current_user=Depends(get_current_user),
+):
+    """Indica si el SHA-256 ya se usó como remisión o foto de descargue."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    existing = lookup_entrada_soporte_hash(contrato_id, content_hash)
+    if not existing:
+        return {"exists": False}
+    codigo = (existing.get("codigo_entrada") or "").strip()
+    if not codigo and existing.get("entrada_id"):
+        try:
+            ent = get_entrada(contrato_id, int(existing["entrada_id"]), incluir_movimientos=False)
+            codigo = (ent.get("codigo") or "").strip()
+        except Exception:
+            codigo = ""
+    return {
+        "exists": True,
+        "entrada_id": existing.get("entrada_id"),
+        "codigo_entrada": codigo or None,
+        "tipo_soporte": existing.get("tipo_soporte"),
+        "message": (
+            f"Este archivo ya se usó en la entrada {codigo or existing.get('entrada_id')}. "
+            "Cargue otro distinto."
+        ),
+    }
+
+
 @router.post("/{contrato_id}/entradas")
 async def route_create_entrada(
     contrato_id: int,
@@ -2576,6 +2608,8 @@ async def route_create_entrada(
     placa: Optional[str] = Form(None),
     transportador: Optional[str] = Form(None),
     llegada_domicilio: Optional[str] = Form(None),
+    remision_content_hash: Optional[str] = Form(None),
+    material_content_hash: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
     material_foto: Optional[UploadFile] = File(None),
     current_user=Depends(get_current_user),
@@ -2597,7 +2631,7 @@ async def route_create_entrada(
         if len(rem_data) > 300 * 1024:
             raise HTTPException(
                 status_code=400,
-                detail="El soporte de remisión no puede superar 300 KB.",
+                detail="El PDF o archivo de remisión no puede superar 300 KB. Use un archivo más liviano.",
             )
     mat_data = mat_mime = mat_nombre = None
     if material_foto and material_foto.filename:
@@ -2607,14 +2641,14 @@ async def route_create_entrada(
         if len(mat_data) > 300 * 1024:
             raise HTTPException(
                 status_code=400,
-                detail="La foto del material no puede superar 300 KB.",
+                detail="La foto del descargue no puede superar 300 KB.",
             )
-    # Recibo: ambas fotos obligatorias (única excepción a no bloquear).
+    # Recibo: remisión + foto descargue obligatorias (única excepción a no bloquear).
     if tipo_norm == "recibo":
         if not rem_data:
-            raise HTTPException(status_code=400, detail="La foto del recibo (remisión) es obligatoria.")
+            raise HTTPException(status_code=400, detail="La remisión (imagen o PDF) es obligatoria.")
         if not mat_data:
-            raise HTTPException(status_code=400, detail="La foto del material descargado es obligatoria.")
+            raise HTTPException(status_code=400, detail="La foto del descargue es obligatoria.")
     body = {
         "orden_compra_id": orden_compra_id,
         "fecha_entrada": fecha_entrada,
@@ -2635,6 +2669,8 @@ async def route_create_entrada(
         "placa": placa,
         "transportador": transportador,
         "llegada_domicilio": str(llegada_domicilio or "").strip().lower() in ("1", "true", "si", "yes"),
+        "remision_content_hash": (remision_content_hash or "").strip() or None,
+        "material_content_hash": (material_content_hash or "").strip() or None,
     }
     try:
         result = create_entrada(

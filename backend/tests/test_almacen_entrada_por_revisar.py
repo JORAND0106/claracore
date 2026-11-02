@@ -32,8 +32,10 @@ def test_create_entrada_motivos_y_recibo_fotos():
     assert "MOTIVO_SUPERA_SALDO" in src
     # Mensaje legacy de remisión como PDF/foto genérico ya no aplica.
     assert "Adjunte el soporte fotográfico o PDF de la remisión." not in create
-    # Recibo: dos fotos obligatorias (única excepción a no bloquear).
-    assert "material descargado" in create.lower()
+    # Recibo: remisión + foto descargue obligatorias (única excepción a no bloquear).
+    assert "foto del descargue" in create.lower()
+    assert "remisión" in create.lower() or "remision" in create.lower()
+    assert "almacen_entrada_soporte_hash" in src or "_assert_soporte_hash_libre" in create
     assert "def list_ocs_pendientes_tarjeta" in src
     assert "def completar_revision_entrada" in src
 
@@ -57,4 +59,17 @@ def test_ruta_create_recibo_exige_dos_fotos_no_numero():
     assert "Adjunte el soporte fotográfico" not in create
     assert "Indique el número de remisión" not in create
     assert "material_foto" in create
-    assert "material descargado" in create.lower()
+    assert "foto del descargue" in create.lower()
+    assert "check-soporte-hash" in routes
+    assert "remision_content_hash" in create
+    assert "material_content_hash" in create
+
+
+def test_migration_soporte_hash_en_runner():
+    mig = ROOT / "migrations" / "20261102210000_almacen_entrada_soporte_hash.sql"
+    assert mig.is_file()
+    text = mig.read_text(encoding="utf-8")
+    assert "almacen_entrada_soporte_hash" in text
+    assert "content_hash" in text
+    runner = (ROOT / "schema_migrations_runner.py").read_text(encoding="utf-8")
+    assert "20261102210000_almacen_entrada_soporte_hash.sql" in runner
