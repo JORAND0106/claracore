@@ -248,6 +248,35 @@ def _sep() -> str:
     return '<div class="sep-line">&nbsp;</div>'
 
 
+def _lineas_insumos_html(
+    lineas: Optional[Sequence[Dict[str, Any]]],
+    *,
+    insumo_label: str,
+    unidad: str,
+    cantidad: Any,
+) -> str:
+    """Una o varias líneas de insumo en el recibo térmico."""
+    rows = [ln for ln in (lineas or []) if ln]
+    if len(rows) > 1:
+        parts = ['<div style="margin:4px 0 2px;font-weight:700;">Insumos:</div>']
+        for ln in rows:
+            mat = ln.get("material_descripcion") or ln.get("insumo_label") or "—"
+            und = ln.get("unidad") or ""
+            cant = _fmt_cant(ln.get("cantidad_recibida"))
+            parts.append(
+                f'<div style="margin:2px 0;font-size:10.5pt;">'
+                f'• {_esc(mat)}: <b>{cant}{_esc((" " + und) if und else "")}</b>'
+                f"</div>"
+            )
+        return "".join(parts)
+    if rows:
+        mat = rows[0].get("material_descripcion") or insumo_label or "—"
+        und = rows[0].get("unidad") or unidad or ""
+        cant = _fmt_cant(rows[0].get("cantidad_recibida") if rows[0].get("cantidad_recibida") is not None else cantidad)
+        return f'{_row("Insumo:", _esc(mat))}{_cantidad_hero(cant, und)}'
+    return f'{_row("Insumo:", _esc(insumo_label or "—"))}{_cantidad_hero(_fmt_cant(cantidad), unidad)}'
+
+
 def _render_copia_html(
     *,
     copy_label: str,
@@ -260,6 +289,7 @@ def _render_copia_html(
     proveedor_nombre: str,
     usuario_nombre: str,
     unidad: str,
+    lineas: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     numero = entrada.get("numero_documento") or "—"
     oc_num = oc.get("numero_oc") or "—"
@@ -269,13 +299,20 @@ def _render_copia_html(
     costado = entrada.get("costado") or "—"
     abs_ini = entrada.get("abscisa_inicial") or "—"
     abs_fin = entrada.get("abscisa_final") or "—"
-    placa = entrada.get("placa") or "—"
-    transportador = entrada.get("transportador") or "—"
+    domicilio = bool(entrada.get("llegada_domicilio"))
+    placa = "Domicilio" if domicilio else (entrada.get("placa") or "—")
+    transportador = "Domicilio" if domicilio else (entrada.get("transportador") or "—")
     block_cls = "copy-block copy-block-last" if is_last else "copy-block"
     hdr_html = _hdr_contrato_html(contrato)
     icon_html = _copy_icon_html(copy_label)
     admin_html = _administradores_html(contrato)
     fecha_hora = _fmt_fecha_hora(entrada.get("created_at"), entrada.get("fecha_entrada"))
+    insumos_html = _lineas_insumos_html(
+        lineas,
+        insumo_label=insumo_label,
+        unidad=unidad,
+        cantidad=entrada.get("cantidad_recibida"),
+    )
 
     return f"""
 <div class="{block_cls}">
@@ -286,8 +323,7 @@ def _render_copia_html(
   {_sep()}
   {_row("Orden de compra:", f"#{_esc(oc_num)}")}
   {_row("Proveedor:", _esc(proveedor_nombre))}
-  {_row("Insumo:", _esc(insumo_label))}
-  {_cantidad_hero(cant, unidad)}
+  {insumos_html}
   {_sep()}
   {_row("PK / Ubicación:", _esc(pk))}
   {_row("Tramo:", _esc(tramo))}
@@ -312,11 +348,13 @@ def generar_pdf_despachador_pos(
     proveedor_nombre: str,
     usuario_nombre: str,
     unidad: str = "",
+    lineas: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> bytes:
     """Genera PDF térmico 80 mm continuo: alto dinámico según contenido × N copias."""
     copias = _copias_por_tipo(tipo)
     doc_title = _titulo_documento(tipo)
-    copia_alto = _estimate_entrada_copia_alto_mm(contrato)
+    n_lineas = max(1, len(lineas or []))
+    copia_alto = _estimate_entrada_copia_alto_mm(contrato) + max(0, n_lineas - 1) * 8
     blocks = [
         _render_copia_html(
             copy_label=label,
@@ -329,6 +367,7 @@ def generar_pdf_despachador_pos(
             proveedor_nombre=proveedor_nombre,
             usuario_nombre=usuario_nombre,
             unidad=unidad,
+            lineas=lineas,
         )
         for idx, label in enumerate(copias)
     ]
