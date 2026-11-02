@@ -195,7 +195,10 @@ def test_excel_memoria_descripcion_wrap_y_altura_y_periodo():
     assert ws["J3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
     assert ws["A5"].value == f"DESCRIPCIÓN\n{desc}"
     assert ws["A5"].alignment.wrap_text is True
-    assert (ws.row_dimensions[5].height or 0) >= 34
+    assert ws["A5"].alignment.vertical == "center"
+    # Altura exacta: etiqueta + cuerpo (sin holgura de +8 pt).
+    assert (ws.row_dimensions[5].height or 0) >= 15
+    assert (ws.row_dimensions[5].height or 0) == inf._excel_row_height_desc_banda_completa(desc)
 
 
 def test_excel_row_height_crece_con_descripcion_larga():

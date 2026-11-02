@@ -127,7 +127,10 @@ def test_html_encabezado_doble_y_banda_objeto():
         pie_fotos_contexto="Acta RPO 1",
         estilo_formato_codigo="CC-MES-002",
     )
-    assert "2.28cm" in html  # altura doble del encabezado
+    assert "1.20cm" in html  # encabezado institucional compacto
+    assert "2.28cm" not in html
+    assert 'id="firmasFooter"' in html
+    assert "@frame footer" in html
     assert "RESUMEN ACTIVIDADES" in html
     assert "CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)" in html
     assert "CC-MES-002" in html
@@ -199,16 +202,19 @@ def test_excel_encabezado_igual_pdf_y_fila3_objeto():
         "RESUMEN ACTIVIDADES\nCONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)"
     )
     assert ws["J1"].value == "CC-MES-002"
-    assert (ws.row_dimensions[1].height or 0) >= 30
-    assert (ws.row_dimensions[2].height or 0) >= 30
+    assert (ws.row_dimensions[1].height or 0) == 15
+    assert (ws.row_dimensions[2].height or 0) == 15
+    assert ws["A1"].value in (None, "")  # logo real o vacío; nunca «LOGO»
     assert ws["A3"].value == "CONTRATO\nICCU-CTO-1614-2025"
     assert ws["C3"].value == f"OBJETO\n{objeto}"
     assert ws["C3"].alignment.wrap_text is True
+    assert ws["C3"].alignment.vertical == "center"
     assert ws["I3"].value == "ACTA RPO\n1"
     assert ws["J3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
-    assert (ws.row_dimensions[3].height or 0) >= 28
-    assert (ws.row_dimensions[3].height or 0) > 34  # crece por objeto largo
+    assert (ws.row_dimensions[3].height or 0) >= 15
+    assert (ws.row_dimensions[3].height or 0) > 31  # crece por objeto largo
     assert ws["A5"].value == f"DESCRIPCIÓN\n{desc}"
+    assert ws["A5"].alignment.vertical == "center"
 
 
 def test_excel_objeto_altura_crece():
@@ -262,6 +268,7 @@ def test_html_objeto_tambien_en_fotos_y_graficos():
     )
     assert html.count("OBJETO") >= 3
     assert html.count(objeto) >= 3
-    assert html.count("2.28cm") >= 3
+    assert html.count("1.20cm") >= 3
+    assert 'id="firmasFooter"' in html
     assert "REGISTRO FOTOGRÁFICO" in html
     assert "REGISTRO GRÁFICO" in html

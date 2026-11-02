@@ -7135,10 +7135,16 @@ def _acercar_firmas_pie_mes(pdf: bytes) -> bytes:
     """
     import pymupdf
 
+    if not pdf or not isinstance(pdf, (bytes, bytearray)) or bytes(pdf[:4]) != b"%PDF":
+        return pdf
     mm = 72.0 / 25.4
     hueco_max = _CC_MES_FIRMAS_HUECO_MAX_MM * mm
     objetivo = _CC_MES_FIRMAS_HUECO_OBJETIVO_MM * mm
-    src = pymupdf.open(stream=pdf, filetype="pdf")
+    try:
+        src = pymupdf.open(stream=pdf, filetype="pdf")
+    except Exception as exc:
+        _log.warning("acercar firmas pie: PDF no legible (%s)", exc)
+        return pdf
     out = None
     try:
         for i, page in enumerate(src):
@@ -7554,8 +7560,9 @@ def pdf_cc_mes_002_acta(
         aprobo_interventoria_desde_config=True,
         pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
         estilo_formato_codigo=fmt,
+        firmas_pie=True,
     )
-    pdf_bytes = _to_pdf(html)
+    pdf_bytes = _acercar_firmas_pie_mes(_to_pdf(html))
     item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
     fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_{item_safe}.pdf")
     return Response(
@@ -8115,8 +8122,9 @@ def pdf_cc_mes_002_acta_con_sello_firma(
         aprobo_interventoria_desde_config=True,
         pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
         estilo_formato_codigo=fmt,
+        firmas_pie=True,
     )
-    pdf_bytes = _to_pdf(html)
+    pdf_bytes = _acercar_firmas_pie_mes(_to_pdf(html))
     item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
     fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_{item_safe}.pdf")
     return _attachment_pdf_con_pagina_sello_usuario(
@@ -8211,6 +8219,16 @@ def _cc_mes_002_acta_completo_ctx(
     item_bodies: List[str] = []
     item_htmls: List[str] = []
     n_regs = 0
+    # Cuerpos sin firmas; el bloque pie se añade una vez por PDF (ítem o consolidado).
+    firmas_bloque = _html_mem002_bloque_firmas(
+        sub,
+        firma_cfg,
+        elaboro_uri,
+        reviso_uri,
+        aprobo_firma_data_uri=aprobo_uri,
+        aprobo_interventoria_desde_config=True,
+        footer_frame=True,
+    )
     for item_numero in numeros:
         registros = by_item.get(item_numero) or []
         if not registros:
@@ -8232,9 +8250,13 @@ def _cc_mes_002_acta_completo_ctx(
             aprobo_firma_data_uri=aprobo_uri,
             aprobo_interventoria_desde_config=True,
             pie_fotos_contexto=pie,
+            firmas_pie=True,
+            emitir_firmas=False,
         )
         item_bodies.append(inner)
-        item_htmls.append(_wrap_memoria_item_html(inner, estilo_css))
+        item_htmls.append(
+            _wrap_memoria_item_html(inner + firmas_bloque, estilo_css, firmas_pie=True)
+        )
 
     if not item_bodies:
         raise HTTPException(
@@ -8242,13 +8264,13 @@ def _cc_mes_002_acta_completo_ctx(
             detail="No hay registros aprobados por ítem en esta acta",
         )
 
-    # HTML monolítico (compat / single-pass): mismos saltos de página entre ítems.
     joined_parts: List[str] = []
     for i, body in enumerate(item_bodies):
         if i > 0:
             joined_parts.append("<pdf:nextpage />")
         joined_parts.append(body)
-    html_joined = _wrap_memoria_item_html("".join(joined_parts), estilo_css)
+    joined_parts.append(firmas_bloque)
+    html_joined = _wrap_memoria_item_html("".join(joined_parts), estilo_css, firmas_pie=True)
 
     return {
         "contrato": contrato,
@@ -8301,7 +8323,9 @@ def _cc_mes_002_pdf_completo_bytes(ctx: Dict[str, Any]) -> bytes:
             n_items,
             n_regs,
         )
-        return _to_pdf(html_joined if html_joined else item_htmls[0])
+        return _acercar_firmas_pie_mes(
+            _to_pdf(html_joined if html_joined else item_htmls[0])
+        )
 
     _log.info(
         "cc_mes_002 PDF completo por lotes items=%s regs=%s (evita HTML monolítico)",
@@ -8311,7 +8335,7 @@ def _cc_mes_002_pdf_completo_bytes(ctx: Dict[str, Any]) -> bytes:
     partes: List[bytes] = []
     for i, h in enumerate(item_htmls):
         try:
-            partes.append(_to_pdf(h))
+            partes.append(_acercar_firmas_pie_mes(_to_pdf(h)))
         except Exception as e:
             _log.exception("cc_mes_002 PDF ítem %s/%s falló", i + 1, n_items)
             raise RuntimeError(
@@ -12598,82 +12622,112 @@ def _memoria_celda_etiqueta_valor(label: Any, value: Any) -> str:
     return f"{lab}\n{val}"
 
 
+def _excel_count_wrapped_lines(text: Any, chars_per_line: int) -> int:
+    """Número de líneas que ocupará ``text`` con wrap a ``chars_per_line``."""
+    t = "" if text is None else str(text)
+    if not t.strip():
+        return 1
+    cpl = max(int(chars_per_line), 1)
+    lines = 0
+    for para in t.splitlines() or [""]:
+        n = len(para)
+        lines += max(1, (n + cpl - 1) // cpl) if n else 1
+    return max(1, lines)
+
+
 def _excel_row_height_wrapped_text(
     text: Any,
     *,
     chars_per_line: int = 52,
-    line_pt: float = 12.0,
-    min_pt: float = 22.0,
-    max_pt: float = 120.0,
+    line_pt: float = 15.0,
+    min_pt: float = 15.0,
+    max_pt: float = 200.0,
+    padding_pt: float = 1.0,
 ) -> float:
-    """Altura de fila Excel para celda con wrap_text (descripción completa visible).
+    """Altura exacta de fila Excel para celda con wrap_text (celdas combinadas no autoajustan).
 
-    Excel no autoajusta altura en celdas combinadas: hay que fijar ``row_dimensions``.
+    Una línea de contenido → una línea de altura (≈15 pt estándar); sin holgura extra.
     """
-    t = "" if text is None else str(text).strip()
-    if not t:
-        return min_pt
-    lines = 0
-    for para in t.splitlines() or [""]:
-        n = len(para)
-        lines += max(1, (n + max(chars_per_line, 1) - 1) // max(chars_per_line, 1))
-    return float(min(max_pt, max(min_pt, lines * line_pt + 8.0)))
+    lines = _excel_count_wrapped_lines(text, chars_per_line)
+    return float(min(max_pt, max(min_pt, lines * line_pt + padding_pt)))
 
 
 def _excel_row_height_desc_banda_completa(desc: Any) -> float:
-    """Altura fila descripción a ancho completo (A:J), incl. línea de etiqueta DESCRIPCIÓN."""
-    # ~119 de ancho de columnas ≈ ~90–100 caracteres útiles; subestimar chars → altura mayor (segura).
+    """Altura fila descripción A:J (ancho ~119 → ~110 chars/línea), etiqueta + cuerpo."""
     cuerpo = str(desc or "").strip()
     return _excel_row_height_wrapped_text(
         _memoria_celda_etiqueta_valor("DESCRIPCIÓN", cuerpo or "—"),
-        chars_per_line=88,
-        line_pt=13.0,
-        min_pt=34.0,
+        chars_per_line=110,
+        line_pt=15.0,
+        min_pt=15.0,
         max_pt=200.0,
+        padding_pt=1.0,
     )
 
 
 def _excel_row_height_objeto_banda(objeto: Any) -> float:
-    """Altura fila 3 por OBJETO en C:H (~54 de ancho → ~48 chars/línea)."""
+    """Altura fila 3 por OBJETO en C:H (ancho ~54 → ~54 chars/línea)."""
     cuerpo = str(objeto or "").strip()
     return _excel_row_height_wrapped_text(
         _memoria_celda_etiqueta_valor("OBJETO", cuerpo or "—"),
-        chars_per_line=48,
-        line_pt=12.0,
-        min_pt=28.0,
-        max_pt=140.0,
+        chars_per_line=54,
+        line_pt=15.0,
+        min_pt=15.0,
+        max_pt=160.0,
+        padding_pt=1.0,
     )
 
 
-def _excel_try_add_logo_contratista(ws, contrato: Optional[dict], *, anchor: str = "A1", max_h_px: int = 70) -> None:
-    """Inserta logo del contratista en Excel; si falla, deja texto LOGO."""
+def _excel_row_height_observacion(obs: Any) -> float:
+    """Altura fila de detalle por OBSERVACIÓN (columna J, ancho 28)."""
+    return _excel_row_height_wrapped_text(
+        obs or "",
+        chars_per_line=28,
+        line_pt=15.0,
+        min_pt=15.0,
+        max_pt=120.0,
+        padding_pt=1.0,
+    )
+
+
+def _excel_try_add_logo_contratista(ws, contrato: Optional[dict], *, anchor: str = "A1", max_h_px: int = 36) -> None:
+    """Inserta el logo real del contratista en Excel (mismo pipeline que PDF).
+
+    Sin URL o si falla la descarga, deja la celda vacía (no escribe «LOGO»).
+    """
     url = str((contrato or {}).get("logo_contratista") or "").strip()
     if not url:
-        cell = ws[anchor]
-        if cell.value in (None, ""):
-            cell.value = "LOGO"
-            cell.font = Font(size=9, color="94A3B8")
-            cell.alignment = Alignment(horizontal="center", vertical="center")
         return
     try:
-        import requests
         from openpyxl.drawing.image import Image as XLImage
+        from pdf_institucional import prepare_image_for_pdf
 
-        resp = requests.get(url, timeout=8)
-        resp.raise_for_status()
-        img = XLImage(io.BytesIO(resp.content))
-        if img.height and img.height > max_h_px:
-            ratio = max_h_px / float(img.height)
-            img.height = max_h_px
-            img.width = int((img.width or max_h_px) * ratio)
+        uri = prepare_image_for_pdf(url, allow_http=True, max_px_w=160, max_px_h=max_h_px)
+        if not uri or ";base64," not in uri:
+            # Fallback: HTTP directo
+            if url.startswith("http"):
+                import requests
+
+                resp = requests.get(url, timeout=10)
+                resp.raise_for_status()
+                raw = resp.content
+            else:
+                return
+        else:
+            raw = base64.b64decode(uri.split(",", 1)[1])
+        img = XLImage(io.BytesIO(raw))
+        # Ajuste contain al rango A1:B2 (~2×15 pt ≈ 40 px de alto útil).
+        target_h = float(max_h_px)
+        target_w = 120.0  # A+B ≈ 19 de ancho
+        ih = float(img.height or target_h)
+        iw = float(img.width or target_w)
+        if ih > 0 and iw > 0:
+            scale = min(target_h / ih, target_w / iw, 1.0)
+            img.height = max(8, int(ih * scale))
+            img.width = max(8, int(iw * scale))
         ws.add_image(img, anchor)
     except Exception as exc:
-        _log.debug("excel logo contratista: %s", exc)
-        cell = ws[anchor]
-        if cell.value in (None, ""):
-            cell.value = "LOGO"
-            cell.font = Font(size=9, color="94A3B8")
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+        _log.warning("excel logo contratista: %s", exc)
 
 def _fn(n, dec=2):
     """Formatea número con decimales (inf/nan no rompen el PDF: format ',.' falla con inf)."""
@@ -12835,13 +12889,8 @@ table { border-collapse: collapse; }
 
 BASE_CSS = PAGE_CSS_LETTER_PORTRAIT + BASE_CSS_SHARED
 
-# CC-SUB-002: un único @page (landscape) + estilos; ir junto a BASE_CSS_SHARED, sin PAGE_CSS_PORTRAIT.
-MEMORIA002_CSS = """
-@page {
-  size: letter landscape;
-  /* Márgenes para caber encabezado completo + plantilla 2×2 (4 imágenes por hoja). */
-  margin: 0.5cm 0.65cm 0.5cm 0.65cm;
-}
+# CC-SUB-002 / SEM / MES: estilos de cuerpo. El @page se arma en `_memoria002_page_css`.
+MEMORIA002_CSS_BODY = """
 body.mem002-doc {
   font-family: Arial, sans-serif;
   font-size: 6pt;
@@ -12862,8 +12911,8 @@ body.mem002-doc .mem002-item-desc {
   overflow: visible;
   max-height: none;
   height: auto;
-  line-height: 1.2;
-  margin: 1px 0 0 0;
+  line-height: 1.15;
+  margin: 0;
   padding: 0;
   font-size: 6.5pt;
   font-weight: normal;
@@ -12871,8 +12920,15 @@ body.mem002-doc .mem002-item-desc {
   text-transform: none;
 }
 body.mem002-doc .mem002-banda-mes td {
-  vertical-align: top;
+  vertical-align: middle;
   overflow: visible;
+}
+body.mem002-doc .mem002-detail thead {
+  display: table-header-group;
+}
+body.mem002-doc .mem002-detail td,
+body.mem002-doc .mem002-detail th {
+  vertical-align: middle;
 }
 body.mem002-doc .mem002-objeto {
   display: block;
@@ -12914,12 +12970,12 @@ body.mem002-doc .mem002-detail td.data-td {
   vertical-align: middle;
 }
 body.mem002-doc .mem002-detail td.mem002-obs {
-  vertical-align: top;
+  vertical-align: middle;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
 body.mem002-doc .mem002-detail td.mem002-enlace {
-  vertical-align: top;
+  vertical-align: middle;
   text-align: left;
   font-size: 5.5pt;
   line-height: 1.15;
@@ -13162,6 +13218,37 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-cargo {
   padding: 0;
 }
 """
+
+
+def _memoria002_page_css(*, firmas_pie: bool = False) -> str:
+    """@page landscape; con firmas_pie reserva franja inferior (criterio CC-MES-001)."""
+    if not firmas_pie:
+        return """@page {
+  size: letter landscape;
+  margin: 0.5cm 0.65cm 0.5cm 0.65cm;
+}
+"""
+    margen_inf = (
+        _CC_MES_FIRMAS_BOTTOM_MM + _CC_MES_FIRMAS_ALTO_MM + _CC_MES_FIRMAS_SEPARACION_MM
+    )
+    return f"""@page {{
+  size: letter landscape;
+  margin: 0.5cm 0.65cm {margen_inf:.1f}mm 0.65cm;
+  @frame footer {{
+    -pdf-frame-content: firmasFooter;
+    bottom: {_CC_MES_FIRMAS_BOTTOM_MM:.1f}mm;
+    margin-left: 0.65cm;
+    margin-right: 0.65cm;
+    height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm;
+    -pdf-keep-in-frame-mode: shrink;
+  }}
+}}
+body.mem002-doc .mem002-firmas-wrap {{ margin: 0; padding: 0; }}
+"""
+
+
+# Compat: CSS completo sin franja de firmas (SUB/SEM por defecto).
+MEMORIA002_CSS = _memoria002_page_css(firmas_pie=False) + MEMORIA002_CSS_BODY
 
 # ── Template CC-SUB-001 (réplica maqueta institucional; sin <pdf:nextpage/>; tablas + estilos inline) ──
 
@@ -13977,28 +14064,30 @@ def _fill_memoria_excel_ws(
     it_num = str(item_info.get("item_numero") or "—")
     it_und = str(item_info.get("unidad") or "—")
     val_font = Font(size=9, bold=True, color="1A1A2E")
-    align_lv = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    # Vertical centrado en todo el formato; horizontal se conserva por celda.
+    align_lv = Alignment(wrap_text=True, vertical="center", horizontal="left")
     align_ctr = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    _EXCEL_ROW_STD = 15.0
 
     if _memoria_es_banda_mes_3filas(conc_meta, codigo_h):
         # Encabezado institucional = PDF: logo A1:B2 | título C1:I2 | código J1:J2
-        # Filas 1–2 a doble altura.
+        # Filas 1–2 a altura estándar de fila.
         ws.merge_cells("A1:B2")
         ws["A1"].alignment = align_ctr
         ws["A1"].border = bd
-        _excel_try_add_logo_contratista(ws, contrato, anchor="A1", max_h_px=70)
+        _excel_try_add_logo_contratista(ws, contrato, anchor="A1", max_h_px=36)
         ws.merge_cells("C1:I2")
         ws["C1"] = f"{_MEMORIA_MES_TITULO_L1}\n{_MEMORIA_MES_TITULO_L2}"
-        ws["C1"].font = Font(bold=True, size=11, color="111827")
+        ws["C1"].font = Font(bold=True, size=10, color="111827")
         ws["C1"].alignment = align_ctr
         ws["C1"].border = bd
         ws.merge_cells("J1:J2")
         ws["J1"] = str(codigo_h or CODIGO_FORMATO_CCD_CC_MES_002)
-        ws["J1"].font = Font(bold=True, size=12, color="1E40AF")
+        ws["J1"].font = Font(bold=True, size=11, color="1E40AF")
         ws["J1"].alignment = align_ctr
         ws["J1"].border = bd
-        ws.row_dimensions[1].height = 30
-        ws.row_dimensions[2].height = 30
+        ws.row_dimensions[1].height = _EXCEL_ROW_STD
+        ws.row_dimensions[2].height = _EXCEL_ROW_STD
         for cc in (1, 3, 10):
             ws.cell(row=1, column=cc).border = bd
 
@@ -14032,7 +14121,7 @@ def _fill_memoria_excel_ws(
         for cc in (1, 3, 9, 10):
             ws.cell(row=3, column=cc).border = bd
 
-        # Fila 4: CAPÍTULO (A–H) | ÍTEM (I) | UNIDAD (J) — sin cambios de concepto
+        # Fila 4: CAPÍTULO (A–H) | ÍTEM (I) | UNIDAD (J)
         ws.merge_cells("A4:H4")
         ws["A4"] = _memoria_celda_etiqueta_valor("CAPÍTULO", cap_val)
         ws["A4"].font = val_font
@@ -14043,7 +14132,13 @@ def _fill_memoria_excel_ws(
         ws["J4"] = _memoria_celda_etiqueta_valor("UNIDAD", it_und)
         ws["J4"].font = val_font
         ws["J4"].alignment = align_lv
-        ws.row_dimensions[4].height = 28
+        ws.row_dimensions[4].height = _excel_row_height_wrapped_text(
+            _memoria_celda_etiqueta_valor("CAPÍTULO", cap_val),
+            chars_per_line=70,
+            line_pt=15.0,
+            min_pt=15.0,
+            padding_pt=1.0,
+        )
         for cc in (1, 9, 10):
             ws.cell(row=4, column=cc).border = bd
 
@@ -14224,9 +14319,11 @@ def _fill_memoria_excel_ws(
                     cell.alignment = Alignment(horizontal="right", vertical="center")
                     cell.number_format = _EXCEL_NUM_FMT_CANT
                 elif col == 10:
-                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+                    cell.alignment = Alignment(wrap_text=True, vertical="center")
                 else:
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            # Altura exacta según líneas de OBSERVACIÓN (Excel no autoajusta).
+            ws.row_dimensions[row].height = _excel_row_height_observacion(obs)
             if reg_parity % 2 == 0:
                 for col in range(1, 11):
                     ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
@@ -17183,8 +17280,12 @@ def _html_mem002_bloque_firmas(
     *,
     aprobo_firma_data_uri: Optional[str] = None,
     aprobo_interventoria_desde_config: bool = False,
+    footer_frame: bool = False,
 ) -> str:
-    """Tres columnas Elaboró / Revisó / Aprobó: subcontratista (CC-SUB) o interventoría desde biblioteca (CC-SEM/MES)."""
+    """Tres columnas Elaboró / Revisó / Aprobó: subcontratista (CC-SUB) o interventoría desde biblioteca (CC-SEM/MES).
+
+    ``footer_frame=True``: id firmasFooter para @frame (criterio CC-MES-001, pie de cada página).
+    """
     fc = firma_cfg or {}
     elaboro_n = _h(str(fc.get("elaboro_nombre") or "").strip() or "—")
     elaboro_c = _h(str(fc.get("elaboro_cargo") or "").strip() or "—")
@@ -17214,7 +17315,8 @@ def _html_mem002_bloque_firmas(
 <div class="mem002-firma-rep">Representante: {aprobo_rep}</div>
 </div>
 </td>"""
-    return f"""<div class="mem002-firmas-wrap">
+    firmas_attr = ' id="firmasFooter"' if footer_frame else ""
+    return f"""<div class="mem002-firmas-wrap"{firmas_attr}>
 <table class="mem002-firmas-tbl" cellspacing="0" cellpadding="0">
 <tr>
 {elaboro_td}
@@ -17226,16 +17328,19 @@ def _html_mem002_bloque_firmas(
 
 
 # Medido en el PDF (letter landscape, márgenes 0,5 cm):
-# la primera fila de datos cae a 36 mm; una fila de una línea mide ~3,4 mm
-# y cada línea extra de la observación ~2,5 mm (la columna parte cerca de 74
-# caracteres). Del subtotal del tramo al pie de las firmas hay ~22 mm.
+# cabecera MES compacta (~1,2 cm institucional + banda) ≈ 28 mm;
+# una fila de una línea mide ~3,4 mm y cada línea extra de observación ~2,5 mm.
+# Con firmas en @frame el cierre en flujo es solo total + pie (~8 mm).
 _MEM002_HOJA_UTIL_MM = 205.9
-_MEM002_CABECERA_MM = 36.0
+_MEM002_CABECERA_MM = 28.0
 _MEM002_BARRA_THEAD_MM = 11.0
 _MEM002_CIERRE_MM = 22.0
+_MEM002_CIERRE_FIRMAS_PIE_MM = 8.0
 _MEM002_FILA_BASE_MM = 3.4
 _MEM002_FILA_LINEA_MM = 2.55
 _MEM002_OBS_CHARS = 74
+# Márgenes base 5 mm; con firmas_pie el inferior pasa a BOTTOM+ALTO+SEPARACIÓN.
+_MEM002_MARGEN_BASE_MM = 5.0
 
 
 def _memoria_altura_entrada_mm(entry: Any) -> float:
@@ -17253,13 +17358,34 @@ def _memoria_altura_entrada_mm(entry: Any) -> float:
     return _MEM002_FILA_BASE_MM + (lineas - 1) * _MEM002_FILA_LINEA_MM
 
 
-def _memoria_presupuesto_hoja_mm(primera: bool) -> float:
+def _memoria_hoja_util_mm(*, firmas_pie: bool = False) -> float:
+    util = _MEM002_HOJA_UTIL_MM
+    if firmas_pie:
+        margen_inf = (
+            _CC_MES_FIRMAS_BOTTOM_MM + _CC_MES_FIRMAS_ALTO_MM + _CC_MES_FIRMAS_SEPARACION_MM
+        )
+        util -= max(0.0, margen_inf - _MEM002_MARGEN_BASE_MM)
+    return util
+
+
+def _memoria_presupuesto_hoja_mm(primera: bool, *, firmas_pie: bool = False) -> float:
+    util = _memoria_hoja_util_mm(firmas_pie=firmas_pie)
     if primera:
-        return _MEM002_HOJA_UTIL_MM - _MEM002_CABECERA_MM
-    return _MEM002_HOJA_UTIL_MM - _MEM002_BARRA_THEAD_MM
+        return util - _MEM002_CABECERA_MM
+    return util - _MEM002_BARRA_THEAD_MM
 
 
-def _chunks_memoria_detalle(registros: List[Any], rows_primera_hoja: int, rows_hoja_siguiente: int) -> List[List[Any]]:
+def _memoria_cierre_mm(*, firmas_pie: bool = False) -> float:
+    return _MEM002_CIERRE_FIRMAS_PIE_MM if firmas_pie else _MEM002_CIERRE_MM
+
+
+def _chunks_memoria_detalle(
+    registros: List[Any],
+    rows_primera_hoja: int,
+    rows_hoja_siguiente: int,
+    *,
+    firmas_pie: bool = False,
+) -> List[List[Any]]:
     """Parte el detalle según lo que cabe en la hoja, no con una cuota fija de filas.
 
     26/30 filas cortaban aunque la hoja siguiera vacía: el «Total tramo» y las
@@ -17268,6 +17394,7 @@ def _chunks_memoria_detalle(registros: List[Any], rows_primera_hoja: int, rows_h
     conservan por los llamadores; el corte lo decide la altura.
     """
     del rows_primera_hoja, rows_hoja_siguiente
+    cierre = _memoria_cierre_mm(firmas_pie=firmas_pie)
     filas = list(registros or [])
     if not filas:
         return [[]]
@@ -17276,9 +17403,9 @@ def _chunks_memoria_detalle(registros: List[Any], rows_primera_hoja: int, rows_h
     n = len(filas)
     primera = True
     while i < n:
-        presupuesto = _memoria_presupuesto_hoja_mm(primera)
+        presupuesto = _memoria_presupuesto_hoja_mm(primera, firmas_pie=firmas_pie)
         resto = sum(_memoria_altura_entrada_mm(filas[k]) for k in range(i, n))
-        if resto + _MEM002_CIERRE_MM <= presupuesto:
+        if resto + cierre <= presupuesto:
             chunks.append(filas[i:])
             break
         # Esta hoja no es la última: se llena, y se deja al menos una fila
@@ -17299,10 +17426,10 @@ def _chunks_memoria_detalle(registros: List[Any], rows_primera_hoja: int, rows_h
     if len(chunks) >= 2:
         previo = chunks[-2]
         ultimo = chunks[-1]
-        presupuesto = _memoria_presupuesto_hoja_mm(len(chunks) == 2)
+        presupuesto = _memoria_presupuesto_hoja_mm(len(chunks) == 2, firmas_pie=firmas_pie)
         usado = sum(_memoria_altura_entrada_mm(e) for e in previo)
         extra = sum(_memoria_altura_entrada_mm(e) for e in ultimo)
-        if usado + extra + _MEM002_CIERRE_MM <= presupuesto:
+        if usado + extra + cierre <= presupuesto:
             chunks[-2] = previo + ultimo
             chunks.pop()
     return chunks
@@ -17326,9 +17453,18 @@ def _memoria_pdf_estilo_css(est: Dict[str, str]) -> str:
     )
 
 
-def _wrap_memoria_item_html(body_html: str, estilo_css: str) -> str:
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
-<style>{BASE_CSS_SHARED}{MEMORIA002_CSS}{estilo_css}</style></head><body class="mem002-doc">
+def _wrap_memoria_item_html(
+    body_html: str,
+    estilo_css: str,
+    *,
+    firmas_pie: bool = False,
+) -> str:
+    page_css = _memoria002_page_css(firmas_pie=firmas_pie)
+    return f"""<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
+<head><meta charset="UTF-8"/>
+<style>{page_css}{BASE_CSS_SHARED}{MEMORIA002_CSS_BODY}{estilo_css}</style></head>
+<body class="mem002-doc">
 {body_html}
 </body></html>"""
 
@@ -17351,6 +17487,8 @@ def _html_memoria_item_body(
     aprobo_firma_data_uri: Optional[str] = None,
     aprobo_interventoria_desde_config: bool = False,
     pie_fotos_contexto: Optional[str] = None,
+    firmas_pie: bool = False,
+    emitir_firmas: bool = True,
 ):
     total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in registros)
 
@@ -17395,26 +17533,27 @@ def _html_memoria_item_body(
         es_mes = _memoria_es_banda_mes_3filas(conc_meta, codigo_raw)
 
         if es_mes:
-            fila1_h = "2.28cm"  # doble de la altura previa (1.14cm)
-            logo_box_h = "2.05cm"
+            # ~mitad+ de la altura previa (2.28cm): franja compacta sin vacío.
+            fila1_h = "1.20cm"
+            logo_box_h = "1.05cm"
             logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
             titulo_html = (
-                f'<div style="font-size:8pt;font-weight:bold;color:#111827;text-transform:uppercase;'
-                f'line-height:1.15;">{_h(_MEMORIA_MES_TITULO_L1)}</div>'
-                f'<div style="font-size:7pt;font-weight:bold;color:#111827;text-transform:uppercase;'
-                f'line-height:1.15;margin-top:2px;">{_h(_MEMORIA_MES_TITULO_L2)}</div>'
+                f'<div style="font-size:7.5pt;font-weight:bold;color:#111827;text-transform:uppercase;'
+                f'line-height:1.1;">{_h(_MEMORIA_MES_TITULO_L1)}</div>'
+                f'<div style="font-size:6.5pt;font-weight:bold;color:#111827;text-transform:uppercase;'
+                f'line-height:1.1;margin-top:1px;">{_h(_MEMORIA_MES_TITULO_L2)}</div>'
             )
             # Anchos alineados a Excel: A:B≈16% · C:I≈69% · J≈15%
             head_inst = f"""<tr>
-<td style="width:16%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+<td style="width:16%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
 {logo_html}
 </td>
-<td style="width:69%;{bd};padding:4px 8px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+<td style="width:69%;{bd};padding:2px 6px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
 {titulo_html}
 </td>
-<td style="width:15%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-<div style="font-size:11pt;font-weight:bold;color:#1e40af;line-height:1.05;">{codigo_h}</div>
-<div style="font-size:6pt;color:#64748b;margin-top:2px;">CCD</div>
+<td style="width:15%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+<div style="font-size:10pt;font-weight:bold;color:#1e40af;line-height:1.05;">{codigo_h}</div>
+<div style="font-size:5.5pt;color:#64748b;margin-top:1px;">CCD</div>
 </td>
 </tr>"""
         else:
@@ -17441,6 +17580,7 @@ def _html_memoria_item_body(
             *,
             bold_val: bool = True,
             extra_class: str = "",
+            v_align: str = "middle",
         ) -> str:
             vstyle = val if bold_val else (
                 "font-size:6.5pt;font-weight:normal;color:#1a1a2e;line-height:1.18;"
@@ -17454,7 +17594,7 @@ def _html_memoria_item_body(
                 else f'<span style="{vstyle};display:block;margin:1px 0 0 0;padding:0;">{shown}</span>'
             )
             return (
-                f'<td style="width:{width_pct};{bd};padding:2px 4px;vertical-align:top;">'
+                f'<td style="width:{width_pct};{bd};padding:2px 4px;vertical-align:{v_align};">'
                 f'<span style="{lbl_blk}">{_h(lab)}</span>'
                 f"{inner}"
                 f"</td>"
@@ -17479,7 +17619,7 @@ def _html_memoria_item_body(
             )
             # Misma grilla de 4 cols que CONTRATO|OBJETO|Acta|Período (Capítulo ocupa 2).
             r_cap = f"""<tr>
-<td colspan="2" style="width:61%;{bd};padding:2px 4px;vertical-align:top;">
+<td colspan="2" style="width:61%;{bd};padding:2px 4px;vertical-align:middle;">
 <span style="{lbl_blk}">CAPÍTULO</span>
 <span style="{val};display:block;margin:1px 0 0 0;padding:0;">{_h(str(cap_val) if cap_val not in (None, '') else '—')}</span>
 </td>
@@ -17487,7 +17627,7 @@ def _html_memoria_item_body(
 {_td_lv("UNIDAD", item_info.get("unidad") or "", "24%")}
 </tr>"""
             r_desc = f"""<tr>
-<td colspan="4" style="{bd};padding:2px 4px;vertical-align:top;">
+<td colspan="4" style="{bd};padding:2px 4px;vertical-align:middle;">
 <span style="{lbl_blk}">DESCRIPCIÓN</span>
 <div class="mem002-item-desc">{it_desc}</div>
 </td>
@@ -17562,7 +17702,12 @@ def _html_memoria_item_body(
     chunks_graf = [graficos[i : i + FOTOS_PER_PAGE] for i in range(0, len(graficos), FOTOS_PER_PAGE)]
     plan_filas = _memoria_plan_filas_detalle(registros)
     unidad_item = str(item_info.get("unidad") or "").strip()
-    chunks_reg = _chunks_memoria_detalle(plan_filas, ROWS_MEMORIA_PRIMERA_HOJA, ROWS_MEMORIA_SIGUIENTES)
+    chunks_reg = _chunks_memoria_detalle(
+        plan_filas,
+        ROWS_MEMORIA_PRIMERA_HOJA,
+        ROWS_MEMORIA_SIGUIENTES,
+        firmas_pie=firmas_pie,
+    )
 
     # Orden: N°, Abscisas, Infraestructura, Long, Ancho/Ø, Esp/kg/m, Cant, Cant Tot, Enlace, Observación.
     try:
@@ -17592,7 +17737,11 @@ def _html_memoria_item_body(
         if ci == 0:
             body += encabezado()
         body += '<div class="section-bar mem002-section">DETALLE DE CANTIDADES APROBADAS</div>'
-        body += f"""<table class="w100 mem002-detail" cellspacing="0" cellpadding="0">{thead_detalle}"""
+        # <thead> para repetir títulos en cada página de continuación (xhtml2pdf).
+        body += (
+            f'<table class="w100 mem002-detail" cellspacing="0" cellpadding="0">'
+            f"<thead>{thead_detalle}</thead><tbody>"
+        )
 
         for j, entry in enumerate(chunk):
             i = row_offset + j
@@ -17642,7 +17791,7 @@ def _html_memoria_item_body(
             </tr>"""
 
         row_offset += len(chunk)
-        body += "</table>"
+        body += "</tbody></table>"
 
     # Fila de total en tabla aparte (sin colspan): xhtml2pdf suele aplastar OBS/CANT TOT en la última página del detalle.
     body += f"""<table class="w100 mem002-total-wrap" cellspacing="0" cellpadding="0">
@@ -17657,15 +17806,18 @@ def _html_memoria_item_body(
 
     body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
 
-    # Firmas justo después del detalle (antes de fotos): visibles en vista previa sin pasar el anexo gráfico.
-    body += _html_mem002_bloque_firmas(
-        sub,
-        firma_cfg,
-        elaboro_firma_data_uri,
-        reviso_firma_data_uri,
-        aprobo_firma_data_uri=aprobo_firma_data_uri,
-        aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
-    )
+    # SUB/SEM: firmas en flujo tras el detalle (antes de fotos).
+    # MES con firmas_pie: se emiten al final con id firmasFooter (@frame).
+    if emitir_firmas and not firmas_pie:
+        body += _html_mem002_bloque_firmas(
+            sub,
+            firma_cfg,
+            elaboro_firma_data_uri,
+            reviso_firma_data_uri,
+            aprobo_firma_data_uri=aprobo_firma_data_uri,
+            aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
+            footer_frame=False,
+        )
 
     # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 2×2.
     if pie_fotos_contexto:
@@ -17764,6 +17916,18 @@ def _html_memoria_item_body(
             obs_builder=_memoria_media_caption_obs,
         )
 
+    # CC-MES-002: firmas en franja fija (@frame) en cada página, criterio CC-MES-001.
+    if emitir_firmas and firmas_pie:
+        body += _html_mem002_bloque_firmas(
+            sub,
+            firma_cfg,
+            elaboro_firma_data_uri,
+            reviso_firma_data_uri,
+            aprobo_firma_data_uri=aprobo_firma_data_uri,
+            aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
+            footer_frame=True,
+        )
+
     return body
 
 def _html_memoria_item(
@@ -17783,10 +17947,14 @@ def _html_memoria_item(
     aprobo_interventoria_desde_config: bool = False,
     pie_fotos_contexto: Optional[str] = None,
     estilo_formato_codigo: str = CODIGO_FORMATO_CCD_CC_SUB_002,
+    firmas_pie: Optional[bool] = None,
 ):
     fc = firma_cfg or {}
     est = _merge_estilo_pdf(fc.get("estilo_pdf"), estilo_formato_codigo)
     estilo_css = _memoria_pdf_estilo_css(est)
+    codigo_hint = str((conc_meta or {}).get("codigo") or estilo_formato_codigo or "")
+    if firmas_pie is None:
+        firmas_pie = _memoria_es_banda_mes_3filas(conc_meta, codigo_hint)
     inner = _html_memoria_item_body(
         contrato,
         sub,
@@ -17802,5 +17970,7 @@ def _html_memoria_item(
         aprobo_firma_data_uri=aprobo_firma_data_uri,
         aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
         pie_fotos_contexto=pie_fotos_contexto,
+        firmas_pie=bool(firmas_pie),
+        emitir_firmas=True,
     )
-    return _wrap_memoria_item_html(inner, estilo_css)
+    return _wrap_memoria_item_html(inner, estilo_css, firmas_pie=bool(firmas_pie))
