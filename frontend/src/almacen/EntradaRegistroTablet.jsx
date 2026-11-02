@@ -39,6 +39,7 @@ import {
   resolvePasteTarget,
   validateSoportePaste,
 } from './entradaSoportePaste'
+import { puedeRegistrarSalidaAlmacen } from './almacenPermisos'
 import {
   buildItemsFromOcSeleccion,
   consolidarResumenInsumos,
@@ -53,6 +54,7 @@ import {
   PASO,
   resumenLineasSeleccion,
 } from './entradaRegistroTabletHelpers'
+import { buildPrefillSalidaInmediata } from './salidaInmediataHelpers'
 
 function HighlightText({ text, query }) {
   const segs = highlightSegments(text, query)
@@ -187,9 +189,13 @@ export default function EntradaRegistroTablet({
   const [tablaVista, setTablaVista] = useState({ visible: 0, total: 0, hayOcultas: false, marcadasOcultas: 0 })
   const [savePhase, setSavePhase] = useState('')
   const [pdfHint, setPdfHint] = useState('')
+  /** null = sin responder; true/false = Sí/No a salida inmediata */
+  const [usaDeUnaVez, setUsaDeUnaVez] = useState(null)
 
   const puedeCrear = Boolean(permisos?.crear)
+  const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
   const puedeValidar = Boolean(permisos?.validar)
+  const preguntaSalidaVisible = Boolean(puedeSalida && tipo === 'recibo')
   const cantNum = Number(cantidad)
   const lineasResumen = useMemo(() => resumenLineasSeleccion(ocSeleccion), [ocSeleccion])
   const lineasResumenVista = useMemo(
@@ -371,6 +377,7 @@ export default function EntradaRegistroTablet({
     setTablaVista({ visible: 0, total: 0, hayOcultas: false, marcadasOcultas: 0 })
     setSavePhase('')
     setPdfHint('')
+    setUsaDeUnaVez(null)
   }
 
   const elegirTipo = (t) => {
@@ -730,6 +737,10 @@ export default function EntradaRegistroTablet({
       setError('Hay cantidades mayores al saldo de la OC. Corríjalas para continuar.')
       return
     }
+    if (preguntaSalidaVisible && usaDeUnaVez == null) {
+      setError('Indique si el material se usa de una vez en obra (Sí o No).')
+      return
+    }
     if (!llegadaDomicilio && placa.trim() && !placaValida(placa)) {
       setError('Placa inválida. Use formato AAA-000 o marque «Llegó por domicilio».')
       return
@@ -760,6 +771,9 @@ export default function EntradaRegistroTablet({
         if (placa) fd.append('placa', placa)
         if (conductor) fd.append('transportador', formatNombrePropio(conductor))
       }
+      if (preguntaSalidaVisible && usaDeUnaVez === true) {
+        fd.append('salida_inmediata_pendiente', 'true')
+      }
 
       let items
       if (modoMultiOc) {
@@ -788,9 +802,11 @@ export default function EntradaRegistroTablet({
       const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
       const r = await api.createEntrada(fd)
       const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+      const quiereSalida = preguntaSalidaVisible && usaDeUnaVez === true
       setOkMsg(
         `${r?.por_revisar ? 'Guardado · por revisar' : 'Guardado'}`
         + (r?.codigo ? ` · ${r.codigo}` : '')
+        + (quiereSalida ? ' · salida pendiente de confirmar' : '')
         + ` · ${Math.max(1, Math.round(ms / 100) / 10)}s`,
       )
       onSaved?.(r)
@@ -811,6 +827,25 @@ export default function EntradaRegistroTablet({
             }
           }
         })()
+      }
+      if (quiereSalida && r?.id) {
+        const prefill = buildPrefillSalidaInmediata(r, {
+          pkId: pkLabel || pkId,
+          pkLabel: pkLabel || pkId,
+          tramo,
+        })
+        setTimeout(() => {
+          onAbrirSalioMaterial?.({ mode: 'registrar', prefillInmediata: prefill })
+          resetFlujo()
+          setOcsLoaded(false)
+          setOcs([])
+          setTipo(null)
+          setPaso(PASO.INICIO)
+          setOkMsg('')
+          setPdfHint('')
+          onClose?.()
+        }, 700)
+        return
       }
       setTimeout(() => {
         resetFlujo()
@@ -1551,51 +1586,6 @@ export default function EntradaRegistroTablet({
                     </div>
                   </>
                 )}
-                <div data-testid="entrada-tablet-numero-remision-wrap" style={{ display: 'grid', gap: 1, minWidth: 120, flex: '1 1 130px' }}>
-                  <label
-                    htmlFor="entrada-tablet-numero-remision"
-                    style={{ fontWeight: 800, fontSize: '0.68rem', color: 'var(--cc-almacen-text)' }}
-                  >
-                    🔢 N.º remisión *
-                  </label>
-                  <input
-                    id="entrada-tablet-numero-remision"
-                    ref={numeroRemisionRef}
-                    data-testid="entrada-tablet-numero-remision"
-                    autoComplete="off"
-                    autoCapitalize="characters"
-                    inputMode="text"
-                    placeholder="REM-123"
-                    aria-required="true"
-                    aria-invalid={!numeroRemisionListo || undefined}
-                    value={numeroRemision}
-                    onChange={(e) => onNumeroRemisionChange(e.target.value)}
-                    onFocus={(e) => {
-                      try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { /* ignore */ }
-                    }}
-                    onKeyDown={onNumeroRemisionKeyDown}
-                    style={{
-                      ...inputGiant(ui),
-                      fontSize: '0.95rem',
-                      minHeight: 36,
-                      letterSpacing: 0.4,
-                      textTransform: 'uppercase',
-                      fontWeight: 800,
-                      padding: '4px 6px',
-                      border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
-                      background: 'var(--cc-almacen-bg-card)',
-                      color: 'var(--cc-almacen-text)',
-                    }}
-                  />
-                  {!numeroRemisionListo && (
-                    <div
-                      data-testid="entrada-tablet-numero-remision-falta"
-                      style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.65rem' }}
-                    >
-                      Falta N.º
-                    </div>
-                  )}
-                </div>
                 <div style={{ display: 'grid', gap: 1, minWidth: 100, flex: '1 1 120px' }} data-testid="entrada-tablet-mapa">
                   <div style={{ fontWeight: 700, fontSize: '0.68rem', color: ui.textMuted }}>Sector</div>
                   <AlmacenPkMapaSelector
@@ -1671,7 +1661,16 @@ export default function EntradaRegistroTablet({
                 </div>
               )}
 
-              <div style={{ display: 'grid', gap: 6, flexShrink: 0 }}>
+              <div
+                data-testid="entrada-tablet-soportes-fila"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: 8,
+                  flexShrink: 0,
+                  alignItems: 'start',
+                }}
+              >
                 <EntradaSoportePicker
                   kind="remision"
                   file={fotoRemision}
@@ -1685,7 +1684,55 @@ export default function EntradaRegistroTablet({
                   onOpenPreview={() => setPreviewSoporte('remision')}
                   labelReady="Remisión ✓"
                   labelEmpty="Falta"
-                />
+                >
+                  <div data-testid="entrada-tablet-numero-remision-wrap" style={{ display: 'grid', gap: 2 }}>
+                    <label
+                      htmlFor="entrada-tablet-numero-remision"
+                      style={{ fontWeight: 700, fontSize: '0.65rem', color: 'var(--cc-almacen-text)' }}
+                    >
+                      🔢 N.º remisión *
+                    </label>
+                    <input
+                      id="entrada-tablet-numero-remision"
+                      ref={numeroRemisionRef}
+                      data-testid="entrada-tablet-numero-remision"
+                      autoComplete="off"
+                      autoCapitalize="characters"
+                      inputMode="text"
+                      placeholder="REM-123"
+                      aria-required="true"
+                      aria-invalid={!numeroRemisionListo || undefined}
+                      value={numeroRemision}
+                      onChange={(e) => onNumeroRemisionChange(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onFocus={(e) => {
+                        setSoporteFocus('remision')
+                        try { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { /* ignore */ }
+                      }}
+                      onKeyDown={onNumeroRemisionKeyDown}
+                      style={{
+                        ...inputGiant(ui),
+                        fontSize: '0.9rem',
+                        minHeight: 34,
+                        letterSpacing: 0.4,
+                        textTransform: 'uppercase',
+                        fontWeight: 800,
+                        padding: '3px 6px',
+                        border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
+                        background: 'var(--cc-almacen-bg-card)',
+                        color: 'var(--cc-almacen-text)',
+                      }}
+                    />
+                    {!numeroRemisionListo && (
+                      <div
+                        data-testid="entrada-tablet-numero-remision-falta"
+                        style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.62rem' }}
+                      >
+                        Falta N.º
+                      </div>
+                    )}
+                  </div>
+                </EntradaSoportePicker>
                 <EntradaSoportePicker
                   kind="material"
                   file={fotoMaterial}
@@ -1702,12 +1749,64 @@ export default function EntradaRegistroTablet({
                 />
               </div>
 
+              {preguntaSalidaVisible && (
+                <div
+                  data-testid="entrada-tablet-usa-de-una-vez"
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexShrink: 0,
+                    padding: '6px 8px',
+                    borderRadius: 10,
+                    border: '1px solid var(--cc-almacen-border)',
+                    background: 'var(--cc-almacen-bg-card)',
+                  }}
+                >
+                  <span style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--cc-almacen-text)' }}>
+                    <span aria-hidden>⚡</span>
+                    {' '}¿Se usa de una vez en obra? (genera la salida)
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="entrada-tablet-usa-de-una-vez-si"
+                    style={{
+                      ...ui.btnSecondary,
+                      minHeight: 36,
+                      fontWeight: 800,
+                      background: usaDeUnaVez === true ? 'var(--cc-almacen-accent-soft, #dbeafe)' : undefined,
+                      borderColor: usaDeUnaVez === true ? 'var(--cc-almacen-accent)' : undefined,
+                    }}
+                    disabled={busy}
+                    onClick={() => setUsaDeUnaVez(true)}
+                  >
+                    Sí
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="entrada-tablet-usa-de-una-vez-no"
+                    style={{
+                      ...ui.btnSecondary,
+                      minHeight: 36,
+                      fontWeight: 800,
+                      background: usaDeUnaVez === false ? 'var(--cc-almacen-accent-soft, #dbeafe)' : undefined,
+                      borderColor: usaDeUnaVez === false ? 'var(--cc-almacen-accent)' : undefined,
+                    }}
+                    disabled={busy}
+                    onClick={() => setUsaDeUnaVez(false)}
+                  >
+                    No
+                  </button>
+                </div>
+              )}
+
               <button
                 ref={continuarCapturaRef}
                 type="button"
                 data-testid="entrada-tablet-captura-siguiente"
                 style={{ ...ui.btnPrimary, minHeight: 44, fontSize: '1rem', flexShrink: 0 }}
-                disabled={!capturaLista || busy}
+                disabled={!capturaLista || busy || (preguntaSalidaVisible && usaDeUnaVez == null)}
                 onClick={() => setPaso(PASO.CONFIRMAR)}
               >
                 Revisar y confirmar
@@ -1889,6 +1988,16 @@ export default function EntradaRegistroTablet({
                     ? '🏠 Domicilio'
                     : `🚛 ${placa || '—'} · ${conductor || '—'}`}
                 </div>
+                {preguntaSalidaVisible && (
+                  <div
+                    data-testid="entrada-tablet-resumen-salida-inmediata"
+                    style={{ marginTop: 6, fontWeight: 800, color: usaDeUnaVez ? '#15803d' : ui.textMuted }}
+                  >
+                    {usaDeUnaVez
+                      ? '⚡ También se generará la salida (confirmar después del recibo)'
+                      : 'Sin salida inmediata'}
+                  </div>
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
                   {fotoRemision && (
                     <div data-testid="entrada-tablet-resumen-remision">
@@ -1941,10 +2050,16 @@ export default function EntradaRegistroTablet({
                 type="button"
                 data-testid="entrada-tablet-guardar"
                 style={btnHome('#16a34a')}
-                disabled={busy || !fotosCompletas || !numeroRemisionListo || superaSaldo}
+                disabled={
+                  busy
+                  || !fotosCompletas
+                  || !numeroRemisionListo
+                  || superaSaldo
+                  || (preguntaSalidaVisible && usaDeUnaVez == null)
+                }
                 onClick={() => { void guardar() }}
               >
-                {busy ? (savePhase || 'Guardando…') : 'Guardar'}
+                {busy ? (savePhase || 'Guardando…') : (usaDeUnaVez ? 'Guardar y abrir salida' : 'Guardar')}
               </button>
               {pdfHint && (
                 <div data-testid="entrada-tablet-pdf-hint" style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 700 }}>

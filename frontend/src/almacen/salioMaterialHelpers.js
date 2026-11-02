@@ -7,6 +7,7 @@ export const SALIO_PASO = {
   REGISTRAR_MATERIAL: 'material',
   REGISTRAR_CAPTURA: 'captura',
   REGISTRAR_CONFIRMAR: 'confirmar',
+  REGISTRAR_INMEDIATA: 'inmediata',
   HISTORIAL: 'historial',
 }
 

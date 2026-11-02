@@ -5,6 +5,7 @@ import DevolucionesListModal from './DevolucionesListModal'
 import EntradaDetalleModal from './EntradaDetalleModal'
 import EntradaRegistroTablet from './EntradaRegistroTablet'
 import SalioMaterialPopup from './SalioMaterialPopup'
+import { buildPrefillSalidaInmediata } from './salidaInmediataHelpers'
 import EntradasFiltrosModal from './EntradasFiltrosModal'
 import {
   countEntradasFiltrosActivos,
@@ -93,6 +94,7 @@ export default function EntradasPanel({
   const [creating, setCreating] = useState(false)
   const [salioOpen, setSalioOpen] = useState(false)
   const [salioMode, setSalioMode] = useState('registrar')
+  const [salioPrefill, setSalioPrefill] = useState(null)
   const [despachadorOpen, setDespachadorOpen] = useState(false)
   const [devolucionesListOpen, setDevolucionesListOpen] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
@@ -154,10 +156,27 @@ export default function EntradasPanel({
     onSalioMaterialRequestHandled?.()
   }, [openSalioMaterialRequest, onSalioMaterialRequestHandled])
 
-  const abrirSalioMaterial = (mode = 'registrar') => {
+  const abrirSalioMaterial = (mode = 'registrar', prefillInmediata = null) => {
     setCreating(false)
     setSalioMode(mode === 'historial' ? 'historial' : 'registrar')
+    setSalioPrefill(prefillInmediata || null)
     setSalioOpen(true)
+  }
+
+  const completarSalidaInmediata = async (entradaResumen) => {
+    if (!entradaResumen?.id) return
+    setError('')
+    try {
+      const ent = await api.getEntrada(entradaResumen.id)
+      const prefill = buildPrefillSalidaInmediata(ent)
+      if (!prefill) {
+        setError('No hay líneas disponibles para completar la salida de esta entrada.')
+        return
+      }
+      abrirSalioMaterial('registrar', prefill)
+    } catch (err) {
+      setError(err.message || 'No se pudo abrir la salida pendiente')
+    }
   }
 
   return (
@@ -322,7 +341,33 @@ export default function EntradasPanel({
                     onClick={() => setDetalleId(e.id)}
                     title="Ver resumen"
                   >
-                    <td style={{ ...tdAlert, fontWeight: 700 }} data-label="N.º">{formatEntradaNumero(e)}</td>
+                    <td style={{ ...tdAlert, fontWeight: 700 }} data-label="N.º">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                        <span>{formatEntradaNumero(e)}</span>
+                        {e.salida_inmediata_pendiente && (
+                          <button
+                            type="button"
+                            data-testid="entrada-salida-pendiente-btn"
+                            title="Completar salida inmediata pendiente"
+                            style={{
+                              ...ui.btnSecondary,
+                              padding: '2px 8px',
+                              fontSize: '0.7rem',
+                              fontWeight: 800,
+                              background: '#fef3c7',
+                              color: '#78350f',
+                              borderColor: '#f59e0b',
+                            }}
+                            onClick={(ev) => {
+                              ev.stopPropagation()
+                              void completarSalidaInmediata(e)
+                            }}
+                          >
+                            ⚡ Salida pendiente
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td style={tdAlert} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
                     <td style={tdAlert} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
                     <td style={tdAlert} data-label="Remisión">
@@ -508,7 +553,7 @@ export default function EntradasPanel({
           onClose={() => setCreating(false)}
           onSaved={() => { reload() }}
           onAbrirSalioMaterial={(opts) => {
-            abrirSalioMaterial(opts?.mode || 'registrar')
+            abrirSalioMaterial(opts?.mode || 'registrar', opts?.prefillInmediata || null)
           }}
         />
       )}
@@ -521,7 +566,12 @@ export default function EntradasPanel({
           contratoId={permisos?.contratoId}
           initialMode={salioMode}
           refreshSignal={refreshSignal}
-          onClose={() => setSalioOpen(false)}
+          prefillInmediata={salioPrefill}
+          onClose={() => {
+            setSalioOpen(false)
+            setSalioPrefill(null)
+            reload()
+          }}
           onSaved={() => {
             invalidateSalidasCache(permisos?.contratoId)
             reload()
@@ -538,6 +588,10 @@ export default function EntradasPanel({
           theme={t}
           permisos={permisos}
           onClose={() => setDetalleId(null)}
+          onCompletarSalidaInmediata={(ent) => {
+            setDetalleId(null)
+            void completarSalidaInmediata(ent)
+          }}
         />
       )}
 

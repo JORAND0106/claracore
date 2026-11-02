@@ -112,6 +112,7 @@ from almacen_service import (
     update_salida_cantidad,
     entradas_disponibles,
     entradas_disponibles_por_pk,
+    clear_salida_inmediata_pendiente,
     completar_revision_salida,
     count_salidas_por_revisar,
     lookup_entrada_soporte_hash,
@@ -2591,6 +2592,21 @@ class CompletarRevisionEntradaBody(BaseModel):
     limpiar_marca: bool = True
 
 
+@router.post("/{contrato_id}/entradas/{entrada_id}/salida-inmediata/completar")
+def route_clear_salida_inmediata(
+    contrato_id: int,
+    entrada_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Quita la marca de salida inmediata pendiente (p. ej. si se cancela el aviso)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "crear")
+    try:
+        return clear_salida_inmediata_pendiente(contrato_id, entrada_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.post("/{contrato_id}/entradas/{entrada_id}/completar-revision")
 def route_completar_revision_entrada(
     contrato_id: int,
@@ -2658,6 +2674,7 @@ async def route_create_entrada(
     placa: Optional[str] = Form(None),
     transportador: Optional[str] = Form(None),
     llegada_domicilio: Optional[str] = Form(None),
+    salida_inmediata_pendiente: Optional[str] = Form(None),
     remision_content_hash: Optional[str] = Form(None),
     material_content_hash: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
@@ -2719,6 +2736,8 @@ async def route_create_entrada(
         "placa": placa,
         "transportador": transportador,
         "llegada_domicilio": str(llegada_domicilio or "").strip().lower() in ("1", "true", "si", "yes"),
+        "salida_inmediata_pendiente": str(salida_inmediata_pendiente or "").strip().lower()
+        in ("1", "true", "si", "yes"),
         "remision_content_hash": (remision_content_hash or "").strip() or None,
         "material_content_hash": (material_content_hash or "").strip() or None,
     }

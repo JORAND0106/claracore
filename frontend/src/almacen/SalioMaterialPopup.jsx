@@ -24,6 +24,7 @@ import {
   pickLineaPreferida,
   SALIO_PASO,
 } from './salioMaterialHelpers'
+import { consolidarPrefillInsumos } from './salidaInmediataHelpers'
 
 const btnHome = (bg, color = '#fff') => ({
   display: 'flex',
@@ -79,6 +80,7 @@ export default function SalioMaterialPopup({
   contratoId,
   initialMode = 'registrar', // 'registrar' | 'historial'
   refreshSignal = 0,
+  prefillInmediata = null,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -87,10 +89,15 @@ export default function SalioMaterialPopup({
   const contrato = contratoId || permisos?.contratoId
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
+  const tienePrefill = Boolean(prefillInmediata?.entradaId && (prefillInmediata.items || []).length)
 
-  const [modo, setModo] = useState(
-    initialMode === 'historial' ? SALIO_PASO.HISTORIAL : SALIO_PASO.REGISTRAR_MATERIAL,
-  )
+  const [modo, setModo] = useState(() => {
+    if (initialMode === 'historial') return SALIO_PASO.HISTORIAL
+    if (tienePrefill) return SALIO_PASO.REGISTRAR_INMEDIATA
+    return SALIO_PASO.REGISTRAR_MATERIAL
+  })
+  const [inmediata, setInmediata] = useState(() => (tienePrefill ? prefillInmediata : null))
+  const [inmediataPendienteMsg, setInmediataPendienteMsg] = useState('')
   const [chromeTop, setChromeTop] = useState(0)
   const [lineas, setLineas] = useState([])
   const [loadingLineas, setLoadingLineas] = useState(false)
@@ -98,13 +105,13 @@ export default function SalioMaterialPopup({
   const [materialCard, setMaterialCard] = useState(null)
   const [lineaSel, setLineaSel] = useState(null)
   const [cantidad, setCantidad] = useState('')
-  const [receptor, setReceptor] = useState(null)
+  const [receptor, setReceptor] = useState(() => (tienePrefill ? (prefillInmediata.receptor || null) : null))
   const [fechaHora, setFechaHora] = useState(() => nowDatetimeLocalColombia())
-  const [pkId, setPkId] = useState('')
-  const [pkLabel, setPkLabel] = useState('')
+  const [pkId, setPkId] = useState(() => (tienePrefill ? (prefillInmediata.pkId || '') : ''))
+  const [pkLabel, setPkLabel] = useState(() => (tienePrefill ? (prefillInmediata.pkLabel || prefillInmediata.pkId || '') : ''))
   const [pkIdId, setPkIdId] = useState(null)
-  const [tramo, setTramo] = useState('')
-  const [costado, setCostado] = useState('')
+  const [tramo, setTramo] = useState(() => (tienePrefill ? (prefillInmediata.tramo || '') : ''))
+  const [costado, setCostado] = useState(() => (tienePrefill ? (prefillInmediata.costado || '') : ''))
   const [abscisaInicial, setAbscisaInicial] = useState('')
   const [abscisaFinal, setAbscisaFinal] = useState('')
   const [observaciones, setObservaciones] = useState('')
@@ -123,6 +130,25 @@ export default function SalioMaterialPopup({
   const sinSector = !String(pkId || pkLabel || '').trim()
   const sinReceptor = !receptor?.id
   const motivosPrev = motivosSalidaPorRevisarPreview({ sinSector, sinReceptor })
+  const inmediataItemsVista = useMemo(
+    () => consolidarPrefillInsumos(inmediata?.items || []),
+    [inmediata],
+  )
+
+  useEffect(() => {
+    if (!prefillInmediata?.entradaId) return
+    setInmediata(prefillInmediata)
+    setModo(SALIO_PASO.REGISTRAR_INMEDIATA)
+    setReceptor(prefillInmediata.receptor || null)
+    setPkId(prefillInmediata.pkId || '')
+    setPkLabel(prefillInmediata.pkLabel || prefillInmediata.pkId || '')
+    setTramo(prefillInmediata.tramo || '')
+    setCostado(prefillInmediata.costado || '')
+    setSavedSalida(null)
+    setError('')
+    setOkMsg('')
+    setInmediataPendienteMsg('')
+  }, [prefillInmediata])
 
   const reloadDisponibles = useCallback(() => {
     setLoadingLineas(true)
@@ -182,7 +208,7 @@ export default function SalioMaterialPopup({
   }, [])
 
   useEffect(() => {
-    if (modo === SALIO_PASO.HISTORIAL) return undefined
+    if (modo === SALIO_PASO.HISTORIAL || modo === SALIO_PASO.REGISTRAR_INMEDIATA) return undefined
     reloadDisponibles()
     reloadPorRevisarCount()
     return undefined
@@ -210,11 +236,23 @@ export default function SalioMaterialPopup({
     setError('')
     setOkMsg('')
     setSearch('')
+    setInmediata(null)
+    setInmediataPendienteMsg('')
   }
 
   const irRegistrar = () => {
     resetRegistro()
     setModo(SALIO_PASO.REGISTRAR_MATERIAL)
+  }
+
+  const cerrarConAvisoPendiente = () => {
+    if (inmediata?.entradaId && !savedSalida) {
+      setInmediataPendienteMsg(
+        `La salida de ${inmediata.codigoEntrada || 'esta entrada'} quedó pendiente. `
+        + 'Complétela desde el listado de entradas (aviso «Salida pendiente»). El stock no se descuenta hasta confirmar.',
+      )
+    }
+    onClose?.({ pendiente: Boolean(inmediata?.entradaId && !savedSalida), entradaId: inmediata?.entradaId })
   }
 
   const irHistorial = () => {
@@ -266,6 +304,10 @@ export default function SalioMaterialPopup({
     && cantNum > 0
     && !superaStock,
   )
+  const puedeConfirmarInmediata = Boolean(
+    inmediata?.entradaId
+    && (inmediata.items || []).length > 0,
+  )
 
   const guardar = async () => {
     if (!puedeConfirmar || !lineaSel) return
@@ -299,6 +341,65 @@ export default function SalioMaterialPopup({
     }
   }
 
+  const guardarInmediata = async () => {
+    if (!puedeConfirmarInmediata) return
+    setBusy(true)
+    setError('')
+    setOkMsg('')
+    try {
+      const obsBase = observaciones.trim()
+      const enlace = inmediata.codigoEntrada
+        ? `Salida inmediata desde ${inmediata.codigoEntrada}`
+        : 'Salida inmediata desde entrada'
+      const body = {
+        items: (inmediata.items || []).map((it) => ({
+          entrada_item_id: Number(it.entrada_item_id),
+          cantidad_salida: Number(it.cantidad_salida),
+        })),
+        receptor_usuario_id: receptor?.id || null,
+        fecha_hora_salida: datetimeLocalColombiaToIsoUtc(fechaHora),
+        pk_id: pkId.trim() || null,
+        pk_id_id: pkIdId,
+        tramo: tramo || null,
+        costado: costado || null,
+        abscisa_inicial: abscisaInicial || null,
+        abscisa_final: abscisaFinal || null,
+        observaciones: obsBase ? `${enlace}. ${obsBase}` : enlace,
+        salida_inmediata: true,
+      }
+      const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+      const saved = await api.createSalida(body)
+      const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+      setSavedSalida(saved)
+      setOkMsg(
+        `${saved?.por_revisar ? 'Guardado · por revisar' : 'Guardado'}`
+        + (saved?.codigo || saved?.numero_salida ? ` · ${saved.codigo || saved.numero_salida}` : '')
+        + (saved?.salidas_creadas > 1 ? ` · ${saved.salidas_creadas} líneas` : '')
+        + ` · ${Math.max(1, Math.round(ms / 100) / 10)}s`,
+      )
+      setInmediataPendienteMsg('')
+      onSaved?.(saved)
+      reloadPorRevisarCount()
+      reloadDisponibles()
+      const pdfId = saved?.id
+      if (pdfId) {
+        try {
+          await api.printSalidaPdf(pdfId)
+        } catch {
+          try {
+            await api.openSalidaPdf(pdfId)
+          } catch {
+            setError('Salida guardada, pero no se pudo imprimir el recibo. Reintente desde el historial.')
+          }
+        }
+      }
+    } catch (e) {
+      setError(e.message || 'No se pudo guardar la salida. La entrada permanece; reintente completar la salida pendiente.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const imprimirRecibo = async () => {
     const id = savedSalida?.id
     if (!id) return
@@ -315,7 +416,9 @@ export default function SalioMaterialPopup({
 
   const headerTitle = modo === SALIO_PASO.HISTORIAL
     ? 'Historial de salidas'
-    : 'Salió material'
+    : modo === SALIO_PASO.REGISTRAR_INMEDIATA
+      ? 'Confirmar salida inmediata'
+      : 'Salió material'
 
   const overlayTop = chromeTop || 0
 
@@ -323,6 +426,15 @@ export default function SalioMaterialPopup({
     if (modo === SALIO_PASO.HISTORIAL) {
       if (initialMode === 'historial') onClose?.()
       else irRegistrar()
+      return
+    }
+    if (modo === SALIO_PASO.REGISTRAR_INMEDIATA) {
+      if (savedSalida) {
+        resetRegistro()
+        setModo(SALIO_PASO.REGISTRAR_MATERIAL)
+        return
+      }
+      cerrarConAvisoPendiente()
       return
     }
     if (modo === SALIO_PASO.REGISTRAR_CONFIRMAR) {
@@ -367,7 +479,10 @@ export default function SalioMaterialPopup({
         color: 'var(--cc-almacen-text)',
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose?.()
+        if (e.target === e.currentTarget) {
+          if (modo === SALIO_PASO.REGISTRAR_INMEDIATA && !savedSalida) cerrarConAvisoPendiente()
+          else onClose?.()
+        }
       }}
     >
       <div
@@ -414,7 +529,10 @@ export default function SalioMaterialPopup({
           <button
             type="button"
             style={{ ...ui.btnSecondary, minWidth: 48, minHeight: 48 }}
-            onClick={() => onClose?.()}
+            onClick={() => {
+              if (modo === SALIO_PASO.REGISTRAR_INMEDIATA && !savedSalida) cerrarConAvisoPendiente()
+              else onClose?.()
+            }}
             aria-label="Cerrar"
           >
             ✕
@@ -490,6 +608,136 @@ export default function SalioMaterialPopup({
           )}
           {okMsg && (
             <div style={{ color: '#15803d', marginBottom: 12, fontWeight: 800, fontSize: '1.2rem' }}>{okMsg}</div>
+          )}
+          {inmediataPendienteMsg && (
+            <div
+              data-testid="salio-inmediata-pendiente-aviso"
+              style={{ ...estiloAvisoAlmacen(contraste, 'warn'), marginBottom: 12, fontWeight: 700 }}
+            >
+              {inmediataPendienteMsg}
+            </div>
+          )}
+
+          {modo === SALIO_PASO.REGISTRAR_INMEDIATA && inmediata && (
+            <div data-testid="salio-inmediata-confirmar" style={{ display: 'grid', gap: 12, maxWidth: 720 }}>
+              {!savedSalida ? (
+                <>
+                  <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>
+                    Revisar y confirmar salida
+                    {inmediata.codigoEntrada ? ` · desde ${inmediata.codigoEntrada}` : ''}
+                  </div>
+                  <div style={{ ...ui.card, lineHeight: 1.45 }}>
+                    {inmediataItemsVista.map((ln) => (
+                      <div key={ln.key} style={{ fontWeight: 700 }}>
+                        🧱 {ln.material_descripcion}: {fmtCant(ln.cantidad_salida)}
+                        {ln.unidad ? ` ${ln.unidad}` : ''}
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 8 }}>
+                      Entrada: {inmediata.codigoEntrada || `#${inmediata.entradaId}`}
+                    </div>
+                  </div>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 700 }}>
+                    Quién recibe
+                    <ReceptorObraSelector value={receptor} onChange={setReceptor} />
+                  </label>
+
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Sector (PK-ID)
+                      <span style={{ fontWeight: 500, color: ui.textMuted }}> — de la entrada, editable</span>
+                    </div>
+                    <AlmacenPkMapaSelector
+                      t={theme}
+                      token={token}
+                      contratoId={contrato}
+                      pkIdSeleccionado={pkId}
+                      pkLabel={pkLabel}
+                      onSeleccionar={onPkSeleccionar}
+                      onLimpiar={onPkLimpiar}
+                      compact
+                    />
+                    {(pkLabel || pkId) && (
+                      <div style={{ marginTop: 6, fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+                        Destino: {pkLabel || pkId}{tramo ? ` · ${tramo}` : ''}
+                      </div>
+                    )}
+                  </div>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 700 }}>
+                    Fecha y hora
+                    <input
+                      type="datetime-local"
+                      style={inputGiant(ui)}
+                      value={fechaHora}
+                      onChange={(e) => setFechaHora(e.target.value)}
+                    />
+                  </label>
+
+                  {motivosPrev.length > 0 && (
+                    <div
+                      data-testid="salio-inmediata-motivos"
+                      style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 600 }}
+                    >
+                      Se guardará por revisar: {motivosPrev.join(' · ')}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    data-testid="salio-inmediata-guardar"
+                    style={btnHome('#16a34a')}
+                    disabled={busy || !puedeConfirmarInmediata}
+                    onClick={() => { void guardarInmediata() }}
+                  >
+                    {busy ? 'Guardando…' : 'Confirmar salida'}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="salio-inmediata-dejar-pendiente"
+                    style={{ ...ui.btnSecondary, minHeight: 48 }}
+                    disabled={busy}
+                    onClick={cerrarConAvisoPendiente}
+                  >
+                    Dejar pendiente y cerrar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontWeight: 800, fontSize: '1.2rem', color: '#15803d' }}>
+                    Salida registrada
+                    {savedSalida.codigo || savedSalida.numero_salida
+                      ? ` · ${savedSalida.codigo || savedSalida.numero_salida}`
+                      : ''}
+                    {savedSalida.salidas_creadas > 1 ? ` · ${savedSalida.salidas_creadas} líneas` : ''}
+                  </div>
+                  {savedSalida.codigo_entrada && (
+                    <div style={{ fontWeight: 700 }}>
+                      Enlazada a entrada {savedSalida.codigo_entrada}
+                    </div>
+                  )}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <button
+                      type="button"
+                      data-testid="salio-inmediata-imprimir"
+                      style={btnHome('#2563eb')}
+                      disabled={busy}
+                      onClick={() => { void imprimirRecibo() }}
+                    >
+                      🖨 Imprimir recibo
+                    </button>
+                    <button
+                      type="button"
+                      style={btnHome('#ea580c')}
+                      onClick={() => onClose?.({ pendiente: false })}
+                    >
+                      Listo
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
           {modo === SALIO_PASO.HISTORIAL && (
