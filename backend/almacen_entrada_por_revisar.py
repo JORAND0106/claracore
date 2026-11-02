@@ -13,6 +13,7 @@ MOTIVO_PROVEEDOR_MANUAL = "proveedor_manual"
 MOTIVO_SIN_FOTO = "sin_foto"
 MOTIVO_VEHICULO_NUEVO = "vehiculo_nuevo"
 MOTIVO_SIN_INSUMO = "sin_insumo"
+MOTIVO_SIN_SECTOR = "sin_sector"
 
 MOTIVO_ETIQUETA = {
     MOTIVO_SIN_OC: "Sin orden de compra",
@@ -22,6 +23,7 @@ MOTIVO_ETIQUETA = {
     MOTIVO_SIN_FOTO: "Sin foto",
     MOTIVO_VEHICULO_NUEVO: "Vehículo nuevo",
     MOTIVO_SIN_INSUMO: "Sin insumo",
+    MOTIVO_SIN_SECTOR: "Sin sector",
 }
 
 

@@ -8457,6 +8457,7 @@ def create_entrada(
         MOTIVO_PROVEEDOR_MANUAL,
         MOTIVO_SIN_FOTO,
         MOTIVO_SIN_INSUMO,
+        MOTIVO_SIN_SECTOR,
         MOTIVO_SIN_OC,
         MOTIVO_SUPERA_SALDO,
         MOTIVO_VEHICULO_NUEVO,
@@ -8548,6 +8549,10 @@ def create_entrada(
     insumo_id = int(body["insumo_id"]) if body.get("insumo_id") else None
     if not insumo_id and not oc_id:
         motivos.append(MOTIVO_SIN_INSUMO)
+
+    # Sector opcional en recibo: si falta, queda por revisar (no bloquea).
+    if tipo == "recibo" and not pk_id:
+        motivos.append(MOTIVO_SIN_SECTOR)
 
     numero_doc = _resolve_numero_documento_entrada(
         contrato_id,

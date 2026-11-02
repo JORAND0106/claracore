@@ -31,20 +31,84 @@ export function matchesAllTerms(haystack, query) {
   return terms.every((t) => h.includes(t))
 }
 
-export function ocCardSearchBlob(card) {
+export function ocCardOcProveedorBlob(card) {
   if (!card) return ''
-  const insumos = Array.isArray(card.insumos) ? card.insumos : []
-  const mats = insumos.map((i) => i.material_descripcion || '').join(' ')
   return [
     card.numero_oc != null ? `OC ${card.numero_oc}` : '',
     card.proveedor_nombre,
-    card.material_descripcion,
-    mats,
-    card.insumo_id,
     card.solicitud_consecutivo != null ? `Sol ${card.solicitud_consecutivo}` : '',
     card.solicitud_titulo,
-    card.pk_id,
   ].filter(Boolean).join(' ')
+}
+
+export function ocInsumoSearchBlob(ins) {
+  if (!ins) return ''
+  return [
+    ins.material_descripcion,
+    ins.insumo_id,
+    ins.unidad,
+    ins.pk_id,
+  ].filter(Boolean).join(' ')
+}
+
+export function ocCardSearchBlob(card) {
+  if (!card) return ''
+  const insumos = Array.isArray(card.insumos) ? card.insumos : []
+  const mats = insumos.map((i) => ocInsumoSearchBlob(i)).join(' ')
+  return [ocCardOcProveedorBlob(card), mats, card.material_descripcion, card.pk_id]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * Filtra OC para el buscador:
+ * - Sin query: tarjetas completas.
+ * - Si coincide OC/proveedor/solicitud: OC con todos sus insumos.
+ * - Si solo coinciden insumos: OC con solo esas líneas.
+ */
+export function filterOcsForSearch(ocs, query) {
+  const list = Array.isArray(ocs) ? ocs : []
+  const q = String(query || '').trim()
+  if (!q) {
+    return list.map((c) => ({
+      ...c,
+      insumos: Array.isArray(c.insumos) ? c.insumos : [],
+      matchMode: 'all',
+    }))
+  }
+  const out = []
+  for (const card of list) {
+    const insumos = Array.isArray(card.insumos) ? card.insumos : []
+    if (matchesAllTerms(ocCardOcProveedorBlob(card), q)) {
+      out.push({ ...card, insumos, matchMode: 'oc' })
+      continue
+    }
+    const matching = insumos.filter((ins) => matchesAllTerms(ocInsumoSearchBlob(ins), q))
+    if (matching.length) {
+      out.push({ ...card, insumos: matching, matchMode: 'line' })
+    }
+  }
+  return out
+}
+
+/** Contador de lo mostrado: líneas si el filtro es por insumo; OC en otro caso. */
+export function countSearchDisplay(filtered) {
+  const list = Array.isArray(filtered) ? filtered : []
+  let n = 0
+  for (const c of list) {
+    if (c.matchMode === 'line') n += (c.insumos || []).length
+    else n += 1
+  }
+  return n
+}
+
+/** Segmentos para resaltar coincidencias (marca el texto entero si todas las palabras aplican). */
+export function highlightSegments(text, query) {
+  const raw = String(text ?? '')
+  if (!String(query || '').trim() || !matchesAllTerms(raw, query)) {
+    return [{ text: raw, hit: false }]
+  }
+  return [{ text: raw, hit: true }]
 }
 
 /**
@@ -87,6 +151,7 @@ export function motivosPorRevisarPreview(draft) {
   if (draft?.supera_saldo) m.push('Supera saldo OC')
   if (draft?.proveedor_manual) m.push('Proveedor a mano')
   if (draft?.sin_insumo) m.push('Sin insumo')
+  if (draft?.sin_sector) m.push('Sin sector')
   // Recibo exige 2 fotos (bloquea); disposición puede quedar sin foto → por revisar.
   if (draft?.tipo !== 'recibo' && !draft?.foto) m.push('Sin foto')
   if (draft?.vehiculo_nuevo) m.push('Vehículo nuevo')
