@@ -1,5 +1,5 @@
 /**
- * Selector de soporte Remisión / Foto descargue: cámara, galería o archivo.
+ * Selector de soporte Remisión / Foto descargue: cámara, galería, archivo o pegar (Ctrl+V).
  */
 import { useRef } from 'react'
 import { useAlmacenTheme } from './almacenShared'
@@ -22,6 +22,8 @@ export default function EntradaSoportePicker({
   onPickFile,
   labelReady,
   labelEmpty,
+  selected = false,
+  onSelect,
 }) {
   const ui = useAlmacenTheme()
   const camRef = useRef(null)
@@ -33,11 +35,30 @@ export default function EntradaSoportePicker({
   return (
     <div
       data-testid={`entrada-soporte-${kind}`}
-      style={{ display: 'grid', gap: 6 }}
+      role="group"
+      tabIndex={0}
+      aria-pressed={selected}
+      onFocus={() => { onSelect?.(kind) }}
+      onClick={() => { onSelect?.(kind) }}
+      style={{
+        display: 'grid',
+        gap: 6,
+        outline: selected ? `2px solid ${ui.accent}` : '1px solid transparent',
+        outlineOffset: 2,
+        borderRadius: 10,
+        padding: 4,
+      }}
     >
       <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>
         {isRemision ? '📄 Remisión' : '📷 Foto del descargue'}
         <span style={{ fontWeight: 500, color: ui.textMuted }}> (obligatoria)</span>
+      </div>
+      <div
+        data-testid={`entrada-soporte-${kind}-pegar-hint`}
+        style={{ fontSize: '0.8rem', color: ui.textMuted, fontWeight: 600 }}
+      >
+        📋 Ctrl+V / Cmd+V para pegar
+        {isRemision ? ' (imagen o PDF)' : ' (imagen)'}
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <input
@@ -119,7 +140,7 @@ export default function EntradaSoportePicker({
             />
           ) : null}
           <div style={{ marginTop: 4, fontSize: '0.85rem', color: '#15803d', fontWeight: 700 }}>
-            {labelReady || 'Listo'} · toque Cámara/Galería/Archivo para reemplazar
+            {labelReady || 'Listo'} · Cámara/Galería/Archivo/Ctrl+V para reemplazar
           </div>
         </div>
       ) : (

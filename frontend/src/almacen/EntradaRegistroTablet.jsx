@@ -24,6 +24,11 @@ import {
   splitInsumoCodigoDesc,
 } from './entradaOcExcelHelpers'
 import {
+  fileFromClipboardEvent,
+  resolvePasteTarget,
+  validateSoportePaste,
+} from './entradaSoportePaste'
+import {
   buildItemsFromOcSeleccion,
   countSearchDisplay,
   distributeCantidadOverLineas,
@@ -158,6 +163,8 @@ export default function EntradaRegistroTablet({
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
   const [salidasPorRevisar, setSalidasPorRevisar] = useState(0)
+  const [soporteFocus, setSoporteFocus] = useState(null) // 'remision' | 'material' | null
+  const [pasteHint, setPasteHint] = useState('')
 
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
@@ -328,6 +335,8 @@ export default function EntradaRegistroTablet({
     setError('')
     setOkMsg('')
     setOcSearch('')
+    setSoporteFocus(null)
+    setPasteHint('')
   }
 
   const elegirTipo = (t) => {
@@ -481,20 +490,13 @@ export default function EntradaRegistroTablet({
     }
   }
 
-  const takeSoporte = async (which, e) => {
-    const f = e.target.files?.[0]
-    e.target.value = ''
+  const takeSoporteFile = async (which, f) => {
     if (!f) return false
     setBusy(true)
     setError('')
     try {
-      const type = (f.type || '').toLowerCase()
-      if (which === 'material' && type === 'application/pdf') {
-        throw new Error('La foto del descargue debe ser una imagen.')
-      }
-      if (which === 'remision' && type && !type.startsWith('image/') && type !== 'application/pdf') {
-        throw new Error('La remisión debe ser imagen o PDF.')
-      }
+      const checkFmt = validateSoportePaste(f, which)
+      if (!checkFmt.ok) throw new Error(checkFmt.message)
       const { file } = await prepareRemisionSoporte(f)
       const digest = await sha256Hex(file)
       if (which === 'remision' && fotoMaterialHash && digest === fotoMaterialHash) {
@@ -527,6 +529,31 @@ export default function EntradaRegistroTablet({
     } finally {
       setBusy(false)
     }
+  }
+
+  const takeSoporte = async (which, e) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return false
+    return takeSoporteFile(which, f)
+  }
+
+  const onPasteSoporte = (e) => {
+    if (paso !== PASO.CAPTURA || tipo !== 'recibo') return
+    const f = fileFromClipboardEvent(e)
+    if (!f) {
+      // Sin archivo en el portapapeles: no interferir con pegar texto en inputs.
+      return
+    }
+    e.preventDefault()
+    const target = resolvePasteTarget({
+      focusedKind: soporteFocus,
+      hasRemision: Boolean(fotoRemision),
+      hasMaterial: Boolean(fotoMaterial),
+    })
+    setPasteHint(`Pegado en ${target.label}${target.replaced ? ' (reemplazo)' : ''}.`)
+    setSoporteFocus(target.which)
+    void takeSoporteFile(target.which, f)
   }
 
   const hayLineasOc = modoMultiOc && lineasResumen.length > 0
@@ -662,6 +689,7 @@ export default function EntradaRegistroTablet({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose?.()
       }}
+      onPaste={onPasteSoporte}
     >
       <div
         data-testid="entrada-tablet-popup"
@@ -681,6 +709,7 @@ export default function EntradaRegistroTablet({
           alignSelf: 'center',
         }}
         onClick={(e) => e.stopPropagation()}
+        onPaste={onPasteSoporte}
       >
         <CcModalBrandHeader theme={theme} />
         <div style={{
@@ -1343,12 +1372,22 @@ export default function EntradaRegistroTablet({
               )}
 
               <div style={{ fontWeight: 800, marginTop: 2 }}>Soportes</div>
+              {pasteHint && (
+                <div
+                  data-testid="entrada-tablet-paste-hint"
+                  style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 700, fontSize: '0.9rem' }}
+                >
+                  {pasteHint}
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <EntradaSoportePicker
                   kind="remision"
                   file={fotoRemision}
                   previewUrl={fotoRemisionPreview}
                   busy={busy}
+                  selected={soporteFocus === 'remision'}
+                  onSelect={setSoporteFocus}
                   onPickFile={(e) => { void takeSoporte('remision', e) }}
                   labelReady="Remisión ✓"
                   labelEmpty="Falta la remisión"
@@ -1358,6 +1397,8 @@ export default function EntradaRegistroTablet({
                   file={fotoMaterial}
                   previewUrl={fotoMaterialPreview}
                   busy={busy}
+                  selected={soporteFocus === 'material'}
+                  onSelect={setSoporteFocus}
                   onPickFile={(e) => { void takeSoporte('material', e) }}
                   labelReady="Descargue ✓"
                   labelEmpty="Falta la foto del descargue"

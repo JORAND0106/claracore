@@ -62,6 +62,20 @@ export function avisosEnvioOc(envios) {
     })
 }
 
+/** Perfil sin correo: el envío usó el buzón institucional como Reply-To/CC. */
+export function avisosSinCorreoAprobador(envios) {
+  return (envios || [])
+    .filter((e) => e && e.aviso_sin_correo_aprobador)
+    .map((e) => {
+      const n = e.numero_oc != null ? `OC #${e.numero_oc}` : 'La orden de compra'
+      return (
+        `${n}: su perfil no tiene correo registrado. `
+        + 'Regístrelo para que las respuestas del proveedor le lleguen directo; '
+        + 'esta vez se usó el buzón institucional.'
+      )
+    })
+}
+
 /** Fila de la grilla a partir de la solicitud que acaba de quedar con OC, sin esperar el listado. */
 export function filaSolicitudTrasOc(sol, ocsExtra) {
   if (!sol?.id) return null

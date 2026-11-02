@@ -6,6 +6,7 @@ import {
   avisosDocumentoSistemaOc,
   avisosEnvioEnProceso,
   avisosEnvioOc,
+  avisosSinCorreoAprobador,
   etiquetasInicialesOc,
   mensajeInicialOc,
 } from './ocGeneradaMensaje'
@@ -41,6 +42,7 @@ export default function OcGeneradaMensajeModal({
   const avisos = useMemo(() => avisosEnvioOc(enviosLocal), [enviosLocal])
   const avisosProceso = useMemo(() => avisosEnvioEnProceso(enviosLocal), [enviosLocal])
   const avisosSistema = useMemo(() => avisosDocumentoSistemaOc(enviosLocal), [enviosLocal])
+  const avisosSinCorreo = useMemo(() => avisosSinCorreoAprobador(enviosLocal), [enviosLocal])
   const pendientes = useMemo(
     () => (enviosLocal || []).filter((e) => e && e.resultado !== 'enviado' && e.resultado !== 'sistema' && e.orden_compra_id),
     [enviosLocal],
@@ -236,6 +238,23 @@ export default function OcGeneradaMensajeModal({
             }}
           >
             {avisosSistema.map((t) => (
+              <div key={t}>{t}</div>
+            ))}
+          </div>
+        )}
+        {avisosSinCorreo.length > 0 && (
+          <div
+            data-testid="oc-envio-sin-correo-aprobador"
+            style={{
+              marginBottom: 12,
+              padding: '8px 10px',
+              borderRadius: 8,
+              ...estiloAvisoAlmacen(contraste, 'warn'),
+              fontSize: 'var(--cc-sm)',
+              lineHeight: 1.45,
+            }}
+          >
+            {avisosSinCorreo.map((t) => (
               <div key={t}>{t}</div>
             ))}
           </div>

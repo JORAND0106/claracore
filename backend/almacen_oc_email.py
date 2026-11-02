@@ -11,6 +11,7 @@ import os
 import re
 import smtplib
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Dict, List, Optional
 
 _log = logging.getLogger("claracore.almacen.oc_email")
@@ -227,23 +228,99 @@ def _smtp_plataforma_oc() -> dict:
     }
 
 
+def resolver_cabeceras_envio_oc(
+    *,
+    contacto: dict,
+    from_email: str,
+    correo_override: Optional[str] = None,
+    cc_contrato: Optional[List[str]] = None,
+) -> dict:
+    """From visible, Reply-To y CC según quien aprobó / redirección de prueba.
+
+    - Remitente SMTP sigue siendo contactenos@…; el nombre visible es «Nombre (ClaraCore)».
+    - Reply-To y CC: correo de quien aprobó; con override de prueba, van al override
+      (nunca al comercial real), salvo que sea la misma persona.
+    - Sin correo del aprobador: Reply-To/CC = buzón institucional + aviso.
+    """
+    plataforma = correo_valido(from_email) or "contactenos@claracore.co"
+    nombre = (contacto.get("nombre") or "Usuario").strip() or "Usuario"
+    email_aprob = correo_valido(contacto.get("email"))
+    override = correo_valido(correo_override) if correo_override else None
+    from_display = f"{nombre} (ClaraCore)"
+    aviso_sin_correo = False
+
+    if override:
+        reply_to = override
+        cc_list = [override]
+    elif email_aprob:
+        reply_to = email_aprob
+        cc_list = [email_aprob]
+    else:
+        reply_to = plataforma
+        cc_list = [plataforma]
+        aviso_sin_correo = True
+
+    for extra in cc_contrato or []:
+        c = correo_valido(extra)
+        if c and c.casefold() not in {x.casefold() for x in cc_list}:
+            # Con redirección de prueba no se añaden CC reales del contrato.
+            if override and c.casefold() != override.casefold():
+                continue
+            cc_list.append(c)
+
+    # No duplicar el To en CC: se filtra al enviar por destinatario.
+    return {
+        "from_display_name": from_display,
+        "from_email": plataforma,
+        "reply_to": reply_to,
+        "cc": cc_list,
+        "aviso_sin_correo_aprobador": aviso_sin_correo,
+    }
+
+
 def enviar_pdf_correo(
     destinatario: str,
     subject: str,
     body: str,
     pdf_bytes: bytes,
     pdf_nombre: str,
-) -> None:
-    """Envía el PDF desde contactenos@claracore.co (mismo flujo que el resto de ClaraCore)."""
+    *,
+    html_body: Optional[str] = None,
+    from_display_name: Optional[str] = None,
+    reply_to: Optional[str] = None,
+    cc: Optional[List[str]] = None,
+) -> dict:
+    """Envía el PDF desde contactenos@claracore.co (mismo flujo que el resto de ClaraCore).
+
+    Devuelve metadatos efectivos del mensaje (From, Reply-To, CC) para el registro.
+    """
     to_addr = correo_valido(destinatario)
     if not to_addr:
         raise RuntimeError("El correo del destinatario no es válido.")
     cfg = _smtp_plataforma_oc()
+    from_email = cfg["from_email"]
+    display = (from_display_name or cfg.get("from_name") or "ClaraCore").strip()
+    reply = correo_valido(reply_to) or from_email
+    cc_clean: List[str] = []
+    for raw in cc or []:
+        c = correo_valido(raw)
+        if not c:
+            continue
+        if c.casefold() == to_addr.casefold():
+            continue
+        if c.casefold() not in {x.casefold() for x in cc_clean}:
+            cc_clean.append(c)
+
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
+    msg["From"] = formataddr((display, from_email))
     msg["To"] = to_addr
+    msg["Reply-To"] = reply
+    if cc_clean:
+        msg["Cc"] = ", ".join(cc_clean)
     msg.set_content(body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
     nombre = (pdf_nombre or "orden-de-compra.pdf").strip() or "orden-de-compra.pdf"
     msg.add_attachment(pdf_bytes or b"", maintype="application", subtype="pdf", filename=nombre)
     with smtplib.SMTP(cfg["host"], cfg["port"], timeout=45) as smtp:
@@ -253,7 +330,14 @@ def enviar_pdf_correo(
             smtp.ehlo()
         if cfg.get("user") and cfg.get("password"):
             smtp.login(cfg["user"], cfg["password"])
-        smtp.send_message(msg)
+        # Incluir CC en el envelope SMTP.
+        smtp.send_message(msg, to_addrs=[to_addr, *cc_clean])
+    return {
+        "remitente": formataddr((display, from_email)),
+        "reply_to": reply,
+        "cc": ", ".join(cc_clean) if cc_clean else None,
+        "destinatario": to_addr,
+    }
 
 
 def _ausente(exc: BaseException) -> bool:
@@ -273,25 +357,71 @@ def _now():
     return _now_iso()
 
 
-def listar_envios_oc(sb, oc_id: int) -> List[dict]:
+def listar_cc_contrato_oc(sb, contrato_id: int) -> List[str]:
+    """CC fijos del contrato (tabla reservada). Sin filas → lista vacía. Escalable sin UI aún."""
     try:
         rows = (
-            sb.table("almacen_orden_compra_envio")
-            .select("id, destinatario, disparado_por, disparado_por_nombre, resultado, detalle, created_at")
-            .eq("orden_compra_id", int(oc_id))
-            .order("created_at")
+            sb.table("almacen_contrato_oc_cc")
+            .select("email")
+            .eq("contrato_id", int(contrato_id))
+            .eq("activo", True)
             .execute()
             .data
             or []
         )
     except Exception as exc:
         if not _ausente(exc):
-            _log.warning("No se pudo leer el registro de envío de la OC %s: %s", oc_id, exc)
+            _log.warning("No se pudo leer CC de contrato %s: %s", contrato_id, exc)
         return []
-    return rows
+    out: List[str] = []
+    for r in rows:
+        c = correo_valido((r or {}).get("email"))
+        if c and c.casefold() not in {x.casefold() for x in out}:
+            out.append(c)
+    return out
 
 
-def _registrar_envio(sb, *, oc_id, contrato_id, destinatario, user_id, nombre, resultado, detalle) -> bool:
+def listar_envios_oc(sb, oc_id: int) -> List[dict]:
+    selects = (
+        "id, destinatario, remitente, reply_to, cc, disparado_por, disparado_por_nombre, "
+        "resultado, detalle, created_at",
+        "id, destinatario, disparado_por, disparado_por_nombre, resultado, detalle, created_at",
+    )
+    for select in selects:
+        try:
+            rows = (
+                sb.table("almacen_orden_compra_envio")
+                .select(select)
+                .eq("orden_compra_id", int(oc_id))
+                .order("created_at")
+                .execute()
+                .data
+                or []
+            )
+            return rows
+        except Exception as exc:
+            if _ausente(exc) and "remitente" in select:
+                continue
+            if not _ausente(exc):
+                _log.warning("No se pudo leer el registro de envío de la OC %s: %s", oc_id, exc)
+            return []
+    return []
+
+
+def _registrar_envio(
+    sb,
+    *,
+    oc_id,
+    contrato_id,
+    destinatario,
+    user_id,
+    nombre,
+    resultado,
+    detalle,
+    remitente: Optional[str] = None,
+    reply_to: Optional[str] = None,
+    cc: Optional[str] = None,
+) -> bool:
     row = {
         "orden_compra_id": int(oc_id),
         "contrato_id": int(contrato_id),
@@ -301,14 +431,30 @@ def _registrar_envio(sb, *, oc_id, contrato_id, destinatario, user_id, nombre, r
         "resultado": resultado,
         "detalle": (detalle or "")[:500] or None,
         "created_at": _now(),
+        "remitente": (remitente or "")[:300] or None,
+        "reply_to": (reply_to or "")[:200] or None,
+        "cc": (cc or "")[:500] or None,
     }
-    try:
-        sb.table("almacen_orden_compra_envio").insert(row).execute()
-        return True
-    except Exception as exc:
-        if not _ausente(exc):
-            _log.warning("No se pudo registrar el envío de la OC %s: %s", oc_id, exc)
-        return False
+    omitted = set()
+    for _ in range(4):
+        body = {k: v for k, v in row.items() if k not in omitted}
+        try:
+            sb.table("almacen_orden_compra_envio").insert(body).execute()
+            return True
+        except Exception as exc:
+            text = str(exc).lower()
+            col = None
+            for key in ("remitente", "reply_to", "cc"):
+                if key in text and key not in omitted:
+                    col = key
+                    break
+            if col:
+                omitted.add(col)
+                continue
+            if not _ausente(exc):
+                _log.warning("No se pudo registrar el envío de la OC %s: %s", oc_id, exc)
+            return False
+    return False
 
 
 def _quitar_documento_sistema(sb, oc_id: int) -> bool:
@@ -486,7 +632,18 @@ def _items_solicitud_de_oc(sb, oc: dict) -> List[dict]:
     return rows
 
 
-def _asunto_cuerpo(oc: dict, contrato: dict, contacto: dict) -> tuple[str, str]:
+def _html_escape(s: str) -> str:
+    return (
+        str(s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _asunto_cuerpo(oc: dict, contrato: dict, contacto: dict) -> tuple[str, str, str]:
+    """Devuelve (asunto, texto plano, html)."""
     numero = oc.get("numero_oc")
     if numero is None or str(numero).strip() == "":
         numero = None
@@ -499,11 +656,17 @@ def _asunto_cuerpo(oc: dict, contrato: dict, contacto: dict) -> tuple[str, str]:
     else:
         asunto = f"Orden de compra N.° {numero} — contrato {contrato_txt}"
         apertura = f"Adjuntamos la orden de compra N.° {numero}."
+    nombre = (contacto.get("nombre") or "nuestro equipo").strip() or "nuestro equipo"
+    email_aprob = correo_valido(contacto.get("email")) or "contactenos@claracore.co"
     contacto_bits = [contacto.get("nombre") or ""]
     if contacto.get("email"):
         contacto_bits.append(contacto["email"])
     if contacto.get("telefono"):
         contacto_bits.append(contacto["telefono"])
+    responder_txt = (
+        f"Por favor responda a todos, para que su respuesta llegue a {nombre} "
+        f"({email_aprob}) y a contactenos@claracore.co."
+    )
     lineas = [
         apertura,
         f"Contrato: {contrato_txt}" + (f" — {contratista}" if contratista else ""),
@@ -512,8 +675,31 @@ def _asunto_cuerpo(oc: dict, contrato: dict, contacto: dict) -> tuple[str, str]:
         lineas.append(f"Objeto: {objeto}")
     lineas.append("Generada por: " + " · ".join(x for x in contacto_bits if x))
     lineas.append("")
+    lineas.append(responder_txt)
+    lineas.append("")
     lineas.append("El archivo adjunto es el PDF de esta orden de compra.")
-    return asunto, "\n".join(lineas)
+    texto = "\n".join(lineas)
+
+    html_parts = [
+        f"<p>{_html_escape(apertura)}</p>",
+        f"<p>Contrato: {_html_escape(contrato_txt)}"
+        + (f" — {_html_escape(contratista)}" if contratista else "")
+        + "</p>",
+    ]
+    if objeto:
+        html_parts.append(f"<p>Objeto: {_html_escape(objeto)}</p>")
+    html_parts.append(
+        "<p>Generada por: "
+        + _html_escape(" · ".join(x for x in contacto_bits if x))
+        + "</p>"
+    )
+    html_parts.append(
+        "<p style=\"margin:16px 0;padding:12px 14px;background:#fff3cd;border:1px solid #f0c36d;"
+        "border-radius:8px;color:#78350f;\">"
+        f"<strong>{_html_escape(responder_txt)}</strong></p>"
+    )
+    html_parts.append("<p>El archivo adjunto es el PDF de esta orden de compra.</p>")
+    return asunto, texto, "".join(html_parts)
 
 
 def _resumen(oc: dict, *, resultado: str, detalle: str, destinatarios: List[str], persistido: bool) -> dict:
@@ -570,17 +756,36 @@ def enviar_oc_por_correo(
         pdf_nombre = oc.get("pdf_nombre") or nombre_archivo_pdf_oc(oc)
     contacto = _contacto_generador(sb, int(user_id))
     contrato = _contrato_breve(sb, int(contrato_id))
-    asunto, cuerpo = _asunto_cuerpo(oc, contrato, contacto)
+    asunto, cuerpo, cuerpo_html = _asunto_cuerpo(oc, contrato, contacto)
+    try:
+        cfg_smtp = _smtp_plataforma_oc()
+        from_email_plat = cfg_smtp.get("from_email") or "contactenos@claracore.co"
+    except Exception:
+        from_email_plat = "contactenos@claracore.co"
+    cc_contrato = listar_cc_contrato_oc(sb, int(contrato_id))
 
     override = correo_valido(correo_override) if correo_override else None
+    cab = resolver_cabeceras_envio_oc(
+        contacto=contacto,
+        from_email=from_email_plat,
+        correo_override=override,
+        cc_contrato=cc_contrato,
+    )
+    aviso_sin_correo = cab.get("aviso_sin_correo_aprobador")
+
     if correo_override and not override:
         detalle = "El correo indicado no es válido. La orden quedó pendiente de envío."
         ok = _registrar_envio(
             sb, oc_id=oc_id, contrato_id=contrato_id, destinatario=str(correo_override).strip(),
             user_id=user_id, nombre=contacto["nombre"], resultado="error", detalle=detalle,
+            remitente=f"{cab['from_display_name']} <{cab['from_email']}>",
+            reply_to=cab["reply_to"],
+            cc=", ".join(cab["cc"]) if cab.get("cc") else None,
         )
         marcado = _marcar_estado_oc(sb, oc_id, "pendiente", None)
-        return _resumen(oc, resultado="error", detalle=detalle, destinatarios=[], persistido=ok and marcado)
+        out = _resumen(oc, resultado="error", detalle=detalle, destinatarios=[], persistido=ok and marcado)
+        out["aviso_sin_correo_aprobador"] = bool(aviso_sin_correo)
+        return out
 
     if override:
         destinatarios = [override]
@@ -597,32 +802,54 @@ def enviar_oc_por_correo(
         ok = _registrar_envio(
             sb, oc_id=oc_id, contrato_id=contrato_id, destinatario=None,
             user_id=user_id, nombre=contacto["nombre"], resultado="pendiente", detalle=detalle,
+            remitente=f"{cab['from_display_name']} <{cab['from_email']}>",
+            reply_to=cab["reply_to"],
+            cc=", ".join(cab["cc"]) if cab.get("cc") else None,
         )
         marcado = _marcar_estado_oc(sb, oc_id, "pendiente", None)
-        return _resumen(oc, resultado="pendiente", detalle=detalle, destinatarios=[], persistido=ok and marcado)
+        out = _resumen(oc, resultado="pendiente", detalle=detalle, destinatarios=[], persistido=ok and marcado)
+        out["aviso_sin_correo_aprobador"] = bool(aviso_sin_correo)
+        return out
 
     if not pdf_bytes:
         detalle = "No se pudo adjuntar el PDF. La orden quedó pendiente de envío."
         ok = _registrar_envio(
             sb, oc_id=oc_id, contrato_id=contrato_id, destinatario=", ".join(destinatarios),
             user_id=user_id, nombre=contacto["nombre"], resultado="error", detalle=detalle,
+            remitente=f"{cab['from_display_name']} <{cab['from_email']}>",
+            reply_to=cab["reply_to"],
+            cc=", ".join(cab["cc"]) if cab.get("cc") else None,
         )
         marcado = _marcar_estado_oc(sb, oc_id, "pendiente", ", ".join(destinatarios))
-        return _resumen(
+        out = _resumen(
             oc, resultado="error", detalle=detalle, destinatarios=destinatarios, persistido=ok and marcado,
         )
+        out["aviso_sin_correo_aprobador"] = bool(aviso_sin_correo)
+        return out
 
     enviados: List[str] = []
     fallos: List[str] = []
     persistido = True
     for correo in destinatarios:
         try:
-            enviar_pdf_correo(correo, asunto, cuerpo, pdf_bytes, pdf_nombre)
+            meta = enviar_pdf_correo(
+                correo, asunto, cuerpo, pdf_bytes, pdf_nombre,
+                html_body=cuerpo_html,
+                from_display_name=cab["from_display_name"],
+                reply_to=cab["reply_to"],
+                cc=cab.get("cc") or [],
+            )
             enviados.append(correo)
+            detalle_ok = "PDF enviado."
+            if aviso_sin_correo:
+                detalle_ok += " Aviso: registre su correo en el perfil; se usó el buzón institucional."
             persistido = _registrar_envio(
                 sb, oc_id=oc_id, contrato_id=contrato_id, destinatario=correo,
                 user_id=user_id, nombre=contacto["nombre"], resultado="enviado",
-                detalle="PDF enviado.",
+                detalle=detalle_ok,
+                remitente=meta.get("remitente"),
+                reply_to=meta.get("reply_to"),
+                cc=meta.get("cc"),
             ) and persistido
         except Exception as exc:
             msg = str(exc).strip() or "No se pudo enviar el correo."
@@ -630,6 +857,9 @@ def enviar_oc_por_correo(
             persistido = _registrar_envio(
                 sb, oc_id=oc_id, contrato_id=contrato_id, destinatario=correo,
                 user_id=user_id, nombre=contacto["nombre"], resultado="error", detalle=msg,
+                remitente=f"{cab['from_display_name']} <{cab['from_email']}>",
+                reply_to=cab["reply_to"],
+                cc=", ".join(cab["cc"]) if cab.get("cc") else None,
             ) and persistido
     if fallos or not enviados:
         detalle = (
@@ -637,15 +867,26 @@ def enviar_oc_por_correo(
             + ("; ".join(fallos) if fallos else "No se pudo enviar el correo.")
         )
         marcado = _marcar_estado_oc(sb, oc_id, "pendiente", ", ".join(destinatarios))
-        return _resumen(
+        out = _resumen(
             oc, resultado="error", detalle=detalle, destinatarios=enviados,
             persistido=persistido and marcado,
         )
+        out["aviso_sin_correo_aprobador"] = bool(aviso_sin_correo)
+        return out
     marcado = _marcar_estado_oc(sb, oc_id, "enviado", ", ".join(enviados))
-    return _resumen(
-        oc, resultado="enviado", detalle="PDF enviado.",
+    detalle_final = "PDF enviado."
+    if aviso_sin_correo:
+        detalle_final += (
+            " Su perfil no tiene correo: registrelo para que las respuestas le lleguen directo."
+        )
+    out = _resumen(
+        oc, resultado="enviado", detalle=detalle_final,
         destinatarios=enviados, persistido=persistido and marcado,
     )
+    out["aviso_sin_correo_aprobador"] = bool(aviso_sin_correo)
+    out["reply_to"] = cab["reply_to"]
+    out["cc"] = cab.get("cc") or []
+    return out
 
 
 def _publicar_pdf_sin_correo(contrato_id: int, oc: dict, user_id: int) -> bool:
