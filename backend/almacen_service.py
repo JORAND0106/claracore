@@ -8577,28 +8577,55 @@ def upsert_transportador(contrato_id: int, user_id: int, placa: str, nombre: str
 
 
 def download_disposicion_pdf(contrato_id: int, entrada_id: int) -> tuple:
+    import time
+
     from almacen_pos_pdf_common import needs_pos_regen
 
     ent = get_entrada(contrato_id, entrada_id)
     if ent.get("tipo") not in ("disposicion", "recibo"):
         raise ValueError("Esta entrada no tiene PDF POS de Despachador.")
-    path = ent.get("disposicion_pdf_blob_path")
-    data = None
-    if path:
+    fname = ent.get("disposicion_pdf_nombre") or f"entrada-{entrada_id}.pdf"
+
+    def _try_blob(row: dict):
+        path = row.get("disposicion_pdf_blob_path")
+        if not path:
+            return None
         try:
             data, _mime = download_soporte(path)
         except Exception as exc:
             _log.warning("Descarga PDF entrada %s: %s", entrada_id, exc)
-            data = None
-    if data and not needs_pos_regen(data):
-        fname = ent.get("disposicion_pdf_nombre") or f"entrada-{entrada_id}.pdf"
+            return None
+        if data and not needs_pos_regen(data):
+            return data
+        return None
+
+    data = _try_blob(ent)
+    if data:
         return data, fname
+
+    # Esperar al hilo de generación post-create (evita regenerar en paralelo).
+    for _ in range(8):
+        time.sleep(0.4)
+        try:
+            ent = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
+        except Exception:
+            break
+        data = _try_blob(ent)
+        if data:
+            return data, fname
+        if not ent.get("disposicion_pdf_blob_path"):
+            continue
+        break
+
     try:
         _regenerar_pdf_pos_entrada(contrato_id, entrada_id, ent)
-        ent = get_entrada(contrato_id, entrada_id)
-        path = ent.get("disposicion_pdf_blob_path")
-        if path:
-            data, _mime = download_soporte(path)
+        ent = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
+        data = _try_blob(ent)
+        if not data and ent.get("disposicion_pdf_blob_path"):
+            try:
+                data, _mime = download_soporte(ent["disposicion_pdf_blob_path"])
+            except Exception:
+                data = None
     except Exception as exc:
         _log.warning("Regenerar PDF POS entrada %s: %s", entrada_id, exc)
     if not data:

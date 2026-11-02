@@ -41,6 +41,7 @@ import {
 } from './entradaSoportePaste'
 import {
   buildItemsFromOcSeleccion,
+  consolidarResumenInsumos,
   countSearchDisplay,
   distributeCantidadOverLineas,
   filterOcsForSearch,
@@ -184,11 +185,17 @@ export default function EntradaRegistroTablet({
   const [galeriaKind, setGaleriaKind] = useState(null) // 'remision' | 'material' | null
   const [previewSoporte, setPreviewSoporte] = useState(null) // 'remision' | 'material' | null
   const [tablaVista, setTablaVista] = useState({ visible: 0, total: 0, hayOcultas: false, marcadasOcultas: 0 })
+  const [savePhase, setSavePhase] = useState('')
+  const [pdfHint, setPdfHint] = useState('')
 
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
   const cantNum = Number(cantidad)
   const lineasResumen = useMemo(() => resumenLineasSeleccion(ocSeleccion), [ocSeleccion])
+  const lineasResumenVista = useMemo(
+    () => consolidarResumenInsumos(lineasResumen),
+    [lineasResumen],
+  )
   const modoMultiOc = Boolean(ocCard && ocSeleccion.length)
   const superaSaldo = modoMultiOc
     ? lineasResumen.some((ln) => ln.supera)
@@ -362,6 +369,8 @@ export default function EntradaRegistroTablet({
     setGaleriaKind(null)
     setPreviewSoporte(null)
     setTablaVista({ visible: 0, total: 0, hayOcultas: false, marcadasOcultas: 0 })
+    setSavePhase('')
+    setPdfHint('')
   }
 
   const elegirTipo = (t) => {
@@ -727,6 +736,8 @@ export default function EntradaRegistroTablet({
     }
     setBusy(true)
     setError('')
+    setPdfHint('')
+    setSavePhase('Guardando…')
     try {
       const fd = new FormData()
       fd.append('tipo', tipo)
@@ -756,6 +767,7 @@ export default function EntradaRegistroTablet({
         if (!items.length) {
           setError('Marque al menos un insumo e indique su cantidad.')
           setBusy(false)
+          setSavePhase('')
           return
         }
       } else if (insumoSel?.lineas?.length) {
@@ -772,15 +784,33 @@ export default function EntradaRegistroTablet({
       if (fotoRemisionHash) fd.append('remision_content_hash', fotoRemisionHash)
       if (fotoMaterialHash) fd.append('material_content_hash', fotoMaterialHash)
 
+      // Crítico: validar + registrar + saldo + soportes. PDF/impresión en segundo plano.
+      const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
       const r = await api.createEntrada(fd)
-      setOkMsg(r?.por_revisar ? 'Guardado · por revisar' : 'Guardado')
+      const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+      setOkMsg(
+        `${r?.por_revisar ? 'Guardado · por revisar' : 'Guardado'}`
+        + (r?.codigo ? ` · ${r.codigo}` : '')
+        + ` · ${Math.max(1, Math.round(ms / 100) / 10)}s`,
+      )
       onSaved?.(r)
+      setBusy(false)
+      setSavePhase('')
       if (r?.id) {
-        try {
-          await api.printDisposicionPdf(r.id)
-        } catch {
-          try { await api.openDisposicionPdf(r.id) } catch { /* ignore */ }
-        }
+        setPdfHint('Preparando recibo térmico…')
+        void (async () => {
+          try {
+            await api.printDisposicionPdf(r.id, { retries: 10, retryDelayMs: 450 })
+            setPdfHint('')
+          } catch {
+            try {
+              await api.openDisposicionPdf(r.id, { retries: 4, retryDelayMs: 500 })
+              setPdfHint('')
+            } catch {
+              setPdfHint('Recibo guardado, pero no se pudo imprimir. Reintente desde el listado de entradas.')
+            }
+          }
+        })()
       }
       setTimeout(() => {
         resetFlujo()
@@ -789,11 +819,12 @@ export default function EntradaRegistroTablet({
         setTipo(null)
         setPaso(PASO.INICIO)
         setOkMsg('')
-      }, 900)
+        setPdfHint('')
+      }, 1200)
     } catch (e) {
       setError(e.message || 'No se pudo guardar')
-    } finally {
       setBusy(false)
+      setSavePhase('')
     }
   }
 
@@ -1840,8 +1871,8 @@ export default function EntradaRegistroTablet({
                 </div>
                 <div>📍 {(pkLabel || pkId) ? `${pkLabel || pkId}${tramo ? ` · ${tramo}` : ''}` : 'Sin sector'}</div>
                 {modoMultiOc ? (
-                  <div style={{ marginTop: 6, display: 'grid', gap: 4 }}>
-                    {lineasResumen.map((ln) => (
+                  <div data-testid="entrada-tablet-resumen-insumos" style={{ marginTop: 6, display: 'grid', gap: 4 }}>
+                    {lineasResumenVista.map((ln) => (
                       <div key={ln.key} style={{ fontWeight: 700 }}>
                         🧱 {ln.material_descripcion}: {fmtCant(ln.cantidad)} {ln.unidad}
                         {ln.supera ? ' ⚠' : ''}
@@ -1910,11 +1941,16 @@ export default function EntradaRegistroTablet({
                 type="button"
                 data-testid="entrada-tablet-guardar"
                 style={btnHome('#16a34a')}
-                disabled={busy || !fotosCompletas || superaSaldo}
+                disabled={busy || !fotosCompletas || !numeroRemisionListo || superaSaldo}
                 onClick={() => { void guardar() }}
               >
-                {busy ? 'Guardando…' : 'Guardar'}
+                {busy ? (savePhase || 'Guardando…') : 'Guardar'}
               </button>
+              {pdfHint && (
+                <div data-testid="entrada-tablet-pdf-hint" style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 700 }}>
+                  {pdfHint}
+                </div>
+              )}
               <button
                 type="button"
                 data-testid="entrada-tablet-corregir"

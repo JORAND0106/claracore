@@ -18,15 +18,15 @@ LEGACY_COPIA_ALTO_ENTRADA_MM = 200
 LEGACY_COPIA_ALTO_SALIDA_MM = 220
 
 # Estimación base por copia (encabezado + campos estándar + cantidad + footer).
-# Calibrado para que xhtml2pdf no desborde a 2.ª página en contenido típico.
-_BASE_COPIA_MM = 148
+# Debe cubrir el HTML sin partir a 2.ª página; el alto total = suma × N copias.
+_BASE_COPIA_MM = 142
 _ADMIN_BLOCK_MM = 8
 _ADMIN_LINE_MM = 5
 _OBJETO_WRAP_MM = 4  # por cada ~45 chars extra del objeto
 _OBS_MM = 10
 _DEVOL_MM = 14
 _FIRMAS_STACK_MM = 36  # dos firmas apiladas verticalmente
-_PAD_MM = 14
+_PAD_MM = 10  # margen de seguridad + corte (sin hoja carta sobrante)
 
 
 def page_size_css(ancho_mm: int, alto_mm: int) -> str:
@@ -41,7 +41,7 @@ def estimate_copia_alto_mm(
     has_devol: bool = False,
     has_firmas: bool = False,
 ) -> int:
-    """Estima alto de una copia en mm (entero, con padding)."""
+    """Estima alto de una copia en mm (entero, con padding mínimo de corte)."""
     h = float(_BASE_COPIA_MM)
     obj = (objeto or "").strip()
     if len(obj) > 45:
@@ -55,7 +55,7 @@ def estimate_copia_alto_mm(
     if has_firmas:
         h += _FIRMAS_STACK_MM
     h += _PAD_MM
-    return max(110, int(round(h)))
+    return max(120, int(round(h)))
 
 
 def page_height_mm(copias_altos: Sequence[int]) -> int:
