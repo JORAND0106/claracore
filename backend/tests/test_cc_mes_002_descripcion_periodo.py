@@ -1,4 +1,4 @@
-"""CC-MES-002: descripción completa + Periodo (en lugar de Fecha acta)."""
+"""CC-MES-002: descripción completa + Periodo (banda 3 filas sin Fecha acta / Consecutivo)."""
 from __future__ import annotations
 
 import sys
@@ -73,8 +73,10 @@ def test_conc_meta_cc_mes_002_usa_periodo_no_fecha_acta():
     assert meta["codigo"] == "CC-MES-002"
     labels = [c[0] for c in meta["cells"]]
     assert "FECHA ACTA" not in labels
+    assert "CONSECUTIVO" not in labels
+    assert "CTO." in labels
     assert "PERÍODO" in labels
-    assert meta["cells"][3] == ("PERÍODO", "2025-01-01 → 2025-01-31")
+    assert meta["cells"][2] == ("PERÍODO", "2025-01-01 → 2025-01-31")
 
 
 def test_html_memoria_muestra_descripcion_completa_y_periodo():
@@ -124,11 +126,12 @@ def test_html_memoria_muestra_descripcion_completa_y_periodo():
         estilo_formato_codigo="CC-MES-002",
     )
     assert "FECHA ACTA" not in html
+    assert "CONSECUTIVO" not in html
+    assert "CTO." in html
     assert "PERÍODO" in html
     assert "2025-02-01 → 2025-02-28" in html
     assert "mem002-item-desc" in html
     assert desc in html
-    # Sin truncar a un prefijo: el texto completo del listado está en el HTML.
     assert html.count(desc) >= 1
 
 
@@ -181,12 +184,10 @@ def test_excel_memoria_descripcion_wrap_y_altura_y_periodo():
         pie_fotos_contexto="Acta RPO 1",
         aprobo_interventoria_desde_config=True,
     )
-    # Periodo en banda (fila 4, celda B4 = 4º campo)
-    assert ws["A4"].value == "PERÍODO"
-    assert ws["B4"].value == "2025-01-01 → 2025-01-31"
-    assert ws["E5"].value == desc
-    assert ws["E5"].alignment.wrap_text is True
-    assert (ws.row_dimensions[5].height or 0) >= 22
+    assert ws["E3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
+    assert ws["A5"].value == f"DESCRIPCIÓN\n{desc}"
+    assert ws["A5"].alignment.wrap_text is True
+    assert (ws.row_dimensions[5].height or 0) >= 34
 
 
 def test_excel_row_height_crece_con_descripcion_larga():
@@ -253,3 +254,4 @@ def test_html_encabezado_periodo_y_desc_en_fotos_y_graficos():
     assert html.count("mem002-item-desc") >= 3
     assert html.count(desc) >= 3
     assert "FECHA ACTA" not in html
+    assert "CONSECUTIVO" not in html

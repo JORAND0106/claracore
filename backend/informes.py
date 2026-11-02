@@ -12515,20 +12515,70 @@ def _periodo_acta_admin_fmt(acta: Optional[dict]) -> str:
 
 
 def _conc_meta_cc_mes_002(contrato_numero: Any, acta: Optional[dict]) -> Dict[str, Any]:
-    """Banda de identificación CC-MES-002: CONTRATO · ACTA RPO · CONSECUTIVO · PERÍODO · (+ CAPÍTULO)."""
+    """Banda CC-MES-002 (3 filas): CTO. · ACTA RPO · PERÍODO; luego CAPÍTULO · ÍTEM · UNIDAD; DESCRIPCIÓN."""
     ac = acta if isinstance(acta, dict) else {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or "—")
-    cons = str(ac.get("consecutivo") or "—")
     return {
         "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
         "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
+        "banda": "mes_3filas",
         "cells": [
-            ("CONTRATO", str(contrato_numero or "")),
+            ("CTO.", str(contrato_numero or "") or "—"),
             ("ACTA RPO", nrpo),
-            ("CONSECUTIVO", cons),
             ("PERÍODO", _periodo_acta_admin_fmt(ac)),
         ],
     }
+
+
+def _memoria_es_banda_mes_3filas(conc_meta: Optional[Dict[str, Any]], codigo: Any = None) -> bool:
+    """True si la memoria usa la banda CC-MES-002 de 3 filas (CTO/Acta/Período · Cap/Ítem/Und · Desc)."""
+    if isinstance(conc_meta, dict):
+        if str(conc_meta.get("banda") or "").strip().lower() == "mes_3filas":
+            return True
+        codigo = conc_meta.get("codigo") if codigo is None else codigo
+    return str(codigo or "").strip().upper() == CODIGO_FORMATO_CCD_CC_MES_002
+
+
+def _memoria_mes_3filas_id_cells(conc_meta: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """CTO. · ACTA RPO · PERÍODO desde conc_meta (tolera celdas legadas CONTRATO/CONSECUTIVO)."""
+    raw = list((conc_meta or {}).get("cells") or [])
+    by: Dict[str, Any] = {}
+    for c in raw:
+        if not c or len(c) < 2:
+            continue
+        key = (
+            str(c[0] or "")
+            .strip()
+            .upper()
+            .replace("Í", "I")
+            .replace("Ó", "O")
+            .replace(".", "")
+        )
+        by[key] = c[1]
+
+    def _v(key: str, *aliases: str) -> str:
+        for k in (key, *aliases):
+            if k in by and by[k] not in (None, ""):
+                return str(by[k])
+        if key in by:
+            return "—"
+        for k in aliases:
+            if k in by:
+                return "—"
+        return "—"
+
+    return [
+        ("CTO.", _v("CTO", "CONTRATO")),
+        ("ACTA RPO", _v("ACTA RPO")),
+        ("PERÍODO", _v("PERIODO")),
+    ]
+
+
+def _memoria_celda_etiqueta_valor(label: Any, value: Any) -> str:
+    """Texto de celda: etiqueta arriba y valor debajo (misma celda)."""
+    lab = str(label or "").strip() or "—"
+    val = value if value not in (None, "") else "—"
+    return f"{lab}\n{val}"
 
 
 def _excel_row_height_wrapped_text(
@@ -12539,7 +12589,10 @@ def _excel_row_height_wrapped_text(
     min_pt: float = 22.0,
     max_pt: float = 120.0,
 ) -> float:
-    """Altura de fila Excel para celda con wrap_text (descripción completa visible)."""
+    """Altura de fila Excel para celda con wrap_text (descripción completa visible).
+
+    Excel no autoajusta altura en celdas combinadas: hay que fijar ``row_dimensions``.
+    """
     t = "" if text is None else str(text).strip()
     if not t:
         return min_pt
@@ -12548,6 +12601,19 @@ def _excel_row_height_wrapped_text(
         n = len(para)
         lines += max(1, (n + max(chars_per_line, 1) - 1) // max(chars_per_line, 1))
     return float(min(max_pt, max(min_pt, lines * line_pt + 8.0)))
+
+
+def _excel_row_height_desc_banda_completa(desc: Any) -> float:
+    """Altura fila descripción a ancho completo (A:J), incl. línea de etiqueta DESCRIPCIÓN."""
+    # ~119 de ancho de columnas ≈ ~90–100 caracteres útiles; subestimar chars → altura mayor (segura).
+    cuerpo = str(desc or "").strip()
+    return _excel_row_height_wrapped_text(
+        _memoria_celda_etiqueta_valor("DESCRIPCIÓN", cuerpo or "—"),
+        chars_per_line=88,
+        line_pt=13.0,
+        min_pt=34.0,
+        max_pt=200.0,
+    )
 
 def _fn(n, dec=2):
     """Formatea número con decimales (inf/nan no rompen el PDF: format ',.' falla con inf)."""
@@ -12735,13 +12801,18 @@ body.mem002-doc .mem002-item-desc {
   overflow-wrap: break-word;
   overflow: visible;
   max-height: none;
-  line-height: 1.18;
+  height: auto;
+  line-height: 1.2;
   margin: 1px 0 0 0;
   padding: 0;
   font-size: 6.5pt;
   font-weight: normal;
   color: #1a1a2e;
   text-transform: none;
+}
+body.mem002-doc .mem002-banda-mes td {
+  vertical-align: top;
+  overflow: visible;
 }
 body.mem002-doc .mem002-section {
   page-break-after: avoid;
@@ -13839,61 +13910,110 @@ def _fill_memoria_excel_ws(
     ws["A2"].font = Font(bold=True, size=10, color="1E40AF")
     ws["A2"].alignment = Alignment(horizontal="center")
 
-    if conc_meta:
-        cells = _memoria_cells_con_capitulo(list(conc_meta.get("cells") or []), cap_val)
-    else:
-        cells = _memoria_cells_con_capitulo(
-            [
-                ("CONTRATO", str(contrato.get("numero") or "—")),
-                ("SUB CONTRATISTA", str(sub.get("razon_social") or "—")),
-                ("CORTE N°", corte_lbl),
-                ("PERÍODO", periodo),
-            ],
-            cap_val,
-        )
-    while len(cells) < 5:
-        cells.append(("", ""))
-    ws["A3"] = str(cells[0][0] or "")
-    ws["A3"].font = lbl_font
-    ws.merge_cells("B3:C3")
-    ws["B3"] = str(cells[0][1] or "—")
-    ws["D3"] = str(cells[1][0] or "")
-    ws["D3"].font = lbl_font
-    ws.merge_cells("E3:F3")
-    ws["E3"] = str(cells[1][1] or "—")
-    ws["G3"] = str(cells[2][0] or "")
-    ws["G3"].font = lbl_font
-    ws.merge_cells("H3:J3")
-    ws["H3"] = str(cells[2][1] or "—")
-    ws["A4"] = str(cells[3][0] or "")
-    ws["A4"].font = lbl_font
-    ws.merge_cells("B4:E4")
-    ws["B4"] = str(cells[3][1] or "—")
-    ws["F4"] = str(cells[4][0] or "")
-    ws["F4"].font = lbl_font
-    ws.merge_cells("G4:J4")
-    ws["G4"] = str(cells[4][1] or "—")
-    for rr, cols in ((3, (1, 2, 4, 5, 7, 8)), (4, (1, 2, 6, 7))):
-        for cc in cols:
-            ws.cell(row=rr, column=cc).border = bd
-
-    ws["A5"], ws["B5"] = "ÍTEM", str(item_info.get("item_numero") or "—")
-    ws.merge_cells("B5:C5")
-    ws["D5"] = "DESCRIPCIÓN"
-    ws["D5"].font = lbl_font
-    ws.merge_cells("E5:H5")
     desc_txt = str(item_info.get("item_descripcion") or "").strip()
-    ws["E5"] = desc_txt
-    ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
-    ws.row_dimensions[5].height = _excel_row_height_wrapped_text(desc_txt)
-    ws["I5"] = "UNIDAD"
-    ws["I5"].font = lbl_font
-    ws["J5"] = str(item_info.get("unidad") or "—")
-    for cc in (1, 2, 4, 5, 9, 10):
-        ws.cell(row=5, column=cc).border = bd
-        ws.cell(row=5, column=cc).alignment = Alignment(
-            wrap_text=(cc == 5), vertical="top"
-        )
+    it_num = str(item_info.get("item_numero") or "—")
+    it_und = str(item_info.get("unidad") or "—")
+    val_font = Font(size=9, bold=True, color="1A1A2E")
+    align_lv = Alignment(wrap_text=True, vertical="top", horizontal="left")
+
+    if _memoria_es_banda_mes_3filas(conc_meta, codigo_h):
+        # Fila 3: CTO. (A–C) | ACTA RPO (D, una celda) | PERÍODO (E–J)
+        cells3 = _memoria_mes_3filas_id_cells(conc_meta)
+        cto_lab, cto_val = cells3[0][0], cells3[0][1]
+        acta_lab, acta_val = cells3[1][0], cells3[1][1]
+        per_lab, per_val = cells3[2][0], cells3[2][1]
+        ws.merge_cells("A3:C3")
+        ws["A3"] = _memoria_celda_etiqueta_valor(cto_lab or "CTO.", cto_val)
+        ws["A3"].font = val_font
+        ws["A3"].alignment = align_lv
+        ws["D3"] = _memoria_celda_etiqueta_valor(acta_lab or "ACTA RPO", acta_val)
+        ws["D3"].font = val_font
+        ws["D3"].alignment = align_lv
+        ws.merge_cells("E3:J3")
+        ws["E3"] = _memoria_celda_etiqueta_valor(per_lab or "PERÍODO", per_val)
+        ws["E3"].font = val_font
+        ws["E3"].alignment = align_lv
+        ws.row_dimensions[3].height = 28
+        for cc in (1, 4, 5):
+            ws.cell(row=3, column=cc).border = bd
+
+        # Fila 4: CAPÍTULO (A–H, mayor ancho) | ÍTEM (I) | UNIDAD (J)
+        ws.merge_cells("A4:H4")
+        ws["A4"] = _memoria_celda_etiqueta_valor("CAPÍTULO", cap_val)
+        ws["A4"].font = val_font
+        ws["A4"].alignment = align_lv
+        ws["I4"] = _memoria_celda_etiqueta_valor("ÍTEM", it_num)
+        ws["I4"].font = val_font
+        ws["I4"].alignment = align_lv
+        ws["J4"] = _memoria_celda_etiqueta_valor("UNIDAD", it_und)
+        ws["J4"].font = val_font
+        ws["J4"].alignment = align_lv
+        ws.row_dimensions[4].height = 28
+        for cc in (1, 9, 10):
+            ws.cell(row=4, column=cc).border = bd
+
+        # Fila 5: DESCRIPCIÓN a todo el ancho (A–J); altura fijada (Excel no autoajusta merges).
+        ws.merge_cells("A5:J5")
+        ws["A5"] = _memoria_celda_etiqueta_valor("DESCRIPCIÓN", desc_txt or "—")
+        ws["A5"].font = Font(size=9, color="1A1A2E")
+        ws["A5"].alignment = align_lv
+        ws["A5"].border = bd
+        ws.row_dimensions[5].height = _excel_row_height_desc_banda_completa(desc_txt)
+    else:
+        if conc_meta:
+            cells = _memoria_cells_con_capitulo(list(conc_meta.get("cells") or []), cap_val)
+        else:
+            cells = _memoria_cells_con_capitulo(
+                [
+                    ("CONTRATO", str(contrato.get("numero") or "—")),
+                    ("SUB CONTRATISTA", str(sub.get("razon_social") or "—")),
+                    ("CORTE N°", corte_lbl),
+                    ("PERÍODO", periodo),
+                ],
+                cap_val,
+            )
+        while len(cells) < 5:
+            cells.append(("", ""))
+        ws["A3"] = str(cells[0][0] or "")
+        ws["A3"].font = lbl_font
+        ws.merge_cells("B3:C3")
+        ws["B3"] = str(cells[0][1] or "—")
+        ws["D3"] = str(cells[1][0] or "")
+        ws["D3"].font = lbl_font
+        ws.merge_cells("E3:F3")
+        ws["E3"] = str(cells[1][1] or "—")
+        ws["G3"] = str(cells[2][0] or "")
+        ws["G3"].font = lbl_font
+        ws.merge_cells("H3:J3")
+        ws["H3"] = str(cells[2][1] or "—")
+        ws["A4"] = str(cells[3][0] or "")
+        ws["A4"].font = lbl_font
+        ws.merge_cells("B4:E4")
+        ws["B4"] = str(cells[3][1] or "—")
+        ws["F4"] = str(cells[4][0] or "")
+        ws["F4"].font = lbl_font
+        ws.merge_cells("G4:J4")
+        ws["G4"] = str(cells[4][1] or "—")
+        for rr, cols in ((3, (1, 2, 4, 5, 7, 8)), (4, (1, 2, 6, 7))):
+            for cc in cols:
+                ws.cell(row=rr, column=cc).border = bd
+
+        ws["A5"], ws["B5"] = "ÍTEM", it_num
+        ws.merge_cells("B5:C5")
+        ws["D5"] = "DESCRIPCIÓN"
+        ws["D5"].font = lbl_font
+        ws.merge_cells("E5:H5")
+        ws["E5"] = desc_txt
+        ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[5].height = _excel_row_height_wrapped_text(desc_txt)
+        ws["I5"] = "UNIDAD"
+        ws["I5"].font = lbl_font
+        ws["J5"] = it_und
+        for cc in (1, 2, 4, 5, 9, 10):
+            ws.cell(row=5, column=cc).border = bd
+            ws.cell(row=5, column=cc).alignment = Alignment(
+                wrap_text=(cc == 5), vertical="top"
+            )
     r0 = 7
     ws.merge_cells(start_row=r0, start_column=1, end_row=r0, end_column=10)
     bar = ws.cell(row=r0, column=1, value="DETALLE DE CANTIDADES APROBADAS")
@@ -17148,14 +17268,93 @@ def _html_memoria_item_body(
     cap_val = _capitulo_memoria(item_info, registros) or "—"
 
     def encabezado():
-        # CC-SUB-002: logo | título | código → banda id (5 campos, incl. capítulo) → ítem | descripción | und.
-        # conc_meta: CC-SEM-002 / CC-MES-002 (sin sub/corte en metadatos).
+        # Encabezado institucional + banda de identificación.
+        # CC-MES-002: 3 filas (CTO.|Acta|Período · Cap.|Ítem|Und. · Descripción full-width).
+        # CC-SUB/SEM-002: banda 5 campos + fila ítem|descripción|unidad.
         bd = "border:1px solid #9ca3af"
         titulo = "RESUMEN ACTIVIDADES CONCILIACIÓN CORTE SUBCONTRATISTA"
-        codigo_h = _h("CC-SUB-002")
+        codigo_raw = "CC-SUB-002"
         if conc_meta:
             titulo = str(conc_meta.get("titulo") or titulo)
-            codigo_h = _h(str(conc_meta.get("codigo") or ""))
+            codigo_raw = str(conc_meta.get("codigo") or codigo_raw)
+        codigo_h = _h(codigo_raw)
+        it_num = _h(str(item_info.get("item_numero") or ""))
+        # Descripción completa del listado (sin recorte ni ellipsis).
+        it_desc = _h(str(item_info.get("item_descripcion") or "").strip())
+        it_und = _h(str(item_info.get("unidad") or ""))
+        lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
+        val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
+        fila1_h = "1.14cm"
+        logo_box_h = "1.08cm"
+        logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
+        lbl_blk = "font-size:6pt;color:#555;font-weight:normal;display:block;margin:0;padding:0;line-height:1.05;"
+        head_inst = f"""<tr>
+<td style="width:17%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+{logo_html}
+</td>
+<td style="width:65%;{bd};padding:2px 6px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+<div style="font-size:6.8pt;font-weight:bold;color:#111827;text-transform:uppercase;line-height:1.08;">{_h(titulo)}</div>
+</td>
+<td style="width:18%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
+<div style="font-size:10pt;font-weight:bold;color:#1e40af;line-height:1;">{codigo_h}</div>
+<div style="font-size:6pt;color:#64748b;margin-top:1px;">CCD</div>
+</td>
+</tr>"""
+
+        def _td_lv(lab: str, celval: Any, width_pct: str, *, bold_val: bool = True) -> str:
+            vstyle = val if bold_val else (
+                "font-size:6.5pt;font-weight:normal;color:#1a1a2e;line-height:1.18;"
+                "text-transform:none;word-wrap:break-word;overflow-wrap:break-word;"
+            )
+            shown = _h(str(celval) if celval not in (None, "") else "—")
+            return (
+                f'<td style="width:{width_pct};{bd};padding:2px 4px;vertical-align:top;">'
+                f'<span style="{lbl_blk}">{_h(lab)}</span>'
+                f'<span style="{vstyle};display:block;margin:1px 0 0 0;padding:0;">{shown}</span>'
+                f"</td>"
+            )
+
+        if _memoria_es_banda_mes_3filas(conc_meta, codigo_raw):
+            cells3 = _memoria_mes_3filas_id_cells(conc_meta)
+            # Anchos: CTO. ~36% · Acta RPO una celda ~14% · Período ~50%.
+            # Cap. ~72% (mayor importancia) · Ítem ~14% · Unidad ~14%.
+            # Descripción 100% full-width, altura adaptable.
+            r_id = (
+                "<tr>"
+                + _td_lv(str(cells3[0][0] or "CTO."), cells3[0][1], "36%")
+                + _td_lv(str(cells3[1][0] or "ACTA RPO"), cells3[1][1], "14%")
+                + _td_lv(str(cells3[2][0] or "PERÍODO"), cells3[2][1], "50%")
+                + "</tr>"
+            )
+            r_cap = (
+                "<tr>"
+                + _td_lv("CAPÍTULO", cap_val, "72%")
+                + _td_lv("ÍTEM", item_info.get("item_numero") or "", "14%")
+                + _td_lv("UNIDAD", item_info.get("unidad") or "", "14%")
+                + "</tr>"
+            )
+            r_desc = f"""<tr>
+<td colspan="3" style="{bd};padding:2px 4px;vertical-align:top;">
+<span style="{lbl_blk}">DESCRIPCIÓN</span>
+<div class="mem002-item-desc">{it_desc}</div>
+</td>
+</tr>"""
+            banda = f"""<tr>
+<td colspan="3" style="padding:0;">
+<table class="w100 mem002-banda-mes" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;">
+{r_id}
+{r_cap}
+{r_desc}
+</table>
+</td>
+</tr>"""
+            return (
+                f'<div class="mem002-head-wrap"><table class="w100" cellspacing="0" cellpadding="0" '
+                f'style="border-collapse:collapse;table-layout:fixed;width:100%;margin-bottom:1px;border:1px solid #9ca3af;">'
+                f"{head_inst}{banda}</table></div>"
+            )
+
+        if conc_meta:
             cells = _memoria_cells_con_capitulo(list(conc_meta.get("cells") or []), cap_val)
         else:
             cells = _memoria_cells_con_capitulo(
@@ -17170,34 +17369,13 @@ def _html_memoria_item_body(
         while len(cells) < 5:
             cells.append(("", ""))
         c5 = cells[:5]
-        it_num = _h(str(item_info.get("item_numero") or ""))
-        # Descripción completa del listado (sin recorte ni ellipsis).
-        it_desc = _h(str(item_info.get("item_descripcion") or "").strip())
-        it_und = _h(str(item_info.get("unidad") or ""))
-        lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
-        val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
-        fila1_h = "1.14cm"
-        logo_box_h = "1.08cm"
-        logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
-        lbl_blk = "font-size:6pt;color:#555;font-weight:normal;display:block;margin:0;padding:0;line-height:1.05;"
         row2 = ""
         for lab, celval in c5:
             row2 += f"""<td style="width:20%;{bd};padding:2px 4px;vertical-align:top;">
 <span style="{lbl}">{_h(str(lab))}</span><br/><span style="{val}">{_h(str(celval) if celval not in (None, '') else '—')}</span>
 </td>"""
         return f"""<div class="mem002-head-wrap"><table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;margin-bottom:1px;border:1px solid #9ca3af;">
-<tr>
-<td style="width:17%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-{logo_html}
-</td>
-<td style="width:65%;{bd};padding:2px 6px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-<div style="font-size:6.8pt;font-weight:bold;color:#111827;text-transform:uppercase;line-height:1.08;">{_h(titulo)}</div>
-</td>
-<td style="width:18%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-<div style="font-size:10pt;font-weight:bold;color:#1e40af;line-height:1;">{codigo_h}</div>
-<div style="font-size:6pt;color:#64748b;margin-top:1px;">CCD</div>
-</td>
-</tr>
+{head_inst}
 <tr>
 <td colspan="3" style="padding:0;">
 <table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;">
