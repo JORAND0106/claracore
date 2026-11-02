@@ -123,12 +123,73 @@ def test_excel_logo_real_sin_placeholder_logo():
     assert (ws.row_dimensions[1].height or 0) == 15
     assert (ws.row_dimensions[2].height or 0) == 15
     assert len(ws._images) >= 1
-    # Observación de una línea → altura estándar.
-    assert any(
-        abs((ws.row_dimensions[r].height or 0) - 16.0) < 0.01
-        for r in range(7, 20)
-        if ws.row_dimensions[r].height
+    logo = ws._images[0]
+    # Contain dentro de A1:B2 (2×15 pt) con margen: no debe llenar ni desbordar.
+    assert int(logo.height or 0) <= 28
+    assert int(logo.width or 0) <= 110
+    # Filas de detalle: sin altura forzada (comportamiento previo al ajuste).
+    for r in range(7, 20):
+        cell_a = ws.cell(row=r, column=1).value
+        if cell_a is None and ws.cell(row=r, column=10).value is None:
+            continue
+        # Filas de datos / subtotales no fijan row_dimensions.
+        if ws.cell(row=r, column=10).value is not None or isinstance(cell_a, (int, float)):
+            assert ws.row_dimensions[r].height is None, r
+
+
+def test_excel_detalle_sin_altura_forzada_por_observacion():
+    """La tabla de detalle no fija altura por observación (solo encabezado)."""
+    inf = _import_informes_with_stubs()
+    assert "_excel_row_height_observacion" not in inf._fill_memoria_excel_ws.__code__.co_names
+    assert not hasattr(inf, "_excel_row_height_observacion")
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": "Objeto",
+        "logo_contratista": None,
+    }
+    item_info = {
+        "item_numero": "1.1",
+        "item_descripcion": "Excavacion",
+        "unidad": "M3",
+        "capitulo": "1. PRELIMINARES",
+    }
+    regs = [
+        {
+            "numero_registro": i,
+            "cantidad_total": 1,
+            "capitulo": "1. PRELIMINARES",
+            "item_numero": "1.1",
+            "observacion": ("Obs larga " + ("X" * 80)) if i == 1 else "Corta",
+            "abscisa_inicial": f"K{i}",
+            "abscisa_final": f"K{i+1}",
+        }
+        for i in range(1, 4)
+    ]
+    conc_meta = inf._conc_meta_cc_mes_002(contrato, _acta())
+    wb = Workbook()
+    ws = wb.active
+    sub, corte = inf._sub_corte_dummy_memoria()
+    inf._fill_memoria_excel_ws(
+        ws,
+        contrato,
+        sub,
+        corte,
+        item_info,
+        regs,
+        {},
+        conc_meta=conc_meta,
+        pie_fotos_contexto="Acta RPO 1",
+        aprobo_interventoria_desde_config=True,
     )
+    # Encabezado sí conserva alturas exactas.
+    assert (ws.row_dimensions[1].height or 0) == 15
+    assert (ws.row_dimensions[3].height or 0) == inf._excel_row_height_objeto_banda("Objeto")
+    assert (ws.row_dimensions[5].height or 0) == inf._excel_row_height_desc_banda_completa(
+        "Excavacion"
+    )
+    # Ninguna fila de datos del detalle tiene altura explícita.
+    for r in range(9, 9 + len(regs) + 2):
+        assert ws.row_dimensions[r].height is None, r
 
 
 def test_html_mes_firmas_pie_y_encabezado_compacto():
