@@ -173,11 +173,14 @@ export default function ExpedienteCompraModal({
                   No hay intentos de envío registrados en esta orden.
                 </div>
               ) : (
-                <table style={{ width: '100%', fontSize: 'var(--cc-sm)' }}>
+                <table style={{ width: '100%', fontSize: 'var(--cc-sm)' }} data-testid="oc-envios-tabla">
                   <thead>
                     <tr>
                       <th style={ui.th}>Fecha</th>
                       <th style={ui.th}>Destinatario</th>
+                      <th style={ui.th}>Remitente</th>
+                      <th style={ui.th}>Responder a</th>
+                      <th style={ui.th}>Copia</th>
                       <th style={ui.th}>Quién</th>
                       <th style={ui.th}>Resultado</th>
                     </tr>
@@ -187,6 +190,9 @@ export default function ExpedienteCompraModal({
                       <tr key={ev.id || `${ev.created_at}-${ev.destinatario}`}>
                         <td style={ui.td}>{fmtFechaAlmacen(ev.created_at) || '—'}</td>
                         <td style={ui.td}>{ev.destinatario || '—'}</td>
+                        <td style={ui.td}>{ev.remitente || '—'}</td>
+                        <td style={ui.td}>{ev.reply_to || '—'}</td>
+                        <td style={ui.td}>{ev.cc || '—'}</td>
                         <td style={ui.td}>{ev.disparado_por_nombre || '—'}</td>
                         <td style={ui.td}>
                           {ev.resultado || '—'}

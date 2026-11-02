@@ -74,7 +74,7 @@ def test_correos_distintos_por_linea():
 
 
 def test_asunto_incluye_oc_contrato_y_contacto():
-    asunto, cuerpo = _asunto_cuerpo(
+    asunto, cuerpo, html = _asunto_cuerpo(
         {"numero_oc": 44},
         {"numero": "CT-9", "contratista": "Vías", "objeto": "Pavimento"},
         {"nombre": "Ana Ruiz", "email": "ana@obra.com", "telefono": "300"},
@@ -86,6 +86,11 @@ def test_asunto_incluye_oc_contrato_y_contacto():
     assert "ana@obra.com" in cuerpo
     assert "300" in cuerpo
     assert "PDF" in cuerpo
+    assert "responda a todos" in cuerpo.lower()
+    assert "responda a todos" in html.lower()
+    assert "<strong>" in html
+    assert "ana@obra.com" in html
+    assert "contactenos@claracore.co" in html
 
 
 def test_smtp_oc_usa_contacto_claracore(monkeypatch):
@@ -128,9 +133,12 @@ def test_enviar_pdf_correo_from_contacto(monkeypatch):
         def login(self, user, password):
             enviados.append(("login", user))
 
-        def send_message(self, msg):
+        def send_message(self, msg, to_addrs=None):
             enviados.append(("from", msg["From"]))
             enviados.append(("to", msg["To"]))
+            enviados.append(("reply", msg["Reply-To"]))
+            enviados.append(("cc", msg["Cc"]))
+            enviados.append(("to_addrs", list(to_addrs or [])))
 
     monkeypatch.setattr(mod.smtplib, "SMTP", _Smtp)
     monkeypatch.setattr(
@@ -145,14 +153,52 @@ def test_enviar_pdf_correo_from_contacto(monkeypatch):
             "use_tls": True,
         },
     )
-    mod.enviar_pdf_correo("prov@obra.com", "Asunto", "Cuerpo", b"%PDF", "oc.pdf")
+    meta = mod.enviar_pdf_correo(
+        "prov@obra.com", "Asunto", "Cuerpo", b"%PDF", "oc.pdf",
+        html_body="<p><strong>responda a todos</strong></p>",
+        from_display_name="Ana Ruiz (ClaraCore)",
+        reply_to="ana@obra.com",
+        cc=["ana@obra.com", "contactenos@claracore.co"],
+    )
     assert ("login", "contactenos@claracore.co") in enviados
-    assert ("from", "ClaraCore <contactenos@claracore.co>") in enviados
+    assert any(t[0] == "from" and "Ana Ruiz" in t[1] and "ClaraCore" in t[1] and "contactenos@claracore.co" in t[1] for t in enviados)
     assert ("to", "prov@obra.com") in enviados
+    assert ("reply", "ana@obra.com") in enviados
+    assert ("cc", "ana@obra.com, contactenos@claracore.co") in enviados
+    assert meta["reply_to"] == "ana@obra.com"
+    assert "ana@obra.com" in (meta.get("cc") or "")
+    assert "ClaraCore" in (meta.get("remitente") or "")
+
+
+def test_resolver_cabeceras_override_no_usa_aprobador():
+    from almacen_oc_email import resolver_cabeceras_envio_oc
+
+    cab = resolver_cabeceras_envio_oc(
+        contacto={"nombre": "Ana Ruiz", "email": "ana@obra.com"},
+        from_email="contactenos@claracore.co",
+        correo_override="prueba@obra.com",
+        cc_contrato=["extra@obra.com"],
+    )
+    assert cab["reply_to"] == "prueba@obra.com"
+    assert cab["cc"] == ["prueba@obra.com"]
+    assert cab["from_display_name"] == "Ana Ruiz (ClaraCore)"
+    assert cab["aviso_sin_correo_aprobador"] is False
+
+
+def test_resolver_cabeceras_sin_correo_aprobador():
+    from almacen_oc_email import resolver_cabeceras_envio_oc
+
+    cab = resolver_cabeceras_envio_oc(
+        contacto={"nombre": "Ana Ruiz", "email": ""},
+        from_email="contactenos@claracore.co",
+    )
+    assert cab["reply_to"] == "contactenos@claracore.co"
+    assert "contactenos@claracore.co" in cab["cc"]
+    assert cab["aviso_sin_correo_aprobador"] is True
 
 
 def test_asunto_sin_numero_visible_no_usa_el_id():
-    asunto, cuerpo = _asunto_cuerpo(
+    asunto, cuerpo, _html = _asunto_cuerpo(
         {"id": 17},
         {"numero": "CT-9"},
         {"nombre": "Ana Ruiz"},
@@ -212,8 +258,27 @@ def _parche_envio(monkeypatch, *, email, smtp_ok=True):
         if not smtp_ok:
             raise RuntimeError("SMTP rechazó el mensaje")
         enviados.append(args[0])
+        return {
+            "remitente": "Ana Ruiz (ClaraCore) <contactenos@claracore.co>",
+            "reply_to": "ana@obra.com",
+            "cc": "ana@obra.com",
+            "destinatario": args[0],
+        }
 
     monkeypatch.setattr(mod, "enviar_pdf_correo", _enviar)
+    monkeypatch.setattr(
+        mod, "_smtp_plataforma_oc",
+        lambda: {
+            "host": "smtp.zoho.com",
+            "port": 587,
+            "user": "contactenos@claracore.co",
+            "password": "x",
+            "from_email": "contactenos@claracore.co",
+            "from_name": "ClaraCore",
+            "use_tls": True,
+        },
+    )
+    monkeypatch.setattr(mod, "listar_cc_contrato_oc", lambda *_a, **_k: [])
     monkeypatch.setattr(
         svc, "get_orden_compra",
         lambda *_a, **_k: {

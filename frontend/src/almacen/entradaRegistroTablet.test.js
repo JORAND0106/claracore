@@ -207,4 +207,11 @@ describe('UI cableado', () => {
     assert.match(salio, /cc-almacen-qty-cell--error/)
     assert.match(salio, /buildAlmacenCssVars/)
   })
+
+  it('soportes aceptan Ctrl+V', () => {
+    const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
+    assert.match(wiz, /onPasteSoporte/)
+    assert.match(wiz, /fileFromClipboardEvent/)
+    assert.match(wiz, /entrada-tablet-paste-hint/)
+  })
 })
