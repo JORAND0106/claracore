@@ -8061,6 +8061,56 @@ def _resolve_numero_documento_entrada(contrato_id: int, tipo: str, numero_raw: O
     raise ValueError("Tipo de entrada inválido.")
 
 
+def lookup_entrada_por_numero_remision(
+    contrato_id: int,
+    numero_documento: Optional[str],
+    *,
+    proveedor_id: Optional[int] = None,
+    proveedor_nombre: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Busca una entrada recibo previa con el mismo N.º de remisión y el mismo proveedor.
+    Solo aviso (no bloquea). Compara numero_documento en mayúsculas.
+    """
+    numero = (numero_documento or "").strip().upper()[:64]
+    if not numero:
+        return None
+    pid = int(proveedor_id) if proveedor_id not in (None, "", 0, "0") else None
+    pname = (proveedor_nombre or "").strip()
+    if not pid and not pname:
+        return None
+    sb = _sb()
+    try:
+        q = (
+            sb.table("almacen_entrada")
+            .select("id, numero_documento, codigo, numero_entrada, proveedor_id, proveedor_nombre_texto, tipo")
+            .eq("contrato_id", int(contrato_id))
+            .eq("tipo", "recibo")
+            .eq("numero_documento", numero)
+        )
+        if pid:
+            q = q.eq("proveedor_id", pid)
+        else:
+            q = q.eq("proveedor_nombre_texto", pname)
+        rows = q.order("id", desc=True).limit(1).execute().data or []
+    except Exception as exc:
+        _log.warning("lookup remisión duplicada falló: %s", exc)
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    _asegurar_codigo_entrada(contrato_id, row)
+    codigo = (row.get("codigo") or "").strip()
+    if not codigo and row.get("numero_entrada"):
+        codigo = _format_codigo_entrada(contrato_id, int(row["numero_entrada"]))
+    return {
+        "entrada_id": row.get("id"),
+        "codigo_entrada": codigo or None,
+        "numero_documento": row.get("numero_documento"),
+        "proveedor_id": row.get("proveedor_id"),
+    }
+
+
 def preview_proximo_numero_disposicion(contrato_id: int) -> dict:
     return {"proximo": _next_numero_disposicion(contrato_id)}
 

@@ -115,6 +115,7 @@ from almacen_service import (
     completar_revision_salida,
     count_salidas_por_revisar,
     lookup_entrada_soporte_hash,
+    lookup_entrada_por_numero_remision,
     enviar_solicitud,
     _fetch_solicitud_head,
     get_config,
@@ -2582,6 +2583,38 @@ def route_check_entrada_soporte_hash(
         "message": (
             f"Este archivo ya se usó en la entrada {codigo or existing.get('entrada_id')}. "
             "Cargue otro distinto."
+        ),
+    }
+
+
+@router.post("/{contrato_id}/entradas/check-numero-remision")
+def route_check_entrada_numero_remision(
+    contrato_id: int,
+    numero_documento: str = Form(...),
+    proveedor_id: Optional[int] = Form(None),
+    proveedor_nombre_texto: Optional[str] = Form(None),
+    current_user=Depends(get_current_user),
+):
+    """Aviso: mismo N.º de remisión ya usado con el mismo proveedor (no bloquea)."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    existing = lookup_entrada_por_numero_remision(
+        contrato_id,
+        numero_documento,
+        proveedor_id=proveedor_id,
+        proveedor_nombre=proveedor_nombre_texto,
+    )
+    if not existing:
+        return {"exists": False}
+    codigo = (existing.get("codigo_entrada") or "").strip() or str(existing.get("entrada_id") or "")
+    return {
+        "exists": True,
+        "entrada_id": existing.get("entrada_id"),
+        "codigo_entrada": existing.get("codigo_entrada"),
+        "numero_documento": existing.get("numero_documento"),
+        "message": (
+            f"Este N.º de remisión ya se usó con este proveedor en la entrada {codigo}. "
+            "Puede continuar si es correcto."
         ),
     }
 

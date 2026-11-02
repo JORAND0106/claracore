@@ -251,8 +251,8 @@ export default function EntradasPanel({
                 <th style={{ ...ui.th, width: 118, whiteSpace: 'nowrap' }}>N.º</th>
                 <th style={{ ...ui.th, width: 88, whiteSpace: 'nowrap' }}>Fecha</th>
                 <th style={{ ...ui.th, width: 72, whiteSpace: 'nowrap' }}>Tipo</th>
-                <th style={{ ...ui.th, width: 88, whiteSpace: 'nowrap' }} title="Número de remisión / documento de ingreso">
-                  Remisión
+                <th style={{ ...ui.th, width: 96, whiteSpace: 'nowrap' }} title="Número de remisión del proveedor / documento de ingreso">
+                  N.º remisión
                 </th>
                 <th style={{ ...ui.th, width: 56, whiteSpace: 'nowrap' }}>OC</th>
                 <th style={{ ...ui.th, width: 88, whiteSpace: 'nowrap' }}>Sector</th>

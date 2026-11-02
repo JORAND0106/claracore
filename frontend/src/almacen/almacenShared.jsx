@@ -172,6 +172,7 @@ export function buildAlmacenCssVars(t) {
     '--cc-almacen-qty-error-text': isDark ? '#fecaca' : '#991b1b',
     '--cc-almacen-qty-focus-bg': isDark ? 'rgba(56, 189, 248, 0.22)' : 'rgba(37, 99, 235, 0.1)',
     '--cc-almacen-warn-text': isDark ? '#fde68a' : '#92400e',
+    '--cc-almacen-warn-border': isDark ? '#fbbf24' : '#d97706',
     '--cc-almacen-danger-text': isDark ? '#fecaca' : '#991b1b',
     '--cc-almacen-ok-text': isDark ? '#6ee7b7' : '#065f46',
     colorScheme: isDark ? 'dark' : 'light',

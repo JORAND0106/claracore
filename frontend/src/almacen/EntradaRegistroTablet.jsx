@@ -24,6 +24,11 @@ import {
   splitInsumoCodigoDesc,
 } from './entradaOcExcelHelpers'
 import {
+  formatRemisionNumeroInput,
+  normalizeRemisionNumero,
+  remisionNumeroOk,
+} from './entradaRemisionNumero'
+import {
   fileFromClipboardEvent,
   MSG_PEGADO_VACIO,
   resolvePasteTarget,
@@ -121,6 +126,7 @@ export default function EntradaRegistroTablet({
   const themeCssVars = useMemo(() => buildAlmacenCssVars(theme || {}), [theme])
   const qtyInputRefs = useRef({})
   const continuarCapturaRef = useRef(null)
+  const numeroRemisionRef = useRef(null)
   const contrato = contratoId || permisos?.contratoId
 
   const [paso, setPaso] = useState(PASO.INICIO)
@@ -166,6 +172,8 @@ export default function EntradaRegistroTablet({
   const [salidasPorRevisar, setSalidasPorRevisar] = useState(0)
   const [soporteFocus, setSoporteFocus] = useState(null) // 'remision' | 'material' | null
   const [pasteHint, setPasteHint] = useState('')
+  const [numeroRemision, setNumeroRemision] = useState('')
+  const [remisionDupHint, setRemisionDupHint] = useState('')
 
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
@@ -177,6 +185,7 @@ export default function EntradaRegistroTablet({
     : Boolean(insumoSel && cantNum > 0 && cantNum > (Number(insumoSel.saldo_cantidad) || 0) + 0.0001)
   const sinInsumo = Boolean(!ocCard && !insumoId)
   const fotosCompletas = Boolean(fotoRemision && fotoMaterial)
+  const numeroRemisionListo = remisionNumeroOk(numeroRemision)
   const placaOk = !placa.trim() || placaValida(placa)
 
   const draft = useMemo(() => ({
@@ -338,6 +347,8 @@ export default function EntradaRegistroTablet({
     setOcSearch('')
     setSoporteFocus(null)
     setPasteHint('')
+    setNumeroRemision('')
+    setRemisionDupHint('')
   }
 
   const elegirTipo = (t) => {
@@ -430,6 +441,16 @@ export default function EntradaRegistroTablet({
     }
   }
 
+  const focusNumeroRemision = () => {
+    const el = numeroRemisionRef.current
+    if (!el) return
+    el.focus()
+    el.select?.()
+    try {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    } catch { /* ignore */ }
+  }
+
   const onQtyKeyDown = (e, idx) => {
     const nav = excelCantidadKeyNav(e.key, {
       shiftKey: e.shiftKey,
@@ -438,8 +459,9 @@ export default function EntradaRegistroTablet({
     })
     if (nav.action === 'stay' && !nav.select) return
     if (nav.action === 'continue') {
+      // Tras la última cantidad → N.º de remisión (antes de soportes / confirmar).
       e.preventDefault()
-      continuarCapturaRef.current?.click()
+      focusNumeroRemision()
       return
     }
     if (nav.action === 'next' || nav.action === 'down') {
@@ -451,6 +473,13 @@ export default function EntradaRegistroTablet({
       e.preventDefault()
       focusQtyAt(idx - 1)
     }
+  }
+
+  const onCantidadSimpleKeyDown = (e) => {
+    if (e.key !== 'Enter' && e.key !== 'Tab') return
+    if (e.key === 'Tab' && e.shiftKey) return
+    e.preventDefault()
+    focusNumeroRemision()
   }
 
   const elegirSinOc = () => {
@@ -584,15 +613,68 @@ export default function EntradaRegistroTablet({
   const hayCantidadSinOc = !modoMultiOc && cantNum > 0
   const capturaLista = Boolean(
     fotosCompletas
+    && numeroRemisionListo
     && placaOk
     && !superaSaldo
     && (hayLineasOc || hayCantidadSinOc),
   )
 
+  const onNumeroRemisionKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (capturaLista) continuarCapturaRef.current?.click()
+    }
+  }
+
+  const onNumeroRemisionChange = (raw) => {
+    setNumeroRemision(formatRemisionNumeroInput(raw))
+    setRemisionDupHint('')
+  }
+
+  // Aviso (no bloqueo) si el N.º ya se usó con el mismo proveedor.
+  useEffect(() => {
+    if (paso !== PASO.CAPTURA || tipo !== 'recibo') return undefined
+    const numero = normalizeRemisionNumero(numeroRemision)
+    if (!numero) {
+      setRemisionDupHint('')
+      return undefined
+    }
+    if (!proveedorId && !String(proveedorNombre || '').trim()) {
+      setRemisionDupHint('')
+      return undefined
+    }
+    let cancelled = false
+    const t = setTimeout(() => {
+      api.checkEntradaNumeroRemision({
+        numeroDocumento: numero,
+        proveedorId,
+        proveedorNombre,
+      }).then((r) => {
+        if (cancelled) return
+        if (r?.exists) {
+          setRemisionDupHint(r.message || `Este N.º ya se usó en ${r.codigo_entrada || 'otra entrada'}.`)
+        } else {
+          setRemisionDupHint('')
+        }
+      }).catch(() => {
+        if (!cancelled) setRemisionDupHint('')
+      })
+    }, 450)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [api, numeroRemision, paso, proveedorId, proveedorNombre, tipo])
+
   const guardar = async () => {
     if (!puedeCrear) return
     if (tipo === 'recibo' && !fotosCompletas) {
       setError('Se requieren la remisión y la foto del descargue.')
+      return
+    }
+    if (tipo === 'recibo' && !numeroRemisionListo) {
+      setError('Indique el número de remisión del proveedor.')
+      focusNumeroRemision()
       return
     }
     if (superaSaldo) {
@@ -609,6 +691,9 @@ export default function EntradaRegistroTablet({
       const fd = new FormData()
       fd.append('tipo', tipo)
       fd.append('fecha_entrada', todayDateInputColombia())
+      if (tipo === 'recibo') {
+        fd.append('numero_documento', normalizeRemisionNumero(numeroRemision))
+      }
       if (ocCard?.orden_compra_id) fd.append('orden_compra_id', String(ocCard.orden_compra_id))
       if (proveedorId) fd.append('proveedor_id', String(proveedorId))
       if (proveedorNombre) fd.append('proveedor_nombre_texto', proveedorNombre)
@@ -1255,6 +1340,7 @@ export default function EntradaRegistroTablet({
                       style={{ ...inputGiant(ui), fontSize: '1.6rem', textAlign: 'center', minHeight: 52 }}
                       value={cantidad}
                       onChange={(e) => setCantidad(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.'))}
+                      onKeyDown={onCantidadSimpleKeyDown}
                       placeholder="0"
                       data-testid="entrada-tablet-cantidad"
                     />
@@ -1395,6 +1481,86 @@ export default function EntradaRegistroTablet({
                 </div>
               )}
 
+              <div
+                data-testid="entrada-tablet-numero-remision-wrap"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-border)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
+                  borderRadius: 12,
+                  padding: 12,
+                  background: 'var(--cc-almacen-input-bg)',
+                }}
+              >
+                <label
+                  htmlFor="entrada-tablet-numero-remision"
+                  style={{
+                    fontWeight: 800,
+                    fontSize: '1.05rem',
+                    color: 'var(--cc-almacen-text)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: '1.35rem' }}>🔢</span>
+                  N.º de remisión
+                  <span style={{ fontWeight: 500, color: 'var(--cc-almacen-text-muted)', fontSize: '0.9rem' }}>
+                    (obligatorio)
+                  </span>
+                </label>
+                <input
+                  id="entrada-tablet-numero-remision"
+                  ref={numeroRemisionRef}
+                  data-testid="entrada-tablet-numero-remision"
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  inputMode="text"
+                  placeholder="Ej. REM-123456"
+                  aria-required="true"
+                  aria-invalid={!numeroRemisionListo || undefined}
+                  value={numeroRemision}
+                  onChange={(e) => onNumeroRemisionChange(e.target.value)}
+                  onFocus={(e) => {
+                    try {
+                      e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+                    } catch { /* ignore */ }
+                  }}
+                  onKeyDown={onNumeroRemisionKeyDown}
+                  style={{
+                    ...inputGiant(ui),
+                    fontSize: '1.45rem',
+                    minHeight: 56,
+                    letterSpacing: 1,
+                    textTransform: 'uppercase',
+                    fontWeight: 800,
+                    border: `2px solid ${numeroRemisionListo ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
+                    background: 'var(--cc-almacen-bg-card)',
+                    color: 'var(--cc-almacen-text)',
+                  }}
+                />
+                {!numeroRemisionListo ? (
+                  <div
+                    data-testid="entrada-tablet-numero-remision-falta"
+                    style={{ color: 'var(--cc-almacen-warn-text, #b45309)', fontWeight: 700, fontSize: '0.9rem' }}
+                  >
+                    Falta el número de remisión
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--cc-almacen-ok-text, #15803d)', fontWeight: 700, fontSize: '0.85rem' }}>
+                    N.º listo
+                  </div>
+                )}
+                {remisionDupHint && (
+                  <div
+                    data-testid="entrada-tablet-numero-remision-dup"
+                    style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700, fontSize: '0.9rem' }}
+                  >
+                    {remisionDupHint}
+                  </div>
+                )}
+              </div>
+
               <div style={{ fontWeight: 800, marginTop: 2 }}>Soportes</div>
               {pasteHint && (
                 <div
@@ -1444,8 +1610,8 @@ export default function EntradaRegistroTablet({
               {!capturaLista && (
                 <div style={{ color: ui.textMuted, fontSize: '0.9rem' }}>
                   {modoMultiOc
-                    ? 'Escriba cantidades (Enter/Tab avanza), remisión y foto del descargue. Placa y conductor son opcionales.'
-                    : 'Complete cantidad, remisión y foto del descargue. Placa y conductor son opcionales.'}
+                    ? 'Escriba cantidades (Enter/Tab → N.º remisión), N.º de remisión, archivo de remisión y foto del descargue. Placa y conductor son opcionales.'
+                    : 'Complete cantidad, N.º de remisión, archivo de remisión y foto del descargue. Placa y conductor son opcionales.'}
                 </div>
               )}
             </div>
@@ -1457,6 +1623,9 @@ export default function EntradaRegistroTablet({
               <div style={cardTouch(ui, false)}>
                 <div>🏭 {proveedorNombre || '—'}</div>
                 <div>📋 {ocCard?.numero_oc != null ? `OC #${ocCard.numero_oc}` : 'Sin OC'}</div>
+                <div data-testid="entrada-tablet-resumen-numero-remision" style={{ fontWeight: 800 }}>
+                  🔢 N.º remisión: {normalizeRemisionNumero(numeroRemision) || '—'}
+                </div>
                 <div>📍 {(pkLabel || pkId) ? `${pkLabel || pkId}${tramo ? ` · ${tramo}` : ''}` : 'Sin sector'}</div>
                 {modoMultiOc ? (
                   <div style={{ marginTop: 6, display: 'grid', gap: 4 }}>
