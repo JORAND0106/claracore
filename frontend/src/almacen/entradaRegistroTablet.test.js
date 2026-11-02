@@ -242,4 +242,18 @@ describe('UI cableado', () => {
     const idxId = routes.indexOf('@router.get("/{contrato_id}/entradas/{entrada_id}")')
     assert.ok(idxGal > 0 && idxId > 0 && idxGal < idxId)
   })
+
+  it('guardar no bloquea en PDF; consolida insumos en resumen', () => {
+    const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
+    const helpers = readFileSync(join(dir, 'entradaRegistroTabletHelpers.js'), 'utf8')
+    const api = readFileSync(join(dir, 'almacenApi.js'), 'utf8')
+    assert.match(wiz, /Preparando recibo térmico/)
+    assert.match(wiz, /printDisposicionPdf\(r\.id, \{ retries:/)
+    assert.match(wiz, /consolidarResumenInsumos/)
+    assert.match(wiz, /lineasResumenVista/)
+    assert.match(wiz, /savePhase/)
+    assert.match(helpers, /export function consolidarResumenInsumos/)
+    assert.match(api, /_fetchDisposicionPdfBlob/)
+    assert.match(api, /retries/)
+  })
 })

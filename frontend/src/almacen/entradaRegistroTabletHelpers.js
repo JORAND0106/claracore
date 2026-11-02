@@ -229,3 +229,30 @@ export function resumenLineasSeleccion(seleccion) {
       }
     })
 }
+
+/** Presentación: suma cantidades del mismo material+unidad. */
+export function consolidarResumenInsumos(lineas) {
+  const map = new Map()
+  for (const ln of Array.isArray(lineas) ? lineas : []) {
+    const mat = String(ln.material_descripcion || 'Material').trim() || 'Material'
+    const und = String(ln.unidad || '').trim()
+    const key = `${mat.toLowerCase()}|${und.toLowerCase()}`
+    const prev = map.get(key)
+    const cant = Number(ln.cantidad) || 0
+    if (!prev) {
+      map.set(key, {
+        key,
+        material_descripcion: mat,
+        unidad: und,
+        cantidad: cant,
+        saldo: Number(ln.saldo) || 0,
+        supera: Boolean(ln.supera),
+      })
+    } else {
+      prev.cantidad += cant
+      prev.saldo = Math.max(prev.saldo, Number(ln.saldo) || 0)
+      prev.supera = prev.supera || Boolean(ln.supera)
+    }
+  }
+  return [...map.values()]
+}

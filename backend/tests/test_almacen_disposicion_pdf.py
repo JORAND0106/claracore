@@ -111,9 +111,9 @@ def test_pdf_mediabox_80mm_alto_dinamico():
     assert _mm(mb.width) == _PAGE_ANCHO_MM
     assert _mm(mb.height) == _page_height_mm(len(COPIAS_RECIBO), copia_alto)
     assert _mm(mb.height) < 400  # legacy recibo
-    text = r_rec.pages[0].extract_text() or ""
-    assert "Recibo de materiales" in text
-    assert "Arena fina" in text
+    text = (r_rec.pages[0].extract_text() or "")
+    assert "RECIBO DE MATERIALES" in text.upper()
+    assert "Arena fina" in text or "ARENA FINA" in text.upper()
 
 
 def test_fmt_fecha_hora():
@@ -138,7 +138,11 @@ def test_generar_pdf_recibo_dos_copias():
 def test_recibo_pdf_muestra_numero_remision():
     from almacen_disposicion_pdf import _render_copia_html
 
-    entrada = {**_BASE["entrada"], "numero_documento": "REM-987654"}
+    entrada = {
+        **_BASE["entrada"],
+        "numero_documento": "REM-987654",
+        "codigo": "Ent-1614-00001",
+    }
     html = _render_copia_html(
         copy_label="Transportador",
         is_last=False,
@@ -150,9 +154,68 @@ def test_recibo_pdf_muestra_numero_remision():
         proveedor_nombre=_BASE["proveedor_nombre"],
         usuario_nombre=_BASE["usuario_nombre"],
         unidad=_BASE["unidad"],
+        tipo="recibo",
     )
     assert "REM-987654" in html
-    assert "1614-00001" not in html
+    assert "N.º de remisión:" in html
+    assert "N.º entrada:" in html
+    assert "Ent-1614-00001" in html
+    assert "No. documento:" not in html
+
+
+def test_recibo_consolida_mismo_insumo():
+    from almacen_disposicion_pdf import consolidar_lineas_insumos, _lineas_insumos_html
+
+    lineas = [
+        {"material_descripcion": "CC-1614-073 — GUANTE", "unidad": "UND", "cantidad_recibida": 2},
+        {"material_descripcion": "CC-1614-073 — GUANTE", "unidad": "UND", "cantidad_recibida": 1},
+    ]
+    cons = consolidar_lineas_insumos(lineas)
+    assert len(cons) == 1
+    assert cons[0]["cantidad_recibida"] == 3
+    html = _lineas_insumos_html(
+        lineas,
+        insumo_label="x",
+        unidad="UND",
+        cantidad=3,
+    )
+    assert "3" in html
+    assert html.count("CC-1614-073") == 1
+
+
+def test_recibo_omite_campos_vacios_y_domicilio():
+    from almacen_disposicion_pdf import _render_copia_html
+
+    entrada = {
+        **_BASE["entrada"],
+        "codigo": "Ent-1614-00002",
+        "numero_documento": "15963",
+        "llegada_domicilio": True,
+        "placa": None,
+        "transportador": None,
+        "tramo": None,
+        "costado": None,
+        "abscisa_inicial": None,
+        "abscisa_final": None,
+    }
+    html = _render_copia_html(
+        copy_label="Obra",
+        is_last=True,
+        doc_title="Recibo de materiales",
+        contrato=_BASE["contrato"],
+        entrada=entrada,
+        oc=_BASE["oc"],
+        insumo_label=_BASE["insumo_label"],
+        proveedor_nombre=_BASE["proveedor_nombre"],
+        usuario_nombre=_BASE["usuario_nombre"],
+        unidad=_BASE["unidad"],
+        tipo="recibo",
+    )
+    assert "Domicilio" in html
+    assert "Abscisas:" not in html
+    assert "Tramo:" not in html
+    assert "Costado:" not in html
+    assert "OC:" in html
 
 
 def test_copias_configuradas():

@@ -785,27 +785,43 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
 
     disposicionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/disposicion/download`,
 
-    async openDisposicionPdf(entradaId) {
-      const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
-        headers: authHeaders(),
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.detail || `Error ${res.status}`)
+    async _fetchDisposicionPdfBlob(entradaId, { retries = 1, retryDelayMs = 400 } = {}) {
+      let lastErr = null
+      const tries = Math.max(1, Number(retries) || 1)
+      for (let i = 0; i < tries; i += 1) {
+        try {
+          const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
+            headers: authHeaders(),
+          })
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            const detail = data.detail
+            const msg = typeof detail === 'string'
+              ? detail
+              : (detail?.message || `Error ${res.status}`)
+            throw new Error(msg)
+          }
+          return await res.blob()
+        } catch (err) {
+          lastErr = err
+          if (i < tries - 1) {
+            await new Promise((r) => setTimeout(r, retryDelayMs))
+          }
+        }
       }
-      const blob = await res.blob()
+      throw lastErr || new Error('No se pudo descargar el recibo PDF.')
+    },
+
+    async openDisposicionPdf(entradaId, opts = {}) {
+      const blob = await this._fetchDisposicionPdfBlob(entradaId, opts)
       await openPosPdfBlob(blob, { filename: `disposicion-${entradaId}.pdf` })
     },
 
-    async printDisposicionPdf(entradaId) {
-      const res = await fetch(`${base}/entradas/${entradaId}/disposicion/download`, {
-        headers: authHeaders(),
+    async printDisposicionPdf(entradaId, opts = {}) {
+      const blob = await this._fetchDisposicionPdfBlob(entradaId, {
+        retries: opts.retries ?? 8,
+        retryDelayMs: opts.retryDelayMs ?? 450,
       })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.detail || `Error ${res.status}`)
-      }
-      const blob = await res.blob()
       await printPosPdfBlob(blob, { filename: `disposicion-${entradaId}.pdf` })
     },
 

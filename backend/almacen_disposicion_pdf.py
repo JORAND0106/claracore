@@ -27,9 +27,10 @@ COPIAS_DISPOSICION: Sequence[str] = ("Transportador", "Escombrera", "Obra")
 COPIAS_RECIBO: Sequence[str] = ("Transportador", "Obra")
 
 COPY_ICON: Dict[str, str] = {
-    "Transportador": "&#9670;",
-    "Escombrera": "&#9679;",
-    "Obra": "&#9650;",
+    # ASCII-friendly (fuentes térmicas / Helvetica no cubren ◆●▲✂).
+    "Transportador": "*",
+    "Escombrera": "#",
+    "Obra": "+",
 }
 
 
@@ -116,15 +117,25 @@ body {{
 }}
 .row-tbl {{ width: 100%; margin: 1px 0; font-size: 10.5pt; border-collapse: collapse; border: none; }}
 .row-tbl td {{ vertical-align: top; padding: 0; border: none; }}
-.row-tbl .lbl {{ font-weight: 600; width: 42%; }}
-.row-tbl .val {{ text-align: right; width: 58%; word-break: break-word; }}
+.row-tbl .lbl {{ font-weight: 600; width: 38%; white-space: nowrap; }}
+.row-tbl .val {{ text-align: right; width: 62%; word-break: break-word; }}
+.row-stack {{ margin: 1px 0; font-size: 10.5pt; }}
+.row-stack .lbl {{ font-weight: 600; display: block; }}
+.row-stack .val {{ display: block; word-break: break-word; }}
 .sep-line {{ border: none; border-top: 1px dashed #666; height: 1px; margin: 3px 0; line-height: 0; font-size: 0; overflow: hidden; }}
+.cut-mark {{
+  text-align: center;
+  font-size: 8.5pt;
+  color: #555;
+  margin: 2px 0 0;
+  letter-spacing: 1px;
+}}
 .admin-block {{
-  margin-top: 5px;
-  padding-top: 3px;
+  margin-top: 4px;
+  padding-top: 2px;
   border-top: 1px dashed #666;
   font-size: 9.25pt;
-  line-height: 1.2;
+  line-height: 1.15;
 }}
 .admin-title {{
   font-weight: 700;
@@ -133,7 +144,7 @@ body {{
   text-align: center;
 }}
 .admin-line {{ margin: 1px 0; word-break: break-word; text-align: center; }}
-.footer {{ text-align: center; font-size: 9.5pt; color: #444; margin-top: 3px; }}
+.footer {{ text-align: center; font-size: 9.5pt; color: #444; margin-top: 2px; }}
 """
 
 
@@ -228,7 +239,19 @@ def _administradores_html(contrato: Dict[str, Any]) -> str:
     )
 
 
-def _row(lbl: str, val: str) -> str:
+def _is_empty_val(val: Any) -> bool:
+    s = str(val or "").strip()
+    return (not s) or s in ("—", "-", "— → —", "- → -")
+
+
+def _row(lbl: str, val: str, *, omit_empty: bool = False, stack: bool = False) -> str:
+    if omit_empty and _is_empty_val(val):
+        return ""
+    if stack:
+        return (
+            f'<div class="row-stack"><span class="lbl">{_esc(lbl)}</span>'
+            f'<span class="val">{val}</span></div>'
+        )
     return (
         f'<table class="row-tbl" width="100%" cellpadding="0" cellspacing="0">'
         f"<tr><td class=\"lbl\">{_esc(lbl)}</td><td class=\"val\">{val}</td></tr></table>"
@@ -248,6 +271,30 @@ def _sep() -> str:
     return '<div class="sep-line">&nbsp;</div>'
 
 
+def consolidar_lineas_insumos(lineas: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Agrupa por material+unidad sumando cantidades (solo presentación)."""
+    buckets: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for ln in lineas or []:
+        if not ln:
+            continue
+        mat = (ln.get("material_descripcion") or ln.get("insumo_label") or "—").strip() or "—"
+        und = (ln.get("unidad") or "").strip()
+        key = f"{mat.casefold()}|{und.casefold()}"
+        if key not in buckets:
+            buckets[key] = {
+                "material_descripcion": mat,
+                "unidad": und,
+                "cantidad_recibida": 0.0,
+            }
+            order.append(key)
+        try:
+            buckets[key]["cantidad_recibida"] += float(ln.get("cantidad_recibida") or 0)
+        except (TypeError, ValueError):
+            pass
+    return [buckets[k] for k in order]
+
+
 def _lineas_insumos_html(
     lineas: Optional[Sequence[Dict[str, Any]]],
     *,
@@ -255,12 +302,12 @@ def _lineas_insumos_html(
     unidad: str,
     cantidad: Any,
 ) -> str:
-    """Una o varias líneas de insumo en el recibo térmico."""
-    rows = [ln for ln in (lineas or []) if ln]
+    """Una o varias líneas de insumo en el recibo térmico (consolidadas)."""
+    rows = consolidar_lineas_insumos(lineas)
     if len(rows) > 1:
         parts = ['<div style="margin:4px 0 2px;font-weight:700;">Insumos:</div>']
         for ln in rows:
-            mat = ln.get("material_descripcion") or ln.get("insumo_label") or "—"
+            mat = ln.get("material_descripcion") or "—"
             und = ln.get("unidad") or ""
             cant = _fmt_cant(ln.get("cantidad_recibida"))
             parts.append(
@@ -272,9 +319,13 @@ def _lineas_insumos_html(
     if rows:
         mat = rows[0].get("material_descripcion") or insumo_label or "—"
         und = rows[0].get("unidad") or unidad or ""
-        cant = _fmt_cant(rows[0].get("cantidad_recibida") if rows[0].get("cantidad_recibida") is not None else cantidad)
-        return f'{_row("Insumo:", _esc(mat))}{_cantidad_hero(cant, und)}'
-    return f'{_row("Insumo:", _esc(insumo_label or "—"))}{_cantidad_hero(_fmt_cant(cantidad), unidad)}'
+        cant = _fmt_cant(
+            rows[0].get("cantidad_recibida")
+            if rows[0].get("cantidad_recibida") is not None
+            else cantidad
+        )
+        return f'{_row("Insumo:", _esc(mat), stack=True)}{_cantidad_hero(cant, und)}'
+    return f'{_row("Insumo:", _esc(insumo_label or "—"), stack=True)}{_cantidad_hero(_fmt_cant(cantidad), unidad)}'
 
 
 def _render_copia_html(
@@ -290,18 +341,29 @@ def _render_copia_html(
     usuario_nombre: str,
     unidad: str,
     lineas: Optional[Sequence[Dict[str, Any]]] = None,
+    tipo: str = "disposicion",
 ) -> str:
-    numero = entrada.get("numero_documento") or "—"
-    oc_num = oc.get("numero_oc") or "—"
-    cant = _fmt_cant(entrada.get("cantidad_recibida"))
-    pk = entrada.get("pk_id") or "—"
-    tramo = entrada.get("tramo") or "—"
-    costado = entrada.get("costado") or "—"
-    abs_ini = entrada.get("abscisa_inicial") or "—"
-    abs_fin = entrada.get("abscisa_final") or "—"
+    tipo_n = (tipo or "disposicion").strip().lower()
+    es_recibo = tipo_n == "recibo" or "recibo" in (doc_title or "").lower()
+    numero_doc = (entrada.get("numero_documento") or "").strip()
+    codigo_ent = (
+        (entrada.get("codigo") or entrada.get("codigo_entrada") or "").strip()
+    )
+    oc_num = oc.get("numero_oc")
+    pk = (entrada.get("pk_id") or "").strip()
+    tramo = (entrada.get("tramo") or "").strip()
+    costado = (entrada.get("costado") or "").strip()
+    abs_ini = (entrada.get("abscisa_inicial") or "").strip()
+    abs_fin = (entrada.get("abscisa_final") or "").strip()
     domicilio = bool(entrada.get("llegada_domicilio"))
-    placa = "Domicilio" if domicilio else (entrada.get("placa") or "—")
-    transportador = "Domicilio" if domicilio else (entrada.get("transportador") or "—")
+    placa_raw = (entrada.get("placa") or "").strip()
+    trans_raw = (entrada.get("transportador") or "").strip()
+    if domicilio:
+        placa = placa_raw or "Domicilio"
+        transportador = trans_raw or "Domicilio"
+    else:
+        placa = placa_raw
+        transportador = trans_raw
     block_cls = "copy-block copy-block-last" if is_last else "copy-block"
     hdr_html = _hdr_contrato_html(contrato)
     icon_html = _copy_icon_html(copy_label)
@@ -314,28 +376,46 @@ def _render_copia_html(
         cantidad=entrada.get("cantidad_recibida"),
     )
 
+    if es_recibo:
+        doc_rows = ""
+        if codigo_ent:
+            doc_rows += _row("N.º entrada:", _esc(codigo_ent))
+        if numero_doc:
+            doc_rows += _row("N.º de remisión:", _esc(numero_doc))
+        if not doc_rows:
+            doc_rows = _row("N.º de remisión:", "—")
+    else:
+        doc_rows = _row("No. documento:", _esc(numero_doc or "—"))
+
+    ubic_rows = ""
+    ubic_rows += _row("PK:", _esc(pk), omit_empty=True)
+    ubic_rows += _row("Tramo:", _esc(tramo), omit_empty=True)
+    ubic_rows += _row("Costado:", _esc(costado), omit_empty=True)
+    if abs_ini or abs_fin:
+        ubic_rows += _row("Abscisas:", f"{_esc(abs_ini or '—')} -&gt; {_esc(abs_fin or '—')}")
+
+    corte = "" if is_last else '<div class="cut-mark">- - - corte - - -</div>'
+
     return f"""
 <div class="{block_cls}">
   <div class="copy-label">{icon_html}Copia: {_esc(copy_label)}</div>{hdr_html}
   <div class="title">{_esc(doc_title)}</div>
-  {_row("No. documento:", _esc(numero))}
+  {doc_rows}
   {_row("Fecha y hora:", fecha_hora)}
   {_sep()}
-  {_row("Orden de compra:", f"#{_esc(oc_num)}")}
-  {_row("Proveedor:", _esc(proveedor_nombre))}
+  {_row("OC:", f"#{_esc(oc_num)}" if oc_num not in (None, "") else "—", omit_empty=False)}
+  {_row("Proveedor:", _esc(proveedor_nombre), stack=len(str(proveedor_nombre or "")) > 28)}
   {insumos_html}
   {_sep()}
-  {_row("PK / Ubicación:", _esc(pk))}
-  {_row("Tramo:", _esc(tramo))}
-  {_row("Costado:", _esc(costado))}
-  {_row("Absc. ini. / fin.:", f"{_esc(abs_ini)} → {_esc(abs_fin)}")}
+  {ubic_rows or _row("PK:", "—")}
   {_sep()}
-  {_row("Placa:", _esc(placa))}
-  {_row("Transportador:", _esc(transportador))}
+  {_row("Placa:", _esc(placa or "—"))}
+  {_row("Transportador:", _esc(transportador or "—"), stack=len(str(transportador or "")) > 22)}
   {_sep()}
   {_row("Registrado por:", _esc(usuario_nombre))}
   {admin_html}
   <div class="footer">ClaraCore · Almacén de Obra</div>
+  {corte}
 </div>"""
 
 
@@ -353,7 +433,9 @@ def generar_pdf_despachador_pos(
     """Genera PDF térmico 80 mm continuo: alto dinámico según contenido × N copias."""
     copias = _copias_por_tipo(tipo)
     doc_title = _titulo_documento(tipo)
-    n_lineas = max(1, len(lineas or []))
+    consolidadas = consolidar_lineas_insumos(lineas)
+    n_lineas = max(1, len(consolidadas) if consolidadas else 1)
+    # Alto por copia según contenido consolidado (crece con líneas; sin hoja fija).
     copia_alto = _estimate_entrada_copia_alto_mm(contrato) + max(0, n_lineas - 1) * 8
     blocks = [
         _render_copia_html(
@@ -367,7 +449,8 @@ def generar_pdf_despachador_pos(
             proveedor_nombre=proveedor_nombre,
             usuario_nombre=usuario_nombre,
             unidad=unidad,
-            lineas=lineas,
+            lineas=consolidadas,
+            tipo=tipo,
         )
         for idx, label in enumerate(copias)
     ]

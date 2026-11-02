@@ -2728,31 +2728,38 @@ async def route_create_entrada(
             remision_data=rem_data, remision_nombre=rem_nombre, remision_mime=rem_mime,
             material_foto_data=mat_data, material_foto_nombre=mat_nombre, material_foto_mime=mat_mime,
         )
-        cab = snapshot_entrada_cabecera(result)
-        items = result.get("items") or []
-        if items:
-            for it in items:
-                ei_id = it.get("id")
-                if ei_id is None:
-                    continue
-                log_almacen(
-                    current_user, "CREAR", "entrada_item", ei_id,
-                    {
-                        "entrada_id": result.get("id"),
-                        "numero_entrada": result.get("numero_entrada"),
-                        "material_descripcion": it.get("material_descripcion"),
-                    },
-                    valor_anterior=None,
-                    valor_nuevo=snapshot_entrada_item(it, result),
-                )
-        else:
-            # Fallback cabecera si no hubo líneas (caso raro).
-            log_almacen(
-                current_user, "CREAR", "entrada", result.get("id"),
-                {"numero_entrada": result.get("numero_entrada")},
-                valor_anterior=None,
-                valor_nuevo=cab,
-            )
+        # Log en segundo plano: no bloquea la confirmación al usuario.
+        def _log_crear_entrada_bg() -> None:
+            try:
+                cab = snapshot_entrada_cabecera(result)
+                items = result.get("items") or []
+                if items:
+                    for it in items:
+                        ei_id = it.get("id")
+                        if ei_id is None:
+                            continue
+                        log_almacen(
+                            current_user, "CREAR", "entrada_item", ei_id,
+                            {
+                                "entrada_id": result.get("id"),
+                                "numero_entrada": result.get("numero_entrada"),
+                                "material_descripcion": it.get("material_descripcion"),
+                            },
+                            valor_anterior=None,
+                            valor_nuevo=snapshot_entrada_item(it, result),
+                        )
+                else:
+                    log_almacen(
+                        current_user, "CREAR", "entrada", result.get("id"),
+                        {"numero_entrada": result.get("numero_entrada")},
+                        valor_anterior=None,
+                        valor_nuevo=cab,
+                    )
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Log CREAR entrada en background: %s", exc)
+
+        import threading
+        threading.Thread(target=_log_crear_entrada_bg, daemon=True).start()
         return result
     except ValueError as exc:
         raise _http_value_error(exc) from exc
