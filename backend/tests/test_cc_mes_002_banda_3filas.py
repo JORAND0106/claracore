@@ -1,11 +1,10 @@
-"""CC-MES-002: banda de identificación en 3 filas + descripción completa a todo el ancho."""
+"""CC-MES-002: encabezado PDF=Excel + banda CONTRATO|OBJETO|Acta|Período."""
 from __future__ import annotations
 
 import sys
 from types import ModuleType, SimpleNamespace
 
 from openpyxl import Workbook
-from openpyxl.utils import range_boundaries
 
 
 def _import_informes_with_stubs():
@@ -51,34 +50,53 @@ def _merged_ranges(ws):
     return {str(r) for r in ws.merged_cells.ranges}
 
 
-def test_conc_meta_cc_mes_002_tres_celdas_sin_consecutivo():
+def _acta():
+    return {
+        "numero_rpo": 1,
+        "consecutivo": 1,
+        "fecha_inicio": "2025-01-01",
+        "fecha_fin": "2025-01-31",
+    }
+
+
+def _objeto_iccu():
+    return (
+        "Mantenimiento y rehabilitación de la malla vial local y obras de "
+        "drenaje asociadas en el contrato ICCU-CTO-1614-2025 según alcance "
+        "técnico del pliego y listado de precios vigente"
+    )
+
+
+def test_conc_meta_cc_mes_002_contrato_objeto_acta_periodo():
     inf = _import_informes_with_stubs()
     meta = inf._conc_meta_cc_mes_002(
-        "ICCU-CTO-1614-2025",
-        {
-            "numero_rpo": 1,
-            "consecutivo": 1,
-            "fecha_inicio": "2025-01-01",
-            "fecha_fin": "2025-01-31",
-        },
+        {"numero": "ICCU-CTO-1614-2025", "objeto": _objeto_iccu()},
+        _acta(),
     )
     assert meta["codigo"] == "CC-MES-002"
     assert meta["banda"] == "mes_3filas"
     labels = [c[0] for c in meta["cells"]]
-    assert labels == ["CTO.", "ACTA RPO", "PERÍODO"]
+    assert labels == ["CONTRATO", "OBJETO", "ACTA RPO", "PERÍODO"]
+    assert "CTO." not in labels
     assert "CONSECUTIVO" not in labels
-    assert "CONTRATO" not in labels
-    assert meta["cells"][2][1] == "2025-01-01 → 2025-01-31"
+    assert meta["cells"][0][1] == "ICCU-CTO-1614-2025"
+    assert meta["cells"][1][1] == _objeto_iccu()
+    assert meta["cells"][3][1] == "2025-01-01 → 2025-01-31"
+    # Legado: primer arg string
+    legacy = inf._conc_meta_cc_mes_002("C-1", _acta())
+    assert legacy["cells"][0] == ("CONTRATO", "C-1")
+    assert legacy["cells"][1][0] == "OBJETO"
 
 
-def test_html_banda_3filas_descripcion_full_width_sin_consecutivo():
+def test_html_encabezado_doble_y_banda_objeto():
     inf = _import_informes_with_stubs()
-    desc = (
-        "EXCAVACION MANUAL EN MATERIAL COMUN H=0.0-2.0M INCLUYE RETIRO DE SOBRANTES "
-        "A UNA DISTANCIA MENOR DE 5 KM SEGUN LISTADO DE PRECIOS VIGENTE DEL CONTRATO "
-        "ICCU Y ESPECIFICACIONES TECNICAS APLICABLES AL ITEM 1.1"
-    )
-    contrato = {"numero": "ICCU-CTO-1614-2025", "logo_contratista": None}
+    objeto = _objeto_iccu()
+    desc = "DESCRIPCION LARGA DEL ITEM PARA VERIFICAR QUE SIGUE COMPLETA EN BANDA"
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": objeto,
+        "logo_contratista": None,
+    }
     item_info = {
         "item_numero": "1.1",
         "item_descripcion": desc,
@@ -88,22 +106,14 @@ def test_html_banda_3filas_descripcion_full_width_sin_consecutivo():
     regs = [
         {
             "numero_registro": 1,
-            "cantidad_total": 3,
+            "cantidad_total": 1,
             "capitulo": item_info["capitulo"],
             "item_numero": "1.1",
             "item_descripcion": desc,
             "unidad": "M3",
         }
     ]
-    conc_meta = inf._conc_meta_cc_mes_002(
-        contrato["numero"],
-        {
-            "numero_rpo": 1,
-            "consecutivo": 99,
-            "fecha_inicio": "2025-02-01",
-            "fecha_fin": "2025-02-28",
-        },
-    )
+    conc_meta = inf._conc_meta_cc_mes_002(contrato, _acta())
     sub, corte = inf._sub_corte_dummy_memoria()
     html = inf._html_memoria_item(
         contrato,
@@ -117,60 +127,51 @@ def test_html_banda_3filas_descripcion_full_width_sin_consecutivo():
         pie_fotos_contexto="Acta RPO 1",
         estilo_formato_codigo="CC-MES-002",
     )
-    assert "mem002-banda-mes" in html
-    assert "CTO." in html
-    assert "CONSECUTIVO" not in html
-    assert ">CONTRATO<" not in html and "CONTRATO</span>" not in html
+    assert "2.28cm" in html  # altura doble del encabezado
+    assert "RESUMEN ACTIVIDADES" in html
+    assert "CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)" in html
+    assert "CC-MES-002" in html
+    assert "CONTRATO" in html
+    assert "OBJETO" in html
+    assert objeto in html
+    assert "mem002-objeto" in html
+    assert "ACTA RPO" in html
     assert "PERÍODO" in html
-    assert "2025-02-01 → 2025-02-28" in html
-    assert "CAPÍTULO" in html
-    assert "1. ACTIVIDADES PRELIMINARES" in html
-    assert "ÍTEM" in html and "1.1" in html
-    assert "UNIDAD" in html and "M3" in html
-    assert "DESCRIPCIÓN" in html
+    assert "2025-01-01 → 2025-01-31" in html
+    assert "CTO." not in html
+    assert "CONSECUTIVO" not in html
     assert desc in html
-    assert 'colspan="3"' in html
-    assert "mem002-item-desc" in html
-    # Descripción a todo el ancho: no debe quedar emparedada entre ÍTEM y UNIDAD.
-    assert html.index("CAPÍTULO") < html.index("DESCRIPCIÓN")
-    assert html.index("ÍTEM") < html.index("DESCRIPCIÓN")
+    assert "CAPÍTULO" in html and "ÍTEM" in html and "UNIDAD" in html
 
 
-def test_excel_banda_3filas_acta_una_celda_y_desc_altura():
+def test_excel_encabezado_igual_pdf_y_fila3_objeto():
     inf = _import_informes_with_stubs()
-    desc = (
-        "SUMINISTRO E INSTALACION DE TUBERIA EN PVC CORRUGADO DOBLE PARED DE DIAMETRO "
-        "NOMINAL 24 PULGADAS TIPO S INCLUYE UNIONES SELLOS Y PRUEBAS HIDRAULICAS SEGUN "
-        "LISTADO DE PRECIOS VIGENTE NP-08 DEL CONTRATO ICCU-CTO-1614-2025"
-    )
-    contrato = {"numero": "ICCU-CTO-1614-2025"}
+    objeto = _objeto_iccu()
+    desc = "ITEM NP-08 CON DESCRIPCION EXTENSA SEGUN LISTADO DE PRECIOS"
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": objeto,
+        "logo_contratista": None,
+    }
     item_info = {
         "item_numero": "NP-08",
         "item_descripcion": desc,
         "unidad": "ML",
-        "capitulo": "2. DRENAJE PLUVIAL",
+        "capitulo": "2. DRENAJE",
     }
     regs = [
         {
             "numero_registro": 8,
-            "cantidad_total": 12.5,
-            "capitulo": "2. DRENAJE PLUVIAL",
+            "cantidad_total": 2,
+            "capitulo": "2. DRENAJE",
             "item_numero": "NP-08",
-            "longitud": 12.5,
+            "longitud": 2,
             "ancho": 1,
             "espesor": 1,
-            "cantidad": 12.5,
+            "cantidad": 2,
         }
     ]
-    conc_meta = inf._conc_meta_cc_mes_002(
-        contrato["numero"],
-        {
-            "numero_rpo": 1,
-            "consecutivo": 1,
-            "fecha_inicio": "2025-01-01",
-            "fecha_fin": "2025-01-31",
-        },
-    )
+    conc_meta = inf._conc_meta_cc_mes_002(contrato, _acta())
     wb = Workbook()
     ws = wb.active
     sub, corte = inf._sub_corte_dummy_memoria()
@@ -187,50 +188,47 @@ def test_excel_banda_3filas_acta_una_celda_y_desc_altura():
         aprobo_interventoria_desde_config=True,
     )
     merges = _merged_ranges(ws)
-    assert "A3:C3" in merges
-    assert "E3:J3" in merges
+    assert "A1:B2" in merges
+    assert "C1:I2" in merges
+    assert "J1:J2" in merges
+    assert "A3:B3" in merges
+    assert "C3:H3" in merges
     assert "A4:H4" in merges
     assert "A5:J5" in merges
-    # Acta RPO en una sola celda D3 (sin merge que la combine).
-    for r in merges:
-        min_col, min_row, max_col, max_row = range_boundaries(r)
-        if min_row == 3 and max_row == 3:
-            assert not (min_col <= 4 <= max_col and min_col != max_col and min_col == 4)
-
-    assert ws["A3"].value == "CTO.\nICCU-CTO-1614-2025"
-    assert ws["D3"].value == "ACTA RPO\n1"
-    assert ws["E3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
-    assert ws["A4"].value == "CAPÍTULO\n2. DRENAJE PLUVIAL"
-    assert ws["I4"].value == "ÍTEM\nNP-08"
-    assert ws["J4"].value == "UNIDAD\nML"
-    assert ws["A5"].value == f"DESCRIPCIÓN\n{desc}"
-    assert ws["A5"].alignment.wrap_text is True
-    assert (ws.row_dimensions[5].height or 0) >= 34
-    # Altura crece con descripción larga (más que el mínimo).
-    assert (ws.row_dimensions[5].height or 0) > 40
-
-
-def test_excel_desc_altura_mayor_en_ancho_completo_que_en_cuarteto():
-    inf = _import_informes_with_stubs()
-    largo = "X" * 240
-    h_full = inf._excel_row_height_desc_banda_completa(largo)
-    h_old = inf._excel_row_height_wrapped_text(largo, chars_per_line=52)
-    # Full-width usa más chars/línea → menos líneas → altura menor o similar, pero
-    # debe incluir la etiqueta y quedar por encima del mínimo de banda.
-    assert h_full >= 34
-    assert inf._excel_row_height_desc_banda_completa("corta") < h_full
-
-
-def test_html_encabezado_3filas_tambien_en_fotos_y_graficos():
-    inf = _import_informes_with_stubs()
-    desc = (
-        "SUMINISTRO E INSTALACION DE GEOCELDA DE HDPE DE 150 MM DE ALTURA INCLUYE "
-        "ANCLAJE EXPANSION FIJACION Y RELLENO SEGUN LISTADO DE PRECIOS"
+    assert ws["C1"].value == (
+        "RESUMEN ACTIVIDADES\nCONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)"
     )
-    contrato = {"numero": "ICCU-CTO-1614-2025", "logo_contratista": None}
+    assert ws["J1"].value == "CC-MES-002"
+    assert (ws.row_dimensions[1].height or 0) >= 30
+    assert (ws.row_dimensions[2].height or 0) >= 30
+    assert ws["A3"].value == "CONTRATO\nICCU-CTO-1614-2025"
+    assert ws["C3"].value == f"OBJETO\n{objeto}"
+    assert ws["C3"].alignment.wrap_text is True
+    assert ws["I3"].value == "ACTA RPO\n1"
+    assert ws["J3"].value == "PERÍODO\n2025-01-01 → 2025-01-31"
+    assert (ws.row_dimensions[3].height or 0) >= 28
+    assert (ws.row_dimensions[3].height or 0) > 34  # crece por objeto largo
+    assert ws["A5"].value == f"DESCRIPCIÓN\n{desc}"
+
+
+def test_excel_objeto_altura_crece():
+    inf = _import_informes_with_stubs()
+    corto = inf._excel_row_height_objeto_banda("Obra corta")
+    largo = inf._excel_row_height_objeto_banda("X" * 220)
+    assert largo > corto
+
+
+def test_html_objeto_tambien_en_fotos_y_graficos():
+    inf = _import_informes_with_stubs()
+    objeto = _objeto_iccu()
+    contrato = {
+        "numero": "ICCU-CTO-1614-2025",
+        "objeto": objeto,
+        "logo_contratista": None,
+    }
     item_info = {
         "item_numero": "NP-08",
-        "item_descripcion": desc,
+        "item_descripcion": "Desc NP-08",
         "unidad": "M2",
         "capitulo": "2. DRENAJE",
     }
@@ -240,7 +238,7 @@ def test_html_encabezado_3filas_tambien_en_fotos_y_graficos():
             "cantidad_total": 1,
             "capitulo": "2. DRENAJE",
             "item_numero": "NP-08",
-            "item_descripcion": desc,
+            "item_descripcion": "Desc NP-08",
             "unidad": "M2",
             "foto_url": "https://cdn.example/f1.jpg",
             "foto_numero": 1,
@@ -248,15 +246,7 @@ def test_html_encabezado_3filas_tambien_en_fotos_y_graficos():
             "grafico_numero": 1,
         }
     ]
-    conc_meta = inf._conc_meta_cc_mes_002(
-        contrato["numero"],
-        {
-            "numero_rpo": 1,
-            "consecutivo": 1,
-            "fecha_inicio": "2025-01-01",
-            "fecha_fin": "2025-01-31",
-        },
-    )
+    conc_meta = inf._conc_meta_cc_mes_002(contrato, _acta())
     sub, corte = inf._sub_corte_dummy_memoria()
     html = inf._html_memoria_item(
         contrato,
@@ -270,9 +260,8 @@ def test_html_encabezado_3filas_tambien_en_fotos_y_graficos():
         pie_fotos_contexto="Acta RPO 1",
         estilo_formato_codigo="CC-MES-002",
     )
-    assert html.count("mem002-banda-mes") >= 3
-    assert html.count("CTO.") >= 3
-    assert html.count(desc) >= 3
-    assert "CONSECUTIVO" not in html
+    assert html.count("OBJETO") >= 3
+    assert html.count(objeto) >= 3
+    assert html.count("2.28cm") >= 3
     assert "REGISTRO FOTOGRÁFICO" in html
     assert "REGISTRO GRÁFICO" in html
