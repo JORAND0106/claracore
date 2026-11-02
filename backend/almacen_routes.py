@@ -2481,82 +2481,9 @@ def route_proveedores_solicitados_entrada(
     )
 
 
-@router.get("/{contrato_id}/entradas/{entrada_id}")
-def route_get_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
-    _check_contrato(current_user, contrato_id)
-    require_lectura_entradas_salidas(current_user)
-    try:
-        return get_entrada(contrato_id, entrada_id)
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
-class CompletarRevisionSalidaBody(BaseModel):
-    receptor_usuario_id: Optional[int] = None
-    pk_id: Optional[str] = None
-    pk_id_id: Optional[int] = None
-    tramo: Optional[str] = None
-    costado: Optional[str] = None
-    abscisa_inicial: Optional[str] = None
-    abscisa_final: Optional[str] = None
-    limpiar_marca: Optional[bool] = None
-    quitar_marca: Optional[bool] = None
-    confirmar: Optional[bool] = None
-    forzar_limpiar: Optional[bool] = None
-
-
-class CompletarRevisionEntradaBody(BaseModel):
-    orden_compra_id: Optional[int] = None
-    proveedor_id: Optional[int] = None
-    confirmar: bool = True
-    limpiar_marca: bool = True
-
-
-@router.post("/{contrato_id}/entradas/{entrada_id}/completar-revision")
-def route_completar_revision_entrada(
-    contrato_id: int,
-    entrada_id: int,
-    body: CompletarRevisionEntradaBody,
-    current_user=Depends(get_current_user),
-):
-    """Completa una entrada «por revisar». Exige Validar en Entradas y Salidas."""
-    _check_contrato(current_user, contrato_id)
-    require_permiso_entradas_salidas(current_user, "validar")
-    try:
-        prev = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
-        result = completar_revision_entrada(
-            contrato_id,
-            entrada_id,
-            _uid(current_user),
-            body.model_dump(exclude_none=True),
-        )
-        log_almacen(
-            current_user,
-            "COMPLETAR_REVISION_ENTRADA",
-            "entrada",
-            entrada_id,
-            {
-                "orden_compra_id": body.orden_compra_id,
-                "proveedor_id": body.proveedor_id,
-            },
-            valor_anterior={
-                "por_revisar": prev.get("por_revisar"),
-                "por_revisar_motivos": prev.get("por_revisar_motivos"),
-                "orden_compra_id": prev.get("orden_compra_id"),
-                "proveedor_id": prev.get("proveedor_id"),
-            },
-            valor_nuevo={
-                "por_revisar": result.get("por_revisar"),
-                "por_revisar_motivos": result.get("por_revisar_motivos"),
-                "orden_compra_id": result.get("orden_compra_id"),
-                "proveedor_id": result.get("proveedor_id"),
-            },
-        )
-        return result
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-
-
+# Rutas literales bajo /entradas/ (check-*, soportes-galeria) deben ir ANTES
+# de la ruta parametrizada por id numérico; si no, FastAPI interpreta
+# p. ej. "soportes-galeria" como entero y responde 422.
 @router.post("/{contrato_id}/entradas/check-soporte-hash")
 def route_check_entrada_soporte_hash(
     contrato_id: int,
@@ -2631,6 +2558,82 @@ def route_check_entrada_numero_remision(
             "Puede continuar si es correcto."
         ),
     }
+
+
+@router.get("/{contrato_id}/entradas/{entrada_id}")
+def route_get_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    try:
+        return get_entrada(contrato_id, entrada_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+class CompletarRevisionSalidaBody(BaseModel):
+    receptor_usuario_id: Optional[int] = None
+    pk_id: Optional[str] = None
+    pk_id_id: Optional[int] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    abscisa_inicial: Optional[str] = None
+    abscisa_final: Optional[str] = None
+    limpiar_marca: Optional[bool] = None
+    quitar_marca: Optional[bool] = None
+    confirmar: Optional[bool] = None
+    forzar_limpiar: Optional[bool] = None
+
+
+class CompletarRevisionEntradaBody(BaseModel):
+    orden_compra_id: Optional[int] = None
+    proveedor_id: Optional[int] = None
+    confirmar: bool = True
+    limpiar_marca: bool = True
+
+
+@router.post("/{contrato_id}/entradas/{entrada_id}/completar-revision")
+def route_completar_revision_entrada(
+    contrato_id: int,
+    entrada_id: int,
+    body: CompletarRevisionEntradaBody,
+    current_user=Depends(get_current_user),
+):
+    """Completa una entrada «por revisar». Exige Validar en Entradas y Salidas."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_entradas_salidas(current_user, "validar")
+    try:
+        prev = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
+        result = completar_revision_entrada(
+            contrato_id,
+            entrada_id,
+            _uid(current_user),
+            body.model_dump(exclude_none=True),
+        )
+        log_almacen(
+            current_user,
+            "COMPLETAR_REVISION_ENTRADA",
+            "entrada",
+            entrada_id,
+            {
+                "orden_compra_id": body.orden_compra_id,
+                "proveedor_id": body.proveedor_id,
+            },
+            valor_anterior={
+                "por_revisar": prev.get("por_revisar"),
+                "por_revisar_motivos": prev.get("por_revisar_motivos"),
+                "orden_compra_id": prev.get("orden_compra_id"),
+                "proveedor_id": prev.get("proveedor_id"),
+            },
+            valor_nuevo={
+                "por_revisar": result.get("por_revisar"),
+                "por_revisar_motivos": result.get("por_revisar_motivos"),
+                "orden_compra_id": result.get("orden_compra_id"),
+                "proveedor_id": result.get("proveedor_id"),
+            },
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.post("/{contrato_id}/entradas")

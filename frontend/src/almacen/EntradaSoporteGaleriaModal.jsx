@@ -1,10 +1,24 @@
 /**
  * Galería de la plataforma: solo soportes ya cargados en Almacén (no dispositivo).
- * Hoy todas las imágenes de entradas están asociadas → se marcan «En uso · Ent-…».
+ * Las asociadas a una entrada se marcan «En uso · Ent-…».
  */
 import { useEffect, useState } from 'react'
 import { estiloAvisoAlmacen } from './almacenContraste'
 import { useAlmacenApi, useAlmacenTheme } from './almacenShared'
+
+function mensajeGaleriaAmigable(err) {
+  const raw = String(err?.message || err || '')
+  if (/valid integer|entrada_id|soportes-galeria|unprocessable|422/i.test(raw)) {
+    return 'No se pudo abrir la galería del módulo. Intente de nuevo o use Cámara / Archivo.'
+  }
+  if (/failed to fetch|network|offline/i.test(raw)) {
+    return 'Sin conexión para cargar la galería. Use Cámara o Archivo.'
+  }
+  if (!raw || raw.length > 160 || /traceback|pydantic|fastapi/i.test(raw)) {
+    return 'No se pudo cargar la galería del módulo. Use Cámara o Archivo.'
+  }
+  return raw
+}
 
 export default function EntradaSoporteGaleriaModal({
   open,
@@ -31,7 +45,7 @@ export default function EntradaSoporteGaleriaModal({
         setRows(Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []))
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message || 'No se pudo cargar la galería del módulo.')
+        if (!cancelled) setError(mensajeGaleriaAmigable(err))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -83,7 +97,7 @@ export default function EntradaSoporteGaleriaModal({
         }}
         >
           <div style={{ fontWeight: 800 }}>
-            🖼 Galería del módulo · {isRemision ? 'Remisión' : 'Descargue'}
+            🖼 Galería · {isRemision ? 'Remisión' : 'Descargue'}
           </div>
           <button type="button" style={{ ...ui.btnSecondary, minHeight: 40 }} onClick={() => onClose?.()}>
             Cerrar
@@ -91,11 +105,12 @@ export default function EntradaSoporteGaleriaModal({
         </div>
         <div style={{ padding: 12, overflow: 'auto', display: 'grid', gap: 8 }}>
           <div style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 600, fontSize: '0.85rem' }}>
-            Solo imágenes de Almacén. Las ya usadas en una entrada no se pueden volver a cargar
-            (regla de duplicados). Use Archivo o Cámara para un soporte nuevo.
+            Solo imágenes de Almacén. Las ya usadas en una entrada no se pueden volver a cargar.
           </div>
           {error && (
-            <div style={{ color: 'var(--cc-almacen-danger-text)', fontWeight: 700 }}>{error}</div>
+            <div data-testid="entrada-soporte-galeria-error" style={{ color: 'var(--cc-almacen-danger-text)', fontWeight: 700 }}>
+              {error}
+            </div>
           )}
           {loading && <div style={{ fontWeight: 700 }}>Cargando…</div>}
           {!loading && !rows.length && !error && (
@@ -103,8 +118,7 @@ export default function EntradaSoporteGaleriaModal({
               data-testid="entrada-soporte-galeria-vacia"
               style={{ fontWeight: 700, color: 'var(--cc-almacen-text-muted)' }}
             >
-              No hay soportes reutilizables en el módulo. Las imágenes guardadas ya están
-              asociadas a una entrada.
+              No hay imágenes disponibles en la galería del módulo.
             </div>
           )}
           {rows.map((row) => {
@@ -115,14 +129,12 @@ export default function EntradaSoporteGaleriaModal({
                 key={`${row.entrada_id}-${row.tipo_soporte || kind}`}
                 type="button"
                 data-testid="entrada-soporte-galeria-item"
-                disabled={!used && false}
                 style={{
                   ...ui.btnSecondary,
                   minHeight: 52,
                   justifyContent: 'flex-start',
                   gap: 10,
                   textAlign: 'left',
-                  opacity: used ? 0.95 : 1,
                 }}
                 onClick={() => {
                   if (used) {

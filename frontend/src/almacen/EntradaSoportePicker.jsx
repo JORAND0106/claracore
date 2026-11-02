@@ -1,25 +1,28 @@
 /**
- * Soporte Remisión / Foto descargue — fila compacta:
- * Cámara | Archivo (dispositivo) | Galería módulo | Pegar.
+ * Soporte Remisión / Foto descargue — fila compacta con preview fijo:
+ * Cámara | Archivo | Galería | Pegar + miniatura (altura/ancho fijos).
  */
 import { useRef } from 'react'
 import { useAlmacenTheme } from './almacenShared'
 import { fileFromClipboardApi, fileFromClipboardEvent, MSG_PEGADO_VACIO } from './entradaSoportePaste'
 
-const btnIcon = (ui, { active = false, flex = '0 0 auto' } = {}) => ({
+const PREVIEW_W = 72
+const PREVIEW_H = 64
+
+const btnIcon = (ui, { active = false } = {}) => ({
   ...ui.btnSecondary,
-  flex,
+  flex: '0 0 auto',
   display: 'inline-flex',
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
   gap: 1,
-  minWidth: 52,
-  minHeight: 48,
-  padding: '4px 6px',
-  fontSize: '0.68rem',
+  minWidth: 50,
+  minHeight: 46,
+  padding: '3px 5px',
+  fontSize: '0.65rem',
   fontWeight: 800,
-  lineHeight: 1.1,
+  lineHeight: 1.05,
   background: active ? (ui.accentSoft || 'var(--cc-almacen-accent-soft)') : 'var(--cc-almacen-bg-card)',
   color: 'var(--cc-almacen-text)',
   borderColor: active ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-border)',
@@ -33,16 +36,13 @@ export default function EntradaSoportePicker({
   previewUrl,
   busy,
   onPickFile,
-  /** (file: File|null, message?: string) */
   onPasteFile,
-  /** () => void — abre galería del módulo (no dispositivo) */
   onOpenGaleriaPlataforma,
+  onOpenPreview,
   labelReady,
   labelEmpty,
   selected = false,
   onSelect,
-  /** Slot opcional a la izquierda (p. ej. N.º remisión) */
-  leading = null,
 }) {
   const ui = useAlmacenTheme()
   const camRef = useRef(null)
@@ -86,23 +86,23 @@ export default function EntradaSoportePicker({
       onClick={() => onSelect?.(kind)}
       style={{
         display: 'grid',
-        gridTemplateColumns: leading ? 'minmax(120px, 1.1fr) minmax(0, 1.4fr) auto' : 'minmax(0, 1fr) auto',
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
         gap: 8,
         alignItems: 'center',
         outline: selected ? `2px solid var(--cc-almacen-accent, ${ui.accent})` : '1px solid var(--cc-almacen-border)',
         outlineOffset: 0,
         borderRadius: 10,
-        padding: '6px 8px',
+        padding: '5px 8px',
         background: 'var(--cc-almacen-input-bg)',
-        minHeight: 56,
+        minHeight: PREVIEW_H + 14,
+        height: PREVIEW_H + 14,
+        boxSizing: 'border-box',
       }}
     >
-      {leading}
-
-      <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+      <div style={{ display: 'grid', gap: 3, minWidth: 0 }}>
         <div style={{
           fontWeight: 800,
-          fontSize: '0.82rem',
+          fontSize: '0.78rem',
           color: 'var(--cc-almacen-text)',
           display: 'flex',
           alignItems: 'center',
@@ -112,7 +112,7 @@ export default function EntradaSoportePicker({
         >
           <span aria-hidden>{isRemision ? '📄' : '📷'}</span>
           {isRemision ? 'Remisión' : 'Descargue'}
-          <span style={{ fontWeight: 500, color: 'var(--cc-almacen-text-muted)', fontSize: '0.75rem' }}>*</span>
+          <span style={{ fontWeight: 500, color: 'var(--cc-almacen-text-muted)', fontSize: '0.7rem' }}>*</span>
         </div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', alignItems: 'stretch' }}>
           <input
@@ -132,7 +132,6 @@ export default function EntradaSoportePicker({
             data-testid={`entrada-soporte-${kind}-file-input`}
             onChange={(e) => { void onPickFile?.(e) }}
           />
-          {/* Compat tests: galería dispositivo ya no existe; Archivo cubre fotos del dispositivo. */}
           <input
             type="file"
             accept="image/*"
@@ -150,7 +149,7 @@ export default function EntradaSoportePicker({
             onClick={(e) => { e.stopPropagation(); camRef.current?.click() }}
             title="Tomar foto ahora"
           >
-            <span style={{ fontSize: '1.05rem' }} aria-hidden>📸</span>
+            <span style={{ fontSize: '1rem' }} aria-hidden>📸</span>
             Cámara
           </button>
           <button
@@ -161,7 +160,7 @@ export default function EntradaSoportePicker({
             onClick={(e) => { e.stopPropagation(); fileRef.current?.click() }}
             title={isRemision ? 'Foto o PDF del dispositivo' : 'Foto del dispositivo'}
           >
-            <span style={{ fontSize: '1.05rem' }} aria-hidden>📁</span>
+            <span style={{ fontSize: '1rem' }} aria-hidden>📁</span>
             Archivo
           </button>
           <button
@@ -176,10 +175,9 @@ export default function EntradaSoportePicker({
             }}
             title="Imágenes ya cargadas en Almacén (no del dispositivo)"
           >
-            <span style={{ fontSize: '1.05rem' }} aria-hidden>🖼</span>
-            Módulo
+            <span style={{ fontSize: '1rem' }} aria-hidden>🖼</span>
+            Galería
           </button>
-          {/* Pegar compacto: rótulo + contentEditable vacío (menú Pegar iPad) + click = clipboard.read */}
           <div
             data-testid={`entrada-soporte-${kind}-pegar`}
             style={{ position: 'relative', ...btnIcon(ui, { active: selected }), padding: 0 }}
@@ -196,12 +194,12 @@ export default function EntradaSoportePicker({
                 justifyContent: 'center',
                 gap: 1,
                 pointerEvents: 'none',
-                fontSize: '0.68rem',
+                fontSize: '0.65rem',
                 fontWeight: 800,
                 color: 'var(--cc-almacen-text)',
               }}
             >
-              <span style={{ fontSize: '1.05rem' }}>📋</span>
+              <span style={{ fontSize: '1rem' }}>📋</span>
               Pegar
             </div>
             <div
@@ -228,8 +226,8 @@ export default function EntradaSoportePicker({
               style={{
                 position: 'relative',
                 zIndex: 1,
-                minWidth: 52,
-                minHeight: 48,
+                minWidth: 50,
+                minHeight: 46,
                 outline: 'none',
                 color: 'transparent',
                 caretColor: 'transparent',
@@ -242,32 +240,58 @@ export default function EntradaSoportePicker({
         </div>
       </div>
 
-      <div
+      <button
+        type="button"
         data-testid={file ? `entrada-soporte-${kind}-preview` : `entrada-soporte-${kind}-falta`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect?.(kind)
+          if (file) onOpenPreview?.(kind)
+        }}
         style={{
-          width: 56,
-          height: 48,
+          width: PREVIEW_W,
+          height: PREVIEW_H,
+          minWidth: PREVIEW_W,
+          minHeight: PREVIEW_H,
+          maxWidth: PREVIEW_W,
+          maxHeight: PREVIEW_H,
           borderRadius: 8,
-          border: `1px solid var(--cc-almacen-border)`,
+          border: `2px solid ${file ? 'var(--cc-almacen-border)' : 'var(--cc-almacen-warn-border, #d97706)'}`,
           background: 'var(--cc-almacen-bg-card)',
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
           overflow: 'hidden',
           flexShrink: 0,
-          fontSize: '0.65rem',
+          fontSize: '0.62rem',
           fontWeight: 800,
           textAlign: 'center',
           padding: 2,
+          cursor: file ? 'pointer' : 'default',
           color: file
             ? 'var(--cc-almacen-ok-text, #15803d)'
             : 'var(--cc-almacen-warn-text, #b45309)',
+          boxSizing: 'border-box',
         }}
-        title={file ? (labelReady || 'Listo') : (labelEmpty || 'Falta')}
+        title={file ? `${labelReady || 'Listo'} · tocar para ampliar` : (labelEmpty || 'Falta')}
+        aria-label={file ? 'Ver vista previa del soporte' : (labelEmpty || 'Falta soporte')}
       >
         {file ? (
           isPdf ? (
-            <span aria-hidden>📎</span>
+            <>
+              <span aria-hidden style={{ fontSize: '1.2rem' }}>📎</span>
+              <span style={{
+                maxWidth: '100%',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                padding: '0 2px',
+              }}
+              >
+                {file.name || 'PDF'}
+              </span>
+            </>
           ) : previewUrl ? (
             <img
               src={previewUrl}
@@ -280,7 +304,7 @@ export default function EntradaSoportePicker({
         ) : (
           <span>Falta</span>
         )}
-      </div>
+      </button>
     </div>
   )
 }

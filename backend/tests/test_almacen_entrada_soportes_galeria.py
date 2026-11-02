@@ -40,3 +40,9 @@ def test_ruta_soportes_galeria_registrada():
     routes = Path(__file__).resolve().parents[1].joinpath("almacen_routes.py").read_text(encoding="utf-8")
     assert "soportes-galeria" in routes
     assert "list_entrada_soportes_galeria" in routes
+    # Debe declararse ANTES de /entradas/{entrada_id} (si no, FastAPI toma
+    # "soportes-galeria" como entrada_id int → 422).
+    idx_gal = routes.index('@router.get("/{contrato_id}/entradas/soportes-galeria")')
+    idx_id = routes.index('@router.get("/{contrato_id}/entradas/{entrada_id}")')
+    assert 0 < idx_gal < idx_id
+    assert "soportes-galeria" in routes
