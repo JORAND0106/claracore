@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
+import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import {
   formatNombrePropio,
   fmtCant,
@@ -14,14 +15,28 @@ import {
 } from './almacenShared'
 import { prepareRemisionSoporte } from './almacenRemisionSoporte'
 import {
+  countSearchDisplay,
   distributeCantidadOverLineas,
+  filterOcsForSearch,
   formatPlacaInput,
-  matchesAllTerms,
+  highlightSegments,
   motivosPorRevisarPreview,
-  ocCardSearchBlob,
   placaValida,
   PASO,
 } from './entradaRegistroTabletHelpers'
+
+function HighlightText({ text, query }) {
+  const segs = highlightSegments(text, query)
+  return (
+    <>
+      {segs.map((s, i) => (
+        s.hit
+          ? <mark key={i} style={{ background: '#fde68a', color: 'inherit', padding: '0 1px', borderRadius: 2 }}>{s.text}</mark>
+          : <span key={i}>{s.text}</span>
+      ))}
+    </>
+  )
+}
 
 const btnHome = (bg, color = '#fff') => ({
   display: 'flex',
@@ -78,11 +93,14 @@ export default function EntradaRegistroTablet({
   onSaved,
   permisos,
   theme,
+  token,
+  contratoId,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const camRemisionRef = useRef(null)
   const camMaterialRef = useRef(null)
+  const contrato = contratoId || permisos?.contratoId
 
   const [paso, setPaso] = useState(PASO.INICIO)
   const [tipo, setTipo] = useState(null)
@@ -115,6 +133,8 @@ export default function EntradaRegistroTablet({
   const [fotoMaterial, setFotoMaterial] = useState(null)
   const [fotoMaterialPreview, setFotoMaterialPreview] = useState('')
   const [pkId, setPkId] = useState('')
+  const [pkLabel, setPkLabel] = useState('')
+  const [tramo, setTramo] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [okMsg, setOkMsg] = useState('')
@@ -132,16 +152,18 @@ export default function EntradaRegistroTablet({
     supera_saldo: superaSaldo,
     proveedor_manual: proveedorManual || (!proveedorId && Boolean(proveedorNombre)),
     sin_insumo: sinInsumo,
+    sin_sector: tipo === 'recibo' && !String(pkId || pkLabel || '').trim(),
     foto: fotoRemision,
     vehiculo_nuevo: vehiculoNuevo,
-  }), [tipo, ocCard, superaSaldo, proveedorManual, proveedorId, proveedorNombre, sinInsumo, fotoRemision, vehiculoNuevo])
+  }), [tipo, ocCard, superaSaldo, proveedorManual, proveedorId, proveedorNombre, sinInsumo, pkId, pkLabel, fotoRemision, vehiculoNuevo])
 
   const motivosPrev = motivosPorRevisarPreview(draft)
 
-  const ocsFiltradas = useMemo(() => {
-    if (!ocSearch.trim()) return ocs
-    return ocs.filter((c) => matchesAllTerms(ocCardSearchBlob(c), ocSearch))
-  }, [ocs, ocSearch])
+  const ocsFiltradas = useMemo(
+    () => filterOcsForSearch(ocs, ocSearch),
+    [ocs, ocSearch],
+  )
+  const ocDisplayCount = useMemo(() => countSearchDisplay(ocsFiltradas), [ocsFiltradas])
 
   const mostrarSinOc = useMemo(() => {
     if (loadingOc && !ocsLoaded) return false
@@ -269,6 +291,8 @@ export default function EntradaRegistroTablet({
     setFotoMaterial(null)
     setFotoMaterialPreview('')
     setPkId('')
+    setPkLabel('')
+    setTramo('')
     setError('')
     setOkMsg('')
     setOcSearch('')
@@ -289,7 +313,10 @@ export default function EntradaRegistroTablet({
     setInsumoId(insumo.insumo_id || null)
     setInsumoLabel(insumo.material_descripcion || '')
     setInsumoUnidad(insumo.unidad || 'm³')
-    setPkId(insumo.pk_id || '')
+    const sector = (insumo.pk_id || '').trim()
+    setPkId(sector)
+    setPkLabel(sector)
+    setTramo(insumo.tramo || '')
     setPaso(PASO.CAPTURA)
   }
 
@@ -382,7 +409,9 @@ export default function EntradaRegistroTablet({
       if (insumoId) fd.append('insumo_id', String(insumoId))
       if (insumoLabel) fd.append('material_descripcion', insumoLabel)
       if (insumoUnidad) fd.append('unidad', insumoUnidad)
-      if (pkId) fd.append('pk_id', pkId)
+      const sector = (pkLabel || pkId || '').trim()
+      if (sector) fd.append('pk_id', sector)
+      if (tramo) fd.append('tramo', tramo)
       if (placa) fd.append('placa', placa)
       if (conductor) fd.append('transportador', formatNombrePropio(conductor))
 
@@ -454,9 +483,9 @@ export default function EntradaRegistroTablet({
         zIndex: 100040,
         background: 'var(--cc-almacen-overlay, rgba(15, 23, 42, 0.55))',
         display: 'flex',
-        alignItems: 'stretch',
+        alignItems: 'center',
         justifyContent: 'center',
-        padding: 10,
+        padding: 12,
         boxSizing: 'border-box',
         overscrollBehavior: 'contain',
       }}
@@ -467,8 +496,9 @@ export default function EntradaRegistroTablet({
       <div
         data-testid="entrada-tablet-popup"
         style={{
-          width: 'min(1120px, 100%)',
-          maxHeight: '100%',
+          width: 'min(1100px, 96%)',
+          maxHeight: 'min(92dvh, calc(100% - 8px))',
+          margin: '0 auto',
           background: 'var(--cc-almacen-bg-card, #fff)',
           color: 'var(--cc-almacen-text, #0f172a)',
           borderRadius: 16,
@@ -478,6 +508,7 @@ export default function EntradaRegistroTablet({
           flexDirection: 'column',
           overflow: 'hidden',
           overscrollBehavior: 'contain',
+          alignSelf: 'center',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -582,7 +613,9 @@ export default function EntradaRegistroTablet({
                 <div data-testid="entrada-tablet-oc-count" style={{ color: ui.textMuted, fontWeight: 600, fontSize: 'var(--cc-sm, 0.9rem)' }}>
                   {loadingOc && !ocsLoaded
                     ? 'Cargando…'
-                    : `${ocsFiltradas.length} OC`}
+                    : (ocSearch.trim()
+                      ? `${ocDisplayCount} resultado${ocDisplayCount === 1 ? '' : 's'}`
+                      : `${ocDisplayCount} OC`)}
                   {ocTimingMs?.client_ms != null && ocsLoaded ? ` · ${ocTimingMs.client_ms} ms` : ''}
                   {ocTimingMs?.server?.source ? ` · ${ocTimingMs.server.source}` : ''}
                 </div>
@@ -602,16 +635,18 @@ export default function EntradaRegistroTablet({
                 data-testid="entrada-tablet-oc-grid"
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
                   gap: 12,
+                  width: '100%',
                 }}
               >
                 {ocsFiltradas.map((c) => {
                   const insumos = Array.isArray(c.insumos) ? c.insumos : []
                   return (
                     <div
-                      key={c.orden_compra_id}
+                      key={`${c.orden_compra_id}-${c.matchMode || 'all'}-${insumos.map((i) => i.key).join(',')}`}
                       data-testid="entrada-tablet-oc-card"
+                      data-match-mode={c.matchMode || 'all'}
                       style={{
                         ...cardTouch(ui, false),
                         cursor: 'default',
@@ -619,9 +654,15 @@ export default function EntradaRegistroTablet({
                       }}
                     >
                       <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>
-                        📋 OC {c.numero_oc != null ? `#${c.numero_oc}` : '—'}
+                        📋 OC{' '}
+                        <HighlightText
+                          text={c.numero_oc != null ? `#${c.numero_oc}` : '—'}
+                          query={ocSearch}
+                        />
                       </div>
-                      <div style={{ fontWeight: 700 }}>🏭 {c.proveedor_nombre || 'Proveedor'}</div>
+                      <div style={{ fontWeight: 700 }}>
+                        🏭 <HighlightText text={c.proveedor_nombre || 'Proveedor'} query={ocSearch} />
+                      </div>
                       <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
                         {insumos.map((ins) => (
                           <button
@@ -640,7 +681,9 @@ export default function EntradaRegistroTablet({
                             }}
                             onClick={() => elegirInsumoDeOc(c, ins)}
                           >
-                            <span style={{ fontWeight: 700 }}>🧱 {ins.material_descripcion || 'Material'}</span>
+                            <span style={{ fontWeight: 700 }}>
+                              🧱 <HighlightText text={ins.material_descripcion || 'Material'} query={ocSearch} />
+                            </span>
                             <span style={{ color: ui.accent, fontWeight: 800 }}>
                               Falta {fmtCant(ins.saldo_cantidad)} {ins.unidad || ''}
                             </span>
@@ -760,14 +803,6 @@ export default function EntradaRegistroTablet({
                 </button>
               )}
 
-              <div style={{ fontWeight: 800, marginTop: 8 }}>Sector (opcional)</div>
-              <input
-                style={inputGiant(ui)}
-                placeholder="PK-ID"
-                value={pkId}
-                onChange={(e) => setPkId(e.target.value.trim())}
-              />
-
               <button
                 type="button"
                 style={{ ...ui.btnPrimary, minHeight: 56, fontSize: '1.1rem', marginTop: 8 }}
@@ -780,76 +815,124 @@ export default function EntradaRegistroTablet({
           )}
 
           {paso === PASO.CAPTURA && (
-            <div data-testid="entrada-tablet-captura" style={{ display: 'grid', gap: 16, maxWidth: 720 }}>
-              <div style={{ fontWeight: 800, fontSize: '1.1rem' }}>
-                Cantidad ({insumoUnidad || 'm³'})
-              </div>
-              {insumoSel && (
-                <div style={{
-                  padding: 12,
-                  borderRadius: 12,
-                  background: ui.accentSoft || 'rgba(0,119,182,0.12)',
-                  fontWeight: 700,
+            <div data-testid="entrada-tablet-captura" style={{ display: 'grid', gap: 10, width: '100%' }}>
+              <div
+                data-testid="entrada-tablet-captura-fila"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: 10,
+                  alignItems: 'end',
+                  width: '100%',
                 }}
-                >
-                  Saldo OC: {fmtCant(saldoOc)} {insumoSel.unidad || ''}
-                  {ocCard?.numero_oc != null ? ` · OC #${ocCard.numero_oc}` : ''}
+              >
+                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Cantidad ({insumoUnidad || 'm³'})</div>
+                  <input
+                    inputMode="decimal"
+                    style={{ ...inputGiant(ui), fontSize: '1.6rem', textAlign: 'center', minHeight: 52 }}
+                    value={cantidad}
+                    onChange={(e) => setCantidad(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.'))}
+                    placeholder="0"
+                    data-testid="entrada-tablet-cantidad"
+                  />
                 </div>
-              )}
-              <input
-                inputMode="decimal"
-                style={{ ...inputGiant(ui), fontSize: '2rem', textAlign: 'center' }}
-                value={cantidad}
-                onChange={(e) => setCantidad(e.target.value.replace(/[^0-9.,]/g, '').replace(',', '.'))}
-                placeholder="0"
-                data-testid="entrada-tablet-cantidad"
-              />
+                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Saldo OC</div>
+                  <div
+                    data-testid="entrada-tablet-saldo"
+                    style={{
+                      ...inputGiant(ui),
+                      display: 'flex',
+                      alignItems: 'center',
+                      fontWeight: 800,
+                      background: ui.accentSoft || 'rgba(0,119,182,0.12)',
+                      border: `1px solid ${ui.borderColor}`,
+                      minHeight: 52,
+                    }}
+                  >
+                    {insumoSel || ocCard
+                      ? `${fmtCant(saldoOc)} ${insumoSel?.unidad || insumoUnidad || ''}${ocCard?.numero_oc != null ? ` · #${ocCard.numero_oc}` : ''}`
+                      : '—'}
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Placa</div>
+                  <input
+                    style={{ ...inputGiant(ui), textTransform: 'uppercase', letterSpacing: 2, minHeight: 52 }}
+                    value={placa}
+                    onChange={(e) => { void onPlacaChange(e.target.value) }}
+                    placeholder="AAA-000"
+                    data-testid="entrada-tablet-placa"
+                    autoCapitalize="characters"
+                  />
+                </div>
+                <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Conductor</div>
+                  <input
+                    style={{ ...inputGiant(ui), minHeight: 52 }}
+                    value={conductor}
+                    onChange={(e) => {
+                      setConductor(e.target.value)
+                      if (placaValida(placa)) setVehiculoNuevo(true)
+                    }}
+                    placeholder="Nombre"
+                    data-testid="entrada-tablet-conductor"
+                  />
+                </div>
+                <div style={{ display: 'grid', gap: 4, minWidth: 0 }} data-testid="entrada-tablet-mapa">
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Sector</div>
+                  <AlmacenPkMapaSelector
+                    t={theme || ui}
+                    token={token}
+                    contratoId={contrato}
+                    pkIdSeleccionado=""
+                    pkLabel={pkLabel || pkId}
+                    onSeleccionar={(sel) => {
+                      setPkId(sel.pk_id || sel.pk_label || '')
+                      setPkLabel(sel.pk_label || sel.pk_id || '')
+                      setTramo(sel.tramo || '')
+                    }}
+                    onLimpiar={() => {
+                      setPkId('')
+                      setPkLabel('')
+                      setTramo('')
+                    }}
+                    compact
+                    initialBasemap="satelite"
+                    showBasemapToggle
+                  />
+                </div>
+              </div>
+
               {superaSaldo && (
                 <div style={{ color: '#b45309', fontWeight: 700 }}>⚠ Supera saldo · se guarda por revisar</div>
               )}
-
-              <div style={{ fontWeight: 800 }}>Placa</div>
-              <input
-                style={{ ...inputGiant(ui), textTransform: 'uppercase', letterSpacing: 2 }}
-                value={placa}
-                onChange={(e) => { void onPlacaChange(e.target.value) }}
-                placeholder="AAA-000"
-                data-testid="entrada-tablet-placa"
-                autoCapitalize="characters"
-              />
-              {placaOpts.slice(0, 5).map((r) => (
-                <button
-                  key={r.placa}
-                  type="button"
-                  style={cardTouch(ui, false)}
-                  onClick={() => {
-                    setPlaca(formatPlacaInput(r.placa))
-                    setConductor(formatNombrePropio(r.nombre))
-                    setVehiculoNuevo(false)
-                  }}
-                >
-                  🚛 {formatPlacaInput(r.placa)} · {formatNombrePropio(r.nombre)}
-                </button>
-              ))}
-
-              <div style={{ fontWeight: 800 }}>Conductor</div>
-              <input
-                style={inputGiant(ui)}
-                value={conductor}
-                onChange={(e) => {
-                  setConductor(e.target.value)
-                  if (placaValida(placa)) setVehiculoNuevo(true)
-                }}
-                placeholder="Nombre"
-                data-testid="entrada-tablet-conductor"
-              />
               {vehiculoNuevo && placaValida(placa) && (
                 <div style={{ color: '#b45309', fontWeight: 700 }}>Vehículo nuevo · por revisar</div>
               )}
+              {placaOpts.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {placaOpts.slice(0, 5).map((r) => (
+                    <button
+                      key={r.placa}
+                      type="button"
+                      style={{ ...ui.btnSecondary, minHeight: 40 }}
+                      onClick={() => {
+                        setPlaca(formatPlacaInput(r.placa))
+                        setConductor(formatNombrePropio(r.nombre))
+                        setVehiculoNuevo(false)
+                      }}
+                    >
+                      🚛 {formatPlacaInput(r.placa)} · {formatNombrePropio(r.nombre)}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-              <div style={{ fontWeight: 800, marginTop: 4 }}>Fotos (obligatorias)</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontWeight: 800, marginTop: 2 }}>Fotos (obligatorias)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div style={{ display: 'grid', gap: 6 }}>
                   <input
                     ref={camRemisionRef}
                     type="file"
@@ -863,22 +946,22 @@ export default function EntradaRegistroTablet({
                     data-testid="entrada-tablet-foto-remision"
                     style={{
                       ...btnHome(fotoRemision ? '#15803d' : '#0077B6'),
-                      minHeight: 100,
+                      minHeight: 72,
                       opacity: busy ? 0.7 : 1,
                     }}
                     disabled={busy}
                     onClick={() => camRemisionRef.current?.click()}
                   >
-                    <span style={{ fontSize: '1.8rem' }} aria-hidden>📄</span>
+                    <span style={{ fontSize: '1.5rem' }} aria-hidden>📄</span>
                     {fotoRemision ? 'Recibo ✓' : 'Foto recibo'}
                   </button>
                   {fotoRemisionPreview ? (
-                    <img src={fotoRemisionPreview} alt="Recibo" style={{ width: '100%', maxHeight: 120, objectFit: 'cover', borderRadius: 10 }} />
+                    <img src={fotoRemisionPreview} alt="Recibo" style={{ width: '100%', maxHeight: 88, objectFit: 'cover', borderRadius: 10 }} />
                   ) : (
-                    <div data-testid="entrada-tablet-falta-remision" style={{ color: '#b45309', fontWeight: 700, fontSize: '0.9rem' }}>Falta foto del recibo</div>
+                    <div data-testid="entrada-tablet-falta-remision" style={{ color: '#b45309', fontWeight: 700, fontSize: '0.85rem' }}>Falta foto del recibo</div>
                   )}
                 </div>
-                <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ display: 'grid', gap: 6 }}>
                   <input
                     ref={camMaterialRef}
                     type="file"
@@ -892,19 +975,19 @@ export default function EntradaRegistroTablet({
                     data-testid="entrada-tablet-foto-material"
                     style={{
                       ...btnHome(fotoMaterial ? '#15803d' : '#0077B6'),
-                      minHeight: 100,
+                      minHeight: 72,
                       opacity: busy ? 0.7 : 1,
                     }}
                     disabled={busy}
                     onClick={() => camMaterialRef.current?.click()}
                   >
-                    <span style={{ fontSize: '1.8rem' }} aria-hidden>📷</span>
+                    <span style={{ fontSize: '1.5rem' }} aria-hidden>📷</span>
                     {fotoMaterial ? 'Material ✓' : 'Foto material'}
                   </button>
                   {fotoMaterialPreview ? (
-                    <img src={fotoMaterialPreview} alt="Material" style={{ width: '100%', maxHeight: 120, objectFit: 'cover', borderRadius: 10 }} />
+                    <img src={fotoMaterialPreview} alt="Material" style={{ width: '100%', maxHeight: 88, objectFit: 'cover', borderRadius: 10 }} />
                   ) : (
-                    <div data-testid="entrada-tablet-falta-material" style={{ color: '#b45309', fontWeight: 700, fontSize: '0.9rem' }}>Falta foto del material</div>
+                    <div data-testid="entrada-tablet-falta-material" style={{ color: '#b45309', fontWeight: 700, fontSize: '0.85rem' }}>Falta foto del material</div>
                   )}
                 </div>
               </div>
@@ -912,7 +995,7 @@ export default function EntradaRegistroTablet({
               <button
                 type="button"
                 data-testid="entrada-tablet-captura-siguiente"
-                style={{ ...ui.btnPrimary, minHeight: 56, fontSize: '1.1rem' }}
+                style={{ ...ui.btnPrimary, minHeight: 52, fontSize: '1.1rem' }}
                 disabled={!capturaLista || busy}
                 onClick={() => setPaso(PASO.CONFIRMAR)}
               >
@@ -927,12 +1010,13 @@ export default function EntradaRegistroTablet({
           )}
 
           {paso === PASO.CONFIRMAR && tipo === 'recibo' && (
-            <div data-testid="entrada-tablet-resumen" style={{ display: 'grid', gap: 12, maxWidth: 720 }}>
+            <div data-testid="entrada-tablet-resumen" style={{ display: 'grid', gap: 12, width: '100%', maxWidth: 900, margin: '0 auto' }}>
               <div style={{ fontWeight: 800, fontSize: '1.2rem' }}>Confirmar</div>
               <div style={cardTouch(ui, false)}>
                 <div>🧱 {insumoLabel || 'Material'}</div>
                 <div>🏭 {proveedorNombre || '—'}</div>
                 <div>📋 {ocCard?.numero_oc != null ? `OC #${ocCard.numero_oc}` : 'Sin OC'}</div>
+                <div>📍 {(pkLabel || pkId) ? `${pkLabel || pkId}${tramo ? ` · ${tramo}` : ''}` : 'Sin sector'}</div>
                 <div style={{ fontWeight: 800 }}>{fmtCant(cantNum)} {insumoUnidad}</div>
                 <div>🚛 {placa} · {conductor}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>

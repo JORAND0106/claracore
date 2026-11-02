@@ -236,6 +236,7 @@ export default function EntradasPanel({
                   Remisión
                 </th>
                 <th style={{ ...ui.th, width: 56, whiteSpace: 'nowrap' }}>OC</th>
+                <th style={{ ...ui.th, width: 88, whiteSpace: 'nowrap' }}>Sector</th>
                 <th style={{ ...ui.th, minWidth: 240, width: '22%', whiteSpace: 'normal' }}>Insumo</th>
                 <ThHelp
                   style={{ ...ui.th, minWidth: 108 }}
@@ -314,6 +315,7 @@ export default function EntradasPanel({
                         || '—'}
                     </td>
                     <td style={tdAlert} data-label="OC">#{oc.numero_oc || '—'}</td>
+                    <td style={tdAlert} data-label="Sector">{e.pk_id || '—'}</td>
                     <td
                       style={{
                         ...tdAlert,
@@ -482,6 +484,8 @@ export default function EntradasPanel({
         <EntradaRegistroTablet
           permisos={permisos}
           theme={t}
+          token={token}
+          contratoId={permisos?.contratoId}
           onClose={() => setCreating(false)}
           onSaved={() => { reload() }}
         />
