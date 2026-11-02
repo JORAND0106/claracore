@@ -563,7 +563,7 @@ export default function EntradasPanel({
               <>
                 ¿Eliminar la entrada {nEnt}{doc}?
                 <div style={{ marginTop: 10, color: 'inherit', opacity: 0.9 }}>
-                  Se revierte el ingreso y el saldo de la orden de compra. Si era el último consecutivo, ese número queda disponible. Si hay salidas que consumen este stock, no se eliminará.
+                  Se revierte el ingreso y el saldo de la orden de compra. Si era el último consecutivo, ese número queda disponible. Si hay salidas que consumen este stock, no se puede eliminar ni anular (quedarían por encima de lo recibido).
                 </div>
                 {eliminarAviso && (
                   <div style={{ marginTop: 10, color: '#991b1b' }}>{eliminarAviso}</div>

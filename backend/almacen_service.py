@@ -8562,8 +8562,10 @@ def create_entrada(
     material_foto_mime: Optional[str] = None,
 ) -> dict:
     """
-    Registra una entrada. Nunca bloquea por OC/saldo/foto/proveedor:
-    si algo no cuadra, guarda igual con marca «por revisar».
+    Registra una entrada.
+    Con OC: la cantidad por línea no puede superar el saldo pendiente (bloquea).
+    Sin OC / foto / proveedor / sector: puede guardar con marca «por revisar»
+    según las reglas vigentes (recibo exige remisión + foto descargue).
     """
     from almacen_entrada_por_revisar import (
         MOTIVO_OC_CONSUMIDA,
@@ -8572,7 +8574,6 @@ def create_entrada(
         MOTIVO_SIN_INSUMO,
         MOTIVO_SIN_SECTOR,
         MOTIVO_SIN_OC,
-        MOTIVO_SUPERA_SALDO,
         MOTIVO_VEHICULO_NUEVO,
         patch_por_revisar,
     )
@@ -8608,10 +8609,12 @@ def create_entrada(
             motivos.append(MOTIVO_SIN_OC)
         elif oc:
             items_oc = oc.get("items") or []
-            if not any(_oc_item_saldos(it)["tiene_saldo"] for it in items_oc):
-                motivos.append(MOTIVO_OC_CONSUMIDA)
-                alerta_codigo = ALERTA_OC_CONSUMIDA
-                alerta_detalle = ALERTA_SILENCIOSA_MSG[ALERTA_OC_CONSUMIDA]
+            if not any(_oc_item_saldos(it)["saldo_cantidad"] > 0.0001 for it in items_oc):
+                num = oc.get("numero_oc")
+                raise ValueError(
+                    f"La OC #{num if num is not None else oc_id} ya está consumida por completo. "
+                    "No admite más entradas."
+                )
             body = _enriquecer_entrada_desde_oc(contrato_id, oc, lineas, body)
     else:
         if pk_id:
@@ -8826,9 +8829,17 @@ def create_entrada(
             else:
                 saldos = _oc_item_saldos(oci)
                 pendiente = saldos["saldo_cantidad"]
-                if (not saldos["tiene_saldo"]) or qty > pendiente + 0.0001:
-                    if MOTIVO_SUPERA_SALDO not in motivos and MOTIVO_OC_CONSUMIDA not in motivos:
-                        motivos.append(MOTIVO_SUPERA_SALDO if saldos["tiene_saldo"] else MOTIVO_OC_CONSUMIDA)
+                mat_lbl = (oci.get("material_descripcion") or "insumo").strip() or "insumo"
+                if pendiente <= 0.0001:
+                    raise ValueError(
+                        f"La OC ya no tiene saldo pendiente para «{mat_lbl}». "
+                        "No se admiten más entradas sobre esta línea."
+                    )
+                if qty > pendiente + 0.0001:
+                    raise ValueError(
+                        f"La cantidad ({qty}) supera el saldo pendiente de la OC "
+                        f"para «{mat_lbl}» ({pendiente}). Máximo permitido: {pendiente}."
+                    )
                 valor_linea = producto(qty, oci.get("valor_unitario"))
                 ei_row = {
                     "entrada_id": entrada_id,
@@ -8849,12 +8860,44 @@ def create_entrada(
                         "unidad": oci.get("unidad"),
                     })
 
+                # Actualización condicionada: evita que dos recepciones concurrentes
+                # sumen por encima de la cantidad de la OC.
+                cant_oc = _to_float(oci.get("cantidad"))
                 new_rec = _to_float(oci.get("cantidad_recibida")) + qty
                 new_val_rec = float(a_decimal(oci.get("valor_recibido")) + a_decimal(valor_linea))
-                sb.table("almacen_orden_compra_item").update({
-                    "cantidad_recibida": new_rec,
-                    "valor_recibido": new_val_rec,
-                }).eq("id", oci_id).execute()
+                cap_recibida = round(cant_oc - qty + 0.0001, 4)
+                upd = (
+                    sb.table("almacen_orden_compra_item")
+                    .update({
+                        "cantidad_recibida": new_rec,
+                        "valor_recibido": new_val_rec,
+                    })
+                    .eq("id", oci_id)
+                    .lte("cantidad_recibida", cap_recibida)
+                    .execute()
+                )
+                if not (upd.data or []):
+                    # Releer saldo actual para mensaje claro (carrera o dato obsoleto).
+                    fresh = (
+                        sb.table("almacen_orden_compra_item")
+                        .select("cantidad, cantidad_recibida, material_descripcion")
+                        .eq("id", oci_id)
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if fresh:
+                        fs = _oc_item_saldos(fresh[0])
+                        raise ValueError(
+                            f"El saldo de la OC para «{mat_lbl}» cambió al registrar "
+                            f"(disponible ahora: {fs['saldo_cantidad']}). "
+                            "Ajuste la cantidad e intente de nuevo."
+                        )
+                    raise ValueError(
+                        f"No se pudo reservar saldo de la OC para «{mat_lbl}». "
+                        "Ajuste la cantidad e intente de nuevo."
+                    )
                 oci["cantidad_recibida"] = new_rec
                 oci["valor_recibido"] = new_val_rec
 

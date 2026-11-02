@@ -5,9 +5,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import ReceptorObraSelector from './ReceptorObraSelector'
 import SalidasPanel from './SalidasPanel'
 import {
+  buildAlmacenCssVars,
   formatEntradaNumero,
   fmtCant,
   datetimeLocalColombiaToIsoUtc,
@@ -80,6 +82,8 @@ export default function SalioMaterialPopup({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = useMemo(() => almacenContraste(ui), [ui])
+  const themeCssVars = useMemo(() => buildAlmacenCssVars(theme || {}), [theme])
   const contrato = contratoId || permisos?.contratoId
   const puedeCrear = Boolean(permisos?.crear)
   const puedeValidar = Boolean(permisos?.validar)
@@ -346,19 +350,21 @@ export default function SalioMaterialPopup({
       data-testid="salio-material-popup"
       className="cc-almacen-theme-scope"
       style={{
+        ...themeCssVars,
         position: 'fixed',
         top: overlayTop,
         left: 0,
         right: 0,
         bottom: 0,
         zIndex: 100040,
-        background: 'var(--cc-almacen-overlay, rgba(15, 23, 42, 0.55))',
+        background: 'var(--cc-almacen-overlay)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 12,
         boxSizing: 'border-box',
         overscrollBehavior: 'contain',
+        color: 'var(--cc-almacen-text)',
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose?.()
@@ -370,11 +376,11 @@ export default function SalioMaterialPopup({
           width: 'min(1100px, 96%)',
           maxHeight: 'min(92dvh, calc(100% - 8px))',
           margin: '0 auto',
-          background: 'var(--cc-almacen-bg-card, #fff)',
-          color: 'var(--cc-almacen-text, #0f172a)',
+          background: 'var(--cc-almacen-bg-card)',
+          color: 'var(--cc-almacen-text)',
           borderRadius: 16,
-          border: `1px solid ${ui.borderColor}`,
-          boxShadow: 'var(--cc-almacen-shadow-modal, 0 24px 64px rgba(0,0,0,0.35))',
+          border: '1px solid var(--cc-almacen-border)',
+          boxShadow: 'var(--cc-almacen-shadow-modal)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -480,7 +486,7 @@ export default function SalioMaterialPopup({
         }}
         >
           {error && (
-            <div data-testid="salio-error" style={{ color: '#b91c1c', marginBottom: 12, fontWeight: 600 }}>{error}</div>
+            <div data-testid="salio-error" style={{ color: 'var(--cc-almacen-danger-text)', marginBottom: 12, fontWeight: 600 }}>{error}</div>
           )}
           {okMsg && (
             <div style={{ color: '#15803d', marginBottom: 12, fontWeight: 800, fontSize: '1.2rem' }}>{okMsg}</div>
@@ -607,13 +613,24 @@ export default function SalioMaterialPopup({
                     type="number"
                     min={0}
                     step="any"
-                    style={inputGiant(ui)}
+                    className={`cc-almacen-qty-cell${superaStock ? ' cc-almacen-qty-cell--error' : ''}`}
+                    aria-invalid={superaStock || undefined}
+                    style={{
+                      ...inputGiant(ui),
+                      background: superaStock ? 'var(--cc-almacen-qty-error-bg)' : 'var(--cc-almacen-input-bg)',
+                      color: superaStock ? 'var(--cc-almacen-qty-error-text)' : 'var(--cc-almacen-text)',
+                      borderColor: superaStock ? 'var(--cc-almacen-qty-error-border)' : 'var(--cc-almacen-border)',
+                    }}
                     value={cantidad}
                     onChange={(e) => setCantidad(e.target.value)}
+                    onFocus={(e) => e.target.select?.()}
                   />
                   {superaStock && (
-                    <span style={{ color: '#b91c1c', fontWeight: 600, fontSize: 'var(--cc-sm)' }}>
-                      No puede superar el disponible ({fmtCant(saldoDisp)}).
+                    <span
+                      data-testid="salio-qty-error"
+                      style={{ color: 'var(--cc-almacen-qty-error-text)', fontWeight: 700, fontSize: 'var(--cc-sm)' }}
+                    >
+                      Máximo disponible: {fmtCant(saldoDisp)}{lineaSel.unidad ? ` ${lineaSel.unidad}` : ''}.
                     </span>
                   )}
                 </label>
@@ -669,10 +686,7 @@ export default function SalioMaterialPopup({
                 <div
                   data-testid="salio-motivos-prev"
                   style={{
-                    background: '#fef3c7',
-                    border: '1px solid #f59e0b',
-                    borderRadius: 8,
-                    padding: '8px 10px',
+                    ...estiloAvisoAlmacen(contraste, 'warn'),
                     marginBottom: 12,
                     fontSize: 'var(--cc-sm)',
                     fontWeight: 600,

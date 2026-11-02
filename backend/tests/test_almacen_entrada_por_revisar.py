@@ -29,7 +29,9 @@ def test_create_entrada_motivos_y_recibo_fotos():
     src = (ROOT / "almacen_service.py").read_text(encoding="utf-8")
     create = src.split("def create_entrada")[1].split("\ndef ")[0]
     assert "MOTIVO_SIN_FOTO" in src
-    assert "MOTIVO_SUPERA_SALDO" in src
+    # supera_saldo ya no marca por revisar: se rechaza con ValueError.
+    assert "motivos.append(MOTIVO_SUPERA_SALDO" not in create
+    assert "Máximo permitido" in create
     # Mensaje legacy de remisión como PDF/foto genérico ya no aplica.
     assert "Adjunte el soporte fotográfico o PDF de la remisión." not in create
     # Recibo: remisión + foto descargue obligatorias (única excepción a no bloquear).

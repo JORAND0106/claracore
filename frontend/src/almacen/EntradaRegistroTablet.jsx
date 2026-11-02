@@ -8,7 +8,9 @@ import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { sha256Hex } from '../comprimirImagen'
 import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import EntradaSoportePicker from './EntradaSoportePicker'
+import { almacenContraste, estiloAvisoAlmacen } from './almacenContraste'
 import {
+  buildAlmacenCssVars,
   formatNombrePropio,
   fmtCant,
   todayDateInputColombia,
@@ -109,6 +111,8 @@ export default function EntradaRegistroTablet({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const contraste = useMemo(() => almacenContraste(ui), [ui])
+  const themeCssVars = useMemo(() => buildAlmacenCssVars(theme || {}), [theme])
   const qtyInputRefs = useRef({})
   const continuarCapturaRef = useRef(null)
   const contrato = contratoId || permisos?.contratoId
@@ -170,14 +174,15 @@ export default function EntradaRegistroTablet({
   const draft = useMemo(() => ({
     tipo,
     orden_compra_id: ocCard?.orden_compra_id || null,
-    supera_saldo: superaSaldo,
+    // supera_saldo ya no es «por revisar»: bloquea confirmar (regla nueva).
+    supera_saldo: false,
     proveedor_manual: proveedorManual || (!proveedorId && Boolean(proveedorNombre)),
     sin_insumo: sinInsumo,
     sin_sector: tipo === 'recibo' && !String(pkId || pkLabel || '').trim(),
     foto: fotoRemision,
     // Vacío o domicilio no marca por revisar; solo vehículo nuevo con placa válida.
     vehiculo_nuevo: Boolean(vehiculoNuevo && placaValida(placa) && !llegadaDomicilio),
-  }), [tipo, ocCard, superaSaldo, proveedorManual, proveedorId, proveedorNombre, sinInsumo, pkId, pkLabel, fotoRemision, vehiculoNuevo, placa, llegadaDomicilio])
+  }), [tipo, ocCard, proveedorManual, proveedorId, proveedorNombre, sinInsumo, pkId, pkLabel, fotoRemision, vehiculoNuevo, placa, llegadaDomicilio])
 
   const motivosPrev = motivosPorRevisarPreview(draft)
 
@@ -529,6 +534,7 @@ export default function EntradaRegistroTablet({
   const capturaLista = Boolean(
     fotosCompletas
     && placaOk
+    && !superaSaldo
     && (hayLineasOc || hayCantidadSinOc),
   )
 
@@ -536,6 +542,10 @@ export default function EntradaRegistroTablet({
     if (!puedeCrear) return
     if (tipo === 'recibo' && !fotosCompletas) {
       setError('Se requieren la remisión y la foto del descargue.')
+      return
+    }
+    if (superaSaldo) {
+      setError('Hay cantidades mayores al saldo de la OC. Corríjalas para continuar.')
       return
     }
     if (!llegadaDomicilio && placa.trim() && !placaValida(placa)) {
@@ -633,19 +643,21 @@ export default function EntradaRegistroTablet({
       data-testid="entrada-registro-tablet"
       className="cc-almacen-theme-scope"
       style={{
+        ...themeCssVars,
         position: 'fixed',
         top: overlayTop,
         left: 0,
         right: 0,
         bottom: 0,
         zIndex: 100040,
-        background: 'var(--cc-almacen-overlay, rgba(15, 23, 42, 0.55))',
+        background: 'var(--cc-almacen-overlay)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 12,
         boxSizing: 'border-box',
         overscrollBehavior: 'contain',
+        color: 'var(--cc-almacen-text)',
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose?.()
@@ -657,11 +669,11 @@ export default function EntradaRegistroTablet({
           width: 'min(1100px, 96%)',
           maxHeight: 'min(92dvh, calc(100% - 8px))',
           margin: '0 auto',
-          background: 'var(--cc-almacen-bg-card, #fff)',
-          color: 'var(--cc-almacen-text, #0f172a)',
+          background: 'var(--cc-almacen-bg-card)',
+          color: 'var(--cc-almacen-text)',
           borderRadius: 16,
-          border: `1px solid ${ui.borderColor}`,
-          boxShadow: 'var(--cc-almacen-shadow-modal, 0 24px 64px rgba(0,0,0,0.35))',
+          border: '1px solid var(--cc-almacen-border)',
+          boxShadow: 'var(--cc-almacen-shadow-modal)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -726,7 +738,7 @@ export default function EntradaRegistroTablet({
         }}
         >
           {error && (
-            <div data-testid="entrada-tablet-error" style={{ color: '#b91c1c', marginBottom: 12, fontWeight: 600 }}>{error}</div>
+            <div data-testid="entrada-tablet-error" style={{ color: 'var(--cc-almacen-danger-text)', marginBottom: 12, fontWeight: 600 }}>{error}</div>
           )}
           {okMsg && (
             <div style={{ color: '#15803d', marginBottom: 12, fontWeight: 800, fontSize: '1.2rem' }}>{okMsg}</div>
@@ -1033,17 +1045,17 @@ export default function EntradaRegistroTablet({
                         width: '100%',
                         borderCollapse: 'collapse',
                         fontSize: 'var(--cc-sm, 0.9rem)',
-                        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
-                        color: ui.text,
+                        background: 'var(--cc-almacen-bg-card)',
+                        color: 'var(--cc-almacen-text)',
                       }}
                     >
                       <thead>
-                        <tr style={{ background: 'var(--cc-almacen-sheet-head, #f3f4f6)' }}>
+                        <tr style={{ background: 'var(--cc-almacen-sheet-head)', color: 'var(--cc-almacen-sheet-head-text)' }}>
                           {['✓', 'Código', 'Descripción', 'Und', 'Saldo', 'Cantidad'].map((h) => (
                             <th
                               key={h}
                               style={{
-                                border: `1px solid ${ui.borderColor}`,
+                                border: '1px solid var(--cc-almacen-border)',
                                 padding: '6px 8px',
                                 textAlign: h === 'Cantidad' || h === 'Saldo' ? 'right' : 'left',
                                 fontWeight: 800,
@@ -1051,7 +1063,8 @@ export default function EntradaRegistroTablet({
                                 position: 'sticky',
                                 top: 0,
                                 zIndex: 1,
-                                background: 'var(--cc-almacen-sheet-head, #f3f4f6)',
+                                background: 'var(--cc-almacen-sheet-head)',
+                                color: 'var(--cc-almacen-sheet-head-text)',
                               }}
                             >
                               {h}
@@ -1064,18 +1077,20 @@ export default function EntradaRegistroTablet({
                           const ins = row.insumo || {}
                           const { codigo, descripcion } = splitInsumoCodigoDesc(ins.material_descripcion)
                           const cantN = Number(String(row.cantidad || '').replace(',', '.'))
-                          const supera = row.marked && Number.isFinite(cantN) && cantN > (Number(ins.saldo_cantidad) || 0) + 0.0001
+                          const saldoMax = Number(ins.saldo_cantidad) || 0
+                          const supera = row.marked && Number.isFinite(cantN) && cantN > saldoMax + 0.0001
                           return (
                             <tr
                               key={row.key}
                               data-testid="entrada-tablet-oc-linea"
                               style={{
                                 background: row.marked
-                                  ? (supera ? 'rgba(251, 191, 36, 0.25)' : 'rgba(34, 197, 94, 0.12)')
+                                  ? (supera ? 'var(--cc-almacen-row-error)' : 'var(--cc-almacen-row-marked)')
                                   : 'transparent',
+                                color: 'var(--cc-almacen-text)',
                               }}
                             >
-                              <td style={{ border: `1px solid ${ui.borderColor}`, padding: 4, textAlign: 'center' }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 4, textAlign: 'center' }}>
                                 <button
                                   type="button"
                                   aria-pressed={row.marked}
@@ -1084,9 +1099,9 @@ export default function EntradaRegistroTablet({
                                     width: 36,
                                     height: 36,
                                     borderRadius: 6,
-                                    border: `2px solid ${row.marked ? ui.accent : ui.borderColor}`,
-                                    background: row.marked ? ui.accent : 'transparent',
-                                    color: row.marked ? '#fff' : ui.text,
+                                    border: `2px solid ${row.marked ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-border)'}`,
+                                    background: row.marked ? 'var(--cc-almacen-accent)' : 'transparent',
+                                    color: row.marked ? '#fff' : 'var(--cc-almacen-text)',
                                     fontWeight: 900,
                                     cursor: 'pointer',
                                   }}
@@ -1095,17 +1110,17 @@ export default function EntradaRegistroTablet({
                                   {row.marked ? '✓' : ''}
                                 </button>
                               </td>
-                              <td style={{ border: `1px solid ${ui.borderColor}`, padding: '4px 6px', fontVariantNumeric: 'tabular-nums' }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '4px 6px', fontVariantNumeric: 'tabular-nums' }}>
                                 {codigo || '—'}
                               </td>
-                              <td style={{ border: `1px solid ${ui.borderColor}`, padding: '4px 6px', maxWidth: 220 }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '4px 6px', maxWidth: 220 }}>
                                 {descripcion}
                               </td>
-                              <td style={{ border: `1px solid ${ui.borderColor}`, padding: '4px 6px' }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: '4px 6px' }}>
                                 {ins.unidad || ''}
                               </td>
                               <td style={{
-                                border: `1px solid ${ui.borderColor}`,
+                                border: '1px solid var(--cc-almacen-border)',
                                 padding: '4px 6px',
                                 textAlign: 'right',
                                 fontVariantNumeric: 'tabular-nums',
@@ -1114,11 +1129,13 @@ export default function EntradaRegistroTablet({
                               >
                                 {fmtCant(ins.saldo_cantidad)}
                               </td>
-                              <td style={{ border: `1px solid ${ui.borderColor}`, padding: 2 }}>
+                              <td style={{ border: '1px solid var(--cc-almacen-border)', padding: 2 }}>
                                 <input
                                   ref={(el) => { qtyInputRefs.current[row.key] = el }}
                                   inputMode="decimal"
                                   data-testid="entrada-tablet-cantidad"
+                                  className={`cc-almacen-qty-cell${supera ? ' cc-almacen-qty-cell--error' : ''}`}
+                                  aria-invalid={supera || undefined}
                                   style={{
                                     ...ui.input,
                                     width: '100%',
@@ -1128,15 +1145,31 @@ export default function EntradaRegistroTablet({
                                     textAlign: 'right',
                                     minHeight: 44,
                                     fontVariantNumeric: 'tabular-nums',
-                                    borderColor: supera ? '#d97706' : undefined,
-                                    background: supera ? '#fef3c7' : undefined,
+                                    background: supera ? 'var(--cc-almacen-qty-error-bg)' : 'var(--cc-almacen-input-bg)',
+                                    color: supera ? 'var(--cc-almacen-qty-error-text)' : 'var(--cc-almacen-text)',
+                                    borderColor: supera ? 'var(--cc-almacen-qty-error-border)' : 'var(--cc-almacen-border)',
                                   }}
                                   value={row.cantidad}
                                   onChange={(e) => setOcLineaCantidad(row.key, e.target.value)}
                                   onFocus={(e) => e.target.select?.()}
                                   onKeyDown={(e) => onQtyKeyDown(e, idx)}
                                   placeholder="0"
+                                  title={supera ? `Máximo ${fmtCant(saldoMax)}` : undefined}
                                 />
+                                {supera && (
+                                  <div
+                                    data-testid="entrada-tablet-qty-error"
+                                    style={{
+                                      fontSize: '0.75rem',
+                                      fontWeight: 700,
+                                      color: 'var(--cc-almacen-qty-error-text)',
+                                      marginTop: 2,
+                                      textAlign: 'right',
+                                    }}
+                                  >
+                                    Máx. {fmtCant(saldoMax)}
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           )
@@ -1203,8 +1236,8 @@ export default function EntradaRegistroTablet({
                       fontWeight: 800,
                       justifyContent: 'flex-start',
                       gap: 10,
-                      background: llegadaDomicilio ? '#dbeafe' : undefined,
-                      borderColor: llegadaDomicilio ? '#2563eb' : undefined,
+                      background: llegadaDomicilio ? 'var(--cc-almacen-accent-soft)' : undefined,
+                      borderColor: llegadaDomicilio ? 'var(--cc-almacen-accent)' : undefined,
                     }}
                     onClick={() => {
                       setLlegadaDomicilio((v) => {
@@ -1277,13 +1310,18 @@ export default function EntradaRegistroTablet({
               </div>
 
               {superaSaldo && (
-                <div style={{ color: '#b45309', fontWeight: 700 }}>⚠ Supera saldo · se guarda por revisar</div>
+                <div
+                  data-testid="entrada-tablet-supera-saldo"
+                  style={{ ...estiloAvisoAlmacen(contraste, 'danger'), fontWeight: 700 }}
+                >
+                  Cantidad mayor al saldo de la OC. Corrija para continuar.
+                </div>
               )}
               {!llegadaDomicilio && vehiculoNuevo && placaValida(placa) && (
-                <div style={{ color: '#b45309', fontWeight: 700 }}>Vehículo nuevo · por revisar</div>
+                <div style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700 }}>Vehículo nuevo · por revisar</div>
               )}
               {!llegadaDomicilio && placa.trim() && !placaValida(placa) && (
-                <div style={{ color: '#b91c1c', fontWeight: 700 }}>Placa incompleta (AAA-000)</div>
+                <div style={{ color: 'var(--cc-almacen-danger-text)', fontWeight: 700 }}>Placa incompleta (AAA-000)</div>
               )}
               {!llegadaDomicilio && placaOpts.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -1408,8 +1446,9 @@ export default function EntradaRegistroTablet({
                       width: 28,
                       height: 28,
                       borderRadius: 999,
-                      background: '#fbbf24',
-                      color: '#78350f',
+                      background: contraste.warnBg,
+                      color: contraste.warnText,
+                      border: `1px solid ${contraste.warnBorder}`,
                       fontWeight: 900,
                     }}
                     >
@@ -1423,7 +1462,7 @@ export default function EntradaRegistroTablet({
                 type="button"
                 data-testid="entrada-tablet-guardar"
                 style={btnHome('#16a34a')}
-                disabled={busy || !fotosCompletas}
+                disabled={busy || !fotosCompletas || superaSaldo}
                 onClick={() => { void guardar() }}
               >
                 {busy ? 'Guardando…' : 'Guardar'}

@@ -88,7 +88,7 @@ describe('helpers tablet', () => {
     assert.ok(m.some((x) => /sector/i.test(x)))
   })
 
-  it('reparte cantidad FIFO', () => {
+  it('reparte cantidad FIFO sin superar saldos', () => {
     const items = distributeCantidadOverLineas([
       { orden_compra_item_id: 2, saldo_cantidad: 3 },
       { orden_compra_item_id: 1, saldo_cantidad: 5 },
@@ -97,6 +97,20 @@ describe('helpers tablet', () => {
       { orden_compra_item_id: 1, cantidad_recibida: 5 },
       { orden_compra_item_id: 2, cantidad_recibida: 2 },
     ])
+    const capped = distributeCantidadOverLineas([
+      { orden_compra_item_id: 1, saldo_cantidad: 2 },
+    ], 9)
+    assert.deepEqual(capped, [{ orden_compra_item_id: 1, cantidad_recibida: 2 }])
+  })
+
+  it('supera saldo ya no entra en motivos por revisar', () => {
+    const m = motivosPorRevisarPreview({
+      tipo: 'recibo',
+      orden_compra_id: 1,
+      supera_saldo: true,
+      foto: true,
+    })
+    assert.ok(!m.some((x) => /supera/i.test(x)))
   })
 
   it('selección OC: premarca línea y arma items multi', () => {
@@ -178,5 +192,19 @@ describe('UI cableado', () => {
     assert.match(picker, /entrada-soporte-\$\{kind\}-archivo/)
     assert.match(picker, /application\/pdf/)
     assert.match(api, /check-soporte-hash/)
+  })
+
+  it('tema: vars de hoja + bloqueo supera saldo', () => {
+    const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
+    const shared = readFileSync(join(dir, 'almacenShared.jsx'), 'utf8')
+    const salio = readFileSync(join(dir, 'SalioMaterialPopup.jsx'), 'utf8')
+    assert.match(shared, /--cc-almacen-sheet-head/)
+    assert.match(shared, /--cc-almacen-qty-error-bg/)
+    assert.match(wiz, /cc-almacen-qty-cell--error/)
+    assert.match(wiz, /!superaSaldo/)
+    assert.match(wiz, /entrada-tablet-supera-saldo/)
+    assert.doesNotMatch(wiz, /Supera saldo · se guarda por revisar/)
+    assert.match(salio, /cc-almacen-qty-cell--error/)
+    assert.match(salio, /buildAlmacenCssVars/)
   })
 })

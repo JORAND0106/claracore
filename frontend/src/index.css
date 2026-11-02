@@ -2475,6 +2475,28 @@ select.cc-dashboard-acta-select--light option {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Celdas de cantidad (Llegó / Salió): foco legible en claro y oscuro */
+.cc-almacen-theme-scope .cc-almacen-qty-cell {
+  background: var(--cc-almacen-input-bg);
+  color: var(--cc-almacen-text);
+  border-color: var(--cc-almacen-border);
+}
+.cc-almacen-theme-scope .cc-almacen-qty-cell:focus {
+  outline: 2px solid var(--cc-almacen-accent);
+  outline-offset: 1px;
+  background: var(--cc-almacen-qty-focus-bg, var(--cc-almacen-input-bg));
+  color: var(--cc-almacen-text);
+}
+.cc-almacen-theme-scope .cc-almacen-qty-cell.cc-almacen-qty-cell--error {
+  background: var(--cc-almacen-qty-error-bg);
+  border-color: var(--cc-almacen-qty-error-border);
+  color: var(--cc-almacen-qty-error-text);
+}
+.cc-almacen-theme-scope .cc-almacen-qty-cell.cc-almacen-qty-cell--error:focus {
+  background: var(--cc-almacen-qty-error-bg);
+  color: var(--cc-almacen-qty-error-text);
+}
+
 /* Inventario: celda de descripción ancha y compacta (sin filas altas) */
 .cc-almacen-inventario-excel td,
 .cc-almacen-inventario-excel th {

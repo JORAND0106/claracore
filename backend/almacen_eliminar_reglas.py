@@ -15,7 +15,8 @@ MOTIVO_LINEA_AL_GUARDAR = (
     "Eliminar una línea requiere el permiso Eliminar y una confirmación."
 )
 MOTIVO_ENTRADA_SALIDAS = (
-    "No se puede eliminar esta entrada porque hay salidas que consumen su stock. "
+    "No se puede eliminar ni anular esta entrada porque hay salidas que consumen su stock. "
+    "Si se quitara, esas salidas quedarían por encima de lo recibido. "
     "Elimine primero esas salidas."
 )
 MOTIVO_COTIZACION_GANADORA = (
