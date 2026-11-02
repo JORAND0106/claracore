@@ -222,4 +222,16 @@ describe('UI cableado', () => {
     assert.match(picker, /fileFromClipboardApi/)
     assert.match(picker, /contentEditable/)
   })
+
+  it('N.º de remisión visible en captura, obligatorio y en resumen', () => {
+    const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
+    assert.match(wiz, /entrada-tablet-numero-remision/)
+    assert.match(wiz, /N\.º de remisión/)
+    assert.match(wiz, /numeroRemisionListo/)
+    assert.match(wiz, /normalizeRemisionNumero/)
+    assert.match(wiz, /fd\.append\('numero_documento'/)
+    assert.match(wiz, /entrada-tablet-resumen-numero-remision/)
+    assert.match(wiz, /checkEntradaNumeroRemision/)
+    assert.match(wiz, /focusNumeroRemision/)
+  })
 })

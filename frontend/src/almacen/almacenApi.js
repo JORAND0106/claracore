@@ -631,6 +631,24 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       return data
     },
 
+    checkEntradaNumeroRemision: async ({ numeroDocumento, proveedorId, proveedorNombre } = {}) => {
+      const fd = new FormData()
+      fd.append('numero_documento', String(numeroDocumento || '').trim())
+      if (proveedorId != null && proveedorId !== '') fd.append('proveedor_id', String(proveedorId))
+      if (proveedorNombre) fd.append('proveedor_nombre_texto', String(proveedorNombre))
+      const res = await fetch(`${base}/entradas/check-numero-remision`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        throw new Error(typeof d === 'string' ? d : (d?.message || `Error ${res.status}`))
+      }
+      return data
+    },
+
     remisionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/remision/download`,
 
     materialFotoDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/material-foto/download`,

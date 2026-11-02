@@ -115,7 +115,11 @@ export default function EntradaDetalleModal({
 
   const cabeceraCols = ent ? [
     { key: 'tipo', label: 'Tipo', value: TIPO_LABEL[ent.tipo] || ent.tipo },
-    { key: 'doc', label: 'Documento', value: ent.numero_documento || '—' },
+    {
+      key: 'doc',
+      label: ent.tipo === 'recibo' ? 'N.º remisión' : 'Documento',
+      value: ent.numero_documento || '—',
+    },
     { key: 'fecha', label: 'Fecha', value: fmtFechaAlmacenSolo(ent.fecha_entrada) },
     { key: 'oc', label: 'OC', value: oc.numero_oc ? `#${oc.numero_oc}` : '—' },
     { key: 'prov', label: 'Proveedor', value: ent.proveedor_nombre || '—' },
