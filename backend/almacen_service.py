@@ -3,6 +3,7 @@ Servicio — módulo Almacén de Obra (Fase 1).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import mimetypes
 import re
@@ -7882,6 +7883,95 @@ def _next_numero_disposicion(contrato_id: int) -> str:
 REMISION_SOPORTE_MAX_BYTES = 300 * 1024
 
 
+def _sha256_hex_bytes(data: bytes) -> str:
+    return hashlib.sha256(data or b"").hexdigest()
+
+
+def lookup_entrada_soporte_hash(contrato_id: int, content_hash: str) -> Optional[dict]:
+    """Busca si el SHA-256 ya se usó como Remisión o foto de descargue en el contrato."""
+    h = (content_hash or "").strip().lower()
+    if not h or len(h) < 16:
+        return None
+    sb = _sb()
+    try:
+        rows = (
+            sb.table("almacen_entrada_soporte_hash")
+            .select("entrada_id, tipo_soporte, codigo_entrada, content_hash")
+            .eq("contrato_id", int(contrato_id))
+            .eq("content_hash", h)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _pgrst_unknown_column(exc) or "almacen_entrada_soporte_hash" in str(exc).lower():
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def upsert_entrada_soporte_hash(
+    contrato_id: int,
+    content_hash: str,
+    entrada_id: int,
+    tipo_soporte: str,
+    codigo_entrada: Optional[str] = None,
+) -> None:
+    h = (content_hash or "").strip().lower()
+    if not h or not entrada_id:
+        return
+    tipo = (tipo_soporte or "").strip().lower()
+    if tipo not in ("remision", "material"):
+        return
+    sb = _sb()
+    payload = {
+        "contrato_id": int(contrato_id),
+        "content_hash": h,
+        "entrada_id": int(entrada_id),
+        "tipo_soporte": tipo,
+        "codigo_entrada": (codigo_entrada or "").strip() or None,
+    }
+    try:
+        sb.table("almacen_entrada_soporte_hash").upsert(
+            payload,
+            on_conflict="contrato_id,content_hash",
+        ).execute()
+    except Exception as exc:
+        if _pgrst_unknown_column(exc) or "almacen_entrada_soporte_hash" in str(exc).lower():
+            _log.warning("Tabla soporte_hash ausente; no se registró hash entrada %s", entrada_id)
+            return
+        _log.warning("No se pudo upsert soporte_hash entrada %s: %s", entrada_id, exc)
+
+
+def _assert_soporte_hash_libre(
+    contrato_id: int,
+    content_hash: Optional[str],
+    *,
+    label: str,
+) -> Optional[str]:
+    """Si el hash ya existe, lanza ValueError con el código Ent-…"""
+    h = (content_hash or "").strip().lower()
+    if not h:
+        return None
+    existing = lookup_entrada_soporte_hash(contrato_id, h)
+    if not existing:
+        return h
+    codigo = (existing.get("codigo_entrada") or "").strip()
+    if not codigo and existing.get("entrada_id"):
+        try:
+            ent = get_entrada(contrato_id, int(existing["entrada_id"]), incluir_movimientos=False)
+            codigo = (ent.get("codigo") or "").strip() or _format_codigo_entrada(
+                contrato_id, int(ent.get("numero_entrada") or 0),
+            )
+        except Exception:
+            codigo = f"#{existing.get('entrada_id')}"
+    raise ValueError(
+        f"Este archivo de {label} ya se usó en la entrada {codigo or 'previa'}. "
+        "Cargue otro distinto."
+    )
+
+
 def _abscisa_entrada_str(val: Any) -> Optional[str]:
     if val is None or val == "":
         return None
@@ -8585,17 +8675,32 @@ def create_entrada(
 
     if remision_data and len(remision_data) > REMISION_SOPORTE_MAX_BYTES:
         # Comprimir no es responsabilidad del servidor aquí; se rechaza solo el exceso técnico.
-        raise ValueError("El soporte de remisión no puede superar 300 KB.")
+        raise ValueError("El PDF o archivo de remisión no puede superar 300 KB. Use un archivo más liviano.")
     if material_foto_data and len(material_foto_data) > REMISION_SOPORTE_MAX_BYTES:
-        raise ValueError("La foto del material no puede superar 300 KB.")
-    # Recibo («Llegó material»): las dos fotos son la única excepción que bloquea.
+        raise ValueError("La foto del descargue no puede superar 300 KB.")
+    # Recibo («Llegó material»): remisión + foto descargue son la única excepción que bloquea.
     if tipo == "recibo":
         if not remision_data:
-            raise ValueError("La foto del recibo (remisión) es obligatoria.")
+            raise ValueError("La remisión (imagen o PDF) es obligatoria.")
         if not material_foto_data:
-            raise ValueError("La foto del material descargado es obligatoria.")
+            raise ValueError("La foto del descargue es obligatoria.")
     elif not remision_data:
         motivos.append(MOTIVO_SIN_FOTO)
+
+    rem_hash = (body.get("remision_content_hash") or "").strip().lower() or (
+        _sha256_hex_bytes(remision_data) if remision_data else None
+    )
+    mat_hash = (body.get("material_content_hash") or "").strip().lower() or (
+        _sha256_hex_bytes(material_foto_data) if material_foto_data else None
+    )
+    if rem_hash and mat_hash and rem_hash == mat_hash:
+        raise ValueError(
+            "La remisión y la foto del descargue no pueden ser el mismo archivo. Cargue dos distintos."
+        )
+    if remision_data:
+        rem_hash = _assert_soporte_hash_libre(contrato_id, rem_hash, label="remisión")
+    if material_foto_data:
+        mat_hash = _assert_soporte_hash_libre(contrato_id, mat_hash, label="foto del descargue")
 
     numero_entrada = _next_consecutivo(contrato_id, "almacen_entrada", "numero_entrada")
     codigo_entrada = _format_codigo_entrada(contrato_id, numero_entrada)
@@ -8660,6 +8765,10 @@ def create_entrada(
         entrada_row["remision_blob_path"] = meta["blob_path"]
         entrada_row["remision_nombre"] = meta["nombre"]
         entrada_row["remision_mime"] = meta["mime"]
+        if rem_hash:
+            upsert_entrada_soporte_hash(
+                contrato_id, rem_hash, entrada_id, "remision", codigo_entrada,
+            )
 
     if material_foto_data:
         try:
@@ -8679,6 +8788,10 @@ def create_entrada(
             entrada_row["material_foto_blob_path"] = meta_m["blob_path"]
             entrada_row["material_foto_nombre"] = meta_m["nombre"]
             entrada_row["material_foto_mime"] = meta_m["mime"]
+            if mat_hash:
+                upsert_entrada_soporte_hash(
+                    contrato_id, mat_hash, entrada_id, "material", codigo_entrada,
+                )
         except Exception as exc:
             col = _pgrst_unknown_column(exc)
             if col and col.startswith("material_foto"):

@@ -44,8 +44,10 @@ def test_migration_foto_material_y_rpc():
 def test_recibo_exige_dos_fotos():
     src = (ROOT / "almacen_service.py").read_text(encoding="utf-8")
     create = src.split("def create_entrada")[1].split("\ndef ")[0]
-    assert "foto del recibo" in create.lower() or "remisión) es obligatoria" in create
-    assert "material descargado" in create.lower()
+    assert "remisión (imagen o pdf) es obligatoria" in create.lower()
+    assert "foto del descargue es obligatoria" in create.lower()
+    assert "_assert_soporte_hash_libre" in create
     routes = (ROOT / "almacen_routes.py").read_text(encoding="utf-8")
     create_r = routes.split("async def route_create_entrada")[1].split("@router.")[0]
-    assert "material descargado" in create_r.lower()
+    assert "foto del descargue" in create_r.lower()
+    assert "check-soporte-hash" in routes

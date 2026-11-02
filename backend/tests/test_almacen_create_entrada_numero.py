@@ -120,6 +120,8 @@ def test_create_entrada_recibo_guarda_remision_literal(monkeypatch):
         "almacen_service._upload_soporte",
         lambda *_a, **_k: {"blob_path": "x", "nombre": "rem.pdf", "mime": "application/pdf"},
     )
+    monkeypatch.setattr("almacen_service.lookup_entrada_soporte_hash", lambda *_a, **_k: None)
+    monkeypatch.setattr("almacen_service.upsert_entrada_soporte_hash", lambda *_a, **_k: None)
     monkeypatch.setattr("almacen_service._next_consecutivo", lambda *_a, **_k: 7)
     monkeypatch.setattr("almacen_service._actualizar_estado_oc", lambda *_a, **_k: None)
     monkeypatch.setattr("almacen_service._upsert_inventario", lambda *_a, **_k: None)
@@ -155,6 +157,9 @@ def test_create_entrada_recibo_guarda_remision_literal(monkeypatch):
         remision_data=b"%PDF-test",
         remision_nombre="rem.pdf",
         remision_mime="application/pdf",
+        material_foto_data=b"\xff\xd8jpeg-fake",
+        material_foto_nombre="mat.jpg",
+        material_foto_mime="image/jpeg",
     )
 
     assert calls, "debe insertar almacen_entrada"

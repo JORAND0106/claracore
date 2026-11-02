@@ -615,6 +615,22 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: formData,
       }).then(parseJson),
 
+    checkEntradaSoporteHash: async (contentHash) => {
+      const fd = new FormData()
+      fd.append('content_hash', contentHash)
+      const res = await fetch(`${base}/entradas/check-soporte-hash`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        throw new Error(typeof d === 'string' ? d : (d?.message || `Error ${res.status}`))
+      }
+      return data
+    },
+
     remisionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/remision/download`,
 
     materialFotoDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/material-foto/download`,
