@@ -84,14 +84,14 @@ INSERT INTO public.permisos (
   cargo_id, funcion_id, contrato_id,
   ver, crear, editar, eliminar, validar, exportar
 )
-SELECT c.id, f.id, NULL, true, true, false, false, false, false
+SELECT c.id, f.id, NULL::integer, true, true, false, false, false, false
 FROM cargo c, fn_rc f
 WHERE NOT EXISTS (
   SELECT 1 FROM public.permisos p
   WHERE p.cargo_id = c.id AND p.funcion_id = f.id AND p.contrato_id IS NULL
 )
 UNION ALL
-SELECT c.id, f.id, NULL, true, false, true, false, false, false
+SELECT c.id, f.id, NULL::integer, true, false, true, false, false, false
 FROM cargo c, fn_topo f
 WHERE NOT EXISTS (
   SELECT 1 FROM public.permisos p
