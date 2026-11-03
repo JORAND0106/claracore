@@ -13501,27 +13501,32 @@ body.mem002-doc .mem002-cierre-keep {
   page-break-inside: avoid;
   -pdf-keep-with-previous: true;
 }
-/* Registro fotográfico / gráfico: plantilla fija 2×2 (4 imágenes por página). */
+/* Registro fotográfico / gráfico: plantilla fija 3×2 (6 imágenes por página).
+   Alto de caja = espacio útil tras encabezado + sección + pies + franja firmas
+   (ver _MEMORIA_MEDIA_BOX_H_CM). page-break-inside evita hoja solo con encabezado. */
+body.mem002-doc .mem002-media-page {
+  page-break-inside: avoid;
+}
 body.mem002-doc .mem002-foto-grid {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
   /* NO usar max-width:0 aquí: en xhtml2pdf colapsa la celda y las imgs desaparecen
      (mismo hallazgo documentado en el thead de gerencia matriz). */
-  width: 50%;
+  width: 33.33%;
   vertical-align: top;
-  padding: 3px 5px;
+  padding: 2px 3px;
   overflow: hidden;
 }
 /* Caja de media: tamaño fijo; la imagen se adapta (nunca al revés). */
 body.mem002-doc .mem002-foto-box {
   width: 100%;
   table-layout: fixed;
-  height: 6.85cm;
-  max-height: 6.85cm;
+  height: 5.40cm;
+  max-height: 5.40cm;
   border: 1px solid #dee2e6;
   background: #f8fafc;
   text-align: center;
@@ -13530,19 +13535,19 @@ body.mem002-doc .mem002-foto-box {
 }
 body.mem002-doc .mem002-foto-box td {
   width: 100%;
-  height: 6.85cm;
-  max-height: 6.85cm;
+  height: 5.40cm;
+  max-height: 5.40cm;
   overflow: hidden;
   text-align: center;
   vertical-align: middle;
-  padding: 2px;
+  padding: 1px;
 }
 /* Contención definitiva: el bitmap ya viene escalado (contain) y la img declara
    width/height en pt. CSS refuerza el tope de la caja sin max-width:0 en el td. */
 body.mem002-doc .mem002-foto-box img,
 body.mem002-doc .mem002-foto-box img.mem002-media-img {
   max-width: 100%;
-  max-height: 6.55cm;
+  max-height: 5.15cm;
   display: inline-block;
   margin: 0 auto;
   object-fit: contain;
@@ -13551,10 +13556,10 @@ body.mem002-doc .mem002-foto-box img.mem002-media-img {
   border: 0;
 }
 body.mem002-doc .mem002-foto-caption {
-  height: 1.15cm;
-  max-height: 1.15cm;
+  height: 0.95cm;
+  max-height: 0.95cm;
   overflow: hidden;
-  margin-top: 2px;
+  margin-top: 1px;
   text-align: center;
 }
 body.mem002-doc .mem002-foto-caption .foto-caption {
@@ -13567,9 +13572,9 @@ body.mem002-doc .mem002-foto-caption .mem002-foto-obs {
   font-size: 5.5pt;
   color: #666;
   line-height: 1.05;
-  margin: 1px 0 0 0;
+  margin: 0;
   padding: 0;
-  max-height: 0.7cm;
+  max-height: 0.55cm;
   overflow: hidden;
 }
 /* Bloque firmas (misma lógica que CC-SUB-001: Elaboró / Revisó / Aprobó subcontratista) */
@@ -14164,14 +14169,23 @@ def _memoria_enlace_txt(r: dict) -> str:
 # Evidencia: pdf_institucional.py docstring — «ignora max-height/max-width CSS →
 # fijar width/height en pt + attrs HTML». La vista previa de memorias es el PDF
 # (blob), así que la regla explícita en pt aplica a preview y descarga.
-# Letter landscape ~792×612 pt; márgenes MEMORIA002 0.5/0.65 cm.
-# Grilla 2×2: cada columna mide ~370 pt; la caja CSS sigue en 6.85 cm de alto
-# (img útil ~6.55 cm ≈ 185 pt) para que dos filas + encabezado quepan en la hoja.
-_MEMORIA_MEDIA_BOX_W_PT = 330.0
-_MEMORIA_MEDIA_BOX_H_PT = 185.0
-_MEMORIA_MEDIA_MAX_PX_W = 660
-_MEMORIA_MEDIA_MAX_PX_H = 370
+#
+# Letter landscape 215,9 mm de alto. Con firmas_pie el útil es:
+#   215,9 − 4,0 (margen sup.) − (BOTTOM+ALTO+SEP ≈ 16,5) ≈ 195,4 mm.
+# Menos encabezado (~42), barra de sección (~8), leyenda (~5), 2×pie foto (~2×9,5)
+# y pads de fila (~4) → 2 cajas ≤ ~58 mm. 5,40 cm deja holgura y evita la hoja
+# huérfana (solo encabezado+firmas) que provocaba 6,85 cm.
+# Grilla 3×2: ~240 pt de ancho por columna (márgenes laterales 6,5 mm).
+_MEMORIA_MEDIA_BOX_H_CM = 5.40
+_MEMORIA_MEDIA_IMG_MAX_H_CM = 5.15
+_MEMORIA_MEDIA_CAPTION_H_CM = 0.95
+_MEMORIA_MEDIA_BOX_W_PT = 240.0
+_MEMORIA_MEDIA_BOX_H_PT = round(_MEMORIA_MEDIA_BOX_H_CM * 72.0 / 2.54, 1)  # ≈ 153.1
+_MEMORIA_MEDIA_MAX_PX_W = 480
+_MEMORIA_MEDIA_MAX_PX_H = 310
 _MEMORIA_MEDIA_PREFETCH_WORKERS = 8
+_MEMORIA_MEDIA_FOTOS_PER_PAGE = 6
+_MEMORIA_MEDIA_FOTOS_COLS = 3
 
 
 def _memoria_fit_media_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
@@ -18258,11 +18272,11 @@ def _html_memoria_item_body(
     # una cuota fija partía la hoja con el total y las firmas solos.
     ROWS_MEMORIA_PRIMERA_HOJA = 26
     ROWS_MEMORIA_SIGUIENTES = 30
-    # Plantilla fija: 4 imágenes por página (2 columnas × 2 filas). La caja mantiene
-    # 6.85 cm de alto: con el encabezado institucional, dos filas llenan la hoja.
-    FOTOS_PER_PAGE = 4
-    FOTOS_COLS = 2
-    FOTO_BOX_H = "6.85cm"
+    # Plantilla fija 3×2 (6 por página). Alto de caja = espacio útil medido
+    # (encabezado + sección + pies + franja firmas); ver _MEMORIA_MEDIA_BOX_H_CM.
+    FOTOS_PER_PAGE = _MEMORIA_MEDIA_FOTOS_PER_PAGE
+    FOTOS_COLS = _MEMORIA_MEDIA_FOTOS_COLS
+    FOTO_BOX_H = f"{_MEMORIA_MEDIA_BOX_H_CM:.2f}cm"
 
     fotos = _dedupe_fotos_memoria(registros)
     graficos = _dedupe_graficos_memoria(registros)
@@ -18585,7 +18599,7 @@ def _html_memoria_item_body(
             aprobo_marca=aprobo_marca,
         )
 
-    # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 2×2.
+    # Páginas de fotos / gráficos: encabezado + sección + grilla 3×2 + firmas (@frame).
     if pie_fotos_contexto:
         pie_foto = _h(pie_fotos_contexto)
     else:
@@ -18600,7 +18614,7 @@ def _html_memoria_item_body(
         # que xhtml2pdf respeta (CSS max-* / object-fit no bastan).
         box_td = (
             f'style="width:100%;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
-            'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;'
+            'overflow:hidden;text-align:center;vertical-align:middle;padding:1px;'
             'line-height:0;"'
         )
         if not url:
@@ -18637,6 +18651,9 @@ def _html_memoria_item_body(
         for chunk in chunks:
             slots: List[Optional[dict]] = list(chunk) + [None] * (FOTOS_PER_PAGE - len(chunk))
             parts += "<pdf:nextpage />"
+            # Un solo bloque inseparable: encabezado + grilla (+ leyenda). Evita la
+            # hoja huérfana con solo encabezado/firmas cuando la grilla no cabía.
+            parts += '<div class="mem002-media-page">'
             parts += encabezado()
             parts += (
                 f'<div class="section-bar mem002-section">{section_title} — ÍTEM '
@@ -18660,6 +18677,7 @@ def _html_memoria_item_body(
                 '<div class="doc-footer">Documento institucional de control interno. '
                 "Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>"
             )
+            parts += "</div>"
         return parts
 
     body += _paginas_media_grid(
