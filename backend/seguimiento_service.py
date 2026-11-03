@@ -2051,10 +2051,18 @@ def _mask_gestion_obra_valores(acta: dict, current_user: Optional[dict] = None) 
         from subcontratista_visibilidad import usuario_ve_valores_economicos_contrato
         cargo = None
         rol = None
+        sid = None
+        empresa_tipo = None
         if isinstance(current_user, dict):
             cargo = current_user.get("cargo_nombre") or current_user.get("cargo")
             rol = current_user.get("rol_nombre") or current_user.get("rol")
-        ver_cant = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+            sid = current_user.get("subcontratista_id") or current_user.get("sub_id")
+            empresa_tipo = current_user.get("empresa_tipo")
+        ver_cant = bool(
+            usuario_ve_valores_economicos_contrato(
+                cargo, rol, subcontratista_id=sid, empresa_tipo=empresa_tipo
+            )
+        )
     except Exception:
         ver_cant = True
     go = dict(go)
@@ -2604,7 +2612,13 @@ def recalcular_gestion_obra_acta(
         from subcontratista_visibilidad import usuario_ve_valores_economicos_contrato
         cargo = (current_user or {}).get("cargo_nombre") or (current_user or {}).get("cargo")
         rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
-        ver_cant = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+        sid = (current_user or {}).get("subcontratista_id") or (current_user or {}).get("sub_id")
+        empresa_tipo = (current_user or {}).get("empresa_tipo")
+        ver_cant = bool(
+            usuario_ve_valores_economicos_contrato(
+                cargo, rol, subcontratista_id=sid, empresa_tipo=empresa_tipo
+            )
+        )
     except Exception:
         ver_cant = True
     snap["ver_valores_cantidades"] = ver_cant

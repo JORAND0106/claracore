@@ -47,9 +47,11 @@ from presupuesto_helpers import (
 from subcontratista_visibilidad import (
     apply_subcontratista_filter_q,
     es_cargo_subcontratista,
+    normalizar_empresa_tipo,
     ocultar_costo_directo_reportes as _ocultar_costo_directo_reportes_vis,
     redactar_filas_economicos_contrato,
     resolver_filtro_subcontratista_solicitado,
+    scope_from_user_dict,
     scope_subcontratista,
     usuario_ve_valores_economicos_contrato,
     validar_vinculo_subcontratista_en_contrato,
@@ -1064,6 +1066,8 @@ class UsuarioUpdate(BaseModel):
     contrato_id: Optional[int] = None
     estado: Optional[str] = None
     subcontratista_id: Optional[int] = None
+    # Empresa del usuario en el contrato: contratista | interventoria | subcontratista
+    empresa_tipo: Optional[str] = None
     politicas_aceptadas: Optional[bool] = None
 
 class UsuarioContratoCreate(BaseModel):
@@ -5540,10 +5544,13 @@ def _sicoe_collect_reporte_ids_misma_linea(
 
 
 def _sicoe_ocultar_costo_directo_reportes(current_user) -> bool:
-    """Operativo Contratista / Interventoría y cargo Subcontratista: sin montos de contrato."""
+    """Operativos + aislamiento por Empresa=subcontratista: sin montos de contrato."""
+    u = current_user if isinstance(current_user, dict) else {}
     return _ocultar_costo_directo_reportes_vis(
-        current_user.get("cargo_nombre") if isinstance(current_user, dict) else None,
-        current_user.get("rol_nombre") if isinstance(current_user, dict) else None,
+        u.get("cargo_nombre"),
+        u.get("rol_nombre") or u.get("rol"),
+        subcontratista_id=u.get("subcontratista_id") or u.get("sub_id"),
+        empresa_tipo=u.get("empresa_tipo"),
     )
 
 
@@ -7739,6 +7746,7 @@ def login(request: Request, body: LoginRequest):
         "contrato_id": usuario.get("contrato_id"),
         "contrato_numero": contrato_numero or "",
         "subcontratista_id": usuario.get("subcontratista_id"),
+        "empresa_tipo": usuario.get("empresa_tipo"),
     })
 
     # Cargar permisos del cargo para control de acceso en el panel
@@ -7772,7 +7780,7 @@ def login(request: Request, body: LoginRequest):
         permisos = _permisos_desarrollador_acceso_total(
             permisos, funciones_rows, usuario.get("cargo_id")
         )
-    # C3: Subcontratista sin subcontratista asignado → sin acceso
+    # Cargo Subcontratista sin empresa subcontratista → sin acceso
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not usuario.get('subcontratista_id'):
         permisos = []
     # Contador: solo módulo Contabilidad (sin módulos de obra)
@@ -7811,6 +7819,7 @@ def login(request: Request, body: LoginRequest):
             "estado": usuario.get("estado"),
             "activo": usuario.get("activo"),
             "subcontratista_id": usuario.get("subcontratista_id"),
+            "empresa_tipo": usuario.get("empresa_tipo"),
             "permisos": permisos,
             "fecha_nacimiento": usuario.get("fecha_nacimiento"),
             "foto_perfil_url": usuario.get("foto_perfil_url"),
@@ -8498,6 +8507,7 @@ def get_mi_usuario(
         "rol_id": u.get("rol_id"), "rol_nombre": rol_nombre,
         "contrato_id": u.get("contrato_id"), "estado": u.get("estado"), "activo": u.get("activo"),
         "subcontratista_id": u.get("subcontratista_id"),
+        "empresa_tipo": u.get("empresa_tipo"),
         "permisos": permisos,
         "fecha_nacimiento": u.get("fecha_nacimiento"),
         "foto_perfil_url": u.get("foto_perfil_url"),
@@ -9361,12 +9371,89 @@ def crear_competencia_contrato(
         raise HTTPException(status_code=500, detail=f"No se pudo guardar la entidad: {ex}")
     return {"competencias": _competencias_para_contrato(contrato_id)}
 
+@app.get("/admin/usuarios/empresas/{contrato_id}")
+def admin_usuarios_empresas_contrato(contrato_id: int, current_user=Depends(get_current_user)):
+    """
+    Opciones del campo Empresa en Gestión de usuarios:
+    contratista del contrato, interventoría del contrato y subcontratistas registrados.
+    """
+    cid = int(contrato_id)
+    crows = (
+        supabase.table("contratos")
+        .select("id, contratista, interventoria, nit, numero_interventoria")
+        .eq("id", cid)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    c = crows[0] if crows else {}
+    contratista_nombre = (c.get("contratista") or "Contratista del contrato").strip() or "Contratista del contrato"
+    interventoria_nombre = (c.get("interventoria") or "Interventoría del contrato").strip() or "Interventoría del contrato"
+    opciones = [
+        {
+            "key": "contratista",
+            "tipo": "contratista",
+            "id": None,
+            "nombre": contratista_nombre,
+            "label": f"Contratista — {contratista_nombre}",
+        },
+        {
+            "key": "interventoria",
+            "tipo": "interventoria",
+            "id": None,
+            "nombre": interventoria_nombre,
+            "label": f"Interventoría — {interventoria_nombre}",
+        },
+    ]
+    try:
+        subs = (
+            supabase.table("subcontratistas")
+            .select("id, razon_social, nit, activo")
+            .eq("contrato_id", cid)
+            .order("razon_social")
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        subs = []
+    for s in subs:
+        if s.get("activo") is False:
+            continue
+        nombre = (s.get("razon_social") or "").strip()
+        if not nombre:
+            continue
+        sid = s.get("id")
+        opciones.append(
+            {
+                "key": f"sub:{sid}",
+                "tipo": "subcontratista",
+                "id": sid,
+                "nombre": nombre,
+                "nit": (s.get("nit") or "").strip() or None,
+                "label": f"Subcontratista — {nombre}",
+            }
+        )
+    return {"contrato_id": cid, "opciones": opciones}
+
+
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
     """Lista solo usuarios vivos: pendiente y aprobado. Los rechazados no aparecen."""
-    result = supabase.table("usuarios").select(
-        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip, subcontratista_id"
-    ).order("nombre").execute()
+    _cols_base = (
+        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, "
+        "politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip, subcontratista_id"
+    )
+    try:
+        result = supabase.table("usuarios").select(
+            _cols_base + ", empresa_tipo"
+        ).order("nombre").execute()
+    except Exception:
+        result = supabase.table("usuarios").select(_cols_base).order("nombre").execute()
+        for u in (result.data or []):
+            if u.get("subcontratista_id") is not None and not u.get("empresa_tipo"):
+                u["empresa_tipo"] = "subcontratista"
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
     contratos = {c["id"]: c["numero"] for c in supabase.table("contratos").select("id, numero").execute().data}
@@ -9446,7 +9533,7 @@ def actualizar_usuario(
                 raise HTTPException(status_code=403, detail="No se puede modificar un usuario Desarrollador")
 
     prev_snap = supabase.table("usuarios").select(
-        "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, nombre, apellidos, email"
+        "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, empresa_tipo, nombre, apellidos, email"
     ).eq("id", usuario_id).limit(1).execute().data
     prev_snap = prev_snap[0] if prev_snap else {}
     prev_estado = (prev_snap.get("estado") or "").lower()
@@ -9456,44 +9543,65 @@ def actualizar_usuario(
     for fk in ("cargo_id", "rol_id", "contrato_id", "subcontratista_id"):
         if fk in data:
             data[fk] = _admin_usuario_fk_int_o_none(data.get(fk))
+    if "empresa_tipo" in data:
+        data["empresa_tipo"] = normalizar_empresa_tipo(data.get("empresa_tipo"))
 
-    # Resolver cargo/contrato/sub finales para validar vínculo obligatorio
+    # Resolver cargo/contrato/empresa finales para validar vínculo
     final_cargo_id = data["cargo_id"] if "cargo_id" in data else prev_snap.get("cargo_id")
     final_contrato_id = data["contrato_id"] if "contrato_id" in data else prev_snap.get("contrato_id")
     final_sub_id = data["subcontratista_id"] if "subcontratista_id" in data else prev_snap.get("subcontratista_id")
+    final_empresa_tipo = (
+        data["empresa_tipo"] if "empresa_tipo" in data else prev_snap.get("empresa_tipo")
+    )
+    # Si solo llega subcontratista_id sin empresa_tipo, inferir tipo
+    if "subcontratista_id" in data and "empresa_tipo" not in data:
+        if final_sub_id is not None:
+            final_empresa_tipo = "subcontratista"
+            data["empresa_tipo"] = "subcontratista"
+        elif final_empresa_tipo == "subcontratista":
+            final_empresa_tipo = None
+            data["empresa_tipo"] = None
+    # Consistencia: contratista/interventoría limpian subcontratista_id
+    if normalizar_empresa_tipo(final_empresa_tipo) in ("contratista", "interventoria"):
+        final_sub_id = None
+        data["subcontratista_id"] = None
+        data["empresa_tipo"] = normalizar_empresa_tipo(final_empresa_tipo)
+        final_empresa_tipo = data["empresa_tipo"]
+    elif final_sub_id is not None:
+        data["empresa_tipo"] = "subcontratista"
+        final_empresa_tipo = "subcontratista"
+        data["subcontratista_id"] = int(final_sub_id)
+    elif "empresa_tipo" in data and data["empresa_tipo"] is None and "subcontratista_id" in data:
+        data["subcontratista_id"] = None
+        final_sub_id = None
+
     cargo_nombre_final = None
     if final_cargo_id is not None:
         cargo_nombre_final = _admin_usuario_nombre_fk("cargos", "nombre", final_cargo_id)
-    if es_cargo_subcontratista(cargo_nombre_final):
-        sub_row = None
-        if final_sub_id is not None:
-            try:
-                sub_rows = (
-                    supabase.table("subcontratistas")
-                    .select("id, contrato_id")
-                    .eq("id", int(final_sub_id))
-                    .limit(1)
-                    .execute()
-                    .data
-                )
-                sub_row = sub_rows[0] if sub_rows else None
-            except Exception:
-                sub_row = None
-        err = validar_vinculo_subcontratista_en_contrato(
-            cargo_nombre=cargo_nombre_final,
-            subcontratista_id=final_sub_id,
-            subcontratista_contrato_id=(sub_row or {}).get("contrato_id"),
-            usuario_contrato_id=final_contrato_id,
-        )
-        if err:
-            raise HTTPException(status_code=400, detail=err)
-        # Persistir sub_id normalizado si venía en el body o se revalidó
-        if "subcontratista_id" in data or final_sub_id is not None:
-            data["subcontratista_id"] = int(final_sub_id)
-    else:
-        # Cargo distinto de subcontratista: no debe conservar vínculo
-        if prev_snap.get("subcontratista_id") is not None or "subcontratista_id" in data:
-            data["subcontratista_id"] = None
+
+    sub_row = None
+    if final_sub_id is not None:
+        try:
+            sub_rows = (
+                supabase.table("subcontratistas")
+                .select("id, contrato_id")
+                .eq("id", int(final_sub_id))
+                .limit(1)
+                .execute()
+                .data
+            )
+            sub_row = sub_rows[0] if sub_rows else None
+        except Exception:
+            sub_row = None
+    err = validar_vinculo_subcontratista_en_contrato(
+        cargo_nombre=cargo_nombre_final,
+        subcontratista_id=final_sub_id,
+        subcontratista_contrato_id=(sub_row or {}).get("contrato_id"),
+        usuario_contrato_id=final_contrato_id,
+        empresa_tipo=final_empresa_tipo,
+    )
+    if err:
+        raise HTTPException(status_code=400, detail=err)
 
     if body.estado == "aprobado":
         data["activo"] = True
@@ -9555,7 +9663,7 @@ def actualizar_usuario(
         return o
 
     after_snap = supabase.table("usuarios").select(
-        "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, nombre, apellidos, email"
+        "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, empresa_tipo, nombre, apellidos, email"
     ).eq("id", usuario_id).limit(1).execute().data
     after_snap = after_snap[0] if after_snap else {}
 
@@ -19733,63 +19841,87 @@ class SubcontratistaTributosBody(BaseModel):
     tributos: Optional[dict] = None
 
 
-def _usuario_subcontratista_id(current_user) -> Optional[int]:
-    """subcontratista_id del usuario autenticado (JWT o tabla usuarios)."""
-    for key in ("subcontratista_id", "sub_id"):
-        raw = current_user.get(key) if isinstance(current_user, dict) else None
-        if raw is not None:
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                pass
+def _usuario_empresa_campos(current_user) -> Tuple[Optional[int], Optional[str]]:
+    """(subcontratista_id, empresa_tipo) del usuario autenticado (JWT o BD)."""
+    sid = None
+    empresa_tipo = None
+    if isinstance(current_user, dict):
+        empresa_tipo = current_user.get("empresa_tipo")
+        for key in ("subcontratista_id", "sub_id"):
+            raw = current_user.get(key)
+            if raw is not None:
+                try:
+                    sid = int(raw)
+                    break
+                except (TypeError, ValueError):
+                    pass
+        if sid is not None and sid <= 0:
+            sid = None
+        # Si JWT ya trae ambos, no consultar BD
+        if sid is not None or empresa_tipo is not None:
+            if sid is not None or normalizar_empresa_tipo(empresa_tipo) in (
+                "contratista",
+                "interventoria",
+                "subcontratista",
+            ):
+                return sid, normalizar_empresa_tipo(empresa_tipo) or (
+                    "subcontratista" if sid is not None else None
+                )
     try:
-        uid = int(current_user.get("sub") or current_user.get("id") or 0)
+        uid = int(current_user.get("sub") or current_user.get("id") or 0) if isinstance(current_user, dict) else 0
     except (TypeError, ValueError):
-        return None
+        return sid, normalizar_empresa_tipo(empresa_tipo)
     if not uid:
-        return None
+        return sid, normalizar_empresa_tipo(empresa_tipo)
     try:
         rows = (
             supabase.table("usuarios")
-            .select("subcontratista_id")
+            .select("subcontratista_id, empresa_tipo")
             .eq("id", uid)
             .limit(1)
             .execute()
             .data
         )
-        if rows and rows[0].get("subcontratista_id") is not None:
-            return int(rows[0]["subcontratista_id"])
+        if rows:
+            if sid is None and rows[0].get("subcontratista_id") is not None:
+                try:
+                    sid = int(rows[0]["subcontratista_id"])
+                except (TypeError, ValueError):
+                    sid = None
+            if empresa_tipo is None:
+                empresa_tipo = rows[0].get("empresa_tipo")
     except Exception:
         pass
-    return None
+    if sid is not None and sid <= 0:
+        sid = None
+    tipo = normalizar_empresa_tipo(empresa_tipo)
+    if tipo is None and sid is not None:
+        tipo = "subcontratista"
+    return sid, tipo
+
+
+def _usuario_subcontratista_id(current_user) -> Optional[int]:
+    """subcontratista_id del usuario autenticado (JWT o tabla usuarios)."""
+    sid, _ = _usuario_empresa_campos(current_user)
+    return sid
 
 
 def _es_usuario_cargo_subcontratista(current_user) -> bool:
-    """True si el cargo del usuario autenticado es «subcontratista»."""
-    if not isinstance(current_user, dict):
-        return False
-    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
-    if cargo == "subcontratista":
-        return True
-    if cargo:
-        return False
-    try:
-        _, cargo_db = _caller_contract_scope(current_user)
-        return (cargo_db or "").strip().lower() == "subcontratista"
-    except Exception:
-        return False
+    """True si el usuario está aislado por Empresa=subcontratista (legacy nombre)."""
+    restricted, _ = _scope_subcontratista_usuario(current_user)
+    return restricted
 
 
 def _scope_subcontratista_usuario(current_user) -> Tuple[bool, Optional[int]]:
     """
     (restricted, forced_id) para el usuario autenticado.
-    Resuelve subcontratista_id desde JWT o BD si el cargo es subcontratista.
+    Aislamiento por Empresa=subcontratista, independiente del cargo/rol.
     """
-    if not _es_usuario_cargo_subcontratista(current_user):
-        return False, None
-    own = _usuario_subcontratista_id(current_user)
-    cargo = (current_user.get("cargo_nombre") if isinstance(current_user, dict) else None) or "subcontratista"
-    return scope_subcontratista(cargo, own)
+    own, empresa_tipo = _usuario_empresa_campos(current_user)
+    cargo = None
+    if isinstance(current_user, dict):
+        cargo = current_user.get("cargo_nombre")
+    return scope_subcontratista(cargo, own, empresa_tipo=empresa_tipo)
 
 
 def _presupuesto_q_visibilidad_usuario(q, current_user):
@@ -19868,11 +20000,12 @@ def _resolver_param_subcontratista_id(current_user, solicitado: Optional[int]) -
 
 
 def _deny_listado_precios_contrato_si_subcontratista(current_user):
-    """El subcontratista no puede leer/escribir el listado de precios de cobro del contrato."""
-    if _es_usuario_cargo_subcontratista(current_user):
+    """Empresa=subcontratista: no puede leer/escribir el listado de precios de cobro del contrato."""
+    restricted, _ = _scope_subcontratista_usuario(current_user)
+    if restricted:
         raise HTTPException(
             status_code=403,
-            detail="Los usuarios subcontratista no pueden consultar el listado de precios del contrato. "
+            detail="Los usuarios con empresa subcontratista no pueden consultar el listado de precios del contrato. "
             "Use los precios pactados de su subcontratista.",
         )
 
@@ -20428,10 +20561,14 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
 
     tributos = resolve_tributos_subcontratista(tributos_sub, precios_rows)
     items = build_precios_sheet(listado, cant_map, precios_rows, saldado_map=saldado_map)
-    # VU Cobro es economía del contrato: nunca al cargo subcontratista / operativos.
+    # VU Cobro es economía del contrato: nunca con aislamiento por empresa sub / operativos.
     cargo = (current_user or {}).get("cargo_nombre")
     rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
-    if not usuario_ve_valores_economicos_contrato(cargo, rol):
+    sid_u, tipo_u = _usuario_empresa_campos(current_user)
+    ve_eco = usuario_ve_valores_economicos_contrato(
+        cargo, rol, subcontratista_id=sid_u, empresa_tipo=tipo_u
+    )
+    if not ve_eco:
         for it in items:
             if isinstance(it, dict) and "vu_cobro" in it:
                 it["vu_cobro"] = None
@@ -20439,7 +20576,7 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
         "items": items,
         "total": len(items),
         "tributos": tributos,
-        "puede_incluir_vu_cobro": bool(usuario_ve_valores_economicos_contrato(cargo, rol)),
+        "puede_incluir_vu_cobro": bool(ve_eco),
     }
 
 
@@ -20681,7 +20818,12 @@ def registrar_export_precios_excel_sub(
 
     cargo = (current_user or {}).get("cargo_nombre")
     rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
-    puede_cobro = bool(usuario_ve_valores_economicos_contrato(cargo, rol))
+    sid_u, tipo_u = _usuario_empresa_campos(current_user)
+    puede_cobro = bool(
+        usuario_ve_valores_economicos_contrato(
+            cargo, rol, subcontratista_id=sid_u, empresa_tipo=tipo_u
+        )
+    )
     # Puede crudo = pasó escribir=True arriba (admin con crear/editar, no cargo sub)
     puede_crudo = bool(solicitado_crudo)
     crudo_efectivo = bool(solicitado_crudo and puede_crudo)
