@@ -1,6 +1,10 @@
 /**
  * Soporte Remisión / Foto descargue — columna compacta:
- * etiqueta → (slot opcional, p. ej. N.º remisión) → orígenes → mini preview debajo.
+ * etiqueta → (slot opcional) → orígenes → zona Pegar aquí → mini preview.
+ *
+ * Pegar tiene DOS caminos (regresión 06204a05 los fusionó y rompió Safari/iPad):
+ * - Botón Pegar → clipboard.read() (teclado / gesto con permiso)
+ * - Zona contentEditable «Pegar aquí» → menú Pegar del sistema / long-press
  */
 import { useRef } from 'react'
 import { useAlmacenTheme } from './almacenShared'
@@ -48,12 +52,12 @@ export default function EntradaSoportePicker({
   const ui = useAlmacenTheme()
   const camRef = useRef(null)
   const fileRef = useRef(null)
-  const pasteRef = useRef(null)
+  const pasteZoneRef = useRef(null)
   const isRemision = kind === 'remision'
   const isPdf = Boolean(file && ((file.type || '').includes('pdf') || /\.pdf$/i.test(file.name || '')))
 
-  const clearPasteEl = () => {
-    const el = pasteRef.current
+  const clearPasteZone = () => {
+    const el = pasteZoneRef.current
     if (el) el.textContent = ''
   }
 
@@ -62,7 +66,7 @@ export default function EntradaSoportePicker({
     const f = fileFromClipboardEvent(e)
     e.preventDefault()
     e.stopPropagation()
-    clearPasteEl()
+    clearPasteZone()
     if (!f) {
       onPasteFile?.(null, MSG_PEGADO_VACIO)
       return
@@ -75,6 +79,8 @@ export default function EntradaSoportePicker({
     const r = await fileFromClipboardApi()
     if (!r.ok) {
       onPasteFile?.(null, r.message)
+      // Dejar la zona lista para el menú Pegar del sistema (Safari/iPad).
+      pasteZoneRef.current?.focus?.()
       return
     }
     onPasteFile?.(r.file)
@@ -183,65 +189,85 @@ export default function EntradaSoportePicker({
           <span style={{ fontSize: '0.95rem' }} aria-hidden>🖼</span>
           Galería
         </button>
-        <div
+        <button
+          type="button"
           data-testid={`entrada-soporte-${kind}-pegar`}
-          style={{ position: 'relative', ...btnIcon(ui, { active: selected }), padding: 0 }}
-          title="Pegar del portapapeles (mantener o toque)"
+          style={btnIcon(ui, { active: selected })}
+          disabled={busy}
+          onClick={(e) => {
+            e.stopPropagation()
+            void handlePegarClick()
+          }}
+          title="Leer imagen o PDF del portapapeles"
         >
-          <div
-            aria-hidden
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 1,
-              pointerEvents: 'none',
-              fontSize: '0.62rem',
-              fontWeight: 800,
-              color: 'var(--cc-almacen-text)',
-            }}
-          >
-            <span style={{ fontSize: '0.95rem' }}>📋</span>
-            Pegar
-          </div>
-          <div
-            ref={pasteRef}
-            role="button"
-            tabIndex={0}
-            contentEditable
-            suppressContentEditableWarning
-            aria-label={isRemision ? 'Pegar remisión' : 'Pegar foto del descargue'}
-            onFocus={() => onSelect?.(kind)}
-            onClick={(e) => {
-              e.stopPropagation()
-              onSelect?.(kind)
-              void handlePegarClick()
-            }}
-            onPaste={handleZonePaste}
-            onInput={clearPasteEl}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                void handlePegarClick()
-              }
-            }}
-            style={{
-              position: 'relative',
-              zIndex: 1,
-              minWidth: 46,
-              minHeight: 42,
-              outline: 'none',
-              color: 'transparent',
-              caretColor: 'transparent',
-              cursor: 'pointer',
-              WebkitUserSelect: 'text',
-              userSelect: 'text',
-            }}
-          />
+          <span style={{ fontSize: '0.95rem' }} aria-hidden>📋</span>
+          Pegar
+        </button>
+      </div>
+
+      {/* Zona compacta para menú Pegar del sistema (iPad Safari). Sin userSelect:none. */}
+      <div
+        data-testid={`entrada-soporte-${kind}-pegar-zona`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect?.(kind)
+          pasteZoneRef.current?.focus?.()
+        }}
+        style={{
+          position: 'relative',
+          minHeight: 36,
+          border: `1.5px dashed ${selected ? 'var(--cc-almacen-accent)' : 'var(--cc-almacen-border)'}`,
+          borderRadius: 8,
+          background: 'var(--cc-almacen-bg-card)',
+          cursor: 'text',
+          WebkitUserSelect: 'text',
+          userSelect: 'text',
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            padding: '4px 8px',
+            pointerEvents: 'none',
+            fontWeight: 700,
+            fontSize: '0.68rem',
+            color: 'var(--cc-almacen-text-muted)',
+          }}
+        >
+          <span style={{ color: 'var(--cc-almacen-text)' }}>Pegar aquí</span>
+          <span style={{ fontWeight: 600 }}>
+            {isRemision ? '· mantenga · imagen/PDF' : '· mantenga · imagen'}
+          </span>
         </div>
+        <div
+          ref={pasteZoneRef}
+          role="textbox"
+          tabIndex={0}
+          contentEditable
+          suppressContentEditableWarning
+          aria-label={isRemision ? 'Pegar remisión aquí' : 'Pegar foto del descargue aquí'}
+          onFocus={() => onSelect?.(kind)}
+          onPaste={handleZonePaste}
+          onInput={clearPasteZone}
+          onBlur={clearPasteZone}
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            minHeight: 36,
+            padding: '6px 8px',
+            outline: 'none',
+            color: 'transparent',
+            caretColor: 'var(--cc-almacen-accent)',
+            WebkitUserSelect: 'text',
+            userSelect: 'text',
+          }}
+        />
       </div>
 
       <button

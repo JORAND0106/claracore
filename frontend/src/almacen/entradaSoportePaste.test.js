@@ -131,7 +131,7 @@ describe('entradaSoportePaste', () => {
     }
   })
 
-  it('UI cablea Pegar compacto y Ctrl/Cmd+V en dialog', () => {
+  it('UI cablea botón Pegar + zona Pegar aquí + Ctrl/Cmd+V en dialog', () => {
     const wiz = readFileSync(join(dir, 'EntradaRegistroTablet.jsx'), 'utf8')
     const picker = readFileSync(join(dir, 'EntradaSoportePicker.jsx'), 'utf8')
     assert.match(wiz, /onPasteSoporte/)
@@ -139,10 +139,40 @@ describe('entradaSoportePaste', () => {
     assert.match(wiz, /fileFromClipboardEvent/)
     assert.match(wiz, /resolvePasteTarget/)
     assert.match(wiz, /onPasteFile/)
-    assert.doesNotMatch(picker, /Pegar aquí/)
+    // Anti-regresión 06204a05: no fusionar botón Pegar con la zona del sistema.
+    assert.match(picker, /Pegar aquí/)
+    assert.match(picker, /entrada-soporte-\$\{kind\}-pegar-zona/)
     assert.match(picker, /entrada-soporte-\$\{kind\}-pegar/)
     assert.match(picker, /contentEditable/)
     assert.match(picker, /fileFromClipboardApi/)
     assert.match(picker, /onPasteFile/)
+    assert.match(picker, /handleZonePaste/)
+    assert.match(picker, /handlePegarClick/)
+    // La zona NO debe llamar clipboard.read al hacer click (solo enfocar).
+    const zonaStart = picker.indexOf('entrada-soporte-${kind}-pegar-zona')
+    const zonaBlock = picker.slice(zonaStart, zonaStart + 900)
+    assert.match(zonaBlock, /pasteZoneRef\.current\?\.focus/)
+    assert.doesNotMatch(zonaBlock, /handlePegarClick/)
+    // El botón Pegar sí usa la Clipboard API.
+    assert.match(picker, /onClick=\{\(e\) => \{\s*e\.stopPropagation\(\)\s*void handlePegarClick\(\)/)
+    // Dialog ignora solo la zona (no el botón), para que Ctrl+V siga vivo.
+    assert.match(wiz, /data-testid\$="-pegar-zona"/)
+    assert.doesNotMatch(wiz, /data-testid\$="-pegar"\]/)
+  })
+
+  it('anti-regresión: Remisión acepta imagen y PDF; Descargue solo imagen', () => {
+    const img = { type: 'image/jpeg', name: 'cap.jpg', size: 20 }
+    const pdf = { type: 'application/pdf', name: 'rem.pdf', size: 20 }
+    assert.equal(validateSoportePaste(img, 'remision').ok, true)
+    assert.equal(validateSoportePaste(pdf, 'remision').ok, true)
+    assert.equal(validateSoportePaste(pdf, 'material').ok, false)
+    assert.equal(validateSoportePaste(img, 'material').ok, true)
+  })
+
+  it('anti-regresión: pegado vacío y mismo destino resuelto muestran aviso usable', () => {
+    assert.match(MSG_PEGADO_VACIO, /Archivo|Galería/i)
+    const t = resolvePasteTarget({ focusedKind: 'remision', hasRemision: true, hasMaterial: false })
+    assert.equal(t.which, 'remision')
+    assert.equal(t.replaced, true)
   })
 })

@@ -217,7 +217,8 @@ describe('UI cableado', () => {
     assert.match(wiz, /entrada-soporte-preview-modal/)
     assert.match(wiz, /entrada-tablet-soportes-fila/)
     assert.match(wiz, /overflow: paso === PASO\.CAPTURA \? 'hidden'/)
-    assert.doesNotMatch(picker, /Pegar aquí/)
+    assert.match(picker, /Pegar aquí/)
+    assert.match(picker, /entrada-soporte-\$\{kind\}-pegar-zona/)
     assert.doesNotMatch(picker, /Módulo/)
     assert.match(picker, /Galería/)
     assert.match(picker, /PREVIEW_W/)
@@ -226,6 +227,9 @@ describe('UI cableado', () => {
     assert.match(picker, /entrada-soporte-\$\{kind\}-galeria/)
     assert.match(picker, /contentEditable/)
     assert.match(picker, /justifySelf: 'start'/)
+    // Botón Pegar separado de la zona (clipboard.read vs menú del sistema).
+    assert.match(picker, /void handlePegarClick\(\)/)
+    assert.match(picker, /fileFromClipboardApi/)
   })
 
   it('tabla OC: scroll visible, alerta X de N y N.º remisión en columna Remisión', () => {
