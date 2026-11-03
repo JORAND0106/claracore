@@ -261,16 +261,22 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     )
     assert "CAPÍTULO" in html
     assert "3. SANITARIO" in html
-    assert html.count('class="mem002-foto-slot"') == 12
+    # 8 fotos únicas → 2×6 slots; 1 gráfico → 1×6; total 18.
+    assert html.count('class="mem002-foto-slot"') == 18
     assert html.count("REGISTRO FOTOGRÁFICO — ÍTEM") == 2
+    assert html.count("REGISTRO GRÁFICO — ÍTEM") == 1
     assert html.count("MEMORIA SEMANAL") >= 4
-    assert "height:6.85cm" in html
+    assert f"height:{inf._MEMORIA_MEDIA_BOX_H_CM:.2f}cm" in html
+    assert "height:6.85cm" not in html
     assert "height:4.55cm" not in html
+    assert 'class="mem002-media-page"' in html
     assert 'class="mem002-media-img"' in html
     # Contención: dims explícitas en pt y/o tope max-*; nunca max-width:0
     assert ("pt;" in html and "mem002-media-img" in html) or "max-height:" in html
     assert "max-width:0" not in html
-    assert "font-size:0" not in html
+    # font-size:0 solo en la jaula vacía de firmas (no en celdas de foto).
+    assert "mem002-foto-box" in html
+    assert "font-size:0" not in html.split("mem002-foto-grid", 1)[-1].split("mem002-firmas", 1)[0]
     assert "ABSCISAS" in html
     assert "ENLACE" in html
     assert "INFRAESTRUCTURA" in html
@@ -309,7 +315,7 @@ def test_html_memoria_sin_graficos_no_genera_seccion():
     )
     assert "REGISTRO FOTOGRÁFICO" in html
     assert "REGISTRO GRÁFICO" not in html
-    assert html.count('class="mem002-foto-slot"') == 4
+    assert html.count('class="mem002-foto-slot"') == 6
 
 
 def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
@@ -561,7 +567,7 @@ def test_fotos_y_graficos_siguen_el_orden_de_la_tabla():
     assert html.index("Gráfico 2 — Reg. 40") < html.index("Gráfico 1 — Reg. 10")
     assert html.count("https://cdn/shared.jpg") == 1
     assert html.count("https://cdn/shared-g.png") == 1
-    assert "height:6.85cm" in html
+    assert f"height:{inf._MEMORIA_MEDIA_BOX_H_CM:.2f}cm" in html
     assert "mem002-foto-grid" in html
     # La tabla de detalle no cambia de orden: tramo 7 (abs menor) antes que tramo 5.
     assert html.index("Total tramo 7") < html.index("Total tramo 5")
@@ -661,10 +667,11 @@ def test_lista_graficos_rotado_aunque_el_historial_siga_con_la_url_vieja():
     assert [x["grafico_url"] for x in g] == ["https://cdn/rotado.png"]
 
 
-def test_fotos_y_graficos_van_de_a_cuatro_por_pagina():
+def test_fotos_y_graficos_van_de_a_seis_por_pagina():
+    """Grilla 3×2: hasta 6 contenedores por hoja de registro fotográfico/gráfico."""
     inf = _import_informes_with_stubs()
     registros = []
-    for i in range(5):
+    for i in range(7):
         registros.append(
             {
                 "numero_registro": i + 1,
@@ -699,11 +706,13 @@ def test_fotos_y_graficos_van_de_a_cuatro_por_pagina():
     )
     assert html.count("REGISTRO FOTOGRÁFICO — ÍTEM") == 2
     assert html.count("REGISTRO GRÁFICO — ÍTEM") == 2
-    assert html.count('class="mem002-foto-slot"') == 16
+    # 7 fotos → 2×6; 7 gráficos → 2×6; total 24.
+    assert html.count('class="mem002-foto-slot"') == 24
     assert html.count("Foto 1 —") == 1
     assert html.count("Foto 5 —") == 1
     assert html.count("Gráfico 1 —") == 1
     assert html.count("Gráfico 5 —") == 1
+    assert f"height:{inf._MEMORIA_MEDIA_BOX_H_CM:.2f}cm" in html
 
 
 def test_detalle_no_salta_de_hoja_si_el_cierre_cabe():
