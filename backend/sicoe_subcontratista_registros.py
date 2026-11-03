@@ -86,16 +86,29 @@ def aplicar_precios_propios_sub_a_registros(
     *,
     vu_por_item: Optional[Dict[str, float]] = None,
     vu_por_cap_item: Optional[Dict[Tuple[str, str], float]] = None,
+    por_servicios: bool = False,
 ) -> List[dict]:
     """
     Redacta economía del contrato y coloca VU/costo del subcontratista.
     Si no hay precio pactado, vlr/costo quedan en null (no se inventa el del contrato).
+
+    por_servicios=True: no valora ni marca «sin_precio» (el corte se paga por tarifas).
     """
     from corte_sub_conciliacion import resolver_vu_costo_mo_item, valor_por_cantidad_vu
 
     out: List[dict] = []
     for raw in registros or []:
         row = redactar_valores_economicos_contrato(raw)
+        if por_servicios:
+            row["vlr_unitario"] = None
+            row["precio_unitario"] = None
+            row["vlr_unitario_sub"] = None
+            row["costo_directo"] = None
+            row["precio_fuente"] = "tarifa_servicio"
+            row["sin_precio"] = False
+            row["no_valorar_corte"] = True
+            out.append(row)
+            continue
         vu = resolver_vu_costo_mo_item(
             item_numero=row.get("item_numero"),
             capitulo=row.get("capitulo"),

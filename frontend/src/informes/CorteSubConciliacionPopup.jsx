@@ -375,7 +375,86 @@ export default function CorteSubConciliacionPopup({
             <>
               <section>
                 <h3 style={{ margin: '0 0 8px', fontSize: 14, color: '#1e3a8a' }}>1. Resumen del corte</h3>
-                {(data.items_sin_precio || []).length > 0 && (
+                {data.tipo_subcontratista === 'por_servicios' && (
+                  <div style={{ background: '#eff6ff', color: '#1e3a8a', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 8 }}>
+                    Corte <strong>por servicios</strong>
+                    {data.corte?.tipo_periodo === 'quincenal' ? ' (factor 0,5 quincenal)' : ' (factor 1 mensual)'}
+                    : valor = tarifa × profesionales × factor. Sin descuento automático.
+                  </div>
+                )}
+                {data.tipo_subcontratista === 'por_servicios' && Array.isArray(data.items) && data.items.length > 0 && (
+                  <div style={{ overflowX: 'auto', marginBottom: 10 }}>
+                    <table style={sheet}>
+                      <thead>
+                        <tr>
+                          <th style={th}>Concepto</th>
+                          <th style={{ ...th, textAlign: 'right' }}>Cant.</th>
+                          <th style={{ ...th, textAlign: 'right' }}>VU período</th>
+                          <th style={{ ...th, textAlign: 'right' }}>Costo directo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.items.map((it) => (
+                          <tr key={it.item_numero || it.item_descripcion}>
+                            <td style={td}>{it.item_descripcion}</td>
+                            <td style={{ ...td, textAlign: 'right' }}>{it.cantidad}</td>
+                            <td style={{ ...td, textAlign: 'right' }}>{fmtMoney(it.vlr_unitario_sub)}</td>
+                            <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtMoney(it.costo_directo)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {data.tipo_subcontratista === 'por_servicios' && data.presencia?.aplicable && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6, color: '#0f766e' }}>
+                      Control de presencia (informativo)
+                    </div>
+                    {(data.presencia.alertas || []).length > 0 && (
+                      <div style={{ background: '#fef3c7', color: '#92400e', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 8 }}>
+                        {(data.presencia.alertas || []).map((a) => (
+                          <div key={`${a.nombre}-${(a.fechas || []).join(',')}`}>{a.mensaje}</div>
+                        ))}
+                        <div style={{ marginTop: 4, fontWeight: 600 }}>
+                          Quien aprueba decide si registra descuento en «otros conceptos» (valor negativo).
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={sheet}>
+                        <thead>
+                          <tr>
+                            <th style={th}>Persona</th>
+                            <th style={th}>Cargo</th>
+                            <th style={{ ...th, textAlign: 'right' }}>Esperados</th>
+                            <th style={{ ...th, textAlign: 'right' }}>Con presencia</th>
+                            <th style={th}>Sin reporte</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(data.presencia.personas || []).map((p) => (
+                            <tr key={p.persona_key} style={p.alerta ? { background: '#fffbeb' } : undefined}>
+                              <td style={td}>{p.nombre}</td>
+                              <td style={td}>{p.cargo}</td>
+                              <td style={{ ...td, textAlign: 'right' }}>{p.dias_esperados}</td>
+                              <td style={{ ...td, textAlign: 'right' }}>{p.dias_con_presencia}</td>
+                              <td style={{ ...td, fontSize: 11, color: p.alerta ? '#b45309' : undefined }}>
+                                {(p.fechas_sin_reporte || []).join(', ') || '—'}
+                              </td>
+                            </tr>
+                          ))}
+                          {!(data.presencia.personas || []).length && (
+                            <tr>
+                              <td style={td} colSpan={5}>Sin personal vinculado a este subcontratista en el período.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {(data.items_sin_precio || []).length > 0 && data.tipo_subcontratista !== 'por_servicios' && (
                   <div style={{ background: '#fef3c7', color: '#92400e', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 600 }}>
                     Ítems sin precio en el listado del subcontratista:{' '}
                     {(data.items_sin_precio || []).join(', ')}
@@ -491,7 +570,9 @@ export default function CorteSubConciliacionPopup({
               <section>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <h3 style={{ margin: 0, fontSize: 14, color: '#1e3a8a' }}>2. Otros conceptos</h3>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>Sin AIU ni IVA — solo costo total</span>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    Sin AIU ni IVA — admiten valor negativo (descuentos) con soporte
+                  </span>
                   {!soloLectura && !bloqueado && (
                     <button
                       type="button"
@@ -619,9 +700,16 @@ export default function CorteSubConciliacionPopup({
                                 disabled={soloLectura || bloqueado}
                                 value={f.valor_unitario}
                                 onChange={(e) => patchFila(idx, { valor_unitario: e.target.value })}
+                                title="Admiten valores negativos (descuentos)"
                               />
                             </td>
-                            <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>
+                            <td style={{
+                              ...td,
+                              textAlign: 'right',
+                              fontWeight: 700,
+                              color: costoFila(f.cantidad, f.valor_unitario) < 0 ? '#b91c1c' : undefined,
+                            }}
+                            >
                               {fmtMoney(costoFila(f.cantidad, f.valor_unitario))}
                             </td>
                             <td style={td}>

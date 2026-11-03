@@ -18,6 +18,7 @@ const EMPTY = {
   telefono: '',
   anticipo: null,
   amortizacion_pct: null,
+  tipo: 'por_cantidades',
 }
 
 /**
@@ -95,6 +96,25 @@ export default function SubcontratistaFormSheet({
                   onChange={(e) => set('nit', e.target.value.replace(/[^0-9]/g, ''))}
                   placeholder="Solo números"
                 />
+              </td>
+            </tr>
+            <tr>
+              <td style={lbl}>Tipo *</td>
+              <td style={val} colSpan={3}>
+                <select
+                  style={ui.cellSelect || ui.cellInp}
+                  value={f.tipo === 'por_servicios' ? 'por_servicios' : 'por_cantidades'}
+                  disabled={!editing}
+                  onChange={(e) => set('tipo', e.target.value)}
+                >
+                  <option value="por_cantidades">Por cantidades (obra / SICOE)</option>
+                  <option value="por_servicios">Por servicios (profesionales / tarifas mensuales)</option>
+                </select>
+                <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginTop: 4, lineHeight: 1.35 }}>
+                  {f.tipo === 'por_servicios'
+                    ? 'Corte por tarifas pactadas y control de presencia en Bitácora (sin valorar cantidades SICOE).'
+                    : 'Comportamiento actual: precios por ítem y cortes por cantidades ejecutadas.'}
+                </div>
               </td>
             </tr>
             <tr>

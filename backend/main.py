@@ -19808,6 +19808,21 @@ class SubcontratistaCreate(BaseModel):
     telefono:        Optional[str] = None
     anticipo:        Optional[float] = None
     amortizacion_pct: Optional[float] = None
+    # por_cantidades (default) | por_servicios
+    tipo:            Optional[str] = None
+
+
+class TarifaServicioItem(BaseModel):
+    concepto: str
+    tarifa_mensual: float = 0
+    cantidad_profesionales: float = 1
+    orden: Optional[int] = None
+    id: Optional[int] = None
+    activo: Optional[bool] = True
+
+
+class TarifasServicioBulkBody(BaseModel):
+    items: List[TarifaServicioItem]
 
 class CorteCreate(BaseModel):
     tipo_periodo: str          # 'quincenal' | 'mensual'
@@ -20025,17 +20040,30 @@ def _fetch_subcontratista_row(sub_id: int) -> dict:
         sid = int(sub_id)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Subcontratista inválido.")
-    sub = (
-        supabase.table("subcontratistas")
-        .select("id, contrato_id, razon_social")
-        .eq("id", sid)
-        .limit(1)
-        .execute()
-        .data
-    )
+    try:
+        sub = (
+            supabase.table("subcontratistas")
+            .select("id, contrato_id, razon_social, tipo, activo")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+            .data
+        )
+    except Exception:
+        sub = (
+            supabase.table("subcontratistas")
+            .select("id, contrato_id, razon_social")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+            .data
+        )
     if not sub:
         raise HTTPException(status_code=404, detail="Subcontratista no encontrado.")
-    return sub[0]
+    row = sub[0]
+    if "tipo" not in row:
+        row["tipo"] = "por_cantidades"
+    return row
 
 
 def _require_acceso_precios_subcontratista(
@@ -20290,31 +20318,42 @@ def listar_subcontratistas(contrato_id: int, current_user=Depends(get_current_us
 
 @app.post("/subcontratistas/{contrato_id}")
 def crear_subcontratista(contrato_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
+    from subcontratista_servicios import normalizar_tipo_subcontratista
+
     _require_contract_access(current_user, contrato_id)
     row = {"contrato_id": contrato_id, **body.dict()}
+    row["tipo"] = normalizar_tipo_subcontratista(row.get("tipo"))
     try:
         result = supabase.table("subcontratistas").insert(row).execute()
     except Exception:
-        # Columnas anticipo / amortizacion_pct aún no migradas
+        # Columnas anticipo / amortizacion_pct / tipo aún no migradas
         row.pop("anticipo", None)
         row.pop("amortizacion_pct", None)
+        row.pop("tipo", None)
         result = supabase.table("subcontratistas").insert(row).execute()
     nuevo = result.data[0] if result.data else {}
+    if nuevo and "tipo" not in nuevo:
+        nuevo["tipo"] = row.get("tipo") or "por_cantidades"
     registrar_log(current_user, "CREAR", "SUBCONTRATISTAS", "subcontratista", str(nuevo.get("id","")),
-                  {"razon_social": body.razon_social})
+                  {"razon_social": body.razon_social, "tipo": nuevo.get("tipo")})
     return nuevo
 
 @app.put("/subcontratistas/{sub_id}")
 def actualizar_subcontratista(sub_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
+    from subcontratista_servicios import normalizar_tipo_subcontratista
+
     patch = body.dict()
+    if "tipo" in patch:
+        patch["tipo"] = normalizar_tipo_subcontratista(patch.get("tipo"))
     try:
         supabase.table("subcontratistas").update(patch).eq("id", sub_id).execute()
     except Exception:
         patch.pop("anticipo", None)
         patch.pop("amortizacion_pct", None)
+        patch.pop("tipo", None)
         supabase.table("subcontratistas").update(patch).eq("id", sub_id).execute()
     registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "subcontratista", str(sub_id),
-                  {"razon_social": body.razon_social})
+                  {"razon_social": body.razon_social, "tipo": patch.get("tipo")})
     return {"ok": True}
 
 @app.patch("/subcontratistas/{sub_id}/toggle-activo")
@@ -20428,6 +20467,145 @@ def actualizar_corte(corte_id: int, body: CorteUpdate, current_user=Depends(get_
     registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "corte", str(corte_id),
                   {"nueva_fecha_fin": body.fecha_fin})
     return {"ok": True}
+
+# ── Tarifas pactadas (por_servicios) ─────────────────────────
+@app.get("/subcontratistas/{sub_id}/tarifas-servicio")
+def listar_tarifas_servicio(sub_id: int, current_user=Depends(get_current_user)):
+    from subcontratista_servicios import fetch_tarifas_servicio
+
+    _require_acceso_precios_subcontratista(current_user, sub_id, escribir=False)
+    return fetch_tarifas_servicio(supabase, int(sub_id))
+
+
+@app.put("/subcontratistas/{sub_id}/tarifas-servicio")
+def reemplazar_tarifas_servicio(
+    sub_id: int, body: TarifasServicioBulkBody, current_user=Depends(get_current_user)
+):
+    """Reemplaza el set activo de tarifas pactadas (hoja sincronizada)."""
+    from subcontratista_servicios import normalizar_fila_tarifa
+
+    sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=True)
+    contrato_id = int(sub["contrato_id"])
+    filas = []
+    for i, it in enumerate(body.items or []):
+        raw = it.dict() if hasattr(it, "dict") else dict(it)
+        n = normalizar_fila_tarifa(raw, orden=i)
+        if n:
+            filas.append(n)
+    # Soft-delete previas activas y upsert nuevo set
+    try:
+        supabase.table("subcontratista_tarifas_servicio").update(
+            {"activo": False, "updated_at": "now()"}
+        ).eq("subcontratista_id", int(sub_id)).eq("activo", True).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Tabla de tarifas por servicios no disponible. Aplique la migración SQL.",
+        ) from exc
+    inserted = []
+    for n in filas:
+        row = {
+            "subcontratista_id": int(sub_id),
+            "contrato_id": contrato_id,
+            "concepto": n["concepto"],
+            "tarifa_mensual": n["tarifa_mensual"],
+            "cantidad_profesionales": n["cantidad_profesionales"],
+            "orden": n["orden"],
+            "activo": True,
+        }
+        res = supabase.table("subcontratista_tarifas_servicio").insert(row).execute()
+        if res.data:
+            inserted.extend(res.data)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "SUBCONTRATISTAS",
+        "tarifas_servicio",
+        str(sub_id),
+        {"n": len(inserted)},
+    )
+    return {"items": inserted, "total": len(inserted)}
+
+
+@app.get("/subcontratistas/{sub_id}/cortes/{corte_id}/presencia")
+def presencia_corte_servicios(
+    sub_id: int, corte_id: int, current_user=Depends(get_current_user)
+):
+    """Control de presencia informativo (Bitácora) para corte por servicios."""
+    from subcontratista_servicios import (
+        construir_control_presencia,
+        es_subcontratista_por_servicios,
+    )
+
+    sub = _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
+    if not es_subcontratista_por_servicios(sub):
+        return {"aplicable": False, "informativo": True, "personas": [], "alertas": []}
+    corte = (
+        supabase.table("subcontratista_cortes")
+        .select("*")
+        .eq("id", int(corte_id))
+        .eq("subcontratista_id", int(sub_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not corte:
+        raise HTTPException(status_code=404, detail="Corte no encontrado.")
+    c = corte[0]
+    contrato_id = int(sub["contrato_id"])
+    trabajadores = []
+    try:
+        from rrhh_service import list_trabajadores
+
+        trabajadores = [
+            t
+            for t in (list_trabajadores(supabase, contrato_id) or [])
+            if str(t.get("empresa_tipo") or "").lower() == "subcontratista"
+            and t.get("empresa_subcontratista_id") is not None
+            and int(t.get("empresa_subcontratista_id")) == int(sub_id)
+        ]
+    except Exception as exc:
+        logging.getLogger(__name__).warning("presencia: RRHH %s", exc)
+    diarios = []
+    try:
+        fi = str(c.get("fecha_inicio") or "")[:10]
+        ff = str(c.get("fecha_fin") or "")[:10]
+        q = (
+            supabase.table("seguimiento_bitacora_entrada")
+            .select("fecha, asistencia_colaboradores, personal, personal_manual, equipos_uso")
+            .eq("contrato_id", contrato_id)
+            .gte("fecha", fi)
+            .lte("fecha", ff)
+            .order("fecha")
+        )
+        diarios = q.execute().data or []
+    except Exception as exc:
+        logging.getLogger(__name__).warning("presencia: bitácora %s", exc)
+        try:
+            diarios = (
+                supabase.table("seguimiento_bitacora_entrada")
+                .select("fecha, asistencia_colaboradores")
+                .eq("contrato_id", contrato_id)
+                .gte("fecha", str(c.get("fecha_inicio") or "")[:10])
+                .lte("fecha", str(c.get("fecha_fin") or "")[:10])
+                .order("fecha")
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            diarios = []
+    ctrl = construir_control_presencia(
+        subcontratista_id=int(sub_id),
+        fecha_inicio=c.get("fecha_inicio"),
+        fecha_fin=c.get("fecha_fin"),
+        trabajadores=trabajadores,
+        diarios=diarios,
+    )
+    ctrl["aplicable"] = True
+    return ctrl
+
 
 # ── Precios subcontratista ───────────────────────────────────
 @app.get("/subcontratistas/{sub_id}/precios")
@@ -25783,28 +25961,41 @@ def obtener_reporte(
             aplicar_precios_propios_sub_a_registros,
             filtrar_registros_para_sub,
         )
+        from subcontratista_servicios import es_subcontratista_por_servicios
+
         if _sub_forced is None:
             regs_raw = []
         else:
             regs_raw = filtrar_registros_para_sub(regs_raw or [], _sub_forced, r)
+            sub_tipo_row = None
             try:
-                from corte_sub_conciliacion import precios_vu_sub_maps
-
-                vu_item, vu_cap = precios_vu_sub_maps(
-                    supabase,
-                    contrato_id=int(contrato_id),
-                    subcontratista_id=int(_sub_forced),
-                )
+                sub_tipo_row = _fetch_subcontratista_row(int(_sub_forced))
+            except Exception:
+                sub_tipo_row = None
+            por_serv = es_subcontratista_por_servicios(sub_tipo_row or {})
+            if por_serv:
                 regs_raw = aplicar_precios_propios_sub_a_registros(
-                    regs_raw,
-                    vu_por_item=vu_item,
-                    vu_por_cap_item=vu_cap,
+                    regs_raw or [], por_servicios=True
                 )
-            except Exception as _exc_sub_vu:
-                logging.getLogger(__name__).warning(
-                    "obtener_reporte precios sub %s: %s", _sub_forced, _exc_sub_vu
-                )
-                regs_raw = aplicar_precios_propios_sub_a_registros(regs_raw or [])
+            else:
+                try:
+                    from corte_sub_conciliacion import precios_vu_sub_maps
+
+                    vu_item, vu_cap = precios_vu_sub_maps(
+                        supabase,
+                        contrato_id=int(contrato_id),
+                        subcontratista_id=int(_sub_forced),
+                    )
+                    regs_raw = aplicar_precios_propios_sub_a_registros(
+                        regs_raw,
+                        vu_por_item=vu_item,
+                        vu_por_cap_item=vu_cap,
+                    )
+                except Exception as _exc_sub_vu:
+                    logging.getLogger(__name__).warning(
+                        "obtener_reporte precios sub %s: %s", _sub_forced, _exc_sub_vu
+                    )
+                    regs_raw = aplicar_precios_propios_sub_a_registros(regs_raw or [])
         r["economia_subcontratista"] = True
         r["subcontratista_scope_id"] = _sub_forced
 

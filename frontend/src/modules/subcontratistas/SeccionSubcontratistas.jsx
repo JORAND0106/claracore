@@ -4,6 +4,7 @@ import { tFrom, isDarkMode, isRestMode, buildContratoUiTheme } from '../../theme
 import { usuarioAisladoPorEmpresaSub } from '../../utils/empresaUsuario'
 import CorteSsBlock from './CorteSsBlock'
 import PreciosSubcontratistaSheet from './PreciosSubcontratistaSheet'
+import TarifasPactadasSheet from './TarifasPactadasSheet'
 import SubcontratistaCalPicker from './SubcontratistaCalPicker'
 import SubcontratistaFormSheet, { EMPTY_SUBCONTRATISTA_FORM } from './SubcontratistaFormSheet'
 import { uploadDocumento, uploadPoliza } from './subcontratistasApi'
@@ -208,6 +209,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
         amortizacion_pct: crearForm.amortizacion_pct != null && crearForm.amortizacion_pct !== ''
           ? Number(crearForm.amortizacion_pct)
           : null,
+        tipo: crearForm.tipo === 'por_servicios' ? 'por_servicios' : 'por_cantidades',
       }
       const nuevo = await call('POST', `/subcontratistas/${contratoId}`, payload)
       const newId = nuevo?.id
@@ -275,6 +277,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
         amortizacion_pct: editForm.amortizacion_pct != null && editForm.amortizacion_pct !== ''
           ? Number(editForm.amortizacion_pct)
           : null,
+        tipo: editForm.tipo === 'por_servicios' ? 'por_servicios' : 'por_cantidades',
       }
       await call('PUT', `/subcontratistas/${detalle.id}`, payload)
       setMsg({ type: 'success', text: 'Datos actualizados.' })
@@ -429,7 +432,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
           <table style={{ ...S.table, minWidth: 640 }}>
             <thead>
               <tr>
-                {['Razón Social', 'Nombre de Contacto', 'NIT', 'Pólizas', 'Estado'].map((h) => (
+                {['Razón Social', 'Tipo', 'Nombre de Contacto', 'NIT', 'Pólizas', 'Estado'].map((h) => (
                   <th key={h} style={S.th}>{h}</th>
                 ))}
               </tr>
@@ -437,6 +440,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
             <tbody>
               {subsFiltrados.map((sub) => {
                 const badge = nivelPolizaBadge(sub.poliza_alerta)
+                const tipoLabel = sub.tipo === 'por_servicios' ? 'Por servicios' : 'Por cantidades'
                 return (
                   <tr
                     key={sub.id}
@@ -446,6 +450,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                   >
                     <td style={{ ...tdStyle, fontWeight: 600, color: col.textPrimary }}>{sub.razon_social}</td>
+                    <td style={{ ...tdStyle, fontSize: 'var(--cc-caption)' }}>{tipoLabel}</td>
                     <td style={tdStyle}>{sub.nombre_contacto || '—'}</td>
                     <td style={{ ...tdStyle, fontSize: 'var(--cc-caption)', color: col.textSecondary }}>{sub.nit || '—'}</td>
                     <td style={tdStyle}>
@@ -570,7 +575,10 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
               flexWrap: 'nowrap',
             }}
             >
-              {[['datos', 'Datos'], ['cortes', 'Cortes'], ['precios', 'Precios']].map(([id, label]) => (
+              {[['datos', 'Datos'], ['cortes', 'Cortes'], [
+                'precios',
+                (detalle?.tipo === 'por_servicios' ? 'Tarifas pactadas' : 'Precios'),
+              ]].map(([id, label]) => (
                 <button
                   key={id}
                   type="button"
@@ -726,16 +734,26 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
               )}
 
               {tabDetalle === 'precios' && detalle?.id && (
-                <PreciosSubcontratistaSheet
-                  theme={theme}
-                  token={token}
-                  subId={detalle.id}
-                  contratoId={contratoId}
-                  subcontratista={detalle}
-                  canEdit={!!(perms?.crear || perms?.editar)}
-                  puedeExportarVuCobro={puedeExportarVuCobro}
-                  onMsg={setMsg}
-                />
+                detalle?.tipo === 'por_servicios' ? (
+                  <TarifasPactadasSheet
+                    theme={theme}
+                    call={call}
+                    subId={detalle.id}
+                    canEdit={!!(perms?.crear || perms?.editar)}
+                    onMsg={setMsg}
+                  />
+                ) : (
+                  <PreciosSubcontratistaSheet
+                    theme={theme}
+                    token={token}
+                    subId={detalle.id}
+                    contratoId={contratoId}
+                    subcontratista={detalle}
+                    canEdit={!!(perms?.crear || perms?.editar)}
+                    puedeExportarVuCobro={puedeExportarVuCobro}
+                    onMsg={setMsg}
+                  />
+                )
               )}
             </div>
 
