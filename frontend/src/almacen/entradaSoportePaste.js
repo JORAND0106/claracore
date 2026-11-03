@@ -51,7 +51,7 @@ export async function fileFromClipboardApi() {
   if (typeof navigator.clipboard.read !== 'function') {
     return {
       ok: false,
-      message: 'Safari no permite leer el portapapeles aquí. Mantenga presionado «Pegar aquí» y elija Pegar, o use Galería/Archivo.',
+      message: 'Safari no permite leer el portapapeles con el botón. Toque «Pegar aquí», mantenga y elija Pegar, o use Galería/Archivo.',
     }
   }
   try {
@@ -86,12 +86,12 @@ export async function fileFromClipboardApi() {
     if (name === 'NotAllowedError' || /denied|permission|not allowed/i.test(msg)) {
       return {
         ok: false,
-        message: 'No se pudo leer el portapapeles (permiso denegado). Mantenga presionado «Pegar aquí» y elija Pegar, o use Galería/Archivo.',
+        message: 'No se pudo leer el portapapeles (permiso denegado). Toque «Pegar aquí», mantenga y elija Pegar, o use Galería/Archivo.',
       }
     }
     return {
       ok: false,
-      message: 'No se pudo leer el portapapeles. Use el recuadro «Pegar aquí», Galería o Archivo.',
+      message: 'No se pudo leer el portapapeles. Use «Pegar aquí», Galería o Archivo.',
     }
   }
 }

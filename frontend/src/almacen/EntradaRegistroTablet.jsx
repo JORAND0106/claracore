@@ -685,9 +685,10 @@ export default function EntradaRegistroTablet({
 
   const onPasteSoporte = (e) => {
     if (paso !== PASO.CAPTURA || tipo !== 'recibo') return
-    // Si el pegado ocurre en el control Pegar del soporte, ese handler ya lo procesó.
-    const pegarCtrl = e.target?.closest?.('[data-testid$="-pegar"]')
-    if (pegarCtrl) return
+    // La zona «Pegar aquí» ya procesó el evento (stopPropagation). El botón Pegar
+    // no es contentEditable: Ctrl/Cmd+V con el popup abierto sigue llegando aquí.
+    const pegarZona = e.target?.closest?.('[data-testid$="-pegar-zona"]')
+    if (pegarZona) return
     const f = fileFromClipboardEvent(e)
     if (!f) {
       // Sin archivo: no interferir con pegar texto en inputs (placa, cantidad…).
