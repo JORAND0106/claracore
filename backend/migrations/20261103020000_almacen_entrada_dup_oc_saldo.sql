@@ -12,35 +12,134 @@ COMMENT ON COLUMN public.almacen_entrada.idempotency_key IS
   'Identificador único del intento de registro (cliente). Evita entradas duplicadas por doble toque o reintento.';
 
 -- 2) Unicidad lógica remisión + proveedor (recibo).
--- Proveedor por id; si no hay id, por nombre normalizado.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_almacen_entrada_remision_proveedor_id
-  ON public.almacen_entrada (contrato_id, upper(btrim(numero_documento)), proveedor_id)
-  WHERE tipo = 'recibo'
-    AND numero_documento IS NOT NULL
-    AND btrim(numero_documento) <> ''
-    AND proveedor_id IS NOT NULL;
+-- Si ya hay duplicados, omite el índice con NOTICE (no aborta la migración).
+DO $$
+DECLARE
+  n_dup_id integer := 0;
+  n_dup_nom integer := 0;
+BEGIN
+  SELECT count(*) INTO n_dup_id
+  FROM (
+    SELECT 1
+    FROM public.almacen_entrada e
+    WHERE e.tipo = 'recibo'
+      AND e.proveedor_id IS NOT NULL
+      AND nullif(btrim(e.numero_documento), '') IS NOT NULL
+    GROUP BY e.contrato_id, upper(btrim(e.numero_documento)), e.proveedor_id
+    HAVING count(*) > 1
+  ) d;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_almacen_entrada_remision_proveedor_nombre
-  ON public.almacen_entrada (
-    contrato_id,
-    upper(btrim(numero_documento)),
-    lower(btrim(proveedor_nombre_texto))
-  )
-  WHERE tipo = 'recibo'
-    AND numero_documento IS NOT NULL
-    AND btrim(numero_documento) <> ''
-    AND proveedor_id IS NULL
-    AND proveedor_nombre_texto IS NOT NULL
-    AND btrim(proveedor_nombre_texto) <> '';
+  IF n_dup_id = 0 THEN
+    EXECUTE $idx$
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_almacen_entrada_remision_proveedor_id
+        ON public.almacen_entrada (contrato_id, upper(btrim(numero_documento)), proveedor_id)
+        WHERE tipo = 'recibo'
+          AND numero_documento IS NOT NULL
+          AND btrim(numero_documento) <> ''
+          AND proveedor_id IS NOT NULL
+    $idx$;
+  ELSE
+    RAISE NOTICE
+      'OMITIDO uq_almacen_entrada_remision_proveedor_id: % grupos duplicados. Ejecute almacen_diagnostico_entradas_duplicadas.sql.',
+      n_dup_id;
+  END IF;
+
+  SELECT count(*) INTO n_dup_nom
+  FROM (
+    SELECT 1
+    FROM public.almacen_entrada e
+    WHERE e.tipo = 'recibo'
+      AND e.proveedor_id IS NULL
+      AND nullif(btrim(e.numero_documento), '') IS NOT NULL
+      AND nullif(btrim(e.proveedor_nombre_texto), '') IS NOT NULL
+    GROUP BY e.contrato_id, upper(btrim(e.numero_documento)), lower(btrim(e.proveedor_nombre_texto))
+    HAVING count(*) > 1
+  ) d;
+
+  IF n_dup_nom = 0 THEN
+    EXECUTE $idx$
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_almacen_entrada_remision_proveedor_nombre
+        ON public.almacen_entrada (
+          contrato_id,
+          upper(btrim(numero_documento)),
+          lower(btrim(proveedor_nombre_texto))
+        )
+        WHERE tipo = 'recibo'
+          AND numero_documento IS NOT NULL
+          AND btrim(numero_documento) <> ''
+          AND proveedor_id IS NULL
+          AND proveedor_nombre_texto IS NOT NULL
+          AND btrim(proveedor_nombre_texto) <> ''
+    $idx$;
+  ELSE
+    RAISE NOTICE
+      'OMITIDO uq_almacen_entrada_remision_proveedor_nombre: % grupos duplicados.',
+      n_dup_nom;
+  END IF;
+EXCEPTION
+  WHEN undefined_column THEN
+    RAISE NOTICE 'Columna ausente al crear índices de remisión; se omite. Aplique scripts previos de entrada.';
+END $$;
 
 -- 3) Umbrales de alerta de saldo OC (configuración por contrato).
+-- ADD + backfill + DEFAULT/NOT NULL + CHECK nombrados (idempotente en re-ejecución).
 ALTER TABLE public.almacen_config
-  ADD COLUMN IF NOT EXISTS alerta_saldo_amarillo_pct numeric(5, 2) NOT NULL DEFAULT 20
-    CHECK (alerta_saldo_amarillo_pct > 0 AND alerta_saldo_amarillo_pct <= 100);
+  ADD COLUMN IF NOT EXISTS alerta_saldo_amarillo_pct numeric(5, 2);
 
 ALTER TABLE public.almacen_config
-  ADD COLUMN IF NOT EXISTS alerta_saldo_rojo_pct numeric(5, 2) NOT NULL DEFAULT 5
-    CHECK (alerta_saldo_rojo_pct > 0 AND alerta_saldo_rojo_pct <= 100);
+  ADD COLUMN IF NOT EXISTS alerta_saldo_rojo_pct numeric(5, 2);
+
+UPDATE public.almacen_config
+SET alerta_saldo_amarillo_pct = 20
+WHERE alerta_saldo_amarillo_pct IS NULL;
+
+UPDATE public.almacen_config
+SET alerta_saldo_rojo_pct = 5
+WHERE alerta_saldo_rojo_pct IS NULL;
+
+ALTER TABLE public.almacen_config
+  ALTER COLUMN alerta_saldo_amarillo_pct SET DEFAULT 20;
+
+ALTER TABLE public.almacen_config
+  ALTER COLUMN alerta_saldo_rojo_pct SET DEFAULT 5;
+
+DO $$
+BEGIN
+  ALTER TABLE public.almacen_config
+    ALTER COLUMN alerta_saldo_amarillo_pct SET NOT NULL;
+EXCEPTION
+  WHEN others THEN
+    RAISE NOTICE 'alerta_saldo_amarillo_pct NOT NULL: %', SQLERRM;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE public.almacen_config
+    ALTER COLUMN alerta_saldo_rojo_pct SET NOT NULL;
+EXCEPTION
+  WHEN others THEN
+    RAISE NOTICE 'alerta_saldo_rojo_pct NOT NULL: %', SQLERRM;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'almacen_config_alerta_saldo_amarillo_pct_check'
+  ) THEN
+    ALTER TABLE public.almacen_config
+      ADD CONSTRAINT almacen_config_alerta_saldo_amarillo_pct_check
+      CHECK (alerta_saldo_amarillo_pct > 0 AND alerta_saldo_amarillo_pct <= 100);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'almacen_config_alerta_saldo_rojo_pct_check'
+  ) THEN
+    ALTER TABLE public.almacen_config
+      ADD CONSTRAINT almacen_config_alerta_saldo_rojo_pct_check
+      CHECK (alerta_saldo_rojo_pct > 0 AND alerta_saldo_rojo_pct <= 100);
+  END IF;
+END $$;
 
 COMMENT ON COLUMN public.almacen_config.alerta_saldo_amarillo_pct IS
   'Umbral amarillo: saldo restante de la OC ≤ este % de lo pedido (default 20).';
@@ -62,8 +161,6 @@ CREATE INDEX IF NOT EXISTS idx_almacen_oc_item_alerta_contrato
 
 COMMENT ON TABLE public.almacen_oc_item_alerta_enviada IS
   'Registro de avisos a Validar por umbral de saldo OC ya enviados (no repetir).';
-
-NOTIFY pgrst, 'reload schema';
 
 -- 5) RPC: OC con saldo incluye insumos consumidos (marcados) para bloquearlos en UI.
 CREATE OR REPLACE FUNCTION public.almacen_ocs_pendientes_tarjeta(p_contrato_id integer)
@@ -269,3 +366,5 @@ $$;
 
 COMMENT ON FUNCTION public.almacen_ocs_pendientes_tarjeta(integer) IS
   'Tarjetas OC con saldo; insumos consumidos incluidos (consumido=true) para bloquearlos en captura.';
+
+NOTIFY pgrst, 'reload schema';
