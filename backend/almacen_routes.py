@@ -214,6 +214,18 @@ def _uid(current_user) -> int:
 
 def _http_value_error(exc: ValueError) -> HTTPException:
     msg = str(exc)
+    if msg.startswith("POSIBLE_DUPLICADO::"):
+        parts = msg.split("::", 4)
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "POSIBLE_DUPLICADO",
+                "entrada_id": int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None,
+                "codigo_entrada": parts[2] if len(parts) > 2 else None,
+                "minutos": float(parts[3]) if len(parts) > 3 else None,
+                "message": parts[4] if len(parts) > 4 else msg,
+            },
+        )
     if "no encontrad" in msg.lower():
         return HTTPException(status_code=404, detail=msg)
     return HTTPException(status_code=400, detail=msg)
@@ -233,6 +245,8 @@ def _puede_anular_solicitud(current_user, sol: dict) -> bool:
 class ConfigUpdateBody(BaseModel):
     cotizaciones_minimas: int = Field(3, ge=1, le=10)
     dias_alerta_vencimiento: int = Field(30, ge=1, le=365)
+    alerta_saldo_amarillo_pct: float = Field(20, gt=0, le=100)
+    alerta_saldo_rojo_pct: float = Field(5, gt=0, le=100)
 
 
 class SolicitudItemBody(BaseModel):
@@ -2537,7 +2551,8 @@ def route_check_entrada_numero_remision(
     proveedor_nombre_texto: Optional[str] = Form(None),
     current_user=Depends(get_current_user),
 ):
-    """Aviso: mismo N.º de remisión ya usado con el mismo proveedor (no bloquea)."""
+    """Bloqueo: mismo N.º de remisión ya usado con el mismo proveedor."""
+    from almacen_entrada_duplicados import mensaje_remision_duplicada
     _check_contrato(current_user, contrato_id)
     require_lectura_entradas_salidas(current_user)
     existing = lookup_entrada_por_numero_remision(
@@ -2547,18 +2562,49 @@ def route_check_entrada_numero_remision(
         proveedor_nombre=proveedor_nombre_texto,
     )
     if not existing:
-        return {"exists": False}
+        return {"exists": False, "blocked": False}
     codigo = (existing.get("codigo_entrada") or "").strip() or str(existing.get("entrada_id") or "")
     return {
         "exists": True,
+        "blocked": True,
         "entrada_id": existing.get("entrada_id"),
         "codigo_entrada": existing.get("codigo_entrada"),
         "numero_documento": existing.get("numero_documento"),
-        "message": (
-            f"Este N.º de remisión ya se usó con este proveedor en la entrada {codigo}. "
-            "Puede continuar si es correcto."
-        ),
+        "message": mensaje_remision_duplicada(codigo),
     }
+
+
+@router.post("/{contrato_id}/entradas/check-similar-reciente")
+async def route_check_entrada_similar_reciente(
+    contrato_id: int,
+    items_json: str = Form(...),
+    orden_compra_id: Optional[int] = Form(None),
+    current_user=Depends(get_current_user),
+):
+    """Confirmación suave: misma OC + mismos insumos/cantidades en ~10 min."""
+    from almacen_entrada_duplicados import lookup_entrada_similar_reciente
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    import json
+    try:
+        items = json.loads(items_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="items_json inválido") from exc
+    sb = None
+    try:
+        from almacen_service import _sb
+        sb = _sb()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    hit = lookup_entrada_similar_reciente(
+        sb,
+        contrato_id,
+        orden_compra_id=orden_compra_id,
+        items=items if isinstance(items, list) else [],
+    )
+    if not hit:
+        return {"exists": False}
+    return {"exists": True, **hit}
 
 
 @router.get("/{contrato_id}/entradas/{entrada_id}")
@@ -2675,6 +2721,8 @@ async def route_create_entrada(
     transportador: Optional[str] = Form(None),
     llegada_domicilio: Optional[str] = Form(None),
     salida_inmediata_pendiente: Optional[str] = Form(None),
+    idempotency_key: Optional[str] = Form(None),
+    confirm_posible_duplicado: Optional[str] = Form(None),
     remision_content_hash: Optional[str] = Form(None),
     material_content_hash: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
@@ -2737,6 +2785,9 @@ async def route_create_entrada(
         "transportador": transportador,
         "llegada_domicilio": str(llegada_domicilio or "").strip().lower() in ("1", "true", "si", "yes"),
         "salida_inmediata_pendiente": str(salida_inmediata_pendiente or "").strip().lower()
+        in ("1", "true", "si", "yes"),
+        "idempotency_key": (idempotency_key or "").strip() or None,
+        "confirm_posible_duplicado": str(confirm_posible_duplicado or "").strip().lower()
         in ("1", "true", "si", "yes"),
         "remision_content_hash": (remision_content_hash or "").strip() or None,
         "material_content_hash": (material_content_hash or "").strip() or None,

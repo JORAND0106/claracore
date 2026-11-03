@@ -83,7 +83,11 @@ export function filterOcsForSearch(ocs, query) {
       out.push({ ...card, insumos, matchMode: 'oc' })
       continue
     }
-    const matching = insumos.filter((ins) => matchesAllTerms(ocInsumoSearchBlob(ins), q))
+    const matching = insumos.filter((ins) => {
+      const consumido = Boolean(ins.consumido) || !(Number(ins.saldo_cantidad) > 0.0001)
+      if (consumido) return false
+      return matchesAllTerms(ocInsumoSearchBlob(ins), q)
+    })
     if (matching.length) {
       out.push({ ...card, insumos: matching, matchMode: 'line' })
     }
@@ -176,12 +180,18 @@ export function initOcLineasSeleccion(insumos, premarcarKey = null) {
   const list = Array.isArray(insumos) ? insumos : []
   return list.map((ins) => {
     const key = ins.key || `${ins.insumo_id}-${ins.material_descripcion}`
-    const marked = premarcarKey != null && String(key) === String(premarcarKey)
+    const consumido = Boolean(ins.consumido) || !(Number(ins.saldo_cantidad) > 0.0001)
+    const marked = !consumido && premarcarKey != null && String(key) === String(premarcarKey)
     return {
       key,
       marked,
       cantidad: '',
-      insumo: ins,
+      consumido,
+      insumo: {
+        ...ins,
+        consumido,
+        cantidad_pedida: Number(ins.cantidad_pedida) || Number(ins.cantidad) || 0,
+      },
     }
   })
 }

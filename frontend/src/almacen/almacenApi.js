@@ -19,7 +19,15 @@ async function parseJson(res) {
     data = {}
   }
   if (!res.ok) {
-    const msg = data.detail || data.message || (res.statusText && res.statusText !== 'OK' ? res.statusText : null) || `Error ${res.status}`
+    const detail = data.detail
+    if (detail && typeof detail === 'object' && detail.code === 'POSIBLE_DUPLICADO') {
+      const err = new Error(detail.message || 'Posible entrada duplicada')
+      err.code = 'POSIBLE_DUPLICADO'
+      err.detalle = detail
+      err.status = res.status
+      throw err
+    }
+    const msg = detail || data.message || (res.statusText && res.statusText !== 'OK' ? res.statusText : null) || `Error ${res.status}`
     throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }
   return data
@@ -658,6 +666,20 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         throw new Error(typeof d === 'string' ? d : (d?.message || `Error ${res.status}`))
       }
       return data
+    },
+
+    checkEntradaSimilarReciente: async ({ ordenCompraId, items } = {}) => {
+      const fd = new FormData()
+      if (ordenCompraId != null && ordenCompraId !== '') {
+        fd.append('orden_compra_id', String(ordenCompraId))
+      }
+      fd.append('items_json', JSON.stringify(Array.isArray(items) ? items : []))
+      const res = await fetch(`${base}/entradas/check-similar-reciente`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      })
+      return parseJson(res)
     },
 
     remisionDownloadUrl: (entradaId) => `${base}/entradas/${entradaId}/remision/download`,

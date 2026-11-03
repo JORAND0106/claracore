@@ -41,6 +41,15 @@ import {
 } from './entradaSoportePaste'
 import { puedeRegistrarSalidaAlmacen } from './almacenPermisos'
 import {
+  alertaAgotamientoOc,
+  DEFAULT_UMBRAL_AMARILLO,
+  DEFAULT_UMBRAL_ROJO,
+  esInsumoConsumido,
+  mensajeAlertaAgotamiento,
+  saldoResultante,
+  textoSaldoProgreso,
+} from './entradaOcSaldoHelpers'
+import {
   buildItemsFromOcSeleccion,
   consolidarResumenInsumos,
   countSearchDisplay,
@@ -55,6 +64,13 @@ import {
   resumenLineasSeleccion,
 } from './entradaRegistroTabletHelpers'
 import { buildPrefillSalidaInmediata } from './salidaInmediataHelpers'
+
+function newIdempotencyKey() {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  } catch { /* ignore */ }
+  return `ent-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
 
 function HighlightText({ text, query }) {
   const segs = highlightSegments(text, query)
@@ -191,8 +207,13 @@ export default function EntradaRegistroTablet({
   const [pdfHint, setPdfHint] = useState('')
   /** null = sin responder; true/false = Sí/No a salida inmediata */
   const [usaDeUnaVez, setUsaDeUnaVez] = useState(null)
+  const [idempotencyKey, setIdempotencyKey] = useState(() => newIdempotencyKey())
+  const [confirmDup, setConfirmDup] = useState(null)
+  const [umbralAmarillo, setUmbralAmarillo] = useState(DEFAULT_UMBRAL_AMARILLO)
+  const [umbralRojo, setUmbralRojo] = useState(DEFAULT_UMBRAL_ROJO)
 
   const puedeCrear = Boolean(permisos?.crear)
+  const remisionBloqueada = Boolean(remisionDupHint)
   const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
   const puedeValidar = Boolean(permisos?.validar)
   const preguntaSalidaVisible = Boolean(puedeSalida && tipo === 'recibo')
@@ -304,6 +325,20 @@ export default function EntradaRegistroTablet({
   }, [paso, ocsLoaded, loadOcs])
 
   useEffect(() => {
+    let cancelled = false
+    api.getConfig()
+      .then((cfg) => {
+        if (cancelled || !cfg) return
+        const a = Number(cfg.alerta_saldo_amarillo_pct)
+        const r = Number(cfg.alerta_saldo_rojo_pct)
+        if (Number.isFinite(a) && a > 0) setUmbralAmarillo(a)
+        if (Number.isFinite(r) && r > 0) setUmbralRojo(r)
+      })
+      .catch(() => { /* defaults */ })
+    return () => { cancelled = true }
+  }, [api])
+
+  useEffect(() => {
     if (paso !== PASO.SIN_OC && paso !== PASO.ESCOMBRERA) return undefined
     if (paso === PASO.ESCOMBRERA) {
       if (!provQuery.trim()) {
@@ -378,6 +413,8 @@ export default function EntradaRegistroTablet({
     setSavePhase('')
     setPdfHint('')
     setUsaDeUnaVez(null)
+    setIdempotencyKey(newIdempotencyKey())
+    setConfirmDup(null)
   }
 
   const elegirTipo = (t) => {
@@ -437,26 +474,29 @@ export default function EntradaRegistroTablet({
   }
 
   const elegirInsumoDeOc = (card, insumo) => {
+    if (Boolean(insumo?.consumido) || esInsumoConsumido(insumo?.saldo_cantidad)) return
     const key = insumo.key || `${insumo.insumo_id}-${insumo.material_descripcion}`
     abrirCapturaOc(card, { premarcarKey: key, seedSectorFrom: insumo })
   }
 
   const toggleOcLinea = (key) => {
-    setOcSeleccion((prev) => prev.map((row) => (
-      row.key === key
-        ? {
-          ...row,
-          marked: !row.marked,
-          cantidad: row.marked ? '' : (row.cantidad || ''),
-        }
-        : row
-    )))
+    setOcSeleccion((prev) => prev.map((row) => {
+      if (row.key !== key) return row
+      if (row.consumido || esInsumoConsumido(row.insumo?.saldo_cantidad)) return row
+      return {
+        ...row,
+        marked: !row.marked,
+        cantidad: row.marked ? '' : (row.cantidad || ''),
+      }
+    }))
   }
 
   const setOcLineaCantidad = (key, raw) => {
-    setOcSeleccion((prev) => prev.map((row) => (
-      row.key === key ? applyCantidadToOcRow(row, raw) : row
-    )))
+    setOcSeleccion((prev) => prev.map((row) => {
+      if (row.key !== key) return row
+      if (row.consumido || esInsumoConsumido(row.insumo?.saldo_cantidad)) return row
+      return applyCantidadToOcRow(row, raw)
+    }))
   }
 
   const refreshTablaVista = useCallback(() => {
@@ -670,6 +710,7 @@ export default function EntradaRegistroTablet({
   const capturaLista = Boolean(
     fotosCompletas
     && numeroRemisionListo
+    && !remisionBloqueada
     && placaOk
     && !superaSaldo
     && (hayLineasOc || hayCantidadSinOc),
@@ -722,7 +763,7 @@ export default function EntradaRegistroTablet({
     }
   }, [api, numeroRemision, paso, proveedorId, proveedorNombre, tipo])
 
-  const guardar = async () => {
+  const guardar = async (opts = {}) => {
     if (!puedeCrear) return
     if (tipo === 'recibo' && !fotosCompletas) {
       setError('Se requieren la remisión y la foto del descargue.')
@@ -741,6 +782,11 @@ export default function EntradaRegistroTablet({
       setError('Indique si el material se usa de una vez en obra (Sí o No).')
       return
     }
+    if (remisionBloqueada) {
+      setError(remisionDupHint || 'Este N.º de remisión ya está registrado con este proveedor.')
+      focusNumeroRemision()
+      return
+    }
     if (!llegadaDomicilio && placa.trim() && !placaValida(placa)) {
       setError('Placa inválida. Use formato AAA-000 o marque «Llegó por domicilio».')
       return
@@ -753,6 +799,10 @@ export default function EntradaRegistroTablet({
       const fd = new FormData()
       fd.append('tipo', tipo)
       fd.append('fecha_entrada', todayDateInputColombia())
+      fd.append('idempotency_key', idempotencyKey)
+      if (opts.confirmPosibleDuplicado || confirmDup?.confirmed) {
+        fd.append('confirm_posible_duplicado', 'true')
+      }
       if (tipo === 'recibo') {
         fd.append('numero_documento', normalizeRemisionNumero(numeroRemision))
       }
@@ -857,10 +907,28 @@ export default function EntradaRegistroTablet({
         setPdfHint('')
       }, 1200)
     } catch (e) {
+      if (e?.code === 'POSIBLE_DUPLICADO' || e?.detalle?.code === 'POSIBLE_DUPLICADO') {
+        const d = e.detalle || {}
+        setConfirmDup({
+          message: d.message || e.message,
+          codigo: d.codigo_entrada,
+          minutos: d.minutos,
+          confirmed: false,
+        })
+        setBusy(false)
+        setSavePhase('')
+        return
+      }
+      // Tras falla de red, reutilizar la misma clave evita duplicar si el servidor sí guardó.
       setError(e.message || 'No se pudo guardar')
       setBusy(false)
       setSavePhase('')
     }
+  }
+
+  const confirmarDuplicadoYGuardar = () => {
+    setConfirmDup((prev) => (prev ? { ...prev, confirmed: true } : { confirmed: true, message: '' }))
+    void guardar({ confirmPosibleDuplicado: true })
   }
 
   if (!puedeCrear) return null
@@ -1095,12 +1163,30 @@ export default function EntradaRegistroTablet({
                         gap: 8,
                       }}
                     >
-                      <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>
-                        📋 OC{' '}
-                        <HighlightText
-                          text={c.numero_oc != null ? `#${c.numero_oc}` : '—'}
-                          query={ocSearch}
-                        />
+                      <div style={{ fontWeight: 800, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span>
+                          📋 OC{' '}
+                          <HighlightText
+                            text={c.numero_oc != null ? `#${c.numero_oc}` : '—'}
+                            query={ocSearch}
+                          />
+                        </span>
+                        {(c.alerta_agotamiento === 'rojo' || c.alerta_agotamiento === 'amarillo') && (
+                          <span
+                            data-testid="entrada-tablet-oc-alerta"
+                            title={c.alerta_agotamiento === 'rojo' ? 'OC por consumirse' : 'Se está acabando la OC'}
+                            style={{
+                              fontSize: '0.72rem',
+                              fontWeight: 800,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              background: c.alerta_agotamiento === 'rojo' ? '#fee2e2' : '#fef3c7',
+                              color: c.alerta_agotamiento === 'rojo' ? '#991b1b' : '#92400e',
+                            }}
+                          >
+                            {c.alerta_agotamiento === 'rojo' ? '🔴 Por consumirse' : '🟡 Se acaba'}
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontWeight: 700 }}>
                         🏭 <HighlightText text={c.proveedor_nombre || 'Proveedor'} query={ocSearch} />
@@ -1117,14 +1203,17 @@ export default function EntradaRegistroTablet({
                         }}
                         onClick={() => elegirOcCompleta(c)}
                       >
-                        ✅ Toda la OC ({insumos.length} insumo{insumos.length === 1 ? '' : 's'})
+                        ✅ Toda la OC ({insumos.filter((i) => !esInsumoConsumido(i.saldo_cantidad) && !i.consumido).length}/{insumos.length} con saldo)
                       </button>
                       <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
-                        {insumos.map((ins) => (
+                        {insumos.map((ins) => {
+                          const consumidoIns = Boolean(ins.consumido) || esInsumoConsumido(ins.saldo_cantidad)
+                          return (
                           <button
                             key={ins.key || `${ins.insumo_id}-${ins.material_descripcion}`}
                             type="button"
                             data-testid="entrada-tablet-oc-insumo"
+                            disabled={consumidoIns}
                             style={{
                               ...ui.btnSecondary,
                               textAlign: 'left',
@@ -1132,6 +1221,8 @@ export default function EntradaRegistroTablet({
                               display: 'flex',
                               flexDirection: 'column',
                               alignItems: 'flex-start',
+                              opacity: consumidoIns ? 0.55 : 1,
+                              cursor: consumidoIns ? 'not-allowed' : 'pointer',
                               gap: 2,
                               width: '100%',
                             }}
@@ -1140,11 +1231,14 @@ export default function EntradaRegistroTablet({
                             <span style={{ fontWeight: 700 }}>
                               🧱 <HighlightText text={ins.material_descripcion || 'Material'} query={ocSearch} />
                             </span>
-                            <span style={{ color: ui.accent, fontWeight: 800 }}>
-                              Falta {fmtCant(ins.saldo_cantidad)} {ins.unidad || ''}
+                            <span style={{ color: consumidoIns ? ui.textMuted : ui.accent, fontWeight: 800 }}>
+                              {consumidoIns
+                                ? 'Consumido'
+                                : `Falta ${fmtCant(ins.saldo_cantidad)} ${ins.unidad || ''}`}
                             </span>
                           </button>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   )
@@ -1366,18 +1460,32 @@ export default function EntradaRegistroTablet({
                           const { codigo, descripcion } = splitInsumoCodigoDesc(ins.material_descripcion)
                           const cantN = Number(String(row.cantidad || '').replace(',', '.'))
                           const saldoMax = Number(ins.saldo_cantidad) || 0
-                          const supera = row.marked && Number.isFinite(cantN) && cantN > saldoMax + 0.0001
+                          const pedida = Number(ins.cantidad_pedida) || 0
+                          const consumido = Boolean(row.consumido) || esInsumoConsumido(saldoMax)
+                          const supera = !consumido && row.marked && Number.isFinite(cantN) && cantN > saldoMax + 0.0001
+                          const resultante = row.marked && cantN > 0
+                            ? saldoResultante(saldoMax, cantN)
+                            : saldoMax
+                          const nivel = alertaAgotamientoOc(resultante, pedida, {
+                            amarilloPct: umbralAmarillo,
+                            rojoPct: umbralRojo,
+                          })
+                          const alertaTxt = mensajeAlertaAgotamiento(nivel, resultante, pedida, ins.unidad || '')
                           return (
                             <tr
                               key={row.key}
                               ref={(el) => { ocRowRefs.current[row.key] = el }}
                               data-row-key={row.key}
                               data-testid="entrada-tablet-oc-linea"
+                              data-consumido={consumido || undefined}
                               style={{
-                                background: row.marked
-                                  ? (supera ? 'var(--cc-almacen-row-error)' : 'var(--cc-almacen-row-marked)')
-                                  : 'transparent',
-                                color: 'var(--cc-almacen-text)',
+                                background: consumido
+                                  ? 'var(--cc-almacen-input-bg)'
+                                  : row.marked
+                                    ? (supera ? 'var(--cc-almacen-row-error)' : 'var(--cc-almacen-row-marked)')
+                                    : 'transparent',
+                                color: consumido ? 'var(--cc-almacen-text-muted)' : 'var(--cc-almacen-text)',
+                                opacity: consumido ? 0.72 : 1,
                               }}
                             >
                               <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: 2, textAlign: 'center' }}>
@@ -1385,6 +1493,7 @@ export default function EntradaRegistroTablet({
                                   type="button"
                                   aria-pressed={row.marked}
                                   data-testid="entrada-tablet-oc-check"
+                                  disabled={consumido}
                                   style={{
                                     width: 32,
                                     height: 32,
@@ -1393,9 +1502,9 @@ export default function EntradaRegistroTablet({
                                     background: row.marked ? 'var(--cc-almacen-accent)' : 'transparent',
                                     color: row.marked ? '#fff' : 'var(--cc-almacen-text)',
                                     fontWeight: 900,
-                                    cursor: 'pointer',
+                                    cursor: consumido ? 'not-allowed' : 'pointer',
                                   }}
-                                  onClick={() => toggleOcLinea(row.key)}
+                                  onClick={() => { if (!consumido) toggleOcLinea(row.key) }}
                                 >
                                   {row.marked ? '✓' : ''}
                                 </button>
@@ -1405,6 +1514,11 @@ export default function EntradaRegistroTablet({
                               </td>
                               <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: '4px 4px', maxWidth: 200, fontSize: '0.8rem' }}>
                                 {descripcion}
+                                {consumido && (
+                                  <div data-testid="entrada-tablet-oc-consumido" style={{ fontWeight: 800, fontSize: '0.68rem', color: 'var(--cc-almacen-warn-text, #b45309)' }}>
+                                    Consumido
+                                  </div>
+                                )}
                               </td>
                               <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', borderRight: '1px solid var(--cc-almacen-border)', padding: '4px 4px', fontSize: '0.8rem' }}>
                                 {ins.unidad || ''}
@@ -1416,10 +1530,48 @@ export default function EntradaRegistroTablet({
                                 textAlign: 'right',
                                 fontVariantNumeric: 'tabular-nums',
                                 fontWeight: 700,
-                                fontSize: '0.8rem',
+                                fontSize: '0.72rem',
+                                lineHeight: 1.25,
+                                minWidth: 110,
                               }}
                               >
-                                {fmtCant(ins.saldo_cantidad)}
+                                <div>{textoSaldoProgreso(saldoMax, pedida, ins.unidad || '')}</div>
+                                {pedida > 0 && (
+                                  <div
+                                    aria-hidden
+                                    style={{
+                                      marginTop: 3,
+                                      height: 4,
+                                      borderRadius: 999,
+                                      background: 'var(--cc-almacen-border)',
+                                      overflow: 'hidden',
+                                    }}
+                                  >
+                                    <div style={{
+                                      width: `${Math.max(0, Math.min(100, (saldoMax / pedida) * 100))}%`,
+                                      height: '100%',
+                                      background: nivel === 'rojo' ? '#dc2626' : nivel === 'amarillo' ? '#f59e0b' : 'var(--cc-almacen-accent)',
+                                    }}
+                                    />
+                                  </div>
+                                )}
+                                {row.marked && cantN > 0 && !consumido && (
+                                  <div data-testid="entrada-tablet-saldo-resultante" style={{ fontWeight: 700, marginTop: 2 }}>
+                                    quedarían {fmtCant(resultante)}{ins.unidad ? ` ${ins.unidad}` : ''}
+                                  </div>
+                                )}
+                                {alertaTxt && row.marked && !consumido && (
+                                  <div
+                                    data-testid={`entrada-tablet-alerta-${nivel}`}
+                                    style={{
+                                      marginTop: 2,
+                                      fontWeight: 800,
+                                      color: nivel === 'rojo' ? '#b91c1c' : '#b45309',
+                                    }}
+                                  >
+                                    {nivel === 'rojo' ? '🔴' : '🟡'} {alertaTxt}
+                                  </div>
+                                )}
                               </td>
                               <td style={{ borderBottom: '1px solid var(--cc-almacen-border)', padding: 2 }}>
                                 <input
@@ -1428,6 +1580,7 @@ export default function EntradaRegistroTablet({
                                   data-testid="entrada-tablet-cantidad"
                                   className={`cc-almacen-qty-cell${supera ? ' cc-almacen-qty-cell--error' : ''}`}
                                   aria-invalid={supera || undefined}
+                                  disabled={consumido}
                                   style={{
                                     ...ui.input,
                                     width: '100%',
@@ -1437,11 +1590,14 @@ export default function EntradaRegistroTablet({
                                     textAlign: 'right',
                                     minHeight: 36,
                                     fontVariantNumeric: 'tabular-nums',
-                                    background: supera ? 'var(--cc-almacen-qty-error-bg)' : 'var(--cc-almacen-input-bg)',
+                                    background: consumido
+                                      ? 'var(--cc-almacen-input-bg)'
+                                      : supera ? 'var(--cc-almacen-qty-error-bg)' : 'var(--cc-almacen-input-bg)',
                                     color: supera ? 'var(--cc-almacen-qty-error-text)' : 'var(--cc-almacen-text)',
                                     borderColor: supera ? 'var(--cc-almacen-qty-error-border)' : 'var(--cc-almacen-border)',
+                                    opacity: consumido ? 0.6 : 1,
                                   }}
-                                  value={row.cantidad}
+                                  value={consumido ? '' : row.cantidad}
                                   onChange={(e) => setOcLineaCantidad(row.key, e.target.value)}
                                   onFocus={(e) => {
                                     e.target.select?.()
@@ -1451,8 +1607,8 @@ export default function EntradaRegistroTablet({
                                     requestAnimationFrame(() => refreshTablaVista())
                                   }}
                                   onKeyDown={(e) => onQtyKeyDown(e, idx)}
-                                  placeholder="0"
-                                  title={supera ? `Máximo ${fmtCant(saldoMax)}` : undefined}
+                                  placeholder={consumido ? '—' : '0'}
+                                  title={consumido ? 'Consumido' : (supera ? `Máximo ${fmtCant(saldoMax)}` : undefined)}
                                 />
                                 {supera && (
                                   <div
@@ -1655,7 +1811,7 @@ export default function EntradaRegistroTablet({
               {remisionDupHint && (
                 <div
                   data-testid="entrada-tablet-numero-remision-dup"
-                  style={{ ...estiloAvisoAlmacen(contraste, 'warn'), fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}
+                  style={{ ...estiloAvisoAlmacen(contraste, 'danger'), fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}
                 >
                   {remisionDupHint}
                 </div>
@@ -1971,12 +2127,34 @@ export default function EntradaRegistroTablet({
                 <div>📍 {(pkLabel || pkId) ? `${pkLabel || pkId}${tramo ? ` · ${tramo}` : ''}` : 'Sin sector'}</div>
                 {modoMultiOc ? (
                   <div data-testid="entrada-tablet-resumen-insumos" style={{ marginTop: 6, display: 'grid', gap: 4 }}>
-                    {lineasResumenVista.map((ln) => (
-                      <div key={ln.key} style={{ fontWeight: 700 }}>
-                        🧱 {ln.material_descripcion}: {fmtCant(ln.cantidad)} {ln.unidad}
-                        {ln.supera ? ' ⚠' : ''}
-                      </div>
-                    ))}
+                    {lineasResumenVista.map((ln) => {
+                      const row = ocSeleccion.find((r) => r.key === ln.key)
+                      const pedida = Number(row?.insumo?.cantidad_pedida) || 0
+                      const resultante = saldoResultante(ln.saldo, ln.cantidad)
+                      const nivel = alertaAgotamientoOc(resultante, pedida, {
+                        amarilloPct: umbralAmarillo,
+                        rojoPct: umbralRojo,
+                      })
+                      const alertaTxt = mensajeAlertaAgotamiento(nivel, resultante, pedida, ln.unidad)
+                      return (
+                        <div key={ln.key} style={{ fontWeight: 700 }}>
+                          🧱 {ln.material_descripcion}: {fmtCant(ln.cantidad)} {ln.unidad}
+                          {ln.supera ? ' ⚠' : ''}
+                          {alertaTxt ? (
+                            <div
+                              data-testid={`entrada-tablet-resumen-alerta-${nivel}`}
+                              style={{
+                                fontWeight: 800,
+                                fontSize: '0.85rem',
+                                color: nivel === 'rojo' ? '#b91c1c' : '#b45309',
+                              }}
+                            >
+                              {nivel === 'rojo' ? '🔴' : '🟡'} {alertaTxt}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : (
                   <div style={{ fontWeight: 800 }}>
@@ -2054,6 +2232,7 @@ export default function EntradaRegistroTablet({
                   busy
                   || !fotosCompletas
                   || !numeroRemisionListo
+                  || remisionBloqueada
                   || superaSaldo
                   || (preguntaSalidaVisible && usaDeUnaVez == null)
                 }
@@ -2061,6 +2240,34 @@ export default function EntradaRegistroTablet({
               >
                 {busy ? (savePhase || 'Guardando…') : (usaDeUnaVez ? 'Guardar y abrir salida' : 'Guardar')}
               </button>
+              {confirmDup && !confirmDup.confirmed && (
+                <div
+                  data-testid="entrada-tablet-confirm-dup"
+                  style={{ ...estiloAvisoAlmacen(contraste, 'warn'), display: 'grid', gap: 10, fontWeight: 700 }}
+                >
+                  <div>{confirmDup.message || 'Ya hay una entrada igual reciente. ¿Es otra llegada?'}</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      data-testid="entrada-tablet-confirm-dup-si"
+                      style={{ ...ui.btnPrimary, minHeight: 44 }}
+                      disabled={busy}
+                      onClick={() => confirmarDuplicadoYGuardar()}
+                    >
+                      Sí, es otra llegada
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="entrada-tablet-confirm-dup-no"
+                      style={{ ...ui.btnSecondary, minHeight: 44 }}
+                      disabled={busy}
+                      onClick={() => setConfirmDup(null)}
+                    >
+                      No, cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
               {pdfHint && (
                 <div data-testid="entrada-tablet-pdf-hint" style={{ ...estiloAvisoAlmacen(contraste, 'info'), fontWeight: 700 }}>
                   {pdfHint}
