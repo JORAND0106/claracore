@@ -157,14 +157,13 @@ def _revisar_pdf(inf, pdf: bytes, *, items: list[dict], con_imagen: bool) -> dic
         assert texto_cuerpo.strip(), f"p{n} solo tiene el bloque de firmas"
         cierre = max(y1 for _, y1, _ in contenido)
         hueco = firma_top - cierre
-        assert 1.0 * _MM <= hueco <= inf._CC_MES_FIRMAS_HUECO_MAX_MM * _MM, (
-            f"p{n} deja {hueco / _MM:.1f} mm entre el cierre y las firmas"
-        )
-        # Hoja llena: las firmas siguen en la franja inferior, no suben.
-        if cierre >= top - inf._CC_MES_FIRMAS_HUECO_MAX_MM * _MM:
-            assert firma_top >= top - 2.0, f"p{n} subió las firmas de una hoja llena"
-            for _, y1, text in pie:
-                assert y1 <= bottom + 1.5, f"p{n} {text!r} se sale del pie"
+        # Firmas fijas al pie: margen bajo el bloque ≤ 5 mm; el hueco (si hay) queda arriba.
+        firma_bot = max(y1 for _, y1, _ in pie)
+        under_mm = (page.rect.height - firma_bot) / _MM
+        assert under_mm <= 5.05, f"p{n} margen bajo firmas {under_mm:.1f} mm > 5 mm"
+        assert firma_top >= top - 3.0, f"p{n} firmas fuera de la franja inferior"
+        for _, y1, text in pie:
+            assert y1 <= bottom + 2.0, f"p{n} {text!r} se sale del pie"
         if "Período" in texto_cuerpo or "Periodo" in texto_cuerpo:
             assert any(
                 token in texto_cuerpo
@@ -184,20 +183,24 @@ def _revisar_pdf(inf, pdf: bytes, *, items: list[dict], con_imagen: bool) -> dic
             if b.get("type") != 1:
                 continue
             x0, y0, x1, y1 = b["bbox"]
-            if y1 - y0 < 18:
+            if y1 - y0 < 14:
                 continue
             imgs.append((x0, y0, x1, y1))
         if con_imagen:
             assert len(imgs) == 3, f"p{n} imágenes de firma={len(imgs)}"
             for x0, y0, x1, y1 in imgs:
                 alto = y1 - y0
-                assert 22 <= alto <= 28, f"p{n} imagen de firma encogida o estirada ({alto:.1f}pt)"
+                assert 16 <= alto <= 24, f"p{n} imagen de firma encogida o estirada ({alto:.1f}pt)"
                 assert y0 >= firma_top - 2, f"p{n} imagen fuera del bloque de firmas"
                 assert y1 <= firma_top + alto_franja + 6, f"p{n} imagen por debajo de la franja"
-                if firma_top < top - 8:
-                    assert y0 < top - 8, f"p{n} la imagen de firma se quedó en el pie vacío"
         paginas.append(
-            {"n": n, "cuerpo": texto_cuerpo[:80], "hueco_mm": round(hueco / _MM, 1), "firma_y": firma_top}
+            {
+                "n": n,
+                "cuerpo": texto_cuerpo[:80],
+                "hueco_mm": round(hueco / _MM, 1),
+                "firma_y": firma_top,
+                "under_mm": round(under_mm, 2),
+            }
         )
     for marca in marcas:
         assert vistos.get(marca) == 1, f"{marca} aparece {vistos.get(marca)} veces"
@@ -218,7 +221,7 @@ def test_subcontratista_conserva_firmas_en_el_flujo():
     assert 'id="firmasFooter"' not in html
     assert "@frame" not in html
     assert "-pdf-frame-content" not in html
-    assert "@page { size: letter landscape; margin: 5mm 7mm; }" in html
+    assert "@page { size: letter landscape; margin: 4.0mm 7mm; }" in html
     assert "page-break-inside: avoid" in html
     assert "<pdf:nextpage" not in html.lower()
 
@@ -242,7 +245,7 @@ def test_mensual_reserva_franja_y_no_parte_filas():
     assert "Representante legal" in pie
     info = _revisar_pdf(inf, _pdf_mes(inf, items, uri=uri), items=items, con_imagen=True)
     assert info["pages"] >= 2
-    assert any(p["hueco_mm"] <= inf._CC_MES_FIRMAS_HUECO_OBJETIVO_MM + 0.5 for p in info["detalle"])
+    assert all(p["under_mm"] <= 5.05 for p in info["detalle"])
 
 
 def test_mensual_con_y_sin_agrupar_np():
@@ -258,7 +261,7 @@ def test_mensual_con_y_sin_agrupar_np():
     for cuadro in (items, agrupados):
         info = _revisar_pdf(inf, _pdf_mes(inf, cuadro), items=cuadro, con_imagen=False)
         assert info["pages"] >= 2
-        assert max(p["hueco_mm"] for p in info["detalle"]) <= inf._CC_MES_FIRMAS_HUECO_MAX_MM
+        assert all(p["under_mm"] <= 5.05 for p in info["detalle"])
 
 
 def test_ninguna_longitud_deja_una_hoja_solo_con_firmas():
@@ -267,4 +270,4 @@ def test_ninguna_longitud_deja_una_hoja_solo_con_firmas():
         items = _items(n)
         info = _revisar_pdf(inf, _pdf_mes(inf, items), items=items, con_imagen=False)
         assert info["pages"] >= 1
-        assert max(p["hueco_mm"] for p in info["detalle"]) <= inf._CC_MES_FIRMAS_HUECO_MAX_MM
+        assert all(p["under_mm"] <= 5.05 for p in info["detalle"])
