@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from catalogo_insumos_permissions import (
     puede_crear_unidad_catalogo,
     require_crear_unidad_catalogo,
+    require_exportar_o_crear_catalogo_insumos,
     require_permiso_catalogo_insumos,
     tiene_permiso_catalogo_insumos,
 )
@@ -698,7 +699,7 @@ def route_create_insumo_json(
 @router.get("/{contrato_id}/import/plantilla.csv")
 def route_csv_plantilla(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_catalogo_insumos(current_user, "ver")
+    require_exportar_o_crear_catalogo_insumos(current_user)
     content = get_csv_template()
     return Response(
         content=content.encode("utf-8-sig"),
@@ -735,7 +736,7 @@ async def route_import_csv(
 @router.get("/{contrato_id}/proveedores/import/plantilla.csv")
 def route_csv_plantilla_proveedores(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_catalogo_insumos(current_user, "ver")
+    require_exportar_o_crear_catalogo_insumos(current_user)
     content = get_csv_template_proveedores()
     return Response(
         content=content.encode("utf-8-sig"),

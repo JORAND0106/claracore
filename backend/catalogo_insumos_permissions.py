@@ -124,3 +124,23 @@ def require_permiso_catalogo_insumos(current_user, accion: CatalogoInsumosAccion
             status_code=403,
             detail=f"No tiene permiso (Catálogo de insumos · {accion}). Configúrelo en Control de accesos.",
         )
+
+
+def require_exportar_o_crear_catalogo_insumos(current_user) -> None:
+    """Plantillas CSV: Exportar (toolbar) o Crear (apoyo al importar)."""
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if _cargo_permiso_catalogo(current_user, "exportar") or _cargo_permiso_catalogo(current_user, "crear"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "No tiene permiso (Catálogo de insumos · exportar) para descargar la plantilla. "
+            "Configúrelo en Control de accesos."
+        ),
+    )

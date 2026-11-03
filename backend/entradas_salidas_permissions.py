@@ -109,3 +109,23 @@ def require_lectura_entradas_salidas(current_user) -> None:
         status_code=403,
         detail="No tiene permiso (Entradas y Salidas). Configúrelo en Control de accesos.",
     )
+
+
+def require_exportar_o_crear_entradas_salidas(current_user) -> None:
+    """Descarga de PDF de recibo/disposición/salida: Exportar, o Crear (impresión post-registro)."""
+    from almacen_permissions import rol_excluido_almacen
+
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if _cargo_permiso_entsal(current_user, "exportar") or _cargo_permiso_entsal(current_user, "crear"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "No tiene permiso (Entradas y Salidas · exportar) para descargar este PDF. "
+            "Configúrelo en Control de accesos."
+        ),
+    )

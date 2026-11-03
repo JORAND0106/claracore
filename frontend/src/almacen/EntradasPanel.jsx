@@ -15,6 +15,7 @@ import {
 import {
   puedeCompletarRevisionEntrada,
   puedeRegistrarEntradaAlmacen,
+  puedeDescargarPdfMovimientoAlmacen,
   puedeVerAlertasEntrada,
 } from './almacenPermisos'
 import { invalidateSalidasCache } from './salidasListCache'
@@ -88,6 +89,7 @@ export default function EntradasPanel({
   const ui = useAlmacenTheme()
   const verAlertas = puedeVerAlertasEntrada(permisos)
   const puedeEntrada = puedeRegistrarEntradaAlmacen(permisos)
+  const puedePdf = puedeDescargarPdfMovimientoAlmacen(permisos)
   const puedeRevisar = puedeCompletarRevisionEntrada(permisos)
   const puedeEliminar = Boolean(permisos?.eliminar)
   const [lista, setLista] = useState([])
@@ -461,7 +463,7 @@ export default function EntradasPanel({
                       )}
                     </td>
                     <td style={{ ...tdAlert, textAlign: 'center' }} data-label="PDF" onClick={(ev) => ev.stopPropagation()}>
-                      {tienePdf ? (
+                      {tienePdf && puedePdf ? (
                         <span style={{ display: 'inline-flex', gap: 4 }}>
                           <button
                             type="button"
@@ -481,6 +483,13 @@ export default function EntradasPanel({
                           >
                             🖨️
                           </button>
+                        </span>
+                      ) : tienePdf && !puedePdf ? (
+                        <span
+                          title="Requiere permiso Exportar (o Crear) en Entradas y Salidas"
+                          style={{ color: ui.textMuted, cursor: 'help' }}
+                        >
+                          —
                         </span>
                       ) : (
                         <span style={{ color: ui.textMuted }}>—</span>

@@ -380,12 +380,10 @@ export const ESTADO_SOLICITUD_COLOR = {
   rechazada: '#dc2626',
 }
 
+/** Anular solicitud enviada: únicamente permiso Eliminar (no Crear/Editar/Validar). */
 export function puedeAnularSolicitud(s, permisos) {
   if (!s || s.estado !== 'enviada') return false
-  const uid = permisos?.userId
-  const esCreador = uid != null && Number(s.created_by) === Number(uid)
-  if (esCreador) return Boolean(permisos?.crear || permisos?.editar)
-  return Boolean(permisos?.editar)
+  return Boolean(permisos?.eliminar)
 }
 
 export function SemaforoDot({ estado }) {

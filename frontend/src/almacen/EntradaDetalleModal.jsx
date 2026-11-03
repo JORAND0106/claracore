@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
-import { puedeCompletarRevisionEntrada, puedeVerAlertasEntrada } from './almacenPermisos'
+import {
+  puedeCompletarRevisionEntrada,
+  puedeDescargarPdfMovimientoAlmacen,
+  puedeVerAlertasEntrada,
+} from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import {
   AlmacenFieldLabel,
@@ -50,6 +54,7 @@ export default function EntradaDetalleModal({
   const [busy, setBusy] = useState(true)
   const [revBusy, setRevBusy] = useState(false)
   const puedeRevisar = puedeCompletarRevisionEntrada(permisos)
+  const puedePdf = puedeDescargarPdfMovimientoAlmacen(permisos)
 
   useEffect(() => {
     if (!entradaId) return
@@ -409,7 +414,7 @@ export default function EntradaDetalleModal({
             )}
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-              {ent.tiene_pdf_disposicion && (
+              {ent.tiene_pdf_disposicion && puedePdf && (
                 <>
                   <button
                     type="button"
@@ -428,6 +433,11 @@ export default function EntradaDetalleModal({
                     🖨️ Imprimir
                   </button>
                 </>
+              )}
+              {ent.tiene_pdf_disposicion && !puedePdf && (
+                <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, alignSelf: 'center' }}>
+                  PDF: requiere Exportar (o Crear) en Entradas y Salidas
+                </span>
               )}
               <button type="button" style={ui.btnPrimary} onClick={onClose}>Cerrar</button>
             </div>

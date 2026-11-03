@@ -69,6 +69,7 @@ from catalogo_insumos_permissions import (
 )
 from entradas_salidas_permissions import (
     require_lectura_entradas_salidas,
+    require_exportar_o_crear_entradas_salidas,
     require_permiso_entradas_salidas,
     tiene_alguna_accion_entradas_salidas,
     tiene_permiso_entradas_salidas,
@@ -236,10 +237,10 @@ def _check_contrato(current_user, contrato_id: int) -> None:
 
 
 def _puede_anular_solicitud(current_user, sol: dict) -> bool:
-    uid = _uid(current_user)
-    if int(sol.get("created_by") or 0) == uid:
-        return tiene_permiso_almacen(current_user, "crear") or tiene_permiso_almacen(current_user, "editar")
-    return tiene_permiso_almacen(current_user, "editar")
+    """Anular exige únicamente Eliminar en Almacén (no Crear/Editar/Validar/cargo)."""
+    if (sol.get("estado") or "") != "enviada":
+        return False
+    return tiene_permiso_almacen(current_user, "eliminar")
 
 
 class ConfigUpdateBody(BaseModel):
@@ -2009,7 +2010,7 @@ def route_anular_solicitud(
     if not _puede_anular_solicitud(current_user, sol):
         raise HTTPException(
             status_code=403,
-            detail="No tiene permiso para anular esta solicitud.",
+            detail="No tiene permiso (Almacén · eliminar) para anular esta solicitud.",
         )
     try:
         result = anular_solicitud(contrato_id, solicitud_id, _uid(current_user))
@@ -2111,7 +2112,7 @@ def route_add_cotizacion(
 @router.delete("/{contrato_id}/cotizaciones/{cotizacion_id}")
 def route_delete_cotizacion(contrato_id: int, cotizacion_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    require_permiso_almacen(current_user, "eliminar")
     try:
         delete_cotizacion(contrato_id, cotizacion_id)
         return {"ok": True}
@@ -2903,7 +2904,7 @@ def route_download_material_foto(contrato_id: int, entrada_id: int, current_user
 @router.get("/{contrato_id}/entradas/{entrada_id}/disposicion/download")
 def route_download_disposicion(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_lectura_entradas_salidas(current_user)
+    require_exportar_o_crear_entradas_salidas(current_user)
     try:
         data, fname = download_disposicion_pdf(contrato_id, entrada_id)
         return StreamingResponse(
@@ -3144,7 +3145,7 @@ def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends
 @router.get("/{contrato_id}/salidas/{salida_id}/recibo/download")
 def route_download_salida_pdf(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_lectura_entradas_salidas(current_user)
+    require_exportar_o_crear_entradas_salidas(current_user)
     try:
         data, fname = download_salida_pdf(contrato_id, salida_id)
         return StreamingResponse(

@@ -241,14 +241,22 @@ export function puedeAlmacen(permisos, accion) {
   return Boolean(permisos?.[accion])
 }
 
-/** Nueva entrada: crear o editar en Entradas y Salidas. */
+/** Nueva entrada: solo Crear en Entradas y Salidas (Editar no habilita el alta). */
 export function puedeRegistrarEntradaAlmacen(permisos) {
-  return Boolean(permisos?.crear || permisos?.editar)
+  return Boolean(permisos?.crear)
 }
 
-/** Nueva salida: crear o editar en Entradas y Salidas. */
+/** Nueva salida: solo Crear en Entradas y Salidas (Editar no habilita el alta). */
 export function puedeRegistrarSalidaAlmacen(permisos) {
-  return Boolean(permisos?.crear || permisos?.editar)
+  return Boolean(permisos?.crear)
+}
+
+/**
+ * Descargar/imprimir PDF de recibo, disposición o salida desde listados.
+ * Exportar cubre el listado; Crear permite reabrir el PDF del registro recién creado.
+ */
+export function puedeDescargarPdfMovimientoAlmacen(permisos) {
+  return Boolean(permisos?.exportar || permisos?.crear)
 }
 
 /**

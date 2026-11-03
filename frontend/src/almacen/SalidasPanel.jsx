@@ -9,6 +9,7 @@ import {
   filterSalidasLista,
 } from './salidasFiltros'
 import {
+  puedeDescargarPdfMovimientoAlmacen,
   puedeEditarCantidadSalidaAlmacen,
   puedeRegistrarSalidaAlmacen,
 } from './almacenPermisos'
@@ -43,6 +44,7 @@ export default function SalidasPanel({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const puedeSalida = puedeRegistrarSalidaAlmacen(permisos)
+  const puedePdf = puedeDescargarPdfMovimientoAlmacen(permisos)
   const puedeEliminar = Boolean(permisos?.eliminar)
   const puedeEditarCantidad = puedeEditarCantidadSalidaAlmacen(permisos)
   const puedeValidar = Boolean(permisos?.validar)
@@ -216,6 +218,10 @@ export default function SalidasPanel({
 
   const abrirPdf = async (e, salida) => {
     e.stopPropagation()
+    if (!puedePdf) {
+      setError('Requiere permiso Exportar (o Crear) en Entradas y Salidas para ver el PDF.')
+      return
+    }
     setPdfBusyId(salida.id)
     setError('')
     try {
@@ -234,6 +240,10 @@ export default function SalidasPanel({
 
   const imprimirPdf = async (e, salida) => {
     e.stopPropagation()
+    if (!puedePdf) {
+      setError('Requiere permiso Exportar (o Crear) en Entradas y Salidas para imprimir el PDF.')
+      return
+    }
     setPdfBusyId(salida.id)
     setError('')
     try {
@@ -498,26 +508,35 @@ export default function SalidasPanel({
                       />
                     </td>
                     <td style={{ ...ui.td, textAlign: 'center' }} data-label="Recibo">
-                      <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-xs)' }}
-                          disabled={busyPdf}
-                          title={tienePdf ? 'Ver recibo PDF' : 'PDF en generación…'}
-                          onClick={(e) => abrirPdf(e, s)}
+                      {puedePdf ? (
+                        <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-xs)' }}
+                            disabled={busyPdf}
+                            title={tienePdf ? 'Ver recibo PDF' : 'PDF en generación…'}
+                            onClick={(e) => abrirPdf(e, s)}
+                          >
+                            {busyPdf ? '…' : '📄'}
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-xs)' }}
+                            disabled={busyPdf || !tienePdf}
+                            title="Imprimir recibo térmico"
+                            onClick={(e) => imprimirPdf(e, s)}
+                          >
+                            🖨
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          title="Requiere permiso Exportar (o Crear) en Entradas y Salidas"
+                          style={{ color: ui.textMuted, cursor: 'help' }}
                         >
-                          {busyPdf ? '…' : '📄'}
-                        </button>
-                        <button
-                          type="button"
-                          style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-xs)' }}
-                          disabled={busyPdf || !tienePdf}
-                          title="Imprimir recibo térmico"
-                          onClick={(e) => imprimirPdf(e, s)}
-                        >
-                          🖨
-                        </button>
-                      </div>
+                          —
+                        </span>
+                      )}
                     </td>
                     {puedeEliminar && (
                       <td style={{ ...ui.td, textAlign: 'center' }} data-label=" ">

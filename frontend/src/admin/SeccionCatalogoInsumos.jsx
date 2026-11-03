@@ -1048,6 +1048,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const canCrear = permsEfectivos?.crear
   const canEditar = permsEfectivos?.editar
   const canEliminar = permsEfectivos?.eliminar
+  const canExportar = permsEfectivos?.exportar
   const verEconomicos = puedeVerValoresEconomicosAlmacen(user)
   const canVer = permsEfectivos?.ver
   const identidadSoloLectura = Boolean(editId && !canEditar)
@@ -2179,21 +2180,23 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <IconCatalogRefresh />
           </ToolbarBtn>
           {canCrear && (
+            <ToolbarBtn
+              label="Crear insumo"
+              title="Nuevo insumo"
+              t={t}
+              variant="primary"
+              iconColor={TOOLBAR_ICON_COLORS.create}
+              disabled={busy}
+              onClick={() => {
+                setMainTab('insumos')
+                openNew()
+              }}
+            >
+              <IconNewInsumo />
+            </ToolbarBtn>
+          )}
+          {canExportar && (
             <>
-              <ToolbarBtn
-                label="Crear insumo"
-                title="Nuevo insumo"
-                t={t}
-                variant="primary"
-                iconColor={TOOLBAR_ICON_COLORS.create}
-                disabled={busy}
-                onClick={() => {
-                  setMainTab('insumos')
-                  openNew()
-                }}
-              >
-                <IconNewInsumo />
-              </ToolbarBtn>
               <ToolbarBtn
                 label="Plantilla insumos"
                 title="Descargar plantilla CSV de insumos"
@@ -2205,16 +2208,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 <IconTemplateDownload />
               </ToolbarBtn>
               <ToolbarBtn
-                label="Cargar CSV"
-                title="Importar insumos desde CSV"
-                disabled={busy}
-                t={t}
-                iconColor={TOOLBAR_ICON_COLORS.cargarInsumos}
-                onClick={() => csvRef.current?.click()}
-              >
-                <IconCsvImport />
-              </ToolbarBtn>
-              <ToolbarBtn
                 label="Plantilla proveedores"
                 title="Descargar plantilla CSV de proveedores"
                 disabled={busy}
@@ -2223,6 +2216,20 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 onClick={() => api?.downloadPlantillaProveedoresCsv().catch((e) => setMsg({ type: 'error', text: e.message }))}
               >
                 <IconProveedoresTemplate />
+              </ToolbarBtn>
+            </>
+          )}
+          {canCrear && (
+            <>
+              <ToolbarBtn
+                label="Cargar CSV"
+                title="Importar insumos desde CSV"
+                disabled={busy}
+                t={t}
+                iconColor={TOOLBAR_ICON_COLORS.cargarInsumos}
+                onClick={() => csvRef.current?.click()}
+              >
+                <IconCsvImport />
               </ToolbarBtn>
               <ToolbarBtn
                 label="Cargar proveedores"
@@ -3475,18 +3482,20 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   ? 'Columnas obligatorias: razon_social, nit. Opcionales: contacto_email, contacto_nombre, contacto_telefono.'
                   : 'Columnas obligatorias: codigo, descripcion, unidad, costo.'}
               </span>
-              <IconActionBtn
-                title={csvPending.kind === 'proveedores' ? 'Descargar plantilla de proveedores' : 'Descargar plantilla CSV'}
-                t={t}
-                onClick={() => {
-                  const p = csvPending.kind === 'proveedores'
-                    ? api?.downloadPlantillaProveedoresCsv()
-                    : api?.downloadPlantillaCsv()
-                  p?.catch(() => {})
-                }}
-              >
-                <IconTemplateDownload />
-              </IconActionBtn>
+              {(canExportar || canCrear) && (
+                <IconActionBtn
+                  title={csvPending.kind === 'proveedores' ? 'Descargar plantilla de proveedores' : 'Descargar plantilla CSV'}
+                  t={t}
+                  onClick={() => {
+                    const p = csvPending.kind === 'proveedores'
+                      ? api?.downloadPlantillaProveedoresCsv()
+                      : api?.downloadPlantillaCsv()
+                    p?.catch(() => {})
+                  }}
+                >
+                  <IconTemplateDownload />
+                </IconActionBtn>
+              )}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>

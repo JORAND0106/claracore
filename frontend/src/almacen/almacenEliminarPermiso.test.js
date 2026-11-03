@@ -45,13 +45,14 @@ describe('eliminar solo con permiso Eliminar', () => {
     assert.match(form, /incluida en una orden de compra/)
   })
 
-  it('anular una enviada no elimina un borrador', () => {
+  it('anular una enviada exige Eliminar (Crear/Editar/Validar no bastan)', () => {
     const borrador = { id: 1, estado: 'borrador', created_by: 4 }
     const enviada = { id: 2, estado: 'enviada', created_by: 4 }
-    const perms = { userId: 4, crear: true, editar: true, validar: true, eliminar: false }
-    assert.equal(puedeAnularSolicitud(borrador, perms), false)
-    assert.equal(puedeAnularSolicitud(enviada, perms), true)
-    assert.equal(puedeAnularSolicitud(enviada, { userId: 9, eliminar: true }), false)
+    const sinEliminar = { userId: 4, crear: true, editar: true, validar: true, eliminar: false }
+    assert.equal(puedeAnularSolicitud(borrador, { eliminar: true }), false)
+    assert.equal(puedeAnularSolicitud(enviada, sinEliminar), false)
+    assert.equal(puedeAnularSolicitud(enviada, { userId: 4, eliminar: true }), true)
+    assert.equal(puedeAnularSolicitud(enviada, { userId: 9, eliminar: true }), true)
   })
 })
 
