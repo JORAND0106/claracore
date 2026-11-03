@@ -3854,6 +3854,15 @@ def _pdf_bytes_conciliacion_informe_v1(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, contexto_tipo, contexto_id, formato_codigo, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, contexto_tipo, contexto_id, formato_codigo, "elaboro"
+    )
+    reviso_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, contexto_tipo, contexto_id, formato_codigo, "reviso"
+    )
+    aprobo_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, contexto_tipo, contexto_id, formato_codigo, "aprobo"
+    )
     html = _html_cc_conciliacion_informe_v1(
         contrato,
         items,
@@ -3872,6 +3881,9 @@ def _pdf_bytes_conciliacion_informe_v1(
         reviso_firma_data_uri=reviso_uri,
         aprobo_firma_data_uri=aprobo_uri,
         estilo_formato_codigo=formato_codigo,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
     )
     return _to_pdf(html)
 
@@ -4849,6 +4861,9 @@ def _html_informe_gerencia_cc_ger_001(
     elaboro_firma_data_uri: Optional[str],
     reviso_firma_data_uri: Optional[str],
     aprobo_firma_data_uri: Optional[str],
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ) -> str:
     """PDF CC-GER-001: matriz SICOE (N1 N2 N3) por capítulo; dos actas; firmas terciarias."""
     bd = "border:1px solid #9ca3af"
@@ -4945,9 +4960,21 @@ def _html_informe_gerencia_cc_ger_001(
             f'<th style="{bd};background:{thead_bg};color:#fff;padding:3px 4px;font-size:6.5pt">DIF. · COP$</th>'
         )
 
-    elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
-    reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)
-    aprobo_td = _html_cc_sub_td_firma_columna(bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri)
+    em = elaboro_marca or ("", "", "", "")
+    rm = reviso_marca or ("", "", "", "")
+    am = aprobo_marca or ("", "", "", "")
+    elaboro_td = _html_cc_sub_td_firma_columna(
+        bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri,
+        marca_nombre=em[0], marca_cargo=em[1], marca_fecha=em[2], marca_hora=em[3],
+    )
+    reviso_td = _html_cc_sub_td_firma_columna(
+        bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri,
+        marca_nombre=rm[0], marca_cargo=rm[1], marca_fecha=rm[2], marca_hora=rm[3],
+    )
+    aprobo_td = _html_cc_sub_td_firma_columna(
+        bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri,
+        marca_nombre=am[0], marca_cargo=am[1], marca_fecha=am[2], marca_hora=am[3],
+    )
 
     secc = d_p.get("secciones") or {}
     sec_txt = []
@@ -4960,7 +4987,7 @@ def _html_informe_gerencia_cc_ger_001(
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
 <head><meta charset="UTF-8"/><title>{_h(formato_ccd)}</title>
 <style type="text/css">
-@page {{ size: letter; margin: 8mm 10mm; }}
+@page {{ size: letter; margin: 8mm 10mm 5mm 10mm; }}
 </style></head>
 <body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};table-layout:fixed;">
@@ -5053,6 +5080,9 @@ def _html_informe_gerencia_cc_ger_001_matriz(
     elaboro_firma_data_uri: Optional[str],
     reviso_firma_data_uri: Optional[str],
     aprobo_firma_data_uri: Optional[str],
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ) -> str:
     """CC-GER-001: 4 columnas, horizontal, compacto; Obra/AIU y Ensayos/IVA con subtotales independientes."""
     bd = "border:0.4px solid #b8c5d0"
@@ -5336,20 +5366,26 @@ def _html_informe_gerencia_cc_ger_001_matriz(
     aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
     aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
     pie2 = f"Firmas CCD · {tit_acta} · {vline}"
+    em = elaboro_marca or ("", "", "", "")
+    rm = reviso_marca or ("", "", "", "")
+    am = aprobo_marca or ("", "", "", "")
     elaboro_td = _html_cc_sub_td_firma_columna(
-        bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri, memoria_compact=True
+        bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri, memoria_compact=True,
+        marca_nombre=em[0], marca_cargo=em[1], marca_fecha=em[2], marca_hora=em[3],
     )
     reviso_td = _html_cc_sub_td_firma_columna(
-        bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri, memoria_compact=True
+        bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri, memoria_compact=True,
+        marca_nombre=rm[0], marca_cargo=rm[1], marca_fecha=rm[2], marca_hora=rm[3],
     )
     aprobo_td = _html_cc_sub_td_firma_columna(
-        bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri, memoria_compact=True
+        bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri, memoria_compact=True,
+        marca_nombre=am[0], marca_cargo=am[1], marca_fecha=am[2], marca_hora=am[3],
     )
     return f"""<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
 <head><meta charset="UTF-8"/><title>{_h(formato_ccd)}</title>
 <style type="text/css">
-@page {{ size: letter landscape; margin: 2.8mm 3.2mm; }}
+@page {{ size: letter landscape; margin: 2.8mm 3.2mm 2.8mm 3.2mm; }}
 th, td {{ word-wrap: break-word; }}
 table.cc-ger-mat {{ table-layout: fixed; width: 100%; border-collapse: collapse; page-break-inside: auto; }}
 table.cc-ger-mat th, table.cc-ger-mat td {{ box-sizing: border-box; }}
@@ -5494,6 +5530,9 @@ def _pdf_bytes_informe_gerencia_pareja(
     ap_ur = _firma_data_uri_para_slot_contexto(
         contrato_id, "acta_rpo", ap, fmtc, "aprobo", a_uid2, anom2, current_user
     )
+    el_mk = _ccd_marca_detalle_slot_contexto(contrato_id, "acta_rpo", ap, fmtc, "elaboro")
+    re_mk = _ccd_marca_detalle_slot_contexto(contrato_id, "acta_rpo", ap, fmtc, "reviso")
+    ap_mk = _ccd_marca_detalle_slot_contexto(contrato_id, "acta_rpo", ap, fmtc, "aprobo")
     html = _html_informe_gerencia_cc_ger_001(
         contrato,
         acta_p,
@@ -5509,6 +5548,9 @@ def _pdf_bytes_informe_gerencia_pareja(
         elaboro_firma_data_uri=el_ur,
         reviso_firma_data_uri=re_ur,
         aprobo_firma_data_uri=ap_ur,
+        elaboro_marca=el_mk,
+        reviso_marca=re_mk,
+        aprobo_marca=ap_mk,
     )
     return _to_pdf(html)
 
@@ -5559,6 +5601,9 @@ def _pdf_bytes_informe_gerencia_matriz(
         el_ur = fut_el.result()
         re_ur = fut_re.result()
         ap_ur = fut_ap.result()
+    el_mk = _ccd_marca_detalle_slot_contexto(contrato_id, "acta_rpo", ap_id, fmtc, "elaboro")
+    re_mk = _ccd_marca_detalle_slot_contexto(contrato_id, "acta_rpo", ap_id, fmtc, "reviso")
+    ap_mk = _ccd_marca_detalle_slot_contexto(contrato_id, "acta_rpo", ap_id, fmtc, "aprobo")
     html = _html_informe_gerencia_cc_ger_001_matriz(
         contrato,
         datos,
@@ -5570,6 +5615,9 @@ def _pdf_bytes_informe_gerencia_matriz(
         elaboro_firma_data_uri=el_ur,
         reviso_firma_data_uri=re_ur,
         aprobo_firma_data_uri=ap_ur,
+        elaboro_marca=el_mk,
+        reviso_marca=re_mk,
+        aprobo_marca=ap_mk,
     )
     return _to_pdf(html)
 
@@ -5600,6 +5648,8 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
     reviso_firma_uri = _firma_data_uri_para_slot_corte(
         contrato_id, corte_id, fmt001, "reviso", r_uid, rnom, current_user
     )
+    elaboro_marca = _ccd_marca_detalle_slot_corte(corte_id, fmt001, "elaboro")
+    reviso_marca = _ccd_marca_detalle_slot_corte(corte_id, fmt001, "reviso")
     _conc = ctx.get("conciliacion") or {}
     vista_sin_conciliar = str(_conc.get("estado") or "") != "enviado"
 
@@ -5626,6 +5676,8 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 items_sin_precio=ctx.get("items_sin_precio") or [],
                 vista_sin_conciliar=vista_sin_conciliar,
                 resumen_4cols=ctx.get("resumen_4cols"),
+                elaboro_marca=elaboro_marca,
+                reviso_marca=reviso_marca,
             ),
         ),
         ("modo_seguro", lambda: _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
@@ -5660,6 +5712,8 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 items_sin_precio=ctx.get("items_sin_precio") or [],
                 vista_sin_conciliar=vista_sin_conciliar,
                 resumen_4cols=ctx.get("resumen_4cols"),
+                elaboro_marca=elaboro_marca,
+                reviso_marca=reviso_marca,
             )
             pdf_bytes = _to_pdf_corte_garantizado(html_last)
         except Exception as e:
@@ -6060,13 +6114,19 @@ def _fecha_hora_marca_bo_desde_created_at(created_at: Optional[object]) -> Tuple
 
 def _ccd_usuario_nombre_completo_por_id(usuario_id: Optional[int]) -> str:
     """Nombre y apellidos desde `usuarios.id` (firma registrada)."""
+    nom, _cargo = _ccd_usuario_nombre_y_cargo_por_id(usuario_id)
+    return nom
+
+
+def _ccd_usuario_nombre_y_cargo_por_id(usuario_id: Optional[int]) -> Tuple[str, str]:
+    """(nombre completo, cargo) desde `usuarios` + `cargos` para el firmante registrado."""
     uid = _opt_usuario_id(usuario_id)
     if not uid:
-        return ""
+        return "", ""
     try:
         rows = (
             _sb.table("usuarios")
-            .select("nombre, apellidos")
+            .select("nombre, apellidos, cargo_id")
             .eq("id", int(uid))
             .limit(1)
             .execute()
@@ -6074,12 +6134,103 @@ def _ccd_usuario_nombre_completo_por_id(usuario_id: Optional[int]) -> str:
             or []
         )
         if not rows:
-            return ""
+            return "", ""
         r = rows[0]
-        return f"{r.get('nombre') or ''} {r.get('apellidos') or ''}".strip()
+        nom = f"{r.get('nombre') or ''} {r.get('apellidos') or ''}".strip()
+        cargo = ""
+        cid = r.get("cargo_id")
+        if cid:
+            cr = (
+                _sb.table("cargos")
+                .select("nombre")
+                .eq("id", int(cid))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if cr:
+                cargo = str(cr[0].get("nombre") or "").strip()
+        return nom, cargo
     except Exception as e:
-        _log.debug("nombre usuario id=%s: %s", uid, e)
-        return ""
+        _log.debug("nombre/cargo usuario id=%s: %s", uid, e)
+        return "", ""
+
+
+def _ccd_marca_detalle_desde_reg(reg: Optional[Dict[str, Any]]) -> Tuple[str, str, str, str]:
+    """(nombre, cargo, fecha, hora) del usuario que firmó; vacíos si no hay registro."""
+    if not reg:
+        return "", "", "", ""
+    nom, cargo = _ccd_usuario_nombre_y_cargo_por_id(reg.get("usuario_id"))
+    fecha, hora = _fecha_hora_marca_bo_desde_created_at(reg.get("created_at"))
+    return nom, cargo, fecha, hora
+
+
+def _ccd_marca_detalle_slot_corte(
+    corte_id: int, formato_codigo: str, slot: str
+) -> Tuple[str, str, str, str]:
+    return _ccd_marca_detalle_desde_reg(
+        _ccd_firma_registro_get(corte_id, formato_codigo, slot)
+    )
+
+
+def _ccd_marca_detalle_slot_contexto(
+    contrato_id: int,
+    contexto_tipo: str,
+    contexto_id: int,
+    formato_codigo: str,
+    slot: str,
+) -> Tuple[str, str, str, str]:
+    return _ccd_marca_detalle_desde_reg(
+        _ccd_firma_registro_contexto_get(
+            contrato_id, contexto_tipo, contexto_id, formato_codigo, slot
+        )
+    )
+
+
+def _ccd_marcas_tres_slots_contexto(
+    contrato_id: int,
+    contexto_tipo: str,
+    contexto_id: int,
+    formato_codigo: str,
+) -> Tuple[Tuple[str, str, str, str], Tuple[str, str, str, str], Tuple[str, str, str, str]]:
+    """Marcas (nombre, cargo, fecha, hora) de elaboro/reviso/aprobo en un solo llamado."""
+    return (
+        _ccd_marca_detalle_slot_contexto(
+            contrato_id, contexto_tipo, contexto_id, formato_codigo, "elaboro"
+        ),
+        _ccd_marca_detalle_slot_contexto(
+            contrato_id, contexto_tipo, contexto_id, formato_codigo, "reviso"
+        ),
+        _ccd_marca_detalle_slot_contexto(
+            contrato_id, contexto_tipo, contexto_id, formato_codigo, "aprobo"
+        ),
+    )
+
+
+def _html_ccd_firma_meta_texto(
+    *,
+    firmado: bool,
+    nombre_cfg: str,
+    cargo_cfg: str,
+    marca_nombre: str = "",
+    marca_cargo: str = "",
+    marca_fecha: str = "",
+    marca_hora: str = "",
+) -> str:
+    """Línea fija bajo la imagen: «Nombre – Cargo | Fecha – Hora» (o Nombre – Cargo sin firma)."""
+    if firmado:
+        n = _h(str(marca_nombre or "").strip()) or nombre_cfg
+        c = _h(str(marca_cargo or "").strip()) or cargo_cfg
+        f = _h(str(marca_fecha or "").strip())
+        h = _h(str(marca_hora or "").strip())
+        left = " – ".join(p for p in (n, c) if p)
+        right = " – ".join(p for p in (f, h) if p)
+        if left and right:
+            return f"{left} | {right}"
+        return left or right or "&nbsp;"
+    left = " – ".join(p for p in (nombre_cfg, cargo_cfg) if p)
+    return left or "&nbsp;"
 
 
 def _firma_data_uri_para_slot_contexto(
@@ -7123,6 +7274,8 @@ def pdf_memoria_item(
         reviso_firma_uri = _firma_data_uri_para_slot_corte(
             contrato_id, corte_id, fmt002, "reviso", r_uid, rnom, current_user
         )
+        elaboro_marca = _ccd_marca_detalle_slot_corte(corte_id, fmt002, "elaboro")
+        reviso_marca = _ccd_marca_detalle_slot_corte(corte_id, fmt002, "reviso")
 
         try:
             html = _html_memoria_item(
@@ -7136,6 +7289,8 @@ def pdf_memoria_item(
                 firma_cfg=firma_cfg,
                 elaboro_firma_data_uri=elaboro_firma_uri,
                 reviso_firma_data_uri=reviso_firma_uri,
+                elaboro_marca=elaboro_marca,
+                reviso_marca=reviso_marca,
             )
             pdf_bytes = _to_pdf(html)
         except Exception as e:
@@ -7378,6 +7533,15 @@ def _pdf_bytes_cc_mes_001_desde_ctx(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "elaboro"
+    )
+    reviso_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "reviso"
+    )
+    aprobo_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "aprobo"
+    )
     _conc = ctx.get("conciliacion") or {}
     vista_sin_conciliar = str(_conc.get("estado") or "") != "enviado"
     html = _html_cc_mes_001_v1(
@@ -7402,6 +7566,9 @@ def _pdf_bytes_cc_mes_001_desde_ctx(
         c3_value=nrpo,
         c4_label="CONSECUTIVO",
         c4_value=cons,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
         pie_contexto=(
             f"Acta RPO {nrpo} · consecutivo {cons} · fecha {fa} · "
             "Bloques Actualizadas|Presente|Acumulado|Saldo · acumulado solo actas enviadas"
@@ -7510,6 +7677,9 @@ def _html_cc_mes_001_v1(
     c4_label: str = "CONSECUTIVO",
     c4_value: str = "—",
     pie_contexto: str = "",
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ) -> str:
     """CC-MES-001 landscape: mismos bloques/resumen que CC-SUB-001, encabezado de acta mensual."""
     # Valores en celdas meta: c3_value en slot SUBCONTRATISTA, c4_value vía consecutivo del corte
@@ -7545,6 +7715,11 @@ def _html_cc_mes_001_v1(
         vista_sin_conciliar=vista_sin_conciliar,
         resumen_4cols=resumen_4cols,
         firmas_pie=True,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_firma_data_uri=aprobo_firma_data_uri,
+        aprobo_marca=aprobo_marca,
+        aprobo_desde_firma_cfg=True,
     )
     html = html.replace(CODIGO_FORMATO_CCD_CC_SUB_001, CODIGO_FORMATO_CCD_CC_MES_001)
     html = html.replace(
@@ -7553,21 +7728,6 @@ def _html_cc_mes_001_v1(
     )
     html = html.replace(">SUB CONTRATISTA<", f">{_h(c3_label)}<")
     html = html.replace(">CORTE<", f">{_h(c4_label)}<")
-    if aprobo_firma_data_uri:
-        bd = "border:1px solid #9ca3af"
-        fc = firma_cfg or {}
-        aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
-        aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
-        aprobo_td = _html_cc_sub_td_firma_columna(bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri)
-        import re as _re
-
-        html = _re.sub(
-            r'<td style="width:33\.33%;[^>]*>\s*<div class="ccd-firma-slot-hdr">Aprobó:</div>.*?</td>\s*</tr>',
-            aprobo_td + "\n</tr>",
-            html,
-            count=1,
-            flags=_re.DOTALL,
-        )
     if pie_contexto:
         html = html.replace(
             "Período del corte:",
@@ -7635,6 +7795,9 @@ def pdf_cc_sem_002_semana(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, "semana", semana_id, fmt, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca, reviso_marca, aprobo_marca = _ccd_marcas_tres_slots_contexto(
+        contrato_id, "semana", semana_id, fmt
+    )
     sub, corte = _sub_corte_dummy_memoria()
     html = _html_memoria_item(
         contrato,
@@ -7652,6 +7815,9 @@ def pdf_cc_sem_002_semana(
         aprobo_interventoria_desde_config=True,
         pie_fotos_contexto=f"Semana N° {nsem} · {fi} — {ff}",
         estilo_formato_codigo=fmt,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
     )
     pdf_bytes = _to_pdf(html)
     item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
@@ -7730,6 +7896,9 @@ def pdf_cc_sem_002_semana_completo(
         aprobo_uri = _firma_data_uri_para_slot_contexto(
             contrato_id, "semana", semana_id, fmt, "aprobo", a_uid, anom, current_user
         )
+        elaboro_marca, reviso_marca, aprobo_marca = _ccd_marcas_tres_slots_contexto(
+            contrato_id, "semana", semana_id, fmt
+        )
         sub, corte = _sub_corte_dummy_memoria()
         est = _merge_estilo_pdf(fc.get("estilo_pdf"), fmt)
         estilo_css = _memoria_pdf_estilo_css(est)
@@ -7757,6 +7926,9 @@ def pdf_cc_sem_002_semana_completo(
                 aprobo_firma_data_uri=aprobo_uri,
                 aprobo_interventoria_desde_config=True,
                 pie_fotos_contexto=f"Semana N° {nsem} · {fi} — {ff}",
+                elaboro_marca=elaboro_marca,
+                reviso_marca=reviso_marca,
+                aprobo_marca=aprobo_marca,
             )
             if parts:
                 parts.append("<pdf:nextpage />")
@@ -7844,6 +8016,9 @@ def pdf_cc_mes_002_acta(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, "acta_rpo", acta_id, fmt, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca, reviso_marca, aprobo_marca = _ccd_marcas_tres_slots_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt
+    )
     sub, corte = _sub_corte_dummy_memoria()
     html = _html_memoria_item(
         contrato,
@@ -7862,6 +8037,9 @@ def pdf_cc_mes_002_acta(
         pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
         estilo_formato_codigo=fmt,
         firmas_pie=True,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
     )
     pdf_bytes = _acercar_firmas_pie_mes(_to_pdf(html))
     item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
@@ -8190,6 +8368,9 @@ def pdf_cc_sem_002_semana_con_sello_firma(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, "semana", semana_id, fmt, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca, reviso_marca, aprobo_marca = _ccd_marcas_tres_slots_contexto(
+        contrato_id, "semana", semana_id, fmt
+    )
     sub, corte = _sub_corte_dummy_memoria()
     html = _html_memoria_item(
         contrato,
@@ -8207,6 +8388,9 @@ def pdf_cc_sem_002_semana_con_sello_firma(
         aprobo_interventoria_desde_config=True,
         pie_fotos_contexto=f"Semana N° {nsem} · {fi} — {ff}",
         estilo_formato_codigo=fmt,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
     )
     pdf_bytes = _to_pdf(html)
     item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
@@ -8288,6 +8472,9 @@ def pdf_cc_sem_002_semana_completo_con_sello_firma(
         aprobo_uri = _firma_data_uri_para_slot_contexto(
             contrato_id, "semana", semana_id, fmt, "aprobo", a_uid, anom, current_user
         )
+        elaboro_marca, reviso_marca, aprobo_marca = _ccd_marcas_tres_slots_contexto(
+            contrato_id, "semana", semana_id, fmt
+        )
         sub, corte = _sub_corte_dummy_memoria()
         est = _merge_estilo_pdf(fc.get("estilo_pdf"), fmt)
         estilo_css = _memoria_pdf_estilo_css(est)
@@ -8315,6 +8502,9 @@ def pdf_cc_sem_002_semana_completo_con_sello_firma(
                 aprobo_firma_data_uri=aprobo_uri,
                 aprobo_interventoria_desde_config=True,
                 pie_fotos_contexto=f"Semana N° {nsem} · {fi} — {ff}",
+                elaboro_marca=elaboro_marca,
+                reviso_marca=reviso_marca,
+                aprobo_marca=aprobo_marca,
             )
             if parts:
                 parts.append("<pdf:nextpage />")
@@ -8406,6 +8596,9 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, "acta_rpo", acta_id, fmt, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca, reviso_marca, aprobo_marca = _ccd_marcas_tres_slots_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt
+    )
     sub, corte = _sub_corte_dummy_memoria()
     html = _html_memoria_item(
         contrato,
@@ -8424,6 +8617,9 @@ def pdf_cc_mes_002_acta_con_sello_firma(
         pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
         estilo_formato_codigo=fmt,
         firmas_pie=True,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
     )
     pdf_bytes = _acercar_firmas_pie_mes(_to_pdf(html))
     item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
@@ -8512,6 +8708,15 @@ def _cc_mes_002_acta_completo_ctx(
     aprobo_uri = _firma_data_uri_para_slot_contexto(
         contrato_id, "acta_rpo", acta_id, fmt, "aprobo", a_uid, anom, current_user
     )
+    elaboro_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt, "elaboro"
+    )
+    reviso_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt, "reviso"
+    )
+    aprobo_marca = _ccd_marca_detalle_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt, "aprobo"
+    )
     sub, corte = _sub_corte_dummy_memoria()
     est = _merge_estilo_pdf(fc.get("estilo_pdf"), fmt)
     estilo_css = _memoria_pdf_estilo_css(est)
@@ -8529,6 +8734,9 @@ def _cc_mes_002_acta_completo_ctx(
         aprobo_firma_data_uri=aprobo_uri,
         aprobo_interventoria_desde_config=True,
         footer_frame=True,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
     )
     for item_numero in numeros:
         registros = by_item.get(item_numero) or []
@@ -13476,8 +13684,14 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-slot-hdr {
   color: #111;
   line-height: 1;
 }
+body.mem002-doc .mem002-firmas-wrap .ccd-firma-slot-stack {
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-slot-body {
-  /* Columnas sin imagen: más bajo que CC-SUB-001 para no estirar la fila frente a la columna con firma */
+  /* Compat columnas Aprobó subcontratista (sin jaula CCD). */
   height: 0.45cm;
   min-height: 0.45cm;
   max-height: 0.45cm;
@@ -13497,12 +13711,13 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-line {
   padding: 0;
   overflow: hidden;
 }
-/* Memorias: jaula más baja que CC-SUB-001 (~22pt); !important gana estilos inline del HTML. */
+/* Memorias: jaula fija (~22pt); firmada o vacía — misma altura. */
 body.mem002-doc .mem002-firmas-wrap table.ccd-firma-img-cage {
   height: 22pt !important;
   max-height: 22pt !important;
   margin: 0 !important;
   overflow: hidden !important;
+  background: transparent !important;
 }
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-img-cage td {
   overflow: hidden !important;
@@ -13511,6 +13726,7 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-img-cage td {
   max-height: 22pt !important;
   line-height: 0 !important;
   vertical-align: middle !important;
+  background: transparent !important;
 }
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-img-cage img {
   max-width: 100% !important;
@@ -13519,6 +13735,18 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-img-cage img {
   width: auto !important;
   display: block !important;
   margin: 0 auto !important;
+  background: transparent !important;
+}
+body.mem002-doc .mem002-firmas-wrap .ccd-firma-meta {
+  word-wrap: break-word;
+  font-size: 5.5pt;
+  color: #333;
+  line-height: 1.05;
+  height: 12pt;
+  max-height: 12pt;
+  overflow: hidden;
+  margin: 0 !important;
+  padding: 0;
 }
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-nombre {
   word-wrap: break-word;
@@ -16764,41 +16992,62 @@ def _html_cc_sub_td_firma_columna(
     firma_data_uri: Optional[str],
     *,
     memoria_compact: bool = False,
+    marca_nombre: str = "",
+    marca_cargo: str = "",
+    marca_fecha: str = "",
+    marca_hora: str = "",
 ) -> str:
-    """Una columna Elaboró o Revisó; si hay data URI, tabla con altura fija + img acotada (evita fila de firmas gigante)."""
+    """Columna de firma de altura fija (firmada o no).
+
+    Estructura idéntica siempre: encabezado + línea + jaula de imagen (tamaño fijo,
+    fondo transparente) + meta «Nombre – Cargo | Fecha – Hora». La imagen se ajusta
+    dentro de la jaula (contain) y nunca cambia la altura del bloque ni de la fila.
+    """
     td_pad = "padding:1px 3px" if memoria_compact else "padding:3px 5px"
     fs = "6pt" if memoria_compact else "6.5pt"
-    img_marg = "margin:0" if memoria_compact else "margin:1px 0 2px 0"
-    if es_marcador_firma_invalidada(firma_data_uri):
-        bp = _CCD_FIRMA_MEM002_BOX_PT if memoria_compact else _CCD_FIRMA_BOX_PT
-        caja = html_caja_firma_invalidada(box_pt=bp, memoria_compact=memoria_compact)
-        return f"""<td style="width:33.33%;{bd};{td_pad};font-size:{fs};vertical-align:top;">
-<div class="ccd-firma-slot-hdr">{etiqueta_hdr}</div>
-<div class="ccd-firma-line"></div>
-{caja}
-<div class="ccd-firma-nombre">{nombre_h}</div>
-<div class="ccd-firma-cargo">{cargo_h}</div>
-</td>"""
-    if firma_data_uri:
-        bp = _CCD_FIRMA_MEM002_BOX_PT if memoria_compact else _CCD_FIRMA_BOX_PT
-        ip = _CCD_FIRMA_MEM002_IMG_INNER_PT if memoria_compact else _CCD_FIRMA_IMG_INNER_PT
-        return f"""<td style="width:33.33%;{bd};{td_pad};font-size:{fs};vertical-align:top;">
-<div class="ccd-firma-slot-hdr">{etiqueta_hdr}</div>
-<div class="ccd-firma-line"></div>
-<table class="ccd-firma-img-cage" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;{img_marg};">
-<tr><td style="height:{bp};max-height:{bp};min-height:{bp};overflow:hidden;vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;">
-<img src="{firma_data_uri}" alt="" style="display:block;margin:0 auto;max-width:100%;width:auto;height:{ip};max-height:{ip};border:0;padding:0;"/>
-</td></tr>
-</table>
-<div class="ccd-firma-nombre">{nombre_h}</div>
-<div class="ccd-firma-cargo">{cargo_h}</div>
-</td>"""
+    img_marg = "margin:0" if memoria_compact else "margin:0"
+    bp = _CCD_FIRMA_MEM002_BOX_PT if memoria_compact else _CCD_FIRMA_BOX_PT
+    ip = _CCD_FIRMA_MEM002_IMG_INNER_PT if memoria_compact else _CCD_FIRMA_IMG_INNER_PT
+    invalidada = es_marcador_firma_invalidada(firma_data_uri)
+    firmado = bool(firma_data_uri) and not invalidada
+    if invalidada:
+        cage = html_caja_firma_invalidada(box_pt=bp, memoria_compact=memoria_compact)
+    elif firmado:
+        cage = (
+            f'<table class="ccd-firma-img-cage" cellspacing="0" cellpadding="0" width="100%" '
+            f'style="border-collapse:collapse;table-layout:fixed;background:transparent;{img_marg};">'
+            f'<tr><td style="height:{bp};max-height:{bp};min-height:{bp};overflow:hidden;'
+            f'vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;'
+            f'border:none;background:transparent;">'
+            f'<img src="{firma_data_uri}" alt="" style="display:block;margin:0 auto;'
+            f'max-width:100%;width:auto;height:{ip};max-height:{ip};border:0;padding:0;'
+            f'background:transparent;"/>'
+            f"</td></tr></table>"
+        )
+    else:
+        # Misma jaula vacía: reserva el alto aunque no haya imagen.
+        cage = (
+            f'<table class="ccd-firma-img-cage" cellspacing="0" cellpadding="0" width="100%" '
+            f'style="border-collapse:collapse;table-layout:fixed;background:transparent;{img_marg};">'
+            f'<tr><td style="height:{bp};max-height:{bp};min-height:{bp};overflow:hidden;'
+            f'vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;'
+            f'border:none;background:transparent;">&nbsp;</td></tr></table>'
+        )
+    meta = _html_ccd_firma_meta_texto(
+        firmado=firmado,
+        nombre_cfg=nombre_h,
+        cargo_cfg=cargo_h,
+        marca_nombre=marca_nombre,
+        marca_cargo=marca_cargo,
+        marca_fecha=marca_fecha,
+        marca_hora=marca_hora,
+    )
     return f"""<td style="width:33.33%;{bd};{td_pad};font-size:{fs};vertical-align:top;">
 <div class="ccd-firma-slot-hdr">{etiqueta_hdr}</div>
-<div class="ccd-firma-slot-body">
+<div class="ccd-firma-slot-stack">
 <div class="ccd-firma-line"></div>
-<div class="ccd-firma-nombre">{nombre_h}</div>
-<div class="ccd-firma-cargo">{cargo_h}</div>
+{cage}
+<div class="ccd-firma-meta">{meta}</div>
 </div>
 </td>"""
 
@@ -16823,12 +17072,20 @@ def _html_cc_sub_v1_plain(
     vista_sin_conciliar: bool = False,
     resumen_4cols: Optional[Dict[str, Any]] = None,
     firmas_pie: bool = False,
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_firma_data_uri: Optional[str] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_desde_firma_cfg: bool = False,
 ) -> str:
     """CC-SUB-001 landscape: bloques Actualizadas/Presente/Acumulado/Saldo + resumen conciliación.
 
     ``firmas_pie`` reserva la franja inferior y repite Elaboró/Revisó/Aprobó en
     cada página. Solo el informe mensual lo activa; el corte de subcontratista
     sigue con las firmas a continuación del resumen.
+
+    Con ``aprobo_desde_firma_cfg=True`` (CC-MES-001) Aprobó usa la columna CCD
+    estándar (imagen + meta) en lugar de empresa/representante del subcontratista.
     """
     import corte_sub_conciliacion as csc
 
@@ -16861,7 +17118,7 @@ def _html_cc_sub_v1_plain(
         )
         page_css = f"""@page {{
   size: letter landscape;
-  margin: 6mm 7mm {margen_inf:.1f}mm 7mm;
+  margin: 5mm 7mm {margen_inf:.1f}mm 7mm;
   @frame footer {{
     -pdf-frame-content: firmasFooter;
     bottom: {_CC_MES_FIRMAS_BOTTOM_MM:.1f}mm;
@@ -16875,7 +17132,7 @@ def _html_cc_sub_v1_plain(
         firmas_attr = ' id="firmasFooter"'
         periodo_css = "margin:0;padding:0;line-height:1.05;"
     else:
-        page_css = "@page { size: letter landscape; margin: 6mm 7mm; }"
+        page_css = "@page { size: letter landscape; margin: 5mm 7mm; }"
         firmas_wrap_css = ".ccd-cc001-firmas-wrap { margin-top: 4mm; page-break-inside: avoid; }"
         firmas_attr = ""
         periodo_css = "margin-top:6px;"
@@ -16898,6 +17155,7 @@ def _html_cc_sub_v1_plain(
 .ccd-cc001-firmas-tbl {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 .ccd-cc001-firmas-tbl td {{ vertical-align: top; }}
 .ccd-firma-slot-hdr {{ font-weight: bold; font-size: 6.5pt; margin: 0 0 1px 0; padding: 0; color: #111; line-height: 1.1; }}
+.ccd-firma-slot-stack {{ overflow: hidden; box-sizing: border-box; padding: 0; margin: 0; }}
 .ccd-firma-slot-body {{
   height: 0.75cm; min-height: 0.75cm; max-height: 0.75cm;
   overflow: hidden; box-sizing: border-box; padding: 0; margin: 0;
@@ -16906,14 +17164,19 @@ def _html_cc_sub_v1_plain(
   border: none; border-top: 1px solid #111; width: 100%; height: 0;
   line-height: 0; font-size: 0; margin: 0 0 2px 0; padding: 0; overflow: hidden;
 }}
+.ccd-firma-meta {{
+  font-size: 6pt; color: #333; line-height: 1.08; height: 14pt; max-height: 14pt;
+  overflow: hidden; margin: 0; padding: 0; word-wrap: break-word;
+}}
 .ccd-firma-nombre {{ font-weight: bold; font-size: 7pt; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-cargo {{ font-size: 6.5pt; color: #444; line-height: 1.08; margin: 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-rep {{ font-size: 6.5pt; color: #333; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
-.ccd-firma-img-cage td {{ overflow: hidden !important; padding: 0 !important; }}
+.ccd-firma-img-cage {{ background: transparent !important; }}
+.ccd-firma-img-cage td {{ overflow: hidden !important; padding: 0 !important; background: transparent !important; }}
 .ccd-firma-img-cage img {{
   max-width: 100% !important; height: {_CCD_FIRMA_IMG_INNER_PT} !important;
   max-height: {_CCD_FIRMA_IMG_INNER_PT} !important; width: auto !important;
-  display: block !important; margin: 0 auto !important;
+  display: block !important; margin: 0 auto !important; background: transparent !important;
 }}
 /* Sin page-break-inside:avoid en el resumen: evita empujar el bloque entero
    a la página siguiente dejando un hueco grande tras la tabla. */
@@ -17121,8 +17384,56 @@ INFORME CORTE DE SUB CONTRATISTA
             + "</table>"
         )
 
-    elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
-    reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)
+    em = elaboro_marca or ("", "", "", "")
+    rm = reviso_marca or ("", "", "", "")
+    am = aprobo_marca or ("", "", "", "")
+    elaboro_td = _html_cc_sub_td_firma_columna(
+        bd,
+        "Elaboró:",
+        elaboro_n,
+        elaboro_c,
+        elaboro_firma_data_uri,
+        marca_nombre=em[0],
+        marca_cargo=em[1],
+        marca_fecha=em[2],
+        marca_hora=em[3],
+    )
+    reviso_td = _html_cc_sub_td_firma_columna(
+        bd,
+        "Revisó:",
+        reviso_n,
+        reviso_c,
+        reviso_firma_data_uri,
+        marca_nombre=rm[0],
+        marca_cargo=rm[1],
+        marca_fecha=rm[2],
+        marca_hora=rm[3],
+    )
+    if aprobo_desde_firma_cfg:
+        aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
+        aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
+        aprobo_td = _html_cc_sub_td_firma_columna(
+            bd,
+            "Aprobó:",
+            aprobo_n,
+            aprobo_c,
+            aprobo_firma_data_uri,
+            marca_nombre=am[0],
+            marca_cargo=am[1],
+            marca_fecha=am[2],
+            marca_hora=am[3],
+        )
+    else:
+        aprobo_td = f"""<td style="width:33.33%;{bd};padding:3px 5px;font-size:6.5pt;vertical-align:top;">
+<div class="ccd-firma-slot-hdr">Aprobó:</div>
+<div class="ccd-firma-slot-stack">
+<div class="ccd-firma-line"></div>
+<table class="ccd-firma-img-cage" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;background:transparent;margin:0;">
+<tr><td style="height:{_CCD_FIRMA_BOX_PT};max-height:{_CCD_FIRMA_BOX_PT};min-height:{_CCD_FIRMA_BOX_PT};overflow:hidden;vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;background:transparent;">&nbsp;</td></tr>
+</table>
+<div class="ccd-firma-meta">{aprobo_empresa} – Representante: {aprobo_rep}</div>
+</div>
+</td>"""
 
     parts.append(f"""
 <div class="ccd-cc001-firmas-wrap"{firmas_attr}>
@@ -17130,14 +17441,7 @@ INFORME CORTE DE SUB CONTRATISTA
 <tr>
 {elaboro_td}
 {reviso_td}
-<td style="width:33.33%;{bd};padding:3px 5px;font-size:6.5pt;vertical-align:top;">
-<div class="ccd-firma-slot-hdr">Aprobó:</div>
-<div class="ccd-firma-slot-body">
-<div class="ccd-firma-line"></div>
-<div class="ccd-firma-nombre">{aprobo_empresa}</div>
-<div class="ccd-firma-rep">Representante: {aprobo_rep}</div>
-</div>
-</td>
+{aprobo_td}
 </tr>
 </table>
 </div>
@@ -17226,6 +17530,9 @@ def _html_cc_conciliacion_informe_v1(
     reviso_firma_data_uri: Optional[str],
     aprobo_firma_data_uri: Optional[str],
     estilo_formato_codigo: str,
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ) -> str:
     """Informe tipo CC-SEM-001 / CC-MES-001: sin subcontratista; Aprobó interventoría con firma opcional."""
     bd = "border:1px solid #9ca3af"
@@ -17253,7 +17560,7 @@ def _html_cc_conciliacion_informe_v1(
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
 <head><meta charset="UTF-8"/><title>{_h(codigo_ccd)}</title>
 <style type="text/css">
-@page {{ size: letter; margin: 8mm 10mm; }}
+@page {{ size: letter; margin: 8mm 10mm 5mm 10mm; }}
 .cc001-tabla-items {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
 .cc001-tabla-items thead {{ display: table-header-group; }}
 .cc001-tabla-items tr.cc001-cap-sub {{ page-break-inside: avoid; }}
@@ -17262,6 +17569,7 @@ def _html_cc_conciliacion_informe_v1(
 .ccd-cc001-firmas-tbl {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 .ccd-cc001-firmas-tbl td {{ vertical-align: top; }}
 .ccd-firma-slot-hdr {{ font-weight: bold; font-size: 6.5pt; margin: 0 0 1px 0; padding: 0; color: #111; line-height: 1.1; }}
+.ccd-firma-slot-stack {{ overflow: hidden; box-sizing: border-box; padding: 0; margin: 0; }}
 .ccd-firma-slot-body {{
   height: 0.75cm;
   min-height: 0.75cm;
@@ -17282,11 +17590,17 @@ def _html_cc_conciliacion_informe_v1(
   padding: 0;
   overflow: hidden;
 }}
+.ccd-firma-meta {{
+  font-size: 6pt; color: #333; line-height: 1.08; height: 14pt; max-height: 14pt;
+  overflow: hidden; margin: 0; padding: 0; word-wrap: break-word;
+}}
 .ccd-firma-nombre {{ font-weight: bold; font-size: 7pt; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-cargo {{ font-size: 6.5pt; color: #444; line-height: 1.08; margin: 0; padding: 0; word-wrap: break-word; }}
+.ccd-firma-img-cage {{ background: transparent !important; }}
 .ccd-firma-img-cage td {{
   overflow: hidden !important;
   padding: 0 !important;
+  background: transparent !important;
 }}
 .ccd-firma-img-cage img {{
   max-width: 100% !important;
@@ -17295,6 +17609,7 @@ def _html_cc_conciliacion_informe_v1(
   width: auto !important;
   display: block !important;
   margin: 0 auto !important;
+  background: transparent !important;
 }}
 </style></head>
 <body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
@@ -17376,9 +17691,21 @@ def _html_cc_conciliacion_informe_v1(
 </tr>"""
         )
     parts.append("</tbody></table>")
-    elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
-    reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)
-    aprobo_td = _html_cc_sub_td_firma_columna(bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri)
+    em = elaboro_marca or ("", "", "", "")
+    rm = reviso_marca or ("", "", "", "")
+    am = aprobo_marca or ("", "", "", "")
+    elaboro_td = _html_cc_sub_td_firma_columna(
+        bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri,
+        marca_nombre=em[0], marca_cargo=em[1], marca_fecha=em[2], marca_hora=em[3],
+    )
+    reviso_td = _html_cc_sub_td_firma_columna(
+        bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri,
+        marca_nombre=rm[0], marca_cargo=rm[1], marca_fecha=rm[2], marca_hora=rm[3],
+    )
+    aprobo_td = _html_cc_sub_td_firma_columna(
+        bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri,
+        marca_nombre=am[0], marca_cargo=am[1], marca_fecha=am[2], marca_hora=am[3],
+    )
     parts.append(f"""
 <div class="ccd-cc001-firmas-wrap">
 <table class="ccd-cc001-firmas-tbl" cellspacing="0" cellpadding="0">
@@ -17603,6 +17930,9 @@ def _html_mem002_bloque_firmas(
     aprobo_firma_data_uri: Optional[str] = None,
     aprobo_interventoria_desde_config: bool = False,
     footer_frame: bool = False,
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ) -> str:
     """Tres columnas Elaboró / Revisó / Aprobó: subcontratista (CC-SUB) o interventoría desde biblioteca (CC-SEM/MES).
 
@@ -17614,27 +17944,59 @@ def _html_mem002_bloque_firmas(
     reviso_n = _h(str(fc.get("reviso_nombre") or "").strip() or "—")
     reviso_c = _h(str(fc.get("reviso_cargo") or "").strip() or "—")
     bd = "border:1px solid #9ca3af"
+    em = elaboro_marca or ("", "", "", "")
+    rm = reviso_marca or ("", "", "", "")
+    am = aprobo_marca or ("", "", "", "")
     elaboro_td = _html_cc_sub_td_firma_columna(
-        bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri, memoria_compact=True
+        bd,
+        "Elaboró:",
+        elaboro_n,
+        elaboro_c,
+        elaboro_firma_data_uri,
+        memoria_compact=True,
+        marca_nombre=em[0],
+        marca_cargo=em[1],
+        marca_fecha=em[2],
+        marca_hora=em[3],
     )
     reviso_td = _html_cc_sub_td_firma_columna(
-        bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri, memoria_compact=True
+        bd,
+        "Revisó:",
+        reviso_n,
+        reviso_c,
+        reviso_firma_data_uri,
+        memoria_compact=True,
+        marca_nombre=rm[0],
+        marca_cargo=rm[1],
+        marca_fecha=rm[2],
+        marca_hora=rm[3],
     )
     if aprobo_interventoria_desde_config:
         aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
         aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
         aprobo_td = _html_cc_sub_td_firma_columna(
-            bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri, memoria_compact=True
+            bd,
+            "Aprobó:",
+            aprobo_n,
+            aprobo_c,
+            aprobo_firma_data_uri,
+            memoria_compact=True,
+            marca_nombre=am[0],
+            marca_cargo=am[1],
+            marca_fecha=am[2],
+            marca_hora=am[3],
         )
     else:
         aprobo_empresa = _h(str(sub.get("razon_social") or "").strip() or "—")
         aprobo_rep = _h(str(sub.get("nombre_contacto") or "").strip() or "—")
         aprobo_td = f"""<td style="width:33.33%;{bd};padding:1px 3px;font-size:6pt;vertical-align:top;">
-<div class="mem002-firma-slot-hdr">Aprobó:</div>
-<div class="mem002-firma-slot-body">
-<div class="mem002-firma-line"></div>
-<div class="mem002-firma-nombre">{aprobo_empresa}</div>
-<div class="mem002-firma-rep">Representante: {aprobo_rep}</div>
+<div class="ccd-firma-slot-hdr">Aprobó:</div>
+<div class="ccd-firma-slot-stack">
+<div class="ccd-firma-line"></div>
+<table class="ccd-firma-img-cage" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;background:transparent;margin:0;">
+<tr><td style="height:{_CCD_FIRMA_MEM002_BOX_PT};max-height:{_CCD_FIRMA_MEM002_BOX_PT};min-height:{_CCD_FIRMA_MEM002_BOX_PT};overflow:hidden;vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;background:transparent;">&nbsp;</td></tr>
+</table>
+<div class="ccd-firma-meta">{aprobo_empresa} – Representante: {aprobo_rep}</div>
 </div>
 </td>"""
     firmas_attr = ' id="firmasFooter"' if footer_frame else ""
@@ -17811,6 +18173,9 @@ def _html_memoria_item_body(
     pie_fotos_contexto: Optional[str] = None,
     firmas_pie: bool = False,
     emitir_firmas: bool = True,
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ):
     total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in registros)
 
@@ -18139,6 +18504,9 @@ def _html_memoria_item_body(
             aprobo_firma_data_uri=aprobo_firma_data_uri,
             aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
             footer_frame=False,
+            elaboro_marca=elaboro_marca,
+            reviso_marca=reviso_marca,
+            aprobo_marca=aprobo_marca,
         )
 
     # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 2×2.
@@ -18248,6 +18616,9 @@ def _html_memoria_item_body(
             aprobo_firma_data_uri=aprobo_firma_data_uri,
             aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
             footer_frame=True,
+            elaboro_marca=elaboro_marca,
+            reviso_marca=reviso_marca,
+            aprobo_marca=aprobo_marca,
         )
 
     return body
@@ -18270,6 +18641,9 @@ def _html_memoria_item(
     pie_fotos_contexto: Optional[str] = None,
     estilo_formato_codigo: str = CODIGO_FORMATO_CCD_CC_SUB_002,
     firmas_pie: Optional[bool] = None,
+    elaboro_marca: Optional[Tuple[str, str, str, str]] = None,
+    reviso_marca: Optional[Tuple[str, str, str, str]] = None,
+    aprobo_marca: Optional[Tuple[str, str, str, str]] = None,
 ):
     fc = firma_cfg or {}
     est = _merge_estilo_pdf(fc.get("estilo_pdf"), estilo_formato_codigo)
@@ -18290,6 +18664,9 @@ def _html_memoria_item(
         reviso_firma_data_uri=reviso_firma_data_uri,
         conc_meta=conc_meta,
         aprobo_firma_data_uri=aprobo_firma_data_uri,
+        elaboro_marca=elaboro_marca,
+        reviso_marca=reviso_marca,
+        aprobo_marca=aprobo_marca,
         aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
         pie_fotos_contexto=pie_fotos_contexto,
         firmas_pie=bool(firmas_pie),
