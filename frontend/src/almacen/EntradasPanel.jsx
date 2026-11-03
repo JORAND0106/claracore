@@ -296,7 +296,7 @@ export default function EntradasPanel({
                 </ThHelp>
                 <ThHelp
                   style={{ ...ui.th, minWidth: 88 }}
-                  ayuda="Qué porcentaje del recibido sigue disponible. Rojo ≤10%, naranja ≤20%, normal si es mayor."
+                  ayuda="Qué porcentaje del recibido sigue disponible. Rojo ≤5 %, naranja ≤20 %, normal si es mayor (umbrales de OC en captura configurables por contrato)."
                 >
                   % saldo
                 </ThHelp>

@@ -453,31 +453,58 @@ def get_config(contrato_id: int) -> dict:
         .data
         or []
     )
-    if rows:
-        return rows[0]
-    return {
+    base = {
         "contrato_id": contrato_id,
         "cotizaciones_minimas": 3,
         "dias_alerta_vencimiento": 30,
+        "alerta_saldo_amarillo_pct": 20,
+        "alerta_saldo_rojo_pct": 5,
     }
+    if rows:
+        out = {**base, **rows[0]}
+        if out.get("alerta_saldo_amarillo_pct") is None:
+            out["alerta_saldo_amarillo_pct"] = 20
+        if out.get("alerta_saldo_rojo_pct") is None:
+            out["alerta_saldo_rojo_pct"] = 5
+        return out
+    return base
 
 
 def update_config(contrato_id: int, user_id: int, body: dict) -> dict:
     sb = _sb()
     cot = int(body.get("cotizaciones_minimas", 3))
     dias = int(body.get("dias_alerta_vencimiento", 30))
+    amarillo = float(body.get("alerta_saldo_amarillo_pct", 20))
+    rojo = float(body.get("alerta_saldo_rojo_pct", 5))
     if cot < 1 or cot > 10:
         raise ValueError("cotizaciones_minimas debe estar entre 1 y 10.")
     if dias < 1 or dias > 365:
         raise ValueError("dias_alerta_vencimiento debe estar entre 1 y 365.")
+    if amarillo <= 0 or amarillo > 100:
+        raise ValueError("alerta_saldo_amarillo_pct debe estar entre 0 y 100.")
+    if rojo <= 0 or rojo > 100:
+        raise ValueError("alerta_saldo_rojo_pct debe estar entre 0 y 100.")
+    if rojo > amarillo:
+        raise ValueError("alerta_saldo_rojo_pct no puede ser mayor que alerta_saldo_amarillo_pct.")
     row = {
         "contrato_id": contrato_id,
         "cotizaciones_minimas": cot,
         "dias_alerta_vencimiento": dias,
+        "alerta_saldo_amarillo_pct": amarillo,
+        "alerta_saldo_rojo_pct": rojo,
         "updated_at": _now_iso(),
         "updated_by": user_id,
     }
-    sb.table("almacen_config").upsert(row, on_conflict="contrato_id").execute()
+    try:
+        sb.table("almacen_config").upsert(row, on_conflict="contrato_id").execute()
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col in ("alerta_saldo_amarillo_pct", "alerta_saldo_rojo_pct"):
+            for k in ("alerta_saldo_amarillo_pct", "alerta_saldo_rojo_pct"):
+                row.pop(k, None)
+            sb.table("almacen_config").upsert(row, on_conflict="contrato_id").execute()
+        else:
+            raise
     return get_config(contrato_id)
 
 
@@ -5662,6 +5689,131 @@ def _destinatarios_validadores_almacen(contrato_id: int) -> List[int]:
     return list(dest)
 
 
+def _notificar_alerta_saldo_oc_entrada(
+    contrato_id: int,
+    user_id: int,
+    *,
+    oc: Optional[dict],
+    created_items: List[dict],
+) -> None:
+    """Aviso one-shot a Validar cuando un insumo de OC cruza umbral amarillo/rojo."""
+    from almacen_entrada_duplicados import umbral_alerta_saldo_oc
+
+    if not oc or not created_items:
+        return
+    cfg = get_config(contrato_id)
+    amarillo = float(cfg.get("alerta_saldo_amarillo_pct") or 20)
+    rojo = float(cfg.get("alerta_saldo_rojo_pct") or 5)
+    sb = _sb()
+    dest_ids = _destinatarios_validadores_almacen(contrato_id)
+    if not dest_ids:
+        return
+    oc_items_by_id = {
+        int(it["id"]): it
+        for it in (oc.get("items") or [])
+        if it.get("id") is not None
+    }
+    num_oc = oc.get("numero_oc")
+    prov = oc.get("proveedor_nombre") or oc.get("proveedor_nombre_texto") or "—"
+    for ei in created_items:
+        oci_id = ei.get("orden_compra_item_id")
+        if oci_id in (None, ""):
+            continue
+        oci_id = int(oci_id)
+        oci = oc_items_by_id.get(oci_id) or {}
+        pedida = _to_float(oci.get("cantidad"))
+        recibida_antes = _to_float(oci.get("cantidad_recibida"))
+        qty = _to_float(ei.get("cantidad_recibida"))
+        saldo_despues = max(0.0, round(pedida - (recibida_antes + qty), 4))
+        nivel = umbral_alerta_saldo_oc(
+            saldo_despues, pedida, amarillo_pct=amarillo, rojo_pct=rojo,
+        )
+        if not nivel:
+            continue
+        # Una sola por umbral; si cruza rojo también intenta registrar amarillo si faltaba.
+        niveles = [nivel]
+        if nivel == "rojo":
+            niveles = ["amarillo", "rojo"]
+        for umbral in niveles:
+            try:
+                already = (
+                    sb.table("almacen_oc_item_alerta_enviada")
+                    .select("orden_compra_item_id")
+                    .eq("orden_compra_item_id", oci_id)
+                    .eq("umbral", umbral)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception as exc:
+                _log.warning("alerta saldo OC lookup: %s", exc)
+                already = []
+            if already:
+                continue
+            # Solo notificar el umbral efectivamente cruzado ahora.
+            if umbral != nivel and not (
+                nivel == "rojo" and umbral == "amarillo"
+            ):
+                continue
+            if umbral == "amarillo" and nivel == "rojo":
+                # Si ya estaba bajo amarillo antes, no reenviar; solo si cruzó ambos ahora.
+                saldo_antes = max(0.0, round(pedida - recibida_antes, 4))
+                prev = umbral_alerta_saldo_oc(
+                    saldo_antes, pedida, amarillo_pct=amarillo, rojo_pct=rojo,
+                )
+                if prev in ("amarillo", "rojo"):
+                    try:
+                        sb.table("almacen_oc_item_alerta_enviada").upsert({
+                            "orden_compra_item_id": oci_id,
+                            "umbral": "amarillo",
+                            "contrato_id": contrato_id,
+                        }, on_conflict="orden_compra_item_id,umbral").execute()
+                    except Exception:
+                        pass
+                    continue
+            mat = ei.get("material_descripcion") or oci.get("material_descripcion") or "Insumo"
+            und = ei.get("unidad") or oci.get("unidad") or ""
+            asunto = (
+                f"{'🔴' if umbral == 'rojo' else '🟡'} OC #{num_oc} · saldo {umbral}"
+            )
+            mensaje = (
+                f"La OC #{num_oc} ({prov}) tiene el insumo «{mat}» "
+                f"con saldo restante {saldo_despues} {und} "
+                f"({umbral}: ≤{rojo if umbral == 'rojo' else amarillo} % de lo pedido).\n"
+                f"Gestione una nueva solicitud si corresponde."
+            )
+            rows = []
+            for did in dest_ids:
+                if did == user_id:
+                    continue
+                rows.append({
+                    "remitente_id": user_id,
+                    "remitente_nombre": "ClaraCore",
+                    "destinatario_id": did,
+                    "asunto": asunto,
+                    "mensaje": mensaje,
+                    "tipo": "SISTEMA",
+                    "modulo": "ALMACEN",
+                    "contrato_id": contrato_id,
+                    "entidad_tipo": "orden_compra",
+                    "entidad_id": str(oc.get("id") or ""),
+                    "leido": False,
+                    "oculto_destinatario": False,
+                    "oculto_remitente": False,
+                })
+            try:
+                if rows:
+                    sb.table("notificaciones").insert(rows).execute()
+                sb.table("almacen_oc_item_alerta_enviada").upsert({
+                    "orden_compra_item_id": oci_id,
+                    "umbral": umbral,
+                    "contrato_id": contrato_id,
+                }, on_conflict="orden_compra_item_id,umbral").execute()
+            except Exception as exc:
+                _log.warning("Notificación saldo OC %s/%s: %s", oci_id, umbral, exc)
+
+
 def _notificar_validadores(contrato_id: int, solicitud_id: int, consecutivo: int, remitente_id: int) -> None:
     sb = _sb()
     dest_ids = _destinatarios_validadores_almacen(contrato_id)
@@ -8125,7 +8277,7 @@ def lookup_entrada_por_numero_remision(
 ) -> Optional[dict]:
     """
     Busca una entrada recibo previa con el mismo N.º de remisión y el mismo proveedor.
-    Solo aviso (no bloquea). Compara numero_documento en mayúsculas.
+    Bloquea el registro (UI + create_entrada). Compara numero_documento en mayúsculas.
     """
     numero = (numero_documento or "").strip().upper()[:64]
     if not numero:
@@ -8699,6 +8851,11 @@ def create_entrada(
     Sin OC / foto / proveedor / sector: puede guardar con marca «por revisar»
     según las reglas vigentes (recibo exige remisión + foto descargue).
     """
+    from almacen_entrada_duplicados import (
+        lookup_entrada_por_idempotency,
+        lookup_entrada_similar_reciente,
+        mensaje_remision_duplicada,
+    )
     from almacen_entrada_por_revisar import (
         MOTIVO_OC_CONSUMIDA,
         MOTIVO_PROVEEDOR_MANUAL,
@@ -8718,6 +8875,17 @@ def create_entrada(
     tipo = (body.get("tipo") or "recibo").strip().lower()
     if tipo not in ("disposicion", "recibo"):
         raise ValueError("Tipo de entrada inválido.")
+
+    idem_key = (body.get("idempotency_key") or "").strip() or None
+    if idem_key:
+        existing_idem = lookup_entrada_por_idempotency(sb, contrato_id, idem_key)
+        if existing_idem:
+            try:
+                replay = get_entrada(contrato_id, int(existing_idem["id"]))
+                replay["idempotent_replay"] = True
+                return replay
+            except Exception:
+                return {**existing_idem, "id": existing_idem.get("id"), "idempotent_replay": True}
 
     motivos: List[str] = []
     pk_id = (body.get("pk_id") or "").strip()
@@ -8808,6 +8976,34 @@ def create_entrada(
         body.get("numero_documento"),
     )
 
+    if tipo == "recibo" and numero_doc:
+        dup_rem = lookup_entrada_por_numero_remision(
+            contrato_id,
+            numero_doc,
+            proveedor_id=proveedor_id,
+            proveedor_nombre=proveedor_nombre_texto,
+        )
+        if dup_rem:
+            codigo_dup = (dup_rem.get("codigo_entrada") or "").strip() or str(dup_rem.get("entrada_id") or "")
+            raise ValueError(mensaje_remision_duplicada(codigo_dup))
+
+    if (
+        tipo == "recibo"
+        and oc_id
+        and not bool(body.get("confirm_posible_duplicado"))
+    ):
+        soft = lookup_entrada_similar_reciente(
+            sb,
+            contrato_id,
+            orden_compra_id=oc_id,
+            items=lineas,
+        )
+        if soft:
+            raise ValueError(
+                f"POSIBLE_DUPLICADO::{soft.get('entrada_id')}::{soft.get('codigo_entrada')}::"
+                f"{soft.get('minutos')}::{soft.get('message')}"
+            )
+
     if remision_data and len(remision_data) > REMISION_SOPORTE_MAX_BYTES:
         # Comprimir no es responsabilidad del servidor aquí; se rechaza solo el exceso técnico.
         raise ValueError("El PDF o archivo de remisión no puede superar 300 KB. Use un archivo más liviano.")
@@ -8867,6 +9063,7 @@ def create_entrada(
         "por_revisar_motivos": por_rev["por_revisar_motivos"],
         "proveedor_nombre_texto": proveedor_nombre_texto,
         "salida_inmediata_pendiente": bool(body.get("salida_inmediata_pendiente")),
+        "idempotency_key": idem_key,
     }
     if entrada_row["llegada_domicilio"]:
         # Domicilio: no exigir ni persistir placa/conductor.
@@ -8875,6 +9072,28 @@ def create_entrada(
     try:
         ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
     except Exception as exc:
+        # Idempotencia: carrera entre dos requests con la misma clave.
+        if idem_key and ("idempotency" in str(exc).lower() or "uq_almacen_entrada_idempotency" in str(exc).lower()):
+            existing_idem = lookup_entrada_por_idempotency(sb, contrato_id, idem_key)
+            if existing_idem:
+                replay = get_entrada(contrato_id, int(existing_idem["id"]))
+                replay["idempotent_replay"] = True
+                return replay
+        if "uq_almacen_entrada_remision" in str(exc).lower() or (
+            "numero_documento" in str(exc).lower() and "unique" in str(exc).lower()
+        ):
+            dup_rem = lookup_entrada_por_numero_remision(
+                contrato_id,
+                numero_doc,
+                proveedor_id=proveedor_id,
+                proveedor_nombre=proveedor_nombre_texto,
+            )
+            codigo_dup = (
+                (dup_rem or {}).get("codigo_entrada")
+                or str((dup_rem or {}).get("entrada_id") or "")
+                or "otra entrada"
+            )
+            raise ValueError(mensaje_remision_duplicada(str(codigo_dup))) from exc
         # Migración pendiente: guardar sin columnas nuevas.
         col = _pgrst_unknown_column(exc)
         drop_cols = (
@@ -8883,6 +9102,7 @@ def create_entrada(
             "proveedor_nombre_texto",
             "llegada_domicilio",
             "salida_inmediata_pendiente",
+            "idempotency_key",
         )
         if col in drop_cols:
             for k in drop_cols:
@@ -8893,6 +9113,7 @@ def create_entrada(
             entrada_row["proveedor_nombre_texto"] = proveedor_nombre_texto
             entrada_row["llegada_domicilio"] = bool(body.get("llegada_domicilio"))
             entrada_row["salida_inmediata_pendiente"] = bool(body.get("salida_inmediata_pendiente"))
+            entrada_row["idempotency_key"] = idem_key
         else:
             raise
     if not ent_ins:
@@ -9231,6 +9452,12 @@ def create_entrada(
         except ValueError:
             # Placa inválida no debe tumbar la entrada ya guardada.
             pass
+    try:
+        _notificar_alerta_saldo_oc_entrada(
+            contrato_id, user_id, oc=oc, created_items=created_items,
+        )
+    except Exception as exc:
+        _log.warning("Alerta saldo OC post-entrada %s: %s", entrada_id, exc)
     _invalidar_graficos_inventario(contrato_id)
     return result
 
@@ -9373,12 +9600,23 @@ def list_ocs_pendientes_tarjeta(
     all_items = _fetch_items()
     stages["items_ms"] = round((time.perf_counter() - t) * 1000, 1)
 
+    # Incluir líneas sin saldo solo si la OC tiene al menos un insumo con saldo
+    # (para mostrarlas bloqueadas en la captura). OC 100 % consumida: no aparece.
+    oc_ids_con_saldo = set()
+    for it in all_items:
+        saldos = _oc_item_saldos(it)
+        if saldos.get("tiene_saldo"):
+            oid = it.get("orden_compra_id")
+            if oid not in (None, ""):
+                oc_ids_con_saldo.add(int(oid))
+
     pending: List[dict] = []
     sol_item_ids: List[int] = []
     for it in all_items:
-        saldos = _oc_item_saldos(it)
-        if not saldos.get("tiene_saldo"):
+        oid = it.get("orden_compra_id")
+        if oid in (None, "") or int(oid) not in oc_ids_con_saldo:
             continue
+        saldos = _oc_item_saldos(it)
         pending.append({**it, "_saldos": saldos})
         sid = it.get("solicitud_item_id")
         if sid not in (None, ""):
@@ -9491,6 +9729,7 @@ def list_ocs_pendientes_tarjeta(
             }
         card = by_oc[oid]
         imap = card["insumos_map"]
+        cant_pedida = round(_to_float(it.get("cantidad")), 4)
         if key not in imap:
             imap[key] = {
                 "key": key,
@@ -9499,6 +9738,8 @@ def list_ocs_pendientes_tarjeta(
                 "unidad": und,
                 "saldo_cantidad": 0.0,
                 "saldo_valor": 0.0,
+                "cantidad_pedida": 0.0,
+                "consumido": False,
                 "pk_id": sol.get("pk_id"),
                 "tramo": sol.get("tramo"),
                 "costado": sol.get("costado"),
@@ -9509,13 +9750,25 @@ def list_ocs_pendientes_tarjeta(
         grp = imap[key]
         grp["saldo_cantidad"] = round(grp["saldo_cantidad"] + float(saldos.get("saldo_cantidad") or 0), 4)
         grp["saldo_valor"] = round(grp["saldo_valor"] + float(saldos.get("saldo_valor") or 0), 2)
+        grp["cantidad_pedida"] = round(grp["cantidad_pedida"] + cant_pedida, 4)
+        grp["consumido"] = float(grp["saldo_cantidad"] or 0) <= 0.0001
         if not grp.get("pk_id") and sol.get("pk_id"):
             grp["pk_id"] = sol.get("pk_id")
-        grp["lineas"].append({
-            "orden_compra_item_id": int(it["id"]),
-            "saldo_cantidad": saldos.get("saldo_cantidad"),
-            "pk_id": sol.get("pk_id"),
-        })
+        # Solo líneas con saldo sirven para despachar cantidad; las consumidas se listan bloqueadas.
+        if float(saldos.get("saldo_cantidad") or 0) > 0.0001:
+            grp["lineas"].append({
+                "orden_compra_item_id": int(it["id"]),
+                "saldo_cantidad": saldos.get("saldo_cantidad"),
+                "cantidad_pedida": cant_pedida,
+                "pk_id": sol.get("pk_id"),
+            })
+        else:
+            grp.setdefault("lineas_consumidas", []).append({
+                "orden_compra_item_id": int(it["id"]),
+                "saldo_cantidad": 0,
+                "cantidad_pedida": cant_pedida,
+                "pk_id": sol.get("pk_id"),
+            })
 
     tarjetas = []
     for oid in oc_ids:
@@ -9523,7 +9776,10 @@ def list_ocs_pendientes_tarjeta(
         if not card:
             continue
         insumos = list(card.pop("insumos_map").values())
-        insumos.sort(key=lambda x: _norm(x.get("material_descripcion") or ""))
+        insumos.sort(key=lambda x: (
+            0 if not x.get("consumido") else 1,
+            _norm(x.get("material_descripcion") or ""),
+        ))
         if not ver_economicos:
             for ins in insumos:
                 ins.pop("saldo_valor", None)
@@ -9531,6 +9787,22 @@ def list_ocs_pendientes_tarjeta(
         card["saldo_cantidad_total"] = round(
             sum(float(i.get("saldo_cantidad") or 0) for i in insumos), 4
         )
+        # Indicador discreto de agotamiento en la tarjeta (umbral default 20/5).
+        peor = "normal"
+        for ins in insumos:
+            if ins.get("consumido"):
+                peor = "rojo"
+                break
+            pedida = float(ins.get("cantidad_pedida") or 0)
+            saldo = float(ins.get("saldo_cantidad") or 0)
+            if pedida <= 0.0001:
+                continue
+            pct = (saldo / pedida) * 100.0
+            if saldo <= 0.0001 or pct <= 5:
+                peor = "rojo"
+            elif pct <= 20 and peor != "rojo":
+                peor = "amarillo"
+        card["alerta_agotamiento"] = peor
         tarjetas.append(card)
 
     total_ms = round((time.perf_counter() - t0) * 1000, 1)
@@ -10768,13 +11040,19 @@ def _porcentaje_saldo_disponible(cantidad_recibida: float, saldo_disponible: flo
     return round((saldo_disponible / cantidad_recibida) * 100, 2)
 
 
-def _alerta_saldo_entrada(porcentaje_saldo: float, cantidad_recibida: float = 1.0) -> str:
-    """rojo ≤10%, naranja ≤20%, normal >20% (sobre cantidad recibida de la línea)."""
+def _alerta_saldo_entrada(
+    porcentaje_saldo: float,
+    cantidad_recibida: float = 1.0,
+    *,
+    rojo_pct: float = 5.0,
+    naranja_pct: float = 20.0,
+) -> str:
+    """rojo ≤ rojo_pct (default 5%), naranja ≤ naranja_pct (default 20%)."""
     if cantidad_recibida <= 0:
         return "normal"
-    if porcentaje_saldo <= 10:
+    if porcentaje_saldo <= float(rojo_pct):
         return "rojo"
-    if porcentaje_saldo <= 20:
+    if porcentaje_saldo <= float(naranja_pct):
         return "naranja"
     return "normal"
 

@@ -1,4 +1,4 @@
-"""Aviso de remisión repetida (mismo proveedor): lookup + ruta."""
+"""Bloqueo de remisión repetida (mismo proveedor): lookup + ruta."""
 from __future__ import annotations
 
 from pathlib import Path
