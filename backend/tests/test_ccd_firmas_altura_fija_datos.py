@@ -251,4 +251,5 @@ def test_margen_inferior_frame_max_5mm():
     inf = _import_informes_with_stubs()
     assert inf._CC_MES_FIRMAS_BOTTOM_MM <= 5.0
     html = _html(inf, _items(8))
-    assert "margin: 5mm 7mm" in html or "bottom: 3.0mm" in html
+    assert f"bottom: {inf._CC_MES_FIRMAS_BOTTOM_MM:.1f}mm" in html
+    assert "margin: 4.0mm 7mm" in html

@@ -7595,62 +7595,13 @@ def _y_fin_contenido_sobre_firmas(page, banda_top: float) -> Optional[float]:
 
 
 def _acercar_firmas_pie_mes(pdf: bytes) -> bytes:
-    """Sube Elaboró/Revisó/Aprobó cuando el cierre deja un hueco grande.
+    """Identidad: las firmas permanecen en la franja inferior fija.
 
-    La franja va fija al pie de cada hoja llena. Si el resumen no alcanza a
-    llenar la última, xhtml2pdf deja esos renglones arriba y las firmas abajo,
-    con el medio en blanco. Aquí esa franja queda junto al último renglón.
+    Subir la franja (versión anterior) dejaba un vacío grande *bajo* el bloque
+    de firmas (medido >12 mm). El criterio vigente es margen inferior ≤ 5 mm
+    bajo las firmas y hueco, si lo hay, *encima* de la franja.
     """
-    import pymupdf
-
-    if not pdf or not isinstance(pdf, (bytes, bytearray)) or bytes(pdf[:4]) != b"%PDF":
-        return pdf
-    mm = 72.0 / 25.4
-    hueco_max = _CC_MES_FIRMAS_HUECO_MAX_MM * mm
-    objetivo = _CC_MES_FIRMAS_HUECO_OBJETIVO_MM * mm
-    try:
-        src = pymupdf.open(stream=pdf, filetype="pdf")
-    except Exception as exc:
-        _log.warning("acercar firmas pie: PDF no legible (%s)", exc)
-        return pdf
-    out = None
-    try:
-        for i, page in enumerate(src):
-            banda = page.rect.height - (
-                _CC_MES_FIRMAS_BOTTOM_MM + _CC_MES_FIRMAS_ALTO_MM
-            ) * mm
-            fin = _y_fin_contenido_sobre_firmas(page, banda)
-            hueco = (banda - fin) if fin is not None else 0.0
-            if fin is None or hueco <= hueco_max:
-                if out is not None:
-                    out.insert_pdf(src, from_page=i, to_page=i)
-                continue
-            if out is None:
-                out = pymupdf.open()
-                if i:
-                    out.insert_pdf(src, from_page=0, to_page=i - 1)
-            # El filete superior de la tabla de firmas cae sobre el corte de la
-            # franja. El flujo se recorta antes; el filete viaja con las firmas.
-            recorte = 1.25
-            nueva = out.new_page(width=page.rect.width, height=page.rect.height)
-            contenido = pymupdf.Rect(0, 0, page.rect.width, banda - recorte)
-            nueva.show_pdf_page(contenido, src, i, clip=contenido)
-            pie = pymupdf.Rect(0, banda - 0.4, page.rect.width, page.rect.height)
-            dest_y0 = fin + objetivo - 0.4
-            dest = pymupdf.Rect(0, dest_y0, page.rect.width, dest_y0 + pie.height)
-            nueva.show_pdf_page(dest, src, i, clip=pie)
-            _log.info(
-                "CC-MES-001: firmas de la página %s subidas %.0f mm hasta el cierre",
-                i + 1,
-                (banda - (fin + objetivo)) / mm,
-            )
-        if out is None:
-            return pdf
-        return out.tobytes()
-    finally:
-        src.close()
-        if out is not None:
-            out.close()
+    return pdf
 
 
 def _html_cc_mes_001_v1(
@@ -13426,7 +13377,8 @@ body.mem002-doc {
 body.mem002-doc .mem002-head-wrap {
   width: 100%;
   page-break-inside: avoid;
-  page-break-after: avoid;
+  -pdf-keep-with-next: true;
+  /* Evitar page-break-after:avoid: dejaba el encabezado solo en una hoja. */
   margin-bottom: 1px;
 }
 /* Descripción del ítem: completa, multilínea; la fila crece (sin ellipsis ni max-height). */
@@ -13473,6 +13425,7 @@ body.mem002-doc .mem002-objeto {
 }
 body.mem002-doc .mem002-section {
   page-break-after: avoid;
+  -pdf-keep-with-next: true;
   margin-top: 1px;
   margin-bottom: 2px;
   font-size: 7pt;
@@ -13530,15 +13483,23 @@ body.mem002-doc .mem002-total-wrap {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
+  page-break-before: avoid;
+  -pdf-keep-with-previous: true;
 }
 body.mem002-doc .mem002-total-wrap td.total-td {
   font-size: 6pt;
   padding: 2px 3px;
 }
 body.mem002-doc .doc-footer {
-  margin-top: 4px;
-  padding-top: 2px;
+  margin-top: 2px;
+  padding-top: 1px;
   font-size: 6pt;
+  page-break-before: avoid;
+  -pdf-keep-with-previous: true;
+}
+body.mem002-doc .mem002-cierre-keep {
+  page-break-inside: avoid;
+  -pdf-keep-with-previous: true;
 }
 /* Registro fotográfico / gráfico: plantilla fija 2×2 (4 imágenes por página). */
 body.mem002-doc .mem002-foto-grid {
@@ -13711,10 +13672,10 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-line {
   padding: 0;
   overflow: hidden;
 }
-/* Memorias: jaula fija (~22pt); firmada o vacía — misma altura. */
+/* Memorias / pie @frame: jaula compacta 18pt; firmada o vacía — misma altura. */
 body.mem002-doc .mem002-firmas-wrap table.ccd-firma-img-cage {
-  height: 22pt !important;
-  max-height: 22pt !important;
+  height: 18pt !important;
+  max-height: 18pt !important;
   margin: 0 !important;
   overflow: hidden !important;
   background: transparent !important;
@@ -13722,28 +13683,28 @@ body.mem002-doc .mem002-firmas-wrap table.ccd-firma-img-cage {
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-img-cage td {
   overflow: hidden !important;
   padding: 0 !important;
-  height: 22pt !important;
-  max-height: 22pt !important;
+  height: 18pt !important;
+  max-height: 18pt !important;
   line-height: 0 !important;
   vertical-align: middle !important;
   background: transparent !important;
 }
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-img-cage img {
   max-width: 100% !important;
-  height: 20pt !important;
-  max-height: 20pt !important;
+  height: 16pt !important;
+  max-height: 16pt !important;
   width: auto !important;
   display: block !important;
   margin: 0 auto !important;
   background: transparent !important;
 }
 body.mem002-doc .mem002-firmas-wrap .ccd-firma-meta {
-  word-wrap: break-word;
-  font-size: 5.5pt;
+  white-space: nowrap;
+  font-size: 5pt;
   color: #333;
-  line-height: 1.05;
-  height: 12pt;
-  max-height: 12pt;
+  line-height: 1.0;
+  height: 9pt;
+  max-height: 9pt;
   overflow: hidden;
   margin: 0 !important;
   padding: 0;
@@ -13768,11 +13729,11 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-cargo {
 
 
 def _memoria002_page_css(*, firmas_pie: bool = False) -> str:
-    """@page landscape; con firmas_pie reserva franja inferior (criterio CC-MES-001)."""
+    """@page landscape; márgenes ≤5 mm; con firmas_pie reserva franja inferior fija."""
     if not firmas_pie:
         return """@page {
   size: letter landscape;
-  margin: 0.5cm 0.65cm 0.5cm 0.65cm;
+  margin: 4.0mm 6.5mm 4.0mm 6.5mm;
 }
 """
     margen_inf = (
@@ -13780,17 +13741,23 @@ def _memoria002_page_css(*, firmas_pie: bool = False) -> str:
     )
     return f"""@page {{
   size: letter landscape;
-  margin: 0.5cm 0.65cm {margen_inf:.1f}mm 0.65cm;
+  margin: 4.0mm 6.5mm {margen_inf:.1f}mm 6.5mm;
   @frame footer {{
     -pdf-frame-content: firmasFooter;
     bottom: {_CC_MES_FIRMAS_BOTTOM_MM:.1f}mm;
-    margin-left: 0.65cm;
-    margin-right: 0.65cm;
+    margin-left: 6.5mm;
+    margin-right: 6.5mm;
     height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm;
     -pdf-keep-in-frame-mode: shrink;
   }}
 }}
-body.mem002-doc .mem002-firmas-wrap {{ margin: 0; padding: 0; }}
+body.mem002-doc {{ margin: 0; padding: 0; }}
+body.mem002-doc .mem002-firmas-wrap {{
+  margin: 0; padding: 0;
+  height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm;
+  max-height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm;
+  overflow: hidden;
+}}
 """
 
 
@@ -16965,23 +16932,21 @@ def _html_cc_sub_001_thead_items(bd: str, thead_bg: str) -> str:
 </tr>
 </thead>"""
 
-# Área de imagen de firma en PDFs CCD (~1,5 cm). xhtml2pdf respeta mejor pt que cm; altura fija en <td>
-# evita que una columna estire TODA la fila de las tres firmas.
-_CCD_FIRMA_BOX_PT = "28pt"  # ≈ 1 cm (más compacto que 42pt)
-_CCD_FIRMA_IMG_INNER_PT = "26pt"
-# Informe mensual: franja inferior fija. Alto medido con la caja de imagen (28pt)
-# más nombre y cargo, con holgura para un salto de línea. El margen inferior
-# del @page es bottom + alto + separación, así el flujo no entra en la franja.
-_CC_MES_FIRMAS_BOTTOM_MM = 3.0
-_CC_MES_FIRMAS_ALTO_MM = 26.0
-_CC_MES_FIRMAS_SEPARACION_MM = 1.5
-# Por encima de esto el cierre no llenó la hoja: la franja se acerca al último
-# renglón. En una hoja llena el hueco real queda en 4–12 mm y no se toca.
+# Área de imagen de firma en PDFs CCD (flujo, sin @frame). Jaula fija en <td>.
+_CCD_FIRMA_BOX_PT = "22pt"
+_CCD_FIRMA_IMG_INNER_PT = "20pt"
+# Franja inferior fija (@frame). under_mm ≈ BOTTOM + (ALTO − alto_visual).
+# Jaula compacta: HTML cabe desde ~13 mm; ALTO=13,5 + BOTTOM=2 → under medido ≈ 4,6 mm
+# (≤ 5 mm). Subir la franja post-PDF dejaba vacío grande *bajo* las firmas.
+_CC_MES_FIRMAS_BOTTOM_MM = 2.0
+_CC_MES_FIRMAS_ALTO_MM = 13.5
+_CC_MES_FIRMAS_SEPARACION_MM = 1.0
+# Legacy (tests / hueco): ya no se sube la franja; el vacío queda ENCIMA de las firmas.
 _CC_MES_FIRMAS_HUECO_MAX_MM = 14.0
 _CC_MES_FIRMAS_HUECO_OBJETIVO_MM = 4.0
-# Memorias CC-SUB-002 / CC-SEM / CC-MES (landscape): fila de firmas más baja que CC-SUB-001.
-_CCD_FIRMA_MEM002_BOX_PT = "22pt"
-_CCD_FIRMA_MEM002_IMG_INNER_PT = "20pt"
+# Pie @frame y memorias landscape: jaula compacta (misma altura firmada o vacía).
+_CCD_FIRMA_MEM002_BOX_PT = "18pt"
+_CCD_FIRMA_MEM002_IMG_INNER_PT = "16pt"
 
 
 def _html_cc_sub_td_firma_columna(
@@ -17118,7 +17083,7 @@ def _html_cc_sub_v1_plain(
         )
         page_css = f"""@page {{
   size: letter landscape;
-  margin: 5mm 7mm {margen_inf:.1f}mm 7mm;
+  margin: 4.0mm 7mm {margen_inf:.1f}mm 7mm;
   @frame footer {{
     -pdf-frame-content: firmasFooter;
     bottom: {_CC_MES_FIRMAS_BOTTOM_MM:.1f}mm;
@@ -17128,14 +17093,47 @@ def _html_cc_sub_v1_plain(
     -pdf-keep-in-frame-mode: shrink;
   }}
 }}"""
-        firmas_wrap_css = ".ccd-cc001-firmas-wrap { margin: 0; padding: 0; }"
+        firmas_wrap_css = (
+            ".ccd-cc001-firmas-wrap { margin: 0; padding: 0; "
+            f"height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm; max-height: {_CC_MES_FIRMAS_ALTO_MM:.1f}mm; "
+            "overflow: hidden; }"
+        )
         firmas_attr = ' id="firmasFooter"'
         periodo_css = "margin:0;padding:0;line-height:1.05;"
+        body_pad = "0"
+        # Pie @frame: tipografía/jaula compacta (igual que memorias) para caber en ALTO_MM.
+        firma_hdr_css = (
+            ".ccd-firma-slot-hdr { font-weight: bold; font-size: 6pt; margin: 0; "
+            "padding: 0; color: #111; line-height: 1; }"
+        )
+        firma_line_css = (
+            ".ccd-firma-line { border: none; border-top: 1px solid #111; width: 100%; "
+            "height: 0; line-height: 0; font-size: 0; margin: 0 0 1px 0; padding: 0; overflow: hidden; }"
+        )
+        firma_meta_css = (
+            ".ccd-firma-meta { font-size: 5pt; color: #333; line-height: 1.0; height: 8pt; "
+            "max-height: 8pt; overflow: hidden; margin: 0; padding: 0; white-space: nowrap; }"
+        )
+        firma_img_inner = _CCD_FIRMA_MEM002_IMG_INNER_PT
     else:
-        page_css = "@page { size: letter landscape; margin: 5mm 7mm; }"
+        page_css = "@page { size: letter landscape; margin: 4.0mm 7mm; }"
         firmas_wrap_css = ".ccd-cc001-firmas-wrap { margin-top: 4mm; page-break-inside: avoid; }"
         firmas_attr = ""
         periodo_css = "margin-top:6px;"
+        body_pad = "0"
+        firma_hdr_css = (
+            ".ccd-firma-slot-hdr { font-weight: bold; font-size: 6.5pt; margin: 0 0 1px 0; "
+            "padding: 0; color: #111; line-height: 1.1; }"
+        )
+        firma_line_css = (
+            ".ccd-firma-line { border: none; border-top: 1px solid #111; width: 100%; "
+            "height: 0; line-height: 0; font-size: 0; margin: 0 0 2px 0; padding: 0; overflow: hidden; }"
+        )
+        firma_meta_css = (
+            ".ccd-firma-meta { font-size: 5.5pt; color: #333; line-height: 1.05; height: 10pt; "
+            "max-height: 10pt; overflow: hidden; margin: 0; padding: 0; white-space: nowrap; }"
+        )
+        firma_img_inner = _CCD_FIRMA_IMG_INNER_PT
 
     parts: list[str] = []
     parts.append(f"""<!DOCTYPE html>
@@ -17154,28 +17152,22 @@ def _html_cc_sub_v1_plain(
 {firmas_wrap_css}
 .ccd-cc001-firmas-tbl {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 .ccd-cc001-firmas-tbl td {{ vertical-align: top; }}
-.ccd-firma-slot-hdr {{ font-weight: bold; font-size: 6.5pt; margin: 0 0 1px 0; padding: 0; color: #111; line-height: 1.1; }}
+{firma_hdr_css}
 .ccd-firma-slot-stack {{ overflow: hidden; box-sizing: border-box; padding: 0; margin: 0; }}
 .ccd-firma-slot-body {{
   height: 0.75cm; min-height: 0.75cm; max-height: 0.75cm;
   overflow: hidden; box-sizing: border-box; padding: 0; margin: 0;
 }}
-.ccd-firma-line {{
-  border: none; border-top: 1px solid #111; width: 100%; height: 0;
-  line-height: 0; font-size: 0; margin: 0 0 2px 0; padding: 0; overflow: hidden;
-}}
-.ccd-firma-meta {{
-  font-size: 6pt; color: #333; line-height: 1.08; height: 14pt; max-height: 14pt;
-  overflow: hidden; margin: 0; padding: 0; word-wrap: break-word;
-}}
+{firma_line_css}
+{firma_meta_css}
 .ccd-firma-nombre {{ font-weight: bold; font-size: 7pt; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-cargo {{ font-size: 6.5pt; color: #444; line-height: 1.08; margin: 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-rep {{ font-size: 6.5pt; color: #333; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-img-cage {{ background: transparent !important; }}
 .ccd-firma-img-cage td {{ overflow: hidden !important; padding: 0 !important; background: transparent !important; }}
 .ccd-firma-img-cage img {{
-  max-width: 100% !important; height: {_CCD_FIRMA_IMG_INNER_PT} !important;
-  max-height: {_CCD_FIRMA_IMG_INNER_PT} !important; width: auto !important;
+  max-width: 100% !important; height: {firma_img_inner} !important;
+  max-height: {firma_img_inner} !important; width: auto !important;
   display: block !important; margin: 0 auto !important; background: transparent !important;
 }}
 /* Sin page-break-inside:avoid en el resumen: evita empujar el bloque entero
@@ -17186,7 +17178,7 @@ def _html_cc_sub_v1_plain(
    juntos y no queda una hoja cuyo único flujo es esa línea. */
 .cc001-cierre {{ width:100%; border-collapse:collapse; margin:0; -pdf-keep-with-next: true; }}
 </style></head>
-<body style="margin:0;padding:3px;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;">
+<body style="margin:0;padding:{body_pad};font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;">
 """)
 
     parts.append(f"""
@@ -17387,12 +17379,15 @@ INFORME CORTE DE SUB CONTRATISTA
     em = elaboro_marca or ("", "", "", "")
     rm = reviso_marca or ("", "", "", "")
     am = aprobo_marca or ("", "", "", "")
+    # firmas_pie (@frame): jaula compacta para que el HTML quepa en ALTO_MM sin drop.
+    pie_compact = bool(firmas_pie)
     elaboro_td = _html_cc_sub_td_firma_columna(
         bd,
         "Elaboró:",
         elaboro_n,
         elaboro_c,
         elaboro_firma_data_uri,
+        memoria_compact=pie_compact,
         marca_nombre=em[0],
         marca_cargo=em[1],
         marca_fecha=em[2],
@@ -17404,6 +17399,7 @@ INFORME CORTE DE SUB CONTRATISTA
         reviso_n,
         reviso_c,
         reviso_firma_data_uri,
+        memoria_compact=pie_compact,
         marca_nombre=rm[0],
         marca_cargo=rm[1],
         marca_fecha=rm[2],
@@ -17418,18 +17414,21 @@ INFORME CORTE DE SUB CONTRATISTA
             aprobo_n,
             aprobo_c,
             aprobo_firma_data_uri,
+            memoria_compact=pie_compact,
             marca_nombre=am[0],
             marca_cargo=am[1],
             marca_fecha=am[2],
             marca_hora=am[3],
         )
     else:
-        aprobo_td = f"""<td style="width:33.33%;{bd};padding:3px 5px;font-size:6.5pt;vertical-align:top;">
+        aprobo_box = _CCD_FIRMA_MEM002_BOX_PT if pie_compact else _CCD_FIRMA_BOX_PT
+        aprobo_pad = "padding:1px 3px;font-size:6pt" if pie_compact else "padding:3px 5px;font-size:6.5pt"
+        aprobo_td = f"""<td style="width:33.33%;{bd};{aprobo_pad};vertical-align:top;">
 <div class="ccd-firma-slot-hdr">Aprobó:</div>
 <div class="ccd-firma-slot-stack">
 <div class="ccd-firma-line"></div>
 <table class="ccd-firma-img-cage" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;background:transparent;margin:0;">
-<tr><td style="height:{_CCD_FIRMA_BOX_PT};max-height:{_CCD_FIRMA_BOX_PT};min-height:{_CCD_FIRMA_BOX_PT};overflow:hidden;vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;background:transparent;">&nbsp;</td></tr>
+<tr><td style="height:{aprobo_box};max-height:{aprobo_box};min-height:{aprobo_box};overflow:hidden;vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;background:transparent;">&nbsp;</td></tr>
 </table>
 <div class="ccd-firma-meta">{aprobo_empresa} – Representante: {aprobo_rep}</div>
 </div>
@@ -17591,8 +17590,8 @@ def _html_cc_conciliacion_informe_v1(
   overflow: hidden;
 }}
 .ccd-firma-meta {{
-  font-size: 6pt; color: #333; line-height: 1.08; height: 14pt; max-height: 14pt;
-  overflow: hidden; margin: 0; padding: 0; word-wrap: break-word;
+  font-size: 5.5pt; color: #333; line-height: 1.05; height: 10pt; max-height: 10pt;
+  overflow: hidden; margin: 0; padding: 0; white-space: nowrap;
 }}
 .ccd-firma-nombre {{ font-weight: bold; font-size: 7pt; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-cargo {{ font-size: 6.5pt; color: #444; line-height: 1.08; margin: 0; padding: 0; word-wrap: break-word; }}
@@ -18011,20 +18010,19 @@ def _html_mem002_bloque_firmas(
 </div>"""
 
 
-# Medido en el PDF (letter landscape, márgenes 0,5 cm):
-# cabecera MES compacta (~1,2 cm institucional + banda) ≈ 28 mm;
-# una fila de una línea mide ~3,4 mm y cada línea extra de observación ~2,5 mm.
-# Con firmas en @frame el cierre en flujo es solo total + pie (~8 mm).
+# Medido en el PDF (letter landscape, márgenes 4 mm):
+# cabecera MES compacta (institucional + banda) ≈ 32–36 mm → presupuesto 38 mm.
+# Con firmas en @frame el cierre en flujo es total + leyenda (~12–14 mm).
 _MEM002_HOJA_UTIL_MM = 205.9
-_MEM002_CABECERA_MM = 28.0
-_MEM002_BARRA_THEAD_MM = 11.0
+_MEM002_CABECERA_MM = 38.0
+_MEM002_BARRA_THEAD_MM = 12.0
 _MEM002_CIERRE_MM = 22.0
-_MEM002_CIERRE_FIRMAS_PIE_MM = 8.0
+_MEM002_CIERRE_FIRMAS_PIE_MM = 14.0
 _MEM002_FILA_BASE_MM = 3.4
 _MEM002_FILA_LINEA_MM = 2.55
 _MEM002_OBS_CHARS = 74
-# Márgenes base 5 mm; con firmas_pie el inferior pasa a BOTTOM+ALTO+SEPARACIÓN.
-_MEM002_MARGEN_BASE_MM = 5.0
+# Márgenes base 4 mm (@page); con firmas_pie el inferior pasa a BOTTOM+ALTO+SEPARACIÓN.
+_MEM002_MARGEN_BASE_MM = 4.0
 
 
 def _memoria_altura_entrada_mm(entry: Any) -> float:
@@ -18063,6 +18061,31 @@ def _memoria_cierre_mm(*, firmas_pie: bool = False) -> float:
     return _MEM002_CIERRE_FIRMAS_PIE_MM if firmas_pie else _MEM002_CIERRE_MM
 
 
+def _memoria_indice_inicio_ultimo_tramo(filas: List[Any]) -> int:
+    """Índice del primer `reg` del último tramo (acompaña al cierre anti-huérfano)."""
+    if not filas:
+        return 0
+    last_sub = None
+    for i in range(len(filas) - 1, -1, -1):
+        e = filas[i]
+        if isinstance(e, dict) and e.get("kind") == "subtramo":
+            last_sub = i
+            break
+    if last_sub is None:
+        return max(0, len(filas) - 1)
+    # Retrocede hasta el inicio del grupo de regs de ese tramo.
+    j = last_sub - 1
+    while j >= 0:
+        e = filas[j]
+        if isinstance(e, dict) and e.get("kind") == "subtramo":
+            return j + 1
+        if isinstance(e, dict) and e.get("kind") == "reg":
+            j -= 1
+            continue
+        break
+    return max(0, j + 1)
+
+
 def _chunks_memoria_detalle(
     registros: List[Any],
     rows_primera_hoja: int,
@@ -18072,10 +18095,9 @@ def _chunks_memoria_detalle(
 ) -> List[List[Any]]:
     """Parte el detalle según lo que cabe en la hoja, no con una cuota fija de filas.
 
-    26/30 filas cortaban aunque la hoja siguiera vacía: el «Total tramo» y las
-    firmas quedaban solos en la siguiente. Si el resto y el cierre caben en el
-    espacio que queda, siguen en la misma hoja. Los argumentos de cuota se
-    conservan por los llamadores; el corte lo decide la altura.
+    El cierre (CANTIDAD TOTAL + leyenda) viaja con el último tramo completo: nunca
+    queda solo en una página. Los argumentos de cuota se conservan por los
+    llamadores; el corte lo decide la altura.
     """
     del rows_primera_hoja, rows_hoja_siguiente
     cierre = _memoria_cierre_mm(firmas_pie=firmas_pie)
@@ -18092,8 +18114,7 @@ def _chunks_memoria_detalle(
         if resto + cierre <= presupuesto:
             chunks.append(filas[i:])
             break
-        # Esta hoja no es la última: se llena, y se deja al menos una fila
-        # para que el cierre no viaje solo.
+        # Hoja intermedia: llenar sin dejar el cierre (ni el último tramo) solo.
         usado = 0.0
         j = i
         while j < n - 1:
@@ -18116,6 +18137,60 @@ def _chunks_memoria_detalle(
         if usado + extra + cierre <= presupuesto:
             chunks[-2] = previo + ultimo
             chunks.pop()
+    # Anti-huérfano: último tramo completo siempre en el chunk final (con el cierre).
+    ini_tramo = _memoria_indice_inicio_ultimo_tramo(filas)
+    if ini_tramo > 0 and ini_tramo < n:
+        prefijo = filas[:ini_tramo]
+        tramo_final = filas[ini_tramo:]
+        rechunks = _chunks_memoria_detalle_sin_cierre(prefijo, firmas_pie=firmas_pie)
+        alto_tramo = sum(_memoria_altura_entrada_mm(e) for e in tramo_final)
+        if not rechunks:
+            chunks = [tramo_final]
+        else:
+            presupuesto_ult = _memoria_presupuesto_hoja_mm(False, firmas_pie=firmas_pie)
+            cola = rechunks[-1]
+            if (
+                sum(_memoria_altura_entrada_mm(e) for e in cola)
+                + alto_tramo
+                + cierre
+                <= presupuesto_ult
+            ):
+                rechunks[-1] = cola + tramo_final
+                chunks = rechunks
+            else:
+                chunks = rechunks + [tramo_final]
+    return chunks
+
+
+def _chunks_memoria_detalle_sin_cierre(
+    filas: List[Any], *, firmas_pie: bool = False
+) -> List[List[Any]]:
+    """Empaqueta filas sin reservar cierre (hojas intermedias del prefijo)."""
+    if not filas:
+        return []
+    chunks: List[List[Any]] = []
+    i = 0
+    n = len(filas)
+    primera = True
+    while i < n:
+        presupuesto = _memoria_presupuesto_hoja_mm(primera, firmas_pie=firmas_pie)
+        resto = sum(_memoria_altura_entrada_mm(filas[k]) for k in range(i, n))
+        if resto <= presupuesto:
+            chunks.append(filas[i:])
+            break
+        usado = 0.0
+        j = i
+        while j < n:
+            alto = _memoria_altura_entrada_mm(filas[j])
+            if j > i and usado + alto > presupuesto:
+                break
+            usado += alto
+            j += 1
+        if j == i:
+            j = i + 1
+        chunks.append(filas[i:j])
+        i = j
+        primera = False
     return chunks
 
 
@@ -18480,18 +18555,19 @@ def _html_memoria_item_body(
         row_offset += len(chunk)
         body += "</tbody></table>"
 
-    # Fila de total en tabla aparte (sin colspan): xhtml2pdf suele aplastar OBS/CANT TOT en la última página del detalle.
-    body += f"""<table class="w100 mem002-total-wrap" cellspacing="0" cellpadding="0">
+    # Total + leyenda: bloque inseparable del final del detalle (anti-huérfano).
+    # xhtml2pdf: total en tabla aparte (sin colspan) para no aplastar OBS/CANT TOT.
+    body += f"""<div class="mem002-cierre-keep">
+<table class="w100 mem002-total-wrap" cellspacing="0" cellpadding="0">
         <tr>
             <td class="total-td" style="width:60%;text-align:right;padding-right:8px">CANTIDAD TOTAL DEL ÍTEM</td>
             <td class="total-td" style="width:8%;text-align:right">{_fn_cant_informe(total_cant)}</td>
             <td class="total-td" style="width:8%;text-align:left;padding-left:4px">{_h(unidad_item)}</td>
             <td class="total-td" style="width:24%">&nbsp;</td>
         </tr>
-    </table>"""
-
-
-    body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
+    </table>
+<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>
+</div>"""
 
     # SUB/SEM: firmas en flujo tras el detalle (antes de fotos).
     # MES con firmas_pie: se emiten al final con id firmasFooter (@frame).
