@@ -295,6 +295,7 @@ import {
 import { sicoeFiltrarRegistrosParaSub } from './modules/sicoe-obra/sicoeSubcontratistaRegistros'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { permisosTopografia, usuarioPuedeEditarRegistrosSicoe } from './utils/permisosContrato'
+import { esVistaSubcontratista } from './utils/empresaUsuario'
 import { SICOE_ALERTA_SYNC_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -2470,7 +2471,8 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
     esInterventoria &&
     !puedeValidarBase &&
     (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
-  const esSubcontratista = esSubRol || cargo.includes('subcontratista')
+  // Aislamiento por Empresa=subcontratista (independiente del cargo/rol).
+  const esSubcontratista = esVistaSubcontratista(usuario)
 
   // Contrato principal: oculto a operativos/apoyo/sub. El sub ve solo precios propios
   // (backend overlay en detalle; flag economia_subcontratista / precio_fuente).

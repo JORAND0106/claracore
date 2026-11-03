@@ -33,6 +33,7 @@ import {
   pptoEstadoValidacionColor,
   pptoEsLegadoDepuracion,
 } from './pptoEstadosValidacion'
+import { esVistaSubcontratista } from '../../utils/empresaUsuario'
 import {
   esDesarrolladorPresupuesto,
   esCargoDesarrolladorPresupuesto,
@@ -196,7 +197,7 @@ function determinarNivelValidacion(usuario, contratoId) {
   const esOperativoInterventoria = rol === 'operativo interventoria'
   const esApoyoTecnico           = esInterventoria && !puedeValidar &&
                                    (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
-  const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
+  const esSubcontratista         = esVistaSubcontratista(usuario)
   const esSoloComentarista       = esOperativoInterventoria  // puede ver y comentar, no valida ni edita
 
   const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico || esSubcontratista)

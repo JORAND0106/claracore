@@ -22,6 +22,10 @@ import { ContratoOrdenesPagoAlertasDev } from "./ContratoOrdenesPagoAlertasDev";
 import { ADMIN_THEME as THEME, tFrom, isDarkMode, isRestMode, isLightTheme, mapboxStyleForTheme } from "./theme/adminPanelTheme";
 import { useClaraViewport } from "./useClaraViewport";
 import { esDesarrolladorUsuario } from "./utils/permisosContrato";
+import {
+  empresaFromKey,
+  empresaKeyFromUsuario,
+} from "./utils/empresaUsuario";
 import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
 import SeccionAlmacenamientoAzure from "./admin/SeccionAlmacenamientoAzure";
 import SeccionIntegridadListado from "./admin/SeccionIntegridadListado";
@@ -447,7 +451,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
   const [expandido, setExpandido] = useState(null);
   const [ucContratos, setUcContratos] = useState({});
   const [addingContrato, setAddingContrato] = useState({});
-  const [subcontratistas, setSubcontratistas] = useState({});
+  const [empresasOpts, setEmpresasOpts] = useState({});
   const [verifInactBusy, setVerifInactBusy] = useState(false);
   const [highlightUid, setHighlightUid] = useState(null);
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
@@ -475,7 +479,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
           rol_id: u.rol_id || "",
           contrato_id: u.contrato_id || "",
           estado: u.estado || "",
-          subcontratista_id: u.subcontratista_id || "",
+          empresa_key: empresaKeyFromUsuario(u),
           politicas_aceptadas: u.politicas_aceptadas === true,
         };
       });
@@ -513,17 +517,16 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     };
   }, [focusUsuarioId, usuarios.length]);
 
-  // Precargar listado de subcontratistas cuando el cargo editado es subcontratista
+  // Precargar opciones de Empresa (contratista / interventoría / subcontratistas) por contrato
   useEffect(() => {
     usuarios.forEach((u) => {
-      if (!esCargoSubcontratistaEdit(u.id, u)) return;
       const cid = edits[u.id]?.contrato_id || u.contrato_id;
       if (!cid) return;
-      if (subcontratistas[u.id]) return;
-      void cargarSubcontratistas(u.id, cid);
+      if (empresasOpts[u.id]) return;
+      void cargarEmpresas(u.id, cid);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usuarios, edits, cargos]);
+  }, [usuarios, edits]);
 
   const ejecutarVerificarInactividad = async () => {
     if (!window.confirm(
@@ -571,25 +574,24 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     setSaving(uid);
     const e = { ...edits[uid], ...(override || {}) };
     const orig = usuarios.find(x => x.id === uid);
+    const emp = empresaFromKey(e.empresa_key);
     // Convertir "" / "None" a null para campos int — evita 22P02 en PostgREST
     const payload = {
       cargo_id:          toOptInt(e.cargo_id),
       rol_id:            toOptInt(e.rol_id),
       contrato_id:       toOptInt(e.contrato_id),
       estado:            e.estado            || null,
-      subcontratista_id: toOptInt(e.subcontratista_id),
+      empresa_tipo:      emp.empresa_tipo,
+      subcontratista_id: emp.subcontratista_id,
     };
     const cargoNom = cargoNombreById(payload.cargo_id) || (orig?.cargo_nombre || "");
     if (String(cargoNom).trim().toLowerCase() === "subcontratista" && !payload.subcontratista_id) {
       setMsg({
         type: "error",
-        text: "El cargo Subcontratista requiere seleccionar el subcontratista del contrato.",
+        text: "El cargo Subcontratista requiere seleccionar una empresa subcontratista del contrato.",
       });
       setSaving(null);
       return;
-    }
-    if (String(cargoNom).trim().toLowerCase() !== "subcontratista") {
-      payload.subcontratista_id = null;
     }
     if (orig && e.politicas_aceptadas !== undefined && e.politicas_aceptadas !== (orig.politicas_aceptadas === true)) {
       payload.politicas_aceptadas = e.politicas_aceptadas;
@@ -623,8 +625,9 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     setExpandido(uid);
     cargarUcContratos(uid);
     const u = usuarios.find(x => x.id === uid);
-    if (u && u.cargo_nombre && u.cargo_nombre.toLowerCase() === 'subcontratista') {
-      cargarSubcontratistas(uid, u.contrato_id);
+    if (u) {
+      const cid = edits[uid]?.contrato_id || u.contrato_id;
+      if (cid) cargarEmpresas(uid, cid);
     }
   };
 
@@ -647,41 +650,41 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     } catch (e) { setMsg({ type: "error", text: e.message }); }
   };
 
-  const cargarSubcontratistas = async (uid, contrato_id) => {
+  const cargarEmpresas = async (uid, contrato_id) => {
     if (!contrato_id) {
-      setSubcontratistas(p => ({ ...p, [uid]: [] }));
+      setEmpresasOpts(p => ({ ...p, [uid]: [] }));
       return;
     }
     try {
-      const data = await call("GET", `/subcontratistas/${contrato_id}`);
-      setSubcontratistas(p => ({ ...p, [uid]: data }));
-    } catch { setSubcontratistas(p => ({ ...p, [uid]: [] })); }
+      const data = await call("GET", `/admin/usuarios/empresas/${contrato_id}`);
+      const opts = Array.isArray(data?.opciones) ? data.opciones : (Array.isArray(data) ? data : []);
+      setEmpresasOpts(p => ({ ...p, [uid]: opts }));
+    } catch {
+      setEmpresasOpts(p => ({ ...p, [uid]: [] }));
+    }
   };
 
   const onCargoChange = (uid, u, cargoId) => {
     setEdit(uid, "cargo_id", cargoId);
-    const nombre = cargoNombreById(cargoId);
-    if (String(nombre).trim().toLowerCase() === "subcontratista") {
-      const cid = edits[uid]?.contrato_id || u.contrato_id;
-      cargarSubcontratistas(uid, cid);
-    } else {
-      setEdit(uid, "subcontratista_id", "");
-    }
+    const cid = edits[uid]?.contrato_id || u.contrato_id;
+    if (cid) cargarEmpresas(uid, cid);
   };
 
   const onContratoChange = (uid, u, contratoId) => {
     setEdit(uid, "contrato_id", contratoId);
-    setEdit(uid, "subcontratista_id", "");
-    if (esCargoSubcontratistaEdit(uid, { ...u, cargo_id: edits[uid]?.cargo_id ?? u.cargo_id })) {
-      cargarSubcontratistas(uid, contratoId);
-    }
+    setEdit(uid, "empresa_key", "");
+    if (contratoId) cargarEmpresas(uid, contratoId);
   };
 
-  const asignarSubcontratista = async (uid, subcontratista_id) => {
+  const asignarEmpresa = async (uid, empresa_key) => {
     try {
-      await call("PUT", `/admin/usuarios/${uid}`, { subcontratista_id: subcontratista_id ? parseInt(subcontratista_id) : null });
-      setMsg({ type: "success", text: "Subcontratista asignado." });
-      setEdit(uid, "subcontratista_id", subcontratista_id);
+      const emp = empresaFromKey(empresa_key);
+      await call("PUT", `/admin/usuarios/${uid}`, {
+        empresa_tipo: emp.empresa_tipo,
+        subcontratista_id: emp.subcontratista_id,
+      });
+      setMsg({ type: "success", text: "Empresa asignada." });
+      setEdit(uid, "empresa_key", empresa_key || "");
       cargar(true);
     } catch (e) { setMsg({ type: "error", text: e.message }); }
   };
@@ -717,42 +720,59 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
         </select>
         <button type="button" style={touchBtn("primary", true)} onClick={() => agregarContrato(u.id)}>Asignar</button>
       </div>
-      {esCargoSubcontratistaEdit(u.id, u) && (
-        <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,175,197,0.15)", paddingTop: 12 }}>
-          <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
-            Subcontratista asignado:
-          </div>
-          {(edits[u.id]?.subcontratista_id || u.subcontratista_id) ? (
-            <div style={{ fontSize: 12, color: col.textSecondary, marginBottom: 8 }}>
-              Actual: {(subcontratistas[u.id] || []).find(s => String(s.id) === String(edits[u.id]?.subcontratista_id || u.subcontratista_id))?.razon_social || `ID ${edits[u.id]?.subcontratista_id || u.subcontratista_id}`}
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: "#f59e0b", marginBottom: 8 }}>Sin subcontratista asignado — el usuario no tiene acceso.</div>
-          )}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select style={sel({ minWidth: adminCompact ? "100%" : 220, flex: adminCompact ? "1 1 100%" : undefined })}
-              value={edits[u.id]?.subcontratista_id || ""}
-              onChange={e => setEdit(u.id, "subcontratista_id", e.target.value)}>
-              <option value="">Seleccionar subcontratista…</option>
-              {(subcontratistas[u.id] || []).map(s => (
-                <option key={s.id} value={s.id}>{s.razon_social}</option>
-              ))}
-            </select>
-            <button type="button" style={touchBtn("primary", true)}
-              onClick={() => asignarSubcontratista(u.id, edits[u.id]?.subcontratista_id)}>
-              Asignar
-            </button>
-          </div>
+      {(() => {
+        const esSubExp = esCargoSubcontratistaEdit(u.id, u);
+        const optsExp = (empresasOpts[u.id] || []).filter((s) =>
+          esSubExp ? String(s.tipo || "").toLowerCase() === "subcontratista" : true
+        );
+        const keyExp = edits[u.id]?.empresa_key || empresaKeyFromUsuario(u);
+        const labelExp = optsExp.find((s) => String(s.key) === String(keyExp))?.label
+          || optsExp.find((s) => String(s.key) === String(keyExp))?.nombre
+          || keyExp;
+        return (
+      <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,175,197,0.15)", paddingTop: 12 }}>
+        <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
+          Empresa asignada:
         </div>
-      )}
+        {keyExp ? (
+          <div style={{ fontSize: 12, color: col.textSecondary, marginBottom: 8 }}>
+            Actual: {labelExp}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: esSubExp ? "#f59e0b" : col.textSecondary, marginBottom: 8 }}>
+            {esSubExp
+              ? "Sin empresa asignada — el cargo Subcontratista requiere una empresa subcontratista."
+              : "Sin empresa asignada (opcional)."}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select style={sel({ minWidth: adminCompact ? "100%" : 220, flex: adminCompact ? "1 1 100%" : undefined })}
+            value={edits[u.id]?.empresa_key || ""}
+            onChange={e => setEdit(u.id, "empresa_key", e.target.value)}>
+            <option value="">Seleccionar empresa…</option>
+            {optsExp.map(s => (
+              <option key={s.key} value={s.key}>{s.label || s.nombre}</option>
+            ))}
+          </select>
+          <button type="button" style={touchBtn("primary", true)}
+            onClick={() => asignarEmpresa(u.id, edits[u.id]?.empresa_key)}>
+            Asignar
+          </button>
+        </div>
+      </div>
+        );
+      })()}
     </div>
   );
 
   const renderCamposUsuario = (u, asCard) => {
     const esSub = esCargoSubcontratistaEdit(u.id, u);
-    const labelSub = (subcontratistas[u.id] || []).find(
-      (s) => String(s.id) === String(edits[u.id]?.subcontratista_id || u.subcontratista_id || "")
-    )?.razon_social;
+    const empresaKey = edits[u.id]?.empresa_key || "";
+    const optsEmpresa = (empresasOpts[u.id] || []).filter((s) =>
+      esSub ? String(s.tipo || "").toLowerCase() === "subcontratista" : true
+    );
+    const labelEmp = optsEmpresa.find((s) => String(s.key) === String(empresaKey))?.nombre
+      || optsEmpresa.find((s) => String(s.key) === String(empresaKey))?.label;
     const fields = [
       {
         key: "estado",
@@ -804,30 +824,28 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
         ),
       },
       {
-        key: "subcontratista",
-        label: esSub ? "Subcontratista *" : "Subcontratista",
-        node: esSub ? (
+        key: "empresa",
+        label: esSub ? "Empresa *" : "Empresa",
+        node: (
           <>
             <select
               style={sel({ minWidth: asCard ? undefined : 180 })}
-              value={edits[u.id]?.subcontratista_id || ""}
-              onChange={(e) => setEdit(u.id, "subcontratista_id", e.target.value)}
-              required
+              value={empresaKey}
+              onChange={(e) => setEdit(u.id, "empresa_key", e.target.value)}
+              required={esSub}
             >
-              <option value="">Seleccionar…</option>
-              {(subcontratistas[u.id] || []).map((s) => (
-                <option key={s.id} value={s.id}>{s.razon_social}</option>
+              <option value="">{esSub ? "Seleccionar…" : "Sin empresa"}</option>
+              {optsEmpresa.map((s) => (
+                <option key={s.key} value={s.key}>{s.label || s.nombre}</option>
               ))}
             </select>
-            {!edits[u.id]?.subcontratista_id && (
-              <div style={{ fontSize: 10, color: "#f59e0b", marginTop: 4 }}>Obligatorio</div>
+            {esSub && !empresaKey && (
+              <div style={{ fontSize: 10, color: "#f59e0b", marginTop: 4 }}>Obligatorio (subcontratista)</div>
             )}
-            {labelSub && edits[u.id]?.subcontratista_id ? (
-              <div style={{ fontSize: 10, color: col.textSecondary, marginTop: 4 }}>{labelSub}</div>
+            {labelEmp && empresaKey ? (
+              <div style={{ fontSize: 10, color: col.textSecondary, marginTop: 4 }}>{labelEmp}</div>
             ) : null}
           </>
-        ) : (
-          <span style={{ color: col.textSecondary, fontSize: 12 }}>—</span>
         ),
       },
       {
@@ -856,9 +874,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
       },
     ];
     if (!asCard) return fields;
-    // En tarjetas, ocultar la columna vacía si el cargo no es subcontratista
-    const cardFields = esSub ? fields : fields.filter((f) => f.key !== "subcontratista");
-    return cardFields.map((f) => (
+    return fields.map((f) => (
       <div key={f.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <label style={{ fontSize: "var(--cc-caption)", color: col.textMuted }}>{f.label}</label>
         {f.node}
@@ -901,7 +917,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
             <table style={S.table}>
               <thead>
                 <tr>
-                  {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Subcontratista", "Políticas", "Acciones"].map(h => (
+                  {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Empresa", "Políticas", "Acciones"].map(h => (
                     <th key={h} style={S.th(theme)}>{h}</th>
                   ))}
                 </tr>

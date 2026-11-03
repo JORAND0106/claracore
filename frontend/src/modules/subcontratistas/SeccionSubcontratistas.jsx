@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { tFrom, isDarkMode, isRestMode, buildContratoUiTheme } from '../../theme/adminPanelTheme'
+import { usuarioAisladoPorEmpresaSub } from '../../utils/empresaUsuario'
 import CorteSsBlock from './CorteSsBlock'
 import PreciosSubcontratistaSheet from './PreciosSubcontratistaSheet'
 import SubcontratistaCalPicker from './SubcontratistaCalPicker'
@@ -15,9 +16,9 @@ import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from '
  */
 export default function SeccionSubcontratistas({ call, user, perms, theme, token }) {
   const contratoId = user?.contrato_id
-  const cargoNom = String(user?.cargo_nombre || '').trim().toLowerCase()
   const rolNom = String(user?.rol_nombre || user?.rol || '').trim().toLowerCase().replace(/í/g, 'i')
-  const esCargoSub = cargoNom === 'subcontratista'
+  // Aislamiento por Empresa=subcontratista (no por nombre de cargo).
+  const esCargoSub = usuarioAisladoPorEmpresaSub(user)
   const esOperativoOcultoEco = rolNom === 'operativo contratista' || rolNom === 'operativo interventoria'
   const puedeExportarVuCobro = !esCargoSub && !esOperativoOcultoEco
   const tTok = tFrom(theme)
