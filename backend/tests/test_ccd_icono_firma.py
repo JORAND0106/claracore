@@ -133,6 +133,14 @@ def test_rol_firmado_oculta_el_icono_y_el_cambio_de_biblioteca_no_pisa_la_firma(
     with pytest.raises(HTTPException) as ya:
         inf._resolver_slot_registrar_firma(cod, cfg, 11, ana, {"elaboro"})
     assert ya.value.status_code == 409
+    # Tras invalidación, el mismo rol vuelve a estar pendiente.
+    assert (
+        inf._slot_firma_pendiente(cfg, 11, ana, cod, {"elaboro"}, contenido_modificado=True)
+        == "elaboro"
+    )
+    assert inf._resolver_slots_registrar_firma(
+        cod, cfg, 11, ana, {"elaboro"}, contenido_modificado=True
+    ) == ["elaboro"]
     ambos = {**cfg, "reviso_usuario_id": 11}
     assert inf._slot_firma_pendiente(ambos, 11, ana, cod, {"elaboro"}) == "reviso"
     movido = {**cfg, "elaboro_usuario_id": 55}

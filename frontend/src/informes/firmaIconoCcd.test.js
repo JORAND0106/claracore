@@ -86,6 +86,53 @@ test('un rol firmado oculta el ícono y el cambio de biblioteca mueve el pendien
   )
 })
 
+test('contenido_modificado reabre el ícono aunque el rol ya esté registrado', () => {
+  const codigo = 'CC-MES-001'
+  const firmadoInvalido = {
+    ...VACIAS,
+    elaboro: { registrada: true, usuario_id: 11, created_at: '2026-10-21' },
+    reviso: { registrada: true, usuario_id: 22, created_at: '2026-10-21' },
+    contenido_modificado: true,
+  }
+  assert.equal(
+    slotFirmaPendienteCcd({
+      codigo,
+      cfg: cfgBase(),
+      firmas: firmadoInvalido,
+      usuario: usuario(11, 'Ana', 'Elaboró'),
+    }),
+    'elaboro',
+  )
+  assert.equal(
+    slotFirmaPendienteCcd({
+      codigo,
+      cfg: cfgBase(),
+      firmas: firmadoInvalido,
+      usuario: usuario(22, 'Luis', 'Revisó'),
+    }),
+    'reviso',
+  )
+  assert.equal(
+    slotFirmaPendienteCcd({
+      codigo,
+      cfg: cfgBase(),
+      firmas: firmadoInvalido,
+      usuario: usuario(44, 'Nadie', 'Asignado'),
+    }),
+    null,
+  )
+  // Sin flag: sigue oculto si ya firmó.
+  assert.equal(
+    slotFirmaPendienteCcd({
+      codigo,
+      cfg: cfgBase(),
+      firmas: { ...firmadoInvalido, contenido_modificado: false },
+      usuario: usuario(11, 'Ana', 'Elaboró'),
+    }),
+    null,
+  )
+})
+
 test('sin firmas cargadas no muestra el ícono; entidades externas nunca', () => {
   assert.equal(
     slotFirmaPendienteCcd({ codigo: 'CC-SEM-001', cfg: cfgBase(), firmas: null, usuario: usuario(11, 'Ana', 'Elaboró') }),
