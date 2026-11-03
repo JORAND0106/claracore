@@ -210,18 +210,32 @@ def test_rutas_de_baja_exigen_eliminar_y_dejan_el_registro_en_el_log():
         "route_eliminar_devolucion",
         "route_eliminar_solicitud",
         "route_eliminar_linea_solicitud",
+        "route_delete_cotizacion",
     ):
         src = _fn_source(almacen, name)
         assert '"eliminar"' in src
         assert '"editar"' not in src
-        assert "registro_completo" in src or 'valor_anterior=result.get("registro")' in src
-        assert 'result.pop("registro"' in src or "registro_completo" in src
+        if name != "route_delete_cotizacion":
+            assert "registro_completo" in src or 'valor_anterior=result.get("registro")' in src
+            assert 'result.pop("registro"' in src or "registro_completo" in src
+
+    routes_txt = almacen.read_text(encoding="utf-8")
+    helper = routes_txt[routes_txt.index("def _puede_anular_solicitud") : routes_txt.index("class ConfigUpdateBody")]
+    assert 'tiene_permiso_almacen(current_user, "eliminar")' in helper
+    assert 'tiene_permiso_almacen(current_user, "editar")' not in helper
+    assert 'tiene_permiso_almacen(current_user, "crear")' not in helper
+
     catalogo = ROOT / "catalogo_insumos_routes.py"
     for name in ("route_delete_insumo", "route_eliminar_cotizacion_insumo"):
         src = _fn_source(catalogo, name)
         assert 'require_permiso_catalogo_insumos(current_user, "eliminar")' in src
         assert 'valor_anterior=result.get("registro")' in src
         assert 'result.pop("registro", None)' in src
+
+    plantilla = _fn_source(catalogo, "route_csv_plantilla")
+    assert "require_exportar_o_crear_catalogo_insumos(current_user)" in plantilla
+    plantilla_prov = _fn_source(catalogo, "route_csv_plantilla_proveedores")
+    assert "require_exportar_o_crear_catalogo_insumos(current_user)" in plantilla_prov
 
 
 def test_eliminar_solicitud_sin_oc_borra_y_recalcula(monkeypatch):

@@ -269,6 +269,8 @@ export default function InventarioPanel({
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
   const verEconomicos = permisos?.verEconomicos !== false
+  const puedeExportar = Boolean(permisos?.exportar)
+  const [exportBusy, setExportBusy] = useState(false)
 
   const [arbol, setArbol] = useState(null)
   const [alertas, setAlertas] = useState([])
@@ -416,18 +418,45 @@ export default function InventarioPanel({
   const filtroActivo = Boolean(filtroCap || filtroItem || q.trim())
   const colSpan = verEconomicos ? 9 : 4
 
+  const exportarExcel = async () => {
+    if (!puedeExportar || exportBusy) return
+    setExportBusy(true)
+    setError('')
+    try {
+      await api.exportInventarioExcel()
+    } catch (e) {
+      setError(e.message || 'No se pudo exportar el inventario')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📊 Inventario</div>
-        <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-          Capítulo → Ítem → Insumo → OC. Valores por insumo, trazabilidad y saldo por consumir.
-        </div>
-        {arbol?.generado_at && (
-          <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
-            Actualizado: {fmtFechaAlmacenCorta(arbol.generado_at)}
+      <div style={{ marginBottom: 16, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📊 Inventario</div>
+          <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
+            Capítulo → Ítem → Insumo → OC. Valores por insumo, trazabilidad y saldo por consumir.
           </div>
-        )}
+          {arbol?.generado_at && (
+            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
+              Actualizado: {fmtFechaAlmacenCorta(arbol.generado_at)}
+            </div>
+          )}
+        </div>
+        {puedeExportar ? (
+          <button
+            type="button"
+            data-testid="inventario-exportar-excel"
+            style={ui.btnSecondary}
+            disabled={exportBusy || loading}
+            title="Exportar inventario a Excel"
+            onClick={exportarExcel}
+          >
+            {exportBusy ? 'Exportando…' : '⬇ Excel'}
+          </button>
+        ) : null}
       </div>
 
       {alertas.length > 0 && (
