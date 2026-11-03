@@ -4,6 +4,10 @@ y marcador visual de invalidación en el PDF.
 
 No borra registros de firma ni bloquea descargas: si el hash actual difiere
 del guardado al firmar, el slot muestra texto en lugar de la imagen.
+
+Al re-firmar, ``informes._asegurar_snapshot_con_hash_actual`` actualiza solo
+``contenido_hash`` del snapshot (los firmantes siguen inmutables) para que el
+marcador desaparezca sin perder el historial de registros.
 """
 from __future__ import annotations
 

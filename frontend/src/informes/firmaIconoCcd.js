@@ -85,6 +85,18 @@ function slotOcupado(firmas, slot) {
   return !!(v.registrada || v.usuario_id || v.created_at)
 }
 
+function contenidoModificado(firmas) {
+  return firmas?.contenido_modificado === true
+}
+
+function usuarioAsignadoAlSlot(cfg, slot, usuario) {
+  const uid = usuarioIdNumero(usuario)
+  const sid = idSlot(cfg, slot)
+  if (uid != null && sid != null && sid === uid) return true
+  if (sid == null && nombreCoincide(cfg, slot, usuario)) return true
+  return false
+}
+
 function nombreCoincide(cfg, slot, usuario) {
   const nc = normalizarNombre(cfg?.[`${slot}_nombre`])
   if (!nc || nc === '—' || nc === 'ej. elaboró' || nc === 'ej. revisó') return false
@@ -94,15 +106,15 @@ function nombreCoincide(cfg, slot, usuario) {
 }
 
 /**
- * Primer rol de origen «configuracion», aún sin firma, asignado a este usuario.
- * null si el formato es de entidades externas, si las firmas del documento no
- * cargaron, o si el usuario no tiene un rol pendiente.
+ * Primer rol de origen «configuracion» pendiente para este usuario.
+ * Pendiente = vacío, o (si contenido_modificado) cualquier rol asignado
+ * aunque ya tenga registro — para re-firmar tras invalidación.
+ * null si entidades externas, firmas no cargaron, o sin rol pendiente.
  */
 export function slotFirmaPendienteCcd({ codigo, formato, cfg, firmas, usuario }) {
   if (codigo === CODIGO_ENTIDAD_EXTERNA || formato?.grupo_ccd === 'entidades_externas') return null
   if (!firmas || typeof firmas !== 'object') return null
   if (!cfg || typeof cfg !== 'object' || !usuario) return null
-  const uid = usuarioIdNumero(usuario)
   const slots = (formato?.slots_firma?.length ? formato.slots_firma : SLOTS_FIRMA_POR_FORMATO[codigo]) || []
   const configurables = new Set(
     slots
@@ -110,11 +122,12 @@ export function slotFirmaPendienteCcd({ codigo, formato, cfg, firmas, usuario })
       .map((s) => s.id),
   )
   if (!configurables.size) return null
+  const revalidar = contenidoModificado(firmas)
   for (const slot of ORDEN_SLOTS_FIRMA) {
-    if (!configurables.has(slot) || slotOcupado(firmas, slot)) continue
-    const sid = idSlot(cfg, slot)
-    if (uid != null && sid != null && sid === uid) return slot
-    if (sid == null && nombreCoincide(cfg, slot, usuario)) return slot
+    if (!configurables.has(slot)) continue
+    if (!revalidar && slotOcupado(firmas, slot)) continue
+    if (!usuarioAsignadoAlSlot(cfg, slot, usuario)) continue
+    return slot
   }
   return null
 }
