@@ -218,7 +218,7 @@ def test_subcontratista_conserva_firmas_en_el_flujo():
     assert 'id="firmasFooter"' not in html
     assert "@frame" not in html
     assert "-pdf-frame-content" not in html
-    assert "@page { size: letter landscape; margin: 6mm 7mm; }" in html
+    assert "@page { size: letter landscape; margin: 5mm 7mm; }" in html
     assert "page-break-inside: avoid" in html
     assert "<pdf:nextpage" not in html.lower()
 
