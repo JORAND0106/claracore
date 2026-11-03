@@ -1625,87 +1625,172 @@ def _contexto_corte_sub(
     try:
         sub = _row(
             "subcontratistas",
-            "razon_social, nit, nombre_contacto, objeto_contrato, anticipo, amortizacion_pct",
+            "razon_social, nit, nombre_contacto, objeto_contrato, anticipo, amortizacion_pct, tipo",
             id=sub_id,
         ) or {}
     except Exception:
-        sub = _row(
-            "subcontratistas",
-            "razon_social, nit, nombre_contacto, objeto_contrato",
-            id=sub_id,
-        ) or {}
-
-    try:
         try:
-            q = (
-                _sb.table("so_registros")
-                .select(
-                    "item_numero, item_descripcion, unidad, cantidad_total, "
-                    "vlr_unitario_subcontratista, capitulo"
+            sub = _row(
+                "subcontratistas",
+                "razon_social, nit, nombre_contacto, objeto_contrato, anticipo, amortizacion_pct",
+                id=sub_id,
+            ) or {}
+        except Exception:
+            sub = _row(
+                "subcontratistas",
+                "razon_social, nit, nombre_contacto, objeto_contrato",
+                id=sub_id,
+            ) or {}
+
+    from subcontratista_servicios import (
+        construir_control_presencia,
+        es_subcontratista_por_servicios,
+        fetch_tarifas_servicio,
+        items_corte_desde_tarifas,
+    )
+
+    por_servicios = es_subcontratista_por_servicios(sub)
+    presencia = None
+    vu_map: Dict[str, float] = {}
+    vu_cap_map: Dict[str, float] = {}
+    items: List[dict] = []
+    items_sin_precio: List[str] = []
+    total_costo = 0.0
+
+    if por_servicios:
+        # Corte por servicios: tarifas pactadas × factor período (no SICOE).
+        tarifas = fetch_tarifas_servicio(_sb, int(sub_id))
+        items, total_costo = items_corte_desde_tarifas(
+            tarifas, tipo_periodo=corte.get("tipo_periodo")
+        )
+        # Control de presencia informativo (Bitácora).
+        try:
+            trabajadores = []
+            try:
+                from rrhh_service import list_trabajadores
+
+                trabajadores = [
+                    t
+                    for t in (list_trabajadores(_sb, int(contrato_id)) or [])
+                    if t.get("empresa_subcontratista_id") is not None
+                    and int(t.get("empresa_subcontratista_id")) == int(sub_id)
+                ]
+            except Exception as exc_rrhh:
+                _log.warning("presencia RRHH corte %s: %s", corte_id, exc_rrhh)
+            fi = str(corte.get("fecha_inicio") or "")[:10]
+            ff = str(corte.get("fecha_fin") or "")[:10]
+            diarios = []
+            try:
+                diarios = (
+                    _sb.table("seguimiento_bitacora_entrada")
+                    .select(
+                        "fecha, asistencia_colaboradores, personal, personal_manual, equipos_uso"
+                    )
+                    .eq("contrato_id", int(contrato_id))
+                    .gte("fecha", fi)
+                    .lte("fecha", ff)
+                    .order("fecha")
+                    .execute()
+                    .data
+                    or []
                 )
-                .eq("contrato_id", contrato_id)
-                .eq("corte_id", corte_id)
+            except Exception:
+                try:
+                    diarios = (
+                        _sb.table("seguimiento_bitacora_entrada")
+                        .select("fecha, asistencia_colaboradores")
+                        .eq("contrato_id", int(contrato_id))
+                        .gte("fecha", fi)
+                        .lte("fecha", ff)
+                        .order("fecha")
+                        .execute()
+                        .data
+                        or []
+                    )
+                except Exception as exc_bit:
+                    _log.warning("presencia bitácora corte %s: %s", corte_id, exc_bit)
+            presencia = construir_control_presencia(
+                subcontratista_id=int(sub_id),
+                fecha_inicio=fi,
+                fecha_fin=ff,
+                trabajadores=trabajadores,
+                diarios=diarios,
             )
-            q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
-            registros = q.execute().data or []
-        except Exception as e0:
-            err = str(e0).lower()
-            if "capitulo" in err or "column" in err or "schema cache" in err:
-                _log.warning("so_registros sin columna capitulo; reintento sin ella: %s", e0)
+            presencia["aplicable"] = True
+        except Exception as exc_pres:
+            _log.warning("presencia corte servicios %s: %s", corte_id, exc_pres)
+            presencia = {"aplicable": True, "informativo": True, "error": str(exc_pres)}
+    else:
+        try:
+            try:
                 q = (
                     _sb.table("so_registros")
                     .select(
                         "item_numero, item_descripcion, unidad, cantidad_total, "
-                        "vlr_unitario_subcontratista"
+                        "vlr_unitario_subcontratista, capitulo"
                     )
                     .eq("contrato_id", contrato_id)
                     .eq("corte_id", corte_id)
                 )
                 q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
                 registros = q.execute().data or []
-            else:
-                raise
-    except Exception as e:
-        _log.exception("so_registros corte sub")
-        raise HTTPException(503, f"No se pudieron leer las cantidades del corte: {e!s}") from e
+            except Exception as e0:
+                err = str(e0).lower()
+                if "capitulo" in err or "column" in err or "schema cache" in err:
+                    _log.warning("so_registros sin columna capitulo; reintento sin ella: %s", e0)
+                    q = (
+                        _sb.table("so_registros")
+                        .select(
+                            "item_numero, item_descripcion, unidad, cantidad_total, "
+                            "vlr_unitario_subcontratista"
+                        )
+                        .eq("contrato_id", contrato_id)
+                        .eq("corte_id", corte_id)
+                    )
+                    q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+                    registros = q.execute().data or []
+                else:
+                    raise
+        except Exception as e:
+            _log.exception("so_registros corte sub")
+            raise HTTPException(503, f"No se pudieron leer las cantidades del corte: {e!s}") from e
 
-    items_map = {}
-    for r in registros:
-        raw_item = r.get("item_numero")
-        k = str(raw_item or "").strip() or "SIN_ITEM"
-        if k not in items_map:
-            items_map[k] = {
-                "item_numero":      "" if k == "SIN_ITEM" else k,
-                "item_descripcion": r.get("item_descripcion", ""),
-                "unidad":           r.get("unidad", ""),
-                "cantidad":         0.0,
-                "vlr_unitario_sub": 0.0,
-                "costo_directo":    0.0,
-                "capitulo":         "",
-                "sin_precio":       False,
-            }
-        cap = str(r.get("capitulo") or "").strip()
-        if cap and not items_map[k].get("capitulo"):
-            items_map[k]["capitulo"] = cap
-        items_map[k]["cantidad"] += _sf(r.get("cantidad_total"), 0.0)
-        vu = _sf(r.get("vlr_unitario_subcontratista"), 0.0)
-        if items_map[k]["vlr_unitario_sub"] == 0.0 and vu != 0.0:
-            items_map[k]["vlr_unitario_sub"] = vu
+        items_map = {}
+        for r in registros:
+            raw_item = r.get("item_numero")
+            k = str(raw_item or "").strip() or "SIN_ITEM"
+            if k not in items_map:
+                items_map[k] = {
+                    "item_numero":      "" if k == "SIN_ITEM" else k,
+                    "item_descripcion": r.get("item_descripcion", ""),
+                    "unidad":           r.get("unidad", ""),
+                    "cantidad":         0.0,
+                    "vlr_unitario_sub": 0.0,
+                    "costo_directo":    0.0,
+                    "capitulo":         "",
+                    "sin_precio":       False,
+                }
+            cap = str(r.get("capitulo") or "").strip()
+            if cap and not items_map[k].get("capitulo"):
+                items_map[k]["capitulo"] = cap
+            items_map[k]["cantidad"] += _sf(r.get("cantidad_total"), 0.0)
+            vu = _sf(r.get("vlr_unitario_subcontratista"), 0.0)
+            if items_map[k]["vlr_unitario_sub"] == 0.0 and vu != 0.0:
+                items_map[k]["vlr_unitario_sub"] = vu
 
-    # Causa raíz del VU=0: so_registros.vlr_unitario_subcontratista casi nunca se sella.
-    # Fuente de verdad: subcontratista_precios del sub del corte (nunca precios del contrato).
-    import corte_sub_conciliacion as csc
+        # Fuente de verdad: subcontratista_precios del sub del corte (nunca precios del contrato).
+        import corte_sub_conciliacion as csc
 
-    vu_map, vu_cap_map = csc.precios_vu_sub_maps(
-        _sb, contrato_id=int(contrato_id), subcontratista_id=int(sub_id)
-    )
-    items, items_sin_precio = csc.aplicar_precios_sub_a_items(
-        list(items_map.values()), vu_map, vu_por_cap_item=vu_cap_map
-    )
-    _sort_items_corte_por_item_numero_asc(items)
-    total_costo = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
-    if not math.isfinite(total_costo):
-        total_costo = 0.0
+        vu_map, vu_cap_map = csc.precios_vu_sub_maps(
+            _sb, contrato_id=int(contrato_id), subcontratista_id=int(sub_id)
+        )
+        items, items_sin_precio = csc.aplicar_precios_sub_a_items(
+            list(items_map.values()), vu_map, vu_por_cap_item=vu_cap_map
+        )
+        _sort_items_corte_por_item_numero_asc(items)
+        total_costo = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
+        if not math.isfinite(total_costo):
+            total_costo = 0.0
 
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
     usuario_cargo = current_user.get("cargo_nombre", "—") or "—"
@@ -1727,6 +1812,8 @@ def _contexto_corte_sub(
         "vu_por_item": vu_map,
         "vu_por_cap_item": vu_cap_map,
         "amortizacion": None,
+        "tipo_subcontratista": "por_servicios" if por_servicios else "por_cantidades",
+        "presencia": presencia,
     }
     try:
         _enriquecer_ctx_corte_sub_conciliacion(ctx, contrato_id, solo_aprobados=solo_aprobados)
@@ -6343,6 +6430,16 @@ def get_corte_sub_conciliacion(
         "items_resumen": {
             "n_items": len(ctx.get("items") or []),
             "total_presente": ctx.get("total_costo"),
+        },
+        "items": ctx.get("items") or [],
+        "tipo_subcontratista": ctx.get("tipo_subcontratista") or "por_cantidades",
+        "presencia": ctx.get("presencia"),
+        "corte": {
+            "id": corte.get("id"),
+            "tipo_periodo": corte.get("tipo_periodo"),
+            "fecha_inicio": corte.get("fecha_inicio"),
+            "fecha_fin": corte.get("fecha_fin"),
+            "consecutivo": corte.get("consecutivo"),
         },
         "conciliacion_id": (conc or {}).get("id"),
     }
