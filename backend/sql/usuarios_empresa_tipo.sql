@@ -123,3 +123,5 @@ WHERE lower(btrim(cg.nombre)) = lower('Coordinador de Topografía')
       AND p2.funcion_id = src.funcion_id
       AND p2.contrato_id = c.id
   );
+
+NOTIFY pgrst, 'reload schema';
