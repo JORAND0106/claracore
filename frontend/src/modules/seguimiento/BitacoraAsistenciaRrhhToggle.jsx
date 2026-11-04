@@ -67,12 +67,13 @@ export default function BitacoraAsistenciaRrhhToggle({
     ? formatFechaHoraColombia(policy.activa_en, { withTime: true })
     : null
 
-  const tooltip = activa
-    ? 'Interruptor ENCENDIDO: Bitácora exige identificación individual y documentación Aprobada. Clic para apagar.'
-    : 'Interruptor APAGADO: Bitácora permite registrar personal sin identificación individual ni estado Aprobado. Clic para encender.'
+  const tooltip = 'Bitácora RRHH'
 
   const onToggle = async () => {
     if (!api?.setBitacoraAsistenciaRrhhActiva || busy) return
+    try {
+      document.dispatchEvent(new CustomEvent('cc-title-tooltip-hide'))
+    } catch { /* ignore */ }
     const next = !activa
     const ok = window.confirm(
       next
@@ -114,7 +115,9 @@ export default function BitacoraAsistenciaRrhhToggle({
         disabled={busy}
         onClick={() => void onToggle()}
         title={tooltip}
-        aria-label={activa ? 'Interruptor Bitácora RRHH encendido' : 'Interruptor Bitácora RRHH apagado'}
+        data-cc-tooltip={tooltip}
+        data-cc-tooltip-variant="short"
+        aria-label={activa ? 'Bitácora RRHH encendido' : 'Bitácora RRHH apagado'}
         aria-pressed={activa}
         style={{
           display: 'inline-flex',

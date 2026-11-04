@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import TemaProseHtml from './TemaProseHtml'
+import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { temaRichProseCss } from './temaRichProseCss'
 import { ESTADOS_GESTION, fmtFecha } from './seguimientoTheme'
 import { puedeMutarActividadPropia } from './planActividadesPermisos'
@@ -35,6 +38,8 @@ export default function PlanActividadDetalleModal({
   const [editComentarioId, setEditComentarioId] = useState(null)
   const [editComentarioTxt, setEditComentarioTxt] = useState('')
   const [busy, setBusy] = useState(false)
+  const [slideDesc, setSlideDesc] = useState(0)
+  const [slideCom, setSlideCom] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -185,10 +190,34 @@ export default function PlanActividadDetalleModal({
               <section>
                 <div style={secTitle(t)}>Descripción</div>
                 <TemaProseHtml html={item.descripcion || ''} emptyLabel="Sin descripción" />
+                {(item.adjuntos_descripcion || []).length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <AdjuntosMediaSlider
+                      t={t}
+                      items={slidesFromImagenes(item.adjuntos_descripcion, imagenSrc)}
+                      index={Math.min(slideDesc, item.adjuntos_descripcion.length - 1)}
+                      height={160}
+                      onIndexChange={setSlideDesc}
+                      onClickItem={(slide) => openImageInNewTab(slide.source)}
+                    />
+                  </div>
+                )}
               </section>
               <section>
                 <div style={secTitle(t)}>Comentario comité</div>
                 <TemaProseHtml html={item.comentario_comite || ''} emptyLabel="Sin comentario" />
+                {(item.adjuntos_comentario || []).length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <AdjuntosMediaSlider
+                      t={t}
+                      items={slidesFromImagenes(item.adjuntos_comentario, imagenSrc)}
+                      index={Math.min(slideCom, item.adjuntos_comentario.length - 1)}
+                      height={140}
+                      onIndexChange={setSlideCom}
+                      onClickItem={(slide) => openImageInNewTab(slide.source)}
+                    />
+                  </div>
+                )}
               </section>
 
               {item.puede_cambiar_estado && (

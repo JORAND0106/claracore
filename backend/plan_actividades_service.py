@@ -463,6 +463,27 @@ def _normalizar_asignados(sb, contrato_id: int, asignados: List[Any]) -> List[di
     return out
 
 
+def _norm_adjuntos(raw) -> List[dict]:
+    out = []
+    for a in raw or []:
+        if not isinstance(a, dict):
+            continue
+        data = a.get("data_uri") or a.get("url") or a.get("src")
+        if not data and not a.get("blob_path"):
+            continue
+        out.append({
+            "nombre": str(a.get("nombre") or "esquema.png")[:200],
+            "data_uri": a.get("data_uri"),
+            "url": a.get("url") or a.get("src"),
+            "blob_path": a.get("blob_path"),
+            "mime_type": a.get("mime_type") or "image/png",
+            "kind": a.get("kind") or "esquema",
+            "campo": a.get("campo"),
+            "created_at": a.get("created_at"),
+        })
+    return out[:16]
+
+
 def _build_campos_plan(
     *,
     grupo: dict,
@@ -474,6 +495,8 @@ def _build_campos_plan(
     periodicidad_hasta: Optional[date],
     asignaciones: List[dict],
     acta_tema_vinculo: Optional[dict] = None,
+    adjuntos_descripcion: Optional[List[dict]] = None,
+    adjuntos_comentario: Optional[List[dict]] = None,
 ) -> dict:
     plan = {
         "grupo_id": int(grupo["id"]),
@@ -484,6 +507,8 @@ def _build_campos_plan(
         "fecha_fin": fecha_fin.isoformat() if fecha_fin else None,
         "periodicidad": periodicidad,
         "periodicidad_hasta": periodicidad_hasta.isoformat() if periodicidad_hasta else None,
+        "adjuntos_descripcion": _norm_adjuntos(adjuntos_descripcion),
+        "adjuntos_comentario": _norm_adjuntos(adjuntos_comentario),
     }
     if acta_tema_vinculo:
         plan["desde_acta"] = True
@@ -569,6 +594,8 @@ def _enrich_item(item: dict) -> dict:
     item["fecha_fin"] = plan.get("fecha_fin") or item.get("fecha_vencimiento")
     item["periodicidad"] = plan.get("periodicidad") or "ninguna"
     item["periodicidad_hasta"] = plan.get("periodicidad_hasta")
+    item["adjuntos_descripcion"] = _norm_adjuntos(plan.get("adjuntos_descripcion"))
+    item["adjuntos_comentario"] = _norm_adjuntos(plan.get("adjuntos_comentario"))
     item["ocurrencias"] = [
         {"fecha_inicio": a.isoformat(), "fecha_fin": b.isoformat()}
         for a, b in _item_intervalos(item)
@@ -785,6 +812,8 @@ def crear_actividad(
         periodicidad_hasta=hasta,
         asignaciones=asignaciones,
         acta_tema_vinculo=vinculo,
+        adjuntos_descripcion=data.get("adjuntos_descripcion") or data.get("esquemas_descripcion"),
+        adjuntos_comentario=data.get("adjuntos_comentario") or data.get("esquemas_comentario"),
     )
 
     nombres = ", ".join(a["nombre"] for a in asignaciones if a.get("nombre"))
@@ -1047,6 +1076,21 @@ def actualizar_actividad(
     if item.get("acta_id"):
         vinculo = {"acta_id": item.get("acta_id"), "idea_id": item.get("idea_id")}
 
+    adj_desc = (
+        data.get("adjuntos_descripcion")
+        if "adjuntos_descripcion" in data or "esquemas_descripcion" in data
+        else plan_prev.get("adjuntos_descripcion")
+    )
+    if "esquemas_descripcion" in data and "adjuntos_descripcion" not in data:
+        adj_desc = data.get("esquemas_descripcion")
+    adj_com = (
+        data.get("adjuntos_comentario")
+        if "adjuntos_comentario" in data or "esquemas_comentario" in data
+        else plan_prev.get("adjuntos_comentario")
+    )
+    if "esquemas_comentario" in data and "adjuntos_comentario" not in data:
+        adj_com = data.get("esquemas_comentario")
+
     campos = _build_campos_plan(
         grupo=grupo,
         comentario_comite=str(comentario or ""),
@@ -1057,6 +1101,8 @@ def actualizar_actividad(
         periodicidad_hasta=hasta,
         asignaciones=asignaciones,
         acta_tema_vinculo=vinculo,
+        adjuntos_descripcion=adj_desc,
+        adjuntos_comentario=adj_com,
     )
     # Conservar otras claves de campos_libres
     for k, v in libres.items():

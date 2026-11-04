@@ -1,5 +1,5 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, Plus, X } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, Download, Plus, X } from 'lucide-react'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import {
   idsConSolapePorAsignado,
@@ -38,8 +38,21 @@ function nombreUsuario(u) {
   )
 }
 
+const COLS = [
+  { key: 'actividad', label: 'Actividad', min: 200 },
+  { key: 'descripcion', label: 'Descripción', min: 180 },
+  { key: 'comentario', label: 'Comentario comité', min: 160 },
+  { key: 'solicitante', label: 'Solicitante', min: 120 },
+  { key: 'asignados', label: 'Asignado(s)', min: 140 },
+  { key: 'prioridad', label: 'Prioridad', min: 88 },
+  { key: 'estado', label: 'Estado', min: 100 },
+  { key: 'fi', label: 'Fecha inicio', min: 110 },
+  { key: 'ff', label: 'Fecha fin', min: 110 },
+  { key: 'periodicidad', label: 'Periodicidad', min: 110 },
+]
+
 /**
- * Grilla tipo Excel del Plan de actividades + Gantt diario.
+ * Grilla tipo Excel del Plan de actividades + Gantt diario desplegable.
  * mode='page' | 'popup'
  */
 export default function PlanActividadesVista({
@@ -64,6 +77,10 @@ export default function PlanActividadesVista({
   const [formOpen, setFormOpen] = useState(false)
   const [editItem, setEditItem] = useState(null)
   const [detalleId, setDetalleId] = useState(null)
+  /** Por defecto la grilla es protagonista; el Gantt se abre con la flecha. */
+  const [ganttOpen, setGanttOpen] = useState(false)
+  const scrollRef = useRef(null)
+  const scrollSnap = useRef({ top: 0, left: 0 })
 
   const vistaAmplia = Boolean(permisos?.esVistaAmplia || permisos?.esDesarrollador) && !forzarPropio
 
@@ -101,6 +118,11 @@ export default function PlanActividadesVista({
   const overlapIds = useMemo(() => idsConSolapePorAsignado(items), [items])
   const gantt = useMemo(() => rangeDaysFromActividades(items, 21), [items])
 
+  const visibleCols = useMemo(
+    () => (ganttOpen ? COLS.filter((c) => c.key === 'actividad') : COLS),
+    [ganttOpen],
+  )
+
   const grouped = useMemo(() => {
     const map = new Map()
     for (const it of items) {
@@ -110,6 +132,29 @@ export default function PlanActividadesVista({
     }
     return [...map.entries()]
   }, [items])
+
+  const colSpan = visibleCols.length + (ganttOpen ? gantt.days.length : 0)
+
+  const tableMinWidth = useMemo(() => {
+    const dataW = visibleCols.reduce((s, c) => s + c.min, 0)
+    const ganttW = ganttOpen ? gantt.days.length * 28 : 0
+    return dataW + ganttW
+  }, [visibleCols, ganttOpen, gantt.days.length])
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = scrollSnap.current.top
+    el.scrollLeft = scrollSnap.current.left
+  }, [ganttOpen])
+
+  function toggleGantt() {
+    const el = scrollRef.current
+    if (el) {
+      scrollSnap.current = { top: el.scrollTop, left: el.scrollLeft }
+    }
+    setGanttOpen((v) => !v)
+  }
 
   async function exportar() {
     try {
@@ -126,6 +171,22 @@ export default function PlanActividadesVista({
       URL.revokeObjectURL(url)
     } catch (e) {
       setError(e?.message || 'No se pudo exportar')
+    }
+  }
+
+  function cellValue(it, key) {
+    switch (key) {
+      case 'actividad': return it.titulo
+      case 'descripcion': return htmlToPlainText(it.descripcion || '').slice(0, 120) || '—'
+      case 'comentario': return htmlToPlainText(it.comentario_comite || '').slice(0, 100) || '—'
+      case 'solicitante': return it.solicitante_nombre || '—'
+      case 'asignados': return it.asignado_a_nombre || '—'
+      case 'prioridad': return it.prioridad ?? '—'
+      case 'estado': return it.estado_gestion || '—'
+      case 'fi': return fmtFecha(it.fecha_inicio) || '—'
+      case 'ff': return fmtFecha(it.fecha_fin) || '—'
+      case 'periodicidad': return it.periodicidad || 'ninguna'
+      default: return '—'
     }
   }
 
@@ -166,13 +227,8 @@ export default function PlanActividadesVista({
         marginBottom: 10,
       }}
       >
-        <div>
-          <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 800, color: t.text }}>
-            Plan de actividades
-          </div>
-          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Grilla tipo Excel · Gantt por días · hora Colombia
-          </div>
+        <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 800, color: t.text }}>
+          Plan de actividades
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {vistaAmplia && (
@@ -183,7 +239,9 @@ export default function PlanActividadesVista({
                   setColaboradorId(e.target.value)
                   if (e.target.value) setVerTodos(false)
                 }}
-                title="Ver plan de un colaborador"
+                title="Colaborador"
+                data-cc-tooltip="Colaborador"
+                data-cc-tooltip-variant="short"
                 aria-label="Selector de colaborador"
                 style={{
                   padding: '8px 10px',
@@ -216,6 +274,8 @@ export default function PlanActividadesVista({
             <button
               type="button"
               title="Crear actividad"
+              data-cc-tooltip="Crear actividad"
+              data-cc-tooltip-variant="short"
               aria-label="Crear actividad"
               onClick={() => { setEditItem(null); setFormOpen(true) }}
               style={iconBtn(t)}
@@ -226,7 +286,9 @@ export default function PlanActividadesVista({
           {permisos?.exportar && (
             <button
               type="button"
-              title="Exportar Plan de actividades a Excel"
+              title="Exportar Excel"
+              data-cc-tooltip="Exportar Excel"
+              data-cc-tooltip-variant="short"
               aria-label="Exportar a Excel"
               onClick={exportar}
               style={iconBtn(t)}
@@ -235,7 +297,7 @@ export default function PlanActividadesVista({
             </button>
           )}
           {modo === 'popup' && onClose && (
-            <button type="button" title="Cerrar" aria-label="Cerrar" onClick={onClose} style={iconBtn(t)}>
+            <button type="button" title="Cerrar" data-cc-tooltip="Cerrar" data-cc-tooltip-variant="short" aria-label="Cerrar" onClick={onClose} style={iconBtn(t)}>
               <X size={17} strokeWidth={2.3} aria-hidden />
             </button>
           )}
@@ -247,113 +309,176 @@ export default function PlanActividadesVista({
       )}
       {loading && <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando plan…</div>}
 
-      <div style={{ ...ui.sheetWrap, overflow: 'auto', maxHeight: modo === 'popup' ? '70vh' : '70vh' }}>
-        <table style={{ ...ui.sheetTable, minWidth: 960 + gantt.days.length * 22 }}>
-          <thead>
-            <tr>
-              {[
-                'Actividad', 'Descripción', 'Comentario comité', 'Solicitante', 'Asignado(s)',
-                'Prioridad', 'Estado', 'Fecha inicio', 'Fecha fin', 'Periodicidad',
-              ].map((h) => (
-                <th key={h} style={{ ...ui.th, whiteSpace: 'nowrap' }}>{h}</th>
-              ))}
-              {gantt.days.map((d) => (
-                <th
-                  key={d}
-                  style={{
-                    ...ui.th,
-                    minWidth: 22,
-                    maxWidth: 22,
-                    padding: '4px 0',
-                    textAlign: 'center',
-                    fontSize: 9,
-                  }}
-                  title={d}
-                >
-                  {d.slice(8)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {grouped.map(([grupoNombre, rows]) => (
-              <Fragment key={`g-${grupoNombre}`}>
-                <tr>
-                  <td
-                    colSpan={10 + gantt.days.length}
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, minHeight: 0 }}>
+        <div
+          ref={scrollRef}
+          style={{
+            ...ui.sheetWrap,
+            flex: 1,
+            minWidth: 0,
+            overflow: 'auto',
+            maxHeight: modo === 'popup' ? '70vh' : '70vh',
+            transition: 'box-shadow 180ms ease',
+          }}
+        >
+          <table
+            style={{
+              ...ui.sheetTable,
+              tableLayout: ganttOpen ? 'auto' : 'fixed',
+              minWidth: tableMinWidth,
+              transition: 'min-width 220ms ease',
+            }}
+          >
+            <thead>
+              <tr>
+                {visibleCols.map((c) => (
+                  <th
+                    key={c.key}
                     style={{
-                      ...ui.td,
-                      background: 'color-mix(in srgb, #fbbf24 55%, var(--cc-bg-card, #fff))',
-                      fontWeight: 800,
-                      color: t.text,
-                      letterSpacing: '0.02em',
+                      ...ui.th,
+                      whiteSpace: 'nowrap',
+                      minWidth: c.min,
+                      width: ganttOpen && c.key === 'actividad' ? 220 : undefined,
                     }}
                   >
-                    {grupoNombre}
-                  </td>
-                </tr>
-                {rows.map((it) => {
-                  const occs = (it.ocurrencias && it.ocurrencias.length)
-                    ? it.ocurrencias
-                    : expandirOcurrencias({
-                      fechaInicio: it.fecha_inicio,
-                      fechaFin: it.fecha_fin,
-                      periodicidad: it.periodicidad,
-                      periodicidadHasta: it.periodicidad_hasta,
-                    })
-                  const solape = overlapIds.has(Number(it.id))
-                  return (
-                    <tr
-                      key={it.id}
-                      onClick={() => setDetalleId(it.id)}
-                      style={{ cursor: 'pointer' }}
-                      title="Abrir detalle de la actividad"
+                    {c.label}
+                  </th>
+                ))}
+                {ganttOpen && gantt.days.map((d) => (
+                  <th
+                    key={d}
+                    style={{
+                      ...ui.th,
+                      minWidth: 28,
+                      width: 28,
+                      maxWidth: 36,
+                      padding: '4px 0',
+                      textAlign: 'center',
+                      fontSize: 9,
+                    }}
+                    title={d}
+                  >
+                    {d.slice(8)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {grouped.map(([grupoNombre, rows]) => (
+                <Fragment key={`g-${grupoNombre}`}>
+                  <tr>
+                    <td
+                      colSpan={Math.max(colSpan, 1)}
+                      style={{
+                        ...ui.td,
+                        background: 'color-mix(in srgb, #fbbf24 55%, var(--cc-bg-card, #fff))',
+                        fontWeight: 800,
+                        color: t.text,
+                        letterSpacing: '0.02em',
+                      }}
                     >
-                      <td style={ui.td}>{it.titulo}</td>
-                      <td style={{ ...ui.td, maxWidth: 160 }}>
-                        {htmlToPlainText(it.descripcion || '').slice(0, 80) || '—'}
-                      </td>
-                      <td style={{ ...ui.td, maxWidth: 140 }}>
-                        {htmlToPlainText(it.comentario_comite || '').slice(0, 60) || '—'}
-                      </td>
-                      <td style={ui.td}>{it.solicitante_nombre || '—'}</td>
-                      <td style={ui.td}>{it.asignado_a_nombre || '—'}</td>
-                      <td style={{ ...ui.td, textAlign: 'center' }}>{it.prioridad ?? '—'}</td>
-                      <td style={ui.td}>{it.estado_gestion || '—'}</td>
-                      <td style={ui.td}>{fmtFecha(it.fecha_inicio) || '—'}</td>
-                      <td style={ui.td}>{fmtFecha(it.fecha_fin) || '—'}</td>
-                      <td style={ui.td}>{it.periodicidad || 'ninguna'}</td>
-                      {gantt.days.map((d) => {
-                        const hit = occs.some((o) => o.fecha_inicio <= d && d <= o.fecha_fin)
-                        return (
+                      {grupoNombre}
+                    </td>
+                  </tr>
+                  {rows.map((it) => {
+                    const occs = (it.ocurrencias && it.ocurrencias.length)
+                      ? it.ocurrencias
+                      : expandirOcurrencias({
+                        fechaInicio: it.fecha_inicio,
+                        fechaFin: it.fecha_fin,
+                        periodicidad: it.periodicidad,
+                        periodicidadHasta: it.periodicidad_hasta,
+                      })
+                    const solape = overlapIds.has(Number(it.id))
+                    return (
+                      <tr
+                        key={it.id}
+                        onClick={() => setDetalleId(it.id)}
+                        style={{ cursor: 'pointer' }}
+                        title="Abrir detalle"
+                        data-cc-tooltip="Abrir detalle"
+                        data-cc-tooltip-variant="short"
+                      >
+                        {visibleCols.map((c) => (
                           <td
-                            key={`${it.id}-${d}`}
+                            key={c.key}
                             style={{
                               ...ui.td,
-                              padding: 0,
-                              background: hit
-                                ? (solape
-                                  ? 'color-mix(in srgb, #f97316 70%, transparent)'
-                                  : 'color-mix(in srgb, #38bdf8 65%, transparent)')
-                                : 'transparent',
+                              whiteSpace: c.key === 'actividad' ? 'normal' : 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              textAlign: c.key === 'prioridad' ? 'center' : undefined,
+                              minWidth: c.min,
                             }}
-                          />
-                        )
-                      })}
-                    </tr>
-                  )
-                })}
-              </Fragment>
-            ))}
-            {!loading && !items.length && (
-              <tr>
-                <td colSpan={10 + gantt.days.length} style={{ ...ui.td, color: t.textMuted, textAlign: 'center', padding: 16 }}>
-                  No hay actividades en este ambiente.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                          >
+                            {cellValue(it, c.key)}
+                          </td>
+                        ))}
+                        {ganttOpen && gantt.days.map((d) => {
+                          const hit = occs.some((o) => o.fecha_inicio <= d && d <= o.fecha_fin)
+                          return (
+                            <td
+                              key={`${it.id}-${d}`}
+                              style={{
+                                ...ui.td,
+                                padding: 0,
+                                minWidth: 28,
+                                width: 28,
+                                background: hit
+                                  ? (solape
+                                    ? 'color-mix(in srgb, #f97316 70%, transparent)'
+                                    : 'color-mix(in srgb, #38bdf8 65%, transparent)')
+                                  : 'transparent',
+                                transition: 'background 160ms ease',
+                              }}
+                            />
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                </Fragment>
+              ))}
+              {!loading && !items.length && (
+                <tr>
+                  <td colSpan={Math.max(colSpan, 1)} style={{ ...ui.td, color: t.textMuted, textAlign: 'center', padding: 16 }}>
+                    No hay actividades en este ambiente.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <button
+          type="button"
+          onClick={toggleGantt}
+          title={ganttOpen ? 'Ocultar Gantt' : 'Ver Gantt'}
+          data-cc-tooltip={ganttOpen ? 'Ocultar Gantt' : 'Ver Gantt'}
+          data-cc-tooltip-variant="short"
+          aria-label={ganttOpen ? 'Ocultar Gantt' : 'Ver Gantt'}
+          aria-pressed={ganttOpen}
+          style={{
+            flexShrink: 0,
+            width: 36,
+            alignSelf: 'stretch',
+            minHeight: 120,
+            marginLeft: 4,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 8,
+            border: `1px solid ${t.border}`,
+            background: ganttOpen ? `${t.primary}18` : (t.bgCard || t.bg || '#fff'),
+            color: t.text,
+            cursor: 'pointer',
+            transition: 'background 180ms ease, border-color 180ms ease',
+          }}
+        >
+          {ganttOpen
+            ? <ChevronLeft size={20} strokeWidth={2.4} aria-hidden />
+            : <ChevronRight size={20} strokeWidth={2.4} aria-hidden />}
+        </button>
       </div>
 
       {formOpen && (
