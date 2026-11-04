@@ -85,7 +85,11 @@ export default function PlanActividadesVista({
       setGrupos(Array.isArray(gs) ? gs : [])
       setUsuarios(Array.isArray(us) ? us : [])
     } catch (e) {
-      setError(e?.message || 'No se pudo cargar el Plan de actividades')
+      const msg = String(e?.message || '').trim()
+      setError(
+        msg
+        || 'No se pudo cargar el Plan de actividades. Verifique su permiso Ver en Control de accesos.',
+      )
       setItems([])
     } finally {
       setLoading(false)

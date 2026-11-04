@@ -16,7 +16,6 @@ import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { accesoPlanActividades } from './planActividadesPermisos'
 import PlanActividadesVista from './PlanActividadesVista'
-import PlanActividadesHabilitacionToggle from './PlanActividadesHabilitacionToggle'
 import { useSeguimientoCompact } from './seguimientoShared'
 
 function toolbarIconBtn(t, { active = false, primary = false } = {}) {
@@ -46,7 +45,7 @@ function toolbarIconBtn(t, { active = false, primary = false } = {}) {
 
 /**
  * Seguimiento: vista única de Calendario (tareas, actas y bitácora por día).
- * Con Plan de actividades habilitado: toggle a grilla Excel + Gantt.
+ * Plan de actividades: visible solo con permiso Ver del submódulo (sin flag por contrato).
  */
 export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const cid = contratoId ?? usuario?.contrato_id
@@ -73,7 +72,6 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const [maquinariaCatalogoOpen, setMaquinariaCatalogoOpen] = useState(false)
   const [cumplimientoOpen, setCumplimientoOpen] = useState(false)
   const [detalleCumplimientoId, setDetalleCumplimientoId] = useState(null)
-  const [planHabilitado, setPlanHabilitado] = useState(false)
   const [vistaPlan, setVistaPlan] = useState(false)
   const api = useMemo(
     () => (token && cid != null ? createSeguimientoApi(cid, token) : null),
@@ -102,26 +100,8 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-    async function loadHab() {
-      if (!api?.getPlanHabilitacion) {
-        if (!cancelled) setPlanHabilitado(false)
-        return
-      }
-      try {
-        const row = await api.getPlanHabilitacion()
-        if (!cancelled) setPlanHabilitado(Boolean(row?.habilitado))
-      } catch {
-        if (!cancelled) setPlanHabilitado(false)
-      }
-    }
-    loadHab()
-    return () => { cancelled = true }
-  }, [api, cid])
-
-  useEffect(() => {
-    if (!planHabilitado || !permisosPlan.ver) setVistaPlan(false)
-  }, [planHabilitado, permisosPlan.ver])
+    if (!permisosPlan.ver) setVistaPlan(false)
+  }, [permisosPlan.ver])
 
   if (permisos.bloqueado) {
     return (
@@ -134,7 +114,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     )
   }
 
-  const showPlanBtn = planHabilitado && permisosPlan.ver
+  const showPlanBtn = Boolean(permisosPlan.ver)
 
   return (
     <div
@@ -179,15 +159,6 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
               token={token}
               contratoId={cid}
               esDesarrollador={Boolean(permisosBitacora?.esDesarrollador)}
-            />
-            <PlanActividadesHabilitacionToggle
-              t={t}
-              api={api}
-              esDesarrollador={Boolean(permisos?.esDesarrollador)}
-              onChanged={(row) => {
-                setPlanHabilitado(Boolean(row?.habilitado))
-                if (!row?.habilitado) setVistaPlan(false)
-              }}
             />
             {permisos?.ver && (
               <button

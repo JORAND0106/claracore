@@ -2,21 +2,11 @@
 -- Submódulo opt-in por contrato, con grupos propios y función de permisos.
 -- Idempotente.
 
--- 1) Flag de habilitación por contrato (solo Desarrollador lo cambia vía API)
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS plan_actividades_habilitado boolean NOT NULL DEFAULT false;
+-- Acceso al Plan: solo matriz de permisos (PLANACT). Sin flag por contrato.
+-- Si en algún entorno se crearon columnas plan_actividades_habilitado*,
+-- la migración 20261104020000_plan_actividades_sin_flag.sql las elimina.
 
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS plan_actividades_habilitado_en timestamptz NULL;
-
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS plan_actividades_habilitado_por integer NULL
-    REFERENCES public.usuarios(id) ON DELETE SET NULL;
-
-COMMENT ON COLUMN public.contratos.plan_actividades_habilitado IS
-  'Habilita el submódulo Plan de actividades en Seguimiento. Deshabilitado por defecto; solo Desarrollador puede cambiarlo.';
-
--- 2) Origen plan_actividad en seguimiento_item
+-- 1) Origen plan_actividad en seguimiento_item
 -- Primero por nombre conocido; luego cualquier CHECK residual sobre origen.
 ALTER TABLE public.seguimiento_item
   DROP CONSTRAINT IF EXISTS seguimiento_item_origen_check;

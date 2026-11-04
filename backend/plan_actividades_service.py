@@ -138,72 +138,25 @@ def _es_gerencial_o_admin(sb, user_id: int, current_user: Optional[dict]) -> boo
     return False
 
 
-def contrato_plan_habilitado(sb, contrato_id: int) -> bool:
-    rows = (
-        sb.table("contratos")
-        .select("id, plan_actividades_habilitado")
-        .eq("id", int(contrato_id))
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        return False
-    return bool(rows[0].get("plan_actividades_habilitado"))
-
-
-def get_plan_habilitacion(sb, contrato_id: int) -> dict:
-    rows = (
-        sb.table("contratos")
-        .select(
-            "id, plan_actividades_habilitado, plan_actividades_habilitado_en, "
-            "plan_actividades_habilitado_por"
-        )
-        .eq("id", int(contrato_id))
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        raise ValueError("Contrato no encontrado")
-    r = rows[0]
-    return {
-        "contrato_id": int(contrato_id),
-        "habilitado": bool(r.get("plan_actividades_habilitado")),
-        "habilitado_en": r.get("plan_actividades_habilitado_en"),
-        "habilitado_por": r.get("plan_actividades_habilitado_por"),
-    }
-
-
-def set_plan_habilitacion(sb, contrato_id: int, activa: bool, user_id: int) -> dict:
-    patch = {
-        "plan_actividades_habilitado": bool(activa),
-        "plan_actividades_habilitado_en": _now_utc().isoformat() if activa else None,
-        "plan_actividades_habilitado_por": int(user_id) if activa else None,
-    }
-    sb.table("contratos").update(patch).eq("id", int(contrato_id)).execute()
-    return get_plan_habilitacion(sb, contrato_id)
-
-
-def assert_plan_habilitado(sb, contrato_id: int) -> None:
-    if not contrato_plan_habilitado(sb, contrato_id):
-        raise PermissionError(
-            "El Plan de actividades no está habilitado en este contrato."
-        )
 
 
 def list_grupos(sb, contrato_id: int) -> List[dict]:
-    return (
-        sb.table("seguimiento_plan_grupo")
-        .select("*")
-        .eq("contrato_id", int(contrato_id))
-        .order("nombre")
-        .execute()
-        .data
-        or []
-    )
+    try:
+        return (
+            sb.table("seguimiento_plan_grupo")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .order("nombre")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.exception("list_grupos: %s", exc)
+        raise ValueError(
+            "No se pudieron cargar los grupos del Plan de actividades. "
+            "Verifique que exista la tabla seguimiento_plan_grupo o contacte a soporte."
+        ) from exc
 
 
 def ensure_grupo(
@@ -633,18 +586,24 @@ def list_actividades(
     incluir_cerrados: bool = True,
     ver_todos: bool = False,
 ) -> List[dict]:
-    assert_plan_habilitado(sb, contrato_id)
-    rows = (
-        sb.table("seguimiento_item")
-        .select("*")
-        .eq("contrato_id", int(contrato_id))
-        .eq("origen", ORIGEN)
-        .order("created_at", desc=False)
-        .limit(2000)
-        .execute()
-        .data
-        or []
-    )
+    try:
+        rows = (
+            sb.table("seguimiento_item")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("origen", ORIGEN)
+            .order("id")
+            .limit(2000)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.exception("list_actividades query: %s", exc)
+        raise ValueError(
+            "No se pudo cargar el Plan de actividades. Verifique que la base de datos "
+            "esté actualizada (origen plan_actividad) o contacte a soporte."
+        ) from exc
 
     es_vista_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
         sb, user_id, current_user
@@ -663,17 +622,14 @@ def list_actividades(
             }
             if cid not in ids:
                 continue
-        elif not ver_todos and not es_vista_amplia:
-            # Ambiente propio
+        elif not ver_todos or not es_vista_amplia:
+            # Ambiente propio (gerencia/admin solo ven todos si ver_todos=true)
             if not (
                 int(r.get("created_by") or 0) == int(user_id)
                 or int(r.get("solicitante_id") or 0) == int(user_id)
                 or int(user_id) in _ids_asignados(r)
             ):
                 continue
-        elif not ver_todos and es_vista_amplia and colaborador_id is None:
-            # Gerencia sin selector: por defecto «todos» si ver_todos, si no propio
-            pass
 
         out.append(_enrich_item(r))
 
@@ -734,7 +690,6 @@ def crear_actividad(
     *,
     confirmar_solape: bool = False,
 ) -> dict:
-    assert_plan_habilitado(sb, contrato_id)
     if not tiene_permiso_plan_actividades(current_user, "crear", contrato_id):
         raise PermissionError("No tiene permiso para crear actividades del plan.")
 
@@ -854,7 +809,19 @@ def crear_actividad(
         "idea_id": idea_id,
     }
 
-    ins = sb.table("seguimiento_item").insert(row).execute().data
+    try:
+        ins = sb.table("seguimiento_item").insert(row).execute().data
+    except Exception as exc:
+        _log.exception("crear_actividad insert: %s", exc)
+        raw = str(exc).lower()
+        if "origen" in raw or "check" in raw:
+            raise ValueError(
+                "No se pudo crear la actividad: la base de datos aún no admite el origen "
+                "«plan_actividad». Ejecute la migración del Plan de actividades."
+            ) from exc
+        raise ValueError(
+            "No se pudo crear la actividad. Verifique los datos e intente de nuevo."
+        ) from exc
     if not ins:
         raise ValueError("No se pudo crear la actividad")
     item = ins[0]
@@ -918,7 +885,6 @@ def get_actividad(
     item = get_item_raw(sb, item_id)
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
-    assert_plan_habilitado(sb, int(item["contrato_id"]))
     if not _puede_ver_item(sb, item, user_id, current_user):
         raise PermissionError("No puede ver esta actividad")
 
@@ -968,7 +934,6 @@ def actualizar_actividad(
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
     cid = int(item["contrato_id"])
-    assert_plan_habilitado(sb, cid)
 
     es_creador = int(item.get("created_by") or 0) == int(user_id)
     if not es_creador and not _es_desarrollador(current_user):
@@ -1151,7 +1116,6 @@ def eliminar_actividad(sb, item_id: int, user_id: int, current_user: dict) -> No
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
     cid = int(item["contrato_id"])
-    assert_plan_habilitado(sb, cid)
     es_creador = int(item.get("created_by") or 0) == int(user_id)
     if not es_creador and not _es_desarrollador(current_user):
         raise PermissionError("Solo quien creó la actividad puede eliminarla.")
@@ -1170,7 +1134,6 @@ def comentar_actividad(
     item = get_item_raw(sb, item_id)
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
-    assert_plan_habilitado(sb, int(item["contrato_id"]))
     if not _puede_comentar(sb, item, user_id, current_user):
         raise PermissionError("No puede comentar esta actividad.")
     msg = str(mensaje or "").strip()
@@ -1259,7 +1222,6 @@ def cambiar_estado_actividad(
     item = get_item_raw(sb, item_id)
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
-    assert_plan_habilitado(sb, int(item["contrato_id"]))
     if not _puede_cambiar_estado(item, user_id, current_user):
         raise PermissionError("Solo el asignado puede cambiar el estado de la actividad.")
 
@@ -1324,7 +1286,6 @@ def exportar_xlsx(
     colaborador_id: Optional[int] = None,
     ver_todos: bool = False,
 ) -> bytes:
-    assert_plan_habilitado(sb, contrato_id)
     if not tiene_permiso_plan_actividades(current_user, "exportar", contrato_id):
         raise PermissionError("No tiene permiso para exportar el Plan de actividades.")
 
