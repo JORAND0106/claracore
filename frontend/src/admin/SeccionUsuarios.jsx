@@ -3,6 +3,7 @@
  * Conserva el comportamiento previo (endpoints, estados, contratos, empresa, políticas).
  */
 import { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   CheckCircle2,
   ClipboardList,
@@ -22,6 +23,9 @@ import {
 } from '../utils/empresaUsuario'
 import { formatFechaHoraColombia } from '../utils/fechaColombia'
 import {
+  avatarColorFromName,
+  inicialesUsuario,
+  usuariosFichaTheme,
   usuariosSheetCssVars,
   usuariosSheetStyles,
   usuariosUi,
@@ -70,12 +74,24 @@ function IconBtn({ title, onClick, disabled, children, tok, active, compact }) {
   )
 }
 
-function FieldRow({ label, children, sheetUi }) {
+function FieldRow({ label, children, ficha }) {
   return (
     <tr>
-      <td style={sheetUi.tdLabel}>{label}</td>
-      <td style={sheetUi.td}>{children}</td>
+      <td style={ficha.fieldLabel}>{label}</td>
+      <td style={ficha.fieldValue}>{children}</td>
     </tr>
+  )
+}
+
+function SectionBlock({ title, ficha, children, last }) {
+  return (
+    <section style={{ ...ficha.sectionCard, marginBottom: last ? 0 : 14 }}>
+      <div style={ficha.sectionTitle}>
+        <span style={ficha.sectionDot} aria-hidden />
+        {title}
+      </div>
+      {children}
+    </section>
   )
 }
 
@@ -371,13 +387,6 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
     }
   }
 
-  const cellSelect = (extra = {}) => ({
-    ...sheetUi.cellSelect,
-    color: tTok.text,
-    ...(adminCompact ? { minHeight: 44, fontSize: 16 } : {}),
-    ...extra,
-  })
-
   const labelEstado = (est) => {
     if (est === 'pendiente') return 'Pendiente'
     if (est === 'aprobado') return 'Aprobado'
@@ -396,61 +405,13 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
   }
 
   const fichaUser = fichaUid != null ? usuarios.find((x) => String(x.id) === String(fichaUid)) : null
+  const ficha = usuariosFichaTheme(theme, tTok)
 
-  const overlayStyle = {
-    position: 'fixed',
-    inset: 0,
-    zIndex: 10001,
-    background: uiTheme.overlay,
-    backdropFilter: 'blur(8px)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: adminCompact ? 0 : 12,
-  }
-  const modalStyle = {
-    width: adminCompact ? '100%' : 'min(720px, 98vw)',
-    maxHeight: adminCompact ? '100dvh' : '94vh',
-    height: adminCompact ? '100dvh' : undefined,
-    background: tTok.bgCard,
-    borderRadius: adminCompact ? 0 : 14,
-    border: adminCompact ? 'none' : `1px solid ${tTok.border}`,
-    boxShadow: uiTheme.shadow,
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-    ...sheetCssVars,
-    fontSize: 'var(--cc-sm)',
-    color: 'var(--cc-text)',
-    fontFamily: 'inherit',
-  }
-  const modalHead = {
-    padding: '12px 16px 10px',
-    borderBottom: `1px solid ${tTok.border}`,
-    background: tTok.headerBg || tTok.bgCard,
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-    flexShrink: 0,
-  }
-  const modalScroll = {
-    flex: 1,
-    overflowY: 'auto',
-    padding: adminCompact ? '12px 12px max(16px, env(safe-area-inset-bottom))' : '14px 16px 18px',
-    WebkitOverflowScrolling: 'touch',
-  }
-  const modalFoot = {
-    padding: '10px 16px',
-    borderTop: `1px solid ${tTok.border}`,
-    background: tTok.headerBg || tTok.bgCard,
-    display: 'flex',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: 8,
-    flexShrink: 0,
-    flexWrap: 'wrap',
-  }
+  const fichaSelect = (extra = {}) => ({
+    ...ficha.select,
+    ...(adminCompact ? { minHeight: 44, fontSize: 16 } : {}),
+    ...extra,
+  })
 
   const renderFicha = (u) => {
     if (!u) return null
@@ -464,70 +425,198 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
       || optsEmpresa.find((s) => String(s.key) === String(keyExp))?.nombre
       || keyExp
 
-    return (
-      <div style={overlayStyle} role="presentation">
+    const est = edits[u.id]?.estado || u.estado || ''
+    const cargoId = edits[u.id]?.cargo_id || u.cargo_id
+    const rolId = edits[u.id]?.rol_id || u.rol_id
+    const cargoNom = cargoNombreById(cargoId) || u.cargo_nombre || ''
+    const rolNom = rolNombreById(rolId) || u.rol_nombre || ''
+    const initials = inicialesUsuario(u.nombre, u.apellidos)
+    const avatarBg = avatarColorFromName(u.nombre, u.apellidos, ficha.avatarColors)
+    const avatarSize = adminCompact ? 56 : 64
+
+    const modalNode = (
+      <div
+        style={{
+          ...ficha.overlay,
+          padding: adminCompact ? 0 : 16,
+        }}
+        role="presentation"
+        data-cc-usuario-ficha-overlay="1"
+      >
         <div
-          className="cc-admin-modal-fs"
-          style={modalStyle}
+          className="cc-admin-modal-fs cc-admin-usuario-ficha"
+          style={{
+            width: adminCompact ? '100%' : 'min(740px, 98vw)',
+            maxHeight: adminCompact ? '100dvh' : '94vh',
+            height: adminCompact ? '100dvh' : undefined,
+            borderRadius: adminCompact ? 0 : 16,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            ...sheetCssVars,
+            fontSize: 'var(--cc-sm)',
+            color: ficha.text,
+            fontFamily: 'inherit',
+            ...ficha.modal,
+          }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="cc-usuario-ficha-title"
           onClick={(e) => e.stopPropagation()}
         >
           <CcModalBrandHeader theme={theme} />
-          <div style={modalHead}>
-            <div style={{ minWidth: 0 }}>
-              <div
-                id="cc-usuario-ficha-title"
-                style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: tTok.text, lineHeight: 1.25 }}
-              >
-                {u.nombre} {u.apellidos}
-              </div>
-              <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted, wordBreak: 'break-all', marginTop: 2 }}>
-                {u.email}
-              </div>
-            </div>
-            <button
-              type="button"
-              style={S.closeBtn}
-              title="Cerrar"
-              aria-label="Cerrar"
-              onClick={cerrarFicha}
+
+          <div style={{ ...ficha.hero, flexShrink: 0 }}>
+            <div style={ficha.heroAccent} aria-hidden />
+            <div
+              style={{
+                padding: adminCompact ? '14px 14px 16px' : '16px 18px 18px',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: adminCompact ? 12 : 16,
+              }}
             >
-              <X size={16} strokeWidth={2.25} aria-hidden />
-            </button>
+              <div
+                aria-hidden
+                style={{
+                  width: avatarSize,
+                  height: avatarSize,
+                  minWidth: avatarSize,
+                  borderRadius: 16,
+                  background: `linear-gradient(145deg, ${avatarBg}, ${ficha.primaryLight})`,
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 800,
+                  fontSize: adminCompact ? 18 : 22,
+                  letterSpacing: '0.04em',
+                  boxShadow: `0 8px 20px ${avatarBg}55`,
+                  border: '2px solid rgba(255,255,255,0.35)',
+                }}
+              >
+                {initials}
+              </div>
+
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
+                  id="cc-usuario-ficha-title"
+                  style={{
+                    fontSize: 'var(--cc-h2)',
+                    fontWeight: 800,
+                    color: ficha.text,
+                    lineHeight: 1.2,
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  {u.nombre} {u.apellidos}
+                </div>
+                <div
+                  style={{
+                    fontSize: 'var(--cc-sm)',
+                    color: ficha.textMuted,
+                    wordBreak: 'break-all',
+                    marginTop: 4,
+                    fontWeight: 500,
+                  }}
+                >
+                  {u.email}
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    marginTop: 10,
+                  }}
+                >
+                  <span style={ficha.pill(est || 'neutral')}>
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: 999,
+                        background: 'currentColor',
+                        flexShrink: 0,
+                      }}
+                      aria-hidden
+                    />
+                    {labelEstado(est)}
+                  </span>
+                  {cargoNom ? (
+                    <span style={ficha.pill('primary')} title="Cargo">{cargoNom}</span>
+                  ) : null}
+                  {rolNom ? (
+                    <span style={ficha.pill('neutral')} title="Rol">{rolNom}</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                style={{
+                  ...ficha.closeBtn,
+                  width: adminCompact ? 44 : 40,
+                  height: adminCompact ? 44 : 40,
+                  minWidth: adminCompact ? 44 : 40,
+                  minHeight: adminCompact ? 44 : 40,
+                }}
+                title="Cerrar"
+                aria-label="Cerrar"
+                onClick={cerrarFicha}
+              >
+                <X size={18} strokeWidth={2.25} aria-hidden />
+              </button>
+            </div>
           </div>
 
-          <div style={modalScroll}>
-            <div style={sheetUi.sectionTitle}>Identidad</div>
-            <div style={{ ...sheetUi.sheetWrap, maxHeight: 'none', overflow: 'visible', marginBottom: 14 }}>
-              <table style={{ ...sheetUi.sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: adminCompact
+                ? '12px 12px max(16px, env(safe-area-inset-bottom))'
+                : '16px 18px 20px',
+              WebkitOverflowScrolling: 'touch',
+              background: theme === 'dark'
+                ? 'rgba(0,0,0,0.12)'
+                : theme === 'rest'
+                  ? 'rgba(42,35,24,0.03)'
+                  : 'rgba(0,119,182,0.03)',
+            }}
+          >
+            <SectionBlock title="Identidad" ficha={ficha}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <tbody>
-                  <FieldRow label="Nombre" sheetUi={sheetUi}>{u.nombre || '—'}</FieldRow>
-                  <FieldRow label="Apellidos" sheetUi={sheetUi}>{u.apellidos || '—'}</FieldRow>
-                  <FieldRow label="Correo" sheetUi={sheetUi}>{u.email || '—'}</FieldRow>
+                  <FieldRow label="Nombre" ficha={ficha}>{u.nombre || '—'}</FieldRow>
+                  <FieldRow label="Apellidos" ficha={ficha}>{u.apellidos || '—'}</FieldRow>
+                  <FieldRow label="Correo" ficha={ficha}>{u.email || '—'}</FieldRow>
                 </tbody>
               </table>
-            </div>
+            </SectionBlock>
 
-            <div style={sheetUi.sectionTitle}>Estado y asignación</div>
-            <div style={{ ...sheetUi.sheetWrap, maxHeight: 'none', overflow: 'visible', marginBottom: 14 }}>
-              <table style={{ ...sheetUi.sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
+            <SectionBlock title="Estado y asignación" ficha={ficha}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <tbody>
-                  <FieldRow label="Estado" sheetUi={sheetUi}>
-                    <select
-                      style={cellSelect({ color: estadoBadge[edits[u.id]?.estado] || tTok.text })}
-                      value={edits[u.id]?.estado || ''}
-                      onChange={(e) => setEdit(u.id, 'estado', e.target.value)}
-                    >
-                      <option value="pendiente">Pendiente</option>
-                      <option value="aprobado">Aprobado</option>
-                      <option value="rechazado">Rechazado (sale de la lista)</option>
-                    </select>
+                  <FieldRow label="Estado" ficha={ficha}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <span style={{ ...ficha.pill(est || 'neutral'), alignSelf: 'flex-start' }}>
+                        {labelEstado(est)}
+                      </span>
+                      <select
+                        style={fichaSelect({ color: estadoBadge[edits[u.id]?.estado] || ficha.text })}
+                        value={edits[u.id]?.estado || ''}
+                        onChange={(e) => setEdit(u.id, 'estado', e.target.value)}
+                      >
+                        <option value="pendiente">Pendiente</option>
+                        <option value="aprobado">Aprobado</option>
+                        <option value="rechazado">Rechazado (sale de la lista)</option>
+                      </select>
+                    </div>
                   </FieldRow>
-                  <FieldRow label="Cargo" sheetUi={sheetUi}>
+                  <FieldRow label="Cargo" ficha={ficha}>
                     <select
-                      style={cellSelect()}
+                      style={fichaSelect()}
                       value={edits[u.id]?.cargo_id || ''}
                       onChange={(e) => onCargoChange(u.id, u, e.target.value)}
                     >
@@ -537,9 +626,9 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
                       ))}
                     </select>
                   </FieldRow>
-                  <FieldRow label="Rol" sheetUi={sheetUi}>
+                  <FieldRow label="Rol" ficha={ficha}>
                     <select
-                      style={cellSelect()}
+                      style={fichaSelect()}
                       value={edits[u.id]?.rol_id || ''}
                       onChange={(e) => setEdit(u.id, 'rol_id', e.target.value)}
                     >
@@ -549,9 +638,9 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
                       ))}
                     </select>
                   </FieldRow>
-                  <FieldRow label="Contrato principal" sheetUi={sheetUi}>
+                  <FieldRow label="Contrato principal" ficha={ficha}>
                     <select
-                      style={cellSelect()}
+                      style={fichaSelect()}
                       value={edits[u.id]?.contrato_id || ''}
                       onChange={(e) => onContratoChange(u.id, u, e.target.value)}
                     >
@@ -561,10 +650,10 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
                       ))}
                     </select>
                   </FieldRow>
-                  <FieldRow label={esSub ? 'Empresa *' : 'Empresa'} sheetUi={sheetUi}>
+                  <FieldRow label={esSub ? 'Empresa *' : 'Empresa'} ficha={ficha}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <select
-                        style={{ ...cellSelect(), flex: '1 1 160px' }}
+                        style={{ ...fichaSelect(), flex: '1 1 160px' }}
                         value={empresaKey}
                         onChange={(e) => setEdit(u.id, 'empresa_key', e.target.value)}
                         required={esSub}
@@ -584,26 +673,26 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
                       </IconBtn>
                     </div>
                     {esSub && !empresaKey && (
-                      <div style={{ fontSize: 'var(--cc-caption)', color: estadoBadge.pendiente, marginTop: 4 }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: ficha.warnColor, marginTop: 6, fontWeight: 700 }}>
                         Obligatorio (subcontratista)
                       </div>
                     )}
                     {keyExp ? (
-                      <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginTop: 4 }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: ficha.textMuted, marginTop: 6 }}>
                         Actual: {labelExp}
                       </div>
                     ) : null}
                   </FieldRow>
-                  <FieldRow label="Políticas" sheetUi={sheetUi}>
+                  <FieldRow label="Políticas" ficha={ficha}>
                     <select
-                      style={cellSelect()}
+                      style={fichaSelect()}
                       value={edits[u.id]?.politicas_aceptadas ? 'si' : 'no'}
                       onChange={(e) => setEdit(u.id, 'politicas_aceptadas', e.target.value === 'si')}
                     >
                       <option value="si">Sí</option>
                       <option value="no">Pendiente</option>
                     </select>
-                    <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginTop: 6, lineHeight: 1.35 }}>
+                    <div style={{ fontSize: 'var(--cc-caption)', color: ficha.textMuted, marginTop: 6, lineHeight: 1.35 }}>
                       {u.politicas_version ? <>v{u.politicas_version}</> : '—'}
                       {u.politicas_fecha ? (
                         <span style={{ display: 'block' }}>
@@ -614,110 +703,103 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
                   </FieldRow>
                 </tbody>
               </table>
-            </div>
+            </SectionBlock>
 
-            <div style={sheetUi.sectionTitle}>Contratos autorizados</div>
-            <div style={{ ...sheetUi.sheetWrap, maxHeight: 'none', overflow: 'visible' }}>
-              <div style={{ padding: '10px 10px 12px' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-                  {(ucContratos[u.id] || []).map((c) => (
-                    <span key={c.id} style={S.chip}>
-                      {c.numero}
-                      <button
-                        type="button"
-                        title={`Quitar contrato ${c.numero}`}
-                        aria-label={`Quitar contrato ${c.numero}`}
-                        onClick={() => setConfirmQuitar({ uid: u.id, cid: c.id, numero: c.numero })}
-                        style={{
-                          border: 'none',
-                          background: 'transparent',
-                          color: estadoBadge.rechazado,
-                          cursor: 'pointer',
-                          padding: 2,
-                          lineHeight: 1,
-                          fontWeight: 700,
-                          fontSize: 14,
-                        }}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                  {(ucContratos[u.id] || []).length === 0 && (
-                    <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-sm)' }}>Sin contratos asignados</span>
-                  )}
-                </div>
-                {confirmQuitar && String(confirmQuitar.uid) === String(u.id) ? (
-                  <div
-                    style={{
-                      marginBottom: 10,
-                      padding: '10px 12px',
-                      borderRadius: 8,
-                      border: `1px solid ${estadoBadge.rechazado}55`,
-                      background: `${estadoBadge.rechazado}14`,
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: 8,
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <span style={{ fontSize: 'var(--cc-sm)', color: tTok.text, lineHeight: 1.35 }}>
-                      ¿Quitar el contrato {confirmQuitar.numero || ''} al usuario?
-                    </span>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <IconBtn
-                        title="Cancelar"
-                        tok={tTok}
-                        compact={adminCompact}
-                        onClick={() => setConfirmQuitar(null)}
-                      >
-                        <X size={16} strokeWidth={2.1} aria-hidden />
-                      </IconBtn>
-                      <IconBtn
-                        title="Quitar contrato"
-                        tok={tTok}
-                        compact={adminCompact}
-                        onClick={() => void quitarContratoConfirmado()}
-                      >
-                        <XCircle size={16} strokeWidth={2.1} aria-hidden />
-                      </IconBtn>
-                    </div>
-                  </div>
-                ) : null}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <select
-                    style={{
-                      ...cellSelect(),
-                      border: `1px solid ${sheetUi.border}`,
-                      borderRadius: 6,
-                      padding: '6px 8px',
-                      background: tTok.inputBg || tTok.bg,
-                      minWidth: adminCompact ? '100%' : 180,
-                      flex: adminCompact ? '1 1 100%' : '1 1 180px',
-                    }}
-                    value={addingContrato[u.id] || ''}
-                    onChange={(e) => setAddingContrato((p) => ({ ...p, [u.id]: e.target.value }))}
-                  >
-                    <option value="">+ Agregar contrato...</option>
-                    {contratos.map((c) => (
-                      <option key={c.id} value={c.id}>{c.numero}</option>
-                    ))}
-                  </select>
-                  <IconBtn
-                    title="Asignar contrato"
-                    tok={tTok}
-                    compact={adminCompact}
-                    onClick={() => void agregarContrato(u.id)}
-                  >
-                    <ClipboardList size={16} strokeWidth={2.1} aria-hidden />
-                  </IconBtn>
-                </div>
+            <SectionBlock title="Contratos autorizados" ficha={ficha} last>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                {(ucContratos[u.id] || []).map((c) => (
+                  <span key={c.id} style={{ ...S.chip, fontWeight: 700 }}>
+                    {c.numero}
+                    <button
+                      type="button"
+                      title={`Quitar contrato ${c.numero}`}
+                      aria-label={`Quitar contrato ${c.numero}`}
+                      onClick={() => setConfirmQuitar({ uid: u.id, cid: c.id, numero: c.numero })}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: ficha.dangerColor,
+                        cursor: 'pointer',
+                        padding: 2,
+                        lineHeight: 1,
+                        fontWeight: 700,
+                        fontSize: 14,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {(ucContratos[u.id] || []).length === 0 && (
+                  <span style={{ color: ficha.textMuted, fontSize: 'var(--cc-sm)' }}>Sin contratos asignados</span>
+                )}
               </div>
-            </div>
+              {confirmQuitar && String(confirmQuitar.uid) === String(u.id) ? (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    border: `1px solid ${ficha.dangerColor}55`,
+                    background: `${ficha.dangerColor}14`,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span style={{ fontSize: 'var(--cc-sm)', color: ficha.text, lineHeight: 1.35, fontWeight: 600 }}>
+                    ¿Quitar el contrato {confirmQuitar.numero || ''} al usuario?
+                  </span>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <IconBtn
+                      title="Cancelar"
+                      tok={tTok}
+                      compact={adminCompact}
+                      onClick={() => setConfirmQuitar(null)}
+                    >
+                      <X size={16} strokeWidth={2.1} aria-hidden />
+                    </IconBtn>
+                    <IconBtn
+                      title="Quitar contrato"
+                      tok={tTok}
+                      compact={adminCompact}
+                      onClick={() => void quitarContratoConfirmado()}
+                    >
+                      <XCircle size={16} strokeWidth={2.1} aria-hidden />
+                    </IconBtn>
+                  </div>
+                </div>
+              ) : null}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <select
+                  style={{
+                    ...fichaSelect(),
+                    minWidth: adminCompact ? '100%' : 180,
+                    flex: adminCompact ? '1 1 100%' : '1 1 180px',
+                  }}
+                  value={addingContrato[u.id] || ''}
+                  onChange={(e) => setAddingContrato((p) => ({ ...p, [u.id]: e.target.value }))}
+                >
+                  <option value="">+ Agregar contrato...</option>
+                  {contratos.map((c) => (
+                    <option key={c.id} value={c.id}>{c.numero}</option>
+                  ))}
+                </select>
+                <IconBtn
+                  title="Asignar contrato"
+                  tok={tTok}
+                  compact={adminCompact}
+                  onClick={() => void agregarContrato(u.id)}
+                >
+                  <ClipboardList size={16} strokeWidth={2.1} aria-hidden />
+                </IconBtn>
+              </div>
+            </SectionBlock>
           </div>
 
-          <div style={modalFoot}>
+          <div style={ficha.foot}>
             <IconBtn
               title="Aprobar usuario"
               tok={tTok}
@@ -745,6 +827,7 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
                 minWidth: adminCompact ? 44 : 40,
                 minHeight: adminCompact ? 44 : 40,
                 opacity: saving === u.id ? 0.7 : 1,
+                borderRadius: 10,
               }}
               title={saving === u.id ? 'Guardando…' : 'Guardar cambios'}
               aria-label={saving === u.id ? 'Guardando…' : 'Guardar cambios'}
@@ -757,6 +840,9 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
         </div>
       </div>
     )
+
+    if (typeof document === 'undefined') return modalNode
+    return createPortal(modalNode, document.body)
   }
 
   return (
