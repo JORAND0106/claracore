@@ -3093,6 +3093,9 @@ app.include_router(catalogo_insumos_router)
 from seguimiento_routes import router as seguimiento_router
 app.include_router(seguimiento_router)
 
+from plan_actividades_routes import router as plan_actividades_router
+app.include_router(plan_actividades_router)
+
 from rrhh_routes import router as rrhh_router
 app.include_router(rrhh_router)
 
@@ -8763,6 +8766,7 @@ _FUNCIONES_REQUERIDAS = (
     {"codigo": "ENTSAL", "nombre": "Entradas y Salidas", "modulo": "Obra"},
     {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
     {"codigo": "BITACORA", "nombre": "Bitácora", "modulo": "Obra"},
+    {"codigo": "PLANACT", "nombre": "Plan de actividades", "modulo": "Obra"},
     {"codigo": "RRHH", "nombre": "Recursos Humanos", "modulo": "Gestión"},
 )
 

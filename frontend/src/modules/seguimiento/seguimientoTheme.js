@@ -5,6 +5,11 @@ export const ORIGEN_COLOR = {
     border: 'var(--cc-color-positive, #0f766e)',
     label: 'Compromiso de acta',
   },
+  plan_actividad: {
+    bg: 'color-mix(in srgb, #0284c7 14%, transparent)',
+    border: '#0284c7',
+    label: 'Plan de actividades',
+  },
   tarea: {
     bg: 'color-mix(in srgb, #2563eb 14%, transparent)',
     border: '#2563eb',

@@ -48,6 +48,20 @@ function IconPlus() {
   )
 }
 
+function IconPlan() {
+  return (
+    <svg {...iconSvgProps()}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M8 4v4" />
+      <path d="M16 4v4" />
+      <path d="M7 14h4" />
+      <path d="M13 14h4" />
+      <path d="M7 17h7" />
+    </svg>
+  )
+}
+
 function iconBtn(t) {
   return {
     width: 30,
@@ -101,6 +115,9 @@ export default function ActaTemasTable({
   onCerrarTema,
   onAgregarTema,
   grabacionActiva = false,
+  /** Si true, muestra botón Plan de actividades del expositor (solo su ambiente). */
+  puedeAbrirPlanActividades = false,
+  onAbrirPlanActividades = null,
 }) {
   const editaIdea = (idea) => {
     if (typeof canEditarIdea === 'function') return !!canEditarIdea(idea)
@@ -434,6 +451,18 @@ export default function ActaTemasTable({
                             onClick={() => onGenerarCompromiso?.(idx)}
                           >
                             <IconPlus />
+                          </button>
+                        )}
+                        {puedeAbrirPlanActividades && puedeEsta && typeof onAbrirPlanActividades === 'function' && (
+                          <button
+                            type="button"
+                            style={iconBtn(t)}
+                            title="Abrir su Plan de actividades (solo su espacio). Las actividades creadas aquí quedan vinculadas a este tema del acta."
+                            aria-label="Plan de actividades"
+                            disabled={saving}
+                            onClick={() => onAbrirPlanActividades(idx, idea)}
+                          >
+                            <IconPlan />
                           </button>
                         )}
                       </div>

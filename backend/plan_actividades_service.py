@@ -1,0 +1,1490 @@
+"""
+Plan de actividades — lógica de negocio.
+
+Cada actividad es un `seguimiento_item` con origen='plan_actividad' (compromiso
+de Seguimiento). Campos propios viven en campos_libres.plan; asignados múltiples
+reutilizan campos_libres.asignaciones (mismo patrón que tareas).
+
+Ocurrencias periódicas se calculan de forma virtual (no se materializan filas).
+Fechas/horas de negocio: America/Bogota.
+"""
+from __future__ import annotations
+
+import calendar
+import logging
+import re
+import unicodedata
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
+
+from plan_actividades_permissions import (
+    tiene_permiso_plan_actividades,
+)
+
+_log = logging.getLogger("claracore.plan_actividades")
+
+BOGOTA = ZoneInfo("America/Bogota")
+ORIGEN = "plan_actividad"
+PERIODICIDADES = frozenset({"ninguna", "semanal", "quincenal", "mensual"})
+PRIORIDADES = frozenset({1, 2, 3, 4, 5})
+ESTADOS_ABIERTOS = frozenset({"abierto", "en_progreso", "parcial", "vencido", "reprogramado"})
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _now_bogota() -> datetime:
+    return datetime.now(BOGOTA)
+
+
+def _parse_date(raw) -> Optional[date]:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, date) and not isinstance(raw, datetime):
+        return raw
+    s = str(raw).strip()[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _norm_txt(s: str) -> str:
+    t = unicodedata.normalize("NFD", str(s or ""))
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return t.lower().strip()
+
+
+def _nombre_usuario(u: Optional[dict]) -> str:
+    if not u:
+        return ""
+    nom = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
+    return nom or str(u.get("email") or u.get("id") or "")
+
+
+def _usuario_row(sb, user_id: int) -> Optional[dict]:
+    rows = (
+        sb.table("usuarios")
+        .select("id, nombre, apellidos, email, cargo_id, rol_id, contrato_id")
+        .eq("id", int(user_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return rows[0] if rows else None
+
+
+def _es_desarrollador(current_user) -> bool:
+    try:
+        from seguimiento_service import es_desarrollador_seguimiento
+
+        return bool(es_desarrollador_seguimiento(current_user))
+    except Exception:
+        return _norm_txt(
+            (current_user or {}).get("cargo_nombre")
+            or (current_user or {}).get("cargo")
+            or (current_user or {}).get("rol_nombre")
+            or ""
+        ) == "desarrollador"
+
+
+def _es_gerencial_o_admin(sb, user_id: int, current_user: Optional[dict]) -> bool:
+    if _es_desarrollador(current_user):
+        return True
+    try:
+        from seguimiento_service import es_contratista_gerencial
+
+        u = _usuario_row(sb, user_id)
+        if es_contratista_gerencial(u, current_user):
+            return True
+    except Exception:
+        pass
+    rol = _norm_txt(
+        (current_user or {}).get("rol_nombre")
+        or (current_user or {}).get("rol")
+        or ""
+    )
+    if rol == "administrativo":
+        return True
+    # Fallback: cargo/rol del usuario en BD
+    u = _usuario_row(sb, user_id)
+    if not u:
+        return False
+    try:
+        from main import supabase as _sb
+
+        if u.get("rol_id"):
+            r = (
+                _sb.table("roles")
+                .select("nombre")
+                .eq("id", int(u["rol_id"]))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if r and _norm_txt(r[0].get("nombre")) in (
+                "contratista gerencial",
+                "administrativo",
+            ):
+                return True
+            if r and "contratista gerencial" in _norm_txt(r[0].get("nombre")):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def contrato_plan_habilitado(sb, contrato_id: int) -> bool:
+    rows = (
+        sb.table("contratos")
+        .select("id, plan_actividades_habilitado")
+        .eq("id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return False
+    return bool(rows[0].get("plan_actividades_habilitado"))
+
+
+def get_plan_habilitacion(sb, contrato_id: int) -> dict:
+    rows = (
+        sb.table("contratos")
+        .select(
+            "id, plan_actividades_habilitado, plan_actividades_habilitado_en, "
+            "plan_actividades_habilitado_por"
+        )
+        .eq("id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Contrato no encontrado")
+    r = rows[0]
+    return {
+        "contrato_id": int(contrato_id),
+        "habilitado": bool(r.get("plan_actividades_habilitado")),
+        "habilitado_en": r.get("plan_actividades_habilitado_en"),
+        "habilitado_por": r.get("plan_actividades_habilitado_por"),
+    }
+
+
+def set_plan_habilitacion(sb, contrato_id: int, activa: bool, user_id: int) -> dict:
+    patch = {
+        "plan_actividades_habilitado": bool(activa),
+        "plan_actividades_habilitado_en": _now_utc().isoformat() if activa else None,
+        "plan_actividades_habilitado_por": int(user_id) if activa else None,
+    }
+    sb.table("contratos").update(patch).eq("id", int(contrato_id)).execute()
+    return get_plan_habilitacion(sb, contrato_id)
+
+
+def assert_plan_habilitado(sb, contrato_id: int) -> None:
+    if not contrato_plan_habilitado(sb, contrato_id):
+        raise PermissionError(
+            "El Plan de actividades no está habilitado en este contrato."
+        )
+
+
+def list_grupos(sb, contrato_id: int) -> List[dict]:
+    return (
+        sb.table("seguimiento_plan_grupo")
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .order("nombre")
+        .execute()
+        .data
+        or []
+    )
+
+
+def ensure_grupo(
+    sb,
+    contrato_id: int,
+    nombre: str,
+    user_id: int,
+    *,
+    grupo_id: Optional[int] = None,
+) -> dict:
+    if grupo_id:
+        rows = (
+            sb.table("seguimiento_plan_grupo")
+            .select("*")
+            .eq("id", int(grupo_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            return rows[0]
+        raise ValueError("Grupo no encontrado en este contrato")
+
+    nom = re.sub(r"\s+", " ", str(nombre or "").strip())[:120]
+    if not nom:
+        raise ValueError("Indique el nombre del grupo")
+
+    existentes = list_grupos(sb, contrato_id)
+    for g in existentes:
+        if _norm_txt(g.get("nombre")) == _norm_txt(nom):
+            return g
+
+    ins = (
+        sb.table("seguimiento_plan_grupo")
+        .insert({
+            "contrato_id": int(contrato_id),
+            "nombre": nom,
+            "created_by": int(user_id),
+        })
+        .execute()
+        .data
+    )
+    if not ins:
+        raise ValueError("No se pudo crear el grupo")
+    return ins[0]
+
+
+def _plan_blob(item: dict) -> dict:
+    libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+    plan = libres.get("plan") if isinstance(libres.get("plan"), dict) else {}
+    return dict(plan)
+
+
+def _asignaciones_de(item: dict) -> List[dict]:
+    libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+    raw = libres.get("asignaciones")
+    if isinstance(raw, list) and raw:
+        out = []
+        for a in raw:
+            if not isinstance(a, dict):
+                continue
+            try:
+                uid = int(a.get("usuario_id") or a.get("id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            if uid <= 0:
+                continue
+            out.append({
+                "usuario_id": uid,
+                "nombre": str(a.get("nombre") or "").strip(),
+                "estado_gestion": a.get("estado_gestion") or item.get("estado_gestion") or "abierto",
+                "updated_at": a.get("updated_at"),
+            })
+        return out
+    # Legacy singular
+    try:
+        aid = int(item.get("asignado_a_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    if aid > 0:
+        return [{
+            "usuario_id": aid,
+            "nombre": str(item.get("asignado_a_nombre") or "").strip(),
+            "estado_gestion": item.get("estado_gestion") or "abierto",
+        }]
+    return []
+
+
+def _ids_asignados(item: dict) -> Set[int]:
+    return {int(a["usuario_id"]) for a in _asignaciones_de(item)}
+
+
+def expandir_ocurrencias(
+    fecha_inicio: Optional[date],
+    fecha_fin: Optional[date],
+    periodicidad: str,
+    hasta: Optional[date],
+    *,
+    rango_desde: Optional[date] = None,
+    rango_hasta: Optional[date] = None,
+) -> List[Tuple[date, date]]:
+    """
+    Devuelve lista de (inicio, fin) por ocurrencia.
+    Si no hay fechas → [].
+    Si periodicidad ninguna → una sola ocurrencia.
+    """
+    if not fecha_inicio and not fecha_fin:
+        return []
+    ini = fecha_inicio or fecha_fin
+    fin = fecha_fin or fecha_inicio
+    if not ini or not fin:
+        return []
+    if fin < ini:
+        ini, fin = fin, ini
+    span = (fin - ini).days
+    per = (periodicidad or "ninguna").strip().lower()
+    if per not in PERIODICIDADES:
+        per = "ninguna"
+
+    if per == "ninguna":
+        occs = [(ini, fin)]
+    else:
+        limite = hasta or fin
+        if limite < fin:
+            limite = fin
+        # Tope de seguridad: 5 años
+        hard = ini + timedelta(days=365 * 5)
+        if limite > hard:
+            limite = hard
+        occs = []
+        cur_ini = ini
+        cur_fin = fin
+        while cur_ini <= limite:
+            occs.append((cur_ini, cur_fin))
+            if per == "semanal":
+                delta = timedelta(days=7)
+            elif per == "quincenal":
+                delta = timedelta(days=14)
+            else:  # mensual
+                # Avance por mes calendario conservando día (clamp)
+                y, m = cur_ini.year, cur_ini.month
+                m += 1
+                if m > 12:
+                    y += 1
+                    m = 1
+                day = min(cur_ini.day, calendar.monthrange(y, m)[1])
+                next_ini = date(y, m, day)
+                delta = next_ini - cur_ini
+            cur_ini = cur_ini + delta
+            cur_fin = cur_ini + timedelta(days=span)
+            if len(occs) >= 520:
+                break
+
+    if rango_desde or rango_hasta:
+        filtered = []
+        for a, b in occs:
+            if rango_hasta and a > rango_hasta:
+                continue
+            if rango_desde and b < rango_desde:
+                continue
+            filtered.append((a, b))
+        return filtered
+    return occs
+
+
+def _intervalos_solapan(a0: date, a1: date, b0: date, b1: date) -> bool:
+    return a0 <= b1 and b0 <= a1
+
+
+def _item_intervalos(item: dict) -> List[Tuple[date, date]]:
+    plan = _plan_blob(item)
+    fi = _parse_date(plan.get("fecha_inicio") or item.get("fecha_vencimiento"))
+    ff = _parse_date(plan.get("fecha_fin") or item.get("fecha_vencimiento"))
+    per = str(plan.get("periodicidad") or "ninguna")
+    hasta = _parse_date(plan.get("periodicidad_hasta"))
+    return expandir_ocurrencias(fi, ff, per, hasta)
+
+
+def detectar_solapes(
+    sb,
+    contrato_id: int,
+    *,
+    asignado_ids: List[int],
+    fecha_inicio: Optional[date],
+    fecha_fin: Optional[date],
+    periodicidad: str,
+    periodicidad_hasta: Optional[date],
+    excluir_item_id: Optional[int] = None,
+) -> List[dict]:
+    """Alerta informativa: cruza con otras actividades del plan y compromisos/tareas del asignado."""
+    if not asignado_ids:
+        return []
+    if not fecha_inicio and not fecha_fin:
+        return []
+
+    nuevas = expandir_ocurrencias(
+        fecha_inicio, fecha_fin, periodicidad, periodicidad_hasta,
+    )
+    if not nuevas:
+        return []
+
+    # Cargar ítems del contrato (plan + compromiso + tarea) abiertos con fechas
+    rows = (
+        sb.table("seguimiento_item")
+        .select(
+            "id, origen, titulo, estado_gestion, asignado_a_id, asignado_a_nombre, "
+            "fecha_vencimiento, campos_libres, created_by"
+        )
+        .eq("contrato_id", int(contrato_id))
+        .in_("origen", ["plan_actividad", "compromiso", "tarea"])
+        .limit(3000)
+        .execute()
+        .data
+        or []
+    )
+
+    asign_set = {int(x) for x in asignado_ids}
+    choques: List[dict] = []
+    seen = set()
+
+    for r in rows:
+        try:
+            rid = int(r.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if excluir_item_id and rid == int(excluir_item_id):
+            continue
+        if r.get("estado_gestion") in ("cumplido", "cancelado"):
+            continue
+        ids = _ids_asignados(r)
+        if not (ids & asign_set):
+            continue
+
+        if r.get("origen") == ORIGEN:
+            otros = _item_intervalos(r)
+        else:
+            fv = _parse_date(r.get("fecha_vencimiento"))
+            if not fv:
+                continue
+            # Compromiso/tarea: día puntual (o rango en plan-like campos)
+            plan = _plan_blob(r)
+            fi = _parse_date(plan.get("fecha_inicio")) or fv
+            ff = _parse_date(plan.get("fecha_fin")) or fv
+            otros = [(fi, ff)]
+
+        for n0, n1 in nuevas:
+            for o0, o1 in otros:
+                if _intervalos_solapan(n0, n1, o0, o1):
+                    key = (rid, o0.isoformat(), o1.isoformat())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    plan_r = _plan_blob(r)
+                    prio = plan_r.get("prioridad")
+                    try:
+                        prio = int(prio) if prio is not None else None
+                    except (TypeError, ValueError):
+                        prio = None
+                    choques.append({
+                        "item_id": rid,
+                        "origen": r.get("origen"),
+                        "titulo": r.get("titulo") or f"#{rid}",
+                        "fecha_inicio": o0.isoformat(),
+                        "fecha_fin": o1.isoformat(),
+                        "prioridad": prio,
+                        "asignados": [
+                            a for a in _asignaciones_de(r)
+                            if int(a["usuario_id"]) in asign_set
+                        ],
+                    })
+    choques.sort(key=lambda x: (x.get("fecha_inicio") or "", x.get("titulo") or ""))
+    return choques
+
+
+def _normalizar_asignados(sb, contrato_id: int, asignados: List[Any]) -> List[dict]:
+    out = []
+    seen = set()
+    for raw in asignados or []:
+        if isinstance(raw, dict):
+            try:
+                uid = int(raw.get("usuario_id") or raw.get("id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            nombre = str(raw.get("nombre") or "").strip()
+        else:
+            try:
+                uid = int(raw)
+            except (TypeError, ValueError):
+                uid = 0
+            nombre = ""
+        if uid <= 0 or uid in seen:
+            continue
+        seen.add(uid)
+        if not nombre:
+            u = _usuario_row(sb, uid)
+            nombre = _nombre_usuario(u)
+        out.append({
+            "usuario_id": uid,
+            "nombre": nombre,
+            "estado_gestion": "abierto",
+        })
+    return out
+
+
+def _build_campos_plan(
+    *,
+    grupo: dict,
+    comentario_comite: str,
+    prioridad: int,
+    fecha_inicio: Optional[date],
+    fecha_fin: Optional[date],
+    periodicidad: str,
+    periodicidad_hasta: Optional[date],
+    asignaciones: List[dict],
+    acta_tema_vinculo: Optional[dict] = None,
+) -> dict:
+    plan = {
+        "grupo_id": int(grupo["id"]),
+        "grupo_nombre": grupo.get("nombre"),
+        "comentario_comite": comentario_comite or "",
+        "prioridad": int(prioridad),
+        "fecha_inicio": fecha_inicio.isoformat() if fecha_inicio else None,
+        "fecha_fin": fecha_fin.isoformat() if fecha_fin else None,
+        "periodicidad": periodicidad,
+        "periodicidad_hasta": periodicidad_hasta.isoformat() if periodicidad_hasta else None,
+    }
+    if acta_tema_vinculo:
+        plan["desde_acta"] = True
+        plan["acta_id"] = acta_tema_vinculo.get("acta_id")
+        plan["idea_id"] = acta_tema_vinculo.get("idea_id")
+    return {
+        "plan": plan,
+        "asignaciones": asignaciones,
+        "es_plan_actividad": True,
+    }
+
+
+def _gracia_para_fecha(sb, contrato_id: int, fv: date):
+    try:
+        from prog_obra_calendar import CalendarioNoHabilesCache, make_calendar_loader
+        from seguimiento_service import calcular_fecha_limite_gracia
+
+        cache = CalendarioNoHabilesCache(loader=make_calendar_loader(sb))
+        return calcular_fecha_limite_gracia(contrato_id, fv, cache)
+    except Exception:
+        # Fallback: +1 día calendario 23:59 Bogotá → UTC
+        fin = datetime(fv.year, fv.month, fv.day, 23, 59, 59, tzinfo=BOGOTA) + timedelta(days=1)
+        return fin.astimezone(timezone.utc)
+
+
+def _proximo_consecutivo(sb, contrato_id: int) -> int:
+    rows = (
+        sb.table("seguimiento_item")
+        .select("consecutivo")
+        .eq("contrato_id", int(contrato_id))
+        .eq("origen", ORIGEN)
+        .order("consecutivo", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    try:
+        return int((rows[0] if rows else {}).get("consecutivo") or 0) + 1
+    except Exception:
+        return 1
+
+
+def _puede_ver_item(sb, item: dict, user_id: int, current_user: dict) -> bool:
+    if _es_desarrollador(current_user):
+        return True
+    if _es_gerencial_o_admin(sb, user_id, current_user):
+        return True
+    if int(item.get("created_by") or 0) == int(user_id):
+        return True
+    if int(item.get("solicitante_id") or 0) == int(user_id):
+        return True
+    return int(user_id) in _ids_asignados(item)
+
+
+def _puede_comentar(sb, item: dict, user_id: int, current_user: dict) -> bool:
+    if _es_desarrollador(current_user) or _es_gerencial_o_admin(sb, user_id, current_user):
+        return True
+    if int(item.get("created_by") or 0) == int(user_id):
+        return True
+    if int(item.get("solicitante_id") or 0) == int(user_id):
+        return True
+    return int(user_id) in _ids_asignados(item)
+
+
+def _puede_cambiar_estado(item: dict, user_id: int, current_user: dict) -> bool:
+    if _es_desarrollador(current_user):
+        return True
+    return int(user_id) in _ids_asignados(item)
+
+
+def _enrich_item(item: dict) -> dict:
+    plan = _plan_blob(item)
+    asigns = _asignaciones_de(item)
+    item = dict(item)
+    item["plan"] = plan
+    item["asignaciones"] = asigns
+    item["grupo_nombre"] = plan.get("grupo_nombre")
+    item["grupo_id"] = plan.get("grupo_id")
+    item["prioridad"] = plan.get("prioridad")
+    item["comentario_comite"] = plan.get("comentario_comite")
+    item["fecha_inicio"] = plan.get("fecha_inicio")
+    item["fecha_fin"] = plan.get("fecha_fin") or item.get("fecha_vencimiento")
+    item["periodicidad"] = plan.get("periodicidad") or "ninguna"
+    item["periodicidad_hasta"] = plan.get("periodicidad_hasta")
+    item["ocurrencias"] = [
+        {"fecha_inicio": a.isoformat(), "fecha_fin": b.isoformat()}
+        for a, b in _item_intervalos(item)
+    ]
+    return item
+
+
+def list_actividades(
+    sb,
+    contrato_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    colaborador_id: Optional[int] = None,
+    incluir_cerrados: bool = True,
+    ver_todos: bool = False,
+) -> List[dict]:
+    assert_plan_habilitado(sb, contrato_id)
+    rows = (
+        sb.table("seguimiento_item")
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .eq("origen", ORIGEN)
+        .order("created_at", desc=False)
+        .limit(2000)
+        .execute()
+        .data
+        or []
+    )
+
+    es_vista_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
+        sb, user_id, current_user
+    )
+    out = []
+    for r in rows:
+        if not incluir_cerrados and r.get("estado_gestion") in ("cumplido", "cancelado"):
+            continue
+        if not _puede_ver_item(sb, r, user_id, current_user):
+            continue
+        if colaborador_id is not None:
+            cid = int(colaborador_id)
+            ids = _ids_asignados(r) | {
+                int(r.get("created_by") or 0),
+                int(r.get("solicitante_id") or 0),
+            }
+            if cid not in ids:
+                continue
+        elif not ver_todos and not es_vista_amplia:
+            # Ambiente propio
+            if not (
+                int(r.get("created_by") or 0) == int(user_id)
+                or int(r.get("solicitante_id") or 0) == int(user_id)
+                or int(user_id) in _ids_asignados(r)
+            ):
+                continue
+        elif not ver_todos and es_vista_amplia and colaborador_id is None:
+            # Gerencia sin selector: por defecto «todos» si ver_todos, si no propio
+            pass
+
+        out.append(_enrich_item(r))
+
+    # Orden: grupo, prioridad desc, fecha inicio
+    def sk(it):
+        return (
+            str(it.get("grupo_nombre") or "zzz").lower(),
+            -(int(it.get("prioridad") or 0)),
+            str(it.get("fecha_inicio") or it.get("fecha_fin") or "9999"),
+            int(it.get("id") or 0),
+        )
+
+    out.sort(key=sk)
+    return out
+
+
+def list_colaboradores_plan(sb, contrato_id: int) -> List[dict]:
+    try:
+        from seguimiento_service import list_usuarios_contrato_enriquecidos
+
+        return list_usuarios_contrato_enriquecidos(sb, int(contrato_id))
+    except Exception:
+        rows = (
+            sb.table("usuario_contratos")
+            .select("usuario_id")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+        ids = [int(r["usuario_id"]) for r in rows if r.get("usuario_id")]
+        if not ids:
+            return []
+        users = (
+            sb.table("usuarios")
+            .select("id, nombre, apellidos, email")
+            .in_("id", ids)
+            .execute()
+            .data
+            or []
+        )
+        return [
+            {
+                "id": u["id"],
+                "nombre": _nombre_usuario(u),
+                "email": u.get("email"),
+            }
+            for u in users
+        ]
+
+
+def crear_actividad(
+    sb,
+    contrato_id: int,
+    user_id: int,
+    current_user: dict,
+    data: dict,
+    *,
+    confirmar_solape: bool = False,
+) -> dict:
+    assert_plan_habilitado(sb, contrato_id)
+    if not tiene_permiso_plan_actividades(current_user, "crear", contrato_id):
+        raise PermissionError("No tiene permiso para crear actividades del plan.")
+
+    titulo = re.sub(r"\s+", " ", str(data.get("titulo") or data.get("actividad") or "").strip())
+    if not titulo:
+        raise ValueError("La actividad (título) es obligatoria")
+    titulo = titulo[:500]
+    descripcion = str(data.get("descripcion") or "")
+    comentario = str(data.get("comentario_comite") or "")
+
+    try:
+        prioridad = int(data.get("prioridad") or 3)
+    except (TypeError, ValueError):
+        prioridad = 3
+    if prioridad not in PRIORIDADES:
+        raise ValueError("Prioridad inválida (1 a 5)")
+
+    periodicidad = str(data.get("periodicidad") or "ninguna").strip().lower()
+    if periodicidad not in PERIODICIDADES:
+        raise ValueError("Periodicidad inválida")
+    fi = _parse_date(data.get("fecha_inicio"))
+    ff = _parse_date(data.get("fecha_fin"))
+    hasta = _parse_date(data.get("periodicidad_hasta"))
+    if periodicidad != "ninguna" and not hasta:
+        raise ValueError("Indique hasta qué fecha se repite la periodicidad")
+    if periodicidad != "ninguna" and not (fi or ff):
+        raise ValueError("La periodicidad requiere fecha de inicio o fin")
+
+    grupo = ensure_grupo(
+        sb,
+        contrato_id,
+        data.get("grupo_nombre") or data.get("grupo") or "",
+        user_id,
+        grupo_id=data.get("grupo_id"),
+    )
+
+    asignaciones = _normalizar_asignados(sb, contrato_id, data.get("asignados") or data.get("asignaciones") or [])
+    if not asignaciones:
+        raise ValueError("Indique al menos un asignado")
+
+    solicitante_id = data.get("solicitante_id")
+    try:
+        solicitante_id = int(solicitante_id) if solicitante_id is not None else int(user_id)
+    except (TypeError, ValueError):
+        solicitante_id = int(user_id)
+    sol_u = _usuario_row(sb, solicitante_id)
+    solicitante_nombre = (
+        str(data.get("solicitante_nombre") or "").strip()
+        or _nombre_usuario(sol_u)
+        or _nombre_usuario(_usuario_row(sb, user_id))
+    )
+
+    acta_id = data.get("acta_id")
+    idea_id = data.get("idea_id")
+    vinculo = None
+    if acta_id is not None:
+        try:
+            acta_id = int(acta_id)
+        except (TypeError, ValueError):
+            acta_id = None
+    if idea_id is not None:
+        try:
+            idea_id = int(idea_id)
+        except (TypeError, ValueError):
+            idea_id = None
+    if acta_id:
+        vinculo = {"acta_id": acta_id, "idea_id": idea_id}
+
+    solapes = detectar_solapes(
+        sb,
+        contrato_id,
+        asignado_ids=[a["usuario_id"] for a in asignaciones],
+        fecha_inicio=fi,
+        fecha_fin=ff,
+        periodicidad=periodicidad,
+        periodicidad_hasta=hasta,
+    )
+    if solapes and not confirmar_solape and not data.get("confirmar_solape"):
+        return {
+            "requiere_confirmacion_solape": True,
+            "solapes": solapes,
+        }
+
+    fv = ff or fi
+    gracia = _gracia_para_fecha(sb, contrato_id, fv) if fv else None
+    campos = _build_campos_plan(
+        grupo=grupo,
+        comentario_comite=comentario,
+        prioridad=prioridad,
+        fecha_inicio=fi,
+        fecha_fin=ff,
+        periodicidad=periodicidad,
+        periodicidad_hasta=hasta,
+        asignaciones=asignaciones,
+        acta_tema_vinculo=vinculo,
+    )
+
+    nombres = ", ".join(a["nombre"] for a in asignaciones if a.get("nombre"))
+    row = {
+        "origen": ORIGEN,
+        "titulo": titulo,
+        "descripcion": descripcion,
+        "estado_gestion": "abierto",
+        "asignado_a_id": asignaciones[0]["usuario_id"],
+        "asignado_a_nombre": nombres[:500] or asignaciones[0].get("nombre"),
+        "created_by": int(user_id),
+        "contrato_id": int(contrato_id),
+        "solicitante_id": solicitante_id,
+        "solicitante_nombre": solicitante_nombre[:200],
+        "relacion_destinatario": "asignacion",
+        "campos_libres": campos,
+        "fecha_vencimiento": fv.isoformat() if fv else None,
+        "fecha_vencimiento_original": fv.isoformat() if fv else None,
+        "fecha_limite_gracia": gracia.isoformat() if gracia else None,
+        "consecutivo": _proximo_consecutivo(sb, contrato_id),
+        "acta_id": acta_id,
+        "idea_id": idea_id,
+    }
+
+    ins = sb.table("seguimiento_item").insert(row).execute().data
+    if not ins:
+        raise ValueError("No se pudo crear la actividad")
+    item = ins[0]
+
+    try:
+        from seguimiento_service import _registrar_evento, _notificar_compromiso_asignado
+
+        _registrar_evento(
+            sb,
+            int(item["id"]),
+            "plan_actividad_creada",
+            user_id,
+            {"titulo": titulo, "prioridad": prioridad, "grupo": grupo.get("nombre")},
+        )
+        for a in asignaciones:
+            if int(a["usuario_id"]) == int(user_id):
+                continue
+            try:
+                _notificar_compromiso_asignado(
+                    sb,
+                    destinatario_id=int(a["usuario_id"]),
+                    remitente_id=int(user_id),
+                    titulo=titulo,
+                    fecha_vencimiento=fv,
+                    contrato_id=contrato_id,
+                    item_id=int(item["id"]),
+                    descripcion=descripcion,
+                )
+            except Exception as exc:
+                _log.warning("notif asignado plan: %s", exc)
+    except Exception as exc:
+        _log.warning("post-create plan: %s", exc)
+
+    enriched = _enrich_item(get_item_raw(sb, int(item["id"])))
+    if solapes:
+        enriched["solapes_informativos"] = solapes
+    return enriched
+
+
+def get_item_raw(sb, item_id: int) -> dict:
+    rows = (
+        sb.table("seguimiento_item")
+        .select("*")
+        .eq("id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Actividad no encontrada")
+    return rows[0]
+
+
+def get_actividad(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+) -> dict:
+    item = get_item_raw(sb, item_id)
+    if item.get("origen") != ORIGEN:
+        raise ValueError("El ítem no es una actividad del plan")
+    assert_plan_habilitado(sb, int(item["contrato_id"]))
+    if not _puede_ver_item(sb, item, user_id, current_user):
+        raise PermissionError("No puede ver esta actividad")
+
+    detalle = _enrich_item(item)
+    # Comentarios + eventos
+    comentarios = (
+        sb.table("seguimiento_item_comentario")
+        .select("*")
+        .eq("item_id", int(item_id))
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    eventos = (
+        sb.table("seguimiento_evento_gestion")
+        .select("*")
+        .eq("item_id", int(item_id))
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    detalle["comentarios"] = comentarios
+    detalle["eventos"] = eventos
+    detalle["puede_editar"] = (
+        int(item.get("created_by") or 0) == int(user_id)
+        and tiene_permiso_plan_actividades(current_user, "editar", item.get("contrato_id"))
+    ) or _es_desarrollador(current_user)
+    detalle["puede_eliminar"] = (
+        int(item.get("created_by") or 0) == int(user_id)
+        and tiene_permiso_plan_actividades(current_user, "eliminar", item.get("contrato_id"))
+    ) or _es_desarrollador(current_user)
+    detalle["puede_comentar"] = _puede_comentar(sb, item, user_id, current_user)
+    detalle["puede_cambiar_estado"] = _puede_cambiar_estado(item, user_id, current_user)
+    return detalle
+
+
+def actualizar_actividad(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    data: dict,
+) -> dict:
+    item = get_item_raw(sb, item_id)
+    if item.get("origen") != ORIGEN:
+        raise ValueError("El ítem no es una actividad del plan")
+    cid = int(item["contrato_id"])
+    assert_plan_habilitado(sb, cid)
+
+    es_creador = int(item.get("created_by") or 0) == int(user_id)
+    if not es_creador and not _es_desarrollador(current_user):
+        raise PermissionError("Solo quien creó la actividad puede editarla.")
+    if not tiene_permiso_plan_actividades(current_user, "editar", cid) and not _es_desarrollador(current_user):
+        raise PermissionError("No tiene permiso para editar actividades del plan.")
+
+    antes = _enrich_item(item)
+    plan_prev = _plan_blob(item)
+    libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+
+    titulo = data.get("titulo") if "titulo" in data or "actividad" in data else item.get("titulo")
+    if "actividad" in data and "titulo" not in data:
+        titulo = data.get("actividad")
+    titulo = re.sub(r"\s+", " ", str(titulo or "").strip())[:500]
+    if not titulo:
+        raise ValueError("La actividad (título) es obligatoria")
+
+    descripcion = data.get("descripcion") if "descripcion" in data else item.get("descripcion")
+    comentario = (
+        data.get("comentario_comite")
+        if "comentario_comite" in data
+        else plan_prev.get("comentario_comite")
+    )
+
+    if "prioridad" in data:
+        try:
+            prioridad = int(data.get("prioridad"))
+        except (TypeError, ValueError):
+            raise ValueError("Prioridad inválida") from None
+    else:
+        prioridad = int(plan_prev.get("prioridad") or 3)
+    if prioridad not in PRIORIDADES:
+        raise ValueError("Prioridad inválida (1 a 5)")
+
+    if "periodicidad" in data:
+        periodicidad = str(data.get("periodicidad") or "ninguna").strip().lower()
+    else:
+        periodicidad = str(plan_prev.get("periodicidad") or "ninguna")
+    if periodicidad not in PERIODICIDADES:
+        raise ValueError("Periodicidad inválida")
+
+    fi = _parse_date(data["fecha_inicio"]) if "fecha_inicio" in data else _parse_date(plan_prev.get("fecha_inicio"))
+    ff = _parse_date(data["fecha_fin"]) if "fecha_fin" in data else _parse_date(plan_prev.get("fecha_fin"))
+    hasta = (
+        _parse_date(data["periodicidad_hasta"])
+        if "periodicidad_hasta" in data
+        else _parse_date(plan_prev.get("periodicidad_hasta"))
+    )
+    if periodicidad != "ninguna" and not hasta:
+        raise ValueError("Indique hasta qué fecha se repite la periodicidad")
+
+    if "grupo_id" in data or "grupo_nombre" in data or "grupo" in data:
+        grupo = ensure_grupo(
+            sb,
+            cid,
+            data.get("grupo_nombre") or data.get("grupo") or plan_prev.get("grupo_nombre") or "",
+            user_id,
+            grupo_id=data.get("grupo_id"),
+        )
+    else:
+        grupo = {
+            "id": plan_prev.get("grupo_id"),
+            "nombre": plan_prev.get("grupo_nombre"),
+        }
+        if not grupo.get("id"):
+            grupo = ensure_grupo(sb, cid, grupo.get("nombre") or "General", user_id)
+
+    if "asignados" in data or "asignaciones" in data:
+        asignaciones = _normalizar_asignados(
+            sb, cid, data.get("asignados") or data.get("asignaciones") or []
+        )
+        if not asignaciones:
+            raise ValueError("Indique al menos un asignado")
+    else:
+        asignaciones = _asignaciones_de(item)
+
+    solicitante_id = item.get("solicitante_id")
+    solicitante_nombre = item.get("solicitante_nombre")
+    if "solicitante_id" in data:
+        try:
+            solicitante_id = int(data.get("solicitante_id"))
+        except (TypeError, ValueError):
+            pass
+        sol_u = _usuario_row(sb, solicitante_id)
+        solicitante_nombre = (
+            str(data.get("solicitante_nombre") or "").strip()
+            or _nombre_usuario(sol_u)
+            or solicitante_nombre
+        )
+
+    solapes = detectar_solapes(
+        sb,
+        cid,
+        asignado_ids=[a["usuario_id"] for a in asignaciones],
+        fecha_inicio=fi,
+        fecha_fin=ff,
+        periodicidad=periodicidad,
+        periodicidad_hasta=hasta,
+        excluir_item_id=item_id,
+    )
+    if solapes and not data.get("confirmar_solape"):
+        return {
+            "requiere_confirmacion_solape": True,
+            "solapes": solapes,
+        }
+
+    fv = ff or fi
+    gracia = _gracia_para_fecha(sb, cid, fv) if fv else None
+    vinculo = None
+    if item.get("acta_id"):
+        vinculo = {"acta_id": item.get("acta_id"), "idea_id": item.get("idea_id")}
+
+    campos = _build_campos_plan(
+        grupo=grupo,
+        comentario_comite=str(comentario or ""),
+        prioridad=prioridad,
+        fecha_inicio=fi,
+        fecha_fin=ff,
+        periodicidad=periodicidad,
+        periodicidad_hasta=hasta,
+        asignaciones=asignaciones,
+        acta_tema_vinculo=vinculo,
+    )
+    # Conservar otras claves de campos_libres
+    for k, v in libres.items():
+        if k not in ("plan", "asignaciones", "es_plan_actividad"):
+            campos[k] = v
+
+    nombres = ", ".join(a["nombre"] for a in asignaciones if a.get("nombre"))
+    patch = {
+        "titulo": titulo,
+        "descripcion": descripcion,
+        "asignado_a_id": asignaciones[0]["usuario_id"],
+        "asignado_a_nombre": nombres[:500] or asignaciones[0].get("nombre"),
+        "solicitante_id": solicitante_id,
+        "solicitante_nombre": (solicitante_nombre or "")[:200],
+        "campos_libres": campos,
+        "fecha_vencimiento": fv.isoformat() if fv else None,
+        "fecha_limite_gracia": gracia.isoformat() if gracia else None,
+        "updated_at": _now_utc().isoformat(),
+    }
+    sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+
+    try:
+        from seguimiento_service import _registrar_evento
+
+        _registrar_evento(
+            sb,
+            int(item_id),
+            "plan_actividad_editada",
+            user_id,
+            {
+                "antes": {
+                    "titulo": antes.get("titulo"),
+                    "prioridad": antes.get("prioridad"),
+                    "fecha_inicio": antes.get("fecha_inicio"),
+                    "fecha_fin": antes.get("fecha_fin"),
+                    "estado_gestion": antes.get("estado_gestion"),
+                },
+                "despues": {
+                    "titulo": titulo,
+                    "prioridad": prioridad,
+                    "fecha_inicio": fi.isoformat() if fi else None,
+                    "fecha_fin": ff.isoformat() if ff else None,
+                },
+            },
+        )
+    except Exception as exc:
+        _log.warning("evento edit plan: %s", exc)
+
+    enriched = get_actividad(sb, item_id, user_id, current_user)
+    if solapes:
+        enriched["solapes_informativos"] = solapes
+    return enriched
+
+
+def eliminar_actividad(sb, item_id: int, user_id: int, current_user: dict) -> None:
+    item = get_item_raw(sb, item_id)
+    if item.get("origen") != ORIGEN:
+        raise ValueError("El ítem no es una actividad del plan")
+    cid = int(item["contrato_id"])
+    assert_plan_habilitado(sb, cid)
+    es_creador = int(item.get("created_by") or 0) == int(user_id)
+    if not es_creador and not _es_desarrollador(current_user):
+        raise PermissionError("Solo quien creó la actividad puede eliminarla.")
+    if not tiene_permiso_plan_actividades(current_user, "eliminar", cid) and not _es_desarrollador(current_user):
+        raise PermissionError("No tiene permiso para eliminar actividades del plan.")
+    sb.table("seguimiento_item").delete().eq("id", int(item_id)).execute()
+
+
+def comentar_actividad(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    mensaje: str,
+) -> dict:
+    item = get_item_raw(sb, item_id)
+    if item.get("origen") != ORIGEN:
+        raise ValueError("El ítem no es una actividad del plan")
+    assert_plan_habilitado(sb, int(item["contrato_id"]))
+    if not _puede_comentar(sb, item, user_id, current_user):
+        raise PermissionError("No puede comentar esta actividad.")
+    msg = str(mensaje or "").strip()
+    if not msg:
+        raise ValueError("Mensaje vacío")
+    u = _usuario_row(sb, user_id)
+    ins = (
+        sb.table("seguimiento_item_comentario")
+        .insert({
+            "item_id": int(item_id),
+            "autor_id": int(user_id),
+            "autor_nombre": _nombre_usuario(u),
+            "mensaje": msg,
+        })
+        .execute()
+        .data
+    )
+    if not ins:
+        raise ValueError("No se pudo guardar el comentario")
+    try:
+        from seguimiento_service import _registrar_evento
+
+        _registrar_evento(
+            sb, int(item_id), "plan_comentario", user_id, {"comentario_id": ins[0].get("id")}
+        )
+    except Exception:
+        pass
+    return ins[0]
+
+
+def editar_comentario(
+    sb,
+    comentario_id: int,
+    user_id: int,
+    current_user: dict,
+    mensaje: str,
+) -> dict:
+    rows = (
+        sb.table("seguimiento_item_comentario")
+        .select("*")
+        .eq("id", int(comentario_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Comentario no encontrado")
+    c = rows[0]
+    item = get_item_raw(sb, int(c["item_id"]))
+    if item.get("origen") != ORIGEN:
+        raise ValueError("El comentario no pertenece al plan")
+    if int(c.get("autor_id") or 0) != int(user_id) and not _es_desarrollador(current_user):
+        raise PermissionError("Solo el autor puede editar su comentario.")
+    msg = str(mensaje or "").strip()
+    if not msg:
+        raise ValueError("Mensaje vacío")
+    u = _usuario_row(sb, user_id)
+    patch = {
+        "mensaje_anterior": c.get("mensaje"),
+        "mensaje": msg,
+        "editado_en": _now_utc().isoformat(),
+        "editado_por_id": int(user_id),
+        "editado_por_nombre": _nombre_usuario(u),
+    }
+    sb.table("seguimiento_item_comentario").update(patch).eq("id", int(comentario_id)).execute()
+    updated = (
+        sb.table("seguimiento_item_comentario")
+        .select("*")
+        .eq("id", int(comentario_id))
+        .limit(1)
+        .execute()
+        .data
+        or [None]
+    )[0]
+    return updated
+
+
+def cambiar_estado_actividad(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    estado_gestion: str,
+) -> dict:
+    item = get_item_raw(sb, item_id)
+    if item.get("origen") != ORIGEN:
+        raise ValueError("El ítem no es una actividad del plan")
+    assert_plan_habilitado(sb, int(item["contrato_id"]))
+    if not _puede_cambiar_estado(item, user_id, current_user):
+        raise PermissionError("Solo el asignado puede cambiar el estado de la actividad.")
+
+    estado = str(estado_gestion or "").strip().lower()
+    permitidos = {
+        "abierto", "en_progreso", "cumplido", "parcial", "vencido", "cancelado", "reprogramado",
+    }
+    if estado not in permitidos:
+        raise ValueError("Estado inválido")
+
+    prev = item.get("estado_gestion")
+    try:
+        from seguimiento_service import actualizar_estado_gestion
+
+        actualizar_estado_gestion(
+            sb, item_id, estado, user_id, contrato_id=item.get("contrato_id"),
+        )
+    except Exception:
+        patch = {
+            "estado_gestion": estado,
+            "updated_at": _now_utc().isoformat(),
+        }
+        sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+        try:
+            from seguimiento_service import _registrar_evento
+
+            _registrar_evento(
+                sb,
+                int(item_id),
+                "cambio_estado",
+                user_id,
+                {"antes": prev, "despues": estado},
+            )
+        except Exception:
+            pass
+
+    # Actualizar estado en asignaciones del usuario
+    libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    asigns = list(libres.get("asignaciones") or [])
+    changed = False
+    for a in asigns:
+        if isinstance(a, dict) and int(a.get("usuario_id") or 0) == int(user_id):
+            a["estado_gestion"] = estado
+            a["updated_at"] = _now_utc().isoformat()
+            changed = True
+    if changed:
+        libres["asignaciones"] = asigns
+        sb.table("seguimiento_item").update({
+            "campos_libres": libres,
+            "updated_at": _now_utc().isoformat(),
+        }).eq("id", int(item_id)).execute()
+
+    return get_actividad(sb, item_id, user_id, current_user)
+
+
+def exportar_xlsx(
+    sb,
+    contrato_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    colaborador_id: Optional[int] = None,
+    ver_todos: bool = False,
+) -> bytes:
+    assert_plan_habilitado(sb, contrato_id)
+    if not tiene_permiso_plan_actividades(current_user, "exportar", contrato_id):
+        raise PermissionError("No tiene permiso para exportar el Plan de actividades.")
+
+    items = list_actividades(
+        sb,
+        contrato_id,
+        user_id,
+        current_user,
+        colaborador_id=colaborador_id,
+        incluir_cerrados=True,
+        ver_todos=ver_todos or colaborador_id is None,
+    )
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+    except ImportError as exc:
+        raise RuntimeError("openpyxl no disponible para exportar") from exc
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Plan de actividades"
+
+    headers = [
+        "Grupo", "Actividad", "Descripción", "Comentario comité", "Solicitante",
+        "Asignado(s)", "Prioridad", "Estado", "Fecha inicio", "Fecha fin", "Periodicidad",
+    ]
+    thin = Border(
+        left=Side(style="thin", color="94A3B8"),
+        right=Side(style="thin", color="94A3B8"),
+        top=Side(style="thin", color="94A3B8"),
+        bottom=Side(style="thin", color="94A3B8"),
+    )
+    header_fill = PatternFill("solid", fgColor="DDEFF8")
+    group_fill = PatternFill("solid", fgColor="FDE68A")
+    header_font = Font(bold=True, color="0F2942")
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(1, col, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+
+    # Gantt columns: from min fecha to max (+30d buffer)
+    all_days: List[date] = []
+    for it in items:
+        for occ in it.get("ocurrencias") or []:
+            a = _parse_date(occ.get("fecha_inicio"))
+            b = _parse_date(occ.get("fecha_fin"))
+            if a:
+                all_days.append(a)
+            if b:
+                all_days.append(b)
+    if all_days:
+        d0 = min(all_days)
+        d1 = max(all_days)
+    else:
+        hoy = _now_bogota().date()
+        d0, d1 = hoy, hoy + timedelta(days=14)
+
+    gantt_start_col = len(headers) + 1
+    cur = d0
+    day_cols: Dict[str, int] = {}
+    col_i = gantt_start_col
+    while cur <= d1 and col_i < gantt_start_col + 120:
+        day_cols[cur.isoformat()] = col_i
+        cell = ws.cell(1, col_i, cur.strftime("%d/%m"))
+        cell.fill = header_fill
+        cell.font = Font(bold=True, size=8)
+        cell.border = thin
+        cell.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[cell.column_letter].width = 4
+        cur += timedelta(days=1)
+        col_i += 1
+
+    # Detect overlaps per assignee for highlighting
+    by_asig: Dict[int, List[Tuple[int, date, date]]] = {}
+    for it in items:
+        for a in it.get("asignaciones") or []:
+            uid = int(a.get("usuario_id") or 0)
+            if uid <= 0:
+                continue
+            for occ in it.get("ocurrencias") or []:
+                a0 = _parse_date(occ.get("fecha_inicio"))
+                a1 = _parse_date(occ.get("fecha_fin"))
+                if a0 and a1:
+                    by_asig.setdefault(uid, []).append((int(it["id"]), a0, a1))
+
+    overlap_ids: Set[int] = set()
+    for uid, spans in by_asig.items():
+        for i, (id1, a0, a1) in enumerate(spans):
+            for id2, b0, b1 in spans[i + 1:]:
+                if id1 != id2 and _intervalos_solapan(a0, a1, b0, b1):
+                    overlap_ids.add(id1)
+                    overlap_ids.add(id2)
+
+    bar_fill = PatternFill("solid", fgColor="38BDF8")
+    bar_overlap = PatternFill("solid", fgColor="F97316")
+    row_i = 2
+    last_grupo = None
+    for it in items:
+        gname = it.get("grupo_nombre") or "Sin grupo"
+        if gname != last_grupo:
+            ws.cell(row_i, 1, gname)
+            for c in range(1, gantt_start_col):
+                cell = ws.cell(row_i, c)
+                cell.fill = group_fill
+                cell.font = Font(bold=True)
+                cell.border = thin
+            last_grupo = gname
+            row_i += 1
+
+        vals = [
+            gname,
+            it.get("titulo"),
+            _strip_html(it.get("descripcion")),
+            _strip_html(it.get("comentario_comite")),
+            it.get("solicitante_nombre"),
+            it.get("asignado_a_nombre"),
+            it.get("prioridad"),
+            it.get("estado_gestion"),
+            it.get("fecha_inicio"),
+            it.get("fecha_fin"),
+            it.get("periodicidad"),
+        ]
+        for col, v in enumerate(vals, 1):
+            cell = ws.cell(row_i, col, v if v is not None else "")
+            cell.border = thin
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        fill = bar_overlap if int(it.get("id") or 0) in overlap_ids else bar_fill
+        for occ in it.get("ocurrencias") or []:
+            a0 = _parse_date(occ.get("fecha_inicio"))
+            a1 = _parse_date(occ.get("fecha_fin"))
+            if not a0 or not a1:
+                continue
+            d = a0
+            while d <= a1:
+                col = day_cols.get(d.isoformat())
+                if col:
+                    cell = ws.cell(row_i, col, "■")
+                    cell.fill = fill
+                    cell.alignment = Alignment(horizontal="center")
+                    cell.border = thin
+                d += timedelta(days=1)
+        row_i += 1
+
+    for col in range(1, len(headers) + 1):
+        ws.column_dimensions[ws.cell(1, col).column_letter].width = 18
+
+    bio = __import__("io").BytesIO()
+    wb.save(bio)
+    return bio.getvalue()
+
+
+def _strip_html(html: Optional[str]) -> str:
+    if not html:
+        return ""
+    s = re.sub(r"<br\s*/?>", "\n", str(html), flags=re.I)
+    s = re.sub(r"</p\s*>", "\n", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    return re.sub(r"\n{3,}", "\n\n", s).strip()

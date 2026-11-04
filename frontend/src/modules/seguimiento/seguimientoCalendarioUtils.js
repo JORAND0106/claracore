@@ -3,6 +3,7 @@
  * Diferenciación visual: color de bloque + icono por tipo.
  */
 import { labelEventoTipo } from './bitacoraConstants.js'
+import { expandirOcurrencias } from './planActividadesOcurrencias.js'
 import { fechaVencimientoEfectiva, hoyBogotaDate } from './vencimientoLevels.js'
 import { numeroActaLabel } from './seguimientoTheme.js'
 
@@ -22,6 +23,14 @@ export const CALENDARIO_KIND = {
     color: '#0f766e',
     textColor: '#ffffff',
     tooltip: 'Compromisos derivados de actas de reunión',
+  },
+  plan_actividad: {
+    id: 'plan_actividad',
+    label: 'Plan de actividades',
+    icon: '🗓️',
+    color: '#0284c7',
+    textColor: '#ffffff',
+    tooltip: 'Actividades del Plan de actividades (compromisos de Seguimiento)',
   },
   acta: {
     id: 'acta',
@@ -113,7 +122,12 @@ function titleWithIcon(icon, text) {
  */
 export function bandejaItemToEvent(item) {
   if (!item?.id) return null
-  const origen = item.origen === 'compromiso' ? 'compromiso' : 'tarea'
+  const origenRaw = String(item.origen || '')
+  const origen = origenRaw === 'compromiso'
+    ? 'compromiso'
+    : origenRaw === 'plan_actividad'
+      ? 'plan_actividad'
+      : 'tarea'
   // Madre con partes: no evento propio (las partes ya ocupan el calendario).
   if (
     origen === 'tarea'
@@ -126,6 +140,40 @@ export function bandejaItemToEvent(item) {
   ) {
     return null
   }
+
+  // Plan periódico: una barra/evento por ocurrencia en el rango visible lo resuelve
+  // el calendario al mapear; aquí emitimos la fecha efectiva o la 1ª ocurrencia.
+  if (origen === 'plan_actividad') {
+    const plan = item.campos_libres?.plan && typeof item.campos_libres.plan === 'object'
+      ? item.campos_libres.plan
+      : {}
+    const per = String(plan.periodicidad || item.periodicidad || 'ninguna')
+    const meta = CALENDARIO_KIND.plan_actividad
+    if (per !== 'ninguna') {
+      // Devolver null aquí: el panel de calendario usará planActividadToEvents
+      // si está disponible; fallback a fecha_vencimiento.
+    }
+    const due = fechaVencimientoEfectiva(item)
+    const start = buildStart(due.fecha || plan.fecha_fin || plan.fecha_inicio, due.hora)
+    if (!start) return null
+    return {
+      id: `plan_actividad-${item.id}`,
+      title: titleWithIcon(meta.icon, item.titulo || `#${item.consecutivo || item.id}`),
+      start,
+      allDay: !due.hora,
+      backgroundColor: meta.color,
+      borderColor: meta.color,
+      textColor: meta.textColor,
+      extendedProps: {
+        kind: 'plan_actividad',
+        sourceId: item.id,
+        icon: meta.icon,
+        label: meta.label,
+        raw: item,
+      },
+    }
+  }
+
   const meta = CALENDARIO_KIND[origen]
   const due = fechaVencimientoEfectiva(item)
   const start = buildStart(due.fecha, due.hora)
@@ -147,6 +195,66 @@ export function bandejaItemToEvent(item) {
       raw: item,
     },
   }
+}
+
+/**
+ * Expande una actividad del plan a N eventos FullCalendar (ocurrencias).
+ */
+export function planActividadToEvents(item, { fechaDesde, fechaHasta } = {}) {
+  if (!item?.id || item.origen !== 'plan_actividad') return []
+  const meta = CALENDARIO_KIND.plan_actividad
+  const plan = item.campos_libres?.plan && typeof item.campos_libres.plan === 'object'
+    ? item.campos_libres.plan
+    : {}
+  let occs = Array.isArray(item.ocurrencias) ? item.ocurrencias : []
+  if (!occs.length) {
+    occs = expandirOcurrencias({
+      fechaInicio: plan.fecha_inicio || item.fecha_inicio,
+      fechaFin: plan.fecha_fin || item.fecha_fin || item.fecha_vencimiento,
+      periodicidad: plan.periodicidad || item.periodicidad,
+      periodicidadHasta: plan.periodicidad_hasta || item.periodicidad_hasta,
+      rangoDesde: fechaDesde,
+      rangoHasta: fechaHasta,
+    })
+  } else if (fechaDesde || fechaHasta) {
+    occs = occs.filter((o) => {
+      if (fechaHasta && o.fecha_inicio > fechaHasta) return false
+      if (fechaDesde && o.fecha_fin < fechaDesde) return false
+      return true
+    })
+  }
+  if (!occs.length) {
+    const ev = bandejaItemToEvent({ ...item, origen: 'plan_actividad' })
+    return ev ? [ev] : []
+  }
+  return occs.map((o, idx) => ({
+    id: `plan_actividad-${item.id}-${idx}-${o.fecha_fin}`,
+    title: titleWithIcon(meta.icon, item.titulo || `#${item.consecutivo || item.id}`),
+    start: o.fecha_inicio,
+    end: o.fecha_fin === o.fecha_inicio
+      ? undefined
+      : (() => {
+        // FullCalendar end exclusivo para allDay
+        const d = new Date(`${o.fecha_fin}T12:00:00`)
+        d.setDate(d.getDate() + 1)
+        const y = d.getFullYear()
+        const m = String(d.getMonth() + 1).padStart(2, '0')
+        const day = String(d.getDate()).padStart(2, '0')
+        return `${y}-${m}-${day}`
+      })(),
+    allDay: true,
+    backgroundColor: meta.color,
+    borderColor: meta.color,
+    textColor: meta.textColor,
+    extendedProps: {
+      kind: 'plan_actividad',
+      sourceId: item.id,
+      icon: meta.icon,
+      label: meta.label,
+      raw: item,
+      ocurrencia: o,
+    },
+  }))
 }
 
 /**
@@ -292,9 +400,19 @@ export function bitacoraGroupToEvent(diarios) {
 }
 
 /** Une eventos de bandeja + actas + bitácora (omite nulos / sin fecha). */
-export function buildCalendarioEvents(bandejaRows = [], actasRows = [], bitacoraRows = []) {
+export function buildCalendarioEvents(
+  bandejaRows = [],
+  actasRows = [],
+  bitacoraRows = [],
+  { fechaDesde, fechaHasta } = {},
+) {
   const out = []
   for (const row of bandejaRows || []) {
+    if (row?.origen === 'plan_actividad') {
+      const evs = planActividadToEvents(row, { fechaDesde, fechaHasta })
+      out.push(...evs)
+      continue
+    }
     const ev = bandejaItemToEvent(row)
     if (ev) out.push(ev)
   }

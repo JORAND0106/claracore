@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
@@ -9,6 +9,8 @@ import ActaTemasTable, { TemaAdjuntosPanel } from './ActaTemasTable'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaEditorModal from './TemaEditorModal'
+import PlanActividadesVista from './PlanActividadesVista'
+import { accesoPlanActividades } from './planActividadesPermisos'
 import { createGrabacionSessionController } from './actaGrabacionSession'
 import { formatMinutosCupo } from './actaGrabacionHelpers'
 import { mergeTemasGrabacionViva } from './actaGrabacionLive'
@@ -421,10 +423,18 @@ export default function ActaEditor({
   const [grabacionSesionId, setGrabacionSesionId] = useState(null)
   const [grabacionLiveInfo, setGrabacionLiveInfo] = useState(null)
   const [actualizandoTemas, setActualizandoTemas] = useState(false)
+  /** Popup Plan de actividades del expositor (solo su ambiente). */
+  const [planPopup, setPlanPopup] = useState(null) // { ideaIdx, ideaId } | null
+  const [planHabilitadoActa, setPlanHabilitadoActa] = useState(false)
   /** Evita armar el checkpoint más de una vez por sesión. */
   const temasCheckpointArmingRef = useRef(false)
   const grabacionCtrlRef = useRef(null)
   const esDev = !!permisos?.esDesarrollador
+  const cidPlan = form?.contrato_id ?? api?.contratoId
+  const permisosPlan = useMemo(
+    () => accesoPlanActividades(usuario, cidPlan),
+    [usuario, cidPlan],
+  )
   const esElaborador = form.elaborador_id != null
     && Number(form.elaborador_id) === Number(usuario?.id)
   const sellada = form.estado === 'realizada' || form.estado === 'firmada'
@@ -846,6 +856,23 @@ export default function ActaEditor({
   }, [actaId])
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!api?.getPlanHabilitacion || !permisosPlan.ver) {
+        if (!cancelled) setPlanHabilitadoActa(false)
+        return
+      }
+      try {
+        const row = await api.getPlanHabilitacion()
+        if (!cancelled) setPlanHabilitadoActa(Boolean(row?.habilitado))
+      } catch {
+        if (!cancelled) setPlanHabilitadoActa(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [api, permisosPlan.ver, cidPlan])
 
   // Si al abrir se reunieron textos huérfanos con su tema, persistir sin pasos manuales.
   useEffect(() => {
@@ -2156,6 +2183,33 @@ export default function ActaEditor({
           viewportCompact={viewportCompact}
           grabacionActiva={grabacionPhase === 'recording'}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
+          puedeAbrirPlanActividades={planHabilitadoActa && permisosPlan.ver}
+          onAbrirPlanActividades={async (idx, idea) => {
+            // Solo el expositor del tema (o Dev) abre SU plan; nadie escribe en el de otro.
+            const expId = Number(idea?.expositor_usuario_id || idea?.expositor_id || 0)
+            const uid = Number(usuario?.id || usuario?.sub || 0)
+            if (!esDev && expId > 0 && uid > 0 && expId !== uid) {
+              setError('Solo puede abrir el Plan de actividades de los temas donde usted es el expositor.')
+              return
+            }
+            let ideaId = idea?.id
+            let actaForPlan = localActaId
+            if (!ideaId || !actaForPlan) {
+              try {
+                const saved = await persistActa()
+                actaForPlan = saved?.id
+                ideaId = saved?.ideas?.[idx]?.id || ideaId
+              } catch (e) {
+                setError(e?.message || 'Guarde el acta antes de abrir el Plan de actividades')
+                return
+              }
+            }
+            setPlanPopup({
+              ideaIdx: idx,
+              ideaId: ideaId || null,
+              actaId: actaForPlan || null,
+            })
+          }}
           puedeActualizarTemas={
             !!puedeEditar
             && grabacionPhase === 'recording'
@@ -2884,6 +2938,28 @@ export default function ActaEditor({
       )}
 
       {/* Gestión de compromisos: tablas en Compromisos abiertos (previos) y Temas y Compromisos (presentes). */}
+
+      {planPopup && (
+        <PlanActividadesVista
+          t={t}
+          api={api}
+          usuario={usuario}
+          permisos={permisosPlan}
+          modo="popup"
+          forzarPropio
+          actaId={planPopup.actaId || localActaId}
+          ideaId={planPopup.ideaId}
+          onClose={async () => {
+            setPlanPopup(null)
+            const aid = localActaId || planPopup.actaId
+            if (!aid) return
+            try {
+              const a = await api.getActa(aid)
+              setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
+            } catch { /* ignore */ }
+          }}
+        />
+      )}
     </div>
   )
 

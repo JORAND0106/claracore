@@ -431,6 +431,57 @@ export function createSeguimientoApi(contratoId, token) {
      * Exportación consolidada por rango: pdf | docx | md.
      * @returns {{ blob: Blob, filename: string }}
      */
+    // ── Plan de actividades ─────────────────────────────────────────────────
+    getPlanHabilitacion: () => get(`/seguimiento/${cid}/plan-actividades/habilitacion`),
+    setPlanHabilitacion: (habilitado) =>
+      send('PUT', `/seguimiento/${cid}/plan-actividades/habilitacion`, { habilitado: Boolean(habilitado) }),
+    listPlanGrupos: () => get(`/seguimiento/${cid}/plan-actividades/grupos`),
+    listPlanColaboradores: () => get(`/seguimiento/${cid}/plan-actividades/colaboradores`),
+    listPlanActividades: (params = {}) => {
+      const q = new URLSearchParams()
+      Object.entries(params).forEach(([k, v]) => {
+        if (v != null && v !== '') q.set(k, String(v))
+      })
+      const qs = q.toString()
+      return get(`/seguimiento/${cid}/plan-actividades${qs ? `?${qs}` : ''}`)
+    },
+    createPlanActividad: (body) => send('POST', `/seguimiento/${cid}/plan-actividades`, body),
+    getPlanActividad: (itemId) => get(`/seguimiento/${cid}/plan-actividades/${itemId}`),
+    updatePlanActividad: (itemId, body) =>
+      send('PUT', `/seguimiento/${cid}/plan-actividades/${itemId}`, body),
+    deletePlanActividad: (itemId) => send('DELETE', `/seguimiento/${cid}/plan-actividades/${itemId}`),
+    comentarPlanActividad: (itemId, mensaje) =>
+      send('POST', `/seguimiento/${cid}/plan-actividades/${itemId}/comentarios`, { mensaje }),
+    editarComentarioPlan: (comentarioId, mensaje) =>
+      send('PATCH', `/seguimiento/${cid}/plan-actividades/comentarios/${comentarioId}`, { mensaje }),
+    patchPlanActividadEstado: (itemId, estado_gestion) =>
+      send('PATCH', `/seguimiento/${cid}/plan-actividades/${itemId}/estado`, { estado_gestion }),
+    exportPlanActividadesBlob: async (params = {}) => {
+      const q = new URLSearchParams()
+      Object.entries(params).forEach(([k, v]) => {
+        if (v != null && v !== '') q.set(k, String(v))
+      })
+      const qs = q.toString()
+      const sig = apiFetchSignal(120000)
+      try {
+        const res = await fetch(
+          `${API_BASE}/seguimiento/${cid}/plan-actividades/export.xlsx${qs ? `?${qs}` : ''}`,
+          {
+            headers: authHeaders(t, false),
+            ...(sig ? { signal: sig } : {}),
+          },
+        )
+        if (!res.ok) await parseOrThrow(res)
+        const buf = await res.arrayBuffer()
+        if (!buf || buf.byteLength < 8) throw new Error('El Excel exportado está vacío')
+        return new Blob([buf], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })
+      } catch (e) {
+        throw mapNetworkError(e)
+      }
+    },
+
     exportBitacoraRangoBlob: async (fechaDesde, fechaHasta, formato = 'pdf') => {
       const d0 = String(fechaDesde || '').slice(0, 10)
       const d1 = String(fechaHasta || '').slice(0, 10)
