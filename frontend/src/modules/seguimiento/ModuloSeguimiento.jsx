@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen, Truck, Users } from 'lucide-react'
+import {
+  BookOpen, CalendarDays, ClipboardList, Percent, Truck, Users,
+} from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import BitacoraAsistenciaRrhhToggle from './BitacoraAsistenciaRrhhToggle'
@@ -12,13 +14,39 @@ import ItemDetalleModal from './ItemDetalleModal'
 import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
 import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
+import { accesoPlanActividades } from './planActividadesPermisos'
+import PlanActividadesVista from './PlanActividadesVista'
+import PlanActividadesHabilitacionToggle from './PlanActividadesHabilitacionToggle'
 import { useSeguimientoCompact } from './seguimientoShared'
+
+function toolbarIconBtn(t, { active = false, primary = false } = {}) {
+  return {
+    width: 34,
+    height: 34,
+    padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    cursor: 'pointer',
+    border: primary
+      ? `1px solid color-mix(in srgb, ${t.primary} 70%, #0c4a6e)`
+      : `1px solid ${active ? t.primary : t.border}`,
+    background: primary
+      ? `linear-gradient(135deg, ${t.primary}, color-mix(in srgb, ${t.primary} 72%, #0e7490))`
+      : active
+        ? `${t.primary}22`
+        : (t.bgCard || t.bg || 'transparent'),
+    color: primary ? '#fff' : t.text,
+    boxShadow: primary
+      ? `0 6px 14px color-mix(in srgb, ${t.primary} 30%, transparent)`
+      : 'none',
+  }
+}
 
 /**
  * Seguimiento: vista única de Calendario (tareas, actas y bitácora por día).
- * Las vistas internas de Actas y Bitácora permanecen disponibles vía el
- * flujo de creación/apertura desde el día; no se eliminan sus componentes.
- * El Libro digital es una vista alternativa de solo lectura.
+ * Con Plan de actividades habilitado: toggle a grilla Excel + Gantt.
  */
 export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const cid = contratoId ?? usuario?.contrato_id
@@ -30,18 +58,24 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     () => accesoBitacora(usuario, cid),
     [usuario, cid],
   )
+  const permisosPlan = useMemo(
+    () => accesoPlanActividades(usuario, cid),
+    [usuario, cid],
+  )
   const compact = useSeguimientoCompact()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
   const [calKey, setCalKey] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [libroSelectorOpen, setLibroSelectorOpen] = useState(false)
-  const [libroModo, setLibroModo] = useState(null) // 'actas' | 'bitacora' | null
+  const [libroModo, setLibroModo] = useState(null)
   const [externosDepuracionOpen, setExternosDepuracionOpen] = useState(false)
   const [maquinariaCatalogoOpen, setMaquinariaCatalogoOpen] = useState(false)
   const [cumplimientoOpen, setCumplimientoOpen] = useState(false)
   const [detalleCumplimientoId, setDetalleCumplimientoId] = useState(null)
-  const apiCumplimiento = useMemo(
+  const [planHabilitado, setPlanHabilitado] = useState(false)
+  const [vistaPlan, setVistaPlan] = useState(false)
+  const api = useMemo(
     () => (token && cid != null ? createSeguimientoApi(cid, token) : null),
     [cid, token],
   )
@@ -67,6 +101,28 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     setUpdatedAt(Date.now())
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    async function loadHab() {
+      if (!api?.getPlanHabilitacion) {
+        if (!cancelled) setPlanHabilitado(false)
+        return
+      }
+      try {
+        const row = await api.getPlanHabilitacion()
+        if (!cancelled) setPlanHabilitado(Boolean(row?.habilitado))
+      } catch {
+        if (!cancelled) setPlanHabilitado(false)
+      }
+    }
+    loadHab()
+    return () => { cancelled = true }
+  }, [api, cid])
+
+  useEffect(() => {
+    if (!planHabilitado || !permisosPlan.ver) setVistaPlan(false)
+  }, [planHabilitado, permisosPlan.ver])
+
   if (permisos.bloqueado) {
     return (
       <div style={{ padding: 24 }}>
@@ -77,6 +133,8 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
       </div>
     )
   }
+
+  const showPlanBtn = planHabilitado && permisosPlan.ver
 
   return (
     <div
@@ -95,111 +153,106 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         <div>
           <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text }}>Seguimiento</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Calendario del contrato · tareas, actas y bitácora
+            {vistaPlan
+              ? 'Plan de actividades · grilla y Gantt'
+              : 'Calendario del contrato · tareas, actas y bitácora'}
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <BitacoraAsistenciaRrhhToggle
-            t={t}
-            token={token}
-            contratoId={cid}
-            esDesarrollador={Boolean(permisosBitacora?.esDesarrollador)}
-          />
-          {permisos?.ver && (
-            <button
-              type="button"
-              onClick={() => setCumplimientoOpen((v) => !v)}
-              title="Ver cumplimiento por persona"
-              aria-label="Cumplimiento por persona"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '10px 14px',
-                borderRadius: 10,
-                border: `1px solid ${t.border}`,
-                background: cumplimientoOpen ? `${t.primary}22` : (t.bgCard || t.bg || 'transparent'),
-                color: t.text,
-                fontWeight: 700,
-                fontSize: 'var(--cc-sm)',
-                cursor: 'pointer',
+          {/* Grupo de botones solo icono */}
+          <div
+            role="group"
+            aria-label="Herramientas de Seguimiento"
+            style={{
+              display: 'inline-flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              padding: 4,
+              borderRadius: 10,
+              border: `1px solid ${t.border}`,
+              background: t.bgCard || t.bg || 'transparent',
+            }}
+          >
+            <BitacoraAsistenciaRrhhToggle
+              t={t}
+              token={token}
+              contratoId={cid}
+              esDesarrollador={Boolean(permisosBitacora?.esDesarrollador)}
+            />
+            <PlanActividadesHabilitacionToggle
+              t={t}
+              api={api}
+              esDesarrollador={Boolean(permisos?.esDesarrollador)}
+              onChanged={(row) => {
+                setPlanHabilitado(Boolean(row?.habilitado))
+                if (!row?.habilitado) setVistaPlan(false)
               }}
-            >
-              <span aria-hidden>%</span>
-              <span>Cumplimiento</span>
-            </button>
-          )}
-          {permisos?.editar && (
-            <button
-              type="button"
-              onClick={() => setExternosDepuracionOpen(true)}
-              title="Depurar asistentes externos del histórico de actas"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '10px 14px',
-                borderRadius: 10,
-                border: `1px solid ${t.border}`,
-                background: t.bgCard || t.bg || 'transparent',
-                color: t.text,
-                fontWeight: 700,
-                fontSize: 'var(--cc-sm)',
-                cursor: 'pointer',
-              }}
-            >
-              <Users size={17} strokeWidth={2.3} aria-hidden />
-              <span>Externos</span>
-            </button>
-          )}
-          {permisosBitacora?.esDesarrollador && (
-            <button
-              type="button"
-              onClick={() => setMaquinariaCatalogoOpen(true)}
-              title="Gestionar catálogo de Maquinaria / equipos de Bitácora"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '10px 14px',
-                borderRadius: 10,
-                border: `1px solid ${t.border}`,
-                background: t.bgCard || t.bg || 'transparent',
-                color: t.text,
-                fontWeight: 700,
-                fontSize: 'var(--cc-sm)',
-                cursor: 'pointer',
-              }}
-            >
-              <Truck size={17} strokeWidth={2.3} aria-hidden />
-              <span>Maquinaria</span>
-            </button>
-          )}
+            />
+            {permisos?.ver && (
+              <button
+                type="button"
+                onClick={() => setCumplimientoOpen((v) => !v)}
+                title="Cumplimiento por persona: resume el avance de tareas y compromisos asignados."
+                aria-label="Cumplimiento por persona"
+                style={toolbarIconBtn(t, { active: cumplimientoOpen })}
+              >
+                <Percent size={17} strokeWidth={2.4} aria-hidden />
+              </button>
+            )}
+            {permisos?.editar && (
+              <button
+                type="button"
+                onClick={() => setExternosDepuracionOpen(true)}
+                title="Externos: depurar asistentes externos del histórico de actas."
+                aria-label="Depurar externos"
+                style={toolbarIconBtn(t)}
+              >
+                <Users size={17} strokeWidth={2.3} aria-hidden />
+              </button>
+            )}
+            {permisosBitacora?.esDesarrollador && (
+              <button
+                type="button"
+                onClick={() => setMaquinariaCatalogoOpen(true)}
+                title="Maquinaria: gestionar el catálogo de equipos de Bitácora."
+                aria-label="Catálogo de maquinaria"
+                style={toolbarIconBtn(t)}
+              >
+                <Truck size={17} strokeWidth={2.3} aria-hidden />
+              </button>
+            )}
+          </div>
+
           <button
             type="button"
             className="cc-seguim-libro-btn"
             onClick={() => setLibroSelectorOpen(true)}
-            title="Abrir libro digital de Actas o Bitácora"
-            style={{
-              ['--cc-libro-btn-accent']: t.primary,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '10px 16px',
-              borderRadius: 10,
-              border: `1px solid color-mix(in srgb, ${t.primary} 70%, #0c4a6e)`,
-              background: `linear-gradient(135deg, ${t.primary}, color-mix(in srgb, ${t.primary} 72%, #0e7490))`,
-              color: '#fff',
-              fontWeight: 800,
-              fontSize: 'var(--cc-sm)',
-              cursor: 'pointer',
-              boxShadow: `0 8px 18px color-mix(in srgb, ${t.primary} 35%, transparent)`,
-              letterSpacing: '0.01em',
-            }}
+            title="Libro digital: consultar Actas o Bitácora en modo lectura."
+            aria-label="Libro digital"
+            style={toolbarIconBtn(t, { primary: true })}
           >
             <BookOpen size={18} strokeWidth={2.4} aria-hidden />
-            <span>Libro digital</span>
           </button>
+
+          {showPlanBtn && (
+            <button
+              type="button"
+              onClick={() => setVistaPlan((v) => !v)}
+              title={
+                vistaPlan
+                  ? 'Volver al calendario de Seguimiento.'
+                  : 'Plan de actividades: ver la grilla tipo Excel con Gantt (compromisos del plan).'
+              }
+              aria-label={vistaPlan ? 'Ver calendario' : 'Ver Plan de actividades'}
+              style={toolbarIconBtn(t, { active: vistaPlan })}
+            >
+              {vistaPlan
+                ? <CalendarDays size={18} strokeWidth={2.3} aria-hidden />
+                : <ClipboardList size={18} strokeWidth={2.3} aria-hidden />}
+            </button>
+          )}
+
           <ModuloDataRefreshBar
             theme={t}
             updatedAt={updatedAt}
@@ -210,31 +263,42 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         </div>
       </div>
 
-      <SeguimientoCalendarioPanel
-        t={t}
-        usuario={usuario}
-        token={token}
-        contratoId={contratoId}
-        viewportCompact={compact}
-        refreshKey={calKey}
-        showFilters
-      />
+      {vistaPlan && api ? (
+        <PlanActividadesVista
+          key={`plan-${calKey}`}
+          t={t}
+          api={api}
+          usuario={usuario}
+          permisos={permisosPlan}
+          modo="page"
+        />
+      ) : (
+        <SeguimientoCalendarioPanel
+          t={t}
+          usuario={usuario}
+          token={token}
+          contratoId={contratoId}
+          viewportCompact={compact}
+          refreshKey={calKey}
+          showFilters
+        />
+      )}
 
-      {cumplimientoOpen && apiCumplimiento && (
+      {cumplimientoOpen && api && (
         <div style={{ marginTop: 16 }}>
           <CumplimientoPersonaPanel
             t={t}
-            api={apiCumplimiento}
+            api={api}
             contratoId={cid}
             onAbrirItem={(id) => setDetalleCumplimientoId(id)}
           />
         </div>
       )}
 
-      {detalleCumplimientoId && apiCumplimiento && (
+      {detalleCumplimientoId && api && (
         <ItemDetalleModal
           t={t}
-          api={apiCumplimiento}
+          api={api}
           itemId={detalleCumplimientoId}
           usuario={usuario}
           permisos={permisos}

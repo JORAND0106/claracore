@@ -2177,11 +2177,12 @@ def get_acta(
     acta["apartados"] = (
         sb.table("seguimiento_acta_apartado").select("*").eq("acta_id", aid).order("orden").execute().data or []
     )
+    # Compromisos del acta + actividades del Plan vinculadas a esta acta/tema
     acta["compromisos"] = (
         sb.table("seguimiento_item")
         .select("*")
         .eq("acta_id", aid)
-        .eq("origen", "compromiso")
+        .in_("origen", ["compromiso", "plan_actividad"])
         .order("id")
         .execute()
         .data
@@ -2214,11 +2215,12 @@ def compromisos_abiertos_contrato(
     """
     # Incluye cumplido/cancelado: el estado de gestión es informativo.
     # Solo se excluyen los archivados vía botón «marcar cumplido» (campos_libres.archivado_revision).
+    # plan_actividad vinculado a acta cuenta como compromiso del acta.
     q = (
         sb.table("seguimiento_item")
         .select("*")
         .eq("contrato_id", int(contrato_id))
-        .eq("origen", "compromiso")
+        .in_("origen", ["compromiso", "plan_actividad"])
         .in_(
             "estado_gestion",
             ["abierto", "en_progreso", "parcial", "vencido", "reprogramado", "cumplido", "cancelado"],
@@ -2226,6 +2228,11 @@ def compromisos_abiertos_contrato(
         .order("fecha_vencimiento")
     )
     rows = q.execute().data or []
+    # Plan sin vínculo a acta no entra en el tab de compromisos abiertos
+    rows = [
+        r for r in rows
+        if r.get("origen") != "plan_actividad" or r.get("acta_id")
+    ]
 
     ref_consecutivo: Optional[int] = None
     ref_fecha: Optional[str] = None
@@ -5570,7 +5577,7 @@ def list_bandeja(
     # contrato activo, mientras actas/bitácora —ya filtradas en SQL— sí aparecen.
     if contrato_id is not None:
         query = query.eq("contrato_id", int(contrato_id))
-    if origen in ("compromiso", "tarea"):
+    if origen in ("compromiso", "tarea", "plan_actividad"):
         query = query.eq("origen", origen)
     if estado:
         query = query.eq("estado_gestion", estado)
@@ -5579,6 +5586,50 @@ def list_bandeja(
     if fecha_hasta:
         query = query.lte("fecha_vencimiento", str(fecha_hasta)[:10])
     rows = query.limit(800).execute().data or []
+
+    # Plan de actividades periódicas: incluir aunque fecha_vencimiento (1ª ocurrencia)
+    # quede fuera del rango visible, si alguna ocurrencia cruza el rango.
+    if (
+        contrato_id is not None
+        and origen in (None, "", "plan_actividad")
+        and (fecha_desde or fecha_hasta)
+    ):
+        try:
+            from plan_actividades_service import expandir_ocurrencias, _plan_blob, _parse_date
+
+            plan_q = (
+                sb.table("seguimiento_item")
+                .select("*")
+                .eq("contrato_id", int(contrato_id))
+                .eq("origen", "plan_actividad")
+                .limit(800)
+            )
+            if estado:
+                plan_q = plan_q.eq("estado_gestion", estado)
+            plan_rows = plan_q.execute().data or []
+            d0 = _parse_date(fecha_desde)
+            d1 = _parse_date(fecha_hasta)
+            seen_ids = {int(r["id"]) for r in rows if r.get("id") is not None}
+            for pr in plan_rows:
+                try:
+                    pid = int(pr.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if pid in seen_ids:
+                    continue
+                plan = _plan_blob(pr)
+                fi = _parse_date(plan.get("fecha_inicio") or pr.get("fecha_vencimiento"))
+                ff = _parse_date(plan.get("fecha_fin") or pr.get("fecha_vencimiento"))
+                per = str(plan.get("periodicidad") or "ninguna")
+                hasta = _parse_date(plan.get("periodicidad_hasta"))
+                occs = expandir_ocurrencias(
+                    fi, ff, per, hasta, rango_desde=d0, rango_hasta=d1,
+                )
+                if occs:
+                    rows.append(pr)
+                    seen_ids.add(pid)
+        except Exception as exc:
+            _log.warning("bandeja plan periódicas: %s", exc)
 
     # Derivar estado/avance de tareas desde checklist (cancelados excluidos del %)
     for r in rows:
@@ -5647,7 +5698,11 @@ def list_bandeja(
             continue
 
     # Enriquecer compromisos con datos del acta de origen
-    acta_ids = list({int(r["acta_id"]) for r in out if r.get("acta_id") and r.get("origen") == "compromiso"})
+    acta_ids = list({
+        int(r["acta_id"])
+        for r in out
+        if r.get("acta_id") and r.get("origen") in ("compromiso", "plan_actividad")
+    })
     actas_map: Dict[int, dict] = {}
     if acta_ids:
         try:
@@ -5675,7 +5730,7 @@ def list_bandeja(
         crows = sb.table("usuarios").select("id, nombre, apellidos").in_("id", creator_ids).execute().data or []
         creators = {int(c["id"]): c for c in crows}
     for r in out:
-        if r.get("acta_id") and r.get("origen") == "compromiso":
+        if r.get("acta_id") and r.get("origen") in ("compromiso", "plan_actividad"):
             a = actas_map.get(int(r["acta_id"]))
             if a:
                 r["acta_consecutivo"] = a.get("consecutivo")
@@ -6143,7 +6198,34 @@ def agregar_comentario(
     item = get_item(sb, item_id)
     u = _usuario_row(sb, user_id)
     dest = None
-    if item.get("origen") == "compromiso":
+    origen_item = (item.get("origen") or "").strip().lower()
+    if origen_item == "plan_actividad":
+        # Plan: asignados, solicitante, creador, gerencia/admin/dev
+        try:
+            from plan_actividades_service import _puede_comentar as _plan_puede_comentar
+            if not _plan_puede_comentar(sb, item, user_id, current_user or {}):
+                raise ValueError("No puede comentar esta actividad del plan")
+        except ValueError:
+            raise
+        except Exception:
+            ids_asig = set()
+            libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+            for a in (libres.get("asignaciones") or []):
+                if isinstance(a, dict) and a.get("usuario_id"):
+                    try:
+                        ids_asig.add(int(a["usuario_id"]))
+                    except (TypeError, ValueError):
+                        pass
+            if int(item.get("asignado_a_id") or 0) > 0:
+                ids_asig.add(int(item["asignado_a_id"]))
+            if int(user_id) not in ids_asig and int(item.get("created_by") or 0) != int(user_id) \
+                    and int(item.get("solicitante_id") or 0) != int(user_id) \
+                    and not es_desarrollador_seguimiento(current_user):
+                raise ValueError("No puede comentar esta actividad del plan")
+        dest = item.get("solicitante_id") or item.get("created_by")
+        if int(dest or 0) == int(user_id):
+            dest = item.get("asignado_a_id")
+    elif origen_item == "compromiso":
         # Asignado de plataforma → elaborador; elaborador/Dev pueden dejar motivo (p.ej. anticipado).
         es_asignado = int(item.get("asignado_a_id") or 0) == int(user_id)
         acta_elab = None

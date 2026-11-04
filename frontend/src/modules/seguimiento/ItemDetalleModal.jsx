@@ -142,7 +142,8 @@ export default function ItemDetalleModal({
   }
 
   const origen = ORIGEN_COLOR[item.origen] || ORIGEN_COLOR.tarea
-  const esCompromiso = item.origen === 'compromiso'
+  const esPlanActividad = item.origen === 'plan_actividad'
+  const esCompromiso = item.origen === 'compromiso' || esPlanActividad
   const esTarea = item.origen === 'tarea'
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
   const asigns = esTarea ? asignacionesDe(item) : []

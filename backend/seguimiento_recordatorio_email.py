@@ -250,10 +250,22 @@ def collect_items_para_fecha(
             libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
             if libres and libres.get("es_madre_partes"):
                 continue
-        origen = "compromiso" if item.get("origen") == "compromiso" else "tarea"
+        origen_raw = (item.get("origen") or "").strip().lower()
+        # Plan de actividades = compromiso de Seguimiento (misma anticipación)
+        if origen_raw in ("compromiso", "plan_actividad"):
+            origen = "compromiso"
+        else:
+            origen = "tarea"
         titulo = (item.get("titulo") or item.get("tema") or f"#{item.get('consecutivo') or iid}").strip()
         hora = _fmt_hora(item.get("hora_vencimiento"))
         asignados = _ids_asignados(item)
+        # También avisar al solicitante en plan/compromiso
+        try:
+            sid = int(item.get("solicitante_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid > 0 and origen == "compromiso":
+            asignados = set(asignados) | {sid}
         # Notificados: preferir campos_libres de parte; checklist legado aún soportado.
         notificados = _ids_notificados(item) if origen == "tarea" else set()
         if origen == "tarea":
@@ -279,6 +291,70 @@ def collect_items_para_fecha(
             by_user[uid].append(RecordatorioItem(**base, rol="responsable"))
         for uid in notificados - asignados:
             by_user[uid].append(RecordatorioItem(**base, rol="notificado"))
+
+    # ── Plan de actividades periódicas: ocurrencias cuyo fin cae en fecha_obj ──
+    try:
+        from plan_actividades_service import expandir_ocurrencias, _plan_blob, _parse_date
+
+        plan_rows = (
+            sb.table("seguimiento_item")
+            .select(
+                "id, origen, titulo, estado_gestion, fecha_vencimiento, hora_vencimiento, "
+                "asignado_a_id, created_by, solicitante_id, contrato_id, campos_libres, consecutivo"
+            )
+            .eq("origen", "plan_actividad")
+            .limit(2000)
+            .execute()
+            .data
+            or []
+        )
+        already = {it.id for items in by_user.values() for it in items}
+        for item in plan_rows:
+            est = str(item.get("estado_gestion") or "").strip().lower()
+            if est in ESTADOS_CERRADOS:
+                continue
+            try:
+                iid = int(item["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if iid in already:
+                continue
+            plan = _plan_blob(item)
+            per = str(plan.get("periodicidad") or "ninguna")
+            if per == "ninguna":
+                continue
+            fi = _parse_date(plan.get("fecha_inicio") or item.get("fecha_vencimiento"))
+            ff = _parse_date(plan.get("fecha_fin") or item.get("fecha_vencimiento"))
+            hasta = _parse_date(plan.get("periodicidad_hasta"))
+            occs = expandir_ocurrencias(
+                fi, ff, per, hasta, rango_desde=fecha_obj, rango_hasta=fecha_obj,
+            )
+            # Solo si alguna ocurrencia TERMINA ese día
+            match = [o for o in occs if o[1] == fecha_obj]
+            if not match:
+                continue
+            titulo = (item.get("titulo") or f"#{item.get('consecutivo') or iid}").strip()
+            asignados = _ids_asignados(item)
+            try:
+                sid = int(item.get("solicitante_id") or 0)
+            except (TypeError, ValueError):
+                sid = 0
+            if sid > 0:
+                asignados = set(asignados) | {sid}
+            user_ids |= asignados
+            base = dict(
+                tipo="compromiso",
+                id=iid,
+                titulo=titulo,
+                fecha=fecha_s,
+                hora=_fmt_hora(item.get("hora_vencimiento")),
+                contrato_id=item.get("contrato_id"),
+                meta={"item": item, "plan_ocurrencia": True},
+            )
+            for uid in asignados:
+                by_user[uid].append(RecordatorioItem(**base, rol="responsable"))
+    except Exception as exc:
+        _log.warning("recordatorio plan periódicas: %s", exc)
 
     # ── Reuniones / actas ──
     try:

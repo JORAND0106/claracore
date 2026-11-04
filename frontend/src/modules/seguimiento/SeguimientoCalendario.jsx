@@ -112,7 +112,7 @@ export default function SeguimientoCalendario({
     setError('')
 
     const origen = filtros.origen
-    const includeBandeja = !origen || origen === 'tarea' || origen === 'compromiso'
+    const includeBandeja = !origen || origen === 'tarea' || origen === 'compromiso' || origen === 'plan_actividad'
     const includeActas = !origen || origen === 'acta'
     const includeBitacora = (!origen || origen === 'bitacora_diario' || origen === 'bitacora_evento')
       && (permisosBitacora?.ver !== false)
@@ -127,7 +127,7 @@ export default function SeguimientoCalendario({
         }
         if (filtros.q) bandejaParams.q = filtros.q
         if (filtros.estado) bandejaParams.estado = filtros.estado
-        if (origen === 'tarea' || origen === 'compromiso') {
+        if (origen === 'tarea' || origen === 'compromiso' || origen === 'plan_actividad') {
           bandejaParams.origen = origen
         }
         if (filtros.incluir_cerrados) bandejaParams.incluir_cerrados = 'true'
@@ -171,6 +171,7 @@ export default function SeguimientoCalendario({
         Array.isArray(bandejaRows) ? bandejaRows : [],
         Array.isArray(actasRows) ? actasRows : [],
         Array.isArray(bitacoraRows) ? bitacoraRows : [],
+        { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
       )
       if (origen) mapped = filterEventsByOrigen(mapped, origen)
       if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
