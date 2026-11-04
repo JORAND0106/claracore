@@ -83,6 +83,46 @@ function FieldRow({ label, children, ficha }) {
   )
 }
 
+/** Celda etiqueta+valor para pares en grid (escritorio/tablet en línea; móvil apila). */
+function FieldCell({ label, children, ficha }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(88px, 34%) 1fr',
+        border: `1px solid ${ficha.border}`,
+        minWidth: 0,
+        background: ficha.bgCard,
+      }}
+    >
+      <div style={{ ...ficha.fieldLabel, border: 'none', width: 'auto', maxWidth: 'none' }}>{label}</div>
+      <div style={{ ...ficha.fieldValue, border: 'none', minWidth: 0 }}>{children}</div>
+    </div>
+  )
+}
+
+function FieldPairRow({ left, right, stack }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: stack ? '1fr' : 'minmax(0, 1fr) minmax(0, 1fr)',
+        gap: 0,
+      }}
+    >
+      <div style={{
+        marginRight: stack ? 0 : -1,
+        marginBottom: -1,
+        minWidth: 0,
+      }}
+      >
+        {left}
+      </div>
+      <div style={{ marginBottom: -1, minWidth: 0 }}>{right}</div>
+    </div>
+  )
+}
+
 function SectionBlock({ title, ficha, children, last }) {
   return (
     <section style={{ ...ficha.sectionCard, marginBottom: last ? 0 : 14 }}>
@@ -93,6 +133,66 @@ function SectionBlock({ title, ficha, children, last }) {
       {children}
     </section>
   )
+}
+
+function FichaAvatar({
+  fotoUrl,
+  initials,
+  avatarBg,
+  primaryLight,
+  size,
+  onFotoError,
+}) {
+  const showFoto = Boolean(fotoUrl)
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        minWidth: size,
+        borderRadius: 16,
+        background: showFoto
+          ? fichaSurface(avatarBg)
+          : `linear-gradient(145deg, ${avatarBg}, ${primaryLight})`,
+        color: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontWeight: 800,
+        fontSize: size >= 64 ? 22 : 18,
+        letterSpacing: '0.04em',
+        boxShadow: `0 8px 20px ${avatarBg}55`,
+        border: showFoto
+          ? `2px solid ${avatarBg}`
+          : '2px solid rgba(255,255,255,0.35)',
+        overflow: 'hidden',
+        position: 'relative',
+        flexShrink: 0,
+      }}
+      aria-hidden={!showFoto}
+    >
+      {showFoto ? (
+        <img
+          src={fotoUrl}
+          alt=""
+          onError={onFotoError}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center',
+            display: 'block',
+          }}
+        />
+      ) : (
+        initials
+      )}
+    </div>
+  )
+}
+
+function fichaSurface(color) {
+  return color || '#0077B6'
 }
 
 /**
@@ -115,6 +215,7 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
   const [confirmInact, setConfirmInact] = useState(false)
   const [confirmQuitar, setConfirmQuitar] = useState(null) // { uid, cid } — barra inline en la ficha
   const [hoverUid, setHoverUid] = useState(null)
+  const [fotoBrokenByUid, setFotoBrokenByUid] = useState({})
 
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport()
   const adminCompact = vpMobile || isLandscapeMobile
@@ -218,6 +319,12 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
 
   const abrirFicha = (uid) => {
     setFichaUid(uid)
+    setFotoBrokenByUid((p) => {
+      if (!p[uid]) return p
+      const next = { ...p }
+      delete next[uid]
+      return next
+    })
     cargarUcContratos(uid)
     const u = usuarios.find((x) => x.id === uid)
     if (u) {
@@ -432,7 +539,9 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
     const rolNom = rolNombreById(rolId) || u.rol_nombre || ''
     const initials = inicialesUsuario(u.nombre, u.apellidos)
     const avatarBg = avatarColorFromName(u.nombre, u.apellidos, ficha.avatarColors)
-    const avatarSize = adminCompact ? 56 : 64
+    const avatarSize = adminCompact ? 60 : 72
+    const fotoRaw = String(u.foto_perfil_url || '').trim()
+    const fotoUrl = fotoRaw && !fotoBrokenByUid[u.id] ? fotoRaw : ''
 
     const modalNode = (
       <div
@@ -446,7 +555,7 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
         <div
           className="cc-admin-modal-fs cc-admin-usuario-ficha"
           style={{
-            width: adminCompact ? '100%' : 'min(740px, 98vw)',
+            width: adminCompact ? '100%' : 'min(1040px, 96vw)',
             maxHeight: adminCompact ? '100dvh' : '94vh',
             height: adminCompact ? '100dvh' : undefined,
             borderRadius: adminCompact ? 0 : 16,
@@ -470,33 +579,20 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
             <div style={ficha.heroAccent} aria-hidden />
             <div
               style={{
-                padding: adminCompact ? '14px 14px 16px' : '16px 18px 18px',
+                padding: adminCompact ? '14px 14px 16px' : '16px 20px 18px',
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: adminCompact ? 12 : 16,
               }}
             >
-              <div
-                aria-hidden
-                style={{
-                  width: avatarSize,
-                  height: avatarSize,
-                  minWidth: avatarSize,
-                  borderRadius: 16,
-                  background: `linear-gradient(145deg, ${avatarBg}, ${ficha.primaryLight})`,
-                  color: '#fff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 800,
-                  fontSize: adminCompact ? 18 : 22,
-                  letterSpacing: '0.04em',
-                  boxShadow: `0 8px 20px ${avatarBg}55`,
-                  border: '2px solid rgba(255,255,255,0.35)',
-                }}
-              >
-                {initials}
-              </div>
+              <FichaAvatar
+                fotoUrl={fotoUrl}
+                initials={initials}
+                avatarBg={avatarBg}
+                primaryLight={ficha.primaryLight}
+                size={avatarSize}
+                onFotoError={() => setFotoBrokenByUid((p) => ({ ...p, [u.id]: true }))}
+              />
 
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div
@@ -596,113 +692,132 @@ export default function SeccionUsuarios({ call, cargos, theme, userId: _userId, 
             </SectionBlock>
 
             <SectionBlock title="Estado y asignación" ficha={ficha}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                <tbody>
-                  <FieldRow label="Estado" ficha={ficha}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <span style={{ ...ficha.pill(est || 'neutral'), alignSelf: 'flex-start' }}>
-                        {labelEstado(est)}
-                      </span>
+              <div style={{ borderRadius: 6, overflow: 'hidden' }}>
+                <FieldPairRow
+                  stack={adminCompact}
+                  left={(
+                    <FieldCell label="Estado" ficha={ficha}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <span style={{ ...ficha.pill(est || 'neutral'), alignSelf: 'flex-start' }}>
+                          {labelEstado(est)}
+                        </span>
+                        <select
+                          style={fichaSelect({ color: estadoBadge[edits[u.id]?.estado] || ficha.text })}
+                          value={edits[u.id]?.estado || ''}
+                          onChange={(e) => setEdit(u.id, 'estado', e.target.value)}
+                        >
+                          <option value="pendiente">Pendiente</option>
+                          <option value="aprobado">Aprobado</option>
+                          <option value="rechazado">Rechazado (sale de la lista)</option>
+                        </select>
+                      </div>
+                    </FieldCell>
+                  )}
+                  right={(
+                    <FieldCell label="Políticas" ficha={ficha}>
                       <select
-                        style={fichaSelect({ color: estadoBadge[edits[u.id]?.estado] || ficha.text })}
-                        value={edits[u.id]?.estado || ''}
-                        onChange={(e) => setEdit(u.id, 'estado', e.target.value)}
+                        style={fichaSelect()}
+                        value={edits[u.id]?.politicas_aceptadas ? 'si' : 'no'}
+                        onChange={(e) => setEdit(u.id, 'politicas_aceptadas', e.target.value === 'si')}
                       >
-                        <option value="pendiente">Pendiente</option>
-                        <option value="aprobado">Aprobado</option>
-                        <option value="rechazado">Rechazado (sale de la lista)</option>
+                        <option value="si">Sí</option>
+                        <option value="no">Pendiente</option>
                       </select>
-                    </div>
-                  </FieldRow>
-                  <FieldRow label="Cargo" ficha={ficha}>
-                    <select
-                      style={fichaSelect()}
-                      value={edits[u.id]?.cargo_id || ''}
-                      onChange={(e) => onCargoChange(u.id, u, e.target.value)}
-                    >
-                      <option value="">Sin cargo</option>
-                      {cargos.map((c) => (
-                        <option key={c.id} value={c.id}>{c.nombre}</option>
-                      ))}
-                    </select>
-                  </FieldRow>
-                  <FieldRow label="Rol" ficha={ficha}>
-                    <select
-                      style={fichaSelect()}
-                      value={edits[u.id]?.rol_id || ''}
-                      onChange={(e) => setEdit(u.id, 'rol_id', e.target.value)}
-                    >
-                      <option value="">Sin rol</option>
-                      {roles.map((r) => (
-                        <option key={r.id} value={r.id}>{r.nombre}</option>
-                      ))}
-                    </select>
-                  </FieldRow>
-                  <FieldRow label="Contrato principal" ficha={ficha}>
-                    <select
-                      style={fichaSelect()}
-                      value={edits[u.id]?.contrato_id || ''}
-                      onChange={(e) => onContratoChange(u.id, u, e.target.value)}
-                    >
-                      <option value="">Sin contrato</option>
-                      {contratos.map((c) => (
-                        <option key={c.id} value={c.id}>{c.numero}</option>
-                      ))}
-                    </select>
-                  </FieldRow>
-                  <FieldRow label={esSub ? 'Empresa *' : 'Empresa'} ficha={ficha}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: ficha.textMuted, marginTop: 6, lineHeight: 1.35 }}>
+                        {u.politicas_version ? <>v{u.politicas_version}</> : '—'}
+                        {u.politicas_fecha ? (
+                          <span style={{ display: 'block' }}>
+                            {formatFechaHoraColombia(u.politicas_fecha)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </FieldCell>
+                  )}
+                />
+                <FieldPairRow
+                  stack={adminCompact}
+                  left={(
+                    <FieldCell label="Cargo" ficha={ficha}>
                       <select
-                        style={{ ...fichaSelect(), flex: '1 1 160px' }}
-                        value={empresaKey}
-                        onChange={(e) => setEdit(u.id, 'empresa_key', e.target.value)}
-                        required={esSub}
+                        style={fichaSelect()}
+                        value={edits[u.id]?.cargo_id || ''}
+                        onChange={(e) => onCargoChange(u.id, u, e.target.value)}
                       >
-                        <option value="">{esSub ? 'Seleccionar…' : 'Sin empresa'}</option>
-                        {optsEmpresa.map((s) => (
-                          <option key={s.key} value={s.key}>{s.label || s.nombre}</option>
+                        <option value="">Sin cargo</option>
+                        {cargos.map((c) => (
+                          <option key={c.id} value={c.id}>{c.nombre}</option>
                         ))}
                       </select>
-                      <IconBtn
-                        title="Asignar empresa"
-                        tok={tTok}
-                        compact={adminCompact}
-                        onClick={() => void asignarEmpresa(u.id, edits[u.id]?.empresa_key)}
+                    </FieldCell>
+                  )}
+                  right={(
+                    <FieldCell label="Rol" ficha={ficha}>
+                      <select
+                        style={fichaSelect()}
+                        value={edits[u.id]?.rol_id || ''}
+                        onChange={(e) => setEdit(u.id, 'rol_id', e.target.value)}
                       >
-                        <ClipboardList size={16} strokeWidth={2.1} aria-hidden />
-                      </IconBtn>
-                    </div>
-                    {esSub && !empresaKey && (
-                      <div style={{ fontSize: 'var(--cc-caption)', color: ficha.warnColor, marginTop: 6, fontWeight: 700 }}>
-                        Obligatorio (subcontratista)
+                        <option value="">Sin rol</option>
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>{r.nombre}</option>
+                        ))}
+                      </select>
+                    </FieldCell>
+                  )}
+                />
+                <FieldPairRow
+                  stack={adminCompact}
+                  left={(
+                    <FieldCell label="Contrato principal" ficha={ficha}>
+                      <select
+                        style={fichaSelect()}
+                        value={edits[u.id]?.contrato_id || ''}
+                        onChange={(e) => onContratoChange(u.id, u, e.target.value)}
+                      >
+                        <option value="">Sin contrato</option>
+                        {contratos.map((c) => (
+                          <option key={c.id} value={c.id}>{c.numero}</option>
+                        ))}
+                      </select>
+                    </FieldCell>
+                  )}
+                  right={(
+                    <FieldCell label={esSub ? 'Empresa *' : 'Empresa'} ficha={ficha}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <select
+                          style={{ ...fichaSelect(), flex: '1 1 140px' }}
+                          value={empresaKey}
+                          onChange={(e) => setEdit(u.id, 'empresa_key', e.target.value)}
+                          required={esSub}
+                        >
+                          <option value="">{esSub ? 'Seleccionar…' : 'Sin empresa'}</option>
+                          {optsEmpresa.map((s) => (
+                            <option key={s.key} value={s.key}>{s.label || s.nombre}</option>
+                          ))}
+                        </select>
+                        <IconBtn
+                          title="Asignar empresa"
+                          tok={tTok}
+                          compact={adminCompact}
+                          onClick={() => void asignarEmpresa(u.id, edits[u.id]?.empresa_key)}
+                        >
+                          <ClipboardList size={16} strokeWidth={2.1} aria-hidden />
+                        </IconBtn>
                       </div>
-                    )}
-                    {keyExp ? (
-                      <div style={{ fontSize: 'var(--cc-caption)', color: ficha.textMuted, marginTop: 6 }}>
-                        Actual: {labelExp}
-                      </div>
-                    ) : null}
-                  </FieldRow>
-                  <FieldRow label="Políticas" ficha={ficha}>
-                    <select
-                      style={fichaSelect()}
-                      value={edits[u.id]?.politicas_aceptadas ? 'si' : 'no'}
-                      onChange={(e) => setEdit(u.id, 'politicas_aceptadas', e.target.value === 'si')}
-                    >
-                      <option value="si">Sí</option>
-                      <option value="no">Pendiente</option>
-                    </select>
-                    <div style={{ fontSize: 'var(--cc-caption)', color: ficha.textMuted, marginTop: 6, lineHeight: 1.35 }}>
-                      {u.politicas_version ? <>v{u.politicas_version}</> : '—'}
-                      {u.politicas_fecha ? (
-                        <span style={{ display: 'block' }}>
-                          {formatFechaHoraColombia(u.politicas_fecha)}
-                        </span>
+                      {esSub && !empresaKey && (
+                        <div style={{ fontSize: 'var(--cc-caption)', color: ficha.warnColor, marginTop: 6, fontWeight: 700 }}>
+                          Obligatorio (subcontratista)
+                        </div>
+                      )}
+                      {keyExp ? (
+                        <div style={{ fontSize: 'var(--cc-caption)', color: ficha.textMuted, marginTop: 6 }}>
+                          Actual: {labelExp}
+                        </div>
                       ) : null}
-                    </div>
-                  </FieldRow>
-                </tbody>
-              </table>
+                    </FieldCell>
+                  )}
+                />
+              </div>
             </SectionBlock>
 
             <SectionBlock title="Contratos autorizados" ficha={ficha} last>
