@@ -1,11 +1,14 @@
 """
 Rutas HTTP — Plan de actividades (submódulo de Seguimiento).
 Prefijo: /seguimiento/{contrato_id}/plan-actividades
+
+Acceso gobernado solo por la matriz de permisos (función PLANACT /
+«Plan de actividades»). Sin flag de habilitación por contrato.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -14,7 +17,6 @@ from pydantic import BaseModel, Field
 from main import _require_contract_access, get_current_user, registrar_log, supabase
 from plan_actividades_permissions import (
     require_permiso_plan_actividades,
-    tiene_permiso_plan_actividades,
 )
 from plan_actividades_service import (
     actualizar_actividad,
@@ -25,16 +27,19 @@ from plan_actividades_service import (
     eliminar_actividad,
     exportar_xlsx,
     get_actividad,
-    get_plan_habilitacion,
     list_actividades,
     list_colaboradores_plan,
     list_grupos,
-    set_plan_habilitacion,
 )
 
 _log = logging.getLogger("claracore.plan_actividades.routes")
 
 router = APIRouter(prefix="/seguimiento", tags=["plan-actividades"])
+
+_MSG_BD = (
+    "No se pudo completar la operación del Plan de actividades. "
+    "Verifique permisos y que la base de datos esté actualizada, o contacte a soporte."
+)
 
 
 def _uid(current_user) -> int:
@@ -49,27 +54,26 @@ def _check_contrato(current_user, contrato_id: int) -> None:
 
 
 def _http_err(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
     if isinstance(exc, PermissionError):
-        return HTTPException(status_code=403, detail=str(exc) or "Sin permiso")
+        detail = str(exc).strip() or (
+            "No tiene permiso para esta acción en Plan de actividades. "
+            "Solicítelo en Gestión de Cargos → Control de accesos."
+        )
+        return HTTPException(status_code=403, detail=detail)
     if isinstance(exc, ValueError):
-        msg = str(exc)
+        msg = str(exc).strip() or _MSG_BD
         code = 404 if "no encontrad" in msg.lower() else 400
         return HTTPException(status_code=code, detail=msg)
+    # Errores de PostgREST / red: mensaje institucional, sin filtrar stack al cliente
+    raw = str(exc or "")
+    low = raw.lower()
+    if any(x in low for x in ("pgrst", "postgrest", "could not find", "column", "relation", "schema cache")):
+        _log.exception("plan actividades (bd): %s", exc)
+        return HTTPException(status_code=400, detail=_MSG_BD)
     _log.exception("plan actividades: %s", exc)
-    return HTTPException(status_code=500, detail="Error interno en Plan de actividades")
-
-
-def _es_dev(current_user) -> bool:
-    try:
-        from main import _es_desarrollador
-
-        return bool(_es_desarrollador(current_user))
-    except Exception:
-        return False
-
-
-class HabilitacionBody(BaseModel):
-    habilitado: bool
+    return HTTPException(status_code=400, detail=_MSG_BD)
 
 
 class ActividadBody(BaseModel):
@@ -102,63 +106,11 @@ class EstadoBody(BaseModel):
     estado_gestion: str = Field(..., min_length=1)
 
 
-@router.get("/{contrato_id}/plan-actividades/habilitacion")
-def route_get_habilitacion(contrato_id: int, current_user=Depends(get_current_user)):
-    _check_contrato(current_user, contrato_id)
-    try:
-        data = get_plan_habilitacion(supabase, contrato_id)
-        data["puede_cambiar"] = _es_dev(current_user)
-        data["permisos"] = {
-            "ver": tiene_permiso_plan_actividades(current_user, "ver", contrato_id),
-            "crear": tiene_permiso_plan_actividades(current_user, "crear", contrato_id),
-            "editar": tiene_permiso_plan_actividades(current_user, "editar", contrato_id),
-            "eliminar": tiene_permiso_plan_actividades(current_user, "eliminar", contrato_id),
-            "exportar": tiene_permiso_plan_actividades(current_user, "exportar", contrato_id),
-        }
-        return data
-    except Exception as exc:
-        raise _http_err(exc) from exc
-
-
-@router.put("/{contrato_id}/plan-actividades/habilitacion")
-def route_set_habilitacion(
-    contrato_id: int,
-    body: HabilitacionBody,
-    current_user=Depends(get_current_user),
-):
-    _check_contrato(current_user, contrato_id)
-    if not _es_dev(current_user):
-        raise HTTPException(
-            status_code=403,
-            detail="Solo el rol Desarrollador puede habilitar o deshabilitar el Plan de actividades.",
-        )
-    try:
-        before = get_plan_habilitacion(supabase, contrato_id)
-        row = set_plan_habilitacion(supabase, contrato_id, body.habilitado, _uid(current_user))
-        registrar_log(
-            current_user,
-            "EDITAR",
-            "SEGUIMIENTO",
-            "plan_actividades_habilitacion",
-            str(contrato_id),
-            {
-                "antes": {"habilitado": before.get("habilitado")},
-                "despues": {"habilitado": row.get("habilitado")},
-            },
-        )
-        return row
-    except Exception as exc:
-        raise _http_err(exc) from exc
-
-
 @router.get("/{contrato_id}/plan-actividades/grupos")
 def route_list_grupos(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
     require_permiso_plan_actividades(current_user, "ver", contrato_id)
     try:
-        from plan_actividades_service import assert_plan_habilitado
-
-        assert_plan_habilitado(supabase, contrato_id)
         return list_grupos(supabase, contrato_id)
     except Exception as exc:
         raise _http_err(exc) from exc
@@ -169,9 +121,6 @@ def route_colaboradores(contrato_id: int, current_user=Depends(get_current_user)
     _check_contrato(current_user, contrato_id)
     require_permiso_plan_actividades(current_user, "ver", contrato_id)
     try:
-        from plan_actividades_service import assert_plan_habilitado
-
-        assert_plan_habilitado(supabase, contrato_id)
         return list_colaboradores_plan(supabase, contrato_id)
     except Exception as exc:
         raise _http_err(exc) from exc
@@ -210,12 +159,13 @@ def route_crear_actividad(
     _check_contrato(current_user, contrato_id)
     require_permiso_plan_actividades(current_user, "crear", contrato_id)
     try:
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         row = crear_actividad(
             supabase,
             contrato_id,
             _uid(current_user),
             current_user,
-            body.model_dump(),
+            payload,
             confirmar_solape=bool(body.confirmar_solape),
         )
         if row.get("requiere_confirmacion_solape"):
@@ -318,8 +268,6 @@ def route_get_actividad(
         if int(row.get("contrato_id") or 0) != int(contrato_id):
             raise HTTPException(status_code=404, detail="Actividad no encontrada en este contrato")
         return row
-    except HTTPException:
-        raise
     except Exception as exc:
         raise _http_err(exc) from exc
 
@@ -334,12 +282,13 @@ def route_actualizar_actividad(
     _check_contrato(current_user, contrato_id)
     require_permiso_plan_actividades(current_user, "editar", contrato_id)
     try:
+        payload = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else body.dict(exclude_unset=True)
         row = actualizar_actividad(
             supabase,
             item_id,
             _uid(current_user),
             current_user,
-            body.model_dump(exclude_unset=True),
+            payload,
         )
         if row.get("requiere_confirmacion_solape"):
             return row
@@ -354,8 +303,6 @@ def route_actualizar_actividad(
             {"titulo": row.get("titulo"), "prioridad": row.get("prioridad")},
         )
         return row
-    except HTTPException:
-        raise
     except Exception as exc:
         raise _http_err(exc) from exc
 
@@ -382,8 +329,6 @@ def route_eliminar_actividad(
             {"titulo": row.get("titulo")},
         )
         return {"ok": True}
-    except HTTPException:
-        raise
     except Exception as exc:
         raise _http_err(exc) from exc
 

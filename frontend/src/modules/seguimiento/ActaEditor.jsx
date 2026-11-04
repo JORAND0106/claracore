@@ -425,7 +425,6 @@ export default function ActaEditor({
   const [actualizandoTemas, setActualizandoTemas] = useState(false)
   /** Popup Plan de actividades del expositor (solo su ambiente). */
   const [planPopup, setPlanPopup] = useState(null) // { ideaIdx, ideaId } | null
-  const [planHabilitadoActa, setPlanHabilitadoActa] = useState(false)
   /** Evita armar el checkpoint más de una vez por sesión. */
   const temasCheckpointArmingRef = useRef(false)
   const grabacionCtrlRef = useRef(null)
@@ -856,23 +855,6 @@ export default function ActaEditor({
   }, [actaId])
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      if (!api?.getPlanHabilitacion || !permisosPlan.ver) {
-        if (!cancelled) setPlanHabilitadoActa(false)
-        return
-      }
-      try {
-        const row = await api.getPlanHabilitacion()
-        if (!cancelled) setPlanHabilitadoActa(Boolean(row?.habilitado))
-      } catch {
-        if (!cancelled) setPlanHabilitadoActa(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [api, permisosPlan.ver, cidPlan])
 
   // Si al abrir se reunieron textos huérfanos con su tema, persistir sin pasos manuales.
   useEffect(() => {
@@ -2183,7 +2165,7 @@ export default function ActaEditor({
           viewportCompact={viewportCompact}
           grabacionActiva={grabacionPhase === 'recording'}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
-          puedeAbrirPlanActividades={planHabilitadoActa && permisosPlan.ver}
+          puedeAbrirPlanActividades={Boolean(permisosPlan.ver)}
           onAbrirPlanActividades={async (idx, idea) => {
             // Solo el expositor del tema (o Dev) abre SU plan; nadie escribe en el de otro.
             const expId = Number(idea?.expositor_usuario_id || idea?.expositor_id || 0)

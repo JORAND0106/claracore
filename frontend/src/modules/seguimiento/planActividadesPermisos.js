@@ -22,7 +22,19 @@ export function permisoPlanActividades(usuario, accion, contratoId) {
   const cid = contratoId ?? usuario?.contrato_id
   if (tienePermisoFlag(usuario, PLAN_FUNCION, accion, cid)) return true
   if (tienePermisoFlag(usuario, PLAN_FUNCION_ALT, accion, cid)) return true
-  return tienePermisoFlag(usuario, PLAN_FUNCION_CODIGO, accion, cid)
+  if (tienePermisoFlag(usuario, PLAN_FUNCION_CODIGO, accion, cid)) return true
+  // Coincidencia por código PLANACT si el login lo expone en la fila
+  const rows = Array.isArray(usuario?.permisos) ? usuario.permisos : []
+  const want = String(accion || '').toLowerCase()
+  const cidN = Number(cid)
+  return rows.some((p) => {
+    const codigo = String(p?.funcion_codigo || p?.codigo || '').toUpperCase()
+    if (codigo !== 'PLANACT') return false
+    if (Number.isFinite(cidN) && p?.contrato_id != null && Number(p.contrato_id) !== cidN) {
+      return false
+    }
+    return Boolean(p?.[want])
+  })
 }
 
 export function accesoPlanActividades(usuario, contratoId) {

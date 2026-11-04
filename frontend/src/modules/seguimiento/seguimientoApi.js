@@ -431,10 +431,7 @@ export function createSeguimientoApi(contratoId, token) {
      * Exportación consolidada por rango: pdf | docx | md.
      * @returns {{ blob: Blob, filename: string }}
      */
-    // ── Plan de actividades ─────────────────────────────────────────────────
-    getPlanHabilitacion: () => get(`/seguimiento/${cid}/plan-actividades/habilitacion`),
-    setPlanHabilitacion: (habilitado) =>
-      send('PUT', `/seguimiento/${cid}/plan-actividades/habilitacion`, { habilitado: Boolean(habilitado) }),
+    // ── Plan de actividades (acceso solo por permisos PLANACT) ──────────────
     listPlanGrupos: () => get(`/seguimiento/${cid}/plan-actividades/grupos`),
     listPlanColaboradores: () => get(`/seguimiento/${cid}/plan-actividades/colaboradores`),
     listPlanActividades: (params = {}) => {

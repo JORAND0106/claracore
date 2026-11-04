@@ -1,15 +1,7 @@
 -- ClaraCore — Plan de actividades (espejo manual para Supabase)
 -- Ver también: migrations/20261104010000_plan_actividades.sql
-
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS plan_actividades_habilitado boolean NOT NULL DEFAULT false;
-
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS plan_actividades_habilitado_en timestamptz NULL;
-
-ALTER TABLE public.contratos
-  ADD COLUMN IF NOT EXISTS plan_actividades_habilitado_por integer NULL
-    REFERENCES public.usuarios(id) ON DELETE SET NULL;
+-- Acceso solo por permisos PLANACT (sin flag por contrato).
+-- Si existen columnas plan_actividades_habilitado*, ejecute también plan_actividades_sin_flag.sql
 
 ALTER TABLE public.seguimiento_item
   DROP CONSTRAINT IF EXISTS seguimiento_item_origen_check;

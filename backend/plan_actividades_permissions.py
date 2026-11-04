@@ -149,7 +149,15 @@ def require_permiso_plan_actividades(
 ):
     if tiene_permiso_plan_actividades(current_user, accion, contrato_id):
         return True
+    accion_txt = {
+        "ver": "Ver",
+        "crear": "Crear",
+        "editar": "Editar",
+        "eliminar": "Eliminar",
+        "exportar": "Exportar",
+    }.get(accion, accion)
     raise _http_exc(
         403,
-        "No tiene permiso para esta acción en Plan de actividades.",
+        f"No tiene permiso «{accion_txt}» en Plan de actividades. "
+        "Solicítelo en Gestión de Cargos → Control de accesos.",
     )
