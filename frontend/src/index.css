@@ -601,12 +601,20 @@ select.cc-dashboard-acta-select--light option {
   width: 100%;
 }
 
+/* Gestión de Usuarios: hoja Excel (scroll) en todos los viewports.
+   Las clases legacy .cc-admin-user-table / .cc-admin-user-cards se mantienen
+   por compatibilidad; el listado activo usa .cc-admin-user-sheet. */
 .cc-admin-user-cards {
   display: none;
 }
 
 .cc-admin-user-table {
   display: block;
+}
+
+.cc-admin-user-sheet {
+  display: block;
+  width: 100%;
 }
 
 .cc-admin-acta-cards {
@@ -709,19 +717,30 @@ select.cc-dashboard-acta-select--light option {
     -webkit-overflow-scrolling: touch;
   }
 
-  .cc-admin-user-table,
+  /* Acta: sigue en cards en móvil. Usuarios: hoja Excel con scroll horizontal. */
   .cc-admin-acta-table {
     display: none !important;
   }
 
-  .cc-admin-user-cards,
+  .cc-admin-user-table {
+    display: block !important;
+  }
+
+  .cc-admin-user-cards {
+    display: none !important;
+  }
+
   .cc-admin-acta-cards {
     display: flex !important;
     flex-direction: column;
     gap: 12px;
   }
 
-  .cc-admin-user-card,
+  .cc-admin-user-sheet {
+    max-height: min(65vh, 640px) !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .cc-admin-acta-card {
     border-radius: 10px;
     padding: 14px;
@@ -730,21 +749,17 @@ select.cc-dashboard-acta-select--light option {
     gap: 10px;
   }
 
-  .cc-admin-user-card-actions,
   .cc-admin-acta-card-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
   }
 
-  .cc-admin-user-card-actions button,
   .cc-admin-acta-card-actions button,
   .cc-admin-scroll-area button {
     min-height: 44px;
   }
 
-  .cc-admin-user-card select,
-  .cc-admin-user-card input,
   .cc-admin-scroll-area select,
   .cc-admin-scroll-area input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
     min-height: 44px;
