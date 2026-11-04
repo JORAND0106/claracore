@@ -9445,19 +9445,33 @@ def admin_usuarios_empresas_contrato(contrato_id: int, current_user=Depends(get_
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
     """Lista solo usuarios vivos: pendiente y aprobado. Los rechazados no aparecen."""
-    _cols_base = (
+    # foto_perfil_url: solo lectura para ficha admin (ya existe en usuarios; sin lógica nueva).
+    _cols_core = (
         "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, "
         "politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip, subcontratista_id"
     )
+    _cols_base = _cols_core + ", foto_perfil_url"
     try:
         result = supabase.table("usuarios").select(
             _cols_base + ", empresa_tipo"
         ).order("nombre").execute()
     except Exception:
-        result = supabase.table("usuarios").select(_cols_base).order("nombre").execute()
-        for u in (result.data or []):
-            if u.get("subcontratista_id") is not None and not u.get("empresa_tipo"):
-                u["empresa_tipo"] = "subcontratista"
+        try:
+            result = supabase.table("usuarios").select(_cols_base).order("nombre").execute()
+            for u in (result.data or []):
+                if u.get("subcontratista_id") is not None and not u.get("empresa_tipo"):
+                    u["empresa_tipo"] = "subcontratista"
+        except Exception:
+            # Esquemas sin foto_perfil_url: listado sigue funcionando; ficha usa iniciales.
+            try:
+                result = supabase.table("usuarios").select(
+                    _cols_core + ", empresa_tipo"
+                ).order("nombre").execute()
+            except Exception:
+                result = supabase.table("usuarios").select(_cols_core).order("nombre").execute()
+                for u in (result.data or []):
+                    if u.get("subcontratista_id") is not None and not u.get("empresa_tipo"):
+                        u["empresa_tipo"] = "subcontratista"
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
     contratos = {c["id"]: c["numero"] for c in supabase.table("contratos").select("id, numero").execute().data}
