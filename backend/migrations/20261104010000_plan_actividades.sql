@@ -17,22 +17,26 @@ COMMENT ON COLUMN public.contratos.plan_actividades_habilitado IS
   'Habilita el submódulo Plan de actividades en Seguimiento. Deshabilitado por defecto; solo Desarrollador puede cambiarlo.';
 
 -- 2) Origen plan_actividad en seguimiento_item
+-- Primero por nombre conocido; luego cualquier CHECK residual sobre origen.
+ALTER TABLE public.seguimiento_item
+  DROP CONSTRAINT IF EXISTS seguimiento_item_origen_check;
+
 DO $$
 DECLARE
-  cname text;
+  r record;
 BEGIN
-  SELECT con.conname INTO cname
-  FROM pg_constraint con
-  JOIN pg_class rel ON rel.oid = con.conrelid
-  JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-  WHERE nsp.nspname = 'public'
-    AND rel.relname = 'seguimiento_item'
-    AND con.contype = 'c'
-    AND pg_get_constraintdef(con.oid) ILIKE '%origen%';
-
-  IF cname IS NOT NULL THEN
-    EXECUTE format('ALTER TABLE public.seguimiento_item DROP CONSTRAINT %I', cname);
-  END IF;
+  FOR r IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'seguimiento_item'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) ILIKE '%origen%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.seguimiento_item DROP CONSTRAINT %I', r.conname);
+  END LOOP;
 
   ALTER TABLE public.seguimiento_item
     ADD CONSTRAINT seguimiento_item_origen_check
