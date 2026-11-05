@@ -129,7 +129,7 @@ export default function ActaTemasTable({
   }
   const esExpositorDelTema = (idea) => {
     if (esDesarrollador) return true
-    const exp = Number(idea?.expositor_usuario_id ?? idea?.expositor_id || 0)
+    const exp = Number(idea?.expositor_usuario_id ?? idea?.expositor_id ?? 0)
     const uid = Number(usuarioId || 0)
     return exp > 0 && uid > 0 && exp === uid
   }
