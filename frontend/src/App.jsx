@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import CcModalBrandHeader from './components/CcModalBrandHeader'
+import CcAnchoredListbox from './components/CcAnchoredListbox'
 import { createPortal } from 'react-dom'
 import { OfflineProvider, useOffline } from './offline/OfflineContext'
 import {
@@ -3055,6 +3056,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [mostrarLista,   setMostrarLista]   = useState(false)
   const [indiceItemKbd,  setIndiceItemKbd]  = useState(-1)
   const indiceItemKbdRef = useRef(-1)
+  const itemInputRef = useRef(null)
   useEffect(() => { indiceItemKbdRef.current = indiceItemKbd }, [indiceItemKbd])
   const [longitud,       setLongitud]       = useState(registro.longitud   ?? '')
   const [ancho,          setAncho]          = useState(registro.ancho      ?? '')
@@ -5498,9 +5500,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 Ítem {buscando ? '⏳' : ''}
               </div>
               <input
+                ref={itemInputRef}
                 value={itemBusqueda}
                 onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
                 onFocus={() => editableCamposFinancieros && itemsLista.length > 0 && setMostrarLista(true)}
+                onBlur={() => setTimeout(() => setMostrarLista(false), 200)}
                 onKeyDown={e => {
                   e.stopPropagation()
                   const n = itemsLista.length
@@ -5533,25 +5537,37 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 placeholder="Buscar por número o descripción..."
                 disabled={!editableCamposFinancieros}
                 style={{ ...inpSt, opacity: editableCamposFinancieros ? 1 : 0.65 }}
+                aria-expanded={editableCamposFinancieros && mostrarLista && itemsLista.length > 0}
+                aria-autocomplete="list"
               />
-              {editableCamposFinancieros && mostrarLista && itemsLista.length > 0 && (
-                <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
-                  {itemsLista.map((item, idx) => (
-                    <div
-                      id={`hoja-item-sug-${registro.id}-${idx}`}
-                      key={item.id} onClick={() => seleccionarItem(item)}
-                      style={{
-                        padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background 0.1s',
-                        background: idx === indiceItemKbd ? t.bg : 'transparent',
-                      }}
-                      onMouseEnter={() => setIndiceItemKbd(idx)}>
-                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
-                      <div style={{ fontSize:'var(--cc-label)', color:t.text }}>{item.descripcion}</div>
-                      <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <CcAnchoredListbox
+                open={editableCamposFinancieros && mostrarLista && itemsLista.length > 0}
+                anchorRef={itemInputRef}
+                t={t}
+                maxHeight={240}
+                data-testid="sicoe-hoja-item-listbox"
+              >
+                {itemsLista.map((item, idx) => (
+                  <div
+                    id={`hoja-item-sug-${registro.id}-${idx}`}
+                    key={item.id}
+                    role="option"
+                    aria-selected={idx === indiceItemKbd}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      seleccionarItem(item)
+                    }}
+                    style={{
+                      padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background 0.1s',
+                      background: idx === indiceItemKbd ? t.bg : 'transparent',
+                    }}
+                    onMouseEnter={() => setIndiceItemKbd(idx)}>
+                    <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
+                    <div style={{ fontSize:'var(--cc-label)', color:t.text }}>{item.descripcion}</div>
+                    <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
+                  </div>
+                ))}
+              </CcAnchoredListbox>
             </div>
           </div>
           ) : (
@@ -15837,6 +15853,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [capBusqueda, setCapBusqueda] = useState('')
   const [capitulos, setCapitulos] = useState([])
   const [capituloSel, setCapituloSel] = useState('')
+  const subInputRef = useRef(null)
+  const inspInputRef = useRef(null)
+  const capInputRef = useRef(null)
   const [pkIds, setPkIds] = useState([])
   const [pkBusqueda, setPkBusqueda] = useState('')
   const [pkSeleccionado, setPkSeleccionado] = useState(null)
@@ -17035,33 +17054,42 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   SUBCONTRATISTA *
                 </label>
                 <input
+                  ref={subInputRef}
                   value={subSeleccionado ? sicoeLabelSubcontratistaLista(subSeleccionado) : subBusqueda}
                   onChange={e => { setSubBusqueda(e.target.value); setSubSeleccionado(null); setSubDropOpen(true) }}
                   onFocus={() => setSubDropOpen(true)}
+                  onBlur={() => setTimeout(() => setSubDropOpen(false), 200)}
                   placeholder={subcontratistas.length ? 'Buscar subcontratista...' : 'Cargando listado...'}
                   style={inpStyle(errores.sub)}
                   data-testid="sicoe-wizard-subcontratista"
+                  aria-expanded={subDropOpen && subFiltrados.length > 0}
+                  aria-autocomplete="list"
                 />
-                {subDropOpen && subFiltrados.length > 0 && (
-                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
-                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
-                    {subFiltrados.map(s => (
-                      <div
-                        key={s.id}
-                        onClick={() => {
-                          setSubSeleccionado({ id: s.id, nombre: sicoeLabelSubcontratistaLista(s) })
-                          setSubBusqueda('')
-                          setSubDropOpen(false)
-                        }}
-                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
-                          borderBottom:`1px solid ${t.border}` }}
-                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                        {sicoeLabelSubcontratistaLista(s)}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <CcAnchoredListbox
+                  open={subDropOpen && subFiltrados.length > 0}
+                  anchorRef={subInputRef}
+                  t={t}
+                  maxHeight={220}
+                  data-testid="sicoe-wizard-subcontratista-listbox"
+                >
+                  {subFiltrados.map(s => (
+                    <div
+                      key={s.id}
+                      role="option"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        setSubSeleccionado({ id: s.id, nombre: sicoeLabelSubcontratistaLista(s) })
+                        setSubBusqueda('')
+                        setSubDropOpen(false)
+                      }}
+                      style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
+                        borderBottom:`1px solid ${t.border}` }}
+                      onMouseEnter={e => { e.currentTarget.style.background = t.bg }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+                      {sicoeLabelSubcontratistaLista(s)}
+                    </div>
+                  ))}
+                </CcAnchoredListbox>
                 {errores.sub && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.sub}</span>}
               </div>
 
@@ -17070,24 +17098,42 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   INSPECTOR *
                 </label>
-                <input value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
+                <input
+                  ref={inspInputRef}
+                  value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
                   onChange={e => { setInspBusqueda(e.target.value); setInspSeleccionado(null); setInspDropOpen(true) }}
                   onFocus={() => setInspDropOpen(true)}
-                  placeholder="Buscar validador nivel 1..." style={inpStyle(errores.insp)} />
-                {inspDropOpen && inspFiltrados.length > 0 && (
-                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
-                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
-                    {inspFiltrados.map(i => (
-                      <div key={i.id} onClick={() => { setInspSeleccionado(i); setInspBusqueda(''); setInspDropOpen(false) }}
-                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
-                          borderBottom:`1px solid ${t.border}` }}
-                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                        {i.nombre}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                  onBlur={() => setTimeout(() => setInspDropOpen(false), 200)}
+                  placeholder="Buscar validador nivel 1..."
+                  style={inpStyle(errores.insp)}
+                  aria-expanded={inspDropOpen && inspFiltrados.length > 0}
+                  aria-autocomplete="list"
+                />
+                <CcAnchoredListbox
+                  open={inspDropOpen && inspFiltrados.length > 0}
+                  anchorRef={inspInputRef}
+                  t={t}
+                  maxHeight={220}
+                  data-testid="sicoe-wizard-inspector-listbox"
+                >
+                  {inspFiltrados.map(i => (
+                    <div
+                      key={i.id}
+                      role="option"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        setInspSeleccionado(i)
+                        setInspBusqueda('')
+                        setInspDropOpen(false)
+                      }}
+                      style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
+                        borderBottom:`1px solid ${t.border}` }}
+                      onMouseEnter={e => { e.currentTarget.style.background = t.bg }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}>
+                      {i.nombre}
+                    </div>
+                  ))}
+                </CcAnchoredListbox>
                 {errores.insp && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.insp}</span>}
               </div>
 
@@ -17097,38 +17143,55 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   CAPÍTULO *
                 </label>
                 <input
+                  ref={capInputRef}
                   value={capituloSel || capBusqueda}
                   onChange={e => { setCapBusqueda(e.target.value); setCapituloSel(''); setCapDropOpen(true) }}
                   onFocus={() => setCapDropOpen(true)}
                   onBlur={() => setTimeout(() => setCapDropOpen(false), 200)}
                   placeholder="Buscar capítulo..."
-                  style={inpStyle(errores.capitulo)} />
-                {capDropOpen && (
-                  <div style={{ position:'fixed', top:'auto', left:'auto', background:t.bgCard,
-                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:9999,
-                    maxHeight:'300px', overflowY:'auto', width:'500px', boxShadow:'0 8px 24px rgba(0,0,0,0.3)' }}>
-                    {capitulos
-                      .filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase()))
-                      .map(c => (
-                        <div key={c.capitulo}
-                          onMouseDown={() => { setCapituloSel(c.capitulo); setCapBusqueda(''); setCapDropOpen(false) }}
-                          style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)',
-                            color: capituloSel === c.capitulo ? t.primary : t.text,
-                            fontWeight: capituloSel === c.capitulo ? '700' : '400',
-                            borderBottom:`1px solid ${t.border}`,
-                            background: capituloSel === c.capitulo ? t.primary+'11' : 'transparent' }}
-                          onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                          onMouseLeave={e => e.currentTarget.style.background = capituloSel === c.capitulo ? t.primary+'11' : 'transparent'}>
-                          {c.capitulo}
-                        </div>
-                      ))}
-                    {capitulos.filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase())).length === 0 && (
-                      <div style={{ padding:'12px', color:t.textMuted, fontSize:'var(--cc-sm)', textAlign:'center' }}>
-                        No se encontró el capítulo
+                  style={inpStyle(errores.capitulo)}
+                  data-testid="sicoe-wizard-capitulo"
+                  aria-expanded={!!capDropOpen}
+                  aria-autocomplete="list"
+                />
+                <CcAnchoredListbox
+                  open={!!capDropOpen}
+                  anchorRef={capInputRef}
+                  t={t}
+                  maxHeight={300}
+                  data-testid="sicoe-wizard-capitulo-listbox"
+                >
+                  {capitulos
+                    .filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase()))
+                    .map(c => (
+                      <div
+                        key={c.capitulo}
+                        role="option"
+                        aria-selected={capituloSel === c.capitulo}
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          setCapituloSel(c.capitulo)
+                          setCapBusqueda('')
+                          setCapDropOpen(false)
+                        }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)',
+                          color: capituloSel === c.capitulo ? t.primary : t.text,
+                          fontWeight: capituloSel === c.capitulo ? '700' : '400',
+                          borderBottom:`1px solid ${t.border}`,
+                          background: capituloSel === c.capitulo ? t.primary+'11' : 'transparent' }}
+                        onMouseEnter={e => { e.currentTarget.style.background = t.bg }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = capituloSel === c.capitulo ? t.primary+'11' : 'transparent'
+                        }}>
+                        {c.capitulo}
                       </div>
-                    )}
-                  </div>
-                )}
+                    ))}
+                  {capitulos.filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase())).length === 0 && (
+                    <div style={{ padding:'12px', color:t.textMuted, fontSize:'var(--cc-sm)', textAlign:'center' }}>
+                      No se encontró el capítulo
+                    </div>
+                  )}
+                </CcAnchoredListbox>
                 {capituloSel && (
                   <div style={{ fontSize:'var(--cc-label)', color:'#10B981', marginTop:'4px' }}>✅ {capituloSel}</div>
                 )}
