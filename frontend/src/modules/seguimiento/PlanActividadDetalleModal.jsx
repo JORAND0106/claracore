@@ -30,6 +30,7 @@ export default function PlanActividadDetalleModal({
   onClose,
   onChanged,
   onEdit,
+  soloLectura = false,
 }) {
   const [item, setItem] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -113,8 +114,11 @@ export default function PlanActividadDetalleModal({
     }
   }
 
-  const puedeEditar = item && puedeMutarActividadPropia(item, usuario, permisos, 'editar')
-  const puedeEliminar = item && puedeMutarActividadPropia(item, usuario, permisos, 'eliminar')
+  const lectura = Boolean(soloLectura)
+  const puedeEditar = !lectura && item && puedeMutarActividadPropia(item, usuario, permisos, 'editar')
+  const puedeEliminar = !lectura && item && puedeMutarActividadPropia(item, usuario, permisos, 'eliminar')
+  const puedeCambiarEstado = !lectura && Boolean(item?.puede_cambiar_estado)
+  const puedeComentar = !lectura && Boolean(item?.puede_comentar)
 
   return (
     <div
@@ -220,7 +224,7 @@ export default function PlanActividadDetalleModal({
                 )}
               </section>
 
-              {item.puede_cambiar_estado && (
+              {puedeCambiarEstado && (
                 <section>
                   <div style={secTitle(t)}>Estado</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -239,6 +243,14 @@ export default function PlanActividadDetalleModal({
                         {e.label}
                       </button>
                     ))}
+                  </div>
+                </section>
+              )}
+              {lectura && (
+                <section>
+                  <div style={secTitle(t)}>Estado</div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.text }}>
+                    {item.estado_gestion || '—'}
                   </div>
                 </section>
               )}
@@ -291,7 +303,7 @@ export default function PlanActividadDetalleModal({
                               Antes: {c.mensaje_anterior}
                             </div>
                           )}
-                          {Number(c.autor_id) === Number(usuario?.id || usuario?.sub) && (
+                          {!lectura && Number(c.autor_id) === Number(usuario?.id || usuario?.sub) && (
                             <button
                               type="button"
                               style={{ ...btn(t), marginTop: 6, height: 26, fontSize: 'var(--cc-caption)' }}
@@ -311,7 +323,7 @@ export default function PlanActividadDetalleModal({
                     <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin comentarios aún.</div>
                   )}
                 </div>
-                {item.puede_comentar && (
+                {puedeComentar && (
                   <div style={{ display: 'grid', gap: 6 }}>
                     <textarea
                       value={comentario}

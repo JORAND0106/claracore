@@ -6880,6 +6880,34 @@ def generar_preview_pdf_acta(
     except Exception as exc:
         _log.warning("compromisos abiertos pdf acta=%s: %s", acta_id, exc)
 
+    # Plan vinculado a temas → resumen bajo cada tema; no duplicar en «Compromisos generados».
+    comps_raw = list(acta.get("compromisos") or [])
+    plan_por_idea: Dict[int, List[dict]] = {}
+    compromisos_pdf: List[dict] = []
+    for c in comps_raw:
+        if str(c.get("origen") or "") == "plan_actividad":
+            enriched = _enrich_plan_fields_en_compromiso(c)
+            try:
+                iid = int(enriched.get("idea_id") or 0)
+            except (TypeError, ValueError):
+                iid = 0
+            if not iid:
+                plan = (enriched.get("campos_libres") or {}).get("plan") if isinstance(
+                    enriched.get("campos_libres"), dict
+                ) else {}
+                if isinstance(plan, dict):
+                    try:
+                        iid = int(plan.get("idea_id") or 0)
+                    except (TypeError, ValueError):
+                        iid = 0
+            if iid > 0:
+                plan_por_idea.setdefault(iid, []).append(enriched)
+            else:
+                # Sin tema: permanece en compromisos generados (no se pierde).
+                compromisos_pdf.append(enriched)
+        else:
+            compromisos_pdf.append(c)
+
     try:
         pdf = generar_pdf_acta(
             contrato,
@@ -6888,8 +6916,9 @@ def generar_preview_pdf_acta(
             acta.get("ideas") or [],
             acta.get("apartados") or [],
             firmas=acta.get("firmas") or [],
-            compromisos=acta.get("compromisos") or [],
+            compromisos=compromisos_pdf,
             compromisos_previos=previos,
+            plan_por_idea=plan_por_idea,
         )
     except Exception as exc:
         _log.exception("PDF acta %s: %s", acta_id, exc)
@@ -6905,8 +6934,9 @@ def generar_preview_pdf_acta(
             acta.get("ideas") or [],
             acta.get("apartados") or [],
             firmas=[],
-            compromisos=acta.get("compromisos") or [],
+            compromisos=compromisos_pdf,
             compromisos_previos=previos,
+            plan_por_idea=plan_por_idea,
         )
 
     if cache_key and pdf:

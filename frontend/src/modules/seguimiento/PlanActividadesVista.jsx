@@ -68,6 +68,8 @@ export default function PlanActividadesVista({
   actaId = null,
   ideaId = null,
   forzarPropio = false,
+  /** Moderador del acta: ve grilla/Gantt/detalle sin mutar. */
+  soloLectura = false,
 }) {
   const ui = useMemo(() => bitacoraSheetStyles(t), [t])
   const [items, setItems] = useState([])
@@ -97,7 +99,20 @@ export default function PlanActividadesVista({
   const equipoScrollRef = useRef(null)
   const equipoScrollSnap = useRef(0)
 
-  const vistaAmplia = Boolean(permisos?.esVistaAmplia || permisos?.esDesarrollador) && !forzarPropio
+  const lectura = Boolean(soloLectura)
+  const permisosUi = useMemo(() => {
+    if (!lectura) return permisos
+    return {
+      ...(permisos || {}),
+      crear: false,
+      editar: false,
+      eliminar: false,
+      exportar: false,
+    }
+  }, [permisos, lectura])
+  const vistaAmplia = Boolean(permisos?.esVistaAmplia || permisos?.esDesarrollador)
+    && !forzarPropio
+    && !lectura
   const enEquipo = vistaAmplia && tab === 'equipo' && !drillColaboradorId
   const colaboradorEfectivo = drillColaboradorId
     ? String(drillColaboradorId)
@@ -108,6 +123,7 @@ export default function PlanActividadesVista({
       || (verTodos && !colaboradorEfectivo)
     ),
   )
+  const alcanceActa = Boolean(actaId || ideaId)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -115,9 +131,11 @@ export default function PlanActividadesVista({
     try {
       const params = {
         incluir_cerrados: true,
-        ver_todos: verTodosEfectivo,
+        ver_todos: verTodosEfectivo || (lectura && alcanceActa),
       }
       if (colaboradorEfectivo) params.colaborador_id = Number(colaboradorEfectivo)
+      if (actaId) params.acta_id = Number(actaId)
+      if (ideaId) params.idea_id = Number(ideaId)
       const [list, gs, us] = await Promise.all([
         api.listPlanActividades(params),
         api.listPlanGrupos().catch(() => []),
@@ -136,7 +154,7 @@ export default function PlanActividadesVista({
     } finally {
       setLoading(false)
     }
-  }, [api, colaboradorEfectivo, verTodosEfectivo])
+  }, [api, colaboradorEfectivo, verTodosEfectivo, actaId, ideaId, lectura, alcanceActa])
 
   useEffect(() => { reload() }, [reload])
 
@@ -376,7 +394,12 @@ export default function PlanActividadesVista({
               )}
             </>
           )}
-          {!enEquipo && permisos?.crear && (
+          {lectura && (
+            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>
+              Solo lectura
+            </span>
+          )}
+          {!enEquipo && permisosUi?.crear && (
             <button
               type="button"
               title="Crear actividad"
@@ -389,7 +412,7 @@ export default function PlanActividadesVista({
               <Plus size={18} strokeWidth={2.4} aria-hidden />
             </button>
           )}
-          {!enEquipo && permisos?.exportar && (
+          {!enEquipo && permisosUi?.exportar && (
             <button
               type="button"
               title="Exportar Excel"
@@ -428,8 +451,9 @@ export default function PlanActividadesVista({
           agrupar={equipoAgrupar}
           onAgruparChange={setEquipoAgrupar}
           scrollRef={equipoScrollRef}
-          puedeCrear={Boolean(permisos?.crear)}
+          puedeCrear={Boolean(permisosUi?.crear)}
           onCrear={() => {
+            if (lectura) return
             setDetalleId(null)
             setEditItem(null)
             setFormOpen(true)
@@ -617,7 +641,7 @@ export default function PlanActividadesVista({
       </div>
       )}
 
-      {formOpen && (
+      {formOpen && !lectura && (
         <PlanActividadFormModal
           t={t}
           api={api}
@@ -637,11 +661,13 @@ export default function PlanActividadesVista({
           t={t}
           api={api}
           usuario={usuario}
-          permisos={permisos}
+          permisos={permisosUi}
+          soloLectura={lectura}
           itemId={detalleId}
           onClose={() => setDetalleId(null)}
           onChanged={() => reload()}
           onEdit={(it) => {
+            if (lectura) return
             setDetalleId(null)
             setEditItem(it)
             setFormOpen(true)

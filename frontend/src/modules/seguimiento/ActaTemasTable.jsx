@@ -115,13 +115,10 @@ export default function ActaTemasTable({
   onCerrarTema,
   onAgregarTema,
   grabacionActiva = false,
-  /** Si true, muestra botón Plan de actividades del expositor (solo su ambiente). */
+  /** Si true, muestra botón Plan de actividades (expositor / moderador / Dev). */
   puedeAbrirPlanActividades = false,
-  /**
-   * Si true, el botón Plan solo aparece al expositor del tema (o Dev vía canEditarIdea).
-   * El moderador del acta no escribe en el plan de otro.
-   */
-  planSoloExpositor = false,
+  /** Moderador del acta (elaborador): ve el Plan de cada tema en solo lectura. */
+  esModeradorActa = false,
   onAbrirPlanActividades = null,
   usuarioId = null,
   esDesarrollador = false,
@@ -135,6 +132,19 @@ export default function ActaTemasTable({
     const exp = Number(idea?.expositor_usuario_id ?? idea?.expositor_id || 0)
     const uid = Number(usuarioId || 0)
     return exp > 0 && uid > 0 && exp === uid
+  }
+  /** Quién ve el botón y en qué modo (escritura vs lectura). */
+  const planBtnMeta = (idea) => {
+    if (!puedeAbrirPlanActividades || typeof onAbrirPlanActividades !== 'function') {
+      return null
+    }
+    if (esDesarrollador || esExpositorDelTema(idea)) {
+      return { soloLectura: false, title: 'Plan de actividades' }
+    }
+    if (esModeradorActa) {
+      return { soloLectura: true, title: 'Plan de actividades · lectura' }
+    }
+    return null
   }
   const puedeAbrirCerrar = puedeAbrirCerrarTema == null ? !soloLectura : !!puedeAbrirCerrarTema
   const tramosList = Array.isArray(tramos) ? tramos : []
@@ -466,20 +476,24 @@ export default function ActaTemasTable({
                             <IconPlus />
                           </button>
                         )}
-                        {puedeAbrirPlanActividades
-                          && typeof onAbrirPlanActividades === 'function'
-                          && (planSoloExpositor ? esExpositorDelTema(idea) : puedeEsta) && (
-                          <button
-                            type="button"
-                            style={iconBtn(t)}
-                            title="Plan de actividades"
-                            aria-label="Plan de actividades"
-                            disabled={saving}
-                            onClick={() => onAbrirPlanActividades(idx, idea)}
-                          >
-                            <IconPlan />
-                          </button>
-                        )}
+                        {(() => {
+                          const meta = planBtnMeta(idea)
+                          if (!meta) return null
+                          return (
+                            <button
+                              type="button"
+                              style={iconBtn(t)}
+                              title={meta.title}
+                              aria-label={meta.title}
+                              disabled={saving}
+                              onClick={() => onAbrirPlanActividades(idx, idea, {
+                                soloLectura: meta.soloLectura,
+                              })}
+                            >
+                              <IconPlan />
+                            </button>
+                          )
+                        })()}
                       </div>
                     </td>
                   </tr>
