@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Download, Users, X } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import { CC_ANCHORED_DROPDOWN_Z } from '../../hooks/useAnchoredDropdown'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { useSeguimientoCompact } from './seguimientoShared'
 
@@ -21,14 +22,18 @@ export default function PlanActividadesExportModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const catalogo = useMemo(
+    () => (usuarios || []).filter((u) => Number(u.id) > 0),
+    [usuarios],
+  )
+  const totalColaboradores = catalogo.length
+
   const disponibles = useMemo(
-    () => usuarios.filter((u) => {
-      const id = Number(u.id)
-      if (!id || id < 0) return false
+    () => catalogo.filter((u) => {
       if (todos) return false
-      return !selected.some((s) => Number(s.id) === id)
+      return !selected.some((s) => Number(s.id) === Number(u.id))
     }),
-    [usuarios, selected, todos],
+    [catalogo, selected, todos],
   )
 
   function addUser(u) {
@@ -51,11 +56,18 @@ export default function PlanActividadesExportModal({
       setError('Elija «Todos» o al menos un colaborador.')
       return
     }
+    if (todos && !totalColaboradores) {
+      setError('No hay colaboradores para exportar.')
+      return
+    }
     setBusy(true)
     try {
+      // Con «Todos» se envían IDs explícitos + flag: el backend une ambos
+      // para no quedar en una sola hoja si el catálogo remoto falla.
+      const allIds = catalogo.map((u) => Number(u.id))
       await onExport?.({
         todos,
-        colaborador_ids: todos ? [] : selected.map((s) => Number(s.id)),
+        colaborador_ids: todos ? allIds : selected.map((s) => Number(s.id)),
       })
       onClose?.()
     } catch (e) {
@@ -158,10 +170,33 @@ export default function PlanActividadesExportModal({
               }}
             />
             <Users size={16} strokeWidth={2.2} aria-hidden />
-            Todos los colaboradores
+            Todos
+            {totalColaboradores > 0 ? ` (${totalColaboradores})` : ''}
           </label>
 
-          {!todos && (
+          {todos ? (
+            <div
+              title={`Todos (${totalColaboradores})`}
+              data-cc-tooltip={`Todos (${totalColaboradores})`}
+              data-cc-tooltip-variant="short"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                border: `1px solid ${t.primary}`,
+                background: `${t.primary}14`,
+                color: t.text,
+                borderRadius: 999,
+                padding: '4px 12px',
+                fontSize: 'var(--cc-xs)',
+                fontWeight: 800,
+                width: 'fit-content',
+              }}
+            >
+              <Users size={13} strokeWidth={2.2} aria-hidden />
+              Todos ({totalColaboradores})
+            </div>
+          ) : (
             <>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {selected.map((s) => (
@@ -196,6 +231,8 @@ export default function PlanActividadesExportModal({
                 valueNombre=""
                 mode="strict"
                 placeholder={selected.length ? 'Agregar otro…' : 'Buscar colaborador…'}
+                dropdownZIndex={CC_ANCHORED_DROPDOWN_Z}
+                maxHeight={compact ? 180 : 240}
                 style={{
                   width: '100%',
                   boxSizing: 'border-box',

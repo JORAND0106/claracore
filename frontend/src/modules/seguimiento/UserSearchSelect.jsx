@@ -43,6 +43,9 @@ export default function UserSearchSelect({
   mode = 'strict',
   placeholder = 'Buscar usuario…',
   style,
+  /** Override del z-index del listado (por defecto CC_ANCHORED_DROPDOWN_Z). */
+  dropdownZIndex,
+  maxHeight = 220,
 }) {
   const reactId = useId()
   const fieldName = `cc_seg_user_search_${String(reactId).replace(/:/g, '')}`
@@ -87,7 +90,10 @@ export default function UserSearchSelect({
   }, [highlight])
 
   const listOpen = open && filtrados.length > 0
-  const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, { maxHeight: 200 })
+  const dropdownStyle = useAnchoredDropdown(listOpen, inputRef, {
+    maxHeight,
+    ...(dropdownZIndex != null ? { zIndex: dropdownZIndex } : {}),
+  })
   const activeOptId = listOpen && highlight >= 0 ? `${fieldName}-opt-${highlight}` : undefined
 
   const pick = (u) => {
