@@ -117,11 +117,24 @@ export default function ActaTemasTable({
   grabacionActiva = false,
   /** Si true, muestra botón Plan de actividades del expositor (solo su ambiente). */
   puedeAbrirPlanActividades = false,
+  /**
+   * Si true, el botón Plan solo aparece al expositor del tema (o Dev vía canEditarIdea).
+   * El moderador del acta no escribe en el plan de otro.
+   */
+  planSoloExpositor = false,
   onAbrirPlanActividades = null,
+  usuarioId = null,
+  esDesarrollador = false,
 }) {
   const editaIdea = (idea) => {
     if (typeof canEditarIdea === 'function') return !!canEditarIdea(idea)
     return !soloLectura
+  }
+  const esExpositorDelTema = (idea) => {
+    if (esDesarrollador) return true
+    const exp = Number(idea?.expositor_usuario_id ?? idea?.expositor_id || 0)
+    const uid = Number(usuarioId || 0)
+    return exp > 0 && uid > 0 && exp === uid
   }
   const puedeAbrirCerrar = puedeAbrirCerrarTema == null ? !soloLectura : !!puedeAbrirCerrarTema
   const tramosList = Array.isArray(tramos) ? tramos : []
@@ -453,11 +466,13 @@ export default function ActaTemasTable({
                             <IconPlus />
                           </button>
                         )}
-                        {puedeAbrirPlanActividades && puedeEsta && typeof onAbrirPlanActividades === 'function' && (
+                        {puedeAbrirPlanActividades
+                          && typeof onAbrirPlanActividades === 'function'
+                          && (planSoloExpositor ? esExpositorDelTema(idea) : puedeEsta) && (
                           <button
                             type="button"
                             style={iconBtn(t)}
-                            title="Abrir su Plan de actividades (solo su espacio). Las actividades creadas aquí quedan vinculadas a este tema del acta."
+                            title="Plan de actividades"
                             aria-label="Plan de actividades"
                             disabled={saving}
                             onClick={() => onAbrirPlanActividades(idx, idea)}

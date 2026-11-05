@@ -97,10 +97,14 @@ export function createSeguimientoApi(contratoId, token) {
     repararCompromisosExternosHuerfanos: () =>
       send('POST', `/seguimiento/${cid}/externos-depuracion/reparar-compromisos`, {}),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
-    compromisosAbiertos: (excluirActaId, tipoActa) => {
+    compromisosAbiertos: (excluirActaId, tipoActa, convocadoIds) => {
       const q = new URLSearchParams()
       if (excluirActaId != null && excluirActaId !== '') q.set('excluir_acta_id', String(excluirActaId))
       if (tipoActa) q.set('tipo_acta', String(tipoActa))
+      const ids = Array.isArray(convocadoIds)
+        ? convocadoIds.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)
+        : []
+      if (ids.length) q.set('convocado_ids', ids.join(','))
       const qs = q.toString()
       return get(`/seguimiento/${cid}/compromisos-abiertos${qs ? `?${qs}` : ''}`)
     },

@@ -2196,11 +2196,121 @@ def get_acta(
     return acta
 
 
+def _plan_ids_asignados(item: dict) -> Set[int]:
+    """IDs de asignados de un ítem (plan o compromiso), desde asignaciones o legacy."""
+    libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+    raw = libres.get("asignaciones")
+    ids: Set[int] = set()
+    if isinstance(raw, list):
+        for a in raw:
+            if not isinstance(a, dict):
+                continue
+            try:
+                uid = int(a.get("usuario_id") or a.get("id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            if uid > 0:
+                ids.add(uid)
+    if ids:
+        return ids
+    try:
+        aid = int(item.get("asignado_a_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    return {aid} if aid > 0 else set()
+
+
+def _enrich_plan_fields_en_compromiso(item: dict) -> dict:
+    """Aplana campos del blob plan para UI/PDF de compromisos abiertos."""
+    if str(item.get("origen") or "") != "plan_actividad":
+        return item
+    libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+    plan = libres.get("plan") if isinstance(libres.get("plan"), dict) else {}
+    out = dict(item)
+    out["grupo_id"] = plan.get("grupo_id") or out.get("grupo_id")
+    out["grupo_nombre"] = plan.get("grupo_nombre") or out.get("grupo_nombre")
+    out["prioridad"] = plan.get("prioridad") if plan.get("prioridad") is not None else out.get("prioridad")
+    out["fecha_inicio"] = plan.get("fecha_inicio") or out.get("fecha_inicio")
+    out["fecha_fin"] = plan.get("fecha_fin") or out.get("fecha_vencimiento")
+    out["es_plan_actividad"] = True
+    return out
+
+
+def ids_convocados_acta(sb, acta_id: int) -> Set[int]:
+    """Usuarios convocados de un acta: elaborador + asistentes registrados + expositores OD."""
+    ids: Set[int] = set()
+    try:
+        aid = int(acta_id)
+    except (TypeError, ValueError):
+        return ids
+    try:
+        rows = (
+            sb.table("seguimiento_acta")
+            .select("id, elaborador_id, orden_del_dia")
+            .eq("id", aid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        rows = []
+    if rows:
+        try:
+            elab = int(rows[0].get("elaborador_id") or 0)
+        except (TypeError, ValueError):
+            elab = 0
+        if elab > 0:
+            ids.add(elab)
+        orden = rows[0].get("orden_del_dia")
+        try:
+            if isinstance(orden, str):
+                import json as _json
+                orden = _json.loads(orden)
+        except Exception:
+            orden = None
+        if isinstance(orden, dict):
+            orden = orden.get("items") or orden.get("orden") or []
+        if isinstance(orden, list):
+            for it in orden:
+                if not isinstance(it, dict):
+                    continue
+                for key in ("expositor_usuario_id", "expositor_id"):
+                    try:
+                        xid = int(it.get(key) or 0)
+                    except (TypeError, ValueError):
+                        xid = 0
+                    if xid > 0:
+                        ids.add(xid)
+    try:
+        asis = (
+            sb.table("seguimiento_acta_asistente")
+            .select("usuario_id")
+            .eq("acta_id", aid)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        asis = []
+    for a in asis:
+        try:
+            uid = int(a.get("usuario_id") or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        if uid > 0:
+            ids.add(uid)
+    return ids
+
+
 def compromisos_abiertos_contrato(
     sb,
     contrato_id: int,
     excluir_acta_id: Optional[int] = None,
     tipo_acta: Optional[str] = None,
+    *,
+    incluir_plan_pendientes: bool = False,
+    convocado_ids: Optional[List[int]] = None,
 ) -> List[dict]:
     """Compromisos abiertos del contrato, opcionalmente filtrados por tipo de acta origen.
 
@@ -2212,10 +2322,15 @@ def compromisos_abiertos_contrato(
     *anteriores* (menor ``consecutivo``; desempate por ``fecha_reunion``).
     Así un compromiso del acta N es visible desde N+1 en adelante, nunca en
     actas anteriores a su creación ni en la propia N (esa lectura es de previos).
+
+    Plan de actividades:
+    - Con ``acta_id``: mismo criterio cronológico/tipo que un compromiso de acta.
+    - Sin ``acta_id`` (calendario / Vista Equipo): solo si ``incluir_plan_pendientes``
+      (quien tiene permiso Plan) y el asignado está entre los convocados.
+      No altera actas de contratos sin permiso Plan.
     """
     # Incluye cumplido/cancelado: el estado de gestión es informativo.
     # Solo se excluyen los archivados vía botón «marcar cumplido» (campos_libres.archivado_revision).
-    # plan_actividad vinculado a acta cuenta como compromiso del acta.
     q = (
         sb.table("seguimiento_item")
         .select("*")
@@ -2228,11 +2343,18 @@ def compromisos_abiertos_contrato(
         .order("fecha_vencimiento")
     )
     rows = q.execute().data or []
-    # Plan sin vínculo a acta no entra en el tab de compromisos abiertos
-    rows = [
-        r for r in rows
-        if r.get("origen") != "plan_actividad" or r.get("acta_id")
-    ]
+
+    convocados: Set[int] = set()
+    if incluir_plan_pendientes:
+        for x in convocado_ids or []:
+            try:
+                n = int(x)
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                convocados.add(n)
+        if not convocados and excluir_acta_id is not None:
+            convocados = ids_convocados_acta(sb, int(excluir_acta_id))
 
     ref_consecutivo: Optional[int] = None
     ref_fecha: Optional[str] = None
@@ -2297,6 +2419,27 @@ def compromisos_abiertos_contrato(
         libres = r.get("campos_libres") if isinstance(r.get("campos_libres"), dict) else {}
         if libres.get("archivado_revision") is True or libres.get("archivado_revision") == "true":
             continue
+
+        es_plan = str(r.get("origen") or "") == "plan_actividad"
+        plan_sin_acta = es_plan and not r.get("acta_id")
+
+        if plan_sin_acta:
+            if not incluir_plan_pendientes:
+                continue
+            # Sin convocados conocidos (acta nueva sin asistentes): mostrar todos
+            # los plan pendientes del contrato a quien tiene permiso Plan.
+            if convocados and not (_plan_ids_asignados(r) & convocados):
+                continue
+            r = _enrich_plan_fields_en_compromiso(r)
+            r["acta_consecutivo"] = None
+            r["acta_fecha"] = None
+            r["acta_numero"] = "Plan de actividades"
+            r["acta_tipo"] = None
+            r["acta_elaborador_id"] = None
+            r["acta_elaborador_nombre"] = None
+            out.append(r)
+            continue
+
         a = actas_map.get(int(r["acta_id"])) if r.get("acta_id") else None
         origen_tipo_k = norm_tipo_key((a or {}).get("tipo_acta") or "interna")
         if want_tipo_k and origen_tipo_k != want_tipo_k:
@@ -2308,6 +2451,8 @@ def compromisos_abiertos_contrato(
         elif excluir_acta_id is not None and not a:
             # Sin acta origen resoluble: no mostrar (evita filtraciones).
             continue
+        if es_plan:
+            r = _enrich_plan_fields_en_compromiso(r)
         r["acta_consecutivo"] = a.get("consecutivo") if a else None
         r["acta_fecha"] = a.get("fecha_reunion") if a else None
         r["acta_numero"] = f"Acta Nº {a['consecutivo']}" if a and a.get("consecutivo") is not None else None
@@ -6715,11 +6860,22 @@ def generar_preview_pdf_acta(
 
     previos = []
     try:
+        incluir_plan = False
+        try:
+            from plan_actividades_permissions import tiene_permiso_plan_actividades
+
+            incluir_plan = bool(
+                tiene_permiso_plan_actividades(current_user, "ver", int(contrato_id))
+            ) if current_user else False
+        except Exception:
+            incluir_plan = False
         previos = compromisos_abiertos_contrato(
             sb,
             int(contrato_id),
             excluir_acta_id=int(acta_id),
             tipo_acta=acta.get("tipo_acta") or "interna",
+            incluir_plan_pendientes=incluir_plan,
+            convocado_ids=list(ids_convocados_acta(sb, int(acta_id))) or None,
         )
     except Exception as exc:
         _log.warning("compromisos abiertos pdf acta=%s: %s", acta_id, exc)

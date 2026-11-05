@@ -798,10 +798,12 @@ def generar_pdf_acta(
             )
         rows = "".join(
             f"<tr>"
-            f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};'>{_esc(c.get('titulo'))}</td>"
+            f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};'>"
+            f"{_esc(('🗓️ ' if str(c.get('origen') or '') == 'plan_actividad' else '') + (c.get('titulo') or ''))}"
+            f"</td>"
             f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};'>{_esc(c.get('asignado_a_nombre'))}</td>"
             f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};'>"
-            f"{fmt_fecha_bogota(c.get('fecha_vencimiento'))}</td>"
+            f"{fmt_fecha_bogota(c.get('fecha_fin') or c.get('fecha_vencimiento'))}</td>"
             f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};'>{_esc(c.get('estado_gestion') or '')}</td>"
             f"</tr>"
             for c in rows_src

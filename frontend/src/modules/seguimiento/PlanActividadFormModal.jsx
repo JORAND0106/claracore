@@ -13,6 +13,7 @@ import {
 } from '../../components/ccFichaModalTheme'
 import TemaRichEditor from './TemaRichEditor'
 import UserSearchSelect from './UserSearchSelect'
+import PlanDepartamentoAutocomplete from './PlanDepartamentoAutocomplete'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { isRichTextEmpty } from './richTextUtils'
 import { useClaraViewport } from '../../useClaraViewport'
@@ -189,9 +190,11 @@ export default function PlanActividadFormModal({
   const ficha = useMemo(() => usuariosFichaTheme(themeMode, t), [themeMode, t])
   const editando = Boolean(actividad?.id)
 
-  const [grupoModo, setGrupoModo] = useState('existente')
   const [grupoId, setGrupoId] = useState(actividad?.grupo_id || '')
-  const [grupoNuevo, setGrupoNuevo] = useState('')
+  const [grupoNombre, setGrupoNombre] = useState(actividad?.grupo_nombre || '')
+  const [grupoEsOtro, setGrupoEsOtro] = useState(
+    Boolean(actividad?.grupo_nombre) && !actividad?.grupo_id,
+  )
   const [titulo, setTitulo] = useState(actividad?.titulo || '')
   const [descripcion, setDescripcion] = useState(actividad?.descripcion || '')
   const [comentario, setComentario] = useState(actividad?.comentario_comite || '')
@@ -234,11 +237,6 @@ export default function PlanActividadFormModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [solapes, setSolapes] = useState(null)
-
-  useEffect(() => {
-    if (!grupos.length) return
-    if (!grupoId && grupos[0]?.id) setGrupoId(grupos[0].id)
-  }, [grupos, grupoId])
 
   const grupoOptions = useMemo(
     () => (Array.isArray(grupos) ? grupos : []),
@@ -315,12 +313,13 @@ export default function PlanActividadFormModal({
       adjuntos_descripcion: adjDesc,
       adjuntos_comentario: adjCom,
     }
-    if (grupoModo === 'otro') {
-      payload.grupo_nombre = grupoNuevo.trim()
+    if (grupoEsOtro || !grupoId) {
+      payload.grupo_nombre = String(grupoNombre || '').trim()
     } else {
       payload.grupo_id = Number(grupoId) || undefined
       const g = grupoOptions.find((x) => Number(x.id) === Number(grupoId))
       if (g) payload.grupo_nombre = g.nombre
+      else if (grupoNombre) payload.grupo_nombre = String(grupoNombre).trim()
     }
     if (actaId) payload.acta_id = Number(actaId)
     if (ideaId) payload.idea_id = Number(ideaId)
@@ -333,12 +332,8 @@ export default function PlanActividadFormModal({
       setError('Indique el título de la actividad.')
       return
     }
-    if (grupoModo === 'otro' && !grupoNuevo.trim()) {
-      setError('Escriba el nombre del nuevo departamento.')
-      return
-    }
-    if (grupoModo !== 'otro' && !grupoId && !grupoOptions.length) {
-      setError('Cree un departamento o elija «Otro».')
+    if (!(grupoId || String(grupoNombre || '').trim())) {
+      setError('Indique el departamento (elija uno o «Otro» para crear uno nuevo).')
       return
     }
     if (!asignados.length) {
@@ -492,37 +487,25 @@ export default function PlanActividadFormModal({
               <div style={{ ...grid2, marginBottom: 0 }}>
                 <div>
                   <label style={label}>Departamento</label>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: ficha.text, fontSize: 'var(--cc-sm)' }}>
-                      <input type="radio" checked={grupoModo === 'existente'} onChange={() => setGrupoModo('existente')} />
-                      Existente
-                    </label>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: ficha.text, fontSize: 'var(--cc-sm)' }}>
-                      <input type="radio" checked={grupoModo === 'otro'} onChange={() => setGrupoModo('otro')} />
-                      Otro
-                    </label>
-                  </div>
-                  {grupoModo === 'otro' ? (
-                    <input
-                      style={fieldInput}
-                      value={grupoNuevo}
-                      onChange={(e) => setGrupoNuevo(e.target.value)}
-                      placeholder="Nombre del nuevo departamento"
-                      list="plan-grupos-sugeridos"
-                    />
-                  ) : (
-                    <select style={fieldInput} value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>
-                      <option value="">Seleccione…</option>
-                      {grupoOptions.map((g) => (
-                        <option key={g.id} value={g.id}>{g.nombre}</option>
-                      ))}
-                    </select>
-                  )}
-                  <datalist id="plan-grupos-sugeridos">
-                    {grupoOptions.map((g) => (
-                      <option key={g.id} value={g.nombre} />
-                    ))}
-                  </datalist>
+                  <PlanDepartamentoAutocomplete
+                    t={{
+                      ...t,
+                      bgCard: ficha.inputBg || ficha.cardBg || t.bgCard,
+                      border: ficha.border || t.border,
+                      text: ficha.text || t.text,
+                      primary: ficha.primary || t.primary,
+                      shadow: t.shadow,
+                    }}
+                    grupos={grupoOptions}
+                    grupoId={grupoId}
+                    grupoNombre={grupoNombre}
+                    inputStyle={fieldInput}
+                    onChange={({ grupoId: id, grupoNombre: nombre, esOtro }) => {
+                      setGrupoEsOtro(Boolean(esOtro))
+                      setGrupoId(esOtro ? '' : (id || ''))
+                      setGrupoNombre(nombre || '')
+                    }}
+                  />
                 </div>
                 <div>
                   <label style={label}>Actividad</label>
