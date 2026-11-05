@@ -3905,6 +3905,26 @@ def _enrich_entrada(
 
 # ── CRUD entradas ─────────────────────────────────────────────────────────────
 
+def _entrada_resumen_calendario(row: dict) -> dict:
+    """Campos mínimos para pintar bitácora en el calendario (sin usos ni media)."""
+    out = dict(row)
+    out["tramo"] = _normalize_tramo(out.get("tramo"))
+    ev_raw = out.get("eventos")
+    if isinstance(ev_raw, str):
+        try:
+            ev_raw = json.loads(ev_raw)
+        except Exception:
+            ev_raw = []
+    if not isinstance(ev_raw, list):
+        ev_raw = []
+    eventos_norm = [b for b in ev_raw if isinstance(b, dict)]
+    out["eventos"] = eventos_norm
+    out["eventos_count"] = len(eventos_norm)
+    out["puede_autocerrar"] = _debe_autocerrar(out)
+    out["es_atrasado"] = bool(es_reporte_atrasado(out))
+    return out
+
+
 def list_entradas(
     sb,
     contrato_id: int,
@@ -3913,6 +3933,7 @@ def list_entradas(
     fecha_hasta: Optional[str] = None,
     tipo: Optional[str] = None,
     q: Optional[str] = None,
+    para_calendario: bool = False,
 ) -> List[dict]:
     """
     Lista entradas del contrato. Visibilidad: cualquier usuario con permiso
@@ -3924,6 +3945,9 @@ def list_entradas(
       (si el esquema aún no tiene consolidado_en_diario_id, todos los tipo=evento).
     - tipo=diario: solo diarios.
     - tipo=evento: solo eventos independientes (no consolidados).
+
+    para_calendario=True: respuesta ligera (sin usos/media) para no timeoutar
+    el GET del calendario cuando hay muchos diarios en el rango.
     """
     t0 = time.perf_counter()
     schema = bitacora_schema_eventos_disponible(sb)
@@ -3964,23 +3988,34 @@ def list_entradas(
     elif tipo == "diario":
         rows = [r for r in rows if str(r.get("tipo") or "") == "diario"]
 
-    # Autocierre lazy + batch de usos (evita N+1 round-trips a PostgREST)
+    # Autocierre lazy. En modo calendario no cargamos usos (N+1 / payload).
     closed_rows = []
     for row in rows:
-        closed_rows.append(asegurar_autocierre_entrada(sb, row))
-    usos_map = _list_usos_batch(
-        sb,
-        [int(r["id"]) for r in closed_rows if r.get("id") is not None],
-    )
+        try:
+            closed_rows.append(asegurar_autocierre_entrada(sb, row))
+        except Exception as exc:
+            # No tumbar el listado del calendario por un cierre puntual.
+            _log.warning("bitacora.list autocierre id=%s: %s", row.get("id"), exc)
+            closed_rows.append(row)
+
+    usos_map: Dict[int, List[dict]] = {}
+    if not para_calendario:
+        usos_map = _list_usos_batch(
+            sb,
+            [int(r["id"]) for r in closed_rows if r.get("id") is not None],
+        )
 
     out = []
     for row in closed_rows:
         eid = int(row["id"]) if row.get("id") is not None else None
-        enriched = _enrich_entrada(
-            sb,
-            row,
-            usos=usos_map.get(eid, []) if eid is not None else [],
-        )
+        if para_calendario:
+            enriched = _entrada_resumen_calendario(row)
+        else:
+            enriched = _enrich_entrada(
+                sb,
+                row,
+                usos=usos_map.get(eid, []) if eid is not None else [],
+            )
         if q:
             needle = str(q).strip().lower()
             eventos_blob = " ".join(
@@ -4000,8 +4035,8 @@ def list_entradas(
                 continue
         out.append(enriched)
     _log.info(
-        "bitacora.list contrato=%s rows=%s ms=%.1f",
-        contrato_id, len(out), (time.perf_counter() - t0) * 1000.0,
+        "bitacora.list contrato=%s rows=%s calendario=%s ms=%.1f",
+        contrato_id, len(out), bool(para_calendario), (time.perf_counter() - t0) * 1000.0,
     )
     return out
 

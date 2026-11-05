@@ -1315,15 +1315,40 @@ def route_compromisos_abiertos(
     contrato_id: int,
     excluir_acta_id: Optional[int] = Query(None),
     tipo_acta: Optional[str] = Query(None),
+    convocado_ids: Optional[str] = Query(
+        None,
+        description="IDs de convocados separados por coma (filtra plan pendientes)",
+    ),
     current_user=Depends(get_current_user),
 ):
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
+    incluir_plan = False
+    try:
+        from plan_actividades_permissions import tiene_permiso_plan_actividades
+
+        incluir_plan = bool(
+            tiene_permiso_plan_actividades(current_user, "ver", contrato_id)
+        )
+    except Exception:
+        incluir_plan = False
+    ids: list = []
+    if convocado_ids:
+        for part in str(convocado_ids).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids.append(int(part))
+            except (TypeError, ValueError):
+                continue
     return compromisos_abiertos_contrato(
         supabase,
         contrato_id,
         excluir_acta_id=excluir_acta_id,
         tipo_acta=tipo_acta,
+        incluir_plan_pendientes=incluir_plan,
+        convocado_ids=ids or None,
     )
 
 
@@ -1705,6 +1730,10 @@ def route_list_bitacora(
     fecha_hasta: Optional[str] = Query(None),
     tipo: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
+    para_calendario: bool = Query(
+        False,
+        description="Respuesta ligera para el calendario (sin usos/media)",
+    ),
     current_user=Depends(get_current_user),
 ):
     require_permiso_bitacora(current_user, "ver", contrato_id)
@@ -1717,6 +1746,7 @@ def route_list_bitacora(
             fecha_hasta=fecha_hasta,
             tipo=tipo,
             q=q,
+            para_calendario=para_calendario,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

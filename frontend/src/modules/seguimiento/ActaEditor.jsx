@@ -10,6 +10,7 @@ import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaEditorModal from './TemaEditorModal'
 import PlanActividadesVista from './PlanActividadesVista'
+import PlanActividadDetalleModal from './PlanActividadDetalleModal'
 import { accesoPlanActividades } from './planActividadesPermisos'
 import { createGrabacionSessionController } from './actaGrabacionSession'
 import { formatMinutosCupo } from './actaGrabacionHelpers'
@@ -423,8 +424,10 @@ export default function ActaEditor({
   const [grabacionSesionId, setGrabacionSesionId] = useState(null)
   const [grabacionLiveInfo, setGrabacionLiveInfo] = useState(null)
   const [actualizandoTemas, setActualizandoTemas] = useState(false)
-  /** Popup Plan de actividades del expositor (solo su ambiente). */
-  const [planPopup, setPlanPopup] = useState(null) // { ideaIdx, ideaId } | null
+  /** Popup Plan de actividades (expositor edita / moderador lee). */
+  const [planPopup, setPlanPopup] = useState(null) // { ideaIdx, ideaId, actaId, soloLectura }
+  /** Detalle de una actividad del Plan abierta desde compromisos anteriores. */
+  const [planDetalleId, setPlanDetalleId] = useState(null)
   /** Evita armar el checkpoint más de una vez por sesión. */
   const temasCheckpointArmingRef = useRef(false)
   const grabacionCtrlRef = useRef(null)
@@ -434,6 +437,25 @@ export default function ActaEditor({
     () => accesoPlanActividades(usuario, cidPlan),
     [usuario, cidPlan],
   )
+  /** Convocados del acta (asistentes + expositores + elaborador) para filtrar Plan pendientes. */
+  const convocadoIds = useMemo(() => {
+    const ids = new Set()
+    const push = (v) => {
+      const n = Number(v)
+      if (Number.isFinite(n) && n > 0) ids.add(n)
+    }
+    push(form.elaborador_id)
+    for (const a of form.asistentes || []) {
+      push(a.usuario_id || a.id)
+    }
+    for (const it of form.orden_del_dia || []) {
+      push(it.expositor_usuario_id || it.expositor_id)
+    }
+    for (const idea of form.ideas || []) {
+      push(idea.expositor_usuario_id || idea.expositor_id)
+    }
+    return [...ids]
+  }, [form.elaborador_id, form.asistentes, form.orden_del_dia, form.ideas])
   const esElaborador = form.elaborador_id != null
     && Number(form.elaborador_id) === Number(usuario?.id)
   const sellada = form.estado === 'realizada' || form.estado === 'firmada'
@@ -813,7 +835,18 @@ export default function ActaEditor({
           hydratedActaIdRef.current = a.id
           try {
             const tipo = a.tipo_acta || 'interna'
-            const abiertos = await client.compromisosAbiertos(actaId, tipo)
+            // Backend también resuelve convocados desde el acta; pasamos ids del payload cargado.
+            const idsLoad = []
+            const pushId = (v) => {
+              const n = Number(v)
+              if (Number.isFinite(n) && n > 0) idsLoad.push(n)
+            }
+            pushId(a.elaborador_id)
+            for (const asis of a.asistentes || []) pushId(asis.usuario_id || asis.id)
+            for (const it of (Array.isArray(a.orden_del_dia) ? a.orden_del_dia : [])) {
+              pushId(it.expositor_usuario_id || it.expositor_id)
+            }
+            const abiertos = await client.compromisosAbiertos(actaId, tipo, idsLoad)
             if (!cancelled) setPrevios(abiertos || [])
           } catch (e) {
             if (!cancelled && !isAbortLike(e)) {
@@ -904,14 +937,18 @@ export default function ActaEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, localActaId, permisos?.editar, permisos?.crear])
 
-  // Recargar compromisos previos al cambiar tipo (interna ↔ externa no se mezclan).
+  // Recargar compromisos previos al cambiar tipo o convocados (Plan pendientes por asistente).
   useEffect(() => {
     if (loading) return
     const tipo = form.tipo_acta || 'interna'
     let cancelled = false
     ;(async () => {
       try {
-        const abiertos = await apiRef.current.compromisosAbiertos(localActaId || undefined, tipo)
+        const abiertos = await apiRef.current.compromisosAbiertos(
+          localActaId || undefined,
+          tipo,
+          convocadoIds,
+        )
         if (!cancelled) setPrevios(abiertos || [])
       } catch (e) {
         if (!cancelled && !isAbortLike(e)) {
@@ -920,7 +957,7 @@ export default function ActaEditor({
       }
     })()
     return () => { cancelled = true }
-  }, [form.tipo_acta, localActaId, loading])
+  }, [form.tipo_acta, localActaId, loading, convocadoIds])
 
   // Al cambiar el tipo, mostrar u ocultar Gestión de obra de inmediato (sin borrar datos).
   useEffect(() => {
@@ -2166,12 +2203,23 @@ export default function ActaEditor({
           grabacionActiva={grabacionPhase === 'recording'}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
           puedeAbrirPlanActividades={Boolean(permisosPlan.ver)}
-          onAbrirPlanActividades={async (idx, idea) => {
-            // Solo el expositor del tema (o Dev) abre SU plan; nadie escribe en el de otro.
+          esModeradorActa={Boolean(esElaborador)}
+          actaAbiertaParaDictado={Boolean(esElaborador && !sellada)}
+          usuarioId={usuario?.id || usuario?.sub}
+          esDesarrollador={esDev}
+          onAbrirPlanActividades={async (idx, idea, opts = {}) => {
+            // Expositor/Dev: editan. Moderador: dicta si acta abierta; si no, solo lectura.
             const expId = Number(idea?.expositor_usuario_id || idea?.expositor_id || 0)
             const uid = Number(usuario?.id || usuario?.sub || 0)
-            if (!esDev && expId > 0 && uid > 0 && expId !== uid) {
-              setError('Solo puede abrir el Plan de actividades de los temas donde usted es el expositor.')
+            const esExpositor = esDev || (expId > 0 && uid > 0 && expId === uid)
+            const modoDictado = Boolean(opts.modoDictado) || (!esExpositor && esElaborador && !sellada)
+            const soloLectura = Boolean(opts.soloLectura) || (!esExpositor && esElaborador && sellada)
+            if (!esExpositor && !esElaborador) {
+              setError('Solo el expositor del tema o el moderador del acta pueden abrir este Plan.')
+              return
+            }
+            if (modoDictado && !(expId > 0)) {
+              setError('Asigne un expositor al tema antes de registrar actividades en su Plan.')
               return
             }
             let ideaId = idea?.id
@@ -2190,6 +2238,13 @@ export default function ActaEditor({
               ideaIdx: idx,
               ideaId: ideaId || null,
               actaId: actaForPlan || null,
+              soloLectura: soloLectura && !modoDictado,
+              modoDictado,
+              expositorId: expId || null,
+              expositorNombre: idea?.expositor_nombre || '',
+              dictadoSessionId: modoDictado
+                ? `d-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+                : null,
             })
           }}
           puedeActualizarTemas={
@@ -2327,9 +2382,15 @@ export default function ActaEditor({
           emptyMessage="Aún no hay compromisos en esta acta. Genere uno desde un tema o con «+ Agregar compromiso»."
           highlightId={highlightCompromisoId}
           showActaOrigen={false}
+          showOrigenBadge
           permitirArchivar={false}
           actaElaboradorId={form.elaborador_id}
           onEditCompromiso={abrirEditarCompromiso}
+          onOpenDetalle={(item) => {
+            if (String(item?.origen || '') === 'plan_actividad') {
+              setPlanDetalleId(item.id)
+            }
+          }}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -2352,8 +2413,11 @@ export default function ActaEditor({
           Compromisos abiertos de actas «{labelTipoActa(form.tipo_acta, tiposActaCustom)}» anteriores
         </h3>
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Exclusivamente compromisos arrastrados de actas anteriores del mismo tipo.
-          Los compromisos de esta acta se gestionan en «Temas y Compromisos».
+          Compromisos de actas anteriores del mismo tipo
+          {permisosPlan.ver
+            ? ' y actividades pendientes del Plan de cada convocado'
+            : ''}.
+          Los de esta acta se gestionan en «Temas y Compromisos».
           {secuencialActivo
             ? ' No podrá avanzar mientras exista al menos un compromiso en estado «Abierto»; actualice su estado y guarde para habilitar Temas.'
             : ''}
@@ -2364,8 +2428,15 @@ export default function ActaEditor({
           items={previos}
           emptyMessage={`No hay compromisos abiertos previos de actas «${labelTipoActa(form.tipo_acta, tiposActaCustom)}».`}
           showActaOrigen
+          showOrigenBadge
           permitirArchivar
+          agruparPorAsignado
           onEditCompromiso={abrirEditarCompromiso}
+          onOpenDetalle={(item) => {
+            if (String(item?.origen || '') === 'plan_actividad') {
+              setPlanDetalleId(item.id)
+            }
+          }}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -2375,6 +2446,7 @@ export default function ActaEditor({
               const abiertos = await api.compromisosAbiertos(
                 localActaId || undefined,
                 form.tipo_acta || 'interna',
+                convocadoIds,
               )
               setPrevios(abiertos || [])
             } catch { /* ignore */ }
@@ -2877,6 +2949,7 @@ export default function ActaEditor({
                 const abiertos = await api.compromisosAbiertos(
                   localActaId || undefined,
                   form.tipo_acta || 'interna',
+                  convocadoIds,
                 )
                 setPrevios(abiertos || [])
               } catch { /* ignore */ }
@@ -2912,6 +2985,7 @@ export default function ActaEditor({
               const abiertos = await api.compromisosAbiertos(
                 localActaId || undefined,
                 form.tipo_acta || 'interna',
+                convocadoIds,
               )
               setPrevios(abiertos || [])
             } catch { /* ignore */ }
@@ -2928,12 +3002,65 @@ export default function ActaEditor({
           usuario={usuario}
           permisos={permisosPlan}
           modo="popup"
-          forzarPropio
+          forzarPropio={!planPopup.soloLectura && !planPopup.modoDictado}
+          soloLectura={Boolean(planPopup.soloLectura)}
+          modoDictado={Boolean(planPopup.modoDictado)}
+          expositorId={planPopup.expositorId || null}
+          expositorNombre={planPopup.expositorNombre || ''}
+          dictadoSessionId={planPopup.dictadoSessionId || null}
           actaId={planPopup.actaId || localActaId}
           ideaId={planPopup.ideaId}
           onClose={async () => {
+            const session = planPopup.dictadoSessionId
+            const exp = planPopup.expositorId
+            const popupActaId = planPopup.actaId || localActaId
             setPlanPopup(null)
-            const aid = localActaId || planPopup.actaId
+            if (session && exp && api.flushPlanDictado) {
+              try {
+                await api.flushPlanDictado({
+                  dictado_session_id: session,
+                  expositor_id: exp,
+                  acta_id: popupActaId,
+                })
+              } catch { /* ignore */ }
+            }
+            const aid = localActaId || popupActaId
+            if (aid) {
+              try {
+                const a = await api.getActa(aid)
+                setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
+              } catch { /* ignore */ }
+            }
+            try {
+              const abiertos = await api.compromisosAbiertos(
+                localActaId || undefined,
+                form.tipo_acta || 'interna',
+                convocadoIds,
+              )
+              setPrevios(abiertos || [])
+            } catch { /* ignore */ }
+          }}
+        />
+      )}
+
+      {planDetalleId != null && (
+        <PlanActividadDetalleModal
+          t={t}
+          api={api}
+          usuario={usuario}
+          permisos={permisosPlan}
+          itemId={planDetalleId}
+          onClose={() => setPlanDetalleId(null)}
+          onChanged={async () => {
+            try {
+              const abiertos = await api.compromisosAbiertos(
+                localActaId || undefined,
+                form.tipo_acta || 'interna',
+                convocadoIds,
+              )
+              setPrevios(abiertos || [])
+            } catch { /* ignore */ }
+            const aid = localActaId
             if (!aid) return
             try {
               const a = await api.getActa(aid)

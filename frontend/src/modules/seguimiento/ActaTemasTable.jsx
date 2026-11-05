@@ -115,13 +115,49 @@ export default function ActaTemasTable({
   onCerrarTema,
   onAgregarTema,
   grabacionActiva = false,
-  /** Si true, muestra botón Plan de actividades del expositor (solo su ambiente). */
+  /** Si true, muestra botón Plan de actividades (expositor / moderador / Dev). */
   puedeAbrirPlanActividades = false,
+  /** Moderador del acta (elaborador). */
+  esModeradorActa = false,
+  /** Acta en borrador (no sellada): el moderador puede dictar el Plan del expositor. */
+  actaAbiertaParaDictado = false,
   onAbrirPlanActividades = null,
+  usuarioId = null,
+  esDesarrollador = false,
 }) {
   const editaIdea = (idea) => {
     if (typeof canEditarIdea === 'function') return !!canEditarIdea(idea)
     return !soloLectura
+  }
+  const esExpositorDelTema = (idea) => {
+    if (esDesarrollador) return true
+    const exp = Number(idea?.expositor_usuario_id ?? idea?.expositor_id || 0)
+    const uid = Number(usuarioId || 0)
+    return exp > 0 && uid > 0 && exp === uid
+  }
+  /**
+   * Quién ve el botón y en qué modo.
+   * Moderador con acta abierta: puede registrar (dictado).
+   * Moderador con acta cerrada: solo lectura.
+   */
+  const planBtnMeta = (idea) => {
+    if (!puedeAbrirPlanActividades || typeof onAbrirPlanActividades !== 'function') {
+      return null
+    }
+    if (esDesarrollador || esExpositorDelTema(idea)) {
+      return { soloLectura: false, modoDictado: false, title: 'Plan de actividades' }
+    }
+    if (esModeradorActa) {
+      if (actaAbiertaParaDictado) {
+        return {
+          soloLectura: false,
+          modoDictado: true,
+          title: 'Plan de actividades',
+        }
+      }
+      return { soloLectura: true, modoDictado: false, title: 'Plan de actividades · lectura' }
+    }
+    return null
   }
   const puedeAbrirCerrar = puedeAbrirCerrarTema == null ? !soloLectura : !!puedeAbrirCerrarTema
   const tramosList = Array.isArray(tramos) ? tramos : []
@@ -453,18 +489,27 @@ export default function ActaTemasTable({
                             <IconPlus />
                           </button>
                         )}
-                        {puedeAbrirPlanActividades && puedeEsta && typeof onAbrirPlanActividades === 'function' && (
-                          <button
-                            type="button"
-                            style={iconBtn(t)}
-                            title="Abrir su Plan de actividades (solo su espacio). Las actividades creadas aquí quedan vinculadas a este tema del acta."
-                            aria-label="Plan de actividades"
-                            disabled={saving}
-                            onClick={() => onAbrirPlanActividades(idx, idea)}
-                          >
-                            <IconPlan />
-                          </button>
-                        )}
+                        {(() => {
+                          const meta = planBtnMeta(idea)
+                          if (!meta) return null
+                          return (
+                            <button
+                              type="button"
+                              style={iconBtn(t)}
+                              title={meta.title}
+                              data-cc-tooltip={meta.title}
+                              data-cc-tooltip-variant="short"
+                              aria-label={meta.title}
+                              disabled={saving}
+                              onClick={() => onAbrirPlanActividades(idx, idea, {
+                                soloLectura: meta.soloLectura,
+                                modoDictado: meta.modoDictado,
+                              })}
+                            >
+                              <IconPlan />
+                            </button>
+                          )
+                        })()}
                       </div>
                     </td>
                   </tr>

@@ -463,6 +463,27 @@ def _normalizar_asignados(sb, contrato_id: int, asignados: List[Any]) -> List[di
     return out
 
 
+def _norm_adjuntos(raw) -> List[dict]:
+    out = []
+    for a in raw or []:
+        if not isinstance(a, dict):
+            continue
+        data = a.get("data_uri") or a.get("url") or a.get("src")
+        if not data and not a.get("blob_path"):
+            continue
+        out.append({
+            "nombre": str(a.get("nombre") or "esquema.png")[:200],
+            "data_uri": a.get("data_uri"),
+            "url": a.get("url") or a.get("src"),
+            "blob_path": a.get("blob_path"),
+            "mime_type": a.get("mime_type") or "image/png",
+            "kind": a.get("kind") or "esquema",
+            "campo": a.get("campo"),
+            "created_at": a.get("created_at"),
+        })
+    return out[:16]
+
+
 def _build_campos_plan(
     *,
     grupo: dict,
@@ -474,6 +495,9 @@ def _build_campos_plan(
     periodicidad_hasta: Optional[date],
     asignaciones: List[dict],
     acta_tema_vinculo: Optional[dict] = None,
+    adjuntos_descripcion: Optional[List[dict]] = None,
+    adjuntos_comentario: Optional[List[dict]] = None,
+    registrado_por: Optional[dict] = None,
 ) -> dict:
     plan = {
         "grupo_id": int(grupo["id"]),
@@ -484,11 +508,17 @@ def _build_campos_plan(
         "fecha_fin": fecha_fin.isoformat() if fecha_fin else None,
         "periodicidad": periodicidad,
         "periodicidad_hasta": periodicidad_hasta.isoformat() if periodicidad_hasta else None,
+        "adjuntos_descripcion": _norm_adjuntos(adjuntos_descripcion),
+        "adjuntos_comentario": _norm_adjuntos(adjuntos_comentario),
     }
     if acta_tema_vinculo:
         plan["desde_acta"] = True
         plan["acta_id"] = acta_tema_vinculo.get("acta_id")
         plan["idea_id"] = acta_tema_vinculo.get("idea_id")
+    if registrado_por and registrado_por.get("id"):
+        plan["dictado"] = True
+        plan["registrado_por_id"] = int(registrado_por["id"])
+        plan["registrado_por_nombre"] = str(registrado_por.get("nombre") or "")[:200]
     return {
         "plan": plan,
         "asignaciones": asignaciones,
@@ -527,6 +557,61 @@ def _proximo_consecutivo(sb, contrato_id: int) -> int:
         return 1
 
 
+def _acta_id_de_item(item: dict) -> Optional[int]:
+    try:
+        aid = int(item.get("acta_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    if aid > 0:
+        return aid
+    plan = _plan_blob(item)
+    try:
+        aid = int(plan.get("acta_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    return aid if aid > 0 else None
+
+
+def _idea_id_de_item(item: dict) -> Optional[int]:
+    try:
+        iid = int(item.get("idea_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    if iid > 0:
+        return iid
+    plan = _plan_blob(item)
+    try:
+        iid = int(plan.get("idea_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    return iid if iid > 0 else None
+
+
+def _es_elaborador_acta_vinculada(sb, item: dict, user_id: int) -> bool:
+    """Moderador del acta (elaborador) puede leer el Plan vinculado a su acta."""
+    aid = _acta_id_de_item(item)
+    if not aid:
+        return False
+    try:
+        rows = (
+            sb.table("seguimiento_acta")
+            .select("id, elaborador_id")
+            .eq("id", int(aid))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return False
+    if not rows:
+        return False
+    try:
+        return int(rows[0].get("elaborador_id") or 0) == int(user_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def _puede_ver_item(sb, item: dict, user_id: int, current_user: dict) -> bool:
     if _es_desarrollador(current_user):
         return True
@@ -536,7 +621,10 @@ def _puede_ver_item(sb, item: dict, user_id: int, current_user: dict) -> bool:
         return True
     if int(item.get("solicitante_id") or 0) == int(user_id):
         return True
-    return int(user_id) in _ids_asignados(item)
+    if int(user_id) in _ids_asignados(item):
+        return True
+    # Lectura: elaborador/moderador del acta a la que está vinculada la actividad.
+    return _es_elaborador_acta_vinculada(sb, item, user_id)
 
 
 def _puede_comentar(sb, item: dict, user_id: int, current_user: dict) -> bool:
@@ -569,10 +657,28 @@ def _enrich_item(item: dict) -> dict:
     item["fecha_fin"] = plan.get("fecha_fin") or item.get("fecha_vencimiento")
     item["periodicidad"] = plan.get("periodicidad") or "ninguna"
     item["periodicidad_hasta"] = plan.get("periodicidad_hasta")
+    item["adjuntos_descripcion"] = _norm_adjuntos(plan.get("adjuntos_descripcion"))
+    item["adjuntos_comentario"] = _norm_adjuntos(plan.get("adjuntos_comentario"))
     item["ocurrencias"] = [
         {"fecha_inicio": a.isoformat(), "fecha_fin": b.isoformat()}
         for a, b in _item_intervalos(item)
     ]
+    try:
+        reg_id = int(plan.get("registrado_por_id") or 0)
+    except (TypeError, ValueError):
+        reg_id = 0
+    if reg_id > 0 or plan.get("dictado"):
+        item["dictado"] = True
+        item["registrado_por_id"] = reg_id or None
+        item["registrado_por_nombre"] = plan.get("registrado_por_nombre") or None
+    else:
+        item["dictado"] = False
+        item["registrado_por_id"] = None
+        item["registrado_por_nombre"] = None
+    if not item.get("acta_id") and plan.get("acta_id"):
+        item["acta_id"] = plan.get("acta_id")
+    if not item.get("idea_id") and plan.get("idea_id"):
+        item["idea_id"] = plan.get("idea_id")
     return item
 
 
@@ -585,19 +691,21 @@ def list_actividades(
     colaborador_id: Optional[int] = None,
     incluir_cerrados: bool = True,
     ver_todos: bool = False,
+    acta_id: Optional[int] = None,
+    idea_id: Optional[int] = None,
 ) -> List[dict]:
     try:
-        rows = (
+        q = (
             sb.table("seguimiento_item")
             .select("*")
             .eq("contrato_id", int(contrato_id))
             .eq("origen", ORIGEN)
-            .order("id")
-            .limit(2000)
-            .execute()
-            .data
-            or []
         )
+        if acta_id is not None:
+            q = q.eq("acta_id", int(acta_id))
+        if idea_id is not None:
+            q = q.eq("idea_id", int(idea_id))
+        rows = q.order("id").limit(2000).execute().data or []
     except Exception as exc:
         _log.exception("list_actividades query: %s", exc)
         raise ValueError(
@@ -608,6 +716,8 @@ def list_actividades(
     es_vista_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
         sb, user_id, current_user
     )
+    # Alcance acta/tema: el elaborador lee el plan del expositor (sin mutar).
+    alcance_acta = acta_id is not None or idea_id is not None
     out = []
     for r in rows:
         if not incluir_cerrados and r.get("estado_gestion") in ("cumplido", "cancelado"):
@@ -622,8 +732,9 @@ def list_actividades(
             }
             if cid not in ids:
                 continue
-        elif not ver_todos or not es_vista_amplia:
-            # Ambiente propio (gerencia/admin solo ven todos si ver_todos=true)
+        elif not alcance_acta and (not ver_todos or not es_vista_amplia):
+            # Ambiente propio (gerencia/admin solo ven todos si ver_todos=true).
+            # Con acta_id/idea_id se listan las del tema visibles al elaborador/expositor.
             if not (
                 int(r.get("created_by") or 0) == int(user_id)
                 or int(r.get("solicitante_id") or 0) == int(user_id)
@@ -758,6 +869,28 @@ def crear_actividad(
     if acta_id:
         vinculo = {"acta_id": acta_id, "idea_id": idea_id}
 
+    # Dictado: moderador registra a nombre del expositor del tema (acta abierta).
+    dictado = bool(data.get("dictado") or data.get("modo_dictado"))
+    registrado_por = None
+    created_by_final = int(user_id)
+    if dictado:
+        if not acta_id or not idea_id:
+            raise ValueError("El dictado del Plan requiere acta y tema.")
+        from plan_actividades_dictado import resolver_contexto_dictado
+
+        ctx = resolver_contexto_dictado(
+            sb, acta_id=acta_id, idea_id=idea_id, user_id=user_id,
+        )
+        created_by_final = int(ctx["expositor_id"])
+        registrado_por = {
+            "id": int(ctx["moderador_id"]),
+            "nombre": ctx["moderador_nombre"],
+        }
+        # Si no pidieron solicitante explícito, queda el expositor.
+        if data.get("solicitante_id") is None:
+            solicitante_id = created_by_final
+            solicitante_nombre = ctx["expositor_nombre"] or solicitante_nombre
+
     solapes = detectar_solapes(
         sb,
         contrato_id,
@@ -785,6 +918,9 @@ def crear_actividad(
         periodicidad_hasta=hasta,
         asignaciones=asignaciones,
         acta_tema_vinculo=vinculo,
+        adjuntos_descripcion=data.get("adjuntos_descripcion") or data.get("esquemas_descripcion"),
+        adjuntos_comentario=data.get("adjuntos_comentario") or data.get("esquemas_comentario"),
+        registrado_por=registrado_por,
     )
 
     nombres = ", ".join(a["nombre"] for a in asignaciones if a.get("nombre"))
@@ -795,7 +931,7 @@ def crear_actividad(
         "estado_gestion": "abierto",
         "asignado_a_id": asignaciones[0]["usuario_id"],
         "asignado_a_nombre": nombres[:500] or asignaciones[0].get("nombre"),
-        "created_by": int(user_id),
+        "created_by": created_by_final,
         "contrato_id": int(contrato_id),
         "solicitante_id": solicitante_id,
         "solicitante_nombre": solicitante_nombre[:200],
@@ -829,16 +965,31 @@ def crear_actividad(
     try:
         from seguimiento_service import _registrar_evento, _notificar_compromiso_asignado
 
+        evento_payload = {
+            "titulo": titulo,
+            "prioridad": prioridad,
+            "grupo": grupo.get("nombre"),
+        }
+        if dictado and registrado_por:
+            evento_payload["dictado"] = True
+            evento_payload["registrado_por_id"] = registrado_por["id"]
+            evento_payload["registrado_por_nombre"] = registrado_por.get("nombre")
+            evento_payload["created_by_efectivo"] = created_by_final
         _registrar_evento(
             sb,
             int(item["id"]),
             "plan_actividad_creada",
             user_id,
-            {"titulo": titulo, "prioridad": prioridad, "grupo": grupo.get("nombre")},
+            evento_payload,
         )
         for a in asignaciones:
-            if int(a["usuario_id"]) == int(user_id):
-                continue
+            # No notificar al operador ni al dueño efectivo si es el mismo asignado
+            # (el expositor recibe aviso de dictado aparte).
+            if int(a["usuario_id"]) in (int(user_id), int(created_by_final)):
+                if dictado and int(a["usuario_id"]) == int(created_by_final):
+                    continue
+                if int(a["usuario_id"]) == int(user_id):
+                    continue
             try:
                 _notificar_compromiso_asignado(
                     sb,
@@ -852,6 +1003,22 @@ def crear_actividad(
                 )
             except Exception as exc:
                 _log.warning("notif asignado plan: %s", exc)
+        if dictado and registrado_por and created_by_final != int(user_id):
+            try:
+                from plan_actividades_dictado import acumular_aviso_dictado
+
+                acumular_aviso_dictado(
+                    sb,
+                    session_id=str(data.get("dictado_session_id") or "") or None,
+                    expositor_id=int(created_by_final),
+                    moderador_id=int(user_id),
+                    contrato_id=int(contrato_id),
+                    item_id=int(item["id"]),
+                    titulo=titulo,
+                    accion="crear",
+                )
+            except Exception as exc:
+                _log.warning("aviso dictado create: %s", exc)
     except Exception as exc:
         _log.warning("post-create plan: %s", exc)
 
@@ -936,14 +1103,39 @@ def actualizar_actividad(
     cid = int(item["contrato_id"])
 
     es_creador = int(item.get("created_by") or 0) == int(user_id)
-    if not es_creador and not _es_desarrollador(current_user):
-        raise PermissionError("Solo quien creó la actividad puede editarla.")
-    if not tiene_permiso_plan_actividades(current_user, "editar", cid) and not _es_desarrollador(current_user):
+    from plan_actividades_dictado import puede_mutar_dictado
+
+    es_dictado_mod = puede_mutar_dictado(
+        sb,
+        item,
+        user_id,
+        acta_id=data.get("acta_id") or item.get("acta_id"),
+        idea_id=data.get("idea_id") or item.get("idea_id"),
+    )
+    if not es_creador and not es_dictado_mod and not _es_desarrollador(current_user):
+        raise PermissionError(
+            "Solo quien creó la actividad (o el moderador del acta abierta, "
+            "sobre actividades de este tema) puede editarla."
+        )
+    if (
+        not es_dictado_mod
+        and not tiene_permiso_plan_actividades(current_user, "editar", cid)
+        and not _es_desarrollador(current_user)
+    ):
         raise PermissionError("No tiene permiso para editar actividades del plan.")
 
     antes = _enrich_item(item)
     plan_prev = _plan_blob(item)
     libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    # Solo actividades dictadas por el moderador llevan la marca «Registrada por».
+    # Si el expositor la creó en el tema, el moderador puede editarla (acta abierta)
+    # pero no se le atribuye el registro.
+    registrado_por_prev = None
+    if plan_prev.get("registrado_por_id") or plan_prev.get("dictado"):
+        registrado_por_prev = {
+            "id": plan_prev.get("registrado_por_id"),
+            "nombre": plan_prev.get("registrado_por_nombre"),
+        }
 
     titulo = data.get("titulo") if "titulo" in data or "actividad" in data else item.get("titulo")
     if "actividad" in data and "titulo" not in data:
@@ -1047,6 +1239,21 @@ def actualizar_actividad(
     if item.get("acta_id"):
         vinculo = {"acta_id": item.get("acta_id"), "idea_id": item.get("idea_id")}
 
+    adj_desc = (
+        data.get("adjuntos_descripcion")
+        if "adjuntos_descripcion" in data or "esquemas_descripcion" in data
+        else plan_prev.get("adjuntos_descripcion")
+    )
+    if "esquemas_descripcion" in data and "adjuntos_descripcion" not in data:
+        adj_desc = data.get("esquemas_descripcion")
+    adj_com = (
+        data.get("adjuntos_comentario")
+        if "adjuntos_comentario" in data or "esquemas_comentario" in data
+        else plan_prev.get("adjuntos_comentario")
+    )
+    if "esquemas_comentario" in data and "adjuntos_comentario" not in data:
+        adj_com = data.get("esquemas_comentario")
+
     campos = _build_campos_plan(
         grupo=grupo,
         comentario_comite=str(comentario or ""),
@@ -1057,6 +1264,9 @@ def actualizar_actividad(
         periodicidad_hasta=hasta,
         asignaciones=asignaciones,
         acta_tema_vinculo=vinculo,
+        adjuntos_descripcion=adj_desc,
+        adjuntos_comentario=adj_com,
+        registrado_por=registrado_por_prev,
     )
     # Conservar otras claves de campos_libres
     for k, v in libres.items():
@@ -1100,8 +1310,45 @@ def actualizar_actividad(
                     "fecha_inicio": fi.isoformat() if fi else None,
                     "fecha_fin": ff.isoformat() if ff else None,
                 },
+                "dictado": bool(es_dictado_mod),
             },
         )
+        if es_dictado_mod and int(item.get("created_by") or 0) != int(user_id):
+            from plan_actividades_dictado import acumular_aviso_dictado
+
+            acumular_aviso_dictado(
+                sb,
+                session_id=str(data.get("dictado_session_id") or "") or None,
+                expositor_id=int(item.get("created_by") or 0),
+                moderador_id=int(user_id),
+                contrato_id=cid,
+                item_id=int(item_id),
+                titulo=titulo,
+                accion="editar",
+            )
+        # Reasignación: notificar nuevos asignados (faltaba para Plan).
+        if "asignados" in data or "asignaciones" in data:
+            prev_ids = {int(a["usuario_id"]) for a in _asignaciones_de(item)}
+            from seguimiento_service import _notificar_compromiso_asignado
+
+            for a in asignaciones:
+                uid_a = int(a["usuario_id"])
+                if uid_a in prev_ids or uid_a == int(user_id):
+                    continue
+                try:
+                    _notificar_compromiso_asignado(
+                        sb,
+                        destinatario_id=uid_a,
+                        remitente_id=int(user_id),
+                        titulo=titulo,
+                        fecha_vencimiento=fv,
+                        contrato_id=cid,
+                        item_id=int(item_id),
+                        descripcion=str(descripcion or ""),
+                        reasignacion=True,
+                    )
+                except Exception as exc:
+                    _log.warning("notif reasign plan: %s", exc)
     except Exception as exc:
         _log.warning("evento edit plan: %s", exc)
 
@@ -1111,17 +1358,75 @@ def actualizar_actividad(
     return enriched
 
 
-def eliminar_actividad(sb, item_id: int, user_id: int, current_user: dict) -> None:
+def eliminar_actividad(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    dictado_session_id: Optional[str] = None,
+    acta_id: Optional[int] = None,
+    idea_id: Optional[int] = None,
+) -> None:
     item = get_item_raw(sb, item_id)
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
     cid = int(item["contrato_id"])
     es_creador = int(item.get("created_by") or 0) == int(user_id)
-    if not es_creador and not _es_desarrollador(current_user):
-        raise PermissionError("Solo quien creó la actividad puede eliminarla.")
-    if not tiene_permiso_plan_actividades(current_user, "eliminar", cid) and not _es_desarrollador(current_user):
+    from plan_actividades_dictado import puede_mutar_dictado
+
+    es_dictado_mod = puede_mutar_dictado(
+        sb, item, user_id, acta_id=acta_id or item.get("acta_id"), idea_id=idea_id or item.get("idea_id"),
+    )
+    if not es_creador and not es_dictado_mod and not _es_desarrollador(current_user):
+        raise PermissionError(
+            "Solo quien creó la actividad (o el moderador del acta abierta, "
+            "sobre actividades de este tema) puede eliminarla."
+        )
+    if (
+        not es_dictado_mod
+        and not tiene_permiso_plan_actividades(current_user, "eliminar", cid)
+        and not _es_desarrollador(current_user)
+    ):
         raise PermissionError("No tiene permiso para eliminar actividades del plan.")
+
+    titulo = item.get("titulo") or ""
+    owner = int(item.get("created_by") or 0)
+    try:
+        from seguimiento_service import _registrar_evento
+
+        _registrar_evento(
+            sb,
+            int(item_id),
+            "plan_actividad_eliminada",
+            user_id,
+            {
+                "titulo": titulo,
+                "dictado": bool(es_dictado_mod),
+                "created_by": owner,
+            },
+        )
+    except Exception as exc:
+        _log.warning("evento delete plan: %s", exc)
+
     sb.table("seguimiento_item").delete().eq("id", int(item_id)).execute()
+
+    if es_dictado_mod and owner and owner != int(user_id):
+        try:
+            from plan_actividades_dictado import acumular_aviso_dictado
+
+            acumular_aviso_dictado(
+                sb,
+                session_id=dictado_session_id,
+                expositor_id=owner,
+                moderador_id=int(user_id),
+                contrato_id=cid,
+                item_id=int(item_id),
+                titulo=titulo,
+                accion="eliminar",
+            )
+        except Exception as exc:
+            _log.warning("aviso dictado delete: %s", exc)
 
 
 def comentar_actividad(
@@ -1277,42 +1582,300 @@ def cambiar_estado_actividad(
     return get_actividad(sb, item_id, user_id, current_user)
 
 
-def exportar_xlsx(
+# Identificación de calidad (sistema CCD ClaraCore). Ajustable si Calidad redefine.
+PLAN_ACTIVIDADES_FORMATO = {
+    "codigo": "CC-SEG-PLAN-001",
+    "version": "1.0",
+    "nombre": "Plan de actividades",
+    "nombre_mayus": "PLAN DE ACTIVIDADES",
+}
+
+# Columnas de grilla (igual que pantalla). El departamento va como banda, no columna.
+_EXPORT_HEADERS = [
+    "Actividad",
+    "Descripción",
+    "Comentario comité",
+    "Solicitante",
+    "Asignado(s)",
+    "Prioridad",
+    "Estado",
+    "Fecha inicio",
+    "Fecha fin",
+    "Periodicidad",
+]
+
+
+def _fmt_fecha_co(raw) -> str:
+    d = _parse_date(raw)
+    if not d:
+        return ""
+    return d.strftime("%d/%m/%Y")
+
+
+def _sheet_title_safe(nombre: str, used: Set[str]) -> str:
+    base = re.sub(r"[:\\/?*\[\]]+", " ", str(nombre or "Colaborador")).strip()
+    base = re.sub(r"\s+", " ", base)[:28] or "Colaborador"
+    title = base
+    n = 2
+    while title.lower() in used:
+        suffix = f" ({n})"
+        title = (base[: max(1, 31 - len(suffix))] + suffix)[:31]
+        n += 1
+    used.add(title.lower())
+    return title
+
+
+def _contrato_meta_export(sb, contrato_id: int) -> Dict[str, str]:
+    try:
+        from main import _xlsx_load_contrato_export_meta
+
+        return _xlsx_load_contrato_export_meta(int(contrato_id))
+    except Exception:
+        pass
+    meta = {
+        "numero": "",
+        "objeto": "",
+        "contratista": "",
+        "logo_contratista": "",
+    }
+    try:
+        cr = (
+            sb.table("contratos")
+            .select("numero, objeto, contratista, logo_contratista")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if cr:
+            meta["numero"] = str(cr[0].get("numero") or "").strip()
+            meta["objeto"] = str(cr[0].get("objeto") or "").strip()
+            meta["contratista"] = str(cr[0].get("contratista") or "").strip()
+            meta["logo_contratista"] = str(cr[0].get("logo_contratista") or "").strip()
+    except Exception:
+        pass
+    return meta
+
+
+def _usuario_export_info(sb, uid: int) -> Dict[str, str]:
+    u = _usuario_row(sb, uid) or {}
+    nombre = _nombre_usuario(u) or f"Usuario {uid}"
+    cargo = ""
+    try:
+        cid = u.get("cargo_id")
+        if cid:
+            crow = (
+                sb.table("cargos")
+                .select("nombre")
+                .eq("id", int(cid))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if crow:
+                cargo = str(crow[0].get("nombre") or "").strip()
+    except Exception:
+        pass
+    return {"id": int(uid), "nombre": nombre, "cargo": cargo}
+
+
+def _targets_export(
     sb,
     contrato_id: int,
     user_id: int,
     current_user: dict,
     *,
-    colaborador_id: Optional[int] = None,
-    ver_todos: bool = False,
-) -> bytes:
-    if not tiene_permiso_plan_actividades(current_user, "exportar", contrato_id):
-        raise PermissionError("No tiene permiso para exportar el Plan de actividades.")
-
-    items = list_actividades(
-        sb,
-        contrato_id,
-        user_id,
-        current_user,
-        colaborador_id=colaborador_id,
-        incluir_cerrados=True,
-        ver_todos=ver_todos or colaborador_id is None,
+    colaborador_id: Optional[int],
+    colaborador_ids: Optional[List[int]],
+    todos: bool,
+) -> List[Dict[str, str]]:
+    """Lista de colaboradores a exportar (una hoja cada uno)."""
+    es_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
+        sb, user_id, current_user
     )
+    if not es_amplia:
+        return [_usuario_export_info(sb, int(user_id))]
 
-    try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
-    except ImportError as exc:
-        raise RuntimeError("openpyxl no disponible para exportar") from exc
+    cols = list_colaboradores_plan(sb, contrato_id) or []
+    by_id: Dict[int, dict] = {}
+    for c in cols:
+        try:
+            cid = int(c.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid > 0:
+            by_id[cid] = c
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Plan de actividades"
+    ids: List[int] = []
+    if todos:
+        # Todos = cada colaborador del contrato (también sin actividades).
+        # Si el cliente manda IDs explícitos, se unen para no perder a nadie
+        # cuando list_colaboradores_plan falle o venga incompleto.
+        ids = list(by_id.keys())
+        if colaborador_ids:
+            for x in colaborador_ids:
+                try:
+                    xi = int(x)
+                except (TypeError, ValueError):
+                    continue
+                if xi > 0 and xi not in ids:
+                    ids.append(xi)
+        if int(user_id) not in ids and int(user_id) > 0:
+            ids.insert(0, int(user_id))
+        if not ids:
+            ids = [int(user_id)]
+    elif colaborador_ids:
+        ids = [int(x) for x in colaborador_ids if x is not None and int(x) > 0]
+    elif colaborador_id is not None:
+        ids = [int(colaborador_id)]
+    else:
+        ids = [int(user_id)]
 
-    headers = [
-        "Grupo", "Actividad", "Descripción", "Comentario comité", "Solicitante",
-        "Asignado(s)", "Prioridad", "Estado", "Fecha inicio", "Fecha fin", "Periodicidad",
-    ]
+    seen: Set[int] = set()
+    out: List[Dict[str, str]] = []
+    for i in ids:
+        if i in seen or i <= 0:
+            continue
+        seen.add(i)
+        info = _usuario_export_info(sb, i)
+        c = by_id.get(i)
+        if c:
+            nm = (
+                c.get("nombre_completo")
+                or f"{c.get('nombre') or ''} {c.get('apellidos') or ''}".strip()
+                or c.get("nombre")
+            )
+            if nm:
+                info["nombre"] = str(nm).strip()
+            if c.get("cargo_nombre"):
+                info["cargo"] = str(c.get("cargo_nombre") or "").strip()
+        out.append(info)
+    return out or [_usuario_export_info(sb, int(user_id))]
+
+
+def _apply_calidad_header(ws, *, n_cols: int, contrato: dict, colaborador: dict) -> int:
+    """
+    Encabezado de calidad (3 partes) + bloque contrato/colaborador.
+    Retorna la primera fila libre para la grilla.
+    """
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    fmt = PLAN_ACTIVIDADES_FORMATO
+    fill_title = PatternFill("solid", fgColor="0F2942")
+    font_title = Font(name="Calibri", bold=True, size=14, color="FFFFFF")
+    font_calidad = Font(name="Calibri", bold=True, size=9, color="FFFFFF")
+    font_head = Font(name="Calibri", bold=True, size=9, color="0F2942")
+    font_body = Font(name="Calibri", size=9, color="0F2942")
+    thin = Border(
+        left=Side(style="thin", color="94A3B8"),
+        right=Side(style="thin", color="94A3B8"),
+        top=Side(style="thin", color="94A3B8"),
+        bottom=Side(style="thin", color="94A3B8"),
+    )
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    n_cols = max(n_cols, 8)
+    title_end = min(4, n_cols)
+    right_start = min(5, n_cols)
+
+    for c in range(1, n_cols + 1):
+        cell = ws.cell(1, c, "")
+        cell.fill = fill_title
+        cell.border = thin
+        cell.alignment = center
+
+    if title_end >= 2:
+        ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=title_end)
+    if right_start <= n_cols and right_start > title_end:
+        ws.merge_cells(start_row=1, start_column=right_start, end_row=1, end_column=n_cols)
+
+    # Logo (imagen o fallback texto)
+    logo_cell = ws.cell(1, 1)
+    logo_cell.font = font_calidad
+    logo_cell.alignment = center
+    logo_ok = False
+    logo_url = (contrato.get("logo_contratista") or "").strip()
+    if logo_url:
+        try:
+            from main import _xlsx_fetch_image_bytes, _xlsx_fit_image_to_cell
+            from openpyxl.drawing.image import Image as XLImage
+            import io as _io
+
+            raw = _xlsx_fetch_image_bytes(logo_url)
+            if raw:
+                img = XLImage(_io.BytesIO(raw))
+                _xlsx_fit_image_to_cell(img, 48, 18)
+                ws.add_image(img, "A1")
+                logo_ok = True
+        except Exception:
+            logo_ok = False
+    if not logo_ok:
+        logo_cell.value = "ClaraCore"
+
+    titulo = ws.cell(1, 2 if n_cols >= 2 else 1)
+    titulo.value = fmt.get("nombre_mayus") or "PLAN DE ACTIVIDADES"
+    titulo.font = font_title
+    titulo.alignment = center
+
+    if right_start <= n_cols:
+        cal = ws.cell(1, right_start)
+        cal.value = (
+            f"{fmt.get('codigo') or 'CC-SEG-PLAN-001'}\n"
+            f"Versión {fmt.get('version') or '1.0'}\n"
+            f"Fecha {_now_bogota().strftime('%d/%m/%Y')}"
+        )
+        cal.font = font_calidad
+        cal.alignment = center
+    ws.row_dimensions[1].height = 52
+
+    # Fila 2: contrato + descripción
+    ws.cell(2, 1, "Contrato").font = font_head
+    ws.cell(2, 1).border = thin
+    ws.cell(2, 2, str(contrato.get("numero") or "—")).font = font_body
+    ws.cell(2, 2).border = thin
+    ws.cell(2, 3, "Descripción").font = font_head
+    ws.cell(2, 3).border = thin
+    if n_cols >= 4:
+        ws.merge_cells(start_row=2, start_column=4, end_row=2, end_column=n_cols)
+    desc = ws.cell(2, 4 if n_cols >= 4 else 3, str(contrato.get("objeto") or "—"))
+    desc.font = font_body
+    desc.alignment = left
+    desc.border = thin
+    for c in range(1, n_cols + 1):
+        ws.cell(2, c).border = thin
+
+    # Fila 3: colaborador + cargo
+    ws.cell(3, 1, "Colaborador").font = font_head
+    ws.cell(3, 1).border = thin
+    ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=min(4, n_cols))
+    ws.cell(3, 2, str(colaborador.get("nombre") or "—")).font = font_body
+    ws.cell(3, 2).border = thin
+    cargo_col = min(5, n_cols)
+    ws.cell(3, cargo_col, "Cargo").font = font_head
+    ws.cell(3, cargo_col).border = thin
+    if n_cols >= cargo_col + 1:
+        ws.merge_cells(start_row=3, start_column=cargo_col + 1, end_row=3, end_column=n_cols)
+        ws.cell(3, cargo_col + 1, str(colaborador.get("cargo") or "—")).font = font_body
+        ws.cell(3, cargo_col + 1).border = thin
+    for c in range(1, n_cols + 1):
+        ws.cell(3, c).border = thin
+
+    ws.row_dimensions[2].height = 22
+    ws.row_dimensions[3].height = 22
+
+    # Fila 4 vacía de respiro
+    return 5
+
+
+def _write_plan_sheet(ws, items: List[dict], *, contrato: dict, colaborador: dict) -> None:
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    headers = list(_EXPORT_HEADERS)
     thin = Border(
         left=Side(style="thin", color="94A3B8"),
         right=Side(style="thin", color="94A3B8"),
@@ -1321,16 +1884,12 @@ def exportar_xlsx(
     )
     header_fill = PatternFill("solid", fgColor="DDEFF8")
     group_fill = PatternFill("solid", fgColor="FDE68A")
-    header_font = Font(bold=True, color="0F2942")
+    header_font = Font(name="Calibri", bold=True, color="0F2942", size=9)
+    body_font = Font(name="Calibri", size=9, color="0F2942")
+    bar_fill = PatternFill("solid", fgColor="38BDF8")
+    bar_overlap = PatternFill("solid", fgColor="F97316")
 
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(1, col, h)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = thin
-        cell.alignment = Alignment(wrap_text=True, vertical="center")
-
-    # Gantt columns: from min fecha to max (+30d buffer)
+    # Rango Gantt
     all_days: List[date] = []
     for it in items:
         for occ in it.get("ocurrencias") or []:
@@ -1341,28 +1900,44 @@ def exportar_xlsx(
             if b:
                 all_days.append(b)
     if all_days:
-        d0 = min(all_days)
-        d1 = max(all_days)
+        d0, d1 = min(all_days), max(all_days)
     else:
         hoy = _now_bogota().date()
         d0, d1 = hoy, hoy + timedelta(days=14)
 
-    gantt_start_col = len(headers) + 1
-    cur = d0
+    gantt_start = len(headers) + 1
     day_cols: Dict[str, int] = {}
-    col_i = gantt_start_col
-    while cur <= d1 and col_i < gantt_start_col + 120:
+    col_i = gantt_start
+    cur = d0
+    while cur <= d1 and col_i < gantt_start + 120:
         day_cols[cur.isoformat()] = col_i
-        cell = ws.cell(1, col_i, cur.strftime("%d/%m"))
-        cell.fill = header_fill
-        cell.font = Font(bold=True, size=8)
-        cell.border = thin
-        cell.alignment = Alignment(horizontal="center")
-        ws.column_dimensions[cell.column_letter].width = 4
-        cur += timedelta(days=1)
         col_i += 1
+        cur += timedelta(days=1)
+    total_cols = max(col_i - 1, len(headers), 8)
 
-    # Detect overlaps per assignee for highlighting
+    header_row = _apply_calidad_header(
+        ws, n_cols=total_cols, contrato=contrato, colaborador=colaborador
+    )
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(header_row, col, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+        cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+
+    for iso, col in day_cols.items():
+        d = date.fromisoformat(iso)
+        cell = ws.cell(header_row, col, d.strftime("%d/%m"))
+        cell.fill = header_fill
+        cell.font = Font(name="Calibri", bold=True, size=8, color="0F2942")
+        cell.border = thin
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(col)].width = 3.6
+
+    ws.row_dimensions[header_row].height = 32
+
+    # Solapes
     by_asig: Dict[int, List[Tuple[int, date, date]]] = {}
     for it in items:
         for a in it.get("asignaciones") or []:
@@ -1374,72 +1949,174 @@ def exportar_xlsx(
                 a1 = _parse_date(occ.get("fecha_fin"))
                 if a0 and a1:
                     by_asig.setdefault(uid, []).append((int(it["id"]), a0, a1))
-
     overlap_ids: Set[int] = set()
-    for uid, spans in by_asig.items():
+    for spans in by_asig.values():
         for i, (id1, a0, a1) in enumerate(spans):
             for id2, b0, b1 in spans[i + 1:]:
                 if id1 != id2 and _intervalos_solapan(a0, a1, b0, b1):
                     overlap_ids.add(id1)
                     overlap_ids.add(id2)
 
-    bar_fill = PatternFill("solid", fgColor="38BDF8")
-    bar_overlap = PatternFill("solid", fgColor="F97316")
-    row_i = 2
-    last_grupo = None
-    for it in items:
-        gname = it.get("grupo_nombre") or "Sin grupo"
-        if gname != last_grupo:
-            ws.cell(row_i, 1, gname)
-            for c in range(1, gantt_start_col):
-                cell = ws.cell(row_i, c)
-                cell.fill = group_fill
-                cell.font = Font(bold=True)
+    row_i = header_row + 1
+    last_dep = None
+    if not items:
+        cell = ws.cell(row_i, 1, "Sin actividades en este plan.")
+        cell.font = Font(name="Calibri", italic=True, size=9, color="64748B")
+        for c in range(1, len(headers) + 1):
+            ws.cell(row_i, c).border = thin
+        row_i += 1
+    else:
+        for it in items:
+            dep = it.get("grupo_nombre") or "Sin departamento"
+            if dep != last_dep:
+                # Banda de departamento (agrupa filas; no es columna de datos)
+                ws.merge_cells(
+                    start_row=row_i,
+                    start_column=1,
+                    end_row=row_i,
+                    end_column=len(headers),
+                )
+                band = ws.cell(row_i, 1, dep)
+                band.fill = group_fill
+                band.font = Font(name="Calibri", bold=True, size=9, color="0F2942")
+                band.alignment = Alignment(vertical="center", wrap_text=True)
+                for c in range(1, gantt_start):
+                    cell = ws.cell(row_i, c)
+                    cell.fill = group_fill
+                    cell.border = thin
+                last_dep = dep
+                row_i += 1
+
+            vals = [
+                it.get("titulo") or "",
+                _strip_html(it.get("descripcion")),
+                _strip_html(it.get("comentario_comite")),
+                it.get("solicitante_nombre") or "",
+                it.get("asignado_a_nombre") or "",
+                it.get("prioridad") if it.get("prioridad") is not None else "",
+                it.get("estado_gestion") or "",
+                _fmt_fecha_co(it.get("fecha_inicio")),
+                _fmt_fecha_co(it.get("fecha_fin")),
+                it.get("periodicidad") or "ninguna",
+            ]
+            for col, v in enumerate(vals, 1):
+                cell = ws.cell(row_i, col, v)
                 cell.border = thin
-            last_grupo = gname
+                cell.font = body_font
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+            fill = bar_overlap if int(it.get("id") or 0) in overlap_ids else bar_fill
+            for occ in it.get("ocurrencias") or []:
+                a0 = _parse_date(occ.get("fecha_inicio"))
+                a1 = _parse_date(occ.get("fecha_fin"))
+                if not a0 or not a1:
+                    continue
+                d = a0
+                while d <= a1:
+                    col = day_cols.get(d.isoformat())
+                    if col:
+                        cell = ws.cell(row_i, col, "■")
+                        cell.fill = fill
+                        cell.alignment = Alignment(horizontal="center")
+                        cell.border = thin
+                    d += timedelta(days=1)
             row_i += 1
 
-        vals = [
-            gname,
-            it.get("titulo"),
-            _strip_html(it.get("descripcion")),
-            _strip_html(it.get("comentario_comite")),
-            it.get("solicitante_nombre"),
-            it.get("asignado_a_nombre"),
-            it.get("prioridad"),
-            it.get("estado_gestion"),
-            it.get("fecha_inicio"),
-            it.get("fecha_fin"),
-            it.get("periodicidad"),
-        ]
-        for col, v in enumerate(vals, 1):
-            cell = ws.cell(row_i, col, v if v is not None else "")
-            cell.border = thin
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    widths = [28, 32, 28, 16, 18, 10, 12, 12, 12, 12]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
 
-        fill = bar_overlap if int(it.get("id") or 0) in overlap_ids else bar_fill
-        for occ in it.get("ocurrencias") or []:
-            a0 = _parse_date(occ.get("fecha_inicio"))
-            a1 = _parse_date(occ.get("fecha_fin"))
-            if not a0 or not a1:
-                continue
-            d = a0
-            while d <= a1:
-                col = day_cols.get(d.isoformat())
-                if col:
-                    cell = ws.cell(row_i, col, "■")
-                    cell.fill = fill
-                    cell.alignment = Alignment(horizontal="center")
-                    cell.border = thin
-                d += timedelta(days=1)
-        row_i += 1
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = f"1:{header_row}"
+    ws.page_margins.left = 0.4
+    ws.page_margins.right = 0.4
+    ws.page_margins.top = 0.5
+    ws.page_margins.bottom = 0.5
 
-    for col in range(1, len(headers) + 1):
-        ws.column_dimensions[ws.cell(1, col).column_letter].width = 18
+
+def exportar_xlsx(
+    sb,
+    contrato_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    colaborador_id: Optional[int] = None,
+    colaborador_ids: Optional[List[int]] = None,
+    ver_todos: bool = False,
+    todos: bool = False,
+) -> Tuple[bytes, str]:
+    """
+    Excel institucional del Plan (una hoja por colaborador).
+    Retorna (bytes, filename).
+    """
+    if not tiene_permiso_plan_actividades(current_user, "exportar", contrato_id):
+        raise PermissionError("No tiene permiso para exportar el Plan de actividades.")
+
+    try:
+        from openpyxl import Workbook
+    except ImportError as exc:
+        raise RuntimeError("openpyxl no disponible para exportar") from exc
+
+    # Compat: ver_todos sin selección explícita → todos (solo vista amplia)
+    es_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
+        sb, user_id, current_user
+    )
+    if es_amplia and ver_todos and not colaborador_ids and colaborador_id is None and not todos:
+        todos = True
+
+    targets = _targets_export(
+        sb,
+        contrato_id,
+        user_id,
+        current_user,
+        colaborador_id=colaborador_id,
+        colaborador_ids=colaborador_ids,
+        todos=todos,
+    )
+    contrato = _contrato_meta_export(sb, contrato_id)
+
+    wb = Workbook()
+    # Quitar hoja por defecto; se recrean por colaborador
+    default = wb.active
+    wb.remove(default)
+
+    used_titles: Set[str] = set()
+    for target in targets:
+        uid = int(target["id"])
+        items = list_actividades(
+            sb,
+            contrato_id,
+            user_id,
+            current_user,
+            colaborador_id=uid,
+            incluir_cerrados=True,
+            ver_todos=True,
+        )
+        ws = wb.create_sheet(
+            _sheet_title_safe(target.get("nombre") or f"Usuario {uid}", used_titles)
+        )
+        _write_plan_sheet(ws, items, contrato=contrato, colaborador=target)
+
+    if not wb.sheetnames:
+        ws = wb.create_sheet("Plan")
+        _write_plan_sheet(
+            ws,
+            [],
+            contrato=contrato,
+            colaborador=_usuario_export_info(sb, int(user_id)),
+        )
 
     bio = __import__("io").BytesIO()
     wb.save(bio)
-    return bio.getvalue()
+    codigo = str(PLAN_ACTIVIDADES_FORMATO.get("codigo") or "CC-SEG-PLAN-001").replace("/", "-")
+    num = re.sub(r"[^\w\-]+", "_", str(contrato.get("numero") or contrato_id))[:40]
+    fname = f"{codigo}_plan_actividades_{num}.xlsx"
+    return bio.getvalue(), fname
 
 
 def _strip_html(html: Optional[str]) -> str:

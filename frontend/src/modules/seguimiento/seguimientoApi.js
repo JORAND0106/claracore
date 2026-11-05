@@ -97,10 +97,14 @@ export function createSeguimientoApi(contratoId, token) {
     repararCompromisosExternosHuerfanos: () =>
       send('POST', `/seguimiento/${cid}/externos-depuracion/reparar-compromisos`, {}),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
-    compromisosAbiertos: (excluirActaId, tipoActa) => {
+    compromisosAbiertos: (excluirActaId, tipoActa, convocadoIds) => {
       const q = new URLSearchParams()
       if (excluirActaId != null && excluirActaId !== '') q.set('excluir_acta_id', String(excluirActaId))
       if (tipoActa) q.set('tipo_acta', String(tipoActa))
+      const ids = Array.isArray(convocadoIds)
+        ? convocadoIds.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)
+        : []
+      if (ids.length) q.set('convocado_ids', ids.join(','))
       const qs = q.toString()
       return get(`/seguimiento/${cid}/compromisos-abiertos${qs ? `?${qs}` : ''}`)
     },
@@ -293,10 +297,17 @@ export function createSeguimientoApi(contratoId, token) {
     listBitacora: (params = {}) => {
       const q = new URLSearchParams()
       Object.entries(params).forEach(([k, v]) => {
-        if (v != null && v !== '') q.set(k, String(v))
+        if (v == null || v === '') return
+        if (typeof v === 'boolean') {
+          q.set(k, v ? 'true' : 'false')
+          return
+        }
+        q.set(k, String(v))
       })
       const qs = q.toString()
-      return get(`/seguimiento/${cid}/bitacora${qs ? `?${qs}` : ''}`)
+      // Calendario: timeout mayor — listado enriquecido puede superar 30s.
+      const timeout = params.para_calendario ? 90000 : 45000
+      return get(`/seguimiento/${cid}/bitacora${qs ? `?${qs}` : ''}`, timeout)
     },
     getBitacoraEntrada: (entradaId) => get(`/seguimiento/${cid}/bitacora/${entradaId}`),
     /**
@@ -446,7 +457,17 @@ export function createSeguimientoApi(contratoId, token) {
     getPlanActividad: (itemId) => get(`/seguimiento/${cid}/plan-actividades/${itemId}`),
     updatePlanActividad: (itemId, body) =>
       send('PUT', `/seguimiento/${cid}/plan-actividades/${itemId}`, body),
-    deletePlanActividad: (itemId) => send('DELETE', `/seguimiento/${cid}/plan-actividades/${itemId}`),
+    deletePlanActividad: (itemId, opts = {}) => {
+      const q = new URLSearchParams()
+      if (opts.dictado) q.set('dictado', 'true')
+      if (opts.dictado_session_id) q.set('dictado_session_id', String(opts.dictado_session_id))
+      if (opts.acta_id != null) q.set('acta_id', String(opts.acta_id))
+      if (opts.idea_id != null) q.set('idea_id', String(opts.idea_id))
+      const qs = q.toString()
+      return send('DELETE', `/seguimiento/${cid}/plan-actividades/${itemId}${qs ? `?${qs}` : ''}`)
+    },
+    flushPlanDictado: (body) =>
+      send('POST', `/seguimiento/${cid}/plan-actividades/dictado-flush`, body),
     comentarPlanActividad: (itemId, mensaje) =>
       send('POST', `/seguimiento/${cid}/plan-actividades/${itemId}/comentarios`, { mensaje }),
     editarComentarioPlan: (comentarioId, mensaje) =>
@@ -456,7 +477,16 @@ export function createSeguimientoApi(contratoId, token) {
     exportPlanActividadesBlob: async (params = {}) => {
       const q = new URLSearchParams()
       Object.entries(params).forEach(([k, v]) => {
-        if (v != null && v !== '') q.set(k, String(v))
+        if (v == null || v === '') return
+        if (Array.isArray(v)) {
+          if (v.length) q.set(k, v.join(','))
+          return
+        }
+        if (typeof v === 'boolean') {
+          q.set(k, v ? 'true' : 'false')
+          return
+        }
+        q.set(k, String(v))
       })
       const qs = q.toString()
       const sig = apiFetchSignal(120000)
@@ -471,9 +501,15 @@ export function createSeguimientoApi(contratoId, token) {
         if (!res.ok) await parseOrThrow(res)
         const buf = await res.arrayBuffer()
         if (!buf || buf.byteLength < 8) throw new Error('El Excel exportado está vacío')
-        return new Blob([buf], {
-          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        })
+        const cd = res.headers.get('Content-Disposition') || ''
+        const m = /filename="?([^";]+)"?/i.exec(cd)
+        const filename = (m && m[1]) ? m[1].trim() : 'plan_actividades.xlsx'
+        return {
+          blob: new Blob([buf], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          }),
+          filename,
+        }
       } catch (e) {
         throw mapNetworkError(e)
       }

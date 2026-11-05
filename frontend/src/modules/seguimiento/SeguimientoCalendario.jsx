@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Filter as FilterIcon, X } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import FullCalendar from '@fullcalendar/react'
@@ -17,6 +18,7 @@ import {
   CALENDARIO_KIND,
   CALENDARIO_VENCIDOS_LEGEND,
   buildCalendarioEvents,
+  compareCalendarioEvents,
   dayHasVencidos,
   dayKindIndicators,
   eventDisplayTime,
@@ -52,12 +54,15 @@ export default function SeguimientoCalendario({
   onAbrirBitacora,
   showFilters = true,
   widgetMode = false,
+  onDataFresh = null,
 }) {
   const filtersVisible = showFilters && !widgetMode
   const calendarRef = useRef(null)
   const genRef = useRef(0)
   const rangeRef = useRef({ start: null, end: null })
   const dayMenuRef = useRef(null)
+  const onDataFreshRef = useRef(onDataFresh)
+  onDataFreshRef.current = onDataFresh
 
   const [filtros, setFiltros] = useState({
     estado: '',
@@ -69,10 +74,11 @@ export default function SeguimientoCalendario({
     solo_mias: false,
     q: '',
   })
-  const [filtersOpen, setFiltersOpen] = useState(true)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [warnBitacora, setWarnBitacora] = useState('')
   const [accesoMsg, setAccesoMsg] = useState('')
   const [detalleId, setDetalleId] = useState(null)
   const [showTarea, setShowTarea] = useState(false)
@@ -110,6 +116,7 @@ export default function SeguimientoCalendario({
     const gen = ++genRef.current
     setLoading(true)
     setError('')
+    setWarnBitacora('')
 
     const origen = filtros.origen
     const includeBandeja = !origen || origen === 'tarea' || origen === 'compromiso' || origen === 'plan_actividad'
@@ -118,6 +125,8 @@ export default function SeguimientoCalendario({
       && (permisosBitacora?.ver !== false)
 
     try {
+      // Cada fuente se aísla: un fallo no borra las demás (antes bitácora
+      // se tragaba con [] y el calendario parecía «sin bitácoras»).
       const jobs = []
 
       if (includeBandeja) {
@@ -132,9 +141,13 @@ export default function SeguimientoCalendario({
         }
         if (filtros.incluir_cerrados) bandejaParams.incluir_cerrados = 'true'
         if (filtros.solo_mias) bandejaParams.solo_mias = 'true'
-        jobs.push(api.listBandeja(bandejaParams).catch((e) => { throw e }))
+        jobs.push(
+          api.listBandeja(bandejaParams)
+            .then((rows) => ({ ok: true, rows }))
+            .catch((e) => ({ ok: false, error: e, rows: [] })),
+        )
       } else {
-        jobs.push(Promise.resolve([]))
+        jobs.push(Promise.resolve({ ok: true, rows: [] }))
       }
 
       if (includeActas) {
@@ -145,41 +158,89 @@ export default function SeguimientoCalendario({
         if (filtros.q) actasParams.q = filtros.q
         if (filtros.tipo_acta) actasParams.tipo_acta = filtros.tipo_acta
         if (filtros.solo_mias) actasParams.solo_mias = 'true'
-        jobs.push(api.listActas(actasParams).catch((e) => { throw e }))
+        jobs.push(
+          api.listActas(actasParams)
+            .then((rows) => ({ ok: true, rows }))
+            .catch((e) => ({ ok: false, error: e, rows: [] })),
+        )
       } else {
-        jobs.push(Promise.resolve([]))
+        jobs.push(Promise.resolve({ ok: true, rows: [] }))
       }
 
       if (includeBitacora && api.listBitacora) {
         const bitParams = {
           fecha_desde: range.fecha_desde,
           fecha_hasta: range.fecha_hasta,
+          para_calendario: true,
         }
         if (filtros.q) bitParams.q = filtros.q
         // bitacora_evento: pedir diarios+eventos (default API) para ver
         // bloques embebidos e independientes; el filtro client-side afina.
         if (origen === 'bitacora_diario') bitParams.tipo = 'diario'
-        jobs.push(api.listBitacora(bitParams).catch(() => []))
+        jobs.push(
+          api.listBitacora(bitParams)
+            .then((rows) => ({ ok: true, rows }))
+            .catch((e) => ({ ok: false, error: e, rows: null })),
+        )
       } else {
-        jobs.push(Promise.resolve([]))
+        jobs.push(Promise.resolve({ ok: true, rows: [] }))
       }
 
-      const [bandejaRows, actasRows, bitacoraRows] = await Promise.all(jobs)
+      const [bandejaRes, actasRes, bitacoraRes] = await Promise.all(jobs)
       if (gen !== genRef.current) return
 
-      let mapped = buildCalendarioEvents(
-        Array.isArray(bandejaRows) ? bandejaRows : [],
-        Array.isArray(actasRows) ? actasRows : [],
-        Array.isArray(bitacoraRows) ? bitacoraRows : [],
-        { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
-      )
-      if (origen) mapped = filterEventsByOrigen(mapped, origen)
-      if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
-      setEvents(mapped)
+      const bandejaRows = Array.isArray(bandejaRes.rows) ? bandejaRes.rows : []
+      const actasRows = Array.isArray(actasRes.rows) ? actasRes.rows : []
+      let bitacoraRows = Array.isArray(bitacoraRes.rows) ? bitacoraRes.rows : []
+
+      if (includeBitacora && bitacoraRes.ok === false) {
+        setWarnBitacora(
+          bitacoraRes.error?.message
+            || 'No se pudieron cargar los registros de Bitácora. Pulse Actualizar.',
+        )
+        // Conservar bitácoras ya en pantalla; actualizar el resto.
+        setEvents((prev) => {
+          const keepBit = (prev || []).filter((ev) => {
+            const k = ev?.extendedProps?.kind
+            return k === 'bitacora_diario' || k === 'bitacora_evento'
+          })
+          let mapped = buildCalendarioEvents(
+            bandejaRows,
+            actasRows,
+            [],
+            { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
+          )
+          mapped = [...mapped, ...keepBit]
+          if (origen) mapped = filterEventsByOrigen(mapped, origen)
+          if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
+          return mapped
+        })
+        onDataFreshRef.current?.({ ok: false, partial: true })
+      } else {
+        let mapped = buildCalendarioEvents(
+          bandejaRows,
+          actasRows,
+          bitacoraRows,
+          { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
+        )
+        if (origen) mapped = filterEventsByOrigen(mapped, origen)
+        if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
+        setEvents(mapped)
+
+        if (!bandejaRes.ok && includeBandeja) {
+          setError(bandejaRes.error?.message || 'No se pudieron cargar tareas/compromisos')
+          onDataFreshRef.current?.({ ok: false, partial: true })
+        } else if (!actasRes.ok && includeActas) {
+          setError(actasRes.error?.message || 'No se pudieron cargar actas')
+          onDataFreshRef.current?.({ ok: false, partial: true })
+        } else {
+          onDataFreshRef.current?.({ ok: true })
+        }
+      }
     } catch (e) {
       if (gen !== genRef.current) return
       setError(e.message || 'Error al cargar el calendario')
-      setEvents([])
+      onDataFreshRef.current?.({ ok: false })
     } finally {
       if (gen === genRef.current) setLoading(false)
     }
@@ -204,6 +265,13 @@ export default function SeguimientoCalendario({
       document.removeEventListener('keydown', onKey)
     }
   }, [dayMenu])
+
+  useEffect(() => {
+    if (!filtersOpen) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setFiltersOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [filtersOpen])
 
   const handleDatesSet = useCallback((info) => {
     rangeRef.current = { start: info.start, end: info.end }
@@ -249,6 +317,7 @@ export default function SeguimientoCalendario({
     const rect = info.dayEl?.getBoundingClientRect?.()
     const x = info.jsEvent?.clientX ?? (rect ? rect.left + rect.width / 2 : 80)
     const y = info.jsEvent?.clientY ?? (rect ? rect.top + 28 : 80)
+    setFiltersOpen(false)
     setDayMenu({ dateStr, x, y })
   }, [])
 
@@ -372,11 +441,163 @@ export default function SeguimientoCalendario({
     }
   }
 
+  const filtrosActivos = Boolean(
+    filtros.q
+    || filtros.estado
+    || filtros.origen
+    || filtros.tipo_acta
+    || filtros.fecha_desde
+    || filtros.fecha_hasta
+    || filtros.incluir_cerrados
+    || filtros.solo_mias,
+  )
+
   const rootClass = [
     'cc-seguim-cal',
     viewportCompact ? 'cc-seguim-cal--compact' : '',
     widgetMode ? 'cc-seguim-cal--widget' : '',
   ].filter(Boolean).join(' ')
+
+  const openFiltersPopup = () => {
+    try { document.dispatchEvent(new CustomEvent('cc-title-tooltip-hide')) } catch { /* ignore */ }
+    setFiltersOpen(true)
+  }
+
+  const closeFiltersPopup = () => setFiltersOpen(false)
+
+  const filtersBody = (
+    <div className="cc-seguim-filters" style={{
+      display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end',
+    }}>
+      <FilterField t={t} label="Buscar" className="cc-seguim-filter cc-seguim-filter--wide">
+        <input
+          value={filtros.q}
+          onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              setReloadTick((n) => n + 1)
+              closeFiltersPopup()
+            }
+          }}
+          placeholder="Buscar en tareas, actas o bitácora…"
+          style={{ ...inp(t), minWidth: viewportCompact ? 0 : 220, width: '100%' }}
+        />
+      </FilterField>
+      <FilterField t={t} label="Estado" className="cc-seguim-filter">
+        <select
+          value={filtros.estado}
+          onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
+          style={{ ...inp(t), width: '100%' }}
+          disabled={filtros.origen === 'acta'
+            || filtros.origen === 'bitacora_diario'
+            || filtros.origen === 'bitacora_evento'}
+          title={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')
+            ? 'El estado de gestión aplica a tareas y compromisos'
+            : undefined}
+        >
+          {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+        </select>
+      </FilterField>
+      <FilterField t={t} label="Origen" className="cc-seguim-filter">
+        <select
+          value={filtros.origen}
+          onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))}
+          style={{ ...inp(t), width: '100%' }}
+        >
+          <option value="">Todos</option>
+          <option value="compromiso">Compromisos</option>
+          <option value="tarea">Tareas</option>
+          <option value="acta">Actas</option>
+          <option value="bitacora_diario">Bitácora (diario)</option>
+          <option value="bitacora_evento">Bitácora (eventos)</option>
+        </select>
+      </FilterField>
+      <FilterField t={t} label="Tipo de acta" className="cc-seguim-filter">
+        <select
+          value={filtros.tipo_acta}
+          onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))}
+          style={{ ...inp(t), width: '100%' }}
+          disabled={filtros.origen === 'tarea'
+            || filtros.origen === 'compromiso'
+            || String(filtros.origen).startsWith('bitacora')}
+        >
+          {tiposActaOpts.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
+        </select>
+      </FilterField>
+      <FilterField t={t} label="Desde" className="cc-seguim-filter">
+        <input
+          type="date"
+          className="cc-seguim-date"
+          value={filtros.fecha_desde}
+          onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
+          style={{ ...inp(t), width: '100%' }}
+        />
+      </FilterField>
+      <FilterField t={t} label="Hasta" className="cc-seguim-filter">
+        <input
+          type="date"
+          className="cc-seguim-date"
+          value={filtros.fecha_hasta}
+          onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
+          style={{ ...inp(t), width: '100%' }}
+        />
+      </FilterField>
+      <label className="cc-seguim-filter cc-seguim-filter--check" style={{
+        display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+      }}>
+        <input
+          type="checkbox"
+          checked={!!filtros.incluir_cerrados}
+          onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
+          disabled={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')}
+        />
+        Incluir cumplidos / cancelados
+      </label>
+      <label
+        className="cc-seguim-filter cc-seguim-filter--check"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+        }}
+        title="Tareas/compromisos creados o asignados a usted; actas donde es elaborador o asistente; bitácora que creó"
+      >
+        <input
+          type="checkbox"
+          checked={!!filtros.solo_mias}
+          onChange={(e) => setFiltros((f) => ({ ...f, solo_mias: e.target.checked }))}
+        />
+        Solo mis actividades
+      </label>
+      <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => {
+            setReloadTick((n) => n + 1)
+            closeFiltersPopup()
+          }}
+          style={ghost(t)}
+        >
+          Buscar
+        </button>
+      </div>
+      {canExportBitacora ? (
+        <div style={{
+          flex: '1 1 100%',
+          marginTop: 4,
+          paddingTop: 10,
+          borderTop: `1px dashed ${t.border}`,
+        }}>
+          <BitacoraExportRangoBar
+            t={t}
+            api={api}
+            variant="inline"
+            compact={viewportCompact}
+            initialDesde={filtros.fecha_desde}
+            initialHasta={filtros.fecha_hasta}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
 
   return (
     <div className={rootClass}>
@@ -400,158 +621,131 @@ export default function SeguimientoCalendario({
       )}
 
       {filtersVisible && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-            marginBottom: filtersOpen ? 8 : 0,
-          }}>
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              aria-expanded={filtersOpen}
-              style={{
-                ...ghost(t),
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                fontWeight: 700,
-              }}
-            >
-              <span aria-hidden>{filtersOpen ? '▾' : '▸'}</span>
-              Filtros
-              {!filtersOpen && filtros.q ? (
-                <span style={{ fontWeight: 500, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-                  · «{filtros.q.slice(0, 24)}{filtros.q.length > 24 ? '…' : ''}»
-                </span>
-              ) : null}
-            </button>
-            {loading && <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Actualizando…</span>}
-          </div>
-
-          {filtersOpen && (
-            <div className="cc-seguim-filters" style={{
-              display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end',
-              padding: '10px 12px',
-              borderRadius: 10,
-              border: `1px solid ${t.border}`,
-              background: `${t.primary}08`,
-            }}>
-              <Filter t={t} label="Buscar" className="cc-seguim-filter cc-seguim-filter--wide">
-                <input
-                  value={filtros.q}
-                  onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') setReloadTick((n) => n + 1) }}
-                  placeholder="Buscar en tareas, actas o bitácora…"
-                  style={{ ...inp(t), minWidth: viewportCompact ? 0 : 220, width: '100%' }}
-                />
-              </Filter>
-              <Filter t={t} label="Estado" className="cc-seguim-filter">
-                <select
-                  value={filtros.estado}
-                  onChange={(e) => setFiltros((f) => ({ ...f, estado: e.target.value }))}
-                  style={{ ...inp(t), width: '100%' }}
-                  disabled={filtros.origen === 'acta'
-                    || filtros.origen === 'bitacora_diario'
-                    || filtros.origen === 'bitacora_evento'}
-                  title={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')
-                    ? 'El estado de gestión aplica a tareas y compromisos'
-                    : undefined}
-                >
-                  {ESTADOS.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
-                </select>
-              </Filter>
-              <Filter t={t} label="Origen" className="cc-seguim-filter">
-                <select
-                  value={filtros.origen}
-                  onChange={(e) => setFiltros((f) => ({ ...f, origen: e.target.value }))}
-                  style={{ ...inp(t), width: '100%' }}
-                >
-                  <option value="">Todos</option>
-                  <option value="compromiso">Compromisos</option>
-                  <option value="tarea">Tareas</option>
-                  <option value="acta">Actas</option>
-                  <option value="bitacora_diario">Bitácora (diario)</option>
-                  <option value="bitacora_evento">Bitácora (eventos)</option>
-                </select>
-              </Filter>
-              <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
-                <select
-                  value={filtros.tipo_acta}
-                  onChange={(e) => setFiltros((f) => ({ ...f, tipo_acta: e.target.value }))}
-                  style={{ ...inp(t), width: '100%' }}
-                  disabled={filtros.origen === 'tarea'
-                    || filtros.origen === 'compromiso'
-                    || String(filtros.origen).startsWith('bitacora')}
-                >
-                  {tiposActaOpts.map((x) => <option key={x.value || 'all'} value={x.value}>{x.label}</option>)}
-                </select>
-              </Filter>
-              <Filter t={t} label="Desde" className="cc-seguim-filter">
-                <input
-                  type="date"
-                  className="cc-seguim-date"
-                  value={filtros.fecha_desde}
-                  onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))}
-                  style={{ ...inp(t), width: '100%' }}
-                />
-              </Filter>
-              <Filter t={t} label="Hasta" className="cc-seguim-filter">
-                <input
-                  type="date"
-                  className="cc-seguim-date"
-                  value={filtros.fecha_hasta}
-                  onChange={(e) => setFiltros((f) => ({ ...f, fecha_hasta: e.target.value }))}
-                  style={{ ...inp(t), width: '100%' }}
-                />
-              </Filter>
-              <label className="cc-seguim-filter cc-seguim-filter--check" style={{
-                display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={!!filtros.incluir_cerrados}
-                  onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
-                  disabled={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')}
-                />
-                Incluir cumplidos / cancelados
-              </label>
-              <label
-                className="cc-seguim-filter cc-seguim-filter--check"
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginBottom: 10,
+          flexWrap: 'wrap',
+        }}>
+          <button
+            type="button"
+            onClick={openFiltersPopup}
+            title="Filtros"
+            data-cc-tooltip="Filtros"
+            data-cc-tooltip-variant="short"
+            aria-label="Filtros"
+            aria-expanded={filtersOpen}
+            style={{
+              width: 34,
+              height: 34,
+              padding: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 8,
+              cursor: 'pointer',
+              position: 'relative',
+              border: `1px solid ${filtrosActivos ? t.primary : t.border}`,
+              background: filtrosActivos ? `${t.primary}22` : (t.bgCard || t.bg || 'transparent'),
+              color: t.text,
+            }}
+          >
+            <FilterIcon size={17} strokeWidth={2.4} aria-hidden />
+            {filtrosActivos ? (
+              <span
+                aria-hidden
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+                  position: 'absolute',
+                  top: 4,
+                  right: 4,
+                  width: 8,
+                  height: 8,
+                  borderRadius: 999,
+                  background: t.primary,
+                  boxShadow: `0 0 0 2px ${t.bgCard || '#fff'}`,
                 }}
-                title="Tareas/compromisos creados o asignados a usted; actas donde es elaborador o asistente; bitácora que creó"
-              >
-                <input
-                  type="checkbox"
-                  checked={!!filtros.solo_mias}
-                  onChange={(e) => setFiltros((f) => ({ ...f, solo_mias: e.target.checked }))}
-                />
-                Solo mis actividades
-              </label>
-              <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>
-              </div>
-              {canExportBitacora ? (
-                <div style={{
-                  flex: '1 1 100%',
-                  marginTop: 4,
-                  paddingTop: 10,
-                  borderTop: `1px dashed ${t.border}`,
-                }}>
-                  <BitacoraExportRangoBar
-                    t={t}
-                    api={api}
-                    variant="inline"
-                    compact={viewportCompact}
-                    initialDesde={filtros.fecha_desde}
-                    initialHasta={filtros.fecha_hasta}
-                  />
-                </div>
-              ) : null}
-            </div>
-          )}
+              />
+            ) : null}
+          </button>
+          {loading && <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Actualizando…</span>}
         </div>
+      )}
+
+      {filtersVisible && filtersOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          role="presentation"
+          data-cc-seguim-filtros-overlay="1"
+          onClick={closeFiltersPopup}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100040,
+            background: t.overlay || 'rgba(15,23,42,0.48)',
+            display: 'flex',
+            alignItems: viewportCompact ? 'flex-end' : 'center',
+            justifyContent: 'center',
+            padding: viewportCompact ? 0 : 16,
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Filtros"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: viewportCompact ? '100%' : 'min(720px, 96vw)',
+              maxHeight: viewportCompact ? '92dvh' : '90vh',
+              overflow: 'auto',
+              background: t.bgCard || t.bg || '#fff',
+              border: `1px solid ${t.border}`,
+              borderRadius: viewportCompact ? '14px 14px 0 0' : 14,
+              boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <CcModalBrandHeader theme={t} />
+            <div style={{
+              padding: '12px 16px',
+              borderBottom: `1px solid ${t.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}>
+              <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 800, color: t.text }}>Filtros</div>
+              <button
+                type="button"
+                title="Cerrar"
+                data-cc-tooltip="Cerrar"
+                data-cc-tooltip-variant="short"
+                aria-label="Cerrar"
+                onClick={closeFiltersPopup}
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  border: `1px solid ${t.border}`,
+                  background: 'transparent',
+                  color: t.text,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                <X size={17} strokeWidth={2.3} aria-hidden />
+              </button>
+            </div>
+            <div style={{ padding: '14px 16px 18px' }}>
+              {filtersBody}
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
 
       {error && (
@@ -583,6 +777,17 @@ export default function SeguimientoCalendario({
         </div>
       )}
 
+      {warnBitacora && (
+        <div style={{
+          fontSize: 'var(--cc-sm)',
+          color: t.danger || '#b91c1c',
+          fontWeight: 700,
+          marginBottom: 8,
+        }}
+        >
+          {warnBitacora}
+        </div>
+      )}
       {filtersVisible && permisos?.esDesarrollador && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista Desarrollador: acceso completo a compromisos, tareas, justificaciones y aprobaciones.
@@ -634,6 +839,7 @@ export default function SeguimientoCalendario({
           height={widgetMode ? '100%' : 'auto'}
           stickyHeaderDates
           events={events}
+          eventOrder={compareCalendarioEvents}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
           dateClick={handleDateClick}
@@ -972,7 +1178,7 @@ export default function SeguimientoCalendario({
   )
 }
 
-function Filter({ t, label, children, className = '' }) {
+function FilterField({ t, label, children, className = '' }) {
   return (
     <div className={className}>
       <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, fontWeight: 600, marginBottom: 2 }}>{label}</div>

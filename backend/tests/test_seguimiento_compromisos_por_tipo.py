@@ -208,3 +208,101 @@ def test_acta_origen_es_anterior_por_consecutivo_y_fecha():
         ref_consecutivo=None,
         ref_fecha="2026-08-01",
     )
+
+
+def test_plan_sin_acta_excluido_sin_permiso_plan():
+    """Sin incluir_plan_pendientes, plan sin acta_id no aparece (actas sin Plan)."""
+    items = ITEMS + [
+        {
+            "id": 50,
+            "contrato_id": 10,
+            "origen": "plan_actividad",
+            "estado_gestion": "abierto",
+            "acta_id": None,
+            "titulo": "Plan suelto",
+            "asignado_a_id": 7,
+            "fecha_vencimiento": "2026-08-10",
+            "campos_libres": {
+                "plan": {"grupo_nombre": "Obra", "prioridad": 3, "fecha_inicio": "2026-08-01", "fecha_fin": "2026-08-10"},
+                "asignaciones": [{"usuario_id": 7, "nombre": "Ana"}],
+            },
+        },
+    ]
+    sb = _FakeSB(items, ACTAS)
+    out = compromisos_abiertos_contrato(sb, 10, tipo_acta="interna")
+    assert all(r["id"] != 50 for r in out)
+
+
+def test_plan_sin_acta_incluido_para_convocado_con_flag():
+    items = ITEMS + [
+        {
+            "id": 50,
+            "contrato_id": 10,
+            "origen": "plan_actividad",
+            "estado_gestion": "abierto",
+            "acta_id": None,
+            "titulo": "Plan suelto",
+            "asignado_a_id": 7,
+            "fecha_vencimiento": "2026-08-10",
+            "campos_libres": {
+                "plan": {
+                    "grupo_nombre": "Obra",
+                    "prioridad": 3,
+                    "fecha_inicio": "2026-08-01",
+                    "fecha_fin": "2026-08-10",
+                },
+                "asignaciones": [{"usuario_id": 7, "nombre": "Ana"}],
+            },
+        },
+        {
+            "id": 51,
+            "contrato_id": 10,
+            "origen": "plan_actividad",
+            "estado_gestion": "abierto",
+            "acta_id": None,
+            "titulo": "Plan de otro",
+            "asignado_a_id": 99,
+            "fecha_vencimiento": "2026-08-11",
+            "campos_libres": {
+                "plan": {"grupo_nombre": "Calidad", "prioridad": 2},
+                "asignaciones": [{"usuario_id": 99, "nombre": "Otro"}],
+            },
+        },
+    ]
+    sb = _FakeSB(items, ACTAS)
+    out = compromisos_abiertos_contrato(
+        sb,
+        10,
+        tipo_acta="interna",
+        incluir_plan_pendientes=True,
+        convocado_ids=[7],
+    )
+    ids = [r["id"] for r in out]
+    assert 50 in ids
+    assert 51 not in ids
+    plan = next(r for r in out if r["id"] == 50)
+    assert plan["grupo_nombre"] == "Obra"
+    assert plan["acta_numero"] == "Plan de actividades"
+    assert plan.get("es_plan_actividad") is True
+
+
+def test_plan_vinculado_a_acta_previa_sigue_apareciendo():
+    items = ITEMS + [
+        {
+            "id": 60,
+            "contrato_id": 10,
+            "origen": "plan_actividad",
+            "estado_gestion": "abierto",
+            "acta_id": 100,
+            "titulo": "Plan desde acta 1",
+            "fecha_vencimiento": "2026-08-12",
+            "campos_libres": {"plan": {"grupo_nombre": "Obra", "prioridad": 4}},
+        },
+    ]
+    sb = _FakeSB(items, ACTAS)
+    out = compromisos_abiertos_contrato(sb, 10, excluir_acta_id=101, tipo_acta="interna")
+    ids = [r["id"] for r in out]
+    assert 1 in ids
+    assert 60 in ids
+    plan = next(r for r in out if r["id"] == 60)
+    assert plan["grupo_nombre"] == "Obra"

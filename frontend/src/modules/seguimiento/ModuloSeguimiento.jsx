@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  BookOpen, CalendarDays, ClipboardList, Percent, Truck, Users,
+  BookOpen, CalendarDays, Percent, Truck, Users,
 } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
@@ -43,6 +43,20 @@ function toolbarIconBtn(t, { active = false, primary = false } = {}) {
   }
 }
 
+/** Cierra el tip institucional al activar el botón (evita tip fijo tras clic/toque). */
+function hideToolbarTip() {
+  try {
+    document.dispatchEvent(new CustomEvent('cc-title-tooltip-hide'))
+  } catch { /* ignore */ }
+}
+
+function withTipHide(handler) {
+  return (...args) => {
+    hideToolbarTip()
+    return handler?.(...args)
+  }
+}
+
 /**
  * Seguimiento: vista única de Calendario (tareas, actas y bitácora por día).
  * Plan de actividades: visible solo con permiso Ver del submódulo (sin flag por contrato).
@@ -81,8 +95,17 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
     setCalKey((n) => n + 1)
-    setUpdatedAt(Date.now())
+    // En vista Plan el calendario está desmontado: no hay onDataFresh.
+    if (vistaPlan) {
+      setUpdatedAt(Date.now())
+      setRefreshBusy(false)
+    }
+    // «Al día» en calendario se confirma vía onCalendarioDataFresh.
+  }, [vistaPlan])
+
+  const onCalendarioDataFresh = useCallback((result) => {
     setRefreshBusy(false)
+    if (result?.ok) setUpdatedAt(Date.now())
   }, [])
 
   useEffect(() => {
@@ -96,12 +119,20 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   }, [setModuloRefresh, clearModuloRefresh, doRefresh, refreshBusy])
 
   useEffect(() => {
-    setUpdatedAt(Date.now())
-  }, [])
-
-  useEffect(() => {
     if (!permisosPlan.ver) setVistaPlan(false)
   }, [permisosPlan.ver])
+
+  const toggleVistaPlan = useCallback(() => {
+    setVistaPlan((v) => {
+      const next = !v
+      // Al volver al calendario, forzar refetch (bitácoras/tareas pueden haber cambiado).
+      if (v && !next) {
+        setRefreshBusy(true)
+        setCalKey((n) => n + 1)
+      }
+      return next
+    })
+  }, [])
 
   if (permisos.bloqueado) {
     return (
@@ -132,11 +163,6 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
       }}>
         <div>
           <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text }}>Seguimiento</div>
-          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            {vistaPlan
-              ? 'Plan de actividades · grilla y Gantt'
-              : 'Calendario del contrato · tareas, actas y bitácora'}
-          </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {/* Grupo de botones solo icono */}
@@ -163,9 +189,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             {permisos?.ver && (
               <button
                 type="button"
-                onClick={() => setCumplimientoOpen((v) => !v)}
-                title="Cumplimiento por persona: resume el avance de tareas y compromisos asignados."
-                aria-label="Cumplimiento por persona"
+                onClick={withTipHide(() => setCumplimientoOpen((v) => !v))}
+                title="Cumplimiento"
+                data-cc-tooltip="Cumplimiento"
+                data-cc-tooltip-variant="short"
+                aria-label="Cumplimiento"
                 style={toolbarIconBtn(t, { active: cumplimientoOpen })}
               >
                 <Percent size={17} strokeWidth={2.4} aria-hidden />
@@ -174,9 +202,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             {permisos?.editar && (
               <button
                 type="button"
-                onClick={() => setExternosDepuracionOpen(true)}
-                title="Externos: depurar asistentes externos del histórico de actas."
-                aria-label="Depurar externos"
+                onClick={withTipHide(() => setExternosDepuracionOpen(true))}
+                title="Externos"
+                data-cc-tooltip="Externos"
+                data-cc-tooltip-variant="short"
+                aria-label="Externos"
                 style={toolbarIconBtn(t)}
               >
                 <Users size={17} strokeWidth={2.3} aria-hidden />
@@ -185,9 +215,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             {permisosBitacora?.esDesarrollador && (
               <button
                 type="button"
-                onClick={() => setMaquinariaCatalogoOpen(true)}
-                title="Maquinaria: gestionar el catálogo de equipos de Bitácora."
-                aria-label="Catálogo de maquinaria"
+                onClick={withTipHide(() => setMaquinariaCatalogoOpen(true))}
+                title="Maquinaria"
+                data-cc-tooltip="Maquinaria"
+                data-cc-tooltip-variant="short"
+                aria-label="Maquinaria"
                 style={toolbarIconBtn(t)}
               >
                 <Truck size={17} strokeWidth={2.3} aria-hidden />
@@ -198,8 +230,10 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           <button
             type="button"
             className="cc-seguim-libro-btn"
-            onClick={() => setLibroSelectorOpen(true)}
-            title="Libro digital: consultar Actas o Bitácora en modo lectura."
+            onClick={withTipHide(() => setLibroSelectorOpen(true))}
+            title="Libro digital"
+            data-cc-tooltip="Libro digital"
+            data-cc-tooltip-variant="short"
             aria-label="Libro digital"
             style={toolbarIconBtn(t, { primary: true })}
           >
@@ -209,18 +243,21 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           {showPlanBtn && (
             <button
               type="button"
-              onClick={() => setVistaPlan((v) => !v)}
-              title={
-                vistaPlan
-                  ? 'Volver al calendario de Seguimiento.'
-                  : 'Plan de actividades: ver la grilla tipo Excel con Gantt (compromisos del plan).'
-              }
-              aria-label={vistaPlan ? 'Ver calendario' : 'Ver Plan de actividades'}
-              style={toolbarIconBtn(t, { active: vistaPlan })}
+              onClick={withTipHide(toggleVistaPlan)}
+              title={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
+              data-cc-tooltip={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
+              data-cc-tooltip-variant="short"
+              aria-label={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
+              style={{
+                ...toolbarIconBtn(t, { active: vistaPlan }),
+                /* Icono policromático distintivo (estilo menú lateral; 🧩 no usado en la plataforma). */
+                fontSize: vistaPlan ? undefined : 'var(--cc-lg, 18px)',
+                lineHeight: 1,
+              }}
             >
               {vistaPlan
                 ? <CalendarDays size={18} strokeWidth={2.3} aria-hidden />
-                : <ClipboardList size={18} strokeWidth={2.3} aria-hidden />}
+                : <span aria-hidden style={{ fontSize: 18, lineHeight: 1 }}>🧩</span>}
             </button>
           )}
 
@@ -248,10 +285,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           t={t}
           usuario={usuario}
           token={token}
-          contratoId={contratoId}
+          contratoId={cid}
           viewportCompact={compact}
           refreshKey={calKey}
           showFilters
+          onDataFresh={onCalendarioDataFresh}
         />
       )}
 
