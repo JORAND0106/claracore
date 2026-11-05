@@ -11,6 +11,7 @@ import { fmtFecha } from './seguimientoTheme'
 import PlanActividadFormModal from './PlanActividadFormModal'
 import PlanActividadDetalleModal from './PlanActividadDetalleModal'
 import PlanActividadesEquipoVista from './PlanActividadesEquipoVista'
+import PlanActividadesExportModal from './PlanActividadesExportModal'
 import { resolverPeriodo } from './planActividadesEquipo'
 
 function iconBtn(t, active = false) {
@@ -79,6 +80,7 @@ export default function PlanActividadesVista({
   const [formOpen, setFormOpen] = useState(false)
   const [editItem, setEditItem] = useState(null)
   const [detalleId, setDetalleId] = useState(null)
+  const [exportOpen, setExportOpen] = useState(false)
   /** Por defecto la grilla es protagonista; el Gantt se abre con la flecha. */
   const [ganttOpen, setGanttOpen] = useState(false)
   /** Pestañas (vista amplia): mi_plan | equipo */
@@ -179,19 +181,25 @@ export default function PlanActividadesVista({
     setGanttOpen((v) => !v)
   }
 
+  async function descargarExport(params = {}) {
+    const result = await api.exportPlanActividadesBlob(params)
+    const blob = result?.blob || result
+    const filename = result?.filename || 'plan_actividades.xlsx'
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   async function exportar() {
     try {
-      const q = {
-        ver_todos: vistaAmplia && verTodos && !colaboradorEfectivo,
+      if (vistaAmplia) {
+        setExportOpen(true)
+        return
       }
-      if (colaboradorEfectivo) q.colaborador_id = Number(colaboradorEfectivo)
-      const blob = await api.exportPlanActividadesBlob(q)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `plan_actividades.xlsx`
-      a.click()
-      URL.revokeObjectURL(url)
+      await descargarExport({})
     } catch (e) {
       setError(e?.message || 'No se pudo exportar')
     }
@@ -637,6 +645,21 @@ export default function PlanActividadesVista({
             setDetalleId(null)
             setEditItem(it)
             setFormOpen(true)
+          }}
+        />
+      )}
+
+      {exportOpen && (
+        <PlanActividadesExportModal
+          t={t}
+          usuarios={usuarios.filter((u) => Number(u.id) > 0)}
+          onClose={() => setExportOpen(false)}
+          onExport={async ({ todos, colaborador_ids }) => {
+            await descargarExport(
+              todos
+                ? { todos: true, colaborador_ids }
+                : { colaborador_ids },
+            )
           }}
         />
       )}
