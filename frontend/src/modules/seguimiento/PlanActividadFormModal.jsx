@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { PenLine, Save, Trash2, X } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import CcConfirmModal from '../../components/CcConfirmModal'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
+import {
+  avatarColorFromName,
+  inicialesUsuario,
+  usuariosFichaTheme,
+} from '../../components/ccFichaModalTheme'
 import TemaRichEditor from './TemaRichEditor'
 import UserSearchSelect from './UserSearchSelect'
-import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { isRichTextEmpty } from './richTextUtils'
+import { useSeguimientoCompact } from './seguimientoShared'
 
 const PRIORIDADES = [
   { value: 1, label: 'Muy suave', color: '#86efac' },
@@ -25,6 +32,16 @@ const PERIODICIDADES = [
   { value: 'mensual', label: 'Mensual' },
 ]
 
+function resolveThemeMode(t) {
+  if (typeof document !== 'undefined') {
+    const ds = document.documentElement?.dataset?.ccTheme
+    if (ds === 'dark' || ds === 'rest' || ds === 'light') return ds
+  }
+  if (t?.mode === 'dark' || t?.mode === 'rest' || t?.mode === 'light') return t.mode
+  if (t?.isDark === true) return 'dark'
+  return 'light'
+}
+
 function nombreUsuario(u) {
   if (!u) return ''
   return (
@@ -36,22 +53,121 @@ function nombreUsuario(u) {
   )
 }
 
-function ghost(t) {
-  return {
-    padding: '4px 10px',
-    borderRadius: 6,
-    border: `1px solid ${t.border}`,
-    background: 'transparent',
-    color: t.text,
-    cursor: 'pointer',
-    fontSize: 'var(--cc-xs)',
-    fontWeight: 700,
-    fontFamily: 'inherit',
+function partsNombre(u, fallbackNombre = '') {
+  if (u) {
+    return {
+      nombre: u.nombre || String(fallbackNombre || '').split(/\s+/)[0] || '',
+      apellidos: u.apellidos || String(fallbackNombre || '').split(/\s+/).slice(1).join(' ') || '',
+    }
   }
+  const bits = String(fallbackNombre || '').trim().split(/\s+/)
+  return { nombre: bits[0] || '', apellidos: bits.slice(1).join(' ') || '' }
+}
+
+function UserAvatar({ u, nombreFallback = '', ficha, size = 36 }) {
+  const parts = partsNombre(u, nombreFallback)
+  const initials = inicialesUsuario(parts.nombre, parts.apellidos)
+  const bg = avatarColorFromName(parts.nombre, parts.apellidos, ficha.avatarColors)
+  const foto = u?.foto_perfil_url || u?.foto_url || u?.avatar_url || ''
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: size,
+        height: size,
+        minWidth: size,
+        borderRadius: Math.round(size * 0.28),
+        overflow: 'hidden',
+        background: foto ? ficha.inputBg : `linear-gradient(145deg, ${bg}, ${ficha.primaryLight || ficha.primary})`,
+        color: '#fff',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontWeight: 800,
+        fontSize: Math.max(11, Math.round(size * 0.34)),
+        letterSpacing: '0.03em',
+        boxShadow: foto ? 'none' : `0 4px 12px ${bg}44`,
+        border: `1.5px solid ${ficha.border}`,
+        flexShrink: 0,
+      }}
+    >
+      {foto ? (
+        <img src={foto} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      ) : (
+        initials
+      )}
+    </span>
+  )
+}
+
+function SectionBlock({ title, ficha, children, last }) {
+  return (
+    <section style={{ ...ficha.sectionCard, marginBottom: last ? 0 : 14 }}>
+      <div style={ficha.sectionTitle}>
+        <span style={ficha.sectionDot} aria-hidden />
+        {title}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function IconBtn({ title, onClick, disabled, children, ficha, compact, variant = 'ghost' }) {
+  const size = compact ? 44 : 40
+  const primary = ficha.primary
+  const styles = variant === 'primary'
+    ? {
+      background: primary,
+      borderColor: primary,
+      color: '#fff',
+    }
+    : variant === 'danger'
+      ? {
+        background: `${ficha.dangerColor}14`,
+        borderColor: `${ficha.dangerColor}55`,
+        color: ficha.dangerColor,
+      }
+      : {
+        background: ficha.closeBtn?.background || 'transparent',
+        borderColor: ficha.border,
+        color: primary,
+      }
+  return (
+    <button
+      type="button"
+      title={title}
+      data-cc-tooltip={title}
+      data-cc-tooltip-variant="short"
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: size,
+        height: size,
+        minWidth: size,
+        minHeight: size,
+        borderRadius: 10,
+        border: '1px solid',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: disabled ? 'wait' : 'pointer',
+        opacity: disabled ? 0.55 : 1,
+        padding: 0,
+        fontFamily: 'inherit',
+        transition: 'transform 140ms ease, box-shadow 140ms ease',
+        ...styles,
+      }}
+    >
+      {children}
+    </button>
+  )
 }
 
 /**
- * Popup creación/edición de actividad del Plan — layout tipo Excel.
+ * Popup creación/edición de actividad del Plan.
+ * Misma familia visual que la ficha de Gestión de Usuarios.
+ * Conserva campos, editores, esquemas, solapes y validaciones.
  */
 export default function PlanActividadFormModal({
   t,
@@ -65,8 +181,11 @@ export default function PlanActividadFormModal({
   onClose,
   onSaved,
 }) {
-  const ui = useMemo(() => bitacoraSheetStyles(t), [t])
+  const compact = useSeguimientoCompact()
+  const themeMode = resolveThemeMode(t)
+  const ficha = useMemo(() => usuariosFichaTheme(themeMode, t), [themeMode, t])
   const editando = Boolean(actividad?.id)
+
   const [grupoModo, setGrupoModo] = useState('existente')
   const [grupoId, setGrupoId] = useState(actividad?.grupo_id || '')
   const [grupoNuevo, setGrupoNuevo] = useState('')
@@ -79,7 +198,7 @@ export default function PlanActividadFormModal({
   const [adjCom, setAdjCom] = useState(() => (
     Array.isArray(actividad?.adjuntos_comentario) ? actividad.adjuntos_comentario : []
   ))
-  const [esquemaCampo, setEsquemaCampo] = useState(null) // 'descripcion' | 'comentario'
+  const [esquemaCampo, setEsquemaCampo] = useState(null)
   const [slideDesc, setSlideDesc] = useState(0)
   const [slideCom, setSlideCom] = useState(0)
   const [solicitanteId, setSolicitanteId] = useState(
@@ -126,6 +245,11 @@ export default function PlanActividadFormModal({
   const usuariosDisponibles = useMemo(
     () => usuarios.filter((u) => !asignados.some((a) => Number(a.id) === Number(u.id))),
     [usuarios, asignados],
+  )
+
+  const solicitante = useMemo(
+    () => usuarios.find((u) => Number(u.id) === Number(solicitanteId)) || null,
+    [usuarios, solicitanteId],
   )
 
   function addAsignado(u) {
@@ -241,355 +365,444 @@ export default function PlanActividadFormModal({
     }
   }
 
-  const cellInp = {
-    ...ui.cellInp,
-    width: '100%',
-    boxSizing: 'border-box',
-    minHeight: 32,
+  const fieldInput = {
+    ...ficha.select,
+    borderRadius: 8,
+    fontWeight: 600,
   }
 
-  const thLabel = { ...ui.th, width: '12%', whiteSpace: 'nowrap' }
-  const tdField = { ...ui.td, verticalAlign: 'top' }
+  const grid2 = {
+    display: 'grid',
+    gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
+    gap: 10,
+  }
 
-  return (
+  const label = {
+    display: 'block',
+    fontSize: 'var(--cc-caption)',
+    fontWeight: 700,
+    color: ficha.textMuted,
+    marginBottom: 6,
+    letterSpacing: '0.02em',
+  }
+
+  const modalNode = (
     <>
       <div
         style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 100040,
-          background: t.overlay || 'rgba(15,23,42,0.48)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 12,
+          ...ficha.overlay,
+          zIndex: 100060,
+          padding: compact ? 0 : 16,
         }}
+        role="presentation"
+        data-cc-plan-actividad-form-overlay="1"
         onClick={onClose}
       >
         <div
           role="dialog"
           aria-modal="true"
-          aria-label={editando ? 'Editar actividad' : 'Crear actividad'}
+          aria-labelledby="cc-plan-actividad-form-title"
           onClick={(e) => e.stopPropagation()}
           style={{
-            width: 'min(1100px, 98vw)',
-            maxHeight: '86vh',
-            overflow: 'auto',
-            background: t.bgCard || t.bg || '#fff',
-            border: `1px solid ${t.border}`,
-            borderRadius: 12,
-            boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
+            width: compact ? '100%' : 'min(920px, 98vw)',
+            maxHeight: compact ? '100dvh' : '94vh',
+            height: compact ? '100dvh' : undefined,
+            borderRadius: compact ? 0 : 16,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            fontSize: 'var(--cc-sm)',
+            color: ficha.text,
+            fontFamily: 'inherit',
+            ...ficha.modal,
           }}
         >
           <CcModalBrandHeader theme={t} />
-          <div style={{ padding: '10px 16px', borderBottom: `1px solid ${t.border}` }}>
-            <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 800, color: t.text }}>
-              {editando ? 'Editar actividad' : 'Nueva actividad'}
+
+          <div style={{ ...ficha.hero, flexShrink: 0 }}>
+            <div style={ficha.heroAccent} aria-hidden />
+            <div
+              style={{
+                padding: compact ? '14px 14px 16px' : '16px 18px 18px',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: compact ? 12 : 16,
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
+                  id="cc-plan-actividad-form-title"
+                  style={{
+                    fontSize: 'var(--cc-h2)',
+                    fontWeight: 800,
+                    color: ficha.text,
+                    lineHeight: 1.2,
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  {editando ? 'Editar actividad' : 'Nueva actividad'}
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    marginTop: 10,
+                  }}
+                >
+                  <span style={ficha.pill('primary')}>Plan de actividades</span>
+                  <span style={ficha.pill(prioridad >= 4 ? 'rechazado' : prioridad <= 2 ? 'aprobado' : 'pendiente')}>
+                    Prioridad {prioridad}
+                    {' · '}
+                    {PRIORIDADES.find((p) => p.value === prioridad)?.label}
+                  </span>
+                </div>
+              </div>
+              <IconBtn title="Cerrar" ficha={ficha} compact={compact} onClick={onClose}>
+                <X size={18} strokeWidth={2.25} aria-hidden />
+              </IconBtn>
             </div>
           </div>
 
-          <div style={{ padding: '12px 16px 16px' }}>
-            <div style={ui.sheetWrap}>
-              <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
-                <tbody>
-                  <tr>
-                    <th style={thLabel}>Grupo</th>
-                    <td style={tdField} colSpan={3}>
-                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--cc-sm)', color: t.text }}>
-                          <input type="radio" checked={grupoModo === 'existente'} onChange={() => setGrupoModo('existente')} />
-                          Existente
-                        </label>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--cc-sm)', color: t.text }}>
-                          <input type="radio" checked={grupoModo === 'otro'} onChange={() => setGrupoModo('otro')} />
-                          Otro
-                        </label>
-                      </div>
-                      {grupoModo === 'otro' ? (
-                        <input
-                          style={cellInp}
-                          value={grupoNuevo}
-                          onChange={(e) => setGrupoNuevo(e.target.value)}
-                          placeholder="Nombre del nuevo grupo"
-                          list="plan-grupos-sugeridos"
-                        />
-                      ) : (
-                        <select style={cellInp} value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>
-                          <option value="">Seleccione…</option>
-                          {grupoOptions.map((g) => (
-                            <option key={g.id} value={g.id}>{g.nombre}</option>
-                          ))}
-                        </select>
-                      )}
-                      <datalist id="plan-grupos-sugeridos">
-                        {grupoOptions.map((g) => (
-                          <option key={g.id} value={g.nombre} />
-                        ))}
-                      </datalist>
-                    </td>
-                  </tr>
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: compact
+                ? '12px 12px max(16px, env(safe-area-inset-bottom))'
+                : '16px 18px 20px',
+              WebkitOverflowScrolling: 'touch',
+              background: themeMode === 'dark'
+                ? 'rgba(0,0,0,0.12)'
+                : themeMode === 'rest'
+                  ? 'rgba(42,35,24,0.03)'
+                  : 'rgba(0,119,182,0.03)',
+            }}
+          >
+            <SectionBlock title="Identificación" ficha={ficha}>
+              <div style={{ ...grid2, marginBottom: 10 }}>
+                <div>
+                  <label style={label}>Grupo</label>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: ficha.text, fontSize: 'var(--cc-sm)' }}>
+                      <input type="radio" checked={grupoModo === 'existente'} onChange={() => setGrupoModo('existente')} />
+                      Existente
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: ficha.text, fontSize: 'var(--cc-sm)' }}>
+                      <input type="radio" checked={grupoModo === 'otro'} onChange={() => setGrupoModo('otro')} />
+                      Otro
+                    </label>
+                  </div>
+                  {grupoModo === 'otro' ? (
+                    <input
+                      style={fieldInput}
+                      value={grupoNuevo}
+                      onChange={(e) => setGrupoNuevo(e.target.value)}
+                      placeholder="Nombre del nuevo grupo"
+                      list="plan-grupos-sugeridos"
+                    />
+                  ) : (
+                    <select style={fieldInput} value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>
+                      <option value="">Seleccione…</option>
+                      {grupoOptions.map((g) => (
+                        <option key={g.id} value={g.id}>{g.nombre}</option>
+                      ))}
+                    </select>
+                  )}
+                  <datalist id="plan-grupos-sugeridos">
+                    {grupoOptions.map((g) => (
+                      <option key={g.id} value={g.nombre} />
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label style={label}>Actividad</label>
+                  <input
+                    style={fieldInput}
+                    value={titulo}
+                    onChange={(e) => setTitulo(e.target.value)}
+                    placeholder="Título"
+                    maxLength={500}
+                  />
+                </div>
+              </div>
+            </SectionBlock>
 
-                  <tr>
-                    <th style={thLabel}>Actividad</th>
-                    <td style={tdField} colSpan={3}>
-                      <input
-                        style={cellInp}
-                        value={titulo}
-                        onChange={(e) => setTitulo(e.target.value)}
-                        placeholder="Título"
-                        maxLength={500}
-                      />
-                    </td>
-                  </tr>
-
-                  <tr>
-                    <th style={thLabel}>Descripción</th>
-                    <td style={tdField} colSpan={3}>
-                      <TemaRichEditor
-                        t={t}
-                        value={descripcion}
-                        onChange={setDescripcion}
-                        minHeight={72}
-                        placeholder="Descripción…"
-                      />
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
-                        <button type="button" style={ghost(t)} onClick={() => setEsquemaCampo('descripcion')}>
-                          Dibujar esquema
-                        </button>
-                        {adjDesc.length > 0 && (
-                          <button
-                            type="button"
-                            style={ghost(t)}
-                            onClick={() => setAdjDesc((prev) => prev.filter((_, i) => i !== Math.min(slideDesc, prev.length - 1)))}
-                          >
-                            Quitar adjunto
-                          </button>
-                        )}
-                      </div>
-                      {adjDesc.length > 0 && (
-                        <div style={{ marginTop: 6 }}>
-                          <AdjuntosMediaSlider
-                            t={t}
-                            items={slidesFromImagenes(adjDesc, imagenSrc)}
-                            index={Math.min(slideDesc, adjDesc.length - 1)}
-                            height={140}
-                            onIndexChange={setSlideDesc}
-                            onClickItem={(slide) => openImageInNewTab(slide.source)}
-                          />
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-
-                  <tr>
-                    <th style={thLabel}>Comentario comité</th>
-                    <td style={tdField} colSpan={3}>
-                      <TemaRichEditor
-                        t={t}
-                        value={comentario}
-                        onChange={setComentario}
-                        minHeight={56}
-                        placeholder="Comentario del comité…"
-                      />
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
-                        <button type="button" style={ghost(t)} onClick={() => setEsquemaCampo('comentario')}>
-                          Dibujar esquema
-                        </button>
-                        {adjCom.length > 0 && (
-                          <button
-                            type="button"
-                            style={ghost(t)}
-                            onClick={() => setAdjCom((prev) => prev.filter((_, i) => i !== Math.min(slideCom, prev.length - 1)))}
-                          >
-                            Quitar adjunto
-                          </button>
-                        )}
-                      </div>
-                      {adjCom.length > 0 && (
-                        <div style={{ marginTop: 6 }}>
-                          <AdjuntosMediaSlider
-                            t={t}
-                            items={slidesFromImagenes(adjCom, imagenSrc)}
-                            index={Math.min(slideCom, adjCom.length - 1)}
-                            height={120}
-                            onIndexChange={setSlideCom}
-                            onClickItem={(slide) => openImageInNewTab(slide.source)}
-                          />
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-
-                  <tr>
-                    <th style={thLabel}>Solicitante</th>
-                    <td style={tdField}>
-                      <select style={cellInp} value={solicitanteId} onChange={(e) => setSolicitanteId(e.target.value)}>
-                        {usuarios.map((u) => (
-                          <option key={u.id} value={u.id}>{nombreUsuario(u)}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <th style={thLabel}>Prioridad</th>
-                    <td style={tdField}>
-                      <div
-                        style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', padding: '4px 0' }}
-                        role="slider"
-                        aria-valuenow={prioridad}
-                        aria-valuemin={1}
-                        aria-valuemax={5}
+            <SectionBlock title="Contenido" ficha={ficha}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <label style={{ ...label, marginBottom: 0 }}>Descripción</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <IconBtn
+                      title="Dibujar esquema"
+                      ficha={ficha}
+                      compact={compact}
+                      onClick={() => setEsquemaCampo('descripcion')}
+                    >
+                      <PenLine size={16} strokeWidth={2.1} aria-hidden />
+                    </IconBtn>
+                    {adjDesc.length > 0 && (
+                      <IconBtn
+                        title="Quitar adjunto"
+                        ficha={ficha}
+                        compact={compact}
+                        variant="danger"
+                        onClick={() => setAdjDesc((prev) => prev.filter((_, i) => i !== Math.min(slideDesc, prev.length - 1)))}
                       >
-                        {PRIORIDADES.map((p) => (
-                          <button
-                            key={p.value}
-                            type="button"
-                            title={p.label}
-                            data-cc-tooltip={p.label}
-                            data-cc-tooltip-variant="short"
-                            aria-label={`Prioridad ${p.value}: ${p.label}`}
-                            onClick={() => setPrioridad(p.value)}
-                            style={{
-                              width: 24 + p.value * 3,
-                              height: 24 + p.value * 2,
-                              borderRadius: 999,
-                              border: prioridad === p.value ? `2px solid ${t.text}` : `1px solid ${t.border}`,
-                              background: p.color,
-                              cursor: 'pointer',
-                              transition: 'transform 160ms ease, box-shadow 160ms ease',
-                              transform: prioridad === p.value ? 'scale(1.08)' : 'scale(1)',
-                              boxShadow: prioridad === p.value ? `0 0 0 3px ${p.color}55` : 'none',
-                            }}
-                          />
-                        ))}
-                        <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                          {PRIORIDADES.find((p) => p.value === prioridad)?.label}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
+                        <Trash2 size={16} strokeWidth={2.1} aria-hidden />
+                      </IconBtn>
+                    )}
+                  </div>
+                </div>
+                <TemaRichEditor
+                  t={t}
+                  value={descripcion}
+                  onChange={setDescripcion}
+                  minHeight={compact ? 72 : 88}
+                  placeholder="Descripción…"
+                />
+                {adjDesc.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <AdjuntosMediaSlider
+                      t={t}
+                      items={slidesFromImagenes(adjDesc, imagenSrc)}
+                      index={Math.min(slideDesc, adjDesc.length - 1)}
+                      height={140}
+                      onIndexChange={setSlideDesc}
+                      onClickItem={(slide) => openImageInNewTab(slide.source)}
+                    />
+                  </div>
+                )}
+              </div>
 
-                  <tr>
-                    <th style={thLabel}>Asignado(s)</th>
-                    <td style={tdField} colSpan={3}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-                        {asignados.map((a) => (
-                          <button
-                            key={a.id}
-                            type="button"
-                            onClick={() => removeAsignado(a.id)}
-                            title="Quitar"
-                            data-cc-tooltip="Quitar"
-                            data-cc-tooltip-variant="short"
-                            style={{
-                              border: `1px solid ${t.primary}`,
-                              background: `${t.primary}14`,
-                              color: t.text,
-                              borderRadius: 999,
-                              padding: '4px 10px',
-                              fontSize: 'var(--cc-xs)',
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                              fontFamily: 'inherit',
-                            }}
-                          >
-                            {a.nombre || `#${a.id}`} ×
-                          </button>
-                        ))}
-                      </div>
-                      <UserSearchSelect
-                        key={`asig-search-${asignados.map((a) => a.id).join('-') || 'empty'}`}
-                        t={t}
-                        usuarios={usuariosDisponibles}
-                        valueId={null}
-                        valueNombre=""
-                        mode="strict"
-                        placeholder={asignados.length ? 'Agregar otro…' : 'Buscar asignado…'}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <label style={{ ...label, marginBottom: 0 }}>Comentario comité</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <IconBtn
+                      title="Dibujar esquema"
+                      ficha={ficha}
+                      compact={compact}
+                      onClick={() => setEsquemaCampo('comentario')}
+                    >
+                      <PenLine size={16} strokeWidth={2.1} aria-hidden />
+                    </IconBtn>
+                    {adjCom.length > 0 && (
+                      <IconBtn
+                        title="Quitar adjunto"
+                        ficha={ficha}
+                        compact={compact}
+                        variant="danger"
+                        onClick={() => setAdjCom((prev) => prev.filter((_, i) => i !== Math.min(slideCom, prev.length - 1)))}
+                      >
+                        <Trash2 size={16} strokeWidth={2.1} aria-hidden />
+                      </IconBtn>
+                    )}
+                  </div>
+                </div>
+                <TemaRichEditor
+                  t={t}
+                  value={comentario}
+                  onChange={setComentario}
+                  minHeight={compact ? 56 : 72}
+                  placeholder="Comentario del comité…"
+                />
+                {adjCom.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <AdjuntosMediaSlider
+                      t={t}
+                      items={slidesFromImagenes(adjCom, imagenSrc)}
+                      index={Math.min(slideCom, adjCom.length - 1)}
+                      height={120}
+                      onIndexChange={setSlideCom}
+                      onClickItem={(slide) => openImageInNewTab(slide.source)}
+                    />
+                  </div>
+                )}
+              </div>
+            </SectionBlock>
+
+            <SectionBlock title="Personas" ficha={ficha}>
+              <div style={{ ...grid2, marginBottom: 12 }}>
+                <div>
+                  <label style={label}>Solicitante</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <UserAvatar u={solicitante} ficha={ficha} size={compact ? 40 : 36} />
+                    <select
+                      style={{ ...fieldInput, flex: 1 }}
+                      value={solicitanteId}
+                      onChange={(e) => setSolicitanteId(e.target.value)}
+                    >
+                      {usuarios.map((u) => (
+                        <option key={u.id} value={u.id}>{nombreUsuario(u)}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={label}>Prioridad</label>
+                  <div
+                    style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', minHeight: 36 }}
+                    role="slider"
+                    aria-valuenow={prioridad}
+                    aria-valuemin={1}
+                    aria-valuemax={5}
+                  >
+                    {PRIORIDADES.map((p) => (
+                      <button
+                        key={p.value}
+                        type="button"
+                        title={p.label}
+                        data-cc-tooltip={p.label}
+                        data-cc-tooltip-variant="short"
+                        aria-label={`Prioridad ${p.value}: ${p.label}`}
+                        onClick={() => setPrioridad(p.value)}
                         style={{
-                          width: '100%',
-                          boxSizing: 'border-box',
-                          fontSize: 'var(--cc-sm)',
-                          padding: '6px 8px',
-                          borderRadius: 4,
-                          border: `1px solid ${ui.border}`,
-                          background: t.inputBg || t.bg || '#fff',
-                          color: t.text,
+                          width: 22 + p.value * 3,
+                          height: 22 + p.value * 2,
+                          borderRadius: 999,
+                          border: prioridad === p.value
+                            ? `2px solid ${ficha.text}`
+                            : `1px solid ${ficha.border}`,
+                          background: p.color,
+                          cursor: 'pointer',
+                          transition: 'transform 160ms ease, box-shadow 160ms ease',
+                          transform: prioridad === p.value ? 'scale(1.08)' : 'scale(1)',
+                          boxShadow: prioridad === p.value
+                            ? `0 0 0 3px ${ficha.primary}44`
+                            : 'none',
                         }}
-                        onSelect={addAsignado}
                       />
-                    </td>
-                  </tr>
+                    ))}
+                    <span style={{ fontSize: 'var(--cc-sm)', color: ficha.textMuted, fontWeight: 600 }}>
+                      {PRIORIDADES.find((p) => p.value === prioridad)?.label}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-                  <tr>
-                    <th style={thLabel}>Fecha inicio</th>
-                    <td style={tdField}>
-                      <input type="date" style={cellInp} value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} />
-                    </td>
-                    <th style={thLabel}>Fecha fin</th>
-                    <td style={tdField}>
-                      <input type="date" style={cellInp} value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} />
-                    </td>
-                  </tr>
+              <div>
+                <label style={label}>Asignado(s)</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                  {asignados.map((a) => {
+                    const u = usuarios.find((x) => Number(x.id) === Number(a.id))
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => removeAsignado(a.id)}
+                        title="Quitar"
+                        data-cc-tooltip="Quitar"
+                        data-cc-tooltip-variant="short"
+                        style={{
+                          ...ficha.pill('primary'),
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                          gap: 8,
+                          padding: '4px 10px 4px 4px',
+                        }}
+                      >
+                        <UserAvatar u={u} nombreFallback={a.nombre} ficha={ficha} size={24} />
+                        <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {a.nombre || `#${a.id}`}
+                        </span>
+                        <X size={12} strokeWidth={2.4} aria-hidden />
+                      </button>
+                    )
+                  })}
+                </div>
+                <UserSearchSelect
+                  key={`asig-search-${asignados.map((a) => a.id).join('-') || 'empty'}`}
+                  t={t}
+                  usuarios={usuariosDisponibles}
+                  valueId={null}
+                  valueNombre=""
+                  mode="strict"
+                  placeholder={asignados.length ? 'Agregar otro…' : 'Buscar asignado…'}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    fontSize: 'var(--cc-sm)',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${ficha.border}`,
+                    background: ficha.inputBg,
+                    color: ficha.text,
+                    fontWeight: 600,
+                  }}
+                  onSelect={addAsignado}
+                />
+              </div>
+            </SectionBlock>
 
-                  <tr>
-                    <th style={thLabel}>Periodicidad</th>
-                    <td style={tdField}>
-                      <select style={cellInp} value={periodicidad} onChange={(e) => setPeriodicidad(e.target.value)}>
-                        {PERIODICIDADES.map((p) => (
-                          <option key={p.value} value={p.value}>{p.label}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <th style={thLabel}>Repetir hasta</th>
-                    <td style={tdField}>
-                      <input
-                        type="date"
-                        style={cellInp}
-                        value={periodicidadHasta}
-                        disabled={periodicidad === 'ninguna'}
-                        onChange={(e) => setPeriodicidadHasta(e.target.value)}
-                      />
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <SectionBlock title="Fechas y periodicidad" ficha={ficha} last>
+              <div style={{ ...grid2, marginBottom: 10 }}>
+                <div>
+                  <label style={label}>Fecha inicio</label>
+                  <input type="date" style={fieldInput} value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} />
+                </div>
+                <div>
+                  <label style={label}>Fecha fin</label>
+                  <input type="date" style={fieldInput} value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} />
+                </div>
+              </div>
+              <div style={grid2}>
+                <div>
+                  <label style={label}>Periodicidad</label>
+                  <select style={fieldInput} value={periodicidad} onChange={(e) => setPeriodicidad(e.target.value)}>
+                    {PERIODICIDADES.map((p) => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={label}>Repetir hasta</label>
+                  <input
+                    type="date"
+                    style={{
+                      ...fieldInput,
+                      opacity: periodicidad === 'ninguna' ? 0.55 : 1,
+                    }}
+                    value={periodicidadHasta}
+                    disabled={periodicidad === 'ninguna'}
+                    onChange={(e) => setPeriodicidadHasta(e.target.value)}
+                  />
+                </div>
+              </div>
+            </SectionBlock>
 
             {error && (
-              <div style={{ color: t.danger || '#dc2626', fontSize: 'var(--cc-sm)', marginTop: 10 }}>{error}</div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-              <button
-                type="button"
-                onClick={onClose}
+              <div
                 style={{
-                  padding: '8px 14px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: 'transparent',
-                  color: t.text,
-                  cursor: 'pointer',
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: `1px solid ${ficha.dangerColor}55`,
+                  background: `${ficha.dangerColor}14`,
+                  color: ficha.dangerColor,
+                  fontSize: 'var(--cc-sm)',
                   fontWeight: 700,
                 }}
               >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => submit(false)}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 8,
-                  border: 'none',
-                  background: t.primary,
-                  color: '#fff',
-                  cursor: saving ? 'wait' : 'pointer',
-                  fontWeight: 800,
-                }}
-              >
-                {saving ? 'Guardando…' : (editando ? 'Guardar cambios' : 'Crear actividad')}
-              </button>
-            </div>
+                {error}
+              </div>
+            )}
+          </div>
+
+          <div style={ficha.foot}>
+            <IconBtn title="Cancelar" ficha={ficha} compact={compact} onClick={onClose}>
+              <X size={18} strokeWidth={2.2} aria-hidden />
+            </IconBtn>
+            <IconBtn
+              title={saving ? 'Guardando…' : (editando ? 'Guardar cambios' : 'Crear actividad')}
+              ficha={ficha}
+              compact={compact}
+              variant="primary"
+              disabled={saving}
+              onClick={() => submit(false)}
+            >
+              <Save size={18} strokeWidth={2.2} aria-hidden />
+            </IconBtn>
           </div>
         </div>
       </div>
@@ -617,7 +830,7 @@ export default function PlanActividadFormModal({
           titulo="Alerta de solape de fechas"
           confirmar="Continuar y guardar"
           cancelar="Volver a ajustar"
-          zIndex={100050}
+          zIndex={100070}
           procesando={saving}
           onCancel={() => setSolapes(null)}
           onConfirm={() => {
@@ -625,10 +838,10 @@ export default function PlanActividadFormModal({
             submit(true)
           }}
         >
-          <div style={{ fontSize: 'var(--cc-sm)', color: t.text }}>
+          <div style={{ fontSize: 'var(--cc-sm)', color: ficha.text }}>
             Esta actividad se cruza con otras del mismo asignado. La alerta es informativa y no impide guardar.
           </div>
-          <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 'var(--cc-sm)', color: t.text }}>
+          <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 'var(--cc-sm)', color: ficha.text }}>
             {(solapes || []).slice(0, 12).map((s) => (
               <li key={`${s.item_id}-${s.fecha_inicio}`}>
                 <strong>{s.titulo}</strong>
@@ -643,4 +856,7 @@ export default function PlanActividadFormModal({
       )}
     </>
   )
+
+  if (typeof document === 'undefined') return modalNode
+  return createPortal(modalNode, document.body)
 }
