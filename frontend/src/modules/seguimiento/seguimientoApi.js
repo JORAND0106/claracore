@@ -293,10 +293,17 @@ export function createSeguimientoApi(contratoId, token) {
     listBitacora: (params = {}) => {
       const q = new URLSearchParams()
       Object.entries(params).forEach(([k, v]) => {
-        if (v != null && v !== '') q.set(k, String(v))
+        if (v == null || v === '') return
+        if (typeof v === 'boolean') {
+          q.set(k, v ? 'true' : 'false')
+          return
+        }
+        q.set(k, String(v))
       })
       const qs = q.toString()
-      return get(`/seguimiento/${cid}/bitacora${qs ? `?${qs}` : ''}`)
+      // Calendario: timeout mayor — listado enriquecido puede superar 30s.
+      const timeout = params.para_calendario ? 90000 : 45000
+      return get(`/seguimiento/${cid}/bitacora${qs ? `?${qs}` : ''}`, timeout)
     },
     getBitacoraEntrada: (entradaId) => get(`/seguimiento/${cid}/bitacora/${entradaId}`),
     /**

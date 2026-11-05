@@ -478,6 +478,11 @@ export function filterEventsSoloMias(events, usuarioId) {
     const kind = ev?.extendedProps?.kind
     const raw = ev?.extendedProps?.raw || {}
     if (kind === 'bitacora_diario' || kind === 'bitacora_evento') {
+      // Agrupados por día: basta con que alguno de los diarios sea del usuario.
+      const diarios = ev?.extendedProps?.diarios
+      if (Array.isArray(diarios) && diarios.length) {
+        return diarios.some((d) => Number(d?.created_by) === uid)
+      }
       return Number(raw.created_by) === uid
     }
     return true

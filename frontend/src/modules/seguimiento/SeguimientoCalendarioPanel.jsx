@@ -22,6 +22,7 @@ export default function SeguimientoCalendarioPanel({
   refreshKey = 0,
   showFilters = true,
   widgetMode = false,
+  onDataFresh = null,
 }) {
   const cid = contratoId ?? usuario?.contrato_id
   const permisos = useMemo(() => accesoSeguimiento(usuario, cid), [usuario, cid])
@@ -178,6 +179,7 @@ export default function SeguimientoCalendarioPanel({
       refreshKey={Number(refreshKey) + localKey}
       showFilters={showFilters && !widgetMode}
       widgetMode={widgetMode}
+      onDataFresh={onDataFresh}
       onNuevaActa={(fecha) => {
         setFechaActaInicial(fecha ? String(fecha).slice(0, 10) : null)
         setCreating(true)

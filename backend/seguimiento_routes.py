@@ -1705,6 +1705,10 @@ def route_list_bitacora(
     fecha_hasta: Optional[str] = Query(None),
     tipo: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
+    para_calendario: bool = Query(
+        False,
+        description="Respuesta ligera para el calendario (sin usos/media)",
+    ),
     current_user=Depends(get_current_user),
 ):
     require_permiso_bitacora(current_user, "ver", contrato_id)
@@ -1717,6 +1721,7 @@ def route_list_bitacora(
             fecha_hasta=fecha_hasta,
             tipo=tipo,
             q=q,
+            para_calendario=para_calendario,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

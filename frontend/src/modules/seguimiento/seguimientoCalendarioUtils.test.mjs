@@ -223,4 +223,24 @@ const solo = filterEventsSoloMias([
 ], 5)
 assert(solo.map((x) => x.id).join(',') === '1,2', 'solo_mias filtra bitácora ajena; bandeja ya filtrada en API')
 
+const soloGrouped = filterEventsSoloMias([
+  {
+    id: 'g',
+    extendedProps: {
+      kind: 'bitacora_diario',
+      raw: { created_by: 9 },
+      diarios: [{ created_by: 9 }, { created_by: 5 }],
+    },
+  },
+  {
+    id: 'h',
+    extendedProps: {
+      kind: 'bitacora_diario',
+      raw: { created_by: 9 },
+      diarios: [{ created_by: 9 }],
+    },
+  },
+], 5)
+assert(soloGrouped.map((x) => x.id).join(',') === 'g', 'solo_mias en bitácora agrupada mira todos los diarios del día')
+
 console.log('seguimientoCalendarioUtils.test.mjs OK')

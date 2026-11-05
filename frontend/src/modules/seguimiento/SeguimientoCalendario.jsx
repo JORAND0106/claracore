@@ -53,12 +53,15 @@ export default function SeguimientoCalendario({
   onAbrirBitacora,
   showFilters = true,
   widgetMode = false,
+  onDataFresh = null,
 }) {
   const filtersVisible = showFilters && !widgetMode
   const calendarRef = useRef(null)
   const genRef = useRef(0)
   const rangeRef = useRef({ start: null, end: null })
   const dayMenuRef = useRef(null)
+  const onDataFreshRef = useRef(onDataFresh)
+  onDataFreshRef.current = onDataFresh
 
   const [filtros, setFiltros] = useState({
     estado: '',
@@ -74,6 +77,7 @@ export default function SeguimientoCalendario({
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [warnBitacora, setWarnBitacora] = useState('')
   const [accesoMsg, setAccesoMsg] = useState('')
   const [detalleId, setDetalleId] = useState(null)
   const [showTarea, setShowTarea] = useState(false)
@@ -111,6 +115,7 @@ export default function SeguimientoCalendario({
     const gen = ++genRef.current
     setLoading(true)
     setError('')
+    setWarnBitacora('')
 
     const origen = filtros.origen
     const includeBandeja = !origen || origen === 'tarea' || origen === 'compromiso' || origen === 'plan_actividad'
@@ -119,6 +124,8 @@ export default function SeguimientoCalendario({
       && (permisosBitacora?.ver !== false)
 
     try {
+      // Cada fuente se aísla: un fallo no borra las demás (antes bitácora
+      // se tragaba con [] y el calendario parecía «sin bitácoras»).
       const jobs = []
 
       if (includeBandeja) {
@@ -133,9 +140,13 @@ export default function SeguimientoCalendario({
         }
         if (filtros.incluir_cerrados) bandejaParams.incluir_cerrados = 'true'
         if (filtros.solo_mias) bandejaParams.solo_mias = 'true'
-        jobs.push(api.listBandeja(bandejaParams).catch((e) => { throw e }))
+        jobs.push(
+          api.listBandeja(bandejaParams)
+            .then((rows) => ({ ok: true, rows }))
+            .catch((e) => ({ ok: false, error: e, rows: [] })),
+        )
       } else {
-        jobs.push(Promise.resolve([]))
+        jobs.push(Promise.resolve({ ok: true, rows: [] }))
       }
 
       if (includeActas) {
@@ -146,41 +157,89 @@ export default function SeguimientoCalendario({
         if (filtros.q) actasParams.q = filtros.q
         if (filtros.tipo_acta) actasParams.tipo_acta = filtros.tipo_acta
         if (filtros.solo_mias) actasParams.solo_mias = 'true'
-        jobs.push(api.listActas(actasParams).catch((e) => { throw e }))
+        jobs.push(
+          api.listActas(actasParams)
+            .then((rows) => ({ ok: true, rows }))
+            .catch((e) => ({ ok: false, error: e, rows: [] })),
+        )
       } else {
-        jobs.push(Promise.resolve([]))
+        jobs.push(Promise.resolve({ ok: true, rows: [] }))
       }
 
       if (includeBitacora && api.listBitacora) {
         const bitParams = {
           fecha_desde: range.fecha_desde,
           fecha_hasta: range.fecha_hasta,
+          para_calendario: true,
         }
         if (filtros.q) bitParams.q = filtros.q
         // bitacora_evento: pedir diarios+eventos (default API) para ver
         // bloques embebidos e independientes; el filtro client-side afina.
         if (origen === 'bitacora_diario') bitParams.tipo = 'diario'
-        jobs.push(api.listBitacora(bitParams).catch(() => []))
+        jobs.push(
+          api.listBitacora(bitParams)
+            .then((rows) => ({ ok: true, rows }))
+            .catch((e) => ({ ok: false, error: e, rows: null })),
+        )
       } else {
-        jobs.push(Promise.resolve([]))
+        jobs.push(Promise.resolve({ ok: true, rows: [] }))
       }
 
-      const [bandejaRows, actasRows, bitacoraRows] = await Promise.all(jobs)
+      const [bandejaRes, actasRes, bitacoraRes] = await Promise.all(jobs)
       if (gen !== genRef.current) return
 
-      let mapped = buildCalendarioEvents(
-        Array.isArray(bandejaRows) ? bandejaRows : [],
-        Array.isArray(actasRows) ? actasRows : [],
-        Array.isArray(bitacoraRows) ? bitacoraRows : [],
-        { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
-      )
-      if (origen) mapped = filterEventsByOrigen(mapped, origen)
-      if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
-      setEvents(mapped)
+      const bandejaRows = Array.isArray(bandejaRes.rows) ? bandejaRes.rows : []
+      const actasRows = Array.isArray(actasRes.rows) ? actasRes.rows : []
+      let bitacoraRows = Array.isArray(bitacoraRes.rows) ? bitacoraRes.rows : []
+
+      if (includeBitacora && bitacoraRes.ok === false) {
+        setWarnBitacora(
+          bitacoraRes.error?.message
+            || 'No se pudieron cargar los registros de Bitácora. Pulse Actualizar.',
+        )
+        // Conservar bitácoras ya en pantalla; actualizar el resto.
+        setEvents((prev) => {
+          const keepBit = (prev || []).filter((ev) => {
+            const k = ev?.extendedProps?.kind
+            return k === 'bitacora_diario' || k === 'bitacora_evento'
+          })
+          let mapped = buildCalendarioEvents(
+            bandejaRows,
+            actasRows,
+            [],
+            { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
+          )
+          mapped = [...mapped, ...keepBit]
+          if (origen) mapped = filterEventsByOrigen(mapped, origen)
+          if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
+          return mapped
+        })
+        onDataFreshRef.current?.({ ok: false, partial: true })
+      } else {
+        let mapped = buildCalendarioEvents(
+          bandejaRows,
+          actasRows,
+          bitacoraRows,
+          { fechaDesde: range.fecha_desde, fechaHasta: range.fecha_hasta },
+        )
+        if (origen) mapped = filterEventsByOrigen(mapped, origen)
+        if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
+        setEvents(mapped)
+
+        if (!bandejaRes.ok && includeBandeja) {
+          setError(bandejaRes.error?.message || 'No se pudieron cargar tareas/compromisos')
+          onDataFreshRef.current?.({ ok: false, partial: true })
+        } else if (!actasRes.ok && includeActas) {
+          setError(actasRes.error?.message || 'No se pudieron cargar actas')
+          onDataFreshRef.current?.({ ok: false, partial: true })
+        } else {
+          onDataFreshRef.current?.({ ok: true })
+        }
+      }
     } catch (e) {
       if (gen !== genRef.current) return
       setError(e.message || 'Error al cargar el calendario')
-      setEvents([])
+      onDataFreshRef.current?.({ ok: false })
     } finally {
       if (gen === genRef.current) setLoading(false)
     }
@@ -717,6 +776,17 @@ export default function SeguimientoCalendario({
         </div>
       )}
 
+      {warnBitacora && (
+        <div style={{
+          fontSize: 'var(--cc-sm)',
+          color: t.danger || '#b91c1c',
+          fontWeight: 700,
+          marginBottom: 8,
+        }}
+        >
+          {warnBitacora}
+        </div>
+      )}
       {filtersVisible && permisos?.esDesarrollador && (
         <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 8 }}>
           Vista Desarrollador: acceso completo a compromisos, tareas, justificaciones y aprobaciones.
