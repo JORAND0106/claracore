@@ -70,6 +70,11 @@ export default function PlanActividadesVista({
   forzarPropio = false,
   /** Moderador del acta: ve grilla/Gantt/detalle sin mutar. */
   soloLectura = false,
+  /** Moderador registra a nombre del expositor (acta abierta). */
+  modoDictado = false,
+  expositorId = null,
+  expositorNombre = '',
+  dictadoSessionId = null,
 }) {
   const ui = useMemo(() => bitacoraSheetStyles(t), [t])
   const [items, setItems] = useState([])
@@ -100,19 +105,33 @@ export default function PlanActividadesVista({
   const equipoScrollSnap = useRef(0)
 
   const lectura = Boolean(soloLectura)
+  const dictado = Boolean(modoDictado)
+  const sessionDictado = dictadoSessionId || null
   const permisosUi = useMemo(() => {
-    if (!lectura) return permisos
-    return {
-      ...(permisos || {}),
-      crear: false,
-      editar: false,
-      eliminar: false,
-      exportar: false,
+    if (lectura) {
+      return {
+        ...(permisos || {}),
+        crear: false,
+        editar: false,
+        eliminar: false,
+        exportar: false,
+      }
     }
-  }, [permisos, lectura])
+    if (dictado) {
+      return {
+        ...(permisos || {}),
+        crear: true,
+        editar: true,
+        eliminar: true,
+        exportar: false,
+      }
+    }
+    return permisos
+  }, [permisos, lectura, dictado])
   const vistaAmplia = Boolean(permisos?.esVistaAmplia || permisos?.esDesarrollador)
     && !forzarPropio
     && !lectura
+    && !dictado
   const enEquipo = vistaAmplia && tab === 'equipo' && !drillColaboradorId
   const colaboradorEfectivo = drillColaboradorId
     ? String(drillColaboradorId)
@@ -125,23 +144,55 @@ export default function PlanActividadesVista({
   )
   const alcanceActa = Boolean(actaId || ideaId)
 
+  const esEditableDictado = useCallback((it) => {
+    if (!dictado) return true
+    const aid = Number(actaId || 0)
+    const iid = Number(ideaId || 0)
+    if (!aid || !iid) return false
+    return Number(it?.acta_id || 0) === aid && Number(it?.idea_id || 0) === iid
+  }, [dictado, actaId, ideaId])
+
   const reload = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const params = {
+      const paramsTema = {
         incluir_cerrados: true,
-        ver_todos: verTodosEfectivo || (lectura && alcanceActa),
+        ver_todos: verTodosEfectivo || lectura || dictado,
       }
-      if (colaboradorEfectivo) params.colaborador_id = Number(colaboradorEfectivo)
-      if (actaId) params.acta_id = Number(actaId)
-      if (ideaId) params.idea_id = Number(ideaId)
-      const [list, gs, us] = await Promise.all([
-        api.listPlanActividades(params),
+      if (colaboradorEfectivo) paramsTema.colaborador_id = Number(colaboradorEfectivo)
+      if (actaId) paramsTema.acta_id = Number(actaId)
+      if (ideaId) paramsTema.idea_id = Number(ideaId)
+
+      const fetches = [
+        api.listPlanActividades(paramsTema),
         api.listPlanGrupos().catch(() => []),
         api.listUsuarios().catch(() => []),
-      ])
-      setItems(Array.isArray(list) ? list : [])
+      ]
+      // Dictado: también trae el resto del plan del expositor (solo lectura visual).
+      if (dictado && expositorId) {
+        fetches.push(
+          api.listPlanActividades({
+            incluir_cerrados: true,
+            colaborador_id: Number(expositorId),
+            ver_todos: false,
+          }).catch(() => []),
+        )
+      }
+      const results = await Promise.all(fetches)
+      const listTema = Array.isArray(results[0]) ? results[0] : []
+      const gs = results[1]
+      const us = results[2]
+      const listExtra = Array.isArray(results[3]) ? results[3] : []
+      const byId = new Map()
+      for (const it of listTema) byId.set(Number(it.id), { ...it, _dictadoEditable: true })
+      for (const it of listExtra) {
+        const id = Number(it.id)
+        if (!byId.has(id)) {
+          byId.set(id, { ...it, _dictadoEditable: false })
+        }
+      }
+      setItems([...byId.values()])
       setGrupos(Array.isArray(gs) ? gs : [])
       setUsuarios(Array.isArray(us) ? us : [])
     } catch (e) {
@@ -154,7 +205,10 @@ export default function PlanActividadesVista({
     } finally {
       setLoading(false)
     }
-  }, [api, colaboradorEfectivo, verTodosEfectivo, actaId, ideaId, lectura, alcanceActa])
+  }, [
+    api, colaboradorEfectivo, verTodosEfectivo, actaId, ideaId,
+    lectura, dictado, expositorId,
+  ])
 
   useEffect(() => { reload() }, [reload])
 
@@ -225,7 +279,45 @@ export default function PlanActividadesVista({
 
   function cellValue(it, key) {
     switch (key) {
-      case 'actividad': return it.titulo
+      case 'actividad': {
+        const marca = it.registrado_por_nombre
+          ? (
+            <span
+              key="reg"
+              title={`Registrada por ${it.registrado_por_nombre}`}
+              data-cc-tooltip={`Registrada por ${it.registrado_por_nombre}`}
+              data-cc-tooltip-variant="short"
+              style={{
+                marginLeft: 6,
+                fontSize: 11,
+                fontWeight: 700,
+                color: t.primary || '#0284c7',
+                verticalAlign: 'middle',
+              }}
+              aria-label={`Registrada por ${it.registrado_por_nombre}`}
+            >
+              ✎
+            </span>
+          )
+          : null
+        const readonlyTag = dictado && !esEditableDictado(it)
+          ? (
+            <span
+              key="ro"
+              style={{ marginLeft: 6, fontSize: 10, color: t.textMuted, fontWeight: 600 }}
+            >
+              · lectura
+            </span>
+          )
+          : null
+        return (
+          <span>
+            {it.titulo || '—'}
+            {marca}
+            {readonlyTag}
+          </span>
+        )
+      }
       case 'descripcion': return htmlToPlainText(it.descripcion || '').slice(0, 120) || '—'
       case 'comentario': return htmlToPlainText(it.comentario_comite || '').slice(0, 100) || '—'
       case 'solicitante': return it.solicitante_nombre || '—'
@@ -397,6 +489,11 @@ export default function PlanActividadesVista({
           {lectura && (
             <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>
               Solo lectura
+            </span>
+          )}
+          {dictado && (
+            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>
+              Registrando a nombre de {expositorNombre || 'expositor'}
             </span>
           )}
           {!enEquipo && permisosUi?.crear && (
@@ -651,6 +748,8 @@ export default function PlanActividadesVista({
           grupos={grupos}
           actaId={actaId}
           ideaId={ideaId}
+          dictado={dictado}
+          dictadoSessionId={sessionDictado}
           onClose={() => { setFormOpen(false); setEditItem(null) }}
           onSaved={() => reload()}
         />
@@ -662,12 +761,20 @@ export default function PlanActividadesVista({
           api={api}
           usuario={usuario}
           permisos={permisosUi}
-          soloLectura={lectura}
+          soloLectura={
+            lectura
+            || (dictado && !esEditableDictado(items.find((x) => Number(x.id) === Number(detalleId)) || {}))
+          }
+          modoDictado={dictado && esEditableDictado(items.find((x) => Number(x.id) === Number(detalleId)) || {})}
+          dictadoSessionId={sessionDictado}
+          actaId={actaId}
+          ideaId={ideaId}
           itemId={detalleId}
           onClose={() => setDetalleId(null)}
           onChanged={() => reload()}
           onEdit={(it) => {
             if (lectura) return
+            if (dictado && !esEditableDictado(it)) return
             setDetalleId(null)
             setEditItem(it)
             setFormOpen(true)

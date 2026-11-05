@@ -35,6 +35,22 @@ def test_plan_resumen_incluye_columnas_y_datos():
     assert "abierto" in html
 
 
+def test_plan_resumen_marca_registrada_por_moderador():
+    html = _plan_resumen_tema_html([
+        {
+            "grupo_nombre": "Obra",
+            "titulo": "Dictado en reunión",
+            "asignado_a_nombre": "Expositor",
+            "prioridad": 3,
+            "fecha_inicio": "2026-11-01",
+            "fecha_fin": "2026-11-08",
+            "estado_gestion": "abierto",
+            "registrado_por_nombre": "Moderador Ana",
+        },
+    ])
+    assert "Dictado en reunión (Registrada por Moderador Ana)" in html
+
+
 def test_ideas_body_inyecta_resumen_solo_si_hay_actividades():
     ideas = [
         {"id": 10, "orden": 1, "titulo": "Avance", "texto": "<p>Contenido</p>"},

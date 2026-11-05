@@ -497,6 +497,7 @@ def _build_campos_plan(
     acta_tema_vinculo: Optional[dict] = None,
     adjuntos_descripcion: Optional[List[dict]] = None,
     adjuntos_comentario: Optional[List[dict]] = None,
+    registrado_por: Optional[dict] = None,
 ) -> dict:
     plan = {
         "grupo_id": int(grupo["id"]),
@@ -514,6 +515,10 @@ def _build_campos_plan(
         plan["desde_acta"] = True
         plan["acta_id"] = acta_tema_vinculo.get("acta_id")
         plan["idea_id"] = acta_tema_vinculo.get("idea_id")
+    if registrado_por and registrado_por.get("id"):
+        plan["dictado"] = True
+        plan["registrado_por_id"] = int(registrado_por["id"])
+        plan["registrado_por_nombre"] = str(registrado_por.get("nombre") or "")[:200]
     return {
         "plan": plan,
         "asignaciones": asignaciones,
@@ -658,6 +663,22 @@ def _enrich_item(item: dict) -> dict:
         {"fecha_inicio": a.isoformat(), "fecha_fin": b.isoformat()}
         for a, b in _item_intervalos(item)
     ]
+    try:
+        reg_id = int(plan.get("registrado_por_id") or 0)
+    except (TypeError, ValueError):
+        reg_id = 0
+    if reg_id > 0 or plan.get("dictado"):
+        item["dictado"] = True
+        item["registrado_por_id"] = reg_id or None
+        item["registrado_por_nombre"] = plan.get("registrado_por_nombre") or None
+    else:
+        item["dictado"] = False
+        item["registrado_por_id"] = None
+        item["registrado_por_nombre"] = None
+    if not item.get("acta_id") and plan.get("acta_id"):
+        item["acta_id"] = plan.get("acta_id")
+    if not item.get("idea_id") and plan.get("idea_id"):
+        item["idea_id"] = plan.get("idea_id")
     return item
 
 
@@ -848,6 +869,28 @@ def crear_actividad(
     if acta_id:
         vinculo = {"acta_id": acta_id, "idea_id": idea_id}
 
+    # Dictado: moderador registra a nombre del expositor del tema (acta abierta).
+    dictado = bool(data.get("dictado") or data.get("modo_dictado"))
+    registrado_por = None
+    created_by_final = int(user_id)
+    if dictado:
+        if not acta_id or not idea_id:
+            raise ValueError("El dictado del Plan requiere acta y tema.")
+        from plan_actividades_dictado import resolver_contexto_dictado
+
+        ctx = resolver_contexto_dictado(
+            sb, acta_id=acta_id, idea_id=idea_id, user_id=user_id,
+        )
+        created_by_final = int(ctx["expositor_id"])
+        registrado_por = {
+            "id": int(ctx["moderador_id"]),
+            "nombre": ctx["moderador_nombre"],
+        }
+        # Si no pidieron solicitante explícito, queda el expositor.
+        if data.get("solicitante_id") is None:
+            solicitante_id = created_by_final
+            solicitante_nombre = ctx["expositor_nombre"] or solicitante_nombre
+
     solapes = detectar_solapes(
         sb,
         contrato_id,
@@ -877,6 +920,7 @@ def crear_actividad(
         acta_tema_vinculo=vinculo,
         adjuntos_descripcion=data.get("adjuntos_descripcion") or data.get("esquemas_descripcion"),
         adjuntos_comentario=data.get("adjuntos_comentario") or data.get("esquemas_comentario"),
+        registrado_por=registrado_por,
     )
 
     nombres = ", ".join(a["nombre"] for a in asignaciones if a.get("nombre"))
@@ -887,7 +931,7 @@ def crear_actividad(
         "estado_gestion": "abierto",
         "asignado_a_id": asignaciones[0]["usuario_id"],
         "asignado_a_nombre": nombres[:500] or asignaciones[0].get("nombre"),
-        "created_by": int(user_id),
+        "created_by": created_by_final,
         "contrato_id": int(contrato_id),
         "solicitante_id": solicitante_id,
         "solicitante_nombre": solicitante_nombre[:200],
@@ -921,16 +965,31 @@ def crear_actividad(
     try:
         from seguimiento_service import _registrar_evento, _notificar_compromiso_asignado
 
+        evento_payload = {
+            "titulo": titulo,
+            "prioridad": prioridad,
+            "grupo": grupo.get("nombre"),
+        }
+        if dictado and registrado_por:
+            evento_payload["dictado"] = True
+            evento_payload["registrado_por_id"] = registrado_por["id"]
+            evento_payload["registrado_por_nombre"] = registrado_por.get("nombre")
+            evento_payload["created_by_efectivo"] = created_by_final
         _registrar_evento(
             sb,
             int(item["id"]),
             "plan_actividad_creada",
             user_id,
-            {"titulo": titulo, "prioridad": prioridad, "grupo": grupo.get("nombre")},
+            evento_payload,
         )
         for a in asignaciones:
-            if int(a["usuario_id"]) == int(user_id):
-                continue
+            # No notificar al operador ni al dueño efectivo si es el mismo asignado
+            # (el expositor recibe aviso de dictado aparte).
+            if int(a["usuario_id"]) in (int(user_id), int(created_by_final)):
+                if dictado and int(a["usuario_id"]) == int(created_by_final):
+                    continue
+                if int(a["usuario_id"]) == int(user_id):
+                    continue
             try:
                 _notificar_compromiso_asignado(
                     sb,
@@ -944,6 +1003,22 @@ def crear_actividad(
                 )
             except Exception as exc:
                 _log.warning("notif asignado plan: %s", exc)
+        if dictado and registrado_por and created_by_final != int(user_id):
+            try:
+                from plan_actividades_dictado import acumular_aviso_dictado
+
+                acumular_aviso_dictado(
+                    sb,
+                    session_id=str(data.get("dictado_session_id") or "") or None,
+                    expositor_id=int(created_by_final),
+                    moderador_id=int(user_id),
+                    contrato_id=int(contrato_id),
+                    item_id=int(item["id"]),
+                    titulo=titulo,
+                    accion="crear",
+                )
+            except Exception as exc:
+                _log.warning("aviso dictado create: %s", exc)
     except Exception as exc:
         _log.warning("post-create plan: %s", exc)
 
@@ -1028,14 +1103,39 @@ def actualizar_actividad(
     cid = int(item["contrato_id"])
 
     es_creador = int(item.get("created_by") or 0) == int(user_id)
-    if not es_creador and not _es_desarrollador(current_user):
-        raise PermissionError("Solo quien creó la actividad puede editarla.")
-    if not tiene_permiso_plan_actividades(current_user, "editar", cid) and not _es_desarrollador(current_user):
+    from plan_actividades_dictado import puede_mutar_dictado
+
+    es_dictado_mod = puede_mutar_dictado(
+        sb,
+        item,
+        user_id,
+        acta_id=data.get("acta_id") or item.get("acta_id"),
+        idea_id=data.get("idea_id") or item.get("idea_id"),
+    )
+    if not es_creador and not es_dictado_mod and not _es_desarrollador(current_user):
+        raise PermissionError(
+            "Solo quien creó la actividad (o el moderador del acta abierta, "
+            "sobre actividades de este tema) puede editarla."
+        )
+    if (
+        not es_dictado_mod
+        and not tiene_permiso_plan_actividades(current_user, "editar", cid)
+        and not _es_desarrollador(current_user)
+    ):
         raise PermissionError("No tiene permiso para editar actividades del plan.")
 
     antes = _enrich_item(item)
     plan_prev = _plan_blob(item)
     libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    # Solo actividades dictadas por el moderador llevan la marca «Registrada por».
+    # Si el expositor la creó en el tema, el moderador puede editarla (acta abierta)
+    # pero no se le atribuye el registro.
+    registrado_por_prev = None
+    if plan_prev.get("registrado_por_id") or plan_prev.get("dictado"):
+        registrado_por_prev = {
+            "id": plan_prev.get("registrado_por_id"),
+            "nombre": plan_prev.get("registrado_por_nombre"),
+        }
 
     titulo = data.get("titulo") if "titulo" in data or "actividad" in data else item.get("titulo")
     if "actividad" in data and "titulo" not in data:
@@ -1166,6 +1266,7 @@ def actualizar_actividad(
         acta_tema_vinculo=vinculo,
         adjuntos_descripcion=adj_desc,
         adjuntos_comentario=adj_com,
+        registrado_por=registrado_por_prev,
     )
     # Conservar otras claves de campos_libres
     for k, v in libres.items():
@@ -1209,8 +1310,45 @@ def actualizar_actividad(
                     "fecha_inicio": fi.isoformat() if fi else None,
                     "fecha_fin": ff.isoformat() if ff else None,
                 },
+                "dictado": bool(es_dictado_mod),
             },
         )
+        if es_dictado_mod and int(item.get("created_by") or 0) != int(user_id):
+            from plan_actividades_dictado import acumular_aviso_dictado
+
+            acumular_aviso_dictado(
+                sb,
+                session_id=str(data.get("dictado_session_id") or "") or None,
+                expositor_id=int(item.get("created_by") or 0),
+                moderador_id=int(user_id),
+                contrato_id=cid,
+                item_id=int(item_id),
+                titulo=titulo,
+                accion="editar",
+            )
+        # Reasignación: notificar nuevos asignados (faltaba para Plan).
+        if "asignados" in data or "asignaciones" in data:
+            prev_ids = {int(a["usuario_id"]) for a in _asignaciones_de(item)}
+            from seguimiento_service import _notificar_compromiso_asignado
+
+            for a in asignaciones:
+                uid_a = int(a["usuario_id"])
+                if uid_a in prev_ids or uid_a == int(user_id):
+                    continue
+                try:
+                    _notificar_compromiso_asignado(
+                        sb,
+                        destinatario_id=uid_a,
+                        remitente_id=int(user_id),
+                        titulo=titulo,
+                        fecha_vencimiento=fv,
+                        contrato_id=cid,
+                        item_id=int(item_id),
+                        descripcion=str(descripcion or ""),
+                        reasignacion=True,
+                    )
+                except Exception as exc:
+                    _log.warning("notif reasign plan: %s", exc)
     except Exception as exc:
         _log.warning("evento edit plan: %s", exc)
 
@@ -1220,17 +1358,75 @@ def actualizar_actividad(
     return enriched
 
 
-def eliminar_actividad(sb, item_id: int, user_id: int, current_user: dict) -> None:
+def eliminar_actividad(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    dictado_session_id: Optional[str] = None,
+    acta_id: Optional[int] = None,
+    idea_id: Optional[int] = None,
+) -> None:
     item = get_item_raw(sb, item_id)
     if item.get("origen") != ORIGEN:
         raise ValueError("El ítem no es una actividad del plan")
     cid = int(item["contrato_id"])
     es_creador = int(item.get("created_by") or 0) == int(user_id)
-    if not es_creador and not _es_desarrollador(current_user):
-        raise PermissionError("Solo quien creó la actividad puede eliminarla.")
-    if not tiene_permiso_plan_actividades(current_user, "eliminar", cid) and not _es_desarrollador(current_user):
+    from plan_actividades_dictado import puede_mutar_dictado
+
+    es_dictado_mod = puede_mutar_dictado(
+        sb, item, user_id, acta_id=acta_id or item.get("acta_id"), idea_id=idea_id or item.get("idea_id"),
+    )
+    if not es_creador and not es_dictado_mod and not _es_desarrollador(current_user):
+        raise PermissionError(
+            "Solo quien creó la actividad (o el moderador del acta abierta, "
+            "sobre actividades de este tema) puede eliminarla."
+        )
+    if (
+        not es_dictado_mod
+        and not tiene_permiso_plan_actividades(current_user, "eliminar", cid)
+        and not _es_desarrollador(current_user)
+    ):
         raise PermissionError("No tiene permiso para eliminar actividades del plan.")
+
+    titulo = item.get("titulo") or ""
+    owner = int(item.get("created_by") or 0)
+    try:
+        from seguimiento_service import _registrar_evento
+
+        _registrar_evento(
+            sb,
+            int(item_id),
+            "plan_actividad_eliminada",
+            user_id,
+            {
+                "titulo": titulo,
+                "dictado": bool(es_dictado_mod),
+                "created_by": owner,
+            },
+        )
+    except Exception as exc:
+        _log.warning("evento delete plan: %s", exc)
+
     sb.table("seguimiento_item").delete().eq("id", int(item_id)).execute()
+
+    if es_dictado_mod and owner and owner != int(user_id):
+        try:
+            from plan_actividades_dictado import acumular_aviso_dictado
+
+            acumular_aviso_dictado(
+                sb,
+                session_id=dictado_session_id,
+                expositor_id=owner,
+                moderador_id=int(user_id),
+                contrato_id=cid,
+                item_id=int(item_id),
+                titulo=titulo,
+                accion="eliminar",
+            )
+        except Exception as exc:
+            _log.warning("aviso dictado delete: %s", exc)
 
 
 def comentar_actividad(

@@ -117,8 +117,10 @@ export default function ActaTemasTable({
   grabacionActiva = false,
   /** Si true, muestra botón Plan de actividades (expositor / moderador / Dev). */
   puedeAbrirPlanActividades = false,
-  /** Moderador del acta (elaborador): ve el Plan de cada tema en solo lectura. */
+  /** Moderador del acta (elaborador). */
   esModeradorActa = false,
+  /** Acta en borrador (no sellada): el moderador puede dictar el Plan del expositor. */
+  actaAbiertaParaDictado = false,
   onAbrirPlanActividades = null,
   usuarioId = null,
   esDesarrollador = false,
@@ -133,16 +135,27 @@ export default function ActaTemasTable({
     const uid = Number(usuarioId || 0)
     return exp > 0 && uid > 0 && exp === uid
   }
-  /** Quién ve el botón y en qué modo (escritura vs lectura). */
+  /**
+   * Quién ve el botón y en qué modo.
+   * Moderador con acta abierta: puede registrar (dictado).
+   * Moderador con acta cerrada: solo lectura.
+   */
   const planBtnMeta = (idea) => {
     if (!puedeAbrirPlanActividades || typeof onAbrirPlanActividades !== 'function') {
       return null
     }
     if (esDesarrollador || esExpositorDelTema(idea)) {
-      return { soloLectura: false, title: 'Plan de actividades' }
+      return { soloLectura: false, modoDictado: false, title: 'Plan de actividades' }
     }
     if (esModeradorActa) {
-      return { soloLectura: true, title: 'Plan de actividades · lectura' }
+      if (actaAbiertaParaDictado) {
+        return {
+          soloLectura: false,
+          modoDictado: true,
+          title: 'Plan de actividades',
+        }
+      }
+      return { soloLectura: true, modoDictado: false, title: 'Plan de actividades · lectura' }
     }
     return null
   }
@@ -484,10 +497,13 @@ export default function ActaTemasTable({
                               type="button"
                               style={iconBtn(t)}
                               title={meta.title}
+                              data-cc-tooltip={meta.title}
+                              data-cc-tooltip-variant="short"
                               aria-label={meta.title}
                               disabled={saving}
                               onClick={() => onAbrirPlanActividades(idx, idea, {
                                 soloLectura: meta.soloLectura,
+                                modoDictado: meta.modoDictado,
                               })}
                             >
                               <IconPlan />

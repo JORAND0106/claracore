@@ -457,7 +457,17 @@ export function createSeguimientoApi(contratoId, token) {
     getPlanActividad: (itemId) => get(`/seguimiento/${cid}/plan-actividades/${itemId}`),
     updatePlanActividad: (itemId, body) =>
       send('PUT', `/seguimiento/${cid}/plan-actividades/${itemId}`, body),
-    deletePlanActividad: (itemId) => send('DELETE', `/seguimiento/${cid}/plan-actividades/${itemId}`),
+    deletePlanActividad: (itemId, opts = {}) => {
+      const q = new URLSearchParams()
+      if (opts.dictado) q.set('dictado', 'true')
+      if (opts.dictado_session_id) q.set('dictado_session_id', String(opts.dictado_session_id))
+      if (opts.acta_id != null) q.set('acta_id', String(opts.acta_id))
+      if (opts.idea_id != null) q.set('idea_id', String(opts.idea_id))
+      const qs = q.toString()
+      return send('DELETE', `/seguimiento/${cid}/plan-actividades/${itemId}${qs ? `?${qs}` : ''}`)
+    },
+    flushPlanDictado: (body) =>
+      send('POST', `/seguimiento/${cid}/plan-actividades/dictado-flush`, body),
     comentarPlanActividad: (itemId, mensaje) =>
       send('POST', `/seguimiento/${cid}/plan-actividades/${itemId}/comentarios`, { mensaje }),
     editarComentarioPlan: (comentarioId, mensaje) =>

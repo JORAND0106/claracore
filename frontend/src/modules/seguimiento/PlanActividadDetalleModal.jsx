@@ -31,6 +31,10 @@ export default function PlanActividadDetalleModal({
   onChanged,
   onEdit,
   soloLectura = false,
+  modoDictado = false,
+  dictadoSessionId = null,
+  actaId = null,
+  ideaId = null,
 }) {
   const [item, setItem] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -105,7 +109,12 @@ export default function PlanActividadDetalleModal({
     if (!window.confirm('¿Eliminar esta actividad? Esta acción no se puede deshacer.')) return
     setBusy(true)
     try {
-      await api.deletePlanActividad(itemId)
+      await api.deletePlanActividad(itemId, modoDictado ? {
+        dictado: true,
+        dictado_session_id: dictadoSessionId || undefined,
+        acta_id: actaId || undefined,
+        idea_id: ideaId || undefined,
+      } : {})
       onChanged?.()
       onClose?.()
     } catch (e) {
@@ -115,9 +124,13 @@ export default function PlanActividadDetalleModal({
   }
 
   const lectura = Boolean(soloLectura)
-  const puedeEditar = !lectura && item && puedeMutarActividadPropia(item, usuario, permisos, 'editar')
-  const puedeEliminar = !lectura && item && puedeMutarActividadPropia(item, usuario, permisos, 'eliminar')
-  const puedeCambiarEstado = !lectura && Boolean(item?.puede_cambiar_estado)
+  const puedeEditar = !lectura && item && (
+    modoDictado || puedeMutarActividadPropia(item, usuario, permisos, 'editar')
+  )
+  const puedeEliminar = !lectura && item && (
+    modoDictado || puedeMutarActividadPropia(item, usuario, permisos, 'eliminar')
+  )
+  const puedeCambiarEstado = !lectura && !modoDictado && Boolean(item?.puede_cambiar_estado)
   const puedeComentar = !lectura && Boolean(item?.puede_comentar)
 
   return (
@@ -158,6 +171,14 @@ export default function PlanActividadDetalleModal({
             </div>
             <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
               {item?.grupo_nombre || '—'} · Prioridad {item?.prioridad ?? '—'} · {item?.estado_gestion || '—'}
+              {item?.registrado_por_nombre ? (
+                <span
+                  title={`Registrada por ${item.registrado_por_nombre}`}
+                  style={{ marginLeft: 8, color: t.primary || '#0284c7', fontWeight: 700 }}
+                >
+                  ✎ Registrada por {item.registrado_por_nombre}
+                </span>
+              ) : null}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6 }}>

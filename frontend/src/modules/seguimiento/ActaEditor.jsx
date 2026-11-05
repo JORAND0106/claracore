@@ -2204,16 +2204,22 @@ export default function ActaEditor({
           onOpenTema={(idx) => setTemaEditIdx(idx)}
           puedeAbrirPlanActividades={Boolean(permisosPlan.ver)}
           esModeradorActa={Boolean(esElaborador)}
+          actaAbiertaParaDictado={Boolean(esElaborador && !sellada)}
           usuarioId={usuario?.id || usuario?.sub}
           esDesarrollador={esDev}
           onAbrirPlanActividades={async (idx, idea, opts = {}) => {
-            // Expositor/Dev: editan. Moderador (elaborador): solo lectura del plan del tema.
+            // Expositor/Dev: editan. Moderador: dicta si acta abierta; si no, solo lectura.
             const expId = Number(idea?.expositor_usuario_id || idea?.expositor_id || 0)
             const uid = Number(usuario?.id || usuario?.sub || 0)
             const esExpositor = esDev || (expId > 0 && uid > 0 && expId === uid)
-            const soloLectura = Boolean(opts.soloLectura) || (!esExpositor && esElaborador)
+            const modoDictado = Boolean(opts.modoDictado) || (!esExpositor && esElaborador && !sellada)
+            const soloLectura = Boolean(opts.soloLectura) || (!esExpositor && esElaborador && sellada)
             if (!esExpositor && !esElaborador) {
               setError('Solo el expositor del tema o el moderador del acta pueden abrir este Plan.')
+              return
+            }
+            if (modoDictado && !(expId > 0)) {
+              setError('Asigne un expositor al tema antes de registrar actividades en su Plan.')
               return
             }
             let ideaId = idea?.id
@@ -2232,7 +2238,13 @@ export default function ActaEditor({
               ideaIdx: idx,
               ideaId: ideaId || null,
               actaId: actaForPlan || null,
-              soloLectura,
+              soloLectura: soloLectura && !modoDictado,
+              modoDictado,
+              expositorId: expId || null,
+              expositorNombre: idea?.expositor_nombre || '',
+              dictadoSessionId: modoDictado
+                ? `d-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+                : null,
             })
           }}
           puedeActualizarTemas={
@@ -2990,13 +3002,29 @@ export default function ActaEditor({
           usuario={usuario}
           permisos={permisosPlan}
           modo="popup"
-          forzarPropio={!planPopup.soloLectura}
+          forzarPropio={!planPopup.soloLectura && !planPopup.modoDictado}
           soloLectura={Boolean(planPopup.soloLectura)}
+          modoDictado={Boolean(planPopup.modoDictado)}
+          expositorId={planPopup.expositorId || null}
+          expositorNombre={planPopup.expositorNombre || ''}
+          dictadoSessionId={planPopup.dictadoSessionId || null}
           actaId={planPopup.actaId || localActaId}
           ideaId={planPopup.ideaId}
           onClose={async () => {
+            const session = planPopup.dictadoSessionId
+            const exp = planPopup.expositorId
+            const popupActaId = planPopup.actaId || localActaId
             setPlanPopup(null)
-            const aid = localActaId || planPopup.actaId
+            if (session && exp && api.flushPlanDictado) {
+              try {
+                await api.flushPlanDictado({
+                  dictado_session_id: session,
+                  expositor_id: exp,
+                  acta_id: popupActaId,
+                })
+              } catch { /* ignore */ }
+            }
+            const aid = localActaId || popupActaId
             if (aid) {
               try {
                 const a = await api.getActa(aid)

@@ -587,13 +587,35 @@ export default function ActaCompromisosAbiertosTable({
                           {esPlan ? '🗓️ Plan' : origenMeta.label}
                         </span>
                       )}
-                      <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>{short}</div>
+                      <div style={{ fontWeight: 600, color: t.text, lineHeight: 1.35 }}>
+                        {short}
+                        {esPlan && c.registrado_por_nombre ? (
+                          <span
+                            title={`Registrada por ${c.registrado_por_nombre}`}
+                            data-cc-tooltip={`Registrada por ${c.registrado_por_nombre}`}
+                            data-cc-tooltip-variant="short"
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: t.primary || '#0284c7',
+                              verticalAlign: 'middle',
+                            }}
+                            aria-label={`Registrada por ${c.registrado_por_nombre}`}
+                          >
+                            ✎
+                          </span>
+                        ) : null}
+                      </div>
                       {esPlan && (
                         <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2, lineHeight: 1.35 }}>
                           {[
                             c.grupo_nombre ? `Depto: ${c.grupo_nombre}` : null,
                             c.solicitante_nombre ? `Solicita: ${c.solicitante_nombre}` : null,
                             c.prioridad != null ? `Prioridad ${c.prioridad}` : null,
+                            c.registrado_por_nombre
+                              ? `Registrada por ${c.registrado_por_nombre}`
+                              : null,
                           ].filter(Boolean).join(' · ')}
                         </div>
                       )}

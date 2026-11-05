@@ -96,6 +96,15 @@ class ActividadBody(BaseModel):
     acta_id: Optional[int] = None
     idea_id: Optional[int] = None
     confirmar_solape: Optional[bool] = False
+    dictado: Optional[bool] = False
+    modo_dictado: Optional[bool] = False
+    dictado_session_id: Optional[str] = None
+
+
+class DictadoFlushBody(BaseModel):
+    dictado_session_id: str
+    expositor_id: int
+    acta_id: Optional[int] = None
 
 
 class ComentarioBody(BaseModel):
@@ -161,9 +170,14 @@ def route_crear_actividad(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_plan_actividades(current_user, "crear", contrato_id)
+    payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    es_dictado = bool(payload.get("dictado") or payload.get("modo_dictado"))
+    # Dictado del moderador en acta abierta: basta con Ver Plan (la regla de negocio
+    # valida elaborador + acta + tema). Fuera de acta se exige Crear.
+    require_permiso_plan_actividades(
+        current_user, "ver" if es_dictado else "crear", contrato_id,
+    )
     try:
-        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         row = crear_actividad(
             supabase,
             contrato_id,
@@ -186,9 +200,35 @@ def route_crear_actividad(
                 "prioridad": row.get("prioridad"),
                 "acta_id": row.get("acta_id"),
                 "idea_id": row.get("idea_id"),
+                "dictado": es_dictado,
+                "registrado_por_id": row.get("registrado_por_id"),
+                "created_by": row.get("created_by"),
             },
         )
         return row
+    except Exception as exc:
+        raise _http_err(exc) from exc
+
+
+@router.post("/{contrato_id}/plan-actividades/dictado-flush")
+def route_dictado_flush(
+    contrato_id: int,
+    body: DictadoFlushBody,
+    current_user=Depends(get_current_user),
+):
+    """Consolida avisos de la sesión de dictado y envía un correo al expositor."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_plan_actividades(current_user, "ver", contrato_id)
+    try:
+        from plan_actividades_dictado import flush_dictado_session
+
+        return flush_dictado_session(
+            supabase,
+            session_id=body.dictado_session_id,
+            expositor_id=int(body.expositor_id),
+            moderador_id=_uid(current_user),
+            contrato_id=int(contrato_id),
+        )
     except Exception as exc:
         raise _http_err(exc) from exc
 
@@ -311,9 +351,12 @@ def route_actualizar_actividad(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_plan_actividades(current_user, "editar", contrato_id)
+    payload = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else body.dict(exclude_unset=True)
+    es_dictado = bool(payload.get("dictado") or payload.get("modo_dictado"))
+    require_permiso_plan_actividades(
+        current_user, "ver" if es_dictado else "editar", contrato_id,
+    )
     try:
-        payload = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else body.dict(exclude_unset=True)
         row = actualizar_actividad(
             supabase,
             item_id,
@@ -331,7 +374,14 @@ def route_actualizar_actividad(
             "SEGUIMIENTO",
             "plan_actividad",
             str(item_id),
-            {"titulo": row.get("titulo"), "prioridad": row.get("prioridad")},
+            {
+                "titulo": row.get("titulo"),
+                "prioridad": row.get("prioridad"),
+                "dictado": es_dictado,
+                "registrado_por_id": row.get("registrado_por_id"),
+                "created_by": row.get("created_by"),
+                "a_nombre_de": row.get("created_by"),
+            },
         )
         return row
     except Exception as exc:
@@ -342,22 +392,36 @@ def route_actualizar_actividad(
 def route_eliminar_actividad(
     contrato_id: int,
     item_id: int,
+    dictado: bool = Query(False),
+    dictado_session_id: Optional[str] = Query(None),
+    acta_id: Optional[int] = Query(None),
+    idea_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_plan_actividades(current_user, "eliminar", contrato_id)
+    require_permiso_plan_actividades(
+        current_user, "ver" if dictado else "eliminar", contrato_id,
+    )
     try:
         row = get_actividad(supabase, item_id, _uid(current_user), current_user)
         if int(row.get("contrato_id") or 0) != int(contrato_id):
             raise HTTPException(status_code=404, detail="Actividad no encontrada en este contrato")
-        eliminar_actividad(supabase, item_id, _uid(current_user), current_user)
+        eliminar_actividad(
+            supabase,
+            item_id,
+            _uid(current_user),
+            current_user,
+            dictado_session_id=dictado_session_id,
+            acta_id=acta_id,
+            idea_id=idea_id,
+        )
         registrar_log(
             current_user,
             "ELIMINAR",
             "SEGUIMIENTO",
             "plan_actividad",
             str(item_id),
-            {"titulo": row.get("titulo")},
+            {"titulo": row.get("titulo"), "dictado": bool(dictado)},
         )
         return {"ok": True}
     except Exception as exc:

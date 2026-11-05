@@ -643,9 +643,13 @@ def _plan_resumen_tema_html(rows: List[dict]) -> str:
     for c in rows:
         fi = c.get("fecha_inicio") or ""
         ff = c.get("fecha_fin") or c.get("fecha_vencimiento") or ""
+        titulo = c.get("titulo") or "—"
+        reg = (c.get("registrado_por_nombre") or "").strip()
+        if reg:
+            titulo = f"{titulo} (Registrada por {reg})"
         vals = {
             "grupo_nombre": c.get("grupo_nombre") or "—",
-            "titulo": c.get("titulo") or "—",
+            "titulo": titulo,
             "asignado_a_nombre": c.get("asignado_a_nombre") or "—",
             "prioridad": c.get("prioridad") if c.get("prioridad") is not None else "—",
             "_fi": fmt_fecha_bogota(fi) if fi else "—",

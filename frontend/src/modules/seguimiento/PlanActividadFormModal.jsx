@@ -179,6 +179,8 @@ export default function PlanActividadFormModal({
   grupos = [],
   actaId = null,
   ideaId = null,
+  dictado = false,
+  dictadoSessionId = null,
   onClose,
   onSaved,
 }) {
@@ -323,6 +325,10 @@ export default function PlanActividadFormModal({
     }
     if (actaId) payload.acta_id = Number(actaId)
     if (ideaId) payload.idea_id = Number(ideaId)
+    if (dictado) {
+      payload.dictado = true
+      if (dictadoSessionId) payload.dictado_session_id = dictadoSessionId
+    }
     return payload
   }
 

@@ -2178,7 +2178,7 @@ def get_acta(
         sb.table("seguimiento_acta_apartado").select("*").eq("acta_id", aid).order("orden").execute().data or []
     )
     # Compromisos del acta + actividades del Plan vinculadas a esta acta/tema
-    acta["compromisos"] = (
+    comps_raw = (
         sb.table("seguimiento_item")
         .select("*")
         .eq("acta_id", aid)
@@ -2188,6 +2188,7 @@ def get_acta(
         .data
         or []
     )
+    acta["compromisos"] = [_enrich_plan_fields_en_compromiso(c) for c in comps_raw]
     acta["firmas"] = (
         sb.table("seguimiento_firma_registro").select("*").eq("acta_id", aid).execute().data or []
     )
@@ -2232,6 +2233,14 @@ def _enrich_plan_fields_en_compromiso(item: dict) -> dict:
     out["prioridad"] = plan.get("prioridad") if plan.get("prioridad") is not None else out.get("prioridad")
     out["fecha_inicio"] = plan.get("fecha_inicio") or out.get("fecha_inicio")
     out["fecha_fin"] = plan.get("fecha_fin") or out.get("fecha_vencimiento")
+    out["idea_id"] = plan.get("idea_id") or out.get("idea_id")
+    out["acta_id"] = plan.get("acta_id") or out.get("acta_id")
+    if plan.get("registrado_por_id") or plan.get("dictado"):
+        out["dictado"] = True
+        out["registrado_por_id"] = plan.get("registrado_por_id") or out.get("registrado_por_id")
+        out["registrado_por_nombre"] = (
+            plan.get("registrado_por_nombre") or out.get("registrado_por_nombre")
+        )
     out["es_plan_actividad"] = True
     return out
 
@@ -6993,7 +7002,7 @@ def procesar_vencimientos_y_llamados(sb, *, limit: int = 100) -> dict:
     rows = (
         sb.table("seguimiento_item")
         .select("*")
-        .eq("origen", "compromiso")
+        .in_("origen", ["compromiso", "plan_actividad"])
         .in_("estado_gestion", ["abierto", "en_progreso", "parcial", "vencido"])
         .eq("llamado_atencion_generado", False)
         .not_.is_("fecha_limite_gracia", "null")
@@ -7005,6 +7014,7 @@ def procesar_vencimientos_y_llamados(sb, *, limit: int = 100) -> dict:
     )
     generados = 0
     marcados = 0
+    emails_vencida = 0
     for item in rows:
         # ¿Hay justificación aprobada vigente que cubra?
         justs = (
@@ -7042,6 +7052,14 @@ def procesar_vencimientos_y_llamados(sb, *, limit: int = 100) -> dict:
             patch["estado_gestion"] = "vencido"
             marcados += 1
             _registrar_evento(sb, int(item["id"]), "vencimiento_sin_justificar", None, {})
+            # Correo «vencida» al solicitante y asignados (faltaba; solo había aviso in-app).
+            try:
+                from seguimiento_vencimiento_email import enviar_email_vencida
+
+                out_mail = enviar_email_vencida(sb, item={**item, **patch})
+                emails_vencida += int((out_mail or {}).get("enviados") or 0)
+            except Exception as exc:
+                _log.warning("email vencida item=%s: %s", item.get("id"), exc)
 
         contrato = _contrato(sb, int(item["contrato_id"]))
         pdf = generar_pdf_llamado_atencion(contrato, {**item, **patch}, generado_at=now)
@@ -7084,7 +7102,12 @@ def procesar_vencimientos_y_llamados(sb, *, limit: int = 100) -> dict:
                 entidad_tipo="seguimiento_compromiso",
                 entidad_id=str(item["id"]),
             )
-    return {"procesados": len(rows), "marcados_vencidos": marcados, "llamados_generados": generados}
+    return {
+        "procesados": len(rows),
+        "marcados_vencidos": marcados,
+        "llamados_generados": generados,
+        "emails_vencida": emails_vencida,
+    }
 
 
 RECORDATORIO_REUNION_ENTIDAD = "seguimiento_acta_recordatorio"
