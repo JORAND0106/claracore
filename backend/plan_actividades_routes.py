@@ -193,19 +193,37 @@ def route_crear_actividad(
 def route_export(
     contrato_id: int,
     colaborador_id: Optional[int] = Query(None),
-    ver_todos: bool = Query(True),
+    colaborador_ids: Optional[str] = Query(
+        None,
+        description="IDs de colaboradores separados por coma (vista amplia)",
+    ),
+    ver_todos: bool = Query(False),
+    todos: bool = Query(False, description="Exportar una hoja por cada colaborador"),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
     require_permiso_plan_actividades(current_user, "exportar", contrato_id)
+    ids_list: Optional[List[int]] = None
+    if colaborador_ids:
+        ids_list = []
+        for part in str(colaborador_ids).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids_list.append(int(part))
+            except ValueError:
+                continue
     try:
-        data = exportar_xlsx(
+        data, fname = exportar_xlsx(
             supabase,
             contrato_id,
             _uid(current_user),
             current_user,
             colaborador_id=colaborador_id,
+            colaborador_ids=ids_list,
             ver_todos=ver_todos,
+            todos=todos,
         )
         registrar_log(
             current_user,
@@ -213,13 +231,22 @@ def route_export(
             "SEGUIMIENTO",
             "plan_actividades",
             str(contrato_id),
-            {"colaborador_id": colaborador_id, "ver_todos": ver_todos},
+            {
+                "colaborador_id": colaborador_id,
+                "colaborador_ids": ids_list,
+                "ver_todos": ver_todos,
+                "todos": todos,
+                "archivo": fname,
+            },
+        )
+        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in fname) or (
+            f"plan_actividades_{contrato_id}.xlsx"
         )
         return Response(
             content=data,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
-                "Content-Disposition": f'attachment; filename="plan_actividades_{contrato_id}.xlsx"',
+                "Content-Disposition": f'attachment; filename="{safe}"',
             },
         )
     except Exception as exc:

@@ -1323,42 +1323,287 @@ def cambiar_estado_actividad(
     return get_actividad(sb, item_id, user_id, current_user)
 
 
-def exportar_xlsx(
+# Identificación de calidad (sistema CCD ClaraCore). Ajustable si Calidad redefine.
+PLAN_ACTIVIDADES_FORMATO = {
+    "codigo": "CC-SEG-PLAN-001",
+    "version": "1.0",
+    "nombre": "Plan de actividades",
+    "nombre_mayus": "PLAN DE ACTIVIDADES",
+}
+
+# Columnas de grilla (igual que pantalla). El departamento va como banda, no columna.
+_EXPORT_HEADERS = [
+    "Actividad",
+    "Descripción",
+    "Comentario comité",
+    "Solicitante",
+    "Asignado(s)",
+    "Prioridad",
+    "Estado",
+    "Fecha inicio",
+    "Fecha fin",
+    "Periodicidad",
+]
+
+
+def _fmt_fecha_co(raw) -> str:
+    d = _parse_date(raw)
+    if not d:
+        return ""
+    return d.strftime("%d/%m/%Y")
+
+
+def _sheet_title_safe(nombre: str, used: Set[str]) -> str:
+    base = re.sub(r"[:\\/?*\[\]]+", " ", str(nombre or "Colaborador")).strip()
+    base = re.sub(r"\s+", " ", base)[:28] or "Colaborador"
+    title = base
+    n = 2
+    while title.lower() in used:
+        suffix = f" ({n})"
+        title = (base[: max(1, 31 - len(suffix))] + suffix)[:31]
+        n += 1
+    used.add(title.lower())
+    return title
+
+
+def _contrato_meta_export(sb, contrato_id: int) -> Dict[str, str]:
+    try:
+        from main import _xlsx_load_contrato_export_meta
+
+        return _xlsx_load_contrato_export_meta(int(contrato_id))
+    except Exception:
+        pass
+    meta = {
+        "numero": "",
+        "objeto": "",
+        "contratista": "",
+        "logo_contratista": "",
+    }
+    try:
+        cr = (
+            sb.table("contratos")
+            .select("numero, objeto, contratista, logo_contratista")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if cr:
+            meta["numero"] = str(cr[0].get("numero") or "").strip()
+            meta["objeto"] = str(cr[0].get("objeto") or "").strip()
+            meta["contratista"] = str(cr[0].get("contratista") or "").strip()
+            meta["logo_contratista"] = str(cr[0].get("logo_contratista") or "").strip()
+    except Exception:
+        pass
+    return meta
+
+
+def _usuario_export_info(sb, uid: int) -> Dict[str, str]:
+    u = _usuario_row(sb, uid) or {}
+    nombre = _nombre_usuario(u) or f"Usuario {uid}"
+    cargo = ""
+    try:
+        cid = u.get("cargo_id")
+        if cid:
+            crow = (
+                sb.table("cargos")
+                .select("nombre")
+                .eq("id", int(cid))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if crow:
+                cargo = str(crow[0].get("nombre") or "").strip()
+    except Exception:
+        pass
+    return {"id": int(uid), "nombre": nombre, "cargo": cargo}
+
+
+def _targets_export(
     sb,
     contrato_id: int,
     user_id: int,
     current_user: dict,
     *,
-    colaborador_id: Optional[int] = None,
-    ver_todos: bool = False,
-) -> bytes:
-    if not tiene_permiso_plan_actividades(current_user, "exportar", contrato_id):
-        raise PermissionError("No tiene permiso para exportar el Plan de actividades.")
-
-    items = list_actividades(
-        sb,
-        contrato_id,
-        user_id,
-        current_user,
-        colaborador_id=colaborador_id,
-        incluir_cerrados=True,
-        ver_todos=ver_todos or colaborador_id is None,
+    colaborador_id: Optional[int],
+    colaborador_ids: Optional[List[int]],
+    todos: bool,
+) -> List[Dict[str, str]]:
+    """Lista de colaboradores a exportar (una hoja cada uno)."""
+    es_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
+        sb, user_id, current_user
     )
+    if not es_amplia:
+        return [_usuario_export_info(sb, int(user_id))]
 
-    try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
-    except ImportError as exc:
-        raise RuntimeError("openpyxl no disponible para exportar") from exc
+    cols = list_colaboradores_plan(sb, contrato_id) or []
+    by_id: Dict[int, dict] = {}
+    for c in cols:
+        try:
+            cid = int(c.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid > 0:
+            by_id[cid] = c
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Plan de actividades"
+    ids: List[int] = []
+    if todos:
+        ids = list(by_id.keys())
+        if int(user_id) not in ids:
+            ids.insert(0, int(user_id))
+    elif colaborador_ids:
+        ids = [int(x) for x in colaborador_ids if x is not None and int(x) > 0]
+    elif colaborador_id is not None:
+        ids = [int(colaborador_id)]
+    else:
+        ids = [int(user_id)]
 
-    headers = [
-        "Grupo", "Actividad", "Descripción", "Comentario comité", "Solicitante",
-        "Asignado(s)", "Prioridad", "Estado", "Fecha inicio", "Fecha fin", "Periodicidad",
-    ]
+    seen: Set[int] = set()
+    out: List[Dict[str, str]] = []
+    for i in ids:
+        if i in seen:
+            continue
+        seen.add(i)
+        info = _usuario_export_info(sb, i)
+        c = by_id.get(i)
+        if c:
+            nm = (
+                c.get("nombre_completo")
+                or f"{c.get('nombre') or ''} {c.get('apellidos') or ''}".strip()
+                or c.get("nombre")
+            )
+            if nm:
+                info["nombre"] = str(nm).strip()
+            if c.get("cargo_nombre"):
+                info["cargo"] = str(c.get("cargo_nombre") or "").strip()
+        out.append(info)
+    return out or [_usuario_export_info(sb, int(user_id))]
+
+
+def _apply_calidad_header(ws, *, n_cols: int, contrato: dict, colaborador: dict) -> int:
+    """
+    Encabezado de calidad (3 partes) + bloque contrato/colaborador.
+    Retorna la primera fila libre para la grilla.
+    """
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    fmt = PLAN_ACTIVIDADES_FORMATO
+    fill_title = PatternFill("solid", fgColor="0F2942")
+    font_title = Font(name="Calibri", bold=True, size=14, color="FFFFFF")
+    font_calidad = Font(name="Calibri", bold=True, size=9, color="FFFFFF")
+    font_head = Font(name="Calibri", bold=True, size=9, color="0F2942")
+    font_body = Font(name="Calibri", size=9, color="0F2942")
+    thin = Border(
+        left=Side(style="thin", color="94A3B8"),
+        right=Side(style="thin", color="94A3B8"),
+        top=Side(style="thin", color="94A3B8"),
+        bottom=Side(style="thin", color="94A3B8"),
+    )
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    n_cols = max(n_cols, 8)
+    title_end = min(4, n_cols)
+    right_start = min(5, n_cols)
+
+    for c in range(1, n_cols + 1):
+        cell = ws.cell(1, c, "")
+        cell.fill = fill_title
+        cell.border = thin
+        cell.alignment = center
+
+    if title_end >= 2:
+        ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=title_end)
+    if right_start <= n_cols and right_start > title_end:
+        ws.merge_cells(start_row=1, start_column=right_start, end_row=1, end_column=n_cols)
+
+    # Logo (imagen o fallback texto)
+    logo_cell = ws.cell(1, 1)
+    logo_cell.font = font_calidad
+    logo_cell.alignment = center
+    logo_ok = False
+    logo_url = (contrato.get("logo_contratista") or "").strip()
+    if logo_url:
+        try:
+            from main import _xlsx_fetch_image_bytes, _xlsx_fit_image_to_cell
+            from openpyxl.drawing.image import Image as XLImage
+            import io as _io
+
+            raw = _xlsx_fetch_image_bytes(logo_url)
+            if raw:
+                img = XLImage(_io.BytesIO(raw))
+                _xlsx_fit_image_to_cell(img, 48, 18)
+                ws.add_image(img, "A1")
+                logo_ok = True
+        except Exception:
+            logo_ok = False
+    if not logo_ok:
+        logo_cell.value = "ClaraCore"
+
+    titulo = ws.cell(1, 2 if n_cols >= 2 else 1)
+    titulo.value = fmt.get("nombre_mayus") or "PLAN DE ACTIVIDADES"
+    titulo.font = font_title
+    titulo.alignment = center
+
+    if right_start <= n_cols:
+        cal = ws.cell(1, right_start)
+        cal.value = (
+            f"{fmt.get('codigo') or 'CC-SEG-PLAN-001'}\n"
+            f"Versión {fmt.get('version') or '1.0'}\n"
+            f"Fecha {_now_bogota().strftime('%d/%m/%Y')}"
+        )
+        cal.font = font_calidad
+        cal.alignment = center
+    ws.row_dimensions[1].height = 52
+
+    # Fila 2: contrato + descripción
+    ws.cell(2, 1, "Contrato").font = font_head
+    ws.cell(2, 1).border = thin
+    ws.cell(2, 2, str(contrato.get("numero") or "—")).font = font_body
+    ws.cell(2, 2).border = thin
+    ws.cell(2, 3, "Descripción").font = font_head
+    ws.cell(2, 3).border = thin
+    if n_cols >= 4:
+        ws.merge_cells(start_row=2, start_column=4, end_row=2, end_column=n_cols)
+    desc = ws.cell(2, 4 if n_cols >= 4 else 3, str(contrato.get("objeto") or "—"))
+    desc.font = font_body
+    desc.alignment = left
+    desc.border = thin
+    for c in range(1, n_cols + 1):
+        ws.cell(2, c).border = thin
+
+    # Fila 3: colaborador + cargo
+    ws.cell(3, 1, "Colaborador").font = font_head
+    ws.cell(3, 1).border = thin
+    ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=min(4, n_cols))
+    ws.cell(3, 2, str(colaborador.get("nombre") or "—")).font = font_body
+    ws.cell(3, 2).border = thin
+    cargo_col = min(5, n_cols)
+    ws.cell(3, cargo_col, "Cargo").font = font_head
+    ws.cell(3, cargo_col).border = thin
+    if n_cols >= cargo_col + 1:
+        ws.merge_cells(start_row=3, start_column=cargo_col + 1, end_row=3, end_column=n_cols)
+        ws.cell(3, cargo_col + 1, str(colaborador.get("cargo") or "—")).font = font_body
+        ws.cell(3, cargo_col + 1).border = thin
+    for c in range(1, n_cols + 1):
+        ws.cell(3, c).border = thin
+
+    ws.row_dimensions[2].height = 22
+    ws.row_dimensions[3].height = 22
+
+    # Fila 4 vacía de respiro
+    return 5
+
+
+def _write_plan_sheet(ws, items: List[dict], *, contrato: dict, colaborador: dict) -> None:
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    headers = list(_EXPORT_HEADERS)
     thin = Border(
         left=Side(style="thin", color="94A3B8"),
         right=Side(style="thin", color="94A3B8"),
@@ -1367,16 +1612,12 @@ def exportar_xlsx(
     )
     header_fill = PatternFill("solid", fgColor="DDEFF8")
     group_fill = PatternFill("solid", fgColor="FDE68A")
-    header_font = Font(bold=True, color="0F2942")
+    header_font = Font(name="Calibri", bold=True, color="0F2942", size=9)
+    body_font = Font(name="Calibri", size=9, color="0F2942")
+    bar_fill = PatternFill("solid", fgColor="38BDF8")
+    bar_overlap = PatternFill("solid", fgColor="F97316")
 
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(1, col, h)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = thin
-        cell.alignment = Alignment(wrap_text=True, vertical="center")
-
-    # Gantt columns: from min fecha to max (+30d buffer)
+    # Rango Gantt
     all_days: List[date] = []
     for it in items:
         for occ in it.get("ocurrencias") or []:
@@ -1387,28 +1628,44 @@ def exportar_xlsx(
             if b:
                 all_days.append(b)
     if all_days:
-        d0 = min(all_days)
-        d1 = max(all_days)
+        d0, d1 = min(all_days), max(all_days)
     else:
         hoy = _now_bogota().date()
         d0, d1 = hoy, hoy + timedelta(days=14)
 
-    gantt_start_col = len(headers) + 1
-    cur = d0
+    gantt_start = len(headers) + 1
     day_cols: Dict[str, int] = {}
-    col_i = gantt_start_col
-    while cur <= d1 and col_i < gantt_start_col + 120:
+    col_i = gantt_start
+    cur = d0
+    while cur <= d1 and col_i < gantt_start + 120:
         day_cols[cur.isoformat()] = col_i
-        cell = ws.cell(1, col_i, cur.strftime("%d/%m"))
-        cell.fill = header_fill
-        cell.font = Font(bold=True, size=8)
-        cell.border = thin
-        cell.alignment = Alignment(horizontal="center")
-        ws.column_dimensions[cell.column_letter].width = 4
-        cur += timedelta(days=1)
         col_i += 1
+        cur += timedelta(days=1)
+    total_cols = max(col_i - 1, len(headers), 8)
 
-    # Detect overlaps per assignee for highlighting
+    header_row = _apply_calidad_header(
+        ws, n_cols=total_cols, contrato=contrato, colaborador=colaborador
+    )
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(header_row, col, h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin
+        cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+
+    for iso, col in day_cols.items():
+        d = date.fromisoformat(iso)
+        cell = ws.cell(header_row, col, d.strftime("%d/%m"))
+        cell.fill = header_fill
+        cell.font = Font(name="Calibri", bold=True, size=8, color="0F2942")
+        cell.border = thin
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(col)].width = 3.6
+
+    ws.row_dimensions[header_row].height = 32
+
+    # Solapes
     by_asig: Dict[int, List[Tuple[int, date, date]]] = {}
     for it in items:
         for a in it.get("asignaciones") or []:
@@ -1420,72 +1677,174 @@ def exportar_xlsx(
                 a1 = _parse_date(occ.get("fecha_fin"))
                 if a0 and a1:
                     by_asig.setdefault(uid, []).append((int(it["id"]), a0, a1))
-
     overlap_ids: Set[int] = set()
-    for uid, spans in by_asig.items():
+    for spans in by_asig.values():
         for i, (id1, a0, a1) in enumerate(spans):
             for id2, b0, b1 in spans[i + 1:]:
                 if id1 != id2 and _intervalos_solapan(a0, a1, b0, b1):
                     overlap_ids.add(id1)
                     overlap_ids.add(id2)
 
-    bar_fill = PatternFill("solid", fgColor="38BDF8")
-    bar_overlap = PatternFill("solid", fgColor="F97316")
-    row_i = 2
-    last_grupo = None
-    for it in items:
-        gname = it.get("grupo_nombre") or "Sin grupo"
-        if gname != last_grupo:
-            ws.cell(row_i, 1, gname)
-            for c in range(1, gantt_start_col):
-                cell = ws.cell(row_i, c)
-                cell.fill = group_fill
-                cell.font = Font(bold=True)
+    row_i = header_row + 1
+    last_dep = None
+    if not items:
+        cell = ws.cell(row_i, 1, "Sin actividades en este plan.")
+        cell.font = Font(name="Calibri", italic=True, size=9, color="64748B")
+        for c in range(1, len(headers) + 1):
+            ws.cell(row_i, c).border = thin
+        row_i += 1
+    else:
+        for it in items:
+            dep = it.get("grupo_nombre") or "Sin departamento"
+            if dep != last_dep:
+                # Banda de departamento (agrupa filas; no es columna de datos)
+                ws.merge_cells(
+                    start_row=row_i,
+                    start_column=1,
+                    end_row=row_i,
+                    end_column=len(headers),
+                )
+                band = ws.cell(row_i, 1, dep)
+                band.fill = group_fill
+                band.font = Font(name="Calibri", bold=True, size=9, color="0F2942")
+                band.alignment = Alignment(vertical="center", wrap_text=True)
+                for c in range(1, gantt_start):
+                    cell = ws.cell(row_i, c)
+                    cell.fill = group_fill
+                    cell.border = thin
+                last_dep = dep
+                row_i += 1
+
+            vals = [
+                it.get("titulo") or "",
+                _strip_html(it.get("descripcion")),
+                _strip_html(it.get("comentario_comite")),
+                it.get("solicitante_nombre") or "",
+                it.get("asignado_a_nombre") or "",
+                it.get("prioridad") if it.get("prioridad") is not None else "",
+                it.get("estado_gestion") or "",
+                _fmt_fecha_co(it.get("fecha_inicio")),
+                _fmt_fecha_co(it.get("fecha_fin")),
+                it.get("periodicidad") or "ninguna",
+            ]
+            for col, v in enumerate(vals, 1):
+                cell = ws.cell(row_i, col, v)
                 cell.border = thin
-            last_grupo = gname
+                cell.font = body_font
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+            fill = bar_overlap if int(it.get("id") or 0) in overlap_ids else bar_fill
+            for occ in it.get("ocurrencias") or []:
+                a0 = _parse_date(occ.get("fecha_inicio"))
+                a1 = _parse_date(occ.get("fecha_fin"))
+                if not a0 or not a1:
+                    continue
+                d = a0
+                while d <= a1:
+                    col = day_cols.get(d.isoformat())
+                    if col:
+                        cell = ws.cell(row_i, col, "■")
+                        cell.fill = fill
+                        cell.alignment = Alignment(horizontal="center")
+                        cell.border = thin
+                    d += timedelta(days=1)
             row_i += 1
 
-        vals = [
-            gname,
-            it.get("titulo"),
-            _strip_html(it.get("descripcion")),
-            _strip_html(it.get("comentario_comite")),
-            it.get("solicitante_nombre"),
-            it.get("asignado_a_nombre"),
-            it.get("prioridad"),
-            it.get("estado_gestion"),
-            it.get("fecha_inicio"),
-            it.get("fecha_fin"),
-            it.get("periodicidad"),
-        ]
-        for col, v in enumerate(vals, 1):
-            cell = ws.cell(row_i, col, v if v is not None else "")
-            cell.border = thin
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    widths = [28, 32, 28, 16, 18, 10, 12, 12, 12, 12]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
 
-        fill = bar_overlap if int(it.get("id") or 0) in overlap_ids else bar_fill
-        for occ in it.get("ocurrencias") or []:
-            a0 = _parse_date(occ.get("fecha_inicio"))
-            a1 = _parse_date(occ.get("fecha_fin"))
-            if not a0 or not a1:
-                continue
-            d = a0
-            while d <= a1:
-                col = day_cols.get(d.isoformat())
-                if col:
-                    cell = ws.cell(row_i, col, "■")
-                    cell.fill = fill
-                    cell.alignment = Alignment(horizontal="center")
-                    cell.border = thin
-                d += timedelta(days=1)
-        row_i += 1
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = f"1:{header_row}"
+    ws.page_margins.left = 0.4
+    ws.page_margins.right = 0.4
+    ws.page_margins.top = 0.5
+    ws.page_margins.bottom = 0.5
 
-    for col in range(1, len(headers) + 1):
-        ws.column_dimensions[ws.cell(1, col).column_letter].width = 18
+
+def exportar_xlsx(
+    sb,
+    contrato_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    colaborador_id: Optional[int] = None,
+    colaborador_ids: Optional[List[int]] = None,
+    ver_todos: bool = False,
+    todos: bool = False,
+) -> Tuple[bytes, str]:
+    """
+    Excel institucional del Plan (una hoja por colaborador).
+    Retorna (bytes, filename).
+    """
+    if not tiene_permiso_plan_actividades(current_user, "exportar", contrato_id):
+        raise PermissionError("No tiene permiso para exportar el Plan de actividades.")
+
+    try:
+        from openpyxl import Workbook
+    except ImportError as exc:
+        raise RuntimeError("openpyxl no disponible para exportar") from exc
+
+    # Compat: ver_todos sin selección explícita → todos (solo vista amplia)
+    es_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
+        sb, user_id, current_user
+    )
+    if es_amplia and ver_todos and not colaborador_ids and colaborador_id is None and not todos:
+        todos = True
+
+    targets = _targets_export(
+        sb,
+        contrato_id,
+        user_id,
+        current_user,
+        colaborador_id=colaborador_id,
+        colaborador_ids=colaborador_ids,
+        todos=todos,
+    )
+    contrato = _contrato_meta_export(sb, contrato_id)
+
+    wb = Workbook()
+    # Quitar hoja por defecto; se recrean por colaborador
+    default = wb.active
+    wb.remove(default)
+
+    used_titles: Set[str] = set()
+    for target in targets:
+        uid = int(target["id"])
+        items = list_actividades(
+            sb,
+            contrato_id,
+            user_id,
+            current_user,
+            colaborador_id=uid,
+            incluir_cerrados=True,
+            ver_todos=True,
+        )
+        ws = wb.create_sheet(
+            _sheet_title_safe(target.get("nombre") or f"Usuario {uid}", used_titles)
+        )
+        _write_plan_sheet(ws, items, contrato=contrato, colaborador=target)
+
+    if not wb.sheetnames:
+        ws = wb.create_sheet("Plan")
+        _write_plan_sheet(
+            ws,
+            [],
+            contrato=contrato,
+            colaborador=_usuario_export_info(sb, int(user_id)),
+        )
 
     bio = __import__("io").BytesIO()
     wb.save(bio)
-    return bio.getvalue()
+    codigo = str(PLAN_ACTIVIDADES_FORMATO.get("codigo") or "CC-SEG-PLAN-001").replace("/", "-")
+    num = re.sub(r"[^\w\-]+", "_", str(contrato.get("numero") or contrato_id))[:40]
+    fname = f"{codigo}_plan_actividades_{num}.xlsx"
+    return bio.getvalue(), fname
 
 
 def _strip_html(html: Optional[str]) -> str:

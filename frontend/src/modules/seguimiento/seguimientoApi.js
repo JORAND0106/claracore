@@ -456,7 +456,16 @@ export function createSeguimientoApi(contratoId, token) {
     exportPlanActividadesBlob: async (params = {}) => {
       const q = new URLSearchParams()
       Object.entries(params).forEach(([k, v]) => {
-        if (v != null && v !== '') q.set(k, String(v))
+        if (v == null || v === '') return
+        if (Array.isArray(v)) {
+          if (v.length) q.set(k, v.join(','))
+          return
+        }
+        if (typeof v === 'boolean') {
+          q.set(k, v ? 'true' : 'false')
+          return
+        }
+        q.set(k, String(v))
       })
       const qs = q.toString()
       const sig = apiFetchSignal(120000)
@@ -471,9 +480,15 @@ export function createSeguimientoApi(contratoId, token) {
         if (!res.ok) await parseOrThrow(res)
         const buf = await res.arrayBuffer()
         if (!buf || buf.byteLength < 8) throw new Error('El Excel exportado está vacío')
-        return new Blob([buf], {
-          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        })
+        const cd = res.headers.get('Content-Disposition') || ''
+        const m = /filename="?([^";]+)"?/i.exec(cd)
+        const filename = (m && m[1]) ? m[1].trim() : 'plan_actividades.xlsx'
+        return {
+          blob: new Blob([buf], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          }),
+          filename,
+        }
       } catch (e) {
         throw mapNetworkError(e)
       }
