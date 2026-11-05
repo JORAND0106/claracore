@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Download, Plus, X } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, Plus, X } from 'lucide-react'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import {
   idsConSolapePorAsignado,
@@ -10,6 +10,8 @@ import { htmlToPlainText } from './richTextUtils'
 import { fmtFecha } from './seguimientoTheme'
 import PlanActividadFormModal from './PlanActividadFormModal'
 import PlanActividadDetalleModal from './PlanActividadDetalleModal'
+import PlanActividadesEquipoVista from './PlanActividadesEquipoVista'
+import { resolverPeriodo } from './planActividadesEquipo'
 
 function iconBtn(t, active = false) {
   return {
@@ -79,10 +81,31 @@ export default function PlanActividadesVista({
   const [detalleId, setDetalleId] = useState(null)
   /** Por defecto la grilla es protagonista; el Gantt se abre con la flecha. */
   const [ganttOpen, setGanttOpen] = useState(false)
+  /** Pestañas (vista amplia): mi_plan | equipo */
+  const [tab, setTab] = useState('mi_plan')
+  const [drillColaboradorId, setDrillColaboradorId] = useState(null)
+  const [equipoPeriodo, setEquipoPeriodo] = useState(() => ({
+    modo: 'semana',
+    ...resolverPeriodo({ modo: 'semana' }),
+  }))
+  const [equipoFiltro, setEquipoFiltro] = useState(null)
+  const [equipoAgrupar, setEquipoAgrupar] = useState(true)
   const scrollRef = useRef(null)
   const scrollSnap = useRef({ top: 0, left: 0 })
+  const equipoScrollRef = useRef(null)
+  const equipoScrollSnap = useRef(0)
 
   const vistaAmplia = Boolean(permisos?.esVistaAmplia || permisos?.esDesarrollador) && !forzarPropio
+  const enEquipo = vistaAmplia && tab === 'equipo' && !drillColaboradorId
+  const colaboradorEfectivo = drillColaboradorId
+    ? String(drillColaboradorId)
+    : colaboradorId
+  const verTodosEfectivo = Boolean(
+    vistaAmplia && (
+      enEquipo
+      || (verTodos && !colaboradorEfectivo)
+    ),
+  )
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -90,9 +113,9 @@ export default function PlanActividadesVista({
     try {
       const params = {
         incluir_cerrados: true,
-        ver_todos: vistaAmplia && verTodos && !colaboradorId,
+        ver_todos: verTodosEfectivo,
       }
-      if (colaboradorId) params.colaborador_id = Number(colaboradorId)
+      if (colaboradorEfectivo) params.colaborador_id = Number(colaboradorEfectivo)
       const [list, gs, us] = await Promise.all([
         api.listPlanActividades(params),
         api.listPlanGrupos().catch(() => []),
@@ -111,7 +134,7 @@ export default function PlanActividadesVista({
     } finally {
       setLoading(false)
     }
-  }, [api, colaboradorId, verTodos, vistaAmplia])
+  }, [api, colaboradorEfectivo, verTodosEfectivo])
 
   useEffect(() => { reload() }, [reload])
 
@@ -159,9 +182,9 @@ export default function PlanActividadesVista({
   async function exportar() {
     try {
       const q = {
-        ver_todos: vistaAmplia && verTodos && !colaboradorId,
+        ver_todos: vistaAmplia && verTodos && !colaboradorEfectivo,
       }
-      if (colaboradorId) q.colaborador_id = Number(colaboradorId)
+      if (colaboradorEfectivo) q.colaborador_id = Number(colaboradorEfectivo)
       const blob = await api.exportPlanActividadesBlob(q)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -227,14 +250,89 @@ export default function PlanActividadesVista({
         marginBottom: 10,
       }}
       >
-        <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 800, color: t.text }}>
-          Plan de actividades
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', minWidth: 0 }}>
+          {drillColaboradorId ? (
+            <button
+              type="button"
+              title="Equipo"
+              data-cc-tooltip="Equipo"
+              data-cc-tooltip-variant="short"
+              aria-label="Volver a Equipo"
+              onClick={() => {
+                setDrillColaboradorId(null)
+                setTab('equipo')
+                requestAnimationFrame(() => {
+                  if (equipoScrollRef.current) {
+                    equipoScrollRef.current.scrollTop = equipoScrollSnap.current || 0
+                  }
+                })
+              }}
+              style={iconBtn(t)}
+            >
+              <ArrowLeft size={17} strokeWidth={2.3} aria-hidden />
+            </button>
+          ) : null}
+          <div style={{ fontSize: 'var(--cc-h3)', fontWeight: 800, color: t.text }}>
+            Plan de actividades
+          </div>
+          {vistaAmplia && !drillColaboradorId && (
+            <div
+              role="tablist"
+              aria-label="Vistas del plan"
+              style={{
+                display: 'inline-flex',
+                gap: 2,
+                padding: 3,
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: `color-mix(in srgb, ${t.border} 35%, ${t.bgCard || t.bg || '#fff'})`,
+              }}
+            >
+              {[
+                { id: 'mi_plan', label: 'Mi plan' },
+                { id: 'equipo', label: 'Equipo' },
+              ].map((tb) => {
+                const active = tab === tb.id
+                return (
+                  <button
+                    key={tb.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    title={tb.label}
+                    data-cc-tooltip={tb.label}
+                    data-cc-tooltip-variant="short"
+                    onClick={() => {
+                      setDrillColaboradorId(null)
+                      setTab(tb.id)
+                    }}
+                    style={{
+                      border: 'none',
+                      background: active ? (t.bgCard || t.bg || '#fff') : 'transparent',
+                      color: active ? t.text : t.textMuted,
+                      fontWeight: 800,
+                      fontSize: 'var(--cc-sm)',
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      boxShadow: active ? `0 1px 4px color-mix(in srgb, ${t.text} 12%, transparent)` : 'none',
+                      transition: 'background 160ms ease, color 160ms ease',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {tb.label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          {vistaAmplia && (
+          {vistaAmplia && !enEquipo && (
             <>
               <select
-                value={colaboradorId}
+                value={colaboradorEfectivo}
+                disabled={Boolean(drillColaboradorId)}
                 onChange={(e) => {
                   setColaboradorId(e.target.value)
                   if (e.target.value) setVerTodos(false)
@@ -258,7 +356,7 @@ export default function PlanActividadesVista({
                   <option key={u.id} value={u.id}>{nombreUsuario(u)}</option>
                 ))}
               </select>
-              {!colaboradorId && (
+              {!colaboradorEfectivo && (
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text }}>
                   <input
                     type="checkbox"
@@ -270,7 +368,7 @@ export default function PlanActividadesVista({
               )}
             </>
           )}
-          {permisos?.crear && (
+          {!enEquipo && permisos?.crear && (
             <button
               type="button"
               title="Crear actividad"
@@ -283,7 +381,7 @@ export default function PlanActividadesVista({
               <Plus size={18} strokeWidth={2.4} aria-hidden />
             </button>
           )}
-          {permisos?.exportar && (
+          {!enEquipo && permisos?.exportar && (
             <button
               type="button"
               title="Exportar Excel"
@@ -307,8 +405,37 @@ export default function PlanActividadesVista({
       {error && (
         <div style={{ color: t.danger || '#dc2626', fontSize: 'var(--cc-sm)', marginBottom: 8 }}>{error}</div>
       )}
-      {loading && <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando plan…</div>}
+      {!enEquipo && loading && <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando plan…</div>}
 
+      {enEquipo ? (
+        <PlanActividadesEquipoVista
+          t={t}
+          items={items}
+          usuarios={usuarios}
+          loading={loading}
+          periodoState={equipoPeriodo}
+          onPeriodoChange={setEquipoPeriodo}
+          filtroIndicador={equipoFiltro}
+          onFiltroChange={setEquipoFiltro}
+          agrupar={equipoAgrupar}
+          onAgruparChange={setEquipoAgrupar}
+          scrollRef={equipoScrollRef}
+          puedeCrear={Boolean(permisos?.crear)}
+          onCrear={() => {
+            setDetalleId(null)
+            setEditItem(null)
+            setFormOpen(true)
+          }}
+          onOpenColaborador={(id) => {
+            if (equipoScrollRef.current) {
+              equipoScrollSnap.current = equipoScrollRef.current.scrollTop
+            }
+            setDetalleId(null)
+            setFormOpen(false)
+            setDrillColaboradorId(Number(id))
+          }}
+        />
+      ) : (
       <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, minHeight: 0 }}>
         <div
           ref={scrollRef}
@@ -480,6 +607,7 @@ export default function PlanActividadesVista({
             : <ChevronRight size={20} strokeWidth={2.4} aria-hidden />}
         </button>
       </div>
+      )}
 
       {formOpen && (
         <PlanActividadFormModal
