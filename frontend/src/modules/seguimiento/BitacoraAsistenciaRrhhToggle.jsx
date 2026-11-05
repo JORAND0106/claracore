@@ -1,6 +1,7 @@
 /**
  * Interruptor on/off (solo Desarrollador) del gate Bitácora↔RRHH
  * en el contrato exento (ID 3).
+ * Textos de estado / último cambio van en tooltip institucional (hora Colombia).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatFechaHoraColombia } from '../../utils/fechaColombia.js'
@@ -67,7 +68,14 @@ export default function BitacoraAsistenciaRrhhToggle({
     ? formatFechaHoraColombia(policy.activa_en, { withTime: true })
     : null
 
-  const tooltip = 'Bitácora RRHH'
+  const estadoTxt = activa
+    ? 'ON: asistencia individual + documentación Aprobada.'
+    : (corte
+      ? 'OFF: se puede registrar personal sin identificación individual ni Aprobado.'
+      : `OFF: el gate global inicia el ${BITACORA_ASISTENCIA_RRHH_CORTE_ISO.slice(8, 10)}-sep-${BITACORA_ASISTENCIA_RRHH_CORTE_ISO.slice(0, 4)}; este contrato permanece exento hasta encenderlo.`)
+  const tooltip = ultima
+    ? `${estadoTxt}\nÚltimo cambio: ${ultima} (hora Colombia)`
+    : `${estadoTxt}\nSin cambios registrados.`
 
   const onToggle = async () => {
     if (!api?.setBitacoraAsistenciaRrhhActiva || busy) return
@@ -106,18 +114,14 @@ export default function BitacoraAsistenciaRrhhToggle({
   const offColor = t.textMuted || '#64748B'
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end',
-      maxWidth: 380,
-    }}>
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
       <button
         type="button"
         disabled={busy}
         onClick={() => void onToggle()}
         title={tooltip}
         data-cc-tooltip={tooltip}
-        data-cc-tooltip-variant="short"
-        aria-label={activa ? 'Bitácora RRHH encendido' : 'Bitácora RRHH apagado'}
+        aria-label={activa ? 'Contrato ON' : 'Contrato OFF'}
         aria-pressed={activa}
         style={{
           display: 'inline-flex',
@@ -139,22 +143,10 @@ export default function BitacoraAsistenciaRrhhToggle({
         <span style={{ color: activa ? onColor : offColor, display: 'inline-flex' }}>
           <IconPower on={activa} />
         </span>
-        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, lineHeight: 1.2 }}>
-          <span>
-            Contrato {BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID}:{' '}
-            {busy ? 'Guardando…' : (activa ? 'ON' : 'OFF')}
-          </span>
-          <span style={{
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: '0.04em',
-            textTransform: 'uppercase',
-            color: activa ? onColor : offColor,
-          }}>
-            {activa ? 'Restricción activa' : 'Sin restricción'}
-          </span>
+        <span>
+          Contrato {BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID}:{' '}
+          {busy ? '…' : (activa ? 'ON' : 'OFF')}
         </span>
-        {/* Interruptor visual */}
         <span
           aria-hidden="true"
           style={{
@@ -181,18 +173,6 @@ export default function BitacoraAsistenciaRrhhToggle({
           />
         </span>
       </button>
-      <div style={{ fontSize: 11, color: t.textMuted, textAlign: 'right', lineHeight: 1.3 }}>
-        {activa
-          ? 'Asistencia individual + documentación Aprobada.'
-          : (corte
-            ? 'Apagado: se puede registrar personal sin identificación individual ni Aprobado.'
-            : `El gate global inicia el ${BITACORA_ASISTENCIA_RRHH_CORTE_ISO.slice(8, 10)}-sep-${BITACORA_ASISTENCIA_RRHH_CORTE_ISO.slice(0, 4)}; este contrato permanece exento hasta encenderlo.`)}
-        {ultima ? (
-          <span style={{ display: 'block', marginTop: 2 }}>
-            Último cambio: {ultima}
-          </span>
-        ) : null}
-      </div>
       {err ? (
         <div style={{ fontSize: 11, color: '#B91C1C', textAlign: 'right' }}>{err}</div>
       ) : null}

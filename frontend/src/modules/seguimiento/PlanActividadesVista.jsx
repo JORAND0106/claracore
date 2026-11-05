@@ -126,7 +126,7 @@ export default function PlanActividadesVista({
   const grouped = useMemo(() => {
     const map = new Map()
     for (const it of items) {
-      const g = it.grupo_nombre || 'Sin grupo'
+      const g = it.grupo_nombre || 'Sin departamento'
       if (!map.has(g)) map.set(g, [])
       map.get(g).push(it)
     }

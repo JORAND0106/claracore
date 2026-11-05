@@ -15,7 +15,7 @@ import TemaRichEditor from './TemaRichEditor'
 import UserSearchSelect from './UserSearchSelect'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { isRichTextEmpty } from './richTextUtils'
-import { useSeguimientoCompact } from './seguimientoShared'
+import { useClaraViewport } from '../../useClaraViewport'
 
 const PRIORIDADES = [
   { value: 1, label: 'Muy suave', color: '#86efac' },
@@ -181,7 +181,10 @@ export default function PlanActividadFormModal({
   onClose,
   onSaved,
 }) {
-  const compact = useSeguimientoCompact()
+  const vp = useClaraViewport()
+  /** Solo celular (incl. landscape de teléfono): columna vertical. Tablet+ → filas horizontales. */
+  const phoneLayout = Boolean(vp.isMobile || vp.isLandscapeMobile)
+  const wideLayout = !phoneLayout
   const themeMode = resolveThemeMode(t)
   const ficha = useMemo(() => usuariosFichaTheme(themeMode, t), [themeMode, t])
   const editando = Boolean(actividad?.id)
@@ -331,11 +334,11 @@ export default function PlanActividadFormModal({
       return
     }
     if (grupoModo === 'otro' && !grupoNuevo.trim()) {
-      setError('Escriba el nombre del nuevo grupo.')
+      setError('Escriba el nombre del nuevo departamento.')
       return
     }
     if (grupoModo !== 'otro' && !grupoId && !grupoOptions.length) {
-      setError('Cree un grupo o elija «Otro».')
+      setError('Cree un departamento o elija «Otro».')
       return
     }
     if (!asignados.length) {
@@ -373,8 +376,14 @@ export default function PlanActividadFormModal({
 
   const grid2 = {
     display: 'grid',
-    gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
+    gridTemplateColumns: phoneLayout ? '1fr' : '1fr 1fr',
     gap: 10,
+  }
+  const gridSide = {
+    display: 'grid',
+    gridTemplateColumns: wideLayout ? '1fr 1fr' : '1fr',
+    gap: wideLayout ? 12 : 0,
+    alignItems: 'stretch',
   }
 
   const label = {
@@ -392,7 +401,7 @@ export default function PlanActividadFormModal({
         style={{
           ...ficha.overlay,
           zIndex: 100060,
-          padding: compact ? 0 : 16,
+          padding: phoneLayout ? 0 : 12,
         }}
         role="presentation"
         data-cc-plan-actividad-form-overlay="1"
@@ -404,10 +413,10 @@ export default function PlanActividadFormModal({
           aria-labelledby="cc-plan-actividad-form-title"
           onClick={(e) => e.stopPropagation()}
           style={{
-            width: compact ? '100%' : 'min(920px, 98vw)',
-            maxHeight: compact ? '100dvh' : '94vh',
-            height: compact ? '100dvh' : undefined,
-            borderRadius: compact ? 0 : 16,
+            width: phoneLayout ? '100%' : (wideLayout ? 'min(1280px, 98vw)' : 'min(920px, 98vw)'),
+            maxHeight: phoneLayout ? '100dvh' : '94vh',
+            height: phoneLayout ? '100dvh' : undefined,
+            borderRadius: phoneLayout ? 0 : 16,
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
@@ -423,10 +432,10 @@ export default function PlanActividadFormModal({
             <div style={ficha.heroAccent} aria-hidden />
             <div
               style={{
-                padding: compact ? '14px 14px 16px' : '16px 18px 18px',
+                padding: phoneLayout ? '14px 14px 16px' : '12px 18px 14px',
                 display: 'flex',
                 alignItems: 'flex-start',
-                gap: compact ? 12 : 16,
+                gap: phoneLayout ? 12 : 16,
               }}
             >
               <div style={{ minWidth: 0, flex: 1 }}>
@@ -458,7 +467,7 @@ export default function PlanActividadFormModal({
                   </span>
                 </div>
               </div>
-              <IconBtn title="Cerrar" ficha={ficha} compact={compact} onClick={onClose}>
+              <IconBtn title="Cerrar" ficha={ficha} compact={phoneLayout} onClick={onClose}>
                 <X size={18} strokeWidth={2.25} aria-hidden />
               </IconBtn>
             </div>
@@ -468,9 +477,9 @@ export default function PlanActividadFormModal({
             style={{
               flex: 1,
               overflowY: 'auto',
-              padding: compact
+              padding: phoneLayout
                 ? '12px 12px max(16px, env(safe-area-inset-bottom))'
-                : '16px 18px 20px',
+                : '12px 16px 14px',
               WebkitOverflowScrolling: 'touch',
               background: themeMode === 'dark'
                 ? 'rgba(0,0,0,0.12)'
@@ -479,10 +488,10 @@ export default function PlanActividadFormModal({
                   : 'rgba(0,119,182,0.03)',
             }}
           >
-            <SectionBlock title="Identificación" ficha={ficha}>
-              <div style={{ ...grid2, marginBottom: 10 }}>
+            <SectionBlock title="Departamento" ficha={ficha}>
+              <div style={{ ...grid2, marginBottom: 0 }}>
                 <div>
-                  <label style={label}>Grupo</label>
+                  <label style={label}>Departamento</label>
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
                     <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: ficha.text, fontSize: 'var(--cc-sm)' }}>
                       <input type="radio" checked={grupoModo === 'existente'} onChange={() => setGrupoModo('existente')} />
@@ -498,7 +507,7 @@ export default function PlanActividadFormModal({
                       style={fieldInput}
                       value={grupoNuevo}
                       onChange={(e) => setGrupoNuevo(e.target.value)}
-                      placeholder="Nombre del nuevo grupo"
+                      placeholder="Nombre del nuevo departamento"
                       list="plan-grupos-sugeridos"
                     />
                   ) : (
@@ -529,247 +538,251 @@ export default function PlanActividadFormModal({
             </SectionBlock>
 
             <SectionBlock title="Contenido" ficha={ficha}>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                  <label style={{ ...label, marginBottom: 0 }}>Descripción</label>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <IconBtn
-                      title="Dibujar esquema"
-                      ficha={ficha}
-                      compact={compact}
-                      onClick={() => setEsquemaCampo('descripcion')}
-                    >
-                      <PenLine size={16} strokeWidth={2.1} aria-hidden />
-                    </IconBtn>
-                    {adjDesc.length > 0 && (
+              <div style={gridSide}>
+                <div style={{ marginBottom: phoneLayout ? 12 : 0, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <label style={{ ...label, marginBottom: 0 }}>Descripción</label>
+                    <div style={{ display: 'flex', gap: 6 }}>
                       <IconBtn
-                        title="Quitar adjunto"
+                        title="Dibujar esquema"
                         ficha={ficha}
-                        compact={compact}
-                        variant="danger"
-                        onClick={() => setAdjDesc((prev) => prev.filter((_, i) => i !== Math.min(slideDesc, prev.length - 1)))}
+                        compact={phoneLayout}
+                        onClick={() => setEsquemaCampo('descripcion')}
                       >
-                        <Trash2 size={16} strokeWidth={2.1} aria-hidden />
+                        <PenLine size={16} strokeWidth={2.1} aria-hidden />
                       </IconBtn>
-                    )}
+                      {adjDesc.length > 0 && (
+                        <IconBtn
+                          title="Quitar adjunto"
+                          ficha={ficha}
+                          compact={phoneLayout}
+                          variant="danger"
+                          onClick={() => setAdjDesc((prev) => prev.filter((_, i) => i !== Math.min(slideDesc, prev.length - 1)))}
+                        >
+                          <Trash2 size={16} strokeWidth={2.1} aria-hidden />
+                        </IconBtn>
+                      )}
+                    </div>
                   </div>
+                  <TemaRichEditor
+                    t={t}
+                    value={descripcion}
+                    onChange={setDescripcion}
+                    minHeight={phoneLayout ? 72 : (wideLayout ? 110 : 88)}
+                    placeholder="Descripción…"
+                  />
+                  {adjDesc.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <AdjuntosMediaSlider
+                        t={t}
+                        items={slidesFromImagenes(adjDesc, imagenSrc)}
+                        index={Math.min(slideDesc, adjDesc.length - 1)}
+                        height={wideLayout ? 100 : 140}
+                        onIndexChange={setSlideDesc}
+                        onClickItem={(slide) => openImageInNewTab(slide.source)}
+                      />
+                    </div>
+                  )}
                 </div>
-                <TemaRichEditor
-                  t={t}
-                  value={descripcion}
-                  onChange={setDescripcion}
-                  minHeight={compact ? 72 : 88}
-                  placeholder="Descripción…"
-                />
-                {adjDesc.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <AdjuntosMediaSlider
-                      t={t}
-                      items={slidesFromImagenes(adjDesc, imagenSrc)}
-                      index={Math.min(slideDesc, adjDesc.length - 1)}
-                      height={140}
-                      onIndexChange={setSlideDesc}
-                      onClickItem={(slide) => openImageInNewTab(slide.source)}
-                    />
-                  </div>
-                )}
-              </div>
 
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                  <label style={{ ...label, marginBottom: 0 }}>Comentario comité</label>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <IconBtn
-                      title="Dibujar esquema"
-                      ficha={ficha}
-                      compact={compact}
-                      onClick={() => setEsquemaCampo('comentario')}
-                    >
-                      <PenLine size={16} strokeWidth={2.1} aria-hidden />
-                    </IconBtn>
-                    {adjCom.length > 0 && (
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <label style={{ ...label, marginBottom: 0 }}>Comentario comité</label>
+                    <div style={{ display: 'flex', gap: 6 }}>
                       <IconBtn
-                        title="Quitar adjunto"
+                        title="Dibujar esquema"
                         ficha={ficha}
-                        compact={compact}
-                        variant="danger"
-                        onClick={() => setAdjCom((prev) => prev.filter((_, i) => i !== Math.min(slideCom, prev.length - 1)))}
+                        compact={phoneLayout}
+                        onClick={() => setEsquemaCampo('comentario')}
                       >
-                        <Trash2 size={16} strokeWidth={2.1} aria-hidden />
+                        <PenLine size={16} strokeWidth={2.1} aria-hidden />
                       </IconBtn>
-                    )}
+                      {adjCom.length > 0 && (
+                        <IconBtn
+                          title="Quitar adjunto"
+                          ficha={ficha}
+                          compact={phoneLayout}
+                          variant="danger"
+                          onClick={() => setAdjCom((prev) => prev.filter((_, i) => i !== Math.min(slideCom, prev.length - 1)))}
+                        >
+                          <Trash2 size={16} strokeWidth={2.1} aria-hidden />
+                        </IconBtn>
+                      )}
+                    </div>
                   </div>
+                  <TemaRichEditor
+                    t={t}
+                    value={comentario}
+                    onChange={setComentario}
+                    minHeight={phoneLayout ? 56 : (wideLayout ? 110 : 72)}
+                    placeholder="Comentario del comité…"
+                  />
+                  {adjCom.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <AdjuntosMediaSlider
+                        t={t}
+                        items={slidesFromImagenes(adjCom, imagenSrc)}
+                        index={Math.min(slideCom, adjCom.length - 1)}
+                        height={wideLayout ? 100 : 120}
+                        onIndexChange={setSlideCom}
+                        onClickItem={(slide) => openImageInNewTab(slide.source)}
+                      />
+                    </div>
+                  )}
                 </div>
-                <TemaRichEditor
-                  t={t}
-                  value={comentario}
-                  onChange={setComentario}
-                  minHeight={compact ? 56 : 72}
-                  placeholder="Comentario del comité…"
-                />
-                {adjCom.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <AdjuntosMediaSlider
-                      t={t}
-                      items={slidesFromImagenes(adjCom, imagenSrc)}
-                      index={Math.min(slideCom, adjCom.length - 1)}
-                      height={120}
-                      onIndexChange={setSlideCom}
-                      onClickItem={(slide) => openImageInNewTab(slide.source)}
-                    />
-                  </div>
-                )}
               </div>
             </SectionBlock>
 
-            <SectionBlock title="Personas" ficha={ficha}>
-              <div style={{ ...grid2, marginBottom: 12 }}>
-                <div>
-                  <label style={label}>Solicitante</label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <UserAvatar u={solicitante} ficha={ficha} size={compact ? 40 : 36} />
-                    <select
-                      style={{ ...fieldInput, flex: 1 }}
-                      value={solicitanteId}
-                      onChange={(e) => setSolicitanteId(e.target.value)}
+            <div style={gridSide}>
+              <SectionBlock title="Personas" ficha={ficha} last={!phoneLayout}>
+                <div style={{ ...grid2, marginBottom: 12 }}>
+                  <div>
+                    <label style={label}>Solicitante</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <UserAvatar u={solicitante} ficha={ficha} size={phoneLayout ? 40 : 36} />
+                      <select
+                        style={{ ...fieldInput, flex: 1 }}
+                        value={solicitanteId}
+                        onChange={(e) => setSolicitanteId(e.target.value)}
+                      >
+                        {usuarios.map((u) => (
+                          <option key={u.id} value={u.id}>{nombreUsuario(u)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label style={label}>Prioridad</label>
+                    <div
+                      style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', minHeight: 36 }}
+                      role="slider"
+                      aria-valuenow={prioridad}
+                      aria-valuemin={1}
+                      aria-valuemax={5}
                     >
-                      {usuarios.map((u) => (
-                        <option key={u.id} value={u.id}>{nombreUsuario(u)}</option>
+                      {PRIORIDADES.map((p) => (
+                        <button
+                          key={p.value}
+                          type="button"
+                          title={p.label}
+                          data-cc-tooltip={p.label}
+                          data-cc-tooltip-variant="short"
+                          aria-label={`Prioridad ${p.value}: ${p.label}`}
+                          onClick={() => setPrioridad(p.value)}
+                          style={{
+                            width: 22 + p.value * 3,
+                            height: 22 + p.value * 2,
+                            borderRadius: 999,
+                            border: prioridad === p.value
+                              ? `2px solid ${ficha.text}`
+                              : `1px solid ${ficha.border}`,
+                            background: p.color,
+                            cursor: 'pointer',
+                            transition: 'transform 160ms ease, box-shadow 160ms ease',
+                            transform: prioridad === p.value ? 'scale(1.08)' : 'scale(1)',
+                            boxShadow: prioridad === p.value
+                              ? `0 0 0 3px ${ficha.primary}44`
+                              : 'none',
+                          }}
+                        />
+                      ))}
+                      <span style={{ fontSize: 'var(--cc-sm)', color: ficha.textMuted, fontWeight: 600 }}>
+                        {PRIORIDADES.find((p) => p.value === prioridad)?.label}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={label}>Asignado(s)</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                    {asignados.map((a) => {
+                      const u = usuarios.find((x) => Number(x.id) === Number(a.id))
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() => removeAsignado(a.id)}
+                          title="Quitar"
+                          data-cc-tooltip="Quitar"
+                          data-cc-tooltip-variant="short"
+                          style={{
+                            ...ficha.pill('primary'),
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                            gap: 8,
+                            padding: '4px 10px 4px 4px',
+                          }}
+                        >
+                          <UserAvatar u={u} nombreFallback={a.nombre} ficha={ficha} size={24} />
+                          <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {a.nombre || `#${a.id}`}
+                          </span>
+                          <X size={12} strokeWidth={2.4} aria-hidden />
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <UserSearchSelect
+                    key={`asig-search-${asignados.map((a) => a.id).join('-') || 'empty'}`}
+                    t={t}
+                    usuarios={usuariosDisponibles}
+                    valueId={null}
+                    valueNombre=""
+                    mode="strict"
+                    placeholder={asignados.length ? 'Agregar otro…' : 'Buscar asignado…'}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      fontSize: 'var(--cc-sm)',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: `1px solid ${ficha.border}`,
+                      background: ficha.inputBg,
+                      color: ficha.text,
+                      fontWeight: 600,
+                    }}
+                    onSelect={addAsignado}
+                  />
+                </div>
+              </SectionBlock>
+
+              <SectionBlock title="Fechas y periodicidad" ficha={ficha} last>
+                <div style={{ ...grid2, marginBottom: 10 }}>
+                  <div>
+                    <label style={label}>Fecha inicio</label>
+                    <input type="date" style={fieldInput} value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} />
+                  </div>
+                  <div>
+                    <label style={label}>Fecha fin</label>
+                    <input type="date" style={fieldInput} value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} />
+                  </div>
+                </div>
+                <div style={grid2}>
+                  <div>
+                    <label style={label}>Periodicidad</label>
+                    <select style={fieldInput} value={periodicidad} onChange={(e) => setPeriodicidad(e.target.value)}>
+                      {PERIODICIDADES.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
                       ))}
                     </select>
                   </div>
-                </div>
-                <div>
-                  <label style={label}>Prioridad</label>
-                  <div
-                    style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', minHeight: 36 }}
-                    role="slider"
-                    aria-valuenow={prioridad}
-                    aria-valuemin={1}
-                    aria-valuemax={5}
-                  >
-                    {PRIORIDADES.map((p) => (
-                      <button
-                        key={p.value}
-                        type="button"
-                        title={p.label}
-                        data-cc-tooltip={p.label}
-                        data-cc-tooltip-variant="short"
-                        aria-label={`Prioridad ${p.value}: ${p.label}`}
-                        onClick={() => setPrioridad(p.value)}
-                        style={{
-                          width: 22 + p.value * 3,
-                          height: 22 + p.value * 2,
-                          borderRadius: 999,
-                          border: prioridad === p.value
-                            ? `2px solid ${ficha.text}`
-                            : `1px solid ${ficha.border}`,
-                          background: p.color,
-                          cursor: 'pointer',
-                          transition: 'transform 160ms ease, box-shadow 160ms ease',
-                          transform: prioridad === p.value ? 'scale(1.08)' : 'scale(1)',
-                          boxShadow: prioridad === p.value
-                            ? `0 0 0 3px ${ficha.primary}44`
-                            : 'none',
-                        }}
-                      />
-                    ))}
-                    <span style={{ fontSize: 'var(--cc-sm)', color: ficha.textMuted, fontWeight: 600 }}>
-                      {PRIORIDADES.find((p) => p.value === prioridad)?.label}
-                    </span>
+                  <div>
+                    <label style={label}>Repetir hasta</label>
+                    <input
+                      type="date"
+                      style={{
+                        ...fieldInput,
+                        opacity: periodicidad === 'ninguna' ? 0.55 : 1,
+                      }}
+                      value={periodicidadHasta}
+                      disabled={periodicidad === 'ninguna'}
+                      onChange={(e) => setPeriodicidadHasta(e.target.value)}
+                    />
                   </div>
                 </div>
-              </div>
-
-              <div>
-                <label style={label}>Asignado(s)</label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                  {asignados.map((a) => {
-                    const u = usuarios.find((x) => Number(x.id) === Number(a.id))
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        onClick={() => removeAsignado(a.id)}
-                        title="Quitar"
-                        data-cc-tooltip="Quitar"
-                        data-cc-tooltip-variant="short"
-                        style={{
-                          ...ficha.pill('primary'),
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                          gap: 8,
-                          padding: '4px 10px 4px 4px',
-                        }}
-                      >
-                        <UserAvatar u={u} nombreFallback={a.nombre} ficha={ficha} size={24} />
-                        <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {a.nombre || `#${a.id}`}
-                        </span>
-                        <X size={12} strokeWidth={2.4} aria-hidden />
-                      </button>
-                    )
-                  })}
-                </div>
-                <UserSearchSelect
-                  key={`asig-search-${asignados.map((a) => a.id).join('-') || 'empty'}`}
-                  t={t}
-                  usuarios={usuariosDisponibles}
-                  valueId={null}
-                  valueNombre=""
-                  mode="strict"
-                  placeholder={asignados.length ? 'Agregar otro…' : 'Buscar asignado…'}
-                  style={{
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    fontSize: 'var(--cc-sm)',
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                    border: `1px solid ${ficha.border}`,
-                    background: ficha.inputBg,
-                    color: ficha.text,
-                    fontWeight: 600,
-                  }}
-                  onSelect={addAsignado}
-                />
-              </div>
-            </SectionBlock>
-
-            <SectionBlock title="Fechas y periodicidad" ficha={ficha} last>
-              <div style={{ ...grid2, marginBottom: 10 }}>
-                <div>
-                  <label style={label}>Fecha inicio</label>
-                  <input type="date" style={fieldInput} value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} />
-                </div>
-                <div>
-                  <label style={label}>Fecha fin</label>
-                  <input type="date" style={fieldInput} value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} />
-                </div>
-              </div>
-              <div style={grid2}>
-                <div>
-                  <label style={label}>Periodicidad</label>
-                  <select style={fieldInput} value={periodicidad} onChange={(e) => setPeriodicidad(e.target.value)}>
-                    {PERIODICIDADES.map((p) => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={label}>Repetir hasta</label>
-                  <input
-                    type="date"
-                    style={{
-                      ...fieldInput,
-                      opacity: periodicidad === 'ninguna' ? 0.55 : 1,
-                    }}
-                    value={periodicidadHasta}
-                    disabled={periodicidad === 'ninguna'}
-                    onChange={(e) => setPeriodicidadHasta(e.target.value)}
-                  />
-                </div>
-              </div>
-            </SectionBlock>
+              </SectionBlock>
+            </div>
 
             {error && (
               <div
@@ -790,13 +803,13 @@ export default function PlanActividadFormModal({
           </div>
 
           <div style={ficha.foot}>
-            <IconBtn title="Cancelar" ficha={ficha} compact={compact} onClick={onClose}>
+            <IconBtn title="Cancelar" ficha={ficha} compact={phoneLayout} onClick={onClose}>
               <X size={18} strokeWidth={2.2} aria-hidden />
             </IconBtn>
             <IconBtn
               title={saving ? 'Guardando…' : (editando ? 'Guardar cambios' : 'Crear actividad')}
               ficha={ficha}
-              compact={compact}
+              compact={phoneLayout}
               variant="primary"
               disabled={saving}
               onClick={() => submit(false)}

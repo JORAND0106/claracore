@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  BookOpen, CalendarDays, ClipboardList, Percent, Truck, Users,
+  BookOpen, CalendarDays, Percent, Truck, Users,
 } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
@@ -231,11 +231,16 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
               data-cc-tooltip={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
               data-cc-tooltip-variant="short"
               aria-label={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
-              style={toolbarIconBtn(t, { active: vistaPlan })}
+              style={{
+                ...toolbarIconBtn(t, { active: vistaPlan }),
+                /* Icono policromático distintivo (estilo menú lateral; 🧩 no usado en la plataforma). */
+                fontSize: vistaPlan ? undefined : 'var(--cc-lg, 18px)',
+                lineHeight: 1,
+              }}
             >
               {vistaPlan
                 ? <CalendarDays size={18} strokeWidth={2.3} aria-hidden />
-                : <ClipboardList size={18} strokeWidth={2.3} aria-hidden />}
+                : <span aria-hidden style={{ fontSize: 18, lineHeight: 1 }}>🧩</span>}
             </button>
           )}
 
