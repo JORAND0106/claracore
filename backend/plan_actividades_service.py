@@ -552,6 +552,61 @@ def _proximo_consecutivo(sb, contrato_id: int) -> int:
         return 1
 
 
+def _acta_id_de_item(item: dict) -> Optional[int]:
+    try:
+        aid = int(item.get("acta_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    if aid > 0:
+        return aid
+    plan = _plan_blob(item)
+    try:
+        aid = int(plan.get("acta_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    return aid if aid > 0 else None
+
+
+def _idea_id_de_item(item: dict) -> Optional[int]:
+    try:
+        iid = int(item.get("idea_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    if iid > 0:
+        return iid
+    plan = _plan_blob(item)
+    try:
+        iid = int(plan.get("idea_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    return iid if iid > 0 else None
+
+
+def _es_elaborador_acta_vinculada(sb, item: dict, user_id: int) -> bool:
+    """Moderador del acta (elaborador) puede leer el Plan vinculado a su acta."""
+    aid = _acta_id_de_item(item)
+    if not aid:
+        return False
+    try:
+        rows = (
+            sb.table("seguimiento_acta")
+            .select("id, elaborador_id")
+            .eq("id", int(aid))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return False
+    if not rows:
+        return False
+    try:
+        return int(rows[0].get("elaborador_id") or 0) == int(user_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def _puede_ver_item(sb, item: dict, user_id: int, current_user: dict) -> bool:
     if _es_desarrollador(current_user):
         return True
@@ -561,7 +616,10 @@ def _puede_ver_item(sb, item: dict, user_id: int, current_user: dict) -> bool:
         return True
     if int(item.get("solicitante_id") or 0) == int(user_id):
         return True
-    return int(user_id) in _ids_asignados(item)
+    if int(user_id) in _ids_asignados(item):
+        return True
+    # Lectura: elaborador/moderador del acta a la que está vinculada la actividad.
+    return _es_elaborador_acta_vinculada(sb, item, user_id)
 
 
 def _puede_comentar(sb, item: dict, user_id: int, current_user: dict) -> bool:
@@ -612,19 +670,21 @@ def list_actividades(
     colaborador_id: Optional[int] = None,
     incluir_cerrados: bool = True,
     ver_todos: bool = False,
+    acta_id: Optional[int] = None,
+    idea_id: Optional[int] = None,
 ) -> List[dict]:
     try:
-        rows = (
+        q = (
             sb.table("seguimiento_item")
             .select("*")
             .eq("contrato_id", int(contrato_id))
             .eq("origen", ORIGEN)
-            .order("id")
-            .limit(2000)
-            .execute()
-            .data
-            or []
         )
+        if acta_id is not None:
+            q = q.eq("acta_id", int(acta_id))
+        if idea_id is not None:
+            q = q.eq("idea_id", int(idea_id))
+        rows = q.order("id").limit(2000).execute().data or []
     except Exception as exc:
         _log.exception("list_actividades query: %s", exc)
         raise ValueError(
@@ -635,6 +695,8 @@ def list_actividades(
     es_vista_amplia = _es_desarrollador(current_user) or _es_gerencial_o_admin(
         sb, user_id, current_user
     )
+    # Alcance acta/tema: el elaborador lee el plan del expositor (sin mutar).
+    alcance_acta = acta_id is not None or idea_id is not None
     out = []
     for r in rows:
         if not incluir_cerrados and r.get("estado_gestion") in ("cumplido", "cancelado"):
@@ -649,8 +711,9 @@ def list_actividades(
             }
             if cid not in ids:
                 continue
-        elif not ver_todos or not es_vista_amplia:
-            # Ambiente propio (gerencia/admin solo ven todos si ver_todos=true)
+        elif not alcance_acta and (not ver_todos or not es_vista_amplia):
+            # Ambiente propio (gerencia/admin solo ven todos si ver_todos=true).
+            # Con acta_id/idea_id se listan las del tema visibles al elaborador/expositor.
             if not (
                 int(r.get("created_by") or 0) == int(user_id)
                 or int(r.get("solicitante_id") or 0) == int(user_id)

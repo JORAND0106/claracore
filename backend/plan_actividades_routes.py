@@ -132,6 +132,8 @@ def route_list_actividades(
     colaborador_id: Optional[int] = Query(None),
     ver_todos: bool = Query(False),
     incluir_cerrados: bool = Query(True),
+    acta_id: Optional[int] = Query(None),
+    idea_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
@@ -145,6 +147,8 @@ def route_list_actividades(
             colaborador_id=colaborador_id,
             incluir_cerrados=incluir_cerrados,
             ver_todos=ver_todos,
+            acta_id=acta_id,
+            idea_id=idea_id,
         )
     except Exception as exc:
         raise _http_err(exc) from exc

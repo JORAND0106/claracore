@@ -50,7 +50,7 @@ _IDEA_IMG_BOX_H_PT = 135.0
 _IDEA_IMG_MAX_PER_IDEA = 8
 
 # Bump al cambiar plantilla/estilos del PDF (invalida pdf_blob_path cacheado).
-PDF_ACTA_TEMPLATE_VERSION = "2026-10-14.1-temas-ntc"
+PDF_ACTA_TEMPLATE_VERSION = "2026-11-05.1-plan-tema"
 
 
 def pdf_acta_cache_key(contenido_hash: str, *, template_version: str = PDF_ACTA_TEMPLATE_VERSION) -> str:
@@ -617,8 +617,63 @@ def _gestion_obra_section_html(acta: dict, *, bordered: bool = True) -> str:
     )
 
 
-def _ideas_body_html(ideas: List[dict]) -> str:
+def _plan_resumen_tema_html(rows: List[dict]) -> str:
+    """Tabla compacta del Plan de actividades de un tema (ICONTEC / sin letra diminuta)."""
+    if not rows:
+        return ""
+    head = (
+        f"<div style='font-size:{_FS_TABLE};font-weight:700;color:{_COLOR};"
+        f"margin:6pt 0 3pt;page-break-after:avoid;'>Plan de actividades</div>"
+    )
+    cols = (
+        ("Departamento", "grupo_nombre"),
+        ("Actividad", "titulo"),
+        ("Asignado(s)", "asignado_a_nombre"),
+        ("Prioridad", "prioridad"),
+        ("Fecha inicio", "_fi"),
+        ("Fecha fin", "_ff"),
+        ("Estado", "estado_gestion"),
+    )
+    ths = "".join(
+        f"<th style='padding:3pt 4pt;border:0.5pt solid {_BORDE};text-align:left;"
+        f"color:{_FG_H};font-size:{_FS_TABLE};'>{_esc(label)}</th>"
+        for label, _k in cols
+    )
+    body_rows = []
+    for c in rows:
+        fi = c.get("fecha_inicio") or ""
+        ff = c.get("fecha_fin") or c.get("fecha_vencimiento") or ""
+        vals = {
+            "grupo_nombre": c.get("grupo_nombre") or "—",
+            "titulo": c.get("titulo") or "—",
+            "asignado_a_nombre": c.get("asignado_a_nombre") or "—",
+            "prioridad": c.get("prioridad") if c.get("prioridad") is not None else "—",
+            "_fi": fmt_fecha_bogota(fi) if fi else "—",
+            "_ff": fmt_fecha_bogota(ff) if ff else "—",
+            "estado_gestion": c.get("estado_gestion") or "—",
+        }
+        tds = "".join(
+            f"<td style='padding:3pt 4pt;border:0.5pt solid {_BORDE};"
+            f"font-size:{_FS_TABLE};line-height:1.35;'>{_esc(vals[k])}</td>"
+            for _label, k in cols
+        )
+        body_rows.append(f"<tr>{tds}</tr>")
+    table = (
+        f"<table width='100%' cellspacing='0' cellpadding='0' class='plan-tema-table' "
+        f"style='border-collapse:collapse;font-size:{_FS_TABLE};margin:0 0 2pt;'>"
+        f"<thead><tr style='background:{_BG_H};'>{ths}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody></table>"
+    )
+    return f"{head}{table}"
+
+
+def _ideas_body_html(
+    ideas: List[dict],
+    *,
+    plan_por_idea: Optional[Dict[Any, List[dict]]] = None,
+) -> str:
     """Cuerpo HTML de temas (sin marco de sección). Jerarquía NTC 1486 adaptada."""
+    plan_map = plan_por_idea if isinstance(plan_por_idea, dict) else {}
     ideas_sorted = sorted(
         list(ideas or []),
         key=lambda x: (
@@ -657,6 +712,12 @@ def _ideas_body_html(ideas: List[dict]) -> str:
             else ""
         )
         imgs_html = _idea_imagenes_html(idea.get("imagenes"))
+        try:
+            idea_key = int(idea.get("id") or 0)
+        except (TypeError, ValueError):
+            idea_key = 0
+        plan_rows = plan_map.get(idea_key) or plan_map.get(str(idea_key)) or []
+        plan_html = _plan_resumen_tema_html(plan_rows) if plan_rows else ""
         # Título + interviniente juntos; page-break-after:avoid reduce títulos huérfanos.
         ideas_html += (
             f"<div class='pdf-idea' style='margin:0 0 10pt;'>"
@@ -665,6 +726,7 @@ def _ideas_body_html(ideas: List[dict]) -> str:
             f"{quien_line}"
             f"{_render_tema_texto_pdf(idea.get('texto') or '')}"
             f"{imgs_html}"
+            f"{plan_html}"
             f"</div>"
         )
     if not ideas_html:
@@ -675,7 +737,12 @@ def _ideas_body_html(ideas: List[dict]) -> str:
     return ideas_html
 
 
-def _temas_section_html(ideas: List[dict], *, bordered: bool = True) -> str:
+def _temas_section_html(
+    ideas: List[dict],
+    *,
+    bordered: bool = True,
+    plan_por_idea: Optional[Dict[Any, List[dict]]] = None,
+) -> str:
     """Sección Temas tratados fuera de una celda única.
 
     Misma causa que Gestión de obra: xhtml2pdf, si mete un tema largo (p. ej.
@@ -715,7 +782,7 @@ def _temas_section_html(ideas: List[dict], *, bordered: bool = True) -> str:
         f'padding:4pt 6pt;font-size:{_FS_TABLE};font-weight:700;color:{_FG_H};">'
         f"{_esc(title)}</td></tr></table>"
     )
-    body = _ideas_body_html(ideas)
+    body = _ideas_body_html(ideas, plan_por_idea=plan_por_idea)
     frame = (
         f"padding:6pt;{body_border}"
         if body_border
@@ -733,10 +800,12 @@ def generar_pdf_acta(
     firmas: Optional[List[dict]] = None,
     compromisos: Optional[List[dict]] = None,
     compromisos_previos: Optional[List[dict]] = None,
+    plan_por_idea: Optional[Dict[Any, List[dict]]] = None,
 ) -> bytes:
     firmas = firmas or []
     compromisos = compromisos or []
     compromisos_previos = compromisos_previos or []
+    plan_por_idea = plan_por_idea if isinstance(plan_por_idea, dict) else {}
     firma_by_asistente = {int(f["asistente_id"]): f for f in firmas if f.get("asistente_id") is not None}
 
     from seguimiento_tipo_acta import norm_tipo_key as _norm_tipo_key_pdf
@@ -914,7 +983,9 @@ def generar_pdf_acta(
 body {{ font-family: Helvetica, Arial, sans-serif; color: {_COLOR}; font-size: {_FS_BODY}; }}
 .pdf-idea {{ page-break-inside: auto; }}
 .go-table thead {{ display: table-header-group; }}
+.plan-tema-table thead {{ display: table-header-group; }}
 table thead {{ display: table-header-group; }}
+.plan-tema-table tr {{ page-break-inside: avoid; }}
 /* Evitar page-break-inside:avoid en firmas/esquemas dentro de celdas:
    xhtml2pdf lanza Splitting error / KeepTogether.draw y el PDF no sale. */
 .pdf-firma {{ page-break-inside: auto; }}
@@ -930,7 +1001,7 @@ table thead {{ display: table-header-group; }}
     bordered=sec_border,
 )}
 {_gestion_obra_section_html(acta, bordered=sec_border)}
-{_temas_section_html(ideas, bordered=sec_border)}
+{_temas_section_html(ideas, bordered=sec_border, plan_por_idea=plan_por_idea)}
 {_section(
     "Compromisos generados",
     _comp_table(compromisos, "Sin compromisos generados en esta acta."),

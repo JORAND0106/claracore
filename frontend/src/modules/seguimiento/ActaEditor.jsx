@@ -424,8 +424,8 @@ export default function ActaEditor({
   const [grabacionSesionId, setGrabacionSesionId] = useState(null)
   const [grabacionLiveInfo, setGrabacionLiveInfo] = useState(null)
   const [actualizandoTemas, setActualizandoTemas] = useState(false)
-  /** Popup Plan de actividades del expositor (solo su ambiente). */
-  const [planPopup, setPlanPopup] = useState(null) // { ideaIdx, ideaId } | null
+  /** Popup Plan de actividades (expositor edita / moderador lee). */
+  const [planPopup, setPlanPopup] = useState(null) // { ideaIdx, ideaId, actaId, soloLectura }
   /** Detalle de una actividad del Plan abierta desde compromisos anteriores. */
   const [planDetalleId, setPlanDetalleId] = useState(null)
   /** Evita armar el checkpoint más de una vez por sesión. */
@@ -2203,19 +2203,17 @@ export default function ActaEditor({
           grabacionActiva={grabacionPhase === 'recording'}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
           puedeAbrirPlanActividades={Boolean(permisosPlan.ver)}
-          planSoloExpositor
+          esModeradorActa={Boolean(esElaborador)}
           usuarioId={usuario?.id || usuario?.sub}
           esDesarrollador={esDev}
-          onAbrirPlanActividades={async (idx, idea) => {
-            // Solo el expositor del tema (o Dev) abre SU plan; nadie escribe en el de otro.
+          onAbrirPlanActividades={async (idx, idea, opts = {}) => {
+            // Expositor/Dev: editan. Moderador (elaborador): solo lectura del plan del tema.
             const expId = Number(idea?.expositor_usuario_id || idea?.expositor_id || 0)
             const uid = Number(usuario?.id || usuario?.sub || 0)
-            if (!esDev && expId > 0 && uid > 0 && expId !== uid) {
-              setError('Solo puede abrir el Plan de actividades de los temas donde usted es el expositor.')
-              return
-            }
-            if (!esDev && !(expId > 0 && expId === uid)) {
-              setError('Solo el expositor asignado puede abrir su Plan de actividades desde el tema.')
+            const esExpositor = esDev || (expId > 0 && uid > 0 && expId === uid)
+            const soloLectura = Boolean(opts.soloLectura) || (!esExpositor && esElaborador)
+            if (!esExpositor && !esElaborador) {
+              setError('Solo el expositor del tema o el moderador del acta pueden abrir este Plan.')
               return
             }
             let ideaId = idea?.id
@@ -2234,6 +2232,7 @@ export default function ActaEditor({
               ideaIdx: idx,
               ideaId: ideaId || null,
               actaId: actaForPlan || null,
+              soloLectura,
             })
           }}
           puedeActualizarTemas={
@@ -2991,7 +2990,8 @@ export default function ActaEditor({
           usuario={usuario}
           permisos={permisosPlan}
           modo="popup"
-          forzarPropio
+          forzarPropio={!planPopup.soloLectura}
+          soloLectura={Boolean(planPopup.soloLectura)}
           actaId={planPopup.actaId || localActaId}
           ideaId={planPopup.ideaId}
           onClose={async () => {
