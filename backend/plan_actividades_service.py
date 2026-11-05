@@ -1451,9 +1451,22 @@ def _targets_export(
 
     ids: List[int] = []
     if todos:
+        # Todos = cada colaborador del contrato (también sin actividades).
+        # Si el cliente manda IDs explícitos, se unen para no perder a nadie
+        # cuando list_colaboradores_plan falle o venga incompleto.
         ids = list(by_id.keys())
-        if int(user_id) not in ids:
+        if colaborador_ids:
+            for x in colaborador_ids:
+                try:
+                    xi = int(x)
+                except (TypeError, ValueError):
+                    continue
+                if xi > 0 and xi not in ids:
+                    ids.append(xi)
+        if int(user_id) not in ids and int(user_id) > 0:
             ids.insert(0, int(user_id))
+        if not ids:
+            ids = [int(user_id)]
     elif colaborador_ids:
         ids = [int(x) for x in colaborador_ids if x is not None and int(x) > 0]
     elif colaborador_id is not None:
@@ -1464,7 +1477,7 @@ def _targets_export(
     seen: Set[int] = set()
     out: List[Dict[str, str]] = []
     for i in ids:
-        if i in seen:
+        if i in seen or i <= 0:
             continue
         seen.add(i)
         info = _usuario_export_info(sb, i)

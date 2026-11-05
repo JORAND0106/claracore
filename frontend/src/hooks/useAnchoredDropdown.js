@@ -1,7 +1,11 @@
 import { useCallback, useLayoutEffect, useState } from 'react'
 
-/** Por encima de overlays de modales (p. ej. Nuevo Reporte z≈1000, Seguimiento ≤12100). */
-export const CC_ANCHORED_DROPDOWN_Z = 20000
+/**
+ * Por encima de overlays de modales de plataforma.
+ * Plan de actividades / Export / Form usan z≈100040–100070; ayuda mapa llega a ~100200.
+ * El listado anclado (portal fixed) debe quedar siempre por delante.
+ */
+export const CC_ANCHORED_DROPDOWN_Z = 300000
 
 /**
  * Posiciona un desplegable con `position:fixed` anclado a un input/elemento.
