@@ -95,8 +95,17 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
     setCalKey((n) => n + 1)
-    setUpdatedAt(Date.now())
+    // En vista Plan el calendario está desmontado: no hay onDataFresh.
+    if (vistaPlan) {
+      setUpdatedAt(Date.now())
+      setRefreshBusy(false)
+    }
+    // «Al día» en calendario se confirma vía onCalendarioDataFresh.
+  }, [vistaPlan])
+
+  const onCalendarioDataFresh = useCallback((result) => {
     setRefreshBusy(false)
+    if (result?.ok) setUpdatedAt(Date.now())
   }, [])
 
   useEffect(() => {
@@ -110,12 +119,20 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   }, [setModuloRefresh, clearModuloRefresh, doRefresh, refreshBusy])
 
   useEffect(() => {
-    setUpdatedAt(Date.now())
-  }, [])
-
-  useEffect(() => {
     if (!permisosPlan.ver) setVistaPlan(false)
   }, [permisosPlan.ver])
+
+  const toggleVistaPlan = useCallback(() => {
+    setVistaPlan((v) => {
+      const next = !v
+      // Al volver al calendario, forzar refetch (bitácoras/tareas pueden haber cambiado).
+      if (v && !next) {
+        setRefreshBusy(true)
+        setCalKey((n) => n + 1)
+      }
+      return next
+    })
+  }, [])
 
   if (permisos.bloqueado) {
     return (
@@ -226,7 +243,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           {showPlanBtn && (
             <button
               type="button"
-              onClick={withTipHide(() => setVistaPlan((v) => !v))}
+              onClick={withTipHide(toggleVistaPlan)}
               title={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
               data-cc-tooltip={vistaPlan ? 'Ver calendario' : 'Plan de actividades'}
               data-cc-tooltip-variant="short"
@@ -268,10 +285,11 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           t={t}
           usuario={usuario}
           token={token}
-          contratoId={contratoId}
+          contratoId={cid}
           viewportCompact={compact}
           refreshKey={calKey}
           showFilters
+          onDataFresh={onCalendarioDataFresh}
         />
       )}
 
