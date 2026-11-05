@@ -529,7 +529,7 @@ export default function PlanActividadesVista({
           onExport={async ({ todos, colaborador_ids }) => {
             await descargarExport(
               todos
-                ? { todos: true }
+                ? { todos: true, colaborador_ids }
                 : { colaborador_ids },
             )
           }}

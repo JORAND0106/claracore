@@ -19,6 +19,10 @@ describe('useAnchoredDropdown', () => {
     assert.match(hookSrc, /spaceBelow/)
     assert.match(hookSrc, /visualViewport/)
     assert.match(hookSrc, /CC_ANCHORED_DROPDOWN_Z/)
+    // Debe superar overlays de Plan/Export (z≈100070+)
+    const m = /CC_ANCHORED_DROPDOWN_Z\s*=\s*(\d+)/.exec(hookSrc)
+    assert.ok(m)
+    assert.ok(Number(m[1]) > 100200)
   })
 
   it('recalcula en scroll (capture) y resize', () => {
