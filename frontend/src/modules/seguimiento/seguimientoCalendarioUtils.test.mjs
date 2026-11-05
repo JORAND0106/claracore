@@ -210,7 +210,8 @@ const sorted = sortDayEvents([
   { id: 'e', title: '✅ Sin hora', start: '2026-08-10', extendedProps: { kind: 'tarea' } },
   { id: 'f', title: '📒 Diario', start: '2026-08-10', extendedProps: { kind: 'bitacora_diario' } },
 ])
-assert(sorted.map((x) => x.id).join(',') === 'c,b,e,d,a,f', 'orden tipo→hora→sin hora')
+// Prioridad: bitácora → acta → compromiso → tarea; con hora antes que sin hora.
+assert(sorted.map((x) => x.id).join(',') === 'f,a,d,c,b,e', 'orden bitácora primero → hora → sin hora')
 assert(eventDisplayTitle({ title: '✅ Revisar planos' }) === 'Revisar planos', 'título sin icono')
 assert(eventDisplayTime({ start: '2026-08-10T09:30:00' }) === '09:30', 'hora timed')
 assert(eventDisplayTime({ start: '2026-08-10' }) === null, 'sin hora → null')

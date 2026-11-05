@@ -496,12 +496,29 @@ export function eventsForDate(events, dateStr) {
   return (events || []).filter((ev) => toDateOnly(ev?.start) === d)
 }
 
-const KIND_SORT = {
-  tarea: 0,
-  compromiso: 1,
+/** Orden de prioridad en celdas del mes / lista del día (menor = más arriba). */
+export const KIND_SORT = {
+  bitacora_diario: 0,
+  bitacora_evento: 1,
   acta: 2,
-  bitacora_diario: 3,
-  bitacora_evento: 4,
+  compromiso: 3,
+  tarea: 4,
+  // Plan: después de bitácora para no empujar diarios al «+N más».
+  plan_actividad: 5,
+}
+
+/** Comparador para FullCalendar `eventOrder` (y listas del día). */
+export function compareCalendarioEvents(a, b) {
+  const ka = KIND_SORT[a?.extendedProps?.kind] ?? 9
+  const kb = KIND_SORT[b?.extendedProps?.kind] ?? 9
+  if (ka !== kb) return ka - kb
+  const sa = String(a?.start || '')
+  const sb = String(b?.start || '')
+  const aTime = sa.includes('T')
+  const bTime = sb.includes('T')
+  if (aTime && bTime) return sa.localeCompare(sb)
+  if (aTime !== bTime) return aTime ? -1 : 1
+  return String(a?.title || '').localeCompare(String(b?.title || ''), 'es')
 }
 
 /**
@@ -509,18 +526,7 @@ const KIND_SORT = {
  * Sin hora es válido; van después de los que sí tienen hora.
  */
 export function sortDayEvents(events) {
-  return [...(events || [])].sort((a, b) => {
-    const ka = KIND_SORT[a?.extendedProps?.kind] ?? 9
-    const kb = KIND_SORT[b?.extendedProps?.kind] ?? 9
-    if (ka !== kb) return ka - kb
-    const sa = String(a?.start || '')
-    const sb = String(b?.start || '')
-    const aTime = sa.includes('T')
-    const bTime = sb.includes('T')
-    if (aTime && bTime) return sa.localeCompare(sb)
-    if (aTime !== bTime) return aTime ? -1 : 1
-    return String(a?.title || '').localeCompare(String(b?.title || ''), 'es')
-  })
+  return [...(events || [])].sort(compareCalendarioEvents)
 }
 
 /** Título sin el emoji/icono inicial del evento. */

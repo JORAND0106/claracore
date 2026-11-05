@@ -18,6 +18,7 @@ import {
   CALENDARIO_KIND,
   CALENDARIO_VENCIDOS_LEGEND,
   buildCalendarioEvents,
+  compareCalendarioEvents,
   dayHasVencidos,
   dayKindIndicators,
   eventDisplayTime,
@@ -838,6 +839,7 @@ export default function SeguimientoCalendario({
           height={widgetMode ? '100%' : 'auto'}
           stickyHeaderDates
           events={events}
+          eventOrder={compareCalendarioEvents}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
           dateClick={handleDateClick}
