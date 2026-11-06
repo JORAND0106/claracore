@@ -1,10 +1,13 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { Download } from 'lucide-react'
 import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { API_BASE, logApiFailure, apiFetchSignal } from './apiBase'
 import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 import { eligeSaludoInicio } from './data/saludosInicio.js'
 import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
+import ClimaInformeModal from './components/inicio/ClimaInformeModal.jsx'
+import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache.js'
 import SeguimientoCalendarioPanel from './modules/seguimiento/SeguimientoCalendarioPanel.jsx'
 
 function useInicioMobile() {
@@ -556,6 +559,7 @@ function BarraClima({ t, fs, contratoId, token }) {
   const [error, setError] = useState(false)
   const [zonaObra, setZonaObra] = useState(null)
   const [cargandoZona, setCargandoZona] = useState(false)
+  const [informeOpen, setInformeOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -564,9 +568,8 @@ function BarraClima({ t, fs, contratoId, token }) {
       return undefined
     }
     setCargandoZona(true)
-    const h = token ? { Authorization: `Bearer ${token}` } : {}
-    fetch(`${API_BASE}/contratos/${contratoId}`, { headers: h })
-      .then(async (r) => (r.ok ? r.json() : null))
+    // Misma fuente que el informe: plano GeoJSON (+ centro) del contrato activo.
+    getContratoPlanoGeojson(API_BASE, contratoId, token, { timeoutMs: 20000 })
       .then(async (data) => {
         if (cancelled) return
         const centro = centroideDesdePlano(data)
@@ -634,6 +637,7 @@ function BarraClima({ t, fs, contratoId, token }) {
   const daily = clima?.obra?.daily
   const nombreObra = zonaObra?.nombre || 'Zona de obra'
   const wmoEscena = obra?.weather_code ?? bog?.weather_code ?? 0
+  const tieneUbicacionObra = zonaObra?.lat != null && zonaObra?.lng != null
 
   const panel = {
     background: 'rgba(8,12,24,0.52)',
@@ -642,6 +646,11 @@ function BarraClima({ t, fs, contratoId, token }) {
     padding: '10px 14px',
     color: '#fff',
     textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+  }
+
+  function abrirInforme() {
+    if (!contratoId) return
+    setInformeOpen(true)
   }
 
   const tarjetaZona = (label, sublabel, code, temp) => (
@@ -711,6 +720,30 @@ function BarraClima({ t, fs, contratoId, token }) {
             </div>
           </div>
 
+          {contratoId ? (
+            <button
+              type="button"
+              title="Informe de clima"
+              data-cc-tooltip="Informe de clima"
+              data-cc-tooltip-variant="short"
+              aria-label="Informe de clima"
+              onClick={abrirInforme}
+              style={{
+                ...panel,
+                padding: 0,
+                width: 40,
+                height: 40,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              <Download size={18} strokeWidth={2.3} aria-hidden />
+            </button>
+          ) : null}
+
           {cargandoZona ? (
             <div style={{ ...panel, fontSize: fs.sm, padding: '8px 12px' }}>Ubicando zona de obra…</div>
           ) : error && !clima ? (
@@ -766,6 +799,17 @@ function BarraClima({ t, fs, contratoId, token }) {
           </div>
         ) : null}
       </div>
+
+      {informeOpen && (
+        <ClimaInformeModal
+          t={t}
+          fs={fs}
+          contratoId={contratoId}
+          token={token}
+          tieneUbicacionObra={tieneUbicacionObra}
+          onClose={() => setInformeOpen(false)}
+        />
+      )}
     </div>
   )
 }

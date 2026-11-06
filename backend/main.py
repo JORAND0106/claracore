@@ -17870,6 +17870,61 @@ def _inicio_q_registros_recientes_contrato(contrato_id: int, fetch_limit: int):
     )
 
 
+@app.get("/inicio/{contrato_id}/clima/informe.xlsx")
+def inicio_clima_informe_xlsx(
+    contrato_id: int,
+    desde: str = Query(..., description="Fecha inicio YYYY-MM-DD (Colombia)"),
+    hasta: str = Query(..., description="Fecha fin YYYY-MM-DD (Colombia)"),
+    current_user=Depends(get_current_user),
+):
+    """
+    Excel del clima histórico diario en la zona de obra del contrato activo.
+    Cualquier usuario vinculado al contrato puede descargarlo (sin permiso extra).
+    """
+    _require_contract_access(current_user, contrato_id)
+    try:
+        from clima_informe_service import ClimaInformeError, generar_informe_clima_xlsx
+
+        data, fname, meta = generar_informe_clima_xlsx(
+            supabase,
+            int(contrato_id),
+            desde=desde,
+            hasta=hasta,
+        )
+    except ClimaInformeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _log_api.warning("inicio clima informe contrato=%s: %s", contrato_id, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "No fue posible consultar el clima en este momento. "
+                "Intente de nuevo en unos minutos."
+            ),
+        ) from exc
+
+    try:
+        registrar_log(
+            current_user,
+            "EXPORTAR",
+            "INICIO",
+            "informe_clima",
+            str(contrato_id),
+            meta,
+        )
+    except Exception as exc:
+        _log_api.warning("log informe clima: %s", exc)
+
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in fname) or (
+        f"informe_clima_{contrato_id}.xlsx"
+    )
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+    )
+
+
 @app.get("/inicio/{contrato_id}/fotos-acta-vigente")
 def inicio_fotos_acta_vigente(
     contrato_id: int,
