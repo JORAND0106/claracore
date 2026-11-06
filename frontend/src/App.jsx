@@ -285,6 +285,11 @@ import {
   sicoeLabelSubcontratistaLista,
   SICOE_NUEVO_REPORTE_FLUSH_EVENT,
 } from './modules/sicoe-obra/sicoeNuevoReporteDraft'
+import {
+  sicoeEsBorradorReporte,
+  sicoePuedeEliminarBorrador,
+  sicoeLimpiarBorradorLocalTrasEliminar,
+} from './modules/sicoe-obra/sicoeBorradores'
 import { sicoeEstadoAlEnviarReporte } from './modules/sicoe-obra/sicoeEstadoAlEnviarReporte'
 import { alertaErrorGuardarReporte, mensajeErrorGuardarReporte } from './modules/sicoe-obra/sicoeGuardarReporteError'
 import { sicoeCortesSoloVigente } from './modules/sicoe-obra/sicoeCorteVigente'
@@ -10256,6 +10261,10 @@ function ModuloSicoeObra({
   }
 
   const perm = permisoReporteCantidades(usuario, contrato_id)
+  const puedeEliminarReporteCantidades = esUsuarioDesarrollador(usuario) || !!(perm?.eliminar)
+  const [borradoresSelIds, setBorradoresSelIds] = useState(() => new Set())
+  const [confirmEliminarBorradores, setConfirmEliminarBorradores] = useState(null)
+  const [eliminandoBorradores, setEliminandoBorradores] = useState(false)
   const nivelInfo = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const estadosReporteFiltro = useMemo(
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo, contrato_id),
@@ -12174,10 +12183,84 @@ function ModuloSicoeObra({
     }
   }
   const sicoeGrillaCols = nivelInfo.verValoresEconomicos
-    ? '78px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
-    : '78px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px'
+    ? '36px 78px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px 40px'
+    : '36px 78px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px 40px'
   // Varias capas: AND u OR según `validacion_capas_op` en backend; no refinar de nuevo con agregados por reporte
   const reportesMostrados = reportes
+  const borradoresEliminables = useMemo(
+    () => reportesMostrados.filter((r) => sicoePuedeEliminarBorrador(usuario, r, {
+      permisoEliminar: puedeEliminarReporteCantidades,
+    })),
+    [reportesMostrados, usuario, puedeEliminarReporteCantidades],
+  )
+  const borradoresSelLista = useMemo(
+    () => borradoresEliminables.filter((r) => borradoresSelIds.has(r.id)),
+    [borradoresEliminables, borradoresSelIds],
+  )
+
+  const toggleBorradorSel = useCallback((id, on) => {
+    setBorradoresSelIds((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+
+  const toggleTodosBorradoresSel = useCallback(() => {
+    setBorradoresSelIds((prev) => {
+      if (borradoresEliminables.length === 0) return prev
+      const allOn = borradoresEliminables.every((r) => prev.has(r.id))
+      if (allOn) return new Set()
+      return new Set(borradoresEliminables.map((r) => r.id))
+    })
+  }, [borradoresEliminables])
+
+  const ejecutarEliminarBorradores = useCallback(async (lista) => {
+    const targets = (lista || []).filter((r) => sicoeEsBorradorReporte(r))
+    if (!targets.length || !contrato_id) return
+    setEliminandoBorradores(true)
+    try {
+      const ids = targets.map((r) => r.id)
+      const res = await fetch(
+        `${API_URL}/sicoe-obra/${contrato_id}/reportes/eliminar-borradores`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        },
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        window.alert(data?.detail || `No se pudieron eliminar los borradores (${res.status}).`)
+        return
+      }
+      const okIds = new Set((data.eliminados || []).map((x) => x.id))
+      const uid = usuario?.id ?? usuario?.sub
+      for (const id of okIds) {
+        await sicoeLimpiarBorradorLocalTrasEliminar({
+          contratoId: contrato_id,
+          userId: uid,
+          reporteId: id,
+          db,
+        })
+      }
+      setReportes((prev) => prev.filter((r) => !okIds.has(r.id)))
+      setBorradoresSelIds(new Set())
+      setConfirmEliminarBorradores(null)
+      if (okIds.size && typeof refrescarMatrizValidacionDashboard === 'function') {
+        try { refrescarMatrizValidacionDashboard() } catch { /* noop */ }
+      }
+      const omit = Array.isArray(data.omitidos) ? data.omitidos.length : 0
+      if (omit > 0) {
+        window.alert(`Se eliminaron ${okIds.size} borrador(es). ${omit} no se pudieron eliminar.`)
+      }
+    } catch (e) {
+      window.alert(e?.message || 'Error al eliminar borradores.')
+    } finally {
+      setEliminandoBorradores(false)
+    }
+  }, [API_URL, contrato_id, usuario, refrescarMatrizValidacionDashboard])
 
   const sicoePuntosPlano = useMemo(() => {
     const planoSoloMaestro = contrato_id != null && SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
@@ -14106,6 +14189,32 @@ function ModuloSicoeObra({
           </div>
         )}
         {/* Header grid — sticky (desktop) */}
+        {borradoresEliminables.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+            padding: '8px 16px', borderBottom: `1px solid ${t.border}`,
+            background: t.bg, fontSize: 'var(--cc-sm)', color: t.textMuted,
+          }}>
+            <span style={{ fontWeight: 600 }}>
+              {borradoresEliminables.length} borrador(es) eliminable(s)
+              {borradoresSelLista.length > 0 ? ` · ${borradoresSelLista.length} seleccionado(s)` : ''}
+            </span>
+            <button
+              type="button"
+              disabled={borradoresSelLista.length === 0 || eliminandoBorradores}
+              onClick={() => setConfirmEliminarBorradores(borradoresSelLista)}
+              title="Eliminar borradores seleccionados"
+              style={{
+                background: borradoresSelLista.length ? '#B91C1C' : t.border,
+                color: '#fff', border: 'none', borderRadius: 8,
+                padding: '6px 12px', fontWeight: 700, cursor: borradoresSelLista.length ? 'pointer' : 'not-allowed',
+                opacity: eliminandoBorradores ? 0.65 : 1,
+              }}
+            >
+              🗑️ Eliminar seleccionados
+            </button>
+          </div>
+        )}
         <div className="cc-sicoe-reportes-grid" style={{
           display:'grid',
           gridTemplateColumns: sicoeGrillaCols,
@@ -14113,6 +14222,17 @@ function ModuloSicoeObra({
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
           fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
+          <div title="Seleccionar borradores">
+            {borradoresEliminables.length > 0 ? (
+              <input
+                type="checkbox"
+                checked={borradoresEliminables.length > 0 && borradoresEliminables.every((r) => borradoresSelIds.has(r.id))}
+                onChange={toggleTodosBorradoresSel}
+                aria-label="Seleccionar todos los borradores"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : null}
+          </div>
           <div style={{ whiteSpace: 'nowrap' }} title="N° reporte">Rep</div>
           <div style={{ whiteSpace: 'nowrap' }} title="Fecha de creación del reporte">F. Crea.</div>
           <div>TRAMO</div>
@@ -14129,6 +14249,7 @@ function ModuloSicoeObra({
           <div style={{ textAlign:'right' }} title="Líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta coinciden con el resumen si la búsqueda sigue vigente.">
             REGS.
           </div>
+          <div title="Eliminar borrador" />
         </div>
 
         {/* Filas */}
@@ -14254,6 +14375,16 @@ function ModuloSicoeObra({
             }}
             onMouseEnter={e => { e.currentTarget.style.background = sinDibujo ? sinDibujoCols.backgroundHover : t.bg }}
             onMouseLeave={e => { e.currentTarget.style.background = sinDibujo ? sinDibujoCols.background : 'transparent' }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ display:'flex', alignItems:'center' }}>
+              {sicoePuedeEliminarBorrador(usuario, rep, { permisoEliminar: puedeEliminarReporteCantidades }) ? (
+                <input
+                  type="checkbox"
+                  checked={borradoresSelIds.has(rep.id)}
+                  onChange={(e) => toggleBorradorSel(rep.id, e.target.checked)}
+                  aria-label={`Seleccionar borrador #${rep.numero_reporte}`}
+                />
+              ) : null}
+            </div>
             <div style={{ fontWeight:'700', color:t.primary, display:'flex', alignItems:'center', gap:4, minWidth:0 }}>
               <span>#{rep.numero_reporte}</span>
               <SicoeIconoSoporteAdjunto
@@ -14297,6 +14428,24 @@ function ModuloSicoeObra({
             <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
             <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
               {rep.num_registros != null ? rep.num_registros : '—'}
+            </div>
+            <div onClick={(e) => e.stopPropagation()} style={{ display:'flex', justifyContent:'center' }}>
+              {sicoePuedeEliminarBorrador(usuario, rep, { permisoEliminar: puedeEliminarReporteCantidades }) ? (
+                <button
+                  type="button"
+                  title={`Eliminar borrador #${rep.numero_reporte}`}
+                  aria-label={`Eliminar borrador #${rep.numero_reporte}`}
+                  disabled={eliminandoBorradores}
+                  onClick={() => setConfirmEliminarBorradores([rep])}
+                  style={{
+                    background: 'transparent', border: 'none', cursor: 'pointer',
+                    color: '#B91C1C', fontSize: 'var(--cc-md)', padding: '2px 4px',
+                    opacity: eliminandoBorradores ? 0.5 : 1,
+                  }}
+                >
+                  🗑️
+                </button>
+              ) : null}
             </div>
           </div>
           )
@@ -14401,6 +14550,15 @@ function ModuloSicoeObra({
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      {sicoePuedeEliminarBorrador(usuario, rep, { permisoEliminar: puedeEliminarReporteCantidades }) && (
+                        <input
+                          type="checkbox"
+                          checked={borradoresSelIds.has(rep.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => toggleBorradorSel(rep.id, e.target.checked)}
+                          aria-label={`Seleccionar borrador #${rep.numero_reporte}`}
+                        />
+                      )}
                       <span>#{rep.numero_reporte}</span>
                       <SicoeIconoSoporteAdjunto
                         tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
@@ -14417,7 +14575,26 @@ function ModuloSicoeObra({
                       {fmtSicoeFechaCreacion(rep.created_at)}
                     </div>
                   </div>
-                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 700 }}>{rep.num_registros != null ? `${rep.num_registros} regs` : '—'}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, fontWeight: 700 }}>{rep.num_registros != null ? `${rep.num_registros} regs` : '—'}</div>
+                    {sicoePuedeEliminarBorrador(usuario, rep, { permisoEliminar: puedeEliminarReporteCantidades }) && (
+                      <button
+                        type="button"
+                        title={`Eliminar borrador #${rep.numero_reporte}`}
+                        aria-label={`Eliminar borrador #${rep.numero_reporte}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setConfirmEliminarBorradores([rep])
+                        }}
+                        style={{
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          color: '#B91C1C', fontSize: 'var(--cc-md)', padding: 2,
+                        }}
+                      >
+                        🗑️
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div style={{ fontWeight: 600, color: t.text, fontSize: 'var(--cc-body)', lineHeight: 1.35 }}>{rep.descripcion_actividad || 'Sin descripción'}</div>
                 <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4 }}>
@@ -14453,6 +14630,30 @@ function ModuloSicoeObra({
         )}
       </div>
       </>
+      )}
+
+      {confirmEliminarBorradores && (
+        <CcConfirmModal
+          theme={t}
+          tipo="danger"
+          titulo={confirmEliminarBorradores.length > 1
+            ? `Eliminar ${confirmEliminarBorradores.length} borradores`
+            : `Eliminar borrador #${confirmEliminarBorradores[0]?.numero_reporte ?? ''}`}
+          confirmar={eliminandoBorradores ? 'Eliminando…' : 'Eliminar'}
+          cancelar="Cancelar"
+          procesando={eliminandoBorradores}
+          onCancel={() => { if (!eliminandoBorradores) setConfirmEliminarBorradores(null) }}
+          onConfirm={() => { void ejecutarEliminarBorradores(confirmEliminarBorradores) }}
+        >
+          <p style={{ margin: 0, lineHeight: 1.45 }}>
+            Se eliminarán por completo
+            {confirmEliminarBorradores.length === 1
+              ? ` el borrador #${confirmEliminarBorradores[0]?.numero_reporte}`
+              : ` ${confirmEliminarBorradores.length} borradores`}
+            {' '}(incluido el dispositivo). Su número quedará libre para el próximo reporte nuevo.
+            Los reportes ya enviados no se afectan.
+          </p>
+        </CcConfirmModal>
       )}
 
       {/* ── Modal Configurar Semanas Iniciales ── */}

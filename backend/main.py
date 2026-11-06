@@ -6651,6 +6651,8 @@ def _sincronizar_contador_numero_reporte(contrato_id: int) -> int:
     proteger reservas concurrentes antes del INSERT. Si se eliminan reportes, el
     contador queda por encima del máximo real y el próximo número no reutiliza huecos.
     Llamar esto tras borrar reportes alinea el contador con la tabla.
+    El alta de reportes (Python) usa además ``_menor_numero_reporte_libre_contrato``
+    para rellenar huecos liberados por borradores eliminados.
     """
     cid = int(contrato_id)
 
@@ -6681,6 +6683,154 @@ def _sincronizar_contador_numero_reporte(contrato_id: int) -> int:
 
     supabase_execute(_upsert)
     return max_rep
+
+
+def _contrato_sicoe_desde_uno(contrato_id: int) -> bool:
+    def _contrato():
+        return (
+            supabase.table("contratos")
+            .select("sicoe_consecutivos_desde_uno")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    crows = supabase_execute(_contrato) or []
+    return bool(crows and crows[0].get("sicoe_consecutivos_desde_uno"))
+
+
+def _numeros_reporte_en_uso(contrato_id: int) -> list:
+    """Todos los numero_reporte del contrato (paginado)."""
+    cid = int(contrato_id)
+    used: list = []
+    off = 0
+    while True:
+        def _q(o=off):
+            return (
+                supabase.table("so_reportes")
+                .select("numero_reporte")
+                .eq("contrato_id", cid)
+                .order("numero_reporte")
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q) or []
+        for r in batch:
+            n = r.get("numero_reporte") if isinstance(r, dict) else None
+            if n is not None:
+                used.append(n)
+        if len(batch) < 1000:
+            break
+        off += 1000
+        if off >= 200000:
+            break
+    return used
+
+
+def _menor_numero_reporte_libre_contrato(contrato_id: int) -> int:
+    """Menor número libre (rellena huecos de borradores eliminados)."""
+    from sicoe_borradores import PISO_NUMERO_REPORTE, menor_numero_reporte_libre
+
+    desde_uno = _contrato_sicoe_desde_uno(contrato_id)
+    usados = _numeros_reporte_en_uso(contrato_id)
+    return menor_numero_reporte_libre(
+        usados, desde_uno=desde_uno, piso=PISO_NUMERO_REPORTE
+    )
+
+
+def _uid_actual(current_user) -> Optional[int]:
+    try:
+        return int(current_user.get("sub") or current_user.get("id") or 0) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _puede_eliminar_borrador_sicoe(current_user, rep: dict, contrato_id: int) -> bool:
+    from sicoe_borradores import puede_eliminar_borrador
+
+    return puede_eliminar_borrador(
+        estado=(rep or {}).get("estado"),
+        user_id=_uid_actual(current_user),
+        creado_por=(rep or {}).get("creado_por"),
+        permiso_eliminar=_puede_eliminar_reporte_cantidades(current_user, contrato_id),
+    )
+
+
+def _eliminar_borrador_reporte_cascada(contrato_id: int, reporte_id: int) -> dict:
+    """Borra registros/comentarios/puntos/cabecera de un borrador. No valida permisos."""
+    cid, rid = int(contrato_id), int(reporte_id)
+
+    def _list_reg():
+        return (
+            supabase.table("so_registros")
+            .select("id")
+            .eq("reporte_id", rid)
+            .eq("contrato_id", cid)
+            .execute()
+            .data
+        )
+
+    reg_rows = supabase_execute(_list_reg) or []
+    reg_ids = [r["id"] for r in reg_rows if r.get("id") is not None]
+
+    if reg_ids:
+        def _del_com():
+            return (
+                supabase.table("so_registro_comentarios")
+                .delete()
+                .in_("registro_id", reg_ids)
+                .execute()
+                .data
+            )
+
+        try:
+            supabase_execute(_del_com)
+        except Exception:
+            pass
+
+    def _del_regs():
+        return (
+            supabase.table("so_registros")
+            .delete()
+            .eq("reporte_id", rid)
+            .eq("contrato_id", cid)
+            .execute()
+            .data
+        )
+
+    supabase_execute(_del_regs)
+
+    def _del_pts():
+        return (
+            supabase.table("so_puntos_topograficos")
+            .delete()
+            .eq("reporte_id", rid)
+            .eq("contrato_id", cid)
+            .execute()
+            .data
+        )
+
+    try:
+        supabase_execute(_del_pts)
+    except Exception:
+        pass
+
+    def _del_rep():
+        return (
+            supabase.table("so_reportes")
+            .delete()
+            .eq("id", rid)
+            .eq("contrato_id", cid)
+            .eq("estado", "Borrador")
+            .execute()
+            .data
+        )
+
+    deleted = supabase_execute(_del_rep) or []
+    return {"registros_eliminados": len(reg_ids), "deleted": bool(deleted)}
 
 
 def _sincronizar_contador_numero_registro(contrato_id: int) -> int:
@@ -21552,40 +21702,13 @@ def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_use
 
 @app.get("/sicoe-obra/{contrato_id}/next-reporte")
 def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)):
-    """Vista previa del siguiente número (sin llamar a la RPC ni reservar). Misma lógica que
-    `siguiente_numero_reporte` (incl. contratos con sicoe_consecutivos_desde_uno)."""
+    """Vista previa del siguiente número (sin reservar).
 
-    def _contrato():
-        return supabase.table("contratos").select("sicoe_consecutivos_desde_uno")\
-            .eq("id", contrato_id).limit(1).execute().data
-
-    def _max_num():
-        return supabase.table("so_reportes").select("numero_reporte")\
-            .eq("contrato_id", contrato_id).order("numero_reporte", desc=True).limit(1).execute().data
-
-    def _rsv():
-        return supabase.table("sico_ultimo_numero_reporte").select("reservado_hasta")\
-            .eq("contrato_id", contrato_id).limit(1).execute().data
-
-    crows = supabase_execute(_contrato)
-    desde_uno = bool(crows and crows[0].get("sicoe_consecutivos_desde_uno"))
-    mrows = supabase_execute(_max_num)
-    m_tab = mrows[0]["numero_reporte"] if mrows else 0
-    if m_tab is None:
-        m_tab = 0
-    urows = supabase_execute(_rsv)
-    if urows:
-        rsv = urows[0].get("reservado_hasta")
-    else:
-        rsv = 0 if desde_uno else 34999
-    if rsv is None:
-        rsv = 0 if desde_uno else 34999
-    piso = 35000
-    rsv = _sicoe_rsv_efectivo(desde_uno, rsv, m_tab, piso)
-    if desde_uno:
-        sig = max(m_tab + 1, rsv + 1)
-    else:
-        sig = max(piso, m_tab + 1, rsv + 1)
+    Usa el menor número libre del contrato (rellena huecos de borradores
+    eliminados). Los números de reportes enviados no se reutilizan.
+    """
+    _require_contract_access(current_user, contrato_id)
+    sig = _menor_numero_reporte_libre_contrato(contrato_id)
     return {"siguiente": sig}
 
 _SICOE_CATALOGO_CACHE: Dict[tuple, Tuple[float, Any]] = {}
@@ -26129,37 +26252,233 @@ def obtener_reporte(
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
-    if not _puede_eliminar_reporte_cantidades(current_user, contrato_id):
+    """Elimina un reporte en estado Borrador (creador o permiso eliminar).
+
+    Cascada: registros, comentarios y puntos topográficos. Libera el número
+    para el siguiente reporte nuevo (menor libre). Queda en trazabilidad.
+    """
+    _require_contract_access(current_user, contrato_id)
+
+    def _get():
+        return (
+            supabase.table("so_reportes")
+            .select("id, numero_reporte, estado, creado_por, descripcion_actividad")
+            .eq("id", int(reporte_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_get) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    rep = rows[0]
+    if str(rep.get("estado") or "") != "Borrador":
+        raise HTTPException(
+            status_code=409,
+            detail="Solo se pueden eliminar reportes en estado Borrador.",
+        )
+    if not _puede_eliminar_borrador_sicoe(current_user, rep, contrato_id):
         raise HTTPException(
             status_code=403,
-            detail="No tiene permiso para eliminar reportes de cantidades (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
+            detail="No puede eliminar este borrador (solo el creador o quien tenga permiso de eliminar reportes).",
         )
-    def _del():
-        return supabase.table("so_reportes").delete()\
-            .eq("id", reporte_id).eq("contrato_id", contrato_id)\
-            .eq("estado", "Borrador").execute().data
-    supabase_execute(_del)
+
+    numero = rep.get("numero_reporte")
+    result = _eliminar_borrador_reporte_cascada(contrato_id, reporte_id)
+    if not result.get("deleted"):
+        raise HTTPException(status_code=409, detail="No se pudo eliminar el borrador (¿ya no está en Borrador?).")
+
     try:
         _sincronizar_contador_numero_reporte(contrato_id)
     except Exception:
         pass
-    return {"ok": True}
+    try:
+        _sincronizar_contador_numero_registro(contrato_id)
+    except Exception:
+        pass
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "ELIMINAR",
+            "SICOE",
+            "reporte_borrador",
+            str(reporte_id),
+            {
+                "numero_reporte": numero,
+                "registros_eliminados": result.get("registros_eliminados", 0),
+                "borrador": True,
+            },
+            valor_anterior=_json_for_log(
+                {k: rep.get(k) for k in ("id", "numero_reporte", "estado", "descripcion_actividad", "creado_por")}
+            ),
+            valor_nuevo={},
+            severidad="AUDIT",
+            alerta_generada=False,
+        )
+    except Exception:
+        pass
+    try:
+        _invalidate_dashboard_financial_caches(int(contrato_id))
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "id": int(reporte_id),
+        "numero_reporte": numero,
+        "registros_eliminados": result.get("registros_eliminados", 0),
+    }
+
+
+class EliminarBorradoresBody(BaseModel):
+    ids: List[int]
+
+
+@app.post("/sicoe-obra/{contrato_id}/reportes/eliminar-borradores")
+def eliminar_borradores_masivo(
+    contrato_id: int,
+    body: EliminarBorradoresBody,
+    current_user=Depends(get_current_user),
+):
+    """Elimina varios borradores a la vez (creador o permiso eliminar por cada uno)."""
+    _require_contract_access(current_user, contrato_id)
+    ids = []
+    for x in body.ids or []:
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        raise HTTPException(status_code=422, detail="Indique al menos un id de borrador.")
+    if len(ids) > 200:
+        raise HTTPException(status_code=422, detail="Máximo 200 borradores por lote.")
+
+    def _get_many():
+        return (
+            supabase.table("so_reportes")
+            .select("id, numero_reporte, estado, creado_por, descripcion_actividad")
+            .eq("contrato_id", int(contrato_id))
+            .in_("id", ids)
+            .execute()
+            .data
+        )
+
+    found = {int(r["id"]): r for r in (supabase_execute(_get_many) or []) if r.get("id") is not None}
+    eliminados = []
+    omitidos = []
+    for rid in ids:
+        rep = found.get(rid)
+        if not rep:
+            omitidos.append({"id": rid, "motivo": "no_encontrado"})
+            continue
+        if str(rep.get("estado") or "") != "Borrador":
+            omitidos.append({"id": rid, "motivo": "no_borrador", "estado": rep.get("estado")})
+            continue
+        if not _puede_eliminar_borrador_sicoe(current_user, rep, contrato_id):
+            omitidos.append({"id": rid, "motivo": "sin_permiso"})
+            continue
+        try:
+            result = _eliminar_borrador_reporte_cascada(contrato_id, rid)
+            if not result.get("deleted"):
+                omitidos.append({"id": rid, "motivo": "no_eliminado"})
+                continue
+            eliminados.append(
+                {
+                    "id": rid,
+                    "numero_reporte": rep.get("numero_reporte"),
+                    "registros_eliminados": result.get("registros_eliminados", 0),
+                }
+            )
+            try:
+                u_log = _audit_user_contrato(current_user, contrato_id)
+                registrar_log(
+                    u_log,
+                    "ELIMINAR",
+                    "SICOE",
+                    "reporte_borrador",
+                    str(rid),
+                    {
+                        "numero_reporte": rep.get("numero_reporte"),
+                        "registros_eliminados": result.get("registros_eliminados", 0),
+                        "borrador": True,
+                        "masivo": True,
+                    },
+                    valor_anterior=_json_for_log(
+                        {k: rep.get(k) for k in ("id", "numero_reporte", "estado", "descripcion_actividad", "creado_por")}
+                    ),
+                    valor_nuevo={},
+                    severidad="AUDIT",
+                    alerta_generada=False,
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            omitidos.append({"id": rid, "motivo": "error", "detail": str(e)[:200]})
+
+    try:
+        _sincronizar_contador_numero_reporte(contrato_id)
+    except Exception:
+        pass
+    try:
+        _sincronizar_contador_numero_registro(contrato_id)
+    except Exception:
+        pass
+    try:
+        _invalidate_dashboard_financial_caches(int(contrato_id))
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "eliminados": eliminados,
+        "omitidos": omitidos,
+        "siguiente_libre": _menor_numero_reporte_libre_contrato(contrato_id),
+    }
+
 
 @app.post("/sicoe-obra/{contrato_id}/reportes")
 def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
-    def _num():
-        return supabase.rpc("siguiente_numero_reporte", {"p_contrato_id": contrato_id}).execute().data
-    numero = supabase_execute(_num)
+    """Crea borrador con el menor número libre (reutiliza huecos de borradores borrados)."""
     data = body.dict()
     _so_reportes_normalizar_payload_cabecera(data)
     data["contrato_id"] = contrato_id
-    data["numero_reporte"] = numero
     data["estado"] = "Borrador"
     data["creado_por"] = int(current_user.get("sub") or current_user.get("id", 0))
-    def _ins():
-        return supabase.table("so_reportes").insert(data).execute().data
-    result = supabase_execute(_ins)
-    row = result[0] if result else {}
+
+    last_err = None
+    row = {}
+    for _intento in range(6):
+        numero = _menor_numero_reporte_libre_contrato(contrato_id)
+        data["numero_reporte"] = numero
+
+        def _ins(payload=dict(data)):
+            return supabase.table("so_reportes").insert(payload).execute().data
+
+        try:
+            result = supabase_execute(_ins)
+            row = result[0] if result else {}
+            if row:
+                break
+        except Exception as e:
+            last_err = e
+            # Colisión de número (concurrencia): reintentar con el siguiente libre.
+            msg = str(e).lower()
+            if "duplicate" in msg or "unique" in msg or "23505" in msg:
+                continue
+            raise
+    else:
+        if last_err:
+            raise last_err
+        raise HTTPException(status_code=500, detail="No se pudo asignar número de reporte.")
+
+    try:
+        _sincronizar_contador_numero_reporte(contrato_id)
+    except Exception:
+        pass
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
