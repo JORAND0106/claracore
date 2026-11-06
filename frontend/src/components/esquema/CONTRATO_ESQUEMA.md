@@ -4,7 +4,7 @@ Documento único y obligatorio. Antes de cualquier cambio en `frontend/src/compo
 
 Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` verifican este contrato. Si fallan, no se despliega.
 
-Ámbito: Bitácora, Actas, SicoeObra, Topografía, Presupuesto y cualquier módulo que invoque la herramienta. Mismo comportamiento en iPad, portátil y celular.
+Ámbito: Bitácora, Actas, SicoeObra, Topografía, Presupuesto, Bloc de notas de campo y cualquier módulo que invoque la herramienta. Mismo comportamiento en iPad, portátil y celular (salvo donde el módulo anfitrión oculte la invocación en celular, p. ej. Bloc de notas).
 
 ---
 
@@ -118,6 +118,7 @@ Fuente de verdad: `esquemaInvocationPoints.js`. Cada fila usa el mismo modal; lo
 | Presupuesto | Grupo de gráfico (nuevo / editar) | — |
 | Presupuesto | Sincronización lote SicoeCAD | — |
 | Topografía | Planilla tubería · Crear / Asociar reporte · Gráfico | Precarga Inicio/Fin + sync al guardar |
+| Bloc de notas | Nota de campo · Esquema | Solo iPad/portátil; en celular el anfitrión no ofrece la invocación |
 
 ## Casos de verificación obligatorios
 
@@ -154,7 +155,7 @@ Fuente de verdad: `esquemaInvocationPoints.js`. Cada fila usa el mismo modal; lo
 31. **PNG nítido en PDF:** Gráfico 161 (memoria muro/pase, total 2,27 m³) en PDF Bitácora al 400 % nítido y «Color» en una línea; despiece ≥5 posiciones nítido; gráfico+coords ≥10 puntos nítido; peso PDF razonable vs. JPEG legacy; tipografía ×2 sin regresión.
 32. **SicoeObra cuadro Kg (C-DES-08):** registro Kg → Sí → Cabezal descole As1/As1a/As2 → Cant Total 31,01 / 9,46 / 47,31 (total 87,78); foto compartida desde Cámara / Galería dispositivo / Archivo (mismas reglas que registros; vista previa y quitar antes de Cargar; al editar se reemplaza igual); PNG solo en esos 3; ítem asignable después; editar As1→18→34,89 + As3 − As1a; aviso al editar/eliminar individual; No = flujo Kg; sellado = solo consulta.
 33. **Dibujo por coordenadas en todos los módulos (C-2D-13):** en Bitácora y Presupuesto el panel muestra coords + tipo Nodo/Línea/Polígono como en SicoeObra; pegar 5 puntos, dibujar línea (1–2) y polígono (5); nodo desde mapa; biblioteca 1:1 en nodo; guardar/reabrir conserva tabla y dibujo. En SicoeObra: refs, sync portada y color ítem sin cambios.
-34. **Paridad de invocación (C-TX-08):** inventario completo; cada punto usa el modal canónico con 2D+coords+3D+cálculo+despiece+borrador/PNG; planilla de tubería precarga Inicio/Fin y sincroniza al guardar; SicoeObra-only intacto; parrilla solo desarrollador.
+34. **Paridad de invocación (C-TX-08):** inventario completo (incl. Bloc de notas); cada punto usa el modal canónico con 2D+coords+3D+cálculo+despiece+borrador/PNG; planilla de tubería precarga Inicio/Fin y sincroniza al guardar; SicoeObra-only intacto; parrilla solo desarrollador; Bloc de notas no invoca en celular.
 35. **Letra mínima 1/55 (C-OUT-08):** en memoria, despiece y tabla de coordenadas generadas, altura de celda ≥ ancho_imagen/55; encabezados > celdas; título > encabezados; en PDF se lee sin ampliar.
 36. **Editable + PDF + DXF + carpeta (C-OUT-09…12):** Bitácora guarda esquema con sólidos y cálculo → «Editar esquema» cambia cota → PNG/memoria/PDF/DXF se actualizan; planilla topo DXF cae en MAGNA-SIRGAS con capas; sin georref → DXF local en metros; sellado oculta Editar; sin permiso / enlace vencido → 403; carpeta contrato organizada; legacy solo-PNG sin ícono.
 37. **PNG siempre + Exportar (C-OUT-13):** Guardar → registro muestra PNG; popup Exportar solo PDF / solo DXF / ambos / Cerrar sin marcar; en todos los casos la carpeta tiene PNG+PDF+DXF; Editar reabre y al guardar actualiza PNG y carpeta; DXF mal guardados dejan de mostrarse en el registro.

@@ -3105,6 +3105,9 @@ app.include_router(esquema_ia_router)
 from esquema_assets_routes import router as esquema_assets_router
 app.include_router(esquema_assets_router)
 
+from bloc_notas_routes import router as bloc_notas_router
+app.include_router(bloc_notas_router)
+
 from storage_quota_routes import router as storage_quota_router
 app.include_router(storage_quota_router)
 
@@ -8918,6 +8921,7 @@ _FUNCIONES_REQUERIDAS = (
     {"codigo": "BITACORA", "nombre": "Bitácora", "modulo": "Obra"},
     {"codigo": "PLANACT", "nombre": "Plan de actividades", "modulo": "Obra"},
     {"codigo": "RRHH", "nombre": "Recursos Humanos", "modulo": "Gestión"},
+    {"codigo": "BLOCNT", "nombre": "Bloc de notas", "modulo": "Campo"},
 )
 
 
