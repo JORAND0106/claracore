@@ -857,6 +857,12 @@ def route_resumen_proveedores(contrato_id: int, current_user=Depends(get_current
 def route_list_solicitudes(
     contrato_id: int,
     estado: Optional[str] = None,
+    estados: Optional[str] = Query(
+        None,
+        description="Chips de estado BD separados por coma: borrador,enviada,aprobada,rechazada",
+    ),
+    con_oc: Optional[bool] = Query(None, description="Chip Con OC"),
+    oc_parcial: Optional[bool] = Query(None, description="Chip OC parcial"),
     resumen: bool = Query(True),
     limit: int = Query(80, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -866,14 +872,18 @@ def route_list_solicitudes(
     _check_contrato(current_user, contrato_id)
     require_lectura_almacen(current_user)
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
+    estados_list = [p.strip() for p in str(estados or "").split(",") if p.strip()] or None
     page = list_solicitudes_pagina(
         contrato_id,
         estado,
+        estados=estados_list,
         ver_economicos=ver_eco,
         resumen=resumen,
         limit=limit,
         offset=offset,
         q=q,
+        con_oc=True if con_oc else None,
+        oc_parcial=True if oc_parcial else None,
     )
     items = page.get("items") or []
     no_leidos = contar_mensajes_no_leidos(
@@ -904,6 +914,18 @@ def route_count_solicitudes(
     _check_contrato(current_user, contrato_id)
     require_lectura_almacen(current_user)
     return {"count": count_solicitudes(contrato_id, estado)}
+
+
+@router.get("/{contrato_id}/solicitudes-estado-counts")
+def route_solicitudes_estado_counts(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Contadores de chips rápidos de la grilla (Todas, Enviadas, OC parcial, etc.)."""
+    _check_contrato(current_user, contrato_id)
+    require_lectura_almacen(current_user)
+    from almacen_service import count_solicitudes_estados
+    return count_solicitudes_estados(contrato_id)
 
 
 def _log_proveedores_completados(current_user, contrato_id: int, result: dict) -> None:

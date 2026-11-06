@@ -1812,42 +1812,106 @@ _SOLICITUD_LIST_SELECT = (
 )
 
 
+def _parse_estados_filtro(
+    estado: Optional[str] = None,
+    estados: Optional[List[str]] = None,
+) -> List[str]:
+    """Normaliza estado único o lista (chips). Solo valores de BD."""
+    allowed = {"borrador", "enviada", "aprobada", "rechazada"}
+    out: List[str] = []
+    if estados:
+        for e in estados:
+            e2 = str(e or "").strip().lower()
+            if e2 in allowed and e2 not in out:
+                out.append(e2)
+    if estado:
+        e2 = str(estado).strip().lower()
+        if e2 in allowed and e2 not in out:
+            out.append(e2)
+    return out
+
+
 def list_solicitudes(
     contrato_id: int,
     estado: Optional[str] = None,
     *,
+    estados: Optional[List[str]] = None,
     ver_economicos: bool = True,
     resumen: bool = True,
     limit: Optional[int] = 80,
     offset: int = 0,
+    con_oc: Optional[bool] = None,
+    oc_parcial: Optional[bool] = None,
 ) -> List[dict]:
     """Lista solicitudes. Por defecto ``resumen=True`` (rápido para grilla).
 
     ``limit`` acota filas (None = sin tope, solo para usos internos/admin).
+    ``estados`` / ``con_oc`` / ``oc_parcial`` son chips de filtro rápido.
     """
     sb = _sb()
     select_cols = _SOLICITUD_LIST_SELECT if resumen else "*"
+    estados_f = _parse_estados_filtro(estado, estados)
+    need_post = bool(con_oc) or bool(oc_parcial)
+
     q = sb.table("almacen_solicitud").select(select_cols).eq("contrato_id", contrato_id)
-    if estado:
-        q = q.eq("estado", estado)
+    if len(estados_f) == 1:
+        q = q.eq("estado", estados_f[0])
+    elif len(estados_f) > 1:
+        q = q.in_("estado", estados_f)
     q = q.order("created_at", desc=True)
-    if limit is not None:
-        lim = max(1, min(int(limit), 200))
-        off = max(0, int(offset or 0))
-        q = q.range(off, off + lim - 1)
-    rows = q.execute().data or []
+
+    # Si hay chips calculados (con_oc / oc_parcial), traemos un bloque mayor y filtramos
+    # tras el resumen liviano; la paginación exacta se aplica después.
+    if need_post:
+        fetch_lim = 500
+        rows = q.range(0, fetch_lim - 1).execute().data or []
+    else:
+        if limit is not None:
+            lim = max(1, min(int(limit), 200))
+            off = max(0, int(offset or 0))
+            q = q.range(off, off + lim - 1)
+        rows = q.execute().data or []
+
     if resumen:
-        return _list_solicitudes_resumen(
+        items = _list_solicitudes_resumen(
             sb, rows, contrato_id, ver_economicos=ver_economicos,
         )
-    validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
-    out = []
-    for r in rows:
-        out.append(_enrich_solicitud(
-            sb, dict(r),
-            validadores_pendientes=validadores_pendientes,
-            ver_economicos=ver_economicos,
-        ))
+    else:
+        validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
+        items = []
+        for r in rows:
+            items.append(_enrich_solicitud(
+                sb, dict(r),
+                validadores_pendientes=validadores_pendientes,
+                ver_economicos=ver_economicos,
+            ))
+
+    if need_post:
+        items = _filtrar_solicitudes_chips(items, con_oc=con_oc, oc_parcial=oc_parcial)
+        if limit is not None:
+            lim = max(1, min(int(limit), 200))
+            off = max(0, int(offset or 0))
+            items = items[off:off + lim]
+    return items
+
+
+def _filtrar_solicitudes_chips(
+    items: List[dict],
+    *,
+    con_oc: Optional[bool] = None,
+    oc_parcial: Optional[bool] = None,
+) -> List[dict]:
+    """Aplica chips Con OC / OC parcial sobre filas ya enriquecidas (misma regla UI)."""
+    out = items
+    if con_oc:
+        out = [s for s in out if s.get("tiene_orden_compra") or s.get("oc_parcial")]
+    if oc_parcial:
+        out = [
+            s for s in out
+            if s.get("oc_parcial") or (
+                s.get("estado") == "enviada" and s.get("tiene_orden_compra")
+            )
+        ]
     return out
 
 
@@ -1855,32 +1919,68 @@ def list_solicitudes_pagina(
     contrato_id: int,
     estado: Optional[str] = None,
     *,
+    estados: Optional[List[str]] = None,
     ver_economicos: bool = True,
     resumen: bool = True,
     limit: Optional[int] = 80,
     offset: int = 0,
     q: Optional[str] = None,
+    con_oc: Optional[bool] = None,
+    oc_parcial: Optional[bool] = None,
 ) -> dict:
     """Página de la grilla. Con ``q`` el total y las filas son solo las coincidencias."""
     from almacen_solicitud_busqueda import coincidencias_solicitudes, tokens_busqueda
 
     tokens = tokens_busqueda(q)
-    if not tokens:
-        items = list_solicitudes(
-            contrato_id,
-            estado,
-            ver_economicos=ver_economicos,
-            resumen=resumen,
-            limit=limit,
-            offset=offset,
-        )
-        return {"items": items, "total": count_solicitudes(contrato_id, estado)}
-
-    sb = _sb()
-    hits = coincidencias_solicitudes(sb, contrato_id, tokens, estado=estado)
-    total = len(hits)
+    estados_f = _parse_estados_filtro(estado, estados)
+    estado_unico = estados_f[0] if len(estados_f) == 1 else None
     lim = max(1, min(int(limit if limit is not None else 80), 200))
     off = max(0, int(offset or 0))
+    if not tokens:
+        need_post = bool(con_oc) or bool(oc_parcial)
+        if need_post:
+            # Una sola pasada (tope 500): filtra chips y pagina en memoria.
+            all_items = list_solicitudes(
+                contrato_id,
+                estado_unico if len(estados_f) <= 1 else None,
+                estados=estados_f if len(estados_f) > 1 else None,
+                ver_economicos=ver_economicos,
+                resumen=resumen,
+                limit=500,
+                offset=0,
+                con_oc=con_oc,
+                oc_parcial=oc_parcial,
+            )
+            total = len(all_items)
+            items = all_items[off:off + lim]
+        else:
+            items = list_solicitudes(
+                contrato_id,
+                estado_unico if len(estados_f) <= 1 else None,
+                estados=estados_f if len(estados_f) > 1 else None,
+                ver_economicos=ver_economicos,
+                resumen=resumen,
+                limit=lim,
+                offset=off,
+            )
+            if len(estados_f) > 1:
+                total = _count_solicitudes_estados_in(contrato_id, estados_f)
+            elif estado_unico:
+                total = count_solicitudes(contrato_id, estado_unico)
+            else:
+                total = count_solicitudes(contrato_id, None)
+        return {"items": items, "total": total}
+
+    sb = _sb()
+    hits = coincidencias_solicitudes(
+        sb, contrato_id, tokens, estado=estado_unico,
+    )
+    if len(estados_f) > 1:
+        hits = [
+            h for h in hits
+            if str((h.get("solicitud") or {}).get("estado") or "") in estados_f
+        ]
+    total = len(hits)
     page = hits[off:off + lim]
     donde = {
         int(h["solicitud"]["id"]): h.get("donde") or ""
@@ -1913,6 +2013,19 @@ def list_solicitudes_pagina(
             )
             for r in ordered
         ]
+    if con_oc or oc_parcial:
+        items = _filtrar_solicitudes_chips(items, con_oc=con_oc, oc_parcial=oc_parcial)
+        # Recalcular total sobre todos los hits enriquecidos sería caro; filtramos la página
+        # y ajustamos total de forma conservadora.
+        all_rows = [
+            {k: h["solicitud"].get(k) for k in list_keys}
+            for h in hits
+            if h.get("solicitud")
+        ]
+        all_items = _list_solicitudes_resumen(
+            sb, all_rows[:500], contrato_id, ver_economicos=False,
+        )
+        total = len(_filtrar_solicitudes_chips(all_items, con_oc=con_oc, oc_parcial=oc_parcial))
     for it in items:
         if isinstance(it, dict) and it.get("id") is not None:
             it["busqueda_donde"] = donde.get(int(it["id"]), "")
@@ -1933,6 +2046,150 @@ def count_solicitudes(contrato_id: int, estado: Optional[str] = None) -> int:
     if resp.count is not None:
         return int(resp.count)
     return len(resp.data or [])
+
+
+def _count_solicitudes_estados_in(contrato_id: int, estados: List[str]) -> int:
+    """Conteo exacto con varios estados de BD (chips multi-selección)."""
+    if not estados:
+        return count_solicitudes(contrato_id, None)
+    if len(estados) == 1:
+        return count_solicitudes(contrato_id, estados[0])
+    sb = _sb()
+    q = (
+        sb.table("almacen_solicitud")
+        .select("id", count="exact")
+        .eq("contrato_id", contrato_id)
+        .in_("estado", list(estados))
+    )
+    resp = q.limit(1).execute()
+    if resp.count is not None:
+        return int(resp.count)
+    return len(resp.data or [])
+
+
+def count_solicitudes_estados(contrato_id: int) -> dict:
+    """Contadores de chips de la grilla (calculados en servidor, sin enriquecer filas).
+
+    Definición de cada chip (no confundir con estado de la OC):
+    - borrador / enviada / aprobada / rechazada: ``almacen_solicitud.estado`` en BD.
+    - con_oc: tiene al menos una fila en ``almacen_orden_compra``.
+    - oc_parcial: tiene OC y alguna línea de solicitud sin ``solicitud_item_id`` en OC,
+      o tiene hijas derivadas y aún no tiene OC propia (misma regla de la grilla).
+    La columna OC de la grilla sigue mostrando números de OC, no estos chips.
+    """
+    sb = _sb()
+    try:
+        heads = (
+            sb.table("almacen_solicitud")
+            .select("id, estado, solicitud_origen_id")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if not _pgrst_unknown_column(exc):
+            raise
+        heads = (
+            sb.table("almacen_solicitud")
+            .select("id, estado")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    counts = {
+        "todas": 0,
+        "borrador": 0,
+        "enviada": 0,
+        "aprobada": 0,
+        "rechazada": 0,
+        "con_oc": 0,
+        "oc_parcial": 0,
+    }
+    if not heads:
+        return counts
+    ids = [int(r["id"]) for r in heads if r.get("id")]
+    counts["todas"] = len(ids)
+    for r in heads:
+        est = str(r.get("estado") or "")
+        if est in counts:
+            counts[est] += 1
+
+    oc_rows = (
+        sb.table("almacen_orden_compra")
+        .select("id, solicitud_id")
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    oc_by_sol: Dict[int, List[int]] = {}
+    for oc in oc_rows:
+        sid = int(oc.get("solicitud_id") or 0)
+        oid = oc.get("id")
+        if sid and oid is not None:
+            oc_by_sol.setdefault(sid, []).append(int(oid))
+    counts["con_oc"] = len(oc_by_sol)
+
+    hijas_sin_oc_padre: set = set()
+    for r in heads:
+        origen = r.get("solicitud_origen_id")
+        if not origen:
+            continue
+        try:
+            oid = int(origen)
+        except (TypeError, ValueError):
+            continue
+        if oid and oid not in oc_by_sol:
+            hijas_sin_oc_padre.add(oid)
+
+    parcial_ids: set = set(hijas_sin_oc_padre)
+    oc_ids = [oid for lst in oc_by_sol.values() for oid in lst]
+    if oc_ids and ids:
+        items = (
+            sb.table("almacen_solicitud_item")
+            .select("id, solicitud_id")
+            .in_("solicitud_id", ids)
+            .execute()
+            .data
+            or []
+        )
+        items_by_sol: Dict[int, List[int]] = {}
+        for it in items:
+            sid = int(it.get("solicitud_id") or 0)
+            iid = it.get("id")
+            if sid and iid is not None:
+                items_by_sol.setdefault(sid, []).append(int(iid))
+        oci = (
+            sb.table("almacen_orden_compra_item")
+            .select("orden_compra_id, solicitud_item_id")
+            .in_("orden_compra_id", oc_ids)
+            .execute()
+            .data
+            or []
+        )
+        oc_id_to_sol = {
+            oid: sid for sid, oids in oc_by_sol.items() for oid in oids
+        }
+        en_oc: Dict[int, set] = {}
+        for row in oci:
+            sid = oc_id_to_sol.get(int(row.get("orden_compra_id") or 0))
+            iid = row.get("solicitud_item_id")
+            if sid and iid:
+                en_oc.setdefault(sid, set()).add(int(iid))
+        for sid, item_ids in items_by_sol.items():
+            if sid not in oc_by_sol:
+                continue
+            linked = en_oc.get(sid) or set()
+            if linked and any(i not in linked for i in item_ids):
+                parcial_ids.add(sid)
+            # enviada + OC se muestra como OC parcial en UI
+            head = next((h for h in heads if int(h["id"]) == sid), None)
+            if head and str(head.get("estado") or "") == "enviada":
+                parcial_ids.add(sid)
+    counts["oc_parcial"] = len(parcial_ids)
+    return counts
 
 
 def valor_unitario_linea_proveedor(it: dict, ofertas: Optional[List[dict]] = None) -> float:
@@ -2054,13 +2311,26 @@ def _ofertas_insumos_batch(sb, insumo_ids: List[int]) -> Dict[int, List[dict]]:
 
 
 def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
-    """Total de cada solicitud, con la misma fuente que el total del popup."""
-    try:
-        _hidratar_proveedor_desde_cotizacion(sb, items)
-    except Exception:
-        _log.exception("No se pudo hidratar el proveedor para el valor del listado")
-    insumo_ids = [int(it["insumo_id"]) for it in items if it.get("insumo_id")]
-    ofertas_map = _ofertas_insumos_batch(sb, insumo_ids) if insumo_ids else {}
+    """Total de cada solicitud, con la misma fuente que el total del popup.
+
+    Si todas las líneas ya tienen ``valor_compra_unitario``, no consulta cotizaciones
+    (ahorro grande en la grilla).
+    """
+    need_ofertas = False
+    for it in items:
+        if _to_float(it.get("valor_compra_unitario")) > 0:
+            continue
+        if it.get("insumo_id"):
+            need_ofertas = True
+            break
+    ofertas_map: Dict[int, List[dict]] = {}
+    if need_ofertas:
+        try:
+            _hidratar_proveedor_desde_cotizacion(sb, items)
+        except Exception:
+            _log.exception("No se pudo hidratar el proveedor para el valor del listado")
+        insumo_ids = [int(it["insumo_id"]) for it in items if it.get("insumo_id")]
+        ofertas_map = _ofertas_insumos_batch(sb, insumo_ids) if insumo_ids else {}
     totals: Dict[int, float] = {}
     vistos: set = set()
     for it in items:
@@ -2073,7 +2343,7 @@ def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
         vistos.add(sid)
         iid = it.get("insumo_id")
         ofertas = None
-        if iid:
+        if iid and ofertas_map:
             try:
                 ofertas = ofertas_map.get(int(iid))
             except (TypeError, ValueError):
@@ -2083,6 +2353,27 @@ def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
             continue
         totals[sid] = float(a_decimal(totals.get(sid, 0.0)) + a_decimal(valor))
     return {sid: totals.get(sid) for sid in vistos}
+
+
+_OC_LIST_SELECT = (
+    "id, solicitud_id, numero_oc, estado, pdf_blob_path, es_sistema, created_at"
+)
+
+
+def _slim_oc_for_list(oc: dict) -> dict:
+    """Campos de OC que usa la grilla (PDF / número / estados)."""
+    return {
+        "id": oc.get("id"),
+        "solicitud_id": oc.get("solicitud_id"),
+        "numero_oc": oc.get("numero_oc"),
+        "estado": oc.get("estado"),
+        "es_sistema": oc.get("es_sistema"),
+        "tiene_pdf_oc": bool(oc.get("pdf_blob_path") or oc.get("tiene_pdf_oc")),
+        "pdf_blob_path": oc.get("pdf_blob_path"),
+        "estado_entrada": oc.get("estado_entrada"),
+        "estado_salida": oc.get("estado_salida"),
+        "created_at": oc.get("created_at"),
+    }
 
 
 def _list_solicitudes_resumen(
@@ -2112,7 +2403,7 @@ def _list_solicitudes_resumen(
     if ids:
         oc_rows = (
             sb.table("almacen_orden_compra")
-            .select("*")
+            .select(_OC_LIST_SELECT)
             .in_("solicitud_id", ids)
             .order("numero_oc")
             .execute()
@@ -2130,26 +2421,20 @@ def _list_solicitudes_resumen(
     flat_ocs = [oc for lst in oc_by_sol.values() for oc in lst]
     en_item_por_sol: Dict[int, set] = {}
     if flat_ocs:
-        _enriquecer_ocs_estado_entrada_salida(sb, flat_ocs)
+        # Una sola pasada de ítems OC: estados entrada/salida + líneas en OC (oc_parcial).
+        oci_prefetch = _enriquecer_ocs_estado_entrada_salida(
+            sb, flat_ocs, return_oci_rows=True,
+        )
         oc_id_to_sol = {
             int(oc["id"]): int(oc["solicitud_id"])
             for oc in flat_ocs
             if oc.get("id") and oc.get("solicitud_id")
         }
-        if oc_id_to_sol:
-            oci_rows = (
-                sb.table("almacen_orden_compra_item")
-                .select("orden_compra_id, solicitud_item_id")
-                .in_("orden_compra_id", list(oc_id_to_sol))
-                .execute()
-                .data
-                or []
-            )
-            for r in oci_rows:
-                sid_oc = oc_id_to_sol.get(int(r.get("orden_compra_id") or 0))
-                iid = r.get("solicitud_item_id")
-                if sid_oc and iid:
-                    en_item_por_sol.setdefault(sid_oc, set()).add(int(iid))
+        for r in oci_prefetch or []:
+            sid_oc = oc_id_to_sol.get(int(r.get("orden_compra_id") or 0))
+            iid = r.get("solicitud_item_id")
+            if sid_oc and iid:
+                en_item_por_sol.setdefault(sid_oc, set()).add(int(iid))
     items_por_sol: Dict[int, List[dict]] = {}
     for it in item_rows:
         sid_it = int(it.get("solicitud_id") or 0)
@@ -2213,7 +2498,8 @@ def _list_solicitudes_resumen(
         sol["items"] = []  # grilla usa items_count; detalle carga enrich completo
         if ver_economicos:
             sol["valor_solicitud"] = valores.get(sid)
-        oc_list = oc_by_sol.get(sid) or []
+        oc_list_raw = oc_by_sol.get(sid) or []
+        oc_list = [_slim_oc_for_list(oc) for oc in oc_list_raw]
         if oc_list:
             sol["ordenes_compra"] = oc_list
             sol["orden_compra"] = oc_list[0]
@@ -7637,19 +7923,29 @@ def _chunked_ids(ids: List[int], size: int = 120):
         yield ids[i:i + size]
 
 
-def _enriquecer_ocs_estado_entrada_salida(sb, oc_rows: List[dict]) -> None:
-    """Adjunta estado_entrada / estado_salida (total|parcial|None) a cada OC in-place."""
+def _enriquecer_ocs_estado_entrada_salida(
+    sb,
+    oc_rows: List[dict],
+    *,
+    return_oci_rows: bool = False,
+):
+    """Adjunta estado_entrada / estado_salida (total|parcial|None) a cada OC in-place.
+
+    Con ``return_oci_rows=True`` también entrega las filas OCI (para oc_parcial
+    sin una segunda consulta).
+    """
     if not oc_rows:
-        return
+        return [] if return_oci_rows else None
     oc_ids = [int(oc["id"]) for oc in oc_rows if oc.get("id") is not None]
     if not oc_ids:
-        return
+        return [] if return_oci_rows else None
 
     items_by_oc: Dict[int, List[dict]] = {}
+    all_oci: List[dict] = []
     for part in _chunked_ids(oc_ids):
         batch = (
             sb.table("almacen_orden_compra_item")
-            .select("id, orden_compra_id, cantidad, cantidad_recibida")
+            .select("id, orden_compra_id, solicitud_item_id, cantidad, cantidad_recibida")
             .in_("orden_compra_id", part)
             .execute()
             .data
@@ -7658,6 +7954,7 @@ def _enriquecer_ocs_estado_entrada_salida(sb, oc_rows: List[dict]) -> None:
         for it in batch:
             oid = int(it["orden_compra_id"])
             items_by_oc.setdefault(oid, []).append(it)
+            all_oci.append(it)
 
     entradas_by_oc: Dict[int, List[dict]] = {}
     for part in _chunked_ids(oc_ids):
@@ -7709,6 +8006,10 @@ def _enriquecer_ocs_estado_entrada_salida(sb, oc_rows: List[dict]) -> None:
         for en in entradas_by_oc.get(oid, []):
             ei_rows.extend(ei_by_entrada.get(int(en["id"]), []))
         oc["estado_salida"] = _estado_salida_vs_entrada(ei_rows, despacho)
+
+    if return_oci_rows:
+        return all_oci
+    return None
 
 
 def _enriquecer_ocs_con_saldo_recepcion(sb, rows: List[dict]) -> List[dict]:
