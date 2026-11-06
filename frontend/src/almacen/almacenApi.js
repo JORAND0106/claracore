@@ -200,9 +200,21 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
-    listSolicitudes: (estado, { resumen = true, limit = 80, offset = 0, q = '' } = {}) => {
+    listSolicitudes: (estado, {
+      resumen = true,
+      limit = 80,
+      offset = 0,
+      q = '',
+      estados = [],
+      con_oc,
+      oc_parcial,
+    } = {}) => {
       const params = new URLSearchParams()
       if (estado) params.set('estado', estado)
+      const estadosList = Array.isArray(estados) ? estados.filter(Boolean) : []
+      if (estadosList.length) params.set('estados', estadosList.join(','))
+      if (con_oc) params.set('con_oc', 'true')
+      if (oc_parcial) params.set('oc_parcial', 'true')
       params.set('resumen', resumen ? 'true' : 'false')
       params.set('limit', String(limit))
       params.set('offset', String(offset))
@@ -225,6 +237,19 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
           }
         })
     },
+
+    solicitudesEstadoCounts: () =>
+      fetch(`${base}/solicitudes-estado-counts`, { headers: authHeaders() })
+        .then(parseJson)
+        .then((r) => ({
+          todas: Number(r?.todas) || 0,
+          borrador: Number(r?.borrador) || 0,
+          enviada: Number(r?.enviada) || 0,
+          aprobada: Number(r?.aprobada) || 0,
+          rechazada: Number(r?.rechazada) || 0,
+          oc_parcial: Number(r?.oc_parcial) || 0,
+          con_oc: Number(r?.con_oc) || 0,
+        })),
 
     resumenProveedores: () =>
       fetchJson(`${base}/resumen-proveedores`, { headers: authHeaders() }),

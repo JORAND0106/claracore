@@ -16,6 +16,13 @@ import {
   filterSolicitudesLista,
 } from './solicitudesFiltros'
 import {
+  chipsToListQuery,
+  EMPTY_ESTADO_COUNTS,
+  labelChipActivos,
+  SOLICITUD_ESTADO_CHIPS,
+  toggleEstadoChip,
+} from './solicitudesEstadoChips'
+import {
   AlmacenHelpIcon,
   ESTADO_SOLICITUD_LABEL,
   fmtFechaAlmacenCorta,
@@ -37,6 +44,8 @@ import {
   textoConteoBusqueda,
   tokensBusqueda,
 } from './solicitudBusqueda'
+
+const listaCachePorContrato = new Map()
 
 function ResalteBusqueda({ texto, tokens, accentSoft }) {
   const src = texto == null ? '' : String(texto)
@@ -105,6 +114,8 @@ export default function SolicitudesPanel({
   const [qInput, setQInput] = useState('')
   const [q, setQ] = useState('')
   const [buscando, setBuscando] = useState(false)
+  const [estadoChips, setEstadoChips] = useState([])
+  const [estadoCounts, setEstadoCounts] = useState(() => ({ ...EMPTY_ESTADO_COUNTS }))
   const busquedaSeq = useRef(0)
 
   const PAGE_SIZE = 80
@@ -112,6 +123,8 @@ export default function SolicitudesPanel({
   const tokens = useMemo(() => tokensBusqueda(q), [q])
   const busquedaActiva = tokens.length > 0
   const busquedaPendiente = tokensBusqueda(qInput).join(' ') !== tokens.join(' ')
+  const chipQuery = useMemo(() => chipsToListQuery(estadoChips), [estadoChips])
+  const chipsActivos = estadoChips.length > 0
 
   const listaFiltrada = useMemo(
     () => filterSolicitudesLista(lista, filtros),
@@ -124,17 +137,52 @@ export default function SolicitudesPanel({
     return () => clearTimeout(handle)
   }, [qInput])
 
+  // Stale-while-revalidate: al montar / cambiar contrato, mostrar cache al instante.
+  useEffect(() => {
+    if (!contratoId) return
+    const cached = listaCachePorContrato.get(String(contratoId))
+    if (cached?.items?.length) {
+      setLista(cached.items)
+      setTotalCount(cached.total || cached.items.length)
+      setHasMore(Boolean(cached.hasMore))
+      setLoading(false)
+    }
+  }, [contratoId])
+
+  const refreshEstadoCounts = useCallback(() => {
+    return api.solicitudesEstadoCounts()
+      .then((c) => setEstadoCounts({ ...EMPTY_ESTADO_COUNTS, ...c }))
+      .catch(() => { /* contadores no bloquean la grilla */ })
+  }, [api])
+
   const reload = useCallback(() => {
     const id = busquedaSeq.current + 1
     busquedaSeq.current = id
     setError('')
     setBuscando(true)
-    return api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: 0, q })
+    return api.listSolicitudes(undefined, {
+      resumen: true,
+      limit: PAGE_SIZE,
+      offset: 0,
+      q,
+      estados: chipQuery.estados,
+      con_oc: chipQuery.con_oc,
+      oc_parcial: chipQuery.oc_parcial,
+    })
       .then((page) => {
         if (id !== busquedaSeq.current) return
-        setLista(page.items || [])
+        const items = page.items || []
+        setLista(items)
         setHasMore(Boolean(page.has_more))
-        setTotalCount(Number(page.total) || (page.items || []).length)
+        setTotalCount(Number(page.total) || items.length)
+        if (contratoId && !q && !chipsActivos) {
+          listaCachePorContrato.set(String(contratoId), {
+            items,
+            total: Number(page.total) || items.length,
+            hasMore: Boolean(page.has_more),
+          })
+        }
+        refreshEstadoCounts()
       })
       .catch((e) => {
         if (id !== busquedaSeq.current) return
@@ -146,13 +194,21 @@ export default function SolicitudesPanel({
         setLoading(false)
         onDataLoaded?.()
       })
-  }, [api, onDataLoaded, q])
+  }, [api, chipQuery, chipsActivos, contratoId, onDataLoaded, q, refreshEstadoCounts])
 
   const loadMore = useCallback(() => {
     if (loadingMore || !hasMore || buscando) return
     const id = busquedaSeq.current
     setLoadingMore(true)
-    api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: lista.length, q })
+    api.listSolicitudes(undefined, {
+      resumen: true,
+      limit: PAGE_SIZE,
+      offset: lista.length,
+      q,
+      estados: chipQuery.estados,
+      con_oc: chipQuery.con_oc,
+      oc_parcial: chipQuery.oc_parcial,
+    })
       .then((page) => {
         if (id !== busquedaSeq.current) return
         const next = page.items || []
@@ -170,9 +226,10 @@ export default function SolicitudesPanel({
       .finally(() => {
         if (id === busquedaSeq.current) setLoadingMore(false)
       })
-  }, [api, buscando, hasMore, lista.length, loadingMore, q])
+  }, [api, buscando, chipQuery, hasMore, lista.length, loadingMore, q])
 
   useEffect(() => { reload() }, [reload])
+  useEffect(() => { refreshEstadoCounts() }, [refreshEstadoCounts])
 
   const limpiarBusqueda = () => {
     setQInput('')
@@ -210,8 +267,9 @@ export default function SolicitudesPanel({
       solicitudId: respuesta.id,
       origenId: respuesta.solicitud_origen?.id,
     })
+    refreshEstadoCounts()
     reloadRef.current()
-  }, [contratoId])
+  }, [contratoId, refreshEstadoCounts])
 
   useEffect(() => {
     return escucharCambiosAlmacen(contratoId, (msg) => {
@@ -341,17 +399,93 @@ export default function SolicitudesPanel({
         )}
       </div>
       <div
+        data-testid="solicitud-estado-chips"
+        role="group"
+        aria-label="Filtro rápido por estado de solicitud"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          marginBottom: 10,
+          alignItems: 'center',
+        }}
+      >
+        {SOLICITUD_ESTADO_CHIPS.map((chip) => {
+          const selected = chip.id === 'todas'
+            ? estadoChips.length === 0
+            : estadoChips.includes(chip.id)
+          const count = Number(estadoCounts[chip.id]) || 0
+          return (
+            <button
+              key={chip.id}
+              type="button"
+              data-testid={`solicitud-chip-${chip.id}`}
+              data-selected={selected ? 'true' : 'false'}
+              onClick={() => setEstadoChips((prev) => toggleEstadoChip(prev, chip.id))}
+              title={
+                chip.id === 'todas'
+                  ? 'Quitar filtros de estado'
+                  : 'Estado de la solicitud (no el de la OC). Clic otra vez para quitar.'
+              }
+              style={{
+                ...ui.btnSecondary,
+                minHeight: 44,
+                padding: '8px 14px',
+                fontSize: 'var(--cc-md)',
+                fontWeight: 800,
+                borderWidth: 2,
+                borderColor: selected ? chip.color : ui.borderColor,
+                background: selected ? `${chip.color}22` : 'var(--cc-almacen-bg-card)',
+                color: ui.text,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: chip.color,
+                flexShrink: 0,
+              }}
+              />
+              {chip.label}
+              <span
+                data-testid={`solicitud-chip-${chip.id}-count`}
+                style={{
+                  fontVariantNumeric: 'tabular-nums',
+                  fontWeight: 700,
+                  fontSize: 'var(--cc-sm)',
+                  opacity: 0.9,
+                  background: selected ? chip.color : 'var(--cc-almacen-input-bg)',
+                  color: selected ? '#fff' : ui.textMuted,
+                  borderRadius: 999,
+                  padding: '2px 8px',
+                  minWidth: 28,
+                  textAlign: 'center',
+                }}
+              >
+                {count}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      <div
         data-testid="solicitud-busqueda-conteo"
         aria-live="polite"
         style={{
           fontSize: 'var(--cc-sm)',
           color: ui.textMuted,
-          marginBottom: qInput.trim() ? 12 : 0,
+          marginBottom: (qInput.trim() || chipsActivos) ? 12 : 0,
         }}
       >
         {qInput.trim()
           ? (buscando || busquedaPendiente ? 'Buscando…' : textoConteoBusqueda(totalCount))
-          : ''}
+          : chipsActivos
+            ? (buscando ? 'Filtrando…' : `${totalCount} solicitud(es) · ${labelChipActivos(estadoChips)}`)
+            : ''}
       </div>
 
       {error && <div style={{ color: tonoFila.error, marginBottom: 12 }}>{error}</div>}
@@ -368,6 +502,18 @@ export default function SolicitudesPanel({
             onClick={limpiarBusqueda}
           >
             Limpiar búsqueda
+          </button>
+        </div>
+      ) : chipsActivos && !buscando && lista.length === 0 ? (
+        <div style={{ ...ui.card, textAlign: 'center', color: ui.text }} data-testid="solicitud-chips-vacia">
+          Ninguna solicitud coincide con el filtro de estado ({labelChipActivos(estadoChips)}).
+          {' '}
+          <button
+            type="button"
+            style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-caption)' }}
+            onClick={() => setEstadoChips([])}
+          >
+            Quitar filtro de estado
           </button>
         </div>
       ) : lista.length === 0 ? (
