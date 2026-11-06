@@ -1,37 +1,79 @@
 /**
- * ClaraCore Service Worker — refuerzo de disponibilidad offline.
- * Importante: index.html y el documento de navegación usan red-primero
- * para que un F5 normal cargue el bundle nuevo tras un deploy;
- * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegado” a JS viejo.
+ * ClaraCore Service Worker — arranque offline + Web Push + tiles MapTiler (SICOE).
+ * index.html y /assets/*: red-primero cuando hay red (deploys visibles);
+ * install precachea el shell mínimo; el cliente envía URLs de assets para precache.
  */
-const CACHE_NAME = 'claracore-shell-v8'
+const CACHE_NAME = 'claracore-shell-v9'
 const TILES_CACHE_NAME = 'claracore-tiles-v1'
+const PRECACHE_MSG = 'CLARACORE_PRECACHE_URLS'
+
+const SHELL_PRECACHE = [
+  '/',
+  '/index.html',
+  '/favicon.png',
+  '/manifest.webmanifest',
+]
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting()
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) =>
+        Promise.all(
+          SHELL_PRECACHE.map((url) =>
+            cache.add(url).catch(() => undefined),
+          ),
+        ),
+      )
+      .then(() => self.skipWaiting()),
+  )
 })
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then(keys =>
+    caches.keys().then((keys) =>
       Promise.all(
-        keys.filter(k => k !== CACHE_NAME && k !== TILES_CACHE_NAME).map(k => caches.delete(k)),
-      )
-    )
+        keys
+          .filter((k) => k !== CACHE_NAME && k !== TILES_CACHE_NAME)
+          .map((k) => caches.delete(k)),
+      ),
+    ).then(() => self.clients.claim()),
   )
-  self.clients.claim()
+})
+
+self.addEventListener('message', (event) => {
+  const data = event.data
+  if (!data || data.type !== PRECACHE_MSG || !Array.isArray(data.urls)) return
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(async (cache) => {
+      for (const raw of data.urls) {
+        try {
+          const url = typeof raw === 'string' ? raw : ''
+          if (!url || url.startsWith('http') && !url.startsWith(self.location.origin)) {
+            // same-origin path or absolute same origin only
+            if (url.startsWith('http')) {
+              const u = new URL(url)
+              if (u.origin !== self.location.origin) continue
+            }
+          }
+          const reqUrl = url.startsWith('http') ? url : new URL(url, self.location.origin).href
+          await cache.add(reqUrl).catch(() => undefined)
+        } catch {
+          /* ignore one URL */
+        }
+      }
+    }),
+  )
 })
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
 
-  // Favicon: nunca desde cache del SW (el navegador ya cachea bastante; evita icono “pegado” tras deploy)
   if (url.pathname === '/favicon.png' || /^\/favicon\.(ico|svg)$/.test(url.pathname)) {
     event.respondWith(fetch(event.request))
     return
   }
 
-  // Tiles MapTiler — cache-first para mapa Leaflet offline (SICOE)
+  // Tiles MapTiler — cache-first para mapa Leaflet offline (SICOE); no tocar lógica SICOE
   if (url.hostname === 'api.maptiler.com') {
     event.respondWith(
       caches.open(TILES_CACHE_NAME).then((cache) =>
@@ -48,21 +90,18 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Llamadas a la API → siempre red (la app React decide qué hacer offline)
   if (url.pathname.startsWith('/api') ||
       url.hostname.includes('supabase') ||
       url.hostname !== self.location.hostname) {
-    return // no interceptar
+    return
   }
 
-  // Vite en desarrollo: no cachear módulos ni HMR
   if (url.pathname.startsWith('/@') ||
       url.pathname.startsWith('/src/') ||
       url.pathname.includes('/node_modules/')) {
     return
   }
 
-  // Documentos (pestaña): red-primero, actualiza caché al éxito → despliegues visibles sin Ctrl+Shift+R
   if (event.request.mode === 'navigate' ||
       url.pathname === '/' ||
       url.pathname === '/index.html') {
@@ -71,16 +110,22 @@ self.addEventListener('fetch', (event) => {
         .then((response) => {
           if (response.ok) {
             const clone = response.clone()
-            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone))
+            caches.open(CACHE_NAME).then((c) => {
+              c.put('/index.html', clone.clone())
+              c.put(event.request, clone)
+            })
           }
           return response
         })
-        .catch(() => caches.match('/index.html').then((c) => c || caches.match('/')))
+        .catch(() =>
+          caches.match('/index.html').then((c) =>
+            c || caches.match('/') || caches.match(event.request),
+          ),
+        ),
     )
     return
   }
 
-  // Chunks Vite (/assets/*.js, *.css): red-primero — evita index nuevo + maps-*.js viejo (404) tras deploy
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
       fetch(event.request)
@@ -91,12 +136,11 @@ self.addEventListener('fetch', (event) => {
           }
           return response
         })
-        .catch(() => caches.match(event.request))
+        .catch(() => caches.match(event.request)),
     )
     return
   }
 
-  // Otros assets del mismo origen: cache-first solo para GET (Cache API no admite POST)
   if (event.request.method !== 'GET') {
     event.respondWith(fetch(event.request))
     return
@@ -114,7 +158,7 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => cached)
       return cached || netFetch
-    })
+    }),
   )
 })
 

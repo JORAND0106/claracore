@@ -147,6 +147,14 @@ export const ESQUEMA_INVOCATION_POINTS = Object.freeze([
     topoTramoCoords: true,
     featureGroups: [...ESQUEMA_PARITY_FEATURE_GROUPS],
   },
+  {
+    id: 'bloc-notas-nota',
+    module: 'Bloc de notas',
+    screen: 'Nota de campo',
+    action: 'Esquema',
+    file: 'modules/bloc-notas/ModuloBlocNotas.jsx',
+    featureGroups: [...ESQUEMA_PARITY_FEATURE_GROUPS],
+  },
 ])
 
 /** Ruta canónica del modal (única implementación). */

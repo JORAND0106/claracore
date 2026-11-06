@@ -341,6 +341,9 @@ import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
 import ModuloMapaNavegacion from './modules/ayuda/ModuloMapaNavegacion'
 import MapaNavegacionHeaderButton from './modules/ayuda/MapaNavegacionHeaderButton'
+import BlocNotasHeaderButton from './modules/bloc-notas/BlocNotasHeaderButton'
+import ModuloBlocNotas from './modules/bloc-notas/ModuloBlocNotas'
+import { initOfflineShell } from './pwa/shellCache'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
 import { PanelSoporteTecnico } from './components/PanelSoporteTecnico'
 import { usuarioPuedeReportarErrores } from './config/reporteErroresHelpers'
@@ -22417,6 +22420,11 @@ const [navReporteId, setNavReporteId] = useState(null)
       (p) => (p.funcion_nombre || '').toLowerCase() === nombreLower && p.ver
     )
   const tieneModuloAuditorSst = _permisoVerFuncion('auditor sst (ia)')
+  const tienePermisoBlocNotas = _permisoVerFuncion('bloc de notas')
+  const puedeVerBlocNotas =
+    !!tienePermisoBlocNotas &&
+    usuario?.contrato_id != null &&
+    usuario?.contrato_id !== ''
   const progPermisos = permisosProgramacionObra(usuario, usuario?.contrato_id)
   const tienePermisoProgramacionObra = progPermisos.ver
   const puedeEditarProgramacionObra = progPermisos.editar
@@ -22570,6 +22578,12 @@ const [navReporteId, setNavReporteId] = useState(null)
       setModuloActivo('inicio')
     }
   }, [esContador, moduloActivo])
+
+  useEffect(() => {
+    if (moduloActivo === 'bloc_notas' && !puedeVerBlocNotas) {
+      setModuloActivo('inicio')
+    }
+  }, [moduloActivo, puedeVerBlocNotas])
 
   const handleCambioContratoUsuario = useCallback(
     async (e) => {
@@ -22808,6 +22822,13 @@ const [navReporteId, setNavReporteId] = useState(null)
               active={moduloActivo === 'mapa_navegacion'}
               onClick={() => setModuloActivo('mapa_navegacion')}
             />
+            {puedeVerBlocNotas && (
+              <BlocNotasHeaderButton
+                t={t}
+                active={moduloActivo === 'bloc_notas'}
+                onClick={() => setModuloActivo('bloc_notas')}
+              />
+            )}
             <AVITriggerButton t={t} />
           </div>
           <ThemeModeSelector t={t} themeMode={themeMode} onTheme={onTheme} />
@@ -23049,6 +23070,16 @@ const [navReporteId, setNavReporteId] = useState(null)
                       setMobileNavOpen(false)
                     }}
                   />
+                  {puedeVerBlocNotas && (
+                    <BlocNotasHeaderButton
+                      t={t}
+                      active={moduloActivo === 'bloc_notas'}
+                      onClick={() => {
+                        setModuloActivo('bloc_notas')
+                        setMobileNavOpen(false)
+                      }}
+                    />
+                  )}
                   <AVITriggerButton t={t} />
                 </div>
                 <button
@@ -23366,6 +23397,15 @@ const [navReporteId, setNavReporteId] = useState(null)
             usuario={usuario}
             compact={false}
             showEditor
+          />
+        )}
+        {moduloActivo === 'bloc_notas' && puedeVerBlocNotas && (
+          <ModuloBlocNotas
+            key={`bloc-notas-${usuario?.contrato_id ?? 'x'}`}
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            contratoId={usuario?.contrato_id}
           />
         )}
         {moduloActivo === 'dashboard' && (() => {
@@ -26431,10 +26471,14 @@ export default function App() {
   const [devPanelView, setDevPanelView] = useState(null) // null | 'gate' | 'open'
   const [usuario, setUsuario] = useState(() => (olvideDeepLink ? null : restoreUsuarioFromStorage()))
 
-  // ── Service Worker (offline + Web Push) ───────────────────────────────────
+  // ── Service Worker (offline + Web Push) + shell PWA ───────────────────────
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {})
+      navigator.serviceWorker.register('/sw.js', { scope: '/' })
+        .then(() => { initOfflineShell() })
+        .catch(() => {})
+    } else {
+      initOfflineShell()
     }
   }, [])
 
