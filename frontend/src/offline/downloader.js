@@ -48,15 +48,19 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
   const { actaRpo = null } = opts
 
   if (!actaRpo) {
-    // Sin acta seleccionada → solo datos maestros básicos (sin registros)
-    const [actas, semanas, precios, reportes, planoResp, pkIds] = await Promise.all([
+    // Sin acta seleccionada → solo datos maestros básicos (sin registros).
+    // Capítulos vía /sicoe-obra/.../capitulos (no requiere permiso de precios);
+    // /listado-precios puede devolver 403 a empresa=subcontratista.
+    const [actas, semanas, preciosRaw, capsPayload, reportes, planoResp, pkIds] = await Promise.all([
       apiFetch(`/actas/${contratoId}/lista`, authToken).catch(() => []),
       apiFetch(`/sicoe-obra/${contratoId}/semanas`, authToken).catch(() => []),
       apiFetch(`/listado-precios/${contratoId}`, authToken).catch(() => []),
+      apiFetch(`/sicoe-obra/${contratoId}/capitulos`, authToken).catch(() => []),
       apiFetch(`/sicoe-obra/${contratoId}/reportes`, authToken).catch(() => []),
       apiFetch(`/contratos/${contratoId}/plano-geojson`, authToken).catch(() => null),
       apiFetch(`/sicoe-obra/${contratoId}/pk-ids`, authToken).catch(() => []),
     ])
+    const precios = _mergePreciosConCapitulosCatalogo(contratoId, preciosRaw, capsPayload)
     await _persistir(contratoId, { actas, semanas, precios, reportes, registros: [] })
     await _persistirMapaCache(contratoId, { planoResp, pkIds })
     return {
@@ -89,7 +93,7 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
 
   const actas     = Array.isArray(pack.actas)     ? pack.actas     : []
   const semanas   = Array.isArray(pack.semanas)   ? pack.semanas   : []
-  const precios   = Array.isArray(pack.precios)   ? pack.precios   : []
+  const preciosRaw = Array.isArray(pack.precios)   ? pack.precios   : []
   const reportes  = Array.isArray(pack.reportes)  ? pack.reportes  : []
   const registros = Array.isArray(pack.registros) ? pack.registros : []
   const inspectores = Array.isArray(pack.inspectores) ? pack.inspectores : []
@@ -98,6 +102,10 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
   if (!pkIds.length) {
     pkIds = await apiFetch(`/sicoe-obra/${contratoId}/pk-ids`, authToken).catch(() => [])
   }
+  // Si el pack no trajo precios (p. ej. redaction/403 parcial), completar capítulos
+  // con el endpoint de catálogo SICOE (solo nombres, sin montos).
+  const capsPayload = await apiFetch(`/sicoe-obra/${contratoId}/capitulos`, authToken).catch(() => [])
+  const precios = _mergePreciosConCapitulosCatalogo(contratoId, preciosRaw, capsPayload)
 
   // Validar que el servidor resolvió correctamente el acta
   if (!pack.acta_id) {
@@ -126,6 +134,38 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
     pk_ids: pkIds.length,
     plano: planoResp?.plano_geojson ? 1 : 0,
   }
+}
+
+/**
+ * Asegura filas de catálogo por capítulo cuando /listado-precios no está
+ * disponible (empresa subcontratista). Stubs sin precio_unitario.
+ */
+function _mergePreciosConCapitulosCatalogo(contratoId, preciosRaw, capsPayload) {
+  const cid = Number(contratoId)
+  const precios = Array.isArray(preciosRaw) ? [...preciosRaw] : []
+  const have = new Set(
+    precios.map((p) => String(p?.capitulo || '').trim()).filter(Boolean),
+  )
+  const caps = Array.isArray(capsPayload) ? capsPayload : []
+  let stubId = -1
+  for (const c of caps) {
+    const label = String(typeof c === 'string' ? c : c?.capitulo || '').trim()
+    if (!label || have.has(label)) continue
+    have.add(label)
+    precios.push({
+      id: stubId,
+      contrato_id: cid,
+      capitulo: label,
+      item_numero: null,
+      descripcion: null,
+      unidad: null,
+      // Sin monto: catálogo para reportar, no listado de cobro.
+      precio_unitario: null,
+      _capitulo_stub: true,
+    })
+    stubId -= 1
+  }
+  return precios
 }
 
 async function _persistir(

@@ -21518,7 +21518,11 @@ def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user))
 @app.get("/sicoe-obra/{contrato_id}/capitulos")
 def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_user)):
     """
-    Capítulos distintos de listado_precios del contrato.
+    Capítulos distintos del catálogo del contrato (solo nombres, sin montos).
+
+    Disponible para cualquier usuario con acceso al contrato que reporte
+    cantidades — no usa GET /listado-precios (bloqueado a Empresa=subcontratista).
+
     Pagina por lotes (PostgREST ~1000 filas/respuesta): sin .range solo se veían
     los primeros ~1000 precios y podían faltar capítulos.
     """
@@ -32110,6 +32114,14 @@ def sicoe_cantidades_por_item(
 # ─── SICOE OBRA: Búsqueda de ítems del listado de precios ────────────────────
 @app.get("/sicoe-obra/{contrato_id}/listado-precios-busqueda")
 def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, competencia: str = None, current_user=Depends(get_current_user)):
+    """Catálogo de ítems para reportar (capítulo/ítem/unidad).
+
+    No exige permiso de Listado de Precios. Si el usuario tiene aislamiento por
+    empresa subcontratista (o no ve valores del contrato), se omiten montos
+    (`precio_unitario`) — ver capítulos/ítems no implica ver precios de cobro.
+    """
+    _require_contract_access(current_user, contrato_id)
+
     def _q():
         query = supabase.table("listado_precios")\
             .select("id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario")\
@@ -32121,7 +32133,18 @@ def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, co
         if q:
             query = query.or_(f"descripcion.ilike.%{q}%,item_numero.ilike.%{q}%")
         return query.order("item_numero").limit(200).execute().data
-    return supabase_execute(_q)
+
+    rows = supabase_execute(_q) or []
+    # Aislamiento: no filtrar el catálogo; solo redactar economía del contrato.
+    cargo = (current_user or {}).get("cargo_nombre")
+    rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol")
+    sid_u, tipo_u = _usuario_empresa_campos(current_user)
+    ve_eco = usuario_ve_valores_economicos_contrato(
+        cargo, rol, subcontratista_id=sid_u, empresa_tipo=tipo_u
+    )
+    if not ve_eco:
+        return redactar_filas_economicos_contrato(rows)
+    return rows
 
 # ─── SICOE OBRA: Auditoría traslapos / vacíos (motor único) ───────────────────
 class AuditoriaTraslaposCandidato(BaseModel):

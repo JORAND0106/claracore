@@ -5562,9 +5562,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       background: idx === indiceItemKbd ? t.bg : 'transparent',
                     }}
                     onMouseEnter={() => setIndiceItemKbd(idx)}>
-                    <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
-                    <div style={{ fontSize:'var(--cc-label)', color:t.text }}>{item.descripcion}</div>
-                    <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
+                      <div style={{ fontSize:'var(--cc-label)', color:t.text }}>{item.descripcion}</div>
+                      <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>
+                        {item.und || item.unidad || '—'}
+                        {nivelInfo.verValoresEconomicos && item.precio_unitario != null
+                          ? ` · ${fmtD(item.precio_unitario)}`
+                          : ''}
+                      </div>
                   </div>
                 ))}
               </CcAnchoredListbox>
@@ -16180,29 +16185,36 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     }
 
     // ── Datos maestros: subcontratistas, inspectores, capítulos, PK-IDs ──────
+    // Capítulos: NUNCA vía GET /listado-precios (403 si Empresa=subcontratista /
+    // sin permiso de precios). Usar GET /sicoe-obra/.../capitulos (solo nombres).
+    const sortCapLabels = (caps) => [...caps].sort((a, b) => {
+      const na = parseInt(String(a).match(/^(\d+)/)?.[1] || '9999', 10)
+      const nb = parseInt(String(b).match(/^(\d+)/)?.[1] || '9999', 10)
+      return na - nb || String(a).localeCompare(String(b), 'es')
+    })
+
     if (!isOnline && isOfflineReady) {
       const cid = Number(contrato_id)
       Promise.all([
-        getPreciosOffline(contrato_id),
+        getCapitulosOffline(contrato_id).catch(() => []),
+        getPreciosOffline(contrato_id).catch(() => []),
         db.inspectores_cache.where('contrato_id').equals(cid).toArray(),
         db.subcontratistas_cache.where('contrato_id').equals(cid).toArray(),
         db.pkids_cache.where('contrato_id').equals(cid).toArray(),
-      ]).then(([d, insp, subs, pks]) => {
+      ]).then(([capsRegs, precios, insp, subs, pks]) => {
         if (cancelled) return
-        if (Array.isArray(d)) {
-          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
-          const sorted = caps.sort((a, b) => {
-            const na = parseInt(String(a).match(/^(\d+)/)?.[1] || '9999')
-            const nb = parseInt(String(b).match(/^(\d+)/)?.[1] || '9999')
-            return na - nb
-          })
-          setCapitulos(sorted.map(c => ({ capitulo: c })))
-        }
+        const fromRegs = Array.isArray(capsRegs) ? capsRegs : []
+        const fromPrecios = Array.isArray(precios)
+          ? precios.map((r) => r?.capitulo).filter(Boolean)
+          : []
+        const sorted = sortCapLabels([...new Set([...fromRegs, ...fromPrecios].map(String))])
+        setCapitulos(sorted.map((c) => ({ capitulo: c })))
         setInspectores(Array.isArray(insp) ? insp : [])
         setSubcontratistas(sicoeNormalizarListaSubcontratistas(subs))
         setPkIds(Array.isArray(pks) ? pks : [])
       }).catch(() => {
         if (cancelled) return
+        setCapitulos([])
         setInspectores([])
         setSubcontratistas([])
         setPkIds([])
@@ -16217,19 +16229,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       .catch(() => { if (!cancelled) setSubcontratistas([]) })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
       .then(r => r.json()).then(d => { if (!cancelled) setInspectores(Array.isArray(d) ? d : []) })
-    fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: hdrs })
-      .then(r => r.json()).then(d => {
+    fetchSicoeCapitulosCached(API_URL, contrato_id, getToken())
+      .then((caps) => {
         if (cancelled) return
-        if (Array.isArray(d)) {
-          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
-          const sorted = caps.sort((a, b) => {
-            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
-            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
-            return na - nb
-          })
-          setCapitulos(sorted.map(c => ({ capitulo: c })))
-        }
+        const sorted = sortCapLabels(Array.isArray(caps) ? caps : [])
+        setCapitulos(sorted.map((c) => ({ capitulo: c })))
       })
+      .catch(() => { if (!cancelled) setCapitulos([]) })
     const cargarPkIdsFormulario = (intento = 0) => {
       fetchSicoePkIdsCached(API_URL, contrato_id, getToken())
         .then((d) => { if (!cancelled) setPkIds(Array.isArray(d) ? d : []) })
