@@ -193,14 +193,21 @@ def push_sync(
             existing = existing_rows[0] if existing_rows else None
             server_rev = int(existing.get("rev") or 0) if existing else 0
             base_rev = int(n.base_rev) if n.base_rev is not None else None
+            client_device = (n.device_id or body.device_id or "") or ""
+            server_device = str((existing or {}).get("device_id") or "")
 
-            # Conflicto: el servidor avanzó desde que el cliente basó su edición
-            if (
+            # Conflicto REAL: misma nota editada en DOS dispositivos distintos sin conexión.
+            # Mismo device_id → siempre upsert (nunca copia). base_rev None → primera subida.
+            is_real_conflict = (
                 existing
                 and base_rev is not None
                 and server_rev > base_rev
                 and not n.deleted
-            ):
+                and bool(client_device)
+                and bool(server_device)
+                and client_device != server_device
+            )
+            if is_real_conflict:
                 copy_id = str(uuid.uuid4())
                 copy_row = {
                     "id": copy_id,
@@ -212,13 +219,12 @@ def push_sync(
                     "created_at": _now_iso(),
                     "updated_at": _now_iso(),
                     "rev": 1,
-                    "device_id": n.device_id or body.device_id,
+                    "device_id": client_device,
                     "deleted_at": None,
                     "conflict_of": nid,
                 }
                 supabase.table("bloc_notas_notes").insert(copy_row).execute()
                 conflict_copies.append(copy_row)
-                # No pisar la nota del servidor
                 applied_notes.append(existing)
                 continue
 
@@ -231,7 +237,7 @@ def push_sync(
                 "body": n.body or {},
                 "updated_at": n.updated_at or _now_iso(),
                 "rev": max(int(n.rev or 1), server_rev + 1 if existing else 1),
-                "device_id": n.device_id or body.device_id,
+                "device_id": client_device or (existing.get("device_id") if existing else None),
                 "deleted_at": _now_iso() if n.deleted else None,
                 "conflict_of": existing.get("conflict_of") if existing else None,
             }

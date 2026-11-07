@@ -1,6 +1,7 @@
 /**
- * Resolución de conflicto local (espejo de la lógica del servidor).
- * Nunca descarta: si hay conflicto, se propone copia automática.
+ * Resolución de conflicto del bloc de notas.
+ * Copia automática SOLO si la misma nota se editó en DOS DISPOSITIVOS distintos
+ * (server_rev > base_rev y device_id distinto). Mismo dispositivo = upsert, nunca copia.
  */
 
 export function conflictTitle(title) {
@@ -11,11 +12,27 @@ export function conflictTitle(title) {
 /**
  * @returns {{ keepServer: boolean, copyLocal: boolean }}
  */
-export function shouldCreateConflictCopy({ serverRev, baseRev, deleted = false }) {
+export function shouldCreateConflictCopy({
+  serverRev,
+  baseRev,
+  deleted = false,
+  serverDeviceId = null,
+  clientDeviceId = null,
+}) {
   if (deleted) return { keepServer: false, copyLocal: false }
   if (serverRev == null || baseRev == null) return { keepServer: false, copyLocal: false }
-  if (Number(serverRev) > Number(baseRev)) {
-    return { keepServer: true, copyLocal: true }
-  }
-  return { keepServer: false, copyLocal: false }
+  if (!(Number(serverRev) > Number(baseRev))) return { keepServer: false, copyLocal: false }
+
+  const a = serverDeviceId == null || serverDeviceId === '' ? null : String(serverDeviceId)
+  const b = clientDeviceId == null || clientDeviceId === '' ? null : String(clientDeviceId)
+  // Sin device_id en ambos → no se puede afirmar conflicto multi-dispositivo
+  if (!a || !b) return { keepServer: false, copyLocal: false }
+  if (a === b) return { keepServer: false, copyLocal: false }
+
+  return { keepServer: true, copyLocal: true }
+}
+
+/** Título típico de copia falsa generada por el bug de sync. */
+export function isConflictCopyTitle(title) {
+  return / · copia$/i.test(String(title || '').trim())
 }

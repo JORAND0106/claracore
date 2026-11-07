@@ -14,9 +14,10 @@ blocDb.version(1).stores({
 
 export function emptyNoteBody() {
   return {
-    tool: 'hand', // hand | text
+    tool: 'text', // hand | text | postit — default teclado
+    richHtml: '', // TipTap HTML (herramientas de Actas)
     strokes: [], // { id, color, width, points: [{x,y,p}] }
-    textBlocks: [], // { id, x, y, w, h, text, fontSize }
+    textBlocks: [], // legado
     postits: [], // { id, x, y, w, h, color, text }
     esquemas: [], // { id, pngDataUrl, scene, title, updatedAt }
     canvas: { width: 1200, height: 1600, bg: '#fffef8' },

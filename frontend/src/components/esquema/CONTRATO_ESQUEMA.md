@@ -4,7 +4,7 @@ Documento único y obligatorio. Antes de cualquier cambio en `frontend/src/compo
 
 Las pruebas en `esquemaContrato.behavior.test.js` y el resto de `test:esquema` verifican este contrato. Si fallan, no se despliega.
 
-Ámbito: Bitácora, Actas, SicoeObra, Topografía, Presupuesto, Bloc de notas de campo y cualquier módulo que invoque la herramienta. Mismo comportamiento en iPad, portátil y celular (salvo donde el módulo anfitrión oculte la invocación en celular, p. ej. Bloc de notas).
+Ámbito: Bitácora, Actas, SicoeObra, Topografía, Presupuesto, Bloc de notas de campo y cualquier módulo que invoque la herramienta. Mismo comportamiento en iPad, portátil y celular (salvo donde el módulo anfitrión oculte la invocación en celular, p. ej. Bloc de notas). El bloc presenta cuadernos/hojas (no paneles de lista); su modo teclado reutiliza `TemaRichEditor` de Actas sin modificar Actas; la copia por conflicto del sync del bloc solo aplica entre dispositivos distintos.
 
 ---
 
