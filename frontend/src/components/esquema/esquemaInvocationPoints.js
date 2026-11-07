@@ -83,9 +83,17 @@ export const ESQUEMA_INVOCATION_POINTS = Object.freeze([
   {
     id: 'sicoe-registro-grafico',
     module: 'SicoeObra',
-    screen: 'Registro · gráfico',
-    action: 'Crear / editar esquema',
+    screen: 'Registro · gráfico (consulta)',
+    action: 'Ver esquemas asignados',
     file: 'App.jsx',
+    featureGroups: [...ESQUEMA_PARITY_FEATURE_GROUPS],
+  },
+  {
+    id: 'sicoe-reporte-esquemas',
+    module: 'SicoeObra',
+    screen: 'Reporte · Esquemas',
+    action: 'Crear / editar / asignar esquemas del reporte',
+    file: 'modules/sicoe-obra/SicoeEsquemasReporteModal.jsx',
     featureGroups: [...ESQUEMA_PARITY_FEATURE_GROUPS],
   },
   {

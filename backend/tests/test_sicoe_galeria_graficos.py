@@ -62,3 +62,33 @@ def test_omite_entradas_sin_url():
     )
     assert len(out) == 1
     assert out[0]["numero"] == 9
+
+
+def test_galeria_orden_por_numero_y_label_con_registros():
+    filas = [
+        {
+            "numero_registro": 443,
+            "numero_reporte": 57,
+            "grafico_url": "https://cdn/muro.png",
+            "grafico_numero": 162,
+            "graficos_historial": [
+                {"url": "https://cdn/placa.png", "numero": 161, "nombre": "Placa"},
+                {"url": "https://cdn/muro.png", "numero": 162, "nombre": "Muro"},
+            ],
+        },
+        {
+            "numero_registro": 440,
+            "numero_reporte": 57,
+            "grafico_url": "https://cdn/placa.png",
+            "grafico_numero": 161,
+            "graficos_historial": [
+                {"url": "https://cdn/placa.png", "numero": 161, "nombre": "Placa"},
+            ],
+        },
+    ]
+    out = m._galeria_extraer_graficos_unicos(filas)
+    assert [x["numero"] for x in out] == [161, 162]
+    assert out[0]["reporte_numero"] == 57
+    assert set(out[0]["registros_numeros"]) == {440, 443}
+    assert "Gráfico 161" in out[0]["label"]
+    assert "Rep." in out[0]["label"]

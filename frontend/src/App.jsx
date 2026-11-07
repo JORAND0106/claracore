@@ -159,6 +159,7 @@ import {
 } from './modules/sicoe-obra/sicoeFotosHelpers'
 import SicoeMensajeModal from './modules/sicoe-obra/SicoeMensajeModal'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
+import SicoeEsquemasReporteModal from './modules/sicoe-obra/SicoeEsquemasReporteModal'
 import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from './components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromRegistro } from './components/adjuntos/adjuntosMedia'
@@ -5830,15 +5831,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     )}
                     {editableGrafico && (
                       <>
-                        <button
-                          type="button"
-                          onClick={abrirEsquemaEditor}
-                          disabled={esquemaCargando || uploadingGraf}
-                          title={grafVista ? 'Editar esquema' : 'Crear esquema'}
-                          style={{ background:'transparent', border:'none', color:t.primary, fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
-                        >
-                          {esquemaCargando ? '…' : '✎'}
-                        </button>
+                        {/* Crear/editar esquema: desde el botón «Esquemas» del reporte (C-OUT-18). */}
                         <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Añadir gráfico">
                           +
                           <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
@@ -5886,21 +5879,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                             }}
                             onFiles={(files) => void subirFoto(files, { mode: 'add' })}
                           />
-                        )}
-                        {editableGrafico && (
-                          <button
-                            type="button"
-                            onClick={abrirEsquemaEditor}
-                            disabled={esquemaCargando}
-                            title="Crear esquema"
-                            style={{
-                              background:t.primary, color:'#fff', border:'none', borderRadius:3,
-                              padding: '2px 5px', fontSize:'var(--cc-caption)', fontWeight:700,
-                              cursor: esquemaCargando ? 'wait' : 'pointer',
-                            }}
-                          >
-                            {esquemaCargando ? '…' : '✎'}
-                          </button>
                         )}
                         {editableGrafico && (
                           <label style={{
@@ -6821,6 +6799,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [creandoReg, setCreandoReg]               = useState(false)
   const [ofertaDibujoReporte, setOfertaDibujoReporte] = useState(!!repoProp?._ofertaDibujo)
   const [editorDibujoReporte, setEditorDibujoReporte] = useState(false)
+  const [esquemasReporteOpen, setEsquemasReporteOpen] = useState(false)
   const [dibujoCmdAviso, setDibujoCmdAviso] = useState(null)
   const [puntosEdit, setPuntosEdit]               = useState((repoProp.puntos || []).map(p => ({...p})))
   const [editandoTopo, setEditandoTopo]            = useState(false)
@@ -8703,6 +8682,31 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 {reporteTieneDibujo(reporte) ? 'Editar dibujo' : 'Dibujar · pendiente'}
               </button>
             )}
+            {puedeEditar && (
+              <button
+                type="button"
+                data-testid="sicoe-esquemas-reporte-btn"
+                onClick={() => setEsquemasReporteOpen(true)}
+                title="Esquemas del reporte (asignables a varios registros)"
+                style={{
+                  background: t.bgCard,
+                  color: t.text,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '8px',
+                  padding: carpetaCompact ? '10px 14px' : '6px 14px',
+                  minHeight: carpetaCompact ? 44 : undefined,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span aria-hidden>📐</span>
+                Esquemas
+              </button>
+            )}
             {puedeEditar && seleccionados.length > 0 && (
               <button type="button" onClick={abrirModalCorteMasivo} style={{
                 background:'#0d9488', color:'#fff', border:'none', borderRadius:'8px',
@@ -9782,6 +9786,27 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               window.setTimeout(() => setDibujoCmdAviso(null), 4500)
             }
             void recargar({ forzarSinFiltros: true })
+          }}
+        />
+      )}
+      {esquemasReporteOpen && (
+        <SicoeEsquemasReporteModal
+          t={t}
+          open={esquemasReporteOpen}
+          onClose={() => setEsquemasReporteOpen(false)}
+          API_URL={API_URL}
+          contratoId={contrato_id}
+          hdrs={hdrs}
+          token={getToken()}
+          reporte={reporte}
+          registros={registros}
+          isSellado={(reg) => sicoeRegistroSelladoMaxActivo(reg, nivelesContrato)}
+          onRegistrosPatched={(patches) => {
+            setRegistros((prev) => prev.map((r) => {
+              const hit = (patches || []).find((p) => String(p.id) === String(r.id))
+              return hit ? { ...r, ...hit } : r
+            }))
+            try { void recargar({ forzarSinFiltros: true }) } catch { /* noop */ }
           }}
         />
       )}
@@ -15976,9 +16001,11 @@ function GaleriaFotos({
 }) {
   const [fotos, setFotos] = useState(() => (Array.isArray(seedFotos) ? seedFotos : []))
   const [loading, setLoading] = useState(true)
+  const [qGaleria, setQGaleria] = useState('')
   const seedKey = Array.isArray(seedFotos)
     ? seedFotos.map((f) => `${f?.url || ''}:${f?.numero ?? ''}`).join('|')
     : ''
+  const esGrafico = (tipo || 'foto') === 'grafico'
 
   useEffect(() => {
     let cancelled = false
@@ -16008,7 +16035,17 @@ function GaleriaFotos({
           console.warn('galeria', msg)
           return
         }
-        const list = d
+        let list = d
+        if (esGrafico) {
+          list = [...list].sort((a, b) => {
+            const na = Number(a?.numero)
+            const nb = Number(b?.numero)
+            if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+            if (Number.isFinite(na)) return -1
+            if (Number.isFinite(nb)) return 1
+            return 0
+          })
+        }
         if (!seeds.length) {
           setFotos(list)
         } else {
@@ -16022,30 +16059,61 @@ function GaleriaFotos({
     return () => { cancelled = true }
     // seedKey estabiliza seedFotos (evitar loop por array inline)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seedFotos vía seedKey
-  }, [contrato_id, API_URL, tipo, fechaDesde, fechaHasta, refreshKey, seedKey])
+  }, [contrato_id, API_URL, tipo, fechaDesde, fechaHasta, refreshKey, seedKey, esGrafico])
+
+  const visibles = (() => {
+    if (!esGrafico || !String(qGaleria || '').trim()) return fotos
+    const s = String(qGaleria).trim().toLowerCase()
+    return fotos.filter((f) => {
+      const blob = [
+        f.numero, f.reporte_numero, f.reporte_nombre, f.descripcion, f.label,
+        ...(Array.isArray(f.registros_numeros) ? f.registros_numeros : []),
+      ].map((x) => String(x ?? '').toLowerCase()).join(' ')
+      return blob.includes(s)
+    })
+  })()
 
   if (loading) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>Cargando galería...</div>
-  if (fotos.length === 0) {
-    const vacio = (tipo || 'foto') === 'grafico'
-      ? 'No hay gráficos en este rango de fechas.'
-      : 'No hay imágenes en este rango de fechas.'
-    return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>{vacio}</div>
-  }
-
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px' }}>
-      {fotos.map((f, i) => (
-        <div key={f.url || `${f.numero}-${i}`} onClick={() => onSelect(f.url, f.numero)}
-          style={{ cursor:'pointer', borderRadius:'8px', overflow:'hidden', border:'2px solid transparent',
-            transition:'border 0.15s' }}
-          onMouseEnter={e => e.currentTarget.style.borderColor = '#0077B6'}
-          onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
-          <img src={f.url} alt="" style={{ width:'100%', height:'100px', objectFit:'cover' }} />
-          <div style={{ padding:'4px 6px', fontSize:'var(--cc-label)', color:'#6B7280', background:'#1E293B' }}>
-            #{String(f.numero ?? '').padStart(4,'0')} — {f.descripcion || ''}
-          </div>
+    <div>
+      {esGrafico && (
+        <div style={{ marginBottom: 10 }}>
+          <input
+            type="search"
+            value={qGaleria}
+            onChange={(e) => setQGaleria(e.target.value)}
+            placeholder="Buscar por nº gráfico o reporte…"
+            data-testid="sicoe-galeria-grafico-buscar"
+            style={{
+              width: '100%', padding: '8px 10px', borderRadius: 8,
+              border: '1px solid #cbd5e1', fontSize: 'var(--cc-sm)',
+            }}
+          />
         </div>
-      ))}
+      )}
+      {visibles.length === 0 ? (
+        <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>
+          {esGrafico ? 'No hay gráficos en este rango de fechas.' : 'No hay imágenes en este rango de fechas.'}
+        </div>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px' }}>
+          {visibles.map((f, i) => (
+            <div key={f.url || `${f.numero}-${i}`} onClick={() => onSelect(f.url, f.numero)}
+              style={{ cursor:'pointer', borderRadius:'8px', overflow:'hidden', border:'2px solid transparent',
+                transition:'border 0.15s' }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = '#0077B6'}
+              onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
+              <img src={f.url} alt="" style={{ width:'100%', height:'100px', objectFit:'cover' }} />
+              <div style={{ padding:'4px 6px', fontSize:'var(--cc-label)', color:'#6B7280', background:'#1E293B', lineHeight:1.35 }}>
+                {f.label
+                  || (f.reporte_numero != null
+                    ? `Gráfico ${f.numero ?? '—'} · Rep. #${f.reporte_numero}${Array.isArray(f.registros_numeros) && f.registros_numeros.length ? ` · Reg. ${f.registros_numeros.join(', ')}` : ''}`
+                    : `#${String(f.numero ?? '').padStart(4, '0')} — ${f.descripcion || ''}`)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
