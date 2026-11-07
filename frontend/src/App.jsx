@@ -20699,6 +20699,10 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setModuloActivo(key)
     after?.()
   }, [])
+  /** No incluir noteId en el key del módulo: limpiar el target no debe remontar (nota que «desaparecía»). */
+  const consumeBlocOpenTarget = useCallback(() => {
+    setBlocOpenTarget(null)
+  }, [])
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [nivelesDashContrato, setNivelesDashContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
   const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
@@ -23502,14 +23506,14 @@ const [navReporteId, setNavReporteId] = useState(null)
         )}
         {moduloActivo === 'bloc_notas' && puedeVerBlocNotas && (
           <ModuloBlocNotas
-            key={`bloc-notas-${usuario?.contrato_id ?? 'x'}-${blocOpenTarget?.noteId || 'x'}`}
+            key={`bloc-notas-${usuario?.contrato_id ?? 'x'}`}
             t={t}
             usuario={usuario}
             token={getToken()}
             contratoId={usuario?.contrato_id}
             initialNoteId={blocOpenTarget?.noteId || null}
             initialFolderId={blocOpenTarget?.folderId || null}
-            onConsumedInitialTarget={() => setBlocOpenTarget(null)}
+            onConsumedInitialTarget={consumeBlocOpenTarget}
           />
         )}
         {moduloActivo === 'dashboard' && (() => {

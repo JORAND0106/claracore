@@ -149,6 +149,16 @@ export function temaRichProseCss(t = {}, { minHeight = 0, variant = 'readonly' }
   font-weight: 700;
   background: ${bg};
 }
+.tema-rich-prose .bloc-day-marker {
+  color: ${primary};
+  font-weight: 800;
+  margin: 0.85em 0 0.45em;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+  border-bottom: 1px solid ${border};
+  padding-bottom: 4px;
+}
 ${editorBits}
 `
 }

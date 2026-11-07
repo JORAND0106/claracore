@@ -28,6 +28,8 @@ export default function BlocNotasNoteCanvas({
   const strokes = body?.strokes || []
   const textBlocks = body?.textBlocks || []
   const postits = body?.postits || []
+  const dayMarks = body?.dayMarks || []
+  const guide = body?.guide || 'lines'
   const cw = body?.canvas?.width || 1200
   const ch = body?.canvas?.height || 1600
   const bg = body?.canvas?.bg || '#fffef8'
@@ -47,13 +49,57 @@ export default function BlocNotasNoteCanvas({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.fillStyle = bg
     ctx.fillRect(0, 0, cw, ch)
-    // soft lines
-    ctx.strokeStyle = 'rgba(0,0,0,0.04)'
-    ctx.lineWidth = 1
-    for (let y = 32; y < ch; y += 32) {
+    // Guía de fondo (no se mezcla con trazos)
+    if (guide === 'lines' || guide === 'rail') {
+      ctx.strokeStyle = 'rgba(0,0,0,0.06)'
+      ctx.lineWidth = 1
+      for (let y = 32; y < ch; y += 32) {
+        ctx.beginPath()
+        ctx.moveTo(0, y)
+        ctx.lineTo(cw, y)
+        ctx.stroke()
+        if (guide === 'rail') {
+          ctx.beginPath()
+          ctx.moveTo(0, y + 10)
+          ctx.lineTo(cw, y + 10)
+          ctx.stroke()
+        }
+      }
+    } else if (guide === 'grid') {
+      ctx.strokeStyle = 'rgba(0,0,0,0.05)'
+      ctx.lineWidth = 1
+      for (let y = 24; y < ch; y += 24) {
+        ctx.beginPath()
+        ctx.moveTo(0, y)
+        ctx.lineTo(cw, y)
+        ctx.stroke()
+      }
+      for (let x = 24; x < cw; x += 24) {
+        ctx.beginPath()
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, ch)
+        ctx.stroke()
+      }
+    } else if (guide === 'dots') {
+      ctx.fillStyle = 'rgba(0,0,0,0.12)'
+      for (let y = 20; y < ch; y += 20) {
+        for (let x = 20; x < cw; x += 20) {
+          ctx.beginPath()
+          ctx.arc(x, y, 1.1, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+    }
+    // Fechas de día (bitácora a mano) — no editables
+    for (const m of dayMarks) {
+      const y = Number(m.y) || 40
+      ctx.fillStyle = '#0369a1'
+      ctx.font = '700 16px "Segoe UI", system-ui, sans-serif'
+      ctx.fillText(String(m.label || m.dateKey || ''), 16, y)
+      ctx.strokeStyle = 'rgba(3,105,161,0.35)'
       ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(cw, y)
+      ctx.moveTo(16, y + 6)
+      ctx.lineTo(cw - 16, y + 6)
       ctx.stroke()
     }
     for (const s of strokes) {
@@ -88,7 +134,7 @@ export default function BlocNotasNoteCanvas({
       }
       ctx.stroke()
     }
-  }, [strokes, cw, ch, bg])
+  }, [strokes, cw, ch, bg, guide, dayMarks])
 
   useEffect(() => { paint() }, [paint, textBlocks, postits])
 
@@ -136,6 +182,7 @@ export default function BlocNotasNoteCanvas({
     const stroke = drawingRef.current
     drawingRef.current = null
     if ((stroke.points || []).length >= 2) {
+      // ensureHandDayMark lo aplica el padre en onBodyChange
       emit({ strokes: [...strokes, stroke] })
     } else {
       paint()

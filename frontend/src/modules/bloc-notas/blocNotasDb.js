@@ -28,6 +28,8 @@ export function emptyNoteBody() {
     textBlocks: [], // legado
     postits: [], // { id, x, y, w, h, color, text }
     esquemas: [], // { id, pngDataUrl, scene, title, updatedAt }
+    dayMarks: [], // escritura a mano: { dateKey, label, y }
+    guide: 'lines', // none | dots | lines | grid | rail
     canvas: { width: 1200, height: 1600, bg: '#fffef8' },
   }
 }
