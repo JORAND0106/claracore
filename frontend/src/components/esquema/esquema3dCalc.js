@@ -737,10 +737,121 @@ function cellAreaM2Local(cell) {
   return Math.max(0, a)
 }
 
-/** Altura resultante (m) a partir de cotas textuales; null si no es válida. */
+/** Parsea cota/altura textual (coma o punto) → número; NaN si vacío/inválido. */
+export function parseCotaNum(v) {
+  if (v == null) return NaN
+  if (typeof v === 'number') return Number.isFinite(v) ? v : NaN
+  const s = String(v).trim().replace(/\s/g, '').replace(',', '.')
+  if (!s) return NaN
+  const n = Number(s)
+  return Number.isFinite(n) ? n : NaN
+}
+
+/** Formato con hasta 3 decimales (punto) para campos del popup Extruir. */
+export function formatCota3(n) {
+  if (!Number.isFinite(n)) return ''
+  const r = Math.round(n * 1000) / 1000
+  return r.toFixed(3)
+}
+
+/**
+ * Altura = cota llegada − cota partida (puede ser negativa).
+ * null si alguno no es numérico.
+ */
+export function alturaSignedFromCotasText(cotaPartida, cotaLlegada) {
+  const a = parseCotaNum(cotaPartida)
+  const b = parseCotaNum(cotaLlegada)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  return b - a
+}
+
+/**
+ * Sincroniza los tres campos del popup Extruir por cotas.
+ * Conserva el último dato escrito (llegada o altura) al cambiar la partida.
+ *
+ * @param {{
+ *   partida: string,
+ *   llegada: string,
+ *   altura: string,
+ *   lastKept: 'llegada'|'altura',
+ * }} state
+ * @param {'partida'|'llegada'|'altura'} edited
+ * @param {string} value
+ * @returns {{ partida: string, llegada: string, altura: string, lastKept: 'llegada'|'altura' }}
+ */
+export function syncExtrudeCotasFields(state, edited, value) {
+  const next = {
+    partida: state?.partida ?? '',
+    llegada: state?.llegada ?? '',
+    altura: state?.altura ?? '',
+    lastKept: state?.lastKept === 'altura' ? 'altura' : 'llegada',
+  }
+  if (edited === 'partida') {
+    next.partida = value
+    const p = parseCotaNum(next.partida)
+    if (!Number.isFinite(p)) return next
+    if (next.lastKept === 'altura') {
+      const h = parseCotaNum(next.altura)
+      if (Number.isFinite(h)) next.llegada = formatCota3(p + h)
+    } else {
+      const L = parseCotaNum(next.llegada)
+      if (Number.isFinite(L)) next.altura = formatCota3(L - p)
+    }
+    return next
+  }
+  if (edited === 'llegada') {
+    next.llegada = value
+    next.lastKept = 'llegada'
+    const p = parseCotaNum(next.partida)
+    const L = parseCotaNum(next.llegada)
+    if (Number.isFinite(p) && Number.isFinite(L)) next.altura = formatCota3(L - p)
+    return next
+  }
+  // altura
+  next.altura = value
+  next.lastKept = 'altura'
+  const p = parseCotaNum(next.partida)
+  const h = parseCotaNum(next.altura)
+  if (Number.isFinite(p) && Number.isFinite(h)) next.llegada = formatCota3(p + h)
+  return next
+}
+
+/**
+ * Resuelve cotaSuperior/cotaInferior reales del sólido a partir de partida + llegada
+ * (o partida + altura). Altura 0 → error.
+ */
+export function resolveExtrudeCotasPair({ partida, llegada, altura } = {}) {
+  const p = parseCotaNum(partida)
+  let L = parseCotaNum(llegada)
+  const h = parseCotaNum(altura)
+  if (!Number.isFinite(p)) {
+    return { ok: false, error: 'Indique la cota de partida.' }
+  }
+  if (!Number.isFinite(L) && Number.isFinite(h)) L = p + h
+  if (!Number.isFinite(L)) {
+    return { ok: false, error: 'Indique la cota de llegada o la altura.' }
+  }
+  const height = L - p
+  if (height === 0 || Math.abs(height) < 1e-12) {
+    return { ok: false, error: 'La altura no puede ser cero.' }
+  }
+  return {
+    ok: true,
+    cotaPartida: p,
+    cotaLlegada: L,
+    altura: height,
+    cotaSuperior: Math.max(p, L),
+    cotaInferior: Math.min(p, L),
+  }
+}
+
+/**
+ * Altura positiva (m) cotaSuperior − cotaInferior; null si no válida o invertida.
+ * Conservada para memoria / lecturas que asumen superior > inferior.
+ */
 export function alturaFromCotasText(cotaSuperior, cotaInferior) {
-  const a = Number(String(cotaSuperior ?? '').trim().replace(',', '.'))
-  const b = Number(String(cotaInferior ?? '').trim().replace(',', '.'))
+  const a = parseCotaNum(cotaSuperior)
+  const b = parseCotaNum(cotaInferior)
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null
   if (a <= b) return null
   return a - b

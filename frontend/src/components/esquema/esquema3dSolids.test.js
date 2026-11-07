@@ -35,9 +35,11 @@ function circleMeters(rM) {
 }
 
 describe('esquema3dSolids — volumen y booleanos', () => {
-  it('valida cotas: superior > inferior', () => {
+  it('valida cotas: ordena el par; altura 0 inválida', () => {
     assert.equal(validateCotas(100, 98).ok, true)
-    assert.equal(validateCotas(98, 100).ok, false)
+    assert.equal(validateCotas(98, 100).ok, true)
+    assert.equal(validateCotas(98, 100).z0, 98)
+    assert.equal(validateCotas(98, 100).z1, 100)
     assert.equal(validateCotas(100, 100).ok, false)
   })
 
