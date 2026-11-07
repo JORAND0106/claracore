@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { claracoreSwPrecache } from './vite-plugin-sw-precache.js'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), claracoreSwPrecache()],
   server: {
     // Escucha en todas las interfaces para acceso desde otros dispositivos en la misma WiFi.
     host: '0.0.0.0',

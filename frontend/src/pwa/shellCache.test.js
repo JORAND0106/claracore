@@ -7,16 +7,28 @@ import { PRECACHE_MSG } from './shellCache.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const publicDir = join(__dirname, '../../public')
+const root = join(__dirname, '../..')
 
 describe('PWA shell offline', () => {
-  it('service worker precachea shell en install', () => {
+  it('service worker precachea shell en install (v10 + cache-first)', () => {
     const sw = readFileSync(join(publicDir, 'sw.js'), 'utf8')
-    assert.match(sw, /claracore-shell-v9/)
-    assert.match(sw, /SHELL_PRECACHE/)
+    assert.match(sw, /claracore-shell-v10/)
+    assert.match(sw, /SHELL_PRECACHE|__CLARACORE_PRECACHE__/)
     assert.match(sw, /\/index\.html/)
     assert.match(sw, /\/manifest\.webmanifest/)
     assert.match(sw, /CLARACORE_PRECACHE_URLS/)
     assert.match(sw, new RegExp(PRECACHE_MSG))
+    assert.match(sw, /cacheFirst/)
+    assert.match(sw, /\/assets\//)
+  })
+
+  it('vite inyecta precache de assets en build', () => {
+    const plugin = join(root, 'vite-plugin-sw-precache.js')
+    assert.ok(existsSync(plugin))
+    const src = readFileSync(plugin, 'utf8')
+    assert.match(src, /__CLARACORE_PRECACHE__/)
+    const vite = readFileSync(join(root, 'vite.config.js'), 'utf8')
+    assert.match(vite, /claracoreSwPrecache/)
   })
 
   it('manifest instalable existe', () => {
