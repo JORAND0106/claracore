@@ -291,3 +291,216 @@ def list_notes(contrato_id: int, current_user=Depends(get_current_user)):
         return rows
     except Exception as e:
         raise _table_error(e) from e
+
+
+# ── Pizarra (post-its desde notas) ───────────────────────────────────────────
+
+class PizarraItemUpsert(BaseModel):
+    id: str = Field(..., min_length=8, max_length=64)
+    note_id: str = Field(..., min_length=8, max_length=64)
+    visibilidad: str = Field(..., min_length=4, max_length=20)
+    updated_at: Optional[str] = None
+    rev: int = Field(1, ge=1)
+    deleted: bool = False
+    device_id: Optional[str] = None
+
+
+class PizarraSyncBody(BaseModel):
+    items: List[PizarraItemUpsert] = Field(default_factory=list)
+    device_id: Optional[str] = None
+
+
+def _pizarra_table_error(exc: BaseException) -> HTTPException:
+    msg = str(exc)
+    if "bloc_notas_pizarra" in msg and (
+        "does not exist" in msg or "PGRST205" in msg or "42P01" in msg
+    ):
+        return HTTPException(
+            status_code=503,
+            detail="Falta la tabla de la Pizarra. Ejecute backend/sql/bloc_notas_pizarra.sql.",
+        )
+    return _table_error(exc)
+
+
+def _enrich_pizarra_item(row: Dict[str, Any], viewer_uid: int) -> Optional[Dict[str, Any]]:
+    """Adjunta título/cuerpo vivos de la nota; omite si la nota fue eliminada."""
+    note_id = row.get("note_id")
+    if not note_id:
+        return None
+    try:
+        notes = (
+            supabase.table("bloc_notas_notes")
+            .select("id, title, body, usuario_id, folder_id, deleted_at, updated_at")
+            .eq("id", note_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        notes = []
+    if not notes:
+        return None
+    note = notes[0]
+    if note.get("deleted_at"):
+        return None
+    owner_id = int(note.get("usuario_id") or row.get("usuario_id") or 0)
+    vis = row.get("visibilidad")
+    # Privacidad: solo_yo solo al dueño
+    if vis == "solo_yo" and owner_id != viewer_uid:
+        return None
+    owner_nombre = None
+    try:
+        urows = (
+            supabase.table("usuarios")
+            .select("id, nombre, nombre_completo, email")
+            .eq("id", owner_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if urows:
+            u = urows[0]
+            owner_nombre = (
+                u.get("nombre_completo")
+                or u.get("nombre")
+                or u.get("email")
+            )
+    except Exception:
+        owner_nombre = None
+    return {
+        "id": row.get("id"),
+        "note_id": note_id,
+        "folder_id": note.get("folder_id"),
+        "contrato_id": row.get("contrato_id"),
+        "usuario_id": owner_id,
+        "visibilidad": vis,
+        "title": note.get("title") or "Nota",
+        "body": note.get("body") or {},
+        "owner_nombre": owner_nombre,
+        "created_at": row.get("created_at"),
+        "updated_at": note.get("updated_at") or row.get("updated_at"),
+        "deleted_at": row.get("deleted_at"),
+        "rev": row.get("rev") or 1,
+        "device_id": row.get("device_id"),
+        "es_dueno": owner_id == viewer_uid,
+    }
+
+
+@router.get("/{contrato_id}/pizarra")
+def list_pizarra(contrato_id: int, current_user=Depends(get_current_user)):
+    """Post-its visibles: propios (solo_yo + contrato) y públicos del contrato."""
+    uid = _uid(current_user)
+    cid = int(contrato_id)
+    try:
+        rows = (
+            supabase.table("bloc_notas_pizarra")
+            .select("*")
+            .eq("contrato_id", cid)
+            .is_("deleted_at", "null")
+            .execute()
+            .data
+            or []
+        )
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            vis = row.get("visibilidad")
+            owner = int(row.get("usuario_id") or 0)
+            if vis == "solo_yo" and owner != uid:
+                continue
+            if vis not in ("solo_yo", "contrato"):
+                continue
+            enriched = _enrich_pizarra_item(row, uid)
+            if enriched:
+                items.append(enriched)
+        items.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+        return {"items": items, "server_time": _now_iso()}
+    except Exception as e:
+        raise _pizarra_table_error(e) from e
+
+
+@router.post("/{contrato_id}/pizarra/sync")
+def sync_pizarra(
+    contrato_id: int,
+    body: PizarraSyncBody,
+    current_user=Depends(get_current_user),
+):
+    """Push de pins del dueño. Un pin por nota."""
+    uid = _uid(current_user)
+    cid = int(contrato_id)
+    acked: List[str] = []
+    try:
+        for item in body.items or []:
+            if item.visibilidad not in ("solo_yo", "contrato"):
+                continue
+            pid = str(item.id)
+            note_id = str(item.note_id)
+            # Solo el dueño de la nota puede publicar
+            notes = (
+                supabase.table("bloc_notas_notes")
+                .select("id, usuario_id, deleted_at")
+                .eq("id", note_id)
+                .eq("usuario_id", uid)
+                .eq("contrato_id", cid)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if not notes:
+                continue
+            if notes[0].get("deleted_at") and not item.deleted:
+                continue
+
+            existing = (
+                supabase.table("bloc_notas_pizarra")
+                .select("*")
+                .eq("id", pid)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            by_note = (
+                supabase.table("bloc_notas_pizarra")
+                .select("*")
+                .eq("note_id", note_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            row = {
+                "id": pid,
+                "note_id": note_id,
+                "contrato_id": cid,
+                "usuario_id": uid,
+                "visibilidad": item.visibilidad,
+                "updated_at": item.updated_at or _now_iso(),
+                "rev": int(item.rev or 1),
+                "deleted_at": _now_iso() if item.deleted else None,
+                "device_id": item.device_id or body.device_id,
+            }
+            target = existing[0] if existing else (by_note[0] if by_note else None)
+            if target:
+                # Respetar ownership
+                if int(target.get("usuario_id") or 0) != uid:
+                    continue
+                row["id"] = target["id"]
+                if not item.deleted:
+                    row["deleted_at"] = None
+                supabase.table("bloc_notas_pizarra").update(row).eq(
+                    "id", target["id"]
+                ).execute()
+                acked.append(target["id"])
+            else:
+                row["created_at"] = _now_iso()
+                supabase.table("bloc_notas_pizarra").insert(row).execute()
+                acked.append(pid)
+        return {"ok": True, "acked": acked, "server_time": _now_iso()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("bloc-notas pizarra sync failed")
+        raise _pizarra_table_error(e) from e

@@ -7188,7 +7188,6 @@ const ADMIN_PANEL_TABS = [
   { id: "subcontratistas",  label: "Subcontratistas"       },
   { id: "resets",           label: "Reset Claves"          },
   { id: "actas",       label: "Actas", soloAdmin: false },
-  { id: "inicio",    label: "Página de inicio", soloAdmin: true },
   { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   { id: "diagnostico", label: "📊 Diagnóstico plataforma", soloDeveloper: true },
   { id: "licencias-claracad", label: "Licencias ClaraCAD", soloDeveloper: true },
@@ -7542,16 +7541,6 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={permsDevOAdmin || subPerms} theme={activeTheme} token={token} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
-            {tab === "inicio"           && (
-              <SeccionInicioNovedades
-                call={call}
-                theme={activeTheme}
-                token={token}
-                isDeveloper={isDeveloper}
-                user={user}
-                contratos={contratosVisibles}
-              />
-            )}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} t={t} user={user} />}
               {tab === "diagnostico" && <SeccionDiagnosticoPlataforma call={call} theme={activeTheme} />}
               {tab === "licencias-claracad" && <SeccionLicenciasClaraCAD call={call} theme={activeTheme} />}

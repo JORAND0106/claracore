@@ -133,6 +133,10 @@ describe('contrato · documento', () => {
     assert.match(md, /arranque sin conexión|sin conexión/i)
     assert.match(md, /pwaArranqueOffline/)
     assert.match(md, /caso 42|42\./)
+    assert.match(md, /C-TX-10/)
+    assert.match(md, /Pizarra/)
+    assert.match(md, /blocNotasPizarra/)
+    assert.match(md, /caso 43|43\./)
   })
 })
 

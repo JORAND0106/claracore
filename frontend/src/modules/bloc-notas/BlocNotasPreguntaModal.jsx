@@ -9,6 +9,8 @@ export default function BlocNotasPreguntaModal({
   message = '',
   onSi,
   onNo,
+  siLabel = 'Sí',
+  noLabel = 'No',
 }) {
   if (!open || typeof document === 'undefined') return null
   const theme = t || {
@@ -56,8 +58,8 @@ export default function BlocNotasPreguntaModal({
         <div style={{ padding: '12px 20px 16px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button
             type="button"
-            title="No"
-            aria-label="No"
+            title={noLabel}
+            aria-label={noLabel}
             onClick={onNo}
             style={{
               background: 'transparent',
@@ -69,12 +71,12 @@ export default function BlocNotasPreguntaModal({
               cursor: 'pointer',
             }}
           >
-            No
+            {noLabel}
           </button>
           <button
             type="button"
-            title="Sí"
-            aria-label="Sí"
+            title={siLabel}
+            aria-label={siLabel}
             onClick={onSi}
             style={{
               background: theme.primary,
@@ -86,7 +88,7 @@ export default function BlocNotasPreguntaModal({
               cursor: 'pointer',
             }}
           >
-            Sí
+            {siLabel}
           </button>
         </div>
       </div>

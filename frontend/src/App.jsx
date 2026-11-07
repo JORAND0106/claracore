@@ -20621,6 +20621,7 @@ function IconoModuloConAlerta({ icon, total = 0, title, ring }) {
 
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, onRefreshContratos, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
+  const [blocOpenTarget, setBlocOpenTarget] = useState(null)
   const [offlineModuloAviso, setOfflineModuloAviso] = useState(false)
   const irAModulo = useCallback((key, after) => {
     if (moduloRequiereConexion(key) && isBrowserOffline()) {
@@ -22413,7 +22414,6 @@ const [navReporteId, setNavReporteId] = useState(null)
   // Panel admin: solo matriz (o Desarrollador). El cargo «Administrador» ya no abre todo solo por nombre.
   const canAdmin = !esContador && (esDeveloper || tienePermisoAdmin)
   /** Misma regla que el backend (logs / novedades): solo estos cargos publican novedades de inicio. */
-  const puedePublicarNovedadesInicio = esDeveloper || esAdminCargo
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
   const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
   const tienePermisoInformesCcd = esDeveloper
@@ -23409,10 +23409,17 @@ const [navReporteId, setNavReporteId] = useState(null)
             t={t}
             usuario={usuario}
             fontSize={fontSize}
-            puedePublicarNovedades={puedePublicarNovedadesInicio}
             token={getToken()}
             esContador={esContador}
             onIrSeguimiento={tienePermisoSeguimiento ? () => irAModulo('seguimiento') : undefined}
+            onAbrirBlocNota={(pin) => {
+              if (!puedeVerBlocNotas || !pin?.note_id) return
+              setBlocOpenTarget({
+                noteId: pin.note_id,
+                folderId: pin.folder_id || null,
+              })
+              irAModulo('bloc_notas')
+            }}
           />
         )}
         {moduloActivo === 'mapa_navegacion' && (
@@ -23427,11 +23434,14 @@ const [navReporteId, setNavReporteId] = useState(null)
         )}
         {moduloActivo === 'bloc_notas' && puedeVerBlocNotas && (
           <ModuloBlocNotas
-            key={`bloc-notas-${usuario?.contrato_id ?? 'x'}`}
+            key={`bloc-notas-${usuario?.contrato_id ?? 'x'}-${blocOpenTarget?.noteId || 'x'}`}
             t={t}
             usuario={usuario}
             token={getToken()}
             contratoId={usuario?.contrato_id}
+            initialNoteId={blocOpenTarget?.noteId || null}
+            initialFolderId={blocOpenTarget?.folderId || null}
+            onConsumedInitialTarget={() => setBlocOpenTarget(null)}
           />
         )}
         {moduloActivo === 'dashboard' && (() => {

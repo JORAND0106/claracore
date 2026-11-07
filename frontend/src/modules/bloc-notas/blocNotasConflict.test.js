@@ -99,6 +99,9 @@ describe('bloc de notas · conflicto real multi-dispositivo', () => {
     assert.match(src, /data-cc-tooltip|BlocNotasIconBtn/)
     assert.match(src, /¿Dejar escritura a mano/)
     assert.match(src, /Volver a cuadernos|Nuevo cuaderno/)
+    assert.match(src, /Deshacer|Rehacer/)
+    assert.match(src, /Enviar a la Pizarra/)
+    assert.match(src, /maxWidth:\s*'100%'/)
     assert.doesNotMatch(src, /width:\s*200.*flexShrink:\s*0[\s\S]*width:\s*220/)
   })
 

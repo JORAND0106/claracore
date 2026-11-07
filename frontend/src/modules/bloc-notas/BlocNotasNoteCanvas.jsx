@@ -206,14 +206,17 @@ export default function BlocNotasNoteCanvas({
         position: 'relative',
         width: '100%',
         overflow: 'auto',
-        maxHeight: 'min(70vh, 720px)',
+        flex: 1,
+        minHeight: 240,
+        height: '100%',
+        maxHeight: 'none',
         border: `1px solid ${t?.border || '#e2e8f0'}`,
         borderRadius: 12,
         background: t?.bg || '#f8fafc',
         touchAction: tool === 'hand' ? 'none' : 'pan-y',
       }}
     >
-      <div style={{ position: 'relative', width: cw, minHeight: ch, margin: '0 auto' }}>
+      <div style={{ position: 'relative', width: '100%', maxWidth: cw, minHeight: Math.min(ch, 900), margin: '0 auto' }}>
         <canvas
           ref={canvasRef}
           width={cw}
