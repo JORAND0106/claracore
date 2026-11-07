@@ -344,6 +344,11 @@ import MapaNavegacionHeaderButton from './modules/ayuda/MapaNavegacionHeaderButt
 import BlocNotasHeaderButton from './modules/bloc-notas/BlocNotasHeaderButton'
 import ModuloBlocNotas from './modules/bloc-notas/ModuloBlocNotas'
 import { initOfflineShell } from './pwa/shellCache'
+import {
+  isBrowserOffline,
+  moduloRequiereConexion,
+  OFFLINE_MODULE_MESSAGE,
+} from './pwa/offlineModules'
 import { ReporteErroresBtn } from './components/ReporteErroresModal'
 import { PanelSoporteTecnico } from './components/PanelSoporteTecnico'
 import { usuarioPuedeReportarErrores } from './config/reporteErroresHelpers'
@@ -20616,6 +20621,15 @@ function IconoModuloConAlerta({ icon, total = 0, title, ring }) {
 
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, onRefreshContratos, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
+  const [offlineModuloAviso, setOfflineModuloAviso] = useState(false)
+  const irAModulo = useCallback((key, after) => {
+    if (moduloRequiereConexion(key) && isBrowserOffline()) {
+      setOfflineModuloAviso(true)
+      return
+    }
+    setModuloActivo(key)
+    after?.()
+  }, [])
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [nivelesDashContrato, setNivelesDashContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
   const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
@@ -21900,10 +21914,11 @@ const [navReporteId, setNavReporteId] = useState(null)
       SEGUIMIENTO: 'seguimiento',
       seguimiento: 'seguimiento',
     }
-    setModuloActivo(modMap[notif.modulo] || modulo || 'dashboard')
-    if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
-      setNavRegistroId(parseInt(notif.entidad_id))
-    }
+    irAModulo(modMap[notif.modulo] || modulo || 'dashboard', () => {
+      if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
+        setNavRegistroId(parseInt(notif.entidad_id))
+      }
+    })
   }
 
   async function abrirRegistroDesdeRevisionListado(contrato, registroId, reporteId) {
@@ -21916,7 +21931,7 @@ const [navReporteId, setNavReporteId] = useState(null)
     if (Number.isFinite(rep) && rep > 0) setNavReporteId(rep)
     setNavRegistroNumero(rid)
     setShowAdmin(false)
-    setModuloActivo('sicoe_obra')
+    irAModulo('sicoe_obra')
   }
 
   async function abrirRegistroSicoeObraDesdePopup(registroId) {
@@ -23265,7 +23280,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               : ''
             const tituloAlerta = tituloAlertaTopo || tituloAlertaSicoe
             return (
-            <button key={key} title={tituloAlerta || undefined} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
+            <button key={key} title={tituloAlerta || undefined} onClick={() => { irAModulo(key, () => setMenuAbierto(false)) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
               border: 'none',
               borderLeft: moduloActivo === key ? `3px solid ${t.primary}` : '3px solid transparent',
@@ -23340,7 +23355,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                 key={key}
                 type="button"
                 title={tituloAlerta || undefined}
-                onClick={() => setModuloActivo(key)}
+                onClick={() => irAModulo(key)}
                 style={{
                   flex: '0 0 auto',
                   background: moduloActivo === key ? t.primary + '22' : t.bgCard,
@@ -23397,7 +23412,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             puedePublicarNovedades={puedePublicarNovedadesInicio}
             token={getToken()}
             esContador={esContador}
-            onIrSeguimiento={tienePermisoSeguimiento ? () => setModuloActivo('seguimiento') : undefined}
+            onIrSeguimiento={tienePermisoSeguimiento ? () => irAModulo('seguimiento') : undefined}
           />
         )}
         {moduloActivo === 'mapa_navegacion' && (
@@ -25546,8 +25561,9 @@ const [navReporteId, setNavReporteId] = useState(null)
                           setDashDetallePpto(null)
                           setPopupPkid(null)
                           setAnalisisMapaPopup(null)
-                          setModuloActivo('presupuesto')
-                          if (id) setNavRegistroId(id)
+                          irAModulo('presupuesto', () => {
+                            if (id) setNavRegistroId(id)
+                          })
                         }}
                         style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 12px', color: t.text, fontSize: 'var(--cc-caption)', fontWeight: '700', cursor: 'pointer' }}
                       >
@@ -26280,8 +26296,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               onAbrirReporteSicoe={(reporteId) => {
                 const rid = Number(reporteId)
                 if (!Number.isFinite(rid) || rid <= 0) return
-                setNavReporteId(rid)
-                setModuloActivo('sicoe_obra')
+                irAModulo('sicoe_obra', () => setNavReporteId(rid))
               }}
             />
           ) : (
@@ -26443,6 +26458,15 @@ const [navReporteId, setNavReporteId] = useState(null)
         onCopySuccess={informePeriodico.onCopySuccess}
         onOk={informePeriodico.onOk}
       />
+
+      <SicoeMensajeModal
+        open={offlineModuloAviso}
+        onClose={() => setOfflineModuloAviso(false)}
+        t={t}
+        title="Sin conexión"
+        message={OFFLINE_MODULE_MESSAGE}
+        confirmLabel="Entendido"
+      />
     </div>
   )
 }
@@ -26500,21 +26524,23 @@ export default function App() {
   const [confirmActualizarApp, setConfirmActualizarApp] = useState(false)
   useEffect(() => {
     let htmlBaseline = null
-    // Captura el html inicial como baseline
+    // Captura el html inicial como baseline (solo con red; no rompe arranque offline)
     fetch(`/index.html?_=${Date.now()}`, { cache: 'no-store' })
       .then(r => r.text())
       .then(html => { htmlBaseline = html })
       .catch(() => {})
     const intervalo = setInterval(async () => {
       if (!htmlBaseline) return
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return
       try {
         const res = await fetch(`/index.html?_=${Date.now()}`, { cache: 'no-store' })
+        if (!res.ok) return
         const html = await res.text()
         if (html !== htmlBaseline) {
           setHayNuevaVersion(true)
           clearInterval(intervalo)
         }
-      } catch { /* silencioso */ }
+      } catch { /* silencioso — sin red no hay versión nueva que avisar */ }
     }, 2 * 60 * 1000) // cada 2 minutos
     return () => clearInterval(intervalo)
   }, [])

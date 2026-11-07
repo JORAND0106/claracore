@@ -129,6 +129,10 @@ describe('contrato · documento', () => {
     assert.match(md, /esquemaCeroPerdida/)
     assert.match(md, /AC1027|validateEsquemaDxf|esquemaDxfValidate/)
     assert.match(md, /Descargas repetibles/)
+    assert.match(md, /C-TX-09/)
+    assert.match(md, /arranque sin conexión|sin conexión/i)
+    assert.match(md, /pwaArranqueOffline/)
+    assert.match(md, /caso 42|42\./)
   })
 })
 

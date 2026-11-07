@@ -26,18 +26,21 @@ export function collectShellUrls() {
   try {
     document.querySelectorAll('script[src]').forEach((el) => {
       const u = el.getAttribute('src')
-      if (u && !u.startsWith('data:')) urls.add(new URL(u, location.origin).pathname + new URL(u, location.origin).search)
-    })
-    document.querySelectorAll('link[rel="stylesheet"]').forEach((el) => {
-      const u = el.getAttribute('href')
-      if (u && !u.startsWith('http')) {
+      if (u && !u.startsWith('data:')) {
         try {
           const abs = new URL(u, location.origin)
           if (abs.origin === location.origin) urls.add(abs.pathname + abs.search)
         } catch { /* ignore */ }
       }
     })
-    // Chunks Vite ya cargados
+    document.querySelectorAll('link[rel="stylesheet"]').forEach((el) => {
+      const u = el.getAttribute('href')
+      if (!u) return
+      try {
+        const abs = new URL(u, location.origin)
+        if (abs.origin === location.origin) urls.add(abs.pathname + abs.search)
+      } catch { /* ignore */ }
+    })
     performance.getEntriesByType('resource').forEach((e) => {
       try {
         const abs = new URL(e.name)
@@ -73,20 +76,21 @@ export async function precacheShellViaServiceWorker() {
   } catch { /* ignore */ }
 }
 
-/** Arranque PWA: SW ya registrado en App; aquí reforzamos caché + persistencia. */
+/** Arranque PWA: refuerza caché de inmediato (no esperar 800 ms). */
 export function initOfflineShell() {
   getOrCreateDeviceId()
   const run = () => {
     precacheShellViaServiceWorker()
     requestPersistentStorage()
   }
-  if (document.readyState === 'complete') {
-    setTimeout(run, 800)
+  // Inmediato + tras load (por si aún faltan chunks)
+  run()
+  if (document.readyState !== 'complete') {
+    window.addEventListener('load', () => setTimeout(run, 50), { once: true })
   } else {
-    window.addEventListener('load', () => setTimeout(run, 800), { once: true })
+    setTimeout(run, 50)
   }
-  // Tras navegar con red, re-precachear assets nuevos
-  window.addEventListener('online', () => setTimeout(run, 500))
+  window.addEventListener('online', () => setTimeout(run, 300))
 }
 
 export { PRECACHE_MSG }
