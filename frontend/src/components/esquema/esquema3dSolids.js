@@ -214,19 +214,27 @@ export function closedEntityToContour(obj) {
 }
 
 /**
- * Valida cotas: superior > inferior.
+ * Valida un par de cotas y las ordena: el sólido queda entre ambas
+ * sin importar cuál se indicó primero (C-3D-05).
  * @returns {{ ok: true, z0: number, z1: number } | { ok: false, error: string }}
  */
-export function validateCotas(cotaSuperior, cotaInferior) {
-  const z1 = Number(cotaSuperior)
-  const z0 = Number(cotaInferior)
-  if (!Number.isFinite(z1) || !Number.isFinite(z0)) {
-    return { ok: false, error: 'Indique cota superior e inferior numéricas.' }
+export function validateCotas(cotaA, cotaB) {
+  const parse = (v) => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : NaN
+    const s = String(v ?? '').trim().replace(/\s/g, '').replace(',', '.')
+    if (!s) return NaN
+    const n = Number(s)
+    return Number.isFinite(n) ? n : NaN
   }
-  if (!(z1 > z0)) {
-    return { ok: false, error: 'La cota superior debe ser mayor que la inferior.' }
+  const a = parse(cotaA)
+  const b = parse(cotaB)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) {
+    return { ok: false, error: 'Indique cotas numéricas.' }
   }
-  return { ok: true, z0, z1 }
+  if (a === b || Math.abs(a - b) < 1e-12) {
+    return { ok: false, error: 'La altura no puede ser cero.' }
+  }
+  return { ok: true, z0: Math.min(a, b), z1: Math.max(a, b) }
 }
 
 export function validateExtrudeLengthM(lengthM) {
