@@ -21,9 +21,10 @@ import {
 import { syncBlocNotas } from './blocNotasSync'
 import { formatColombiaDateTime, nowColombiaIso } from './blocNotasTime'
 import {
+  dedupeDiaryDaysInHtml,
+  dedupeHandDayMarks,
   ensureDiaryDayInHtml,
   ensureHandDayMark,
-  extractDayKeysFromHtml,
   HAND_GUIDES,
   initialDiaryHtml,
 } from './blocNotasDiary'
@@ -55,6 +56,23 @@ function newId() {
 }
 
 const COVER_COLORS = ['#7C5C3B', '#5B7C6A', '#4A6FA5', '#8B5A2B', '#6B4E71', '#3D5A5B']
+
+/** Depura fechas repetidas del mismo día en notas ya guardadas (teclado + mano). */
+function sanitizeNoteBody(body) {
+  const b = body && typeof body === 'object' ? { ...body } : emptyNoteBody()
+  if (typeof b.richHtml === 'string' && b.richHtml) {
+    b.richHtml = dedupeDiaryDaysInHtml(b.richHtml)
+  }
+  if (Array.isArray(b.dayMarks) && b.dayMarks.length) {
+    b.dayMarks = dedupeHandDayMarks(b.dayMarks)
+  }
+  return b
+}
+
+function sanitizeNoteRow(row) {
+  if (!row) return row
+  return { ...row, body: sanitizeNoteBody(row.body) }
+}
 
 export default function ModuloBlocNotas({
   t,
@@ -132,7 +150,18 @@ export default function ModuloBlocNotas({
       }
       setFolderId(row.folder_id || initialFolderId || null)
       setNoteId(row.id)
-      setNote(row)
+      const cleaned = sanitizeNoteRow(row)
+      setNote(cleaned)
+      // Persistir depuración de fechas repetidas si hubo cambios
+      if (cleaned.body?.richHtml !== row.body?.richHtml
+        || JSON.stringify(cleaned.body?.dayMarks || []) !== JSON.stringify(row.body?.dayMarks || [])) {
+        upsertNote({
+          ...cleaned,
+          updated_at: nowColombiaIso(),
+          rev: (cleaned.rev || 1) + 1,
+          dirty: true,
+        }).catch(() => {})
+      }
       onConsumedInitialTarget?.()
     })()
     return () => { cancelled = true }
@@ -149,10 +178,22 @@ export default function ModuloBlocNotas({
       }
       const row = await getNote(noteId)
       if (!cancelled) {
-        setNote(row || null)
-        noteRef.current = row || null
+        const cleaned = sanitizeNoteRow(row)
+        setNote(cleaned || null)
+        noteRef.current = cleaned || null
         historyRef.current.reset(noteId)
         setHistTick((n) => n + 1)
+        if (cleaned && row && (
+          cleaned.body?.richHtml !== row.body?.richHtml
+          || JSON.stringify(cleaned.body?.dayMarks || []) !== JSON.stringify(row.body?.dayMarks || [])
+        )) {
+          upsertNote({
+            ...cleaned,
+            updated_at: nowColombiaIso(),
+            rev: (cleaned.rev || 1) + 1,
+            dirty: true,
+          }).catch(() => {})
+        }
       }
     })()
     return () => { cancelled = true }
@@ -412,6 +453,8 @@ export default function ModuloBlocNotas({
     if (tool === 'hand') {
       const marks = ensureHandDayMark(body.dayMarks || note.body?.dayMarks, body.strokes || [], new Date())
       nextBody = { ...body, dayMarks: marks }
+    } else if (Array.isArray(body?.dayMarks)) {
+      nextBody = { ...body, dayMarks: dedupeHandDayMarks(body.dayMarks) }
     }
     persistNote({ ...note, body: nextBody })
   }
@@ -424,8 +467,9 @@ export default function ModuloBlocNotas({
   const onRichHtmlChange = (html) => {
     if (!note) return
     const prev = note.body || emptyNoteBody()
-    const known = extractDayKeysFromHtml(prev.richHtml || '')
-    const guarded = ensureDiaryDayInHtml(html, { knownDays: known })
+    // Solo al escribir: dedupe + inserta fecha de hoy si el día aún no está.
+    // Abrir sin teclear no dispara onChange → no inserta fecha.
+    const guarded = ensureDiaryDayInHtml(html, { insertToday: true })
     const body = { ...prev, richHtml: guarded, tool: 'text' }
     persistNote({ ...note, body })
   }
@@ -848,6 +892,7 @@ export default function ModuloBlocNotas({
                 disableHistory
                 enableSemanario
                 iconOnlyTableTools
+                enableBlocDayMarkers
               />
             </div>
           ) : (
