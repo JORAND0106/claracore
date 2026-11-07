@@ -30,6 +30,8 @@ export default function TemaRichEditor({
   placeholder = '',
   /** Si se pega una imagen, el padre puede adjuntarla como esquema (no insertarla en el HTML). */
   onPasteImage = null,
+  /** Desactiva History de TipTap (p. ej. Bloc usa deshacer/rehacer unificado). No afecta Actas. */
+  disableHistory = false,
 }) {
   const editorRef = useRef(null)
   const skipNextExternal = useRef(false)
@@ -54,6 +56,7 @@ export default function TemaRichEditor({
         code: false,
         blockquote: false,
         horizontalRule: false,
+        history: disableHistory ? false : undefined,
         orderedList: { keepMarks: true, keepAttributes: false },
         bulletList: { keepMarks: true, keepAttributes: false },
       }),

@@ -12,6 +12,14 @@ blocDb.version(1).stores({
   sync_meta: 'key',
 })
 
+/** v2: Pizarra del contrato (post-its desde notas). */
+blocDb.version(2).stores({
+  folders: 'id, contrato_id, usuario_id, updated_at, [usuario_id+contrato_id]',
+  notes: 'id, folder_id, contrato_id, usuario_id, updated_at, [usuario_id+contrato_id]',
+  sync_meta: 'key',
+  pizarra: 'id, note_id, contrato_id, usuario_id, updated_at, [contrato_id+usuario_id]',
+})
+
 export function emptyNoteBody() {
   return {
     tool: 'text', // hand | text | postit — default teclado

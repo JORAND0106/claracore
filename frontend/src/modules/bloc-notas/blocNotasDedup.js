@@ -1,12 +1,13 @@
 /**
  * Depura copias falsas creadas por el bug de conflicto en el mismo dispositivo.
  * Conserva la que tenga contenido; si ambas tienen contenido distinto, conserva ambas.
+ * Si el original está vacío y la copia tiene contenido, conserva la copia y elimina el vacío.
  */
 import { softDeleteNote, listNotes } from './blocNotasDb'
 import { isConflictCopyTitle } from './blocNotasConflict'
 import { nowColombiaIso } from './blocNotasTime'
 
-function bodyHasContent(body) {
+export function bodyHasContent(body) {
   if (!body || typeof body !== 'object') return false
   if (Array.isArray(body.strokes) && body.strokes.length > 0) return true
   if (Array.isArray(body.postits) && body.postits.some((p) => String(p?.text || '').trim())) return true
@@ -60,6 +61,14 @@ export async function dedupeFalseConflictCopies(usuarioId, contratoId) {
     if (parent && bodyFingerprint(parent.body) === bodyFingerprint(n.body)) {
       await softDeleteNote(n.id, now)
       removed++
+      continue
+    }
+
+    // Original vacío + copia con contenido → conservar copia, quitar original vacío
+    if (parent && !bodyHasContent(parent.body) && hasContent) {
+      await softDeleteNote(parent.id, now)
+      removed++
+      kept++
       continue
     }
 

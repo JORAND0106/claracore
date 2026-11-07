@@ -27,6 +27,15 @@ import BlocNotasNoteCanvas from './BlocNotasNoteCanvas'
 import BlocNotasIconBtn from './BlocNotasIconBtn'
 import BlocNotasPreguntaModal from './BlocNotasPreguntaModal'
 import { dedupeFalseConflictCopies } from './blocNotasDedup'
+import { createNoteHistory, matchUndoRedoKeys } from './blocNotasHistory'
+import {
+  PIZARRA_CONTRATO,
+  PIZARRA_SOLO_YO,
+  enviarNotaAPizarra,
+  refreshPizarraFromNote,
+  softDeletePizarraForNote,
+  syncPizarra,
+} from './blocNotasPizarra'
 
 function newId() {
   return (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -40,7 +49,15 @@ function newId() {
 
 const COVER_COLORS = ['#7C5C3B', '#5B7C6A', '#4A6FA5', '#8B5A2B', '#6B4E71', '#3D5A5B']
 
-export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
+export default function ModuloBlocNotas({
+  t,
+  usuario,
+  token,
+  contratoId,
+  initialNoteId = null,
+  initialFolderId = null,
+  onConsumedInitialTarget,
+}) {
   const vp = useClaraViewport()
   const isPhone = isEsquemaPhoneViewport(vp)
   const uid = usuario?.id
@@ -48,8 +65,8 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
 
   const [folders, setFolders] = useState([])
   const [notes, setNotes] = useState([])
-  const [folderId, setFolderId] = useState(null)
-  const [noteId, setNoteId] = useState(null)
+  const [folderId, setFolderId] = useState(initialFolderId || null)
+  const [noteId, setNoteId] = useState(initialNoteId || null)
   const [note, setNote] = useState(null)
   const [tool, setTool] = useState(() => getDefaultWriteMode(usuario?.id))
   const [quotaOpen, setQuotaOpen] = useState(false)
@@ -58,10 +75,14 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
   const [renameFolderId, setRenameFolderId] = useState(null)
   const [renameValue, setRenameValue] = useState('')
   const [prefAsk, setPrefAsk] = useState(null) // 'hand' | 'text' | null
+  const [pizarraAsk, setPizarraAsk] = useState(false)
+  const [histTick, setHistTick] = useState(0)
   const saveTimer = useRef(null)
   const syncTimer = useRef(null)
   const creatingRef = useRef(false)
   const creatingFolderRef = useRef(false)
+  const historyRef = useRef(createNoteHistory())
+  const noteRef = useRef(null)
 
   const openFolder = folders.find((f) => f.id === folderId) || null
   const noteIndex = notes.findIndex((n) => n.id === noteId)
@@ -84,38 +105,128 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
     setTool(getDefaultWriteMode(uid))
   }, [uid])
 
+  // Abrir nota desde la Pizarra (Inicio)
+  useEffect(() => {
+    if (!initialNoteId) return undefined
+    let cancelled = false
+    ;(async () => {
+      const row = await getNote(initialNoteId)
+      if (cancelled || !row || row.deleted_at) {
+        onConsumedInitialTarget?.()
+        return
+      }
+      setFolderId(row.folder_id || initialFolderId || null)
+      setNoteId(row.id)
+      setNote(row)
+      onConsumedInitialTarget?.()
+    })()
+    return () => { cancelled = true }
+  }, [initialNoteId, initialFolderId, onConsumedInitialTarget])
+
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      if (!noteId) { setNote(null); return }
+      if (!noteId) {
+        setNote(null)
+        noteRef.current = null
+        historyRef.current.reset(null)
+        return
+      }
       const row = await getNote(noteId)
       if (!cancelled) {
         setNote(row || null)
-        if (row?.body?.tool === 'hand' || row?.body?.tool === 'text' || row?.body?.tool === 'postit') {
-          // Preferencia de sesión: no forzar body.tool sobre preferencia de usuario al abrir
-        }
+        noteRef.current = row || null
+        historyRef.current.reset(noteId)
+        setHistTick((n) => n + 1)
       }
     })()
     return () => { cancelled = true }
   }, [noteId])
 
+  useEffect(() => {
+    noteRef.current = note
+  }, [note])
+
   const scheduleSync = useCallback(() => {
     if (!token || !uid || !cid) return
     clearTimeout(syncTimer.current)
     syncTimer.current = setTimeout(() => {
-      syncBlocNotas({ contratoId: cid, usuarioId: uid, token }).then(() => reload())
+      syncBlocNotas({ contratoId: cid, usuarioId: uid, token })
+        .then(() => syncPizarra({ contratoId: cid, usuarioId: uid, token }))
+        .then(() => reload())
     }, 1500)
   }, [token, uid, cid, reload])
+
+  const applyHistorySnap = useCallback((snap) => {
+    if (!snap || !noteRef.current) return
+    const next = {
+      ...noteRef.current,
+      title: snap.title,
+      body: snap.body,
+    }
+    clearTimeout(saveTimer.current)
+    setNote(next)
+    noteRef.current = next
+    saveTimer.current = setTimeout(async () => {
+      const now = nowColombiaIso()
+      const row = {
+        ...next,
+        updated_at: now,
+        rev: (next.rev || 1) + 1,
+        dirty: true,
+        base_rev: next.base_rev == null ? null : next.base_rev,
+        device_id: next.device_id || getOrCreateDeviceId(),
+      }
+      try {
+        await upsertNote(row)
+        setNote(row)
+        noteRef.current = row
+        await refreshPizarraFromNote(row)
+        scheduleSync()
+      } catch (e) {
+        if (isQuotaExceededError(e)) setQuotaOpen(true)
+      }
+    }, 200)
+    setHistTick((n) => n + 1)
+  }, [scheduleSync])
+
+  const undoNote = useCallback(() => {
+    const cur = noteRef.current
+    const prev = historyRef.current.undo(cur)
+    if (prev) applyHistorySnap(prev)
+  }, [applyHistorySnap])
+
+  const redoNote = useCallback(() => {
+    const cur = noteRef.current
+    const next = historyRef.current.redo(cur)
+    if (next) applyHistorySnap(next)
+  }, [applyHistorySnap])
+
+  useEffect(() => {
+    if (!noteId) return undefined
+    const onKey = (e) => {
+      const action = matchUndoRedoKeys(e)
+      if (!action) return
+      e.preventDefault()
+      if (action === 'undo') undoNote()
+      else redoNote()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [noteId, undoNote, redoNote])
 
   useEffect(() => {
     if (!token || !uid || !cid) return undefined
     ;(async () => {
       await dedupeFalseConflictCopies(uid, cid)
       await syncBlocNotas({ contratoId: cid, usuarioId: uid, token })
+      await syncPizarra({ contratoId: cid, usuarioId: uid, token })
       await reload()
     })()
     const onOnline = () => {
-      syncBlocNotas({ contratoId: cid, usuarioId: uid, token }).then(() => reload())
+      syncBlocNotas({ contratoId: cid, usuarioId: uid, token })
+        .then(() => syncPizarra({ contratoId: cid, usuarioId: uid, token }))
+        .then(() => reload())
     }
     window.addEventListener('online', onOnline)
     return () => window.removeEventListener('online', onOnline)
@@ -229,9 +340,14 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
     }
   }
 
-  const persistNote = useCallback((next) => {
+  const persistNote = useCallback((next, { recordHistory = true } = {}) => {
+    if (recordHistory && noteRef.current && !historyRef.current.applying) {
+      historyRef.current.pushBeforeChange(noteRef.current)
+      setHistTick((n) => n + 1)
+    }
     clearTimeout(saveTimer.current)
     setNote(next)
+    noteRef.current = next
     saveTimer.current = setTimeout(async () => {
       const now = nowColombiaIso()
       const row = {
@@ -246,6 +362,8 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
       try {
         await upsertNote(row)
         setNote(row)
+        noteRef.current = row
+        await refreshPizarraFromNote(row)
         scheduleSync()
       } catch (e) {
         if (isQuotaExceededError(e)) setQuotaOpen(true)
@@ -288,12 +406,27 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
     const now = nowColombiaIso()
     await withQuota(async () => {
       await softDeleteNote(id, now)
+      await softDeletePizarraForNote(id, now)
       if (noteId === id) {
         setNoteId(null)
         setNote(null)
       }
       await reload()
       scheduleSync()
+    })
+  }
+
+  const confirmEnviarPizarra = async (visibilidad) => {
+    setPizarraAsk(false)
+    if (!note) return
+    await withQuota(async () => {
+      await enviarNotaAPizarra({
+        note,
+        usuarioId: uid,
+        contratoId: cid,
+        visibilidad,
+        token,
+      })
     })
   }
 
@@ -359,10 +492,21 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
   const pageBg = t?.bgCard || '#fff'
   const muted = t?.textMuted || '#64748b'
 
+  const canUndo = histTick >= 0 && historyRef.current.canUndo()
+  const canRedo = histTick >= 0 && historyRef.current.canRedo()
+
   // ── Estante de cuadernos ──────────────────────────────────────────────────
   if (!folderId) {
     return (
-      <div style={{ padding: '12px 8px 28px', maxWidth: 1100, margin: '0 auto' }}>
+      <div style={{
+        padding: '8px 8px 16px',
+        width: '100%',
+        maxWidth: '100%',
+        margin: 0,
+        boxSizing: 'border-box',
+        minHeight: 'calc(100vh - 120px)',
+        height: '100%',
+      }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <span style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: primary }}>Bloc de notas</span>
           <div style={{ flex: 1 }} />
@@ -470,8 +614,18 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
 
   // ── Cuaderno abierto (hojas) ──────────────────────────────────────────────
   return (
-    <div style={{ padding: '8px 4px 28px', maxWidth: 960, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+    <div style={{
+      padding: '6px 6px 10px',
+      width: '100%',
+      maxWidth: '100%',
+      margin: 0,
+      boxSizing: 'border-box',
+      minHeight: 'calc(100vh - 110px)',
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap', flexShrink: 0 }}>
         <BlocNotasIconBtn t={t} title="Volver a cuadernos" onClick={goShelf}>←</BlocNotasIconBtn>
         <span style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: primary }}>
           {openFolder?.nombre || 'Cuaderno'}
@@ -512,6 +666,8 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
           boxShadow: '0 10px 28px rgba(0,0,0,0.08)',
           padding: '16px 14px 20px',
           minHeight: 320,
+          flex: 1,
+          width: '100%',
         }}>
           {notes.length === 0 ? (
             <div style={{ textAlign: 'center', color: muted, padding: 40, fontSize: 14 }}>
@@ -561,9 +717,14 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
           border: `1px solid ${t?.border}`,
           background: pageBg,
           boxShadow: '0 12px 32px rgba(0,0,0,0.1)',
-          padding: '12px 12px 16px',
+          padding: '10px 10px 12px',
+          flex: 1,
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
         }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10, flexShrink: 0 }}>
             <BlocNotasIconBtn t={t} title="Hojas del cuaderno" onClick={() => { setNoteId(null); setNote(null) }}>☰</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Hoja anterior" onClick={goPrevNote} disabled={noteIndex <= 0}>‹</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Hoja siguiente" onClick={goNextNote} disabled={noteIndex < 0 || noteIndex >= notes.length - 1}>›</BlocNotasIconBtn>
@@ -577,6 +738,8 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
                 color: t?.text, fontWeight: 700, fontSize: 15,
               }}
             />
+            <BlocNotasIconBtn t={t} title="Deshacer" onClick={undoNote} disabled={!canUndo}>↶</BlocNotasIconBtn>
+            <BlocNotasIconBtn t={t} title="Rehacer" onClick={redoNote} disabled={!canRedo}>↷</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Teclado" active={tool === 'text'} onClick={() => requestTool('text')}>⌨</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Escritura a mano" active={tool === 'hand'} onClick={() => requestTool('hand')}>✍</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Post-it" active={tool === 'postit'} onClick={() => requestTool('postit')}>📌</BlocNotasIconBtn>
@@ -586,9 +749,10 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
                 title="Esquema"
                 onClick={() => { setEditEsquema(null); setEsquemaOpen(true) }}
               >
-                ✎
+                ▦
               </BlocNotasIconBtn>
             )}
+            <BlocNotasIconBtn t={t} title="Enviar a la Pizarra" onClick={() => setPizarraAsk(true)}>📋</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Eliminar nota" onClick={() => deleteNote(note.id)}>🗑</BlocNotasIconBtn>
           </div>
 
@@ -596,25 +760,32 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
             <div style={{
               border: `1px solid ${t?.border}`,
               borderRadius: 12,
-              overflow: 'hidden',
+              overflow: 'auto',
               background: t?.bg || '#fff',
+              flex: 1,
+              minHeight: 280,
+              display: 'flex',
+              flexDirection: 'column',
             }}>
               <TemaRichEditor
                 t={t}
                 value={note.body?.richHtml || ''}
                 onChange={onRichHtmlChange}
                 editable
-                minHeight={280}
+                minHeight={Math.max(320, (typeof window !== 'undefined' ? window.innerHeight : 800) - 260)}
                 placeholder="Escriba la nota…"
+                disableHistory
               />
             </div>
           ) : (
-            <BlocNotasNoteCanvas
-              t={t}
-              body={note.body || emptyNoteBody()}
-              tool={tool}
-              onChange={onBodyChange}
-            />
+            <div style={{ flex: 1, minHeight: 280, display: 'flex', flexDirection: 'column' }}>
+              <BlocNotasNoteCanvas
+                t={t}
+                body={note.body || emptyNoteBody()}
+                tool={tool}
+                onChange={onBodyChange}
+              />
+            </div>
           )}
 
           {((note.body?.esquemas) || []).length > 0 && (
@@ -688,6 +859,17 @@ export default function ModuloBlocNotas({ t, usuario, token, contratoId }) {
           if (prefAsk) setDefaultWriteMode(uid, prefAsk)
           setPrefAsk(null)
         }}
+      />
+
+      <BlocNotasPreguntaModal
+        open={pizarraAsk}
+        t={t}
+        title="Enviar a la Pizarra"
+        message="¿Quién puede ver este post-it?"
+        noLabel="Solo yo"
+        siLabel="Todo el contrato"
+        onNo={() => confirmEnviarPizarra(PIZARRA_SOLO_YO)}
+        onSi={() => confirmEnviarPizarra(PIZARRA_CONTRATO)}
       />
     </div>
   )

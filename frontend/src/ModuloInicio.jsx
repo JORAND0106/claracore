@@ -9,6 +9,7 @@ import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
 import ClimaInformeModal from './components/inicio/ClimaInformeModal.jsx'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache.js'
 import SeguimientoCalendarioPanel from './modules/seguimiento/SeguimientoCalendarioPanel.jsx'
+import PizarraInicio from './modules/bloc-notas/PizarraInicio.jsx'
 
 function useInicioMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
@@ -1477,14 +1478,12 @@ export default function ModuloInicio({
   t,
   usuario,
   fontSize = 'normal',
-  puedePublicarNovedades = false,
   token = null,
   esContador = false,
   onIrSeguimiento,
+  onAbrirBlocNota,
 }) {
   const [saludoVisible, setSaludoVisible] = useState(false)
-  const [novedades, setNovedades] = useState([])
-  const [novedadesCargando, setNovedadesCargando] = useState(true)
   const isMobile = useInicioMobile()
   const fs = useMemo(() => buildfs(fontSize), [fontSize])
 
@@ -1492,39 +1491,6 @@ export default function ModuloInicio({
     const timer = setTimeout(() => setSaludoVisible(true), 100)
     return () => clearTimeout(timer)
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    setNovedadesCargando(true)
-    const getTok = () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
-    const headers = getTok() ? { Authorization: `Bearer ${getTok()}` } : {}
-    const sig = apiFetchSignal(30000)
-    fetch(`${API_BASE}/inicio/novedades`, {
-      headers,
-      ...(sig ? { signal: sig } : {}),
-    })
-      .then((r) => (r.status === 401 ? [] : r.ok ? r.json() : []))
-      .then((data) => {
-        if (cancelled) return
-        const arr = Array.isArray(data) ? data : []
-        setNovedades((prev) => {
-          const prevMap = new Map((prev || []).map((n) => [n.id, !!n.leida]))
-          return arr.map((n) => ({
-            ...n,
-            leida: !!(n.leida || prevMap.get(n.id)),
-          }))
-        })
-      })
-      .catch(() => {
-        if (!cancelled) setNovedades([])
-      })
-      .finally(() => {
-        if (!cancelled) setNovedadesCargando(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [usuario?.contrato_id])
 
   const contratoId = usuario?.contrato_id
 
@@ -1545,9 +1511,9 @@ export default function ModuloInicio({
           {/* ── Zona 1: clima ── */}
           <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
 
-          {/* ── Zona 2: saludo compacto | novedades (3 recientes) ── */}
+          {/* ── Zona 2: saludo compacto | Pizarra (reemplaza Novedades) ── */}
           <div
-            className="cc-inicio-saludo-novedades"
+            className="cc-inicio-saludo-pizarra"
             style={{
               display: 'flex',
               flexDirection: isMobile ? 'column' : 'row',
@@ -1573,17 +1539,14 @@ export default function ModuloInicio({
               flex: isMobile ? '1 1 auto' : '1 1 50%',
               width: isMobile ? '100%' : undefined,
               minWidth: 0,
+              minHeight: isMobile ? 240 : 280,
             }}>
-              <BandejaNovedadesInicio
-                novedades={novedades}
-                setNovedades={setNovedades}
+              <PizarraInicio
                 t={t}
                 fs={fs}
-                novedadesCargando={novedadesCargando}
+                usuario={usuario}
                 token={token}
-                puedePublicarNovedades={puedePublicarNovedades}
-                limite={3}
-                compact
+                onAbrirEnBloc={onAbrirBlocNota}
               />
             </div>
           </div>
