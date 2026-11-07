@@ -309,11 +309,22 @@ export default function PptoGruposGraficosModal({
       setEsquemaOpen(false)
       await onPickReplaceFiles([file], 'esquema')
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
-      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-        const f = adj.blob
-          ? new File([adj.blob], adj.nombre, { type: adj.mime })
-          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-        if (f) await onPickReplaceFiles([f], 'esquema-calculo')
+      const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
+      const { presentEsquemaExportPopup } = await import('../../components/esquema/esquemaExportHost.js')
+      await applyEsquemaCalcAdjuntos(
+        { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+        async (adj) => {
+          const f = adj.blob
+            ? new File([adj.blob], adj.nombre, { type: adj.mime })
+            : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+          if (f) await onPickReplaceFiles([f], 'esquema-calculo')
+        },
+      )
+      await presentEsquemaExportPopup({
+        t,
+        title: extras?.title || 'Esquema',
+        pdf: extras?.exports?.pdf || null,
+        dxf: extras?.exports?.dxf || null,
       })
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')
@@ -814,6 +825,8 @@ export default function PptoGruposGraficosModal({
           t={t}
           title="Dibujar esquema · reemplazar imagen del grupo"
           contratoId={contratoId}
+          draftModule="ppto_grupo"
+          draftEntityId={`ppto-grupo-${grupoId || 'local'}`}
           iaDoc={{ ambito: 'ppto_grupo', docKey: `ppto-grupo-${grupoId || 'local'}` }}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquemaReemplazo}

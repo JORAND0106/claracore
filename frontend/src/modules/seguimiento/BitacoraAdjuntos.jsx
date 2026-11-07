@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
@@ -7,6 +7,7 @@ import EsquemaEditIcon from '../../components/esquema/EsquemaEditIcon'
 import EsquemaArchivosMenu from '../../components/esquema/EsquemaArchivosMenu'
 import { hasEditableEsquemaScene, parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
 import { repairEsquemaRegistroList } from '../../components/esquema/esquemaRegistroAdjuntos'
+import { esquemaDraftRebind } from '../../components/esquema/esquemaDraft'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
@@ -48,6 +49,22 @@ export default function BitacoraAdjuntos({
   const [preview, setPreview] = useState(null) // { dataUri, nombre, mime, origen, pie }
   const fileRef = useRef(null)
   const pasteZoneRef = useRef(null)
+  const prevEntradaIdRef = useRef(entradaId)
+
+  // Al pasar de borrador → entrada guardada, el esquema queda ligado al id real.
+  useEffect(() => {
+    const prev = prevEntradaIdRef.current
+    prevEntradaIdRef.current = entradaId
+    if (entradaId == null || entradaId === '' || entradaId === 'draft') return
+    if (prev != null && prev !== '' && prev !== 'draft' && String(prev) === String(entradaId)) return
+    if (prev != null && prev !== '' && prev !== 'draft') return
+    void esquemaDraftRebind({
+      module: 'bitacora',
+      fromEntityId: 'draft',
+      toEntityId: entradaId,
+      contratoId,
+    })
+  }, [entradaId, contratoId])
   const [dragOver, setDragOver] = useState(false)
 
   // C-OUT-13: oculta DXF/PDF-paquete mal guardados; el registro muestra PNG.

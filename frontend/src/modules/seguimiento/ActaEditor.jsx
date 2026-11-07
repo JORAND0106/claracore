@@ -1188,9 +1188,18 @@ export default function ActaEditor({
     return row
   }
 
-  const pushIdeaImagenPending = (ideaIdx, { nombre, data_uri, mime_type = 'image/png' }) => {
+  const pushIdeaImagenPending = (ideaIdx, {
+    nombre,
+    data_uri,
+    mime_type = 'image/png',
+    kind = 'esquema',
+    origen = 'esquema',
+    scene = null,
+    esquema_scene = null,
+  }) => {
     if (!data_uri) return false
     let added = false
+    const sceneVal = scene || esquema_scene || null
     patchList('ideas', (list) => list.map((row, i) => {
       if (i !== ideaIdx) return row
       const prev = normalizeIdeaImagenes(row.imagenes)
@@ -1203,8 +1212,10 @@ export default function ActaEditor({
           data_uri,
           mime_type: mime_type || 'image/png',
           created_at: new Date().toISOString(),
-          kind: 'esquema',
+          kind: kind || 'esquema',
+          origen: origen || kind || 'esquema',
           pending: true,
+          ...(sceneVal ? { esquema_scene: sceneVal, scene: sceneVal } : {}),
         }],
       }
     }))
@@ -2864,6 +2875,13 @@ export default function ActaEditor({
           t={t}
           title={`Esquema · Idea ${(esquemaIdeaIdx + 1)}`}
           contratoId={form?.contrato_id}
+          draftModule="acta_idea"
+          draftEntityId={`acta-${localActaId || actaId || 'new'}-idea-${esquemaIdeaIdx}`}
+          initialSceneSnapshot={(() => {
+            const imgs = form.ideas[esquemaIdeaIdx]?.imagenes || []
+            const withScene = [...imgs].reverse().find((im) => im?.esquema_scene || im?.scene)
+            return withScene?.esquema_scene || withScene?.scene || null
+          })()}
           iaDoc={{
             ambito: 'acta_idea',
             docKey: `acta-${localActaId || actaId || 'new'}-idea-${esquemaIdeaIdx}`,
@@ -2871,23 +2889,36 @@ export default function ActaEditor({
           onClose={() => setEsquemaIdeaIdx(null)}
           onSave={(dataUrl, extras) => {
             const idx = esquemaIdeaIdx
+            const scene = extras?.scene || extras?.esquema_scene || null
             const ok = pushIdeaImagenPending(idx, {
               nombre: `esquema-idea-${idx + 1}-${Date.now()}.png`,
               data_uri: dataUrl,
               mime_type: 'image/png',
               kind: 'esquema',
               origen: 'esquema',
+              scene,
             })
             void (async () => {
               const { applyEsquemaCalcAdjuntos } = await import('../../components/esquema/esquemaSaveExtras.js')
-              await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-                pushIdeaImagenPending(idx, {
-                  nombre: adj.nombre,
-                  data_uri: adj.dataUri,
-                  mime_type: adj.mime,
-                  kind: adj.kind || 'esquema-calculo',
-                  origen: adj.origen || 'esquema-calculo',
-                })
+              const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
+              const { presentEsquemaExportPopup } = await import('../../components/esquema/esquemaExportHost.js')
+              await applyEsquemaCalcAdjuntos(
+                { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+                async (adj) => {
+                  pushIdeaImagenPending(idx, {
+                    nombre: adj.nombre,
+                    data_uri: adj.dataUri,
+                    mime_type: adj.mime,
+                    kind: adj.kind || 'esquema-calculo',
+                    origen: adj.origen || 'esquema-calculo',
+                  })
+                },
+              )
+              await presentEsquemaExportPopup({
+                t,
+                title: extras?.title || `Esquema · Idea ${idx + 1}`,
+                pdf: extras?.exports?.pdf || null,
+                dxf: extras?.exports?.dxf || null,
               })
             })()
             setEsquemaIdeaIdx(null)

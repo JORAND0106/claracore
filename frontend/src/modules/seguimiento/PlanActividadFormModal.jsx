@@ -807,6 +807,8 @@ export default function PlanActividadFormModal({
         <EsquemaEditorModal
           t={t}
           title={esquemaCampo === 'descripcion' ? 'Esquema · Descripción' : 'Esquema · Comentario comité'}
+          draftModule="plan_actividad"
+          draftEntityId={`plan-${actividad?.id || 'nueva'}-${esquemaCampo}`}
           iaDoc={{
             ambito: 'plan_actividad',
             docKey: `plan-${actividad?.id || 'nueva'}-${esquemaCampo}`,
@@ -815,6 +817,14 @@ export default function PlanActividadFormModal({
           onSave={(dataUrl, extras) => {
             pushEsquema(esquemaCampo, dataUrl, extras)
             setEsquemaCampo(null)
+            void import('../../components/esquema/esquemaExportHost.js').then(({ presentEsquemaExportPopup }) => (
+              presentEsquemaExportPopup({
+                t,
+                title: extras?.title || 'Esquema',
+                pdf: extras?.exports?.pdf || null,
+                dxf: extras?.exports?.dxf || null,
+              })
+            ))
           }}
         />
       )}

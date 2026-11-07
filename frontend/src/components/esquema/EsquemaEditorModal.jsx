@@ -167,7 +167,8 @@ import {
   getEsquemaDraftUserId,
 } from './esquemaDraft'
 import { esEsquemaUsuarioDesarrollador } from './esquemaAuth.js'
-import { EsquemaDraftNoticePopup } from './esquemaDraftUi'
+import { EsquemaCloseConfirmPopup, EsquemaDraftNoticePopup } from './esquemaDraftUi'
+import { uploadEsquemaAsset } from './esquemaAssetsApi.js'
 import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
@@ -720,6 +721,10 @@ export default function EsquemaEditorModal({
   const [volumeCalcs, setVolumeCalcs] = useState([])
   const [activeCalcId, setActiveCalcId] = useState(null)
   const [draftNotice, setDraftNotice] = useState(null) // { kind, title, message, ... }
+  const [closeConfirm, setCloseConfirm] = useState(false)
+  const closeAfterSaveRef = useRef(false)
+  const autosaveTimerRef = useRef(null)
+  const autosavingRef = useRef(false)
   /**
    * Ventana: altura = lado de dibujo; ancho = lado + panel lateral
    * (el área de dibujo no se reduce para alojar el lateral).
@@ -6369,18 +6374,20 @@ export default function EsquemaEditorModal({
     title: title || '',
   }), [activeCalcId, activeDespieceId, mapOpacity, mapBasemap, title])
 
-  const saveEsquemaDraft = useCallback(async () => {
+  const saveEsquemaDraft = useCallback(async ({ silent = false } = {}) => {
     const key = resolvedDraftKeyRef.current
     if (!key) {
-      setDraftNotice({
-        kind: 'info',
-        title: 'Borrador',
-        message: 'Este esquema no tiene un lugar de borrador asociado en el módulo.',
-        confirmLabel: 'Entendido',
-      })
-      return
+      if (!silent) {
+        setDraftNotice({
+          kind: 'info',
+          title: 'Borrador',
+          message: 'Este esquema no tiene un lugar de borrador asociado en el módulo.',
+          confirmLabel: 'Entendido',
+        })
+      }
+      return { ok: false }
     }
-    setBusy(true)
+    if (!silent) setBusy(true)
     try {
       const snapshot = collectDraftSnapshot()
       const r = await esquemaDraftSave({
@@ -6392,26 +6399,68 @@ export default function EsquemaEditorModal({
         snapshot,
       })
       if (!r.ok) {
+        if (!silent) {
+          setDraftNotice({
+            kind: 'info',
+            title: 'No se pudo guardar',
+            message: r.error || 'Intente de nuevo.',
+            confirmLabel: 'Entendido',
+          })
+        }
+        return r
+      }
+      // Autosave silencioso: no limpia dirty ni muestra avisos.
+      // Borrador manual: dirty=false (trabajo ya resguardado en este lugar).
+      if (!silent) {
+        setDirty(false)
         setDraftNotice({
-          kind: 'info',
-          title: 'No se pudo guardar',
-          message: r.error || 'Intente de nuevo.',
+          kind: 'saved',
+          title: 'Borrador guardado',
+          message: 'Puede cerrar y continuar más adelante desde el mismo lugar del módulo.',
           confirmLabel: 'Entendido',
         })
-        return
+        setToolHint('Borrador guardado.')
+      } else {
+        // Nube: escena borrador sin interrumpir (si hay sesión y contrato).
+        try {
+          let tok = ''
+          try {
+            tok = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+          } catch { /* ignore */ }
+          if (tok && contratoIdProp != null) {
+            const json = JSON.stringify(snapshot)
+            const blob = new Blob([json], { type: 'application/json' })
+            const file = new File([blob], 'esquema-borrador-scene.json', { type: 'application/json' })
+            await uploadEsquemaAsset({
+              token: tok,
+              contratoId: contratoIdProp,
+              modulo: draftModule || iaDoc?.ambito || 'esquema',
+              registroId: draftEntityId ?? iaDoc?.docKey ?? 'draft',
+              registroNombre: title || 'esquema',
+              kind: 'scene',
+              title: `${title || 'esquema'}-borrador`,
+              file,
+              mime: 'application/json',
+              nombre: 'esquema-borrador-scene.json',
+            })
+          }
+        } catch { /* autosave nube best-effort */ }
       }
-      setDirty(false)
-      setDraftNotice({
-        kind: 'saved',
-        title: 'Borrador guardado',
-        message: 'Puede cerrar y continuar más adelante desde el mismo lugar del módulo.',
-        confirmLabel: 'Entendido',
-      })
-      setToolHint('Borrador guardado.')
+      return r
     } finally {
-      setBusy(false)
+      if (!silent) setBusy(false)
     }
-  }, [collectDraftSnapshot, draftModule, draftEntityId, iaDoc, contratoIdProp])
+  }, [collectDraftSnapshot, draftModule, draftEntityId, iaDoc, contratoIdProp, title])
+
+  /** Cierre solo por botón: confirma si hay cambios; nunca por clic fuera ni inactividad. */
+  const pedirCerrar = useCallback(() => {
+    if (busy) return
+    if (dirty) {
+      setCloseConfirm(true)
+      return
+    }
+    onClose?.()
+  }, [busy, dirty, onClose])
 
   // Al abrir con escena guardada (C-OUT-09): restaurar dibujo editable.
   useEffect(() => {
@@ -6425,7 +6474,7 @@ export default function EsquemaEditorModal({
     return undefined
   }, [initialSceneSnapshot, applyDraftSnapshot])
 
-  // Al abrir: si hay borrador del usuario, ofrecer continuar o empezar de nuevo.
+  // Al abrir: restaurar borrador automáticamente (cero pérdida; sin popup interruptivo).
   useEffect(() => {
     if (draftHydratedRef.current) return undefined
     if (normalizeEsquemaScene(initialSceneSnapshot)) return undefined
@@ -6436,17 +6485,42 @@ export default function EsquemaEditorModal({
       const row = await esquemaDraftLoad(key, { userId: getEsquemaDraftUserId() })
       if (cancelled || !row?.snapshot) return
       draftHydratedRef.current = true
-      setDraftNotice({
-        kind: 'resume',
-        title: 'Borrador encontrado',
-        message: 'Hay un borrador suyo en este esquema. ¿Desea continuar donde lo dejó?',
-        confirmLabel: 'Continuar',
-        cancelLabel: 'Empezar de nuevo',
-        snapshot: row.snapshot,
-      })
+      applyDraftSnapshot(row.snapshot)
+      setToolHint('Borrador restaurado. El esquema quedó como lo dejó.')
     })()
     return () => { cancelled = true }
-  }, [resolvedDraftKey, initialSceneSnapshot])
+  }, [resolvedDraftKey, initialSceneSnapshot, applyDraftSnapshot])
+
+  // Autosave tras cambios (debounce + intervalo mientras dirty), local + nube; sin avisos.
+  useEffect(() => {
+    if (!dirty || !resolvedDraftKey) return undefined
+    const run = () => {
+      if (autosavingRef.current) return
+      autosavingRef.current = true
+      void saveEsquemaDraft({ silent: true }).finally(() => {
+        autosavingRef.current = false
+      })
+    }
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    autosaveTimerRef.current = setTimeout(run, 800)
+    const intervalId = setInterval(run, 2500)
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+      clearInterval(intervalId)
+    }
+  }, [dirty, resolvedDraftKey, saveEsquemaDraft, panTick, solids3d, coordRows, volumeCalcs, despieceSchedules, mode3d])
+
+  // Evitar pérdida al cerrar pestaña/navegador con cambios.
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (!dirty) return
+      e.preventDefault()
+      e.returnValue = ''
+      void saveEsquemaDraft({ silent: true })
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty, saveEsquemaDraft])
 
   const confirmarGuardar = async () => {
     const titleTxt = String(savePrompt?.title || '').trim() || 'Esquema'
@@ -6541,12 +6615,13 @@ export default function EsquemaEditorModal({
           : [],
         dibujoTipo: dibujoTipoRef.current || 'nodo',
       })
+      setDirty(false)
       // Finalizar: el resultado queda fijo y se limpia el borrador.
       if (resolvedDraftKeyRef.current) {
         await esquemaDraftClear(resolvedDraftKeyRef.current)
       }
       // Popup Exportar (PDF/DXF al computador). Si el caller (p. ej. Bitácora)
-      // también lo muestra tras onSave, el host evita duplicar.
+      // también lo muestra tras onSave, el host evita duplicar en la misma ráfaga.
       try {
         await presentEsquemaExportPopup({
           t,
@@ -6556,6 +6631,10 @@ export default function EsquemaEditorModal({
         })
       } catch (err) {
         console.error('presentEsquemaExportPopup', err)
+      }
+      if (closeAfterSaveRef.current) {
+        closeAfterSaveRef.current = false
+        onClose?.()
       }
     } finally {
       setBusy(false)
@@ -6740,6 +6819,12 @@ export default function EsquemaEditorModal({
       role="dialog"
       aria-modal="true"
       data-esquema-phone={isPhoneLayout ? '1' : '0'}
+      data-esquema-no-backdrop-close="1"
+      data-testid="esquema-editor-overlay"
+      onClick={(e) => {
+        // Cero pérdida: tocar fuera del popup NUNCA cierra la herramienta.
+        e.stopPropagation()
+      }}
       style={{
         position: 'fixed', inset: 0, zIndex: 13000,
         background: t.overlay || ui.overlay,
@@ -6786,7 +6871,7 @@ export default function EsquemaEditorModal({
             canRedo={canRedo}
             onUndo={undo}
             onRedo={redo}
-            onClose={onClose}
+            onClose={pedirCerrar}
             onSave={pedirGuardar}
             saveBusy={busy}
             saveDisabled={busy || (huellaMode ? false : (!dirty && !mapActive))}
@@ -7611,7 +7696,7 @@ export default function EsquemaEditorModal({
               aria-label="Guardar borrador"
               data-testid="esquema-guardar-borrador"
               disabled={busy || !resolvedDraftKey}
-              onClick={() => { void saveEsquemaDraft() }}
+              onClick={() => { void saveEsquemaDraft({ silent: false }) }}
               style={{
                 ...iconBtn(t, false),
                 opacity: (busy || !resolvedDraftKey) ? 0.4 : 1,
@@ -7623,7 +7708,8 @@ export default function EsquemaEditorModal({
               type="button"
               title="Cerrar"
               aria-label="Cerrar"
-              onClick={onClose}
+              data-testid="esquema-cerrar"
+              onClick={pedirCerrar}
               style={iconBtn(t, false)}
             >
               <IconCerrarPanel />
@@ -9312,6 +9398,26 @@ export default function EsquemaEditorModal({
               Cancelar
             </button>
           </div>
+        ) : null}
+        {closeConfirm ? (
+          <EsquemaCloseConfirmPopup
+            t={t}
+            onCancelar={() => setCloseConfirm(false)}
+            onDescartar={() => {
+              setCloseConfirm(false)
+              closeAfterSaveRef.current = false
+              if (resolvedDraftKeyRef.current) {
+                void esquemaDraftClear(resolvedDraftKeyRef.current)
+              }
+              setDirty(false)
+              onClose?.()
+            }}
+            onGuardar={() => {
+              setCloseConfirm(false)
+              closeAfterSaveRef.current = true
+              pedirGuardar()
+            }}
+          />
         ) : null}
         {draftNotice ? (
           <EsquemaDraftNoticePopup

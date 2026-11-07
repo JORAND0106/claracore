@@ -992,6 +992,8 @@ function ActionPanel({
                   t={t}
                   title="Esquema · evidencia del compromiso"
                   contratoId={item?.contrato_id}
+                  draftModule="compromiso"
+                  draftEntityId={`compromiso-${item.id}`}
                   iaDoc={{ ambito: 'compromiso', docKey: `compromiso-${item.id}` }}
                   onClose={() => setEsquemaOpen(false)}
                   onSave={async (dataUrl, extras) => {
@@ -1001,11 +1003,22 @@ function ActionPanel({
                       setEsquemaOpen(false)
                       await api.uploadEvidencia(item.id, file, 'esquema')
                       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
-                      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-                        const f = adj.blob
-                          ? new File([adj.blob], adj.nombre, { type: adj.mime })
-                          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-                        if (f) await api.uploadEvidencia(item.id, f, adj.origen || 'esquema-calculo')
+                      const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
+                      const { presentEsquemaExportPopup } = await import('../../components/esquema/esquemaExportHost.js')
+                      await applyEsquemaCalcAdjuntos(
+                        { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+                        async (adj) => {
+                          const f = adj.blob
+                            ? new File([adj.blob], adj.nombre, { type: adj.mime })
+                            : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+                          if (f) await api.uploadEvidencia(item.id, f, adj.origen || 'esquema-calculo')
+                        },
+                      )
+                      await presentEsquemaExportPopup({
+                        t,
+                        title: extras?.title || 'Esquema',
+                        pdf: extras?.exports?.pdf || null,
+                        dxf: extras?.exports?.dxf || null,
                       })
                       const d = await api.getItem(item.id)
                       setDetail(d)

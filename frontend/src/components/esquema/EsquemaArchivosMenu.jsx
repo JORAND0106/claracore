@@ -66,17 +66,16 @@ export default function EsquemaArchivosMenu({
   const onDownload = async (f) => {
     setErr('')
     try {
-      // Enlace temporal (vence en minutos) tras verificar permiso.
-      const tmp = await getEsquemaAssetTempUrl({
-        token,
-        contratoId,
-        blobPath: f.blob_path || f.path,
-        ttlSeconds: 300,
-      })
-      if (tmp?.url) {
-        window.open(tmp.url, '_blank', 'noopener,noreferrer')
-        return
-      }
+      // Cada descarga minta un enlace temporal NUEVO y fuerza <a download>
+      // (window.open se bloquea tras la 1.ª vez por pop-up del navegador).
+      try {
+        await getEsquemaAssetTempUrl({
+          token,
+          contratoId,
+          blobPath: f.blob_path || f.path,
+          ttlSeconds: 300,
+        })
+      } catch { /* el proxy autenticado basta */ }
       const blob = await downloadEsquemaAssetBlob({
         token,
         contratoId,
@@ -86,8 +85,11 @@ export default function EsquemaArchivosMenu({
       const a = document.createElement('a')
       a.href = url
       a.download = f.nombre || f.name || 'esquema.bin'
+      a.rel = 'noopener'
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
     } catch (e) {
       setErr(e?.status === 403
         ? 'Sin permiso para este archivo'

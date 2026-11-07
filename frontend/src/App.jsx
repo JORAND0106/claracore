@@ -3950,6 +3950,17 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       } catch (cloudErr) {
         console.warn('esquema assets cloud', cloudErr)
       }
+      try {
+        const { presentEsquemaExportPopup } = await import('./components/esquema/esquemaExportHost.js')
+        await presentEsquemaExportPopup({
+          t,
+          title: extras?.title || `esquema_reg${registro.numero_registro ?? registro.id}`,
+          pdf: extras?.exports?.pdf || null,
+          dxf: extras?.exports?.dxf || null,
+        })
+      } catch (exportErr) {
+        console.warn('esquema Exportar popup', exportErr)
+      }
     } catch (e) {
       alert('Error guardando esquema: ' + (e?.message || String(e)))
     }

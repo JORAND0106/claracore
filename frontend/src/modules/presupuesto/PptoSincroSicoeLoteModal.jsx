@@ -166,17 +166,27 @@ export default function PptoSincroSicoeLoteModal({
       setEsquemaOpen(false)
       await addFiles([file], 'esquema')
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
-      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-        const f = adj.blob
-          ? new File([adj.blob], adj.nombre, { type: adj.mime })
-          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-        // PNG isométrico + PDF de memoria (mismo flujo transversal que PptoGraficosModal)
-        if (f) await addFiles([f], 'esquema-calculo')
+      const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
+      const { presentEsquemaExportPopup } = await import('../../components/esquema/esquemaExportHost.js')
+      await applyEsquemaCalcAdjuntos(
+        { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+        async (adj) => {
+          const f = adj.blob
+            ? new File([adj.blob], adj.nombre, { type: adj.mime })
+            : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+          if (f) await addFiles([f], 'esquema-calculo')
+        },
+      )
+      await presentEsquemaExportPopup({
+        t,
+        title: extras?.title || 'Esquema',
+        pdf: extras?.exports?.pdf || null,
+        dxf: extras?.exports?.dxf || null,
       })
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')
     }
-  }, [addFiles])
+  }, [addFiles, t])
 
   const onPaste = useCallback((e) => {
     const named = imagenDesdePasteEvent(e)
@@ -634,6 +644,8 @@ export default function PptoSincroSicoeLoteModal({
           t={t}
           title="Dibujar esquema · lote SicoeCAD"
           contratoId={contratoId}
+          draftModule="ppto_lote"
+          draftEntityId={`ppto-lote-${presupuestoIds[0] || data?.ts || 'local'}`}
           iaDoc={{ ambito: 'ppto_lote', docKey: `ppto-lote-${presupuestoIds[0] || data?.ts || 'local'}` }}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquema}

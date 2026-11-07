@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
+import { parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { prepararEsquemaParaUpload, prepararImagenParaUpload } from '../../comprimirImagen'
@@ -59,10 +61,12 @@ export default function SicoeGraficosWizardPanel({
   const [subiendo, setSubiendo] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
+  const [esquemaInitialScene, setEsquemaInitialScene] = useState(null)
   const [esquemaCargando, setEsquemaCargando] = useState(false)
   const lista = Array.isArray(graficos) ? graficos : []
   const safeIdx = Math.min(idx, Math.max(0, lista.length - 1))
   const actual = lista[safeIdx] || null
+  const draftEntityId = iaDocKey || `sicoe-lote-${contrato_id || 'local'}`
 
   const aplicar = (nuevaLista) => {
     onGraficosChange(nuevaLista)
@@ -118,7 +122,10 @@ export default function SicoeGraficosWizardPanel({
         nombre: file?.name || null,
         kind: origen === 'esquema-calculo'
           ? (isPdfUpload ? 'memoria-calculo' : 'grafico-isometrico')
-          : undefined,
+          : (origen === 'esquema' ? 'esquema' : undefined),
+        ...(opts.scene
+          ? { esquema_scene: opts.scene, scene: opts.scene }
+          : {}),
       })
     } catch (err) {
       alert('Error subiendo gráfico: ' + (err?.message || String(err)))
@@ -131,12 +138,17 @@ export default function SicoeGraficosWizardPanel({
     if (subiendo || esquemaCargando) return
     setEsquemaCargando(true)
     try {
-      const prim = pickPrimaryGraficoFromHistorial(lista) || actual
-      const dataUri = prim?.url ? await urlADataUriParaEsquema(prim.url) : null
+      const withScene = [...lista].reverse().find((g) => g?.esquema_scene || g?.scene)
+        || pickPrimaryGraficoFromHistorial(lista)
+        || actual
+      const scene = parseEsquemaScene(withScene?.esquema_scene || withScene?.scene)
+      const dataUri = withScene?.url ? await urlADataUriParaEsquema(withScene.url) : null
+      setEsquemaInitialScene(scene)
       setEsquemaInitialDataUri(dataUri)
       setEsquemaOpen(true)
     } catch {
       setEsquemaInitialDataUri(null)
+      setEsquemaInitialScene(null)
       setEsquemaOpen(true)
     } finally {
       setEsquemaCargando(false)
@@ -148,9 +160,11 @@ export default function SicoeGraficosWizardPanel({
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema')
       if (!file) throw new Error('No se pudo convertir el esquema')
+      const scene = extras?.scene || extras?.esquema_scene || null
       setEsquemaOpen(false)
       setEsquemaInitialDataUri(null)
-      await subirArchivo(file, { origen: 'esquema' })
+      setEsquemaInitialScene(null)
+      await subirArchivo(file, { origen: 'esquema', scene })
       // Solo PNG de memoria/despiece al historial; PDF/DXF no van al registro (C-OUT-13).
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
       const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
@@ -163,6 +177,12 @@ export default function SicoeGraficosWizardPanel({
           if (f) await subirArchivo(f, { origen: adj.origen || 'esquema-calculo' })
         },
       )
+      await presentEsquemaExportPopup({
+        t,
+        title: extras?.title || 'Esquema',
+        pdf: extras?.exports?.pdf || null,
+        dxf: extras?.exports?.dxf || null,
+      })
     } catch (err) {
       alert('Error guardando esquema: ' + (err?.message || String(err)))
     }
@@ -281,9 +301,16 @@ export default function SicoeGraficosWizardPanel({
           t={t}
           title={actual ? 'Editar esquema · gráfico del registro' : 'Crear esquema · gráfico del registro'}
           initialDataUri={esquemaInitialDataUri}
+          initialSceneSnapshot={esquemaInitialScene}
           contratoId={contrato_id}
-          iaDoc={{ ambito: 'sicoe_lote', docKey: iaDocKey || `sicoe-lote-${contrato_id || 'local'}` }}
-          onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
+          draftModule="sicoe_lote"
+          draftEntityId={draftEntityId}
+          iaDoc={{ ambito: 'sicoe_lote', docKey: draftEntityId }}
+          onClose={() => {
+            setEsquemaOpen(false)
+            setEsquemaInitialDataUri(null)
+            setEsquemaInitialScene(null)
+          }}
           onSave={guardarEsquemaComoGrafico}
         />
       )}
