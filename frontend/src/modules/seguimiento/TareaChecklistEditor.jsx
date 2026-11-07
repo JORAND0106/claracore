@@ -710,9 +710,13 @@ export default function TareaChecklistEditor({
           t={t}
           title={`Esquema · ${items[esquemaIdx].texto || `Sub-ítem ${esquemaIdx + 1}`}`}
           initialDataUri={imagenSrc(items[esquemaIdx].esquema)}
+          initialSceneSnapshot={items[esquemaIdx].esquema?.esquema_scene || items[esquemaIdx].esquema?.scene || null}
+          draftModule="tarea_checklist"
+          draftEntityId={`tarea-subitem-${items[esquemaIdx].id || esquemaIdx}`}
           iaDoc={{ ambito: 'tarea_checklist', docKey: `tarea-subitem-${items[esquemaIdx].id}` }}
           onClose={() => setEsquemaIdx(null)}
           onSave={(dataUrl, extras) => {
+            const scene = extras?.scene || extras?.esquema_scene || null
             const calcAdj = Array.isArray(extras?.adjuntos)
               ? extras.adjuntos.map((a) => ({
                 nombre: a.nombre,
@@ -732,10 +736,20 @@ export default function TareaChecklistEditor({
                 created_at: new Date().toISOString(),
                 pending: true,
                 kind: 'esquema',
+                origen: 'esquema',
+                ...(scene ? { esquema_scene: scene, scene } : {}),
               },
               ...(calcAdj.length ? { esquema_calc_adjuntos: calcAdj } : {}),
             })
             setEsquemaIdx(null)
+            void import('../../components/esquema/esquemaExportHost.js').then(({ presentEsquemaExportPopup }) => (
+              presentEsquemaExportPopup({
+                t,
+                title: extras?.title || 'Esquema',
+                pdf: extras?.exports?.pdf || null,
+                dxf: extras?.exports?.dxf || null,
+              })
+            ))
           }}
         />
       )}

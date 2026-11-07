@@ -52,6 +52,77 @@ export function EsquemaDraftNoticePopup({
   )
 }
 
+/**
+ * Confirmación al cerrar con cambios: ¿Guardar cambios? Guardar | Descartar | Cancelar.
+ * No se cierra al tocar fuera.
+ */
+export function EsquemaCloseConfirmPopup({
+  t,
+  onGuardar,
+  onDescartar,
+  onCancelar,
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      data-testid="esquema-close-confirm"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 16000,
+        background: t.overlay || 'rgba(15,23,42,0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(400px, 94vw)',
+          background: t.bgCard || '#fff',
+          border: `1px solid ${t.border}`,
+          borderRadius: 12,
+          boxShadow: t.shadow || '0 12px 32px rgba(15,23,42,0.2)',
+          padding: 16,
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 15, color: t.text, marginBottom: 8 }}>
+          ¿Guardar cambios?
+        </div>
+        <div style={{ fontSize: 13, color: t.textMuted || '#64748b', marginBottom: 14, lineHeight: 1.45 }}>
+          Hay cambios en el esquema. Guárdelos en el registro, descártelos o cancele para seguir editando.
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            data-testid="esquema-close-cancelar"
+            onClick={onCancelar}
+            style={btnGhost(t)}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            data-testid="esquema-close-descartar"
+            onClick={onDescartar}
+            style={btnGhost(t)}
+          >
+            Descartar
+          </button>
+          <button
+            type="button"
+            data-testid="esquema-close-guardar"
+            onClick={onGuardar}
+            style={btnPrimary(t)}
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function btnGhost(t) {
   return {
     padding: '8px 12px',

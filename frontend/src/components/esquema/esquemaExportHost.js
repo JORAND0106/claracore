@@ -2,7 +2,8 @@
  * Muestra el popup «Exportar» en un portal independiente del modal,
  * para que sobreviva si el caller cierra el editor en onSave.
  * Siempre muestra la ventana (aunque PDF/DXF no estén listos).
- * Llamadas concurrentes reutilizan el mismo popup (sin duplicar).
+ * Llamadas concurrentes en la misma ráfaga (~120 ms) reutilizan el mismo popup.
+ * Cada guardado posterior vuelve a mostrar Exportar (descargas repetibles).
  */
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -10,6 +11,8 @@ import EsquemaExportPopup from './EsquemaExportPopup.jsx'
 
 let activeHost = null
 let pendingPromise = null
+let coalesceUntil = 0
+let pendingResolve = null
 
 function teardown() {
   if (!activeHost) return
@@ -28,13 +31,32 @@ export function presentEsquemaExportPopup(opts = {}) {
     return Promise.resolve({ exported: { pdf: false, dxf: false } })
   }
 
-  // Modal + Bitácora pueden llamar a la vez: un solo popup.
-  if (pendingPromise) return pendingPromise
+  const now = Date.now()
+  // Modal + Bitácora/host pueden llamar a la vez tras el mismo Guardar.
+  if (pendingPromise && now < coalesceUntil) {
+    return pendingPromise
+  }
+
+  // Guardado nuevo: cerrar popup anterior (si quedó abierto) y mostrar de nuevo.
+  if (pendingPromise && pendingResolve) {
+    const prev = pendingResolve
+    pendingResolve = null
+    pendingPromise = null
+    teardown()
+    try { prev({ exported: { pdf: false, dxf: false } }) } catch { /* ignore */ }
+  } else if (activeHost) {
+    teardown()
+  }
+
+  coalesceUntil = now + 120
 
   pendingPromise = new Promise((resolve) => {
+    pendingResolve = resolve
     const finish = (result) => {
       teardown()
       pendingPromise = null
+      pendingResolve = null
+      coalesceUntil = 0
       resolve(result || { exported: { pdf: false, dxf: false } })
     }
 
@@ -68,4 +90,12 @@ export function presentEsquemaExportPopup(opts = {}) {
   })
 
   return pendingPromise
+}
+
+/** Solo pruebas: limpia estado del host. */
+export function __resetEsquemaExportHostForTests() {
+  teardown()
+  pendingPromise = null
+  pendingResolve = null
+  coalesceUntil = 0
 }

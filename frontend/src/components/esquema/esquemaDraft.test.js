@@ -7,6 +7,7 @@ import {
   esquemaDraftIsDirty,
   esquemaDraftKey,
   esquemaDraftLoad,
+  esquemaDraftRebind,
   esquemaDraftSave,
   getEsquemaDraftUserId,
 } from './esquemaDraft.js'
@@ -88,6 +89,46 @@ describe('esquemaDraft', () => {
   it('otro usuario no puede leer el borrador', async () => {
     const other = await esquemaDraftLoad(key, { userId: 'otro-user' })
     assert.equal(other, null)
+  })
+
+  it('rebind mueve borrador de draft al id real del reporte', async () => {
+    const draftKey = esquemaDraftKey({
+      module: 'bitacora',
+      entityId: 'draft',
+      userId: 'user-test',
+      contratoId: 7,
+    })
+    const realKey = esquemaDraftKey({
+      module: 'bitacora',
+      entityId: 'entrada-99',
+      userId: 'user-test',
+      contratoId: 7,
+    })
+    await esquemaDraftClear(draftKey)
+    await esquemaDraftClear(realKey)
+    await esquemaDraftSave({
+      key: draftKey,
+      module: 'bitacora',
+      entityId: 'draft',
+      userId: 'user-test',
+      contratoId: 7,
+      snapshot: buildEsquemaDraftSnapshot({
+        objects: [{ id: '1', type: 'rect', x1: 0, y1: 0, x2: 10, y2: 10 }],
+      }),
+    })
+    const moved = await esquemaDraftRebind({
+      module: 'bitacora',
+      fromEntityId: 'draft',
+      toEntityId: 'entrada-99',
+      userId: 'user-test',
+      contratoId: 7,
+    })
+    assert.equal(moved.ok, true)
+    assert.equal(moved.moved, true)
+    assert.equal(await esquemaDraftLoad(draftKey, { userId: 'user-test' }), null)
+    const loaded = await esquemaDraftLoad(realKey, { userId: 'user-test' })
+    assert.ok(loaded?.snapshot?.objects?.length)
+    await esquemaDraftClear(realKey)
   })
 
   it('clear elimina el borrador', async () => {

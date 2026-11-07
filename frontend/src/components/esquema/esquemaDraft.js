@@ -170,6 +170,49 @@ export async function esquemaDraftClear(key) {
   }
 }
 
+/**
+ * Reasocia un borrador de entityId provisional ('draft' / 'nuevo') al id real
+ * del reporte/registro al guardarlo por primera vez (C-OUT-14 / cero pérdida).
+ * @returns {Promise<{ ok: boolean, fromKey?: string, toKey?: string, moved?: boolean, error?: string }>}
+ */
+export async function esquemaDraftRebind({
+  fromKey,
+  toKey,
+  module,
+  fromEntityId,
+  toEntityId,
+  contratoId = null,
+  userId = null,
+} = {}) {
+  try {
+    const uid = userId == null || userId === '' ? getEsquemaDraftUserId() : String(userId)
+    const src = fromKey || esquemaDraftKey({
+      module, entityId: fromEntityId, userId: uid, contratoId,
+    })
+    const dst = toKey || esquemaDraftKey({
+      module, entityId: toEntityId, userId: uid, contratoId,
+    })
+    if (!src || !dst || src === dst) return { ok: true, fromKey: src, toKey: dst, moved: false }
+    const row = await draftDb.drafts.get(src)
+    if (!row?.snapshot) return { ok: true, fromKey: src, toKey: dst, moved: false }
+    if (String(row.userId) !== String(uid)) {
+      return { ok: false, error: 'Borrador de otro usuario', fromKey: src, toKey: dst }
+    }
+    await draftDb.drafts.put({
+      ...row,
+      key: dst,
+      entityId: String(toEntityId ?? row.entityId ?? 'draft'),
+      module: String(module || row.module || 'esquema'),
+      contratoId: contratoId == null ? row.contratoId : String(contratoId),
+      updatedAt: Date.now(),
+    })
+    if (src !== dst) await draftDb.drafts.delete(src)
+    return { ok: true, fromKey: src, toKey: dst, moved: true }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'No se pudo reasignar el borrador' }
+  }
+}
+
 /** Lista borradores del usuario actual (opcionalmente filtrados por módulo/contrato). */
 export async function esquemaDraftList({ module = null, contratoId = null, userId = null } = {}) {
   const uid = userId == null || userId === '' ? getEsquemaDraftUserId() : String(userId)

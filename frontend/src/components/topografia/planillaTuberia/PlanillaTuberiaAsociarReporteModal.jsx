@@ -1011,6 +1011,15 @@ export default function PlanillaTuberiaAsociarReporteModal({
               }
               setEsquemaOpen(false)
               setErr('')
+              try {
+                const { presentEsquemaExportPopup } = await import('../../esquema/esquemaExportHost.js')
+                await presentEsquemaExportPopup({
+                  t: ui?.t,
+                  title: extras?.title || 'Esquema del tramo',
+                  pdf: extras?.exports?.pdf || null,
+                  dxf: extras?.exports?.dxf || null,
+                })
+              } catch { /* popup opcional */ }
             }}
           />
         </div>,

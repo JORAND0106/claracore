@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { prepararEsquemaParaUpload, prepararImagenParaUpload } from '../../comprimirImagen'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
+import { parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
@@ -47,6 +49,7 @@ export default function PptoGraficosModal({
   const [exito, setExito] = useState(null)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [esquemaEditScene, setEsquemaEditScene] = useState(null)
   const [slideIdx, setSlideIdx] = useState(0)
   const dropRef = useRef(null)
   const iaDraftKey = useMemo(() => {
@@ -98,7 +101,7 @@ export default function PptoGraficosModal({
     return () => clearTimeout(tmr)
   }, [open])
 
-  const addFiles = useCallback(async (fileList, origen = 'upload') => {
+  const addFiles = useCallback(async (fileList, origen = 'upload', meta = null) => {
     const files = [...(fileList || [])].filter((f) => {
       if (!f) return false
       if (f.type?.startsWith('image/')) return true
@@ -110,6 +113,7 @@ export default function PptoGraficosModal({
     })
     if (!files.length) return
     setError('')
+    const scene = meta?.scene || meta?.esquema_scene || null
     const next = []
     for (const file of files) {
       try {
@@ -135,8 +139,9 @@ export default function PptoGraficosModal({
           mime: named.type,
           kind: origen === 'esquema-calculo'
             ? (isPdf ? 'memoria-calculo' : 'grafico-isometrico')
-            : undefined,
+            : (origen === 'esquema' ? 'esquema' : undefined),
           nombre: named.name,
+          ...(scene && origen === 'esquema' ? { esquema_scene: scene, scene } : {}),
         })
       } catch (err) {
         setError(err?.message || 'No se pudo preparar la imagen')
@@ -179,19 +184,31 @@ export default function PptoGraficosModal({
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema-ppto')
       if (!file) throw new Error('No se pudo convertir el esquema')
+      const scene = extras?.scene || extras?.esquema_scene || null
       setEsquemaOpen(false)
-      await addFiles([file], 'esquema')
+      setEsquemaEditScene(null)
+      await addFiles([file], 'esquema', { scene })
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
-      await applyEsquemaCalcAdjuntos(extras, async (adj) => {
-        const f = adj.blob
-          ? new File([adj.blob], adj.nombre, { type: adj.mime })
-          : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
-        if (f) await addFiles([f], 'esquema-calculo')
+      const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
+      await applyEsquemaCalcAdjuntos(
+        { adjuntos: filterEsquemaRegistroAdjuntos(extras?.adjuntos) },
+        async (adj) => {
+          const f = adj.blob
+            ? new File([adj.blob], adj.nombre, { type: adj.mime })
+            : dataUriToFile(adj.dataUri, adj.nombre, adj.mime)
+          if (f) await addFiles([f], 'esquema-calculo')
+        },
+      )
+      await presentEsquemaExportPopup({
+        t,
+        title: extras?.title || 'Esquema',
+        pdf: extras?.exports?.pdf || null,
+        dxf: extras?.exports?.dxf || null,
       })
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')
     }
-  }, [addFiles])
+  }, [addFiles, t])
 
   const onPaste = useCallback((e) => {
     const named = imagenDesdePasteEvent(e)
@@ -570,7 +587,11 @@ export default function PptoGraficosModal({
                 onOpenGaleria={() => setGaleriaOpen(true)}
                 onPasteClipboard={pegarDesdeClipboard}
                 onFocusPasteZone={() => dropRef.current?.focus?.()}
-                onOpenEsquema={() => setEsquemaOpen(true)}
+                onOpenEsquema={() => {
+                  const withScene = [...imagenes].reverse().find((im) => im?.esquema_scene || im?.scene)
+                  setEsquemaEditScene(parseEsquemaScene(withScene?.esquema_scene || withScene?.scene))
+                  setEsquemaOpen(true)
+                }}
               />
             </div>
             {imagenes.length > 0 && (
@@ -687,8 +708,11 @@ export default function PptoGraficosModal({
           t={t}
           title="Dibujar esquema · grupo de gráfico"
           contratoId={contratoId}
+          draftModule="ppto_grupo_nuevo"
+          draftEntityId={iaDraftRef.current}
+          initialSceneSnapshot={esquemaEditScene}
           iaDoc={{ ambito: 'ppto_grupo_nuevo', docKey: iaDraftRef.current }}
-          onClose={() => setEsquemaOpen(false)}
+          onClose={() => { setEsquemaOpen(false); setEsquemaEditScene(null) }}
           onSave={guardarEsquema}
         />
       )}
