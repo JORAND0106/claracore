@@ -20,6 +20,13 @@ import {
 } from './blocNotasDb'
 import { syncBlocNotas } from './blocNotasSync'
 import { formatColombiaDateTime, nowColombiaIso } from './blocNotasTime'
+import {
+  ensureDiaryDayInHtml,
+  ensureHandDayMark,
+  extractDayKeysFromHtml,
+  HAND_GUIDES,
+  initialDiaryHtml,
+} from './blocNotasDiary'
 import { isQuotaExceededError, QUOTA_FULL_MESSAGE } from './blocNotasQuota'
 import { getDefaultWriteMode, setDefaultWriteMode } from './blocNotasPrefs'
 import { getOrCreateDeviceId } from '../../pwa/shellCache'
@@ -83,23 +90,31 @@ export default function ModuloBlocNotas({
   const creatingFolderRef = useRef(false)
   const historyRef = useRef(createNoteHistory())
   const noteRef = useRef(null)
+  const folderIdRef = useRef(folderId)
+  const reloadGenRef = useRef(0)
+
+  useEffect(() => { folderIdRef.current = folderId }, [folderId])
 
   const openFolder = folders.find((f) => f.id === folderId) || null
   const noteIndex = notes.findIndex((n) => n.id === noteId)
 
   const reload = useCallback(async () => {
     if (!uid || !cid) return
+    const gen = ++reloadGenRef.current
+    const fid = folderIdRef.current
     const f = await listFolders(uid, cid)
+    if (gen !== reloadGenRef.current) return
     setFolders(f)
-    if (!folderId) {
+    if (!fid) {
       setNotes([])
       return
     }
-    const n = await listNotes(uid, cid, folderId)
+    const n = await listNotes(uid, cid, fid)
+    if (gen !== reloadGenRef.current) return
     setNotes(n)
-  }, [uid, cid, folderId])
+  }, [uid, cid])
 
-  useEffect(() => { reload() }, [reload])
+  useEffect(() => { reload() }, [reload, folderId])
 
   useEffect(() => {
     setTool(getDefaultWriteMode(uid))
@@ -217,19 +232,27 @@ export default function ModuloBlocNotas({
 
   useEffect(() => {
     if (!token || !uid || !cid) return undefined
+    let cancelled = false
     ;(async () => {
       await dedupeFalseConflictCopies(uid, cid)
+      if (cancelled) return
       await syncBlocNotas({ contratoId: cid, usuarioId: uid, token })
+      if (cancelled) return
       await syncPizarra({ contratoId: cid, usuarioId: uid, token })
+      if (cancelled) return
       await reload()
     })()
     const onOnline = () => {
+      if (cancelled) return
       syncBlocNotas({ contratoId: cid, usuarioId: uid, token })
-        .then(() => syncPizarra({ contratoId: cid, usuarioId: uid, token }))
-        .then(() => reload())
+        .then(() => { if (!cancelled) return syncPizarra({ contratoId: cid, usuarioId: uid, token }) })
+        .then(() => { if (!cancelled) return reload() })
     }
     window.addEventListener('online', onOnline)
-    return () => window.removeEventListener('online', onOnline)
+    return () => {
+      cancelled = true
+      window.removeEventListener('online', onOnline)
+    }
   }, [token, uid, cid, reload])
 
   const withQuota = async (fn) => {
@@ -307,13 +330,21 @@ export default function ModuloBlocNotas({
   const createNote = async () => {
     if (!uid || !cid || !folderId || creatingRef.current) return
     creatingRef.current = true
+    const keepFolderId = folderId
     try {
       const now = nowColombiaIso()
       const mode = getDefaultWriteMode(uid)
-      const body = { ...emptyNoteBody(), tool: mode }
+      const body = {
+        ...emptyNoteBody(),
+        tool: mode,
+        richHtml: initialDiaryHtml(new Date(now)),
+        dayMarks: mode === 'hand'
+          ? ensureHandDayMark([], [], new Date(now))
+          : [],
+      }
       const row = {
         id: newId(),
-        folder_id: folderId,
+        folder_id: keepFolderId,
         contrato_id: cid,
         usuario_id: Number(uid),
         title: 'Nota',
@@ -328,10 +359,14 @@ export default function ModuloBlocNotas({
       }
       await withQuota(async () => {
         await upsertNote(row)
-        await reload()
+        // Seleccionar primero; luego refrescar lista del cuaderno actual (sin carrera stale)
+        folderIdRef.current = keepFolderId
+        setFolderId(keepFolderId)
         setNoteId(row.id)
         setNote(row)
+        noteRef.current = row
         setTool(mode)
+        await reload()
         scheduleSync()
       })
     } finally {
@@ -373,7 +408,12 @@ export default function ModuloBlocNotas({
 
   const onBodyChange = (body) => {
     if (!note) return
-    persistNote({ ...note, body })
+    let nextBody = body
+    if (tool === 'hand') {
+      const marks = ensureHandDayMark(body.dayMarks || note.body?.dayMarks, body.strokes || [], new Date())
+      nextBody = { ...body, dayMarks: marks }
+    }
+    persistNote({ ...note, body: nextBody })
   }
 
   const onTitleChange = (title) => {
@@ -383,8 +423,22 @@ export default function ModuloBlocNotas({
 
   const onRichHtmlChange = (html) => {
     if (!note) return
-    const body = { ...(note.body || emptyNoteBody()), richHtml: html, tool: 'text' }
+    const prev = note.body || emptyNoteBody()
+    const known = extractDayKeysFromHtml(prev.richHtml || '')
+    const guarded = ensureDiaryDayInHtml(html, { knownDays: known })
+    const body = { ...prev, richHtml: guarded, tool: 'text' }
     persistNote({ ...note, body })
+  }
+
+  const cycleHandGuide = () => {
+    if (!note) return
+    const cur = note.body?.guide || 'lines'
+    const idx = HAND_GUIDES.indexOf(cur)
+    const next = HAND_GUIDES[(idx < 0 ? 0 : idx + 1) % HAND_GUIDES.length]
+    persistNote({
+      ...note,
+      body: { ...(note.body || emptyNoteBody()), guide: next },
+    })
   }
 
   const requestTool = (nextTool) => {
@@ -752,8 +806,25 @@ export default function ModuloBlocNotas({
                 ▦
               </BlocNotasIconBtn>
             )}
+            {tool === 'hand' && (
+              <BlocNotasIconBtn
+                t={t}
+                title={`Guía: ${({ none: 'ninguna', dots: 'puntos', lines: 'líneas', grid: 'cuadrícula', rail: 'ferrocarril' })[note.body?.guide || 'lines'] || 'líneas'}`}
+                onClick={cycleHandGuide}
+              >
+                #
+              </BlocNotasIconBtn>
+            )}
             <BlocNotasIconBtn t={t} title="Enviar a la Pizarra" onClick={() => setPizarraAsk(true)}>📋</BlocNotasIconBtn>
             <BlocNotasIconBtn t={t} title="Eliminar nota" onClick={() => deleteNote(note.id)}>🗑</BlocNotasIconBtn>
+          </div>
+
+          <div style={{
+            fontSize: 11, color: muted, marginBottom: 8, flexShrink: 0,
+            display: 'flex', flexWrap: 'wrap', gap: '8px 16px',
+          }}>
+            <span title="Fecha de creación">Creada: {formatColombiaDateTime(note.created_at) || '—'}</span>
+            <span title="Última modificación">Modificada: {formatColombiaDateTime(note.updated_at) || '—'}</span>
           </div>
 
           {tool === 'text' ? (
@@ -775,6 +846,8 @@ export default function ModuloBlocNotas({
                 minHeight={Math.max(320, (typeof window !== 'undefined' ? window.innerHeight : 800) - 260)}
                 placeholder="Escriba la nota…"
                 disableHistory
+                enableSemanario
+                iconOnlyTableTools
               />
             </div>
           ) : (

@@ -141,6 +141,10 @@ describe('contrato · documento', () => {
     assert.match(md, /Esquemas del reporte/)
     assert.match(md, /sicoeEsquemasReporte/)
     assert.match(md, /caso 44|44\./)
+    assert.match(md, /C-TX-11/)
+    assert.match(md, /semanario|bitácora por día/i)
+    assert.match(md, /blocNotasDiary|blocNotasEstabilidad/)
+    assert.match(md, /caso 45|45\./)
   })
 })
 

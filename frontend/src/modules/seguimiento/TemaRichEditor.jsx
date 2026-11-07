@@ -12,6 +12,12 @@ import { EnsureEditableAfterTable } from './temaEnsureEditableAfterTable.js'
 import { scrollEditorCaretIntoView } from './temaEditorScroll.js'
 import { temaRichProseCss } from './temaRichProseCss'
 import { applyColumnWidthPx, currentCellColWidth } from './temaTableWidth'
+import {
+  buildSemanarioTableHtml,
+  mondayOfWeek,
+  shiftWeek,
+  weekDayHeaders,
+} from '../bloc-notas/blocNotasDiary.js'
 
 /**
  * Editor TipTap para temas/ideas y bitácora (Actas, Observaciones Diario, Evento).
@@ -20,6 +26,7 @@ import { applyColumnWidthPx, currentCellColWidth } from './temaTableWidth'
  * - Tablas con columnas redimensionables (arrastre + ancho numérico)
  * - Auto-scroll del caret al escribir contenido largo
  * - Párrafo editable garantizado tras cada tabla
+ * - Opcional Bloc: semanario + botones de tabla solo icono (sin cambiar Actas por defecto)
  */
 export default function TemaRichEditor({
   t,
@@ -32,6 +39,10 @@ export default function TemaRichEditor({
   onPasteImage = null,
   /** Desactiva History de TipTap (p. ej. Bloc usa deshacer/rehacer unificado). No afecta Actas. */
   disableHistory = false,
+  /** Solo Bloc: muestra «Insertar semanario». */
+  enableSemanario = false,
+  /** Solo Bloc: botones de tabla como icono + tooltip. Actas conserva texto. */
+  iconOnlyTableTools = false,
 }) {
   const editorRef = useRef(null)
   const skipNextExternal = useRef(false)
@@ -39,6 +50,8 @@ export default function TemaRichEditor({
   const onChangeRef = useRef(onChange)
   const [colWidthDraft, setColWidthDraft] = useState('')
   const [, setTick] = useState(0)
+  const [semanaOpen, setSemanaOpen] = useState(false)
+  const [semanaMonday, setSemanaMonday] = useState(() => mondayOfWeek())
 
   useEffect(() => {
     onPasteImageRef.current = onPasteImage
@@ -277,63 +290,90 @@ export default function TemaRichEditor({
           <button
             type="button"
             title="Insertar tabla 3×3"
+            aria-label="Insertar tabla 3×3"
+            data-cc-tooltip="Insertar tabla 3×3"
             aria-pressed={inTable}
             style={btn(inTable)}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
-              // EnsureEditableAfterTable añade párrafo tras la tabla; enfocar scroll.
               requestAnimationFrame(() => scrollEditorCaretIntoView(editor))
             }}
           >
-            ⊞ Tabla
+            {iconOnlyTableTools ? '⊞' : '⊞ Tabla'}
           </button>
+          {enableSemanario && (
+            <button
+              type="button"
+              title="Insertar semanario"
+              aria-label="Insertar semanario"
+              data-cc-tooltip="Insertar semanario"
+              style={btn(false)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setSemanaMonday(mondayOfWeek())
+                setSemanaOpen(true)
+              }}
+            >
+              📅
+            </button>
+          )}
           {inTable && (
             <>
               <button
                 type="button"
                 title="Agregar fila"
+                aria-label="Agregar fila"
+                data-cc-tooltip="Agregar fila"
                 style={btn(false)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => editor.chain().focus().addRowAfter().run()}
               >
-                + Fila
+                {iconOnlyTableTools ? '＋↕' : '+ Fila'}
               </button>
               <button
                 type="button"
                 title="Agregar columna"
+                aria-label="Agregar columna"
+                data-cc-tooltip="Agregar columna"
                 style={btn(false)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => editor.chain().focus().addColumnAfter().run()}
               >
-                + Col
+                {iconOnlyTableTools ? '＋↔' : '+ Col'}
               </button>
               <button
                 type="button"
                 title="Eliminar fila"
+                aria-label="Eliminar fila"
+                data-cc-tooltip="Eliminar fila"
                 style={btn(false)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => editor.chain().focus().deleteRow().run()}
               >
-                − Fila
+                {iconOnlyTableTools ? '－↕' : '− Fila'}
               </button>
               <button
                 type="button"
                 title="Eliminar columna"
+                aria-label="Eliminar columna"
+                data-cc-tooltip="Eliminar columna"
                 style={btn(false)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => editor.chain().focus().deleteColumn().run()}
               >
-                − Col
+                {iconOnlyTableTools ? '－↔' : '− Col'}
               </button>
               <button
                 type="button"
                 title="Eliminar tabla"
+                aria-label="Eliminar tabla"
+                data-cc-tooltip="Eliminar tabla"
                 style={btn(false)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => editor.chain().focus().deleteTable().run()}
               >
-                Quitar tabla
+                {iconOnlyTableTools ? '⌫' : 'Quitar tabla'}
               </button>
               <label
                 style={{
@@ -347,12 +387,14 @@ export default function TemaRichEditor({
                 }}
                 title="Ancho de la columna activa (px). También puede arrastrar el borde entre columnas."
               >
-                Ancho
+                {iconOnlyTableTools ? null : 'Ancho'}
                 <input
                   type="number"
                   min={40}
                   max={640}
                   value={colWidthDraft}
+                  title="Ancho de columna (px)"
+                  aria-label="Ancho de columna"
                   onChange={(e) => setColWidthDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -374,11 +416,14 @@ export default function TemaRichEditor({
                 />
                 <button
                   type="button"
+                  title="Aplicar ancho"
+                  aria-label="Aplicar ancho"
+                  data-cc-tooltip="Aplicar ancho"
                   style={{ ...btn(false), fontSize: 11 }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={applyWidth}
                 >
-                  Aplicar
+                  {iconOnlyTableTools ? '✓' : 'Aplicar'}
                 </button>
               </label>
             </>
@@ -386,6 +431,88 @@ export default function TemaRichEditor({
         </div>
       )}
       <EditorContent editor={editor} />
+
+      {enableSemanario && semanaOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Insertar semanario"
+          onClick={(e) => { if (e.target === e.currentTarget) setSemanaOpen(false) }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 12060,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: t.bgCard || '#fff',
+              color: t.text,
+              border: `1px solid ${t.border}`,
+              borderRadius: 14,
+              padding: 16,
+              width: '100%',
+              maxWidth: 420,
+              boxShadow: '0 16px 48px rgba(0,0,0,0.35)',
+            }}
+          >
+            <div style={{ fontWeight: 800, color: t.primary, marginBottom: 8 }}>Semanario</div>
+            <div style={{ fontSize: 13, color: t.textMuted, marginBottom: 12 }}>
+              Escoja la semana a insertar
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <button
+                type="button"
+                title="Semana anterior"
+                aria-label="Semana anterior"
+                data-cc-tooltip="Semana anterior"
+                onClick={() => setSemanaMonday((m) => shiftWeek(m, -1))}
+                style={btn(false)}
+              >
+                ‹
+              </button>
+              <div style={{ flex: 1, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>
+                {weekDayHeaders(semanaMonday)[0]} — {weekDayHeaders(semanaMonday)[6]}
+              </div>
+              <button
+                type="button"
+                title="Semana siguiente"
+                aria-label="Semana siguiente"
+                data-cc-tooltip="Semana siguiente"
+                onClick={() => setSemanaMonday((m) => shiftWeek(m, 1))}
+                style={btn(false)}
+              >
+                ›
+              </button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" title="Cancelar" onClick={() => setSemanaOpen(false)} style={btn(false)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                title="Insertar"
+                onClick={() => {
+                  const html = buildSemanarioTableHtml(semanaMonday)
+                  editor.chain().focus().insertContent(html).run()
+                  setSemanaOpen(false)
+                  requestAnimationFrame(() => scrollEditorCaretIntoView(editor))
+                }}
+                style={{
+                  ...btn(true),
+                  background: t.primary,
+                  color: '#fff',
+                  border: 'none',
+                }}
+              >
+                Insertar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

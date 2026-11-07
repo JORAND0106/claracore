@@ -251,5 +251,6 @@ export async function hydratePizarraItem(item, usuarioId) {
     ...item,
     title: note.title || item.title,
     body: note.body || item.body,
+    folder_id: note.folder_id || item.folder_id || null,
   }
 }
