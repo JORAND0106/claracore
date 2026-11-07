@@ -26,12 +26,23 @@ describe('caso · Bloc estabilidad, fechas, semanario y guías', () => {
     assert.match(mod, /initialDiaryHtml/)
     assert.match(mod, /ensureDiaryDayInHtml/)
     assert.match(mod, /ensureHandDayMark/)
+    assert.match(mod, /dedupeDiaryDaysInHtml|sanitizeNoteBody/)
+    assert.match(mod, /enableBlocDayMarkers/)
     assert.match(mod, /Creada:/)
     assert.match(mod, /Modificada:/)
     assert.match(mod, /cycleHandGuide|Guía:/)
     assert.match(mod, /enableSemanario/)
     assert.match(mod, /iconOnlyTableTools/)
     assert.match(mod, /creatingRef/)
+  })
+
+  it('TemaRichEditor opt-in conserva data-bloc-day (BlocDayParagraph)', () => {
+    const ed = readFileSync(join(srcRoot, 'modules/seguimiento/TemaRichEditor.jsx'), 'utf8')
+    assert.match(ed, /enableBlocDayMarkers/)
+    assert.match(ed, /BlocDayParagraph/)
+    const ext = readFileSync(join(__dirname, 'blocDayMarkerExtension.js'), 'utf8')
+    assert.match(ext, /data-bloc-day/)
+    assert.match(ext, /bloc-day-marker/)
   })
 
   it('Pizarra hidrata folder_id para abrir la nota exacta', () => {
