@@ -28360,53 +28360,108 @@ def _galeria_parse_historial_graficos(raw: Any) -> List[dict]:
 def _galeria_extraer_graficos_unicos(filas_registros: Optional[List[dict]]) -> List[dict]:
     """
     Galería de gráficos del contrato: une grafico_url actual + entradas de
-    graficos_historial, deduplicadas por url y por numero (sin renumerar).
-    Conserva el numero original de cada gráfico.
+    graficos_historial, deduplicadas por numero (preferido) y url (sin renumerar).
+    Orden: número de gráfico ascendente. Incluye reporte y registros asignados
+    cuando vienen en las filas.
     """
-    seen_urls: Set[str] = set()
-    seen_nums: Set[int] = set()
-    out: List[dict] = []
+    # numero -> agregado
+    by_num: Dict[Any, dict] = {}
+    by_url_only: Dict[str, dict] = {}
 
-    def _push(url, numero, descripcion=""):
+    def _num(v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _push(url, numero, descripcion="", *, reg_num=None, reporte_num=None, reporte_nombre=""):
         u = (url or "").strip()
-        if not u or u in seen_urls:
+        if not u:
             return
-        num_i = None
-        if numero is not None:
-            try:
-                num_i = int(numero)
-            except (TypeError, ValueError):
-                num_i = None
-        if num_i is not None and num_i in seen_nums:
-            return
-        seen_urls.add(u)
-        if num_i is not None:
-            seen_nums.add(num_i)
-        out.append(
-            {
+        num_i = _num(numero)
+        key = num_i if num_i is not None else f"url:{u}"
+        bucket = by_num if num_i is not None else by_url_only
+        row = bucket.get(key)
+        if not row:
+            row = {
                 "url": u,
                 "numero": num_i if num_i is not None else numero,
                 "descripcion": descripcion or "",
+                "reporte_numero": reporte_num,
+                "reporte_nombre": reporte_nombre or "",
+                "registros_numeros": [],
+                "_seen_regs": set(),
             }
-        )
+            bucket[key] = row
+        else:
+            # Preferir URL más reciente (última vista en historial) si mismo número.
+            row["url"] = u
+            if descripcion:
+                row["descripcion"] = descripcion
+            if reporte_num is not None:
+                row["reporte_numero"] = reporte_num
+            if reporte_nombre:
+                row["reporte_nombre"] = reporte_nombre
+        if reg_num is not None and reg_num != "":
+            rs = str(reg_num)
+            if rs not in row["_seen_regs"]:
+                row["_seen_regs"].add(rs)
+                row["registros_numeros"].append(reg_num)
 
     for r in filas_registros or []:
         if not isinstance(r, dict):
             continue
+        reg_num = r.get("numero_registro")
+        reporte_num = r.get("numero_reporte") or r.get("reporte_numero")
+        reporte_nombre = r.get("reporte_nombre") or r.get("descripcion_actividad") or ""
+        # Nested so_reportes from PostgREST join
+        rep = r.get("so_reportes")
+        if isinstance(rep, dict):
+            if reporte_num is None:
+                reporte_num = rep.get("numero_reporte")
+            if not reporte_nombre:
+                reporte_nombre = rep.get("descripcion_actividad") or ""
         hist = _galeria_parse_historial_graficos(r.get("graficos_historial"))
-        # Historial primero (puede incluir gráficos previos no vigentes).
         for h in hist:
             _push(
                 h.get("url"),
                 h.get("numero"),
-                h.get("descripcion") or "",
+                h.get("descripcion") or h.get("nombre") or "",
+                reg_num=reg_num,
+                reporte_num=reporte_num,
+                reporte_nombre=reporte_nombre,
             )
         if r.get("grafico_url"):
             _push(
                 r.get("grafico_url"),
                 r.get("grafico_numero"),
                 r.get("grafico_descripcion") or "",
+                reg_num=reg_num,
+                reporte_num=reporte_num,
+                reporte_nombre=reporte_nombre,
             )
+
+    out: List[dict] = []
+    for row in list(by_num.values()) + list(by_url_only.values()):
+        row.pop("_seen_regs", None)
+        n = row.get("numero")
+        rn = row.get("reporte_numero")
+        regs = row.get("registros_numeros") or []
+        regs_txt = ", ".join(str(x) for x in regs) if regs else "—"
+        rep_txt = f"#{rn}" if rn is not None and rn != "" else "—"
+        row["label"] = f"Gráfico {n if n is not None else '—'} · Rep. {rep_txt} · Reg. {regs_txt}"
+        out.append(row)
+
+    def _sort_key(it):
+        n = it.get("numero")
+        try:
+            return (0, int(n))
+        except (TypeError, ValueError):
+            return (1, 0)
+
+    out.sort(key=_sort_key)
     return out
 
 
@@ -28429,19 +28484,21 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
         so_registros_pgrst_unknown_column as _so_unknown_col,
     )
 
-    def _select_cols(incluir_fotos_hist: bool) -> str:
+    def _select_cols(incluir_fotos_hist: bool, enriquecer_grafico: bool = False) -> str:
         parts = [
             "foto_url", "foto_numero", "foto_descripcion",
             "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
             "created_at",
         ]
+        if enriquecer_grafico:
+            parts.extend(["numero_registro", "reporte_id", "so_reportes(numero_reporte, descripcion_actividad)"])
         if incluir_fotos_hist and not _so_col_omitted("fotos_historial"):
             parts.insert(3, "fotos_historial")
         return ", ".join(parts)
 
-    def _q_regs(incluir_fotos_hist: bool = True):
+    def _q_regs(incluir_fotos_hist: bool = True, enriquecer_grafico: bool = False):
         q = supabase.table("so_registros")\
-            .select(_select_cols(incluir_fotos_hist))\
+            .select(_select_cols(incluir_fotos_hist, enriquecer_grafico))\
             .eq("contrato_id", contrato_id)
         if desde:
             q = q.gte("created_at", desde)
@@ -28450,12 +28507,19 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
         return q.order("created_at", desc=True).execute().data
 
     try:
-        rows = supabase_execute(lambda: _q_regs(True)) or []
+        rows = supabase_execute(lambda: _q_regs(True, tipo == "grafico")) or []
     except Exception as exc:
         col = _so_unknown_col(exc)
-        if col == "fotos_historial" or (col is None and "fotos_historial" in str(exc).lower()):
+        msg = str(exc).lower()
+        if col == "fotos_historial" or (col is None and "fotos_historial" in msg):
             _so_remember_omit("fotos_historial")
-            rows = supabase_execute(lambda: _q_regs(False)) or []
+            try:
+                rows = supabase_execute(lambda: _q_regs(False, tipo == "grafico")) or []
+            except Exception:
+                rows = supabase_execute(lambda: _q_regs(False, False)) or []
+        elif tipo == "grafico" and ("so_reportes" in msg or "numero_registro" in msg or "reporte_id" in msg):
+            # Fallback sin join si el esquema no expone la relación.
+            rows = supabase_execute(lambda: _q_regs(True, False)) or []
         else:
             raise
     if tipo == "grafico":
