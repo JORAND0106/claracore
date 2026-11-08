@@ -181,8 +181,8 @@ def _esc(val) -> str:
     return html.escape(str(val or ""))
 
 
-def _fmt_fecha_hora(created_at, fecha_entrada) -> str:
-    return fmt_fecha_hora_entrada(created_at, fecha_entrada)
+def _fmt_fecha_hora(created_at, fecha_entrada, *, es_retroactivo: bool = False) -> str:
+    return fmt_fecha_hora_entrada(created_at, fecha_entrada, es_retroactivo=es_retroactivo)
 
 
 def _fmt_cant(v) -> str:
@@ -368,7 +368,12 @@ def _render_copia_html(
     hdr_html = _hdr_contrato_html(contrato)
     icon_html = _copy_icon_html(copy_label)
     admin_html = _administradores_html(contrato)
-    fecha_hora = _fmt_fecha_hora(entrada.get("created_at"), entrada.get("fecha_entrada"))
+    es_retro = bool(entrada.get("es_retroactivo"))
+    fecha_hora = _fmt_fecha_hora(
+        entrada.get("created_at"), entrada.get("fecha_entrada"), es_retroactivo=es_retro,
+    )
+    from almacen_retroactivo import leyenda_pdf_retroactivo
+    leyenda_retro = leyenda_pdf_retroactivo(entrada)
     insumos_html = _lineas_insumos_html(
         lineas,
         insumo_label=insumo_label,
@@ -395,13 +400,15 @@ def _render_copia_html(
         ubic_rows += _row("Abscisas:", f"{_esc(abs_ini or '—')} -&gt; {_esc(abs_fin or '—')}")
 
     corte = "" if is_last else '<div class="cut-mark">- - - corte - - -</div>'
+    retro_row = _row("Nota:", _esc(leyenda_retro)) if leyenda_retro else ""
 
     return f"""
 <div class="{block_cls}">
   <div class="copy-label">{icon_html}Copia: {_esc(copy_label)}</div>{hdr_html}
   <div class="title">{_esc(doc_title)}</div>
   {doc_rows}
-  {_row("Fecha y hora:", fecha_hora)}
+  {_row("Fecha del hecho:", fecha_hora)}
+  {retro_row}
   {_sep()}
   {_row("OC:", f"#{_esc(oc_num)}" if oc_num not in (None, "") else "—", omit_empty=False)}
   {_row("Proveedor:", _esc(proveedor_nombre), stack=len(str(proveedor_nombre or "")) > 28)}

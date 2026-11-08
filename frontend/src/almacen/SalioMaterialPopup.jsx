@@ -25,6 +25,7 @@ import {
   SALIO_PASO,
 } from './salioMaterialHelpers'
 import { consolidarPrefillInsumos } from './salidaInmediataHelpers'
+import { MODO_RETROACTIVO } from './retroactivoModo'
 
 const btnHome = (bg, color = '#fff') => ({
   display: 'flex',
@@ -81,15 +82,19 @@ export default function SalioMaterialPopup({
   initialMode = 'registrar', // 'registrar' | 'historial'
   refreshSignal = 0,
   prefillInmediata = null,
+  modoRegistro = 'actualizado',
+  fechaHechoInicial = '',
+  onFechaHechoChange,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const contraste = useMemo(() => almacenContraste(ui), [ui])
   const themeCssVars = useMemo(() => buildAlmacenCssVars(theme || {}), [theme])
   const contrato = contratoId || permisos?.contratoId
-  const puedeCrear = Boolean(permisos?.crear)
+  const puedeCrear = Boolean(permisos?.crear || (modoRegistro === MODO_RETROACTIVO && permisos?.editar))
   const puedeValidar = Boolean(permisos?.validar)
   const tienePrefill = Boolean(prefillInmediata?.entradaId && (prefillInmediata.items || []).length)
+  const esRetro = modoRegistro === MODO_RETROACTIVO
 
   const [modo, setModo] = useState(() => {
     if (initialMode === 'historial') return SALIO_PASO.HISTORIAL
@@ -106,7 +111,20 @@ export default function SalioMaterialPopup({
   const [lineaSel, setLineaSel] = useState(null)
   const [cantidad, setCantidad] = useState('')
   const [receptor, setReceptor] = useState(() => (tienePrefill ? (prefillInmediata.receptor || null) : null))
-  const [fechaHora, setFechaHora] = useState(() => nowDatetimeLocalColombia())
+  const [fechaHora, setFechaHora] = useState(() => {
+    if (fechaHechoInicial && String(fechaHechoInicial).length >= 10) {
+      const base = String(fechaHechoInicial).slice(0, 10)
+      const now = nowDatetimeLocalColombia()
+      return `${base}T${now.slice(11, 16)}`
+    }
+    return nowDatetimeLocalColombia()
+  })
+  const [fechaAprox, setFechaAprox] = useState(false)
+
+  const setFechaHoraPersist = (v) => {
+    setFechaHora(v)
+    if (v && v.length >= 10) onFechaHechoChange?.(v.slice(0, 10))
+  }
   const [pkId, setPkId] = useState(() => (tienePrefill ? (prefillInmediata.pkId || '') : ''))
   const [pkLabel, setPkLabel] = useState(() => (tienePrefill ? (prefillInmediata.pkLabel || prefillInmediata.pkId || '') : ''))
   const [pkIdId, setPkIdId] = useState(null)
@@ -311,6 +329,10 @@ export default function SalioMaterialPopup({
 
   const guardar = async () => {
     if (!puedeConfirmar || !lineaSel) return
+    if (esRetro && !fechaHora) {
+      setError('Indique la fecha y hora del hecho (salida del material).')
+      return
+    }
     setBusy(true)
     setError('')
     setOkMsg('')
@@ -319,7 +341,11 @@ export default function SalioMaterialPopup({
         entrada_item_id: Number(lineaSel.entrada_item_id),
         cantidad_salida: cantNum,
         receptor_usuario_id: receptor?.id || null,
-        fecha_hora_salida: datetimeLocalColombiaToIsoUtc(fechaHora),
+        fecha_hora_salida: esRetro
+          ? datetimeLocalColombiaToIsoUtc(fechaHora)
+          : datetimeLocalColombiaToIsoUtc(nowDatetimeLocalColombia()),
+        es_retroactivo: esRetro,
+        fecha_aproximada: esRetro ? fechaAprox : false,
         pk_id: pkId.trim() || null,
         pk_id_id: pkIdId,
         tramo: tramo || null,
@@ -357,7 +383,11 @@ export default function SalioMaterialPopup({
           cantidad_salida: Number(it.cantidad_salida),
         })),
         receptor_usuario_id: receptor?.id || null,
-        fecha_hora_salida: datetimeLocalColombiaToIsoUtc(fechaHora),
+        fecha_hora_salida: esRetro
+          ? datetimeLocalColombiaToIsoUtc(fechaHora)
+          : datetimeLocalColombiaToIsoUtc(nowDatetimeLocalColombia()),
+        es_retroactivo: esRetro,
+        fecha_aproximada: esRetro ? fechaAprox : false,
         pk_id: pkId.trim() || null,
         pk_id_id: pkIdId,
         tramo: tramo || null,
@@ -665,15 +695,28 @@ export default function SalioMaterialPopup({
                     )}
                   </div>
 
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 700 }}>
-                    Fecha y hora
-                    <input
-                      type="datetime-local"
-                      style={inputGiant(ui)}
-                      value={fechaHora}
-                      onChange={(e) => setFechaHora(e.target.value)}
-                    />
-                  </label>
+                  {esRetro ? (
+                    <div style={{ display: 'grid', gap: 6, padding: 10, borderRadius: 10, background: '#fff7ed', border: '1px solid #fdba74' }}>
+                      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 800, color: '#9a3412' }}>
+                        Fecha del hecho (salida)
+                        <input
+                          type="datetime-local"
+                          style={inputGiant(ui)}
+                          value={fechaHora}
+                          onChange={(e) => setFechaHoraPersist(e.target.value)}
+                          data-testid="salio-fecha-hecho"
+                        />
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#9a3412' }}>
+                        <input type="checkbox" checked={fechaAprox} onChange={(e) => setFechaAprox(e.target.checked)} />
+                        Fecha aproximada
+                      </label>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, fontWeight: 600 }}>
+                      Modo Actualizado · se usará la fecha y hora actuales
+                    </div>
+                  )}
 
                   {motivosPrev.length > 0 && (
                     <div
@@ -886,15 +929,28 @@ export default function SalioMaterialPopup({
                   Quién recibe
                   <ReceptorObraSelector value={receptor} onChange={setReceptor} />
                 </label>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 700 }}>
-                  Fecha y hora
-                  <input
-                    type="datetime-local"
-                    style={inputGiant(ui)}
-                    value={fechaHora}
-                    onChange={(e) => setFechaHora(e.target.value)}
-                  />
-                </label>
+                {esRetro ? (
+                  <div style={{ display: 'grid', gap: 6, padding: 10, borderRadius: 10, background: '#fff7ed', border: '1px solid #fdba74' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 800, color: '#9a3412' }}>
+                      Fecha del hecho (salida)
+                      <input
+                        type="datetime-local"
+                        style={inputGiant(ui)}
+                        value={fechaHora}
+                        onChange={(e) => setFechaHoraPersist(e.target.value)}
+                        data-testid="salio-fecha-hecho-reg"
+                      />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#9a3412' }}>
+                      <input type="checkbox" checked={fechaAprox} onChange={(e) => setFechaAprox(e.target.checked)} />
+                      Fecha aproximada
+                    </label>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, fontWeight: 600 }}>
+                    Modo Actualizado · se usará la fecha y hora actuales
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: 12 }}>

@@ -355,6 +355,9 @@ def _render_copia_html(
     obs = (salida.get("observaciones") or "").strip()
     numero = salida.get("codigo") or salida.get("numero_salida") or "—"
     fecha_hora = _fmt_fecha_hora(salida.get("fecha_hora_salida"))
+    from almacen_retroactivo import leyenda_pdf_retroactivo
+    leyenda_retro = leyenda_pdf_retroactivo(salida)
+    retro_row = _row("Nota:", _esc(leyenda_retro)) if leyenda_retro else ""
 
     firmas = (
         f'<div class="firmas-stack">'
@@ -372,7 +375,8 @@ def _render_copia_html(
   {_hdr_contrato_html(contrato)}
   <div class="title">Salida de material</div>
   {_row("No. salida:", f"#{_esc(numero)}")}
-  {_row("Fecha y hora:", fecha_hora)}
+  {_row("Fecha del hecho:", fecha_hora)}
+  {retro_row}
   {_sep()}
   {_row("Orden de compra:", f"#{_esc(oc_num)}")}
   {_row("Insumo:", _esc(insumo_label))}

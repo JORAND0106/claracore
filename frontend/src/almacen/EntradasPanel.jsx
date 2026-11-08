@@ -20,6 +20,13 @@ import {
 } from './almacenPermisos'
 import { invalidateSalidasCache } from './salidasListCache'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
+import RetroactivoModoBar, { BadgeRetroactivo } from './RetroactivoModoBar'
+import RetroactivoHabilitacionesModal from './RetroactivoHabilitacionesModal'
+import {
+  MODO_ACTUALIZADO,
+  MODO_RETROACTIVO,
+  resolverModoInicial,
+} from './retroactivoModo'
 import {
   AlmacenHelpIcon,
   formatEntradaNumero,
@@ -88,7 +95,6 @@ export default function EntradasPanel({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const verAlertas = puedeVerAlertasEntrada(permisos)
-  const puedeEntrada = puedeRegistrarEntradaAlmacen(permisos)
   const puedePdf = puedeDescargarPdfMovimientoAlmacen(permisos)
   const puedeRevisar = puedeCompletarRevisionEntrada(permisos)
   const puedeEliminar = Boolean(permisos?.eliminar)
@@ -106,12 +112,40 @@ export default function EntradasPanel({
   const [eliminarAviso, setEliminarAviso] = useState('')
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_ENTRADAS_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
+  const [retroEstado, setRetroEstado] = useState(null)
+  const [modoRegistro, setModoRegistro] = useState(MODO_ACTUALIZADO)
+  const [habModalOpen, setHabModalOpen] = useState(false)
+  const [pendientesRetro, setPendientesRetro] = useState(0)
+  const [seleccionRetro, setSeleccionRetro] = useState(() => new Set())
+  const [fechaHechoPersistida, setFechaHechoPersistida] = useState('')
+  const userId = permisos?.userId
+  const contratoId = permisos?.contratoId
+  const puedeEntrada = puedeRegistrarEntradaAlmacen(permisos)
+    || (modoRegistro === MODO_RETROACTIVO && Boolean(permisos?.editar) && Boolean(retroEstado?.puede_usar_modo))
 
   const listaFiltrada = useMemo(
     () => filterEntradasLista(lista, filtros),
     [lista, filtros],
   )
   const filtrosActivos = countEntradasFiltrosActivos(filtros)
+
+  const reloadRetroEstado = useCallback(() => {
+    api.getRetroactivoEstado()
+      .then((st) => {
+        setRetroEstado(st)
+        setModoRegistro((prev) => {
+          if (!st?.puede_usar_modo) return MODO_ACTUALIZADO
+          if (prev === MODO_RETROACTIVO) return prev
+          return resolverModoInicial(st, userId, contratoId)
+        })
+      })
+      .catch(() => setRetroEstado(null))
+    if (puedeRevisar) {
+      api.getRetroactivoPendientesCount()
+        .then((c) => setPendientesRetro(Number(c?.entradas || c?.total || 0)))
+        .catch(() => setPendientesRetro(0))
+    }
+  }, [api, puedeRevisar, userId, contratoId])
 
   const solicitarEliminar = (e, entrada) => {
     e.stopPropagation()
@@ -142,6 +176,7 @@ export default function EntradasPanel({
     .finally(() => onDataLoaded?.()), [api, onDataLoaded])
 
   useEffect(() => { reload() }, [reload])
+  useEffect(() => { reloadRetroEstado() }, [reloadRetroEstado])
 
   useEffect(() => {
     if (refreshSignal > 0) {
@@ -241,6 +276,43 @@ export default function EntradasPanel({
       </div>
 
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
+
+      <RetroactivoModoBar
+        estado={retroEstado}
+        modo={modoRegistro}
+        onModoChange={setModoRegistro}
+        userId={userId}
+        contratoId={contratoId}
+        onAbrirHabilitaciones={() => setHabModalOpen(true)}
+        pendientesCount={pendientesRetro}
+        puedeValidar={puedeRevisar}
+        onFiltrarPendientes={() => setFiltros((f) => ({
+          ...f,
+          retroactivo_pendiente: f.retroactivo_pendiente === 'si' ? '' : 'si',
+        }))}
+      />
+
+      {puedeRevisar && filtros.retroactivo_pendiente === 'si' && seleccionRetro.size > 0 && (
+        <div style={{ marginBottom: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            style={{ ...ui.btnPrimary, background: '#c2410c' }}
+            data-testid="validar-retroactivo-lote"
+            onClick={async () => {
+              try {
+                await api.validarRetroactivo({ entrada_ids: [...seleccionRetro] })
+                setSeleccionRetro(new Set())
+                await reload()
+                reloadRetroEstado()
+              } catch (err) {
+                setError(err.message)
+              }
+            }}
+          >
+            Validar seleccionados ({seleccionRetro.size})
+          </button>
+        </div>
+      )}
 
       {lista.length === 0 ? (
         <div style={{ ...ui.card, textAlign: 'center', color: ui.textMuted }}>No hay entradas registradas.</div>
@@ -345,6 +417,23 @@ export default function EntradasPanel({
                   >
                     <td style={{ ...tdAlert, fontWeight: 700 }} data-label="N.º">
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                        {puedeRevisar && filtros.retroactivo_pendiente === 'si' && (e.marca_retroactivo || (e.es_retroactivo && !e.retroactivo_validado_at)) && (
+                          <label onClick={(ev) => ev.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}>
+                            <input
+                              type="checkbox"
+                              checked={seleccionRetro.has(e.id)}
+                              onChange={() => {
+                                setSeleccionRetro((prev) => {
+                                  const next = new Set(prev)
+                                  if (next.has(e.id)) next.delete(e.id)
+                                  else next.add(e.id)
+                                  return next
+                                })
+                              }}
+                            />
+                            Validar
+                          </label>
+                        )}
                         <span>{formatEntradaNumero(e)}</span>
                         {e.salida_inmediata_pendiente && (
                           <button
@@ -370,7 +459,12 @@ export default function EntradasPanel({
                         )}
                       </div>
                     </td>
-                    <td style={tdAlert} data-label="Fecha">{fmtFechaAlmacenSolo(e.fecha_entrada)}</td>
+                    <td style={tdAlert} data-label="Fecha">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <span>{fmtFechaAlmacenSolo(e.fecha_entrada)}</span>
+                        <BadgeRetroactivo row={e} />
+                      </div>
+                    </td>
                     <td style={tdAlert} data-label="Tipo">{TIPO_LABEL[e.tipo] || e.tipo || 'Recibo'}</td>
                     <td style={tdAlert} data-label="Remisión">
                       {e.numero_documento
@@ -559,8 +653,11 @@ export default function EntradasPanel({
           theme={t}
           token={token}
           contratoId={permisos?.contratoId}
+          modoRegistro={modoRegistro}
+          fechaHechoInicial={fechaHechoPersistida}
+          onFechaHechoChange={setFechaHechoPersistida}
           onClose={() => setCreating(false)}
-          onSaved={() => { reload() }}
+          onSaved={() => { reload(); reloadRetroEstado() }}
           onAbrirSalioMaterial={(opts) => {
             abrirSalioMaterial(opts?.mode || 'registrar', opts?.prefillInmediata || null)
           }}
@@ -576,6 +673,9 @@ export default function EntradasPanel({
           initialMode={salioMode}
           refreshSignal={refreshSignal}
           prefillInmediata={salioPrefill}
+          modoRegistro={modoRegistro}
+          fechaHechoInicial={fechaHechoPersistida}
+          onFechaHechoChange={setFechaHechoPersistida}
           onClose={() => {
             setSalioOpen(false)
             setSalioPrefill(null)
@@ -584,7 +684,19 @@ export default function EntradasPanel({
           onSaved={() => {
             invalidateSalidasCache(permisos?.contratoId)
             reload()
+            reloadRetroEstado()
             onSalidaMutated?.()
+          }}
+        />
+      )}
+
+      {habModalOpen && (
+        <RetroactivoHabilitacionesModal
+          api={api}
+          theme={t}
+          onClose={() => {
+            setHabModalOpen(false)
+            reloadRetroEstado()
           }}
         />
       )}

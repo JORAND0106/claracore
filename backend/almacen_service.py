@@ -9357,12 +9357,33 @@ def create_entrada(
     codigo_entrada = _format_codigo_entrada(contrato_id, numero_entrada)
     por_rev = patch_por_revisar(motivos)
 
+    from almacen_retroactivo import (
+        assert_entrada_no_antes_de_oc,
+        assert_fecha_hecho_entrada,
+        parse_fecha_hecho_entrada,
+        patch_retroactivo_columns,
+        resolver_flags_retroactivo_create,
+    )
+
+    es_retro, fecha_aprox = resolver_flags_retroactivo_create(
+        sb, contrato_id, user_id, body, current_user=body.get("_current_user"),
+    )
+    if es_retro:
+        fecha_hecho = parse_fecha_hecho_entrada(body.get("fecha_entrada"))
+        assert_fecha_hecho_entrada(sb, contrato_id, fecha_hecho)
+        assert_entrada_no_antes_de_oc(sb, oc_id, fecha_hecho)
+        fecha_entrada_val = fecha_hecho.isoformat()
+    else:
+        # Actualizado: siempre hoy (ignora fecha del cliente).
+        fecha_entrada_val = date.today().isoformat()
+        fecha_aprox = False
+
     entrada_row = {
         "orden_compra_id": oc_id,
         "contrato_id": contrato_id,
         "numero_entrada": numero_entrada,
         "codigo": codigo_entrada,
-        "fecha_entrada": body.get("fecha_entrada") or date.today().isoformat(),
+        "fecha_entrada": fecha_entrada_val,
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
         "tipo": tipo,
@@ -9385,6 +9406,7 @@ def create_entrada(
         "salida_inmediata_pendiente": bool(body.get("salida_inmediata_pendiente")),
         "idempotency_key": idem_key,
     }
+    entrada_row = patch_retroactivo_columns(entrada_row, es_retro=es_retro, fecha_aprox=fecha_aprox)
     if entrada_row["llegada_domicilio"]:
         # Domicilio: no exigir ni persistir placa/conductor.
         entrada_row["placa"] = None
@@ -9416,6 +9438,12 @@ def create_entrada(
             raise ValueError(mensaje_remision_duplicada(str(codigo_dup))) from exc
         # Migración pendiente: guardar sin columnas nuevas.
         col = _pgrst_unknown_column(exc)
+        retro_cols = (
+            "es_retroactivo",
+            "fecha_aproximada",
+            "retroactivo_validado_at",
+            "retroactivo_validado_por",
+        )
         drop_cols = (
             "por_revisar",
             "por_revisar_motivos",
@@ -9423,8 +9451,14 @@ def create_entrada(
             "llegada_domicilio",
             "salida_inmediata_pendiente",
             "idempotency_key",
+            *retro_cols,
         )
         if col in drop_cols:
+            if col in retro_cols and es_retro:
+                raise ValueError(
+                    "Falta la migración de modo Retroactivo en la base de datos. "
+                    "Ejecute backend/sql/almacen_modo_retroactivo.sql y NOTIFY pgrst, 'reload schema'."
+                ) from exc
             for k in drop_cols:
                 entrada_row.pop(k, None)
             ent_ins = sb.table("almacen_entrada").insert(entrada_row).execute().data
@@ -10697,6 +10731,8 @@ def list_entradas(contrato_id: int) -> List[dict]:
             r["usuario_nombre"] = names.get(int(r["created_by"]))
         r["tiene_remision"] = bool(r.get("remision_blob_path"))
         r["tiene_material_foto"] = bool(r.get("material_foto_blob_path"))
+        from almacen_retroactivo import enriquecer_marca
+        enriquecer_marca(r)
         _asegurar_codigo_entrada(contrato_id, r)
     return _enriquecer_entradas_listado(sb, rows)
 
@@ -11891,15 +11927,50 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
     ubic_eff = ubic_map.get(entrada_item_id) or {}
     # Destino puede diferir del PK de la entrada; sin PK → por revisar (no bloquea).
 
+    from almacen_retroactivo import (
+        assert_fecha_hecho_salida,
+        assert_salida_coherente_con_entrada,
+        patch_retroactivo_columns,
+        resolver_flags_retroactivo_create,
+    )
+
+    es_retro, fecha_aprox = resolver_flags_retroactivo_create(
+        sb, contrato_id, user_id, body, current_user=body.get("_current_user"),
+    )
     salidas_map = _despacho_neto_por_entrada_item(sb, [entrada_item_id])
     recibida = _cantidad_recibida_entrada_item(sb, entrada_item_id)
     despachada = salidas_map.get(entrada_item_id, 0.0)
     disponible = _disponible_entrada_item(recibida, despachada)
-    if qty > disponible + 1e-9:
-        raise ValueError(
-            f"La cantidad a despachar ({qty}) supera el disponible para salida ({disponible}) "
-            f"de esta entrada. Máximo permitido: {disponible}."
+
+    if es_retro:
+        raw_fh = (body.get("fecha_hora_salida") or "").strip()
+        if not raw_fh:
+            raise ValueError("En modo Retroactivo la fecha y hora del hecho son obligatorias.")
+        fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(raw_fh)
+        dt_hecho = assert_fecha_hecho_salida(sb, contrato_id, fecha_hora)
+        # Stock a la fecha del hecho (permite capturar en desorden respecto al reloj actual).
+        assert_salida_coherente_con_entrada(
+            sb,
+            ent,
+            fecha_hora_salida=dt_hecho,
+            cantidad=qty,
+            entrada_item_id=entrada_item_id,
+            cantidad_recibida=recibida,
         )
+        # Tope global: nunca superar lo recibido menos lo ya despachado neto.
+        if qty > disponible + 1e-9:
+            raise ValueError(
+                f"La cantidad a despachar ({qty}) supera el disponible actual ({disponible}) "
+                f"de esta entrada. Máximo permitido: {disponible}."
+            )
+    else:
+        fecha_hora = normalize_fecha_hora_bogota_to_utc_iso("")
+        fecha_aprox = False
+        if qty > disponible + 1e-9:
+            raise ValueError(
+                f"La cantidad a despachar ({qty}) supera el disponible para salida ({disponible}) "
+                f"de esta entrada. Máximo permitido: {disponible}."
+            )
 
     motivos: List[str] = []
     if not pk_id:
@@ -11908,9 +11979,6 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         motivos.append(MOTIVO_SIN_RECEPTOR)
     por_rev = patch_por_revisar(motivos)
 
-    fecha_hora = normalize_fecha_hora_bogota_to_utc_iso(
-        (body.get("fecha_hora_salida") or "").strip()
-    )
     numero_salida = _next_consecutivo(contrato_id, "almacen_salida", "numero_salida")
     codigo_salida = _format_codigo_salida(contrato_id, numero_salida)
 
@@ -11933,12 +12001,24 @@ def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
         "por_revisar": por_rev["por_revisar"],
         "por_revisar_motivos": por_rev["por_revisar_motivos"],
     }
+    salida_row = patch_retroactivo_columns(salida_row, es_retro=es_retro, fecha_aprox=fecha_aprox)
     try:
         ins = sb.table("almacen_salida").insert(salida_row).execute().data
     except Exception as exc:
         col = _pgrst_unknown_column(exc)
-        if col in ("por_revisar", "por_revisar_motivos"):
-            for k in ("por_revisar", "por_revisar_motivos"):
+        retro_cols = (
+            "es_retroactivo",
+            "fecha_aproximada",
+            "retroactivo_validado_at",
+            "retroactivo_validado_por",
+        )
+        if col in retro_cols and es_retro:
+            raise ValueError(
+                "Falta la migración de modo Retroactivo en la base de datos. "
+                "Ejecute backend/sql/almacen_modo_retroactivo.sql y NOTIFY pgrst, 'reload schema'."
+            ) from exc
+        if col in ("por_revisar", "por_revisar_motivos", *retro_cols):
+            for k in ("por_revisar", "por_revisar_motivos", *retro_cols):
                 salida_row.pop(k, None)
             if receptor_id is None:
                 raise ValueError(
@@ -12112,7 +12192,8 @@ def list_salidas(contrato_id: int) -> List[dict]:
         "tramo, costado, abscisa_inicial, abscisa_final, entrada_item_id, cantidad_salida, "
         "observaciones, receptor_usuario_id, created_by, created_at, "
         "salida_pdf_blob_path, salida_pdf_nombre, salida_pdf_mime, "
-        "por_revisar, por_revisar_motivos"
+        "por_revisar, por_revisar_motivos, "
+        "es_retroactivo, fecha_aproximada, retroactivo_validado_at, retroactivo_validado_por"
     )
     try:
         rows = (
@@ -12126,7 +12207,11 @@ def list_salidas(contrato_id: int) -> List[dict]:
         )
     except Exception as exc:
         col = _pgrst_unknown_column(exc)
-        if col in ("por_revisar", "por_revisar_motivos"):
+        if col in (
+            "por_revisar", "por_revisar_motivos",
+            "es_retroactivo", "fecha_aproximada",
+            "retroactivo_validado_at", "retroactivo_validado_por",
+        ):
             rows = (
                 sb.table("almacen_salida")
                 .select(
@@ -12143,6 +12228,9 @@ def list_salidas(contrato_id: int) -> List[dict]:
             )
         else:
             raise
+    from almacen_retroactivo import enriquecer_marca
+    for r in rows:
+        enriquecer_marca(r)
     return _enrich_salidas_rows(sb, contrato_id, rows)
 
 

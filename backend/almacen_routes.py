@@ -2469,6 +2469,194 @@ def route_list_entradas(contrato_id: int, current_user=Depends(get_current_user)
     return list_entradas(contrato_id)
 
 
+# ── Modo Retroactivo ─────────────────────────────────────────────────────────
+
+class RetroHabilitacionBody(BaseModel):
+    usuario_ids: List[int] = Field(..., min_length=1)
+    desde: str
+    hasta: str
+    motivo: Optional[str] = None
+
+
+class RetroAmpliarBody(BaseModel):
+    hasta: str
+
+
+class RetroValidarBody(BaseModel):
+    entrada_ids: Optional[List[int]] = None
+    salida_ids: Optional[List[int]] = None
+
+
+@router.get("/{contrato_id}/retroactivo/estado")
+def route_retroactivo_estado(contrato_id: int, current_user=Depends(get_current_user)):
+    from almacen_retroactivo import estado_retroactivo_usuario
+
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    return estado_retroactivo_usuario(
+        supabase, contrato_id, _uid(current_user), current_user=current_user,
+    )
+
+
+@router.get("/{contrato_id}/retroactivo/habilitaciones")
+def route_list_habilitaciones_retro(
+    contrato_id: int,
+    incluir_vencidas: bool = True,
+    current_user=Depends(get_current_user),
+):
+    from almacen_retroactivo import list_habilitaciones, require_habilitar_modo_retroactivo
+
+    _check_contrato(current_user, contrato_id)
+    require_habilitar_modo_retroactivo(current_user)
+    return list_habilitaciones(supabase, contrato_id, incluir_vencidas=incluir_vencidas)
+
+
+@router.post("/{contrato_id}/retroactivo/habilitaciones")
+def route_crear_habilitacion_retro(
+    contrato_id: int,
+    body: RetroHabilitacionBody,
+    current_user=Depends(get_current_user),
+):
+    from almacen_retroactivo import crear_habilitacion, require_habilitar_modo_retroactivo
+
+    _check_contrato(current_user, contrato_id)
+    require_habilitar_modo_retroactivo(current_user)
+    try:
+        rows = crear_habilitacion(
+            supabase,
+            contrato_id,
+            usuario_ids=body.usuario_ids,
+            desde=body.desde,
+            hasta=body.hasta,
+            motivo=body.motivo,
+            habilitado_por=_uid(current_user),
+        )
+        for r in rows:
+            log_almacen(
+                current_user, "HABILITAR_RETROACTIVO", "habilitacion_retroactivo", r.get("id"),
+                {
+                    "usuario_id": r.get("usuario_id"),
+                    "desde": r.get("desde"),
+                    "hasta": r.get("hasta"),
+                    "motivo": r.get("motivo"),
+                },
+                valor_anterior=None,
+                valor_nuevo=r,
+            )
+        return {"ok": True, "habilitaciones": rows}
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/{contrato_id}/retroactivo/habilitaciones/{hab_id}")
+def route_ampliar_habilitacion_retro(
+    contrato_id: int,
+    hab_id: int,
+    body: RetroAmpliarBody,
+    current_user=Depends(get_current_user),
+):
+    from almacen_retroactivo import ampliar_habilitacion, require_habilitar_modo_retroactivo
+
+    _check_contrato(current_user, contrato_id)
+    require_habilitar_modo_retroactivo(current_user)
+    try:
+        prev = None
+        try:
+            prev_rows = (
+                supabase.table("almacen_habilitacion_retroactivo")
+                .select("*")
+                .eq("id", hab_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            prev = prev_rows[0] if prev_rows else None
+        except Exception:
+            prev = None
+        row = ampliar_habilitacion(
+            supabase, contrato_id, hab_id, hasta=body.hasta, user_id=_uid(current_user),
+        )
+        log_almacen(
+            current_user, "AMPLIAR_RETROACTIVO", "habilitacion_retroactivo", hab_id,
+            {"hasta": body.hasta},
+            valor_anterior=prev,
+            valor_nuevo=row,
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/retroactivo/habilitaciones/{hab_id}")
+def route_revocar_habilitacion_retro(
+    contrato_id: int,
+    hab_id: int,
+    current_user=Depends(get_current_user),
+):
+    from almacen_retroactivo import require_habilitar_modo_retroactivo, revocar_habilitacion
+
+    _check_contrato(current_user, contrato_id)
+    require_habilitar_modo_retroactivo(current_user)
+    try:
+        row = revocar_habilitacion(
+            supabase, contrato_id, hab_id, user_id=_uid(current_user),
+        )
+        log_almacen(
+            current_user, "REVOCAR_RETROACTIVO", "habilitacion_retroactivo", hab_id,
+            {"revocado": True},
+            valor_anterior=None,
+            valor_nuevo=row,
+        )
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/retroactivo/pendientes-count")
+def route_retroactivo_pendientes_count(contrato_id: int, current_user=Depends(get_current_user)):
+    from almacen_retroactivo import contar_pendientes_validacion, puede_validar_registros_retroactivos
+
+    _check_contrato(current_user, contrato_id)
+    require_lectura_entradas_salidas(current_user)
+    if not puede_validar_registros_retroactivos(current_user):
+        return {"entradas": 0, "salidas": 0, "total": 0}
+    return contar_pendientes_validacion(supabase, contrato_id)
+
+
+@router.post("/{contrato_id}/retroactivo/validar")
+def route_validar_retroactivo(
+    contrato_id: int,
+    body: RetroValidarBody,
+    current_user=Depends(get_current_user),
+):
+    from almacen_retroactivo import require_validar_registros_retroactivos, validar_registros_retroactivos
+
+    _check_contrato(current_user, contrato_id)
+    require_validar_registros_retroactivos(current_user)
+    try:
+        out = validar_registros_retroactivos(
+            supabase,
+            contrato_id,
+            validador_id=_uid(current_user),
+            entrada_ids=body.entrada_ids,
+            salida_ids=body.salida_ids,
+        )
+        log_almacen(
+            current_user, "VALIDAR_RETROACTIVO", "retroactivo", None,
+            {
+                "entradas": out.get("entradas_validadas"),
+                "salidas": out.get("salidas_validadas"),
+            },
+            valor_anterior=None,
+            valor_nuevo=out,
+        )
+        return out
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
 @router.get("/{contrato_id}/entradas/ocs-pendientes")
 def route_ocs_pendientes_entrada(contrato_id: int, current_user=Depends(get_current_user)):
     """Tarjetas de OC con saldo para el registro tablet (consulta liviana + timing)."""
@@ -2748,12 +2936,26 @@ async def route_create_entrada(
     confirm_posible_duplicado: Optional[str] = Form(None),
     remision_content_hash: Optional[str] = Form(None),
     material_content_hash: Optional[str] = Form(None),
+    es_retroactivo: Optional[str] = Form(None),
+    fecha_aproximada: Optional[str] = Form(None),
     remision: Optional[UploadFile] = File(None),
     material_foto: Optional[UploadFile] = File(None),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_entradas_salidas(current_user, "crear")
+    es_retro = str(es_retroactivo or "").strip().lower() in ("1", "true", "si", "yes")
+    if es_retro:
+        if not (
+            tiene_permiso_entradas_salidas(current_user, "crear")
+            or tiene_permiso_entradas_salidas(current_user, "editar")
+            or es_desarrollador_almacen(current_user)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Se requiere Crear o Editar en Entradas y Salidas para modo Retroactivo.",
+            )
+    else:
+        require_permiso_entradas_salidas(current_user, "crear")
     import json
     try:
         items = json.loads(items_json)
@@ -2814,6 +3016,9 @@ async def route_create_entrada(
         in ("1", "true", "si", "yes"),
         "remision_content_hash": (remision_content_hash or "").strip() or None,
         "material_content_hash": (material_content_hash or "").strip() or None,
+        "es_retroactivo": es_retro,
+        "fecha_aproximada": str(fecha_aproximada or "").strip().lower() in ("1", "true", "si", "yes"),
+        "_current_user": current_user,
     }
     try:
         result = create_entrada(
@@ -2958,6 +3163,8 @@ class SalidaCreateBody(BaseModel):
     # Multi-línea: varias filas en un mismo registro.
     items: Optional[List[SalidaItemBody]] = None
     observaciones: Optional[str] = None
+    es_retroactivo: Optional[bool] = False
+    fecha_aproximada: Optional[bool] = False
 
 
 class SalidaCantidadUpdateBody(BaseModel):
@@ -3063,11 +3270,23 @@ def route_get_salida(contrato_id: int, salida_id: int, current_user=Depends(get_
 @router.post("/{contrato_id}/salidas")
 def route_create_salida(contrato_id: int, body: SalidaCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_entradas_salidas(current_user, "crear")
+    if body.es_retroactivo:
+        if not (
+            tiene_permiso_entradas_salidas(current_user, "crear")
+            or tiene_permiso_entradas_salidas(current_user, "editar")
+            or es_desarrollador_almacen(current_user)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Se requiere Crear o Editar en Entradas y Salidas para modo Retroactivo.",
+            )
+    else:
+        require_permiso_entradas_salidas(current_user, "crear")
     try:
         payload = body.dict()
         if body.items:
             payload["items"] = [it.dict() for it in body.items]
+        payload["_current_user"] = current_user
         result = create_salida(contrato_id, _uid(current_user), payload)
         snap = snapshot_salida(result)
         log_almacen(

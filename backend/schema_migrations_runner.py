@@ -53,6 +53,7 @@ CRITICAL_MIGRATIONS = (
     "20261103020000_almacen_entrada_dup_oc_saldo.sql",
     "20261103140000_usuarios_empresa_tipo.sql",
     "20261103150000_subcontratista_por_servicios.sql",
+    "20261108120000_almacen_modo_retroactivo.sql",
 )
 
 _ENSURE_TABLE_SQL = """
