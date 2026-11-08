@@ -244,10 +244,11 @@ export default function SicoeMediaLightbox({
             </>
           )}
 
-          <div className="cc-sicoe-lightbox-stage">
+          <div className="cc-sicoe-lightbox-stage" data-testid="sicoe-media-lightbox-stage">
             <img
               src={actual.url}
               alt={actual.label || 'Imagen'}
+              data-testid="sicoe-media-lightbox-img"
               referrerPolicy="no-referrer"
               title="Clic derecho para guardar, copiar o abrir en una pestaña nueva"
               style={{

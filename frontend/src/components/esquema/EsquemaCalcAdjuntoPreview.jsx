@@ -303,13 +303,17 @@ export default function EsquemaCalcAdjuntoPreview({
           <button type="button" style={btn.ghost} onClick={onClose} aria-label="Cerrar">Cerrar</button>
         </div>
 
-        <div style={{
-          flex: 1,
-          minHeight: 280,
-          maxHeight: 'min(70vh, 640px)',
-          background: '#ffffff',
-          overflow: 'auto',
-        }}
+        <div
+          data-testid="esquema-calc-adjunto-preview-stage"
+          style={{
+            flex: 1,
+            minHeight: 280,
+            maxHeight: 'min(78vh, 720px)',
+            background: '#ffffff',
+            /* C-OUT-22: imagen completa (encabezado + iso + cuadro); scroll si no cabe. */
+            overflow: 'auto',
+            WebkitOverflowScrolling: 'touch',
+          }}
         >
           {activeIsPdf && viewUrl ? (
             <object
@@ -328,12 +332,15 @@ export default function EsquemaCalcAdjuntoPreview({
             <img
               src={viewUrl || rawUrl}
               alt={active?.label || 'Adjunto'}
+              data-testid="esquema-calc-adjunto-preview-img"
               style={{
                 display: 'block',
+                width: '100%',
+                height: 'auto',
                 maxWidth: '100%',
-                maxHeight: 'min(70vh, 640px)',
                 margin: '0 auto',
                 objectFit: 'contain',
+                objectPosition: 'top center',
                 background: '#fff',
               }}
             />

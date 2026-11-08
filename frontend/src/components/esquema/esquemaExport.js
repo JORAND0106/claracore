@@ -35,6 +35,14 @@ export const ESQUEMA_MEMORIA_TABLE_COLUMNS = Object.freeze([
   '#', 'Color', 'Nombre', 'Operación', 'Descuenta de', 'Dimensiones', 'Fórmula', 'Volumen (m³)',
 ])
 
+/** ¿El snapshot de cálculo debe embeberse en la PNG (tabla bajo el isométrico)? */
+export function esquemaSnapshotTieneMemoria(snap) {
+  if (!snap || typeof snap !== 'object') return false
+  if ((snap.lines || []).some((l) => l && l.ok !== false && (l.ok || l.volumeM3 > 0))) return true
+  if (Array.isArray(snap.memoriaRows) && snap.memoriaRows.length > 0) return true
+  return false
+}
+
 export const EXPORT_MARGIN = 48
 export const EXPORT_TITLE_H = 56
 /** Contorno del margen / área imprimible (contenido + margen). */
@@ -418,7 +426,7 @@ export function planEsquemaExportSalida({
   imageWidth = EXPORT_MIN_WIDTH,
   solids3d = null,
 } = {}) {
-  const snaps = (calcSnapshots || []).filter((s) => s && (s.lines || []).some((l) => l.ok))
+  const snaps = (calcSnapshots || []).filter(esquemaSnapshotTieneMemoria)
   const header = planEsquemaSalidaHeader({
     imageWidth,
     tipoTitulo: 'Esquema',
@@ -484,7 +492,7 @@ export async function composeEsquemaExport({
   }
   const margin = EXPORT_MARGIN
   const rows = nodes || []
-  const snaps = (calcSnapshots || []).filter((s) => s && (s.lines || []).some((l) => l.ok))
+  const snaps = (calcSnapshots || []).filter(esquemaSnapshotTieneMemoria)
   const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
   const exportView = resolveEsquemaExportView3d(solids)
   void view3d
