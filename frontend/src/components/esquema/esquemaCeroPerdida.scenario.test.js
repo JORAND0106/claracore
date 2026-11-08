@@ -46,6 +46,18 @@ describe('esquemaCeroPerdida · modal y host', () => {
     assert.doesNotMatch(modal, /cerrar.*por inactividad|inactivity.?close/i)
   })
 
+  it('C-OUT-14: indicador Guardando→Guardado / Sin guardar + keepDraft', () => {
+    assert.match(modal, /Guardando…/)
+    assert.match(modal, /Guardado/)
+    assert.match(modal, /Sin guardar/)
+    assert.match(modal, /'unsaved'/)
+    assert.match(modal, /keepDraft/)
+    assert.match(modal, /endStatus/)
+    // «Guardado» requiere nube OK (o sin sesión); fallo → unsaved + reintento
+    assert.match(modal, /cloudOk/)
+    assert.match(modal, /void saveEsquemaDraft\(\{\s*silent:\s*true\s*\}\)/)
+  })
+
   it('C-OUT-14: no remonta hoja Sicoe ni cierra sesión con editor abierto', () => {
     const app = read('App.jsx')
     assert.match(app, /sicoeHojaRegistroStableKey/)
@@ -100,6 +112,20 @@ describe('esquemaCeroPerdida · invocación con escena / draft', () => {
       const src = read(file)
       assert.match(src, /draftModule|initialSceneSnapshot|esquema_scene/, file)
       assert.match(src, /EsquemaEditorModal/, file)
+    }
+  })
+
+  it('hosts críticos devuelven keepDraft si Guardar falla', () => {
+    const hosts = [
+      'modules/seguimiento/BitacoraAdjuntos.jsx',
+      'modules/sicoe-obra/SicoeGraficosWizardPanel.jsx',
+      'modules/presupuesto/PptoGraficosModal.jsx',
+      'modules/seguimiento/ActaEditor.jsx',
+      'modules/sicoe-obra/SicoeEsquemasReporteModal.jsx',
+    ]
+    for (const file of hosts) {
+      const src = read(file)
+      assert.match(src, /keepDraft:\s*true/, file)
     }
   })
 

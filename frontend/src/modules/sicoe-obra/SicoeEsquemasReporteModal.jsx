@@ -15,6 +15,12 @@ import {
   planificarActualizacionVersionEsquema,
   planificarAsignacionEsquema,
 } from './sicoeEsquemasReporte.js'
+import {
+  listarEsquemasSinAsignar,
+  mergeEsquemasLista,
+  removeEsquemaSinAsignar,
+  upsertEsquemaSinAsignar,
+} from './sicoeEsquemasSinAsignar.js'
 
 async function nextGraficoNumero(API_URL, contratoId, hdrs) {
   const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/next-grafico`, {
@@ -82,20 +88,33 @@ export default function SicoeEsquemasReporteModal({
   onRegistrosPatched,
 }) {
   const [localRegs, setLocalRegs] = useState(registros)
+  const [sinAsignarRows, setSinAsignarRows] = useState([])
   const esquemas = useMemo(
-    () => listarEsquemasDelReporte(localRegs, isSellado),
-    [localRegs, isSellado],
+    () => mergeEsquemasLista(
+      listarEsquemasDelReporte(localRegs, isSellado),
+      sinAsignarRows,
+    ),
+    [localRegs, isSellado, sinAsignarRows],
   )
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editTarget, setEditTarget] = useState(null) // esquema row or null=nuevo
-  const [pendingSave, setPendingSave] = useState(null) // { dataUrl, extras, editTarget }
+  const [pendingSave, setPendingSave] = useState(null) // { dataUrl, extras, entrada, editTarget }
   const [assignOpen, setAssignOpen] = useState(false)
   const [assignMode, setAssignMode] = useState('nuevo') // nuevo | editar | reasignar
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
+  const reloadSinAsignar = useCallback(async () => {
+    const rows = await listarEsquemasSinAsignar({
+      contratoId,
+      reporteId: reporte?.id,
+    })
+    setSinAsignarRows(rows)
+  }, [contratoId, reporte?.id])
+
   useEffect(() => { setLocalRegs(registros) }, [registros])
+  useEffect(() => { void reloadSinAsignar() }, [reloadSinAsignar, open])
 
   const abrirNuevo = () => {
     setEditTarget(null)
@@ -132,51 +151,75 @@ export default function SicoeEsquemasReporteModal({
     return applied
   }, [API_URL, contratoId, hdrs, onRegistrosPatched])
 
+  const uploadYEntrada = async (dataUrl, extras, {
+    esquemaId,
+    numero: numeroIn,
+    nombreIn,
+    sceneIn,
+  } = {}) => {
+    const file = await dataUriEsquemaAFile(dataUrl, 'esquema-reporte')
+    if (!file) throw new Error('No se pudo convertir el esquema')
+    const nombre = String(nombreIn || extras?.title || 'Esquema').trim() || 'Esquema'
+    const eid = esquemaId || nuevoEsquemaId()
+    let numero = numeroIn
+    if (numero == null) {
+      numero = await nextGraficoNumero(API_URL, contratoId, hdrs)
+    }
+    const up = await uploadGraficoPng(API_URL, contratoId, hdrs, file, numero)
+    const scene = sceneIn || extras?.scene || extras?.esquema_scene || null
+    const entrada = buildEsquemaHistorialEntrada({
+      url: up.url,
+      numero: up.numero ?? numero,
+      nombre,
+      esquemaId: eid,
+      scene,
+      reporteId: reporte?.id,
+    })
+    try {
+      const tok = token || (hdrs?.Authorization || '').replace(/^Bearer\s+/i, '')
+      if (tok && contratoId != null) {
+        await applyEsquemaSaveBundle(dataUrl, extras, {
+          commitImage: async () => {},
+          uploadToCloud: true,
+          token: tok,
+          folder: {
+            contratoId,
+            modulo: 'sicoe-obra',
+            reporteId: reporte?.id ?? reporte?.numero_reporte,
+            reporteNombre: `reporte-${reporte?.numero_reporte ?? reporte?.id ?? ''}`,
+            registroId: `esquema-${entrada.numero}`,
+            registroNombre: nombre,
+          },
+        })
+      }
+    } catch { /* nube best-effort */ }
+    return { entrada, nombre }
+  }
+
   const persistirNuevaVersion = async (dataUrl, extras, target) => {
     setBusy(true)
     setErr('')
     try {
-      const file = await dataUriEsquemaAFile(dataUrl, 'esquema-reporte')
-      if (!file) throw new Error('No se pudo convertir el esquema')
-      const nombre = String(extras?.title || target?.nombre || 'Esquema').trim() || 'Esquema'
-      const esquemaId = target?.esquema_id || nuevoEsquemaId()
-      const numero = target?.numero
-      if (numero == null) throw new Error('El esquema no tiene número de gráfico')
-      const up = await uploadGraficoPng(API_URL, contratoId, hdrs, file, numero)
-      const entrada = buildEsquemaHistorialEntrada({
-        url: up.url,
-        numero: up.numero ?? numero,
-        nombre,
-        esquemaId,
-        scene: extras?.scene || extras?.esquema_scene || target?.scene || null,
-        reporteId: reporte?.id,
+      const { entrada, nombre } = await uploadYEntrada(dataUrl, extras, {
+        esquemaId: target?.esquema_id,
+        numero: target?.numero,
+        nombreIn: target?.nombre,
+        sceneIn: target?.scene,
       })
-      try {
-        const tok = token || (hdrs?.Authorization || '').replace(/^Bearer\s+/i, '')
-        if (tok && contratoId != null) {
-          await applyEsquemaSaveBundle(dataUrl, extras, {
-            commitImage: async () => {},
-            uploadToCloud: true,
-            token: tok,
-            folder: {
-              contratoId,
-              modulo: 'sicoe-obra',
-              reporteId: reporte?.id ?? reporte?.numero_reporte,
-              reporteNombre: `reporte-${reporte?.numero_reporte ?? reporte?.id ?? ''}`,
-              registroId: `esquema-${entrada.numero}`,
-              registroNombre: nombre,
-            },
-          })
-        }
-      } catch { /* nube best-effort */ }
-
-      const { patches } = planificarActualizacionVersionEsquema({
-        registros: localRegs,
-        entradaNueva: entrada,
-        isSellado,
-      })
-      if (patches.length) {
-        await aplicarPatches(patches)
+      if (target?.sinAsignar || !(target?.registros || []).length) {
+        await upsertEsquemaSinAsignar({
+          contratoId,
+          reporteId: reporte?.id,
+          entrada,
+        })
+        await reloadSinAsignar()
+      } else {
+        const { patches } = planificarActualizacionVersionEsquema({
+          registros: localRegs,
+          entradaNueva: entrada,
+          isSellado,
+        })
+        if (patches.length) await aplicarPatches(patches)
       }
       await presentEsquemaExportPopup({
         t,
@@ -188,23 +231,54 @@ export default function SicoeEsquemasReporteModal({
       setPendingSave(null)
     } catch (e) {
       setErr(e?.message || String(e))
+      throw e
     } finally {
       setBusy(false)
     }
   }
 
+  /**
+   * Guardar siempre persiste PNG+escena (C-OUT-14 / C-OUT-18).
+   * Nuevo: queda «Sin asignar» y luego se ofrece el popup de casillas.
+   * Cancelar asignación no pierde el esquema.
+   */
   const onSaveEditor = async (dataUrl, extras) => {
-    if (!dataUrl) return
-    setEditorOpen(false)
+    if (!dataUrl) return { keepDraft: true }
     if (editTarget) {
-      // Edición: actualiza versión en todos los asignados (sellados incluidos).
-      await persistirNuevaVersion(dataUrl, extras, editTarget)
-      return
+      try {
+        await persistirNuevaVersion(dataUrl, extras, editTarget)
+        setEditorOpen(false)
+        return { keepDraft: false }
+      } catch (e) {
+        setErr(e?.message || String(e))
+        return { keepDraft: true }
+      }
     }
-    // Nuevo: primero la lista de casillas (ninguna marcada); Exportar después de confirmar.
-    setPendingSave({ dataUrl, extras, editTarget: null })
-    setAssignMode('nuevo')
-    setAssignOpen(true)
+    // Nuevo: persistir YA (Sin asignar), luego pedir asignación.
+    setBusy(true)
+    setErr('')
+    try {
+      const { entrada, nombre } = await uploadYEntrada(dataUrl, extras, {})
+      await upsertEsquemaSinAsignar({
+        contratoId,
+        reporteId: reporte?.id,
+        entrada,
+      })
+      await reloadSinAsignar()
+      setPendingSave({
+        dataUrl, extras, entrada, nombre, editTarget: null,
+      })
+      setAssignMode('nuevo')
+      setEditorOpen(false)
+      setAssignOpen(true)
+      return { keepDraft: false }
+    } catch (e) {
+      setErr(e?.message || String(e))
+      // Conservar borrador del editor: el Guardar falló.
+      return { keepDraft: true }
+    } finally {
+      setBusy(false)
+    }
   }
 
   const confirmarAsignacion = async (ids) => {
@@ -231,55 +305,39 @@ export default function SicoeEsquemasReporteModal({
           idsDeseados: ids,
           isSellado,
         })
-        if (!patches.length) throw new Error('No hay cambios de asignación.')
-        await aplicarPatches(patches)
+        if (!patches.length && !editTarget.sinAsignar) {
+          throw new Error('No hay cambios de asignación.')
+        }
+        if (patches.length) await aplicarPatches(patches)
+        if (ids.length) {
+          await removeEsquemaSinAsignar({
+            contratoId,
+            reporteId: reporte?.id,
+            esquemaId: editTarget.esquema_id,
+          })
+        } else {
+          await upsertEsquemaSinAsignar({
+            contratoId,
+            reporteId: reporte?.id,
+            entrada,
+          })
+        }
+        await reloadSinAsignar()
         setAssignOpen(false)
         setEditTarget(null)
         setPendingSave(null)
         return
       }
 
-      const { dataUrl, extras, editTarget: target } = pendingSave || {}
-      const file = await dataUriEsquemaAFile(dataUrl, 'esquema-reporte')
-      if (!file) throw new Error('No se pudo convertir el esquema')
-
-      const nombre = String(extras?.title || target?.nombre || 'Esquema').trim() || 'Esquema'
-      const esquemaId = target?.esquema_id || nuevoEsquemaId()
-      let numero = target?.numero
-      if (numero == null) {
-        numero = await nextGraficoNumero(API_URL, contratoId, hdrs)
+      // Nuevo: PNG+escena ya persistidos como Sin asignar en onSaveEditor.
+      const { dataUrl, extras, entrada: entradaSaved, nombre: nombreSaved } = pendingSave || {}
+      let entrada = entradaSaved
+      let nombre = nombreSaved || extras?.title || 'Esquema'
+      if (!entrada?.url) {
+        const uploaded = await uploadYEntrada(dataUrl, extras, {})
+        entrada = uploaded.entrada
+        nombre = uploaded.nombre
       }
-      const up = await uploadGraficoPng(API_URL, contratoId, hdrs, file, numero)
-      const url = up.url
-      const scene = extras?.scene || extras?.esquema_scene || target?.scene || null
-      const entrada = buildEsquemaHistorialEntrada({
-        url,
-        numero: up.numero ?? numero,
-        nombre,
-        esquemaId,
-        scene,
-        reporteId: reporte?.id,
-      })
-
-      // Nube + export bundle (PNG ya subido; commitImage no-op por registro se hace abajo)
-      try {
-        const tok = token || (hdrs?.Authorization || '').replace(/^Bearer\s+/i, '')
-        if (tok && contratoId != null) {
-          await applyEsquemaSaveBundle(dataUrl, extras, {
-            commitImage: async () => {},
-            uploadToCloud: true,
-            token: tok,
-            folder: {
-              contratoId,
-              modulo: 'sicoe-obra',
-              reporteId: reporte?.id ?? reporte?.numero_reporte,
-              reporteNombre: `reporte-${reporte?.numero_reporte ?? reporte?.id ?? ''}`,
-              registroId: `esquema-${entrada.numero}`,
-              registroNombre: nombre,
-            },
-          })
-        }
-      } catch { /* nube best-effort */ }
 
       const { patches } = planificarAsignacionEsquema({
         registros: localRegs,
@@ -290,6 +348,12 @@ export default function SicoeEsquemasReporteModal({
 
       if (!patches.length) throw new Error('Seleccione al menos un registro')
       await aplicarPatches(patches)
+      await removeEsquemaSinAsignar({
+        contratoId,
+        reporteId: reporte?.id,
+        esquemaId: entrada.esquema_id,
+      })
+      await reloadSinAsignar()
 
       await presentEsquemaExportPopup({
         t,
@@ -305,6 +369,25 @@ export default function SicoeEsquemasReporteModal({
       setErr(e?.message || String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const cancelarAsignacion = () => {
+    if (busy) return
+    // El esquema ya está guardado como Sin asignar (o reasignar sin cambios).
+    const pending = pendingSave
+    setAssignOpen(false)
+    setPendingSave(null)
+    if (assignMode === 'reasignar') setEditTarget(null)
+    void reloadSinAsignar()
+    // Guardar ya ocurrió: ofrecer Exportar aunque se cancele la asignación.
+    if (assignMode === 'nuevo' && pending) {
+      void presentEsquemaExportPopup({
+        t,
+        title: pending.nombre || pending.extras?.title || 'Esquema',
+        pdf: pending.extras?.exports?.pdf || null,
+        dxf: pending.extras?.exports?.dxf || null,
+      }).catch(() => {})
     }
   }
 
@@ -411,7 +494,9 @@ export default function SicoeEsquemasReporteModal({
                     <td style={td}>#{row.numero ?? '—'}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{row.nombre}</td>
                     <td style={td}>
-                      {row.registros.map((r) => `#${r.numero_registro}`).join(', ') || '—'}
+                      {row.sinAsignar || !(row.registros || []).length
+                        ? <span style={{ color: ui.muted, fontWeight: 700 }}>Sin asignar</span>
+                        : row.registros.map((r) => `#${r.numero_registro}`).join(', ')}
                     </td>
                     <td style={td}>
                       {row.thumb ? (
@@ -472,12 +557,7 @@ export default function SicoeEsquemasReporteModal({
             ? `Cambiar asignación · ${editTarget?.nombre || 'Esquema'}`
             : 'Asignar esquema a registros'}
           busy={busy}
-          onCancel={() => {
-            if (busy) return
-            setAssignOpen(false)
-            setPendingSave(null)
-            if (assignMode === 'reasignar') setEditTarget(null)
-          }}
+          onCancel={cancelarAsignacion}
           onConfirm={(ids) => void confirmarAsignacion(ids)}
         />
       )}

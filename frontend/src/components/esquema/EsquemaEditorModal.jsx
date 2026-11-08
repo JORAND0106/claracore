@@ -6483,6 +6483,8 @@ export default function EsquemaEditorModal({
       return { ok: false }
     }
     if (!silent) setBusy(true)
+    /** Estado terminal del indicador: evita race con setState async en finally. */
+    let endStatus = null
     if (silent) {
       setDraftSaveStatus('saving')
       if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
@@ -6498,7 +6500,7 @@ export default function EsquemaEditorModal({
         snapshot,
       })
       if (!r.ok) {
-        if (silent) setDraftSaveStatus(typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'idle')
+        endStatus = typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'unsaved'
         if (!silent) {
           setDraftNotice({
             kind: 'info',
@@ -6520,16 +6522,17 @@ export default function EsquemaEditorModal({
           confirmLabel: 'Entendido',
         })
         setToolHint('Borrador guardado.')
-        setDraftSaveStatus('saved')
+        endStatus = 'saved'
       } else {
-        // Nube: escena borrador sin interrumpir (si hay sesión y contrato).
+        // Nube: escena borrador; «Guardado» solo si la nube OK (o vacío/sin sesión).
         let cloudOk = false
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false
         try {
           let tok = ''
           try {
             tok = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
           } catch { /* ignore */ }
-          if (tok && contratoIdProp != null && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+          if (tok && contratoIdProp != null && !offline) {
             const json = JSON.stringify(snapshot)
             const blob = new Blob([json], { type: 'application/json' })
             const file = new File([blob], 'esquema-borrador-scene.json', { type: 'application/json' })
@@ -6546,26 +6549,38 @@ export default function EsquemaEditorModal({
               nombre: 'esquema-borrador-scene.json',
             })
             cloudOk = true
+          } else if (!tok || contratoIdProp == null) {
+            // Sin sesión/contrato: local basta.
+            cloudOk = true
           }
-        } catch { /* autosave nube best-effort */ }
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-          setDraftSaveStatus('offline')
+        } catch { /* nube falló */ }
+        if (offline) {
+          endStatus = 'offline'
+        } else if (cloudOk) {
+          endStatus = 'saved'
+          if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
+          draftSaveStatusTimerRef.current = setTimeout(() => {
+            setDraftSaveStatus((s) => (s === 'saved' ? 'idle' : s))
+          }, 2500)
         } else {
-          setDraftSaveStatus('saved')
-          if (!cloudOk) {
-            // Local OK; nube diferida — el indicador sigue en Guardado (dispositivo).
-          }
+          endStatus = 'unsaved'
+          // Reintento suave sin dejar «Guardando…» colgado.
+          if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
+          draftSaveStatusTimerRef.current = setTimeout(() => {
+            if (dirty && resolvedDraftKeyRef.current) {
+              void saveEsquemaDraft({ silent: true })
+            }
+          }, 4000)
         }
-        if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
-        draftSaveStatusTimerRef.current = setTimeout(() => {
-          setDraftSaveStatus((s) => (s === 'saved' ? 'idle' : s))
-        }, 2500)
       }
       return r
     } finally {
       if (!silent) setBusy(false)
+      // Nunca dejar el indicador en «Guardando…» indefinidamente (C-OUT-14).
+      if (endStatus) setDraftSaveStatus(endStatus)
+      else if (silent) setDraftSaveStatus('unsaved')
     }
-  }, [collectDraftSnapshot, draftModule, draftEntityId, iaDoc, contratoIdProp, title])
+  }, [collectDraftSnapshot, draftModule, draftEntityId, iaDoc, contratoIdProp, title, dirty])
 
   /** Cierre solo por botón: confirma si hay cambios; nunca por clic fuera ni inactividad. */
   const pedirCerrar = useCallback(() => {
@@ -6753,7 +6768,7 @@ export default function EsquemaEditorModal({
           }
         }
       } catch { /* DXF opcional */ }
-      await onSave?.(composed, {
+      const saveResult = await onSave?.(composed, {
         title: titleTxt,
         adjuntos,
         calcSnapshots: snapshots,
@@ -6768,14 +6783,23 @@ export default function EsquemaEditorModal({
           : [],
         dibujoTipo: dibujoTipoRef.current || 'nodo',
       })
-      setDirty(false)
-      // Finalizar: el resultado queda fijo y se limpia el borrador.
-      if (resolvedDraftKeyRef.current) {
-        await esquemaDraftClear(resolvedDraftKeyRef.current)
+      // Si el host pide keepDraft (p. ej. Guardar falló antes de persistir),
+      // no borrar el borrador ni dirty: C-OUT-14 nunca pierde el trabajo.
+      const keepDraft = !!(saveResult && saveResult.keepDraft)
+      if (!keepDraft) {
+        setDirty(false)
+        if (resolvedDraftKeyRef.current) {
+          await esquemaDraftClear(resolvedDraftKeyRef.current)
+        }
+        setDraftSaveStatus('saved')
+      } else {
+        setDraftSaveStatus('unsaved')
+        // Reintentar autosave sin esperar otro cambio del usuario.
+        void saveEsquemaDraft({ silent: true })
       }
       // Popup Exportar (PDF/DXF al computador). Si el caller lo difiere
       // (asignación SicoeObra) o ya lo muestra tras onSave, no duplicar aquí.
-      if (!deferExportPopup) {
+      if (!deferExportPopup && !keepDraft) {
         try {
           await presentEsquemaExportPopup({
             t,
@@ -6787,7 +6811,7 @@ export default function EsquemaEditorModal({
           console.error('presentEsquemaExportPopup', err)
         }
       }
-      if (closeAfterSaveRef.current) {
+      if (closeAfterSaveRef.current && !keepDraft) {
         closeAfterSaveRef.current = false
         onClose?.()
       }
@@ -7313,15 +7337,16 @@ export default function EsquemaEditorModal({
             data-status={draftSaveStatus}
             title={
               draftSaveStatus === 'saving' ? 'Guardando borrador…'
-                : draftSaveStatus === 'saved' ? 'Borrador guardado'
-                  : draftSaveStatus === 'offline' ? 'Borrador en este dispositivo (sin conexión)'
-                    : 'Autosave silencioso activo'
+                : draftSaveStatus === 'saved' ? 'Borrador guardado en la nube'
+                  : draftSaveStatus === 'offline' ? 'Sin conexión: borrador en este dispositivo'
+                    : draftSaveStatus === 'unsaved' ? 'Sin guardar — se reintenta solo'
+                      : 'Autosave silencioso activo'
             }
             style={{
               fontSize: 11,
               fontWeight: 600,
               color: draftSaveStatus === 'saving' ? (t.primary || '#0f766e')
-                : draftSaveStatus === 'offline' ? '#b45309'
+                : draftSaveStatus === 'offline' || draftSaveStatus === 'unsaved' ? '#b45309'
                   : (t.textMuted || '#64748b'),
               marginRight: 8,
               whiteSpace: 'nowrap',
@@ -7331,7 +7356,8 @@ export default function EsquemaEditorModal({
             {draftSaveStatus === 'saving' ? 'Guardando…'
               : draftSaveStatus === 'saved' ? 'Guardado'
                 : draftSaveStatus === 'offline' ? 'En dispositivo'
-                  : (dirty ? '…' : 'Guardado')}
+                  : draftSaveStatus === 'unsaved' ? 'Sin guardar'
+                    : (dirty ? '…' : 'Guardado')}
           </span>
           <button
             type="button"

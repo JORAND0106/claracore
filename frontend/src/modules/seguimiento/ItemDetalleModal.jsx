@@ -1138,10 +1138,10 @@ export default function ItemDetalleModal({
               iaDoc={{ ambito: 'compromiso', docKey: `compromiso-${item.id}` }}
               onClose={() => setEsquemaOpen(false)}
               onSave={async (dataUrl, extras) => {
+                if (!dataUrl) return { keepDraft: true }
                 try {
                   const file = await dataUriEsquemaAFile(dataUrl, `esquema-compromiso-${item.id}`)
                   if (!file) throw new Error('No se pudo convertir el esquema')
-                  setEsquemaOpen(false)
                   await api.uploadEvidencia(item.id, file, 'esquema')
                   const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
                   const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
@@ -1163,7 +1163,12 @@ export default function ItemDetalleModal({
                   })
                   await reload()
                   onChanged?.()
-                } catch (err) { setError(err.message) }
+                  setEsquemaOpen(false)
+                  return { keepDraft: false }
+                } catch (err) {
+                  setError(err.message)
+                  return { keepDraft: true }
+                }
               }}
             />
           )}

@@ -2888,6 +2888,7 @@ export default function ActaEditor({
           }}
           onClose={() => setEsquemaIdeaIdx(null)}
           onSave={(dataUrl, extras) => {
+            if (!dataUrl) return { keepDraft: true }
             const idx = esquemaIdeaIdx
             const scene = extras?.scene || extras?.esquema_scene || null
             const ok = pushIdeaImagenPending(idx, {
@@ -2898,6 +2899,10 @@ export default function ActaEditor({
               origen: 'esquema',
               scene,
             })
+            if (!ok) {
+              setError('Máximo 8 esquemas/gráficos por idea')
+              return { keepDraft: true }
+            }
             void (async () => {
               const { applyEsquemaCalcAdjuntos } = await import('../../components/esquema/esquemaSaveExtras.js')
               const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
@@ -2922,11 +2927,9 @@ export default function ActaEditor({
               })
             })()
             setEsquemaIdeaIdx(null)
-            if (!ok) setError('Máximo 8 esquemas/gráficos por idea')
-            else {
-              setError('')
-              setOkMsg('Esquema dibujado. Guarde el acta para persistirlo.')
-            }
+            setError('')
+            setOkMsg('Esquema dibujado. Guarde el acta para persistirlo.')
+            return { keepDraft: false }
           }}
         />
       )}

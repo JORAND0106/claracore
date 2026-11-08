@@ -869,7 +869,7 @@ export default function PlanillaTuberiaCrearReporteModal({
             onSave={async (dataUrl, extras) => {
               if (!dataUrl) {
                 setErr('El esquema no devolvió imagen. Guarde de nuevo.')
-                return
+                return { keepDraft: true }
               }
               setEsquemaDataUri(dataUrl)
               setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
@@ -888,6 +888,7 @@ export default function PlanillaTuberiaCrearReporteModal({
                   dxf: extras?.exports?.dxf || null,
                 })
               } catch { /* popup opcional */ }
+              return { keepDraft: false }
             }}
           />
         </div>,

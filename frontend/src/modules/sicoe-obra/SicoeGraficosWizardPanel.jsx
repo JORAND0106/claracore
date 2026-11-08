@@ -156,14 +156,11 @@ export default function SicoeGraficosWizardPanel({
   }
 
   const guardarEsquemaComoGrafico = async (dataUrl, extras) => {
-    if (!dataUrl || subiendo) return
+    if (!dataUrl || subiendo) return { keepDraft: true }
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema')
       if (!file) throw new Error('No se pudo convertir el esquema')
       const scene = extras?.scene || extras?.esquema_scene || null
-      setEsquemaOpen(false)
-      setEsquemaInitialDataUri(null)
-      setEsquemaInitialScene(null)
       await subirArchivo(file, { origen: 'esquema', scene })
       // Solo PNG de memoria/despiece al historial; PDF/DXF no van al registro (C-OUT-13).
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
@@ -183,8 +180,13 @@ export default function SicoeGraficosWizardPanel({
         pdf: extras?.exports?.pdf || null,
         dxf: extras?.exports?.dxf || null,
       })
+      setEsquemaOpen(false)
+      setEsquemaInitialDataUri(null)
+      setEsquemaInitialScene(null)
+      return { keepDraft: false }
     } catch (err) {
       alert('Error guardando esquema: ' + (err?.message || String(err)))
+      return { keepDraft: true }
     }
   }
 
