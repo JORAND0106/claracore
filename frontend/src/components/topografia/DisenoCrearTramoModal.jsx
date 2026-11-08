@@ -3,6 +3,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
+import { IconClose, IconMap } from './disenoDgIcons'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
 import { useTopoTheme } from './topografiaShared'
@@ -22,6 +23,20 @@ const SECTOR_COLS = [
   { key: 'fin', label: 'Abscisa fin', width: 120 },
   { key: 'acc', label: '', width: 40 },
 ]
+
+function Field({ ui, label, children }) {
+  return (
+    <label style={{ display: 'block', flex: '1 1 160px' }}>
+      <span style={{
+        display: 'block', fontSize: 'var(--cc-caption)', fontWeight: 700,
+        color: ui.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6,
+      }}>
+        {label}
+      </span>
+      {children}
+    </label>
+  )
+}
 
 export default function DisenoCrearTramoModal({
   open,
@@ -149,7 +164,7 @@ export default function DisenoCrearTramoModal({
     })
   }
 
-  const pkResumen = pks.map((p) => p.pk_label || p.ubicacion_pk || p.pk_id).join(', ')
+  const editando = !!initial?.id
 
   return (
     <div
@@ -165,163 +180,229 @@ export default function DisenoCrearTramoModal({
       <div
         style={{
           ...ui.card,
-          width: 'min(720px, 96vw)',
+          width: 'min(760px, 96vw)',
           maxHeight: '92vh',
           overflow: 'auto',
-          padding: '18px 22px',
+          padding: 0,
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <CcModalBrandHeader theme={ui.t} />
-        <h3 style={{ margin: '0 0 6px', color: ui.text, fontSize: 'var(--cc-base)' }}>
-          {initial?.id ? 'Editar tramo' : 'Configurar tramo'}
-        </h3>
-        <p style={{ margin: '0 0 14px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
-          PK seleccionados: <strong style={{ color: ui.text }}>{pkResumen || '—'}</strong>
-        </p>
 
-        <label style={{ display: 'block', marginBottom: 12, maxWidth: 480 }}>
-          <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Nombre del tramo</span>
-          <input
-            value={nombre}
-            onChange={(e) => setNombre(e.target.value)}
-            style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-          />
-        </label>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
-          <label style={{ flex: '1 1 140px' }}>
-            <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Abscisa inicio</span>
-            <input
-              value={absIni}
-              onChange={(e) => setAbsIni(e.target.value)}
-              inputMode="decimal"
-              style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-            />
-          </label>
-          <label style={{ flex: '1 1 140px' }}>
-            <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Abscisa final</span>
-            <input
-              value={absFin}
-              onChange={(e) => setAbsFin(e.target.value)}
-              inputMode="decimal"
-              style={{ ...ui.inputStyle, display: 'block', marginTop: 4, width: '100%' }}
-            />
-          </label>
+        <div style={{
+          padding: '16px 20px 12px',
+          borderBottom: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+          display: 'flex', gap: 10, alignItems: 'flex-start',
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{
+              fontSize: 'var(--cc-caption)', fontWeight: 700,
+              color: ui.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em',
+            }}>
+              {editando ? 'Editar tramo' : 'Configurar tramo'}
+            </div>
+            <h3 style={{ margin: '4px 0 0', color: ui.text, fontSize: 'var(--cc-lg)' }}>
+              {editando ? (initial?.nombre || 'Tramo') : 'Nuevo tramo desde el mapa'}
+            </h3>
+          </div>
+          <button
+            type="button"
+            title="Cerrar"
+            aria-label="Cerrar"
+            disabled={saving}
+            onClick={onClose}
+            style={{
+              ...ui.btnSecondary, width: 36, height: 36, padding: 0,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <IconClose />
+          </button>
         </div>
 
-        <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.text }}>
-          Estructura(s) del contrato
-        </p>
-        {!estructuras.length ? (
-          <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309' }}>
-            No hay estructuras del contrato. Créelas primero en «Estructuras del contrato».
-          </p>
-        ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-            {estructuras.map((e) => {
-              const on = estructuraIds.includes(e.id)
-              return (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => toggleEstructura(e.id)}
-                  title={on ? 'Quitar estructura' : 'Asignar estructura'}
+        <div style={{ padding: '16px 20px 20px' }}>
+          <div style={{
+            padding: '10px 12px', borderRadius: 10, marginBottom: 14,
+            border: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+            background: ui.t?.bg || 'transparent',
+          }}>
+            <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: ui.textMuted, marginBottom: 6 }}>
+              PK seleccionados ({pks.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {pks.map((p) => (
+                <span
+                  key={p.pk_id || p.ubicacion_pk_id}
                   style={{
-                    ...ui.btnSecondary,
-                    borderColor: on ? (ui.t?.success || '#16a34a') : ui.t?.border,
-                    background: on ? `${ui.t?.success || '#16a34a'}18` : undefined,
-                    fontWeight: on ? 700 : 500,
+                    fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.text,
+                    padding: '4px 8px', borderRadius: 8,
+                    border: `1px solid ${ui.t?.border || '#e2e8f0'}`,
                   }}
                 >
-                  {e.nombre}
-                  {e.espesor_total_m != null ? ` · Σ ${Number(e.espesor_total_m).toFixed(3)} m` : ''}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
-        {estructuraIds.length > 1 && (
-          <>
-            <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
-              Defina los sectores (estructura + abscisas). Deben quedar dentro del tramo.
-            </p>
-            <TopoExcelSheet sheet={sheet} columns={SECTOR_COLS} minWidth={480}>
-              {sectores.map((s, idx) => (
-                <tr key={idx}>
-                  <td style={sheet.td}>
-                    <select
-                      value={s.estructura_id}
-                      onChange={(e) => setSectores((rows) => rows.map((r, i) => (
-                        i === idx ? { ...r, estructura_id: e.target.value } : r
-                      )))}
-                      style={sheet.cellSelect}
-                    >
-                      <option value="">—</option>
-                      {estructuras.map((est) => (
-                        <option key={est.id} value={est.id}>{est.nombre}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td style={sheet.td}>
-                    <input
-                      value={s.abscisa_inicio}
-                      onChange={(e) => setSectores((rows) => rows.map((r, i) => (
-                        i === idx ? { ...r, abscisa_inicio: e.target.value } : r
-                      )))}
-                      style={sheet.cellInp}
-                    />
-                  </td>
-                  <td style={sheet.td}>
-                    <input
-                      value={s.abscisa_fin}
-                      onChange={(e) => setSectores((rows) => rows.map((r, i) => (
-                        i === idx ? { ...r, abscisa_fin: e.target.value } : r
-                      )))}
-                      style={sheet.cellInp}
-                    />
-                  </td>
-                  <td style={sheet.td}>
-                    <button
-                      type="button"
-                      title="Quitar sector"
-                      aria-label="Quitar sector"
-                      style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
-                      onClick={() => setSectores((rows) => rows.filter((_, i) => i !== idx))}
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
+                  {p.pk_label || p.ubicacion_pk || p.pk_id}
+                  {p.costado ? ` · ${p.costado}` : ''}
+                </span>
               ))}
-            </TopoExcelSheet>
-            <button
-              type="button"
-              style={{ ...ui.btnSecondary, marginTop: 6 }}
-              onClick={() => setSectores((rows) => [...rows, { estructura_id: '', abscisa_inicio: '', abscisa_fin: '' }])}
-            >
-              + Agregar sector
-            </button>
-          </>
-        )}
+            </div>
+            {onBackToMap && (
+              <button
+                type="button"
+                title="Volver al mapa para cambiar pk_ID"
+                aria-label="Volver al mapa para cambiar pk_ID"
+                disabled={saving}
+                onClick={onBackToMap}
+                style={{
+                  ...ui.btnSecondary, marginTop: 10,
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                <IconMap width={16} height={16} /> Cambiar selección en el mapa
+              </button>
+            )}
+          </div>
 
-        {error && (
-          <p style={{ margin: '12px 0 0', fontSize: 'var(--cc-xs)', color: '#dc2626' }}>{error}</p>
-        )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+            <Field ui={ui} label="Nombre del tramo">
+              <input
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                style={{ ...ui.inputStyle, display: 'block', width: '100%' }}
+              />
+            </Field>
+            <Field ui={ui} label="Abscisa inicio">
+              <input
+                value={absIni}
+                onChange={(e) => setAbsIni(e.target.value)}
+                inputMode="decimal"
+                style={{ ...ui.inputStyle, display: 'block', width: '100%' }}
+              />
+            </Field>
+            <Field ui={ui} label="Abscisa final">
+              <input
+                value={absFin}
+                onChange={(e) => setAbsFin(e.target.value)}
+                inputMode="decimal"
+                style={{ ...ui.inputStyle, display: 'block', width: '100%' }}
+              />
+            </Field>
+          </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-          <button type="button" style={ui.btnSecondary} onClick={onClose} disabled={saving} title="Cancelar">
-            Cancelar
-          </button>
-          {onBackToMap && (
-            <button type="button" style={ui.btnSecondary} onClick={onBackToMap} disabled={saving} title="Volver al mapa">
-              Volver al mapa
-            </button>
+          <div style={{
+            padding: '12px 14px', borderRadius: 12, marginBottom: 12,
+            border: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+          }}>
+            <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: ui.text, marginBottom: 8 }}>
+              Estructura(s) del contrato
+            </div>
+            {!estructuras.length ? (
+              <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309' }}>
+                No hay estructuras del contrato. Créelas primero en «Estructuras del contrato».
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {estructuras.map((e) => {
+                  const on = estructuraIds.includes(e.id)
+                  return (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => toggleEstructura(e.id)}
+                      title={on ? 'Quitar estructura' : 'Asignar estructura'}
+                      style={{
+                        ...ui.btnSecondary,
+                        borderColor: on ? (ui.t?.success || '#16a34a') : ui.t?.border,
+                        background: on ? `${ui.t?.success || '#16a34a'}18` : undefined,
+                        fontWeight: on ? 700 : 500,
+                      }}
+                    >
+                      {e.nombre}
+                      {e.espesor_total_m != null ? ` · Σ ${Number(e.espesor_total_m).toFixed(3)} m` : ''}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {estructuraIds.length > 1 && (
+            <div style={{
+              padding: '12px 14px', borderRadius: 12, marginBottom: 12,
+              border: `1px solid ${ui.t?.border || '#e2e8f0'}`,
+            }}>
+              <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
+                Defina los sectores (estructura + abscisas). Deben quedar dentro del tramo.
+              </p>
+              <TopoExcelSheet sheet={sheet} columns={SECTOR_COLS} minWidth={480}>
+                {sectores.map((s, idx) => (
+                  <tr key={idx}>
+                    <td style={sheet.td}>
+                      <select
+                        value={s.estructura_id}
+                        onChange={(e) => setSectores((rows) => rows.map((r, i) => (
+                          i === idx ? { ...r, estructura_id: e.target.value } : r
+                        )))}
+                        style={sheet.cellSelect}
+                      >
+                        <option value="">—</option>
+                        {estructuras.map((est) => (
+                          <option key={est.id} value={est.id}>{est.nombre}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={s.abscisa_inicio}
+                        onChange={(e) => setSectores((rows) => rows.map((r, i) => (
+                          i === idx ? { ...r, abscisa_inicio: e.target.value } : r
+                        )))}
+                        style={sheet.cellInp}
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        value={s.abscisa_fin}
+                        onChange={(e) => setSectores((rows) => rows.map((r, i) => (
+                          i === idx ? { ...r, abscisa_fin: e.target.value } : r
+                        )))}
+                        style={sheet.cellInp}
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <button
+                        type="button"
+                        title="Quitar sector"
+                        aria-label="Quitar sector"
+                        style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
+                        onClick={() => setSectores((rows) => rows.filter((_, i) => i !== idx))}
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </TopoExcelSheet>
+              <button
+                type="button"
+                style={{ ...ui.btnSecondary, marginTop: 6 }}
+                onClick={() => setSectores((rows) => [...rows, { estructura_id: '', abscisa_inicio: '', abscisa_fin: '' }])}
+              >
+                + Agregar sector
+              </button>
+            </div>
           )}
-          <button type="button" style={ui.btnPrimary} onClick={guardar} disabled={saving} title="Guardar tramo">
-            {saving ? 'Guardando…' : 'Guardar'}
-          </button>
+
+          {error && (
+            <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: '#dc2626' }}>{error}</p>
+          )}
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" style={ui.btnSecondary} onClick={onClose} disabled={saving} title="Cancelar">
+              Cancelar
+            </button>
+            <button type="button" style={ui.btnPrimary} onClick={guardar} disabled={saving} title="Guardar tramo">
+              {saving ? 'Guardando…' : 'Guardar'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

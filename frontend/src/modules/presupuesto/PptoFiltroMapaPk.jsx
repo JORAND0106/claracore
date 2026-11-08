@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from '../../apiBase'
@@ -81,6 +81,11 @@ export default function PptoFiltroMapaPk({
   showNivelacionLayerToggle = false,
   /** Vista inicial del basemap (`satelite` | `calle` | `relieve` | …). No altera el default de Presupuesto. */
   initialBasemap = null,
+  /**
+   * Selección múltiple (Configuración DG): el padre gestiona el set;
+   * no se remonta el mapa al cambiar la selección.
+   */
+  multiSelect = false,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -88,11 +93,15 @@ export default function PptoFiltroMapaPk({
   const onClearRef = useRef(onClearSelection)
   const tokenRef = useRef(token)
   const selectedRef = useRef(selectedPk)
+  const multiRef = useRef(multiSelect)
+  const applySelStyleRef = useRef(null)
+  const syncMarkersRef = useRef(null)
   const [mapaTick, setMapaTick] = useState(0)
   onPickRef.current = onPkPick
   onClearRef.current = onClearSelection
   tokenRef.current = token
   selectedRef.current = selectedPk
+  multiRef.current = multiSelect
   const getMapNiv = useCallback(() => mapRef.current, [])
   const capaNiv = useTopoNivelacionMapaCapa(
     getMapNiv,
@@ -150,12 +159,17 @@ export default function PptoFiltroMapaPk({
     const isFiltered = permit != null && permitSet && permitSet.size > 0
 
     const applySelectionStyle = (map) => {
+      if (!map?.getLayer?.('ppto-plano-fill')) return
       const raw = selectedRef.current
       const list = (Array.isArray(raw) ? raw : [raw])
         .map((v) => String(v || '').trim().toLowerCase())
         .filter(Boolean)
-      if (!list.length || !map.getLayer('ppto-plano-fill')) return
       try {
+        if (!list.length) {
+          map.setPaintProperty('ppto-plano-fill', 'fill-color', isFiltered ? '#0D9488' : '#0077B6')
+          map.setPaintProperty('ppto-plano-fill', 'fill-opacity', isFiltered ? 0.38 : 0.3)
+          return
+        }
         const pkExpr = ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']]
         const matchExpr = list.length === 1
           ? ['==', pkExpr, list[0]]
@@ -175,6 +189,9 @@ export default function PptoFiltroMapaPk({
       } catch {
         /* ignore */
       }
+    }
+    applySelStyleRef.current = () => {
+      if (mapRef.current) applySelectionStyle(mapRef.current)
     }
 
     ;(async () => {
@@ -256,17 +273,34 @@ export default function PptoFiltroMapaPk({
         }
       }
 
+      const selectedSetLower = () => {
+        const raw = selectedRef.current
+        return new Set(
+          (Array.isArray(raw) ? raw : [raw])
+            .map((x) => String(x || '').trim().toLowerCase())
+            .filter(Boolean),
+        )
+      }
+
       const syncMarkerStyles = () => {
+        const onSet = selectedSetLower()
         markerEls.forEach(({ el, pk }) => {
-          const on = String(pk).trim().toLowerCase() === String(selectedRef.current || '').trim().toLowerCase()
+          const on = onSet.has(String(pk).trim().toLowerCase())
           el.style.background = on ? '#F59E0B' : isFiltered ? '#0D9488' : '#0077B6'
           el.style.transform = on ? 'scale(1.15)' : 'scale(1)'
         })
       }
+      syncMarkersRef.current = syncMarkerStyles
 
       const togglePk = (pkv, meta = null) => {
         const v = String(pkv || '').trim()
         if (!v) return
+        if (multiRef.current) {
+          // El padre agrega/quita; no limpiar todo el set.
+          onPickRef.current?.(v, meta)
+          // Estilos se refrescan cuando el padre actualiza selectedPk (efecto externo).
+          return
+        }
         const cur = String(selectedRef.current || '').trim().toLowerCase()
         if (cur === v.toLowerCase()) {
           selectedRef.current = ''
@@ -350,6 +384,7 @@ export default function PptoFiltroMapaPk({
             capasPkListas = true
           }
           applySelectionStyle(map)
+          syncMarkersRef.current?.()
         } catch {
           /* estilo aún cargando */
         }
@@ -546,6 +581,8 @@ export default function PptoFiltroMapaPk({
 
     return () => {
       cancelled = true
+      applySelStyleRef.current = null
+      syncMarkersRef.current = null
       try {
         mapRef.current?.remove()
       } catch {
@@ -553,7 +590,17 @@ export default function PptoFiltroMapaPk({
       }
       mapRef.current = null
     }
-  }, [contratoId, filtroKey, selKey, height, zoomToSelected, showBasemapToggle, initialBasemap])
+    // En multiSelect el mapa no se remonta al cambiar selectedPk (evita perder la selección).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selKey solo remonta en modo simple
+  }, [contratoId, filtroKey, multiSelect ? '' : selKey, height, zoomToSelected, showBasemapToggle, initialBasemap, multiSelect])
+
+  // Refresco de resalte sin remontar el mapa (selección múltiple).
+  useEffect(() => {
+    if (!multiSelect) return
+    selectedRef.current = selectedPk
+    applySelStyleRef.current?.()
+    syncMarkersRef.current?.()
+  }, [multiSelect, selKey, selectedPk])
 
   return (
     <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column', position: 'relative' }}>
