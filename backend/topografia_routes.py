@@ -12,11 +12,31 @@ from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, supabase, supabase_execute
 from topografia_audit import (
+    ENTIDAD_DISENO_GEOMETRICO,
     ENTIDAD_NIVELACION,
     ENTIDAD_POLIGONAL,
     log_topo,
+    snapshot_diseno_estructura,
+    snapshot_diseno_tramo,
     snapshot_nivelacion,
     snapshot_poligonal,
+)
+from topografia_diseno_tramos import (
+    alerta_abscisas_diseno,
+    actualizar_estructura_contrato,
+    capas_canonica_tramo,
+    capas_para_abscisa,
+    crear_estructura_contrato,
+    eliminar_estructura_contrato,
+    enriquecer_sectores,
+    listar_estructuras_contrato,
+    listar_pks_tramo,
+    listar_sectores_tramo,
+    obtener_estructura_contrato,
+    reemplazar_pks_tramo,
+    reemplazar_sectores_tramo,
+    resumen_estructuras_tramo,
+    validar_sectores_tramo,
 )
 from topografia_cargos import es_cargo_topografia
 from topografia_poligonal_papelera import (
@@ -1568,10 +1588,6 @@ class ViaLecturaBody(BaseModel):
     tolerancia_m: float = 0.02
 
 
-class DisenoEjeBody(BaseModel):
-    nombre: str = Field(..., min_length=1, max_length=100)
-
-
 class DisenoCapaItem(BaseModel):
     nombre: str = Field(..., min_length=1, max_length=80)
     espesor_m: float = Field(..., gt=0)
@@ -1579,7 +1595,49 @@ class DisenoCapaItem(BaseModel):
     sobre_ancho_m: Optional[float] = Field(0, ge=0)
 
 
+class DisenoEstructuraContratoBody(BaseModel):
+    nombre: str = Field(..., min_length=1, max_length=120)
+    capas: List[DisenoCapaItem]
+
+
+class DisenoEstructuraContratoPatch(BaseModel):
+    nombre: Optional[str] = Field(None, min_length=1, max_length=120)
+    capas: List[DisenoCapaItem]
+
+
+class DisenoPkItem(BaseModel):
+    pk_id: str = Field(..., min_length=1)
+    pk_label: Optional[str] = None
+    ubicacion_pk: Optional[str] = None
+    tramo_plataforma: Optional[str] = None
+    ubicacion_tramo: Optional[str] = None
+    costado: Optional[str] = None
+    ubicacion_costado: Optional[str] = None
+    infraestructura: Optional[str] = None
+    ubicacion_infraestructura: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    ubicacion_lat: Optional[float] = None
+    ubicacion_lng: Optional[float] = None
+
+
+class DisenoSectorItem(BaseModel):
+    estructura_id: str
+    abscisa_inicio: Optional[float] = None
+    abscisa_fin: Optional[float] = None
+
+
+class DisenoEjeBody(BaseModel):
+    """Crear / actualizar tramo (eje) desde mapa + estructuras del contrato."""
+    nombre: str = Field(..., min_length=1, max_length=100)
+    abscisa_inicio: float
+    abscisa_fin: float
+    pks: List[DisenoPkItem] = Field(default_factory=list)
+    sectores: List[DisenoSectorItem] = Field(default_factory=list)
+
+
 class DisenoEstructuraBody(BaseModel):
+    """Legacy: estructura por eje (se mantiene para compatibilidad)."""
     nombre: Optional[str] = None
     capas: List[DisenoCapaItem]
 
@@ -4908,9 +4966,10 @@ def pdf_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_curr
     return Response(content=to_pdf_bytes(html_doc), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="tuberia_{tuberia_id[:8]}.pdf"'})
 
 
-# ── DISEÑO GEOMÉTRICO (ejes, rasante CSV, estructura de vía) ───────────────────
+# ── DISEÑO GEOMÉTRICO (tramos/ejes, rasante, estructuras de contrato) ─────────
 
 def _capas_estructura_vigente(eje_id: str) -> list[dict]:
+    """Fallback legacy: estructura vigente ligada al eje (antes de catálogo contrato)."""
     est = (
         supabase.table("topo_diseno_estructuras")
         .select("id")
@@ -4941,52 +5000,83 @@ def _capas_estructura_vigente(eje_id: str) -> list[dict]:
     )
 
 
+def _sectores_enriquecidos_eje(contrato_id: int, eje_id: str) -> list[dict]:
+    return enriquecer_sectores(supabase, contrato_id, listar_sectores_tramo(supabase, eje_id))
+
+
+def _capas_tramo(contrato_id: int, eje_id: str) -> list[dict]:
+    sectores = _sectores_enriquecidos_eje(contrato_id, eje_id)
+    capas = capas_canonica_tramo(sectores)
+    if capas:
+        return capas
+    return _capas_estructura_vigente(eje_id)
+
+
 def _enriquecer_diseno_eje_resumen(eje: dict) -> dict:
     eid = eje["id"]
+    contrato_id = eje.get("contrato_id")
     rasante = (
         supabase.table("topo_diseno_rasante")
         .select("abscisa", count="exact")
         .eq("eje_id", eid)
         .execute()
     )
-    capas_vig = _capas_estructura_vigente(eid)
-    estructuras = (
-        supabase.table("topo_diseno_estructuras")
-        .select("id", count="exact")
-        .eq("eje_id", eid)
-        .execute()
-    )
-    est_vig = (
-        supabase.table("topo_diseno_estructuras")
-        .select("nombre")
-        .eq("eje_id", eid)
-        .eq("vigente", True)
-        .limit(1)
-        .execute()
-        .data
-    )
-    abscisas = (
-        supabase.table("topo_diseno_rasante")
-        .select("abscisa")
-        .eq("eje_id", eid)
-        .order("abscisa")
-        .execute()
-        .data
-        or []
-    )
-    abs_vals = [r["abscisa"] for r in abscisas if r.get("abscisa") is not None]
+    sectores = []
+    if contrato_id is not None:
+        try:
+            sectores = _sectores_enriquecidos_eje(int(contrato_id), eid)
+        except Exception:
+            sectores = []
+    estructuras_resumen = resumen_estructuras_tramo(sectores)
+    capas_vig = capas_canonica_tramo(sectores) if sectores else _capas_estructura_vigente(eid)
+    filas_rasante = rasante.count or 0
+    abs_inicio = eje.get("abscisa_inicio")
+    abs_fin = eje.get("abscisa_fin")
+    if abs_inicio is None or abs_fin is None:
+        abscisas = (
+            supabase.table("topo_diseno_rasante")
+            .select("abscisa")
+            .eq("eje_id", eid)
+            .order("abscisa")
+            .execute()
+            .data
+            or []
+        )
+        abs_vals = [r["abscisa"] for r in abscisas if r.get("abscisa") is not None]
+        if abs_inicio is None and abs_vals:
+            abs_inicio = min(abs_vals)
+        if abs_fin is None and abs_vals:
+            abs_fin = max(abs_vals)
+    nombres = [e["nombre"] for e in estructuras_resumen if e.get("nombre")]
     return {
         **eje,
-        "filas_rasante": rasante.count or 0,
+        "filas_rasante": filas_rasante,
+        "diseno_cargado": filas_rasante > 0,
         "num_capas": len(capas_vig),
-        "num_estructuras": estructuras.count or 0,
-        "estructura_vigente_nombre": est_vig[0]["nombre"] if est_vig else None,
-        "abscisa_min": min(abs_vals) if abs_vals else None,
-        "abscisa_max": max(abs_vals) if abs_vals else None,
+        "num_estructuras": len(estructuras_resumen) or (
+            supabase.table("topo_diseno_estructuras")
+            .select("id", count="exact")
+            .eq("eje_id", eid)
+            .execute()
+            .count
+            or 0
+        ),
+        "estructuras_resumen": estructuras_resumen,
+        "estructura_vigente_nombre": nombres[0] if nombres else None,
+        "estructuras_nombres": nombres,
+        "espesor_total_estructuras_m": [
+            {"id": e["id"], "nombre": e["nombre"], "espesor_total_m": e["espesor_total_m"]}
+            for e in estructuras_resumen
+        ],
+        "abscisa_inicio": abs_inicio,
+        "abscisa_fin": abs_fin,
+        "abscisa_min": abs_inicio,
+        "abscisa_max": abs_fin,
     }
 
 
 def _listar_estructuras_eje(eje_id: str) -> list[dict]:
+    """Legacy: estructuras versionadas ligadas al eje."""
     rows = (
         supabase.table("topo_diseno_estructuras")
         .select("*")
@@ -5025,9 +5115,24 @@ def _cargar_diseno_eje_detalle(contrato_id: int, eje_id: str) -> dict:
         .data
         or []
     )
-    estructuras = _listar_estructuras_eje(eje_id)
-    vigente = next((e for e in estructuras if e.get("vigente")), None)
-    capas = vigente["capas"] if vigente else _capas_estructura_vigente(eje_id)
+    sectores = _sectores_enriquecidos_eje(contrato_id, eje_id)
+    pks = listar_pks_tramo(supabase, eje_id)
+    capas = capas_canonica_tramo(sectores) or _capas_estructura_vigente(eje_id)
+    estructuras_contrato = [s["estructura"] for s in sectores if s.get("estructura")]
+    # Dedup por id
+    vistos: set[str] = set()
+    estructuras_uniq = []
+    for e in estructuras_contrato:
+        if e["id"] in vistos:
+            continue
+        vistos.add(e["id"])
+        estructuras_uniq.append(e)
+    vigente = estructuras_uniq[0] if estructuras_uniq else None
+    if not vigente:
+        legacy = _listar_estructuras_eje(eje_id)
+        vigente = next((e for e in legacy if e.get("vigente")), None)
+        if not capas and vigente:
+            capas = vigente.get("capas") or []
     perfil_puntos: list = []
     if eje.get("tipo_seccion") and eje.get("ancho_via_m") and rasante:
         perfil_puntos = generar_perfil_desde_filas(
@@ -5037,13 +5142,23 @@ def _cargar_diseno_eje_detalle(contrato_id: int, eje_id: str) -> dict:
             bool(eje.get("calcular_intermedias")),
             float(eje["paso_intermedias_m"]) if eje.get("paso_intermedias_m") else None,
         )
+    resumen = _enriquecer_diseno_eje_resumen(eje)
+    alerta = alerta_abscisas_diseno(
+        resumen.get("abscisa_inicio"),
+        resumen.get("abscisa_fin"),
+        sectores,
+        rasante,
+    )
     return {
-        "eje": {**_enriquecer_diseno_eje_resumen(eje), "puntos_perfil": len(perfil_puntos)},
+        "eje": {**resumen, "puntos_perfil": len(perfil_puntos)},
         "rasante": rasante,
         "perfil_puntos": perfil_puntos,
         "capas": capas,
         "estructura_vigente": vigente,
-        "estructuras": estructuras,
+        "estructuras": estructuras_uniq or _listar_estructuras_eje(eje_id),
+        "sectores": sectores,
+        "pks": pks,
+        "alerta_abscisas": alerta,
         "tipos_seccion": SECCION_TIPOS,
     }
 
@@ -5201,6 +5316,87 @@ def descargar_plantilla_diseno(contrato_id: int, current_user=Depends(get_curren
     )
 
 
+# ── Estructuras del contrato ──────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/diseno-geometrico/estructuras")
+def listar_estructuras_contrato_dg(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver", contrato_id)
+    return listar_estructuras_contrato(supabase, contrato_id)
+
+
+@router.post("/{contrato_id}/diseno-geometrico/estructuras")
+def crear_estructura_contrato_dg(
+    contrato_id: int,
+    body: DisenoEstructuraContratoBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "crear", contrato_id)
+    capas = [c.model_dump() for c in body.capas]
+    out = crear_estructura_contrato(supabase, contrato_id, body.nombre, capas)
+    log_topo(
+        current_user, "CREAR", ENTIDAD_DISENO_GEOMETRICO, out["id"],
+        {"contrato_id": contrato_id, "ambito": "estructura_contrato", "nombre": out.get("nombre")},
+        valor_nuevo=snapshot_diseno_estructura(out),
+    )
+    return out
+
+
+@router.get("/{contrato_id}/diseno-geometrico/estructuras/{estructura_id}")
+def obtener_estructura_contrato_dg(
+    contrato_id: int,
+    estructura_id: str,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver", contrato_id)
+    return obtener_estructura_contrato(supabase, contrato_id, estructura_id)
+
+
+@router.put("/{contrato_id}/diseno-geometrico/estructuras/{estructura_id}")
+def actualizar_estructura_contrato_dg(
+    contrato_id: int,
+    estructura_id: str,
+    body: DisenoEstructuraContratoPatch,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar", contrato_id)
+    antes = obtener_estructura_contrato(supabase, contrato_id, estructura_id)
+    capas = [c.model_dump() for c in body.capas]
+    out = actualizar_estructura_contrato(
+        supabase, contrato_id, estructura_id, body.nombre, capas,
+    )
+    log_topo(
+        current_user, "EDITAR", ENTIDAD_DISENO_GEOMETRICO, estructura_id,
+        {"contrato_id": contrato_id, "ambito": "estructura_contrato"},
+        valor_anterior=snapshot_diseno_estructura(antes),
+        valor_nuevo=snapshot_diseno_estructura(out),
+    )
+    return out
+
+
+@router.delete("/{contrato_id}/diseno-geometrico/estructuras/{estructura_id}")
+def eliminar_estructura_contrato_dg(
+    contrato_id: int,
+    estructura_id: str,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "eliminar", contrato_id)
+    antes = obtener_estructura_contrato(supabase, contrato_id, estructura_id)
+    out = eliminar_estructura_contrato(supabase, contrato_id, estructura_id)
+    log_topo(
+        current_user, "ELIMINAR", ENTIDAD_DISENO_GEOMETRICO, estructura_id,
+        {"contrato_id": contrato_id, "ambito": "estructura_contrato", "nombre": antes.get("nombre")},
+        valor_anterior=snapshot_diseno_estructura(antes),
+    )
+    return out
+
+
+# ── Tramos (ejes) ─────────────────────────────────────────────────────────────
+
 @router.get("/{contrato_id}/diseno-geometrico/ejes")
 def listar_diseno_ejes(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -5217,6 +5413,33 @@ def listar_diseno_ejes(contrato_id: int, current_user=Depends(get_current_user))
     return [_enriquecer_diseno_eje_resumen(r) for r in rows]
 
 
+def _persistir_tramo_config(contrato_id: int, eje_id: str, body: DisenoEjeBody) -> dict:
+    """Valida PKs/sectores y guarda configuración del tramo."""
+    if not body.pks:
+        raise HTTPException(
+            status_code=422,
+            detail="Seleccione uno o varios pk_ID en el mapa para crear el tramo.",
+        )
+    # Verificar que las estructuras existen en el contrato
+    for s in body.sectores:
+        obtener_estructura_contrato(supabase, contrato_id, s.estructura_id)
+    sectores = validar_sectores_tramo(
+        float(body.abscisa_inicio),
+        float(body.abscisa_fin),
+        [s.model_dump() for s in body.sectores],
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("topo_diseno_ejes").update({
+        "nombre": body.nombre.strip(),
+        "abscisa_inicio": float(body.abscisa_inicio),
+        "abscisa_fin": float(body.abscisa_fin),
+        "updated_at": now,
+    }).eq("id", eje_id).execute()
+    reemplazar_pks_tramo(supabase, eje_id, [p.model_dump() for p in body.pks])
+    reemplazar_sectores_tramo(supabase, eje_id, sectores)
+    return _cargar_diseno_eje_detalle(contrato_id, eje_id)
+
+
 @router.post("/{contrato_id}/diseno-geometrico/ejes")
 def crear_diseno_eje(contrato_id: int, body: DisenoEjeBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -5224,11 +5447,51 @@ def crear_diseno_eje(contrato_id: int, body: DisenoEjeBody, current_user=Depends
     nombre = body.nombre.strip()
     row = (
         supabase.table("topo_diseno_ejes")
-        .insert({"contrato_id": contrato_id, "nombre": nombre})
+        .insert({
+            "contrato_id": contrato_id,
+            "nombre": nombre,
+            "abscisa_inicio": float(body.abscisa_inicio),
+            "abscisa_fin": float(body.abscisa_fin),
+        })
         .execute()
         .data
     )
-    return row[0] if row else {}
+    if not row:
+        raise HTTPException(status_code=500, detail="No se pudo crear el tramo.")
+    eje_id = row[0]["id"]
+    try:
+        detalle = _persistir_tramo_config(contrato_id, eje_id, body)
+    except HTTPException:
+        supabase.table("topo_diseno_ejes").delete().eq("id", eje_id).execute()
+        raise
+    log_topo(
+        current_user, "CREAR", ENTIDAD_DISENO_GEOMETRICO, eje_id,
+        {"contrato_id": contrato_id, "ambito": "tramo", "nombre": nombre},
+        valor_nuevo=snapshot_diseno_tramo(detalle.get("eje")),
+    )
+    return detalle
+
+
+@router.put("/{contrato_id}/diseno-geometrico/ejes/{eje_id}")
+def actualizar_diseno_eje(
+    contrato_id: int,
+    eje_id: str,
+    body: DisenoEjeBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar", contrato_id)
+    if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
+        raise HTTPException(status_code=404, detail="Tramo no encontrado")
+    antes = _cargar_diseno_eje_detalle(contrato_id, eje_id)
+    detalle = _persistir_tramo_config(contrato_id, eje_id, body)
+    log_topo(
+        current_user, "EDITAR", ENTIDAD_DISENO_GEOMETRICO, eje_id,
+        {"contrato_id": contrato_id, "ambito": "tramo"},
+        valor_anterior=snapshot_diseno_tramo(antes.get("eje")),
+        valor_nuevo=snapshot_diseno_tramo(detalle.get("eje")),
+    )
+    return detalle
 
 
 @router.get("/{contrato_id}/diseno-geometrico/ejes/{eje_id}")
@@ -5242,9 +5505,15 @@ def obtener_diseno_eje(contrato_id: int, eje_id: str, current_user=Depends(get_c
 def eliminar_diseno_eje(contrato_id: int, eje_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "eliminar", contrato_id)
-    if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
-        raise HTTPException(status_code=404, detail="Eje no encontrado")
+    eje = _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id)
+    if not eje:
+        raise HTTPException(status_code=404, detail="Tramo no encontrado")
     supabase.table("topo_diseno_ejes").delete().eq("id", eje_id).execute()
+    log_topo(
+        current_user, "ELIMINAR", ENTIDAD_DISENO_GEOMETRICO, eje_id,
+        {"contrato_id": contrato_id, "ambito": "tramo", "nombre": eje.get("nombre")},
+        valor_anterior=snapshot_diseno_tramo(eje),
+    )
     return {"ok": True}
 
 
@@ -5367,28 +5636,55 @@ def preview_cota_capa_diseno(
 def _contexto_entrega_eje(contrato_id: int, eje_id: str) -> dict:
     data = _cargar_diseno_eje_detalle(contrato_id, eje_id)
     if not data.get("rasante"):
-        raise HTTPException(status_code=422, detail="El eje no tiene rasante importada.")
+        raise HTTPException(status_code=422, detail="El tramo no tiene rasante importada.")
     if not data.get("capas"):
-        raise HTTPException(status_code=422, detail="El eje no tiene estructura de vía definida.")
+        raise HTTPException(status_code=422, detail="El tramo no tiene estructura de vía definida.")
     if not data["eje"].get("tipo_seccion") or not data["eje"].get("ancho_via_m"):
-        raise HTTPException(status_code=422, detail="Complete la configuración transversal del eje (importe con esquema A/B/C).")
+        raise HTTPException(status_code=422, detail="Complete la configuración transversal del tramo (importe con esquema A/B/C).")
     return data
 
 
 def _grilla_entrega(contrato_id: int, entrega: dict, solo_referencia: bool = True) -> list[dict]:
+    """Grilla de diseño respetando la estructura del sector que corresponde a cada abscisa."""
     ctx = _contexto_entrega_eje(contrato_id, entrega["eje_id"])
     ras = filtrar_rasante_rango(
         ctx["rasante"],
         entrega.get("abscisa_desde"),
         entrega.get("abscisa_hasta"),
     )
-    return grilla_entrega_capa(
-        ras,
-        ctx["eje"],
-        ctx["capas"],
-        int(entrega["indice_capa"]),
-        solo_referencia=solo_referencia,
-    )
+    sectores = ctx.get("sectores") or []
+    indice = int(entrega["indice_capa"])
+    capas_canonica = ctx["capas"]
+    if len(sectores) <= 1:
+        return grilla_entrega_capa(
+            ras, ctx["eje"], capas_canonica, indice, solo_referencia=solo_referencia,
+        )
+    # Terreno natural: no depende de capas por sector
+    if es_entrega_terreno_natural(indice, len(capas_canonica)):
+        return grilla_entrega_capa(
+            ras, ctx["eje"], capas_canonica, len(capas_canonica), solo_referencia=solo_referencia,
+        )
+    grupos: dict[str, list[dict]] = {}
+    capas_por_grupo: dict[str, list[dict]] = {}
+    orden_ids: list[str] = []
+    for r in ras:
+        capas = capas_para_abscisa(sectores, float(r["abscisa"]), capas_canonica)
+        key = "|".join(f"{c.get('nombre')}:{c.get('espesor_m')}" for c in capas) or "__empty__"
+        if key not in grupos:
+            grupos[key] = []
+            orden_ids.append(key)
+            capas_por_grupo[key] = capas
+        grupos[key].append(r)
+    out: list[dict] = []
+    for key in orden_ids:
+        capas = capas_por_grupo.get(key) or capas_canonica
+        if indice < 0 or indice >= len(capas):
+            continue
+        out.extend(grilla_entrega_capa(
+            grupos[key], ctx["eje"], capas, indice, solo_referencia=solo_referencia,
+        ))
+    out.sort(key=lambda g: (float(g["abscisa"]), float(g["ordenada"])))
+    return out
 
 
 def _lecturas_referencia_campo_entrega(

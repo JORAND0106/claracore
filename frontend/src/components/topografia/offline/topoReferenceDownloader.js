@@ -38,6 +38,7 @@ export async function downloadTopoReferenceData(contratoId, token) {
     newpoints,
     entregas,
     ejes,
+    estructurasContrato,
     equipos,
     tuberias,
     areas,
@@ -50,6 +51,7 @@ export async function downloadTopoReferenceData(contratoId, token) {
     fetchJson(contratoId, '/newpoints', token),
     fetchJson(contratoId, '/entrega-dg', token),
     fetchJson(contratoId, '/diseno-geometrico/ejes', token),
+    fetchJson(contratoId, '/diseno-geometrico/estructuras', token).catch(() => []),
     fetchJson(contratoId, '/equipos', token),
     fetchJson(contratoId, '/tuberias', token),
     fetchJson(contratoId, '/areas', token),
@@ -88,7 +90,17 @@ export async function downloadTopoReferenceData(contratoId, token) {
     },
   )
 
-  // Detalle DG por eje (rasante + estructura)
+  // Catálogo de estructuras del contrato + detalle DG por tramo
+  try {
+    await topoDb.topo_entity_detail.put({
+      key: entityDetailKey(contratoId, 'diseno_estructuras', 'all'),
+      data: estructurasContrato || [],
+      updated_at: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.warn('[Topo offline] No se pudo cachear estructuras DG', e)
+  }
+
   const ejeIds = (ejes || []).map((e) => e.id).filter(Boolean)
   for (const ejeId of ejeIds) {
     try {

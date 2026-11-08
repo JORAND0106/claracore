@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { API_BASE } from '../../apiBase'
-import { parseDisenoExcelBuffer } from '../../utils/disenoGeometricoParse'
-import DisenoImportConfigModal from './DisenoImportConfigModal'
-import DisenoEstructuraPanel, { DisenoNuevaEstructuraModal, sumEspesores } from './DisenoEstructuraPanel'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import DisenoCrearTramoModal from './DisenoCrearTramoModal'
+import { DisenoNuevaEstructuraModal, sumEspesores } from './DisenoEstructuraPanel'
+import DisenoPreviewCotasModal from './DisenoPreviewCotasModal'
+import DisenoTramoDetalleModal from './DisenoTramoDetalleModal'
+import DisenoTramoMapaPkModal from './DisenoTramoMapaPkModal'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoErrorModal from './TopoErrorModal'
+import TopoExcelSheet from './TopoExcelSheet'
+import { topoSheetStyles } from './topoSheetStyles'
 import {
   parseApiError,
   PanelColapsable,
@@ -13,13 +16,11 @@ import {
   TopoHelpIcon,
   useTopografiaApi,
   useTopoTheme,
-  useTopoViewport,
 } from './topografiaShared'
 
 const AYUDA_MODULO_DISENO =
-  'Configure el diseño geométrico de la vía por eje: cargue la rasante (capa terminada) con TRAMO, ABSCISA, '
-  + 'IZQUIERDA, EJE, DERECHA y ANCHO. Defina el esquema transversal al importar y la estructura de vía con capas '
-  + 'y espesores (de terminado hacia abajo).'
+  'Defina las estructuras de vía una sola vez a nivel del contrato. Cree tramos desde el mapa '
+  + '(seleccionando pk_ID), asigne estructuras por sector y cargue el diseño geométrico desde el detalle del tramo.'
 
 function fmtN(v, dec = 3) {
   if (v == null || v === '') return '—'
@@ -27,40 +28,62 @@ function fmtN(v, dec = 3) {
   return Number.isFinite(n) ? n.toFixed(dec) : '—'
 }
 
-function fmtOrdenadaCol(o) {
-  const n = Number(o)
-  if (!Number.isFinite(n)) return '—'
-  if (Math.abs(n) < 1e-9) return '0.00'
-  return n > 0 ? `+${n.toFixed(2)}` : n.toFixed(2)
+function IconBtn({ title, onClick, disabled, danger, primary, children, style }) {
+  const ui = useTopoTheme()
+  const base = primary ? ui.btnPrimary : ui.btnSecondary
+  return (
+    <button
+      type="button"
+      className="cc-topo-touch-btn"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...base,
+        padding: '6px 10px',
+        minWidth: 36,
+        color: danger ? '#dc2626' : (primary ? undefined : ui.text),
+        opacity: disabled ? 0.5 : 1,
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  )
 }
 
-function cotasEnAbscisa(cotasPorAbscisa, abscisa) {
-  for (const [pk, cotas] of cotasPorAbscisa) {
-    if (Math.abs(pk - abscisa) < 1e-6) return cotas
-  }
-  return null
-}
+const TRAMO_COLS = [
+  { key: 'tramo', label: 'Tramo' },
+  { key: 'abs', label: 'Abscisa inicio – fin', width: 160 },
+  { key: 'est', label: 'Estructura(s) · espesor total' },
+  { key: 'dg', label: 'Diseño geométrico', width: 160 },
+  { key: 'acc', label: '', width: 44 },
+]
 
 export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
   const ui = useTopoTheme()
-  const { isCompact } = useTopoViewport()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { api } = useTopografiaApi(contratoId, token)
-  const fileRef = useRef(null)
 
   const [lista, setLista] = useState([])
-  const [sel, setSel] = useState(null)
-  const [detalle, setDetalle] = useState(null)
-  const [creando, setCreando] = useState(false)
-  const [nombreNuevo, setNombreNuevo] = useState('')
+  const [estructuras, setEstructuras] = useState([])
+  const [estructurasAbiertas, setEstructurasAbiertas] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [modalNuevaEstructura, setModalNuevaEstructura] = useState(false)
-  const [modalImportConfig, setModalImportConfig] = useState(false)
-  const [archivoPendiente, setArchivoPendiente] = useState(null)
-  const [confirmEliminar, setConfirmEliminar] = useState(null)
-  const [confirmEliminarRasante, setConfirmEliminarRasante] = useState(false)
-  const [rasanteAbierta, setRasanteAbierta] = useState(false)
-  const [estructuraAbierta, setEstructuraAbierta] = useState(true)
   const [errorModal, setErrorModal] = useState(null)
+
+  const [mapaOpen, setMapaOpen] = useState(false)
+  const [pksPendientes, setPksPendientes] = useState([])
+  const [crearOpen, setCrearOpen] = useState(false)
+  const [editandoTramo, setEditandoTramo] = useState(null)
+
+  const [detalle, setDetalle] = useState(null)
+  const [detalleOpen, setDetalleOpen] = useState(false)
+
+  const [modalEstructura, setModalEstructura] = useState(null) // null | { mode, estructura? }
+  const [confirmEliminar, setConfirmEliminar] = useState(null)
+  const [confirmEliminarEst, setConfirmEliminarEst] = useState(null)
+  const [previewDesdeGrilla, setPreviewDesdeGrilla] = useState(null)
 
   const showError = useCallback((err) => {
     setErrorModal(parseApiError(err?.message || String(err)))
@@ -75,12 +98,10 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
     }
   }, [api, showError])
 
-  const cargarDetalle = useCallback(async (id) => {
-    setCreando(false)
-    setSel(id)
+  const cargarEstructuras = useCallback(async () => {
     try {
-      const data = await api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
-      setDetalle(data)
+      const data = await api(`/diseno-geometrico/estructuras?_=${Date.now()}`)
+      setEstructuras(Array.isArray(data) ? data : [])
     } catch (e) {
       showError(e)
     }
@@ -88,34 +109,15 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
 
   useEffect(() => {
     cargarLista()
-  }, [cargarLista])
+    cargarEstructuras()
+  }, [cargarLista, cargarEstructuras])
 
-  useEffect(() => {
-    if (!lista.length || sel || creando) return
-    cargarDetalle(lista[0].id)
-  }, [lista, sel, creando, cargarDetalle])
-
-  const abrirNuevo = () => {
-    setCreando(true)
-    setSel(null)
-    setDetalle(null)
-    setNombreNuevo('')
-  }
-
-  const crearEje = async () => {
-    const nombre = nombreNuevo.trim()
-    if (!nombre) {
-      showError(new Error('Indique el nombre del eje.'))
-      return
-    }
+  const abrirDetalle = async (id) => {
     setBusy(true)
     try {
-      const row = await api('/diseno-geometrico/ejes', {
-        method: 'POST',
-        body: JSON.stringify({ nombre }),
-      })
-      await cargarLista()
-      if (row?.id) await cargarDetalle(row.id)
+      const data = await api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
+      setDetalle(data)
+      setDetalleOpen(true)
     } catch (e) {
       showError(e)
     } finally {
@@ -123,56 +125,47 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
     }
   }
 
-  const descargarPlantilla = async () => {
-    try {
-      const res = await fetch(
-        `${API_BASE}/topografia/${contratoId}/diseno-geometrico/plantilla.csv`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-      )
-      if (!res.ok) throw new Error('No se pudo descargar la plantilla.')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'plantilla_diseno_geometrico.csv'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      showError(e)
-    }
+  const recargarDetalle = async (id) => {
+    const data = await api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
+    setDetalle(data)
+    await cargarLista()
+    return data
   }
 
-  const onFileSelected = (file) => {
-    if (!file) return
-    setArchivoPendiente(file)
-    setModalImportConfig(true)
-    if (fileRef.current) fileRef.current.value = ''
+  const iniciarCrearTramo = () => {
+    if (!puede(permisos, 'crear')) return
+    setEditandoTramo(null)
+    setPksPendientes([])
+    setMapaOpen(true)
   }
 
-  const ejecutarImportacion = async (config) => {
-    if (!sel || !archivoPendiente) return
+  const onMapaConfirm = (pks) => {
+    setPksPendientes(pks || [])
+    setMapaOpen(false)
+    setCrearOpen(true)
+  }
+
+  const guardarTramo = async (payload) => {
     setBusy(true)
     try {
-      const name = archivoPendiente.name.toLowerCase()
-      if (name.endsWith('.csv')) {
-        const contenido = await archivoPendiente.text()
-        await api(`/diseno-geometrico/ejes/${sel}/import-csv`, {
-          method: 'POST',
-          body: JSON.stringify({ contenido, reemplazar: true, config }),
+      if (editandoTramo?.eje?.id) {
+        const data = await api(`/diseno-geometrico/ejes/${editandoTramo.eje.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
         })
-      } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-        const buf = await archivoPendiente.arrayBuffer()
-        const filas = parseDisenoExcelBuffer(buf)
-        await api(`/diseno-geometrico/ejes/${sel}/import-filas`, {
-          method: 'POST',
-          body: JSON.stringify({ filas, reemplazar: true, config }),
-        })
+        setDetalle(data)
+        setDetalleOpen(true)
       } else {
-        throw new Error('Use archivo .csv o .xlsx')
+        const data = await api('/diseno-geometrico/ejes', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+        setDetalle(data)
+        setDetalleOpen(true)
       }
-      setModalImportConfig(false)
-      setArchivoPendiente(null)
-      await cargarDetalle(sel)
+      setCrearOpen(false)
+      setEditandoTramo(null)
+      setPksPendientes([])
       await cargarLista()
     } catch (e) {
       showError(e)
@@ -181,75 +174,18 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
     }
   }
 
-  const guardarEstructuraVigente = async (capas, nombre) => {
-    if (!sel) return
-    setBusy(true)
-    try {
-      await api(`/diseno-geometrico/ejes/${sel}/estructura`, {
-        method: 'PUT',
-        body: JSON.stringify({ capas, nombre: nombre || undefined }),
-      })
-      await cargarDetalle(sel)
-      await cargarLista()
-    } catch (e) {
-      showError(e)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const crearNuevaEstructura = async (nombre, capas) => {
-    if (!sel) return
-    setBusy(true)
-    try {
-      await api(`/diseno-geometrico/ejes/${sel}/estructura`, {
-        method: 'POST',
-        body: JSON.stringify({ nombre, capas }),
-      })
-      setModalNuevaEstructura(false)
-      await cargarDetalle(sel)
-      await cargarLista()
-    } catch (e) {
-      showError(e)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const eliminarRasante = async () => {
-    if (!sel) return
-    setBusy(true)
-    try {
-      await api(`/diseno-geometrico/ejes/${sel}/rasante`, { method: 'DELETE' })
-      setConfirmEliminarRasante(false)
-      setRasanteAbierta(false)
-      await cargarDetalle(sel)
-      await cargarLista()
-    } catch (e) {
-      showError(e)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const eliminarEje = async () => {
+  const eliminarTramo = async () => {
     const id = confirmEliminar?.id
     if (!id) return
     setBusy(true)
     try {
       await api(`/diseno-geometrico/ejes/${id}`, { method: 'DELETE' })
-      if (sel === id) {
-        setSel(null)
+      if (detalle?.eje?.id === id) {
         setDetalle(null)
+        setDetalleOpen(false)
       }
       setConfirmEliminar(null)
       await cargarLista()
-      if (sel === id && lista.length > 1) {
-        const rest = lista.filter((e) => e.id !== id)
-        if (rest[0]) await cargarDetalle(rest[0].id)
-      } else if (sel === id) {
-        setCreando(true)
-      }
     } catch (e) {
       showError(e)
     } finally {
@@ -257,371 +193,342 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
     }
   }
 
-  const eje = detalle?.eje
-  const rasante = detalle?.rasante || []
-  const perfilPuntos = detalle?.perfil_puntos || []
-  const estructuraVigente = detalle?.estructura_vigente
-  const estructuras = detalle?.estructuras || []
-  const capas = detalle?.capas || []
+  const guardarEstructuraContrato = async (nombre, capas) => {
+    setBusy(true)
+    try {
+      if (modalEstructura?.mode === 'edit' && modalEstructura.estructura?.id) {
+        await api(`/diseno-geometrico/estructuras/${modalEstructura.estructura.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ nombre, capas }),
+        })
+      } else {
+        await api('/diseno-geometrico/estructuras', {
+          method: 'POST',
+          body: JSON.stringify({ nombre, capas }),
+        })
+      }
+      setModalEstructura(null)
+      await cargarEstructuras()
+      await cargarLista()
+      if (detalle?.eje?.id) await recargarDetalle(detalle.eje.id)
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
 
-  const puntosPorAbscisa = useMemo(() => {
-    const map = new Map()
-    perfilPuntos.forEach((p) => {
-      const key = p.abscisa
-      if (!map.has(key)) map.set(key, new Map())
-      map.get(key).set(p.ordenada, p.cota)
-    })
-    return map
-  }, [perfilPuntos])
+  const eliminarEstructura = async () => {
+    const id = confirmEliminarEst?.id
+    if (!id) return
+    setBusy(true)
+    try {
+      await api(`/diseno-geometrico/estructuras/${id}`, { method: 'DELETE' })
+      setConfirmEliminarEst(null)
+      await cargarEstructuras()
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
 
-  const columnasOrdenada = useMemo(() => {
-    if (!perfilPuntos.length) return null
-    return [...new Set(perfilPuntos.map((p) => p.ordenada))].sort((a, b) => a - b)
-  }, [perfilPuntos])
+  const abrirPreviewDesdeGrilla = async (row) => {
+    if (!row?.diseno_cargado && !(row.filas_rasante > 0)) return
+    setBusy(true)
+    try {
+      const data = await api(`/diseno-geometrico/ejes/${row.id}?_=${Date.now()}`)
+      setPreviewDesdeGrilla(data)
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
 
-  const ordenadasReferencia = useMemo(() => {
-    const set = new Set()
-    perfilPuntos.filter((p) => p.es_referencia).forEach((p) => set.add(p.ordenada))
-    return set
-  }, [perfilPuntos])
-
-  const seccionLabel = eje?.tipo_seccion && eje?.ancho_via_m
-    ? `Sección ${eje.tipo_seccion} · ${fmtN(eje.ancho_via_m, 2)} m`
-    : null
+  const estructurasLabel = (row) => {
+    const items = row.espesor_total_estructuras_m || row.estructuras_resumen || []
+    if (items.length) {
+      return items.map((e) => {
+        const esp = e.espesor_total_m != null ? Number(e.espesor_total_m).toFixed(3) : '—'
+        return `${e.nombre} (Σ ${esp} m)`
+      }).join(' · ')
+    }
+    if (row.estructura_vigente_nombre) return row.estructura_vigente_nombre
+    return '—'
+  }
 
   return (
     <div>
-      <div style={ui.tabBar} role="tablist" aria-label="Ejes configuración DG">
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <PermisoAviso permisos={permisos} accion="crear">
-            <button
-              type="button"
-              style={{ ...ui.tabBtn(creando), borderStyle: 'dashed', color: ui.accent }}
-              onClick={abrirNuevo}
-              title="Nuevo eje / tramo"
-            >
-              + Nuevo
-            </button>
-          </PermisoAviso>
-          <TopoHelpIcon ayuda={AYUDA_MODULO_DISENO} />
-        </div>
-        {lista.map((n) => {
-          const active = sel === n.id && !creando
-          const src = sel === n.id && eje ? { ...n, ...eje } : n
-          const label = (src.nombre || '').trim() || 'Sin nombre'
-          const ok = (src.filas_rasante || 0) > 0 && (src.num_capas || 0) > 0
-          return (
-            <div key={n.id} style={{ display: 'inline-flex', alignItems: 'stretch', flexShrink: 0 }}>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active}
-                style={ui.tabBtn(active)}
-                onClick={() => cargarDetalle(n.id)}
-                title={label}
-              >
-                <span>{label}</span>
-                <small style={{ color: ui.textMuted, fontWeight: 400 }}>
-                  ({src.filas_rasante || 0} pk · {src.num_capas || 0} capas{ok ? ' · listo' : ''})
-                </small>
-              </button>
-              {puede(permisos, 'eliminar') && (
-                <button
-                  type="button"
-                  title="Eliminar eje"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setConfirmEliminar({ id: n.id, nombre: label })
-                  }}
-                  style={{
-                    ...ui.btnSecondary,
-                    color: '#dc2626',
-                    padding: '0 8px',
-                    marginLeft: -4,
-                    borderRadius: '0 8px 0 0',
-                    alignSelf: 'stretch',
-                    fontSize: 'var(--cc-lg)',
-                    lineHeight: 1,
-                  }}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          )
-        })}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 14 }}>
+        <h3 style={{ margin: 0, flex: '1 1 auto', fontSize: 'var(--cc-lg)', color: ui.text }}>
+          Configuración DG
+        </h3>
+        <TopoHelpIcon ayuda={AYUDA_MODULO_DISENO} />
+        <PermisoAviso permisos={permisos} accion="crear">
+          {puede(permisos, 'crear') && (
+            <IconBtn title="Crear tramo (seleccionar pk_ID en el mapa)" onClick={iniciarCrearTramo} primary disabled={busy}>
+              ＋
+            </IconBtn>
+          )}
+        </PermisoAviso>
       </div>
 
-      {!lista.length && !creando && (
-        <p style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', margin: '0 0 12px' }}>
-          Aún no hay ejes. Pulse «+ Nuevo» para comenzar.
-        </p>
-      )}
-
-      {creando && (
-        <PermisoAviso permisos={permisos} accion="crear">
-          <div style={{ ...ui.card, marginBottom: 16, padding: '14px 16px' }}>
-            <label style={{ display: 'block', marginBottom: 10 }}>
-              <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Nombre del eje / tramo</span>
-              <input
-                value={nombreNuevo}
-                onChange={(e) => setNombreNuevo(e.target.value)}
-                placeholder="Eje 1"
-                style={{ ...ui.inputStyle, display: 'block', marginTop: 4, maxWidth: 320 }}
-              />
-            </label>
-            <button type="button" style={ui.btnPrimary} onClick={crearEje} disabled={busy}>
-              {busy ? 'Creando…' : 'Crear eje'}
-            </button>
-          </div>
-        </PermisoAviso>
-      )}
-
-      {detalle && eje && !creando && (
-        <div style={{ display: 'grid', gap: 16 }}>
-          <div style={{ ...ui.card, padding: '14px 16px' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 16px', alignItems: 'center', marginBottom: 12 }}>
-              <h3 style={{ margin: 0, flex: '1 1 auto', fontSize: 'var(--cc-lg)', color: ui.text }}>
-                {eje.nombre}
-              </h3>
-              <button type="button" style={ui.btnSecondary} onClick={descargarPlantilla}>
-                Descargar plantilla CSV
-              </button>
-              <PermisoAviso permisos={permisos} accion="editar">
-                <label style={{ ...ui.btnPrimary, cursor: busy ? 'wait' : 'pointer', margin: 0 }}>
-                  {busy ? 'Importando…' : 'Subir CSV / Excel'}
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept=".csv,.xlsx,.xls"
-                    style={{ display: 'none' }}
-                    disabled={busy}
-                    onChange={(e) => onFileSelected(e.target.files?.[0])}
-                  />
-                </label>
-              </PermisoAviso>
-              {rasante.length > 0 && puede(permisos, 'editar') && (
-                <button
-                  type="button"
-                  style={{ ...ui.btnSecondary, color: '#dc2626' }}
-                  disabled={busy}
-                  onClick={() => setConfirmEliminarRasante(true)}
-                >
-                  Eliminar rasante importada
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
-              <span><strong style={{ color: ui.text }}>{rasante.length}</strong> estaciones CSV</span>
-              <span><strong style={{ color: ui.text }}>{capas.length}</strong> capas (vigente)</span>
-              {eje.estructura_vigente_nombre && (
-                <span>Estructura: <strong style={{ color: ui.text }}>{eje.estructura_vigente_nombre}</strong></span>
-              )}
-              {seccionLabel && <span>{seccionLabel}</span>}
-              {eje.calcular_intermedias && eje.paso_intermedias_m && (
-                <span>Intermedias transv. cada {fmtN(eje.paso_intermedias_m, 2)} m en ordenadas</span>
-              )}
-              {perfilPuntos.length > 0 && (
-                <span><strong style={{ color: ui.text }}>{perfilPuntos.length}</strong> pts transversales</span>
-              )}
-              {eje.abscisa_min != null && eje.abscisa_max != null && (
-                <span>PK {fmtN(eje.abscisa_min, 2)} – {fmtN(eje.abscisa_max, 2)}</span>
-              )}
-            </div>
-
-            {!rasante.length && (
-              <p style={{ margin: '12px 0 0', fontSize: 'var(--cc-xs)', color: ui.t?.warn || '#b45309', lineHeight: 1.5 }}>
-                {capas.length > 0
-                  ? 'La estructura de capas ya está guardada, pero este eje aún no tiene estaciones de rasante (0 CSV). Pulse «Subir CSV / Excel» o descargue la plantilla. Sin rasante, el eje no aparecerá como listo en Estructura de Vía.'
-                  : 'Suba el CSV o Excel con el diseño geométrico (rasante / capa terminada).'}
-              </p>
-            )}
-          </div>
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
-            <div style={{ flex: isCompact ? '1 1 100%' : '0 0 55%', minWidth: isCompact ? 0 : 320, maxWidth: isCompact ? '100%' : 780, width: isCompact ? '100%' : undefined }}>
-              <PanelColapsable
-                ui={ui}
-                titulo="Estructura de vía"
-                abierto={estructuraAbierta}
-                onToggle={() => setEstructuraAbierta((v) => !v)}
-                resumen={[
-                  estructuraVigente?.nombre || eje.estructura_vigente_nombre || 'Sin definir',
-                  `${capas.length} capas`,
-                  capas.length ? `Σ ${sumEspesores(capas.map((c) => ({ espesor_m: c.espesor_m }))).toFixed(3)} m` : null,
-                ].filter(Boolean).join(' · ')}
+      <PanelColapsable
+        ui={ui}
+        titulo="Estructuras del contrato"
+        abierto={estructurasAbiertas}
+        onToggle={() => setEstructurasAbiertas((v) => !v)}
+        resumen={`${estructuras.length} estructura(s)`}
+        style={{ marginBottom: 16 }}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+          <p style={{ margin: 0, flex: 1, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
+            Se definen una sola vez y quedan disponibles para todos los tramos. Primera capa = terminado / rasante.
+          </p>
+          <PermisoAviso permisos={permisos} accion="crear">
+            {puede(permisos, 'crear') && (
+              <IconBtn
+                title="Nueva estructura del contrato"
+                onClick={() => setModalEstructura({ mode: 'create' })}
+                primary
+                disabled={busy}
               >
-                <DisenoEstructuraPanel
-                  embed
-                  estructuraVigente={estructuraVigente || (capas.length ? { capas, nombre: eje.estructura_vigente_nombre, vigente: true } : null)}
-                  estructuras={estructuras}
-                  permisos={permisos}
-                  busy={busy}
-                  onGuardar={guardarEstructuraVigente}
-                />
-              </PanelColapsable>
-            </div>
-            <div style={{ flex: isCompact ? '1 1 100%' : '1 1 35%', minWidth: isCompact ? 0 : 240, width: isCompact ? '100%' : undefined }}>
-              <div style={{ ...ui.card, padding: '14px 16px', height: '100%' }}>
-                <h4 style={{ margin: '0 0 8px', fontSize: 'var(--cc-base)', color: ui.text }}>
-                  Nueva estructura
-                </h4>
-                <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
-                  Cree una versión alternativa de la estructura de vía. La vigente queda en el panel izquierdo;
-                  la nueva pasa a ser la activa al guardarla.
-                </p>
-                <PermisoAviso permisos={permisos} accion="editar">
-                  <button
-                    type="button"
-                    style={ui.btnSecondary}
-                    onClick={() => setModalNuevaEstructura(true)}
-                    disabled={busy}
-                  >
-                    + Nueva estructura
-                  </button>
-                </PermisoAviso>
-              </div>
-            </div>
-          </div>
-
-          {rasante.length > 0 && (
-            <PanelColapsable
-              ui={ui}
-              titulo="Rasante importada"
-              abierto={rasanteAbierta}
-              onToggle={() => setRasanteAbierta((v) => !v)}
-              resumen={[
-                `${rasante.length} estaciones`,
-                columnasOrdenada && eje.calcular_intermedias
-                  ? `${columnasOrdenada.length} ordenadas · paso ${fmtN(eje.paso_intermedias_m, 2)} m`
-                  : null,
-                eje.abscisa_min != null && eje.abscisa_max != null
-                  ? `PK ${fmtN(eje.abscisa_min, 2)} – ${fmtN(eje.abscisa_max, 2)}`
-                  : null,
-                seccionLabel,
-              ].filter(Boolean).join(' · ')}
-              style={{ marginBottom: 0, padding: '12px 14px' }}
-            >
-              {eje.calcular_intermedias && columnasOrdenada && (
-                <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
-                  Cotas por ordenada transversal (m). Columnas en negrita = puntos de referencia del CSV;
-                  intermedias cada {fmtN(eje.paso_intermedias_m, 2)} m entre borde y eje.
-                </p>
-              )}
-              <div style={{ overflowX: 'auto', maxHeight: isCompact ? 'min(52dvh, 420px)' : 480, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
-                  <thead>
-                    <tr>
-                      <th style={ui.th}>Tramo</th>
-                      <th style={ui.th}>Abscisa</th>
-                      {columnasOrdenada ? (
-                        columnasOrdenada.map((o) => (
-                          <th
-                            key={o}
-                            style={{
-                              ...ui.th,
-                              fontWeight: ordenadasReferencia.has(o) ? 700 : 500,
-                            }}
-                            title={ordenadasReferencia.has(o) ? 'Referencia CSV' : 'Intermedia calculada'}
-                          >
-                            {fmtOrdenadaCol(o)}
-                          </th>
-                        ))
-                      ) : (
-                        <>
-                          <th style={ui.th}>Izquierda</th>
-                          <th style={ui.th}>Eje</th>
-                          <th style={ui.th}>Derecha</th>
-                        </>
-                      )}
-                      <th style={ui.th}>Ancho</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rasante.slice(0, 60).map((r) => {
-                      const cotas = cotasEnAbscisa(puntosPorAbscisa, r.abscisa)
-                      return (
-                        <tr key={r.id || `${r.tramo}-${r.abscisa}`}>
-                          <td style={ui.td}>{r.tramo || '—'}</td>
-                          <td style={ui.td}>{fmtN(r.abscisa, 2)}</td>
-                          {columnasOrdenada ? (
-                            columnasOrdenada.map((o) => (
-                              <td
-                                key={o}
-                                style={{
-                                  ...ui.td,
-                                  fontWeight: ordenadasReferencia.has(o) ? 600 : 400,
-                                }}
-                              >
-                                {fmtN(cotas?.get(o))}
-                              </td>
-                            ))
-                          ) : (
-                            <>
-                              <td style={ui.td}>{fmtN(r.cota_izquierda)}</td>
-                              <td style={ui.td}>{fmtN(r.cota_eje)}</td>
-                              <td style={ui.td}>{fmtN(r.cota_derecha)}</td>
-                            </>
-                          )}
-                          <td style={ui.td}>{fmtN(r.ancho, 2)}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {rasante.length > 60 && (
-                <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-                  Mostrando 60 de {rasante.length} estaciones.
-                </p>
-              )}
-            </PanelColapsable>
-          )}
+                ＋
+              </IconBtn>
+            )}
+          </PermisoAviso>
         </div>
+
+        {!estructuras.length ? (
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+            Aún no hay estructuras. Créelas antes de configurar tramos.
+          </p>
+        ) : (
+          <TopoExcelSheet
+            sheet={sheet}
+            columns={[
+              { key: 'nom', label: 'Estructura' },
+              { key: 'cap', label: 'Capas', width: 70 },
+              { key: 'esp', label: 'Espesor total', width: 120 },
+              { key: 'acc', label: '', width: 80 },
+            ]}
+            minWidth={420}
+          >
+            {estructuras.map((e) => (
+              <tr key={e.id}>
+                <td style={sheet.td}>{e.nombre}</td>
+                <td style={sheet.td}>{(e.capas || []).length}</td>
+                <td style={sheet.td}>
+                  {e.espesor_total_m != null
+                    ? `${Number(e.espesor_total_m).toFixed(3)} m`
+                    : `${sumEspesores((e.capas || []).map((c) => ({ espesor_m: c.espesor_m }))).toFixed(3)} m`}
+                </td>
+                <td style={sheet.td}>
+                  <div style={{ display: 'inline-flex', gap: 4 }}>
+                    {puede(permisos, 'editar') && (
+                      <IconBtn
+                        title="Editar estructura"
+                        onClick={() => setModalEstructura({ mode: 'edit', estructura: e })}
+                        disabled={busy}
+                        style={{ padding: '2px 8px' }}
+                      >
+                        ✎
+                      </IconBtn>
+                    )}
+                    {puede(permisos, 'eliminar') && (
+                      <IconBtn
+                        title="Eliminar estructura"
+                        danger
+                        onClick={() => setConfirmEliminarEst({ id: e.id, nombre: e.nombre })}
+                        disabled={busy}
+                        style={{ padding: '2px 8px' }}
+                      >
+                        ×
+                      </IconBtn>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </TopoExcelSheet>
+        )}
+      </PanelColapsable>
+
+      <div style={{ ...ui.card, padding: '14px 16px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+          <h4 style={{ margin: 0, flex: 1, fontSize: 'var(--cc-base)', color: ui.text }}>Tramos</h4>
+          <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{lista.length} registro(s)</span>
+        </div>
+
+        {!lista.length ? (
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+            Aún no hay tramos. Pulse «＋» para seleccionar pk_ID en el mapa y configurar el tramo.
+          </p>
+        ) : (
+          <TopoExcelSheet sheet={sheet} columns={TRAMO_COLS} minWidth={640}>
+            {lista.map((row) => {
+              const cargado = !!(row.diseno_cargado || (row.filas_rasante || 0) > 0)
+              return (
+                <tr
+                  key={row.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => abrirDetalle(row.id)}
+                  title="Ver detalle del tramo"
+                >
+                  <td style={sheet.td}>
+                    <strong style={{ color: ui.text }}>{row.nombre || '—'}</strong>
+                  </td>
+                  <td style={sheet.td}>
+                    {fmtN(row.abscisa_inicio ?? row.abscisa_min, 2)} – {fmtN(row.abscisa_fin ?? row.abscisa_max, 2)}
+                  </td>
+                  <td style={sheet.td}>{estructurasLabel(row)}</td>
+                  <td style={sheet.td} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <span style={{
+                        fontWeight: 700,
+                        fontSize: 'var(--cc-xs)',
+                        color: cargado ? (ui.t?.success || '#16a34a') : (ui.t?.warn || '#b45309'),
+                      }}>
+                        {cargado ? 'Cargado' : 'Pendiente'}
+                      </span>
+                      {cargado && (
+                        <IconBtn
+                          title="Vista previa de cotas del diseño"
+                          onClick={() => abrirPreviewDesdeGrilla(row)}
+                          disabled={busy}
+                          style={{ padding: '2px 8px' }}
+                        >
+                          👁
+                        </IconBtn>
+                      )}
+                    </div>
+                  </td>
+                  <td style={sheet.td} onClick={(e) => e.stopPropagation()}>
+                    {puede(permisos, 'eliminar') && (
+                      <IconBtn
+                        title="Eliminar tramo"
+                        danger
+                        onClick={() => setConfirmEliminar({ id: row.id, nombre: row.nombre })}
+                        disabled={busy}
+                        style={{ padding: '2px 8px' }}
+                      >
+                        ×
+                      </IconBtn>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </TopoExcelSheet>
+        )}
+      </div>
+
+      {mapaOpen && (
+        <DisenoTramoMapaPkModal
+          t={ui.t}
+          token={token}
+          contratoId={contratoId}
+          initialPks={pksPendientes}
+          onConfirm={onMapaConfirm}
+          onClose={() => setMapaOpen(false)}
+        />
       )}
 
-      <DisenoImportConfigModal
-        open={modalImportConfig}
-        nombreArchivo={archivoPendiente?.name}
-        onConfirm={ejecutarImportacion}
+      <DisenoCrearTramoModal
+        open={crearOpen}
+        pks={pksPendientes}
+        estructuras={estructuras}
+        initial={editandoTramo ? {
+          id: editandoTramo.eje?.id,
+          nombre: editandoTramo.eje?.nombre,
+          abscisa_inicio: editandoTramo.eje?.abscisa_inicio,
+          abscisa_fin: editandoTramo.eje?.abscisa_fin,
+          sectores: editandoTramo.sectores,
+        } : null}
+        saving={busy}
+        onSave={guardarTramo}
+        onBackToMap={() => {
+          setCrearOpen(false)
+          setMapaOpen(true)
+        }}
         onClose={() => {
           if (!busy) {
-            setModalImportConfig(false)
-            setArchivoPendiente(null)
+            setCrearOpen(false)
+            setEditandoTramo(null)
           }
         }}
       />
 
-      <DisenoNuevaEstructuraModal
-        open={modalNuevaEstructura}
-        onSave={crearNuevaEstructura}
-        onClose={() => { if (!busy) setModalNuevaEstructura(false) }}
-        saving={busy}
+      <DisenoTramoDetalleModal
+        open={detalleOpen && !!detalle}
+        detalle={detalle}
+        contratoId={contratoId}
+        token={token}
+        permisos={permisos}
+        busy={busy}
+        api={api}
+        onReload={recargarDetalle}
+        onEdit={(d) => {
+          setDetalleOpen(false)
+          setEditandoTramo(d)
+          setPksPendientes((d.pks || []).map((p) => ({
+            ...p,
+            ubicacion_pk: p.pk_label,
+            ubicacion_pk_id: p.pk_id,
+            ubicacion_tramo: p.tramo_plataforma,
+            ubicacion_costado: p.costado,
+            ubicacion_infraestructura: p.infraestructura,
+            ubicacion_lat: p.lat,
+            ubicacion_lng: p.lng,
+          })))
+          setCrearOpen(true)
+        }}
+        onClose={() => { if (!busy) setDetalleOpen(false) }}
+        onError={showError}
       />
 
-      {confirmEliminarRasante && (
-        <TopoConfirmModal
-          theme={ui.t}
-          titulo="Eliminar rasante importada"
-          confirmLabel={busy ? 'Eliminando…' : 'Eliminar rasante'}
-          onCancel={() => { if (!busy) setConfirmEliminarRasante(false) }}
-          onConfirm={eliminarRasante}
-        >
-          ¿Eliminar la rasante importada de <strong>«{eje?.nombre || 'este eje'}»</strong>?
-          Se conservan el eje y la estructura de vía; podrá volver a subir el CSV o Excel.
-        </TopoConfirmModal>
-      )}
+      <DisenoNuevaEstructuraModal
+        open={!!modalEstructura}
+        saving={busy}
+        titulo={modalEstructura?.mode === 'edit' ? 'Editar estructura del contrato' : 'Nueva estructura del contrato'}
+        descripcion="Capas de arriba hacia abajo. Primera capa = terminado / rasante. Queda disponible para todos los tramos."
+        initialNombre={modalEstructura?.estructura?.nombre || ''}
+        initialCapas={modalEstructura?.estructura?.capas || null}
+        onSave={guardarEstructuraContrato}
+        onClose={() => { if (!busy) setModalEstructura(null) }}
+      />
+
+      <DisenoPreviewCotasModal
+        open={!!previewDesdeGrilla}
+        eje={previewDesdeGrilla?.eje}
+        rasante={previewDesdeGrilla?.rasante || []}
+        perfilPuntos={previewDesdeGrilla?.perfil_puntos || []}
+        onClose={() => setPreviewDesdeGrilla(null)}
+      />
 
       {confirmEliminar && (
         <TopoConfirmModal
           theme={ui.t}
-          titulo="Eliminar eje"
+          titulo="Eliminar tramo"
           confirmLabel={busy ? 'Eliminando…' : 'Eliminar'}
           onCancel={() => { if (!busy) setConfirmEliminar(null) }}
-          onConfirm={eliminarEje}
+          onConfirm={eliminarTramo}
         >
-          ¿Eliminar el eje <strong>«{confirmEliminar.nombre}»</strong> y todo su diseño y estructura?
+          ¿Eliminar el tramo <strong>«{confirmEliminar.nombre}»</strong> y su diseño geométrico?
+        </TopoConfirmModal>
+      )}
+
+      {confirmEliminarEst && (
+        <TopoConfirmModal
+          theme={ui.t}
+          titulo="Eliminar estructura"
+          confirmLabel={busy ? 'Eliminando…' : 'Eliminar'}
+          onCancel={() => { if (!busy) setConfirmEliminarEst(null) }}
+          onConfirm={eliminarEstructura}
+        >
+          ¿Eliminar la estructura <strong>«{confirmEliminarEst.nombre}»</strong> del contrato?
+          No debe estar asignada a ningún tramo.
         </TopoConfirmModal>
       )}
 

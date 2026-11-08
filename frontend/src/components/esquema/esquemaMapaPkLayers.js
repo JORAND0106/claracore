@@ -342,29 +342,30 @@ export function ensureEsquemaPkLayers(map, planoFc, selectedPk = '') {
 
 /**
  * Resalte ámbar del PK seleccionado (mismo criterio que PptoFiltroMapaPk).
+ * Acepta un PK o una lista (selección múltiple en Configuración DG).
  * @param {import('mapbox-gl').Map} map
- * @param {string} selectedPk
+ * @param {string|string[]} selectedPk
  */
 export function applyEsquemaPkSelectionStyle(map, selectedPk) {
   if (!map?.getLayer?.(ESQUEMA_MAPA_PK_FILL)) return
-  const sel = String(selectedPk || '').trim()
+  const list = (Array.isArray(selectedPk) ? selectedPk : [selectedPk])
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter(Boolean)
   try {
-    if (!sel) {
+    if (!list.length) {
       map.setPaintProperty(ESQUEMA_MAPA_PK_FILL, 'fill-color', ESQUEMA_MAPA_PK_COLOR)
       map.setPaintProperty(ESQUEMA_MAPA_PK_FILL, 'fill-opacity', 0.3)
       return
     }
+    const pkExpr = ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']]
+    const matchExpr = list.length === 1
+      ? ['==', pkExpr, list[0]]
+      : ['in', pkExpr, ['literal', list]]
     map.setPaintProperty(ESQUEMA_MAPA_PK_FILL, 'fill-color', [
-      'case',
-      ['==', ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']], sel.toLowerCase()],
-      ESQUEMA_MAPA_PK_SELECTED,
-      ESQUEMA_MAPA_PK_COLOR,
+      'case', matchExpr, ESQUEMA_MAPA_PK_SELECTED, ESQUEMA_MAPA_PK_COLOR,
     ])
     map.setPaintProperty(ESQUEMA_MAPA_PK_FILL, 'fill-opacity', [
-      'case',
-      ['==', ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']], sel.toLowerCase()],
-      0.55,
-      0.3,
+      'case', matchExpr, 0.55, 0.3,
     ])
   } catch {
     /* ignore */

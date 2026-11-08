@@ -44,8 +44,8 @@ const CAPAS_COLS = [
   { key: 'ord', label: '#', width: 44 },
   { key: 'capa', label: 'Capa' },
   { key: 'esp', label: 'Espesor (m)', width: 96 },
-  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en entrega DG' },
-  { key: 'sa', label: 'Sobre ancho (m)', width: 100, ayuda: 'Metros adicionales al ancho de vía del eje para esta capa' },
+  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en Estructura de Vía' },
+  { key: 'sa', label: 'Sobre ancho (m)', width: 100, ayuda: 'Metros adicionales al ancho de vía del tramo para esta capa' },
   { key: 'acc', label: '', width: 40 },
 ]
 
@@ -299,14 +299,26 @@ export default function DisenoEstructuraPanel({
 }
 
 const NUEVA_COLS = [
-  { key: 'ord', label: '#', width: 56 },
+  { key: 'ord', label: '#', width: 44 },
   { key: 'capa', label: 'Capa' },
-  { key: 'esp', label: 'Espesor (m)', width: 140 },
-  { key: 'acc', label: '', width: 48 },
+  { key: 'esp', label: 'Espesor (m)', width: 96 },
+  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en Estructura de Vía' },
+  { key: 'sa', label: 'Sobre ancho (m)', width: 100, ayuda: 'Metros adicionales al ancho de vía del tramo para esta capa' },
+  { key: 'acc', label: '', width: 40 },
 ]
 
-/** Modal ancho para crear nueva versión de estructura con nombre. */
-export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
+/** Modal ancho para crear/editar estructura de vía (contrato o versión). */
+export function DisenoNuevaEstructuraModal({
+  open,
+  onSave,
+  onClose,
+  saving,
+  zIndex = 100065,
+  titulo = 'Nueva estructura de vía',
+  descripcion = 'Defina las capas de arriba hacia abajo. La primera capa es terminado / rasante.',
+  initialNombre = '',
+  initialCapas = null,
+}) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const [nombre, setNombre] = useState('')
@@ -315,10 +327,21 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
 
   useEffect(() => {
     if (!open) return
-    setNombre('')
-    setFilas([filaVacia()])
+    setNombre(initialNombre || '')
+    if (initialCapas?.length) {
+      setFilas(initialCapas.map((c) => ({
+        nombre: c.nombre || '',
+        espesor_m: c.espesor_m ?? '',
+        referencia_orden: c.referencia_analisis_orden === 0
+          ? '0'
+          : (c.referencia_analisis_orden != null ? String(c.referencia_analisis_orden) : ''),
+        sobre_ancho_m: c.sobre_ancho_m ?? '',
+      })))
+    } else {
+      setFilas([filaVacia()])
+    }
     setError('')
-  }, [open])
+  }, [open, initialNombre, initialCapas])
 
   if (!open) return null
 
@@ -347,7 +370,7 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 9000,
+        zIndex,
         background: 'rgba(15,23,42,0.55)',
         display: 'flex',
         alignItems: 'center',
@@ -368,10 +391,10 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
       >
         <CcModalBrandHeader theme={ui.t} />
         <h3 style={{ margin: '0 0 6px', color: ui.text, fontSize: 'var(--cc-base)' }}>
-          Nueva estructura de vía
+          {titulo}
         </h3>
         <p style={{ margin: '0 0 14px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
-          La nueva estructura quedará <strong>vigente</strong> automáticamente. Las anteriores se conservan en el historial.
+          {descripcion}
         </p>
 
         <label style={{ display: 'block', marginBottom: 14, maxWidth: 480 }}>
@@ -384,14 +407,20 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
           />
         </label>
 
-        <TopoExcelSheet sheet={sheet} columns={NUEVA_COLS} minWidth={420}>
+        <TopoExcelSheet sheet={sheet} columns={NUEVA_COLS} minWidth={520}>
           {filas.map((f, idx) => (
             <tr key={idx}>
-              <td style={sheet.td}>{idx + 1}{idx === 0 ? ' · terminado' : ''}</td>
+              <td style={sheet.td}>
+                {idx + 1}
+                {idx === 0 && (
+                  <div style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted }}>terminado</div>
+                )}
+              </td>
               <td style={sheet.td}>
                 <input
                   value={f.nombre}
                   onChange={(e) => update(idx, { nombre: e.target.value })}
+                  placeholder={idx === 0 ? 'MD-12' : 'MD-20'}
                   style={sheet.cellInp}
                 />
               </td>
@@ -399,12 +428,42 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
                 <input
                   value={f.espesor_m}
                   onChange={(e) => update(idx, { espesor_m: e.target.value })}
+                  placeholder="0.070"
                   style={sheet.cellInp}
+                />
+              </td>
+              <td style={sheet.td}>
+                <select
+                  value={f.referencia_orden ?? ''}
+                  onChange={(e) => update(idx, { referencia_orden: e.target.value })}
+                  style={sheet.cellSelect}
+                  title="Capa inferior para cálculo de espesor en Estructura de Vía"
+                >
+                  <option value="">
+                    Auto ({idx + 1 < filas.length ? (filas[idx + 1].nombre || `Capa ${idx + 2}`) : 'Terreno'})
+                  </option>
+                  {filas.slice(idx + 1).map((capaAbajo, j) => (
+                    <option key={j} value={String(idx + j + 2)}>
+                      {capaAbajo.nombre || `Capa ${idx + j + 2}`}
+                    </option>
+                  ))}
+                  <option value="0">Terreno natural</option>
+                </select>
+              </td>
+              <td style={sheet.td}>
+                <input
+                  value={f.sobre_ancho_m ?? ''}
+                  onChange={(e) => update(idx, { sobre_ancho_m: e.target.value })}
+                  placeholder="0.00"
+                  style={sheet.cellInp}
+                  title="Metros adicionales al ancho de vía del tramo para esta capa"
                 />
               </td>
               <td style={sheet.td}>
                 <button
                   type="button"
+                  title="Quitar capa"
+                  aria-label="Quitar capa"
                   style={{ ...ui.btnSecondary, padding: '2px 8px', color: '#dc2626' }}
                   onClick={() => filas.length > 1 && setFilas(filas.filter((_, i) => i !== idx))}
                   disabled={filas.length <= 1}
@@ -415,7 +474,7 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
             </tr>
           ))}
           <tr style={{ background: `${totalColor}22`, fontWeight: 700 }}>
-            <td style={sheet.td} colSpan={2}>Espesor total</td>
+            <td style={sheet.td} colSpan={4}>Espesor total estructura</td>
             <td style={{ ...sheet.td, color: totalColor }} colSpan={2}>
               {total.toFixed(3)} m
             </td>
@@ -426,6 +485,7 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
           type="button"
           style={{ ...ui.btnSecondary, marginTop: 4 }}
           onClick={() => setFilas([...filas, filaVacia()])}
+          title="Agregar capa"
         >
           + Agregar capa
         </button>
@@ -433,9 +493,9 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
         {error && <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-xs)', color: '#dc2626' }}>{error}</p>}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-          <button type="button" style={ui.btnSecondary} onClick={onClose} disabled={saving}>Cancelar</button>
-          <button type="button" style={ui.btnPrimary} onClick={guardar} disabled={saving}>
-            {saving ? 'Guardando…' : 'Crear y activar estructura'}
+          <button type="button" style={ui.btnSecondary} onClick={onClose} disabled={saving} title="Cancelar">Cancelar</button>
+          <button type="button" style={ui.btnPrimary} onClick={guardar} disabled={saving} title="Guardar estructura">
+            {saving ? 'Guardando…' : 'Guardar estructura'}
           </button>
         </div>
       </div>

@@ -55,6 +55,7 @@ class TestTopografiaAudit(unittest.TestCase):
         self.assertEqual(mod.ENTIDAD_PLANILLA_TUBERIA, "topo_planilla_tuberia")
         self.assertEqual(mod.ENTIDAD_POLIGONAL, "topo_poligonal")
         self.assertEqual(mod.ENTIDAD_NIVELACION, "topo_nivelacion")
+        self.assertEqual(mod.ENTIDAD_DISENO_GEOMETRICO, "topo_diseno_geometrico")
 
     def test_snapshot_tablas_diff_campo_a_campo(self):
         mod, _ = _load_audit_module()

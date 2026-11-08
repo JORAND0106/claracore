@@ -567,7 +567,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
 
       {!lista.length && !creando && (
         <p style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', margin: '0 0 12px' }}>
-          Aún no hay entregas. Pulse «+ Nuevo» para crear un seguimiento (requiere eje con rasante y estructura en Configuración DG).
+          Aún no hay entregas. Pulse «+ Nuevo» para crear un seguimiento (requiere tramo con diseño geométrico y estructura en Configuración DG).
         </p>
       )}
 
@@ -579,7 +579,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                 {ejesIncompletos.length > 0 ? (
                   <>
                     <p style={{ margin: '0 0 6px' }}>
-                      Hay ejes en Configuración DG, pero aún no están listos para Entrega (se necesitan rasante CSV y estructura):
+                      Hay tramos en Configuración DG, pero aún no están listos para Estructura de Vía (se necesitan diseño geométrico y estructura):
                     </p>
                     <ul style={{ margin: 0, paddingLeft: 18 }}>
                       {ejesIncompletos.map((e) => (
@@ -588,7 +588,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                           {' — falta '}
                           {(e.faltantes || []).join(' y ')}
                           {(e.filas_rasante || 0) === 0 && (e.num_capas || 0) > 0
-                            ? '. Abra el eje y pulse «Subir CSV / Excel».'
+                            ? '. Abra el tramo en Configuración DG y cargue el diseño geométrico.'
                             : '.'}
                         </li>
                       ))}
@@ -596,7 +596,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                   </>
                 ) : (
                   <p style={{ margin: 0 }}>
-                    No hay ejes. Cree uno en Configuración DG, suba la rasante (CSV/Excel) y defina la estructura de capas.
+                    No hay tramos. Cree uno en Configuración DG (desde el mapa), asigne estructura y cargue el diseño geométrico.
                   </p>
                 )}
               </div>
