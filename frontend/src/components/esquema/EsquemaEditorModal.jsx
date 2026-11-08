@@ -86,7 +86,6 @@ import {
   pickSubtractBase,
   refreshSolidFromSourceEntity,
   sliceSolidByLine,
-  solidCanEditExtrusion,
   solidOsnapPoints,
   solidForSourceEntity,
   solidThicknessAlongViewM,
@@ -100,6 +99,10 @@ import {
   uniteSolids,
   updateExtrudedSolid,
 } from './esquema3dSolids'
+import {
+  initialCotasFromSolid,
+  resolveExtrudeSelection,
+} from './esquemaExtrudeSelection'
 import { filterObjectsFor3dDraw } from './esquema3dEntityUnity'
 import {
   applyWorldDeltaToEntity,
@@ -946,6 +949,26 @@ export default function EsquemaEditorModal({
     selectedIdsRef.current = new Set(list)
     setSelectedIds(list)
     setSelectedId(list.length === 1 ? list[0] : (list[0] || null))
+    // C-3D-05 / selección: alinear (o limpiar) sólidos con la selección de contornos
+    // para que Extruir/propiedades/cálculo no queden amarrados a un elemento anterior.
+    if (list.length === 1) {
+      const linked = solidForSourceEntity(solids3dRef.current || [], list[0])
+      if (linked) {
+        selectedSolidIdsRef.current = [linked.id]
+        setSelectedSolidIds([linked.id])
+      } else {
+        selectedSolidIdsRef.current = []
+        setSelectedSolidIds([])
+      }
+    } else if (list.length > 1) {
+      const linkedIds = list
+        .map((id) => solidForSourceEntity(solids3dRef.current || [], id)?.id)
+        .filter(Boolean)
+      selectedSolidIdsRef.current = linkedIds
+      setSelectedSolidIds(linkedIds)
+    }
+    // list.length === 0: no tocar selectedSolidIds aquí — selectSolidAndSource
+    // puede seleccionar un sólido sin entidad fuente y luego llamar selectOne(null).
     if (list.length === 1 && (huellaMode || mapActiveRef.current)) {
       const obj = objectsRef.current.find((o) => o.id === list[0])
       if (isScaleLockedBloque(obj) && selectModeRef.current === 'dimensionar') {
@@ -1910,101 +1933,57 @@ export default function EsquemaEditorModal({
       return
     }
     const viewId = normalizeViewId(view3dRef.current)
-    if (!isEsquema3dDrawView(viewId)) {
-      setToolHint('Cambie a una de las seis vistas de cara para extruir.')
-      return
-    }
-
-    // Editar extrusión existente: sólido seleccionado (o contorno ligado) con params.
     const solids = solids3dRef.current || []
-    const selSolidId = (selectedSolidIdsRef.current || [])[0]
-    let editSolid = selSolidId ? solids.find((s) => s.id === selSolidId) : null
-    if (!solidCanEditExtrusion(editSolid)) {
-      const selEnt = objectsRef.current.find((o) => selectedIdsRef.current.has(o.id) && isClosedDrawableEntity(o))
-      if (selEnt) {
-        const linked = solidForSourceEntity(solids, selEnt.id)
-        if (solidCanEditExtrusion(linked)) editSolid = linked
-      }
+    const objects = objectsRef.current || []
+    const resolved = resolveExtrudeSelection({
+      selectedSolidIds: selectedSolidIdsRef.current || [],
+      selectedEntityIds: selectedIdsRef.current || [],
+      solids,
+      objects,
+      viewId,
+    })
+    if (!resolved.ok) {
+      setToolHint(resolved.error || 'Seleccione un elemento')
+      return
     }
-    if (solidCanEditExtrusion(editSolid)) {
-      const params = editSolid.extrudeParams || {}
-      const editView = normalizeViewId(params.viewId || editSolid.viewPlane || viewId)
-      const mode = params.lengthM != null && Number(params.lengthM) > 0
-        ? 'length'
-        : extrudeModeForView(editView)
-      const initialCotas = mode === 'cotas' && params.cotaSuperior != null && params.cotaInferior != null
-        ? {
-          superior: Number(params.cotaSuperior).toFixed(3),
-          inferior: Number(params.cotaInferior).toFixed(3),
-          altura: (Number(params.cotaSuperior) - Number(params.cotaInferior)).toFixed(3),
-        }
-        : null
+
+    if (resolved.kind === 'edit' && resolved.solid) {
+      const params = resolved.solid.extrudeParams || {}
       setExtrudePrompt({
-        mode,
+        mode: resolved.mode,
         editing: true,
-        editSolidId: editSolid.id,
-        entityId: editSolid.sourceEntityId || null,
-        viewId: editView,
+        editSolidId: resolved.solid.id,
+        entityId: resolved.entity?.id || resolved.solid.sourceEntityId || null,
+        viewId: resolved.viewId,
         faceDepthWorld: params.faceDepthWorld ?? 0,
-        defaultLengthM: mode === 'length' ? Number(params.lengthM) : null,
-        initialCotas,
+        defaultLengthM: resolved.mode === 'length' ? Number(params.lengthM) : null,
+        initialCotas: resolved.mode === 'cotas' ? initialCotasFromSolid(resolved.solid) : null,
+        // Token único: el popup no reutiliza estado del sólido anterior.
+        promptKey: `edit-${resolved.solid.id}-${Date.now()}`,
       })
       return
     }
 
-    const sel = objectsRef.current.find((o) => selectedIdsRef.current.has(o.id) && isClosedDrawableEntity(o))
+    const sel = resolved.entity
     if (!sel) {
-      setToolHint('Seleccione un contorno cerrado o un sólido extruido para extruir / editar.')
+      setToolHint('Seleccione un elemento')
       return
     }
-    // Ya extruido por este contorno → editar (no duplicar).
-    const already = solidForSourceEntity(solids, sel.id)
-    if (solidCanEditExtrusion(already)) {
-      const params = already.extrudeParams || {}
-      const editView = normalizeViewId(params.viewId || already.viewPlane || viewId)
-      const editMode = params.lengthM != null && Number(params.lengthM) > 0
-        ? 'length'
-        : extrudeModeForView(editView)
-      setExtrudePrompt({
-        mode: editMode,
-        editing: true,
-        editSolidId: already.id,
-        entityId: already.sourceEntityId || sel.id,
-        viewId: editView,
-        faceDepthWorld: params.faceDepthWorld ?? 0,
-        defaultLengthM: editMode === 'length' ? Number(params.lengthM) : null,
-        initialCotas: editMode === 'cotas' && params.cotaSuperior != null && params.cotaInferior != null
-          ? {
-            superior: Number(params.cotaSuperior).toFixed(3),
-            inferior: Number(params.cotaInferior).toFixed(3),
-            altura: (Number(params.cotaSuperior) - Number(params.cotaInferior)).toFixed(3),
-          }
-          : null,
-      })
-      return
-    }
-    const mode = extrudeModeForView(viewId)
     let faceDepthWorld = 0
-    let defaultLengthM = null
-    if (mode === 'length') {
-      // Cara bajo el contorno → OSNAP 3D → profundidad guardada al dibujar → plano 0.
-      const inferred = inferFaceDepthForExtrude(
-        sel,
-        solids,
-        viewId,
-      )
+    if (resolved.mode === 'length') {
+      const inferred = inferFaceDepthForExtrude(sel, solids, resolved.viewId)
       faceDepthWorld = inferred.faceDepthWorld || 0
-      // Nueva extrusión: no precargar longitud; el placeholder del popup guía.
-      defaultLengthM = null
     }
     setExtrudePrompt({
-      mode,
+      mode: resolved.mode,
       editing: false,
+      editSolidId: null,
       entityId: sel.id,
-      viewId,
+      viewId: resolved.viewId,
       faceDepthWorld,
-      defaultLengthM,
+      defaultLengthM: null,
       initialCotas: null,
+      promptKey: `new-${sel.id}-${Date.now()}`,
     })
   }, [])
 
@@ -9506,6 +9485,8 @@ export default function EsquemaEditorModal({
         )}
         {extrudePrompt ? (
           <Esquema3dExtrudePopup
+            key={extrudePrompt.promptKey
+              || `${extrudePrompt.editing ? 'e' : 'n'}-${extrudePrompt.editSolidId || extrudePrompt.entityId}`}
             t={t}
             ui={ui}
             mode={extrudePrompt.mode}

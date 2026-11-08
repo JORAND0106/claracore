@@ -165,10 +165,12 @@ describe('C-3D-05 · UI fila + placeholders + edición + calc', () => {
   it('modal reedita extrusión y actualiza sólido', () => {
     const src = readFileSync(join(__dirname, 'EsquemaEditorModal.jsx'), 'utf8')
     assert.match(src, /updateExtrudedSolid/)
-    assert.match(src, /solidCanEditExtrusion/)
+    assert.match(src, /resolveExtrudeSelection/)
     assert.match(src, /editing:\s*true/)
     assert.match(src, /editSolidId/)
     assert.match(src, /initialCotas/)
+    const sel = readFileSync(join(__dirname, 'esquemaExtrudeSelection.js'), 'utf8')
+    assert.match(sel, /solidCanEditExtrusion/)
   })
 
   it('g) cálculo: hover no pega selección; clic selecciona el sólido exacto', () => {
