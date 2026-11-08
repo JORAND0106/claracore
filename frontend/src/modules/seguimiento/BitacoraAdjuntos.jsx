@@ -563,13 +563,16 @@ export default function BitacoraAdjuntos({
                   registroNombre: extras?.title || 'esquema',
                 },
               })
-              // Popup Exportar: elegir PDF y/o DXF para bajar al computador.
-              await presentEsquemaExportPopup({
-                t,
-                title: extras?.title || 'Esquema',
-                pdf: extras?.exports?.pdf || null,
-                dxf: extras?.exports?.dxf || null,
-              })
+              // Exportar: si PDF/DXF van en segundo plano (exportsPending), el editor
+              // muestra el popup al terminar — no bloquear Guardar aquí.
+              if (!extras?.exportsPending) {
+                await presentEsquemaExportPopup({
+                  t,
+                  title: extras?.title || 'Esquema',
+                  pdf: extras?.exports?.pdf || null,
+                  dxf: extras?.exports?.dxf || null,
+                })
+              }
               setEsquemaOpen(false)
               setEditScene(null)
               setEditTargetIdx(null)

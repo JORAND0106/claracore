@@ -126,6 +126,62 @@ export function buildEsquemaHistorialEntrada({
 }
 
 /**
+ * Quita data-URIs pesados de la escena antes de persistir en graficos_historial
+ * (evita PUT enormes que fallan o no llegan al registro). Conserva geometría.
+ */
+export function aligerarEscenaParaHistorial(scene) {
+  if (!scene || typeof scene !== 'object') return scene
+  const slimObj = (o) => {
+    if (!o || typeof o !== 'object') return o
+    const c = { ...o }
+    for (const k of ['src', 'dataUri', 'data_uri', 'href', 'imageData']) {
+      if (typeof c[k] === 'string' && c[k].startsWith('data:')) {
+        c[k] = null
+        c._dataUriOmitted = true
+      }
+    }
+    return c
+  }
+  return {
+    ...scene,
+    objects: Array.isArray(scene.objects) ? scene.objects.map(slimObj) : scene.objects,
+    backgroundImage: typeof scene.backgroundImage === 'string'
+      && scene.backgroundImage.startsWith('data:')
+      ? null
+      : scene.backgroundImage,
+  }
+}
+
+/** Entrada lista para PUT en so_registros (historial ligero + campos de gráfico). */
+export function entradaParaRegistroHistorial(entrada) {
+  if (!entrada?.url) return null
+  const scene = entrada.scene || entrada.esquema_scene
+    ? aligerarEscenaParaHistorial(entrada.scene || entrada.esquema_scene)
+    : null
+  return {
+    url: entrada.url,
+    numero: entrada.numero ?? null,
+    creado_en: entrada.creado_en || new Date().toISOString(),
+    origen: 'esquema',
+    kind: 'esquema',
+    nombre: String(entrada.nombre || 'Esquema').trim() || 'Esquema',
+    esquema_id: entrada.esquema_id || nuevoEsquemaId(),
+    ...(scene ? { scene, esquema_scene: scene } : {}),
+    ...(entrada.reporte_id != null ? { reporte_id: entrada.reporte_id } : {}),
+  }
+}
+
+/** ¿El registro muestra este esquema en sus gráficos? (ícono / galería / PDF). */
+export function registroTieneEsquemaAsignado(reg, { esquemaId, numero } = {}) {
+  const hist = listaGraficosRegistro(reg).filter(esEntradaEsquema)
+  return hist.some((g) => {
+    if (esquemaId && g.esquema_id && String(g.esquema_id) === String(esquemaId)) return true
+    if (numero != null && g.numero != null && Number(g.numero) === Number(numero)) return true
+    return false
+  })
+}
+
+/**
  * Aplica / actualiza asignación a la lista deseada.
  * Incluye registros sellados: solo se tocan campos de gráfico/esquema
  * (grafico_url, grafico_numero, graficos_historial); nunca cantidades.
@@ -158,19 +214,23 @@ export function planificarAsignacionEsquema({
     const tiene = hist.some(pertenece)
     const quiere = desired.has(rid)
 
+    const entradaPut = entradaParaRegistroHistorial(entrada) || { ...entrada }
     if (quiere && !tiene) {
-      hist = [...hist.filter((g) => !pertenece(g)), { ...entrada }]
+      hist = [...hist.filter((g) => !pertenece(g)), { ...entradaPut }]
     } else if (!quiere && tiene) {
       hist = hist.filter((g) => !pertenece(g))
     } else if (quiere && tiene) {
       // Actualizar URL/escena/nombre (misma asignación)
-      hist = hist.map((g) => (pertenece(g) ? { ...g, ...entrada, creado_en: entrada.creado_en || g.creado_en } : g))
+      hist = hist.map((g) => (pertenece(g)
+        ? { ...g, ...entradaPut, creado_en: entradaPut.creado_en || g.creado_en }
+        : g))
     } else {
       continue
     }
 
     const prim = pickPrimaryGraficoFromHistorial(hist)
     // Solo campos de esquema/gráfico — no medidas ni cantidades.
+    // grafico_descripcion: la UI/galería lo usan junto al ícono del registro.
     patches.push({
       registro: reg,
       body: {
@@ -178,6 +238,7 @@ export function planificarAsignacionEsquema({
         numero_registro: reg.numero_registro,
         grafico_url: prim?.url || null,
         grafico_numero: prim?.numero ?? null,
+        grafico_descripcion: prim?.nombre || entradaPut.nombre || 'Esquema',
         graficos_historial: hist,
       },
     })

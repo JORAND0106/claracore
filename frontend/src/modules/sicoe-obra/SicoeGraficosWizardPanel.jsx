@@ -174,12 +174,14 @@ export default function SicoeGraficosWizardPanel({
           if (f) await subirArchivo(f, { origen: adj.origen || 'esquema-calculo' })
         },
       )
-      await presentEsquemaExportPopup({
-        t,
-        title: extras?.title || 'Esquema',
-        pdf: extras?.exports?.pdf || null,
-        dxf: extras?.exports?.dxf || null,
-      })
+      if (!extras?.exportsPending) {
+        await presentEsquemaExportPopup({
+          t,
+          title: extras?.title || 'Esquema',
+          pdf: extras?.exports?.pdf || null,
+          dxf: extras?.exports?.dxf || null,
+        })
+      }
       setEsquemaOpen(false)
       setEsquemaInitialDataUri(null)
       setEsquemaInitialScene(null)

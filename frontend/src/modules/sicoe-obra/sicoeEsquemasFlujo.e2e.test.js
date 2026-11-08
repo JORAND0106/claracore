@@ -15,6 +15,8 @@ import {
   resolverEscenaGuardado,
   simularFlujoEsquemasE2E,
 } from './sicoeEsquemasFlujo.js'
+import { registroTieneEsquemaAsignado } from './sicoeEsquemasReporte.js'
+import { listaGraficosRegistro } from './sicoeGraficosHelpers.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const srcRoot = join(__dirname, '../..')
@@ -84,6 +86,17 @@ describe('sicoeEsquemasFlujo · punta a punta (#57)', () => {
     assert.equal(fila.sinAsignar, false)
     const nums = fila.registros.map((x) => x.numero_registro).sort((a, b) => a - b)
     assert.deepEqual(nums, [440, 442, 443, 624, 625])
+    // El esquema asignado aparece dentro de cada registro marcado (gráficos).
+    const despuesAsignar = r.log.find((x) => x.accion === 'asignar')?.despues || []
+    assert.ok(despuesAsignar.length >= 5)
+    for (const reg of despuesAsignar) {
+      assert.equal(
+        registroTieneEsquemaAsignado(reg, { esquemaId: 'esq-e2e-174', numero: 174 }),
+        true,
+        `#${reg.numero_registro} debe tener el esquema en sus gráficos`,
+      )
+      assert.ok(listaGraficosRegistro(reg).some((g) => Number(g.numero) === 174))
+    }
   })
 
   it('escena del editor prevalece sobre la del target (regresión Guardar)', () => {

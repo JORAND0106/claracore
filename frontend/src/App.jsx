@@ -3133,15 +3133,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setFotoImgError(false)
   }, [registro.id, registro.foto_url, registro.foto_numero, registro.fotos_historial, reporte?.registros])
   useEffect(() => {
-    const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
-    // Si esta fila trae grafico_url (incluso null tras borrar), no heredar de hermanos.
+    const fromRep = reporte?.registros?.find((r) => String(r.id) === String(registro.id))
+    // Preferir historial del reporte si es más completo (p. ej. tras Asignar).
+    const histReg = registro.graficos_historial
+    const histRep = fromRep?.graficos_historial
+    const histMerged = (Array.isArray(histReg) && histReg.length)
+      ? histReg
+      : (Array.isArray(histRep) && histRep.length ? histRep : (histReg ?? histRep))
     const urlEste = Object.prototype.hasOwnProperty.call(registro, 'grafico_url')
-      ? (registro.grafico_url || null)
-      : (fromRep?.grafico_url || null)
+      && registro.grafico_url
+      ? registro.grafico_url
+      : (fromRep?.grafico_url || registro.grafico_url || null)
     setGrafLocal(urlEste)
     setGraficosHistLocal(parseGraficosHistorial({
       ...registro,
-      graficos_historial: registro.graficos_historial ?? fromRep?.graficos_historial,
+      graficos_historial: histMerged,
       grafico_url: urlEste,
     }))
   }, [registro.id, registro.grafico_url, registro.graficos_historial, reporte?.registros])
@@ -9804,11 +9810,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           registros={registros}
           isSellado={(reg) => sicoeRegistroSelladoMaxActivo(reg, nivelesContrato)}
           onRegistrosPatched={(patches) => {
-            setRegistros((prev) => prev.map((r) => {
+            // Causa prod #57: recargar(?ligero=1) justo después del PUT pisaba
+            // graficos_historial local y el registro abría sin esquema.
+            // Confiar en el PUT verificado + patch local (lista y hoja).
+            const apply = (prev) => (prev || []).map((r) => {
               const hit = (patches || []).find((p) => String(p.id) === String(r.id))
               return hit ? { ...r, ...hit } : r
-            }))
-            try { void recargar({ forzarSinFiltros: true }) } catch { /* noop */ }
+            })
+            setRegistros(apply)
+            setReporte((prev) => {
+              if (!prev) return prev
+              return { ...prev, registros: apply(prev.registros || []) }
+            })
           }}
         />
       )}
