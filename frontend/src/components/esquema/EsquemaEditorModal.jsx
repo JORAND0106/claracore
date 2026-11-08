@@ -6708,23 +6708,26 @@ export default function EsquemaEditorModal({
           orbitAngles: orbitAnglesRef.current,
         })
         : null
-      // Siempre PNG hi-res; en 3D incluye sólidos en la vista activa.
+      // Congela cálculos ANTES de componer: la PNG principal incluye
+      // encabezado institucional + memoria bajo el isométrico si hay cálculo.
+      const { adjuntos: calcAdj, snapshots } = await buildVolumeCalcAdjuntos()
+      const despieceAdj = await buildDespieceScheduleAdjuntos()
       const composed = await composeEsquemaExport({
         title: titleTxt,
         objects: objectsRef.current,
         nodes,
         drawObject,
-        solids3d: in3d ? solids : null,
+        solids3d: in3d || solids.length ? solids : null,
         view3d: viewId,
-        orbit,
-        drawSolid: in3d ? drawSolid3d : null,
+        orbit: orbit || (solids.length
+          ? solidsViewCamera(viewId, solids, { orbitFree: false })
+          : null),
+        drawSolid: solids.length ? drawSolid3d : null,
+        calcSnapshots: snapshots,
       })
       if (!isEsquemaPngDataUrl(composed)) {
         throw new Error('El esquema debe guardarse como PNG.')
       }
-      // Congela cálculos al guardar (ya no se recalculan tras cerrar).
-      const { adjuntos: calcAdj, snapshots } = await buildVolumeCalcAdjuntos()
-      const despieceAdj = await buildDespieceScheduleAdjuntos()
       // Registro: SOLO PNG (memoria/despiece). PDF/DXF NUNCA van al registro (C-OUT-13).
       const adjuntos = filterEsquemaRegistroAdjuntos([
         ...(calcAdj || []),

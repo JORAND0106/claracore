@@ -18,6 +18,20 @@ import {
   esquemaDocFontHierarchy,
   ESQUEMA_FO_EO_SLOT_H,
 } from './esquemaDocLegibility.js'
+import {
+  drawEsquemaSalidaHeader,
+  ESQUEMA_SALIDA_BRAND,
+  planEsquemaSalidaHeader,
+} from './esquemaSalidaHeader.js'
+import {
+  memoriaDisplayRows,
+  renderMemoriaColorTableCanvas,
+} from './esquema3dCalcExport.js'
+
+/** Columnas aprobadas de la tabla de memoria (referencia). */
+export const ESQUEMA_MEMORIA_TABLE_COLUMNS = Object.freeze([
+  '#', 'Color', 'Nombre', 'Operación', 'Descuenta de', 'Dimensiones', 'Fórmula', 'Volumen (m³)',
+])
 
 export const EXPORT_MARGIN = 48
 export const EXPORT_TITLE_H = 56
@@ -376,12 +390,56 @@ export function computeEsquemaExportSize({ objects, nodes, solids3d, view3d, orb
 }
 
 /**
- * Compone el PNG rotulado (título + márgenes + contorno + rosa + tabla).
- * Siempre `data:image/png` con fondo blanco.
- * En 3D: dibuja sólidos en la vista/órbita activa (`drawSolid` = drawSolid3d).
- * `drawObject` lo inyecta el editor para no duplicar el rasterizado de entidades.
+ * Plan estructural de la PNG de esquema (sin dibujar) — referencias aprobadas.
+ * Incluye encabezado institucional y, si hay cálculo, la tabla de memoria.
  */
-export function composeEsquemaExport({
+export function planEsquemaExportSalida({
+  title = 'Esquema',
+  nodes = [],
+  calcSnapshots = [],
+  brandTitle = ESQUEMA_SALIDA_BRAND,
+  imageWidth = EXPORT_MIN_WIDTH,
+} = {}) {
+  const snaps = (calcSnapshots || []).filter((s) => s && (s.lines || []).some((l) => l.ok))
+  const header = planEsquemaSalidaHeader({
+    imageWidth,
+    tipoTitulo: 'Esquema',
+    nombre: title,
+    brandTitle,
+  })
+  const hasCoords = Array.isArray(nodes) && nodes.length > 0
+  const memoriaPlans = snaps.map((snap) => {
+    const rows = memoriaDisplayRows(snap)
+    return {
+      nombre: snap.nombre || 'Cálculo',
+      rowCount: rows.length,
+      columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+      totalM3: snap.totalM3,
+      hasNetRow: rows.some((r) => r.isNetRow || String(r.nombre || '').includes('(neto)')),
+      nums: rows.map((r) => r.numLabel || r.num || r.index).filter((x) => x != null),
+    }
+  })
+  return {
+    kind: snaps.length ? 'esquema-con-memoria' : (hasCoords ? 'esquema-con-coords' : 'esquema-sin-tablas'),
+    header,
+    hasHeader: true,
+    hasIso: true,
+    hasMemoriaTable: memoriaPlans.length > 0,
+    hasCoordsTable: hasCoords,
+    memoria: memoriaPlans,
+    columnsRequired: snaps.length ? [...ESQUEMA_MEMORIA_TABLE_COLUMNS] : null,
+    minFontFrac: 1 / 55,
+  }
+}
+
+/**
+ * Compone el PNG rotulado: encabezado institucional + dibujo + (memoria|coords).
+ * Siempre `data:image/png` con fondo blanco.
+ * En 3D: dibuja sólidos en la vista/órbita activa.
+ * Si hay `calcSnapshots` con líneas OK, incluye la tabla de memoria bajo el isométrico.
+ * @returns {Promise<string|{ dataUrl: string, meta: object }>}
+ */
+export async function composeEsquemaExport({
   title,
   objects,
   nodes,
@@ -390,10 +448,18 @@ export function composeEsquemaExport({
   view3d = 'top',
   orbit = null,
   drawSolid = null,
+  calcSnapshots = null,
+  brandTitle = ESQUEMA_SALIDA_BRAND,
+  returnMeta = false,
 } = {}) {
+  if (typeof document === 'undefined') {
+    const plan = planEsquemaExportSalida({ title, nodes, calcSnapshots, brandTitle })
+    if (returnMeta) return { dataUrl: null, meta: plan }
+    throw new Error('composeEsquemaExport requiere DOM')
+  }
   const margin = EXPORT_MARGIN
-  const titleH = EXPORT_TITLE_H
   const rows = nodes || []
+  const snaps = (calcSnapshots || []).filter((s) => s && (s.lines || []).some((l) => l.ok))
   const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
   const mode3d = solids.length > 0 && typeof drawSolid === 'function'
   const linked = mode3d ? linkedSourceEntityIds(solids) : null
@@ -405,43 +471,81 @@ export function composeEsquemaExport({
     : null
   const layout = computeEsquemaExportSize({
     objects: objs2d,
-    nodes: rows,
+    nodes: snaps.length ? [] : rows, // con memoria, coords van aparte o se omiten del layout base
     solids3d: mode3d ? solids : null,
     view3d: view3d || 'top',
     orbit: cam,
   })
-  const { w, h, scale, drawW, drawH, heightBoost } = layout
-  const bb2d = sceneExportBounds(objs2d)
-  const bb3d = mode3d ? solidsExportBounds(solids, view3d || 'top', cam) : null
-  const bb = mergeExportBounds(objs2d.length ? bb2d : null, bb3d) || bb2d
+  let { w, scale, drawW, drawH, heightBoost } = layout
+  // Encabezado institucional (no el título suelto de EXPORT_TITLE_H).
+  const textScale = (w / 1280) * ESQUEMA_DOC_TYPE_SCALE
+  const headerPlan = planEsquemaSalidaHeader({
+    imageWidth: w,
+    tipoTitulo: 'Esquema',
+    nombre: title || 'Esquema',
+    brandTitle,
+    textScale,
+  })
+  const headerH = headerPlan.height
+
+  // Tablas de memoria (una por cálculo) a ancho útil.
+  const memoriaCanvases = []
+  for (const snap of snaps) {
+    const table = renderMemoriaColorTableCanvas(snap, {
+      width: w - margin * 2,
+      fontScale: textScale * 1.05,
+    })
+    if (table) memoriaCanvases.push({ snap, table })
+  }
+  const memoriaBlockH = memoriaCanvases.reduce(
+    (s, m) => s + m.table.height + Math.round(18 * textScale),
+    0,
+  )
+
+  let coordsBlock = 0
+  if (!snaps.length && rows.length) {
+    coordsBlock = exportCoordTableBlockHeight(rows.length, w - margin * 2, margin, heightBoost)
+  } else if (snaps.length && rows.length) {
+    // Con memoria y coords: coords debajo de memoria.
+    coordsBlock = exportCoordTableBlockHeight(rows.length, w - margin * 2, margin, heightBoost)
+  }
+
+  const gap = Math.round(14 * textScale)
+  const footerH = Math.round(22 * textScale)
+  const h = headerH + gap + drawH + gap + memoriaBlockH + coordsBlock + footerH
+
   const c = document.createElement('canvas')
   c.width = Math.round(w)
   c.height = Math.round(h)
   const ctx = c.getContext('2d')
-  // Fondo siempre blanco (independiente del tema de la plataforma)
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, w, h)
 
-  const titleMetrics = exportCoordTableMetrics(w - margin * 2, { heightBoost })
-  const mainTitlePx = Math.max(22, Math.round(20 * Math.min(1.6, titleMetrics.scale)))
-  ctx.fillStyle = '#0f172a'
-  ctx.font = `700 ${mainTitlePx}px sans-serif`
-  ctx.textBaseline = 'middle'
-  ctx.fillText(title || 'Esquema', margin, titleH / 2)
+  const headerMeta = await drawEsquemaSalidaHeader(ctx, {
+    imageWidth: w,
+    tipoTitulo: 'Esquema',
+    nombre: title || 'Esquema',
+    brandTitle,
+    textScale,
+    fechaIso: new Date().toISOString(),
+  })
 
   const drawX = Math.round((w - drawW) / 2)
+  const drawY = headerH + gap
+  const bb2d = sceneExportBounds(objs2d)
+  const bb3d = mode3d ? solidsExportBounds(solids, view3d || 'top', cam) : null
+  const bb = mergeExportBounds(objs2d.length ? bb2d : null, bb3d) || bb2d
   ctx.save()
   ctx.beginPath()
-  ctx.rect(drawX, titleH, drawW, drawH)
+  ctx.rect(drawX, drawY, drawW, drawH)
   ctx.clip()
-  ctx.translate(drawX + margin - bb.x * scale, titleH + margin - bb.y * scale)
+  ctx.translate(drawX + margin - bb.x * scale, drawY + margin - bb.y * scale)
   ctx.scale(scale, scale)
   for (const obj of partitionBackgroundFirst(objs2d)) {
     if (obj?.type === 'image' && obj.fit) continue
     drawObject?.(ctx, obj, false, { skipResize: true, zoom: scale })
   }
   if (mode3d) {
-    // pixelScale = escala del ctx (líneas fijas en píxeles de pantalla).
     drawSolids3dLayered(ctx, solids, {
       viewId: view3d || 'top',
       zoom: scale,
@@ -451,24 +555,65 @@ export function composeEsquemaExport({
     void drawSolid
   }
   ctx.restore()
-  // Contorno del margen / área imprimible (después del clip, sin tapar el dibujo)
-  drawExportMarginContour(ctx, { x: drawX, y: titleH, w: drawW, h: drawH })
-  drawNorthIndicator(ctx, drawW, drawH, { x: drawX, y: titleH })
+  drawExportMarginContour(ctx, { x: drawX, y: drawY, w: drawW, h: drawH })
+  drawNorthIndicator(ctx, drawW, drawH, { x: drawX, y: drawY })
+
+  let y = drawY + drawH + gap
+  const memoriaMeta = []
+  for (const { snap, table } of memoriaCanvases) {
+    const tx = margin + Math.max(0, ((w - margin * 2) - table.width) / 2)
+    ctx.drawImage(table, tx, y)
+    const rowsM = memoriaDisplayRows(snap)
+    memoriaMeta.push({
+      nombre: snap.nombre,
+      rowCount: rowsM.length,
+      columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+      totalM3: snap.totalM3,
+      tableW: table.width,
+      tableH: table.height,
+    })
+    y += table.height + Math.round(18 * textScale)
+  }
 
   if (rows.length) {
     const tableX = margin
     const tableW = w - margin * 2
     const m = exportCoordTableMetrics(tableW, { heightBoost })
-    const tableY = titleH + drawH + m.tableGap
     ctx.fillStyle = '#0f172a'
     ctx.font = `700 ${m.titleFontPx}px sans-serif`
     ctx.textBaseline = 'alphabetic'
-    ctx.fillText('Tabla de coordenadas', tableX, tableY + Math.round(m.titleBlockH * 0.65))
-    drawExportCoordTable(ctx, rows, tableX, tableY + m.titleBlockH + 4, tableW, { heightBoost })
+    ctx.fillText('Tabla de coordenadas', tableX, y + Math.round(m.titleBlockH * 0.65))
+    drawExportCoordTable(ctx, rows, tableX, y + m.titleBlockH + 4, tableW, { heightBoost })
   }
+
+  ctx.fillStyle = '#64748b'
+  ctx.font = `${Math.round(11 * textScale)}px "Segoe UI", system-ui, sans-serif`
+  ctx.fillText(
+    `${brandTitle} · Esquema · PNG de alta resolución`,
+    margin,
+    h - Math.round(8 * textScale),
+  )
+
   const dataUrl = c.toDataURL('image/png')
   if (!isEsquemaPngDataUrl(dataUrl)) {
-    return Promise.reject(new Error('El esquema debe guardarse como PNG.'))
+    throw new Error('El esquema debe guardarse como PNG.')
   }
-  return Promise.resolve(dataUrl)
+  const meta = {
+    ...planEsquemaExportSalida({
+      title,
+      nodes: rows,
+      calcSnapshots: snaps,
+      brandTitle,
+      imageWidth: w,
+    }),
+    header: headerMeta,
+    memoria: memoriaMeta.length ? memoriaMeta : planEsquemaExportSalida({
+      title, nodes: rows, calcSnapshots: snaps, brandTitle, imageWidth: w,
+    }).memoria,
+    width: w,
+    height: h,
+    cellFontPx: exportCoordTableMetrics(w - margin * 2, { heightBoost }).bodyFontPx,
+  }
+  if (returnMeta) return { dataUrl, meta }
+  return dataUrl
 }
