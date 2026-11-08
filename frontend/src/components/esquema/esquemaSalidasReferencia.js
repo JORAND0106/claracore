@@ -36,6 +36,10 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
       memoriaTable: true,
       columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
       minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+      /** Con sólidos (cálculo) la imagen sale en isométrico NE. */
+      exportView: 'iso-ne',
+      headersIntact: ['Descuenta de', 'Operación', 'Color'],
+      noWordBreak: true,
     },
   },
   {
@@ -50,6 +54,28 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
     },
   },
   {
+    id: 'esquema-con-solidos-iso',
+    label: 'Esquema con sólidos → imagen en isométrico NE (C-OUT-21)',
+    requires: {
+      header: true,
+      iso: true,
+      exportView: 'iso-ne',
+      hasSolids: true,
+      minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+    },
+  },
+  {
+    id: 'esquema-sin-solidos-top',
+    label: 'Esquema sin sólidos → imagen en vista superior (C-OUT-21)',
+    requires: {
+      header: true,
+      iso: true,
+      exportView: 'top',
+      hasSolids: false,
+      minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+    },
+  },
+  {
     id: 'memoria-volúmenes',
     label: 'PNG memoria de cálculo (encabezado + iso + tabla)',
     requires: {
@@ -58,6 +84,9 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
       memoriaTable: true,
       columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
       minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+      exportView: 'iso-ne',
+      headersIntact: ['Descuenta de'],
+      noWordBreak: true,
     },
   },
   {
@@ -182,6 +211,27 @@ export function verifySalidaAgainstReference(meta, refId) {
       errors.push(`Letra ${m.cellFontPx}px < mínimo ${minPx.toFixed(2)}px (1/55 del ancho)`)
     }
   }
+  if (req.exportView) {
+    const view = m.exportView || m.view3d
+    if (view !== req.exportView) {
+      errors.push(`Vista exportada «${view || '—'}» ≠ requerida «${req.exportView}»`)
+    }
+  }
+  if (req.hasSolids === true && m.hasSolids === false) {
+    errors.push('Se esperaban sólidos (isométrico NE)')
+  }
+  if (req.hasSolids === false && m.hasSolids === true) {
+    errors.push('No se esperaban sólidos (vista superior)')
+  }
+  if (req.headersIntact?.length) {
+    const intact = m.headersIntact || m.columns || m.columnsRequired || []
+    for (const h of req.headersIntact) {
+      if (!intact.includes(h)) errors.push(`Encabezado incompleto o ausente: ${h}`)
+    }
+  }
+  if (req.noWordBreak && m.noWordBreak === false) {
+    errors.push('Hay palabras partidas en la tabla')
+  }
 
   return { ok: errors.length === 0, errors, refId }
 }
@@ -199,11 +249,18 @@ export function runApprovedSalidasVerification(opts = {}) {
   const snap = fixtureMemoriaPocetaSnapshot()
   const rows = memoriaDisplayRows(snap)
 
-  // 1) Esquema con memoria
+  // Fixture sólido mínimo (cells) para forzar iso-ne en plan.
+  const solidFixture = [{
+    type: 'solid3d', id: 's1',
+    cells: [{ z0: 0, z1: 1, ring: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] }],
+  }]
+
+  // 1) Esquema con memoria (+ sólidos → iso-ne)
   let planConMem = planEsquemaExportSalida({
     title: 'Cabezal 9A',
     calcSnapshots: [snap],
     nodes: [],
+    solids3d: solidFixture,
   })
   if (stripMemoriaTable) {
     planConMem = {
@@ -221,6 +278,8 @@ export function runApprovedSalidasVerification(opts = {}) {
       hasHeader: true,
       hasIso: true,
       columns: planConMem.columnsRequired,
+      headersIntact: planConMem.headersIntact,
+      noWordBreak: true,
       cellFontPx: Math.max(1, (planConMem.header?.width || 1600) / 55),
       width: planConMem.header?.width || 1600,
     }, 'esquema-con-memoria'),
@@ -237,7 +296,36 @@ export function runApprovedSalidasVerification(opts = {}) {
     width: planSin.header?.width || 1600,
   }, 'esquema-sin-tablas'))
 
-  // 3) Memoria dedicada
+  // 3) Con sólidos → iso-ne
+  const planSolids = planEsquemaExportSalida({
+    title: 'Cabezal 9A',
+    solids3d: solidFixture,
+    calcSnapshots: [snap],
+  })
+  results.push(verifySalidaAgainstReference({
+    ...planSolids,
+    hasHeader: true,
+    hasIso: true,
+    cellFontPx: Math.max(1, (planSolids.header?.width || 1600) / 55),
+    width: planSolids.header?.width || 1600,
+  }, 'esquema-con-solidos-iso'))
+
+  // 4) Sin sólidos → top
+  const planTop = planEsquemaExportSalida({
+    title: 'Planta 2D',
+    solids3d: [],
+    nodes: [],
+    calcSnapshots: [],
+  })
+  results.push(verifySalidaAgainstReference({
+    ...planTop,
+    hasHeader: true,
+    hasIso: true,
+    cellFontPx: Math.max(1, (planTop.header?.width || 1600) / 55),
+    width: planTop.header?.width || 1600,
+  }, 'esquema-sin-solidos-top'))
+
+  // 5) Memoria dedicada
   const headerMem = planEsquemaSalidaHeader({
     imageWidth: 1400,
     tipoTitulo: 'Memoria de cálculo de volúmenes',
@@ -249,13 +337,16 @@ export function runApprovedSalidasVerification(opts = {}) {
     hasIso: true,
     hasMemoriaTable: !stripMemoriaTable,
     columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+    headersIntact: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+    noWordBreak: true,
+    exportView: 'iso-ne',
     rowCount: rows.length,
     totalM3: snap.totalM3,
     cellFontPx: Math.max(1, 1400 / 55),
     width: 1400,
   }, 'memoria-volúmenes'))
 
-  // 4) Despiece
+  // 6) Despiece
   results.push(verifySalidaAgainstReference({
     hasHeader: true,
     header: planEsquemaSalidaHeader({
@@ -269,7 +360,7 @@ export function runApprovedSalidasVerification(opts = {}) {
     width: 2200,
   }, 'cuadro-despiece'))
 
-  // 5) Coords
+  // 7) Coords
   const planCoords = planEsquemaExportSalida({
     title: 'Levantamiento',
     nodes: [{ n: 1 }, { n: 2 }],

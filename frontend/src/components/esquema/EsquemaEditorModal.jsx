@@ -196,7 +196,13 @@ import {
   syncSceneBloquesToLibrary,
 } from './esquemaLibraryScale'
 import CcModalBrandHeader from '../CcModalBrandHeader'
-import { composeEsquemaExport, isEsquemaPngDataUrl, sceneExportBounds, solidsExportBounds } from './esquemaExport'
+import {
+  composeEsquemaExport,
+  isEsquemaPngDataUrl,
+  resolveEsquemaExportView3d,
+  sceneExportBounds,
+  solidsExportBounds,
+} from './esquemaExport'
 import { composeEsquemaPdf } from './esquemaExportPdf'
 import { composeEsquemaDxf, esquemaDxfToDataUri } from './esquemaExportDxf'
 import { presentEsquemaExportPopup } from './esquemaExportHost'
@@ -6704,14 +6710,11 @@ export default function EsquemaEditorModal({
       await preloadHatchRegions(objectsRef.current)
       await new Promise((r) => requestAnimationFrame(r))
       const nodes = objectsRef.current.filter((o) => o.type === 'nodo')
-      const in3d = !!mode3dRef.current
       const solids = solids3dRef.current || []
-      const viewId = view3dRef.current || 'top'
-      const orbit = in3d
-        ? solidsViewCamera(viewId, solids, {
-          orbitFree: !!orbitFreeRef.current,
-          orbitAngles: orbitAnglesRef.current,
-        })
+      // C-OUT-21: con sólidos → iso-ne; sin → top. Independiente de la vista activa.
+      const exportView = resolveEsquemaExportView3d(solids)
+      const exportOrbit = solids.length
+        ? solidsViewCamera(exportView, solids, { orbitFree: false })
         : null
       // Congela cálculos ANTES de componer: la PNG principal incluye
       // encabezado institucional + memoria bajo el isométrico si hay cálculo.
@@ -6722,11 +6725,9 @@ export default function EsquemaEditorModal({
         objects: objectsRef.current,
         nodes,
         drawObject,
-        solids3d: in3d || solids.length ? solids : null,
-        view3d: viewId,
-        orbit: orbit || (solids.length
-          ? solidsViewCamera(viewId, solids, { orbitFree: false })
-          : null),
+        solids3d: solids.length ? solids : null,
+        view3d: exportView,
+        orbit: exportOrbit,
         drawSolid: solids.length ? drawSolid3d : null,
         calcSnapshots: snapshots,
       })

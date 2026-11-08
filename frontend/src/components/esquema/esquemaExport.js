@@ -3,7 +3,8 @@
  * Única fuente para Guardar desde cualquier módulo (Seguimiento, SicoeObra, Presupuesto).
  *
  * Siempre PNG de alta resolución, fondo blanco (legible en cualquier tema).
- * En modo 3D incluye los sólidos en la vista activa al guardar.
+ * Vista de exportación (C-OUT-21): con sólidos → isométrico NE;
+ * sin sólidos → vista superior. Independiente de la vista activa al Guardar.
  */
 import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esquemaGeometry.js'
 import { partitionBackgroundFirst } from './esquemaZOrder.js'
@@ -24,6 +25,7 @@ import {
   planEsquemaSalidaHeader,
 } from './esquemaSalidaHeader.js'
 import {
+  labelsFromSnapshot,
   memoriaDisplayRows,
   renderMemoriaColorTableCanvas,
 } from './esquema3dCalcExport.js'
@@ -81,6 +83,16 @@ export function sceneExportBounds(objects) {
     w: Math.max(40, maxX - minX),
     h: Math.max(40, maxY - minY),
   }
+}
+
+/**
+ * Vista canónica de la imagen exportada (PNG / memoria / PDF).
+ * Con ≥1 sólido → iso-ne; sin sólidos → top (planta).
+ * No depende de la vista que el usuario tenga activa.
+ */
+export function resolveEsquemaExportView3d(solids3d) {
+  const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  return solids.length ? 'iso-ne' : 'top'
 }
 
 /** Bounds de sólidos 3D en el espacio proyectado de la vista/órbita activa. */
@@ -320,12 +332,17 @@ export function computeEsquemaExportSize({ objects, nodes, solids3d, view3d, orb
   const titleH = EXPORT_TITLE_H
   const rows = nodes || []
   const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  const exportView = resolveEsquemaExportView3d(solids)
+  void view3d // la vista activa del editor no decide la exportación
   const linked = solids.length ? linkedSourceEntityIds(solids) : null
   const objs2d = linked
     ? (objects || []).filter((o) => o && !linked.has(o.id))
     : (objects || [])
   const bb2d = sceneExportBounds(objs2d)
-  const bb3d = solids.length ? solidsExportBounds(solids, view3d || 'top', orbit) : null
+  const cam = solids.length
+    ? (orbit || solidsViewCamera(exportView, solids, { orbitFree: false }))
+    : null
+  const bb3d = solids.length ? solidsExportBounds(solids, exportView, cam) : null
   const bb = mergeExportBounds(
     objs2d.length ? bb2d : null,
     bb3d,
@@ -399,6 +416,7 @@ export function planEsquemaExportSalida({
   calcSnapshots = [],
   brandTitle = ESQUEMA_SALIDA_BRAND,
   imageWidth = EXPORT_MIN_WIDTH,
+  solids3d = null,
 } = {}) {
   const snaps = (calcSnapshots || []).filter((s) => s && (s.lines || []).some((l) => l.ok))
   const header = planEsquemaSalidaHeader({
@@ -408,6 +426,8 @@ export function planEsquemaExportSalida({
     brandTitle,
   })
   const hasCoords = Array.isArray(nodes) && nodes.length > 0
+  const exportView = resolveEsquemaExportView3d(solids3d)
+  const hasSolids = exportView === 'iso-ne'
   const memoriaPlans = snaps.map((snap) => {
     const rows = memoriaDisplayRows(snap)
     return {
@@ -424,18 +444,23 @@ export function planEsquemaExportSalida({
     header,
     hasHeader: true,
     hasIso: true,
+    /** Vista canónica de la imagen (C-OUT-21). */
+    exportView,
+    hasSolids,
     hasMemoriaTable: memoriaPlans.length > 0,
     hasCoordsTable: hasCoords,
     memoria: memoriaPlans,
     columnsRequired: snaps.length ? [...ESQUEMA_MEMORIA_TABLE_COLUMNS] : null,
     minFontFrac: 1 / 55,
+    headersIntact: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+    noWordBreak: true,
   }
 }
 
 /**
  * Compone el PNG rotulado: encabezado institucional + dibujo + (memoria|coords).
  * Siempre `data:image/png` con fondo blanco.
- * En 3D: dibuja sólidos en la vista/órbita activa.
+ * Con sólidos: isométrico NE (C-OUT-21); sin sólidos: planta. Ignora view3d activa.
  * Si hay `calcSnapshots` con líneas OK, incluye la tabla de memoria bajo el isométrico.
  * @returns {Promise<string|{ dataUrl: string, meta: object }>}
  */
@@ -453,7 +478,7 @@ export async function composeEsquemaExport({
   returnMeta = false,
 } = {}) {
   if (typeof document === 'undefined') {
-    const plan = planEsquemaExportSalida({ title, nodes, calcSnapshots, brandTitle })
+    const plan = planEsquemaExportSalida({ title, nodes, calcSnapshots, brandTitle, solids3d })
     if (returnMeta) return { dataUrl: null, meta: plan }
     throw new Error('composeEsquemaExport requiere DOM')
   }
@@ -461,19 +486,22 @@ export async function composeEsquemaExport({
   const rows = nodes || []
   const snaps = (calcSnapshots || []).filter((s) => s && (s.lines || []).some((l) => l.ok))
   const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
+  const exportView = resolveEsquemaExportView3d(solids)
+  void view3d
+  void orbit // órbita libre del editor no se usa; cámara canónica iso-ne / top
   const mode3d = solids.length > 0 && typeof drawSolid === 'function'
   const linked = mode3d ? linkedSourceEntityIds(solids) : null
   const objs2d = linked
     ? (objects || []).filter((o) => o && !linked.has(o.id))
     : (objects || [])
   const cam = mode3d
-    ? (orbit || solidsViewCamera(view3d || 'top', solids, { orbitFree: false }))
+    ? solidsViewCamera(exportView, solids, { orbitFree: false })
     : null
   const layout = computeEsquemaExportSize({
     objects: objs2d,
     nodes: snaps.length ? [] : rows, // con memoria, coords van aparte o se omiten del layout base
     solids3d: mode3d ? solids : null,
-    view3d: view3d || 'top',
+    view3d: exportView,
     orbit: cam,
   })
   let { w, scale, drawW, drawH, heightBoost } = layout
@@ -533,8 +561,20 @@ export async function composeEsquemaExport({
   const drawX = Math.round((w - drawW) / 2)
   const drawY = headerH + gap
   const bb2d = sceneExportBounds(objs2d)
-  const bb3d = mode3d ? solidsExportBounds(solids, view3d || 'top', cam) : null
+  const bb3d = mode3d ? solidsExportBounds(solids, exportView, cam) : null
   const bb = mergeExportBounds(objs2d.length ? bb2d : null, bb3d) || bb2d
+  // Números de identificación (#) en el isométrico exportado.
+  let exportLabels = []
+  for (const snap of snaps) {
+    for (const lb of labelsFromSnapshot(snap) || []) {
+      if (lb?.solidId != null && !exportLabels.some((x) => x.solidId === lb.solidId)) {
+        exportLabels.push(lb)
+      }
+    }
+  }
+  if (!exportLabels.length && mode3d) {
+    exportLabels = solids.map((s, i) => ({ solidId: s.id, num: i + 1 }))
+  }
   ctx.save()
   ctx.beginPath()
   ctx.rect(drawX, drawY, drawW, drawH)
@@ -547,10 +587,12 @@ export async function composeEsquemaExport({
   }
   if (mode3d) {
     drawSolids3dLayered(ctx, solids, {
-      viewId: view3d || 'top',
+      viewId: exportView,
       zoom: scale,
       pixelScale: scale,
       orbit: cam,
+      labels: exportLabels,
+      labelScale: textScale,
     })
     void drawSolid
   }
@@ -605,10 +647,13 @@ export async function composeEsquemaExport({
       calcSnapshots: snaps,
       brandTitle,
       imageWidth: w,
+      solids3d: solids,
     }),
     header: headerMeta,
+    exportView,
+    hasSolids: mode3d,
     memoria: memoriaMeta.length ? memoriaMeta : planEsquemaExportSalida({
-      title, nodes: rows, calcSnapshots: snaps, brandTitle, imageWidth: w,
+      title, nodes: rows, calcSnapshots: snaps, brandTitle, imageWidth: w, solids3d: solids,
     }).memoria,
     width: w,
     height: h,

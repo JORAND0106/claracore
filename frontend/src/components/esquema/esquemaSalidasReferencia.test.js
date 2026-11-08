@@ -13,8 +13,12 @@ import {
   runApprovedSalidasVerification,
   verifySalidaAgainstReference,
 } from './esquemaSalidasReferencia.js'
-import { planEsquemaExportSalida, ESQUEMA_MEMORIA_TABLE_COLUMNS } from './esquemaExport.js'
-import { memoriaDisplayRows } from './esquema3dCalcExport.js'
+import {
+  planEsquemaExportSalida,
+  resolveEsquemaExportView3d,
+  ESQUEMA_MEMORIA_TABLE_COLUMNS,
+} from './esquemaExport.js'
+import { memoriaDisplayRows, wrapMemoriaText } from './esquema3dCalcExport.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const srcRoot = join(__dirname, '../..')
@@ -24,10 +28,12 @@ function read(rel) {
 }
 
 describe('esquemaSalidasReferencia · catálogo aprobado', () => {
-  it('incluye los 4 tipos de salida del concepto', () => {
+  it('incluye tipos de salida + refs con/sin sólidos (C-OUT-21)', () => {
     const ids = ESQUEMA_SALIDAS_REFERENCIAS.map((r) => r.id)
     assert.ok(ids.includes('esquema-con-memoria'))
     assert.ok(ids.includes('esquema-sin-tablas'))
+    assert.ok(ids.includes('esquema-con-solidos-iso'))
+    assert.ok(ids.includes('esquema-sin-solidos-top'))
     assert.ok(ids.includes('memoria-volúmenes'))
     assert.ok(ids.includes('cuadro-despiece'))
     assert.ok(ids.includes('tabla-coordenadas'))
@@ -63,12 +69,18 @@ describe('esquemaSalidasReferencia · verificación pre-despliegue', () => {
 
   it('plan de Cabezal 9A con cálculo exige encabezado + columnas de memoria', () => {
     const snap = fixtureMemoriaPocetaSnapshot()
+    const solids = [{
+      type: 'solid3d', id: 'muro',
+      cells: [{ z0: 0, z1: 2, ring: [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 0.3 }, { x: 0, y: 0.3 }] }],
+    }]
     const plan = planEsquemaExportSalida({
       title: 'Cabezal 9A',
       calcSnapshots: [snap],
+      solids3d: solids,
     })
     assert.equal(plan.hasMemoriaTable, true)
     assert.equal(plan.hasHeader, true)
+    assert.equal(plan.exportView, 'iso-ne')
     assert.ok(plan.header?.tipoTitulo)
     assert.ok(plan.header?.fecha)
     assert.ok(plan.header?.brandTitle)
@@ -80,6 +92,8 @@ describe('esquemaSalidasReferencia · verificación pre-despliegue', () => {
       hasHeader: true,
       hasIso: true,
       columns: plan.columnsRequired,
+      headersIntact: plan.headersIntact,
+      noWordBreak: true,
       cellFontPx: plan.header.width / 55,
       width: plan.header.width,
     }, 'esquema-con-memoria')
@@ -106,11 +120,47 @@ describe('esquemaSalidasReferencia · cableado en código', () => {
     assert.match(solids, /strokeCurveHoles/)
   })
 
+  it('vista export: con sólidos → iso-ne; sin → top (independiente de vista activa)', () => {
+    const solid = {
+      type: 'solid3d', id: 'a',
+      cells: [{ z0: 0, z1: 1, ring: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }],
+    }
+    assert.equal(resolveEsquemaExportView3d([solid]), 'iso-ne')
+    assert.equal(resolveEsquemaExportView3d([]), 'top')
+    assert.equal(resolveEsquemaExportView3d(null), 'top')
+    const exp = read('components/esquema/esquemaExport.js')
+    assert.match(exp, /resolveEsquemaExportView3d/)
+    assert.match(exp, /exportView/)
+    const modal = read('components/esquema/EsquemaEditorModal.jsx')
+    assert.match(modal, /resolveEsquemaExportView3d/)
+  })
+
+  it('tabla: Descuenta de / Descuenta no se parten por caracteres', () => {
+    const fakeCtx = {
+      measureText(t) {
+        return { width: String(t).length * 10 }
+      },
+    }
+    // Ancho justo menor que «Descuenta» (9*10=90): no partir → una sola línea entera.
+    const op = wrapMemoriaText(fakeCtx, 'Descuenta', 85, 2)
+    assert.deepEqual(op, ['Descuenta'])
+    assert.ok(!op.some((ln) => ln === 'Descuent' || ln === 'a'))
+    const hdr = wrapMemoriaText(fakeCtx, 'Descuenta de', 200, 1)
+    assert.ok(hdr.includes('Descuenta de') || hdr.join(' ').includes('Descuenta'))
+    const exp = read('components/esquema/esquema3dCalcExport.js')
+    assert.match(exp, /Descuenta de/)
+    assert.match(exp, /mustFitHeader|grow\(/)
+    assert.doesNotMatch(exp, /for \(const ch of last\)/)
+  })
+
   it('contrato documenta referencias aprobadas', () => {
     const md = read('components/esquema/CONTRATO_ESQUEMA.md')
     assert.match(md, /referencia aprobada|referencias aprobadas/i)
     assert.match(md, /esquemaSalidasReferencia/)
     assert.match(md, /toda salida generada se verifica/i)
+    assert.match(md, /C-OUT-21/)
+    assert.match(md, /isométrico NE|iso-ne/i)
+    assert.match(md, /vista superior/i)
   })
 
   it('cableado en test:esquema', () => {
