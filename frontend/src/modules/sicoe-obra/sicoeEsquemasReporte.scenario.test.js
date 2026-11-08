@@ -56,6 +56,17 @@ describe('sicoeEsquemasReporte · contrato UI', () => {
     assert.match(modal, /assignMode === 'nuevo' && pending/)
   })
 
+  it('Asignar estable: sin convertir PNG; error visible; escena del editor', () => {
+    const modal = read('modules/sicoe-obra/SicoeEsquemasReporteModal.jsx')
+    assert.match(modal, /entradaDesdeFilaLista/)
+    assert.match(modal, /resolverEscenaGuardado/)
+    assert.match(modal, /hostError=\{assignErr\}/)
+    assert.match(modal, /No se pudo asignar el esquema|mensajeErrorEsquemaUsuario/)
+    assert.doesNotMatch(modal, /sceneIn:\s*target\?\.scene/)
+    const popup = read('modules/sicoe-obra/SicoeEsquemaAsignarPopup.jsx')
+    assert.match(popup, /sicoe-esquema-asignar-error/)
+  })
+
   it('popup asignación: sellados togglables, sin texto largo, aviso mínimo', () => {
     const popup = read('modules/sicoe-obra/SicoeEsquemaAsignarPopup.jsx')
     assert.match(popup, /Seleccione al menos un registro/)

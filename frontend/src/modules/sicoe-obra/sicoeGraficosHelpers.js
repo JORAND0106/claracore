@@ -212,16 +212,23 @@ export async function urlADataUriParaEsquema(src) {
   })
 }
 
-/** PNG data URI del editor → File listo para upload-grafico (siempre .png / image/png). */
+/** PNG data URI (o URL http de PNG ya subido) → File listo para upload-grafico. */
 export async function dataUriEsquemaAFile(dataUrl, nombreBase = 'esquema') {
   if (!dataUrl) return null
-  if (String(dataUrl).startsWith('data:application/pdf')) return null
-  const resp = await fetch(dataUrl)
-  const blob = await resp.blob()
-  if (String(blob.type || '').includes('pdf')) return null
-  return new File(
-    [blob],
-    `${nombreBase}_${Date.now()}.png`,
-    { type: 'image/png' },
-  )
+  const s = String(dataUrl)
+  if (s.startsWith('data:application/pdf')) return null
+  try {
+    const resp = await fetch(s)
+    if (!resp.ok && !s.startsWith('data:')) return null
+    const blob = await resp.blob()
+    if (!blob || blob.size < 8) return null
+    if (String(blob.type || '').includes('pdf')) return null
+    return new File(
+      [blob],
+      `${nombreBase}_${Date.now()}.png`,
+      { type: 'image/png' },
+    )
+  } catch {
+    return null
+  }
 }

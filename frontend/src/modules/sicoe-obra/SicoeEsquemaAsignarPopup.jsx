@@ -25,6 +25,8 @@ export default function SicoeEsquemaAsignarPopup({
   onConfirm,
   onCancel,
   busy = false,
+  /** Error del host (asignar falló): se muestra delante, completo, sin texto técnico. */
+  hostError = '',
 }) {
   const [selected, setSelected] = useState(() => new Set((initialIds || []).map(String)))
   const [err, setErr] = useState('')
@@ -46,8 +48,15 @@ export default function SicoeEsquemaAsignarPopup({
       return
     }
     setErr('')
-    onConfirm?.([...selected])
+    // Pasar ids numéricos cuando el registro los tenga numéricos (evita mismatch).
+    const ids = [...selected].map((k) => {
+      const reg = (registros || []).find((r) => String(r.id) === String(k))
+      return reg ? reg.id : k
+    })
+    onConfirm?.(ids)
   }
+
+  const visibleErr = err || hostError || ''
 
   const ui = {
     text: t?.text || '#0f172a',
@@ -138,7 +147,26 @@ export default function SicoeEsquemaAsignarPopup({
             </tbody>
           </table>
         </div>
-        {err && <div style={{ color: '#b91c1c', fontSize: 12, marginBottom: 8 }}>{err}</div>}
+        {visibleErr ? (
+          <div
+            role="alert"
+            data-testid="sicoe-esquema-asignar-error"
+            style={{
+              color: '#991b1b',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 8,
+              padding: '10px 12px',
+              fontSize: 13,
+              fontWeight: 700,
+              marginBottom: 10,
+              position: 'relative',
+              zIndex: 2,
+            }}
+          >
+            {visibleErr}
+          </div>
+        ) : null}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" disabled={busy} onClick={onCancel} style={btnGhost(ui)}>
             Cancelar

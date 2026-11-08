@@ -21,6 +21,18 @@ import {
   removeEsquemaSinAsignar,
   upsertEsquemaSinAsignar,
 } from './sicoeEsquemasSinAsignar.js'
+import {
+  entradaDesdeFilaLista,
+  mensajeErrorEsquemaUsuario,
+  necesitaReuploadPng,
+  resolverEscenaGuardado,
+} from './sicoeEsquemasFlujo.js'
+
+function logErrorTecnico(contexto, err) {
+  try {
+    console.error(`[SicoeEsquemas] ${contexto}`, err?.message || err, err)
+  } catch { /* ignore */ }
+}
 
 async function nextGraficoNumero(API_URL, contratoId, hdrs) {
   const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/next-grafico`, {
@@ -104,6 +116,8 @@ export default function SicoeEsquemasReporteModal({
   const [assignMode, setAssignMode] = useState('nuevo') // nuevo | editar | reasignar
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  /** Error de asignación visible DENTRO del popup (nunca tapado). */
+  const [assignErr, setAssignErr] = useState('')
 
   const reloadSinAsignar = useCallback(async () => {
     const rows = await listarEsquemasSinAsignar({
@@ -120,12 +134,14 @@ export default function SicoeEsquemasReporteModal({
     setEditTarget(null)
     setEditorOpen(true)
     setErr('')
+    setAssignErr('')
   }
 
   const abrirEditar = (row) => {
     setEditTarget(row)
     setEditorOpen(true)
     setErr('')
+    setAssignErr('')
   }
 
   const abrirReasignar = (row) => {
@@ -133,6 +149,7 @@ export default function SicoeEsquemasReporteModal({
     setAssignMode('reasignar')
     setAssignOpen(true)
     setErr('')
+    setAssignErr('')
   }
 
   const aplicarPatches = useCallback(async (patches) => {
@@ -155,10 +172,11 @@ export default function SicoeEsquemasReporteModal({
     esquemaId,
     numero: numeroIn,
     nombreIn,
-    sceneIn,
+    sceneFallback = null,
   } = {}) => {
+    if (!dataUrl) throw new Error('No se pudo guardar el esquema')
     const file = await dataUriEsquemaAFile(dataUrl, 'esquema-reporte')
-    if (!file) throw new Error('No se pudo convertir el esquema')
+    if (!file) throw new Error('No se pudo guardar el esquema')
     const nombre = String(nombreIn || extras?.title || 'Esquema').trim() || 'Esquema'
     const eid = esquemaId || nuevoEsquemaId()
     let numero = numeroIn
@@ -166,7 +184,9 @@ export default function SicoeEsquemasReporteModal({
       numero = await nextGraficoNumero(API_URL, contratoId, hdrs)
     }
     const up = await uploadGraficoPng(API_URL, contratoId, hdrs, file, numero)
-    const scene = sceneIn || extras?.scene || extras?.esquema_scene || null
+    if (!up?.url) throw new Error('No se pudo guardar el esquema')
+    // Escena del editor (extras) siempre gana sobre la stale del target.
+    const scene = resolverEscenaGuardado(extras, sceneFallback)
     const entrada = buildEsquemaHistorialEntrada({
       url: up.url,
       numero: up.numero ?? numero,
@@ -192,7 +212,9 @@ export default function SicoeEsquemasReporteModal({
           },
         })
       }
-    } catch { /* nube best-effort */ }
+    } catch (cloudErr) {
+      logErrorTecnico('nube tras Guardar', cloudErr)
+    }
     return { entrada, nombre }
   }
 
@@ -204,14 +226,16 @@ export default function SicoeEsquemasReporteModal({
         esquemaId: target?.esquema_id,
         numero: target?.numero,
         nombreIn: target?.nombre,
-        sceneIn: target?.scene,
+        // Fallback solo si el editor no envió escena; NUNCA pisar extras.scene.
+        sceneFallback: target?.scene || null,
       })
       if (target?.sinAsignar || !(target?.registros || []).length) {
-        await upsertEsquemaSinAsignar({
+        const up = await upsertEsquemaSinAsignar({
           contratoId,
           reporteId: reporte?.id,
           entrada,
         })
+        if (!up?.ok) throw new Error(up?.error || 'No se pudo guardar el esquema')
         await reloadSinAsignar()
       } else {
         const { patches } = planificarActualizacionVersionEsquema({
@@ -230,7 +254,8 @@ export default function SicoeEsquemasReporteModal({
       setEditTarget(null)
       setPendingSave(null)
     } catch (e) {
-      setErr(e?.message || String(e))
+      logErrorTecnico('persistirNuevaVersion', e)
+      setErr(mensajeErrorEsquemaUsuario(e, 'editar'))
       throw e
     } finally {
       setBusy(false)
@@ -250,20 +275,23 @@ export default function SicoeEsquemasReporteModal({
         setEditorOpen(false)
         return { keepDraft: false }
       } catch (e) {
-        setErr(e?.message || String(e))
+        logErrorTecnico('onSaveEditor editar', e)
+        setErr(mensajeErrorEsquemaUsuario(e, 'editar'))
         return { keepDraft: true }
       }
     }
     // Nuevo: persistir YA (Sin asignar), luego pedir asignación.
     setBusy(true)
     setErr('')
+    setAssignErr('')
     try {
       const { entrada, nombre } = await uploadYEntrada(dataUrl, extras, {})
-      await upsertEsquemaSinAsignar({
+      const up = await upsertEsquemaSinAsignar({
         contratoId,
         reporteId: reporte?.id,
         entrada,
       })
+      if (!up?.ok) throw new Error(up?.error || 'No se pudo guardar el esquema')
       await reloadSinAsignar()
       setPendingSave({
         dataUrl, extras, entrada, nombre, editTarget: null,
@@ -273,8 +301,8 @@ export default function SicoeEsquemasReporteModal({
       setAssignOpen(true)
       return { keepDraft: false }
     } catch (e) {
-      setErr(e?.message || String(e))
-      // Conservar borrador del editor: el Guardar falló.
+      logErrorTecnico('onSaveEditor nuevo', e)
+      setErr(mensajeErrorEsquemaUsuario(e, 'guardar'))
       return { keepDraft: true }
     } finally {
       setBusy(false)
@@ -284,31 +312,36 @@ export default function SicoeEsquemasReporteModal({
   const confirmarAsignacion = async (ids) => {
     if (!pendingSave && assignMode !== 'reasignar') return
     if (!ids?.length) {
-      setErr('Seleccione al menos un registro')
+      setAssignErr('Seleccione al menos un registro')
       return
     }
     setBusy(true)
     setErr('')
+    setAssignErr('')
     try {
+      // Cambiar asignación: NUNCA re-sube PNG ni convierte data URI.
       if (assignMode === 'reasignar' && editTarget) {
-        const entrada = buildEsquemaHistorialEntrada({
-          url: editTarget.url,
-          numero: editTarget.numero,
-          nombre: editTarget.nombre,
-          esquemaId: editTarget.esquema_id,
-          scene: editTarget.scene,
-          reporteId: reporte?.id,
-        })
+        const entrada = entradaDesdeFilaLista(editTarget, reporte?.id)
+        if (!entrada?.url) {
+          throw new Error('No se pudo asignar el esquema')
+        }
         const { patches } = planificarAsignacionEsquema({
           registros: localRegs,
           entrada,
           idsDeseados: ids,
           isSellado,
         })
-        if (!patches.length && !editTarget.sinAsignar) {
-          throw new Error('No hay cambios de asignación.')
+        if (!patches.length) {
+          if (editTarget.sinAsignar || !(editTarget.registros || []).length) {
+            throw new Error('No se pudo asignar el esquema')
+          }
+          // Misma selección ya asignada: cerrar sin error.
+          setAssignOpen(false)
+          setEditTarget(null)
+          setPendingSave(null)
+          return
         }
-        if (patches.length) await aplicarPatches(patches)
+        await aplicarPatches(patches)
         if (ids.length) {
           await removeEsquemaSinAsignar({
             contratoId,
@@ -333,10 +366,28 @@ export default function SicoeEsquemasReporteModal({
       const { dataUrl, extras, entrada: entradaSaved, nombre: nombreSaved } = pendingSave || {}
       let entrada = entradaSaved
       let nombre = nombreSaved || extras?.title || 'Esquema'
-      if (!entrada?.url) {
-        const uploaded = await uploadYEntrada(dataUrl, extras, {})
-        entrada = uploaded.entrada
-        nombre = uploaded.nombre
+      // Solo re-sube si falta URL; si dataUrl es http ya subido, arma entrada sin convertir.
+      if (necesitaReuploadPng(entrada)) {
+        if (dataUrl && String(dataUrl).startsWith('http')) {
+          entrada = buildEsquemaHistorialEntrada({
+            url: dataUrl,
+            numero: entrada?.numero,
+            nombre,
+            esquemaId: entrada?.esquema_id,
+            scene: resolverEscenaGuardado(extras, entrada?.scene),
+            reporteId: reporte?.id,
+          })
+        } else if (dataUrl && String(dataUrl).startsWith('data:')) {
+          const uploaded = await uploadYEntrada(dataUrl, extras, {
+            esquemaId: entrada?.esquema_id,
+            numero: entrada?.numero,
+            nombreIn: nombre,
+          })
+          entrada = uploaded.entrada
+          nombre = uploaded.nombre
+        } else {
+          throw new Error('No se pudo asignar el esquema')
+        }
       }
 
       const { patches } = planificarAsignacionEsquema({
@@ -366,7 +417,10 @@ export default function SicoeEsquemasReporteModal({
       setPendingSave(null)
       setEditTarget(null)
     } catch (e) {
-      setErr(e?.message || String(e))
+      logErrorTecnico('confirmarAsignacion', e)
+      const msg = mensajeErrorEsquemaUsuario(e, 'asignar')
+      setAssignErr(msg)
+      setErr(msg)
     } finally {
       setBusy(false)
     }
@@ -378,6 +432,7 @@ export default function SicoeEsquemasReporteModal({
     const pending = pendingSave
     setAssignOpen(false)
     setPendingSave(null)
+    setAssignErr('')
     if (assignMode === 'reasignar') setEditTarget(null)
     void reloadSinAsignar()
     // Guardar ya ocurrió: ofrecer Exportar aunque se cancele la asignación.
@@ -404,7 +459,7 @@ export default function SicoeEsquemasReporteModal({
 
   // Nuevo: ninguna casilla marcada. Reasignar: las actuales.
   const initialAssignIds = (assignMode === 'reasignar' && editTarget)
-    ? editTarget.registros.map((r) => r.id)
+    ? (editTarget.registros || []).map((r) => r.id)
     : []
 
   return (
@@ -466,8 +521,23 @@ export default function SicoeEsquemasReporteModal({
             </div>
           </div>
 
-          {err && (
-            <div style={{ padding: '8px 16px', color: '#b91c1c', fontSize: 13 }}>{err}</div>
+          {err && !assignOpen && (
+            <div
+              role="alert"
+              data-testid="sicoe-esquemas-error"
+              style={{
+                margin: '8px 16px',
+                padding: '10px 12px',
+                color: '#991b1b',
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              {err}
+            </div>
           )}
 
           <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
@@ -557,6 +627,7 @@ export default function SicoeEsquemasReporteModal({
             ? `Cambiar asignación · ${editTarget?.nombre || 'Esquema'}`
             : 'Asignar esquema a registros'}
           busy={busy}
+          hostError={assignErr}
           onCancel={cancelarAsignacion}
           onConfirm={(ids) => void confirmarAsignacion(ids)}
         />
