@@ -7,8 +7,11 @@ import { drawSolids3dLayered } from './esquema3dSolids.js'
 import { fmtMemoria } from './esquema3dCalc.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
 import { ESQUEMA_DOC_TYPE_SCALE, esquemaDocFontHierarchy } from './esquemaDocLegibility.js'
-
-const LOGO_URL = '/CLARA.CORE.png'
+import {
+  drawEsquemaSalidaHeader,
+  ESQUEMA_SALIDA_BRAND,
+  planEsquemaSalidaHeader,
+} from './esquemaSalidaHeader.js'
 
 /** Colores fijos de memoria (legibles en cualquier tema de plataforma). */
 export const MEMORIA_COLORS = Object.freeze({
@@ -70,31 +73,6 @@ export function solidsIsoBounds(solids) {
     viewId,
     orbit,
   }
-}
-
-async function loadLogoDataUrl() {
-  try {
-    const res = await fetch(LOGO_URL)
-    if (!res.ok) return null
-    const blob = await res.blob()
-    return await new Promise((resolve) => {
-      const r = new FileReader()
-      r.onload = () => resolve(r.result)
-      r.onerror = () => resolve(null)
-      r.readAsDataURL(blob)
-    })
-  } catch {
-    return null
-  }
-}
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = reject
-    img.src = src
-  })
 }
 
 /** Filas de memoria: prioriza desglose (memoriaRows); fallback a lines. */
@@ -488,7 +466,7 @@ export function renderMemoriaTableCanvas(snapshot, opts = {}) {
 export async function composeCalcMemoriaPng({
   snapshot,
   solids = [],
-  brandTitle = 'Clara Core',
+  brandTitle = ESQUEMA_SALIDA_BRAND,
   width = null,
 } = {}) {
   if (typeof document === 'undefined' || !snapshot) return null
@@ -503,7 +481,15 @@ export async function composeCalcMemoriaPng({
     : Math.round(1280 + Math.min(240, Math.max(0, nRows - 4) * 24))
   const textScale = (baseW / 1280) * ESQUEMA_DOC_TYPE_SCALE
   const margin = Math.round(28 * textScale)
-  const headerH = Math.round(78 * textScale)
+  const headerPlan = planEsquemaSalidaHeader({
+    imageWidth: baseW,
+    tipoTitulo: 'Memoria de cálculo de volúmenes',
+    nombre: snapshot.nombre || 'Cálculo',
+    brandTitle,
+    textScale,
+    fechaIso: snapshot.frozenAt || null,
+  })
+  const headerH = headerPlan.height
   const footerH = Math.round(26 * textScale)
   const gap = Math.round(14 * textScale)
 
@@ -542,33 +528,14 @@ export async function composeCalcMemoriaPng({
   ctx.fillStyle = C.bg
   ctx.fillRect(0, 0, imgW, height)
 
-  // Encabezado (tipografía proporcional)
-  ctx.fillStyle = C.headerBg
-  ctx.fillRect(0, 0, imgW, headerH)
-  ctx.fillStyle = C.primary
-  const memHier = esquemaDocFontHierarchy(imgW, { cellPx: Math.round(13 * textScale) })
-  ctx.font = `bold ${Math.max(Math.round(26 * textScale), memHier.titlePx)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText('Memoria de cálculo de volúmenes', margin, Math.round(32 * textScale))
-  ctx.fillStyle = C.text
-  ctx.font = `bold ${Math.max(Math.round(16 * textScale), memHier.headerPx)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText(String(snapshot.nombre || 'Cálculo'), margin, Math.round(58 * textScale))
-  ctx.fillStyle = C.muted
-  ctx.font = `${Math.round(13 * textScale)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText(brandTitle, imgW * 0.42, Math.round(32 * textScale))
-  if (snapshot.frozenAt) {
-    const fecha = new Date(snapshot.frozenAt).toLocaleString('es-CO')
-    ctx.fillText(fecha, imgW - margin - 20 - ctx.measureText(fecha).width, Math.round(58 * textScale))
-  }
-
-  const logo = await loadLogoDataUrl()
-  if (logo) {
-    try {
-      const img = await loadImage(logo)
-      const lw = Math.round(110 * textScale)
-      const lh = (img.height / Math.max(1, img.width)) * lw
-      ctx.drawImage(img, imgW - margin - lw, Math.round(10 * textScale), lw, Math.min(lh, headerH - Math.round(16 * textScale)))
-    } catch { /* ignore */ }
-  }
+  const headerMeta = await drawEsquemaSalidaHeader(ctx, {
+    imageWidth: imgW,
+    tipoTitulo: 'Memoria de cálculo de volúmenes',
+    nombre: snapshot.nombre || 'Cálculo',
+    brandTitle,
+    textScale,
+    fechaIso: snapshot.frozenAt || new Date().toISOString(),
+  })
 
   let y = headerH + gap
   if (iso) {
@@ -586,7 +553,7 @@ export async function composeCalcMemoriaPng({
 
   ctx.fillStyle = C.muted
   ctx.font = `${Math.round(11 * textScale)}px "Segoe UI", system-ui, sans-serif`
-  ctx.fillText('Clara Core · Esquema 3D · PNG de alta resolución', margin, height - Math.round(10 * textScale))
+  ctx.fillText(`${brandTitle} · Esquema 3D · PNG de alta resolución`, margin, height - Math.round(10 * textScale))
 
   const dataUri = canvas.toDataURL('image/png')
   const comma = dataUri.indexOf(',')
@@ -612,6 +579,14 @@ export async function composeCalcMemoriaPng({
       docTypeScale: ESQUEMA_DOC_TYPE_SCALE,
       tableWidthRatio: tableW / Math.max(1, isoW),
       isoRatio: isoH / height,
+      header: headerMeta,
+      hasHeader: true,
+      hasMemoriaTable: !!table,
+      columns: [
+        '#', 'Color', 'Nombre', 'Operación', 'Descuenta de', 'Dimensiones', 'Fórmula', 'Volumen (m³)',
+      ],
+      rowCount: nRows,
+      totalM3: snapshot.totalM3,
     },
   }
 }

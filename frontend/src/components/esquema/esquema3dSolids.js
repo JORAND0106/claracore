@@ -2736,15 +2736,18 @@ export function drawSolid3d(ctx, solid, {
     return
   }
 
-  const addEdge = (pa, pb, front) => {
+  const addEdge = (pa, pb, front, flags = {}) => {
     const k = edgeKey(pa, pb)
     let e = edgeMap.get(k)
     if (!e) {
-      e = { a: pa, b: pb, frontVotes: 0, backVotes: 0 }
+      e = { a: pa, b: pb, frontVotes: 0, backVotes: 0, _fromHole: false }
       edgeMap.set(k, e)
     }
     if (front) e.frontVotes += 1
     else e.backVotes += 1
+    // Huecos: marcar para omitir aristas facetadas cuando hay curveHoles lisos
+    // (evita franja de rayas en el borde circular).
+    if (flags.fromHole) e._fromHole = true
   }
 
   const emitPrismFaces = (
@@ -2814,7 +2817,7 @@ export function drawSolid3d(ctx, solid, {
       }
       for (const hole of holeTops) {
         for (let i = 0; i < hole.length; i += 1) {
-          addEdge(hole[i], hole[(i + 1) % hole.length], front)
+          addEdge(hole[i], hole[(i + 1) % hole.length], front, { fromHole: true })
         }
       }
     }
@@ -2832,7 +2835,7 @@ export function drawSolid3d(ctx, solid, {
       }
       for (const hole of holeBots) {
         for (let i = 0; i < hole.length; i += 1) {
-          addEdge(hole[i], hole[(i + 1) % hole.length], front)
+          addEdge(hole[i], hole[(i + 1) % hole.length], front, { fromHole: true })
         }
       }
     }
@@ -2930,11 +2933,11 @@ export function drawSolid3d(ctx, solid, {
           tone = faceToneFactorFromNormal(-ay, ax, 0)
         }
         facePolys.push({ pts, depth, front, tone })
-        if (!skipBottom) addEdge(hb[i], hb[j], front)
-        if (!skipTop) addEdge(ht[j], ht[i], front)
+        if (!skipBottom) addEdge(hb[i], hb[j], front, { fromHole: true })
+        if (!skipTop) addEdge(ht[j], ht[i], front, { fromHole: true })
         if (!holeSkipVert) {
-          addEdge(hb[i], ht[i], front)
-          addEdge(hb[j], ht[j], front)
+          addEdge(hb[i], ht[i], front, { fromHole: true })
+          addEdge(hb[j], ht[j], front, { fromHole: true })
         }
       }
     }
