@@ -16,7 +16,7 @@ const SUBMOD_LABEL = {
   poligonal: 'Poligonal',
   newpoint: 'NewPoint',
   nivelacion: 'Nivelación',
-  entrega_dg: 'Entrega DG',
+  entrega_dg: 'Estructura de Vía',
   tuberia: 'Tubería',
   areas: 'Áreas',
   equipos: 'Equipos',

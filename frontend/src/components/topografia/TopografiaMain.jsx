@@ -55,7 +55,7 @@ const VIAS = [
   },
   {
     id: 'topo_entrega_dg',
-    label: 'Entrega DG Obra',
+    label: 'Estructura de Vía',
     ayuda: 'Seguimiento de entrega en obra por eje y capa: lecturas, deltas y avance por tramo.',
   },
 ]
