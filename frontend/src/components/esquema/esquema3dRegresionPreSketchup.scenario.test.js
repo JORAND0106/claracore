@@ -144,7 +144,7 @@ describe('regresión · Extruir popup cotas (superior) y longitud (perfiles)', (
     assert.equal(isEsquema3dDrawView('iso-ne'), false)
   })
 
-  it('popup de cotas: altura calculada = cotaSup − cotaInf; extrusión superior OK', () => {
+  it('popup de cotas: altura = llegada − partida; extrusión superior OK', () => {
     assert.equal(alturaFromCotasText('100', '98'), 2)
     assert.equal(alturaFromCotasText('2.60', '0'), 2.6)
     const rect = {
@@ -171,12 +171,13 @@ describe('regresión · Extruir popup cotas (superior) y longitud (perfiles)', (
     assert.match(src, /const beginExtrude3d = useCallback/)
     assert.match(src, /const mode = extrudeModeForView\(viewId\)/)
     assert.match(src, /setExtrudePrompt\(\{\s*mode,/)
-    // Popup UI distingue cotas vs longitud
+    // Popup UI distingue cotas vs longitud (altura editable ±)
     const ui = readFileSync(join(__dirname, 'esquema3dUi.jsx'), 'utf8')
     assert.match(ui, /Extruir por cotas/)
-    assert.match(ui, /esquema-extruir-cota-sup/)
+    assert.match(ui, /esquema-extruir-cota-partida/)
+    assert.match(ui, /esquema-extruir-cota-llegada/)
+    assert.match(ui, /esquema-extruir-altura/)
     assert.match(ui, /esquema-extruir-longitud/)
-    assert.match(ui, /Altura calculada/)
   })
 })
 

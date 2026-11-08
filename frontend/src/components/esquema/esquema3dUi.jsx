@@ -10,9 +10,14 @@ import {
   viewPastelFor,
 } from './esquema3dViews.js'
 import { formatVolumeM3 } from './esquema3dSolids.js'
-import { alturaFromCotasText } from './esquema3dCalc.js'
+import {
+  alturaFromCotasText,
+  formatCota3,
+  resolveExtrudeCotasPair,
+  syncExtrudeCotasFields,
+} from './esquema3dCalc.js'
 
-export { alturaFromCotasText }
+export { alturaFromCotasText, resolveExtrudeCotasPair, syncExtrudeCotasFields }
 
 export function Esquema3dViewToolbar({
   t,
@@ -148,8 +153,13 @@ export function Esquema3dExtrudePopup({
   defaultLengthM = null,
   phoneFullscreen = false,
 }) {
-  const [cotaSup, setCotaSup] = useState('100')
-  const [cotaInf, setCotaInf] = useState('98')
+  // C-3D-05: partida / llegada / altura editable (±); defaults = caso 100→98.
+  const [cotas, setCotas] = useState(() => ({
+    partida: '100',
+    llegada: '98',
+    altura: formatCota3(-2),
+    lastKept: 'llegada',
+  }))
   const [lengthM, setLengthM] = useState(
     defaultLengthM != null && Number(defaultLengthM) > 0
       ? String(defaultLengthM)
@@ -157,12 +167,30 @@ export function Esquema3dExtrudePopup({
   )
   const [error, setError] = useState('')
 
-  const alturaM = mode === 'cotas' ? alturaFromCotasText(cotaSup, cotaInf) : null
+  const editCota = (field) => (e) => {
+    const value = e.target.value
+    setError('')
+    setCotas((prev) => syncExtrudeCotasFields(prev, field, value))
+  }
 
   const submit = () => {
     setError('')
     if (mode === 'cotas') {
-      onConfirm({ cotaSuperior: cotaSup, cotaInferior: cotaInf }, (err) => setError(err || ''))
+      const resolved = resolveExtrudeCotasPair(cotas)
+      if (!resolved.ok) {
+        setError(resolved.error || 'Revise las cotas.')
+        return
+      }
+      onConfirm(
+        {
+          cotaSuperior: resolved.cotaSuperior,
+          cotaInferior: resolved.cotaInferior,
+          cotaPartida: resolved.cotaPartida,
+          cotaLlegada: resolved.cotaLlegada,
+          altura: resolved.altura,
+        },
+        (err) => setError(err || ''),
+      )
     } else {
       onConfirm({ lengthM }, (err) => setError(err || ''))
     }
@@ -213,52 +241,41 @@ export function Esquema3dExtrudePopup({
           </div>
           <div style={{ fontSize: phoneFullscreen ? 15 : 13, color: ui?.muted || '#64748b', marginBottom: 12 }}>
             {mode === 'cotas'
-              ? 'Indique la cota superior y la cota inferior (metros). El sólido se construye entre ambas.'
+              ? 'Cota de partida, cota de llegada y altura (m). Altura = llegada − partida (±). El sólido se construye entre las dos cotas.'
               : 'Indique la longitud en metros (profundidad perpendicular a la cara, hacia el fondo de la vista). La figura conserva su posición y cotas.'}
           </div>
           {mode === 'cotas' ? (
             <div style={{ display: 'grid', gap: 10 }}>
               <label style={labelStyle(t)}>
-                Cota superior (m)
+                Cota de partida (m)
                 <input
-                  value={cotaSup}
-                  onChange={(e) => setCotaSup(e.target.value)}
+                  value={cotas.partida}
+                  onChange={editCota('partida')}
                   style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
                   inputMode="decimal"
-                  data-testid="esquema-extruir-cota-sup"
+                  data-testid="esquema-extruir-cota-partida"
                 />
               </label>
               <label style={labelStyle(t)}>
-                Cota inferior (m)
+                Cota de llegada (m)
                 <input
-                  value={cotaInf}
-                  onChange={(e) => setCotaInf(e.target.value)}
+                  value={cotas.llegada}
+                  onChange={editCota('llegada')}
                   style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
                   inputMode="decimal"
-                  data-testid="esquema-extruir-cota-inf"
+                  data-testid="esquema-extruir-cota-llegada"
                 />
               </label>
-              <div
-                data-testid="esquema-extruir-altura"
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: t.bgHover || 'rgba(15,118,110,0.08)',
-                  fontSize: 13,
-                  color: t.text,
-                }}
-              >
-                <span style={{ fontWeight: 700, color: ui?.muted || '#64748b' }}>Altura calculada</span>
-                <div style={{ fontWeight: 800, fontSize: 18, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
-                  {alturaM != null
-                    ? `${alturaM.toFixed(2)} m`
-                    : '—'}
-                </div>
-                <div style={{ fontSize: 11, color: ui?.muted || '#64748b', marginTop: 2 }}>
-                  Cota superior − cota inferior (solo lectura)
-                </div>
-              </div>
+              <label style={labelStyle(t)}>
+                Altura (m)
+                <input
+                  value={cotas.altura}
+                  onChange={editCota('altura')}
+                  style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                  inputMode="decimal"
+                  data-testid="esquema-extruir-altura"
+                />
+              </label>
             </div>
           ) : (
             <label style={labelStyle(t)}>
