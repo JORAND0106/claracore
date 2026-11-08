@@ -207,13 +207,18 @@ export async function composeCalcIsoPng({
   return canvas ? canvas.toDataURL('image/png') : null
 }
 
-/** Parte texto en hasta `maxLines` líneas que caben en `maxW` (sin cortar con …). */
+/**
+ * Parte texto en hasta `maxLines` líneas que caben en `maxW`.
+ * Nunca parte palabras a mitad (C-OUT-03/08): solo corta en espacios o
+ * separadores tipográficos (· × −). Si una sola palabra no cabe, se deja
+ * entera (la columna debe ensancharse antes).
+ */
 export function wrapMemoriaText(ctx, text, maxW, maxLines = 2) {
   const raw = String(text ?? '')
   if (!raw) return ['']
   if (ctx.measureText(raw).width <= maxW) return [raw]
-  // Preferir cortes en espacios / · / × / −
-  const tokens = raw.split(/(\s+|·|×|−|-)/).filter((t) => t.length)
+  // Solo cortes entre palabras / separadores — jamás por carácter.
+  const tokens = raw.split(/(\s+|·|×|−)/).filter((t) => t.length)
   const lines = []
   let cur = ''
   const push = () => {
@@ -224,32 +229,36 @@ export function wrapMemoriaText(ctx, text, maxW, maxLines = 2) {
     if (lines.length >= maxLines) break
     const trial = cur + tok
     if (ctx.measureText(trial).width <= maxW || !cur) {
+      // Token solo que no cabe: conservar entero (sin partir «Descuenta»).
+      if (!cur && ctx.measureText(tok).width > maxW) {
+        lines.push(tok)
+        continue
+      }
       cur = trial
       continue
     }
     push()
     if (lines.length >= maxLines) break
-    cur = tok.trimStart()
+    const next = tok.trimStart()
+    if (!next) continue
+    if (ctx.measureText(next).width > maxW) {
+      lines.push(next)
+      cur = ''
+    } else {
+      cur = next
+    }
   }
   if (lines.length < maxLines) push()
-  // Si aún sobra y la última línea no cabe, bajar fuente no; repartir por caracteres.
-  if (lines.length && ctx.measureText(lines[lines.length - 1]).width > maxW) {
-    const last = lines[lines.length - 1]
-    const fitted = []
-    let buf = ''
-    for (const ch of last) {
-      const t = buf + ch
-      if (ctx.measureText(t).width <= maxW || !buf) buf = t
-      else {
-        fitted.push(buf)
-        buf = ch
-        if (fitted.length >= maxLines) break
-      }
-    }
-    if (buf && fitted.length < maxLines) fitted.push(buf)
-    return fitted.length ? fitted : [last]
-  }
   return lines.length ? lines : [raw]
+}
+
+/** ¿Alguna línea devolvió una palabra partida? (solo espacios = OK). */
+export function memoriaTextHasWordBreak(original, lines) {
+  const joined = (lines || []).join('').replace(/\s+/g, '')
+  const src = String(original ?? '').replace(/\s+/g, '')
+  if (!src) return false
+  // Si al juntar sin espacios no reconstruye el original, hubo corte interior.
+  return joined !== src
 }
 
 /**
@@ -277,14 +286,14 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   const margin = Math.round(8 * fs)
   const baseCols = [
     { key: 'num', label: '#', w: 36 },
-    // Ancho mínimo para «Color» en tipografía × DOC_TYPE_SCALE (una sola línea).
-    { key: 'color', label: 'Color', w: 56 },
+    // Anchos base generosos: encabezados «Descuenta de» / «Operación» / «Color» en 1 línea.
+    { key: 'color', label: 'Color', w: 64 },
     { key: 'nombre', label: 'Nombre', w: 118 },
-    { key: 'op', label: 'Operación', w: 98 },
-    { key: 'from', label: 'Descuenta de', w: 108 },
-    { key: 'dims', label: 'Dimensiones', w: 166 },
-    { key: 'formula', label: 'Fórmula', w: 166 },
-    { key: 'vol', label: 'Volumen (m³)', w: 98 },
+    { key: 'op', label: 'Operación', w: 110 },
+    { key: 'from', label: 'Descuenta de', w: 130 },
+    { key: 'dims', label: 'Dimensiones', w: 160 },
+    { key: 'formula', label: 'Fórmula', w: 160 },
+    { key: 'vol', label: 'Volumen (m³)', w: 110 },
   ]
   const baseW = baseCols.reduce((s, c) => s + c.w, 0)
   // Mismo ancho que el isométrico: estirar columnas al ancho pedido (fs solo tipografía).
@@ -296,22 +305,46 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   if (sumW !== targetW && cols.length) {
     cols[cols.length - 1].w += (targetW - sumW)
   }
-  // «Color» siempre en una línea a tipografía ×fs (no «Colo/r»).
+  // Encabezados y palabras clave en UNA sola línea (nunca «Descuent/a» ni «Descuenta» cortado).
   {
     const probe = typeof document !== 'undefined' ? document.createElement('canvas') : null
     const pctx = probe ? probe.getContext('2d') : null
     if (pctx) {
       pctx.font = `bold ${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
-      const need = Math.ceil(pctx.measureText('Color').width) + 12
-      const colorCol = cols.find((c) => c.key === 'color')
-      const donor = cols.find((c) => c.key === 'formula') || cols[cols.length - 1]
-      if (colorCol && donor && colorCol.w < need) {
-        const delta = need - colorCol.w
-        if (donor.w - delta >= 80) {
-          colorCol.w = need
-          donor.w -= delta
+      const mustFitHeader = [
+        { key: 'color', text: 'Color' },
+        { key: 'op', text: 'Operación' },
+        { key: 'from', text: 'Descuenta de' },
+        { key: 'vol', text: 'Volumen (m³)' },
+      ]
+      pctx.font = `bold ${Math.round(12 * fs)}px "Segoe UI", system-ui, sans-serif`
+      const mustFitBody = [
+        { key: 'op', text: 'Descuenta' },
+        { key: 'op', text: 'Exterior' },
+      ]
+      const donorKeys = ['formula', 'dims', 'nombre']
+      const grow = (key, text, fontSpec) => {
+        pctx.font = fontSpec
+        const need = Math.ceil(pctx.measureText(text).width) + 14
+        const col = cols.find((c) => c.key === key)
+        if (!col || col.w >= need) return
+        let delta = need - col.w
+        for (const dk of donorKeys) {
+          if (delta <= 0) break
+          const donor = cols.find((c) => c.key === dk)
+          if (!donor || donor === col) continue
+          const give = Math.min(delta, Math.max(0, donor.w - 72))
+          if (give <= 0) continue
+          donor.w -= give
+          col.w += give
+          delta -= give
         }
+        if (delta > 0) col.w += delta // prioridad: no partir palabras
       }
+      const hdrFont = `bold ${Math.round(11 * fs)}px "Segoe UI", system-ui, sans-serif`
+      const bodyFont = `bold ${Math.round(12 * fs)}px "Segoe UI", system-ui, sans-serif`
+      for (const m of mustFitHeader) grow(m.key, m.text, hdrFont)
+      for (const m of mustFitBody) grow(m.key, m.text, bodyFont)
     }
   }
   const tableW = cols.reduce((s, c) => s + c.w, 0)

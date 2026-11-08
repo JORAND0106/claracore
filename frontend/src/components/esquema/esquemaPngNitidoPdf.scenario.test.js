@@ -27,9 +27,11 @@ describe('caso 31 · PNG nítido en PDF + encabezado Color', () => {
 
   it('caso a · Color cabe en una línea a tipografía × DOC_TYPE_SCALE', () => {
     const src = readFileSync(join(__dirname, 'esquema3dCalcExport.js'), 'utf8')
-    assert.match(src, /key:\s*'color',\s*label:\s*'Color',\s*w:\s*56/)
+    assert.match(src, /key:\s*'color',\s*label:\s*'Color',\s*w:\s*6[46]/)
     assert.match(src, /wrapMemoriaText\(ctx, col\.label, Math\.max\(8, col\.w - 8\), 1\)/)
-    assert.match(src, /measureText\('Color'\)/)
+    assert.match(src, /text:\s*'Color'/)
+    assert.match(src, /text:\s*'Descuenta de'/)
+    assert.match(src, /measureText\(text\)/)
     assert.equal(ESQUEMA_DOC_TYPE_SCALE, 2)
 
     // Sin DOM real: simular medida de encabezado partido vs. ancho.
