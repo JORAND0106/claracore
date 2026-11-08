@@ -5,6 +5,7 @@
  * Sólidos 3D → 3DFACE (superficies de caras). Textos con \U+XXXX.
  */
 import { worldToMeters } from './esquemaGeometry.js'
+import { ellipseTubeWorldRings, profileDrawAsDxfCircle } from './esquema3dCurves.js'
 import { validateEsquemaDxf } from './esquemaDxfValidate.js'
 
 const LAYER = {
@@ -300,13 +301,53 @@ function objectToEntities(obj, opts) {
   return ''
 }
 
+/** CIRCLE DXF desde profileDraw / curveHole circular. */
+function writeCurveCircles(layer, pd, opts) {
+  if (!pd) return ''
+  if (pd.kind === 'ellipse_xy' && pd.circular) {
+    const c = toDxfXY({ x: pd.cx, y: pd.cy, zCota: (Number(pd.z0) + Number(pd.z1)) / 2 }, opts)
+    const rM = Math.abs(worldToMeters(Number(pd.rx) || 0))
+    if (!(rM > 0)) return ''
+    return writeCircle(layer, c, rM)
+  }
+  const info = profileDrawAsDxfCircle(pd)
+  if (!info) return ''
+  let out = ''
+  // Dos tapas (extremos del tubo) como CIRCLE reales.
+  if (info.alongAxis === 'x') {
+    out += writeCircle(layer, toDxfXY({ x: info.x, y: info.depth0, zCota: info.zCota }, opts), info.rM)
+    out += writeCircle(layer, toDxfXY({ x: info.x, y: info.depth1, zCota: info.zCota }, opts), info.rM)
+  } else {
+    out += writeCircle(layer, toDxfXY({ x: info.depth0, y: info.y, zCota: info.zCota }, opts), info.rM)
+    out += writeCircle(layer, toDxfXY({ x: info.depth1, y: info.y, zCota: info.zCota }, opts), info.rM)
+  }
+  return out
+}
+
 /**
- * Sólidos 3D → 3DFACE (superficies). Prefer faces; si no, cells (anillo × z0/z1);
- * fallback bbox.
+ * Sólidos 3D → 3DFACE (superficies) + CIRCLE reales para cilindros/huecos.
+ * Prefer faces; si no, cells (anillo × z0/z1); fallback bbox.
  */
 function solidToEntities(solid, opts) {
   const layer = opts.itemLayer || LAYER.solidos
   let out = ''
+
+  // Contornos circulares reales (cilindro de perfil y huecos sustraídos).
+  if (solid?.profileDraw) out += writeCurveCircles(layer, solid.profileDraw, opts)
+  for (const h of solid?.curveHoles || []) out += writeCurveCircles(layer, h, opts)
+
+  // Tubo de perfil: malla lisa desde profileDraw (no losas Z escalonadas).
+  if (solid?.profileDraw?.kind === 'ellipse_tube') {
+    const { ringA, ringB } = ellipseTubeWorldRings(solid.profileDraw, solid.profileDraw.segments)
+    const a = ringA.map((p) => toDxfXY({ x: p.x, y: p.y, zCota: p.zCota }, opts))
+    const b = ringB.map((p) => toDxfXY({ x: p.x, y: p.y, zCota: p.zCota }, opts))
+    for (let i = 0; i < a.length; i += 1) {
+      const j = (i + 1) % a.length
+      out += write3dFace(layer, a[i], a[j], b[j], b[i])
+    }
+    return out
+  }
+
   const faces = Array.isArray(solid?.faces) ? solid.faces : []
   if (faces.length) {
     for (const face of faces) {
@@ -321,7 +362,43 @@ function solidToEntities(solid, opts) {
     if (out) return out
   }
 
+  // Cilindro vertical analítico: CIRCLE en tapa/base + generatriz omitida (3DFACE laterales densas evitadas).
   const cells = Array.isArray(solid?.cells) ? solid.cells : []
+  if (
+    cells.length === 1
+    && cells[0]?.analytic?.type === 'ellipse'
+    && Math.abs(Math.abs(cells[0].analytic.rxM) - Math.abs(cells[0].analytic.ryM)) < 1e-9
+  ) {
+    const cell = cells[0]
+    const ring = cell.ring || []
+    let cx = 0
+    let cy = 0
+    for (const p of ring) { cx += p.x; cy += p.y }
+    if (ring.length) {
+      cx /= ring.length
+      cy /= ring.length
+    }
+    const rM = Math.abs(cell.analytic.rxM)
+    const z0 = dxfNum(cell.z0)
+    const z1 = dxfNum(cell.z1, z0)
+    out += writeCircle(layer, toDxfXY({ x: cx, y: cy, zCota: z0 }, opts), rM)
+    out += writeCircle(layer, toDxfXY({ x: cx, y: cy, zCota: z1 }, opts), rM)
+    // Laterales: malla densa de 3DFACE desde el anillo (ya con muchos segmentos).
+    const bottom = ring.map((p) => {
+      const q = toDxfXY(p, opts)
+      return { x: q.x, y: q.y, z: z0 }
+    })
+    const top = ring.map((p) => {
+      const q = toDxfXY(p, opts)
+      return { x: q.x, y: q.y, z: z1 }
+    })
+    for (let i = 0; i < ring.length; i += 1) {
+      const j = (i + 1) % ring.length
+      out += write3dFace(layer, bottom[i], bottom[j], top[j], top[i])
+    }
+    return out
+  }
+
   for (const cell of cells) {
     const ring = Array.isArray(cell?.ring) ? cell.ring : []
     if (ring.length < 3) continue

@@ -23,9 +23,15 @@ import {
   viewProfileMeta,
   worldZToCota,
 } from './esquema3dViews.js'
+import {
+  CIRCLE_SEGMENTS,
+  buildEllipseProfileDraw,
+  ellipseTubeHoleOutline,
+  ellipseTubeMesh,
+  translateProfileDraw,
+} from './esquema3dCurves.js'
 
-/** Segmentos del anillo de círculo/elipse: suficientes para contorno limpio, sin trama densa. */
-const CIRCLE_SEGMENTS = 32
+export { CIRCLE_SEGMENTS } from './esquema3dCurves.js'
 
 function uid() {
   return `s3d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
@@ -276,6 +282,7 @@ export function extrudeClosedEntity(obj, {
       // Vista inferior: el lienzo Y está invertido respecto a world Y.
       ring = ring.map((p) => ({ x: p.x, y: -p.y }))
     }
+    const closed = closeRing(ring)?.slice(0, -1) || ring
     const solid = {
       type: 'solid3d',
       id: id || uid(),
@@ -289,7 +296,7 @@ export function extrudeClosedEntity(obj, {
         cotaInferior: v.z0,
       },
       cells: [{
-        ring: closeRing(ring)?.slice(0, -1) || ring,
+        ring: closed,
         holes: [],
         z0: v.z0,
         z1: v.z1,
@@ -308,6 +315,14 @@ export function extrudeClosedEntity(obj, {
         ryM: ry,
         lengthM: hM,
         diameterM: circ ? rx * 2 : null,
+      }
+      // Dibujo liso (sin generatrices densas): mismos anillos base/tapa.
+      solid.loftDraw = {
+        ringBase: closed.map((p) => ({ ...p })),
+        ringTop: closed.map((p) => ({ ...p })),
+        z0: v.z0,
+        z1: v.z1,
+        curved: true,
       }
     } else if (contour.analytic?.type === 'rect') {
       solid.formMeta = {
@@ -344,6 +359,7 @@ export function extrudeClosedEntity(obj, {
       faceDepthWorld: faceDepthWorld == null ? 0 : Number(faceDepthWorld),
     },
     cells: built.cells,
+    profileDraw: built.profileDraw || null,
   }
   // Volumen exacto: área del perfil × longitud (no la suma de losas de teselación).
   const profileArea = profileAreaM2(contour.ring, contour.analytic)
@@ -467,9 +483,23 @@ function buildCanonicalFromProfile({
   }
 
   // Círculo / elipse / polígono: losas Z (compatible con booleanos).
+  // El dibujo liso usa profileDraw; las losas no definen el contorno visible.
   const cells = tessellateProfileAlongZ(profile, meta, depthMin, depthMax, analytic)
   if (!cells.length) return { ok: false, error: 'No se pudo extruir el perfil.' }
-  return { ok: true, cells }
+  const profileDraw = analytic?.type === 'ellipse'
+    ? buildEllipseProfileDraw({
+      analytic,
+      alongMin,
+      alongMax,
+      zMin: z0,
+      zMax: z1,
+      depthMin,
+      depthMax,
+      meta,
+      viewId,
+    })
+    : null
+  return { ok: true, cells, profileDraw }
 }
 
 function profileLooksAxisAlignedRect(profile) {
@@ -489,8 +519,8 @@ function tessellateProfileAlongZ(profile, meta, depthMin, depthMax, analytic) {
   const zMax = Math.max(...profile.map((p) => p.cota))
   const alongMin = Math.min(...profile.map((p) => p.along))
   const alongMax = Math.max(...profile.map((p) => p.along))
-  // Pocas bandas: el volumen es analítico; el dibujo evita trama densa.
-  const nBands = analytic?.type === 'ellipse' ? 8 : 8
+  // Bandas densas para booleanos/huecos; el contorno visible usa profileDraw.
+  const nBands = analytic?.type === 'ellipse' ? CIRCLE_SEGMENTS : CIRCLE_SEGMENTS
   const cells = []
   const xyRect = (a0, a1) => {
     if (meta.alongAxis === 'x' && meta.depthAxis === 'y') {
@@ -707,11 +737,19 @@ export function translateSolid3d(solid, { dx = 0, dy = 0, dzCota = 0 } = {}) {
       ringTop: (solid.loftDraw.ringTop || []).map((p) => ({ x: p.x + ddx, y: p.y + ddy })),
     }
     : solid.loftDraw
+  const profileDraw = solid.profileDraw
+    ? translateProfileDraw(solid.profileDraw, { dx: ddx, dy: ddy, dzCota: ddz })
+    : solid.profileDraw
+  const curveHoles = Array.isArray(solid.curveHoles)
+    ? solid.curveHoles.map((h) => translateProfileDraw(h, { dx: ddx, dy: ddy, dzCota: ddz }))
+    : solid.curveHoles
   return {
     ...solid,
     volumeM3: solid.volumeM3,
     volumeLocked: !!solid.volumeLocked,
     loftDraw,
+    profileDraw,
+    curveHoles,
     cells: (solid.cells || []).map((cell) => ({
       ...cell,
       z0: (Number(cell.z0) || 0) + ddz,
@@ -1811,6 +1849,42 @@ export function subtractSolids(baseSolid, subtractList) {
   if (baseSolid.nombre) solid.nombre = baseSolid.nombre
   if (baseSolid.formMeta) solid.formMeta = baseSolid.formMeta
 
+  // Huecos curvos: conservar profileDraw de operandos (y previos) para dibujo liso.
+  const prevHoles = Array.isArray(baseSolid.curveHoles) ? baseSolid.curveHoles : []
+  const newHoles = withShare
+    .map((o) => o?.profileDraw)
+    .filter((pd) => pd && pd.kind === 'ellipse_tube')
+  // Cilindros verticales (cota): sin profileDraw; marcar hueco desde formMeta + cell.
+  for (const o of withShare) {
+    if (o?.profileDraw) continue
+    if (o?.formMeta?.kind !== 'cylinder' && o?.formMeta?.kind !== 'elliptic_prism') continue
+    const cell = (o.cells || [])[0]
+    if (!cell?.analytic || cell.analytic.type !== 'ellipse') continue
+    const ring = cell.ring || []
+    if (ring.length < 3) continue
+    let cx = 0
+    let cy = 0
+    for (const p of ring) { cx += p.x; cy += p.y }
+    cx /= ring.length
+    cy /= ring.length
+    const rx = metersToWorld(Math.abs(cell.analytic.rxM))
+    const ry = metersToWorld(Math.abs(cell.analytic.ryM))
+    newHoles.push({
+      kind: 'ellipse_xy',
+      cx,
+      cy,
+      rx,
+      ry,
+      z0: Math.min(Number(cell.z0) || 0, Number(cell.z1) || 0),
+      z1: Math.max(Number(cell.z0) || 0, Number(cell.z1) || 0),
+      circular: Math.abs(cell.analytic.rxM - cell.analytic.ryM) < 1e-9,
+      segments: CIRCLE_SEGMENTS,
+    })
+  }
+  if (prevHoles.length || newHoles.length) {
+    solid.curveHoles = [...prevHoles, ...newHoles]
+  }
+
   // Volumen mostrado = suma de valores redondeados (p. ej. 3,38 − 1,57 = 1,81).
   // En cadena: conservar el exterior original y acumular operandos descontados.
   const prevMeta = baseSolid.booleanMeta?.op === 'subtract' ? baseSolid.booleanMeta : null
@@ -2233,6 +2307,144 @@ export function solidFootprintDimsM(solid) {
 }
 
 /**
+ * Cilindro / prisma elíptico extruido en perfil: caras y aristas lisas.
+ */
+function drawEllipseTubeSolid(ctx, solid, opts) {
+  const pd = solid.profileDraw
+  if (!pd || !ctx) return
+  const {
+    viewId, cotaRefM, orbit, base, fillAlpha, strokeVis, strokeHid,
+    lwVis, lwHid, lwGlow, glowColor, dash,
+    doFills, doEdgesVis, doEdgesHid, flatElev, elevTone,
+  } = opts
+  const mesh = ellipseTubeMesh(pd, { viewId, cotaRefM, orbit })
+  if (doFills) {
+    const faces = [...mesh.faces].sort((a, b) => a.depth - b.depth)
+    const paint = flatElev ? faces.filter((f) => f.front) : faces
+    for (const f of paint) {
+      let tone = FACE_TONE_FACTOR.front
+      if (flatElev) tone = elevTone
+      else if (f.kind === 'cap') {
+        tone = f.tone === 'capA' ? FACE_TONE_FACTOR.front : FACE_TONE_FACTOR.back
+      } else if (f.toneCurved) {
+        tone = faceToneFactorFromNormal(f.nx || 0, 0, f.nz || 0)
+      }
+      ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
+      pathRing(ctx, f.pts)
+      ctx.fill()
+    }
+  }
+  const edgeVotes = new Map()
+  for (const e of mesh.edges) {
+    const k = edgeKey(e.a, e.b)
+    let slot = edgeVotes.get(k)
+    if (!slot) {
+      slot = { a: e.a, b: e.b, frontVotes: 0, backVotes: 0 }
+      edgeVotes.set(k, slot)
+    }
+    if (e.front) slot.frontVotes += 1
+    else slot.backVotes += 1
+  }
+  if (doEdgesVis) {
+    for (const e of edgeVotes.values()) {
+      const hidden = e.frontVotes === 0 && e.backVotes > 0
+      if (hidden) continue
+      if (glowColor && lwGlow) {
+        ctx.strokeStyle = glowColor
+        ctx.lineWidth = lwGlow
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.moveTo(e.a.x, e.a.y)
+        ctx.lineTo(e.b.x, e.b.y)
+        ctx.stroke()
+      }
+      ctx.strokeStyle = strokeVis
+      ctx.lineWidth = lwVis
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(e.a.x, e.a.y)
+      ctx.lineTo(e.b.x, e.b.y)
+      ctx.stroke()
+    }
+  }
+  if (doEdgesHid) {
+    for (const e of edgeVotes.values()) {
+      const hidden = e.frontVotes === 0 && e.backVotes > 0
+      if (!hidden) continue
+      ctx.strokeStyle = strokeHid
+      ctx.lineWidth = lwHid
+      ctx.setLineDash(dash)
+      ctx.beginPath()
+      ctx.moveTo(e.a.x, e.a.y)
+      ctx.lineTo(e.b.x, e.b.y)
+      ctx.stroke()
+    }
+  }
+}
+
+/** Contornos lisos de huecos curvos (sobre el sólido booleano). */
+function strokeCurveHoles(ctx, solid, {
+  viewId, cotaRefM, orbit, strokeVis, lwVis, doEdgesVis,
+}) {
+  const holes = solid?.curveHoles || []
+  if (!holes.length || !doEdgesVis) return
+  for (const h of holes) {
+    let ring = null
+    if (h.kind === 'ellipse_tube') {
+      ring = ellipseTubeHoleOutline(h, { viewId, cotaRefM, orbit })
+    } else if (h.kind === 'ellipse_xy') {
+      const z = (Number(h.z0) + Number(h.z1)) / 2
+      const n = Math.max(24, Math.floor(h.segments || CIRCLE_SEGMENTS))
+      const pts = []
+      for (let i = 0; i < n; i += 1) {
+        const t = (i / n) * Math.PI * 2
+        pts.push(projectPt(
+          { x: h.cx + Math.cos(t) * h.rx, y: h.cy + Math.sin(t) * h.ry },
+          z,
+          viewId,
+          cotaRefM,
+          orbit,
+        ))
+      }
+      ring = pts
+    }
+    if (!ring?.length) continue
+    pathRing(ctx, ring)
+    ctx.strokeStyle = strokeVis
+    ctx.lineWidth = lwVis
+    ctx.setLineDash([])
+    ctx.stroke()
+  }
+}
+
+/** Huecos lisos (proyección) para relleno evenodd en alzados. */
+function smoothHolesForDraw(solid, viewId, cotaRefM, orbit) {
+  const out = []
+  for (const h of solid?.curveHoles || []) {
+    if (h.kind === 'ellipse_tube') {
+      const ring = ellipseTubeHoleOutline(h, { viewId, cotaRefM, orbit })
+      if (ring?.length >= 3) out.push(ring)
+    } else if (h.kind === 'ellipse_xy') {
+      const z = (Number(h.z0) + Number(h.z1)) / 2
+      const n = Math.max(24, Math.floor(h.segments || CIRCLE_SEGMENTS))
+      const pts = []
+      for (let i = 0; i < n; i += 1) {
+        const t = (i / n) * Math.PI * 2
+        pts.push(projectPt(
+          { x: h.cx + Math.cos(t) * h.rx, y: h.cy + Math.sin(t) * h.ry },
+          z,
+          viewId,
+          cotaRefM,
+          orbit,
+        ))
+      }
+      if (pts.length >= 3) out.push(pts)
+    }
+  }
+  return out
+}
+
+/**
  * Dibuja un sólido con reglas de dibujo técnico:
  * - Caras con color + transparencia ligera (internos también, se leen a través).
  * - Aristas visibles: continua fina, tono oscuro del color.
@@ -2259,6 +2471,13 @@ export function drawSolid3d(ctx, solid, {
   const useOrbit = !!(orbit && Number.isFinite(orbit.yaw) && Number.isFinite(orbit.pitch))
   const flatTop = !useOrbit && viewId === 'top'
   const flatBottom = !useOrbit && viewId === 'bottom'
+  const flatElevId = !useOrbit ? normalizeViewId(viewId) : null
+  const flatElev = flatElevId === 'front' || flatElevId === 'back'
+    || flatElevId === 'left' || flatElevId === 'side' || flatElevId === 'right'
+  let elevTone = FACE_TONE_FACTOR.front
+  if (flatElevId === 'back') elevTone = FACE_TONE_FACTOR.back
+  else if (flatElevId === 'left' || flatElevId === 'side') elevTone = FACE_TONE_FACTOR.left
+  else if (flatElevId === 'right') elevTone = FACE_TONE_FACTOR.right
   // pixelScale = escala del transform del ctx; si no viene, usar zoom del editor.
   const pScale = Math.max(Number(pixelScale != null ? pixelScale : zoom) || 1, 0.05)
   const lwVis = solidLineWidthWorld(
@@ -2282,6 +2501,33 @@ export function drawSolid3d(ctx, solid, {
   ctx.save()
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
+
+  // Tubo elíptico / cilindro de perfil: malla lisa (no losas Z escalonadas).
+  if (solid.profileDraw?.kind === 'ellipse_tube') {
+    drawEllipseTubeSolid(ctx, solid, {
+      viewId,
+      cotaRefM,
+      selected,
+      base,
+      fillAlpha,
+      strokeVis,
+      strokeHid,
+      lwVis,
+      lwHid,
+      lwGlow,
+      glowColor,
+      dash,
+      doFills,
+      doEdgesVis,
+      doEdgesHid,
+      flatElev,
+      elevTone,
+      orbit,
+    })
+    ctx.setLineDash([])
+    ctx.restore()
+    return
+  }
 
   // Vista superior/inferior ortográfica: un solo plano → tono de esa cara.
   if (flatTop || flatBottom) {
@@ -2368,19 +2614,12 @@ export function drawSolid3d(ctx, solid, {
   }
 
   // Alzados e iso: caras reales (con recortes/huecos de Sustraer), no AABB opaco.
-  // En alzado ortográfico se pintan solo caras hacia la cámara con el tono del
-  // alzado (front/back/left/right), para que frontal ≠ posterior y los huecos se vean.
-  const flatElevId = !useOrbit ? normalizeViewId(viewId) : null
-  const flatElev = flatElevId === 'front' || flatElevId === 'back'
-    || flatElevId === 'left' || flatElevId === 'side' || flatElevId === 'right'
-  let elevTone = FACE_TONE_FACTOR.front
-  if (flatElevId === 'back') elevTone = FACE_TONE_FACTOR.back
-  else if (flatElevId === 'left' || flatElevId === 'side') elevTone = FACE_TONE_FACTOR.left
-  else if (flatElevId === 'right') elevTone = FACE_TONE_FACTOR.right
+  // flatElev / elevTone ya calculados arriba (también para profileDraw).
 
   const facePolys = []
   const faceWithHoles = []
   const edgeMap = new Map()
+  const smoothHoleRings = smoothHolesForDraw(solid, viewId, cotaRefM, orbit)
 
   // Solevado: dibujar un solo prisma base→tapa (sin trama de bandas Z).
   const loftDraw = solid.loftDraw
@@ -2712,7 +2951,9 @@ export function drawSolid3d(ctx, solid, {
       const tone = flatElev ? elevTone : (f.tone ?? 1)
       ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
       if (f.kind === 'holes') {
-        pathRingWithHoles(ctx, f.outer, f.holes)
+        // Preferir contorno circular/elíptico exacto si hay curveHoles.
+        const holes = smoothHoleRings.length ? smoothHoleRings : f.holes
+        pathRingWithHoles(ctx, f.outer, holes)
         ctx.fill('evenodd')
       } else {
         pathRing(ctx, f.pts)
@@ -2738,6 +2979,8 @@ export function drawSolid3d(ctx, solid, {
     for (const e of edgeMap.values()) {
       const hidden = e.frontVotes === 0 && e.backVotes > 0
       if (hidden) continue
+      // Si hay huecos curvos, omitir aristas de hueco facetado (las redibuja strokeCurveHoles).
+      if (smoothHoleRings.length && e._fromHole) continue
       ctx.strokeStyle = strokeVis
       ctx.lineWidth = lwVis
       ctx.setLineDash([])
@@ -2761,6 +3004,9 @@ export function drawSolid3d(ctx, solid, {
       ctx.stroke()
     }
   }
+  strokeCurveHoles(ctx, solid, {
+    viewId, cotaRefM, orbit, strokeVis, lwVis, doEdgesVis,
+  })
   ctx.setLineDash([])
   ctx.restore()
 }

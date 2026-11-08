@@ -6,8 +6,10 @@
 import { closedEntityToContour } from './esquema3dSolids.js'
 import { closedEntityAreaM2, metersToWorld, polygonAreaM2 } from './esquemaGeometry.js'
 
-const LOFT_BANDS = 12
+const LOFT_BANDS = 24
 const APEX_EPS_M = 1e-4
+/** Segmentos de contorno curvo en loftDraw (cono / tronco de cono lisos). */
+const LOFT_CURVE_SEGMENTS = 96
 
 function uid() {
   return `s3d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
@@ -311,10 +313,10 @@ function buildLoftCells(ringBase, ringTop, z0, z1, bands = LOFT_BANDS) {
 }
 
 function sampleCountFor(contour) {
-  if (contour?.analytic?.type === 'ellipse') return 32
+  if (contour?.analytic?.type === 'ellipse') return LOFT_CURVE_SEGMENTS
   if (contour?.analytic?.type === 'rect') return 4
   const n = (contour?.ring || []).length
-  return Math.max(8, Math.min(48, n || 16))
+  return Math.max(8, Math.min(LOFT_CURVE_SEGMENTS, n || 16))
 }
 
 function asContour(ent) {
