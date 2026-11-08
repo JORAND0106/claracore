@@ -1,5 +1,5 @@
 /**
- * Contrato C-OUT-18: esquemas a nivel de reporte + galería ordenada.
+ * Contrato C-OUT-18: esquemas a nivel de reporte + asignación en sellados.
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,13 +25,12 @@ describe('sicoeEsquemasReporte · contrato UI', () => {
 
   it('registro ya no ofrece botón Crear esquema', () => {
     const app = read('App.jsx')
-    // Los botones ✎ Crear/Editar esquema del registro se retiraron.
     assert.match(app, /Crear\/editar esquema: desde el botón «Esquemas»/)
     assert.doesNotMatch(app, /title=\{grafVista \? 'Editar esquema' : 'Crear esquema'\}/)
     assert.doesNotMatch(app, /title="Crear esquema"/)
   })
 
-  it('modal de lista + asignación + editor', () => {
+  it('modal de lista + asignación + editor; Exportar diferido', () => {
     const modal = read('modules/sicoe-obra/SicoeEsquemasReporteModal.jsx')
     assert.match(modal, /Nuevo esquema/)
     assert.match(modal, /Cambiar asignación/)
@@ -39,6 +38,22 @@ describe('sicoeEsquemasReporte · contrato UI', () => {
     assert.match(modal, /EsquemaEditorModal/)
     assert.match(modal, /presentEsquemaExportPopup/)
     assert.match(modal, /planificarActualizacionVersionEsquema/)
+    assert.match(modal, /deferExportPopup/)
+    // Nuevo: casillas vacías (no precarga editTarget)
+    assert.match(modal, /assignMode === 'reasignar'/)
+    assert.doesNotMatch(modal, /Cree esquemas del reporte y asígnelos/)
+    assert.doesNotMatch(modal, /sealedKeep/)
+  })
+
+  it('popup asignación: sellados togglables, sin texto largo, aviso mínimo', () => {
+    const popup = read('modules/sicoe-obra/SicoeEsquemaAsignarPopup.jsx')
+    assert.match(popup, /Seleccione al menos un registro/)
+    assert.match(popup, /Sellado/)
+    assert.doesNotMatch(popup, /Los sellados conservan su versión/)
+    assert.doesNotMatch(popup, /canToggle = !sellado/)
+    assert.doesNotMatch(popup, /disabled=\{busy \|\| !canToggle\}/)
+    assert.match(popup, /Reg\./)
+    assert.match(popup, /Cant Total/)
   })
 
   it('galería busca por número y ordena', () => {
@@ -47,10 +62,12 @@ describe('sicoeEsquemasReporte · contrato UI', () => {
     assert.match(app, /Buscar por nº gráfico o reporte/)
   })
 
-  it('contrato documenta C-OUT-18', () => {
+  it('contrato documenta C-OUT-18 con sellados asignables', () => {
     const md = read('components/esquema/CONTRATO_ESQUEMA.md')
     assert.match(md, /C-OUT-18/)
     assert.match(md, /Esquemas del reporte/)
     assert.match(md, /sicoeEsquemasReporte/)
+    assert.match(md, /sellados?.*asignar|asignar.*sellados?/i)
+    assert.match(md, /cantidades?.*bloquead/i)
   })
 })

@@ -126,8 +126,9 @@ export function buildEsquemaHistorialEntrada({
 }
 
 /**
- * Aplica / actualiza asignación: los sellados que ya tienen el esquema se conservan;
- * no se asignan ni quitan sellados. Unsealed se alinean a la lista deseada.
+ * Aplica / actualiza asignación a la lista deseada.
+ * Incluye registros sellados: solo se tocan campos de gráfico/esquema
+ * (grafico_url, grafico_numero, graficos_historial); nunca cantidades.
  *
  * @returns {{ patches: Array<{ registro: object, body: object }>, skippedSellados: any[] }}
  */
@@ -140,6 +141,7 @@ export function planificarAsignacionEsquema({
   const desired = new Set((idsDeseados || []).map(String))
   const patches = []
   const skippedSellados = []
+  void isSellado // el sellado ya no bloquea asignación; se conserva el param por API.
   const eid = entrada?.esquema_id
   const num = entrada?.numero
 
@@ -151,16 +153,10 @@ export function planificarAsignacionEsquema({
   }
 
   for (const reg of registros || []) {
-    const sellado = !!isSellado(reg)
     const rid = String(reg.id)
     let hist = listaGraficosRegistro(reg)
     const tiene = hist.some(pertenece)
     const quiere = desired.has(rid)
-
-    if (sellado) {
-      if (tiene !== quiere) skippedSellados.push(reg.numero_registro ?? reg.id)
-      continue
-    }
 
     if (quiere && !tiene) {
       hist = [...hist.filter((g) => !pertenece(g)), { ...entrada }]
@@ -174,6 +170,7 @@ export function planificarAsignacionEsquema({
     }
 
     const prim = pickPrimaryGraficoFromHistorial(hist)
+    // Solo campos de esquema/gráfico — no medidas ni cantidades.
     patches.push({
       registro: reg,
       body: {
@@ -191,7 +188,8 @@ export function planificarAsignacionEsquema({
 
 /**
  * Al editar un esquema: nueva URL/escena con el mismo numero/esquema_id.
- * Solo registros no sellados reciben la nueva versión.
+ * Todos los registros asignados (sellados o no) reciben la versión actual.
+ * Las cantidades del registro no se modifican.
  */
 export function planificarActualizacionVersionEsquema({
   registros,
