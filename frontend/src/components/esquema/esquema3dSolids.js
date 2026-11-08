@@ -596,6 +596,75 @@ export function refreshSolidFromSourceEntity(solid, entity) {
   return r
 }
 
+/**
+ * Edita cotas o longitud de un sólido ya extruido (mismo id, volumen nuevo).
+ * Requiere entidad fuente; no aplica a resultados booleanos.
+ */
+export function updateExtrudedSolid(solid, entity, values = {}) {
+  if (!solid || solid.type !== 'solid3d') {
+    return { ok: false, error: 'Sólido no válido.' }
+  }
+  if (solid.booleanMeta) {
+    return { ok: false, error: 'No se edita la extrusión de un resultado de Unir/Sustraer/Cortar.' }
+  }
+  if (!entity) {
+    return { ok: false, error: 'No hay contorno fuente para reeditar la extrusión.' }
+  }
+  const params = { ...(solid.extrudeParams || {}) }
+  const viewId = params.viewId || solid.viewPlane || 'top'
+  const mode = extrudeModeForView(viewId)
+  let cotaSuperior = params.cotaSuperior
+  let cotaInferior = params.cotaInferior
+  let lengthM = params.lengthM
+  if (mode === 'cotas') {
+    const v = validateCotas(
+      values.cotaSuperior ?? cotaSuperior,
+      values.cotaInferior ?? cotaInferior,
+    )
+    if (!v.ok) return v
+    cotaSuperior = v.z1
+    cotaInferior = v.z0
+    lengthM = undefined
+  } else {
+    const v = validateExtrudeLengthM(values.lengthM ?? lengthM)
+    if (!v.ok) return v
+    lengthM = v.lengthM
+    cotaSuperior = undefined
+    cotaInferior = undefined
+  }
+  const r = extrudeClosedEntity(entity, {
+    viewId,
+    cotaSuperior,
+    cotaInferior,
+    lengthM,
+    color: solid.color,
+    id: solid.id,
+    faceDepthWorld: params.faceDepthWorld ?? values.faceDepthWorld ?? 0,
+  })
+  if (!r.ok) return r
+  r.solid.sourceEntityId = entity.id
+  r.solid.name = solid.name
+  r.solid.extrudeParams = {
+    ...(r.solid.extrudeParams || {}),
+    viewId,
+    faceDepthWorld: params.faceDepthWorld ?? values.faceDepthWorld ?? 0,
+    ...(mode === 'cotas'
+      ? { cotaSuperior, cotaInferior }
+      : { lengthM }),
+  }
+  return r
+}
+
+/** ¿El sólido admite reedición de extrusión (cotas o longitud)? */
+export function solidCanEditExtrusion(solid) {
+  if (!solid || solid.type !== 'solid3d' || solid.booleanMeta) return false
+  const p = solid.extrudeParams
+  if (!p) return false
+  if (p.lengthM != null && Number(p.lengthM) > 0) return true
+  if (p.cotaSuperior != null && p.cotaInferior != null) return true
+  return false
+}
+
 /** Ids de entidades 2D que ya son base de un sólido (no deben dibujarse aparte en 3D). */
 export function linkedSourceEntityIds(solids) {
   const ids = new Set()

@@ -31,6 +31,8 @@ export function Esquema3dCalcPanel({
   selectedSolidIds,
   onHint,
   onHighlightSolid,
+  /** Solo resalte visual al pasar el mouse (no cambia la selección). */
+  onHoverSolid = null,
   highlightedSolidId = null,
   embedded = false,
   phoneFullscreenPopups = false,
@@ -319,9 +321,9 @@ export function Esquema3dCalcPanel({
                   data-solid-id={line.solidId || ''}
                   title={tip}
                   data-cc-tooltip={tip}
-                  onMouseEnter={() => onHighlightSolid?.(line.solidId)}
-                  onFocus={() => onHighlightSolid?.(line.solidId)}
-                  onPointerDown={() => onHighlightSolid?.(line.solidId)}
+                  onMouseEnter={() => onHoverSolid?.(line.solidId)}
+                  onMouseLeave={() => onHoverSolid?.(null)}
+                  onFocus={() => onHoverSolid?.(line.solidId)}
                   onClick={() => openEditPopup(line)}
                   style={{
                     display: 'flex',

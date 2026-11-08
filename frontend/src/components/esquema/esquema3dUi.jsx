@@ -144,6 +144,12 @@ function viewShort(id) {
   }
 }
 
+const EXTRUDE_COTA_PLACEHOLDERS = {
+  superior: '1502,234',
+  altura: '0,631',
+  inferior: '1501,603',
+}
+
 export function Esquema3dExtrudePopup({
   t,
   ui,
@@ -151,20 +157,31 @@ export function Esquema3dExtrudePopup({
   onCancel,
   onConfirm,
   defaultLengthM = null,
+  /** Valores al editar un sólido ya extruido; null = extrusión nueva (placeholders). */
+  initialCotas = null,
+  editing = false,
   phoneFullscreen = false,
 }) {
-  // C-3D-05: partida / llegada / altura editable (±); defaults = caso 100→98.
-  const [cotas, setCotas] = useState(() => ({
-    partida: '100',
-    llegada: '98',
-    altura: formatCota3(-2),
-    lastKept: 'llegada',
-  }))
-  const [lengthM, setLengthM] = useState(
-    defaultLengthM != null && Number(defaultLengthM) > 0
-      ? String(defaultLengthM)
-      : '0.30',
-  )
+  const [cotas, setCotas] = useState(() => {
+    if (initialCotas && (initialCotas.superior != null || initialCotas.inferior != null)) {
+      const superior = initialCotas.superior != null ? String(initialCotas.superior) : ''
+      const inferior = initialCotas.inferior != null ? String(initialCotas.inferior) : ''
+      const altura = initialCotas.altura != null
+        ? String(initialCotas.altura)
+        : (() => {
+          const s = Number(String(superior).replace(',', '.'))
+          const i = Number(String(inferior).replace(',', '.'))
+          return Number.isFinite(s) && Number.isFinite(i) ? formatCota3(s - i) : ''
+        })()
+      return { superior, inferior, altura, lastKept: 'inferior' }
+    }
+    return { superior: '', inferior: '', altura: '', lastKept: 'inferior' }
+  })
+  const [lengthM, setLengthM] = useState(() => {
+    if (defaultLengthM != null && Number(defaultLengthM) > 0) return String(defaultLengthM)
+    // Nueva extrusión por longitud: vacío + placeholder (no precargar 0.30).
+    return editing && defaultLengthM != null ? String(defaultLengthM) : ''
+  })
   const [error, setError] = useState('')
 
   const editCota = (field) => (e) => {
@@ -185,8 +202,6 @@ export function Esquema3dExtrudePopup({
         {
           cotaSuperior: resolved.cotaSuperior,
           cotaInferior: resolved.cotaInferior,
-          cotaPartida: resolved.cotaPartida,
-          cotaLlegada: resolved.cotaLlegada,
           altura: resolved.altura,
         },
         (err) => setError(err || ''),
@@ -194,6 +209,14 @@ export function Esquema3dExtrudePopup({
     } else {
       onConfirm({ lengthM }, (err) => setError(err || ''))
     }
+  }
+
+  const fieldInputStyle = {
+    ...inputStyle(t),
+    fontSize: phoneFullscreen ? 16 : 13,
+    minHeight: phoneFullscreen ? 44 : 36,
+    width: '100%',
+    boxSizing: 'border-box',
   }
 
   return (
@@ -213,8 +236,9 @@ export function Esquema3dExtrudePopup({
       <div
         onClick={(e) => e.stopPropagation()}
         data-testid="esquema-extruir-popup"
+        data-editing={editing ? '1' : '0'}
         style={{
-          width: phoneFullscreen ? '100%' : 'min(420px, 96vw)',
+          width: phoneFullscreen ? '100%' : 'min(560px, 96vw)',
           height: phoneFullscreen ? '100%' : undefined,
           maxHeight: phoneFullscreen ? '100%' : undefined,
           background: t.bgCard || '#fff',
@@ -236,54 +260,67 @@ export function Esquema3dExtrudePopup({
           padding: phoneFullscreen ? 16 : 0,
         }}
         >
-          <div style={{ fontWeight: 800, fontSize: phoneFullscreen ? 18 : 16, color: t.text, marginBottom: 8 }}>
-            {mode === 'cotas' ? 'Extruir por cotas' : 'Extruir por profundidad'}
-          </div>
-          <div style={{ fontSize: phoneFullscreen ? 15 : 13, color: ui?.muted || '#64748b', marginBottom: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: phoneFullscreen ? 18 : 16, color: t.text, marginBottom: 12 }}>
             {mode === 'cotas'
-              ? 'Cota de partida, cota de llegada y altura (m). Altura = llegada − partida (±). El sólido se construye entre las dos cotas.'
-              : 'Indique la longitud en metros (profundidad perpendicular a la cara, hacia el fondo de la vista). La figura conserva su posición y cotas.'}
+              ? (editing ? 'Editar extrusión por cotas' : 'Extruir por cotas')
+              : (editing ? 'Editar extrusión por profundidad' : 'Extruir por profundidad')}
           </div>
           {mode === 'cotas' ? (
-            <div style={{ display: 'grid', gap: 10 }}>
-              <label style={labelStyle(t)}>
-                Cota de partida (m)
+            <div
+              data-testid="esquema-extruir-cotas-fila"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr 1fr',
+                gap: 10,
+                alignItems: 'end',
+              }}
+            >
+              <label style={{ ...labelStyle(t), margin: 0 }} title="Cota superior (m). Referencia de partida del sólido.">
+                Cota superior
                 <input
-                  value={cotas.partida}
-                  onChange={editCota('partida')}
-                  style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                  value={cotas.superior}
+                  onChange={editCota('superior')}
+                  placeholder={EXTRUDE_COTA_PLACEHOLDERS.superior}
+                  title="Cota superior (m)"
+                  style={fieldInputStyle}
                   inputMode="decimal"
-                  data-testid="esquema-extruir-cota-partida"
+                  data-testid="esquema-extruir-cota-sup"
                 />
               </label>
-              <label style={labelStyle(t)}>
-                Cota de llegada (m)
-                <input
-                  value={cotas.llegada}
-                  onChange={editCota('llegada')}
-                  style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
-                  inputMode="decimal"
-                  data-testid="esquema-extruir-cota-llegada"
-                />
-              </label>
-              <label style={labelStyle(t)}>
-                Altura (m)
+              <label style={{ ...labelStyle(t), margin: 0 }} title="Altura = cota superior − cota inferior (±). Positiva baja; negativa sube.">
+                Altura
                 <input
                   value={cotas.altura}
                   onChange={editCota('altura')}
-                  style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                  placeholder={EXTRUDE_COTA_PLACEHOLDERS.altura}
+                  title="Altura (m): superior − inferior (±)"
+                  style={fieldInputStyle}
                   inputMode="decimal"
                   data-testid="esquema-extruir-altura"
                 />
               </label>
+              <label style={{ ...labelStyle(t), margin: 0 }} title="Cota inferior (m). Se calcula con superior y altura, o define la altura.">
+                Cota inferior
+                <input
+                  value={cotas.inferior}
+                  onChange={editCota('inferior')}
+                  placeholder={EXTRUDE_COTA_PLACEHOLDERS.inferior}
+                  title="Cota inferior (m)"
+                  style={fieldInputStyle}
+                  inputMode="decimal"
+                  data-testid="esquema-extruir-cota-inf"
+                />
+              </label>
             </div>
           ) : (
-            <label style={labelStyle(t)}>
+            <label style={labelStyle(t)} title="Longitud / profundidad perpendicular a la cara (m).">
               Longitud / profundidad (m)
               <input
                 value={lengthM}
                 onChange={(e) => setLengthM(e.target.value)}
-                style={{ ...inputStyle(t), fontSize: phoneFullscreen ? 16 : undefined, minHeight: phoneFullscreen ? 44 : undefined }}
+                placeholder="0,30"
+                title="Longitud de extrusión (m)"
+                style={fieldInputStyle}
                 inputMode="decimal"
                 data-testid="esquema-extruir-longitud"
               />
@@ -305,7 +342,9 @@ export function Esquema3dExtrudePopup({
         }}
         >
           <button type="button" onClick={onCancel} style={{ ...btnGhost(t), minHeight: phoneFullscreen ? 44 : undefined }}>Cancelar</button>
-          <button type="button" onClick={submit} style={{ ...btnPrimary(t), minHeight: phoneFullscreen ? 44 : undefined }}>Extruir</button>
+          <button type="button" onClick={submit} style={{ ...btnPrimary(t), minHeight: phoneFullscreen ? 44 : undefined }}>
+            {editing ? 'Aplicar' : 'Extruir'}
+          </button>
         </div>
       </div>
     </div>
