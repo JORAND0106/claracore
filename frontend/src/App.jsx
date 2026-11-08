@@ -161,6 +161,12 @@ import SicoeMensajeModal from './modules/sicoe-obra/SicoeMensajeModal'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
 import SicoeEsquemasReporteModal from './modules/sicoe-obra/SicoeEsquemasReporteModal'
 import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
+import {
+  consumeEsquemaEditorPendingReopen,
+  isEsquemaEditorOpen,
+  shouldKeepSessionAliveForEsquema,
+  subscribeEsquemaEditorOpen,
+} from './components/esquema/esquemaEditorLifecycle'
 import AdjuntosMediaSlider from './components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromRegistro } from './components/adjuntos/adjuntosMedia'
 import ValidacionAdjuntoImagen from './components/validacion/ValidacionAdjuntoImagen'
@@ -2996,34 +3002,15 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
   )
 }
 
-/** Key estable para remontar la hoja cuando el servidor devuelve dimensiones/costo nuevos (evita estado local viejo). */
-function sicoeHojaRegistroSyncKey(reg) {
+/**
+ * Key de React para HojaRegistro: SOLO id estable.
+ * Antes se usaba un syncKey con grafico_url/dimensiones/costo: cualquier fusión del padre
+ * remontaba la hoja, cerraba EsquemaEditorModal y perdía el trabajo (C-OUT-14 / iPad).
+ * Los props se sincronizan por useEffect dentro de HojaRegistro.
+ */
+function sicoeHojaRegistroStableKey(reg) {
   if (!reg || reg.id == null) return '0'
-  const foto = String(reg.foto_url || '').trim() ? 'u1' : 'u0'
-  return [
-    reg.id,
-    foto,
-    reg.longitud,
-    reg.ancho,
-    reg.espesor,
-    reg.cantidad,
-    reg.cantidad_total,
-    reg.costo_directo,
-    reg.vlr_unitario,
-    reg.item_numero,
-    reg.observacion,
-    reg.competencia,
-    reg.capitulo,
-    reg.subcontratista_id,
-    reg.corte_id,
-    reg.nivel2_objeto_pago_sub,
-    reg.cuadro_aceros_id,
-    reg.cuadro_aceros_posicion,
-    reg.peso_kg_m,
-    reg.grafico_url,
-  ]
-    .map((x) => (x == null ? '' : String(x)))
-    .join('|')
+  return String(reg.id)
 }
 
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
@@ -3871,6 +3858,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     // Solo al montar / primera solicitud de esquema desde la tabla de ítems
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAbrirEsquema])
+
+  // C-OUT-14: tras kill de página / remount, reabrir el esquema del mismo registro.
+  useEffect(() => {
+    if (esquemaOpen || autoEsquemaDoneRef.current) return undefined
+    const pending = consumeEsquemaEditorPendingReopen({
+      module: 'sicoe-obra',
+      entityId: registro?.id ?? registro?.numero_registro,
+      contratoId: registro?.contrato_id ?? contrato_id,
+    })
+    if (!pending) return undefined
+    autoEsquemaDoneRef.current = true
+    void abrirEsquemaEditor()
+    return undefined
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registro?.id])
 
   /** Guarda el PNG del editor como gráfico de este registro (next-grafico + upload + PUT). */
   const guardarEsquemaComoGrafico = async (dataUrl, extras) => {
@@ -9172,7 +9174,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     {expandido && (
                       <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
                         <HojaRegistro
-                          key={sicoeHojaRegistroSyncKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
+                          key={sicoeHojaRegistroStableKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
                           contrato_id={contrato_id} reporte={reporte} registro={reg}
                           puedeEditar={puedeEditar} puedeCrear={puedeCrear} actasList={actasList}
                           nivelesContrato={nivelesContrato}
@@ -9261,7 +9263,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 renderMenuAcciones={(reg) => renderMenuAccionesReg(reg)}
                 renderHojaRegistro={(reg) => (
                   <HojaRegistro
-                    key={sicoeHojaRegistroSyncKey(reg)}
+                    key={sicoeHojaRegistroStableKey(reg)}
                     t={t}
                     usuario={usuario}
                     API_URL={API_URL}
@@ -26832,7 +26834,8 @@ export default function App() {
     return () => { cancelled = true }
   }, [usuario?.id])
 
-  // Rastrear actividad del usuario (memoria + storage para reabrir pestaña)
+  // Rastrear actividad del usuario (memoria + storage para reabrir pestaña).
+  // Incluye touch/pointer (iPad): dibujar en el esquema no dispara mousemove/click.
   useEffect(() => {
     if (!usuario) return
     const touch = () => {
@@ -26847,11 +26850,14 @@ export default function App() {
     const flush = () => touchSessionActivity(lastActivityRef.current)
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush()
+      else touch()
     }
     window.addEventListener('mousemove', touch)
     window.addEventListener('keydown', touch)
     window.addEventListener('click', touch)
     window.addEventListener('scroll', touch)
+    window.addEventListener('touchstart', touch, { passive: true })
+    window.addEventListener('pointerdown', touch, { passive: true })
     window.addEventListener('pagehide', flush)
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
@@ -26859,8 +26865,28 @@ export default function App() {
       window.removeEventListener('keydown', touch)
       window.removeEventListener('click', touch)
       window.removeEventListener('scroll', touch)
+      window.removeEventListener('touchstart', touch)
+      window.removeEventListener('pointerdown', touch)
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [usuario])
+
+  // C-OUT-14: mientras el esquema está abierto, la sesión no puede morir por inactividad.
+  useEffect(() => {
+    if (!usuario) return undefined
+    const beat = () => {
+      if (!shouldKeepSessionAliveForEsquema()) return
+      const now = Date.now()
+      lastActivityRef.current = now
+      touchSessionActivity(now)
+    }
+    beat()
+    const iv = setInterval(beat, 30000)
+    const unsub = subscribeEsquemaEditorOpen(() => beat())
+    return () => {
+      clearInterval(iv)
+      unsub()
     }
   }, [usuario])
 
@@ -26870,10 +26896,20 @@ export default function App() {
       const token = getToken()
       if (!token) return
 
+      // Keep-alive: editor de esquema abierto (o pendiente de recuperación) → nunca logout.
+      if (shouldKeepSessionAliveForEsquema() || isEsquemaEditorOpen()) {
+        lastActivityRef.current = Date.now()
+        touchSessionActivity(lastActivityRef.current)
+      }
+
       const inactivo = Date.now() - lastActivityRef.current
 
       // Cerrar sesión por inactividad
       if (inactivo >= INACTIVITY_LIMIT) {
+        if (shouldKeepSessionAliveForEsquema() || isEsquemaEditorOpen()) {
+          lastActivityRef.current = Date.now()
+          return
+        }
         clearInterval(id)
         // Flush borrador local de «Nuevo reporte» antes de desmontar (pérdida de datos en campo).
         try { sicoeNuevoReporteRequestFlush() } catch { /* noop */ }
@@ -26906,6 +26942,11 @@ export default function App() {
             const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
             storage.setItem('cc_token', access_token)
           } else if (refreshRes.status === 401) {
+            // Con esquema abierto: no tumbar la ventana; el borrador ya está en dispositivo.
+            if (shouldKeepSessionAliveForEsquema() || isEsquemaEditorOpen()) {
+              console.warn('[ClaraCore] refresh 401 con esquema abierto: se conserva la ventana y el borrador local')
+              return
+            }
             try { sicoeNuevoReporteRequestFlush() } catch { /* noop */ }
             clearSessionCredentials()
             setUsuario(null)
