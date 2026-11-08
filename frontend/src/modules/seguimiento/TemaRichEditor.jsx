@@ -18,6 +18,7 @@ import {
   shiftWeek,
   weekDayHeaders,
 } from '../bloc-notas/blocNotasDiary.js'
+import { BlocDayParagraph } from '../bloc-notas/blocDayMarkerExtension.js'
 
 /**
  * Editor TipTap para temas/ideas y bitácora (Actas, Observaciones Diario, Evento).
@@ -43,6 +44,8 @@ export default function TemaRichEditor({
   enableSemanario = false,
   /** Solo Bloc: botones de tabla como icono + tooltip. Actas conserva texto. */
   iconOnlyTableTools = false,
+  /** Solo Bloc: conserva data-bloc-day / class en fechas automáticas del diario. */
+  enableBlocDayMarkers = false,
 }) {
   const editorRef = useRef(null)
   const skipNextExternal = useRef(false)
@@ -69,10 +72,13 @@ export default function TemaRichEditor({
         code: false,
         blockquote: false,
         horizontalRule: false,
+        // Bloc: párrafo extendido conserva data-bloc-day (Actas usa el default).
+        paragraph: enableBlocDayMarkers ? false : undefined,
         history: disableHistory ? false : undefined,
         orderedList: { keepMarks: true, keepAttributes: false },
         bulletList: { keepMarks: true, keepAttributes: false },
       }),
+      ...(enableBlocDayMarkers ? [BlocDayParagraph] : []),
       Underline,
       Placeholder.configure({ placeholder }),
       Table.configure({
