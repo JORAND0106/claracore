@@ -539,6 +539,11 @@ export default function EsquemaEditorModal({
    * (p. ej. SicoeObra tras el popup de asignación de esquemas).
    */
   deferExportPopup = false,
+  /**
+   * PDF/DXF listos en segundo plano tras Guardar (C-OUT-20).
+   * El host (p. ej. SicoeObra con deferExportPopup) puede mostrar Exportar / Archivos.
+   */
+  onExportsReady = null,
   onSave,
   onClose,
 }) {
@@ -6738,39 +6743,8 @@ export default function EsquemaEditorModal({
         title: titleTxt,
       })
       const safeName = titleTxt.replace(/[^\w\-áéíóúÁÉÍÓÚñÑ]+/g, '_').slice(0, 48) || 'esquema'
-      let exportPdf = null
-      let exportDxf = null
-      try {
-        const pdfAdj = await composeEsquemaPdf({
-          title: titleTxt,
-          esquemaPng: composed,
-          adjuntos: [...(calcAdj || []), ...(despieceAdj || [])],
-        })
-        if (pdfAdj?.dataUri) {
-          exportPdf = {
-            dataUri: pdfAdj.dataUri,
-            mime: 'application/pdf',
-            kind: 'esquema-pdf',
-            origen: 'esquema',
-            nombre: pdfAdj.nombre || `${safeName}.pdf`,
-          }
-        }
-      } catch { /* PDF opcional: no bloquea el PNG */ }
-      try {
-        const dxfRes = composeEsquemaDxf(sceneSnap || collectDraftSnapshot())
-        const dxfUri = esquemaDxfToDataUri(dxfRes.dxf)
-        if (dxfUri) {
-          exportDxf = {
-            dataUri: dxfUri,
-            mime: 'application/dxf',
-            kind: 'esquema-dxf',
-            origen: 'esquema',
-            nombre: `${safeName}.dxf`,
-            georeferenced: !!dxfRes.georeferenced,
-            layers: dxfRes.layers,
-          }
-        }
-      } catch { /* DXF opcional */ }
+      // Guardar rápido (C-OUT-20): PNG + escena + adjuntos de registro YA.
+      // PDF/DXF/carpeta en segundo plano — el usuario recupera el control de inmediato.
       const saveResult = await onSave?.(composed, {
         title: titleTxt,
         adjuntos,
@@ -6778,16 +6752,13 @@ export default function EsquemaEditorModal({
         mime: 'image/png',
         formato: 'png',
         scene: sceneSnap,
-        /** PDF/DXF para nube + popup Exportar; nunca como adjunto del registro. */
-        exports: { pdf: exportPdf, dxf: exportDxf },
-        /** Tabla de coordenadas vigente (paridad / sync planilla topografía). */
+        exports: { pdf: null, dxf: null },
+        exportsPending: true,
         coordRows: Array.isArray(coordRowsRef.current)
           ? coordRowsRef.current.map((r) => ({ ...(r || {}) }))
           : [],
         dibujoTipo: dibujoTipoRef.current || 'nodo',
       })
-      // Si el host pide keepDraft (p. ej. Guardar falló antes de persistir),
-      // no borrar el borrador ni dirty: C-OUT-14 nunca pierde el trabajo.
       const keepDraft = !!(saveResult && saveResult.keepDraft)
       if (!keepDraft) {
         setDirty(false)
@@ -6797,26 +6768,140 @@ export default function EsquemaEditorModal({
         setDraftSaveStatus('saved')
       } else {
         setDraftSaveStatus('unsaved')
-        // Reintentar autosave sin esperar otro cambio del usuario.
         void saveEsquemaDraft({ silent: true })
       }
-      // Popup Exportar (PDF/DXF al computador). Si el caller lo difiere
-      // (asignación SicoeObra) o ya lo muestra tras onSave, no duplicar aquí.
-      if (!deferExportPopup && !keepDraft) {
-        try {
-          await presentEsquemaExportPopup({
-            t,
-            title: titleTxt,
-            pdf: exportPdf,
-            dxf: exportDxf,
-          })
-        } catch (err) {
-          console.error('presentEsquemaExportPopup', err)
-        }
-      }
+      // Liberar UI de inmediato tras persistir PNG/escena («Guardado»).
+      setBusy(false)
       if (closeAfterSaveRef.current && !keepDraft) {
         closeAfterSaveRef.current = false
         onClose?.()
+      }
+
+      if (!keepDraft) {
+        const calcAdjBg = calcAdj
+        const despieceAdjBg = despieceAdj
+        const composedBg = composed
+        const sceneBg = sceneSnap
+        const deferPopup = deferExportPopup
+        const notifyExports = onExportsReady
+        void (async () => {
+          const buildExports = async () => {
+            let exportPdf = null
+            let exportDxf = null
+            try {
+              const pdfAdj = await composeEsquemaPdf({
+                title: titleTxt,
+                esquemaPng: composedBg,
+                adjuntos: [...(calcAdjBg || []), ...(despieceAdjBg || [])],
+              })
+              if (pdfAdj?.dataUri) {
+                exportPdf = {
+                  dataUri: pdfAdj.dataUri,
+                  mime: 'application/pdf',
+                  kind: 'esquema-pdf',
+                  origen: 'esquema',
+                  nombre: pdfAdj.nombre || `${safeName}.pdf`,
+                }
+              }
+            } catch (err) {
+              console.error('composeEsquemaPdf bg', err)
+            }
+            try {
+              const dxfRes = composeEsquemaDxf(sceneBg || collectDraftSnapshot())
+              const dxfUri = esquemaDxfToDataUri(dxfRes.dxf)
+              if (dxfUri) {
+                exportDxf = {
+                  dataUri: dxfUri,
+                  mime: 'application/dxf',
+                  kind: 'esquema-dxf',
+                  origen: 'esquema',
+                  nombre: `${safeName}.dxf`,
+                  georeferenced: !!dxfRes.georeferenced,
+                  layers: dxfRes.layers,
+                }
+              }
+            } catch (err) {
+              console.error('composeEsquemaDxf bg', err)
+            }
+            return { exportPdf, exportDxf }
+          }
+
+          let { exportPdf, exportDxf } = await buildExports()
+          // Un reintento silencioso si falló la generación.
+          if (!exportPdf && !exportDxf) {
+            try {
+              await new Promise((r) => setTimeout(r, 400))
+              ;({ exportPdf, exportDxf } = await buildExports())
+            } catch { /* ignore */ }
+          }
+
+          try {
+            notifyExports?.({
+              title: titleTxt,
+              pdf: exportPdf,
+              dxf: exportDxf,
+            })
+          } catch (err) {
+            console.error('onExportsReady', err)
+          }
+
+          // Subir PDF/DXF a la carpeta del contrato (Archivos del esquema).
+          const uploadOnce = async () => {
+            let tok = ''
+            try {
+              tok = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+            } catch { /* ignore */ }
+            if (!tok || contratoIdProp == null || (!exportPdf && !exportDxf)) return
+            const { uploadEsquemaAssetBundle } = await import('./esquemaAssetsApi.js')
+            await uploadEsquemaAssetBundle({
+              token: tok,
+              folder: {
+                contratoId: contratoIdProp,
+                modulo: draftModule || iaDoc?.ambito || 'esquema',
+                reporteId: null,
+                reporteNombre: null,
+                registroId: draftEntityId ?? iaDoc?.docKey ?? 'draft',
+                registroNombre: titleTxt,
+              },
+              title: titleTxt,
+              pngDataUri: null,
+              scene: null,
+              adjuntos: [
+                ...(exportPdf ? [exportPdf] : []),
+                ...(exportDxf ? [exportDxf] : []),
+              ],
+            })
+          }
+          try {
+            await uploadOnce()
+          } catch (err) {
+            console.error('upload exports bg', err)
+            try {
+              await new Promise((r) => setTimeout(r, 600))
+              await uploadOnce()
+            } catch (err2) {
+              console.error('upload exports bg retry', err2)
+              setDraftNotice({
+                kind: 'info',
+                title: 'No se pudo generar el archivo',
+                message: 'El esquema quedó guardado. Si PDF/DXF no aparecen en Archivos del esquema, vuelva a Guardar.',
+                confirmLabel: 'Entendido',
+              })
+            }
+          }
+          if (!deferPopup) {
+            try {
+              await presentEsquemaExportPopup({
+                t,
+                title: titleTxt,
+                pdf: exportPdf,
+                dxf: exportDxf,
+              })
+            } catch (err) {
+              console.error('presentEsquemaExportPopup', err)
+            }
+          }
+        })()
       }
     } finally {
       setBusy(false)

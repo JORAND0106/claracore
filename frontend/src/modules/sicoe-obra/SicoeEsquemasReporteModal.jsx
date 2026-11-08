@@ -1,7 +1,7 @@
 /**
  * Lista Excel de esquemas del reporte + crear / editar / cambiar asignación.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
@@ -61,6 +61,26 @@ async function uploadGraficoPng(API_URL, contratoId, hdrs, file, numero) {
   return up.json()
 }
 
+function putRegistroPersistioGrafico(body, row) {
+  if (!row || typeof row !== 'object' || !Object.keys(row).length) return false
+  if (!Object.prototype.hasOwnProperty.call(body, 'grafico_url')
+    && !Object.prototype.hasOwnProperty.call(body, 'graficos_historial')) {
+    return true
+  }
+  // Respuesta sin columnas de gráfico (select parcial): confiar si trae id.
+  if (!('grafico_url' in row) && !('graficos_historial' in row)) {
+    return row.id != null
+  }
+  if (body.grafico_url) {
+    if (row.grafico_url && String(row.grafico_url) === String(body.grafico_url)) return true
+    const hist = Array.isArray(row.graficos_historial) ? row.graficos_historial : []
+    if (hist.some((g) => g?.url && String(g.url) === String(body.grafico_url))) return true
+    return false
+  }
+  // Desasignación / primary null: historial debe coincidir en longitud aprox. o URL vacía.
+  return true
+}
+
 async function putRegistro(API_URL, contratoId, hdrs, registroId, body) {
   const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/registros/${registroId}`, {
     method: 'PUT',
@@ -68,7 +88,13 @@ async function putRegistro(API_URL, contratoId, hdrs, registroId, body) {
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
-  return res.json().catch(() => ({}))
+  const data = await res.json().catch(() => null)
+  const row = Array.isArray(data) ? data[0] : data
+  // PostgREST/RLS a veces responde 200 con {} (sin write): el gráfico no llegó al registro.
+  if (!putRegistroPersistioGrafico(body, row)) {
+    throw new Error('No se pudo asignar el esquema')
+  }
+  return row
 }
 
 /**
@@ -118,6 +144,28 @@ export default function SicoeEsquemasReporteModal({
   const [err, setErr] = useState('')
   /** Error de asignación visible DENTRO del popup (nunca tapado). */
   const [assignErr, setAssignErr] = useState('')
+  /** PDF/DXF generados en segundo plano tras Guardar (no bloquean). */
+  const exportsReadyRef = useRef({ pdf: null, dxf: null, title: '' })
+
+  const ofrecerExportar = useCallback((title, extras) => {
+    const ready = exportsReadyRef.current || {}
+    const pdf = ready.pdf || extras?.exports?.pdf || null
+    const dxf = ready.dxf || extras?.exports?.dxf || null
+    void presentEsquemaExportPopup({
+      t,
+      title: title || ready.title || extras?.title || 'Esquema',
+      pdf,
+      dxf,
+    }).catch((e) => logErrorTecnico('Exportar popup', e))
+  }, [t])
+
+  const onExportsReady = useCallback((payload) => {
+    exportsReadyRef.current = {
+      pdf: payload?.pdf || null,
+      dxf: payload?.dxf || null,
+      title: payload?.title || '',
+    }
+  }, [])
 
   const reloadSinAsignar = useCallback(async () => {
     const rows = await listarEsquemasSinAsignar({
@@ -157,8 +205,21 @@ export default function SicoeEsquemasReporteModal({
     for (const p of patches) {
       const rid = p.registro?.id
       if (rid == null || String(rid).startsWith('local_')) continue
-      await putRegistro(API_URL, contratoId, hdrs, rid, p.body)
-      applied.push({ id: rid, ...p.body })
+      const saved = await putRegistro(API_URL, contratoId, hdrs, rid, p.body)
+      // Preferir lo que devolvió el servidor; completar con el body enviado.
+      applied.push({
+        id: rid,
+        ...p.body,
+        ...(saved?.grafico_url != null ? { grafico_url: saved.grafico_url } : {}),
+        ...(saved?.grafico_numero != null ? { grafico_numero: saved.grafico_numero } : {}),
+        ...(saved?.grafico_descripcion != null ? { grafico_descripcion: saved.grafico_descripcion } : {}),
+        ...(Array.isArray(saved?.graficos_historial)
+          ? { graficos_historial: saved.graficos_historial }
+          : {}),
+      })
+    }
+    if (!applied.length && patches.length) {
+      throw new Error('No se pudo asignar el esquema')
     }
     setLocalRegs((prev) => prev.map((r) => {
       const hit = applied.find((a) => String(a.id) === String(r.id))
@@ -195,25 +256,24 @@ export default function SicoeEsquemasReporteModal({
       scene,
       reporteId: reporte?.id,
     })
-    try {
-      const tok = token || (hdrs?.Authorization || '').replace(/^Bearer\s+/i, '')
-      if (tok && contratoId != null) {
-        await applyEsquemaSaveBundle(dataUrl, extras, {
-          commitImage: async () => {},
-          uploadToCloud: true,
-          token: tok,
-          folder: {
-            contratoId,
-            modulo: 'sicoe-obra',
-            reporteId: reporte?.id ?? reporte?.numero_reporte,
-            reporteNombre: `reporte-${reporte?.numero_reporte ?? reporte?.id ?? ''}`,
-            registroId: `esquema-${entrada.numero}`,
-            registroNombre: nombre,
-          },
-        })
-      }
-    } catch (cloudErr) {
-      logErrorTecnico('nube tras Guardar', cloudErr)
+    // Nube (PDF/DXF/carpeta): segundo plano — no bloquea Guardar ni Asignar.
+    const tok = token || (hdrs?.Authorization || '').replace(/^Bearer\s+/i, '')
+    if (tok && contratoId != null) {
+      void applyEsquemaSaveBundle(dataUrl, extras, {
+        commitImage: async () => {},
+        uploadToCloud: true,
+        token: tok,
+        folder: {
+          contratoId,
+          modulo: 'sicoe-obra',
+          reporteId: reporte?.id ?? reporte?.numero_reporte,
+          reporteNombre: `reporte-${reporte?.numero_reporte ?? reporte?.id ?? ''}`,
+          registroId: `esquema-${entrada.numero}`,
+          registroNombre: nombre,
+        },
+      }).catch((cloudErr) => {
+        logErrorTecnico('nube tras Guardar (bg)', cloudErr)
+      })
     }
     return { entrada, nombre }
   }
@@ -245,12 +305,8 @@ export default function SicoeEsquemasReporteModal({
         })
         if (patches.length) await aplicarPatches(patches)
       }
-      await presentEsquemaExportPopup({
-        t,
-        title: nombre,
-        pdf: extras?.exports?.pdf || null,
-        dxf: extras?.exports?.dxf || null,
-      })
+      // Exportar no bloquea: PDF/DXF pueden llegar después (onExportsReady).
+      ofrecerExportar(nombre, extras)
       setEditTarget(null)
       setPendingSave(null)
     } catch (e) {
@@ -269,6 +325,11 @@ export default function SicoeEsquemasReporteModal({
    */
   const onSaveEditor = async (dataUrl, extras) => {
     if (!dataUrl) return { keepDraft: true }
+    exportsReadyRef.current = {
+      pdf: extras?.exports?.pdf || null,
+      dxf: extras?.exports?.dxf || null,
+      title: extras?.title || '',
+    }
     if (editTarget) {
       try {
         await persistirNuevaVersion(dataUrl, extras, editTarget)
@@ -406,12 +467,7 @@ export default function SicoeEsquemasReporteModal({
       })
       await reloadSinAsignar()
 
-      await presentEsquemaExportPopup({
-        t,
-        title: nombre,
-        pdf: extras?.exports?.pdf || null,
-        dxf: extras?.exports?.dxf || null,
-      })
+      ofrecerExportar(nombre, extras)
 
       setAssignOpen(false)
       setPendingSave(null)
@@ -437,12 +493,7 @@ export default function SicoeEsquemasReporteModal({
     void reloadSinAsignar()
     // Guardar ya ocurrió: ofrecer Exportar aunque se cancele la asignación.
     if (assignMode === 'nuevo' && pending) {
-      void presentEsquemaExportPopup({
-        t,
-        title: pending.nombre || pending.extras?.title || 'Esquema',
-        pdf: pending.extras?.exports?.pdf || null,
-        dxf: pending.extras?.exports?.dxf || null,
-      }).catch(() => {})
+      ofrecerExportar(pending.nombre || pending.extras?.title || 'Esquema', pending.extras)
     }
   }
 
@@ -607,6 +658,7 @@ export default function SicoeEsquemasReporteModal({
           initialSceneSnapshot={editTarget?.scene || null}
           initialDataUri={null}
           deferExportPopup
+          onExportsReady={onExportsReady}
           iaDoc={{
             ambito: 'sicoe_reporte_esquema',
             docKey: `sicoe-rep-${reporte?.id || 'x'}-${editTarget?.esquema_id || 'nuevo'}`,

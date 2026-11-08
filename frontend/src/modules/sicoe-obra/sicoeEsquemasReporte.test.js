@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  aligerarEscenaParaHistorial,
   buildEsquemaHistorialEntrada,
   esEntradaEsquema,
   etiquetaGaleriaGrafico,
@@ -9,7 +10,9 @@ import {
   ordenarGaleriaPorNumero,
   planificarActualizacionVersionEsquema,
   planificarAsignacionEsquema,
+  registroTieneEsquemaAsignado,
 } from './sicoeEsquemasReporte.js'
+import { listaGraficosRegistro } from './sicoeGraficosHelpers.js'
 
 describe('sicoeEsquemasReporte', () => {
   const regs = [
@@ -133,6 +136,89 @@ describe('sicoeEsquemasReporte', () => {
       patches.map((p) => p.registro.numero_registro).sort((a, b) => a - b),
       [440, 443],
     )
+  })
+
+  it('esquema asignado aparece dentro de cada registro marcado (#57 / #174)', () => {
+    const isSellado = (r) => [440, 442, 443].includes(Number(r.numero_registro))
+    const base = [
+      { id: 1, numero_registro: 440, reporte_id: 57, cantidad_total: 0.2, graficos_historial: [] },
+      { id: 2, numero_registro: 442, reporte_id: 57, cantidad_total: 0.4, graficos_historial: [] },
+      { id: 3, numero_registro: 443, reporte_id: 57, cantidad_total: 0.6, graficos_historial: [] },
+      { id: 6, numero_registro: 439, reporte_id: 57, cantidad_total: 0.15, graficos_historial: [] },
+    ]
+    const entrada = buildEsquemaHistorialEntrada({
+      url: 'https://cdn/esq-174.png',
+      numero: 174,
+      nombre: 'Esquema 174',
+      esquemaId: 'esq-174',
+      scene: {
+        objects: [{ id: 'o1', type: 'image', src: 'data:image/png;base64,AAAA' }],
+        backgroundImage: 'data:image/png;base64,BBBB',
+      },
+    })
+    const ids = [1, 2, 3, 6] // 440,442,443 sellados + 439
+    const { patches } = planificarAsignacionEsquema({
+      registros: base,
+      entrada,
+      idsDeseados: ids,
+      isSellado,
+    })
+    assert.equal(patches.length, 4)
+    let regs = base.map((r) => ({ ...r }))
+    for (const p of patches) {
+      assert.equal(p.body.cantidad_total, undefined)
+      assert.equal(p.body.grafico_url, 'https://cdn/esq-174.png')
+      assert.equal(p.body.grafico_numero, 174)
+      assert.equal(p.body.grafico_descripcion, 'Esquema 174')
+      // Escena aligerada: sin data-URIs enormes
+      const hist = p.body.graficos_historial
+      const hit = hist.find((g) => g.esquema_id === 'esq-174')
+      assert.ok(hit)
+      assert.equal(hit.scene?.objects?.[0]?._dataUriOmitted, true)
+      assert.equal(hit.scene?.backgroundImage, null)
+      regs = regs.map((r) => (String(r.id) === String(p.registro.id) ? { ...r, ...p.body } : r))
+    }
+    for (const r of regs) {
+      assert.equal(
+        registroTieneEsquemaAsignado(r, { esquemaId: 'esq-174', numero: 174 }),
+        true,
+        `reg #${r.numero_registro} debe mostrar el esquema`,
+      )
+      const lista = listaGraficosRegistro(r)
+      assert.ok(lista.some((g) => g.url === 'https://cdn/esq-174.png'))
+    }
+    // Lista del reporte = mismos registros
+    const list = listarEsquemasDelReporte(regs, isSellado)
+    const fila = list.find((x) => x.esquema_id === 'esq-174')
+    assert.ok(fila)
+    assert.deepEqual(
+      fila.registros.map((r) => r.numero_registro).sort((a, b) => a - b),
+      [439, 440, 442, 443],
+    )
+    // Desasignar 442
+    const { patches: quitar } = planificarAsignacionEsquema({
+      registros: regs,
+      entrada,
+      idsDeseados: [1, 3, 6],
+      isSellado,
+    })
+    for (const p of quitar) {
+      regs = regs.map((r) => (String(r.id) === String(p.registro.id) ? { ...r, ...p.body } : r))
+    }
+    const r442 = regs.find((r) => r.numero_registro === 442)
+    assert.equal(registroTieneEsquemaAsignado(r442, { esquemaId: 'esq-174' }), false)
+  })
+
+  it('aligerarEscenaParaHistorial quita data-URIs y conserva geometría', () => {
+    const slim = aligerarEscenaParaHistorial({
+      objects: [{ id: 1, type: 'nodo', x: 1, src: 'data:image/png;base64,XX' }],
+      solids: [{ id: 's1', height: 0.5 }],
+      backgroundImage: 'data:image/png;base64,YY',
+    })
+    assert.equal(slim.objects[0].src, null)
+    assert.equal(slim.objects[0].x, 1)
+    assert.equal(slim.solids[0].height, 0.5)
+    assert.equal(slim.backgroundImage, null)
   })
 
   it('etiqueta y filtro de galería', () => {

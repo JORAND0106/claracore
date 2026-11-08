@@ -25,9 +25,11 @@ describe('caso · esquema editable + PDF + DXF + archivos', () => {
     assert.match(modal, /composeEsquemaPdf/)
     assert.match(modal, /composeEsquemaDxf/)
     assert.match(modal, /scene:\s*sceneSnap/)
-    assert.match(modal, /exports:\s*\{\s*pdf:\s*exportPdf/)
+    assert.match(modal, /exportsPending:\s*true/)
+    assert.match(modal, /exportPdf/)
     assert.match(modal, /presentEsquemaExportPopup/)
     assert.match(modal, /filterEsquemaRegistroAdjuntos/)
+    assert.match(modal, /onExportsReady/)
   })
 
   it('Bitácora muestra Editar esquema y Archivos', () => {

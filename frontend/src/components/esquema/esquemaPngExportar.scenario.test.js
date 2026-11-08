@@ -25,8 +25,12 @@ describe('caso · PNG siempre + popup Exportar (C-OUT-13)', () => {
   it('modal no mete DXF/PDF en adjuntos del registro; sí en exports + popup', () => {
     const modal = readFileSync(join(__dirname, 'EsquemaEditorModal.jsx'), 'utf8')
     assert.match(modal, /filterEsquemaRegistroAdjuntos/)
-    assert.match(modal, /exports:\s*\{\s*pdf:\s*exportPdf/)
+    // PDF/DXF en segundo plano (C-OUT-20); siguen yendo a exports / popup, no al registro.
+    assert.match(modal, /exportsPending:\s*true/)
+    assert.match(modal, /composeEsquemaPdf/)
+    assert.match(modal, /composeEsquemaDxf/)
     assert.match(modal, /presentEsquemaExportPopup/)
+    assert.match(modal, /exportPdf/)
     assert.doesNotMatch(
       modal,
       /adjuntos\.push\(\s*\{[^}]*kind:\s*['"]esquema-dxf['"]/,

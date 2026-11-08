@@ -63,8 +63,32 @@ describe('sicoeEsquemasReporte · contrato UI', () => {
     assert.match(modal, /hostError=\{assignErr\}/)
     assert.match(modal, /No se pudo asignar el esquema|mensajeErrorEsquemaUsuario/)
     assert.doesNotMatch(modal, /sceneIn:\s*target\?\.scene/)
+    // PUT verificado: no aceptar 200 vacío (gráfico debe llegar al registro)
+    assert.match(modal, /putRegistroPersistioGrafico/)
+    const logic = read('modules/sicoe-obra/sicoeEsquemasReporte.js')
+    assert.match(logic, /entradaParaRegistroHistorial/)
+    assert.match(logic, /aligerarEscenaParaHistorial/)
+    assert.match(logic, /grafico_descripcion/)
     const popup = read('modules/sicoe-obra/SicoeEsquemaAsignarPopup.jsx')
     assert.match(popup, /sicoe-esquema-asignar-error/)
+    const app = read('App.jsx')
+    // Tras Asignar: patch a reporte.registros; sin recargar que pise el gráfico
+    assert.match(app, /onRegistrosPatched/)
+    assert.doesNotMatch(
+      app,
+      /onRegistrosPatched[\s\S]{0,500}recargar\(\s*\{\s*forzarSinFiltros/,
+    )
+  })
+
+  it('Guardar no bloquea: PDF/DXF en segundo plano + onExportsReady', () => {
+    const modal = read('modules/sicoe-obra/SicoeEsquemasReporteModal.jsx')
+    assert.match(modal, /onExportsReady/)
+    assert.match(modal, /ofrecerExportar/)
+    assert.match(modal, /nube tras Guardar \(bg\)|uploadToCloud:\s*true/)
+    const editor = read('components/esquema/EsquemaEditorModal.jsx')
+    assert.match(editor, /exportsPending:\s*true/)
+    assert.match(editor, /setDraftSaveStatus\('saved'\)/)
+    assert.match(editor, /composeEsquemaPdf/)
   })
 
   it('popup asignación: sellados togglables, sin texto largo, aviso mínimo', () => {
