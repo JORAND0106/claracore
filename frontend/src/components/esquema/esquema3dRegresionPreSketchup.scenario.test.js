@@ -167,10 +167,11 @@ describe('regresión · Extruir popup cotas (superior) y longitud (perfiles)', (
     assert.doesNotMatch(src, /esquema3dFace/)
     assert.doesNotMatch(src, /extruir-drag/)
     assert.doesNotMatch(src, /isEsquema3dSketchView/)
-    // beginExtrude3d usa extrudeModeForView y setExtrudePrompt({ mode, ... })
+    // beginExtrude3d resuelve la selección actual y abre popup con mode.
     assert.match(src, /const beginExtrude3d = useCallback/)
-    assert.match(src, /const mode = extrudeModeForView\(viewId\)/)
-    assert.match(src, /setExtrudePrompt\(\{\s*mode,/)
+    assert.match(src, /resolveExtrudeSelection/)
+    assert.match(src, /setExtrudePrompt\(\{\s*\n\s*mode: resolved\.mode/)
+    assert.match(src, /promptKey/)
     // Popup UI: una fila superior|altura|inferior + longitud
     const ui = readFileSync(join(__dirname, 'esquema3dUi.jsx'), 'utf8')
     assert.match(ui, /Extruir por cotas/)
