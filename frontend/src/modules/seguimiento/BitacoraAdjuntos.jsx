@@ -8,6 +8,7 @@ import EsquemaArchivosMenu from '../../components/esquema/EsquemaArchivosMenu'
 import { hasEditableEsquemaScene, parseEsquemaScene } from '../../components/esquema/esquemaScenePersist'
 import { repairEsquemaRegistroList } from '../../components/esquema/esquemaRegistroAdjuntos'
 import { esquemaDraftRebind } from '../../components/esquema/esquemaDraft'
+import { consumeEsquemaEditorPendingReopen } from '../../components/esquema/esquemaEditorLifecycle'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
@@ -65,6 +66,22 @@ export default function BitacoraAdjuntos({
       contratoId,
     })
   }, [entradaId, contratoId])
+
+  // C-OUT-14: recuperar ventana tras kill de página en el mismo lugar.
+  useEffect(() => {
+    if (esquemaOpen || disabled || sealed) return undefined
+    const pending = consumeEsquemaEditorPendingReopen({
+      module: 'bitacora',
+      entityId: entradaId || 'draft',
+      contratoId,
+    })
+    if (!pending) return undefined
+    setEditScene(null)
+    setEditTargetIdx(null)
+    setEsquemaOpen(true)
+    return undefined
+  }, [entradaId, contratoId, disabled, sealed, esquemaOpen])
+
   const [dragOver, setDragOver] = useState(false)
 
   // C-OUT-13: oculta DXF/PDF-paquete mal guardados; el registro muestra PNG.

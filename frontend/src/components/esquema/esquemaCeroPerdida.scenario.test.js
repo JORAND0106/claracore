@@ -39,8 +39,20 @@ describe('esquemaCeroPerdida · modal y host', () => {
     assert.match(modal, /Autosave/)
     assert.match(modal, /uploadEsquemaAsset/)
     assert.match(modal, /beforeunload/)
+    assert.match(modal, /pagehide/)
+    assert.match(modal, /visibilitychange/)
+    assert.match(modal, /esquema-draft-status/)
     assert.doesNotMatch(modal, /idleTimeout|setTimeout\(\s*onClose\s*\)/)
     assert.doesNotMatch(modal, /cerrar.*por inactividad|inactivity.?close/i)
+  })
+
+  it('C-OUT-14: no remonta hoja Sicoe ni cierra sesión con editor abierto', () => {
+    const app = read('App.jsx')
+    assert.match(app, /sicoeHojaRegistroStableKey/)
+    assert.match(app, /shouldKeepSessionAliveForEsquema/)
+    assert.match(app, /touchstart/)
+    assert.match(app, /consumeEsquemaEditorPendingReopen/)
+    assert.match(read('modules/seguimiento/BitacoraAdjuntos.jsx'), /consumeEsquemaEditorPendingReopen/)
   })
 
   it('C-OUT-15: rebind de borrador draft → id real', () => {

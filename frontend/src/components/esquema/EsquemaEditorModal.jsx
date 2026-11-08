@@ -170,6 +170,10 @@ import {
 } from './esquemaDraft'
 import { esEsquemaUsuarioDesarrollador } from './esquemaAuth.js'
 import { EsquemaCloseConfirmPopup, EsquemaDraftNoticePopup } from './esquemaDraftUi'
+import {
+  markEsquemaEditorClosed,
+  markEsquemaEditorOpened,
+} from './esquemaEditorLifecycle'
 import { uploadEsquemaAsset } from './esquemaAssetsApi.js'
 import CcTipChrome from '../CcTipChrome'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
@@ -726,9 +730,12 @@ export default function EsquemaEditorModal({
   const [activeCalcId, setActiveCalcId] = useState(null)
   const [draftNotice, setDraftNotice] = useState(null) // { kind, title, message, ... }
   const [closeConfirm, setCloseConfirm] = useState(false)
+  /** Indicador discreto C-OUT-14: 'idle' | 'saving' | 'saved' | 'offline' */
+  const [draftSaveStatus, setDraftSaveStatus] = useState('idle')
   const closeAfterSaveRef = useRef(false)
   const autosaveTimerRef = useRef(null)
   const autosavingRef = useRef(false)
+  const draftSaveStatusTimerRef = useRef(null)
   /**
    * Ventana: altura = lado de dibujo; ancho = lado + panel lateral
    * (el área de dibujo no se reduce para alojar el lateral).
@@ -6492,6 +6499,10 @@ export default function EsquemaEditorModal({
       return { ok: false }
     }
     if (!silent) setBusy(true)
+    if (silent) {
+      setDraftSaveStatus('saving')
+      if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
+    }
     try {
       const snapshot = collectDraftSnapshot()
       const r = await esquemaDraftSave({
@@ -6503,6 +6514,7 @@ export default function EsquemaEditorModal({
         snapshot,
       })
       if (!r.ok) {
+        if (silent) setDraftSaveStatus(typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'idle')
         if (!silent) {
           setDraftNotice({
             kind: 'info',
@@ -6524,14 +6536,16 @@ export default function EsquemaEditorModal({
           confirmLabel: 'Entendido',
         })
         setToolHint('Borrador guardado.')
+        setDraftSaveStatus('saved')
       } else {
         // Nube: escena borrador sin interrumpir (si hay sesión y contrato).
+        let cloudOk = false
         try {
           let tok = ''
           try {
             tok = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
           } catch { /* ignore */ }
-          if (tok && contratoIdProp != null) {
+          if (tok && contratoIdProp != null && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
             const json = JSON.stringify(snapshot)
             const blob = new Blob([json], { type: 'application/json' })
             const file = new File([blob], 'esquema-borrador-scene.json', { type: 'application/json' })
@@ -6547,8 +6561,21 @@ export default function EsquemaEditorModal({
               mime: 'application/json',
               nombre: 'esquema-borrador-scene.json',
             })
+            cloudOk = true
           }
         } catch { /* autosave nube best-effort */ }
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          setDraftSaveStatus('offline')
+        } else {
+          setDraftSaveStatus('saved')
+          if (!cloudOk) {
+            // Local OK; nube diferida — el indicador sigue en Guardado (dispositivo).
+          }
+        }
+        if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
+        draftSaveStatusTimerRef.current = setTimeout(() => {
+          setDraftSaveStatus((s) => (s === 'saved' ? 'idle' : s))
+        }, 2500)
       }
       return r
     } finally {
@@ -6563,8 +6590,24 @@ export default function EsquemaEditorModal({
       setCloseConfirm(true)
       return
     }
+    // markEsquemaEditorClosed corre en el unmount (cleanup); así un kill de página
+    // conserva la pendiente de reapertura en sessionStorage.
     onClose?.()
   }, [busy, dirty, onClose])
+
+  // Registrar editor abierto: keep-alive de sesión + reapertura tras kill de página (iPad).
+  useEffect(() => {
+    markEsquemaEditorOpened({
+      module: draftModule || iaDoc?.ambito || 'esquema',
+      entityId: draftEntityId ?? iaDoc?.docKey ?? 'draft',
+      contratoId: contratoIdProp,
+      title,
+    })
+    return () => {
+      markEsquemaEditorClosed()
+      if (draftSaveStatusTimerRef.current) clearTimeout(draftSaveStatusTimerRef.current)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- montaje único
 
   // Al abrir con escena guardada (C-OUT-09): restaurar dibujo editable.
   useEffect(() => {
@@ -6614,16 +6657,38 @@ export default function EsquemaEditorModal({
     }
   }, [dirty, resolvedDraftKey, saveEsquemaDraft, panTick, solids3d, coordRows, volumeCalcs, despieceSchedules, mode3d])
 
-  // Evitar pérdida al cerrar pestaña/navegador con cambios.
+  // Evitar pérdida al cerrar pestaña/navegador / bloquear pantalla / cambiar de app.
   useEffect(() => {
+    const flush = () => {
+      if (!dirty && !resolvedDraftKeyRef.current) return
+      void saveEsquemaDraft({ silent: true })
+    }
     const onBeforeUnload = (e) => {
       if (!dirty) return
       e.preventDefault()
       e.returnValue = ''
-      void saveEsquemaDraft({ silent: true })
+      flush()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    const onPageHide = () => flush()
+    const onFreeze = () => flush()
+    const onOnline = () => {
+      if (dirty || resolvedDraftKeyRef.current) void saveEsquemaDraft({ silent: true })
     }
     window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('freeze', onFreeze)
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('freeze', onFreeze)
+      window.removeEventListener('online', onOnline)
+    }
   }, [dirty, saveEsquemaDraft])
 
   const confirmarGuardar = async () => {
@@ -7257,6 +7322,31 @@ export default function EsquemaEditorModal({
           }}
         >
           <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4 }}>{title}</div>
+          <span
+            data-testid="esquema-draft-status"
+            data-status={draftSaveStatus}
+            title={
+              draftSaveStatus === 'saving' ? 'Guardando borrador…'
+                : draftSaveStatus === 'saved' ? 'Borrador guardado'
+                  : draftSaveStatus === 'offline' ? 'Borrador en este dispositivo (sin conexión)'
+                    : 'Autosave silencioso activo'
+            }
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: draftSaveStatus === 'saving' ? (t.primary || '#0f766e')
+                : draftSaveStatus === 'offline' ? '#b45309'
+                  : (t.textMuted || '#64748b'),
+              marginRight: 8,
+              whiteSpace: 'nowrap',
+              minWidth: 72,
+            }}
+          >
+            {draftSaveStatus === 'saving' ? 'Guardando…'
+              : draftSaveStatus === 'saved' ? 'Guardado'
+                : draftSaveStatus === 'offline' ? 'En dispositivo'
+                  : (dirty ? '…' : 'Guardado')}
+          </span>
           <button
             type="button"
             title="Deshacer"
