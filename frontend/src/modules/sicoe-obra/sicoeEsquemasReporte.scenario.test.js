@@ -45,6 +45,17 @@ describe('sicoeEsquemasReporte · contrato UI', () => {
     assert.doesNotMatch(modal, /sealedKeep/)
   })
 
+  it('Guardar independiente: Sin asignar + keepDraft + cancelar no pierde', () => {
+    const modal = read('modules/sicoe-obra/SicoeEsquemasReporteModal.jsx')
+    assert.match(modal, /upsertEsquemaSinAsignar/)
+    assert.match(modal, /mergeEsquemasLista/)
+    assert.match(modal, /Sin asignar/)
+    assert.match(modal, /keepDraft/)
+    assert.match(modal, /cancelarAsignacion/)
+    // Tras cancelar asignación de un nuevo guardado, aún se ofrece Exportar
+    assert.match(modal, /assignMode === 'nuevo' && pending/)
+  })
+
   it('popup asignación: sellados togglables, sin texto largo, aviso mínimo', () => {
     const popup = read('modules/sicoe-obra/SicoeEsquemaAsignarPopup.jsx')
     assert.match(popup, /Seleccione al menos un registro/)

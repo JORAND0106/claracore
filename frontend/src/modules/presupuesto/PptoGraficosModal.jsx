@@ -181,12 +181,11 @@ export default function PptoGraficosModal({
   }, [addFiles])
 
   const guardarEsquema = useCallback(async (dataUrl, extras) => {
+    if (!dataUrl) return { keepDraft: true }
     try {
       const file = await dataUriEsquemaAFile(dataUrl, 'esquema-ppto')
       if (!file) throw new Error('No se pudo convertir el esquema')
       const scene = extras?.scene || extras?.esquema_scene || null
-      setEsquemaOpen(false)
-      setEsquemaEditScene(null)
       await addFiles([file], 'esquema', { scene })
       const { applyEsquemaCalcAdjuntos, dataUriToFile } = await import('../../components/esquema/esquemaSaveExtras.js')
       const { filterEsquemaRegistroAdjuntos } = await import('../../components/esquema/esquemaRegistroAdjuntos.js')
@@ -205,8 +204,12 @@ export default function PptoGraficosModal({
         pdf: extras?.exports?.pdf || null,
         dxf: extras?.exports?.dxf || null,
       })
+      setEsquemaOpen(false)
+      setEsquemaEditScene(null)
+      return { keepDraft: false }
     } catch (err) {
       setError(err?.message || 'No se pudo guardar el esquema')
+      return { keepDraft: true }
     }
   }, [addFiles, t])
 

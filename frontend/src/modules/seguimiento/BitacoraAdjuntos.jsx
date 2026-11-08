@@ -507,9 +507,9 @@ export default function BitacoraAdjuntos({
             setEditTargetIdx(null)
           }}
           onSave={async (dataUrl, extras) => {
-            // Cierra el editor; el PNG se guarda en la entrada (no se descarga al PC).
-            setEsquemaOpen(false)
-            if (!dataUrl) return
+            // PNG + escena en la entrada; no descargar al PC.
+            // keepDraft si falla: C-OUT-14 no borra el borrador del editor.
+            if (!dataUrl) return { keepDraft: true }
             try {
               const tok = token || api?.token
               await applyEsquemaSaveBundle(dataUrl, extras, {
@@ -570,11 +570,12 @@ export default function BitacoraAdjuntos({
                 pdf: extras?.exports?.pdf || null,
                 dxf: extras?.exports?.dxf || null,
               })
-            } catch {
-              /* error en state */
-            } finally {
+              setEsquemaOpen(false)
               setEditScene(null)
               setEditTargetIdx(null)
+              return { keepDraft: false }
+            } catch {
+              return { keepDraft: true }
             }
           }}
         />
