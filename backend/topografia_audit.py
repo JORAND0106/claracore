@@ -8,6 +8,7 @@ entidad_tipo:
   - topo_planilla_tuberia
   - topo_poligonal
   - topo_nivelacion
+  - topo_diseno_geometrico
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ MODULO_TOPOGRAFIA = "TOPOGRAFIA"
 ENTIDAD_PLANILLA_TUBERIA = "topo_planilla_tuberia"
 ENTIDAD_POLIGONAL = "topo_poligonal"
 ENTIDAD_NIVELACION = "topo_nivelacion"
+ENTIDAD_DISENO_GEOMETRICO = "topo_diseno_geometrico"
 
 # Campos de cartera de campo auditables (no columnas calculadas).
 _CARTERA_CAMPOS = (
@@ -214,6 +216,21 @@ def snapshot_nivelacion(n: Optional[dict]) -> Optional[dict]:
     return _pick(n, (
         "id", "contrato_id", "nombre", "estado", "tipo_nivel",
         "nivel1_estado", "nivel2_estado", "biblioteca_at", "abierto_at",
+    ))
+
+
+def snapshot_diseno_tramo(t: Optional[dict]) -> Optional[dict]:
+    return _pick(t, (
+        "id", "contrato_id", "nombre",
+        "abscisa_inicio", "abscisa_fin",
+        "filas_rasante", "num_capas", "num_estructuras",
+        "diseño_cargado", "diseno_cargado",
+    ))
+
+
+def snapshot_diseno_estructura(e: Optional[dict]) -> Optional[dict]:
+    return _pick(e, (
+        "id", "contrato_id", "nombre", "espesor_total_m",
     ))
 
 

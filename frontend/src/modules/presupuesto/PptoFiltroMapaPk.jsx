@@ -108,7 +108,9 @@ export default function PptoFiltroMapaPk({
       : pkIdsDeGrilla.length === 0
         ? 'empty'
         : [...new Set(pkIdsDeGrilla.map((x) => String(x).trim()).filter(Boolean))].sort().join('\x1e')
-  const selKey = String(selectedPk || '').trim().toLowerCase()
+  const selKey = Array.isArray(selectedPk)
+    ? selectedPk.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean).sort().join('\x1e')
+    : String(selectedPk || '').trim().toLowerCase()
 
   useLayoutEffect(() => {
     if (!contratoId || !containerRef.current) return
@@ -148,18 +150,25 @@ export default function PptoFiltroMapaPk({
     const isFiltered = permit != null && permitSet && permitSet.size > 0
 
     const applySelectionStyle = (map) => {
-      const sel = String(selectedRef.current || '').trim()
-      if (!sel || !map.getLayer('ppto-plano-fill')) return
+      const raw = selectedRef.current
+      const list = (Array.isArray(raw) ? raw : [raw])
+        .map((v) => String(v || '').trim().toLowerCase())
+        .filter(Boolean)
+      if (!list.length || !map.getLayer('ppto-plano-fill')) return
       try {
+        const pkExpr = ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']]
+        const matchExpr = list.length === 1
+          ? ['==', pkExpr, list[0]]
+          : ['in', pkExpr, ['literal', list]]
         map.setPaintProperty('ppto-plano-fill', 'fill-color', [
           'case',
-          ['==', ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']], sel.toLowerCase()],
+          matchExpr,
           '#F59E0B',
           isFiltered ? '#0D9488' : '#0077B6',
         ])
         map.setPaintProperty('ppto-plano-fill', 'fill-opacity', [
           'case',
-          ['==', ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']], sel.toLowerCase()],
+          matchExpr,
           0.55,
           isFiltered ? 0.38 : 0.3,
         ])

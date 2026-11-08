@@ -712,6 +712,12 @@ export async function readTopoOffline(contratoId, path, query = '') {
     return topoDb.topo_diseno_ejes.where('contrato_id').equals(cid).sortBy('created_at')
   }
 
+  if (path === '/diseno-geometrico/estructuras') {
+    const det = await getCachedTopoEntityDetail(contratoId, 'diseno_estructuras', 'all')
+    if (Array.isArray(det)) return det
+    return []
+  }
+
   if (path.match(/^\/diseno-geometrico\/ejes\/[^/]+$/)) {
     const id = path.split('/')[3]?.split('?')[0]
     const det = await getCachedTopoEntityDetail(contratoId, 'diseno_eje', id)

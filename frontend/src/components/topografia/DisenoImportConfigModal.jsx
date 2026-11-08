@@ -63,7 +63,7 @@ const TIPOS = {
 
 
 
-export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm, onClose }) {
+export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm, onClose, zIndex = 9000 }) {
 
   const ui = useTopoTheme()
 
@@ -187,7 +187,7 @@ export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm
 
         inset: 0,
 
-        zIndex: 9000,
+        zIndex,
 
         background: 'rgba(15,23,42,0.55)',
 
