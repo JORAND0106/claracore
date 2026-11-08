@@ -40,6 +40,9 @@ def snapshot_entrada_cabecera(ent: Optional[dict]) -> Optional[dict]:
         "orden_compra_id", "observaciones", "placa", "transportador",
         "remision_nombre", "material_foto_nombre",
         "tiene_remision", "tiene_material_foto",
+        "es_retroactivo", "fecha_aproximada",
+        "retroactivo_validado_at", "retroactivo_validado_por",
+        "created_at",
     ))
 
 
@@ -67,6 +70,9 @@ def snapshot_salida(sal: Optional[dict]) -> Optional[dict]:
         "pk_id", "tramo", "costado", "abscisa_inicial", "abscisa_final",
         "entrada_item_id", "cantidad_salida", "cantidad_devuelta", "cantidad_neta",
         "receptor_usuario_id", "observaciones", "material_descripcion", "numero_oc",
+        "es_retroactivo", "fecha_aproximada",
+        "retroactivo_validado_at", "retroactivo_validado_por",
+        "created_at",
     ))
 
 

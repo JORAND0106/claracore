@@ -126,7 +126,17 @@ export default function EntradaDetalleModal({
       label: ent.tipo === 'recibo' ? 'N.º remisión' : 'Documento',
       value: ent.numero_documento || '—',
     },
-    { key: 'fecha', label: 'Fecha', value: fmtFechaAlmacenSolo(ent.fecha_entrada) },
+    {
+      key: 'fecha',
+      label: 'Fecha del hecho',
+      value: [
+        fmtFechaAlmacenSolo(ent.fecha_entrada),
+        (ent.marca_retroactivo || (ent.es_retroactivo && !ent.retroactivo_validado_at))
+          ? ' · Retroactivo'
+          : '',
+        ent.fecha_aproximada ? ' (aprox.)' : '',
+      ].join(''),
+    },
     { key: 'oc', label: 'OC', value: oc.numero_oc ? `#${oc.numero_oc}` : '—' },
     { key: 'prov', label: 'Proveedor', value: ent.proveedor_nombre || '—' },
     { key: 'insumo', label: 'Insumo', value: ent.insumo_label || item0.material_descripcion || '—' },

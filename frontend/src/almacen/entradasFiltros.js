@@ -12,6 +12,7 @@ export const EMPTY_ENTRADAS_FILTROS = {
   pk_id: '',
   alerta_saldo: '', // '' | normal | naranja | rojo
   por_revisar: '', // '' | si | no
+  retroactivo_pendiente: '', // '' | si | no
 }
 
 export function countEntradasFiltrosActivos(filtros) {
@@ -66,6 +67,16 @@ export function matchEntradaFiltros(row, filtros) {
     if (!row?.por_revisar && !row?.alerta_silenciosa_codigo) return false
   } else if (f.por_revisar === 'no') {
     if (row?.por_revisar || row?.alerta_silenciosa_codigo) return false
+  }
+
+  if (f.retroactivo_pendiente === 'si') {
+    const pendiente = Boolean(row?.marca_retroactivo)
+      || (Boolean(row?.es_retroactivo) && !row?.retroactivo_validado_at)
+    if (!pendiente) return false
+  } else if (f.retroactivo_pendiente === 'no') {
+    const pendiente = Boolean(row?.marca_retroactivo)
+      || (Boolean(row?.es_retroactivo) && !row?.retroactivo_validado_at)
+    if (pendiente) return false
   }
 
   return true

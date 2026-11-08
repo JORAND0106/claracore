@@ -975,5 +975,44 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
       const blob = await res.blob()
       await printPosPdfBlob(blob, { filename: `salida-${salidaId}.pdf` })
     },
+
+    getRetroactivoEstado: () =>
+      fetch(`${base}/retroactivo/estado`, { headers: authHeaders() }).then(parseJson),
+
+    listHabilitacionesRetroactivo: (incluirVencidas = true) =>
+      fetch(
+        `${base}/retroactivo/habilitaciones?incluir_vencidas=${incluirVencidas ? 'true' : 'false'}`,
+        { headers: authHeaders() },
+      ).then(parseJsonList),
+
+    crearHabilitacionRetroactivo: (body) =>
+      fetch(`${base}/retroactivo/habilitaciones`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
+    ampliarHabilitacionRetroactivo: (habId, body) =>
+      fetch(`${base}/retroactivo/habilitaciones/${habId}`, {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
+
+    revocarHabilitacionRetroactivo: (habId) =>
+      fetch(`${base}/retroactivo/habilitaciones/${habId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      }).then(parseJson),
+
+    getRetroactivoPendientesCount: () =>
+      fetch(`${base}/retroactivo/pendientes-count`, { headers: authHeaders() }).then(parseJson),
+
+    validarRetroactivo: (body) =>
+      fetch(`${base}/retroactivo/validar`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body || {}),
+      }).then(parseJson),
   }
 }

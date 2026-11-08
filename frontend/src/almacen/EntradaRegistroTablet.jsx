@@ -18,6 +18,7 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
+import { MODO_RETROACTIVO } from './retroactivoModo'
 import { prepareRemisionSoporte } from './almacenRemisionSoporte'
 import {
   applyCantidadToOcRow,
@@ -143,6 +144,9 @@ export default function EntradaRegistroTablet({
   token,
   contratoId,
   onAbrirSalioMaterial,
+  modoRegistro = 'actualizado',
+  fechaHechoInicial = '',
+  onFechaHechoChange,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -154,6 +158,18 @@ export default function EntradaRegistroTablet({
   const continuarCapturaRef = useRef(null)
   const numeroRemisionRef = useRef(null)
   const contrato = contratoId || permisos?.contratoId
+  const esRetro = modoRegistro === MODO_RETROACTIVO
+  const [fechaHecho, setFechaHecho] = useState(() => fechaHechoInicial || todayDateInputColombia())
+  const [fechaAprox, setFechaAprox] = useState(false)
+
+  useEffect(() => {
+    if (fechaHechoInicial) setFechaHecho(fechaHechoInicial)
+  }, [fechaHechoInicial])
+
+  const setFechaHechoPersist = (v) => {
+    setFechaHecho(v)
+    onFechaHechoChange?.(v)
+  }
 
   const [paso, setPaso] = useState(PASO.INICIO)
   const [tipo, setTipo] = useState(null)
@@ -797,9 +813,28 @@ export default function EntradaRegistroTablet({
     setPdfHint('')
     setSavePhase('Guardando…')
     try {
+      if (esRetro) {
+        if (!fechaHecho) {
+          setError('Indique la fecha del hecho (llegada del material).')
+          setBusy(false)
+          setSavePhase('')
+          return
+        }
+        const hoy = todayDateInputColombia()
+        if (fechaHecho > hoy) {
+          setError('No se aceptan fechas futuras.')
+          setBusy(false)
+          setSavePhase('')
+          return
+        }
+      }
       const fd = new FormData()
       fd.append('tipo', tipo)
-      fd.append('fecha_entrada', todayDateInputColombia())
+      fd.append('fecha_entrada', esRetro ? fechaHecho : todayDateInputColombia())
+      if (esRetro) {
+        fd.append('es_retroactivo', 'true')
+        if (fechaAprox) fd.append('fecha_aproximada', 'true')
+      }
       fd.append('idempotency_key', idempotencyKey)
       if (opts.confirmPosibleDuplicado || confirmDup?.confirmed) {
         fd.append('confirm_posible_duplicado', 'true')
@@ -1378,6 +1413,40 @@ export default function EntradaRegistroTablet({
                 overflow: 'hidden',
               }}
             >
+              {esRetro && (
+                <div
+                  data-testid="entrada-tablet-fecha-hecho"
+                  style={{
+                    display: 'grid',
+                    gap: 6,
+                    padding: 10,
+                    borderRadius: 10,
+                    background: '#fff7ed',
+                    border: '1px solid #fdba74',
+                    flexShrink: 0,
+                  }}
+                >
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 800, color: '#9a3412' }}>
+                    Fecha del hecho (llegada)
+                    <input
+                      type="date"
+                      value={fechaHecho}
+                      max={todayDateInputColombia()}
+                      onChange={(e) => setFechaHechoPersist(e.target.value)}
+                      style={{ ...ui.input, fontSize: '1.1rem', minHeight: 44 }}
+                      required
+                    />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#9a3412' }}>
+                    <input
+                      type="checkbox"
+                      checked={fechaAprox}
+                      onChange={(e) => setFechaAprox(e.target.checked)}
+                    />
+                    Fecha aproximada
+                  </label>
+                </div>
+              )}
               {modoMultiOc ? (
                 <div data-testid="entrada-tablet-oc-lineas" style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, flex: '1 1 auto', maxHeight: 'min(34vh, 260px)' }}>
                   <div style={{ fontWeight: 800, fontSize: '0.9rem', flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8 }}>
@@ -2120,6 +2189,11 @@ export default function EntradaRegistroTablet({
             <div data-testid="entrada-tablet-resumen" style={{ display: 'grid', gap: 12, width: '100%', maxWidth: 900, margin: '0 auto' }}>
               <div style={{ fontWeight: 800, fontSize: '1.2rem' }}>Confirmar</div>
               <div style={cardTouch(ui, false)}>
+                {esRetro && (
+                  <div style={{ fontWeight: 800, color: '#9a3412' }}>
+                    ⏱ Retroactivo · hecho {fechaHecho}{fechaAprox ? ' (aprox.)' : ''}
+                  </div>
+                )}
                 <div>🏭 {proveedorNombre || '—'}</div>
                 <div>📋 {ocCard?.numero_oc != null ? `OC #${ocCard.numero_oc}` : 'Sin OC'}</div>
                 <div data-testid="entrada-tablet-resumen-numero-remision" style={{ fontWeight: 800 }}>

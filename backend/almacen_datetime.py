@@ -74,8 +74,12 @@ def format_solicitud_titulo(consecutivo, created_at=None) -> str:
     return f"Solicitud #{num} - {fecha}"
 
 
-def fmt_fecha_hora_entrada(created_at, fecha_entrada) -> str:
-    """Preferir timestamp de registro; si no hay hora, usar solo fecha de entrada."""
+def fmt_fecha_hora_entrada(created_at, fecha_entrada, *, es_retroactivo: bool = False) -> str:
+    """Fecha del hecho en PDF. En retroactivo prioriza fecha_entrada; si no, el registro."""
+    if es_retroactivo:
+        hecho = fmt_fecha_bogota(fecha_entrada)
+        if hecho != "—":
+            return hecho
     if created_at:
         txt = fmt_fecha_hora_bogota(created_at)
         if txt != "—":
