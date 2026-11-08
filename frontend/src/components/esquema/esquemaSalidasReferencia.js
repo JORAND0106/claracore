@@ -76,6 +76,20 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
     },
   },
   {
+    id: 'esquema-preview-completa',
+    label: 'Vista previa / PNG con cálculo: encabezado + iso + cuadro completo (C-OUT-22)',
+    requires: {
+      header: true,
+      iso: true,
+      memoriaTable: true,
+      columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+      headersIntact: ['Descuenta de', 'Operación', 'Color'],
+      noWordBreak: true,
+      previewShowsFullImage: true,
+      minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+    },
+  },
+  {
     id: 'memoria-volúmenes',
     label: 'PNG memoria de cálculo (encabezado + iso + tabla)',
     requires: {
@@ -232,6 +246,15 @@ export function verifySalidaAgainstReference(meta, refId) {
   if (req.noWordBreak && m.noWordBreak === false) {
     errors.push('Hay palabras partidas en la tabla')
   }
+  if (req.previewShowsFullImage) {
+    // La meta de plan/PNG debe declarar cuadro; el CSS de preview no debe recortar.
+    if (!(m.hasMemoriaTable || (m.memoria && m.memoria.length) || m.previewShowsFullImage)) {
+      errors.push('La vista previa/PNG debe incluir el cuadro de resumen completo')
+    }
+    if (m.previewCropsImage === true) {
+      errors.push('La vista previa no debe recortar la imagen')
+    }
+  }
 
   return { ok: errors.length === 0, errors, refId }
 }
@@ -325,7 +348,22 @@ export function runApprovedSalidasVerification(opts = {}) {
     width: planTop.header?.width || 1600,
   }, 'esquema-sin-solidos-top'))
 
-  // 5) Memoria dedicada
+  // 5) Vista previa / PNG completa con cuadro (C-OUT-22)
+  results.push(verifySalidaAgainstReference({
+    ...planConMem,
+    hasHeader: true,
+    hasIso: true,
+    hasMemoriaTable: !stripMemoriaTable && planConMem.hasMemoriaTable,
+    columns: planConMem.columnsRequired,
+    headersIntact: planConMem.headersIntact,
+    noWordBreak: true,
+    previewShowsFullImage: true,
+    previewCropsImage: false,
+    cellFontPx: Math.max(1, (planConMem.header?.width || 1600) / 55),
+    width: planConMem.header?.width || 1600,
+  }, 'esquema-preview-completa'))
+
+  // 6) Memoria dedicada
   const headerMem = planEsquemaSalidaHeader({
     imageWidth: 1400,
     tipoTitulo: 'Memoria de cálculo de volúmenes',
@@ -346,7 +384,7 @@ export function runApprovedSalidasVerification(opts = {}) {
     width: 1400,
   }, 'memoria-volúmenes'))
 
-  // 6) Despiece
+  // 7) Despiece
   results.push(verifySalidaAgainstReference({
     hasHeader: true,
     header: planEsquemaSalidaHeader({
@@ -360,7 +398,7 @@ export function runApprovedSalidasVerification(opts = {}) {
     width: 2200,
   }, 'cuadro-despiece'))
 
-  // 7) Coords
+  // 8) Coords
   const planCoords = planEsquemaExportSalida({
     title: 'Levantamiento',
     nodes: [{ n: 1 }, { n: 2 }],

@@ -198,6 +198,7 @@ import {
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import {
   composeEsquemaExport,
+  esquemaSnapshotTieneMemoria,
   isEsquemaPngDataUrl,
   resolveEsquemaExportView3d,
   sceneExportBounds,
@@ -6357,7 +6358,8 @@ export default function EsquemaEditorModal({
     const snapshots = calcs.map((c) => freezeCalcSnapshot(c, solids3dRef.current || []))
     const adjuntos = []
     for (const snap of snapshots) {
-      if (!(snap.lines || []).some((l) => l.ok)) continue
+      // Embebe cuadro aunque `ok` falte si hay memoriaRows (C-OUT-02/22).
+      if (!esquemaSnapshotTieneMemoria(snap)) continue
       const rows = await buildCalcAdjuntos(snap, solidsMap)
       adjuntos.push(...rows)
     }
