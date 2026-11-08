@@ -4,6 +4,13 @@ import { DisenoNuevaEstructuraModal, sumEspesores } from './DisenoEstructuraPane
 import DisenoPreviewCotasModal from './DisenoPreviewCotasModal'
 import DisenoTramoDetalleModal from './DisenoTramoDetalleModal'
 import DisenoTramoMapaPkModal from './DisenoTramoMapaPkModal'
+import {
+  IconEdit,
+  IconEye,
+  IconLayers,
+  IconPlusMap,
+  IconTrash,
+} from './disenoDgIcons'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoErrorModal from './TopoErrorModal'
 import TopoExcelSheet from './TopoExcelSheet'
@@ -41,8 +48,13 @@ function IconBtn({ title, onClick, disabled, danger, primary, children, style })
       disabled={disabled}
       style={{
         ...base,
-        padding: '6px 10px',
-        minWidth: 36,
+        width: 40,
+        height: 40,
+        padding: 0,
+        minWidth: 40,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
         color: danger ? '#dc2626' : (primary ? undefined : ui.text),
         opacity: disabled ? 0.5 : 1,
         ...style,
@@ -78,12 +90,15 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
   const [editandoTramo, setEditandoTramo] = useState(null)
 
   const [detalle, setDetalle] = useState(null)
+  const [detalleResumen, setDetalleResumen] = useState(null)
   const [detalleOpen, setDetalleOpen] = useState(false)
+  const [detalleLoading, setDetalleLoading] = useState(false)
 
   const [modalEstructura, setModalEstructura] = useState(null) // null | { mode, estructura? }
   const [confirmEliminar, setConfirmEliminar] = useState(null)
   const [confirmEliminarEst, setConfirmEliminarEst] = useState(null)
   const [previewDesdeGrilla, setPreviewDesdeGrilla] = useState(null)
+  const [previewLoadingId, setPreviewLoadingId] = useState(null)
 
   const showError = useCallback((err) => {
     setErrorModal(parseApiError(err?.message || String(err)))
@@ -112,24 +127,40 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
     cargarEstructuras()
   }, [cargarLista, cargarEstructuras])
 
-  const abrirDetalle = async (id) => {
-    setBusy(true)
-    try {
-      const data = await api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
-      setDetalle(data)
-      setDetalleOpen(true)
-    } catch (e) {
-      showError(e)
-    } finally {
-      setBusy(false)
-    }
+  const abrirDetalle = (rowOrId) => {
+    const id = typeof rowOrId === 'object' ? rowOrId?.id : rowOrId
+    if (!id) return
+    const resumen = typeof rowOrId === 'object'
+      ? rowOrId
+      : (lista.find((r) => r.id === id) || { id, nombre: 'Tramo' })
+    // Abrir de inmediato: un solo clic, con estado de carga si el detalle tarda.
+    setDetalleResumen(resumen)
+    setDetalle(null)
+    setDetalleOpen(true)
+    setDetalleLoading(true)
+    api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
+      .then((data) => {
+        setDetalle(data)
+        setDetalleResumen(data?.eje || resumen)
+      })
+      .catch((e) => {
+        showError(e)
+        setDetalleOpen(false)
+      })
+      .finally(() => setDetalleLoading(false))
   }
 
   const recargarDetalle = async (id) => {
-    const data = await api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
-    setDetalle(data)
-    await cargarLista()
-    return data
+    setDetalleLoading(true)
+    try {
+      const data = await api(`/diseno-geometrico/ejes/${id}?_=${Date.now()}`)
+      setDetalle(data)
+      setDetalleResumen(data?.eje || null)
+      await cargarLista()
+      return data
+    } finally {
+      setDetalleLoading(false)
+    }
   }
 
   const iniciarCrearTramo = () => {
@@ -235,14 +266,14 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
 
   const abrirPreviewDesdeGrilla = async (row) => {
     if (!row?.diseno_cargado && !(row.filas_rasante > 0)) return
-    setBusy(true)
+    setPreviewLoadingId(row.id)
     try {
       const data = await api(`/diseno-geometrico/ejes/${row.id}?_=${Date.now()}`)
       setPreviewDesdeGrilla(data)
     } catch (e) {
       showError(e)
     } finally {
-      setBusy(false)
+      setPreviewLoadingId(null)
     }
   }
 
@@ -268,7 +299,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
         <PermisoAviso permisos={permisos} accion="crear">
           {puede(permisos, 'crear') && (
             <IconBtn title="Crear tramo (seleccionar pk_ID en el mapa)" onClick={iniciarCrearTramo} primary disabled={busy}>
-              ＋
+              <IconPlusMap />
             </IconBtn>
           )}
         </PermisoAviso>
@@ -294,7 +325,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                 primary
                 disabled={busy}
               >
-                ＋
+                <IconLayers />
               </IconBtn>
             )}
           </PermisoAviso>
@@ -331,9 +362,9 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                         title="Editar estructura"
                         onClick={() => setModalEstructura({ mode: 'edit', estructura: e })}
                         disabled={busy}
-                        style={{ padding: '2px 8px' }}
+                        style={{ width: 32, height: 32, minWidth: 32 }}
                       >
-                        ✎
+                        <IconEdit width={16} height={16} />
                       </IconBtn>
                     )}
                     {puede(permisos, 'eliminar') && (
@@ -342,9 +373,9 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                         danger
                         onClick={() => setConfirmEliminarEst({ id: e.id, nombre: e.nombre })}
                         disabled={busy}
-                        style={{ padding: '2px 8px' }}
+                        style={{ width: 32, height: 32, minWidth: 32 }}
                       >
-                        ×
+                        <IconTrash width={16} height={16} />
                       </IconBtn>
                     )}
                   </div>
@@ -363,7 +394,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
 
         {!lista.length ? (
           <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
-            Aún no hay tramos. Pulse «＋» para seleccionar pk_ID en el mapa y configurar el tramo.
+            Aún no hay tramos. Use el botón de crear tramo para seleccionar pk_ID en el mapa.
           </p>
         ) : (
           <TopoExcelSheet sheet={sheet} columns={TRAMO_COLS} minWidth={640}>
@@ -373,7 +404,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                 <tr
                   key={row.id}
                   style={{ cursor: 'pointer' }}
-                  onClick={() => abrirDetalle(row.id)}
+                  onClick={() => abrirDetalle(row)}
                   title="Ver detalle del tramo"
                 >
                   <td style={sheet.td}>
@@ -394,12 +425,12 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                       </span>
                       {cargado && (
                         <IconBtn
-                          title="Vista previa de cotas del diseño"
+                          title="Vista previa del diseño geométrico"
                           onClick={() => abrirPreviewDesdeGrilla(row)}
-                          disabled={busy}
-                          style={{ padding: '2px 8px' }}
+                          disabled={previewLoadingId === row.id}
+                          style={{ width: 32, height: 32, minWidth: 32 }}
                         >
-                          👁
+                          <IconEye width={16} height={16} />
                         </IconBtn>
                       )}
                     </div>
@@ -411,9 +442,9 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
                         danger
                         onClick={() => setConfirmEliminar({ id: row.id, nombre: row.nombre })}
                         disabled={busy}
-                        style={{ padding: '2px 8px' }}
+                        style={{ width: 32, height: 32, minWidth: 32 }}
                       >
-                        ×
+                        <IconTrash width={16} height={16} />
                       </IconBtn>
                     )}
                   </td>
@@ -461,8 +492,10 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
       />
 
       <DisenoTramoDetalleModal
-        open={detalleOpen && !!detalle}
+        open={detalleOpen}
         detalle={detalle}
+        loading={detalleLoading}
+        resumen={detalleResumen}
         contratoId={contratoId}
         token={token}
         permisos={permisos}
@@ -470,6 +503,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
         api={api}
         onReload={recargarDetalle}
         onEdit={(d) => {
+          if (!d) return
           setDetalleOpen(false)
           setEditandoTramo(d)
           setPksPendientes((d.pks || []).map((p) => ({
@@ -484,7 +518,13 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
           })))
           setCrearOpen(true)
         }}
-        onClose={() => { if (!busy) setDetalleOpen(false) }}
+        onClose={() => {
+          if (!busy && !detalleLoading) {
+            setDetalleOpen(false)
+            setDetalle(null)
+            setDetalleResumen(null)
+          }
+        }}
         onError={showError}
       />
 

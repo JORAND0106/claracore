@@ -1,12 +1,12 @@
 /**
- * Selección de uno o varios pk_ID en el mapa para crear un tramo en Configuración DG.
- * Reutiliza el maestro PK y el mapa de polígonos de Bitácora/Presupuesto.
+ * Selección de uno o varios pk_ID en el mapa para crear/editar un tramo en Configuración DG.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import PptoFiltroMapaPk from '../../modules/presupuesto/PptoFiltroMapaPk'
 import { API_BASE } from '../../apiBase'
 import { identificarUbicacionMaterial } from '../../modules/seguimiento/bitacoraMaterialUbicacion'
+import { IconClose } from './disenoDgIcons'
 
 async function fetchPkMaestro(contratoId, token) {
   const t = token
@@ -21,15 +21,6 @@ async function fetchPkMaestro(contratoId, token) {
   return Array.isArray(data) ? data : []
 }
 
-/**
- * @param {{
- *   t: object, token?: string, contratoId: string|number,
- *   zIndex?: number,
- *   initialPks?: Array<object>,
- *   onConfirm: (pks: Array<object>) => void,
- *   onClose: () => void,
- * }} props
- */
 export default function DisenoTramoMapaPkModal({
   t,
   token,
@@ -69,10 +60,19 @@ export default function DisenoTramoMapaPkModal({
 
   useEffect(() => { void cargar() }, [cargar])
 
+  const items = useMemo(() => [...seleccion.values()], [seleccion])
   const labelsSeleccionados = useMemo(
-    () => [...seleccion.values()].map((p) => p.pk_label || p.ubicacion_pk || p.pk_id).filter(Boolean),
-    [seleccion],
+    () => items.map((p) => p.pk_label || p.ubicacion_pk || p.pk_id).filter(Boolean),
+    [items],
   )
+
+  const quitarPk = (id) => {
+    setSeleccion((prev) => {
+      const next = new Map(prev)
+      next.delete(String(id))
+      return next
+    })
+  }
 
   const onPkPick = (pkVal, meta) => {
     if (meta?.screenshotOnly) return
@@ -128,7 +128,7 @@ export default function DisenoTramoMapaPkModal({
         aria-label="Seleccionar pk_ID del tramo"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 'min(640px, 96vw)', height: 'min(760px, 94vh)',
+          width: 'min(720px, 96vw)', height: 'min(820px, 95vh)',
           background: t.bgCard || '#fff', borderRadius: 12,
           border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column',
           overflow: 'hidden', boxShadow: '0 20px 50px rgba(15,23,42,0.25)',
@@ -144,7 +144,7 @@ export default function DisenoTramoMapaPkModal({
               Seleccionar pk_ID del tramo
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
-              Pulse uno o varios polígonos. Volver a pulsar quita el PK. Luego continue para definir abscisas y estructura.
+              Pulse varios polígonos para agregar. Pulse de nuevo o use ✕ en la lista para quitar.
             </div>
           </div>
           <button
@@ -152,9 +152,13 @@ export default function DisenoTramoMapaPkModal({
             onClick={onClose}
             title="Cerrar mapa"
             aria-label="Cerrar mapa"
-            style={{ ...btn, background: t.bg, color: t.text, border: `1px solid ${t.border}` }}
+            style={{
+              ...btn, background: t.bg, color: t.text, border: `1px solid ${t.border}`,
+              width: 36, height: 36, padding: 0, display: 'inline-flex',
+              alignItems: 'center', justifyContent: 'center',
+            }}
           >
-            ✕
+            <IconClose />
           </button>
         </div>
 
@@ -167,6 +171,46 @@ export default function DisenoTramoMapaPkModal({
             {aviso}
           </div>
         ) : null}
+
+        {items.length > 0 && (
+          <div style={{
+            padding: '8px 12px 0',
+            display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 88, overflowY: 'auto',
+          }}>
+            {items.map((p) => {
+              const label = p.pk_label || p.ubicacion_pk || p.pk_id
+              const extra = [p.costado, p.infraestructura].filter(Boolean).join(' · ')
+              return (
+                <span
+                  key={p.pk_id}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '4px 8px', borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg || '#f8fafc',
+                    color: t.text, fontSize: 'var(--cc-xs)', fontWeight: 600,
+                  }}
+                  title={extra || label}
+                >
+                  {label}{extra ? ` · ${extra}` : ''}
+                  <button
+                    type="button"
+                    title={`Quitar PK ${label}`}
+                    aria-label={`Quitar PK ${label}`}
+                    onClick={() => quitarPk(p.pk_id)}
+                    style={{
+                      border: 'none', background: 'transparent', cursor: 'pointer',
+                      color: t.textMuted, padding: 0, display: 'inline-flex',
+                      lineHeight: 1,
+                    }}
+                  >
+                    <IconClose width={14} height={14} />
+                  </button>
+                </span>
+              )
+            })}
+          </div>
+        )}
 
         <div style={{ flex: 1, minHeight: 0, padding: 12 }}>
           {pkLoading ? (
@@ -181,6 +225,7 @@ export default function DisenoTramoMapaPkModal({
               onPkPick={onPkPick}
               selectedPk={labelsSeleccionados}
               onClearSelection={() => setSeleccion(new Map())}
+              multiSelect
               height="100%"
               hideCaption
               showBasemapToggle
@@ -192,10 +237,8 @@ export default function DisenoTramoMapaPkModal({
           padding: '10px 14px', borderTop: `1px solid ${t.border}`,
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700, maxWidth: '58%', lineHeight: 1.35 }}>
-            {seleccion.size
-              ? `${seleccion.size} PK: ${labelsSeleccionados.slice(0, 6).join(', ')}${labelsSeleccionados.length > 6 ? '…' : ''}`
-              : 'Sin PK seleccionado'}
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 700 }}>
+            {seleccion.size ? `${seleccion.size} pk_ID seleccionado(s)` : 'Sin PK seleccionado'}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {seleccion.size > 0 && (
