@@ -2355,25 +2355,53 @@ def _valores_por_solicitud(sb, items: List[dict]) -> Dict[int, Optional[float]]:
     return {sid: totals.get(sid) for sid in vistos}
 
 
-_OC_LIST_SELECT = (
-    "id, solicitud_id, numero_oc, estado, pdf_blob_path, es_sistema, created_at"
+# Columna real: documento_sistema (la grilla no debe pedir nombres inventados).
+_OC_LIST_SELECTS = (
+    "id, solicitud_id, numero_oc, estado, pdf_blob_path, documento_sistema, created_at",
+    "id, solicitud_id, numero_oc, estado, pdf_blob_path, created_at",
 )
 
 
 def _slim_oc_for_list(oc: dict) -> dict:
-    """Campos de OC que usa la grilla (PDF / número / estados)."""
+    """Campos de OC que usa la grilla (PDF / número / estados / documento de sistema)."""
     return {
         "id": oc.get("id"),
         "solicitud_id": oc.get("solicitud_id"),
         "numero_oc": oc.get("numero_oc"),
         "estado": oc.get("estado"),
-        "es_sistema": oc.get("es_sistema"),
+        "documento_sistema": bool(oc.get("documento_sistema")),
         "tiene_pdf_oc": bool(oc.get("pdf_blob_path") or oc.get("tiene_pdf_oc")),
         "pdf_blob_path": oc.get("pdf_blob_path"),
         "estado_entrada": oc.get("estado_entrada"),
         "estado_salida": oc.get("estado_salida"),
         "created_at": oc.get("created_at"),
     }
+
+
+def _fetch_ocs_for_solicitudes_list(sb, solicitud_ids: List[int]) -> List[dict]:
+    """OC de la grilla: columnas mínimas, con fallback si falta documento_sistema."""
+    if not solicitud_ids:
+        return []
+    last_exc: Optional[Exception] = None
+    for select in _OC_LIST_SELECTS:
+        try:
+            return (
+                sb.table("almacen_orden_compra")
+                .select(select)
+                .in_("solicitud_id", solicitud_ids)
+                .order("numero_oc")
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            last_exc = exc
+            if not _pgrst_unknown_column(exc):
+                _log.warning("No se pudieron leer OC del listado: %s", exc)
+                return []
+    if last_exc:
+        _log.warning("OC del listado sin documento_sistema: %s", last_exc)
+    return []
 
 
 def _list_solicitudes_resumen(
@@ -2401,16 +2429,7 @@ def _list_solicitudes_resumen(
 
     oc_by_sol: Dict[int, List[dict]] = {}
     if ids:
-        oc_rows = (
-            sb.table("almacen_orden_compra")
-            .select(_OC_LIST_SELECT)
-            .in_("solicitud_id", ids)
-            .order("numero_oc")
-            .execute()
-            .data
-            or []
-        )
-        for oc in oc_rows:
+        for oc in _fetch_ocs_for_solicitudes_list(sb, ids):
             sid = int(oc.get("solicitud_id") or 0)
             if not sid:
                 continue
