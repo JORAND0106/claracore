@@ -15,6 +15,7 @@ describe('sicoeEsquemasReporte', () => {
   const regs = [
     {
       id: 1, numero_registro: 440, reporte_id: 57,
+      longitud: 1, ancho: 1, espesor: 0.2, cantidad_total: 0.2, item: 'I-440',
       graficos_historial: [
         buildEsquemaHistorialEntrada({
           url: 'https://cdn/placa-v1.png', numero: 161, nombre: 'Placa base', esquemaId: 'esq-placa',
@@ -66,7 +67,7 @@ describe('sicoeEsquemasReporte', () => {
     )
   })
 
-  it('asignación: sellado conserva versión y no se quita', () => {
+  it('editar: sellados también reciben la versión nueva; body sin cantidades', () => {
     const isSellado = (r) => Number(r.numero_registro) === 440
     const nueva = buildEsquemaHistorialEntrada({
       url: 'https://cdn/placa-v2.png', numero: 161, nombre: 'Placa base', esquemaId: 'esq-placa',
@@ -77,16 +78,21 @@ describe('sicoeEsquemasReporte', () => {
       isSellado,
     })
     const byId = Object.fromEntries(patches.map((p) => [p.registro.numero_registro, p]))
-    assert.ok(!byId[440], 'sellado no se parchea')
+    assert.ok(byId[440], 'sellado sí se actualiza')
     assert.ok(byId[442])
     assert.ok(byId[443])
-    const h442 = byId[442].body.graficos_historial.find((g) => g.esquema_id === 'esq-placa')
-    assert.equal(h442.url, 'https://cdn/placa-v2.png')
-    assert.equal(h442.numero, 161)
+    const h440 = byId[440].body.graficos_historial.find((g) => g.esquema_id === 'esq-placa')
+    assert.equal(h440.url, 'https://cdn/placa-v2.png')
+    assert.equal(h440.numero, 161)
+    // Solo campos de gráfico — no cantidades/medidas/ítem
+    assert.equal(byId[440].body.cantidad_total, undefined)
+    assert.equal(byId[440].body.longitud, undefined)
+    assert.equal(byId[440].body.item, undefined)
+    assert.ok(byId[440].body.graficos_historial)
   })
 
-  it('cambiar asignación no toca sellados; agrega registro nuevo', () => {
-    const isSellado = (r) => Number(r.numero_registro) === 440
+  it('cambiar asignación: quitar/agregar sellados y no sellados', () => {
+    const isSellado = (r) => [440, 442, 624].includes(Number(r.numero_registro))
     const conNuevo = [
       ...regs,
       { id: 9, numero_registro: 900, reporte_id: 57, graficos_historial: [] },
@@ -94,17 +100,39 @@ describe('sicoeEsquemasReporte', () => {
     const entrada = buildEsquemaHistorialEntrada({
       url: 'https://cdn/placa-v1.png', numero: 161, nombre: 'Placa base', esquemaId: 'esq-placa',
     })
+    // Caso c): desmarcar 440, marcar 442 (ya) y 624 + 900
     const { patches, skippedSellados } = planificarAsignacionEsquema({
       registros: conNuevo,
       entrada,
-      // Intenta quitar 440 (sellado) y agregar 900
-      idsDeseados: [2, 3, 9],
+      idsDeseados: [2, 4, 9], // 442, 624, 900 — quita 440 y 443
       isSellado,
     })
-    assert.ok(skippedSellados.includes(440))
-    const ids = patches.map((p) => p.registro.numero_registro).sort((a, b) => a - b)
-    assert.ok(ids.includes(900))
-    assert.ok(!ids.includes(440))
+    assert.equal(skippedSellados.length, 0)
+    const byNum = Object.fromEntries(patches.map((p) => [p.registro.numero_registro, p]))
+    assert.ok(byNum[440], 'quita esquema del sellado 440')
+    assert.ok(!byNum[440].body.graficos_historial.some((g) => g.esquema_id === 'esq-placa'))
+    assert.ok(byNum[624], 'agrega al sellado 624')
+    assert.ok(byNum[624].body.graficos_historial.some((g) => g.esquema_id === 'esq-placa'))
+    assert.ok(byNum[900])
+    assert.ok(byNum[443], 'quita 443')
+  })
+
+  it('nuevo: asignar solo a sellados 440 y 443', () => {
+    const isSellado = (r) => [440, 443].includes(Number(r.numero_registro))
+    const entrada = buildEsquemaHistorialEntrada({
+      url: 'https://cdn/nuevo.png', numero: 174, nombre: 'Nuevo', esquemaId: 'esq-nuevo',
+    })
+    const { patches } = planificarAsignacionEsquema({
+      registros: regs,
+      entrada,
+      idsDeseados: [1, 3],
+      isSellado,
+    })
+    assert.equal(patches.length, 2)
+    assert.deepEqual(
+      patches.map((p) => p.registro.numero_registro).sort((a, b) => a - b),
+      [440, 443],
+    )
   })
 
   it('etiqueta y filtro de galería', () => {

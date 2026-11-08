@@ -534,6 +534,11 @@ export default function EsquemaEditorModal({
   draftModule = null,
   /** Identificador de entidad en el módulo (entradaId, registroId, …). */
   draftEntityId = null,
+  /**
+   * Si true, no muestra el popup Exportar aquí: el caller lo hace después
+   * (p. ej. SicoeObra tras el popup de asignación de esquemas).
+   */
+  deferExportPopup = false,
   onSave,
   onClose,
 }) {
@@ -6768,17 +6773,19 @@ export default function EsquemaEditorModal({
       if (resolvedDraftKeyRef.current) {
         await esquemaDraftClear(resolvedDraftKeyRef.current)
       }
-      // Popup Exportar (PDF/DXF al computador). Si el caller (p. ej. Bitácora)
-      // también lo muestra tras onSave, el host evita duplicar en la misma ráfaga.
-      try {
-        await presentEsquemaExportPopup({
-          t,
-          title: titleTxt,
-          pdf: exportPdf,
-          dxf: exportDxf,
-        })
-      } catch (err) {
-        console.error('presentEsquemaExportPopup', err)
+      // Popup Exportar (PDF/DXF al computador). Si el caller lo difiere
+      // (asignación SicoeObra) o ya lo muestra tras onSave, no duplicar aquí.
+      if (!deferExportPopup) {
+        try {
+          await presentEsquemaExportPopup({
+            t,
+            title: titleTxt,
+            pdf: exportPdf,
+            dxf: exportDxf,
+          })
+        } catch (err) {
+          console.error('presentEsquemaExportPopup', err)
+        }
       }
       if (closeAfterSaveRef.current) {
         closeAfterSaveRef.current = false

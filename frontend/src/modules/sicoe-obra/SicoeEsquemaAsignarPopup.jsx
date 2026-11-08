@@ -1,6 +1,7 @@
 /**
  * Tras guardar el PNG: elegir a qué registros del reporte se asigna el esquema.
- * Al menos uno. Sellados que ya lo tienen aparecen marcados y deshabilitados.
+ * Ninguna casilla marcada al crear; al menos uno. Sellados se pueden marcar/desmarcar
+ * (solo cambia la asignación del esquema; no toca cantidades).
  */
 import { useState } from 'react'
 
@@ -28,8 +29,8 @@ export default function SicoeEsquemaAsignarPopup({
   const [selected, setSelected] = useState(() => new Set((initialIds || []).map(String)))
   const [err, setErr] = useState('')
 
-  const toggle = (id, locked) => {
-    if (locked || busy) return
+  const toggle = (id) => {
+    if (busy) return
     const k = String(id)
     setSelected((prev) => {
       const next = new Set(prev)
@@ -41,7 +42,7 @@ export default function SicoeEsquemaAsignarPopup({
 
   const confirmar = () => {
     if (selected.size < 1) {
-      setErr('Marque al menos un registro.')
+      setErr('Seleccione al menos un registro')
       return
     }
     setErr('')
@@ -82,12 +83,9 @@ export default function SicoeEsquemaAsignarPopup({
           padding: 16,
         }}
       >
-        <div style={{ fontWeight: 800, fontSize: 16, color: ui.text, marginBottom: 6 }}>
+        <div style={{ fontWeight: 800, fontSize: 16, color: ui.text, marginBottom: 12 }}>
           {titulo}
         </div>
-        <p style={{ margin: '0 0 12px', fontSize: 13, color: ui.muted, lineHeight: 1.45 }}>
-          Marque los registros que deben llevar este esquema. Los sellados conservan su versión y no se pueden quitar ni agregar.
-        </p>
         <div style={{
           border: `1px solid ${ui.border}`,
           borderRadius: 8,
@@ -108,22 +106,28 @@ export default function SicoeEsquemaAsignarPopup({
             <tbody>
               {(registros || []).map((reg) => {
                 const sellado = !!isSellado(reg)
-                const canToggle = !sellado
                 const checked = selected.has(String(reg.id))
                 return (
-                  <tr key={reg.id} style={{ borderTop: `1px solid ${ui.border}`, opacity: (sellado && !checked) ? 0.55 : 1 }}>
+                  <tr key={reg.id} style={{ borderTop: `1px solid ${ui.border}` }}>
                     <td style={td}>
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={busy || !canToggle}
-                        onChange={() => toggle(reg.id, !canToggle)}
+                        disabled={busy}
+                        onChange={() => toggle(reg.id)}
                         aria-label={`Asignar al registro ${reg.numero_registro}`}
                       />
                     </td>
                     <td style={td}>
                       #{reg.numero_registro}
-                      {sellado ? <span style={{ marginLeft: 6, color: '#0f766e', fontWeight: 700 }}>Sellado</span> : null}
+                      {sellado ? (
+                        <span
+                          style={{ marginLeft: 6, color: '#0f766e', fontWeight: 700 }}
+                          title="Registro sellado: se puede asignar o quitar el esquema; las cantidades no cambian"
+                        >
+                          Sellado
+                        </span>
+                      ) : null}
                     </td>
                     <td style={td}>{reg.item || reg.codigo_item || '—'}</td>
                     <td style={td}>{fmtMedidas(reg)}</td>

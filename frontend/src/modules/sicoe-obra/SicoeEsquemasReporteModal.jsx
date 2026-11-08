@@ -175,10 +175,7 @@ export default function SicoeEsquemasReporteModal({
         entradaNueva: entrada,
         isSellado,
       })
-      if (!patches.length) {
-        // Solo sellados: no hay a quién actualizar, pero el guardado es válido.
-        setErr('')
-      } else {
+      if (patches.length) {
         await aplicarPatches(patches)
       }
       await presentEsquemaExportPopup({
@@ -200,10 +197,11 @@ export default function SicoeEsquemasReporteModal({
     if (!dataUrl) return
     setEditorOpen(false)
     if (editTarget) {
-      // Edición: no pide asignación; sellados conservan su URL.
+      // Edición: actualiza versión en todos los asignados (sellados incluidos).
       await persistirNuevaVersion(dataUrl, extras, editTarget)
       return
     }
+    // Nuevo: primero la lista de casillas (ninguna marcada); Exportar después de confirmar.
     setPendingSave({ dataUrl, extras, editTarget: null })
     setAssignMode('nuevo')
     setAssignOpen(true)
@@ -211,6 +209,10 @@ export default function SicoeEsquemasReporteModal({
 
   const confirmarAsignacion = async (ids) => {
     if (!pendingSave && assignMode !== 'reasignar') return
+    if (!ids?.length) {
+      setErr('Seleccione al menos un registro')
+      return
+    }
     setBusy(true)
     setErr('')
     try {
@@ -223,17 +225,13 @@ export default function SicoeEsquemasReporteModal({
           scene: editTarget.scene,
           reporteId: reporte?.id,
         })
-        // Mantener sellados que ya lo tienen
-        const sealedKeep = (localRegs || [])
-          .filter((r) => isSellado(r) && editTarget.registros.some((x) => String(x.id) === String(r.id)))
-          .map((r) => r.id)
-        const idsFinal = [...new Set([...ids.map(String), ...sealedKeep.map(String)])]
         const { patches } = planificarAsignacionEsquema({
           registros: localRegs,
           entrada,
-          idsDeseados: idsFinal,
+          idsDeseados: ids,
           isSellado,
         })
+        if (!patches.length) throw new Error('No hay cambios de asignación.')
         await aplicarPatches(patches)
         setAssignOpen(false)
         setEditTarget(null)
@@ -283,37 +281,14 @@ export default function SicoeEsquemasReporteModal({
         }
       } catch { /* nube best-effort */ }
 
-      let patches
-      if (assignMode === 'editar' && target) {
-        const sealedKeep = (localRegs || [])
-          .filter((r) => isSellado(r) && target.registros.some((x) => String(x.id) === String(r.id)))
-          .map((r) => r.id)
-        const idsFinal = [...new Set([...ids.map(String), ...sealedKeep.map(String)])]
-        ;({ patches } = planificarAsignacionEsquema({
-          registros: localRegs,
-          entrada,
-          idsDeseados: idsFinal,
-          isSellado,
-        }))
-        // También fuerza update de versión en los que ya lo tenían (no sellados)
-        const ver = planificarActualizacionVersionEsquema({
-          registros: localRegs,
-          entradaNueva: entrada,
-          isSellado,
-        })
-        const byId = new Map(patches.map((p) => [String(p.registro.id), p]))
-        for (const p of ver.patches) byId.set(String(p.registro.id), p)
-        patches = [...byId.values()]
-      } else {
-        ;({ patches } = planificarAsignacionEsquema({
-          registros: localRegs,
-          entrada,
-          idsDeseados: ids,
-          isSellado,
-        }))
-      }
+      const { patches } = planificarAsignacionEsquema({
+        registros: localRegs,
+        entrada,
+        idsDeseados: ids,
+        isSellado,
+      })
 
-      if (!patches.length) throw new Error('No hay registros asignables (revise sellados).')
+      if (!patches.length) throw new Error('Seleccione al menos un registro')
       await aplicarPatches(patches)
 
       await presentEsquemaExportPopup({
@@ -344,7 +319,8 @@ export default function SicoeEsquemasReporteModal({
     bgSoft: t?.bg || '#f8fafc',
   }
 
-  const initialAssignIds = editTarget
+  // Nuevo: ninguna casilla marcada. Reasignar: las actuales.
+  const initialAssignIds = (assignMode === 'reasignar' && editTarget)
     ? editTarget.registros.map((r) => r.id)
     : []
 
@@ -379,13 +355,8 @@ export default function SicoeEsquemasReporteModal({
             display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
           }}
           >
-            <div>
-              <div style={{ fontWeight: 800, color: ui.text, fontSize: 16 }}>
-                Esquemas · Reporte #{reporte?.numero_reporte ?? '—'}
-              </div>
-              <div style={{ fontSize: 12, color: ui.muted }}>
-                Cree esquemas del reporte y asígnelos a uno o varios registros.
-              </div>
+            <div style={{ fontWeight: 800, color: ui.text, fontSize: 16 }}>
+              Esquemas · Reporte #{reporte?.numero_reporte ?? '—'}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -480,6 +451,7 @@ export default function SicoeEsquemasReporteModal({
           draftEntityId={`${reporte?.id || 'rep'}-${editTarget?.esquema_id || 'nuevo'}`}
           initialSceneSnapshot={editTarget?.scene || null}
           initialDataUri={null}
+          deferExportPopup
           iaDoc={{
             ambito: 'sicoe_reporte_esquema',
             docKey: `sicoe-rep-${reporte?.id || 'x'}-${editTarget?.esquema_id || 'nuevo'}`,
@@ -491,6 +463,7 @@ export default function SicoeEsquemasReporteModal({
 
       {assignOpen && (
         <SicoeEsquemaAsignarPopup
+          key={`assign-${assignMode}-${editTarget?.esquema_id || 'nuevo'}-${pendingSave ? 'save' : 're'}`}
           t={t}
           registros={localRegs}
           isSellado={isSellado}
@@ -503,6 +476,7 @@ export default function SicoeEsquemasReporteModal({
             if (busy) return
             setAssignOpen(false)
             setPendingSave(null)
+            if (assignMode === 'reasignar') setEditTarget(null)
           }}
           onConfirm={(ids) => void confirmarAsignacion(ids)}
         />
