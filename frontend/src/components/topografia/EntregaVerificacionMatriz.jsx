@@ -1,7 +1,7 @@
 import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { cotaReferenciaEnOrdenada, hiDesdeCotaVplus, resolveHiEntrega } from '../../utils/entrega_dg_bloques'
 import { topoSheetStyles } from './topoSheetStyles'
-import { PermisoAviso, puede, themeColorScheme, useTopoViewport } from './topografiaShared'
+import { puede, themeColorScheme, useTopoViewport } from './topografiaShared'
 
 const VI_W = 65
 
@@ -69,6 +69,8 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   busy,
   puntosNiv,
   modoCartera = 'lecturas',
+  /** Solo diseño / ref / capa / diffs / métricas (sin Vi ni columnas de amarre). */
+  soloResultados = false,
   onGuardarCartera,
   onAddBloque,
   onRecalcular,
@@ -102,7 +104,6 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   const rowViBg = t.inputBg || ui.card?.background
   const rowDisBg = `${ui.accent}0c`
   const rowTerBg = ui.card?.background || t.bgCard
-  const instBg = `${ui.accent}10`
   const warnColor = t?.warn || '#b45309'
   const okColor = t?.success || 'var(--cc-color-success)'
   const bajoTolColor = t?.link || '#2563eb'
@@ -164,8 +165,11 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   const usaRefCampo = Boolean(analisis?.referencia_usa_campo)
   const muestraFilaRef = !esModoTerreno && espesorDiseno != null
   const muestraMetricas = muestraFilaRef && anchoEfectivo != null
-  const filasPorAbscisa = esModoTerreno ? 3 : (muestraFilaRef ? 4 : 3)
-  const puedeEditar = puede(permisos, 'editar')
+  // Lecturas: resultados solo. Cotas: fila editable "Campo" en la tabla principal.
+  const muestraFilaEntrada = !soloResultados && esModoCotas
+  const filasBase = esModoTerreno ? 2 : (muestraFilaRef ? 3 : 2)
+  const filasPorAbscisa = filasBase + (muestraFilaEntrada ? 1 : 0)
+  const puedeEditar = puede(permisos, 'editar') && !soloResultados
   const tol = entrega?.tolerancia_m
 
   const th = (extra = {}) => ({
@@ -205,15 +209,6 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     fontSize: 'var(--cc-xs)',
   })
 
-  const sel = (w = 72) => ({
-    ...sheet.cellSelect,
-    width: w,
-    minWidth: w,
-    maxWidth: w + 16,
-    textAlign: 'center',
-    fontSize: 'var(--cc-xs)',
-  })
-
   const hiFila = useCallback((f) => resolveHiEntrega({
     bloques,
     matriz,
@@ -231,6 +226,10 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   }, [])
 
   const cotaCampoFila = useCallback((f, colKey, hi, viOrCota) => {
+    if (soloResultados) {
+      const saved = f.terreno?.[colKey]?.cota
+      return saved != null ? Number(saved) : null
+    }
     if (esModoCotas) {
       const live = parseNum(viOrCota)
       if (live != null) return live
@@ -241,7 +240,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     if (live != null) return live
     const saved = f.terreno?.[colKey]?.cota
     return saved != null ? Number(saved) : null
-  }, [cotaCampo, esModoCotas])
+  }, [cotaCampo, esModoCotas, soloResultados])
 
   /** Superficie de entrega = cota de diseño (rasante − espesores encima; sin restar la capa misma). */
   const cotaDisenoSuperior = useCallback((f, colKey) => {
@@ -343,32 +342,6 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     anchoEfectivo,
   ])
 
-  const patchInst = (abscisa, patch) => {
-    const k = String(abscisa)
-    const fila = matriz.find((f) => String(f.abscisa) === k)
-    setInstDraft((prev) => {
-      const cur = prev[k] || {}
-      return {
-        ...prev,
-        [k]: {
-          ...cur,
-          ...patch,
-          bloque_id: patch.bloque_id ?? cur.bloque_id ?? fila?.instrumento?.bloque_id ?? fila?.bloque_id,
-        },
-      }
-    })
-    setDirty(true)
-  }
-
-  const onPuntoSelect = (abscisa, bloqueId, puntoId) => {
-    const p = puntosNiv.find((x) => x.id === puntoId)
-    patchInst(abscisa, {
-      bloque_id: bloqueId,
-      punto_biblioteca_id: puntoId,
-      cota_punto: p?.cota != null ? String(p.cota) : '',
-    })
-  }
-
   const buildCarteraPayload = () => {
     const filas = matriz.map((f) => {
       const k = String(f.abscisa)
@@ -450,8 +423,17 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   const nTrans = ordenadasCols.length
 
   return (
-    <div style={{ ...ui.card, padding: '14px 16px' }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', alignItems: 'center', marginBottom: 10 }}>
+    <div style={{
+      ...ui.card,
+      padding: '14px 16px',
+      flex: 1,
+      minHeight: 0,
+      minWidth: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', alignItems: 'center', marginBottom: 10, flexShrink: 0 }}>
         <h4 style={{ margin: 0, fontSize: 'var(--cc-base)', color: ui.text }}>
           Verificación de estructura de vía
         </h4>
@@ -478,10 +460,20 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
           </span>
         )}
         <div className="cc-topo-actions-bar" style={{ marginLeft: isCompact ? 0 : 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', width: isCompact ? '100%' : undefined }}>
-          {dirty && (
+          {dirty && !soloResultados && (
             <span style={{ fontSize: 'var(--cc-xs)', color: warnColor }}>Cambios sin guardar</span>
           )}
-          {puedeEditar && (
+          {soloResultados ? (
+            <button
+              type="button"
+              style={ui.btnSecondary}
+              onClick={onRecalcular}
+              disabled={busy || saving}
+              title="Recalcular verificación"
+            >
+              Recalcular
+            </button>
+          ) : puede(permisos, 'editar') && (
             <>
               <button
                 type="button"
@@ -489,6 +481,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                 style={ui.btnPrimary}
                 onClick={guardarCartera}
                 disabled={busy || saving}
+                title="Guardar cartera"
               >
                 {saving ? 'Guardando…' : 'Guardar cartera'}
               </button>
@@ -497,6 +490,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                 style={ui.btnSecondary}
                 onClick={onRecalcular}
                 disabled={busy || saving}
+                title="Recalcular verificación"
               >
                 Recalcular
               </button>
@@ -508,7 +502,9 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
       <div
         style={{
           ...sheet.sheetWrap,
-          maxHeight: 580,
+          flex: 1,
+          minHeight: 0,
+          maxHeight: '100%',
           overflow: 'auto',
           WebkitOverflowScrolling: 'touch',
           colorScheme: themeColorScheme(ui.t),
@@ -539,153 +535,68 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                   <th style={th()} title="Promedio áreas con abscisa anterior × longitud tramo">Volumen</th>
                 </>
               )}
-              {!esModoCotas && (
-                <>
-                  <th style={th({ background: instBg })} title="Punto de amarre (biblioteca o nuevo)">Punto</th>
-                  <th style={th({ background: instBg })}>H. Inst</th>
-                  <th style={th({ background: instBg })}>V+</th>
-                  <th style={th({ background: instBg })} title="Cota del amarre">Cota</th>
-                  <th style={th({ background: instBg, width: 32 })}>+</th>
-                </>
-              )}
             </tr>
           </thead>
           <tbody>
             {matriz.map((f, filaIdx) => {
               const k = String(f.abscisa)
               const draft = viDraft[k] || {}
-              const ins = f.instrumento || {}
-              const esCambio = Boolean(ins.es_cambio)
-              const instD = instDraft[k] || {}
               const hi = hiFila(f)
-              const bloqueId = instD.bloque_id || ins.bloque_id
               const rs = filasPorAbscisa
-
-                  const renderInst = () => {
-                if (esModoCotas) return null
-                const hiShow = esCambio
-                  ? (hiDesdeCotaVplus(instD.cota_punto, instD.v_mas) ?? ins.altura_instrumento)
-                  : null
-                return (
-                  <>
-                    <td style={cell({ background: instBg, verticalAlign: 'middle' })} rowSpan={rs}>
-                      {esCambio && puedeEditar ? (
-                        <div style={{ display: 'grid', gap: 4 }}>
-                          <select
-                            value={instD.punto_biblioteca_id ?? ''}
-                            onChange={(e) => onPuntoSelect(f.abscisa, bloqueId, e.target.value)}
-                            style={sel(72)}
-                            title="Elegir punto de la biblioteca"
-                          >
-                            <option value="">Nuevo…</option>
-                            {puntosNiv.map((p) => (
-                              <option key={p.id} value={p.id}>{p.nombre}</option>
-                            ))}
-                          </select>
-                          {!(instD.punto_biblioteca_id) && (
-                            <input
-                              value={instD.nombre_punto ?? ''}
-                              onChange={(e) => patchInst(f.abscisa, {
-                                bloque_id: bloqueId,
-                                nombre_punto: e.target.value,
-                                punto_biblioteca_id: '',
-                              })}
-                              style={inp(72)}
-                              placeholder="Nombre"
-                              title="Nombre del punto nuevo (se guarda en biblioteca)"
-                              autoComplete="off"
-                            />
-                          )}
-                        </div>
-                      ) : (
-                        <span style={{ color: ui.textMuted }}>{esCambio ? (ins.nombre_punto || '—') : ''}</span>
-                      )}
-                    </td>
-                    <td style={cell({ background: instBg, color: ui.textMuted, verticalAlign: 'middle' })} rowSpan={rs}>
-                      {esCambio ? fmtN(hiShow, 3) : ''}
-                    </td>
-                    <td style={cell({ background: instBg, verticalAlign: 'middle' })} rowSpan={rs}>
-                      {esCambio && puedeEditar ? (
-                        <input
-                          value={instD.v_mas ?? ''}
-                          onChange={(e) => patchInst(f.abscisa, { bloque_id: bloqueId, v_mas: e.target.value })}
-                          style={inp(52)}
-                          placeholder="0.00"
-                          autoComplete="off"
-                        />
-                      ) : (esCambio ? fmtN(ins.v_mas, 3) : '')}
-                    </td>
-                    <td style={cell({ background: instBg, verticalAlign: 'middle' })} rowSpan={rs}>
-                      {esCambio && puedeEditar ? (
-                        <input
-                          value={instD.cota_punto ?? ''}
-                          onChange={(e) => patchInst(f.abscisa, { bloque_id: bloqueId, cota_punto: e.target.value })}
-                          style={inp(64)}
-                          placeholder="Cota"
-                          title="Cota del amarre"
-                          autoComplete="off"
-                        />
-                      ) : (esCambio ? fmtN(instD.cota_punto ?? ins.cota_punto, 3) : '')}
-                    </td>
-                    <td style={cell({ background: instBg, padding: 2, verticalAlign: 'middle' })} rowSpan={rs}>
-                      <PermisoAviso permisos={permisos} accion="editar">
-                        <button
-                          type="button"
-                          title="Agregar cambio de instrumento en esta abscisa"
-                          onClick={() => onAddBloque?.(f.abscisa)}
-                          disabled={busy || saving || addingBloqueAt != null}
-                          style={{ ...ui.btnSecondary, padding: '0 5px', fontSize: '13px', lineHeight: 1.2, minWidth: 0 }}
-                        >
-                          {addingBloqueAt === f.abscisa ? '…' : '+'}
-                        </button>
-                      </PermisoAviso>
-                    </td>
-                  </>
-                )
-              }
 
               return (
                 <Fragment key={k}>
-                  <tr ref={(el) => { rowRefs.current[k] = el }} style={{ background: rowViBg }}>
-                    <td style={cell({ fontWeight: 600 })} rowSpan={rs}>{f.tramo || '—'}</td>
-                    <td style={cell({ fontWeight: 700 })} rowSpan={rs}>{fmtN(f.abscisa, 2)}</td>
-                    <td style={rowLabel()}>Vi</td>
-                    {ordenadasCols.map((col, colIdx) => (
-                      <td key={`vi-${col.key}`} style={cell()}>
-                        {puedeEditar ? (
-                          <input
-                            ref={(el) => { viInputRefs.current[filaIdx * ordenadasCols.length + colIdx] = el }}
-                            value={draft[col.key] ?? ''}
-                            onChange={(e) => {
-                              setViDraft((p) => ({
-                                ...p,
-                                [k]: { ...(p[k] || {}), [col.key]: e.target.value },
-                              }))
-                              setDirty(true)
-                            }}
-                            onKeyDown={onViEnter(filaIdx, colIdx)}
-                            style={inp(VI_W)}
-                            autoComplete="off"
-                          />
-                        ) : fmtN(f.terreno?.[col.key]?.vi, 3)}
-                      </td>
-                    ))}
-                    <td style={cell()} colSpan={nTrans} />
-                    <td style={cell({ color: ui.textMuted })} rowSpan={rs}>{fmtN(anchoEfectivo, 1)}</td>
-                    {muestraMetricas && (
+                  {muestraFilaEntrada && (
+                    <tr ref={(el) => { rowRefs.current[k] = el }} style={{ background: rowViBg }}>
+                      <td style={cell({ fontWeight: 600 })} rowSpan={rs}>{f.tramo || '—'}</td>
+                      <td style={cell({ fontWeight: 700 })} rowSpan={rs}>{fmtN(f.abscisa, 2)}</td>
+                      <td style={rowLabel()}>Campo</td>
+                      {ordenadasCols.map((col, colIdx) => (
+                        <td key={`vi-${col.key}`} style={cell()}>
+                          {puedeEditar ? (
+                            <input
+                              ref={(el) => { viInputRefs.current[filaIdx * ordenadasCols.length + colIdx] = el }}
+                              value={draft[col.key] ?? ''}
+                              onChange={(e) => {
+                                setViDraft((p) => ({
+                                  ...p,
+                                  [k]: { ...(p[k] || {}), [col.key]: e.target.value },
+                                }))
+                                setDirty(true)
+                              }}
+                              onKeyDown={onViEnter(filaIdx, colIdx)}
+                              style={inp(VI_W)}
+                              autoComplete="off"
+                              title={`Cota directa en ${col.label}`}
+                            />
+                          ) : fmtN(f.terreno?.[col.key]?.cota, 3)}
+                        </td>
+                      ))}
+                      <td style={cell()} colSpan={nTrans} />
+                      <td style={cell({ color: ui.textMuted })} rowSpan={rs}>{fmtN(anchoEfectivo, 1)}</td>
+                      {muestraMetricas && (
+                        <>
+                          <td style={cell({ fontWeight: 600 })} rowSpan={rs} title="Prom. |diseño − terreno| (fila Terreno natural) × ancho">
+                            {fmtN(metricasSeccion[filaIdx]?.area, 3)}
+                          </td>
+                          <td style={cell({ fontWeight: 600 })} rowSpan={rs} title="Promedio áreas × longitud desde abscisa anterior">
+                            {fmtN(metricasSeccion[filaIdx]?.volumen, 3)}
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  )}
+
+                  <tr
+                    ref={muestraFilaEntrada ? undefined : (el) => { rowRefs.current[k] = el }}
+                    style={{ background: rowDisBg }}
+                  >
+                    {!muestraFilaEntrada && (
                       <>
-                        <td style={cell({ fontWeight: 600 })} rowSpan={rs} title="Prom. |diseño − terreno| (fila Terreno natural) × ancho">
-                          {fmtN(metricasSeccion[filaIdx]?.area, 3)}
-                        </td>
-                        <td style={cell({ fontWeight: 600 })} rowSpan={rs} title="Promedio áreas × longitud desde abscisa anterior">
-                          {fmtN(metricasSeccion[filaIdx]?.volumen, 3)}
-                        </td>
+                        <td style={cell({ fontWeight: 600 })} rowSpan={rs}>{f.tramo || '—'}</td>
+                        <td style={cell({ fontWeight: 700 })} rowSpan={rs}>{fmtN(f.abscisa, 2)}</td>
                       </>
                     )}
-                    {renderInst()}
-                  </tr>
-
-                  <tr style={{ background: rowDisBg }}>
                     <td style={rowLabel()}>Diseño</td>
                     {ordenadasCols.map((col) => (
                       <td key={`dis-${col.key}`} style={cell()} title={esModoTerreno
@@ -722,6 +633,21 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                         </td>
                       )
                     })}
+                    {!muestraFilaEntrada && (
+                      <>
+                        <td style={cell({ color: ui.textMuted })} rowSpan={rs}>{fmtN(anchoEfectivo, 1)}</td>
+                        {muestraMetricas && (
+                          <>
+                            <td style={cell({ fontWeight: 600 })} rowSpan={rs}>
+                              {fmtN(metricasSeccion[filaIdx]?.area, 3)}
+                            </td>
+                            <td style={cell({ fontWeight: 600 })} rowSpan={rs}>
+                              {fmtN(metricasSeccion[filaIdx]?.volumen, 3)}
+                            </td>
+                          </>
+                        )}
+                      </>
+                    )}
                   </tr>
 
                   {muestraFilaRef && (
@@ -817,7 +743,9 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
         )}
       </div>
       <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
-        {esModoCotas ? 'Cota campo' : 'Vi'} / Diseño{!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / {capaLabel} por ordenada transversal.
+        {soloResultados
+          ? `Resultados: Diseño${!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / ${capaLabel}.`
+          : `${esModoCotas ? 'Campo' : 'Vi'} / Diseño${!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / ${capaLabel} por ordenada transversal.`}
         {esModoTerreno
           ? ' Diferencia = cota campo − cota diseño (rasante importada). No aplica cumplimiento por tolerancia.'
           : ` Diseño/Dif: CUMPLE si |${capaLabel} − diseño| ≤ ±${fmtN(tol, 3)} m. ▼ azul = por debajo; ▲ fucsia = por encima. ${referenciaLabel}: cotas campo. ${capaLabel}: Dif = ${capaLabel} − diseño. Área = prom. |${referenciaLabel} − diseño| × ancho.`}
