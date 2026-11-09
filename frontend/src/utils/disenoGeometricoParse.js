@@ -68,12 +68,34 @@ function rowToFila(mapped, row) {
   return data.abscisa != null ? data : null
 }
 
-/** Parsea primera hoja Excel (.xlsx) a filas de diseño geométrico. */
-export function parseDisenoExcelBuffer(buf) {
+/** Nombres de hojas de un Excel (.xlsx / .xls). */
+export function listDisenoExcelSheetNames(buf) {
   const wb = XLSX.read(buf, { type: 'array' })
-  const ws = wb.Sheets[wb.SheetNames[0]]
+  const names = Array.isArray(wb.SheetNames) ? wb.SheetNames.filter(Boolean) : []
+  if (!names.length) throw new Error('El archivo Excel no tiene hojas.')
+  return names
+}
+
+/**
+ * Parsea una hoja Excel a filas de diseño geométrico.
+ * @param {ArrayBuffer} buf
+ * @param {{ sheetName?: string }} [opts] — si no se indica, usa la primera hoja.
+ */
+export function parseDisenoExcelBuffer(buf, opts = {}) {
+  const wb = XLSX.read(buf, { type: 'array' })
+  const names = Array.isArray(wb.SheetNames) ? wb.SheetNames : []
+  if (!names.length) throw new Error('El archivo Excel no tiene hojas.')
+  const wanted = (opts.sheetName || '').trim()
+  const sheetName = wanted
+    ? names.find((n) => String(n) === wanted)
+    : names[0]
+  if (!sheetName) {
+    throw new Error(`No se encontró la hoja «${wanted}» en el Excel.`)
+  }
+  const ws = wb.Sheets[sheetName]
+  if (!ws) throw new Error(`La hoja «${sheetName}» está vacía o no es válida.`)
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-  if (!rows.length) throw new Error('El archivo Excel está vacío.')
+  if (!rows.length) throw new Error(`La hoja «${sheetName}» está vacía.`)
   const mapped = mapHeaders(rows[0])
   if (!Object.values(mapped).includes('abscisa')) {
     throw new Error('Faltan columnas. Use: TRAMO, ABSCISA, IZQUIERDA, EJE, DERECHA, ANCHO.')
