@@ -1,19 +1,24 @@
 /**
  * Vista previa del diseño geométrico del tramo:
  * Abscisa | Ordenadas izquierda (elegibles) | Eje | Ordenadas derecha (elegibles).
- * Solo abscisas del tramo seleccionado.
+ * Solo abscisas del tramo seleccionado. No inventa cotas.
  */
 import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
+import { sintetizarPerfilDesdeRasante } from '../../utils/disenoGeometricoParse'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
 import { IconClose } from './disenoDgIcons'
 import { useTopoTheme, useTopoViewport } from './topografiaShared'
 
 function fmtN(v, dec = 3) {
-  if (v == null || v === '') return '—'
+  if (v == null || valEmpty(v)) return '—'
   const n = Number(v)
   return Number.isFinite(n) ? n.toFixed(dec) : '—'
+}
+
+function valEmpty(v) {
+  return v === '' || v === undefined
 }
 
 function fmtOrdenada(o) {
@@ -61,32 +66,35 @@ export default function DisenoPreviewCotasModal({
     })
   }, [rasante, absIni, absFin])
 
-  const perfilTramo = useMemo(() => {
+  const perfilEfectivo = useMemo(() => {
     const rows = Array.isArray(perfilPuntos) ? perfilPuntos : []
-    if (absIni == null || absFin == null || !Number.isFinite(absIni) || !Number.isFinite(absFin)) {
-      return rows
+    const filtrar = (lista) => {
+      if (absIni == null || absFin == null || !Number.isFinite(absIni) || !Number.isFinite(absFin)) {
+        return lista
+      }
+      return lista.filter((p) => {
+        const a = Number(p.abscisa)
+        if (!Number.isFinite(a)) return false
+        return a >= absIni - 1e-9 && a <= absFin + 1e-9
+      })
     }
-    return rows.filter((p) => {
-      const a = Number(p.abscisa)
-      if (!Number.isFinite(a)) return false
-      return a >= absIni - 1e-9 && a <= absFin + 1e-9
-    })
-  }, [perfilPuntos, absIni, absFin])
+    const delBackend = filtrar(rows)
+    if (delBackend.length) return delBackend
+    return filtrar(sintetizarPerfilDesdeRasante(rasanteTramo, eje))
+  }, [perfilPuntos, rasanteTramo, eje, absIni, absFin])
 
   const ordenadasDisponibles = useMemo(() => {
     const set = new Set()
-    perfilTramo.forEach((p) => {
+    perfilEfectivo.forEach((p) => {
       const o = Number(p.ordenada)
       if (Number.isFinite(o)) set.add(o)
     })
-    // Si no hay perfil, usar IZQ / EJE / DER del CSV
-    if (!set.size && rasanteTramo.length) {
-      set.add(-1) // marcadores sintéticos no; usamos claves especiales
-    }
     return [...set].sort((a, b) => a - b)
-  }, [perfilTramo, rasanteTramo])
+  }, [perfilEfectivo])
 
-  const tienePerfil = ordenadasDisponibles.length > 0 && perfilTramo.length > 0
+  const tienePerfil = ordenadasDisponibles.length > 0 && perfilEfectivo.length > 0
+  const cotasVacias = rasanteTramo.length > 0 && !tienePerfil
+
   const izqDisponibles = useMemo(
     () => ordenadasDisponibles.filter((o) => o < -1e-9),
     [ordenadasDisponibles],
@@ -108,13 +116,13 @@ export default function DisenoPreviewCotasModal({
 
   const puntosPorAbscisa = useMemo(() => {
     const map = new Map()
-    perfilTramo.forEach((p) => {
+    perfilEfectivo.forEach((p) => {
       const key = p.abscisa
       if (!map.has(key)) map.set(key, new Map())
       map.get(key).set(Number(p.ordenada), p.cota)
     })
     return map
-  }, [perfilTramo])
+  }, [perfilEfectivo])
 
   const toggleOrd = (lado, valor) => {
     const setter = lado === 'izq' ? setIzqSel : setDerSel
@@ -206,6 +214,26 @@ export default function DisenoPreviewCotasModal({
             <IconClose />
           </button>
         </div>
+
+        {cotasVacias && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid #fca5a5',
+              background: '#fef2f2',
+              color: '#991b1b',
+              fontSize: 'var(--cc-xs)',
+              lineHeight: 1.45,
+            }}
+          >
+            Las estaciones tienen abscisa, pero no hay cotas guardadas (Izquierda / Eje / Derecha).
+            Vuelva a cargar el archivo de diseño; si alguna columna de cotas no se reconoce, el sistema
+            lo avisará al importar.
+          </div>
+        )}
 
         {tienePerfil && (
           <div style={{
