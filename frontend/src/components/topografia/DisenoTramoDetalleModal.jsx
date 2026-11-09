@@ -4,9 +4,13 @@
  */
 import { useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../../apiBase'
-import { parseDisenoExcelBuffer } from '../../utils/disenoGeometricoParse'
+import {
+  listDisenoExcelSheetNames,
+  parseDisenoExcelBuffer,
+} from '../../utils/disenoGeometricoParse'
 import { formatFechaHoraColombia } from '../../utils/fechaColombia'
 import CcModalBrandHeader from '../CcModalBrandHeader'
+import DisenoExcelHojaModal from './DisenoExcelHojaModal'
 import DisenoImportConfigModal from './DisenoImportConfigModal'
 import DisenoPreviewCotasModal from './DisenoPreviewCotasModal'
 import {
@@ -33,12 +37,13 @@ const SECTOR_COLS = [
   { key: 'rango', label: 'Sector (abscisas)', width: 180 },
 ]
 
+/** Botón solo ícono — estilo institucional (borde + transparente), sin azul sólido. */
 function IconAction({
-  title, onClick, disabled, danger, primary, children, style,
+  title, onClick, disabled, danger, children, style,
   as: Tag = 'button', ...rest
 }) {
   const ui = useTopoTheme()
-  const base = primary ? ui.btnPrimary : ui.btnSecondary
+  const border = ui.t?.border || '#cbd5e1'
   return (
     <Tag
       type={Tag === 'button' ? 'button' : undefined}
@@ -47,17 +52,20 @@ function IconAction({
       onClick={onClick}
       disabled={Tag === 'button' ? disabled : undefined}
       style={{
-        ...base,
+        background: 'transparent',
+        color: danger ? '#dc2626' : ui.text,
+        border: `1px solid ${danger ? '#fca5a5' : border}`,
+        borderRadius: 8,
         width: 40,
         height: 40,
         padding: 0,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: danger ? '#dc2626' : (primary ? undefined : ui.text),
         opacity: disabled ? 0.45 : 1,
         cursor: disabled ? 'not-allowed' : 'pointer',
         margin: 0,
+        lineHeight: 1,
         ...style,
       }}
       {...rest}
@@ -112,6 +120,10 @@ export default function DisenoTramoDetalleModal({
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const fileRef = useRef(null)
   const [archivoPendiente, setArchivoPendiente] = useState(null)
+  const [excelBuffer, setExcelBuffer] = useState(null)
+  const [excelHojas, setExcelHojas] = useState([])
+  const [excelHojaSel, setExcelHojaSel] = useState('')
+  const [modalExcelHoja, setModalExcelHoja] = useState(false)
   const [modalImportConfig, setModalImportConfig] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [localBusy, setLocalBusy] = useState(false)
@@ -147,11 +159,48 @@ export default function DisenoTramoDetalleModal({
     }
   }
 
-  const onFileSelected = (file) => {
-    if (!file || loading) return
-    setArchivoPendiente(file)
-    setModalImportConfig(true)
+  const resetArchivo = () => {
+    setArchivoPendiente(null)
+    setExcelBuffer(null)
+    setExcelHojas([])
+    setExcelHojaSel('')
+    setModalExcelHoja(false)
+    setModalImportConfig(false)
     if (fileRef.current) fileRef.current.value = ''
+  }
+
+  const onFileSelected = async (file) => {
+    if (!file || loading) return
+    const name = file.name.toLowerCase()
+    try {
+      if (name.endsWith('.csv')) {
+        setArchivoPendiente(file)
+        setExcelBuffer(null)
+        setExcelHojas([])
+        setExcelHojaSel('')
+        setModalImportConfig(true)
+      } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        const buf = await file.arrayBuffer()
+        const hojas = listDisenoExcelSheetNames(buf)
+        setArchivoPendiente(file)
+        setExcelBuffer(buf)
+        setExcelHojas(hojas)
+        if (hojas.length <= 1) {
+          setExcelHojaSel(hojas[0] || '')
+          setModalImportConfig(true)
+        } else {
+          setExcelHojaSel(hojas[0] || '')
+          setModalExcelHoja(true)
+        }
+      } else {
+        throw new Error('Use archivo .csv o .xlsx')
+      }
+    } catch (e) {
+      resetArchivo()
+      onError?.(e)
+    } finally {
+      if (fileRef.current) fileRef.current.value = ''
+    }
   }
 
   const ejecutarImportacion = async (config) => {
@@ -166,8 +215,10 @@ export default function DisenoTramoDetalleModal({
           body: JSON.stringify({ contenido, reemplazar: true, config }),
         })
       } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-        const buf = await archivoPendiente.arrayBuffer()
-        const filas = parseDisenoExcelBuffer(buf)
+        const buf = excelBuffer || await archivoPendiente.arrayBuffer()
+        const filas = parseDisenoExcelBuffer(buf, {
+          sheetName: excelHojaSel || undefined,
+        })
         await api(`/diseno-geometrico/ejes/${eje.id}/import-filas`, {
           method: 'POST',
           body: JSON.stringify({ filas, reemplazar: true, config }),
@@ -175,8 +226,7 @@ export default function DisenoTramoDetalleModal({
       } else {
         throw new Error('Use archivo .csv o .xlsx')
       }
-      setModalImportConfig(false)
-      setArchivoPendiente(null)
+      resetArchivo()
       await onReload?.(eje.id)
     } catch (e) {
       onError?.(e)
@@ -221,7 +271,7 @@ export default function DisenoTramoDetalleModal({
           background: 'rgba(15,23,42,0.55)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
         }}
-        onClick={() => { if (!working && !modalImportConfig && !previewOpen) onClose?.() }}
+        onClick={() => { if (!working && !modalImportConfig && !modalExcelHoja && !previewOpen) onClose?.() }}
       >
         <div
           style={{
@@ -380,7 +430,6 @@ export default function DisenoTramoDetalleModal({
                         <IconAction
                           as="label"
                           title="Cargar diseño geométrico (CSV o Excel)"
-                          primary
                           disabled={working}
                           style={{ cursor: working ? 'wait' : 'pointer' }}
                         >
@@ -391,7 +440,7 @@ export default function DisenoTramoDetalleModal({
                             accept=".csv,.xlsx,.xls"
                             style={{ display: 'none' }}
                             disabled={working}
-                            onChange={(e) => onFileSelected(e.target.files?.[0])}
+                            onChange={(e) => { void onFileSelected(e.target.files?.[0]) }}
                           />
                         </IconAction>
                       )}
@@ -424,16 +473,33 @@ export default function DisenoTramoDetalleModal({
         </div>
       </div>
 
+      <DisenoExcelHojaModal
+        open={modalExcelHoja}
+        nombreArchivo={archivoPendiente?.name}
+        hojas={excelHojas}
+        selected={excelHojaSel}
+        zIndex={100085}
+        onSelect={setExcelHojaSel}
+        onConfirm={(hoja) => {
+          setExcelHojaSel(hoja)
+          setModalExcelHoja(false)
+          setModalImportConfig(true)
+        }}
+        onClose={() => {
+          if (!localBusy) resetArchivo()
+        }}
+      />
+
       <DisenoImportConfigModal
         open={modalImportConfig}
-        nombreArchivo={archivoPendiente?.name}
-        zIndex={100080}
+        nombreArchivo={
+          archivoPendiente?.name
+            + (excelHojaSel && excelHojas.length > 1 ? ` · hoja «${excelHojaSel}»` : '')
+        }
+        zIndex={100090}
         onConfirm={ejecutarImportacion}
         onClose={() => {
-          if (!localBusy) {
-            setModalImportConfig(false)
-            setArchivoPendiente(null)
-          }
+          if (!localBusy) resetArchivo()
         }}
       />
 

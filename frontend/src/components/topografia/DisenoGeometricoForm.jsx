@@ -35,9 +35,10 @@ function fmtN(v, dec = 3) {
   return Number.isFinite(n) ? n.toFixed(dec) : '—'
 }
 
-function IconBtn({ title, onClick, disabled, danger, primary, children, style }) {
+/** Botón solo ícono — mismo estilo institucional (borde + fondo transparente), sin azul sólido. */
+function IconBtn({ title, onClick, disabled, danger, children, style }) {
   const ui = useTopoTheme()
-  const base = primary ? ui.btnPrimary : ui.btnSecondary
+  const border = ui.t?.border || '#cbd5e1'
   return (
     <button
       type="button"
@@ -47,7 +48,10 @@ function IconBtn({ title, onClick, disabled, danger, primary, children, style })
       onClick={onClick}
       disabled={disabled}
       style={{
-        ...base,
+        background: 'transparent',
+        color: danger ? '#dc2626' : ui.text,
+        border: `1px solid ${danger ? '#fca5a5' : border}`,
+        borderRadius: 8,
         width: 40,
         height: 40,
         padding: 0,
@@ -55,8 +59,9 @@ function IconBtn({ title, onClick, disabled, danger, primary, children, style })
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: danger ? '#dc2626' : (primary ? undefined : ui.text),
+        cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
+        lineHeight: 1,
         ...style,
       }}
     >
@@ -298,7 +303,7 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
         <TopoHelpIcon ayuda={AYUDA_MODULO_DISENO} />
         <PermisoAviso permisos={permisos} accion="crear">
           {puede(permisos, 'crear') && (
-            <IconBtn title="Crear tramo (seleccionar pk_ID en el mapa)" onClick={iniciarCrearTramo} primary disabled={busy}>
+            <IconBtn title="Crear tramo (seleccionar pk_ID en el mapa)" onClick={iniciarCrearTramo} disabled={busy}>
               <IconPlusMap />
             </IconBtn>
           )}
@@ -322,7 +327,6 @@ export default function DisenoGeometricoForm({ contratoId, token, permisos }) {
               <IconBtn
                 title="Nueva estructura del contrato"
                 onClick={() => setModalEstructura({ mode: 'create' })}
-                primary
                 disabled={busy}
               >
                 <IconLayers />
