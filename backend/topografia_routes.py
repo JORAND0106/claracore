@@ -5189,12 +5189,21 @@ def _eliminar_rasante_eje(eje_id: str) -> None:
     }).eq("id", eje_id).execute()
 
 
+def _contar_cotas_filas(filas: list[dict]) -> int:
+    n = 0
+    for f in filas:
+        for key in ("cota_izquierda", "cota_eje", "cota_derecha"):
+            if f.get(key) is not None:
+                n += 1
+    return n
+
+
 def _insertar_rasante_filas(
     eje_id: str,
     filas: list[dict],
     reemplazar: bool,
     config: DisenoImportConfig | None = None,
-) -> int:
+) -> dict:
     if reemplazar:
         supabase.table("topo_diseno_rasante").delete().eq("eje_id", eje_id).execute()
         supabase.table("topo_diseno_perfil_puntos").delete().eq("eje_id", eje_id).execute()
@@ -5214,6 +5223,7 @@ def _insertar_rasante_filas(
         })
     for i in range(0, len(payload), 100):
         supabase.table("topo_diseno_rasante").insert(payload[i : i + 100]).execute()
+    puntos_perfil = 0
     if config:
         _aplicar_config_importacion(eje_id, config)
         puntos = generar_perfil_desde_filas(
@@ -5223,12 +5233,19 @@ def _insertar_rasante_filas(
             config.calcular_intermedias,
             config.paso_intermedias_m,
         )
+        puntos_perfil = len(puntos)
         perf_payload = [{**p, "eje_id": eje_id} for p in puntos]
         for i in range(0, len(perf_payload), 100):
             supabase.table("topo_diseno_perfil_puntos").insert(perf_payload[i : i + 100]).execute()
     now = datetime.now(timezone.utc).isoformat()
     supabase.table("topo_diseno_ejes").update({"updated_at": now}).eq("id", eje_id).execute()
-    return len(payload)
+    return {
+        "ok": True,
+        "filas_importadas": len(payload),
+        "estaciones": len(payload),
+        "cotas_leidas": _contar_cotas_filas(filas),
+        "puntos_perfil": puntos_perfil,
+    }
 
 
 def _guardar_estructura_capas(
@@ -5543,8 +5560,7 @@ def importar_diseno_csv(
         filas = parse_csv_diseno_rasante(body.contenido)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    n = _insertar_rasante_filas(eje_id, filas, body.reemplazar, body.config)
-    return {"ok": True, "filas_importadas": n, "puntos_perfil": True}
+    return _insertar_rasante_filas(eje_id, filas, body.reemplazar, body.config)
 
 
 @router.post("/{contrato_id}/diseno-geometrico/ejes/{eje_id}/import-filas")
@@ -5562,8 +5578,7 @@ def importar_diseno_filas(
         filas = parse_filas_diseno_rasante(body.filas)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    n = _insertar_rasante_filas(eje_id, filas, body.reemplazar, body.config)
-    return {"ok": True, "filas_importadas": n, "puntos_perfil": True}
+    return _insertar_rasante_filas(eje_id, filas, body.reemplazar, body.config)
 
 
 @router.put("/{contrato_id}/diseno-geometrico/ejes/{eje_id}/estructura")

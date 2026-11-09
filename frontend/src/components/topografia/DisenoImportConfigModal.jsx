@@ -63,7 +63,9 @@ const TIPOS = {
 
 
 
-export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm, onClose, zIndex = 9000 }) {
+export default function DisenoImportConfigModal({
+  open, nombreArchivo, onConfirm, onClose, zIndex = 9000, busy = false,
+}) {
 
   const ui = useTopoTheme()
 
@@ -130,6 +132,7 @@ export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm
 
 
   const confirmar = () => {
+    if (busy) return
 
     const w = parseFloat(String(ancho).replace(',', '.'))
 
@@ -411,12 +414,24 @@ export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm
 
 
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-
-          <button type="button" style={ui.btnSecondary} onClick={onClose}>Cancelar</button>
-
-          <button type="button" style={ui.btnPrimary} onClick={confirmar}>Importar diseño</button>
-
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+          {busy && (
+            <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginRight: 'auto' }}>
+              Importando diseño…
+            </span>
+          )}
+          <button type="button" style={ui.btnSecondary} onClick={onClose} disabled={busy}>
+            Cancelar
+          </button>
+          <button
+            type="button"
+            style={{ ...ui.btnPrimary, opacity: busy ? 0.7 : 1, cursor: busy ? 'wait' : 'pointer' }}
+            onClick={confirmar}
+            disabled={busy}
+            title={busy ? 'Importando…' : 'Importar diseño'}
+          >
+            {busy ? 'Importando…' : 'Importar diseño'}
+          </button>
         </div>
 
       </div>
