@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { matrizConBloquesEntrega } from '../../utils/entrega_dg_bloques'
 import EntregaCarteraCargaModal from './EntregaCarteraCargaModal'
+import EntregaNivelacionLecturasModal from './EntregaNivelacionLecturasModal'
 import EntregaVerificacionMatriz from './EntregaVerificacionMatriz'
+import { IconClose, IconUpload } from './disenoDgIcons'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoErrorModal from './TopoErrorModal'
 import TopoExcelSheet from './TopoExcelSheet'
@@ -15,6 +17,37 @@ import {
   useTopografiaApi,
   useTopoTheme,
 } from './topografiaShared'
+
+function IconAction({ title, onClick, disabled, children, style }) {
+  const ui = useTopoTheme()
+  const border = ui.t?.border || '#cbd5e1'
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        background: 'transparent',
+        color: ui.text,
+        border: `1px solid ${border}`,
+        borderRadius: 8,
+        width: 36,
+        height: 36,
+        padding: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
 
 const AYUDA =
   'Módulo Vías: cada libro es un tramo con diseño cargado. Dentro ve capas y entregas. '
@@ -91,6 +124,9 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
   const [libroId, setLibroId] = useState(null)
   const [modoCartera, setModoCartera] = useState('lecturas') // lecturas | cotas
   const [cargaCarteraOpen, setCargaCarteraOpen] = useState(false)
+  const [nivelacionOpen, setNivelacionOpen] = useState(false)
+  const [nivelacionDirty, setNivelacionDirty] = useState(false)
+  const [nivelacionAbrirCarga, setNivelacionAbrirCarga] = useState(false)
 
   const [formNuevo, setFormNuevo] = useState({
     nombre: '',
@@ -142,18 +178,18 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
   }, [api, showError])
 
   const carteraSinGuardar = useCallback(
-    () => matrizRef.current?.isDirty?.() ?? carteraDirty,
-    [carteraDirty],
+    () => Boolean(matrizRef.current?.isDirty?.() || carteraDirty || nivelacionDirty),
+    [carteraDirty, nivelacionDirty],
   )
 
   useEffect(() => {
     if (!registerUnsavedGuard) return undefined
     registerUnsavedGuard({
-      isDirty: () => matrizRef.current?.isDirty?.() ?? carteraDirty,
+      isDirty: () => Boolean(matrizRef.current?.isDirty?.() || carteraDirty || nivelacionDirty),
       saveCartera: () => matrizRef.current?.saveCartera?.() ?? Promise.resolve(false),
     })
     return () => registerUnsavedGuard(null)
-  }, [registerUnsavedGuard, carteraDirty])
+  }, [registerUnsavedGuard, carteraDirty, nivelacionDirty])
 
   const ejecutarSalidaPendiente = async (guardar) => {
     if (!salirPendiente) return
@@ -171,6 +207,9 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
         setSel(null)
         setDetalle(null)
         setCargaCarteraOpen(false)
+        setNivelacionOpen(false)
+        setNivelacionDirty(false)
+        setNivelacionAbrirCarga(false)
       }
       setSalirPendiente(null)
     } catch (e) {
@@ -502,14 +541,26 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     return sector.tramos.map((t) => `${t.tramo} (PK ${fmtN(t.abscisa_min, 2)}–${fmtN(t.abscisa_max, 2)})`).join(' · ')
   }, [sector])
 
-  const cerrarEntregaPopup = () => {
-    if (carteraDirty) {
+  const cerrarEntregaPopup = (e) => {
+    e?.stopPropagation?.()
+    e?.preventDefault?.()
+    // El popup de nivelación debe cerrarse primero (queda encima).
+    if (nivelacionOpen) return
+    if (carteraSinGuardar()) {
       setSalirPendiente({ tipo: 'cerrar_entrega' })
       return
     }
     setSel(null)
     setDetalle(null)
     setCargaCarteraOpen(false)
+    setNivelacionOpen(false)
+    setNivelacionDirty(false)
+    setNivelacionAbrirCarga(false)
+  }
+
+  const abrirNivelacion = ({ conCarga = false } = {}) => {
+    setNivelacionAbrirCarga(Boolean(conCarga))
+    setNivelacionOpen(true)
   }
 
   return (
@@ -787,29 +838,28 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
           style={{
             position: 'fixed', inset: 0, zIndex: 100060,
             background: 'rgba(15,23,42,0.55)',
-            display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-            padding: '16px 12px', overflow: 'auto',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 12, overflow: 'hidden',
           }}
           onClick={cerrarEntregaPopup}
         >
         <div
-          style={{ display: 'grid', gap: 16, width: 'min(1180px, 98vw)', paddingBottom: 24 }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            width: 'min(1180px, 98vw)',
+            maxHeight: 'calc(100vh - 24px)',
+            minWidth: 0,
+            overflow: 'hidden',
+          }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ ...ui.card, padding: '14px 16px' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 20px', alignItems: 'baseline' }}>
-              <button
-                type="button"
-                title="Cerrar entrega"
-                aria-label="Cerrar entrega"
-                onClick={cerrarEntregaPopup}
-                style={{
-                  ...ui.btnSecondary, width: 36, height: 36, padding: 0,
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                }}
-              >
-                ×
-              </button>
+          <div style={{ ...ui.card, padding: '14px 16px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 20px', alignItems: 'center' }}>
+              <IconAction title="Cerrar entrega" onClick={cerrarEntregaPopup}>
+                <IconClose />
+              </IconAction>
               <h3 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: ui.text }}>{entrega.nombre}</h3>
               <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
                 Eje: <strong style={{ color: ui.text }}>{ejeInfo?.nombre}</strong>
@@ -877,7 +927,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
           </div>
 
           <div style={{
-            ...ui.card, padding: '10px 14px',
+            ...ui.card, padding: '10px 14px', flexShrink: 0,
             display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
           }}>
             <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.text }}>Modo de cartera</span>
@@ -888,7 +938,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                 checked={modoCartera === 'lecturas'}
                 onChange={() => setModoCartera('lecturas')}
               />
-              Por lecturas (amarre + Vi)
+              Por lecturas
             </label>
             <label style={{ fontSize: 'var(--cc-xs)', color: ui.text, display: 'inline-flex', gap: 4, alignItems: 'center' }}>
               <input
@@ -899,44 +949,83 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
               />
               Por cotas directas
             </label>
+            {modoCartera === 'lecturas' && (
+              <PermisoAviso permisos={permisos} accion="editar">
+                <button
+                  type="button"
+                  title="Abrir nivelación por lecturas (cartera | resultados)"
+                  style={ui.btnPrimary}
+                  disabled={busy}
+                  onClick={() => abrirNivelacion()}
+                >
+                  Nivelación
+                </button>
+              </PermisoAviso>
+            )}
             <PermisoAviso permisos={permisos} accion="editar">
-              <button
-                type="button"
-                title="Cargar cartera desde Excel, CSV o pegado"
-                style={ui.btnSecondary}
+              <IconAction
+                title="Cargar cartera (Excel, CSV o pegado)"
                 disabled={busy}
-                onClick={() => setCargaCarteraOpen(true)}
+                onClick={() => {
+                  if (modoCartera === 'lecturas') abrirNivelacion({ conCarga: true })
+                  else setCargaCarteraOpen(true)
+                }}
               >
-                Cargar cartera
-              </button>
+                <IconUpload />
+              </IconAction>
             </PermisoAviso>
           </div>
 
-          <EntregaVerificacionMatriz
-            ref={matrizRef}
-            key={entrega.id}
-            ui={ui}
-            detalle={detalle}
-            permisos={permisos}
-            busy={busy}
-            puntosNiv={puntosNiv}
-            modoCartera={modoCartera}
-            onGuardarCartera={guardarCartera}
-            onDirtyChange={setCarteraDirty}
-            onAddBloque={agregarBloque}
-            onRecalcular={recalcular}
-            scrollToAbscisa={scrollAbscisa}
-            addingBloqueAt={addingBloqueAt}
-          />
+          <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <EntregaVerificacionMatriz
+              ref={matrizRef}
+              key={entrega.id}
+              ui={ui}
+              detalle={detalle}
+              permisos={permisos}
+              busy={busy}
+              puntosNiv={puntosNiv}
+              modoCartera={modoCartera}
+              soloResultados={modoCartera === 'lecturas'}
+              onGuardarCartera={guardarCartera}
+              onDirtyChange={setCarteraDirty}
+              onAddBloque={agregarBloque}
+              onRecalcular={recalcular}
+              scrollToAbscisa={scrollAbscisa}
+              addingBloqueAt={addingBloqueAt}
+            />
+          </div>
 
         </div>
         </div>
       )}
 
+      <EntregaNivelacionLecturasModal
+        open={nivelacionOpen && !!detalle && modoCartera === 'lecturas'}
+        detalle={detalle}
+        permisos={permisos}
+        puntosNiv={puntosNiv}
+        busy={busy}
+        zIndex={100080}
+        abrirCarga={nivelacionAbrirCarga}
+        onAbrirCargaConsumida={() => setNivelacionAbrirCarga(false)}
+        onDirtyChange={setNivelacionDirty}
+        onGuardar={async (payload) => {
+          await guardarCartera(payload)
+        }}
+        onAddBloque={agregarBloque}
+        addingBloqueAt={addingBloqueAt}
+        onClose={() => {
+          setNivelacionOpen(false)
+          setNivelacionAbrirCarga(false)
+        }}
+      />
+
       <EntregaCarteraCargaModal
-        open={cargaCarteraOpen && !!detalle}
-        modo={modoCartera}
+        open={cargaCarteraOpen && !!detalle && modoCartera === 'cotas'}
+        modo="cotas"
         ordenadasCols={detalle?.ordenadas_cols || []}
+        zIndex={100100}
         onClose={() => setCargaCarteraOpen(false)}
         onApply={async (parsed) => {
           if (!sel) return
@@ -948,10 +1037,11 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
             }))
             await api(`/entrega-dg/${sel}/guardar-cartera`, {
               method: 'POST',
-              body: JSON.stringify({ filas, bloques: [], modo_cartera: parsed.modo }),
+              body: JSON.stringify({ filas, bloques: [], modo_cartera: 'cotas' }),
             })
             await cargarDetalle(sel, { force: true })
             setCargaCarteraOpen(false)
+            setCarteraDirty(false)
           } finally {
             setBusy(false)
           }
