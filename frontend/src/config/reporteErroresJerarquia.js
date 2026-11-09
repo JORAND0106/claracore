@@ -513,7 +513,7 @@ export const REPORTE_ERRORES_JERARQUIA = {
         },
       },
       entrega_dg: {
-        label: 'Estructura de Vía',
+        label: 'Vías',
         sectores: {
           pestanas: 'Pestañas de entregas',
           cartera: 'Cartera lecturas / deltas',

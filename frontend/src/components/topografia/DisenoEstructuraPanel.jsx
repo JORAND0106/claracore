@@ -44,7 +44,7 @@ const CAPAS_COLS = [
   { key: 'ord', label: '#', width: 44 },
   { key: 'capa', label: 'Capa' },
   { key: 'esp', label: 'Espesor (m)', width: 96 },
-  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en Estructura de Vía' },
+  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en Vías' },
   { key: 'sa', label: 'Sobre ancho (m)', width: 100, ayuda: 'Metros adicionales al ancho de vía del tramo para esta capa' },
   { key: 'acc', label: '', width: 40 },
 ]
@@ -302,7 +302,7 @@ const NUEVA_COLS = [
   { key: 'ord', label: '#', width: 44 },
   { key: 'capa', label: 'Capa' },
   { key: 'esp', label: 'Espesor (m)', width: 96 },
-  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en Estructura de Vía' },
+  { key: 'ref', label: 'Ref. espesor', width: 140, ayuda: 'Capa inferior para cálculo de espesor en Vías' },
   { key: 'sa', label: 'Sobre ancho (m)', width: 100, ayuda: 'Metros adicionales al ancho de vía del tramo para esta capa' },
   { key: 'acc', label: '', width: 40 },
 ]
@@ -437,7 +437,7 @@ export function DisenoNuevaEstructuraModal({
                   value={f.referencia_orden ?? ''}
                   onChange={(e) => update(idx, { referencia_orden: e.target.value })}
                   style={sheet.cellSelect}
-                  title="Capa inferior para cálculo de espesor en Estructura de Vía"
+                  title="Capa inferior para cálculo de espesor en Vías"
                 >
                   <option value="">
                     Auto ({idx + 1 < filas.length ? (filas[idx + 1].nombre || `Capa ${idx + 2}`) : 'Terreno'})

@@ -705,7 +705,7 @@ export async function readTopoOffline(contratoId, path, query = '') {
     if (det) return det
     const row = await topoDb.topo_entrega_dg.get(id)
     if (row) return { entrega: row, lecturas: [], _offline_partial: true }
-    throw new Error('Estructura de Vía no disponible offline. Ábrala una vez con conexión o espere la descarga de referencia.')
+    throw new Error('Vías no disponible offline. Ábrala una vez con conexión o espere la descarga de referencia.')
   }
 
   if (path === '/diseno-geometrico/ejes') {

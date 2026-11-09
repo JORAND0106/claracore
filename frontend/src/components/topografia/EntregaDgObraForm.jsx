@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { matrizConBloquesEntrega } from '../../utils/entrega_dg_bloques'
+import EntregaCarteraCargaModal from './EntregaCarteraCargaModal'
 import EntregaVerificacionMatriz from './EntregaVerificacionMatriz'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoErrorModal from './TopoErrorModal'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
+import ViasLibrosVista from './ViasLibrosVista'
 import {
   PermisoAviso,
   puede,
@@ -15,8 +17,9 @@ import {
 } from './topografiaShared'
 
 const AYUDA =
-  'Seguimiento de entrega en obra por eje y capa. Indique el rango de abscisas a verificar; '
-  + 'el sistema reconoce el tramo/sector y muestra la matriz Izq · Eje · Der con diseño, terreno (Vi) y diferencias.'
+  'Módulo Vías: cada libro es un tramo con diseño cargado. Dentro ve capas y entregas. '
+  + 'La cota de diseño de cada capa es la rasante menos los espesores de las capas de encima. '
+  + 'La cartera se carga por lecturas (con amarre nuevo o de biblioteca) o por cotas directas.'
 
 function fmtN(v, dec = 3) {
   if (v == null || v === '') return '—'
@@ -85,6 +88,9 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
   const [carteraDirty, setCarteraDirty] = useState(false)
   const [salirPendiente, setSalirPendiente] = useState(null)
   const [guardSalidaBusy, setGuardSalidaBusy] = useState(false)
+  const [libroId, setLibroId] = useState(null)
+  const [modoCartera, setModoCartera] = useState('lecturas') // lecturas | cotas
+  const [cargaCarteraOpen, setCargaCarteraOpen] = useState(false)
 
   const [formNuevo, setFormNuevo] = useState({
     nombre: '',
@@ -95,6 +101,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     operador: '',
     fecha_campo: '',
     tolerancia_m: '0.005',
+    modo_cartera: 'lecturas',
   })
 
   const showError = useCallback((err) => {
@@ -159,7 +166,11 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
       if (salirPendiente.type === 'tab') {
         await cargarDetalle(salirPendiente.id)
       } else if (salirPendiente.type === 'nuevo') {
-        abrirNuevo()
+        abrirNuevo(salirPendiente.ejeId || null)
+      } else if (salirPendiente.tipo === 'cerrar_entrega' || salirPendiente.type === 'cerrar_entrega') {
+        setSel(null)
+        setDetalle(null)
+        setCargaCarteraOpen(false)
       }
       setSalirPendiente(null)
     } catch (e) {
@@ -177,12 +188,12 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     cargarDetalle(id)
   }
 
-  const requestAbrirNuevo = () => {
+  const requestAbrirNuevo = (ejePreferido = null) => {
     if (detalle && !creando && carteraSinGuardar()) {
-      setSalirPendiente({ type: 'nuevo' })
+      setSalirPendiente({ type: 'nuevo', ejeId: ejePreferido })
       return
     }
-    abrirNuevo()
+    abrirNuevo(ejePreferido)
   }
 
   const cargarDetalle = useCallback(async (id, { scrollToPendiente = false, force = false } = {}) => {
@@ -326,14 +337,14 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     api,
   ])
 
-  const abrirNuevo = () => {
+  const abrirNuevo = (ejePreferido = null) => {
     nombreManualRef.current = false
     toleranciaManualRef.current = false
     setCreando(true)
     setSel(null)
     setDetalle(null)
     setPreviewRango(null)
-    const ejeId = ejes[0]?.id || ''
+    const ejeId = ejePreferido || libroId || ejes[0]?.id || ''
     setFormNuevo({
       nombre: '',
       eje_id: ejeId,
@@ -343,6 +354,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
       operador: '',
       fecha_campo: new Date().toISOString().slice(0, 10),
       tolerancia_m: '0.005',
+      modo_cartera: modoCartera || 'lecturas',
     })
   }
 
@@ -382,7 +394,11 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
         }),
       })
       await cargarLista()
-      if (row?.id) await cargarDetalle(row.id, { scrollToPendiente: true })
+      if (row?.id) {
+        setLibroId(formNuevo.eje_id || libroId)
+        setModoCartera(formNuevo.modo_cartera || 'lecturas')
+        await cargarDetalle(row.id, { scrollToPendiente: true })
+      }
     } catch (e) {
       showError(e)
     } finally {
@@ -486,89 +502,44 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     return sector.tramos.map((t) => `${t.tramo} (PK ${fmtN(t.abscisa_min, 2)}–${fmtN(t.abscisa_max, 2)})`).join(' · ')
   }, [sector])
 
+  const cerrarEntregaPopup = () => {
+    if (carteraDirty) {
+      setSalirPendiente({ tipo: 'cerrar_entrega' })
+      return
+    }
+    setSel(null)
+    setDetalle(null)
+    setCargaCarteraOpen(false)
+  }
+
   return (
     <div>
-      <div style={ui.tabBar} role="tablist" aria-label="Entregas DG Obra">
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <PermisoAviso permisos={permisos} accion="crear">
-            <button
-              type="button"
-              style={{ ...ui.tabBtn(creando), borderStyle: 'dashed', color: ui.accent }}
-              onClick={requestAbrirNuevo}
-              title="Nueva entrega"
-            >
-              + Nuevo
-            </button>
-          </PermisoAviso>
-          <TopoHelpIcon ayuda={AYUDA} />
-        </div>
-        {lista.map((n, tabIdx) => {
-          const active = sel === n.id && !creando
-          const label = (n.nombre || '').trim() || 'Sin nombre'
-          const dragging = dragTabIdx === tabIdx
-          return (
-            <div
-              key={n.id}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'stretch',
-                flexShrink: 0,
-                opacity: dragging ? 0.55 : 1,
-              }}
-              draggable={puedeReordenarTabs}
-              onDragStart={onTabDragStart(tabIdx)}
-              onDragOver={onTabDragOver(tabIdx)}
-              onDragEnd={onTabDragEnd}
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active}
-                style={{
-                  ...ui.tabBtn(active),
-                  cursor: puedeReordenarTabs ? (dragging ? 'grabbing' : 'grab') : 'pointer',
-                }}
-                onClick={() => requestCargarDetalle(n.id)}
-                title={puedeReordenarTabs
-                  ? `${label} — arrastre para cambiar el orden`
-                  : label}
-              >
-                <span>{label}</span>
-                <small style={{ color: ui.textMuted, fontWeight: 400 }}>
-                  ({n.capa_nombre || 'capa'} · {n.avance_pct ?? 0}%)
-                </small>
-              </button>
-              {puede(permisos, 'eliminar') && (
-                <button
-                  type="button"
-                  title="Eliminar entrega"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setConfirmEliminar({ id: n.id, nombre: label })
-                  }}
-                  style={{
-                    ...ui.btnSecondary,
-                    color: '#dc2626',
-                    padding: '0 8px',
-                    marginLeft: -4,
-                    borderRadius: '0 8px 0 0',
-                    alignSelf: 'stretch',
-                    fontSize: 'var(--cc-lg)',
-                    lineHeight: 1,
-                  }}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          )
-        })}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <TopoHelpIcon ayuda={AYUDA} />
+        <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, flex: 1 }}>
+          Libros por tramo · capas · entregas
+        </span>
       </div>
 
-      {!lista.length && !creando && (
-        <p style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', margin: '0 0 12px' }}>
-          Aún no hay entregas. Pulse «+ Nuevo» para crear un seguimiento (requiere tramo con diseño geométrico y estructura en Configuración DG).
-        </p>
+      {!creando && !detalle && (
+        <ViasLibrosVista
+          ejes={ejes}
+          lista={lista}
+          libroId={libroId}
+          onAbrirLibro={setLibroId}
+          onCerrarLibro={() => setLibroId(null)}
+          onNuevaEntrega={(eid) => {
+            setLibroId(eid)
+            requestAbrirNuevo(eid)
+          }}
+          onAbrirEntrega={(id) => requestCargarDetalle(id)}
+          onEliminarEntrega={(e) => setConfirmEliminar({
+            id: e.id,
+            nombre: (e.nombre || '').trim() || 'Sin nombre',
+          })}
+          canCreate={puede(permisos, 'crear')}
+          canDelete={puede(permisos, 'eliminar')}
+        />
       )}
 
       {creando && (
@@ -579,7 +550,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                 {ejesIncompletos.length > 0 ? (
                   <>
                     <p style={{ margin: '0 0 6px' }}>
-                      Hay tramos en Configuración DG, pero aún no están listos para Estructura de Vía (se necesitan diseño geométrico y estructura):
+                      Hay tramos en Configuración DG, pero aún no están listos para Vías (se necesitan diseño geométrico y estructura):
                     </p>
                     <ul style={{ margin: 0, paddingLeft: 18 }}>
                       {ejesIncompletos.map((e) => (
@@ -603,7 +574,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
             )}
             <TopoExcelSheet
               sheet={sheet}
-              title="Nueva entrega DG Obra"
+              title="Nueva entrega — Vías"
               minWidth={720}
               columns={[
                 { key: 'nombre', label: 'Nombre', width: '16%' },
@@ -768,22 +739,77 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
               </div>
             )}
 
+            <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.text }}>Cartera:</span>
+              <label style={{ fontSize: 'var(--cc-xs)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <input
+                  type="radio"
+                  checked={(formNuevo.modo_cartera || 'lecturas') === 'lecturas'}
+                  onChange={() => setFormNuevo({ ...formNuevo, modo_cartera: 'lecturas' })}
+                />
+                Por lecturas
+              </label>
+              <label style={{ fontSize: 'var(--cc-xs)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <input
+                  type="radio"
+                  checked={formNuevo.modo_cartera === 'cotas'}
+                  onChange={() => setFormNuevo({ ...formNuevo, modo_cartera: 'cotas' })}
+                />
+                Por cotas directas
+              </label>
+            </div>
+
             <button
               type="button"
               style={{ ...ui.btnPrimary, marginTop: 12 }}
               onClick={crearEntrega}
               disabled={busy || !ejes.length}
             >
-              {busy ? 'Creando…' : 'Crear entrega e ir al sector'}
+              {busy ? 'Creando…' : 'Crear entrega'}
+            </button>
+            <button
+              type="button"
+              style={{ ...ui.btnSecondary, marginTop: 12, marginLeft: 8 }}
+              onClick={() => { setCreando(false); setPreviewRango(null) }}
+              disabled={busy}
+            >
+              Cancelar
             </button>
           </div>
         </PermisoAviso>
       )}
 
       {detalle && entrega && !creando && (
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Entrega de vía"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 100060,
+            background: 'rgba(15,23,42,0.55)',
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+            padding: '16px 12px', overflow: 'auto',
+          }}
+          onClick={cerrarEntregaPopup}
+        >
+        <div
+          style={{ display: 'grid', gap: 16, width: 'min(1180px, 98vw)', paddingBottom: 24 }}
+          onClick={(e) => e.stopPropagation()}
+        >
           <div style={{ ...ui.card, padding: '14px 16px' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 20px', alignItems: 'baseline' }}>
+              <button
+                type="button"
+                title="Cerrar entrega"
+                aria-label="Cerrar entrega"
+                onClick={cerrarEntregaPopup}
+                style={{
+                  ...ui.btnSecondary, width: 36, height: 36, padding: 0,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                ×
+              </button>
               <h3 style={{ margin: 0, fontSize: 'var(--cc-lg)', color: ui.text }}>{entrega.nombre}</h3>
               <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
                 Eje: <strong style={{ color: ui.text }}>{ejeInfo?.nombre}</strong>
@@ -850,6 +876,42 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
             )}
           </div>
 
+          <div style={{
+            ...ui.card, padding: '10px 14px',
+            display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
+          }}>
+            <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.text }}>Modo de cartera</span>
+            <label style={{ fontSize: 'var(--cc-xs)', color: ui.text, display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+              <input
+                type="radio"
+                name="modo-cartera"
+                checked={modoCartera === 'lecturas'}
+                onChange={() => setModoCartera('lecturas')}
+              />
+              Por lecturas (amarre + Vi)
+            </label>
+            <label style={{ fontSize: 'var(--cc-xs)', color: ui.text, display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+              <input
+                type="radio"
+                name="modo-cartera"
+                checked={modoCartera === 'cotas'}
+                onChange={() => setModoCartera('cotas')}
+              />
+              Por cotas directas
+            </label>
+            <PermisoAviso permisos={permisos} accion="editar">
+              <button
+                type="button"
+                title="Cargar cartera desde Excel, CSV o pegado"
+                style={ui.btnSecondary}
+                disabled={busy}
+                onClick={() => setCargaCarteraOpen(true)}
+              >
+                Cargar cartera
+              </button>
+            </PermisoAviso>
+          </div>
+
           <EntregaVerificacionMatriz
             ref={matrizRef}
             key={entrega.id}
@@ -858,6 +920,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
             permisos={permisos}
             busy={busy}
             puntosNiv={puntosNiv}
+            modoCartera={modoCartera}
             onGuardarCartera={guardarCartera}
             onDirtyChange={setCarteraDirty}
             onAddBloque={agregarBloque}
@@ -867,7 +930,33 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
           />
 
         </div>
+        </div>
       )}
+
+      <EntregaCarteraCargaModal
+        open={cargaCarteraOpen && !!detalle}
+        modo={modoCartera}
+        ordenadasCols={detalle?.ordenadas_cols || []}
+        onClose={() => setCargaCarteraOpen(false)}
+        onApply={async (parsed) => {
+          if (!sel) return
+          setBusy(true)
+          try {
+            const filas = (parsed.filas || []).map((f) => ({
+              abscisa: f.abscisa,
+              lecturas: f.lecturas,
+            }))
+            await api(`/entrega-dg/${sel}/guardar-cartera`, {
+              method: 'POST',
+              body: JSON.stringify({ filas, bloques: [], modo_cartera: parsed.modo }),
+            })
+            await cargarDetalle(sel, { force: true })
+            setCargaCarteraOpen(false)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
 
       {salirPendiente && (
         <TopoConfirmModal

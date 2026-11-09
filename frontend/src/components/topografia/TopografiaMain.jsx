@@ -55,8 +55,8 @@ const VIAS = [
   },
   {
     id: 'topo_entrega_dg',
-    label: 'Estructura de Vía',
-    ayuda: 'Seguimiento de entrega en obra por eje y capa: lecturas, deltas y avance por tramo.',
+    label: 'Vías',
+    ayuda: 'Libros por tramo con diseño cargado: capas, entregas, cotas de obra y avance. Permisos SICOE Obra.',
   },
 ]
 

@@ -80,6 +80,7 @@ from topografia_entrega_utils import (
     grilla_terreno_natural_entrega,
     es_entrega_terreno_natural,
     capa_nombre_vigente_entrega,
+    enriquecer_tramo_rasante,
     info_sector_rango,
     mapa_cota_campo_lecturas,
     ordenadas_referencia_izq_eje_der,
@@ -1692,6 +1693,7 @@ class EntregaDgBloqueBody(BaseModel):
 class EntregaDgFilaVi(BaseModel):
     ordenada: float
     vi: Optional[float] = None
+    cota: Optional[float] = None  # modo cotas directas (sin lectura/HI)
 
 
 class EntregaDgFilaBody(BaseModel):
@@ -1706,6 +1708,7 @@ class EntregaDgFilaBody(BaseModel):
 class EntregaDgBloquePatch(BaseModel):
     id: str
     punto_biblioteca_id: Optional[str] = None
+    nombre_punto: Optional[str] = None
     v_mas: Optional[float] = None
     altura_instrumento: Optional[float] = None
     cota_punto: Optional[float] = None
@@ -1714,6 +1717,7 @@ class EntregaDgBloquePatch(BaseModel):
 class EntregaDgCarteraBody(BaseModel):
     filas: List[EntregaDgFilaBody] = Field(default_factory=list)
     bloques: List[EntregaDgBloquePatch] = Field(default_factory=list)
+    modo_cartera: Optional[str] = None  # 'lecturas' | 'cotas'
 
 
 class EntregaDgLecturaBody(BaseModel):
@@ -5662,12 +5666,13 @@ def _contexto_entrega_eje(contrato_id: int, eje_id: str) -> dict:
 def _grilla_entrega(contrato_id: int, entrega: dict, solo_referencia: bool = True) -> list[dict]:
     """Grilla de diseño respetando la estructura del sector que corresponde a cada abscisa."""
     ctx = _contexto_entrega_eje(contrato_id, entrega["eje_id"])
+    eje_nombre = (ctx.get("eje") or {}).get("nombre")
+    sectores = ctx.get("sectores") or []
     ras = filtrar_rasante_rango(
-        ctx["rasante"],
+        enriquecer_tramo_rasante(ctx["rasante"], eje_nombre=eje_nombre, sectores=sectores),
         entrega.get("abscisa_desde"),
         entrega.get("abscisa_hasta"),
     )
-    sectores = ctx.get("sectores") or []
     indice = int(entrega["indice_capa"])
     capas_canonica = ctx["capas"]
     if len(sectores) <= 1:
@@ -5795,28 +5800,22 @@ def _cargar_entrega_detalle(contrato_id: int, entrega_id: str) -> dict:
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
     ctx = _contexto_entrega_eje(contrato_id, entrega["eje_id"])
+    eje_nombre = (ctx.get("eje") or {}).get("nombre")
+    sectores = ctx.get("sectores") or []
+    ras_enriquecida = enriquecer_tramo_rasante(
+        ctx["rasante"], eje_nombre=eje_nombre, sectores=sectores,
+    )
     ras_filtrada = filtrar_rasante_rango(
-        ctx["rasante"],
+        ras_enriquecida,
         entrega.get("abscisa_desde"),
         entrega.get("abscisa_hasta"),
     )
     capas = ctx["capas"]
     idx_capa = int(entrega["indice_capa"])
     es_terreno = es_entrega_terreno_natural(idx_capa, len(capas))
-    grilla_full = grilla_entrega_capa(
-        ras_filtrada,
-        ctx["eje"],
-        capas,
-        idx_capa,
-        solo_referencia=False,
-    )
-    grilla = grilla_entrega_capa(
-        ras_filtrada,
-        ctx["eje"],
-        capas,
-        idx_capa,
-        solo_referencia=True,
-    )
+    # Grilla sector-aware (misma lógica que lecturas unitarias)
+    grilla_full = _grilla_entrega(contrato_id, entrega, solo_referencia=False)
+    grilla = [g for g in grilla_full if g.get("es_referencia")] or grilla_full
     ordenadas_ref = ordenadas_referencia_izq_eje_der(grilla_full)
     lecturas = (
         supabase.table("topo_entrega_dg_lecturas")
@@ -5838,9 +5837,11 @@ def _cargar_entrega_detalle(contrato_id: int, entrega_id: str) -> dict:
     )
     resumen = resumen_sectores_entrega(ras_filtrada, grilla_full, lecturas, ordenadas_ref)
     sector = info_sector_rango(
-        ctx["rasante"],
+        ras_enriquecida,
         entrega.get("abscisa_desde"),
         entrega.get("abscisa_hasta"),
+        eje_nombre=eje_nombre,
+        sectores=sectores,
     )
     grilla_ref = None
     ref_idx = None
@@ -5959,8 +5960,16 @@ def preview_entrega_dg_rango(
     idx = int(indice_capa)
     if idx < 0 or idx > len(capas):
         raise HTTPException(status_code=422, detail="Índice de capa inválido.")
-    sector = info_sector_rango(ctx["rasante"], abscisa_desde, abscisa_hasta)
-    ras = filtrar_rasante_rango(ctx["rasante"], abscisa_desde, abscisa_hasta)
+    eje_nombre = (ctx.get("eje") or {}).get("nombre")
+    sectores = ctx.get("sectores") or []
+    ras_enriquecida = enriquecer_tramo_rasante(
+        ctx["rasante"], eje_nombre=eje_nombre, sectores=sectores,
+    )
+    sector = info_sector_rango(
+        ras_enriquecida, abscisa_desde, abscisa_hasta,
+        eje_nombre=eje_nombre, sectores=sectores,
+    )
+    ras = filtrar_rasante_rango(ras_enriquecida, abscisa_desde, abscisa_hasta)
     grilla_full = grilla_entrega_capa(ras, ctx["eje"], capas, idx, solo_referencia=False)
     ordenadas_ref = ordenadas_referencia_izq_eje_der(grilla_full)
     abscisas = abscisas_referencia_en_rango(grilla_full, abscisa_desde, abscisa_hasta)
@@ -6296,13 +6305,21 @@ def guardar_entrega_dg_cartera(
     _assert_editable(entrega.get("nivel_validacion", 0))
     for bp in body.bloques:
         patch: dict[str, Any] = {}
-        if bp.punto_biblioteca_id is not None:
-            patch["punto_biblioteca_id"] = bp.punto_biblioteca_id or None
-            if bp.punto_biblioteca_id:
-                pto = _punto_nivelacion_biblioteca(bp.punto_biblioteca_id, contrato_id)
-                patch["nombre_punto"] = pto.get("nombre")
-                if bp.cota_punto is None and pto.get("cota") is not None:
-                    patch["cota_punto"] = float(pto["cota"])
+        # Amarre: biblioteca existente o punto nuevo (nombre + cota) → biblioteca
+        if bp.punto_biblioteca_id or (bp.nombre_punto and bp.cota_punto is not None):
+            pid, pnom = _asegurar_punto_biblioteca_entrega(
+                contrato_id,
+                punto_id=bp.punto_biblioteca_id,
+                nombre=bp.nombre_punto,
+                cota=bp.cota_punto,
+            )
+            if pid:
+                patch["punto_biblioteca_id"] = pid
+                patch["nombre_punto"] = pnom
+        elif bp.punto_biblioteca_id is not None and not bp.punto_biblioteca_id:
+            patch["punto_biblioteca_id"] = None
+        if bp.nombre_punto is not None and "nombre_punto" not in patch:
+            patch["nombre_punto"] = (bp.nombre_punto or "").strip() or None
         if bp.v_mas is not None:
             patch["v_mas"] = bp.v_mas
         if bp.cota_punto is not None:
@@ -6330,7 +6347,63 @@ def guardar_entrega_dg_cartera(
 def _fila_tiene_lecturas(body: EntregaDgFilaBody) -> bool:
     if body.vi_izq is not None or body.vi_eje is not None or body.vi_der is not None:
         return True
-    return any(item.vi is not None for item in body.lecturas)
+    return any(item.vi is not None or item.cota is not None for item in body.lecturas)
+
+
+def _asegurar_punto_biblioteca_entrega(
+    contrato_id: int,
+    *,
+    punto_id: str | None,
+    nombre: str | None,
+    cota: float | None,
+) -> tuple[str | None, str | None]:
+    """Reutiliza o crea punto en biblioteca para amarre de cartera (no exige existencia previa)."""
+    if punto_id:
+        pto = _row("topo_puntos", id=punto_id, contrato_id=contrato_id)
+        if not pto:
+            raise HTTPException(status_code=422, detail="Punto de amarre no encontrado en la biblioteca.")
+        return pto["id"], pto.get("nombre")
+    nom = (nombre or "").strip()
+    if not nom:
+        return None, None
+    if cota is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Indique la cota del punto «{nom}» para guardarlo en la biblioteca.",
+        )
+    existing = (
+        supabase.table("topo_puntos")
+        .select("id, nombre, cota")
+        .eq("contrato_id", contrato_id)
+        .eq("nombre", nom)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        pid = existing[0]["id"]
+        supabase.table("topo_puntos").update({
+            "cota": float(cota),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", pid).execute()
+        return pid, nom
+    row = (
+        supabase.table("topo_puntos")
+        .insert({
+            "contrato_id": contrato_id,
+            "nombre": nom,
+            "cota": float(cota),
+            "tipo": "BM",
+            "verificado": True,
+            "modulo_origen": "entrega_dg",
+        })
+        .execute()
+        .data
+    )
+    if not row:
+        raise HTTPException(status_code=500, detail="No se pudo crear el punto de amarre en la biblioteca.")
+    return row[0]["id"], nom
 
 
 def _grillas_entrega_persistir(
@@ -6340,14 +6413,14 @@ def _grillas_entrega_persistir(
     ctx = _contexto_entrega_eje(contrato_id, entrega["eje_id"])
     capas = ctx["capas"]
     idx_capa = int(entrega["indice_capa"])
+    eje_nombre = (ctx.get("eje") or {}).get("nombre")
+    sectores = ctx.get("sectores") or []
     ras = filtrar_rasante_rango(
-        ctx["rasante"],
+        enriquecer_tramo_rasante(ctx["rasante"], eje_nombre=eje_nombre, sectores=sectores),
         entrega.get("abscisa_desde"),
         entrega.get("abscisa_hasta"),
     )
-    grilla_full = grilla_entrega_capa(
-        ras, ctx["eje"], capas, idx_capa, solo_referencia=False,
-    )
+    grilla_full = _grilla_entrega(contrato_id, entrega, solo_referencia=False)
     grilla_ref = None
     if not es_entrega_terreno_natural(idx_capa, len(capas)):
         ref_idx = referencia_analisis_indice(capas, idx_capa)
@@ -6441,26 +6514,31 @@ def _persistir_cartera_filas_batch(
                     continue
                 vi_por_ordenada[round(float(ordenadas_ref[col]), 4)] = vi
 
+        cota_por_ordenada: dict[float, float | None] = {}
+        for item in body.lecturas:
+            cota_por_ordenada[round(float(item.ordenada), 4)] = item.cota
+
         for col in ordenadas_cols:
             ord_v = col["ordenada"]
-            vi = vi_por_ordenada.get(round(float(ord_v), 4))
-            if vi is None:
+            key_ord = round(float(ord_v), 4)
+            vi = vi_por_ordenada.get(key_ord)
+            cota_dir = cota_por_ordenada.get(key_ord)
+            if vi is None and cota_dir is None:
                 continue
             max_orden += 1
-            pk_ab = round(float(body.abscisa), 6)
-            pk_ord = round(float(ord_v), 4)
             cota_ref_campo = cota_campo_ref_interp(lecturas_ref_map, body.abscisa, ord_v)
             calc = calcular_lectura_entrega(
                 grilla_full,
                 body.abscisa,
                 ord_v,
-                hi,
-                vi,
+                None if cota_dir is not None else hi,
+                None if cota_dir is not None else vi,
                 tol,
                 capas=capas,
                 indice_capa=idx_capa,
                 grilla_ref=grilla_ref,
                 cota_ref_campo=cota_ref_campo,
+                cota_campo_directa=cota_dir,
             )
             rows_insert.append({
                 "entrega_id": entrega_id,
@@ -6469,8 +6547,8 @@ def _persistir_cartera_filas_batch(
                 "tramo": tramo or calc.get("tramo"),
                 "abscisa": body.abscisa,
                 "ordenada": ord_v,
-                "altura_instrumento": hi,
-                "lectura_mira": vi,
+                "altura_instrumento": None if cota_dir is not None else hi,
+                "lectura_mira": None if cota_dir is not None else vi,
                 "cota_campo": calc.get("cota_campo"),
                 "cota_diseno": calc.get("cota_diseno"),
                 "cota_rasante": calc.get("cota_rasante"),

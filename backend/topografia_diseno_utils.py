@@ -278,17 +278,18 @@ def capa_usa_cota_inferior_diseno(capas: list[dict[str, Any]], indice_capa: int)
 
 
 def cota_diseno_capa(cota_rasante: float, capas: list[dict[str, Any]], indice_capa: int) -> float:
-    """Cota inferior verificable de la capa en entrega DG.
+    """Cota de diseño de la capa a entregar (cara superior / superficie de entrega).
 
-    Rasante − espesores acumulados desde la superficie terminada hasta el fondo
-    de la capa seleccionada (inclusive).
+    Rasante menos únicamente los espesores de las capas que están por encima.
+    No resta el espesor de la capa misma.
+    Ej.: capa 0 (terminado) = rasante; capa 1 = rasante − esp[0]; capa 2 = rasante − (esp[0]+esp[1]).
     """
-    return cota_fondo_capa(cota_rasante, capas, indice_capa)
+    return float(cota_rasante) - espesor_acumulado_hasta_capa(capas, indice_capa)
 
 
 def cota_diseno_superior_capa(cota_rasante: float, capas: list[dict[str, Any]], indice_capa: int) -> float:
-    """Cota de la cara superior de la capa (para espesor y comparación con campo en capa inferior)."""
-    return cota_rasante - espesor_acumulado_hasta_capa(capas, indice_capa)
+    """Alias de cota_diseno_capa (cara superior = superficie de entrega)."""
+    return cota_diseno_capa(cota_rasante, capas, indice_capa)
 
 
 def cota_fondo_estructura(cota_rasante: float, capas: list[dict[str, Any]]) -> float:
