@@ -6,6 +6,7 @@ import { useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import DisenoExcelHojaModal from './DisenoExcelHojaModal'
+import { IconClose } from './disenoDgIcons'
 import { listDisenoExcelSheetNames } from '../../utils/disenoGeometricoParse'
 import { useTopoTheme } from './topografiaShared'
 
@@ -242,7 +243,37 @@ export default function EntregaCarteraCargaModal({
         >
           <CcModalBrandHeader theme={ui.t} />
           <div style={{ padding: '14px 18px 18px' }}>
-            <h3 style={{ margin: '0 0 4px', color: ui.text }}>Cargar cartera ({tituloModo})</h3>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
+              <h3 style={{ margin: 0, flex: 1, color: ui.text }}>Cargar cartera ({tituloModo})</h3>
+              <button
+                type="button"
+                title="Cerrar"
+                aria-label="Cerrar"
+                disabled={busy}
+                onClick={() => { reset(); onClose?.() }}
+                style={{
+                  background: 'transparent',
+                  color: ui.text,
+                  border: `1px solid ${ui.t?.border || '#cbd5e1'}`,
+                  borderRadius: 8,
+                  width: 36,
+                  height: 36,
+                  minWidth: 36,
+                  minHeight: 36,
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  opacity: busy ? 0.45 : 1,
+                  touchAction: 'manipulation',
+                  WebkitTapHighlightColor: 'transparent',
+                  flexShrink: 0,
+                }}
+              >
+                <IconClose />
+              </button>
+            </div>
             <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
               {help} No se inventan valores vacíos.
             </p>

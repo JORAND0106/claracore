@@ -35,12 +35,16 @@ function IconAction({ title, onClick, disabled, children, style }) {
         borderRadius: 8,
         width: 36,
         height: 36,
+        minWidth: 36,
+        minHeight: 36,
         padding: 0,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
         opacity: disabled ? 0.45 : 1,
         cursor: disabled ? 'not-allowed' : 'pointer',
+        touchAction: 'manipulation',
+        WebkitTapHighlightColor: 'transparent',
         ...style,
       }}
     >
@@ -309,10 +313,8 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     api('/puntos/verificados?modulo_origen=nivelacion').then(setPuntosNiv).catch(() => {})
   }, [cargarLista, cargarEjes, api])
 
-  useEffect(() => {
-    if (!lista.length || sel || creando) return
-    cargarDetalle(lista[0].id)
-  }, [lista, sel, creando, cargarDetalle])
+  // No reabrir automáticamente la primera entrega al cerrar el popup:
+  // eso dejaba la plataforma bloqueada (el X cerraba y el efecto la volvía a abrir).
 
   useEffect(() => {
     if (!creando || !formNuevo.eje_id) {
@@ -541,21 +543,17 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
     return sector.tramos.map((t) => `${t.tramo} (PK ${fmtN(t.abscisa_min, 2)}–${fmtN(t.abscisa_max, 2)})`).join(' · ')
   }, [sector])
 
+  /** Cierra siempre al primer clic/toque: desmonta capas hijas y no deja overlay bloqueante. */
   const cerrarEntregaPopup = (e) => {
     e?.stopPropagation?.()
-    e?.preventDefault?.()
-    // El popup de nivelación debe cerrarse primero (queda encima).
-    if (nivelacionOpen) return
-    if (carteraSinGuardar()) {
-      setSalirPendiente({ tipo: 'cerrar_entrega' })
-      return
-    }
-    setSel(null)
-    setDetalle(null)
+    setSalirPendiente(null)
     setCargaCarteraOpen(false)
     setNivelacionOpen(false)
     setNivelacionDirty(false)
     setNivelacionAbrirCarga(false)
+    setCarteraDirty(false)
+    setSel(null)
+    setDetalle(null)
   }
 
   const abrirNivelacion = ({ conCarga = false } = {}) => {
@@ -1051,6 +1049,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
       {salirPendiente && (
         <TopoConfirmModal
           theme={ui.t}
+          zIndex={100200}
           titulo="Cartera sin guardar"
           confirmLabel="Guardar"
           cancelLabel="Cancelar"
@@ -1067,6 +1066,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
       {confirmEliminar && (
         <TopoConfirmModal
           theme={ui.t}
+          zIndex={100200}
           titulo="Eliminar entrega"
           confirmLabel={busy ? 'Eliminando…' : 'Eliminar'}
           onCancel={() => { if (!busy) setConfirmEliminar(null) }}
@@ -1077,7 +1077,7 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
       )}
 
       {errorModal && (
-        <TopoErrorModal theme={ui.t} titulo={errorModal.titulo} onClose={() => setErrorModal(null)}>
+        <TopoErrorModal theme={ui.t} zIndex={100210} titulo={errorModal.titulo} onClose={() => setErrorModal(null)}>
           {errorModal.mensaje}
         </TopoErrorModal>
       )}

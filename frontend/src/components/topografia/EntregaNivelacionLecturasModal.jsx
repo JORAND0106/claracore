@@ -46,12 +46,16 @@ function IconBtn({ title, onClick, disabled, children, danger, ui }) {
         borderRadius: 8,
         width: 36,
         height: 36,
+        minWidth: 36,
+        minHeight: 36,
         padding: 0,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.45 : 1,
+        touchAction: 'manipulation',
+        WebkitTapHighlightColor: 'transparent',
       }}
     >
       {children}
@@ -282,8 +286,12 @@ export default function EntregaNivelacionLecturasModal({
     })
   }
 
-  const cerrar = () => {
-    if (dirty && !window.confirm('Hay cambios sin guardar en la nivelación. ¿Cerrar de todos modos?')) return
+  /** X / fondo: siempre cierra al primer clic o toque (no deja capa bloqueante). */
+  const cerrar = (e) => {
+    e?.stopPropagation?.()
+    setCargaOpen(false)
+    setDirty(false)
+    onDirtyChange?.(false)
     onClose?.()
   }
 
@@ -382,7 +390,7 @@ export default function EntregaNivelacionLecturasModal({
                 {saving ? 'Guardando…' : 'Guardar'}
               </button>
             </PermisoAviso>
-            <IconBtn ui={ui} title="Cerrar nivelación" onClick={(e) => { e.stopPropagation(); cerrar() }}>
+            <IconBtn ui={ui} title="Cerrar nivelación" onClick={cerrar}>
               <IconClose />
             </IconBtn>
           </div>

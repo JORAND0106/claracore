@@ -17,7 +17,7 @@ describe('Vías — popup de entrega y nivelación por lecturas', () => {
     assert.match(src, /overflow:\s*['"]hidden['"]/)
     assert.match(src, /alignItems:\s*['"]center['"]/)
     assert.match(src, /cerrarEntregaPopup/)
-    assert.match(src, /carteraSinGuardar\(\)/)
+    assert.match(src, /carteraSinGuardar/)
     assert.match(src, /EntregaNivelacionLecturasModal/)
     assert.match(src, /soloResultados=\{modoCartera === ['"]lecturas['"]\}/)
   })

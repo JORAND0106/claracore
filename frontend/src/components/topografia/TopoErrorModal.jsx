@@ -9,6 +9,7 @@ export default function TopoErrorModal({
   children,
   onClose,
   cerrar = 'Entendido',
+  zIndex = 100030,
 }) {
   const t = theme || {}
 
@@ -17,7 +18,7 @@ export default function TopoErrorModal({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 100030,
+        zIndex,
         background: t.overlay || 'rgba(15, 23, 42, 0.48)',
         display: 'flex',
         alignItems: 'center',
