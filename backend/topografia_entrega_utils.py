@@ -278,6 +278,7 @@ def calcular_lectura_entrega(
     indice_capa: int | None = None,
     grilla_ref: list[dict] | None = None,
     cota_ref_campo: float | None = None,
+    cota_campo_directa: float | None = None,
 ) -> dict[str, Any]:
     ref = _lookup_diseno(grilla, abscisa, ordenada)
     cota_diseno = cota_diseno_manual
@@ -290,7 +291,9 @@ def calcular_lectura_entrega(
         espesor_diseno = ref.get("espesor_diseno_m")
         tramo = ref.get("tramo")
     cota_campo = None
-    if altura_instrumento is not None and lectura_mira is not None:
+    if cota_campo_directa is not None:
+        cota_campo = float(cota_campo_directa)
+    elif altura_instrumento is not None and lectura_mira is not None:
         cota_campo = float(altura_instrumento) - float(lectura_mira)
 
     modo_terreno = (
@@ -405,7 +408,7 @@ def resumen_sectores_entrega(
 
     for r in rasante:
         pk = round(float(r["abscisa"]), 6)
-        tramo = (r.get("tramo") or "Sin tramo").strip() or "Sin tramo"
+        tramo = (r.get("tramo") or "Tramo").strip() or "Tramo"
         if tramo not in tramos:
             tramos[tramo] = {
                 "tramo": tramo,
@@ -466,16 +469,56 @@ def resumen_sectores_entrega(
     }
 
 
+def _etiqueta_tramo_rasante(
+    row: dict[str, Any],
+    *,
+    eje_nombre: str | None = None,
+    sectores: list[dict[str, Any]] | None = None,
+) -> str:
+    """Nombre de tramo/sector: CSV TRAMO, luego estructura DG del sector, luego nombre del eje."""
+    raw = (row.get("tramo") or "").strip()
+    if raw:
+        return raw
+    if sectores:
+        try:
+            from topografia_diseno_tramos import estructura_en_abscisa
+            est = estructura_en_abscisa(sectores, float(row["abscisa"]))
+            if est and (est.get("nombre") or "").strip():
+                return str(est["nombre"]).strip()
+        except Exception:
+            pass
+    if (eje_nombre or "").strip():
+        return str(eje_nombre).strip()
+    return "Tramo"
+
+
+def enriquecer_tramo_rasante(
+    rasante: list[dict[str, Any]],
+    *,
+    eje_nombre: str | None = None,
+    sectores: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Copia rasante con tramo resuelto (nunca 'Sin tramo' si hay eje/sectores)."""
+    out: list[dict[str, Any]] = []
+    for r in rasante:
+        label = _etiqueta_tramo_rasante(r, eje_nombre=eje_nombre, sectores=sectores)
+        out.append({**r, "tramo": label})
+    return out
+
+
 def info_sector_rango(
     rasante: list[dict[str, Any]],
     abscisa_desde: float | None,
     abscisa_hasta: float | None,
+    *,
+    eje_nombre: str | None = None,
+    sectores: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Tramos y abscisas que intersectan el rango indicado."""
     filtrado = filtrar_rasante_rango(rasante, abscisa_desde, abscisa_hasta)
     tramos: dict[str, dict[str, Any]] = {}
     for r in filtrado:
-        tr = (r.get("tramo") or "Sin tramo").strip() or "Sin tramo"
+        tr = _etiqueta_tramo_rasante(r, eje_nombre=eje_nombre, sectores=sectores)
         pk = float(r["abscisa"])
         if tr not in tramos:
             tramos[tr] = {"tramo": tr, "abscisa_min": pk, "abscisa_max": pk, "abscisas": 0}

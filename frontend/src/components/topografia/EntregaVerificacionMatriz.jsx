@@ -35,14 +35,17 @@ function estiloTolerancia(estado, { okColor, bajoColor, altoColor, muted, text }
   return { color: altoColor, flecha: '▲ ', title: 'Por encima del diseño (fuera de tolerancia)' }
 }
 
-function draftFromMatriz(matriz, ordenadasCols) {
+function draftFromMatriz(matriz, ordenadasCols, modoCartera = 'lecturas') {
   const v = {}
   const ins = {}
   matriz.forEach((f) => {
     const k = String(f.abscisa)
     const row = {}
     ordenadasCols.forEach((col) => {
-      row[col.key] = f.terreno?.[col.key]?.vi ?? ''
+      const cell = f.terreno?.[col.key]
+      row[col.key] = modoCartera === 'cotas'
+        ? (cell?.cota ?? '')
+        : (cell?.vi ?? '')
     })
     v[k] = row
     if (f.instrumento?.es_cambio) {
@@ -50,6 +53,7 @@ function draftFromMatriz(matriz, ordenadasCols) {
       ins[k] = {
         bloque_id: i.bloque_id,
         punto_biblioteca_id: i.punto_biblioteca_id ?? '',
+        nombre_punto: i.nombre_punto ?? '',
         v_mas: i.v_mas ?? '',
         cota_punto: i.cota_punto ?? '',
       }
@@ -64,6 +68,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
   permisos,
   busy,
   puntosNiv,
+  modoCartera = 'lecturas',
   onGuardarCartera,
   onAddBloque,
   onRecalcular,
@@ -119,7 +124,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     const entregaCambio = loadedEntregaRef.current !== entrega.id
     if (entregaCambio) {
       loadedEntregaRef.current = entrega.id
-      const { v, ins } = draftFromMatriz(matriz, ordenadasCols)
+      const { v, ins } = draftFromMatriz(matriz, ordenadasCols, modoCartera)
       setViDraft(v)
       setInstDraft(ins)
       setDirty(false)
@@ -127,11 +132,11 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     }
 
     if (!dirty) {
-      const { v, ins } = draftFromMatriz(matriz, ordenadasCols)
+      const { v, ins } = draftFromMatriz(matriz, ordenadasCols, modoCartera)
       setViDraft(v)
       setInstDraft(ins)
     }
-  }, [entrega?.id, matriz, ordenadasCols, dirty])
+  }, [entrega?.id, matriz, ordenadasCols, dirty, modoCartera])
 
   useEffect(() => {
     onDirtyChange?.(dirty)
@@ -144,6 +149,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
 
   const capaLabel = analisis?.capa_nombre || detalle?.capa?.nombre || entrega?.capa_nombre || 'Capa'
   const capaIdx = entrega?.indice_capa ?? 0
+  const esModoCotas = modoCartera === 'cotas'
   const esModoTerreno = analisis?.modo === 'terreno'
   const indiceTerreno = capas.length
   const referenciaLabel = (analisis?.referencia_nombre || 'Referencia')
@@ -224,24 +230,34 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     return h - v
   }, [])
 
-  const cotaCampoFila = useCallback((f, colKey, hi, vi) => {
-    const live = cotaCampo(hi, vi)
+  const cotaCampoFila = useCallback((f, colKey, hi, viOrCota) => {
+    if (esModoCotas) {
+      const live = parseNum(viOrCota)
+      if (live != null) return live
+      const saved = f.terreno?.[colKey]?.cota
+      return saved != null ? Number(saved) : null
+    }
+    const live = cotaCampo(hi, viOrCota)
     if (live != null) return live
     const saved = f.terreno?.[colKey]?.cota
     return saved != null ? Number(saved) : null
-  }, [cotaCampo])
+  }, [cotaCampo, esModoCotas])
 
-  const cotaDisenoInferior = useCallback((f, colKey) => {
+  /** Superficie de entrega = cota de diseño (rasante − espesores encima; sin restar la capa misma). */
+  const cotaDisenoSuperior = useCallback((f, colKey) => {
     const v = f.diseno?.[colKey]
     return v != null ? Number(v) : null
   }, [])
 
-  const cotaDisenoSuperior = useCallback((f, colKey) => {
-    const inf = cotaDisenoInferior(f, colKey)
-    if (inf == null) return null
-    if (espesorDiseno != null && !esModoTerreno) return inf + Number(espesorDiseno)
-    return inf
-  }, [cotaDisenoInferior, espesorDiseno, esModoTerreno])
+  /** Cara inferior de la capa (fondo) para espesor / referencia. */
+  const cotaDisenoInferior = useCallback((f, colKey) => {
+    const fondo = f.fondo_diseno?.[colKey]
+    if (fondo != null && fondo !== '') return Number(fondo)
+    const sup = cotaDisenoSuperior(f, colKey)
+    if (sup == null) return null
+    if (espesorDiseno != null && !esModoTerreno) return Number(sup) - Number(espesorDiseno)
+    return sup
+  }, [cotaDisenoSuperior, espesorDiseno, esModoTerreno])
 
   const cotaReferenciaDiseno = useCallback((f, col) => (
     cotaReferenciaEnOrdenada(f, col, ordenadasCols, 'diseno')
@@ -357,16 +373,17 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
     const filas = matriz.map((f) => {
       const k = String(f.abscisa)
       const draft = viDraft[k] || {}
-      const lecturas = ordenadasCols.map((col) => ({
-        ordenada: col.ordenada,
-        vi: parseNum(draft[col.key]),
-      }))
+      const lecturas = ordenadasCols.map((col) => {
+        const n = parseNum(draft[col.key])
+        if (esModoCotas) return { ordenada: col.ordenada, cota: n }
+        return { ordenada: col.ordenada, vi: n }
+      })
       return {
         abscisa: f.abscisa,
         bloque_id: f.instrumento?.bloque_id || f.bloque_id || null,
         lecturas,
       }
-    }).filter((f) => f.lecturas.some((l) => l.vi != null))
+    }).filter((f) => f.lecturas.some((l) => (esModoCotas ? l.cota != null : l.vi != null)))
 
     const bloqueIds = new Set((bloques || []).map((b) => b.id))
     const bloquesPayload = Object.entries(instDraft)
@@ -378,6 +395,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
         return {
           id,
           punto_biblioteca_id: d.punto_biblioteca_id || null,
+          nombre_punto: (d.nombre_punto || '').trim() || null,
           v_mas: parseNum(d.v_mas),
           altura_instrumento: hi ?? parseNum(d.altura_instrumento),
           cota_punto: parseNum(d.cota_punto),
@@ -385,7 +403,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
       })
       .filter((b) => b.id && bloqueIds.has(b.id))
 
-    return { filas, bloques: bloquesPayload }
+    return { filas, bloques: bloquesPayload, modo_cartera: modoCartera }
   }
 
   const focusViInput = (index) => {
@@ -521,11 +539,15 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                   <th style={th()} title="Promedio áreas con abscisa anterior × longitud tramo">Volumen</th>
                 </>
               )}
-              <th style={th({ background: instBg })}>Punto</th>
-              <th style={th({ background: instBg })}>H. Inst</th>
-              <th style={th({ background: instBg })}>V+</th>
-              <th style={th({ background: instBg })}>Cota</th>
-              <th style={th({ background: instBg, width: 32 })}>+</th>
+              {!esModoCotas && (
+                <>
+                  <th style={th({ background: instBg })} title="Punto de amarre (biblioteca o nuevo)">Punto</th>
+                  <th style={th({ background: instBg })}>H. Inst</th>
+                  <th style={th({ background: instBg })}>V+</th>
+                  <th style={th({ background: instBg })} title="Cota del amarre">Cota</th>
+                  <th style={th({ background: instBg, width: 32 })}>+</th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -539,7 +561,8 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
               const bloqueId = instD.bloque_id || ins.bloque_id
               const rs = filasPorAbscisa
 
-              const renderInst = () => {
+                  const renderInst = () => {
+                if (esModoCotas) return null
                 const hiShow = esCambio
                   ? (hiDesdeCotaVplus(instD.cota_punto, instD.v_mas) ?? ins.altura_instrumento)
                   : null
@@ -547,16 +570,33 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                   <>
                     <td style={cell({ background: instBg, verticalAlign: 'middle' })} rowSpan={rs}>
                       {esCambio && puedeEditar ? (
-                        <select
-                          value={instD.punto_biblioteca_id ?? ''}
-                          onChange={(e) => onPuntoSelect(f.abscisa, bloqueId, e.target.value)}
-                          style={sel(72)}
-                        >
-                          <option value="">—</option>
-                          {puntosNiv.map((p) => (
-                            <option key={p.id} value={p.id}>{p.nombre}</option>
-                          ))}
-                        </select>
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <select
+                            value={instD.punto_biblioteca_id ?? ''}
+                            onChange={(e) => onPuntoSelect(f.abscisa, bloqueId, e.target.value)}
+                            style={sel(72)}
+                            title="Elegir punto de la biblioteca"
+                          >
+                            <option value="">Nuevo…</option>
+                            {puntosNiv.map((p) => (
+                              <option key={p.id} value={p.id}>{p.nombre}</option>
+                            ))}
+                          </select>
+                          {!(instD.punto_biblioteca_id) && (
+                            <input
+                              value={instD.nombre_punto ?? ''}
+                              onChange={(e) => patchInst(f.abscisa, {
+                                bloque_id: bloqueId,
+                                nombre_punto: e.target.value,
+                                punto_biblioteca_id: '',
+                              })}
+                              style={inp(72)}
+                              placeholder="Nombre"
+                              title="Nombre del punto nuevo (se guarda en biblioteca)"
+                              autoComplete="off"
+                            />
+                          )}
+                        </div>
                       ) : (
                         <span style={{ color: ui.textMuted }}>{esCambio ? (ins.nombre_punto || '—') : ''}</span>
                       )}
@@ -575,8 +615,17 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                         />
                       ) : (esCambio ? fmtN(ins.v_mas, 3) : '')}
                     </td>
-                    <td style={cell({ background: instBg, color: ui.textMuted, verticalAlign: 'middle' })} rowSpan={rs}>
-                      {esCambio ? fmtN(instD.cota_punto ?? ins.cota_punto, 3) : ''}
+                    <td style={cell({ background: instBg, verticalAlign: 'middle' })} rowSpan={rs}>
+                      {esCambio && puedeEditar ? (
+                        <input
+                          value={instD.cota_punto ?? ''}
+                          onChange={(e) => patchInst(f.abscisa, { bloque_id: bloqueId, cota_punto: e.target.value })}
+                          style={inp(64)}
+                          placeholder="Cota"
+                          title="Cota del amarre"
+                          autoComplete="off"
+                        />
+                      ) : (esCambio ? fmtN(instD.cota_punto ?? ins.cota_punto, 3) : '')}
                     </td>
                     <td style={cell({ background: instBg, padding: 2, verticalAlign: 'middle' })} rowSpan={rs}>
                       <PermisoAviso permisos={permisos} accion="editar">
@@ -641,7 +690,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
                     {ordenadasCols.map((col) => (
                       <td key={`dis-${col.key}`} style={cell()} title={esModoTerreno
                         ? 'Cota de rasante importada'
-                        : 'Cota inferior de capa (rasante − esp. acumulado incl. capa)'}>
+                        : 'Cota de diseño de la capa (rasante − espesores de capas encima; no resta el espesor propio)'}>
                         {fmtN(f.diseno?.[col.key], 3)}
                       </td>
                     ))}
@@ -768,7 +817,7 @@ const EntregaVerificacionMatriz = forwardRef(function EntregaVerificacionMatriz(
         )}
       </div>
       <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
-        Vi / Diseño{!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / {capaLabel} por ordenada transversal.
+        {esModoCotas ? 'Cota campo' : 'Vi'} / Diseño{!esModoTerreno && espesorDiseno != null ? ` / ${referenciaLabel}` : ''} / {capaLabel} por ordenada transversal.
         {esModoTerreno
           ? ' Diferencia = cota campo − cota diseño (rasante importada). No aplica cumplimiento por tolerancia.'
           : ` Diseño/Dif: CUMPLE si |${capaLabel} − diseño| ≤ ±${fmtN(tol, 3)} m. ▼ azul = por debajo; ▲ fucsia = por encima. ${referenciaLabel}: cotas campo. ${capaLabel}: Dif = ${capaLabel} − diseño. Área = prom. |${referenciaLabel} − diseño| × ancho.`}
