@@ -127,6 +127,8 @@ export default function DisenoTramoDetalleModal({
   const [modalImportConfig, setModalImportConfig] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [localBusy, setLocalBusy] = useState(false)
+  const [faseImport, setFaseImport] = useState('') // leyendo | configurando | importando | ''
+  const [avisoImport, setAvisoImport] = useState(null) // { tipo: 'ok'|'error'|'info', texto }
 
   if (!open) return null
 
@@ -135,10 +137,16 @@ export default function DisenoTramoDetalleModal({
   const rasante = detalle?.rasante || []
   const pks = detalle?.pks || []
   const alerta = detalle?.alerta_abscisas
-  const working = busy || localBusy || loading
+  const importing = localBusy || !!faseImport
+  const working = busy || importing
   const nombre = eje.nombre || resumen?.nombre || 'Tramo'
   const absIni = eje.abscisa_inicio ?? resumen?.abscisa_inicio ?? resumen?.abscisa_min
   const absFin = eje.abscisa_fin ?? resumen?.abscisa_fin ?? resumen?.abscisa_max
+
+  const mostrarAviso = (tipo, texto) => {
+    setAvisoImport({ tipo, texto })
+    if (tipo === 'error') onError?.(new Error(texto))
+  }
 
   const descargarPlantilla = async () => {
     try {
@@ -155,7 +163,7 @@ export default function DisenoTramoDetalleModal({
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      onError?.(e)
+      mostrarAviso('error', e?.message || 'No se pudo descargar la plantilla.')
     }
   }
 
@@ -166,18 +174,47 @@ export default function DisenoTramoDetalleModal({
     setExcelHojaSel('')
     setModalExcelHoja(false)
     setModalImportConfig(false)
+    setFaseImport('')
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  const abrirSelectorArchivo = () => {
+    setAvisoImport(null)
+    if (importing) {
+      mostrarAviso('info', 'Espere: hay una importación en curso.')
+      return
+    }
+    if (loading && !eje?.id) {
+      mostrarAviso('info', 'Espere a que termine de cargar la información del tramo.')
+      return
+    }
+    if (!eje?.id) {
+      mostrarAviso('error', 'No se identificó el tramo. Cierre el popup e inténtelo de nuevo.')
+      return
+    }
+    try {
+      fileRef.current?.click()
+    } catch (e) {
+      mostrarAviso('error', e?.message || 'No se pudo abrir el selector de archivos.')
+    }
+  }
+
   const onFileSelected = async (file) => {
-    if (!file || loading) return
+    if (!file) return
+    if (importing) {
+      mostrarAviso('info', 'Espere: hay una importación en curso.')
+      return
+    }
     const name = file.name.toLowerCase()
+    setAvisoImport(null)
+    setFaseImport('leyendo')
     try {
       if (name.endsWith('.csv')) {
         setArchivoPendiente(file)
         setExcelBuffer(null)
         setExcelHojas([])
         setExcelHojaSel('')
+        setFaseImport('configurando')
         setModalImportConfig(true)
       } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
         const buf = await file.arrayBuffer()
@@ -185,32 +222,47 @@ export default function DisenoTramoDetalleModal({
         setArchivoPendiente(file)
         setExcelBuffer(buf)
         setExcelHojas(hojas)
+        setExcelHojaSel(hojas[0] || '')
         if (hojas.length <= 1) {
-          setExcelHojaSel(hojas[0] || '')
+          setFaseImport('configurando')
           setModalImportConfig(true)
         } else {
-          setExcelHojaSel(hojas[0] || '')
+          setFaseImport('configurando')
           setModalExcelHoja(true)
         }
       } else {
-        throw new Error('Use archivo .csv o .xlsx')
+        throw new Error('Use un archivo .csv o .xlsx / .xls')
       }
     } catch (e) {
       resetArchivo()
-      onError?.(e)
+      mostrarAviso('error', e?.message || 'No se pudo leer el archivo.')
     } finally {
       if (fileRef.current) fileRef.current.value = ''
+      // Si quedó abierto un modal de config/hoja, faseImport sigue en 'configurando'
+      setFaseImport((prev) => (prev === 'leyendo' ? '' : prev))
     }
   }
 
   const ejecutarImportacion = async (config) => {
-    if (!eje.id || !archivoPendiente) return
+    if (localBusy) return
+    if (!eje?.id) {
+      mostrarAviso('error', 'No se identificó el tramo. Cierre el popup e inténtelo de nuevo.')
+      return
+    }
+    if (!archivoPendiente) {
+      mostrarAviso('error', 'No hay archivo seleccionado. Vuelva a elegir el archivo.')
+      resetArchivo()
+      return
+    }
     setLocalBusy(true)
+    setFaseImport('importando')
+    setAvisoImport(null)
     try {
       const name = archivoPendiente.name.toLowerCase()
+      let resultado = null
       if (name.endsWith('.csv')) {
         const contenido = await archivoPendiente.text()
-        await api(`/diseno-geometrico/ejes/${eje.id}/import-csv`, {
+        resultado = await api(`/diseno-geometrico/ejes/${eje.id}/import-csv`, {
           method: 'POST',
           body: JSON.stringify({ contenido, reemplazar: true, config }),
         })
@@ -219,19 +271,30 @@ export default function DisenoTramoDetalleModal({
         const filas = parseDisenoExcelBuffer(buf, {
           sheetName: excelHojaSel || undefined,
         })
-        await api(`/diseno-geometrico/ejes/${eje.id}/import-filas`, {
+        resultado = await api(`/diseno-geometrico/ejes/${eje.id}/import-filas`, {
           method: 'POST',
           body: JSON.stringify({ filas, reemplazar: true, config }),
         })
       } else {
-        throw new Error('Use archivo .csv o .xlsx')
+        throw new Error('Use un archivo .csv o .xlsx / .xls')
       }
+      if (!resultado?.ok) {
+        throw new Error('El servidor no confirmó la importación. Inténtelo de nuevo.')
+      }
+      const estaciones = resultado.estaciones ?? resultado.filas_importadas ?? 0
+      const cotas = resultado.cotas_leidas ?? 0
       resetArchivo()
       await onReload?.(eje.id)
+      mostrarAviso(
+        'ok',
+        `Importación exitosa: ${estaciones} estación(es) y ${cotas} cota(s) leídas.`,
+      )
     } catch (e) {
-      onError?.(e)
+      setFaseImport('configurando')
+      mostrarAviso('error', e?.message || 'No se pudo importar el diseño geométrico.')
     } finally {
       setLocalBusy(false)
+      setFaseImport((prev) => (prev === 'importando' ? '' : prev))
     }
   }
 
@@ -271,7 +334,7 @@ export default function DisenoTramoDetalleModal({
           background: 'rgba(15,23,42,0.55)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
         }}
-        onClick={() => { if (!working && !modalImportConfig && !modalExcelHoja && !previewOpen) onClose?.() }}
+        onClick={() => { if (!working && !modalImportConfig && !modalExcelHoja && !previewOpen && !importing) onClose?.() }}
       >
         <div
           style={{
@@ -421,32 +484,33 @@ export default function DisenoTramoDetalleModal({
                   titulo="Diseño geométrico"
                   right={badge(rasante.length > 0)}
                 >
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
-                    <IconAction title="Descargar plantilla CSV" onClick={descargarPlantilla} disabled={working}>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    style={{ display: 'none' }}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    onChange={(e) => { void onFileSelected(e.target.files?.[0]) }}
+                  />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                    <IconAction title="Descargar plantilla CSV" onClick={descargarPlantilla} disabled={importing}>
                       <IconDownload />
                     </IconAction>
                     <PermisoAviso permisos={permisos} accion="editar">
                       {puede(permisos, 'editar') && (
                         <IconAction
-                          as="label"
-                          title="Cargar diseño geométrico (CSV o Excel)"
-                          disabled={working}
-                          style={{ cursor: working ? 'wait' : 'pointer' }}
+                          title={importing ? 'Importando diseño…' : 'Cargar diseño geométrico (CSV o Excel)'}
+                          onClick={abrirSelectorArchivo}
+                          disabled={importing}
+                          style={{ cursor: importing ? 'wait' : 'pointer' }}
                         >
                           <IconUpload />
-                          <input
-                            ref={fileRef}
-                            type="file"
-                            accept=".csv,.xlsx,.xls"
-                            style={{ display: 'none' }}
-                            disabled={working}
-                            onChange={(e) => { void onFileSelected(e.target.files?.[0]) }}
-                          />
                         </IconAction>
                       )}
                     </PermisoAviso>
                     {rasante.length > 0 && (
-                      <IconAction title="Vista previa del diseño" onClick={() => setPreviewOpen(true)} disabled={working}>
+                      <IconAction title="Vista previa del diseño" onClick={() => setPreviewOpen(true)} disabled={importing}>
                         <IconEye />
                       </IconAction>
                     )}
@@ -455,13 +519,54 @@ export default function DisenoTramoDetalleModal({
                         title="Eliminar rasante importada"
                         danger
                         onClick={eliminarRasante}
-                        disabled={working}
+                        disabled={importing}
                       >
                         <IconTrash />
                       </IconAction>
                     )}
+                    {importing && (
+                      <span
+                        role="status"
+                        aria-live="polite"
+                        style={{
+                          fontSize: 'var(--cc-xs)',
+                          color: ui.textMuted,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {faseImport === 'leyendo' && 'Leyendo archivo…'}
+                        {faseImport === 'configurando' && 'Configure la sección para continuar…'}
+                        {faseImport === 'importando' && 'Importando diseño…'}
+                        {!faseImport && 'Procesando…'}
+                      </span>
+                    )}
                   </div>
-                  {!rasante.length && (
+                  {avisoImport && (
+                    <div
+                      role="alert"
+                      style={{
+                        marginBottom: 8,
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        fontSize: 'var(--cc-xs)',
+                        lineHeight: 1.45,
+                        border: `1px solid ${
+                          avisoImport.tipo === 'ok' ? '#86efac'
+                            : avisoImport.tipo === 'error' ? '#fca5a5'
+                              : (ui.t?.border || '#cbd5e1')
+                        }`,
+                        background: avisoImport.tipo === 'ok' ? '#f0fdf4'
+                          : avisoImport.tipo === 'error' ? '#fef2f2'
+                            : (ui.t?.bg || 'transparent'),
+                        color: avisoImport.tipo === 'ok' ? '#166534'
+                          : avisoImport.tipo === 'error' ? '#991b1b'
+                            : ui.text,
+                      }}
+                    >
+                      {avisoImport.texto}
+                    </div>
+                  )}
+                  {!rasante.length && !avisoImport && (
                     <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.45 }}>
                       Descargue la plantilla o cargue CSV/Excel con rasante / capa terminada.
                     </p>
@@ -483,23 +588,31 @@ export default function DisenoTramoDetalleModal({
         onConfirm={(hoja) => {
           setExcelHojaSel(hoja)
           setModalExcelHoja(false)
+          setFaseImport('configurando')
           setModalImportConfig(true)
         }}
         onClose={() => {
-          if (!localBusy) resetArchivo()
+          if (!localBusy) {
+            resetArchivo()
+            setAvisoImport({ tipo: 'info', texto: 'Importación cancelada.' })
+          }
         }}
       />
 
       <DisenoImportConfigModal
         open={modalImportConfig}
         nombreArchivo={
-          archivoPendiente?.name
+          (archivoPendiente?.name || '')
             + (excelHojaSel && excelHojas.length > 1 ? ` · hoja «${excelHojaSel}»` : '')
         }
         zIndex={100090}
+        busy={localBusy}
         onConfirm={ejecutarImportacion}
         onClose={() => {
-          if (!localBusy) resetArchivo()
+          if (!localBusy) {
+            resetArchivo()
+            setAvisoImport({ tipo: 'info', texto: 'Importación cancelada.' })
+          }
         }}
       />
 
@@ -510,6 +623,35 @@ export default function DisenoTramoDetalleModal({
         perfilPuntos={detalle?.perfil_puntos || []}
         onClose={() => setPreviewOpen(false)}
       />
+
+      {faseImport === 'importando' && (
+        <div
+          role="status"
+          aria-live="assertive"
+          aria-label="Importando diseño geométrico"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100095,
+            background: 'rgba(15,23,42,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'all',
+          }}
+        >
+          <div style={{
+            ...ui.card,
+            padding: '18px 22px',
+            minWidth: 240,
+            textAlign: 'center',
+            fontWeight: 700,
+            color: ui.text,
+          }}>
+            Importando diseño…
+          </div>
+        </div>
+      )}
     </>
   )
 }
