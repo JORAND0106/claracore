@@ -16,18 +16,34 @@ PLANTILLA_CSV_DISENO = (
 
 _COL_ALIASES: dict[str, tuple[str, ...]] = {
     "tramo": ("tramo", "sector"),
-    "abscisa": ("abscisa", "pk", "progresiva", "estacion"),
-    "cota_izquierda": ("izquierda", "izq", "left", "cota_izquierda", "cota izquierda"),
-    "cota_eje": ("eje", "centro", "cota_eje", "cota eje"),
-    "cota_derecha": ("derecha", "der", "right", "cota_derecha", "cota derecha"),
-    "ancho": ("ancho", "width", "ancho_calzada", "ancho calzada"),
+    "abscisa": ("abscisa", "pk", "progresiva", "estacion", "estaca", "cadena"),
+    "cota_izquierda": (
+        "izquierda", "izq", "left", "cota_izquierda", "cota_izq",
+        "elev_izquierda", "elevacion_izquierda", "elev_izq",
+        "z_izquierda", "z_izq", "nivel_izquierda",
+    ),
+    "cota_eje": (
+        "eje", "centro", "center", "cota_eje", "elev_eje",
+        "elevacion_eje", "elev_centro", "z_eje", "nivel_eje",
+    ),
+    "cota_derecha": (
+        "derecha", "der", "right", "cota_derecha", "cota_der",
+        "elev_derecha", "elevacion_derecha", "elev_der",
+        "z_derecha", "z_der", "nivel_derecha",
+    ),
+    "ancho": ("ancho", "width", "ancho_calzada", "ancho_via"),
 }
+
+_COTA_FIELDS = ("cota_izquierda", "cota_eje", "cota_derecha")
 
 
 def _norm_header(h: str) -> str:
     s = unicodedata.normalize("NFKD", (h or "").strip().lower())
     s = "".join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    # Quita sufijos de unidad frecuentes: IZQUIERDA (m), Eje_m, Cota msnm…
+    s = re.sub(r"_(m|msnm|ml|mts|metros?|m\.?s\.?n\.?m\.?)$", "", s)
+    return s.strip("_")
 
 
 # Orden: cotas transversales antes que tramo (evita ambigüedad en headers).
@@ -41,16 +57,61 @@ _HEADER_FIELD_ORDER = (
 )
 
 
+def _header_matches(nh: str, alias: str) -> bool:
+    if not nh:
+        return False
+    alias_n = _norm_header(alias)
+    if nh == alias_n or nh == alias:
+        return True
+    if nh.replace("_", "") == alias_n.replace("_", ""):
+        return True
+    tokens = set(nh.split("_"))
+    alias_tokens = set(alias_n.split("_"))
+    if alias_tokens and alias_tokens <= tokens:
+        return True
+    return False
+
+
 def _map_headers(headers: list[str]) -> dict[int, str]:
     mapped: dict[int, str] = {}
+    used_fields: set[str] = set()
     for i, raw in enumerate(headers):
         nh = _norm_header(raw)
         for field in _HEADER_FIELD_ORDER:
+            if field in used_fields:
+                continue
             aliases = _COL_ALIASES[field]
-            if nh in aliases or nh == field:
+            if nh == field or any(_header_matches(nh, a) for a in aliases):
                 mapped[i] = field
+                used_fields.add(field)
                 break
     return mapped
+
+
+def _find_header_row(rows: list[list[Any]], max_scan: int = 20) -> tuple[int, dict[int, str]]:
+    """Busca la fila de encabezados (permite título u otras filas arriba)."""
+    best_i = 0
+    best_mapped: dict[int, str] = {}
+    best_score = -1
+    limit = min(len(rows), max_scan)
+    for i in range(limit):
+        headers = [str(c) if c is not None else "" for c in rows[i]]
+        mapped = _map_headers(headers)
+        vals = set(mapped.values())
+        if "abscisa" not in vals:
+            continue
+        score = len(vals)
+        if any(f in vals for f in _COTA_FIELDS):
+            score += 10
+        if score > best_score:
+            best_score = score
+            best_i = i
+            best_mapped = mapped
+    if best_score < 0:
+        raise ValueError(
+            "No se encontró la fila de encabezados. Use columnas: TRAMO, ABSCISA, IZQUIERDA, EJE, DERECHA, ANCHO."
+        )
+    return best_i, best_mapped
 
 
 def _parse_float(val: Any) -> float | None:
@@ -59,6 +120,8 @@ def _parse_float(val: Any) -> float | None:
     s = str(val).strip().replace(",", ".")
     if not s:
         return None
+    # Quita espacios de miles: 1 234.5
+    s = s.replace(" ", "")
     try:
         return float(s)
     except ValueError:
@@ -87,6 +150,44 @@ def _parse_fila(mapped: dict[int, str], row: list[Any]) -> dict[str, Any] | None
     return data
 
 
+def _float_or_none(raw: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key in raw and raw[key] is not None and str(raw[key]).strip() != "":
+            return _parse_float(raw[key])
+    return None
+
+
+def validar_filas_cotas(filas: list[dict[str, Any]], mapped_fields: set[str] | None = None) -> None:
+    """Exige columnas/valores de cotas; nunca acepta solo abscisas."""
+    fields = mapped_fields
+    if fields is not None:
+        halladas = [f for f in _COTA_FIELDS if f in fields]
+        if not halladas:
+            raise ValueError(
+                "No se reconocieron columnas de cotas. "
+                "Se esperan IZQUIERDA, EJE y DERECHA (o equivalentes como Cota Izq / Elevación Eje). "
+                "Revise los encabezados del archivo; la carga no inventa valores."
+            )
+        faltantes = [f.replace("cota_", "").upper() for f in _COTA_FIELDS if f not in fields]
+        if faltantes:
+            raise ValueError(
+                "Faltan columnas de cotas: "
+                + ", ".join(faltantes)
+                + ". Use la plantilla: TRAMO, ABSCISA, IZQUIERDA, EJE, DERECHA, ANCHO."
+            )
+    if not filas:
+        raise ValueError("No se encontraron filas de datos válidas (revise ABSCISA numérica).")
+    con_cota = 0
+    for f in filas:
+        if any(f.get(k) is not None for k in _COTA_FIELDS):
+            con_cota += 1
+    if con_cota == 0:
+        raise ValueError(
+            "Se leyeron las abscisas, pero ninguna fila tiene cotas numéricas en IZQUIERDA, EJE o DERECHA. "
+            "Revise que esas columnas tengan valores y no estén vacías."
+        )
+
+
 def parse_csv_diseno_rasante(contenido: str) -> list[dict[str, Any]]:
     """Parsea CSV con columnas TRAMO|ABSCISA|IZQUIERDA|EJE|DERECHA|ANCHO."""
     if not (contenido or "").strip():
@@ -100,20 +201,15 @@ def parse_csv_diseno_rasante(contenido: str) -> list[dict[str, Any]]:
     rows = list(reader)
     if not rows:
         raise ValueError("No hay filas en el archivo.")
-    mapped = _map_headers(rows[0])
-    if "abscisa" not in mapped.values():
-        raise ValueError(
-            "Faltan columnas obligatorias. Use la plantilla: TRAMO, ABSCISA, IZQUIERDA, EJE, DERECHA, ANCHO."
-        )
+    header_i, mapped = _find_header_row(rows)
     out: list[dict[str, Any]] = []
-    for row in rows[1:]:
+    for row in rows[header_i + 1 :]:
         if not any(str(c).strip() for c in row):
             continue
         fila = _parse_fila(mapped, row)
         if fila:
             out.append(fila)
-    if not out:
-        raise ValueError("No se encontraron filas de datos válidas (revise ABSCISA numérica).")
+    validar_filas_cotas(out, set(mapped.values()))
     out.sort(key=lambda r: (r.get("tramo") or "", r["abscisa"]))
     return out
 
@@ -128,13 +224,12 @@ def parse_filas_diseno_rasante(filas: list[dict[str, Any]]) -> list[dict[str, An
         out.append({
             "tramo": (str(raw.get("tramo")).strip() if raw.get("tramo") else None) or None,
             "abscisa": abscisa,
-            "cota_izquierda": _parse_float(raw.get("cota_izquierda") or raw.get("izquierda")),
-            "cota_eje": _parse_float(raw.get("cota_eje") or raw.get("eje")),
-            "cota_derecha": _parse_float(raw.get("cota_derecha") or raw.get("derecha")),
-            "ancho": _parse_float(raw.get("ancho")),
+            "cota_izquierda": _float_or_none(raw, "cota_izquierda", "izquierda"),
+            "cota_eje": _float_or_none(raw, "cota_eje", "eje"),
+            "cota_derecha": _float_or_none(raw, "cota_derecha", "derecha"),
+            "ancho": _float_or_none(raw, "ancho"),
         })
-    if not out:
-        raise ValueError("No hay filas válidas con ABSCISA.")
+    validar_filas_cotas(out, None)
     out.sort(key=lambda r: (r.get("tramo") or "", r["abscisa"]))
     return out
 
