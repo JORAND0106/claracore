@@ -2366,10 +2366,32 @@ def route_eliminar_bitacora(
     require_permiso_bitacora(current_user, "eliminar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
+        prev = get_entrada(supabase, contrato_id, entrada_id)
         eliminar_entrada(supabase, contrato_id, entrada_id, current_user=current_user)
+
+        def _n_items(key):
+            val = prev.get(key) if isinstance(prev, dict) else None
+            return len(val) if isinstance(val, list) else 0
+
+        n_fotos = _n_items("imagenes")
+        for bloc in (prev.get("materiales") or []) if isinstance(prev, dict) else []:
+            if isinstance(bloc, dict):
+                n_fotos += len(bloc.get("adjuntos") or [])
+        for uso in (prev.get("equipos_uso") or []) if isinstance(prev, dict) else []:
+            if isinstance(uso, dict):
+                n_fotos += len(uso.get("preoperacionales") or [])
         registrar_log(
             current_user, "ELIMINAR", "BITACORA", "seguimiento_bitacora_entrada",
-            str(entrada_id), {},
+            str(entrada_id), {
+                "fecha": str(prev.get("fecha") or "")[:10] if isinstance(prev, dict) else "",
+                "contrato_id": int(contrato_id),
+                "resumen": {
+                    "personal": _n_items("asistencia_colaboradores"),
+                    "maquinaria": _n_items("equipos_uso"),
+                    "materiales": _n_items("materiales"),
+                    "fotos": n_fotos,
+                },
+            },
         )
         return {"ok": True}
     except ValueError as exc:

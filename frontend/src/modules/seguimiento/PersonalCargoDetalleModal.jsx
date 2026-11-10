@@ -10,9 +10,11 @@ import {
   asistenciaRowFromRrhh,
   cantidadManualDesdePlantillaPorCargo,
   emptyAsistenciaRow,
+  enriquecerAsistenciaConHorasExtra,
   filtrarCatalogoPorCargoYEmpresa,
   formatHorarioAsistencia,
 } from './personalAsistenciaHelpers'
+import { formatoHorasDecimal } from './bitacoraHorario'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
@@ -41,10 +43,17 @@ export default function PersonalCargoDetalleModal({
   viewportCompact = false,
   zIndex = 12000,
   onClose,
+  /** Horario del contrato (o snapshot) para precarga y horas extra. */
+  horario = null,
+  /** Fecha ISO del diario (YYYY-MM-DD). */
+  fechaISO = null,
 }) {
   const ui = bitacoraSheetStyles(t)
   const [draftOpen, setDraftOpen] = useState(false)
-  const [draft, setDraft] = useState(() => emptyAsistenciaRow({ cargo: cargo || '' }))
+  const [draft, setDraft] = useState(() => emptyAsistenciaRow(
+    { cargo: cargo || '' },
+    { horario, fechaISO },
+  ))
   const [autoBusy, setAutoBusy] = useState(false)
   const [autoMsg, setAutoMsg] = useState('')
   const [autoErr, setAutoErr] = useState('')
@@ -113,7 +122,7 @@ export default function PersonalCargoDetalleModal({
       cargo: String(draft.cargo || cargo || '').trim() || cargo,
     }
     onChange?.([...(rows || []), row])
-    setDraft(emptyAsistenciaRow({ cargo: cargo || '' }))
+    setDraft(emptyAsistenciaRow({ cargo: cargo || '' }, { horario, fechaISO }))
     setDraftOpen(false)
   }
 
@@ -252,7 +261,7 @@ export default function PersonalCargoDetalleModal({
               <button
                 type="button"
                 onClick={() => {
-                  setDraft(emptyAsistenciaRow({ cargo: cargo || '' }))
+                  setDraft(emptyAsistenciaRow({ cargo: cargo || '' }, { horario, fechaISO }))
                   setDraftOpen((v) => !v)
                 }}
                 style={btnPrimary}
@@ -394,17 +403,19 @@ export default function PersonalCargoDetalleModal({
             >
               <thead>
                 <tr>
-                  <th style={{ ...ui.th, width: '26%' }}>Nombre</th>
-                  <th style={{ ...ui.th, width: '16%' }}>Tramo *</th>
-                  <th style={{ ...ui.th, width: '18%' }}>Empresa</th>
-                  <th style={{ ...ui.th, width: '22%' }}>Horario</th>
-                  <th style={{ ...ui.th, width: '10%' }} />
+                  <th style={{ ...ui.th, width: '20%' }}>Nombre</th>
+                  <th style={{ ...ui.th, width: '12%' }}>Tramo *</th>
+                  <th style={{ ...ui.th, width: '14%' }}>Empresa</th>
+                  <th style={{ ...ui.th, width: '18%' }}>Horario</th>
+                  <th style={{ ...ui.th, width: '8%' }}>Hrs extra</th>
+                  <th style={{ ...ui.th, width: '18%' }}>Justificación</th>
+                  <th style={{ ...ui.th, width: '8%' }} />
                 </tr>
               </thead>
               <tbody>
                 {entries.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                    <td colSpan={7} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
                       {Number(cantidadManual) > 0
                         ? 'Sin nombres nominados; la cantidad proviene del registro directo.'
                         : (disabled
@@ -414,6 +425,8 @@ export default function PersonalCargoDetalleModal({
                   </tr>
                 ) : entries.map(({ row, index }) => {
                   const locked = disabled || (row.rrhh_trabajador_id != null && !!row.nombre)
+                  const enriched = enriquecerAsistenciaConHorasExtra(row, { horario, fechaISO })
+                  const extra = Number(enriched.horas_extra) || 0
                   return (
                     <tr key={`cargo-${row.rrhh_trabajador_id || row.nombre}-${index}`}>
                       <td style={ui.td} data-label="Nombre">
@@ -505,7 +518,7 @@ export default function PersonalCargoDetalleModal({
                                 hora_ingreso: e.target.value || HORA_INGRESO_DEFAULT,
                               })}
                               style={{ ...cellInp, width: 96 }}
-                              title="Hora de ingreso (defecto 07:30)"
+                              title="Hora de ingreso (según horario del contrato)"
                             />
                             <span style={{ color: t.textMuted }}>–</span>
                             <input
@@ -515,9 +528,39 @@ export default function PersonalCargoDetalleModal({
                                 hora_salida: e.target.value || HORA_SALIDA_DEFAULT,
                               })}
                               style={{ ...cellInp, width: 96 }}
-                              title="Hora de salida (defecto 16:30)"
+                              title="Hora de salida (según horario del contrato)"
                             />
                           </div>
+                        )}
+                      </td>
+                      <td style={{ ...ui.td, textAlign: 'center', fontWeight: 700 }} data-label="Hrs extra">
+                        {formatoHorasDecimal(extra)}
+                      </td>
+                      <td style={ui.td} data-label="Justificación">
+                        {extra > 0 ? (
+                          disabled ? (
+                            <span style={{ fontSize: 'var(--cc-xs)' }}>
+                              {row.justificacion_horas_extra || '—'}
+                            </span>
+                          ) : (
+                            <input
+                              type="text"
+                              value={row.justificacion_horas_extra || ''}
+                              onChange={(e) => updateByIndex(index, {
+                                justificacion_horas_extra: e.target.value,
+                              })}
+                              placeholder="Obligatoria"
+                              title="Justificación de horas extra (obligatoria)"
+                              style={{
+                                ...cellInp,
+                                borderColor: String(row.justificacion_horas_extra || '').trim()
+                                  ? (t.border || cellInp.border)
+                                  : '#b91c1c',
+                              }}
+                            />
+                          )
+                        ) : (
+                          <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>—</span>
                         )}
                       </td>
                       <td style={{ ...ui.td, textAlign: 'center', whiteSpace: 'nowrap' }} data-label="">

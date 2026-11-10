@@ -24,9 +24,12 @@ import {
   puntosPctADecimal,
 } from "./admin/catalogoInsumosTributos";
 import { desgloseValorContrato } from "./contratoFinanciero";
+import ContratoHorarioEditor from "./components/ContratoHorarioEditor";
+import { horarioDefault, normalizeHorario } from "./modules/seguimiento/bitacoraHorario";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
+  { id: "horario", label: "Horario" },
   { id: "financiera", label: "Información financiera" },
   { id: "exportacion", label: "Paleta exportación" },
   { id: "niveles", label: "Niveles de validación", editOnly: true },
@@ -706,6 +709,35 @@ export default function ContratoEditModal({
             eliminando={pkPanoramaEliminando}
           />
 
+          {tab === "horario" && (
+            <div>
+              <div style={{
+                fontWeight: 800,
+                color: ui.text,
+                fontSize: font.title || 15,
+                marginBottom: 10,
+              }}>
+                Horario laboral (Bitácora)
+              </div>
+              <ContratoHorarioEditor
+                t={{
+                  text: ui.text,
+                  textMuted: ui.textMuted,
+                  border: ui.border,
+                  primary: ui.primary || ui.accent,
+                  inputBg: ui.inputBg,
+                  bg: ui.bg,
+                }}
+                value={form.bitacora_horario || horarioDefault()}
+                disabled={!(isEdit ? perms?.editar : perms?.crear)}
+                onChange={(next) => setForm((f) => ({
+                  ...f,
+                  bitacora_horario: normalizeHorario(next),
+                }))}
+              />
+            </div>
+          )}
+
           {tab === "financiera" && (
             <div>
               <TopoExcelSheet
@@ -1168,7 +1200,7 @@ export default function ContratoEditModal({
           )}
         </div>
 
-        {(tab === "info" || tab === "financiera" || tab === "exportacion" || tab === "niveles") && (isEdit ? perms?.editar : perms?.crear) && (
+        {(tab === "info" || tab === "horario" || tab === "financiera" || tab === "exportacion" || tab === "niveles") && (isEdit ? perms?.editar : perms?.crear) && (
           <div
             style={{
               padding: "12px 20px 16px",

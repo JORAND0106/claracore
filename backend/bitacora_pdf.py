@@ -844,12 +844,44 @@ def _fotos_diario(diario: Optional[dict]) -> List[dict]:
     return out
 
 
-def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
+def _formato_horas_extra_pdf(val: float) -> str:
+    v = float(val or 0)
+    if v <= 0:
+        return "—"
+    return str(int(v)) if v == int(v) else f"{v:.2f}"
+
+
+def _justificacion_asistencia_pdf(a: dict, *, extra_h: float) -> str:
+    if extra_h <= 0:
+        return "—"
+    raw = (
+        a.get("justificacion_horas_extra")
+        or a.get("justificacion_extra")
+        or a.get("justificacion")
+        or a.get("observacion")
+        or a.get("observaciones")
+        or ""
+    )
+    txt = str(raw or "").strip()
+    return txt or "—"
+
+
+def _html_asistencia_colaboradores(
+    diario: Optional[dict],
+    pal: dict,
+    *,
+    horario: Optional[dict] = None,
+    fecha_iso: Optional[str] = None,
+) -> str:
     """Listado de asistencia diaria (si hay filas)."""
     rows_in = (diario or {}).get("asistencia_colaboradores") or []
     if not isinstance(rows_in, list) or not rows_in:
         return ""
+    from bitacora_horario import calcular_horas_extra
+
     rows = []
+    total_extra = 0.0
+    fecha_calc = str(fecha_iso or (diario or {}).get("fecha") or "")[:10]
     for a in rows_in:
         if not isinstance(a, dict):
             continue
@@ -860,26 +892,104 @@ def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
         empresa = str(a.get("subcontratista_nombre") or "").strip() or "—"
         ini = str(a.get("hora_ingreso") or "").strip()[:5]
         fin = str(a.get("hora_salida") or "").strip()[:5]
-        horario = "–".join(p for p in (ini, fin) if p) or "—"
+        extra_h = calcular_horas_extra(
+            hora_ingreso=ini,
+            hora_salida=fin,
+            horario=horario,
+            fecha=fecha_calc,
+        )
+        total_extra += extra_h
+        justif = _justificacion_asistencia_pdf(a, extra_h=extra_h)
         rows.append([
             _esc(nombre),
             _esc(cargo),
             _esc(empresa),
-            _esc(horario),
+            _esc(ini or "—"),
+            _esc(fin or "—"),
+            _esc(_formato_horas_extra_pdf(extra_h)),
+            _esc(justif),
         ])
     if not rows:
         return ""
+    t2 = pal["titulo_2"]
+    tabla = _mini_table(
+        ["Nombre", "Cargo", "Empresa", "Entrada", "Salida", "Hrs extra", "Justificación"],
+        rows,
+        pal,
+        ["20%", "16%", "18%", "10%", "10%", "10%", "16%"],
+        compact=True,
+    )
+    total_txt = (
+        f'<div style="font-size:5.5pt;color:{t2["text"]};margin-top:2pt;text-align:right;">'
+        f'<b>Total horas extra del día:</b> {_esc(_formato_horas_extra_pdf(total_extra))}'
+        f"</div>"
+    )
     return (
         f'<div style="margin-top:3pt;">'
         + _section_title("Asistencia", pal)
-        + _mini_table(
-            ["Nombre", "Cargo", "Empresa", "Horario"],
-            rows,
-            pal,
-            ["30%", "22%", "28%", "20%"],
-            compact=True,
-        )
+        + tabla
+        + total_txt
         + "</div>"
+    )
+
+
+def _html_bitacora_bloque_firmas(contrato_id: int) -> str:
+    """Dos firmas: Residente de obra / Director de obra (biblioteca CCD CC-BIT-001)."""
+    try:
+        from informes import (
+            CODIGO_FORMATO_CCD_CC_BIT_001,
+            FORMATOS_CCD,
+            _get_firma_cfg_para_documento,
+            _html_cc_sub_td_firma_columna,
+        )
+    except Exception as exc:
+        _log.warning("bitacora pdf firmas: import informes: %s", exc)
+        return _html_bitacora_firmas_fallback(pal_t2=None)
+
+    meta = FORMATOS_CCD.get(CODIGO_FORMATO_CCD_CC_BIT_001) or {}
+    slot_labels = {
+        str(s.get("id") or ""): str(s.get("label") or "").strip()
+        for s in (meta.get("slots_firma") or [])
+        if isinstance(s, dict)
+    }
+    label_elaboro = slot_labels.get("elaboro") or "Residente de obra"
+    label_reviso = slot_labels.get("reviso") or "Director de obra"
+
+    fc = _get_firma_cfg_para_documento(int(contrato_id), CODIGO_FORMATO_CCD_CC_BIT_001) or {}
+    elaboro_n = _esc(str(fc.get("elaboro_nombre") or "").strip() or "—")
+    elaboro_c = _esc(str(fc.get("elaboro_cargo") or "").strip() or label_elaboro)
+    reviso_n = _esc(str(fc.get("reviso_nombre") or "").strip() or "—")
+    reviso_c = _esc(str(fc.get("reviso_cargo") or "").strip() or label_reviso)
+    bd = "border:0.25pt solid #9ca3af"
+    elaboro_td = _html_cc_sub_td_firma_columna(
+        bd, f"{_esc(label_elaboro)}:", elaboro_n, elaboro_c, None, memoria_compact=True,
+    )
+    reviso_td = _html_cc_sub_td_firma_columna(
+        bd, f"{_esc(label_reviso)}:", reviso_n, reviso_c, None, memoria_compact=True,
+    )
+    return (
+        f'<div style="margin-top:10pt;page-break-inside:avoid;">'
+        f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+        f"<tr>{elaboro_td}{reviso_td}</tr></table></div>"
+    )
+
+
+def _html_bitacora_firmas_fallback(*, pal_t2: Optional[dict] = None) -> str:
+    t2 = pal_t2 or {"text": "#1F4E70", "bg": "#E5F4FA"}
+    bd = f'border:0.25pt dashed {t2["bg"]}'
+
+    def _celda(lbl: str) -> str:
+        return (
+            f'<td width="50%" style="vertical-align:top;padding:4pt;">'
+            f'<div style="font-size:6pt;font-weight:bold;color:{t2["text"]};margin-bottom:2pt;">'
+            f"{_esc(lbl)}</div>"
+            f'<div style="min-height:36pt;{bd};"></div></td>'
+        )
+
+    return (
+        '<div style="margin-top:10pt;"><table width="100%" cellspacing="0" cellpadding="0">'
+        f"<tr>{_celda('Residente de obra')}{_celda('Director de obra')}</tr>"
+        "</table></div>"
     )
 
 
@@ -889,10 +999,14 @@ def _html_cuerpo_diario(
     pal: dict,
     *,
     prepared_fotos: Optional[Dict[int, Tuple[str, float, float]]] = None,
+    horario: Optional[dict] = None,
+    fecha_iso: Optional[str] = None,
 ) -> str:
     """Materiales a ancho completo; debajo, Observaciones | Registro Fotográfico."""
     mats = _html_materiales(diario, pal)
-    asist = _html_asistencia_colaboradores(diario, pal)
+    asist = _html_asistencia_colaboradores(
+        diario, pal, horario=horario, fecha_iso=fecha_iso,
+    )
     left = _html_observaciones(diario, pal)
     fotos = _fotos_diario(diario)
     prepared = prepared_fotos
@@ -1025,6 +1139,15 @@ def generar_pdf_bitacora_dia(
     diario = dia.get("diario")
     eventos = [e for e in (dia.get("eventos") or []) if isinstance(e, dict)]
     fecha_iso = dia.get("fecha") or str(fecha)[:10]
+    try:
+        from bitacora_horario import get_horario_contrato, normalize_horario
+
+        if isinstance(diario, dict) and diario.get("horario_aplicado"):
+            horario_contrato = normalize_horario(diario.get("horario_aplicado"))
+        else:
+            horario_contrato = get_horario_contrato(sb, int(contrato_id))
+    except Exception:
+        horario_contrato = None
     t_data = time.perf_counter()
 
     cache_key = (int(contrato_id), fecha_iso, _fingerprint_dia(dia))
@@ -1093,13 +1216,19 @@ def generar_pdf_bitacora_dia(
         hdr
         + _html_panel_superior(diario, slots, pal)
         + _html_cuerpo_diario(
-            diario, int(contrato_id), pal, prepared_fotos=prepared_diario,
+            diario,
+            int(contrato_id),
+            pal,
+            prepared_fotos=prepared_diario,
+            horario=horario_contrato,
+            fecha_iso=fecha_iso,
         )
     )
     if eventos:
         hoja1 += _html_eventos_con_fotos(
             eventos, int(contrato_id), pal, prepared_by_evento=prepared_by_evento,
         )
+    hoja1 += _html_bitacora_bloque_firmas(int(contrato_id))
 
     body_parts = [hoja1]
     t_html = time.perf_counter()

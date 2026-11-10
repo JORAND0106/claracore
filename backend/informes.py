@@ -298,6 +298,7 @@ CODIGO_FORMATO_CCD_CC_MES_002 = "CC-MES-002"
 CODIGO_FORMATO_IDU_FO_EO_04_V2 = "FO-IDU-EO-04-V2"
 # Informe gerencia: comparativo de costo directo (cascada N1–N3) entre dos actas RPO; firmas CCD = acta «presente».
 CODIGO_FORMATO_CCD_CC_GER_001 = "CC-GER-001"
+CODIGO_FORMATO_CCD_CC_BIT_001 = "CC-BIT-001"
 
 router = APIRouter(tags=["informes"])
 
@@ -591,6 +592,22 @@ FORMATOS_CCD: Dict[str, Dict[str, Any]] = {
             {"id": "elaboro", "label": "Elaboró", "origen": "configuracion"},
             {"id": "reviso", "label": "Revisó", "origen": "configuracion"},
             {"id": "aprobo", "label": "Aprobó", "origen": "configuracion"},
+        ],
+        "acceso_interventoria": True,
+    },
+    CODIGO_FORMATO_CCD_CC_BIT_001: {
+        "titulo": "Bitácora de obra — reporte diario",
+        "descripcion": "Firmas del reporte diario de bitácora (residente y director de obra).",
+        "plantilla_html": "bitacora_diario_v1",
+        "motor_pdf": "xhtml2pdf",
+        "layout": {
+            "orientacion": "landscape",
+            "firmas_solo_ultima_hoja": True,
+            "firmas_bloque_inferior": True,
+        },
+        "slots_firma": [
+            {"id": "elaboro", "label": "Residente de obra", "origen": "configuracion"},
+            {"id": "reviso", "label": "Director de obra", "origen": "configuracion"},
         ],
         "acceso_interventoria": True,
     },
