@@ -24,6 +24,14 @@ describe('CompetenciaSelect FALLBACK_COMPETENCIAS', () => {
     assert.equal(list.includes('Red matriz IDU'), false)
   })
 
+  it('incluye IDU Alum. Pub e IDU M.T. con el nombre exacto', () => {
+    const list = parseFallbackList()
+    assert.ok(list.includes('IDU Alum. Pub'))
+    assert.ok(list.includes('IDU M.T.'))
+    assert.equal(list.filter((x) => x === 'IDU Alum. Pub').length, 1)
+    assert.equal(list.filter((x) => x === 'IDU M.T.').length, 1)
+  })
+
   it('conserva el catálogo base previo', () => {
     const set = new Set(parseFallbackList())
     for (const n of [
