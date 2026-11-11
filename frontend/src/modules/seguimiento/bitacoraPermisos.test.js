@@ -2,7 +2,9 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   accesoBitacora,
+  finDiaBogotaMs,
   puedeEditarEntradaBitacora,
+  ventanaEdicionVencidaLocal,
 } from './bitacoraPermisos.js'
 import {
   BITACORA_HORA_INICIO_DEFAULT,
@@ -51,7 +53,12 @@ describe('bitacoraPermisos', () => {
 
   it('diario abierto editable; cerrado no; evento legacy no editable', () => {
     const perms = { editar: true, esDesarrollador: false }
-    assert.equal(puedeEditarEntradaBitacora({ tipo: 'diario', estado: 'abierto' }, perms), true)
+    assert.equal(puedeEditarEntradaBitacora({
+      tipo: 'diario',
+      estado: 'abierto',
+      fecha: '2099-12-30',
+      puede_autocerrar: false,
+    }, perms), true)
     assert.equal(puedeEditarEntradaBitacora({ tipo: 'diario', estado: 'cerrado' }, perms), false)
     assert.equal(puedeEditarEntradaBitacora(
       { tipo: 'evento', estado: 'cerrado', evento_editable_hoy: true },
@@ -61,6 +68,24 @@ describe('bitacoraPermisos', () => {
       { tipo: 'diario', estado: 'cerrado' },
       { editar: true, esDesarrollador: true },
     ), true)
+  })
+
+  it('bloquea edición tras D+1 23:59 Bogotá (salvo desarrollador)', () => {
+    const perms = { editar: true, esDesarrollador: false }
+    const entrada = {
+      tipo: 'diario',
+      estado: 'abierto',
+      fecha: '2020-01-10',
+      puede_autocerrar: false,
+    }
+    const cierre = finDiaBogotaMs('2020-01-11')
+    assert.ok(cierre)
+    assert.equal(ventanaEdicionVencidaLocal(entrada, { ahoraMs: cierre + 1000 }), true)
+    assert.equal(puedeEditarEntradaBitacora(entrada, perms), false)
+    assert.equal(
+      puedeEditarEntradaBitacora(entrada, { editar: true, esDesarrollador: true }),
+      true,
+    )
   })
 })
 

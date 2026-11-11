@@ -2132,6 +2132,7 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
     anticipo: '', amortizacion_pct: '',
     valor_componente_ambiental: '', valor_componente_social: '', valor_componente_pmt: '', costo_directo_contrato: '',
     costos_adicionales_lista: [],
+    bitacora_horario: null,
     export_palette: { ...EXPORT_PALETTE_DEFAULTS },
   };
   const [form, setForm] = useState(FORM_VACIO);
@@ -2303,6 +2304,7 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
       valor_componente_pmt: d.valor_componente_pmt != null ? String(d.valor_componente_pmt) : '',
       costo_directo_contrato: d.costo_directo_contrato != null ? String(d.costo_directo_contrato) : '',
       costos_adicionales_lista,
+      bitacora_horario: d.bitacora_horario || null,
       export_palette: mergeExportPalette(d.export_palette),
     });
     setPlanoArchivoLabel(planoLimpio && (planoLimpio.features || []).length ? 'Plano guardado en servidor' : null);

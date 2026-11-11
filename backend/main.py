@@ -1043,6 +1043,7 @@ class ContratoCreate(BaseModel):
     # Suma legada; si envías costos_adicionales_lista, el API recalcula.
     costos_adicionales: Optional[float] = None
     costos_adicionales_lista: List[CostoAdicionalItem] = Field(default_factory=list)
+    bitacora_horario: Optional[Dict[str, Any]] = None
     export_palette: Optional[Dict[str, Any]] = None
 
 class PermisoUpdate(BaseModel):
@@ -1111,6 +1112,7 @@ class ContratoUpdate(BaseModel):
     costo_directo_contrato: Optional[float] = None
     costos_adicionales: Optional[float] = None
     costos_adicionales_lista: Optional[List[CostoAdicionalItem]] = None
+    bitacora_horario: Optional[Dict[str, Any]] = None
     export_palette: Optional[Dict[str, Any]] = None
 
 class ListadoPrecioItem(BaseModel):
@@ -6621,7 +6623,7 @@ _CONTRATOS_SELECT_LISTA = (
 # Detalle sin plano_geojson (decenas de MB): el plano se pide con GET .../plano-geojson o ?include_plano=1.
 _CONTRATOS_SELECT_DETALLE_SIN_PLANO = (
     _CONTRATOS_SELECT_LISTA
-    + ",aiu,iva,anticipo,amortizacion_pct,valor_componente_ambiental,valor_componente_social,"
+    + ",aiu,iva,anticipo,amortizacion_pct,bitacora_horario,valor_componente_ambiental,valor_componente_social,"
     "valor_componente_pmt,costo_directo_contrato,costos_adicionales_lista,"
     "sicoe_consecutivos_desde_uno,ccd_firma_config"
 )
@@ -9220,6 +9222,7 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "iva": contrato.iva,
         "anticipo": contrato.anticipo,
         "amortizacion_pct": contrato.amortizacion_pct,
+        "bitacora_horario": contrato.bitacora_horario,
         "valor_componente_ambiental": contrato.valor_componente_ambiental,
         "valor_componente_social": contrato.valor_componente_social,
         "valor_componente_pmt": contrato.valor_componente_pmt,
@@ -9266,6 +9269,34 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
         norm = _normalizar_costos_adicionales_lista(body.costos_adicionales_lista)
         data["costos_adicionales_lista"] = norm
         data["costos_adicionales"] = _suma_costos_adicionales_cop(norm)
+    horario_prev = None
+    if "bitacora_horario" in data and data["bitacora_horario"] is not None:
+        try:
+            from bitacora_horario import normalize_horario, _hoy_iso_bogota
+            from rrhh_timezone import format_fecha_hora_colombia, now_iso_bogota
+
+            prev_rows = (
+                supabase.table("contratos")
+                .select("bitacora_horario,numero")
+                .eq("id", int(contrato_id))
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            horario_prev = (prev_rows[0].get("bitacora_horario") if prev_rows else None)
+            numero_c = (prev_rows[0].get("numero") if prev_rows else None)
+            data["bitacora_horario"] = normalize_horario(
+                data["bitacora_horario"],
+                vigente_desde=_hoy_iso_bogota(),
+            )
+        except Exception:
+            from bitacora_horario import normalize_horario, _hoy_iso_bogota
+            data["bitacora_horario"] = normalize_horario(
+                data["bitacora_horario"],
+                vigente_desde=_hoy_iso_bogota(),
+            )
+            numero_c = None
     palette_payload = None
     if "export_palette" in data:
         palette_payload = data.pop("export_palette")
@@ -9291,10 +9322,39 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
                         _upd,
                         has_numero_interventoria=("numero_interventoria" in data),
                     )
+            elif _is_pgrst_missing_column(exc, "bitacora_horario"):
+                data.pop("bitacora_horario", None)
+                if data:
+                    _contratos_write_with_schema_retry(
+                        "update",
+                        _upd,
+                        has_numero_interventoria=("numero_interventoria" in data),
+                    )
             else:
                 raise
     if palette_payload is not None:
         _guardar_export_palette_contrato(contrato_id, palette_payload)
+    if "bitacora_horario" in (body.dict(exclude_unset=True) or {}) and body.bitacora_horario is not None:
+        try:
+            from rrhh_timezone import format_fecha_hora_colombia, now_iso_bogota
+
+            registrar_log(
+                current_user,
+                "ACTUALIZAR",
+                "CONTRATOS",
+                "contratos",
+                str(contrato_id),
+                {
+                    "accion": "bitacora_horario",
+                    "contrato_id": contrato_id,
+                    "numero": numero_c,
+                    "horario_anterior": horario_prev,
+                    "horario_nuevo": data.get("bitacora_horario"),
+                    "fecha_hora_colombia": format_fecha_hora_colombia(now_iso_bogota()),
+                },
+            )
+        except Exception:
+            pass
     return {"mensaje": "Contrato actualizado"}
 
 

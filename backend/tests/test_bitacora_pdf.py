@@ -177,6 +177,62 @@ def test_omit_pagina_eventos_si_vacia(monkeypatch):
     assert "#112233" in captured["doc"]
 
 
+def test_pdf_asistencia_horas_extra_y_firmas(monkeypatch):
+    pdf.clear_pdf_caches_for_tests()
+    captured = {}
+
+    def fake_pdf(doc, landscape=True):
+        captured["doc"] = doc
+        return b"%PDF-1.4 mock"
+
+    monkeypatch.setattr(pdf, "contrato_meta_bitacora", lambda *_a, **_k: {
+        "id": 1, "numero": "X", "objeto": "O", "contratista": "C",
+        "interventoria": "I", "entidad": "E", "geo_lat": 4.7, "geo_lng": -74.0,
+        "logo_entidad": None, "logo_contratista": None, "logo_interventoria": None,
+        "export_palette": {},
+    })
+    monkeypatch.setattr(pdf, "list_entradas_del_dia", lambda *_a, **_k: {
+        "fecha": "2026-08-18",
+        "diario": {
+            "fecha": "2026-08-18",
+            "hora_inicio_labores": "07:30",
+            "personal": [],
+            "equipos_uso": [],
+            "materiales": [],
+            "cuerpo_html": "",
+            "imagenes": [],
+            "asistencia_colaboradores": [{
+                "nombre": "Carlos P",
+                "cargo": "Oficial",
+                "subcontratista_nombre": "Empresa A",
+                "hora_ingreso": "07:30",
+                "hora_salida": "18:30",
+                "observacion": "Cierre de frente",
+            }],
+        },
+        "eventos": [],
+    })
+    monkeypatch.setattr(pdf, "consultar_clima_slots_3h", lambda *_a, **_k: [])
+    monkeypatch.setattr(pdf, "to_pdf_bytes", fake_pdf)
+    monkeypatch.setattr(
+        "bitacora_horario.get_horario_contrato",
+        lambda *_a, **_k: {
+            "vigente_desde": "2026-01-01",
+            "dias": {
+                "lun": {"laborable": True, "entrada": "07:30", "salida": "16:30",
+                        "almuerzo_inicio": "12:00", "almuerzo_fin": "13:00"},
+            },
+        },
+    )
+    out = pdf.generar_pdf_bitacora_dia(MagicMock(), 1, "2026-08-18")
+    assert out.startswith(b"%PDF")
+    doc = captured["doc"]
+    assert "Hrs extra" in doc
+    assert "Total horas extra del día" in doc
+    assert "Residente de obra" in doc
+    assert "Director de obra" in doc
+
+
 def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
     pdf.clear_pdf_caches_for_tests()
     captured = {}

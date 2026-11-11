@@ -56,6 +56,10 @@ export default function PersonalAsistenciaPanel({
   excluidosRrhhIds = [],
   /** () => Promise<plantilla> para autocompletar por cargo desde el día anterior. */
   fetchPlantillaAutocompletar = null,
+  /** Horario del contrato / snapshot para precarga y horas extra. */
+  horario = null,
+  /** Fecha ISO del diario. */
+  fechaISO = null,
 }) {
   const ui = sheetStyles || {}
   const viewportCompact = useSeguimientoCompact() || compact
@@ -64,7 +68,7 @@ export default function PersonalAsistenciaPanel({
   const [draftCargoOtro, setDraftCargoOtro] = useState('')
   const [draftCantidad, setDraftCantidad] = useState(1)
   const [addOpen, setAddOpen] = useState(false)
-  const [draftAdd, setDraftAdd] = useState(() => emptyAsistenciaRow())
+  const [draftAdd, setDraftAdd] = useState(() => emptyAsistenciaRow({}, { horario, fechaISO }))
   const [cargoDetalle, setCargoDetalle] = useState(null)
 
   const liveMap = useMemo(
@@ -163,7 +167,7 @@ export default function PersonalAsistenciaPanel({
     onChange?.([...(rows || []), { ...draftAdd }])
     const cargo = String(draftAdd.cargo || '').trim()
     const empresa = nombreEmpresaAsistencia(draftAdd)
-    setDraftAdd(emptyAsistenciaRow())
+    setDraftAdd(emptyAsistenciaRow({}, { horario, fechaISO }))
     setAddOpen(false)
     if (cargo) {
       setCargoDetalle({
@@ -335,7 +339,7 @@ export default function PersonalAsistenciaPanel({
               type="button"
               onClick={() => {
                 setCargoFormOpen(false)
-                setDraftAdd(emptyAsistenciaRow())
+                setDraftAdd(emptyAsistenciaRow({}, { horario, fechaISO }))
                 setAddOpen((v) => !v)
               }}
               style={ui.sectionBarSolo
@@ -638,6 +642,8 @@ export default function PersonalAsistenciaPanel({
           fetchPlantillaAutocompletar={fetchPlantillaAutocompletar}
           excluidosRrhhIds={excluidosRrhhIds}
           viewportCompact={viewportCompact}
+          horario={horario}
+          fechaISO={fechaISO}
           onClose={() => setCargoDetalle(null)}
         />
       )}

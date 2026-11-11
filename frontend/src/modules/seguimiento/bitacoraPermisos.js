@@ -56,6 +56,48 @@ export function fechaCreacionBogotaISO(entrada) {
   }
 }
 
+/** Suma días calendario a una fecha ISO YYYY-MM-DD. */
+function addDaysISO(iso, days) {
+  const m = String(iso || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  const dt = new Date(Date.UTC(y, mo - 1, d + Number(days), 12, 0, 0))
+  if (Number.isNaN(dt.getTime())) return null
+  return dt.toISOString().slice(0, 10)
+}
+
+/** 23:59:59 America/Bogota del día calendario indicado → epoch ms. */
+export function finDiaBogotaMs(isoDate) {
+  const d = String(isoDate || '').slice(0, 10)
+  const ms = Date.parse(`${d}T23:59:59-05:00`)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * Instantáneo de cierre de edición (espejo de momento_cierre_efectivo en backend).
+ */
+export function momentoCierreEdicionLocal(entrada) {
+  if (!entrada || String(entrada.tipo || '') === 'evento') return null
+  const fecha = String(entrada.fecha || '').slice(0, 10)
+  if (!fecha) return null
+  if (esReporteAtrasadoLocal(entrada)) {
+    const creacion = fechaCreacionBogotaISO(entrada)
+    if (!creacion) return finDiaBogotaMs(fecha)
+    return finDiaBogotaMs(creacion)
+  }
+  const diaSiguiente = addDaysISO(fecha, 1)
+  return diaSiguiente ? finDiaBogotaMs(diaSiguiente) : null
+}
+
+export function ventanaEdicionVencidaLocal(entrada, { ahoraMs } = {}) {
+  const cierre = momentoCierreEdicionLocal(entrada)
+  if (cierre == null) return false
+  const now = ahoraMs != null ? Number(ahoraMs) : Date.now()
+  return now >= cierre
+}
+
 /**
  * Bitácora edita el Diario (y sus bloques de evento) mientras esté abierto
  * dentro de la ventana efectiva (D+1 normal, o día de creación si atrasado);
@@ -72,6 +114,7 @@ export function puedeEditarEntradaBitacora(entrada, permisos) {
   }
   if (String(entrada.estado || '') === 'cerrado') return false
   if (entrada.puede_autocerrar) return false
+  if (ventanaEdicionVencidaLocal(entrada)) return false
   return true
 }
 

@@ -1,6 +1,12 @@
 /** Helpers de asistencia de colaboradores (Reporte Diario) — catálogo RRHH. */
 
 import { BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO } from './bitacoraConstants.js'
+import {
+  HORA_INGRESO_DEFAULT as HORA_INGRESO_HORARIO,
+  HORA_SALIDA_DEFAULT as HORA_SALIDA_HORARIO,
+  calcularHorasExtra,
+  horasPrecargaDesdeHorario,
+} from './bitacoraHorario.js'
 
 export const DOCUMENTO_TIPOS = ['CC', 'CE', 'TI', 'PA', 'NIT', 'OTRO']
 
@@ -12,8 +18,8 @@ export const ESTADOS_COLABORADOR = [
   { value: 'retirado', label: 'Retirado' },
 ]
 
-export const HORA_INGRESO_DEFAULT = '07:30'
-export const HORA_SALIDA_DEFAULT = '16:30'
+export const HORA_INGRESO_DEFAULT = HORA_INGRESO_HORARIO
+export const HORA_SALIDA_DEFAULT = HORA_SALIDA_HORARIO
 
 /** Solo «activo» (RRHH) aporta al Resumen por cargo. */
 export const ESTADOS_CUENTAN_RESUMEN = new Set(['activo'])
@@ -149,7 +155,10 @@ export function asistenciaRowFromRrhh(trab, partial = {}) {
   })
 }
 
-export function emptyAsistenciaRow(partial = {}) {
+export function emptyAsistenciaRow(partial = {}, { horario = null, fechaISO = null } = {}) {
+  const precarga = (horario && fechaISO)
+    ? horasPrecargaDesdeHorario(horario, fechaISO)
+    : null
   return {
     rrhh_trabajador_id: null,
     colaborador_id: null,
@@ -160,14 +169,33 @@ export function emptyAsistenciaRow(partial = {}) {
     subcontratista_id: null,
     subcontratista_nombre: '',
     estado: 'activo',
-    hora_ingreso: HORA_INGRESO_DEFAULT,
-    hora_salida: HORA_SALIDA_DEFAULT,
+    hora_ingreso: precarga?.hora_ingreso || HORA_INGRESO_DEFAULT,
+    hora_salida: precarga?.hora_salida || HORA_SALIDA_DEFAULT,
     fecha_ingreso: '',
     fecha_retiro: '',
     observacion: '',
+    justificacion_horas_extra: '',
     origen: 'rrhh',
     tramo: '',
     ...partial,
+  }
+}
+
+/** Recalcula horas extra de una fila según horario del contrato / snapshot. */
+export function enriquecerAsistenciaConHorasExtra(row, { horario = null, fechaISO = null } = {}) {
+  const r = row && typeof row === 'object' ? row : {}
+  const extra = calcularHorasExtra({
+    hora_ingreso: r.hora_ingreso,
+    hora_salida: r.hora_salida,
+    horario,
+    fechaISO,
+  })
+  return {
+    ...r,
+    horas_extra: extra,
+    justificacion_horas_extra: extra > 0
+      ? String(r.justificacion_horas_extra || r.justificacion_extra || '').trim()
+      : '',
   }
 }
 
@@ -328,6 +356,12 @@ export function asistenciaFromEntrada(entradaOrList) {
       fecha_ingreso: parseFechaISO(r?.fecha_ingreso),
       fecha_retiro: parseFechaISO(r?.fecha_retiro),
       observacion: String(r?.observacion || r?.observaciones || '').trim(),
+      justificacion_horas_extra: String(
+        r?.justificacion_horas_extra || r?.justificacion_extra || '',
+      ).trim(),
+      horas_extra: r?.horas_extra != null && r.horas_extra !== ''
+        ? Number(r.horas_extra)
+        : null,
       origen: r?.origen || (tid != null ? 'rrhh' : 'legado'),
       tramo: String(r?.tramo || '').trim(),
     })
@@ -671,25 +705,39 @@ export function operadorEstaEnAsistencia(uso, rowsOrCatalogo) {
   return opciones.some((o) => o.value === current)
 }
 
-export function asistenciaParaPayload(rows) {
-  return asistenciaFromEntrada(rows).map((r) => ({
-    rrhh_trabajador_id: r.rrhh_trabajador_id,
-    colaborador_id: r.colaborador_id,
-    nombre: r.nombre,
-    documento_tipo: r.documento_tipo,
-    documento_numero: r.documento_numero,
-    cargo: r.cargo,
-    subcontratista_id: r.subcontratista_id,
-    subcontratista_nombre: r.subcontratista_nombre,
-    estado: r.estado,
-    hora_ingreso: r.hora_ingreso || null,
-    hora_salida: r.hora_salida || HORA_SALIDA_DEFAULT,
-    fecha_ingreso: r.fecha_ingreso || null,
-    fecha_retiro: r.fecha_retiro || null,
-    observacion: r.observacion,
-    origen: r.origen || 'rrhh',
-    tramo: String(r.tramo || '').trim() || null,
-  }))
+export function asistenciaParaPayload(rows, { horario = null, fechaISO = null } = {}) {
+  return asistenciaFromEntrada(rows).map((raw) => {
+    const r = enriquecerAsistenciaConHorasExtra(raw, { horario, fechaISO })
+    return {
+      rrhh_trabajador_id: r.rrhh_trabajador_id,
+      colaborador_id: r.colaborador_id,
+      nombre: r.nombre,
+      documento_tipo: r.documento_tipo,
+      documento_numero: r.documento_numero,
+      cargo: r.cargo,
+      subcontratista_id: r.subcontratista_id,
+      subcontratista_nombre: r.subcontratista_nombre,
+      estado: r.estado,
+      hora_ingreso: r.hora_ingreso || null,
+      hora_salida: r.hora_salida || HORA_SALIDA_DEFAULT,
+      fecha_ingreso: r.fecha_ingreso || null,
+      fecha_retiro: r.fecha_retiro || null,
+      observacion: r.observacion,
+      horas_extra: r.horas_extra > 0 ? r.horas_extra : 0,
+      justificacion_horas_extra: r.horas_extra > 0
+        ? String(r.justificacion_horas_extra || '').trim()
+        : '',
+      origen: r.origen || 'rrhh',
+      tramo: String(r.tramo || '').trim() || null,
+    }
+  })
+}
+
+/** True si alguna fila con horas extra carece de justificación. */
+export function faltanJustificacionesHorasExtra(rows, { horario = null, fechaISO = null } = {}) {
+  return asistenciaParaPayload(rows, { horario, fechaISO }).some(
+    (r) => Number(r.horas_extra) > 0 && !String(r.justificacion_horas_extra || '').trim(),
+  )
 }
 
 export function labelEstadoColaborador(estado) {

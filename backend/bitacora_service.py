@@ -2990,6 +2990,17 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
         hora_ingreso = _parse_hora_hhmm(item.get("hora_ingreso"), default=HORA_INGRESO_DEFAULT)
         hora_salida = _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
         origen = str(item.get("origen") or ("rrhh" if rrhh_id is not None else "legado")).strip() or "legado"
+        just_extra = str(
+            item.get("justificacion_horas_extra")
+            or item.get("justificacion_extra")
+            or "",
+        ).strip()
+        try:
+            horas_extra_in = float(item.get("horas_extra")) if item.get("horas_extra") not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            horas_extra_in = 0.0
+        if horas_extra_in < 0:
+            horas_extra_in = 0.0
         out.append({
             "rrhh_trabajador_id": rrhh_id,
             "colaborador_id": cid,
@@ -3005,9 +3016,71 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
             "fecha_ingreso": _parse_fecha_iso(item.get("fecha_ingreso")),
             "fecha_retiro": _parse_fecha_iso(item.get("fecha_retiro")),
             "observacion": str(item.get("observacion") or item.get("observaciones") or "").strip(),
+            "horas_extra": round(horas_extra_in, 2),
+            "justificacion_horas_extra": just_extra,
             "origen": origen,
             **({"tramo": tramo_fila} if tramo_fila else {}),
         })
+    return out
+
+
+def _resolver_horario_aplicado(
+    sb,
+    contrato_id: int,
+    data: Optional[dict] = None,
+    *,
+    entrada_existente: Optional[dict] = None,
+) -> dict:
+    """Snapshot de horario: conserva el ya aplicado; si no, usa payload o contrato."""
+    from bitacora_horario import get_horario_contrato, normalize_horario
+
+    if isinstance(entrada_existente, dict) and entrada_existente.get("horario_aplicado"):
+        return normalize_horario(entrada_existente.get("horario_aplicado"))
+    raw = (data or {}).get("horario_aplicado") if isinstance(data, dict) else None
+    if raw:
+        return normalize_horario(raw)
+    return get_horario_contrato(sb, contrato_id)
+
+
+def _enriquecer_y_validar_horas_extra(
+    asistencia: Optional[List[dict]],
+    *,
+    horario: Optional[dict],
+    fecha,
+) -> List[dict]:
+    """Recalcula horas extra y exige justificación cuando hay overtime."""
+    from bitacora_horario import calcular_horas_extra
+
+    if not asistencia:
+        return []
+    out: List[dict] = []
+    faltantes: List[str] = []
+    for row in asistencia:
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        extra = calcular_horas_extra(
+            hora_ingreso=r.get("hora_ingreso"),
+            hora_salida=r.get("hora_salida"),
+            horario=horario,
+            fecha=fecha,
+        )
+        r["horas_extra"] = extra
+        just = str(r.get("justificacion_horas_extra") or "").strip()
+        if extra > 0:
+            r["justificacion_horas_extra"] = just
+            if not just:
+                faltantes.append(str(r.get("nombre") or "sin nombre"))
+        else:
+            r["justificacion_horas_extra"] = ""
+        out.append(r)
+    if faltantes:
+        nombres = ", ".join(faltantes[:5])
+        mas = f" (+{len(faltantes) - 5})" if len(faltantes) > 5 else ""
+        raise ValueError(
+            "Hay trabajadores con horas extra sin justificación: "
+            f"{nombres}{mas}. Complétela para guardar."
+        )
     return out
 
 
@@ -4218,6 +4291,11 @@ def crear_reporte_diario(
         personal, asistencia = _resolver_personal_y_asistencia(
             sb, contrato_id, data, user_id=user_id, current_user=current_user,
         )
+        horario_aplicado = _resolver_horario_aplicado(sb, contrato_id, data)
+        if asistencia is not None:
+            asistencia = _enriquecer_y_validar_horas_extra(
+                asistencia, horario=horario_aplicado, fecha=fecha,
+            )
         usos_raw = data.get("equipos_uso") if isinstance(data.get("equipos_uso"), list) else []
         _validar_tramos_filas_diario(
             asistencia=asistencia,
@@ -4225,6 +4303,7 @@ def crear_reporte_diario(
             equipos_uso=usos_raw,
         )
         payload["personal"] = personal
+        payload["horario_aplicado"] = horario_aplicado
         if asistencia is not None:
             payload["asistencia_colaboradores"] = asistencia
         if "eventos" in data:
@@ -4248,6 +4327,7 @@ def crear_reporte_diario(
             _log.warning("bitacora.crear_diario insert falló: %s", exc)
             payload.pop("asistencia_colaboradores", None)
             payload.pop("eventos", None)
+            payload.pop("horario_aplicado", None)
             try:
                 inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
             except Exception as exc2:
@@ -4422,11 +4502,22 @@ def update_entrada(
             patch["clima_descripcion"] = str(data.get("clima_descripcion") or "").strip() or None
         if "clima_editado_manual" in data:
             patch["clima_editado_manual"] = bool(data.get("clima_editado_manual"))
+        horario_aplicado = _resolver_horario_aplicado(
+            sb, contrato_id, data, entrada_existente=entrada,
+        )
+        # Conservar snapshot: no reescribir si ya existe; fijarlo si faltaba.
+        if not entrada.get("horario_aplicado"):
+            patch["horario_aplicado"] = horario_aplicado
         if "personal" in data or "asistencia_colaboradores" in data:
             with _stage_timer(stages, "sync_cargos"):
                 pers, asist = _resolver_personal_y_asistencia(
                     sb, contrato_id, data, user_id=user_id, current_user=current_user,
                 )
+                if asist is not None:
+                    fecha_asist = _parse_fecha(entrada.get("fecha"))
+                    asist = _enriquecer_y_validar_horas_extra(
+                        asist, horario=horario_aplicado, fecha=fecha_asist,
+                    )
                 patch["personal"] = pers
                 if asist is not None:
                     patch["asistencia_colaboradores"] = asist

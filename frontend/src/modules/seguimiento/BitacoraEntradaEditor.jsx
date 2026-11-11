@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Download, Eye, Table2, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Download, Eye, Image as ImageIcon, Table2, Trash2, X } from 'lucide-react'
+import CcConfirmModal from '../../components/CcConfirmModal'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import { downloadInformePeriodicoBlob } from '../../utils/informePeriodicoCapture'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
 import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
@@ -12,6 +15,8 @@ import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import BitacoraReportePersonalModal from './BitacoraReportePersonalModal'
+import BitacoraReporteDiarioPngCapture from './BitacoraReporteDiarioPngCapture'
+import { normalizeHorario } from './bitacoraHorario'
 import EventoBloquesSection from './EventoBloquesSection'
 import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
@@ -25,6 +30,7 @@ import {
   HINT_REGISTRAR_EN_RRHH,
   asistenciaFromEntrada,
   asistenciaParaPayload,
+  faltanJustificacionesHorasExtra,
   mapaEstadosRrhh,
   mergePersonalCantidades,
   nombreCompletoRrhh,
@@ -299,10 +305,16 @@ export default function BitacoraEntradaEditor({
   const [mapTarget, setMapTarget] = useState(null)
   const [contratoCentro, setContratoCentro] = useState({ lat: 4.711, lng: -74.0721 })
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [pngBusy, setPngBusy] = useState(false)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
   const [reportePersonalOpen, setReportePersonalOpen] = useState(false)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   const [contratoMeta, setContratoMeta] = useState({})
+  const [bitacoraHorario, setBitacoraHorario] = useState(null)
+  const [firmasBitacora, setFirmasBitacora] = useState(null)
+  const pngCaptureRef = useRef(null)
+  const exportProgress = pdfBusy ? 'Generando PDF…' : (pngBusy ? 'Generando PNG…' : '')
 
   // Plantilla de cargos: se mantiene para sync de catálogo; el resumen se deriva de asistencia.
   useEffect(() => {
@@ -431,6 +443,7 @@ export default function BitacoraEntradaEditor({
             contratista: data?.contratista != null ? String(data.contratista) : '',
             logo_contratista: data?.logo_contratista || '',
           })
+          setBitacoraHorario(data?.bitacora_horario ? normalizeHorario(data.bitacora_horario) : null)
         }
         let lat = data?.centro_lat != null ? Number(data.centro_lat) : null
         let lng = data?.centro_lng != null ? Number(data.centro_lng) : null
@@ -441,9 +454,43 @@ export default function BitacoraEntradaEditor({
           setContratoCentro({ lat, lng })
         }
       } catch { /* ignore */ }
+      try {
+        const { API_BASE } = await import('../../apiBase')
+        const fr = await fetch(
+          `${API_BASE}/informes/${contratoId}/ccd/config-firma/CC-BIT-001`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        if (fr.ok && !cancelled) {
+          const cfg = await fr.json()
+          if (cfg && typeof cfg === 'object') setFirmasBitacora(cfg)
+        }
+      } catch { /* ignore */ }
     })()
     return () => { cancelled = true }
   }, [contratoId, token])
+
+  const exportarPngDia = useCallback(async () => {
+    if (!fecha || pngBusy || pdfBusy) return
+    const node = pngCaptureRef.current
+    if (!node || typeof window === 'undefined') return
+    setPngBusy(true)
+    setError('')
+    try {
+      const { toBlob } = await import('html-to-image')
+      const blob = await toBlob(node, {
+        pixelRatio: Math.min(3, window.devicePixelRatio || 2),
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+      })
+      if (!blob) throw new Error('No se pudo generar la imagen')
+      downloadInformePeriodicoBlob(blob, `bitacora_reporte_${fecha}.png`)
+      setOkMsg('PNG del reporte diario descargado.')
+    } catch (e) {
+      setError(e?.message || 'No se pudo generar el PNG')
+    } finally {
+      setPngBusy(false)
+    }
+  }, [fecha, pdfBusy, pngBusy])
 
   const exportarPdfDia = async ({ preview = false } = {}) => {
     if (!api?.exportBitacoraPdfBlob || !fecha) return
@@ -567,7 +614,21 @@ export default function BitacoraEntradaEditor({
     setOkMsg('')
     const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
-      const asistenciaPayload = asistenciaParaPayload(asistencia)
+      const horarioEfectivo = normalizeHorario(
+        entrada?.horario_aplicado || bitacoraHorario,
+      )
+      const asistenciaPayload = asistenciaParaPayload(asistencia, {
+        horario: horarioEfectivo,
+        fechaISO: fecha,
+      })
+      if (faltanJustificacionesHorasExtra(asistencia, {
+        horario: horarioEfectivo,
+        fechaISO: fecha,
+      })) {
+        setError('Hay trabajadores con horas extra sin justificación. Complétela para guardar.')
+        setBusy(false)
+        return
+      }
       const sinRrhh = asistenciaPayload.filter(
         (r) => r.nombre && r.rrhh_trabajador_id == null && r.origen !== 'legado',
       )
@@ -663,6 +724,8 @@ export default function BitacoraEntradaEditor({
         materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
         eventos: eventosParaPayload(eventos),
+        // Snapshot: bitácoras ya guardadas conservan el horario con que se registraron.
+        horario_aplicado: horarioEfectivo,
       }
       let row
       const tNet0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
@@ -975,6 +1038,20 @@ export default function BitacoraEntradaEditor({
             )}
             {tipo === 'diario' && (permisos?.ver || permisos?.exportar) && (
               <>
+                {exportProgress ? (
+                  <span
+                    role="status"
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: t.textMuted,
+                      whiteSpace: 'nowrap',
+                      padding: '0 4px',
+                    }}
+                  >
+                    {exportProgress}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   disabled={busy || !fecha}
@@ -987,9 +1064,19 @@ export default function BitacoraEntradaEditor({
                 </button>
                 <button
                   type="button"
-                  disabled={pdfBusy || busy || !fecha}
+                  disabled={pngBusy || pdfBusy || busy || !fecha}
+                  onClick={() => void exportarPngDia()}
+                  style={btnIcon({ disabled: pngBusy || pdfBusy || busy || !fecha })}
+                  title={pngBusy ? 'Generando PNG…' : 'Descargar PNG del reporte diario'}
+                  aria-label={pngBusy ? 'Generando PNG…' : 'Descargar PNG del reporte diario'}
+                >
+                  <ImageIcon size={iconSz} strokeWidth={2.2} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  disabled={pdfBusy || pngBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: true })}
-                  style={btnIcon({ disabled: pdfBusy || busy || !fecha })}
+                  style={btnIcon({ disabled: pdfBusy || pngBusy || busy || !fecha })}
                   title={pdfBusy ? 'Generando vista previa…' : 'Vista previa PDF'}
                   aria-label={pdfBusy ? 'Generando vista previa…' : 'Vista previa PDF'}
                 >
@@ -997,9 +1084,9 @@ export default function BitacoraEntradaEditor({
                 </button>
                 <button
                   type="button"
-                  disabled={pdfBusy || busy || !fecha}
+                  disabled={pdfBusy || pngBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: false })}
-                  style={btnIcon({ disabled: pdfBusy || busy || !fecha, primary: true })}
+                  style={btnIcon({ disabled: pdfBusy || pngBusy || busy || !fecha, primary: true })}
                   title={pdfBusy ? 'Generando PDF…' : 'Descargar PDF'}
                   aria-label={pdfBusy ? 'Generando PDF…' : 'Descargar PDF'}
                 >
@@ -1146,6 +1233,10 @@ export default function BitacoraEntradaEditor({
                 onChangePersonalManual={setPersonalManual}
                 permitirCargoCantidad={permitirCargoCantidad && editable}
                 gateRrhhAprobado={gateRrhhAprobado}
+                horario={normalizeHorario(
+                  entrada?.horario_aplicado || bitacoraHorario,
+                )}
+                fechaISO={fecha}
                 fetchPlantillaAutocompletar={
                   editable && esNuevo
                     ? () => api.plantillaAutocompletarDiario()
@@ -1899,22 +1990,12 @@ export default function BitacoraEntradaEditor({
               <button
                 type="button"
                 disabled={busy}
-                onClick={async () => {
-                  if (!window.confirm('¿Eliminar definitivamente esta entrada?')) return
-                  setBusy(true)
-                  try {
-                    await api.deleteBitacoraEntrada(localId)
-                    onSaved?.(null)
-                    onClose?.()
-                  } catch (e) {
-                    setError(e.message || 'No se pudo eliminar')
-                  } finally {
-                    setBusy(false)
-                  }
-                }}
-                style={{ ...btnGhost, color: '#B91C1C' }}
+                onClick={() => setConfirmDeleteOpen(true)}
+                style={{ ...btnIcon({ danger: true }), color: '#B91C1C' }}
+                title="Borrar bitácora"
+                aria-label="Borrar bitácora"
               >
-                Eliminar
+                <Trash2 size={iconSz} strokeWidth={2.2} aria-hidden />
               </button>
             )}
           </div>
@@ -2046,6 +2127,51 @@ export default function BitacoraEntradaEditor({
             setMapTarget(null)
           }}
         />
+      )}
+
+      <BitacoraReporteDiarioPngCapture
+        ref={pngCaptureRef}
+        fecha={fecha}
+        asistencia={asistencia}
+        usos={usos}
+        contratoMeta={contratoMeta}
+        horario={normalizeHorario(
+          entrada?.horario_aplicado || bitacoraHorario,
+        )}
+        firmas={firmasBitacora}
+      />
+
+      {confirmDeleteOpen && createPortal(
+        <CcConfirmModal
+          theme={t}
+          tipo="danger"
+          titulo="Borrar bitácora"
+          confirmar="Borrar definitivamente"
+          cancelar="Cancelar"
+          procesando={busy}
+          zIndex={100090}
+          onCancel={() => !busy && setConfirmDeleteOpen(false)}
+          onConfirm={async () => {
+            setBusy(true)
+            try {
+              await api.deleteBitacoraEntrada(localId)
+              setConfirmDeleteOpen(false)
+              onSaved?.(null)
+              onClose?.()
+            } catch (e) {
+              setError(e.message || 'No se pudo eliminar')
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+            Se eliminará de forma <strong>irreversible</strong> el reporte del día{' '}
+            <strong>{fecha || '—'}</strong> y todo su contenido (personal, maquinaria,
+            materiales y fotos). Esta acción no se puede deshacer.
+          </p>
+        </CcConfirmModal>,
+        document.body,
       )}
 
       <BitacoraReportePersonalModal
