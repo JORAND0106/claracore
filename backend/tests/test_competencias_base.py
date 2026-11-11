@@ -37,6 +37,14 @@ def test_competencias_base_incluye_red_matriz_idu():
     assert "RedMatriz IDU" not in base
 
 
+def test_competencias_base_incluye_idu_alum_y_mt():
+    base = _load_competencias_base()
+    assert "IDU Alum. Pub" in base
+    assert "IDU M.T." in base
+    assert base.count("IDU Alum. Pub") == 1
+    assert base.count("IDU M.T.") == 1
+
+
 def test_competencias_base_conserva_existentes():
     base = set(_load_competencias_base())
     for nombre in (

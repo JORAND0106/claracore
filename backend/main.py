@@ -2847,6 +2847,8 @@ COMPETENCIAS_BASE = [
     "Gas Natural",
     "ICCU",
     "IDU",
+    "IDU Alum. Pub",
+    "IDU M.T.",
     "MOVISTAR",
     "Red Matriz IDU",
 ]

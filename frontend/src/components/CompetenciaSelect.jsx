@@ -10,6 +10,8 @@ const FALLBACK_COMPETENCIAS = [
   'Gas Natural',
   'ICCU',
   'IDU',
+  'IDU Alum. Pub',
+  'IDU M.T.',
   'MOVISTAR',
   'Red Matriz IDU',
 ]
