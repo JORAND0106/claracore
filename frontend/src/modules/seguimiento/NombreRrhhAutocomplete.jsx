@@ -5,6 +5,7 @@ import {
   filtrarTrabajadoresRrhh,
   nombreCompletoRrhh,
 } from './personalAsistenciaHelpers'
+import { focusAdjacentBitacoraCell } from './bitacoraExcelNav'
 import { useAnchoredDropdown } from './useAnchoredDropdown'
 
 /**
@@ -20,10 +21,12 @@ export default function NombreRrhhAutocomplete({
   disabled = false,
   onPick,
   style,
+  ...navAttrs
 }) {
   const listId = useId()
   const [query, setQuery] = useState(value || '')
   const [open, setOpen] = useState(false)
+  const [hi, setHi] = useState(0)
   const wrapRef = useRef(null)
   const inputRef = useRef(null)
   const listRef = useRef(null)
@@ -45,6 +48,21 @@ export default function NombreRrhhAutocomplete({
     () => filtrarTrabajadoresRrhh(catalogo, query, excludeIds).slice(0, 12),
     [catalogo, query, excludeIds],
   )
+
+  useEffect(() => {
+    setHi(0)
+  }, [query, open])
+
+  const pickTrab = (trab, { advance = false } = {}) => {
+    const label = nombreCompletoRrhh(trab)
+    onPick?.(trab)
+    setQuery(label)
+    setOpen(false)
+    if (advance && inputRef.current) {
+      // Tras seleccionar, avanzar a la siguiente celda Excel.
+      requestAnimationFrame(() => focusAdjacentBitacoraCell(inputRef.current, 1))
+    }
+  }
 
   const showEmptyHint = open && !disabled
     && String(query || '').trim().length >= 1
@@ -77,27 +95,26 @@ export default function NombreRrhhAutocomplete({
           }}>
             {HINT_REGISTRAR_EN_RRHH}
           </div>
-        ) : matches.map((trab) => {
+        ) : matches.map((trab, i) => {
           const label = nombreCompletoRrhh(trab)
           const doc = [trab.tipo_documento || 'CC', trab.numero_documento].filter(Boolean).join(' ')
           const meta = [trab.cargo_aspira, trab.empresa_nombre].filter(Boolean).join(' · ')
+          const active = i === hi
           return (
             <button
               key={`rrhh-${trab.id}`}
               type="button"
               role="option"
+              aria-selected={active}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                onPick?.(trab)
-                setQuery(label)
-                setOpen(false)
-              }}
+              onMouseEnter={() => setHi(i)}
+              onClick={() => pickTrab(trab, { advance: true })}
               style={{
                 display: 'block',
                 width: '100%',
                 textAlign: 'left',
                 border: 'none',
-                background: 'transparent',
+                background: active ? (t.primary ? `${t.primary}18` : '#e0f2fe') : 'transparent',
                 padding: '8px 12px',
                 cursor: 'pointer',
                 borderBottom: `1px solid ${t.border}`,
@@ -129,12 +146,36 @@ export default function NombreRrhhAutocomplete({
           setOpen(true)
         }}
         onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (!listVisible || matches.length === 0) return
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setHi((h) => Math.min(h + 1, matches.length - 1))
+            return
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setHi((h) => Math.max(h - 1, 0))
+            return
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            const trab = matches[hi] || matches[0]
+            if (trab) pickTrab(trab, { advance: true })
+            return
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            setOpen(false)
+          }
+        }}
         style={style}
         title="Seleccione un colaborador del catálogo de RRHH"
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={listVisible}
         aria-controls={listId}
+        {...navAttrs}
       />
       {listbox}
     </div>

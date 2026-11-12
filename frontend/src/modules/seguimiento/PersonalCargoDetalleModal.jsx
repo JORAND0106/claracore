@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
@@ -14,7 +14,11 @@ import {
   filtrarCatalogoPorCargoYEmpresa,
   formatHorarioAsistencia,
 } from './personalAsistenciaHelpers'
-import { formatoHorasDecimal } from './bitacoraHorario'
+import { formatoHorasDecimal, horasPrecargaDesdeHorario } from './bitacoraHorario'
+import {
+  bitacoraCellNavProps,
+  handleBitacoraExcelKeyNav,
+} from './bitacoraExcelNav'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
@@ -49,6 +53,7 @@ export default function PersonalCargoDetalleModal({
   fechaISO = null,
 }) {
   const ui = bitacoraSheetStyles(t)
+  const navRef = useRef(null)
   const [draftOpen, setDraftOpen] = useState(false)
   const [draft, setDraft] = useState(() => emptyAsistenciaRow(
     { cargo: cargo || '' },
@@ -57,6 +62,20 @@ export default function PersonalCargoDetalleModal({
   const [autoBusy, setAutoBusy] = useState(false)
   const [autoMsg, setAutoMsg] = useState('')
   const [autoErr, setAutoErr] = useState('')
+  const precargaHoras = horasPrecargaDesdeHorario(horario, fechaISO)
+  const horaIngresoDef = precargaHoras.hora_ingreso || HORA_INGRESO_DEFAULT
+  const horaSalidaDef = precargaHoras.hora_salida || HORA_SALIDA_DEFAULT
+
+  useEffect(() => {
+    if (!horario || !fechaISO) return
+    setDraft((prev) => {
+      if (String(prev?.nombre || '').trim()) return prev
+      return emptyAsistenciaRow(
+        { cargo: cargo || '', tramo: prev?.tramo || '' },
+        { horario, fechaISO },
+      )
+    })
+  }, [horario, fechaISO, cargo])
 
   const usedIds = useMemo(
     () => (rows || []).map((r) => r.rrhh_trabajador_id).filter((x) => x != null),
@@ -109,8 +128,8 @@ export default function PersonalCargoDetalleModal({
   const pickDraft = (trab) => {
     setDraft(asistenciaRowFromRrhh(trab, {
       cargo: String(cargo || trab?.cargo_aspira || trab?.cargo || '').trim() || cargo,
-      hora_ingreso: draft.hora_ingreso || HORA_INGRESO_DEFAULT,
-      hora_salida: draft.hora_salida || HORA_SALIDA_DEFAULT,
+      hora_ingreso: draft.hora_ingreso || horaIngresoDef,
+      hora_salida: draft.hora_salida || horaSalidaDef,
       tramo: draft.tramo || '',
     }))
   }
@@ -361,10 +380,10 @@ export default function PersonalCargoDetalleModal({
                 <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Ingreso</span>
                 <input
                   type="time"
-                  value={(draft.hora_ingreso || HORA_INGRESO_DEFAULT).slice(0, 5)}
+                  value={(draft.hora_ingreso || horaIngresoDef).slice(0, 5)}
                   onChange={(e) => setDraft((d) => ({
                     ...d,
-                    hora_ingreso: e.target.value || HORA_INGRESO_DEFAULT,
+                    hora_ingreso: e.target.value || horaIngresoDef,
                   }))}
                   style={{ ...cellInp, width: 96 }}
                 />
@@ -373,10 +392,10 @@ export default function PersonalCargoDetalleModal({
                 <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Salida</span>
                 <input
                   type="time"
-                  value={(draft.hora_salida || HORA_SALIDA_DEFAULT).slice(0, 5)}
+                  value={(draft.hora_salida || horaSalidaDef).slice(0, 5)}
                   onChange={(e) => setDraft((d) => ({
                     ...d,
-                    hora_salida: e.target.value || HORA_SALIDA_DEFAULT,
+                    hora_salida: e.target.value || horaSalidaDef,
                   }))}
                   style={{ ...cellInp, width: 96 }}
                 />
@@ -396,7 +415,12 @@ export default function PersonalCargoDetalleModal({
             </div>
           )}
 
-          <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+          <div
+            ref={navRef}
+            style={ui.sheetWrap}
+            className="cc-bitacora-sheet-scroll cc-bitacora-excel-nav"
+            onKeyDown={(e) => handleBitacoraExcelKeyNav(e, navRef.current)}
+          >
             <table
               className="cc-bitacora-responsive-table cc-bitacora-personal-table"
               style={{ ...ui.sheetTable, minWidth: viewportCompact ? 0 : 720, tableLayout: 'auto' }}
@@ -471,14 +495,15 @@ export default function PersonalCargoDetalleModal({
                             excludeIds={usedIds.filter((id) => id !== row.rrhh_trabajador_id)}
                             onPick={(trab) => {
                               updateByIndex(index, asistenciaRowFromRrhh(trab, {
-                                hora_ingreso: row.hora_ingreso || HORA_INGRESO_DEFAULT,
-                                hora_salida: row.hora_salida || HORA_SALIDA_DEFAULT,
+                                hora_ingreso: row.hora_ingreso || horaIngresoDef,
+                                hora_salida: row.hora_salida || horaSalidaDef,
                                 observacion: row.observacion || '',
                                 tramo: row.tramo || '',
                                 cargo: String(cargo || trab?.cargo_aspira || trab?.cargo || '').trim() || cargo,
                               }))
                             }}
                             style={cellInp}
+                            {...bitacoraCellNavProps(index, 0)}
                           />
                         )}
                       </td>
@@ -492,6 +517,7 @@ export default function PersonalCargoDetalleModal({
                             style={{ ...cellInp, height: 28 }}
                             required
                             title="Tramo obligatorio por colaborador"
+                            {...bitacoraCellNavProps(index, 1)}
                           >
                             <option value="">Seleccione…</option>
                             {(tramosCatalogo || []).map((tr) => (
@@ -513,22 +539,24 @@ export default function PersonalCargoDetalleModal({
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                             <input
                               type="time"
-                              value={(row.hora_ingreso || HORA_INGRESO_DEFAULT).slice(0, 5)}
+                              value={(row.hora_ingreso || horaIngresoDef).slice(0, 5)}
                               onChange={(e) => updateByIndex(index, {
-                                hora_ingreso: e.target.value || HORA_INGRESO_DEFAULT,
+                                hora_ingreso: e.target.value || horaIngresoDef,
                               })}
                               style={{ ...cellInp, width: 96 }}
                               title="Hora de ingreso (según horario del contrato)"
+                              {...bitacoraCellNavProps(index, 2)}
                             />
                             <span style={{ color: t.textMuted }}>–</span>
                             <input
                               type="time"
-                              value={(row.hora_salida || HORA_SALIDA_DEFAULT).slice(0, 5)}
+                              value={(row.hora_salida || horaSalidaDef).slice(0, 5)}
                               onChange={(e) => updateByIndex(index, {
-                                hora_salida: e.target.value || HORA_SALIDA_DEFAULT,
+                                hora_salida: e.target.value || horaSalidaDef,
                               })}
                               style={{ ...cellInp, width: 96 }}
                               title="Hora de salida (según horario del contrato)"
+                              {...bitacoraCellNavProps(index, 3)}
                             />
                           </div>
                         )}
@@ -557,6 +585,7 @@ export default function PersonalCargoDetalleModal({
                                   ? (t.border || cellInp.border)
                                   : '#b91c1c',
                               }}
+                              {...bitacoraCellNavProps(index, 4)}
                             />
                           )
                         ) : (

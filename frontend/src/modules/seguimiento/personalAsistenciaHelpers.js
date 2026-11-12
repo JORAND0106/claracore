@@ -137,7 +137,7 @@ export function nombreCompletoRrhh(trab) {
 }
 
 /** Fila de asistencia a partir de un trabajador RRHH. Conserva tramo vía partial. */
-export function asistenciaRowFromRrhh(trab, partial = {}) {
+export function asistenciaRowFromRrhh(trab, partial = {}, { horario = null, fechaISO = null } = {}) {
   const nombre = nombreCompletoRrhh(trab)
   const tid = trab?.id != null ? Number(trab.id) : null
   return emptyAsistenciaRow({
@@ -152,7 +152,7 @@ export function asistenciaRowFromRrhh(trab, partial = {}) {
     estado: normalizeEstadoRrhh(trab?.estado),
     origen: 'rrhh',
     ...partial,
-  })
+  }, { horario, fechaISO })
 }
 
 export function emptyAsistenciaRow(partial = {}, { horario = null, fechaISO = null } = {}) {

@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import VisitanteCatalogSelect from './VisitanteCatalogSelect'
 import { emptyVisitanteRow } from './visitantesEventoHelpers'
+import {
+  bitacoraCellNavProps,
+  handleBitacoraExcelKeyNav,
+} from './bitacoraExcelNav'
 
 export { emptyVisitanteRow, visitantesFromDetalle, mergeAsistentesSearch } from './visitantesEventoHelpers'
 
@@ -17,6 +21,7 @@ export default function VisitantesEventoGrid({
   sheetStyles = null,
 }) {
   const ui = sheetStyles || {}
+  const navRef = useRef(null)
   const list = Array.isArray(rows) && rows.length ? rows : [emptyVisitanteRow()]
   const [usuarios, setUsuarios] = useState([])
 
@@ -64,6 +69,11 @@ export default function VisitantesEventoGrid({
       }}>
         Asistentes
       </div>
+      <div
+        ref={navRef}
+        className="cc-bitacora-excel-nav"
+        onKeyDown={(e) => handleBitacoraExcelKeyNav(e, navRef.current)}
+      >
       <table style={ui.sheetTable || { width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
@@ -89,6 +99,7 @@ export default function VisitantesEventoGrid({
                       disabled={disabled}
                       inputStyle={cellInp}
                       usuariosContrato={usuarios}
+                      inputProps={bitacoraCellNavProps(idx, 0)}
                       onChange={(sel) => {
                         const cargoPlat = String(sel.cargo || '').trim()
                         setRow(idx, {
@@ -120,6 +131,7 @@ export default function VisitantesEventoGrid({
                         opacity: cargoLocked ? 0.85 : 1,
                         cursor: cargoLocked ? 'default' : 'text',
                       }}
+                      {...bitacoraCellNavProps(idx, 1)}
                     />
                   )}
                 </td>
@@ -143,6 +155,7 @@ export default function VisitantesEventoGrid({
           })}
         </tbody>
       </table>
+      </div>
       {!disabled && (
         <button
           type="button"

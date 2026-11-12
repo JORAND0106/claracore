@@ -7810,13 +7810,33 @@ def obtener_contrato(contrato_id: int, include_plano: bool = Query(False)):
             and (
                 _is_pgrst_missing_column(exc, "anticipo")
                 or _is_pgrst_missing_column(exc, "amortizacion_pct")
+                or _is_pgrst_missing_column(exc, "bitacora_horario")
             )
         ):
-            sel_fb = (
-                _CONTRATOS_SELECT_LISTA
-                + ",aiu,iva,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
-                "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno,ccd_firma_config"
-            )
+            # Reintentar sin columnas nuevas que puedan faltar en el esquema remoto.
+            omit = []
+            if _is_pgrst_missing_column(exc, "anticipo") or _is_pgrst_missing_column(exc, "amortizacion_pct"):
+                omit.extend(["anticipo", "amortizacion_pct"])
+            if _is_pgrst_missing_column(exc, "bitacora_horario"):
+                omit.append("bitacora_horario")
+            sel_fb = sel
+            for col in omit:
+                sel_fb = ",".join(
+                    p for p in sel_fb.split(",") if p.strip() != col
+                )
+            if "bitacora_horario" in omit:
+                # Fallback histórico (sin anticipo/amortización/horario).
+                sel_fb = (
+                    _CONTRATOS_SELECT_LISTA
+                    + ",aiu,iva,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
+                    "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno,ccd_firma_config"
+                )
+            elif omit:
+                sel_fb = (
+                    _CONTRATOS_SELECT_LISTA
+                    + ",aiu,iva,bitacora_horario,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
+                    "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno,ccd_firma_config"
+                )
             r = supabase.table("contratos").select(sel_fb).eq("id", contrato_id).limit(1).execute()
         else:
             raise
@@ -9325,7 +9345,12 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
                         has_numero_interventoria=("numero_interventoria" in data),
                     )
             elif _is_pgrst_missing_column(exc, "bitacora_horario"):
+                # No silenciar del todo: el Admin cree que guardó el horario.
                 data.pop("bitacora_horario", None)
+                logging.getLogger("claracore.api").warning(
+                    "contratos.actualizar: columna bitacora_horario ausente; "
+                    "aplique migración 20261110120000_contratos_bitacora_horario.sql"
+                )
                 if data:
                     _contratos_write_with_schema_retry(
                         "update",
