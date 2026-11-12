@@ -16,7 +16,14 @@ import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import BitacoraReportePersonalModal from './BitacoraReportePersonalModal'
 import BitacoraReporteDiarioPngCapture from './BitacoraReporteDiarioPngCapture'
-import { normalizeHorario } from './bitacoraHorario'
+import {
+  horasPrecargaDesdeHorario,
+  normalizeHorario,
+} from './bitacoraHorario'
+import {
+  bitacoraCellNavProps,
+  handleBitacoraExcelKeyNav,
+} from './bitacoraExcelNav'
 import EventoBloquesSection from './EventoBloquesSection'
 import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
@@ -47,6 +54,7 @@ import {
 } from './bitacoraAsistenciaRrhhPolicy'
 import { puedeEditarEntradaBitacora, esReporteAtrasadoLocal } from './bitacoraPermisos'
 import {
+  BITACORA_HORA_INICIO_DEFAULT,
   EVENTO_TIPOS,
   eventoTieneDestinatario,
   horaInicioLaboresInicial,
@@ -65,7 +73,10 @@ import {
   useSeguimientoCompact,
 } from './seguimientoShared'
 
-function emptyUso() {
+function emptyUso({ horario = null, fechaISO = null } = {}) {
+  const precarga = (horario && fechaISO)
+    ? horasPrecargaDesdeHorario(horario, fechaISO)
+    : null
   return {
     equipo_id: null,
     equipo_nombre: '',
@@ -74,8 +85,8 @@ function emptyUso() {
     operador_rrhh_id: null,
     tramo: '',
     cantidad: 1,
-    hora_inicio: '',
-    hora_fin: '',
+    hora_inicio: precarga?.hora_ingreso || '',
+    hora_fin: precarga?.hora_salida || '',
     hora_intermedia: '',
     horas_intermedias: [],
     preoperacionales: [],
@@ -314,7 +325,15 @@ export default function BitacoraEntradaEditor({
   const [bitacoraHorario, setBitacoraHorario] = useState(null)
   const [firmasBitacora, setFirmasBitacora] = useState(null)
   const pngCaptureRef = useRef(null)
+  const maqNavRef = useRef(null)
+  const matNavRef = useRef(null)
+  const horarioAplicadoRef = useRef(false)
   const exportProgress = pdfBusy ? 'Generando PDF…' : (pngBusy ? 'Generando PNG…' : '')
+
+  const horarioEfectivoUi = useMemo(
+    () => normalizeHorario(entrada?.horario_aplicado || bitacoraHorario),
+    [entrada?.horario_aplicado, bitacoraHorario],
+  )
 
   // Plantilla de cargos: se mantiene para sync de catálogo; el resumen se deriva de asistencia.
   useEffect(() => {
@@ -443,7 +462,12 @@ export default function BitacoraEntradaEditor({
             contratista: data?.contratista != null ? String(data.contratista) : '',
             logo_contratista: data?.logo_contratista || '',
           })
-          setBitacoraHorario(data?.bitacora_horario ? normalizeHorario(data.bitacora_horario) : null)
+          // Null → default 07:30–16:30 vía normalizeHorario en consumidores.
+          setBitacoraHorario(
+            data?.bitacora_horario != null
+              ? normalizeHorario(data.bitacora_horario)
+              : null,
+          )
         }
         let lat = data?.centro_lat != null ? Number(data.centro_lat) : null
         let lng = data?.centro_lng != null ? Number(data.centro_lng) : null
@@ -468,6 +492,34 @@ export default function BitacoraEntradaEditor({
     })()
     return () => { cancelled = true }
   }, [contratoId, token])
+
+  // Cuando llega el horario del contrato: precargar hora inicio + maquinaria
+  // vacía en bitácoras nuevas (sin pisar horas ya editadas / snapshot histórico).
+  useEffect(() => {
+    if (!esNuevo || tipo !== 'diario' || !fecha) return
+    if (entrada?.horario_aplicado) return
+    if (!bitacoraHorario) return
+    if (horarioAplicadoRef.current) return
+    horarioAplicadoRef.current = true
+    const precarga = horasPrecargaDesdeHorario(bitacoraHorario, fecha)
+    setHoraInicio((prev) => {
+      const cur = String(prev || '').slice(0, 5)
+      if (!cur || cur === BITACORA_HORA_INICIO_DEFAULT) {
+        return precarga.hora_ingreso
+      }
+      return prev
+    })
+    setUsos((rows) => (rows || []).map((r) => {
+      const ini = String(r?.hora_inicio || '').slice(0, 5)
+      const fin = String(r?.hora_fin || '').slice(0, 5)
+      if (ini && fin) return r
+      return {
+        ...r,
+        hora_inicio: ini || precarga.hora_ingreso,
+        hora_fin: fin || precarga.hora_salida,
+      }
+    }))
+  }, [bitacoraHorario, esNuevo, tipo, fecha, entrada?.horario_aplicado])
 
   const exportarPngDia = useCallback(async () => {
     if (!fecha || pngBusy || pdfBusy) return
@@ -777,7 +829,7 @@ export default function BitacoraEntradaEditor({
           setUsos(
             rowClean.equipos_uso.length
               ? rowClean.equipos_uso.map(usoFromApi)
-              : [emptyUso()],
+              : [emptyUso({ horario: horarioEfectivoUi, fechaISO: fecha })],
           )
         }
       }
@@ -1170,7 +1222,7 @@ export default function BitacoraEntradaEditor({
                           value={(horaInicio || '').slice(0, 8)}
                           onChange={(e) => setHoraInicio(e.target.value)}
                           style={ui.cellInp}
-                          title="Por defecto 07:30; editable mientras la bitácora esté abierta"
+                          title="Según horario del contrato; editable mientras la bitácora esté abierta"
                         />
                       ) : (
                         <div style={ui.cellRo}>{horaInicio || '—'}</div>
@@ -1233,9 +1285,7 @@ export default function BitacoraEntradaEditor({
                 onChangePersonalManual={setPersonalManual}
                 permitirCargoCantidad={permitirCargoCantidad && editable}
                 gateRrhhAprobado={gateRrhhAprobado}
-                horario={normalizeHorario(
-                  entrada?.horario_aplicado || bitacoraHorario,
-                )}
+                horario={horarioEfectivoUi}
                 fechaISO={fecha}
                 fetchPlantillaAutocompletar={
                   editable && esNuevo
@@ -1251,14 +1301,22 @@ export default function BitacoraEntradaEditor({
                   {editable && (
                     <button
                       type="button"
-                      onClick={() => setUsos((u) => [...u, emptyUso()])}
+                      onClick={() => setUsos((u) => [...u, emptyUso({
+                        horario: horarioEfectivoUi,
+                        fechaISO: fecha,
+                      })])}
                       style={{ ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }}
                     >
                       + Fila
                     </button>
                   )}
                 </div>
-                <div style={ui.sheetWrapFlush} className="cc-bitacora-sheet-scroll">
+                <div
+                  ref={maqNavRef}
+                  style={ui.sheetWrapFlush}
+                  className="cc-bitacora-sheet-scroll cc-bitacora-excel-nav"
+                  onKeyDown={(e) => handleBitacoraExcelKeyNav(e, maqNavRef.current)}
+                >
                   <table
                     className="cc-bitacora-responsive-table cc-bitacora-maquinaria-table"
                     style={{
@@ -1338,6 +1396,7 @@ export default function BitacoraEntradaEditor({
                                 style={{ ...ui.cellInp, height: 28 }}
                                 required
                                 title="Tramo obligatorio por fila de maquinaria"
+                                {...bitacoraCellNavProps(idx, 0)}
                               >
                                 <option value="">Seleccione…</option>
                                 {tramosCatalogo.map((tr) => (
@@ -1384,6 +1443,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, cantidad: e.target.value } : r
                               )))}
                               style={{ ...ui.cellInp, textAlign: 'center' }}
+                              {...bitacoraCellNavProps(idx, 1)}
                             />
                           </td>
                           <td style={ui.td} data-label="Hora inicio">
@@ -1395,6 +1455,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, hora_inicio: e.target.value } : r
                               )))}
                               style={ui.cellInp}
+                              {...bitacoraCellNavProps(idx, 2)}
                             />
                           </td>
                           <td style={ui.td} data-label="Hora fin">
@@ -1406,6 +1467,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, hora_fin: e.target.value } : r
                               )))}
                               style={ui.cellInp}
+                              {...bitacoraCellNavProps(idx, 3)}
                             />
                           </td>
                           <td style={ui.td} data-label="Hora interm.">
@@ -1417,6 +1479,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, hora_intermedia: e.target.value } : r
                               )))}
                               style={ui.cellInp}
+                              {...bitacoraCellNavProps(idx, 4)}
                             />
                           </td>
                           <td style={{ ...ui.td, textAlign: 'center' }} data-label="Preop.">
@@ -1464,7 +1527,12 @@ export default function BitacoraEntradaEditor({
                     </button>
                   )}
                 </div>
-                <div style={ui.sheetWrapFlush} className="cc-bitacora-sheet-scroll">
+                <div
+                  ref={matNavRef}
+                  style={ui.sheetWrapFlush}
+                  className="cc-bitacora-sheet-scroll cc-bitacora-excel-nav"
+                  onKeyDown={(e) => handleBitacoraExcelKeyNav(e, matNavRef.current)}
+                >
                   <table
                     className="cc-bitacora-responsive-table cc-bitacora-materiales-table"
                     style={{
@@ -1497,6 +1565,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, movimiento: e.target.value } : r
                               )))}
                               style={{ ...ui.cellInp, height: 28 }}
+                              {...bitacoraCellNavProps(idx, 0)}
                             >
                               <option value="ingreso">Ingreso</option>
                               <option value="salida">Salida</option>
@@ -1512,6 +1581,7 @@ export default function BitacoraEntradaEditor({
                                 style={{ ...ui.cellInp, height: 28 }}
                                 required
                                 title="Tramo obligatorio por fila de materiales"
+                                {...bitacoraCellNavProps(idx, 1)}
                               >
                                 <option value="">Seleccione…</option>
                                 {tramosCatalogo.map((tr) => (
@@ -1547,6 +1617,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, proveedor: e.target.value } : r
                               )))}
                               style={ui.cellInp}
+                              {...bitacoraCellNavProps(idx, 2)}
                             />
                           </td>
                           <td style={ui.td} data-label="Cant.">
@@ -1560,6 +1631,7 @@ export default function BitacoraEntradaEditor({
                                 i === idx ? { ...r, cantidad: e.target.value } : r
                               )))}
                               style={{ ...ui.cellInp, textAlign: 'center' }}
+                              {...bitacoraCellNavProps(idx, 3)}
                             />
                           </td>
                           <td style={ui.td} data-label="Nº vale(s)">
@@ -1572,6 +1644,7 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                               placeholder="Ej. 101, 102"
                               title="Número(s) de vale"
+                              {...bitacoraCellNavProps(idx, 4)}
                             />
                           </td>
                           <td style={{ ...ui.td, textAlign: 'center' }} data-label="Remisión">
@@ -2135,9 +2208,7 @@ export default function BitacoraEntradaEditor({
         asistencia={asistencia}
         usos={usos}
         contratoMeta={contratoMeta}
-        horario={normalizeHorario(
-          entrada?.horario_aplicado || bitacoraHorario,
-        )}
+        horario={horarioEfectivoUi}
         firmas={firmasBitacora}
       />
 

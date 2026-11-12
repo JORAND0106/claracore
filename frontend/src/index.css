@@ -3081,6 +3081,18 @@ select.cc-dashboard-acta-select--light option {
   height: min(360px, 55vh) !important;
 }
 
+/* Bitácora — celda activa en navegación teclado tipo Excel */
+.cc-bitacora-excel-nav input:focus,
+.cc-bitacora-excel-nav select:focus,
+.cc-bitacora-excel-nav textarea:focus {
+  outline: 2px solid var(--cc-primary, #0077B6);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--cc-primary, #0077B6) 12%, var(--cc-input-bg, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-primary, #0077B6) 35%, transparent);
+  z-index: 1;
+  position: relative;
+}
+
 /* Bitácora Diario — grillas Excel adaptadas a móvil (Personal / Maquinaria / Materiales) */
 .cc-bitacora-entrada--compact .cc-bitacora-sheet-scroll {
   overflow: visible;

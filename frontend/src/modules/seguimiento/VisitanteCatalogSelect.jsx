@@ -15,6 +15,7 @@ export default function VisitanteCatalogSelect({
   disabled = false,
   placeholder = 'Buscar usuario o registrar asistente…',
   inputStyle = null,
+  inputProps = null,
   usuariosContrato = null,
 }) {
   const [q, setQ] = useState(value || '')
@@ -157,6 +158,7 @@ export default function VisitanteCatalogSelect({
         onFocus={() => { setOpen(true); void load(q) }}
         onBlur={onBlurCommit}
         style={inp}
+        {...(inputProps && typeof inputProps === 'object' ? inputProps : {})}
       />
       {open && opts.length > 0 && (
         <div style={{

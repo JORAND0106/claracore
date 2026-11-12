@@ -1,7 +1,12 @@
+import { useRef } from 'react'
 import {
   emptyActividadRow,
   formatUbicacionActividad,
 } from './bitacoraEventoActividades'
+import {
+  bitacoraCellNavProps,
+  handleBitacoraExcelKeyNav,
+} from './bitacoraExcelNav'
 
 /**
  * Grilla Excel compacta de Actividades del Reporte de Evento.
@@ -17,6 +22,7 @@ export default function ActividadesEventoGrid({
   compact = false,
 }) {
   const ui = sheetStyles || {}
+  const navRef = useRef(null)
   const list = Array.isArray(rows) && rows.length ? rows : [emptyActividadRow()]
 
   const setRow = (idx, patch) => {
@@ -84,7 +90,9 @@ export default function ActividadesEventoGrid({
         )}
       </div>
       <div
-        className="cc-bitacora-evento-actividades-scroll"
+        ref={navRef}
+        className="cc-bitacora-evento-actividades-scroll cc-bitacora-excel-nav"
+        onKeyDown={(e) => handleBitacoraExcelKeyNav(e, navRef.current)}
         style={ui.sheetWrap ? { ...ui.sheetWrap, margin: 0, overflowX: 'auto' } : {
           overflowX: 'auto',
           border: `1px solid ${t.border}`,
@@ -125,6 +133,7 @@ export default function ActividadesEventoGrid({
                         onChange={(e) => setRow(idx, { actividad: e.target.value })}
                         placeholder="Actividad"
                         style={cellInp}
+                        {...bitacoraCellNavProps(idx, 0)}
                       />
                     )}
                   </td>
@@ -137,6 +146,7 @@ export default function ActividadesEventoGrid({
                         onChange={(e) => setRow(idx, { abs_inicio: e.target.value })}
                         placeholder="K0+000"
                         style={cellInp}
+                        {...bitacoraCellNavProps(idx, 1)}
                       />
                     )}
                   </td>
@@ -149,6 +159,7 @@ export default function ActividadesEventoGrid({
                         onChange={(e) => setRow(idx, { abs_fin: e.target.value })}
                         placeholder="K0+100"
                         style={cellInp}
+                        {...bitacoraCellNavProps(idx, 2)}
                       />
                     )}
                   </td>
@@ -157,6 +168,7 @@ export default function ActividadesEventoGrid({
                       type="button"
                       title={ubiLabel || 'Seleccionar PK en mapa'}
                       disabled={disabled && !ubiLabel}
+                      tabIndex={-1}
                       onClick={() => onPickUbicacion?.(idx)}
                       style={{
                         ...(ui.clipBtn || {
@@ -187,6 +199,7 @@ export default function ActividadesEventoGrid({
                         onChange={(e) => setRow(idx, { cantidad: e.target.value })}
                         placeholder="Cant."
                         style={cellInp}
+                        {...bitacoraCellNavProps(idx, 3)}
                       />
                     )}
                   </td>
@@ -199,6 +212,7 @@ export default function ActividadesEventoGrid({
                         onChange={(e) => setRow(idx, { observacion: e.target.value })}
                         placeholder="Obs."
                         style={cellInp}
+                        {...bitacoraCellNavProps(idx, 4)}
                       />
                     )}
                   </td>

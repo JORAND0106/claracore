@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CARGOS_PERSONAL } from './bitacoraConstants'
 import { HINT_DOCUMENTACION_NO_APROBADA } from './bitacoraAsistenciaRrhhPolicy'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
@@ -70,6 +70,18 @@ export default function PersonalAsistenciaPanel({
   const [addOpen, setAddOpen] = useState(false)
   const [draftAdd, setDraftAdd] = useState(() => emptyAsistenciaRow({}, { horario, fechaISO }))
   const [cargoDetalle, setCargoDetalle] = useState(null)
+
+  // Si el horario del contrato llega después de montar, actualizar el borrador vacío.
+  useEffect(() => {
+    if (!horario || !fechaISO) return
+    setDraftAdd((prev) => {
+      if (String(prev?.nombre || '').trim()) return prev
+      return emptyAsistenciaRow(
+        { tramo: prev?.tramo || '' },
+        { horario, fechaISO },
+      )
+    })
+  }, [horario, fechaISO])
 
   const liveMap = useMemo(
     () => (resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)),
@@ -159,7 +171,7 @@ export default function PersonalAsistenciaPanel({
       hora_ingreso: draftAdd.hora_ingreso || HORA_INGRESO_DEFAULT,
       hora_salida: draftAdd.hora_salida || HORA_SALIDA_DEFAULT,
       tramo: draftAdd.tramo || '',
-    }))
+    }, { horario, fechaISO }))
   }
 
   const confirmDraftAdd = () => {

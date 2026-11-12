@@ -116,6 +116,14 @@ export function bitacoraSheetStyles(t) {
       height: 28,
       fontFamily: 'inherit',
     },
+    /** Resalte de celda activa (navegación Excel). */
+    cellFocus: {
+      outline: `2px solid ${primary}`,
+      outlineOffset: -1,
+      background: hexLuminance(bgCard) < 0.45
+        ? `${primary}33`
+        : `${primary}14`,
+    },
     cellRo: {
       width: '100%',
       boxSizing: 'border-box',
