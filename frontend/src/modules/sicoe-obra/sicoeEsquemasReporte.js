@@ -63,6 +63,8 @@ export function listarEsquemasDelReporte(registros, isSellado = () => false) {
           creado_en: g.creado_en || null,
           registros: [],
           thumb: g.url,
+          ...(g.fuente ? { fuente: g.fuente } : {}),
+          ...(g.dibujo_reporte ? { dibujo_reporte: true } : {}),
         }
         map.set(k, row)
       }
@@ -77,6 +79,8 @@ export function listarEsquemasDelReporte(registros, isSellado = () => false) {
         if (g.nombre) row.nombre = String(g.nombre)
         if (g.numero != null) row.numero = g.numero
         if (g.esquema_id) row.esquema_id = g.esquema_id
+        if (g.fuente) row.fuente = g.fuente
+        if (g.dibujo_reporte) row.dibujo_reporte = true
       }
       const rid = reg.id
       if (!row.registros.some((r) => String(r.id) === String(rid))) {
@@ -111,17 +115,22 @@ export function buildEsquemaHistorialEntrada({
   esquemaId,
   scene = null,
   reporteId = null,
+  fuente = null,
+  dibujoReporte = false,
 } = {}) {
+  const esDibujo = !!dibujoReporte || fuente === 'dibujo_reporte'
   return {
     url,
     numero: numero ?? null,
     creado_en: new Date().toISOString(),
+    // Sigue siendo entrada de esquema en galería/lista (C-OUT-18); fuente marca el puente.
     origen: 'esquema',
     kind: 'esquema',
     nombre: String(nombre || 'Esquema').trim() || 'Esquema',
     esquema_id: esquemaId || nuevoEsquemaId(),
     ...(scene ? { scene, esquema_scene: scene } : {}),
     ...(reporteId != null ? { reporte_id: reporteId } : {}),
+    ...(esDibujo ? { fuente: 'dibujo_reporte', dibujo_reporte: true } : {}),
   }
 }
 
@@ -168,6 +177,8 @@ export function entradaParaRegistroHistorial(entrada) {
     esquema_id: entrada.esquema_id || nuevoEsquemaId(),
     ...(scene ? { scene, esquema_scene: scene } : {}),
     ...(entrada.reporte_id != null ? { reporte_id: entrada.reporte_id } : {}),
+    ...(entrada.fuente ? { fuente: entrada.fuente } : {}),
+    ...(entrada.dibujo_reporte ? { dibujo_reporte: true } : {}),
   }
 }
 

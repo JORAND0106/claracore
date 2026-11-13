@@ -9758,6 +9758,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           contratoId={contrato_id}
           reporte={reporte}
           esDesarrollador={esUsuarioDesarrollador(usuario)}
+          registros={registros}
+          isSellado={(reg) => sicoeRegistroSelladoMaxActivo(reg, nivelesContrato)}
+          onRegistrosPatched={(patches) => {
+            const apply = (prev) => (prev || []).map((r) => {
+              const hit = (patches || []).find((p) => String(p.id) === String(r.id))
+              return hit ? { ...r, ...hit } : r
+            })
+            setRegistros(apply)
+            setReporte((prev) => {
+              if (!prev) return prev
+              return { ...prev, registros: apply(prev.registros || []) }
+            })
+          }}
           onClose={() => setEditorDibujoReporte(false)}
           onGuardado={(data) => {
             const patch = data?.reporte || data || {}
@@ -9809,6 +9822,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           reporte={reporte}
           registros={registros}
           isSellado={(reg) => sicoeRegistroSelladoMaxActivo(reg, nivelesContrato)}
+          onEditarDibujo={() => {
+            setEsquemasReporteOpen(false)
+            setEditorDibujoReporte(true)
+          }}
           onRegistrosPatched={(patches) => {
             // Causa prod #57: recargar(?ligero=1) justo después del PUT pisaba
             // graficos_historial local y el registro abría sin esquema.

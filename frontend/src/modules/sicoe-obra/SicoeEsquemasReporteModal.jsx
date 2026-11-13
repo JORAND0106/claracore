@@ -15,6 +15,7 @@ import {
   planificarActualizacionVersionEsquema,
   planificarAsignacionEsquema,
 } from './sicoeEsquemasReporte.js'
+import { esFilaEsquemaDibujoReporte } from './sicoeDibujoComoGrafico.js'
 import {
   listarEsquemasSinAsignar,
   mergeEsquemasLista,
@@ -110,6 +111,7 @@ async function putRegistro(API_URL, contratoId, hdrs, registroId, body) {
  *   registros: object[],
  *   isSellado: (reg: object) => boolean,
  *   onRegistrosPatched?: (patches: object[]) => void,
+ *   onEditarDibujo?: () => void,
  * }} props
  */
 export default function SicoeEsquemasReporteModal({
@@ -124,6 +126,7 @@ export default function SicoeEsquemasReporteModal({
   registros = [],
   isSellado = () => false,
   onRegistrosPatched,
+  onEditarDibujo,
 }) {
   const [localRegs, setLocalRegs] = useState(registros)
   const [sinAsignarRows, setSinAsignarRows] = useState([])
@@ -186,6 +189,11 @@ export default function SicoeEsquemasReporteModal({
   }
 
   const abrirEditar = (row) => {
+    // C-OUT-23: gráfico nacido del dibujo → reabre «Editar dibujo».
+    if (esFilaEsquemaDibujoReporte(row) && typeof onEditarDibujo === 'function') {
+      onEditarDibujo(row)
+      return
+    }
     setEditTarget(row)
     setEditorOpen(true)
     setErr('')
