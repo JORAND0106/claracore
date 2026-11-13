@@ -210,8 +210,9 @@ export default function ModuloPlanoMapaCalor({
   renderEmbedCarpeta = null,
 }) {
   const contratoId = usuario?.contrato_id
-  const { isMobile: vpMobile, isLandscapeMobile, isTablet } = useClaraViewport()
-  const panelsAsIcons = vpMobile || isLandscapeMobile || isTablet
+  const { isMobile: vpMobile, isLandscapeMobile, isTablet, isNavDrawer, isDesktop } = useClaraViewport()
+  /** Móvil + tablet (incl. landscape/iPad): capas e intensidad como iconos. Escritorio ancho: paneles compactos abiertos. */
+  const panelsAsIcons = vpMobile || isLandscapeMobile || isTablet || isNavDrawer || !isDesktop
 
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
@@ -1117,12 +1118,16 @@ export default function ModuloPlanoMapaCalor({
   const totalRegs = meta?.total_registros || 0
   const enPlano = (leyendaVista.con_dibujo || 0) + (leyendaVista.sin_dibujo || 0)
 
+  const filtroTip = esMesaValidador
+    ? 'Filtros — al entrar se carga No Revisado de su nivel. Sin filtros el plano muestra eje y abscisado para ubicarse.'
+    : 'Filtros — elija criterios y Buscar para ver reportes en el plano. Sin filtros el plano muestra eje y abscisado para ubicarse.'
+
   const iconBtn = (id, label, emoji) => (
     <button
       key={id}
       type="button"
-      title={label}
-      aria-label={label}
+      title={id === 'filtros' ? filtroTip : label}
+      aria-label={id === 'filtros' ? filtroTip : label}
       aria-pressed={panelAbierto === id}
       onClick={() => {
         if (id === 'filtros') {
@@ -1137,7 +1142,7 @@ export default function ModuloPlanoMapaCalor({
         height: 40,
         borderRadius: 10,
         border: `1px solid ${panelAbierto === id ? t.primary : t.border}`,
-        background: panelAbierto === id ? `${t.primary}22` : `${t.bgCard}EE`,
+        background: panelAbierto === id ? `${t.primary}22` : `${t.bgCard}F2`,
         color: t.text,
         cursor: 'pointer',
         fontSize: 16,
@@ -1203,12 +1208,16 @@ export default function ModuloPlanoMapaCalor({
   return (
     <div
       className="cc-claragis-root"
+      data-claragis="1"
       style={{
         display: 'flex',
         flexDirection: 'column',
         gap: panelsAsIcons ? 6 : 10,
-        height: 'calc(100vh - 140px)',
+        height: 'calc(100dvh - 140px)',
         minHeight: 360,
+        isolation: 'isolate',
+        position: 'relative',
+        zIndex: 0,
       }}
     >
       <div style={{ flexShrink: 0 }}>
@@ -1360,46 +1369,32 @@ export default function ModuloPlanoMapaCalor({
           </>
         )}
 
-        {!tieneCriterios && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            maxWidth: 420, textAlign: 'center', zIndex: 6,
-            background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
-            borderRadius: 12, padding: '16px 20px', boxShadow: t.shadow,
-          }}>
-            <div style={{ fontWeight: 800, color: t.text, marginBottom: 6 }}>Defina filtros para ver el mapa</div>
-            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-              Abra <strong>Filtros</strong>, elija criterios y pulse <strong>Buscar</strong>.
-              {esMesaValidador ? ' Como validador, al entrar se carga No Revisado de su nivel.' : ' Sin filtros no se muestra ningún dato.'}
-            </div>
-          </div>
-        )}
-
         {tieneCriterios && busquedaRealizada && !buscando && nPts === 0 && !errorMsg && (
           <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            maxWidth: 440, textAlign: 'center', zIndex: 6,
-            background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
-            borderRadius: 12, padding: '16px 20px', boxShadow: t.shadow,
+            position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 6, maxWidth: 'min(440px, 92%)', textAlign: 'center',
+            background: `${t.bgCard}F2`, border: `1px solid ${t.border}`,
+            borderRadius: 10, padding: '8px 12px', boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+            pointerEvents: 'none',
           }}>
-            <div style={{ fontWeight: 800, color: t.text, marginBottom: 6 }}>Sin puntos georreferenciados</div>
-            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-caption)' }}>
               {totalRegs > 0
-                ? `Hay ${totalRegs} registro${totalRegs === 1 ? '' : 's'} con el filtro actual, pero ${sinCoords || totalRegs} sin coordenadas GPS.`
-                : 'Ningún registro cumple los filtros activos.'}
+                ? `${totalRegs} registro${totalRegs === 1 ? '' : 's'} · ${sinCoords || totalRegs} sin coordenadas`
+                : 'Ningún registro cumple los filtros'}
             </div>
           </div>
         )}
 
         {(buscando || embedCargando) && (
           <div style={{
-            position: 'absolute', inset: 0, zIndex: 4,
-            background: 'rgba(15,23,42,0.25)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
+            position: 'absolute', top: 12, right: 12, zIndex: 4,
+            background: `${t.bgCard}F2`, border: `1px solid ${t.border}`,
+            borderRadius: 8, padding: '6px 10px',
+            color: t.text, fontWeight: 700, fontSize: 'var(--cc-caption)',
             pointerEvents: 'none',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
           }}>
-            {embedCargando ? 'Abriendo reporte…' : 'Actualizando ClaraGIS…'}
+            {embedCargando ? 'Abriendo reporte…' : 'Actualizando…'}
           </div>
         )}
 

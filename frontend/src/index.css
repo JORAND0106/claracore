@@ -972,8 +972,48 @@ select.cc-dashboard-acta-select--light option {
   min-height: 0 !important;
 }
 
-.cc-sicoe-carpeta-overlay--embed .cc-sicoe-carpeta-content {
+.cc-sicoe-carpeta-overlay--embed .cc-sicoe-carpeta-content,
+.cc-claragis-embed-content {
   min-height: 0;
+  overflow-x: hidden !important;
+}
+
+/* ClaraGIS: evitar que Mapbox WebGL deje borrosa la barra superior. */
+.cc-claragis-root {
+  isolation: isolate;
+  transform: translateZ(0);
+}
+
+.cc-claragis-root .mapboxgl-canvas,
+.cc-claragis-root .mapboxgl-map {
+  transform: translateZ(0);
+}
+
+body:has(.cc-claragis-root) .cc-app-header {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.cc-claragis-embed-header {
+  flex-shrink: 0;
+}
+
+.cc-claragis-items-excel,
+.cc-claragis-reg-row {
+  max-width: 100%;
+}
+
+.cc-claragis-reg-row img {
+  display: block;
+}
+
+@media (max-width: 1366px) {
+  .cc-claragis-root {
+    height: calc(100dvh - 120px) !important;
+    min-height: 280px;
+  }
 }
 
 @media (max-width: 767px) {
@@ -982,10 +1022,11 @@ select.cc-dashboard-acta-select--light option {
     min-height: 280px;
   }
 
-  .cc-sicoe-carpeta-shell--embed {
-    width: min(100%, 100%) !important;
-    max-height: 55% !important;
-    min-height: 38% !important;
+  .cc-sicoe-carpeta-shell--embed-mobile {
+    width: 100% !important;
+    max-height: 48% !important;
+    min-height: 34% !important;
+    border-radius: 14px 14px 0 0 !important;
   }
 }
 

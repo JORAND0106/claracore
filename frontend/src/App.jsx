@@ -6593,11 +6593,22 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const { isMobile: carpetaVpMobile, isLandscapeMobile: carpetaLandscapeMobile } = useClaraViewport()
   const carpetaCompact = carpetaVpMobile || carpetaLandscapeMobile
   const isEmbed = layout === 'embed'
+  const embedMobileDock = isEmbed && (carpetaVpMobile || carpetaLandscapeMobile)
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
   const capasOpNorm = (capasFiltroValidacionOp || 'and') === 'or' ? 'or' : 'and'
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
   const [nivelMasivoDevAdmin, setNivelMasivoDevAdmin] = useState(2)
+  const [embedWidthPx, setEmbedWidthPx] = useState(() => {
+    try {
+      const n = Number(sessionStorage.getItem('claragis_embed_w'))
+      if (Number.isFinite(n) && n >= 360 && n <= 960) return n
+    } catch { /* ignore */ }
+    return 640
+  })
+  const embedWidthRef = useRef(embedWidthPx)
+  embedWidthRef.current = embedWidthPx
+  const embedResizeRef = useRef(false)
 
   // Mapa cargo_id → campo de nivel en so_registros (alineado con backend CARGO_ID_NIVEL_MAP)
   const CARGO_NIVEL_CAMPO = {
@@ -6790,6 +6801,38 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     })
     return undefined
   }, [registroExpandido, registros, reporte?.id, repoProp?.id])
+
+  // ClaraGIS embed: arrastre para ajustar ancho (tablet/escritorio).
+  useEffect(() => {
+    if (!isEmbed || embedMobileDock) return undefined
+    const onMove = (e) => {
+      if (!embedResizeRef.current) return
+      const clientX = e.touches?.[0]?.clientX ?? e.clientX
+      if (!Number.isFinite(clientX)) return
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
+      const maxW = Math.min(960, Math.floor(vw * 0.72))
+      const next = Math.max(380, Math.min(maxW, vw - clientX - 12))
+      embedWidthRef.current = next
+      setEmbedWidthPx(next)
+    }
+    const onUp = () => {
+      if (!embedResizeRef.current) return
+      embedResizeRef.current = false
+      try { sessionStorage.setItem('claragis_embed_w', String(embedWidthRef.current)) } catch { /* ignore */ }
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: true })
+    window.addEventListener('touchend', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+    }
+  }, [isEmbed, embedMobileDock])
 
   // Panel/notif/deep-link: resolver _autoRegistro cuando ya hay registros (no forzar sin_asignar en race).
   useEffect(() => {
@@ -8457,18 +8500,67 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     )
   }
 
+  const embedTitulo = reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`
+  const embedCapItem = [reporte.capitulo, reporte.item_principal || reporte.item_numero].filter(Boolean).join(' · ')
+    || [reporte.capitulo, reporte.subcontratista_nombre].filter(Boolean).join(' · ')
+    || '—'
+  const fmtFechaEmbed = (ts) => {
+    if (!ts) return null
+    try {
+      const n = /Z$|[+-]\d{2}:\d{2}$/.test(ts) ? ts : `${ts}Z`
+      const d = new Date(n)
+      if (Number.isNaN(d.getTime())) return null
+      return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' })
+    } catch { return null }
+  }
+  const fcEmbed = fmtFechaEmbed(reporte.created_at)
+  const fmEmbed = fmtFechaEmbed(reporte.updated_at)
+  const fechasTip = [
+    reporte.nombre_creador ? `Creado por ${reporte.nombre_creador}` : null,
+    reporte.nombre_modificador ? `Modificado por ${reporte.nombre_modificador}` : null,
+  ].filter(Boolean).join(' · ') || 'Fechas del reporte'
+
+  const iconActionEmbed = (opts) => (
+    <button
+      type="button"
+      key={opts.key}
+      onClick={opts.onClick}
+      disabled={opts.disabled}
+      title={opts.title}
+      aria-label={opts.title}
+      style={{
+        background: opts.danger ? 'rgba(185,28,28,0.9)' : 'rgba(255,255,255,0.16)',
+        border: 'none',
+        color: '#fff',
+        borderRadius: 8,
+        width: 32,
+        height: 32,
+        minWidth: 32,
+        fontSize: 'var(--cc-sm)',
+        cursor: opts.disabled ? 'wait' : 'pointer',
+        opacity: opts.disabled ? 0.55 : 1,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+      }}
+    >
+      {opts.icon}
+    </button>
+  )
+
   return (
     <div
-      className={`cc-sicoe-carpeta-overlay${isEmbed ? ' cc-sicoe-carpeta-overlay--embed' : ''}`}
+      className={`cc-sicoe-carpeta-overlay${isEmbed ? ' cc-sicoe-carpeta-overlay--embed' : ''}${embedMobileDock ? ' cc-sicoe-carpeta-overlay--embed-mobile' : ''}`}
       style={isEmbed ? {
         position: 'absolute',
         inset: 0,
         zIndex: 30,
         background: 'transparent',
         display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'flex-end',
-        padding: carpetaCompact ? '6px' : '10px',
+        alignItems: embedMobileDock ? 'flex-end' : 'flex-start',
+        justifyContent: embedMobileDock ? 'stretch' : 'flex-end',
+        padding: embedMobileDock ? '0' : '8px',
         overflow: 'hidden',
         pointerEvents: 'none',
       } : {
@@ -8484,17 +8576,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       }}
     >
       <div
-        className={`cc-sicoe-carpeta-shell${isEmbed ? ' cc-sicoe-carpeta-shell--embed' : ''}`}
+        className={`cc-sicoe-carpeta-shell${isEmbed ? ' cc-sicoe-carpeta-shell--embed' : ''}${embedMobileDock ? ' cc-sicoe-carpeta-shell--embed-mobile' : ''}`}
         style={isEmbed ? {
           pointerEvents: 'auto',
-          width: carpetaCompact ? 'min(100%, 420px)' : 'min(520px, 46vw)',
-          maxWidth: '100%',
-          maxHeight: carpetaCompact ? '58%' : 'min(92%, calc(100% - 12px))',
-          minHeight: carpetaCompact ? '42%' : '55%',
+          position: 'relative',
+          width: embedMobileDock ? '100%' : `${embedWidthPx}px`,
+          maxWidth: embedMobileDock ? '100%' : 'min(72vw, 960px)',
+          maxHeight: embedMobileDock ? '48%' : 'min(94%, calc(100% - 8px))',
+          minHeight: embedMobileDock ? '34%' : '48%',
+          height: embedMobileDock ? '48%' : undefined,
           background: C.carpetaFondo,
-          borderRadius: 14,
-          border: `2px solid ${C.carpetaHeader}`,
-          boxShadow: '0 16px 48px rgba(0,0,0,0.45)',
+          borderRadius: embedMobileDock ? '14px 14px 0 0' : 12,
+          border: `1px solid ${C.carpetaHeader}`,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -8510,9 +8604,120 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           flexDirection: 'column',
         }}
       >
+        {isEmbed && !embedMobileDock && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Ajustar ancho de la ventana"
+            title="Arrastrar para ajustar ancho"
+            onMouseDown={() => {
+              embedResizeRef.current = true
+              document.body.style.cursor = 'col-resize'
+              document.body.style.userSelect = 'none'
+            }}
+            onTouchStart={() => { embedResizeRef.current = true }}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              cursor: 'col-resize',
+              zIndex: 5,
+              background: 'transparent',
+            }}
+          />
+        )}
 
-        {/* ─ Header tipo carpeta ─ */}
-        {carpetaCompact ? (
+        {/* ─ Header ClaraGIS embed (ejecutivo, compacto) ─ */}
+        {isEmbed ? (
+          <div
+            className="cc-claragis-embed-header"
+            style={{
+              background: `linear-gradient(135deg, ${t.primary}, ${t.primary}CC)`,
+              padding: '8px 10px',
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  title={embedTitulo}
+                  style={{
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 800,
+                    color: '#fff',
+                    lineHeight: 1.25,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  #{reporte.numero_reporte ?? '—'} · {embedTitulo}
+                </div>
+                <div
+                  title={embedCapItem}
+                  style={{
+                    fontSize: 'var(--cc-caption)',
+                    color: 'rgba(255,255,255,0.82)',
+                    fontWeight: 600,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    marginTop: 2,
+                  }}
+                >
+                  {embedCapItem}
+                </div>
+              </div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                {puedeEliminarReporteCantidades && iconActionEmbed({
+                  key: 'del',
+                  icon: '🗑️',
+                  title: 'Eliminar reporte',
+                  danger: true,
+                  disabled: !!devEliminando,
+                  onClick: () => { void devEliminarReporteCompleto() },
+                })}
+                {iconActionEmbed({
+                  key: 'ref',
+                  icon: recargando ? '⏳' : '⟳',
+                  title: 'Actualizar reporte',
+                  disabled: !!recargando,
+                  onClick: () => { void recargar() },
+                })}
+                {typeof onEmbedMinimize === 'function' && iconActionEmbed({
+                  key: 'min',
+                  icon: '▬',
+                  title: 'Minimizar para ver el plano',
+                  onClick: onEmbedMinimize,
+                })}
+                {iconActionEmbed({
+                  key: 'close',
+                  icon: '✕',
+                  title: 'Cerrar reporte',
+                  onClick: onClose,
+                })}
+              </div>
+            </div>
+            <div
+              title={fechasTip}
+              style={{
+                fontSize: 'var(--cc-caption)',
+                color: 'rgba(255,255,255,0.75)',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {[fcEmbed && `📅 ${fcEmbed}`, fmEmbed && `✏️ ${fmEmbed}`].filter(Boolean).join(' · ') || '—'}
+            </div>
+          </div>
+        ) : carpetaCompact ? (
           <div
             className="cc-sicoe-carpeta-header cc-sicoe-carpeta-header--mobile"
             style={{
@@ -8772,8 +8977,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </button>
           </div>
         )}
-        {/* ─ Tab bar horizontal (exactamente 3 pestañas) ─ */}
-        <div className={`cc-sicoe-tabs-scroll${carpetaCompact ? ' cc-sicoe-carpeta-tabs' : ''}`} style={{ display:'flex', gap:'4px', padding: carpetaCompact ? '6px 8px 0' : '12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto', WebkitOverflowScrolling:'touch', flexShrink: 0 }}>
+        {/* ─ Tab bar horizontal ─ */}
+        <div className={`cc-sicoe-tabs-scroll${carpetaCompact || isEmbed ? ' cc-sicoe-carpeta-tabs' : ''}${isEmbed ? ' cc-claragis-embed-tabs' : ''}`} style={{ display:'flex', gap: isEmbed ? '3px' : '4px', padding: isEmbed ? '6px 8px 0' : (carpetaCompact ? '6px 8px 0' : '12px 16px 0'), background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto', WebkitOverflowScrolling:'touch', flexShrink: 0 }}>
           {(() => {
             const tienePendienteItems = capasF && itemsAsignados.some((it) =>
               registrosDominioValidacion.some((r) => {
@@ -8788,31 +8993,46 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               }),
             )
             const nItems = itemsAsignados.length
+            const nSin = regsSinAsignar.length
             const tabs = [
-              { key: 'portada',      label: '📋 Portada' },
-              { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
-              { key: 'items',        label: `${tienePendienteItems ? '🔴' : '🔖'} Ítems y registros${nItems > 0 ? ` (${nItems})` : ''}` },
+              { key: 'portada', icon: '📋', tip: 'Portada', label: isEmbed ? 'Portada' : '📋 Portada' },
+              { key: 'sin_asignar', icon: '📄', tip: `Sin asignar ítem${nSin ? ` (${nSin})` : ''}`, label: isEmbed ? `Sin asig.${nSin ? ` (${nSin})` : ''}` : `📄 Sin Asignar Ítem${nSin ? ` (${nSin})` : ''}` },
+              { key: 'items', icon: tienePendienteItems ? '🔴' : '🔖', tip: `Ítems y registros${nItems ? ` (${nItems})` : ''}`, label: isEmbed ? `Ítems${nItems ? ` (${nItems})` : ''}` : `${tienePendienteItems ? '🔴' : '🔖'} Ítems y registros${nItems ? ` (${nItems})` : ''}` },
             ]
             if (tienePlanillaTuberiaOrigen) {
-              tabs.push({ key: 'planilla_tuberia', label: '📐 Planilla tubería' })
+              tabs.push({ key: 'planilla_tuberia', icon: '📐', tip: 'Planilla tubería', label: isEmbed ? 'Planilla' : '📐 Planilla tubería' })
             }
-            return tabs
-          })().map(tab => (
-            <button key={tab.key} type="button" onClick={() => setTabActiva(tab.key)} style={{
-              background:    tabActiva === tab.key ? '#E8F6F8' : '#2A3F52',
-              color:         tabActiva === tab.key ? '#0F5C66' : '#E2E8F0',
-              border:        `1px solid ${tabActiva === tab.key ? '#7DD3E8' : '#475569'}`,
-              borderBottom:  tabActiva === tab.key ? '1px solid #E8F6F8' : '1px solid #2A3F52',
-              borderRadius:  '8px 8px 0 0', padding: carpetaCompact ? '8px 12px' : '8px 16px', fontSize: carpetaCompact ? 'var(--cc-caption)' : 'var(--cc-sm)',
-              fontWeight:    tabActiva === tab.key ? '700' : '500',
-              cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s',
-              minHeight: carpetaCompact ? 40 : undefined,
-              boxShadow: tabActiva === tab.key ? '0 -2px 8px rgba(0,0,0,0.12)' : 'none',
-            }}>{tab.label}</button>
-          ))}
+            const useIconsOnly = isEmbed && (embedMobileDock || embedWidthPx < 480)
+            return tabs.map(tab => (
+              <button
+                key={tab.key}
+                type="button"
+                title={tab.tip}
+                aria-label={tab.tip}
+                onClick={() => setTabActiva(tab.key)}
+                style={{
+                  background:    tabActiva === tab.key ? '#E8F6F8' : '#2A3F52',
+                  color:         tabActiva === tab.key ? '#0F5C66' : '#E2E8F0',
+                  border:        `1px solid ${tabActiva === tab.key ? '#7DD3E8' : '#475569'}`,
+                  borderBottom:  tabActiva === tab.key ? '1px solid #E8F6F8' : '1px solid #2A3F52',
+                  borderRadius:  '8px 8px 0 0',
+                  padding: useIconsOnly ? '8px 10px' : (isEmbed || carpetaCompact ? '8px 10px' : '8px 16px'),
+                  fontSize: isEmbed || carpetaCompact ? 'var(--cc-caption)' : 'var(--cc-sm)',
+                  fontWeight:    tabActiva === tab.key ? '700' : '500',
+                  cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s',
+                  minHeight: isEmbed || carpetaCompact ? 36 : undefined,
+                  minWidth: useIconsOnly ? 40 : undefined,
+                  boxShadow: tabActiva === tab.key ? '0 -2px 8px rgba(0,0,0,0.12)' : 'none',
+                  flexShrink: 0,
+                }}
+              >
+                {useIconsOnly ? tab.icon : tab.label}
+              </button>
+            ))
+          })()}
 
           {/* Botones de acción */}
-          <div style={{ marginLeft:'auto', display:'flex', gap:'8px', paddingBottom:'8px', flexShrink:0 }}>
+          <div style={{ marginLeft:'auto', display:'flex', gap: isEmbed ? 4 : 8, paddingBottom:'8px', flexShrink:0 }}>
             {puedeEditar && (
               <button
                 type="button"
@@ -8821,7 +9041,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 onClick={() => setEditorDibujoReporte(true)}
                 title={reporteTieneDibujo(reporte)
                   ? 'Editar dibujo del reporte (huella de todos los registros)'
-                  : 'Dibujo pendiente: dibujar el reporte sobre el plano semáforo (no bloquea asignar ítem)'}
+                  : 'Dibujo pendiente: dibujar el reporte sobre el plano (no bloquea asignar ítem)'}
                 style={{
                   background: reporteTieneDibujo(reporte) ? t.bgCard : '#d9770618',
                   color: reporteTieneDibujo(reporte) ? t.text : '#b45309',
@@ -8829,8 +9049,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     ? `1px solid ${t.border}`
                     : '1px solid #d9770644',
                   borderRadius: '8px',
-                  padding: carpetaCompact ? '10px 14px' : '6px 14px',
-                  minHeight: carpetaCompact ? 44 : undefined,
+                  padding: isEmbed ? '6px 8px' : (carpetaCompact ? '10px 14px' : '6px 14px'),
+                  minHeight: isEmbed ? 36 : (carpetaCompact ? 44 : undefined),
                   fontSize: 'var(--cc-sm)',
                   fontWeight: '700',
                   cursor: 'pointer',
@@ -8840,7 +9060,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 }}
               >
                 <span aria-hidden>✎</span>
-                {reporteTieneDibujo(reporte) ? 'Editar dibujo' : 'Dibujar · pendiente'}
+                {isEmbed ? null : (reporteTieneDibujo(reporte) ? 'Editar dibujo' : 'Dibujar · pendiente')}
               </button>
             )}
             {puedeEditar && (
@@ -8854,8 +9074,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   color: t.text,
                   border: `1px solid ${t.border}`,
                   borderRadius: '8px',
-                  padding: carpetaCompact ? '10px 14px' : '6px 14px',
-                  minHeight: carpetaCompact ? 44 : undefined,
+                  padding: isEmbed ? '6px 8px' : (carpetaCompact ? '10px 14px' : '6px 14px'),
+                  minHeight: isEmbed ? 36 : (carpetaCompact ? 44 : undefined),
                   fontSize: 'var(--cc-sm)',
                   fontWeight: '700',
                   cursor: 'pointer',
@@ -8865,32 +9085,32 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 }}
               >
                 <span aria-hidden>📐</span>
-                Esquemas
+                {isEmbed ? null : 'Esquemas'}
               </button>
             )}
             {puedeEditar && seleccionados.length > 0 && (
-              <button type="button" onClick={abrirModalCorteMasivo} style={{
+              <button type="button" onClick={abrirModalCorteMasivo} title={`Corte (${seleccionados.length})`} style={{
                 background:'#0d9488', color:'#fff', border:'none', borderRadius:'8px',
-                padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
-              }}>📄 Corte ({seleccionados.length})</button>
+                padding: isEmbed ? '6px 8px' : (carpetaCompact ? '10px 14px' : '6px 14px'), minHeight: isEmbed ? 36 : (carpetaCompact ? 44 : undefined), fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
+              }}>{isEmbed ? `📄 ${seleccionados.length}` : `📄 Corte (${seleccionados.length})`}</button>
             )}
             {puedeEditar && seleccionados.length > 0 && (
-              <button type="button" onClick={() => { cargarReportesParaMover(); setModalMover(true) }} style={{
+              <button type="button" onClick={() => { cargarReportesParaMover(); setModalMover(true) }} title={`Mover (${seleccionados.length})`} style={{
                 background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px',
-                padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
-              }}>↗ Mover ({seleccionados.length})</button>
+                padding: isEmbed ? '6px 8px' : (carpetaCompact ? '10px 14px' : '6px 14px'), minHeight: isEmbed ? 36 : (carpetaCompact ? 44 : undefined), fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
+              }}>{isEmbed ? `↗ ${seleccionados.length}` : `↗ Mover (${seleccionados.length})`}</button>
             )}
             {puedeAgregarRegistro && (
-              <button type="button" onClick={crearNuevoRegistro} disabled={creandoReg} style={{
+              <button type="button" onClick={crearNuevoRegistro} disabled={creandoReg} title="Nuevo registro" style={{
                 background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
-              }}>{creandoReg ? '...' : '+ Nuevo Registro'}</button>
+                padding: isEmbed ? '6px 8px' : (carpetaCompact ? '10px 14px' : '6px 14px'), minHeight: isEmbed ? 36 : (carpetaCompact ? 44 : undefined), fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
+              }}>{creandoReg ? '...' : (isEmbed ? '+' : '+ Nuevo Registro')}</button>
             )}
           </div>
         </div>
 
         {/* ─ Contenido del tab ─ */}
-        <div className="cc-sicoe-carpeta-content" style={{ flex:1, padding: carpetaCompact ? '10px 8px' : '16px 14px', overflowY:'auto', minHeight: 0 }}>
+        <div className={`cc-sicoe-carpeta-content${isEmbed ? ' cc-claragis-embed-content' : ''}`} style={{ flex:1, padding: isEmbed ? '8px 8px' : (carpetaCompact ? '10px 8px' : '16px 14px'), overflowY:'auto', overflowX: isEmbed ? 'hidden' : undefined, minHeight: 0 }}>
           {msgMasivo && (
             <div style={{
               marginBottom:'16px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
@@ -9376,7 +9596,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 reporte={reporte}
                 registros={registrosConItem}
                 verValoresEconomicos={nivelInfo.verValoresEconomicos}
-                carpetaCompact={carpetaCompact}
+                carpetaCompact={carpetaCompact || isEmbed}
+                claragisEmbed={isEmbed}
                 estadoMiNivel={estadoMiNivelRegistro}
                 puedeValidarRapido={puedeValidarRapidoRegistro}
                 puedeMasivaNivel={puedeMasivaNivel}
