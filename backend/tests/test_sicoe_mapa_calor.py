@@ -5,7 +5,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sicoe_mapa_calor import (  # noqa: E402
+    build_dibujos_mapa_calor,
     build_mapa_calor_geojson,
+    features_desde_dibujo_reporte,
     parse_coord_wgs84,
 )
 
@@ -148,3 +150,114 @@ def test_intensidad_relativa_al_conjunto_filtrado():
     assert g_acta["meta"]["intensidad"] == "relativa_conjunto_filtrado"
     assert g_acta["meta"]["max_costo_directo"] == 400
     assert g_item["meta"]["max_costo_directo"] == 100
+
+
+def _poly():
+    return {
+        "type": "Polygon",
+        "coordinates": [
+            [[-74.1, 4.7], [-74.09, 4.7], [-74.09, 4.71], [-74.1, 4.71], [-74.1, 4.7]]
+        ],
+    }
+
+
+def test_features_desde_dibujo_reporte_conserva_todas_las_partes():
+    """El botón Dibujar guarda un FC; no colapsar a un solo nodo."""
+    fc = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [-74.1, 4.7]},
+                "properties": {"dibujo_tipo": "nodo", "es_bloque": True},
+            },
+            {
+                "type": "Feature",
+                "geometry": _poly(),
+                "properties": {"dibujo_tipo": "poligono"},
+            },
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[-74.1, 4.7], [-74.09, 4.71]],
+                },
+                "properties": {"dibujo_tipo": "linea"},
+            },
+        ],
+    }
+    feats = features_desde_dibujo_reporte(fc, reporte_id=60)
+    assert len(feats) == 3
+    tipos = {f["properties"]["huella_tipo"] for f in feats}
+    assert tipos == {"nodo", "poligono", "linea"}
+    assert all(f["properties"]["reporte_id"] == 60 for f in feats)
+    assert all(f["properties"]["origen"] == "reporte_dibujo" for f in feats)
+
+
+def test_build_dibujos_prioriza_dibujo_del_reporte_sobre_huella():
+    registros = [
+        {
+            "id": 1,
+            "reporte_id": 60,
+            "costo_directo": 800,
+            "huella_geojson": {
+                "type": "Feature",
+                "geometry": _poly(),
+                "properties": {"huella_tipo": "franja"},
+            },
+        },
+        {"id": 2, "reporte_id": 60, "costo_directo": 400},
+    ]
+    reporte_map = {
+        60: {
+            "id": 60,
+            "dibujo_geojson": {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": _poly(),
+                        "properties": {"dibujo_tipo": "poligono"},
+                    }
+                ],
+            },
+        }
+    }
+    heat = build_mapa_calor_geojson(
+        [
+            {**registros[0], "coord_lat": 4.7, "coord_lng": -74.1},
+            {**registros[1], "coord_lat": 4.71, "coord_lng": -74.1},
+        ],
+        reporte_map,
+    )
+    dibujos = build_dibujos_mapa_calor(registros, reporte_map, heat_features=heat["features"])
+    assert len(dibujos["features"]) == 1
+    assert dibujos["features"][0]["properties"]["origen"] == "reporte_dibujo"
+    assert dibujos["features"][0]["properties"]["weight"] == 1.0  # max del reporte
+    assert dibujos["meta"]["reportes_con_dibujo"] == 1
+
+
+def test_build_mapa_calor_incluir_dibujos():
+    registros = [
+        {
+            "id": 1,
+            "reporte_id": 7,
+            "costo_directo": 100,
+            "coord_lat": 4.7,
+            "coord_lng": -74.0,
+        }
+    ]
+    reporte_map = {
+        7: {
+            "id": 7,
+            "dibujo_geojson": {
+                "type": "Feature",
+                "geometry": _poly(),
+                "properties": {},
+            },
+        }
+    }
+    geo = build_mapa_calor_geojson(registros, reporte_map, incluir_dibujos=True)
+    assert "dibujos" in geo
+    assert geo["dibujos"]["meta"]["total"] == 1
+    assert geo["meta"]["con_dibujo"] == 1
