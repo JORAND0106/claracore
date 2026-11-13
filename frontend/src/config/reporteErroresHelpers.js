@@ -78,7 +78,7 @@ export function getModulosVisiblesReporte(usuario) {
       label: 'Topografía',
       visible: _permisoVerFuncion('topografía') || _permisoVerFuncion('topografia'),
     },
-    { key: 'semaforo', label: 'Plano Semáforo', visible: true },
+    { key: 'semaforo', label: 'ClaraGIS', visible: true },
     {
       key: 'auditor_sst',
       label: 'Auditor',

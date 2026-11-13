@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import SicoeFiltroModal from './SicoeFiltroModal'
 import {
   sicoeBundleTieneCriteriosUsuario,
@@ -43,10 +43,20 @@ export default function SicoeFiltroObraVista({
   extraActions = null,
   /** En Cantidades por ítem: chips más sutiles (no cambia funcionalidad). */
   chipsSuaves = false,
+  /** ClaraGIS: oculta la barra de botones (el host abre el modal). */
+  hideToolbar = false,
+  /** ClaraGIS: chips en una sola línea con scroll horizontal. */
+  chipsUnaLinea = false,
+  /** Incrementar para abrir el modal de filtros desde fuera. */
+  openModalSignal = 0,
 }) {
   const [modalOpen, setModalOpen] = useState(false)
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport()
   const compact = vpMobile || isLandscapeMobile
+
+  useEffect(() => {
+    if (openModalSignal > 0) setModalOpen(true)
+  }, [openModalSignal])
 
   const tieneCriterios = useMemo(
     () => sicoeBundleTieneCriteriosUsuario(bundleAplicado),
@@ -149,152 +159,170 @@ export default function SicoeFiltroObraVista({
     whiteSpace: 'nowrap',
   }
 
+  const chipsEl = chipsActivos.length > 0 ? (
+    <div
+      className={`cc-sicoe-filtro-chips${chipsSuaves ? ' cc-sicoe-filtro-chips--suave' : ''}${chipsUnaLinea ? ' cc-sicoe-filtro-chips--una-linea' : ''}`}
+      aria-label="Filtros activos"
+      style={chipsUnaLinea ? {
+        display: 'flex',
+        flexWrap: 'nowrap',
+        overflowX: 'auto',
+        gap: 6,
+        marginTop: hideToolbar ? 0 : 8,
+        paddingBottom: 2,
+        WebkitOverflowScrolling: 'touch',
+      } : undefined}
+    >
+      {chipsActivos.map((chip) => (
+        <span
+          key={chip.key}
+          className={`cc-sicoe-filtro-chip${chipsSuaves ? ' cc-sicoe-filtro-chip--suave' : ''}${chipsUnaLinea ? ' cc-sicoe-filtro-chip--compacto' : ''}`}
+          style={chipsSuaves ? {
+            background: t.bg || 'rgba(148,163,184,0.10)',
+            border: `1px solid ${t.border}`,
+            color: t.textMuted,
+            flexShrink: 0,
+          } : {
+            background: `${t.primary}18`,
+            border: `1px solid ${t.primary}44`,
+            color: t.text,
+            flexShrink: 0,
+            ...(chipsUnaLinea ? { padding: '3px 8px', borderRadius: 8 } : null),
+          }}
+        >
+          <span style={{ color: chipsSuaves ? t.textMuted : t.primary, fontWeight: chipsSuaves ? 600 : 700 }}>{chip.label}:</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: chipsUnaLinea ? 120 : 160, fontWeight: chipsSuaves ? 500 : 600, color: chipsSuaves ? t.text : undefined }}>{chip.value}</span>
+          <button
+            type="button"
+            aria-label={`Quitar filtro ${chip.label}`}
+            onClick={() => quitarChip(chip.key)}
+            style={{ color: t.textMuted }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+    </div>
+  ) : null
+
   return (
     <>
-      <div
-        className="cc-sicoe-filtro-bar"
-        style={{
-          background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 10,
-          padding: '10px 12px',
-          marginBottom: 12,
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-        }}
-      >
-        <div className="cc-sicoe-filtro-bar-actions" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => setModalOpen(true)}
-            style={{
-              ...btnSec,
-              background: t.primary,
-              color: '#fff',
-              border: 'none',
-              fontWeight: 700,
-              padding: compact ? '10px 14px' : '6px 14px',
-              flexShrink: 0,
-            }}
-          >
-            🔍 Filtros
-            {tieneCriterios ? (
-              <span style={{ marginLeft: 6, background: '#fff3', borderRadius: 10, padding: '1px 7px', fontSize: 'var(--cc-caption)' }}>
-                {chipsActivos.length || '●'}
-              </span>
-            ) : null}
-          </button>
-
-          <button
-            type="button"
-            disabled={buscando}
-            onClick={() => {
-              if (!sicoeBundleTieneCriteriosUsuario(bundleAplicado)) {
-                window.alert('Defina al menos un criterio de búsqueda antes de continuar.')
-                return
-              }
-              if (typeof onBuscar === 'function') onBuscar(bundleAplicado)
-            }}
-            title="Ejecutar búsqueda con los criterios actuales (grilla y panel)"
-            style={{
-              ...btnSec,
-              background: t.primary,
-              color: '#fff',
-              border: 'none',
-              fontWeight: 700,
-              padding: compact ? '10px 14px' : '6px 14px',
-              flexShrink: 0,
-              opacity: buscando ? 0.65 : 1,
-            }}
-          >
-            {buscando ? '⏳ Buscando…' : 'Buscar'}
-          </button>
-
-          {!compact && (
-            <div
+      {!hideToolbar && (
+        <div
+          className="cc-sicoe-filtro-bar"
+          style={{
+            background: t.bgCard,
+            border: `1px solid ${t.border}`,
+            borderRadius: 10,
+            padding: '10px 12px',
+            marginBottom: 12,
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+          }}
+        >
+          <div className="cc-sicoe-filtro-bar-actions" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setModalOpen(true)}
               style={{
-                flex: '1 1 200px',
-                minWidth: 0,
-                fontSize: 'var(--cc-caption)',
-                color: t.textMuted,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                ...btnSec,
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                fontWeight: 700,
+                padding: compact ? '10px 14px' : '6px 14px',
+                flexShrink: 0,
               }}
-              title={resumen}
             >
-              <strong style={{ color: t.text }}>Criterios:</strong>{' '}
-              {busquedaRealizada && tieneCriterios ? resumen : 'Ninguno'}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', flexShrink: 0, marginLeft: compact ? 0 : 'auto' }}>
-            <button type="button" onClick={onLimpiar} style={{ ...btnSec, color: '#ef4444', borderColor: '#ef444466' }}>
-              Limpiar
+              🔍 Filtros
+              {tieneCriterios ? (
+                <span style={{ marginLeft: 6, background: '#fff3', borderRadius: 10, padding: '1px 7px', fontSize: 'var(--cc-caption)' }}>
+                  {chipsActivos.length || '●'}
+                </span>
+              ) : null}
             </button>
-            {typeof onActualizar === 'function' && (
-              <button
-                type="button"
-                onClick={onActualizar}
-                disabled={!!actualizarDisabled}
-                title="Recarga grilla y panel con los filtros actuales"
-                style={{ ...btnSec, border: 'none', color: '#94a3b8', opacity: actualizarDisabled ? 0.5 : 0.92 }}
-              >
-                {buscando ? '⏳…' : '⟳'}
-              </button>
-            )}
-            {puedeExportar && typeof onExportarExcel === 'function' && (
-              <button
-                type="button"
-                className="cc-sicoe-export-desktop"
-                onClick={onExportarExcel}
-                disabled={!!exportDisabled}
-                style={{ ...btnSec, opacity: exportDisabled ? 0.6 : 1 }}
-              >
-                ⬇ Excel
-              </button>
-            )}
-            {extraActions}
-          </div>
-        </div>
 
-        {chipsActivos.length > 0 && (
-          <div
-            className={`cc-sicoe-filtro-chips${chipsSuaves ? ' cc-sicoe-filtro-chips--suave' : ''}`}
-            aria-label="Filtros activos"
-          >
-            {chipsActivos.map((chip) => (
-              <span
-                key={chip.key}
-                className={`cc-sicoe-filtro-chip${chipsSuaves ? ' cc-sicoe-filtro-chip--suave' : ''}`}
-                style={chipsSuaves ? {
-                  background: t.bg || 'rgba(148,163,184,0.10)',
-                  border: `1px solid ${t.border}`,
+            <button
+              type="button"
+              disabled={buscando}
+              onClick={() => {
+                if (!sicoeBundleTieneCriteriosUsuario(bundleAplicado)) {
+                  window.alert('Defina al menos un criterio de búsqueda antes de continuar.')
+                  return
+                }
+                if (typeof onBuscar === 'function') onBuscar(bundleAplicado)
+              }}
+              title="Ejecutar búsqueda con los criterios actuales (grilla y panel)"
+              style={{
+                ...btnSec,
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                fontWeight: 700,
+                padding: compact ? '10px 14px' : '6px 14px',
+                flexShrink: 0,
+                opacity: buscando ? 0.65 : 1,
+              }}
+            >
+              {buscando ? '⏳ Buscando…' : 'Buscar'}
+            </button>
+
+            {!compact && (
+              <div
+                style={{
+                  flex: '1 1 200px',
+                  minWidth: 0,
+                  fontSize: 'var(--cc-caption)',
                   color: t.textMuted,
-                } : {
-                  background: `${t.primary}18`,
-                  border: `1px solid ${t.primary}44`,
-                  color: t.text,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
+                title={resumen}
               >
-                <span style={{ color: chipsSuaves ? t.textMuted : t.primary, fontWeight: chipsSuaves ? 600 : 700 }}>{chip.label}:</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160, fontWeight: chipsSuaves ? 500 : 600, color: chipsSuaves ? t.text : undefined }}>{chip.value}</span>
+                <strong style={{ color: t.text }}>Criterios:</strong>{' '}
+                {busquedaRealizada && tieneCriterios ? resumen : 'Ninguno'}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', flexShrink: 0, marginLeft: compact ? 0 : 'auto' }}>
+              <button type="button" onClick={onLimpiar} style={{ ...btnSec, color: '#ef4444', borderColor: '#ef444466' }}>
+                Limpiar
+              </button>
+              {typeof onActualizar === 'function' && (
                 <button
                   type="button"
-                  aria-label={`Quitar filtro ${chip.label}`}
-                  onClick={() => quitarChip(chip.key)}
-                  style={{ color: t.textMuted }}
+                  onClick={onActualizar}
+                  disabled={!!actualizarDisabled}
+                  title="Recarga grilla y panel con los filtros actuales"
+                  style={{ ...btnSec, border: 'none', color: '#94a3b8', opacity: actualizarDisabled ? 0.5 : 0.92 }}
                 >
-                  ×
+                  {buscando ? '⏳…' : '⟳'}
                 </button>
-              </span>
-            ))}
+              )}
+              {puedeExportar && typeof onExportarExcel === 'function' && (
+                <button
+                  type="button"
+                  className="cc-sicoe-export-desktop"
+                  onClick={onExportarExcel}
+                  disabled={!!exportDisabled}
+                  style={{ ...btnSec, opacity: exportDisabled ? 0.6 : 1 }}
+                >
+                  ⬇ Excel
+                </button>
+              )}
+              {extraActions}
+            </div>
           </div>
-        )}
 
-        {validacionMasivaPanel}
-      </div>
+          {chipsEl}
+
+          {validacionMasivaPanel}
+        </div>
+      )}
+
+      {hideToolbar && chipsEl}
 
       <SicoeFiltroModal
         open={modalOpen}

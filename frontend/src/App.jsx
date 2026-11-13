@@ -6587,11 +6587,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, urlReporteDetalleFiltrado: urlReporteDetalleFiltradoFn = null, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null, onReporteActualizado = null }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, urlReporteDetalleFiltrado: urlReporteDetalleFiltradoFn = null, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null, onReporteActualizado = null, layout = 'modal', embedMinimized = false, onEmbedMinimize = null, onEmbedRestore = null, onRegistroExpandidoChange = null }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
   const { isMobile: carpetaVpMobile, isLandscapeMobile: carpetaLandscapeMobile } = useClaraViewport()
   const carpetaCompact = carpetaVpMobile || carpetaLandscapeMobile
+  const isEmbed = layout === 'embed'
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
   const capasOpNorm = (capasFiltroValidacionOp || 'and') === 'or' ? 'or' : 'and'
   const [reporte, setReporte]                     = useState(repoProp)
@@ -6759,6 +6760,36 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [itemExpandidoNav, setItemExpandidoNav] = useState(null)
   const [esquemaPendienteRegId, setEsquemaPendienteRegId] = useState(null)
   const autoRegNavAplicadoRef = useRef(null)
+
+  // ClaraGIS: notificar apertura/cierre del registro en revisión (foco de plano).
+  const onRegistroExpandidoChangeRef = useRef(onRegistroExpandidoChange)
+  onRegistroExpandidoChangeRef.current = onRegistroExpandidoChange
+  const ultimoFocoNotificadoRef = useRef(null)
+  useEffect(() => {
+    const cb = onRegistroExpandidoChangeRef.current
+    if (typeof cb !== 'function') return undefined
+    if (registroExpandido == null) {
+      if (ultimoFocoNotificadoRef.current != null) {
+        ultimoFocoNotificadoRef.current = null
+        cb(null)
+      }
+      return undefined
+    }
+    const reg = (Array.isArray(registros) ? registros : []).find(
+      (r) => r && String(r.id) === String(registroExpandido),
+    ) || null
+    const key = `${registroExpandido}|${reg?.item_numero || ''}|${reporte?.id ?? repoProp?.id ?? ''}`
+    if (ultimoFocoNotificadoRef.current === key) return undefined
+    ultimoFocoNotificadoRef.current = key
+    cb({
+      registroId: registroExpandido,
+      itemNumero: reg?.item_numero || null,
+      itemDescripcion: reg?.item_descripcion || null,
+      reporteId: reporte?.id ?? repoProp?.id ?? null,
+      registro: reg,
+    })
+    return undefined
+  }, [registroExpandido, registros, reporte?.id, repoProp?.id])
 
   // Panel/notif/deep-link: resolver _autoRegistro cuando ya hay registros (no forzar sin_asignar en race).
   useEffect(() => {
@@ -8387,9 +8418,98 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     )
   }
 
+  if (isEmbed && embedMinimized) {
+    return (
+      <div
+        className="cc-sicoe-carpeta-overlay cc-sicoe-carpeta-overlay--embed cc-sicoe-carpeta-overlay--minimized"
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          zIndex: 30,
+          pointerEvents: 'auto',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => { if (typeof onEmbedRestore === 'function') onEmbedRestore() }}
+          title="Restaurar ventana del reporte"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: C.carpetaFondo,
+            border: `2px solid ${C.carpetaHeader}`,
+            borderRadius: 10,
+            padding: '8px 12px',
+            color: t.text,
+            cursor: 'pointer',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            maxWidth: 280,
+          }}
+        >
+          <span style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            📁 #{reporte.numero_reporte ?? '—'}
+          </span>
+          <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>▲</span>
+        </button>
+      </div>
+    )
+  }
+
   return (
-    <div className="cc-sicoe-carpeta-overlay" style={{ position:'fixed', inset:0, zIndex:15000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
-      <div className="cc-sicoe-carpeta-shell" style={{ width:'100%', maxWidth:'min(1480px, 98vw)', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
+    <div
+      className={`cc-sicoe-carpeta-overlay${isEmbed ? ' cc-sicoe-carpeta-overlay--embed' : ''}`}
+      style={isEmbed ? {
+        position: 'absolute',
+        inset: 0,
+        zIndex: 30,
+        background: 'transparent',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'flex-end',
+        padding: carpetaCompact ? '6px' : '10px',
+        overflow: 'hidden',
+        pointerEvents: 'none',
+      } : {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 15000,
+        background: 'rgba(0,0,0,0.75)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '16px',
+        overflowY: 'auto',
+      }}
+    >
+      <div
+        className={`cc-sicoe-carpeta-shell${isEmbed ? ' cc-sicoe-carpeta-shell--embed' : ''}`}
+        style={isEmbed ? {
+          pointerEvents: 'auto',
+          width: carpetaCompact ? 'min(100%, 420px)' : 'min(520px, 46vw)',
+          maxWidth: '100%',
+          maxHeight: carpetaCompact ? '58%' : 'min(92%, calc(100% - 12px))',
+          minHeight: carpetaCompact ? '42%' : '55%',
+          background: C.carpetaFondo,
+          borderRadius: 14,
+          border: `2px solid ${C.carpetaHeader}`,
+          boxShadow: '0 16px 48px rgba(0,0,0,0.45)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        } : {
+          width: '100%',
+          maxWidth: 'min(1480px, 98vw)',
+          background: C.carpetaFondo,
+          borderRadius: '16px',
+          border: `2px solid ${C.carpetaHeader}`,
+          boxShadow: '0 24px 80px rgba(0,0,0,0.6)',
+          minHeight: '80vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
 
         {/* ─ Header tipo carpeta ─ */}
         {carpetaCompact ? (
@@ -8500,6 +8620,30 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 >
                   {recargando ? '⏳' : '⟳'}
                 </button>
+                {isEmbed && typeof onEmbedMinimize === 'function' && (
+                  <button
+                    type="button"
+                    onClick={onEmbedMinimize}
+                    aria-label="Minimizar reporte"
+                    title="Minimizar para ver el plano"
+                    style={{
+                      background: 'rgba(255,255,255,0.15)',
+                      border: 'none',
+                      color: '#fff',
+                      borderRadius: 8,
+                      width: 36,
+                      height: 36,
+                      minWidth: 36,
+                      fontSize: 'var(--cc-body)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    ▬
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={onClose}
@@ -8605,6 +8749,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               title="Vuelve a cargar desde el servidor. Si abriste el reporte con filtros de búsqueda, se mantienen y solo se actualizan las líneas que cumplen esos criterios."
               style={{ background: 'transparent', border: 'none', color: 'rgba(226,232,240,0.55)', borderRadius: '6px', padding: '3px 8px', fontSize: '11px', fontWeight: 500, cursor: recargando ? 'wait' : 'pointer', whiteSpace:'nowrap', opacity: recargando ? 0.5 : 0.95 }}
             >{recargando ? '⏳ Cargando...' : '⟳ Actualizar'}</button>
+            {isEmbed && typeof onEmbedMinimize === 'function' && (
+              <button
+                type="button"
+                onClick={onEmbedMinimize}
+                title="Minimizar para ver el plano"
+                aria-label="Minimizar reporte"
+                style={{ background:'rgba(255,255,255,0.15)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}
+              >▬</button>
+            )}
             <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-lg)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
             </div>
           </div>
@@ -8612,7 +8765,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         )}
 
         {/* ─ Botón volver al panel (desktop / sin back en header) ─ */}
-        {capasF && !carpetaCompact && (
+        {capasF && !carpetaCompact && !isEmbed && (
           <div style={{ padding:'6px 16px', background:'#0F1923', borderBottom:`1px solid ${C.borde}` }}>
             <button onClick={onClose} style={{ background:'transparent', border:`1px solid ${C.borde}`, borderRadius:'6px', padding:'4px 12px', fontSize:'var(--cc-label)', color:'#94A3B8', cursor:'pointer' }}>
               ← Volver al panel
@@ -20921,6 +21074,36 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     )
   }, [usuario])
 
+  /** ClaraGIS: capas «No Revisado» del nivel del validador (estable entre renders). */
+  const claraGisCapasIniciales = useMemo(
+    () => capasInicialesValidacionFromUser(usuario, nivelesDashContrato, usuario?.contrato_id),
+    [usuario, nivelesDashContrato],
+  )
+
+  const renderClaraGisEmbedCarpeta = useCallback((slot) => (
+    <OfflineProvider contratoId={usuario?.contrato_id} authToken={getToken()}>
+      <CarpetaReporte
+        layout="embed"
+        embedMinimized={!!slot?.minimized}
+        onEmbedMinimize={slot?.onMinimize}
+        onEmbedRestore={slot?.onRestore}
+        onRegistroExpandidoChange={slot?.onRegistroExpandidoChange}
+        t={t}
+        usuario={usuario}
+        API_URL={API_URL}
+        contrato_id={usuario?.contrato_id}
+        reporte={slot?.reporte}
+        actasList={[]}
+        nivelesContrato={nivelesDashContrato}
+        capasFiltroValidacion={slot?.capasFiltroValidacion || null}
+        capasFiltroValidacionOp={slot?.capasFiltroValidacionOp || 'and'}
+        onClose={slot?.onClose}
+        onActualizar={slot?.onActualizar}
+        onReporteActualizado={slot?.onReporteActualizado}
+      />
+    </OfflineProvider>
+  ), [usuario, t, API_URL, nivelesDashContrato])
+
   const limpiarCachesDashVista = useCallback(() => {
     dashDrillFetchSeqRef.current += 1
     if (contratoIdDash) invalidateDashboardVistaCache(contratoIdDash)
@@ -23370,7 +23553,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             ['seguimiento',  '📌', 'Seguimiento',    !esContador && tienePermisoSeguimiento],
             ['rrhh',         '👥', 'Recursos Humanos', !esContador && tienePermisoRrhh],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
-            ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
+            ['semaforo',     '🗺️', 'ClaraGIS', !esContador],
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
           ].filter(([,,, visible]) => visible).map(([key, icon, label]) => {
             const alertaTopo = key === 'topografia' ? alertaPlanillasSinReporte : 0
@@ -23441,7 +23624,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               ['seguimiento', '📌', 'Seguim.', !esContador && tienePermisoSeguimiento],
               ['rrhh', '👥', 'Recursos Humanos', !esContador && tienePermisoRrhh],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
-              ['semaforo', '🗺️', 'Semáforo', !esContador],
+              ['semaforo', '🗺️', 'ClaraGIS', !esContador],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
             ].filter(([, , , visible]) => visible).map(([key, icon, label]) => {
               const alertaTopo = key === 'topografia' ? alertaPlanillasSinReporte : 0
@@ -26495,7 +26678,14 @@ const [navReporteId, setNavReporteId] = useState(null)
           )
         )}
         {moduloActivo === 'semaforo' && (
-          <ModuloPlanoMapaCalor key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />
+          <ModuloPlanoMapaCalor
+            key={`claragis-${usuario?.contrato_id ?? 'x'}`}
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            capasInicialesValidacion={claraGisCapasIniciales}
+            renderEmbedCarpeta={renderClaraGisEmbedCarpeta}
+          />
         )}
 
         </div>{/* fin contenido principal */}

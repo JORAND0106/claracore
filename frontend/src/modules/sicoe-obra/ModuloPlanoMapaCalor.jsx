@@ -5,7 +5,6 @@ import {
   sicoeBundleTieneCriteriosUsuario,
   sicoeEstadosReporteFiltro,
   sicoeFiltroSnapshot,
-  sicoeFSicoeVacios,
   sicoePuedeVerFiltroSubcontratista,
 } from './sicoeFiltroCatalogo'
 import {
@@ -16,6 +15,17 @@ import {
 import { fetchSicoeMapaCalor } from './sicoeMapaCalorApi'
 import { fmtCostoMapa } from './sicoeMapaCalorParams'
 import { construirCalorSobreDibujos, weightColorExpr } from './sicoeMapaCalorDibujos'
+import {
+  CLARAGIS_HINT,
+  CLARAGIS_TITULO,
+  claraGisAnotarFocoFeatures,
+  claraGisBundleFocoItem,
+  claraGisBundleNoRevisado,
+  claraGisBundleVacio,
+  claraGisEsMesaValidador,
+  claraGisOpacidadExpr,
+  claraGisStrokeWidthExpr,
+} from './claraGisMesaValidacion'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from '../../geoPlanoSanitize'
@@ -28,6 +38,7 @@ import {
 } from '../../mapboxPlanoLabels'
 import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNivelacionMapaCapa'
 import { addMapboxGeolocateControl } from '../../mapboxSafe'
+import { useClaraViewport } from '../../useClaraViewport'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -74,20 +85,10 @@ const ETIQUETAS_VALIDACION = [
 ]
 
 function bundleVacio() {
-  return {
-    fSicoe: sicoeFSicoeVacios(),
-    itemsChips: [],
-    itemsOp: 'and',
-    capasValidacion: [],
-    capasValidacionOp: 'and',
-    q_observacion: '',
-    q_nodo: '',
-    panelCapitulos: [],
-    panelActasRpo: [],
-  }
+  return claraGisBundleVacio()
 }
 
-function bundleInicialDesdeSesion(contratoId) {
+function bundleInicialClaraGis(contratoId, capasIniciales, usuario) {
   if (!contratoId) return bundleVacio()
   try {
     const saved = cargarSicoeFiltroSesion(contratoId)
@@ -95,6 +96,9 @@ function bundleInicialDesdeSesion(contratoId) {
       return sicoeFiltroSnapshot(saved)
     }
   } catch { /* ignore */ }
+  if (claraGisEsMesaValidador(usuario, contratoId, capasIniciales)) {
+    return claraGisBundleNoRevisado(capasIniciales)
+  }
   return bundleVacio()
 }
 
@@ -195,44 +199,37 @@ function fitMapBounds(map, bounds, { padding = 48, maxZoom = 17, duration = 0 } 
   } catch { /* ignore */ }
 }
 
-function nivelEstadoResumen(props) {
-  const parts = []
-  for (let i = 1; i <= 6; i += 1) {
-    const e = props?.[`nivel${i}`]
-    if (e) parts.push(`N${i}: ${e}`)
-  }
-  return parts.length ? parts.join(' · ') : '—'
-}
-
-function fmtFechaCorta(iso) {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10)
-    return d.toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: 'numeric' })
-  } catch {
-    return String(iso).slice(0, 10)
-  }
-}
-
 /**
- * Plano Semáforo → mapa de calor de reportes SicoeObra por costo_directo,
- * sincronizado con el mismo bloque de filtros de la grilla.
+ * ClaraGIS (antes Plano Semáforo): mapa de calor + mesa de validación.
  */
-export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
+export default function ModuloPlanoMapaCalor({
+  t,
+  usuario,
+  token,
+  capasInicialesValidacion = [],
+  renderEmbedCarpeta = null,
+}) {
   const contratoId = usuario?.contrato_id
+  const { isMobile: vpMobile, isLandscapeMobile, isTablet } = useClaraViewport()
+  const panelsAsIcons = vpMobile || isLandscapeMobile || isTablet
+
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
-  const popupRef = useRef(null)
   const abortRef = useRef(null)
   const puntosRef = useRef(EMPTY_FC)
   const mapReadyRef = useRef(false)
   const centeredPlanoRef = useRef(false)
   const fetchGenRef = useRef(0)
-  /** Evita doble GET: auto-sesión una vez; Buscar/Actualizar van por handler directo. */
   const autoBusquedaHechaRef = useRef(false)
+  const allHuellasRef = useRef([])
+  const heatFcRef = useRef(EMPTY_FC)
+  const trabajoBundleRef = useRef(null)
+  const focoActivoRef = useRef(false)
+  const abrirReporteRef = useRef(null)
 
-  const [bundleAplicado, setBundleAplicado] = useState(() => bundleInicialDesdeSesion(contratoId))
+  const [bundleAplicado, setBundleAplicado] = useState(() =>
+    bundleInicialClaraGis(contratoId, capasInicialesValidacion, usuario),
+  )
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
   const [buscando, setBuscando] = useState(false)
   const [errorMsg, setErrorMsg] = useState(null)
@@ -248,14 +245,17 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const [mostrarEje, setMostrarEje] = useState(true)
   const [mostrarNodos, setMostrarNodos] = useState(false)
   const [leyendaVista, setLeyendaVista] = useState({ con_dibujo: 0, sin_dibujo: 0 })
-  const allHuellasRef = useRef([])
-  const heatFcRef = useRef(EMPTY_FC)
   const getMapNiv = useCallback(() => mapInstance.current, [])
   const capaNiv = useTopoNivelacionMapaCapa(getMapNiv, contratoId, token, { readyKey: mapReady })
-  const [seleccionado, setSeleccionado] = useState(null)
   const [filtroSubcList, setFiltroSubcList] = useState([])
   const [nivelesDisponibles, setNivelesDisponibles] = useState([1, 2, 3])
   const [encabezadoPorNivel, setEncabezadoPorNivel] = useState({})
+  const [panelAbierto, setPanelAbierto] = useState(null) // 'filtros' | 'capas' | 'intensidad' | null
+  const [openFiltroSignal, setOpenFiltroSignal] = useState(0)
+  const [embedReporte, setEmbedReporte] = useState(null)
+  const [embedMin, setEmbedMin] = useState(false)
+  const [embedCargando, setEmbedCargando] = useState(false)
+  const [focoRevision, setFocoRevision] = useState(null) // { registroId, itemNumero }
 
   const nivelInfo = useMemo(() => {
     const rol = String(usuario?.rol_nombre || usuario?.rol || '').toLowerCase()
@@ -264,6 +264,11 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
       rolOrigen: rol,
     }
   }, [usuario])
+
+  const esMesaValidador = useMemo(
+    () => claraGisEsMesaValidador(usuario, contratoId, capasInicialesValidacion),
+    [usuario, contratoId, capasInicialesValidacion],
+  )
 
   const estadosReporte = useMemo(
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo, contratoId),
@@ -278,6 +283,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     () => sicoeBundleTieneCriteriosUsuario(bundleAplicado),
     [bundleAplicado],
   )
+
+  const focusActive = !!(focoRevision?.registroId)
 
   const centrarEnProyecto = useCallback((map, { duration = 0 } = {}) => {
     if (!map) return false
@@ -297,7 +304,225 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     return false
   }, [planoGeojson, centroContrato])
 
-  // Cargar plano + opciones auxiliares (filtros de sesión ya van en el state inicial)
+  const aplicarPaintFoco = useCallback((map, activo) => {
+    if (!map) return
+    try {
+      if (map.getLayer('sicoe-calor-puntos')) {
+        map.setPaintProperty('sicoe-calor-puntos', 'circle-opacity', claraGisOpacidadExpr(0.92, { focusActive: activo }))
+        map.setPaintProperty('sicoe-calor-puntos', 'circle-stroke-width', claraGisStrokeWidthExpr(2.8, { focusActive: activo }))
+        map.setPaintProperty(
+          'sicoe-calor-puntos',
+          'circle-stroke-color',
+          activo
+            ? ['case', ['==', ['get', 'claragis_modo'], 'activo'], '#fbbf24', '#f8fafc']
+            : '#f8fafc',
+        )
+        map.setPaintProperty(
+          'sicoe-calor-puntos',
+          'circle-radius',
+          activo
+            ? [
+              'case',
+              ['==', ['get', 'claragis_modo'], 'activo'],
+              ['interpolate', ['linear'], ['zoom'], 10, 9, 14, 14, 17, 18],
+              ['interpolate', ['linear'], ['zoom'], 10, 4, 14, 6, 17, 9],
+            ]
+            : ['interpolate', ['linear'], ['zoom'], 10, 5, 14, 8, 17, 11],
+        )
+      }
+      if (map.getLayer('sicoe-huellas-fill')) {
+        map.setPaintProperty(
+          'sicoe-huellas-fill',
+          'fill-opacity',
+          activo
+            ? [
+              'case',
+              ['==', ['get', 'claragis_modo'], 'activo'], 0.82,
+              ['==', ['get', 'claragis_modo'], 'referencia'], 0.22,
+              0.05,
+            ]
+            : [
+              'case',
+              ['==', ['get', 'color_mode'], 'calor'],
+              0.55,
+              ['case', ['==', ['get', 'precision'], 'precisa'], 0.4, 0.22],
+            ],
+        )
+      }
+      if (map.getLayer('sicoe-huellas-line')) {
+        map.setPaintProperty(
+          'sicoe-huellas-line',
+          'line-width',
+          activo
+            ? [
+              'case',
+              ['==', ['get', 'claragis_modo'], 'activo'], 4.2,
+              ['==', ['get', 'claragis_modo'], 'referencia'], 1.2,
+              0.6,
+            ]
+            : [
+              'case',
+              ['==', ['get', 'color_mode'], 'calor'],
+              2.4,
+              1.4,
+            ],
+        )
+        map.setPaintProperty(
+          'sicoe-huellas-line',
+          'line-opacity',
+          activo
+            ? [
+              'case',
+              ['==', ['get', 'claragis_modo'], 'activo'], 1,
+              ['==', ['get', 'claragis_modo'], 'referencia'], 0.35,
+              0.08,
+            ]
+            : 1,
+        )
+      }
+      if (map.getLayer('sicoe-huellas-nodo-lod')) {
+        map.setPaintProperty(
+          'sicoe-huellas-nodo-lod',
+          'circle-opacity',
+          claraGisOpacidadExpr(0.95, { focusActive: activo }),
+        )
+        map.setPaintProperty(
+          'sicoe-huellas-nodo-lod',
+          'circle-stroke-color',
+          activo
+            ? ['case', ['==', ['get', 'claragis_modo'], 'activo'], '#fbbf24', '#fff']
+            : '#fff',
+        )
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  const aplicarPuntosAlMapa = useCallback((fc, { fit = false, registroFocoId = null } = {}) => {
+    const map = mapInstance.current
+    const raw = fc?.type === 'FeatureCollection' ? fc : EMPTY_FC
+    const data = claraGisAnotarFocoFeatures(raw, registroFocoId ?? focoRevision?.registroId)
+    heatFcRef.current = data
+    puntosRef.current = data
+    if (!map || !mapReadyRef.current) return
+
+    const joined = construirCalorSobreDibujos(data, allHuellasRef.current)
+    // Propagar claragis_modo a dibujos unidos
+    const rid = registroFocoId != null ? String(registroFocoId) : (focoRevision?.registroId != null ? String(focoRevision.registroId) : null)
+    if (rid && joined.dibujosFc?.features) {
+      joined.dibujosFc = {
+        ...joined.dibujosFc,
+        features: joined.dibujosFc.features.map((f) => {
+          const id = f?.properties?.id != null
+            ? String(f.properties.id)
+            : (f?.properties?.registro_id != null ? String(f.properties.registro_id) : '')
+          return {
+            ...f,
+            properties: {
+              ...(f.properties || {}),
+              claragis_modo: id && id === rid ? 'activo' : 'referencia',
+            },
+          }
+        }),
+      }
+    }
+    if (rid && joined.puntosSinDibujoFc?.features) {
+      joined.puntosSinDibujoFc = claraGisAnotarFocoFeatures(joined.puntosSinDibujoFc, rid)
+    }
+
+    setLeyendaVista({
+      con_dibujo: joined.meta.con_dibujo,
+      sin_dibujo: joined.meta.sin_dibujo,
+    })
+
+    const srcDib = map.getSource('sicoe-huellas')
+    if (srcDib) {
+      try { srcDib.setData(joined.dibujosFc) } catch { /* ignore */ }
+    }
+    const srcPts = map.getSource('sicoe-calor')
+    if (srcPts) {
+      try { srcPts.setData(joined.puntosSinDibujoFc) } catch { /* ignore */ }
+    }
+
+    aplicarPaintFoco(map, !!rid)
+    focoActivoRef.current = !!rid
+
+    if (fit) {
+      const feats = [
+        ...(joined.dibujosFc.features || []),
+        ...(joined.puntosSinDibujoFc.features || []),
+      ]
+      const bPts = boundsFromPoints({ type: 'FeatureCollection', features: feats })
+      if (bPts) {
+        fitMapBounds(map, bPts, { padding: 56, maxZoom: 16, duration: 600 })
+      } else {
+        centrarEnProyecto(map, { duration: 0 })
+      }
+    }
+  }, [centrarEnProyecto, aplicarPaintFoco, focoRevision?.registroId])
+
+  const cargarMapaCalor = useCallback(async (bundle, { registroFocoId = null, fit = true } = {}) => {
+    if (!contratoId || !token) return
+    const gen = ++fetchGenRef.current
+    if (!sicoeBundleTieneCriteriosUsuario(bundle)) {
+      setPuntosFc(EMPTY_FC)
+      setMeta(null)
+      setBusquedaRealizada(false)
+      aplicarPuntosAlMapa(EMPTY_FC)
+      return
+    }
+    if (abortRef.current) abortRef.current.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
+    setBuscando(true)
+    setErrorMsg(null)
+    try {
+      const data = await fetchSicoeMapaCalor(contratoId, token, bundle, { signal: ac.signal })
+      if (gen !== fetchGenRef.current) return
+      if (!data || data.type !== 'FeatureCollection') {
+        throw new Error(
+          typeof data?.detail === 'string'
+            ? data.detail
+            : 'Respuesta inválida del mapa de calor',
+        )
+      }
+      const fc = {
+        type: 'FeatureCollection',
+        features: Array.isArray(data.features) ? data.features : [],
+      }
+      setPuntosFc(fc)
+      setMeta(data.meta || null)
+      setBusquedaRealizada(true)
+      aplicarPuntosAlMapa(fc, {
+        fit: fit && fc.features.length > 0,
+        registroFocoId,
+      })
+    } catch (e) {
+      if (e?.name === 'AbortError') return
+      if (gen !== fetchGenRef.current) return
+      setErrorMsg(e?.message || String(e))
+      setPuntosFc(EMPTY_FC)
+      setMeta(null)
+      setBusquedaRealizada(true)
+      aplicarPuntosAlMapa(EMPTY_FC)
+    } finally {
+      if (abortRef.current === ac) abortRef.current = null
+      if (gen === fetchGenRef.current) setBuscando(false)
+    }
+  }, [contratoId, token, aplicarPuntosAlMapa])
+
+  const restaurarBloqueTrabajo = useCallback(() => {
+    setFocoRevision(null)
+    const base = trabajoBundleRef.current
+      || (esMesaValidador
+        ? claraGisBundleNoRevisado(capasInicialesValidacion)
+        : bundleAplicado)
+    const b = sicoeFiltroSnapshot(base)
+    setBundleAplicado(b)
+    guardarSicoeFiltroSesion(contratoId, b)
+    void cargarMapaCalor(b)
+  }, [esMesaValidador, capasInicialesValidacion, bundleAplicado, contratoId, cargarMapaCalor])
+
+  // Plano + auxiliares
   useEffect(() => {
     if (!contratoId || !token) return undefined
     centeredPlanoRef.current = false
@@ -345,120 +570,58 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     return () => { cancelled = true }
   }, [contratoId, token])
 
-  // Si cambia el contrato, rehidratar filtros de sesión
+  // Cambio de contrato / capas iniciales (firma estable de capas)
+  const capasIniKey = useMemo(
+    () => (Array.isArray(capasInicialesValidacion) ? capasInicialesValidacion : [])
+      .map((c) => `${c?.nivel}:${c?.estado}`)
+      .join('|'),
+    [capasInicialesValidacion],
+  )
+
   useEffect(() => {
     autoBusquedaHechaRef.current = false
-    setBundleAplicado(bundleInicialDesdeSesion(contratoId))
+    const inicial = bundleInicialClaraGis(contratoId, capasInicialesValidacion, usuario)
+    setBundleAplicado(inicial)
+    trabajoBundleRef.current = esMesaValidador
+      ? claraGisBundleNoRevisado(capasInicialesValidacion)
+      : (sicoeBundleTieneCriteriosUsuario(inicial) ? inicial : null)
+    if (sicoeBundleTieneCriteriosUsuario(inicial)) {
+      try { guardarSicoeFiltroSesion(contratoId, inicial) } catch { /* ignore */ }
+    }
     setBusquedaRealizada(false)
     setPuntosFc(EMPTY_FC)
     setMeta(null)
     setErrorMsg(null)
-    setSeleccionado(null)
+    setEmbedReporte(null)
+    setEmbedMin(false)
+    setFocoRevision(null)
     puntosRef.current = EMPTY_FC
     fetchGenRef.current += 1
-  }, [contratoId])
+  // capasIniKey evita reinicios por nueva referencia de array idéntico
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contratoId, capasIniKey, esMesaValidador])
 
-  const aplicarPuntosAlMapa = useCallback((fc, { fit = false } = {}) => {
-    const map = mapInstance.current
-    const data = fc?.type === 'FeatureCollection' ? fc : EMPTY_FC
-    heatFcRef.current = data
-    puntosRef.current = data
-    if (!map || !mapReadyRef.current) return
-
-    const joined = construirCalorSobreDibujos(data, allHuellasRef.current)
-    setLeyendaVista({
-      con_dibujo: joined.meta.con_dibujo,
-      sin_dibujo: joined.meta.sin_dibujo,
-    })
-
-    const srcDib = map.getSource('sicoe-huellas')
-    if (srcDib) {
-      try { srcDib.setData(joined.dibujosFc) } catch { /* ignore */ }
-    }
-    const srcPts = map.getSource('sicoe-calor')
-    if (srcPts) {
-      // Solo puntos de reportes filtrados sin dibujo (distintos del calor sobre geometría).
-      try { srcPts.setData(joined.puntosSinDibujoFc) } catch { /* ignore */ }
-    }
-
-    if (fit) {
-      const feats = [
-        ...(joined.dibujosFc.features || []),
-        ...(joined.puntosSinDibujoFc.features || []),
-      ]
-      const bPts = boundsFromPoints({ type: 'FeatureCollection', features: feats })
-      if (bPts) {
-        fitMapBounds(map, bPts, { padding: 56, maxZoom: 16, duration: 600 })
-      } else {
-        centrarEnProyecto(map, { duration: 0 })
-      }
-    }
-  }, [centrarEnProyecto])
-
-  const cargarMapaCalor = useCallback(async (bundle) => {
-    if (!contratoId || !token) return
-    const gen = ++fetchGenRef.current
-    if (!sicoeBundleTieneCriteriosUsuario(bundle)) {
-      setPuntosFc(EMPTY_FC)
-      setMeta(null)
-      setBusquedaRealizada(false)
-      aplicarPuntosAlMapa(EMPTY_FC)
-      return
-    }
-    if (abortRef.current) abortRef.current.abort()
-    const ac = new AbortController()
-    abortRef.current = ac
-    setBuscando(true)
-    setErrorMsg(null)
-    try {
-      const data = await fetchSicoeMapaCalor(contratoId, token, bundle, { signal: ac.signal })
-      if (gen !== fetchGenRef.current) return
-      if (!data || data.type !== 'FeatureCollection') {
-        throw new Error(
-          typeof data?.detail === 'string'
-            ? data.detail
-            : 'Respuesta inválida del mapa de calor',
-        )
-      }
-      const fc = {
-        type: 'FeatureCollection',
-        features: Array.isArray(data.features) ? data.features : [],
-      }
-      setPuntosFc(fc)
-      setMeta(data.meta || null)
-      setBusquedaRealizada(true)
-      aplicarPuntosAlMapa(fc, { fit: fc.features.length > 0 })
-    } catch (e) {
-      if (e?.name === 'AbortError') return
-      if (gen !== fetchGenRef.current) return
-      setErrorMsg(e?.message || String(e))
-      setPuntosFc(EMPTY_FC)
-      setMeta(null)
-      setBusquedaRealizada(true)
-      aplicarPuntosAlMapa(EMPTY_FC)
-    } finally {
-      if (abortRef.current === ac) abortRef.current = null
-      if (gen === fetchGenRef.current) setBuscando(false)
-    }
-  }, [contratoId, token, aplicarPuntosAlMapa])
-
-  // Auto-buscar una vez si la sesión ya trae criterios (el Bug previo: el effect no veía el bundle restaurado)
   useEffect(() => {
     if (!contratoId || !token) return
     if (!tieneCriterios) return
     if (autoBusquedaHechaRef.current || busquedaRealizada || buscando) return
     autoBusquedaHechaRef.current = true
+    if (!trabajoBundleRef.current && esMesaValidador) {
+      trabajoBundleRef.current = claraGisBundleNoRevisado(capasInicialesValidacion)
+    } else if (!trabajoBundleRef.current && tieneCriterios) {
+      trabajoBundleRef.current = bundleAplicado
+    }
     void cargarMapaCalor(bundleAplicado)
-  }, [contratoId, token, tieneCriterios, bundleAplicado, busquedaRealizada, buscando, cargarMapaCalor])
+  }, [contratoId, token, tieneCriterios, bundleAplicado, busquedaRealizada, buscando, cargarMapaCalor, esMesaValidador, capasInicialesValidacion])
 
   const onBuscar = useCallback((snap) => {
     const b = sicoeFiltroSnapshot(snap)
     setBundleAplicado(b)
     guardarSicoeFiltroSesion(contratoId, b)
-    setSeleccionado(null)
-    // Carga directa (el efecto de auto-búsqueda no reentra si ya está buscando / realizada)
+    if (!focoRevision) trabajoBundleRef.current = b
+    setPanelAbierto(null)
     void cargarMapaCalor(b)
-  }, [contratoId, cargarMapaCalor])
+  }, [contratoId, cargarMapaCalor, focoRevision])
 
   const onLimpiar = useCallback(() => {
     fetchGenRef.current += 1
@@ -469,19 +632,90 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     const vacio = bundleVacio()
     setBundleAplicado(vacio)
     limpiarSicoeFiltroSesion(contratoId)
+    trabajoBundleRef.current = esMesaValidador
+      ? claraGisBundleNoRevisado(capasInicialesValidacion)
+      : null
     setBusquedaRealizada(false)
     setBuscando(false)
     setPuntosFc(EMPTY_FC)
     setMeta(null)
-    setSeleccionado(null)
     setErrorMsg(null)
     setLeyendaVista({ con_dibujo: 0, sin_dibujo: 0 })
+    setFocoRevision(null)
     aplicarPuntosAlMapa(EMPTY_FC)
     const map = mapInstance.current
     if (map) centrarEnProyecto(map, { duration: 400 })
-  }, [contratoId, aplicarPuntosAlMapa, centrarEnProyecto])
+  }, [contratoId, aplicarPuntosAlMapa, centrarEnProyecto, esMesaValidador, capasInicialesValidacion])
 
-  // Inicializar mapa Mapbox
+  const abrirReporteDesdeMapa = useCallback(async (props) => {
+    const reporteId = props?.reporte_id
+    const registroId = props?.id
+    if (!reporteId || !contratoId || !token) return
+    setEmbedCargando(true)
+    setEmbedMin(false)
+    setEmbedReporte({
+      id: reporteId,
+      numero_reporte: props?.numero_reporte,
+      _cargandoDetalle: true,
+      registros: [],
+      puntos: [],
+      ...(registroId != null ? { _autoRegistro: registroId } : {}),
+    })
+    try {
+      const res = await fetch(`${API_BASE}/sicoe-obra/${contratoId}/reportes/${reporteId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error(`No se pudo abrir el reporte (${res.status})`)
+      const data = await res.json()
+      setEmbedReporte({
+        ...data,
+        _cargandoDetalle: false,
+        ...(registroId != null ? { _autoRegistro: registroId } : {}),
+      })
+    } catch (e) {
+      setErrorMsg(e?.message || String(e))
+      setEmbedReporte(null)
+    } finally {
+      setEmbedCargando(false)
+    }
+  }, [contratoId, token])
+
+  abrirReporteRef.current = abrirReporteDesdeMapa
+
+  const onRegistroExpandidoChange = useCallback((info) => {
+    if (!info?.registroId) {
+      if (focoRevision) restaurarBloqueTrabajo()
+      return
+    }
+    const item = String(info.itemNumero || '').trim()
+    if (!item) {
+      setFocoRevision({ registroId: info.registroId, itemNumero: null })
+      aplicarPuntosAlMapa(puntosRef.current, { registroFocoId: info.registroId, fit: true })
+      return
+    }
+    if (!trabajoBundleRef.current) {
+      trabajoBundleRef.current = sicoeFiltroSnapshot(bundleAplicado)
+    }
+    const focoBundle = claraGisBundleFocoItem(item, info.itemDescripcion)
+    setFocoRevision({ registroId: info.registroId, itemNumero: item })
+    setBundleAplicado(focoBundle)
+    void cargarMapaCalor(focoBundle, { registroFocoId: info.registroId, fit: true })
+  }, [focoRevision, restaurarBloqueTrabajo, aplicarPuntosAlMapa, bundleAplicado, cargarMapaCalor])
+
+  const cerrarEmbed = useCallback(() => {
+    setEmbedReporte(null)
+    setEmbedMin(false)
+    if (focoRevision) restaurarBloqueTrabajo()
+    else if (esMesaValidador) {
+      const b = claraGisBundleNoRevisado(capasInicialesValidacion)
+      trabajoBundleRef.current = b
+      setBundleAplicado(b)
+      guardarSicoeFiltroSesion(contratoId, b)
+      void cargarMapaCalor(b)
+    }
+  }, [focoRevision, restaurarBloqueTrabajo, esMesaValidador, capasInicialesValidacion, contratoId, cargarMapaCalor])
+
+  // Inicializar mapa
   useEffect(() => {
     if (!MAPBOX_TOKEN || !mapRef.current) return undefined
 
@@ -502,10 +736,10 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
       bearing: 270,
     })
     const unreg = installMapboxAttributionLinksOpenNewTab(map)
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    addMapboxGeolocateControl(map)
+    // Abajo a la derecha: la ventana incrustada del reporte vive arriba a la derecha.
+    map.addControl(new mapboxgl.NavigationControl({ showCompass: true }), 'bottom-right')
+    addMapboxGeolocateControl(map, 'bottom-right')
     mapInstance.current = map
-    popupRef.current = new mapboxgl.Popup({ closeButton: true, maxWidth: '320px' })
 
     const onLoad = () => {
       map.addSource('plano-underlay', {
@@ -553,7 +787,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         maxzoom: 18,
         layout: { visibility: 'none' },
         paint: {
-          // weight ya viene normalizado 0–1 respecto al max costo_directo del filtro activo
           'heatmap-weight': [
             'interpolate', ['linear'],
             ['coalesce', ['to-number', ['get', 'weight']], 0],
@@ -586,7 +819,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
             14, 8,
             17, 11,
           ],
-          // Sin dibujo: anillo oscuro + relleno por peso (distinto de las geometrías coloreadas)
           'circle-color': weightColorExpr(),
           'circle-stroke-width': 2.8,
           'circle-stroke-color': '#f8fafc',
@@ -594,7 +826,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           'circle-pitch-alignment': 'map',
         },
       })
-      // Halo exterior para distinguir puntos sin dibujo de nodos LOD coloreados
       map.addLayer({
         id: 'sicoe-calor-puntos-halo',
         type: 'circle',
@@ -613,7 +844,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         },
       })
 
-      // Eje + huellas (franja / nodo / polígono) + nodos PK
       map.addSource('sicoe-eje', { type: 'geojson', data: EMPTY_FC })
       map.addLayer({
         id: 'sicoe-eje-line',
@@ -745,7 +975,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           'circle-opacity': 0.95,
         },
       })
-      // Carga asíncrona de eje + catálogo de huellas (se filtran al aplicar el calor).
+
       fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`, {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -756,7 +986,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
             map.getSource('sicoe-eje')?.setData(data.eje || EMPTY_FC)
             allHuellasRef.current = Array.isArray(data.features) ? data.features : []
             map.getSource('sicoe-nodos')?.setData(data.nodos || EMPTY_FC)
-            // Reaplicar filtro activo sobre dibujos (si ya hay calor).
             const joined = construirCalorSobreDibujos(heatFcRef.current || EMPTY_FC, allHuellasRef.current)
             map.getSource('sicoe-huellas')?.setData(joined.dibujosFc)
             map.getSource('sicoe-calor')?.setData(joined.puntosSinDibujoFc)
@@ -768,36 +997,20 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         })
         .catch(() => {})
 
-      map.on('mouseenter', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = 'pointer' })
-      map.on('mouseleave', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = '' })
-      const abrirPopupProps = (props, lngLat) => {
+      const abrirDesdeFeature = (props) => {
         if (!props) return
         const p = { ...props }
-        if (p.costo_directo != null) p.costo_directo = Number(p.costo_directo)
-        if (p.cantidad_total != null) p.cantidad_total = Number(p.cantidad_total)
-        if (p.weight != null) p.weight = Number(p.weight)
-        setSeleccionado(p)
-        if (lngLat && popupRef.current) {
-          const html = `
-            <div style="font-family:system-ui,sans-serif;font-size:12px;line-height:1.45;color:#0f172a;">
-              <div style="font-weight:800;margin-bottom:6px;color:#0369a1;">
-                Reg. ${p.numero_registro ?? '—'} · Rep. ${p.numero_reporte ?? '—'}
-                ${p.sin_dibujo ? ' · sin dibujo' : ''}
-              </div>
-              <div><strong>Costo directo:</strong> ${fmtCostoMapa(p.costo_directo)}</div>
-              <div><strong>Fecha:</strong> ${fmtFechaCorta(p.created_at)}</div>
-              <div><strong>Capítulo:</strong> ${p.capitulo || '—'}</div>
-              <div><strong>Ítem:</strong> ${p.item_numero || '—'} ${p.item_descripcion ? `· ${String(p.item_descripcion).slice(0, 80)}` : ''}</div>
-              <div><strong>Estado reporte:</strong> ${p.estado_reporte || '—'}</div>
-              <div><strong>Validación:</strong> ${nivelEstadoResumen(p)}</div>
-            </div>`
-          popupRef.current.setLngLat(lngLat).setHTML(html).addTo(map)
+        if (typeof abrirReporteRef.current === 'function') {
+          void abrirReporteRef.current(p)
         }
       }
+
+      map.on('mouseenter', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = '' })
       map.on('click', 'sicoe-calor-puntos', (e) => {
         const f = e.features?.[0]
         if (!f) return
-        abrirPopupProps(f.properties, e.lngLat || f.geometry?.coordinates)
+        abrirDesdeFeature(f.properties)
       })
       for (const layerId of ['sicoe-huellas-fill', 'sicoe-huellas-line', 'sicoe-huellas-nodo-lod']) {
         map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer' })
@@ -805,7 +1018,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         map.on('click', layerId, (e) => {
           const f = e.features?.[0]
           if (!f || f.properties?.color_mode !== 'calor') return
-          abrirPopupProps(f.properties, e.lngLat)
+          abrirDesdeFeature(f.properties)
         })
       }
 
@@ -813,7 +1026,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
       mapReadyRef.current = true
       setMapReady(true)
       centrarEnProyecto(map, { duration: 0 })
-      // No pintar puntos crudos: el efecto de puntosFc aplica el join con dibujos.
     }
 
     if (map.loaded()) onLoad()
@@ -831,16 +1043,13 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
       mapReadyRef.current = false
       try { ro?.disconnect() } catch { /* ignore */ }
       try { unreg() } catch { /* ignore */ }
-      try { popupRef.current?.remove() } catch { /* ignore */ }
       try { map.remove() } catch { /* ignore */ }
       mapInstance.current = null
       setMapReady(false)
     }
-  // Recrear al cambiar tema; el plano/centro se aplican por efectos aparte
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t.bg, contratoId])
 
-  // Actualizar underlay + recentrar al proyecto cuando llega el plano
   useEffect(() => {
     const map = mapInstance.current
     if (!map || !mapReady) return
@@ -852,7 +1061,6 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     if (!nPts) centrarEnProyecto(map, { duration: centeredPlanoRef.current ? 0 : 400 })
   }, [planoGeojson, centroContrato, mapReady, centrarEnProyecto])
 
-  // Visibilidad de capas
   useEffect(() => {
     const map = mapInstance.current
     if (!map || !mapReady) return
@@ -867,9 +1075,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     try {
       setMapboxAbscisaLabelsVisibility(map, 'plano-underlay-labels-abscisa', mostrarPlano)
     } catch { /* ignore */ }
-    // Calor clásico de puntos GPS: apagado (el calor va sobre el dibujo).
     if (map.getLayer('sicoe-calor-heat')) map.setLayoutProperty('sicoe-calor-heat', 'visibility', 'none')
-    // Puntos = solo reportes filtrados sin dibujo.
     if (map.getLayer('sicoe-calor-puntos')) map.setLayoutProperty('sicoe-calor-puntos', 'visibility', visPts)
     if (map.getLayer('sicoe-calor-puntos-halo')) map.setLayoutProperty('sicoe-calor-puntos-halo', 'visibility', visPts)
     if (map.getLayer('sicoe-eje-line')) map.setLayoutProperty('sicoe-eje-line', 'visibility', visEje)
@@ -881,11 +1087,19 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     }
   }, [mostrarPlano, mostrarHeat, mostrarPuntos, mostrarEje, mostrarHuellas, mostrarNodos, mapReady])
 
-  // Sync puntos cuando el mapa queda listo o cambia la data
   useEffect(() => {
     if (!mapReady) return
-    aplicarPuntosAlMapa(puntosFc)
-  }, [puntosFc, mapReady, aplicarPuntosAlMapa])
+    aplicarPuntosAlMapa(puntosFc, { registroFocoId: focoRevision?.registroId })
+  }, [puntosFc, mapReady, aplicarPuntosAlMapa, focoRevision?.registroId])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !mapReady) return
+    const tmr = setTimeout(() => {
+      try { map.resize() } catch { /* ignore */ }
+    }, 80)
+    return () => clearTimeout(tmr)
+  }, [panelAbierto, embedReporte, embedMin, mapReady, panelsAsIcons])
 
   if (!MAPBOX_TOKEN) {
     return (
@@ -901,74 +1115,250 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const nPts = puntosFc?.features?.length || 0
   const sinCoords = meta?.sin_coords || 0
   const totalRegs = meta?.total_registros || 0
+  const enPlano = (leyendaVista.con_dibujo || 0) + (leyendaVista.sin_dibujo || 0)
+
+  const iconBtn = (id, label, emoji) => (
+    <button
+      key={id}
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={panelAbierto === id}
+      onClick={() => {
+        if (id === 'filtros') {
+          setOpenFiltroSignal((n) => n + 1)
+          setPanelAbierto(null)
+          return
+        }
+        setPanelAbierto((cur) => (cur === id ? null : id))
+      }}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        border: `1px solid ${panelAbierto === id ? t.primary : t.border}`,
+        background: panelAbierto === id ? `${t.primary}22` : `${t.bgCard}EE`,
+        color: t.text,
+        cursor: 'pointer',
+        fontSize: 16,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+      }}
+    >
+      {emoji}
+    </button>
+  )
+
+  const capasPanel = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {[
+        ['plano', 'Plano base (abscisado)', mostrarPlano, setMostrarPlano],
+        ['heat', 'Calor en dibujos', mostrarHeat, setMostrarHeat],
+        ['pts', 'Sin dibujo (puntos)', mostrarPuntos, setMostrarPuntos],
+        ['eje', 'Eje', mostrarEje, setMostrarEje],
+        ['huellas', 'Dibujos filtrados', mostrarHuellas, setMostrarHuellas],
+        ['nodos', 'Nodos PK', mostrarNodos, setMostrarNodos],
+      ].map(([key, label, on, setOn]) => (
+        <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
+          <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
+          {label}
+        </label>
+      ))}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
+        <input {...capaNiv.checkboxProps} />
+        Puntos de nivelación{capaNiv.count ? ` (${capaNiv.count})` : ''}
+      </label>
+    </div>
+  )
+
+  const intensidadPanel = (
+    <div>
+      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+        INTENSIDAD RELATIVA · COSTO DIRECTO
+      </div>
+      <div style={{
+        height: 10, borderRadius: 6, marginBottom: 6,
+        background: 'linear-gradient(90deg,#2166ac,#fdae61,#b2182b)',
+      }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+        <span>Menor del filtro</span>
+        <span>Máx. del filtro</span>
+      </div>
+      {busquedaRealizada && meta && (
+        <div style={{ marginTop: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
+          {enPlano} en plano
+          {leyendaVista.con_dibujo ? ` · ${leyendaVista.con_dibujo} con dibujo` : ''}
+          {leyendaVista.sin_dibujo ? ` · ${leyendaVista.sin_dibujo} sin dibujo` : ''}
+          {meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
+          {meta.sin_coords ? ` · ${meta.sin_coords} sin coords` : ''}
+          {meta.truncado ? ` · truncado a ${meta.max_features}` : ''}
+          {focusActive ? ' · foco de revisión' : ''}
+        </div>
+      )}
+    </div>
+  )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: 'calc(100vh - 140px)' }}>
+    <div
+      className="cc-claragis-root"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: panelsAsIcons ? 6 : 10,
+        height: 'calc(100vh - 140px)',
+        minHeight: 360,
+      }}
+    >
       <div style={{ flexShrink: 0 }}>
-        <div style={{ marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: panelsAsIcons ? 4 : 8 }}>
           <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text }}>
-            🗺️ Mapa de calor · Reportes por costo directo
+            🗺️ {CLARAGIS_TITULO}
           </div>
-          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
-            Intensidad relativa al filtro activo: el mayor <em>costo directo</em> del conjunto filtrado = calor máximo.
-            Sin filtros no se muestra ningún dato.
-          </div>
+          <span
+            title={CLARAGIS_HINT}
+            aria-label={CLARAGIS_HINT}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              borderRadius: '50%',
+              border: `1px solid ${t.border}`,
+              color: t.textMuted,
+              fontSize: 12,
+              fontWeight: 800,
+              cursor: 'help',
+              userSelect: 'none',
+            }}
+          >
+            i
+          </span>
+          {esMesaValidador && (
+            <span style={{ fontSize: 'var(--cc-caption)', color: t.primary, fontWeight: 700 }}>
+              Mesa de validación
+            </span>
+          )}
         </div>
-        <SicoeFiltroObraVista
-          t={t}
-          contratoId={contratoId}
-          token={token}
-          bundleAplicado={bundleAplicado}
-          onBuscar={onBuscar}
-          onLimpiar={onLimpiar}
-          onActualizar={() => void cargarMapaCalor(bundleAplicado)}
-          actualizarDisabled={!tieneCriterios || buscando}
-          buscando={buscando}
-          puedeExportar={false}
-          puedeVerSubcontratista={puedeVerSubcontratista}
-          estadosReporte={estadosReporte}
-          etiquetasValidacion={ETIQUETAS_VALIDACION}
-          nivelesDisponibles={nivelesDisponibles}
-          encabezadoPorNivel={encabezadoPorNivel}
-          filtroSubcList={filtroSubcList}
-          busquedaRealizada={busquedaRealizada}
-        />
+
+        {!panelsAsIcons && (
+          <SicoeFiltroObraVista
+            t={t}
+            contratoId={contratoId}
+            token={token}
+            bundleAplicado={bundleAplicado}
+            onBuscar={onBuscar}
+            onLimpiar={onLimpiar}
+            onActualizar={() => void cargarMapaCalor(bundleAplicado, { registroFocoId: focoRevision?.registroId })}
+            actualizarDisabled={!tieneCriterios || buscando}
+            buscando={buscando}
+            puedeExportar={false}
+            puedeVerSubcontratista={puedeVerSubcontratista}
+            estadosReporte={estadosReporte}
+            etiquetasValidacion={ETIQUETAS_VALIDACION}
+            nivelesDisponibles={nivelesDisponibles}
+            encabezadoPorNivel={encabezadoPorNivel}
+            filtroSubcList={filtroSubcList}
+            busquedaRealizada={busquedaRealizada}
+            chipsUnaLinea
+          />
+        )}
+
+        {panelsAsIcons && (
+          <SicoeFiltroObraVista
+            t={t}
+            contratoId={contratoId}
+            token={token}
+            bundleAplicado={bundleAplicado}
+            onBuscar={onBuscar}
+            onLimpiar={onLimpiar}
+            onActualizar={() => void cargarMapaCalor(bundleAplicado, { registroFocoId: focoRevision?.registroId })}
+            actualizarDisabled={!tieneCriterios || buscando}
+            buscando={buscando}
+            puedeExportar={false}
+            puedeVerSubcontratista={puedeVerSubcontratista}
+            estadosReporte={estadosReporte}
+            etiquetasValidacion={ETIQUETAS_VALIDACION}
+            nivelesDisponibles={nivelesDisponibles}
+            encabezadoPorNivel={encabezadoPorNivel}
+            filtroSubcList={filtroSubcList}
+            busquedaRealizada={busquedaRealizada}
+            hideToolbar
+            chipsUnaLinea
+            openModalSignal={openFiltroSignal}
+          />
+        )}
       </div>
 
       <div style={{
         position: 'relative',
         flex: 1,
-        minHeight: 320,
+        minHeight: 280,
         borderRadius: 12,
         overflow: 'hidden',
         border: `1px solid ${t.border}`,
       }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
 
-        <div style={{
-          position: 'absolute', top: 12, left: 12, zIndex: 5,
-          background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
-          borderRadius: 10, padding: '8px 10px', boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
-          display: 'flex', flexDirection: 'column', gap: 6,
-        }}>
-          {[
-            ['plano', 'Plano base', mostrarPlano, setMostrarPlano],
-            ['heat', 'Calor en dibujos', mostrarHeat, setMostrarHeat],
-            ['pts', 'Sin dibujo (puntos)', mostrarPuntos, setMostrarPuntos],
-            ['eje', 'Eje', mostrarEje, setMostrarEje],
-            ['huellas', 'Dibujos filtrados', mostrarHuellas, setMostrarHuellas],
-            ['nodos', 'Nodos PK', mostrarNodos, setMostrarNodos],
-          ].map(([key, label, on, setOn]) => (
-            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
-              <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
-              {label}
-            </label>
-          ))}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
-            <input {...capaNiv.checkboxProps} />
-            Puntos de nivelación{capaNiv.count ? ` (${capaNiv.count})` : ''}
-          </label>
-        </div>
+        {/* Controles recogidos (móvil/tablet) o paneles abiertos (desktop capas/intensidad) */}
+        {panelsAsIcons ? (
+          <div style={{
+            position: 'absolute', top: 12, left: 12, zIndex: 8,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {iconBtn('filtros', 'Filtros', '🔍')}
+              {iconBtn('capas', 'Capas del plano', '🗂️')}
+              {iconBtn('intensidad', 'Intensidad y conteos', '🌡️')}
+            </div>
+            {panelAbierto === 'capas' && (
+              <div style={{
+                background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
+                borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+                maxWidth: 260,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Capas</strong>
+                  <button type="button" onClick={() => setPanelAbierto(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted }}>✕</button>
+                </div>
+                {capasPanel}
+              </div>
+            )}
+            {panelAbierto === 'intensidad' && (
+              <div style={{
+                background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
+                borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+                maxWidth: 280,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Intensidad</strong>
+                  <button type="button" onClick={() => setPanelAbierto(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted }}>✕</button>
+                </div>
+                {intensidadPanel}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div style={{
+              position: 'absolute', top: 12, left: 12, zIndex: 5,
+              background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
+              borderRadius: 10, padding: '8px 10px', boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
+            }}>
+              {capasPanel}
+            </div>
+            <div style={{
+              position: 'absolute', bottom: 20, left: 12, zIndex: 5,
+              background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
+              borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              maxWidth: 320,
+            }}>
+              {intensidadPanel}
+            </div>
+          </>
+        )}
 
         {!tieneCriterios && (
           <div style={{
@@ -979,8 +1369,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           }}>
             <div style={{ fontWeight: 800, color: t.text, marginBottom: 6 }}>Defina filtros para ver el mapa</div>
             <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-              Abra <strong>Filtros</strong>, elija criterios (capítulo, fechas, subcontratista, etc.)
-              y pulse <strong>Buscar</strong>. El calor se escala al mayor costo directo de ese resultado.
+              Abra <strong>Filtros</strong>, elija criterios y pulse <strong>Buscar</strong>.
+              {esMesaValidador ? ' Como validador, al entrar se carga No Revisado de su nivel.' : ' Sin filtros no se muestra ningún dato.'}
             </div>
           </div>
         )}
@@ -1001,14 +1391,15 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           </div>
         )}
 
-        {buscando && (
+        {(buscando || embedCargando) && (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 4,
             background: 'rgba(15,23,42,0.25)', display: 'flex',
             alignItems: 'center', justifyContent: 'center',
             color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)',
+            pointerEvents: 'none',
           }}>
-            Actualizando mapa de calor…
+            {embedCargando ? 'Abriendo reporte…' : 'Actualizando ClaraGIS…'}
           </div>
         )}
 
@@ -1023,79 +1414,26 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           </div>
         )}
 
-        <div style={{
-          position: 'absolute', bottom: 20, left: 12, zIndex: 5,
-          background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
-          borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-        }}>
-          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-            INTENSIDAD RELATIVA · COSTO DIRECTO
-          </div>
-          <div style={{
-            height: 10, borderRadius: 6, marginBottom: 6,
-            background: 'linear-gradient(90deg,#2166ac,#fdae61,#b2182b)',
-          }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-            <span>Menor del filtro</span>
-            <span>Máx. del filtro</span>
-          </div>
-          {busquedaRealizada && meta && (
-            <div style={{ marginTop: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-              {(leyendaVista.con_dibujo || 0) + (leyendaVista.sin_dibujo || 0)} en plano
-              {leyendaVista.con_dibujo
-                ? ` · ${leyendaVista.con_dibujo} con dibujo`
-                : ''}
-              {leyendaVista.sin_dibujo
-                ? ` · ${leyendaVista.sin_dibujo} sin dibujo`
-                : ''}
-              {meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
-              {meta.sin_coords ? ` · ${meta.sin_coords} sin coords` : ''}
-              {meta.truncado ? ` · truncado a ${meta.max_features}` : ''}
-            </div>
-          )}
-        </div>
-
-        {seleccionado && (
-          <div style={{
-            position: 'absolute', top: 12, right: 56, zIndex: 6,
-            background: `${t.bgCard}F2`, border: `1px solid ${t.border}`,
-            borderRadius: 10, padding: '12px 14px', minWidth: 240, maxWidth: 320,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-sm)' }}>
-                Reg. {seleccionado.numero_registro ?? '—'} · Rep. {seleccionado.numero_reporte ?? '—'}
-              </div>
-              <button
-                type="button"
-                onClick={() => { setSeleccionado(null); try { popupRef.current?.remove() } catch { /* */ } }}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: t.textMuted, fontSize: 'var(--cc-lg)' }}
-              >
-                ✕
-              </button>
-            </div>
-            {[
-              ['Costo directo', fmtCostoMapa(seleccionado.costo_directo)],
-              ['Fecha', fmtFechaCorta(seleccionado.created_at)],
-              ['Capítulo', seleccionado.capitulo || '—'],
-              ['Ítem', seleccionado.item_numero || '—'],
-              ['Cantidad', seleccionado.cantidad_total != null ? String(seleccionado.cantidad_total) : '—'],
-              ['Estado reporte', seleccionado.estado_reporte || '—'],
-              ['Validación', nivelEstadoResumen(seleccionado)],
-              ['PK / tramo', [seleccionado.pk_id_id, seleccionado.tramo, seleccionado.margen].filter(Boolean).join(' · ') || '—'],
-              ['Origen coords', seleccionado.origen_coord === 'reporte' ? 'Reporte (loc. única)' : 'Registro'],
-            ].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
-                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>{k}</span>
-                <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.text, textAlign: 'right' }}>{v}</span>
-              </div>
-            ))}
-            {seleccionado.item_descripcion && (
-              <div style={{ marginTop: 6, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-                {String(seleccionado.item_descripcion).slice(0, 160)}
-              </div>
-            )}
-          </div>
+        {/* Ventana incrustada del reporte */}
+        {embedReporte && typeof renderEmbedCarpeta === 'function' && (
+          renderEmbedCarpeta({
+            reporte: embedReporte,
+            minimized: embedMin,
+            onMinimize: () => setEmbedMin(true),
+            onRestore: () => setEmbedMin(false),
+            onClose: cerrarEmbed,
+            onActualizar: cerrarEmbed,
+            onRegistroExpandidoChange,
+            onReporteActualizado: (patch) => {
+              setEmbedReporte((prev) =>
+                prev && String(prev.id) === String(patch?.id) ? { ...prev, ...patch } : prev,
+              )
+            },
+            capasFiltroValidacion: !focoRevision && Array.isArray(bundleAplicado?.capasValidacion) && bundleAplicado.capasValidacion.length
+              ? bundleAplicado.capasValidacion
+              : null,
+            capasFiltroValidacionOp: bundleAplicado?.capasValidacionOp || 'and',
+          })
         )}
       </div>
     </div>
