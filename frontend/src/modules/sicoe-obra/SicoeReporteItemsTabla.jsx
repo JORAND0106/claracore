@@ -8,6 +8,7 @@ import { listaGraficosRegistro } from './sicoeGraficosHelpers'
 import { slidesFromRegistro } from '../../components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
 import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
+import { fmtCantidadConDimensiones } from './sicoeCantidadDimensiones.js'
 import {
   sicoeHeadersMedicion,
   sicoeMedicionCeldasDisplay,
@@ -171,6 +172,8 @@ export default function SicoeReporteItemsTabla({
   registros,
   verValoresEconomicos = true,
   carpetaCompact = false,
+  /** ClaraGIS: filas tipo Excel limpio sin scroll horizontal (solo ventana incrustada). */
+  claragisEmbed = false,
   estadoMiNivel,
   puedeValidarRapido,
   puedeMasivaNivel = false,
@@ -190,6 +193,7 @@ export default function SicoeReporteItemsTabla({
   nivelesIndicadores = [],
   nivelUsuario = null,
 }) {
+  const useCompactCards = carpetaCompact || claragisEmbed
   const [itemExpandido, setItemExpandido] = useState(() => normalizarItemNumSicoe(itemExpandidoInicial))
   const [menuGraf, setMenuGraf] = useState(null) // { regId, anchor }
   const [menuVal, setMenuVal] = useState(null)
@@ -459,8 +463,8 @@ export default function SicoeReporteItemsTabla({
         )}
       </div>
 
-      {carpetaCompact ? (
-        <div className="cc-sicoe-items-mobile" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {useCompactCards ? (
+        <div className={`cc-sicoe-items-mobile${claragisEmbed ? ' cc-claragis-items-excel' : ''}`} style={{ display: 'flex', flexDirection: 'column', gap: claragisEmbed ? 6 : 8 }}>
           {filasItem.map((fila) => {
               const abierto = sicoeItemFilaAbierta(itemExpandido, fila.itemNum)
               const selIds = idsSeleccionadosEnItem(fila.regs)
@@ -493,6 +497,7 @@ export default function SicoeReporteItemsTabla({
                   renderMenuAcciones={renderMenuAcciones}
                   nivelesIndicadores={nivelesIndicadores}
                   nivelUsuario={nivelUsuario}
+                  claragisEmbed={claragisEmbed}
                 />
               )
           })}
@@ -753,13 +758,15 @@ function MobileItemCard({
   renderMenuAcciones,
   nivelesIndicadores,
   nivelUsuario,
+  claragisEmbed = false,
 }) {
   return (
     <div
+      className={claragisEmbed ? 'cc-claragis-item-block' : undefined}
       style={{
         background: abierto ? `${t.primary}14` : t.bgCard,
         border: `1px solid ${abierto ? t.primary : t.border}`,
-        borderRadius: 10,
+        borderRadius: claragisEmbed ? 8 : 10,
         overflow: 'hidden',
       }}
     >
@@ -772,16 +779,20 @@ function MobileItemCard({
           textAlign: 'left',
           background: 'transparent',
           border: 'none',
-          padding: '12px 14px',
+          padding: claragisEmbed ? '8px 10px' : '12px 14px',
           cursor: 'pointer',
           color: t.text,
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-sm)' }}>{fila.itemNum}</div>
-            <div style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.35, marginTop: 4, wordBreak: 'break-word' }}>{fila.descripcion}</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', marginTop: 8, fontSize: 'var(--cc-label)', color: t.textMuted }}>
+            <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${fila.itemNum} · ${fila.descripcion || ''}`}>
+              {fila.itemNum}{claragisEmbed && fila.descripcion ? ` · ${fila.descripcion}` : ''}
+            </div>
+            {!claragisEmbed && (
+              <div style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.35, marginTop: 4, wordBreak: 'break-word' }}>{fila.descripcion}</div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: claragisEmbed ? '6px 10px' : '8px 14px', marginTop: claragisEmbed ? 4 : 8, fontSize: 'var(--cc-label)', color: t.textMuted }}>
               <span>Und <strong style={{ color: t.text }}>{fila.unidad}</strong></span>
               <span>Cant <strong style={{ color: t.text, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(fila.sumCant)}</strong></span>
               {verValoresEconomicos && (
@@ -807,35 +818,38 @@ function MobileItemCard({
       )}
 
       {abierto && (
-        <div style={{ borderTop: `1px solid ${t.border}`, background: t.bg, padding: '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ borderTop: `1px solid ${t.border}`, background: t.bg, padding: claragisEmbed ? '6px 6px 8px' : '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: claragisEmbed ? 6 : 8 }}>
           {fila.regs.map((reg) => {
             const estado = estadoMiNivel?.(reg) || 'No Revisado'
             const pastel = pastelDeEstadoValidacion(estado)
             const expandido = sicoeRegistroFilaExpandida(registroExpandido, reg)
             const media = mediaItemsDeRegistro(reg, reporte)
             const tieneFoto = !!String(reg.foto_url || '').trim()
+            const fotoThumb = String(reg.foto_url || reg.foto_thumb_url || '').trim()
             const tieneGraf = media.some((m) => String(m.label || '').startsWith('Gráfico'))
             const rapido = puedeValidarRapido?.(reg)
             const hasPastel = pastel.bg !== 'transparent'
             const rowFg = hasPastel && pastel.color ? pastel.color : t.text
+            const dimsTxt = fmtCantidadConDimensiones(reg)
             return (
               <div
                 key={reg.id}
                 id={`registro-${reg.id}`}
+                className={claragisEmbed ? 'cc-claragis-reg-row' : undefined}
                 style={{
                   background: hasPastel ? pastel.bg : t.bgCard,
                   border: `1px solid ${hasPastel ? pastel.border : t.border}`,
-                  borderRadius: 8,
-                  padding: '10px 12px',
+                  borderRadius: claragisEmbed ? 6 : 8,
+                  padding: claragisEmbed ? '8px 8px' : '10px 12px',
                   color: rowFg,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                   <input
                     type="checkbox"
                     checked={seleccionados.includes(reg.id)}
                     onChange={() => onToggleSeleccion?.(reg.id)}
-                    style={{ width: 16, height: 16, accentColor: t.primary }}
+                    style={{ width: 16, height: 16, accentColor: t.primary, marginTop: 2, flexShrink: 0 }}
                     aria-label={`Seleccionar registro ${reg.numero_registro}`}
                   />
                   <button
@@ -843,6 +857,7 @@ function MobileItemCard({
                     onClick={() => onToggleRegistroExpandido?.(expandido ? null : reg.id)}
                     style={{
                       flex: 1,
+                      minWidth: 0,
                       textAlign: 'left',
                       background: 'transparent',
                       border: 'none',
@@ -851,26 +866,75 @@ function MobileItemCard({
                       color: rowFg,
                     }}
                   >
-                    <div style={{ fontWeight: 800, color: hasPastel ? rowFg : '#D97706' }}>#{reg.numero_registro}</div>
-                    <div style={{ fontSize: 'var(--cc-label)', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
-                      <span>Cant {fmtNum(reg.cantidad)}</span>
-                      <span>Total <strong>{formatearCantidadTotal(reg.cantidad_total)}</strong></span>
-                      {verValoresEconomicos && <span>CD <strong>{fmtPesos(reg.costo_directo)}</strong></span>}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, color: hasPastel ? rowFg : '#D97706' }}>#{reg.numero_registro}</span>
+                      <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>{fila.itemNum}</span>
                     </div>
+                    <div
+                      title={dimsTxt}
+                      style={{
+                        fontSize: 'var(--cc-label)',
+                        marginTop: 4,
+                        fontFamily: 'ui-monospace, Consolas, monospace',
+                        fontWeight: 700,
+                        color: rowFg,
+                        wordBreak: 'break-word',
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {dimsTxt}
+                    </div>
+                    {verValoresEconomicos && (
+                      <div style={{ fontSize: 'var(--cc-label)', marginTop: 2, color: t.textMuted }}>
+                        CD <strong style={{ color: hasPastel ? rowFg : t.primary, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtPesos(reg.costo_directo)}</strong>
+                      </div>
+                    )}
                   </button>
+                  {claragisEmbed && (
+                    <button
+                      type="button"
+                      title={tieneFoto ? 'Ver foto' : 'Sin foto'}
+                      onClick={() => {
+                        if (tieneFoto && media.length) setLightbox({ items: media, index: 0 })
+                        else onToggleRegistroExpandido?.(reg.id)
+                      }}
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: 6,
+                        border: `1px solid ${t.border}`,
+                        background: t.bg,
+                        padding: 0,
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {fotoThumb ? (
+                        <img src={fotoThumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <span style={{ fontSize: 16, opacity: 0.45 }}>📷</span>
+                      )}
+                    </button>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    title={tieneFoto ? 'Ver foto' : 'Sin foto'}
-                    onClick={() => {
-                      if (tieneFoto && media.length) setLightbox({ items: media, index: 0 })
-                      else onToggleRegistroExpandido?.(reg.id)
-                    }}
-                    style={btnIcon(tieneFoto ? t.primary : t.textMuted)}
-                  >
-                    📷
-                  </button>
+                  {!claragisEmbed && (
+                    <button
+                      type="button"
+                      title={tieneFoto ? 'Ver foto' : 'Sin foto'}
+                      onClick={() => {
+                        if (tieneFoto && media.length) setLightbox({ items: media, index: 0 })
+                        else onToggleRegistroExpandido?.(reg.id)
+                      }}
+                      style={btnIcon(tieneFoto ? t.primary : t.textMuted)}
+                    >
+                      📷
+                    </button>
+                  )}
                   <button
                     type="button"
                     title="Gráfico / esquema"
@@ -893,7 +957,39 @@ function MobileItemCard({
                       setMenuVal({ regId: reg.id, anchor: rectFromEvent(e) })
                     }}
                   />
-                  <div style={{ marginLeft: 'auto' }}>{renderMenuAcciones?.(reg)}</div>
+                  {claragisEmbed && rapido && (
+                    <div style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap', marginLeft: 'auto' }} onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        disabled={ejecutandoMasivo || estado === 'Aprobado'}
+                        title="Aprobar"
+                        onClick={() => onValidacionAprobar?.([reg.id])}
+                        style={{ ...btnVal('#16a34a', ejecutandoMasivo || estado === 'Aprobado'), width: 'auto', padding: '6px 8px', height: 'auto', fontSize: 'var(--cc-caption)' }}
+                      >
+                        ✅
+                      </button>
+                      <button
+                        type="button"
+                        disabled={ejecutandoMasivo}
+                        title="Pendiente"
+                        onClick={() => onPedirComentarioMasivo?.('Pendiente', [reg.id])}
+                        style={{ ...btnVal('#d97706', ejecutandoMasivo), width: 'auto', padding: '6px 8px', height: 'auto', fontSize: 'var(--cc-caption)' }}
+                      >
+                        🟡
+                      </button>
+                      <button
+                        type="button"
+                        disabled={ejecutandoMasivo}
+                        title="Rechazar"
+                        onClick={() => onPedirComentarioMasivo?.('Rechazado', [reg.id])}
+                        style={{ ...btnVal('#dc2626', ejecutandoMasivo), width: 'auto', padding: '6px 8px', height: 'auto', fontSize: 'var(--cc-caption)' }}
+                      >
+                        🔴
+                      </button>
+                    </div>
+                  )}
+                  {!claragisEmbed && <div style={{ marginLeft: 'auto' }}>{renderMenuAcciones?.(reg)}</div>}
+                  {claragisEmbed && <div style={{ marginLeft: rapido ? 0 : 'auto' }}>{renderMenuAcciones?.(reg)}</div>}
                 </div>
                 {expandido && (
                   <div style={{ marginTop: 8, borderTop: `2px solid ${t.primary}`, overflow: 'hidden', borderRadius: '0 0 6px 6px' }}>

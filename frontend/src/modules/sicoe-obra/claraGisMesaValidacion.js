@@ -10,7 +10,7 @@ import { permisoReporteCantidades, esDesarrolladorUsuario } from '../../utils/pe
 
 export const CLARAGIS_TITULO = 'ClaraGIS'
 export const CLARAGIS_HINT =
-  'Intensidad relativa al filtro activo: el mayor costo directo del conjunto filtrado = calor máximo. Sin filtros no se muestra ningún dato (salvo carga automática de No Revisado para validadores).'
+  'El plano siempre muestra eje y abscisado para ubicarse. Use Filtros para ver reportes; la intensidad es relativa al filtro activo (máx. costo directo = calor máximo). Validadores: al entrar se carga No Revisado de su nivel.'
 
 /** Bundle vacío canónico (misma forma que ModuloPlanoMapaCalor). */
 export function claraGisBundleVacio() {
