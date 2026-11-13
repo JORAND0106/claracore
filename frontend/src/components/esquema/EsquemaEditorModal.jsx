@@ -3653,7 +3653,11 @@ export default function EsquemaEditorModal({
     })
     coordOriginRef.current = origin
     pushHistory()
-    const keep = objectsRef.current.filter((o) => o.type !== 'nodo' && !o.joinSeq && !o.fromCoordTable)
+    // En dibujo de reporte: al redibujar desde coordenadas, descartar geometría previa
+    // (líneas/polígonos viejos) para no mezclar el trazo anterior con el nuevo.
+    const keep = huellaMode
+      ? objectsRef.current.filter((o) => o && o.type === 'image' && o.fit)
+      : objectsRef.current.filter((o) => o.type !== 'nodo' && !o.joinSeq && !o.fromCoordTable)
     const tipo = opts.skipTipoActions
       ? 'nodo'
       : (dibujoTipoRef.current || 'nodo')
@@ -3754,7 +3758,10 @@ export default function EsquemaEditorModal({
         })
       }
     }
-    objectsRef.current = [...objectsRef.current.filter((o) => o?.type !== 'nodo' && !o?.joinSeq && !o?.fromCoordTable), ...liveNodes, ...extras]
+    const keepAfter = huellaMode
+      ? objectsRef.current.filter((o) => o && o.type === 'image' && o.fit)
+      : objectsRef.current.filter((o) => o?.type !== 'nodo' && !o?.joinSeq && !o?.fromCoordTable)
+    objectsRef.current = [...keepAfter, ...liveNodes, ...extras]
     if (mapActiveRef.current) {
       try { syncCanvasToMapRef.current() } catch { /* ignore */ }
     }

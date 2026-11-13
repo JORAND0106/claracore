@@ -1,21 +1,26 @@
 /**
- * Ficha de lectura "Verificar" para la ventana incrustada de ClaraGIS.
- * Un registro a la vez; modo Editar queda en el formulario completo existente.
+ * Vista "Verificar" ClaraGIS: ítems → registros → ficha de lectura.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { listaFotosRegistro } from './sicoeFotosHelpers'
 import { listaGraficosRegistro } from './sicoeGraficosHelpers'
 import {
   sicoeCorteNumeroDeRegistro,
   sicoeNombreSubcontratistaRegistro,
 } from './sicoeRegistroSubcontratista'
+import { agruparRegistrosPorItem, pastelDeEstadoValidacion } from './sicoeReporteItemsTablaHelpers'
+import { fmtCantidadConDimensiones } from './sicoeCantidadDimensiones'
+import { formatearCantidadTotal } from './sicoeCantidadRedondeo'
 import {
+  buildSlidesMediaVerificar,
   compararCantidadConDibujo,
+  fmtAbscisaCostado,
   fmtCantidadVerificar,
   fmtCostoDirectoVerificar,
   indiceRegistroPorId,
   indiceSiguientePendiente,
   lineaItemVerificar,
+  puedeMostrarBotonesValidacion,
   semaforoNivelesRegistro,
   textoSelladoRegistro,
 } from './claraGisVerificarHelpers'
@@ -89,24 +94,26 @@ function PanelSecundario({ t, titulo, onClose, children }) {
   )
 }
 
-/**
- * @param {object} props
- * @param {object} props.t
- * @param {object[]} props.registros
- * @param {object} props.reporte
- * @param {number|string|null} props.registroId
- * @param {(id: any) => void} props.onRegistroChange
- * @param {(modo: 'verificar'|'editar') => void} props.onCambiarModo
- * @param {(reg) => string} props.estadoMiNivel
- * @param {(reg) => boolean} props.puedeValidarRapido
- * @param {(ids: any[]) => void} props.onAprobar
- * @param {(estado: string, ids: any[]) => void} props.onPedirComentario
- * @param {boolean} props.ejecutando
- * @param {number[]} props.nivelesActivos
- * @param {Record<number,string>} props.encabezadosNivel
- * @param {object} props.nivelesContrato
- * @param {object} props.usuario
- */
+function SemaforoMini({ reg, nivelesActivos, encabezadosNivel, t }) {
+  const dots = semaforoNivelesRegistro(reg, nivelesActivos, encabezadosNivel)
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }} title={dots.map((d) => `${d.label}:${d.estado}`).join(' · ')}>
+      {dots.map((d) => (
+        <span
+          key={d.nivel}
+          style={{
+            width: 9,
+            height: 9,
+            borderRadius: '50%',
+            background: d.color,
+            boxShadow: `0 0 0 1px ${t.border || '#334155'}`,
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
 export default function ClaraGisVerificarFicha({
   t,
   registros = [],
@@ -123,39 +130,87 @@ export default function ClaraGisVerificarFicha({
   encabezadosNivel = {},
   nivelesContrato = null,
 }) {
-  const regs = Array.isArray(registros) ? registros : []
-  const [idx, setIdx] = useState(() => indiceRegistroPorId(regs, registroId))
-  const [fotoIdx, setFotoIdx] = useState(0)
+  const regsAll = Array.isArray(registros) ? registros : []
+  const filasItem = useMemo(() => agruparRegistrosPorItem(regsAll), [regsAll])
+
+  const [nivelNav, setNivelNav] = useState('items') // items | regs | ficha
+  const [itemKey, setItemKey] = useState(null)
+  const [idx, setIdx] = useState(0)
+  const [slideIdx, setSlideIdx] = useState(0)
   const [lightbox, setLightbox] = useState(null)
+  const [lightboxZoom, setLightboxZoom] = useState(1)
   const [itemDetalle, setItemDetalle] = useState(false)
-  const [panel, setPanel] = useState(null) // 'obs' | 'adjuntos' | 'graficos' | 'reversion' | null
+  const [panel, setPanel] = useState(null)
   const [tipNivel, setTipNivel] = useState(null)
+  const touchX = useRef(null)
+
+  const regsItem = useMemo(() => {
+    const fila = filasItem.find((f) => f.itemNum === itemKey)
+    return fila?.regs || []
+  }, [filasItem, itemKey])
+
+  // Deep-link / foco desde plano: abrir ficha del registro.
+  useEffect(() => {
+    if (registroId == null || !regsAll.length) return
+    const reg = regsAll.find((r) => String(r.id) === String(registroId))
+    if (!reg) return
+    const key = String(reg.item_numero || '').trim()
+    if (!key) return
+    setItemKey(key)
+    const i = indiceRegistroPorId(
+      (filasItem.find((f) => f.itemNum === key)?.regs) || [],
+      registroId,
+    )
+    setIdx(i)
+    setNivelNav('ficha')
+  }, [registroId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const next = indiceRegistroPorId(regs, registroId)
-    setIdx(next)
-  }, [registroId, regs])
-
-  useEffect(() => {
-    setFotoIdx(0)
+    setSlideIdx(0)
     setPanel(null)
     setItemDetalle(false)
     setTipNivel(null)
-  }, [idx])
+  }, [idx, nivelNav])
 
-  const reg = regs[idx] || null
-  const total = regs.length
+  const reg = nivelNav === 'ficha' ? (regsItem[idx] || null) : null
+  const total = regsItem.length
 
   const irA = (nextIdx) => {
     if (nextIdx < 0 || nextIdx >= total) return
     setIdx(nextIdx)
-    const r = regs[nextIdx]
+    const r = regsItem[nextIdx]
     if (r?.id != null) onRegistroChange?.(r.id)
   }
 
-  const fotos = useMemo(() => (reg ? listaFotosRegistro(reg) : []), [reg])
-  const graficos = useMemo(() => (reg ? listaGraficosRegistro(reg) : []), [reg])
-  const fotoActual = fotos[fotoIdx] || null
+  const abrirItem = (key) => {
+    setItemKey(key)
+    setNivelNav('regs')
+    setIdx(0)
+  }
+
+  const abrirRegistro = (r, i) => {
+    setIdx(i)
+    setNivelNav('ficha')
+    if (r?.id != null) onRegistroChange?.(r.id)
+  }
+
+  const volver = () => {
+    if (nivelNav === 'ficha') {
+      setNivelNav('regs')
+      return
+    }
+    if (nivelNav === 'regs') {
+      setNivelNav('items')
+      setItemKey(null)
+    }
+  }
+
+  const slides = useMemo(() => {
+    if (!reg) return []
+    return buildSlidesMediaVerificar(listaFotosRegistro(reg), listaGraficosRegistro(reg))
+  }, [reg])
+
+  const slide = slides[slideIdx] || null
 
   const comparacion = useMemo(
     () => (reg ? compararCantidadConDibujo(reg, reporte?.dibujo_geojson || reporte?.perimetro_geojson) : null),
@@ -167,18 +222,18 @@ export default function ClaraGisVerificarFicha({
     [reg, nivelesActivos, encabezadosNivel],
   )
 
-  const puedeDecidir = !!(reg && typeof puedeValidarRapido === 'function' && puedeValidarRapido(reg))
+  const puedeDecidir = !!(reg && puedeMostrarBotonesValidacion(reg, {
+    puedeValidarRapido,
+    estadoMiNivel,
+  }))
   const estadoYo = reg && typeof estadoMiNivel === 'function' ? estadoMiNivel(reg) : 'No Revisado'
-
   const selladoTip = textoSelladoRegistro(reg, nivelesContrato)
-  const subNombre = sicoeNombreSubcontratistaRegistro({
-    registro: reg,
-    reporte,
-  }) || 'Sin subcontratista'
+  const subNombre = sicoeNombreSubcontratistaRegistro({ registro: reg, reporte }) || 'Sin subcontratista'
   const corteNum = sicoeCorteNumeroDeRegistro({ registro: reg, reporte })
+  const abscisaTxt = fmtAbscisaCostado(reg)
 
   const trasDecision = () => {
-    const next = indiceSiguientePendiente(regs, idx, {
+    const next = indiceSiguientePendiente(regsItem, idx, {
       estadoMiNivel,
       puedeValidar: puedeValidarRapido,
       omitirIds: reg?.id != null ? [reg.id] : [],
@@ -189,7 +244,6 @@ export default function ClaraGisVerificarFicha({
   const aprobar = () => {
     if (!reg || !puedeDecidir) return
     onAprobar?.([reg.id])
-    // El optimistic update puede tardar; avanzar al siguiente pendiente.
     setTimeout(trasDecision, 80)
   }
 
@@ -198,18 +252,162 @@ export default function ClaraGisVerificarFicha({
     onPedirComentario?.('Rechazado', [reg.id])
   }
 
-  if (!reg) {
-    return (
-      <div style={{ padding: 16, color: t.textMuted, fontSize: 'var(--cc-md)' }}>
-        No hay registros con ítem en este reporte.
-      </div>
-    )
-  }
-
   const textMain = t.text || '#e2e8f0'
   const muted = t.textMuted || '#94a3b8'
   const border = t.border || '#334155'
   const cardBg = t.card || t.bgSecondary || '#111827'
+
+  const fmtNum = (v) => {
+    try {
+      return formatearCantidadTotal(v, { locale: true, empty: '—' })
+    } catch {
+      return String(v ?? '—')
+    }
+  }
+  const fmtPesos = (v) => fmtCostoDirectoVerificar(v)
+
+  // ── Nivel 1: ítems ──
+  if (nivelNav === 'items') {
+    return (
+      <div className="cc-claragis-verificar" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, color: textMain }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px 10px', flexShrink: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 'var(--cc-lg)', flex: 1 }}>Ítems del reporte</div>
+          <IconBtn title="Editar (formulario completo)" onClick={() => onCambiarModo?.('editar')} size={42}>✏️</IconBtn>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {!filasItem.length ? (
+            <div style={{ padding: 16, color: muted }}>No hay registros con ítem.</div>
+          ) : filasItem.map((fila) => (
+            <button
+              key={fila.itemNum}
+              type="button"
+              onClick={() => abrirItem(fila.itemNum)}
+              style={{
+                textAlign: 'left',
+                background: cardBg,
+                border: `1px solid ${border}`,
+                borderRadius: 10,
+                padding: '12px 14px',
+                color: textMain,
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)', marginBottom: 4 }}>
+                {fila.itemNum}
+              </div>
+              <div style={{
+                fontSize: 'var(--cc-sm)',
+                color: muted,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                marginBottom: 8,
+              }}>
+                {fila.descripcion}
+              </div>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
+                <span>Cant {fmtNum(fila.sumCant)} {fila.unidad}</span>
+                <span style={{ color: '#16a34a' }}>{fmtPesos(fila.sumCd)}</span>
+                <span style={{ color: muted, fontWeight: 600 }}>{fila.regs.length} reg.</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  // ── Nivel 2: registros del ítem ──
+  if (nivelNav === 'regs') {
+    const fila = filasItem.find((f) => f.itemNum === itemKey)
+    return (
+      <div className="cc-claragis-verificar" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, color: textMain }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 2px 10px', flexShrink: 0 }}>
+          <IconBtn title="Volver a ítems" onClick={volver} size={40}>←</IconBtn>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {itemKey}
+            </div>
+            <div style={{ fontSize: 'var(--cc-caption)', color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {fila?.descripcion || ''}
+            </div>
+          </div>
+          <IconBtn title="Editar (formulario completo)" onClick={() => onCambiarModo?.('editar')} size={42}>✏️</IconBtn>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+            <thead>
+              <tr style={{ color: muted, textAlign: 'left' }}>
+                <th style={{ padding: '6px 4px', fontWeight: 700 }}>#</th>
+                <th style={{ padding: '6px 4px', fontWeight: 700 }}>Cantidad</th>
+                <th style={{ padding: '6px 4px', fontWeight: 700 }}>CD</th>
+                <th style={{ padding: '6px 4px', fontWeight: 700 }}>Val.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {regsItem.map((r, i) => {
+                const pastel = pastelDeEstadoValidacion(estadoMiNivel?.(r) || 'No Revisado')
+                return (
+                  <tr
+                    key={r.id}
+                    onClick={() => abrirRegistro(r, i)}
+                    style={{
+                      cursor: 'pointer',
+                      background: pastel.bg !== 'transparent' ? pastel.bg : 'transparent',
+                      borderBottom: `1px solid ${border}`,
+                      height: 36,
+                    }}
+                  >
+                    <td style={{ padding: '4px 4px', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                      {r.numero_registro ?? '—'}
+                    </td>
+                    <td style={{
+                      padding: '4px 4px',
+                      fontFamily: 'ui-monospace, Consolas, monospace',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      maxWidth: 140,
+                    }}>
+                      {fmtCantidadConDimensiones(r)}
+                    </td>
+                    <td style={{
+                      padding: '4px 4px',
+                      fontWeight: 700,
+                      color: '#16a34a',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {fmtPesos(r.costo_directo)}
+                    </td>
+                    <td style={{ padding: '4px 4px' }}>
+                      <SemaforoMini
+                        reg={r}
+                        nivelesActivos={nivelesActivos}
+                        encabezadosNivel={encabezadosNivel}
+                        t={t}
+                      />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Nivel 3: ficha ──
+  if (!reg) {
+    return (
+      <div style={{ padding: 16, color: muted }}>
+        Registro no encontrado.
+        <div style={{ marginTop: 8 }}>
+          <IconBtn title="Volver" onClick={volver} size={40}>←</IconBtn>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -224,7 +422,6 @@ export default function ClaraGisVerificarFicha({
         fontSize: 'var(--cc-md)',
       }}
     >
-      {/* Nav superior */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -232,55 +429,71 @@ export default function ClaraGisVerificarFicha({
         padding: '4px 2px 10px',
         flexShrink: 0,
       }}>
+        <IconBtn title="Volver a registros" onClick={volver} size={40}>←</IconBtn>
         <IconBtn title="Registro anterior" onClick={() => irA(idx - 1)} disabled={idx <= 0} size={40}>◀</IconBtn>
         <div style={{ fontWeight: 800, fontSize: 'var(--cc-lg)', minWidth: 64, textAlign: 'center' }}>
           {idx + 1}/{total}
         </div>
         <IconBtn title="Registro siguiente" onClick={() => irA(idx + 1)} disabled={idx >= total - 1} size={40}>▶</IconBtn>
         <div style={{ flex: 1 }} />
-        <IconBtn
-          title="Editar (formulario completo)"
-          onClick={() => onCambiarModo?.('editar')}
-          size={42}
-        >
-          ✏️
-        </IconBtn>
+        <IconBtn title="Editar (formulario completo)" onClick={() => onCambiarModo?.('editar')} size={42}>✏️</IconBtn>
       </div>
 
-      {/* Contenido scrollable */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingBottom: puedeDecidir ? 72 : 8 }}>
-        {/* Foto */}
+        {/* Slider foto + gráfico */}
         <div
-          onClick={() => { if (fotoActual?.url) setLightbox(fotoActual.url) }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && fotoActual?.url) setLightbox(fotoActual.url) }}
-          role={fotoActual?.url ? 'button' : undefined}
-          tabIndex={fotoActual?.url ? 0 : undefined}
-          title={fotoActual?.url ? 'Ampliar foto' : undefined}
+          onTouchStart={(e) => { touchX.current = e.touches?.[0]?.clientX ?? null }}
+          onTouchEnd={(e) => {
+            const x0 = touchX.current
+            const x1 = e.changedTouches?.[0]?.clientX
+            touchX.current = null
+            if (x0 == null || x1 == null || slides.length < 2) return
+            const dx = x1 - x0
+            if (Math.abs(dx) < 40) return
+            setSlideIdx((i) => (dx < 0
+              ? (i + 1) % slides.length
+              : (i - 1 + slides.length) % slides.length))
+          }}
+          onClick={() => { if (slide?.url) { setLightboxZoom(1); setLightbox(slide.url) } }}
+          role={slide?.url ? 'button' : undefined}
+          tabIndex={slide?.url ? 0 : undefined}
+          title={slide?.url ? 'Ampliar' : undefined}
           style={{
             width: '100%',
-            aspectRatio: fotoActual?.url ? '4 / 3' : '16 / 7',
+            aspectRatio: slide?.url ? '4 / 3' : '16 / 7',
             borderRadius: 12,
-            background: fotoActual?.url ? '#0b1220' : '#1e293b',
+            background: slide?.url ? '#0b1220' : '#1e293b',
             border: `1px solid ${border}`,
             overflow: 'hidden',
             position: 'relative',
-            cursor: fotoActual?.url ? 'zoom-in' : 'default',
+            cursor: slide?.url ? 'zoom-in' : 'default',
             marginBottom: 14,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          {fotoActual?.url ? (
-            <img
-              src={fotoActual.url}
-              alt={`Foto ${fotoIdx + 1}`}
-              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            />
+          {slide?.url ? (
+            <img src={slide.url} alt={slide.label} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
           ) : (
             <div style={{ color: muted, fontSize: 36, opacity: 0.7 }}>📷</div>
           )}
-          {fotos.length > 1 && (
+          {slide && (
+            <span style={{
+              position: 'absolute',
+              top: 8,
+              left: 8,
+              background: 'rgba(15,23,42,0.8)',
+              color: '#fff',
+              borderRadius: 8,
+              padding: '2px 8px',
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 700,
+            }}>
+              {slide.label}
+            </span>
+          )}
+          {slides.length > 1 && (
             <div style={{
               position: 'absolute',
               bottom: 8,
@@ -291,13 +504,7 @@ export default function ClaraGisVerificarFicha({
               justifyContent: 'center',
               gap: 8,
             }}>
-              <IconBtn
-                title="Foto anterior"
-                size={36}
-                onClick={(e) => { e.stopPropagation(); setFotoIdx((i) => (i - 1 + fotos.length) % fotos.length) }}
-              >
-                ‹
-              </IconBtn>
+              <IconBtn title="Anterior" size={36} onClick={() => setSlideIdx((i) => (i - 1 + slides.length) % slides.length)}>‹</IconBtn>
               <span style={{
                 background: 'rgba(15,23,42,0.75)',
                 color: '#fff',
@@ -306,20 +513,13 @@ export default function ClaraGisVerificarFicha({
                 fontWeight: 700,
                 fontSize: 'var(--cc-sm)',
               }}>
-                {fotoIdx + 1}/{fotos.length}
+                {slideIdx + 1}/{slides.length}
               </span>
-              <IconBtn
-                title="Foto siguiente"
-                size={36}
-                onClick={(e) => { e.stopPropagation(); setFotoIdx((i) => (i + 1) % fotos.length) }}
-              >
-                ›
-              </IconBtn>
+              <IconBtn title="Siguiente" size={36} onClick={() => setSlideIdx((i) => (i + 1) % slides.length)}>›</IconBtn>
             </div>
           )}
         </div>
 
-        {/* Ítem */}
         <button
           type="button"
           onClick={() => setItemDetalle((v) => !v)}
@@ -363,19 +563,16 @@ export default function ClaraGisVerificarFicha({
           </div>
         )}
 
-        {/* Cantidad */}
         <div style={{
           fontSize: 'calc(var(--cc-lg) * 1.55)',
           fontWeight: 800,
           lineHeight: 1.25,
-          letterSpacing: '-0.01em',
           padding: '4px 2px 6px',
           wordBreak: 'break-word',
         }}>
           {fmtCantidadVerificar(reg)}
         </div>
 
-        {/* Costo */}
         <div style={{
           fontSize: 'calc(var(--cc-lg) * 1.35)',
           fontWeight: 800,
@@ -385,7 +582,30 @@ export default function ClaraGisVerificarFicha({
           {fmtCostoDirectoVerificar(reg.costo_directo)}
         </div>
 
-        {/* Comparación dibujo */}
+        {abscisaTxt && (
+          <div style={{
+            padding: '0 2px 6px',
+            fontSize: 'var(--cc-md)',
+            fontWeight: 600,
+            color: muted,
+            lineHeight: 1.4,
+          }}>
+            {abscisaTxt}
+          </div>
+        )}
+
+        {String(reg.observacion || '').trim() ? (
+          <div style={{
+            padding: '0 2px 12px',
+            fontSize: 'var(--cc-md)',
+            lineHeight: 1.45,
+            color: textMain,
+            whiteSpace: 'pre-wrap',
+          }}>
+            {String(reg.observacion).trim()}
+          </div>
+        ) : null}
+
         {comparacion && (
           <div style={{
             padding: '0 2px 12px',
@@ -397,14 +617,12 @@ export default function ClaraGisVerificarFicha({
           </div>
         )}
 
-        {/* Semáforo */}
         <div style={{
           display: 'flex',
           flexWrap: 'wrap',
           gap: 10,
           alignItems: 'center',
           padding: '4px 2px 14px',
-          position: 'relative',
         }}>
           {semaforo.map((s) => (
             <button
@@ -458,31 +676,23 @@ export default function ClaraGisVerificarFicha({
           })()}
         </div>
 
-        {/* Iconos secundarios */}
         <div style={{
           display: 'flex',
           flexWrap: 'wrap',
           gap: 4,
-          padding: '0 0 8px',
+          padding: '10px 0 8px',
           borderTop: `1px solid ${border}`,
-          paddingTop: 10,
         }}>
           <IconBtn title={selladoTip} size={40}>🔒</IconBtn>
           <IconBtn title="Reversión de sellado" size={40} onClick={() => setPanel('reversion')}>♻️</IconBtn>
           <IconBtn title={`Subcontratista: ${subNombre}`} size={40}>👷</IconBtn>
-          <IconBtn
-            title={corteNum != null ? `Corte: ${corteNum}` : 'Sin corte'}
-            size={40}
-          >
-            ✂️
-          </IconBtn>
+          <IconBtn title={corteNum != null ? `Corte: ${corteNum}` : 'Sin corte'} size={40}>✂️</IconBtn>
           <IconBtn title="Observación" size={40} onClick={() => setPanel('obs')}>📝</IconBtn>
           <IconBtn title="Adjuntos / enlace soporte" size={40} onClick={() => setPanel('adjuntos')}>📎</IconBtn>
           <IconBtn title="Galería de gráficos" size={40} onClick={() => setPanel('graficos')}>🖼️</IconBtn>
         </div>
       </div>
 
-      {/* Footer decisión fijo */}
       {puedeDecidir && (
         <div style={{
           position: 'sticky',
@@ -516,7 +726,6 @@ export default function ClaraGisVerificarFicha({
         </div>
       )}
 
-      {/* Paneles secundarios (dentro de la ficha) */}
       {panel === 'obs' && (
         <PanelSecundario t={t} titulo="Observación" onClose={() => setPanel(null)}>
           {String(reg.observacion || '').trim() || 'Sin observación.'}
@@ -543,9 +752,7 @@ export default function ClaraGisVerificarFicha({
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {urls.map((u) => (
                   <li key={u} style={{ marginBottom: 8 }}>
-                    <a href={u} target="_blank" rel="noopener noreferrer" style={{ color: t.primary }}>
-                      {u}
-                    </a>
+                    <a href={u} target="_blank" rel="noopener noreferrer" style={{ color: t.primary }}>{u}</a>
                   </li>
                 ))}
               </ul>
@@ -555,13 +762,13 @@ export default function ClaraGisVerificarFicha({
       )}
       {panel === 'graficos' && (
         <PanelSecundario t={t} titulo="Gráficos" onClose={() => setPanel(null)}>
-          {!graficos.length ? 'Sin gráficos.' : (
+          {!listaGraficosRegistro(reg).length ? 'Sin gráficos.' : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {graficos.map((g, i) => (
+              {listaGraficosRegistro(reg).map((g, i) => (
                 <button
                   key={`${g.url}-${i}`}
                   type="button"
-                  onClick={() => setLightbox(g.url)}
+                  onClick={() => { setLightboxZoom(1); setLightbox(g.url) }}
                   style={{
                     border: `1px solid ${border}`,
                     borderRadius: 10,
@@ -580,11 +787,9 @@ export default function ClaraGisVerificarFicha({
       )}
       {panel === 'reversion' && (
         <PanelSecundario t={t} titulo="Reversión de sellado" onClose={() => setPanel(null)}>
-          <p style={{ marginTop: 0 }}>
-            {selladoTip}
-          </p>
+          <p style={{ marginTop: 0 }}>{selladoTip}</p>
           <p style={{ color: muted }}>
-            Para solicitar o completar la reversión de sellado use el modo Editar (icono ✏️), donde está el flujo completo de doble llave.
+            Para solicitar o completar la reversión use el modo Editar (✏️), con el flujo completo de doble llave.
           </p>
           <button
             type="button"
@@ -606,7 +811,6 @@ export default function ClaraGisVerificarFicha({
         </PanelSecundario>
       )}
 
-      {/* Lightbox foto/gráfico */}
       {lightbox && (
         <div
           role="dialog"
@@ -627,28 +831,50 @@ export default function ClaraGisVerificarFicha({
             src={lightbox}
             alt="Ampliada"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 8 }}
-          />
-          <button
-            type="button"
-            title="Cerrar"
-            onClick={() => setLightbox(null)}
             style={{
-              position: 'absolute',
-              top: 16,
-              right: 16,
-              width: 48,
-              height: 48,
-              borderRadius: 12,
-              border: 'none',
-              background: 'rgba(255,255,255,0.15)',
-              color: '#fff',
-              fontSize: 22,
-              cursor: 'pointer',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              objectFit: 'contain',
+              borderRadius: 8,
+              transform: `scale(${lightboxZoom})`,
+              transition: 'transform 0.15s ease',
             }}
-          >
-            ✕
-          </button>
+          />
+          <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              title="Acercar"
+              onClick={(e) => { e.stopPropagation(); setLightboxZoom((z) => Math.min(3, z + 0.25)) }}
+              style={{
+                width: 48, height: 48, borderRadius: 12, border: 'none',
+                background: 'rgba(255,255,255,0.15)', color: '#fff', fontSize: 22, cursor: 'pointer',
+              }}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              title="Alejar"
+              onClick={(e) => { e.stopPropagation(); setLightboxZoom((z) => Math.max(1, z - 0.25)) }}
+              style={{
+                width: 48, height: 48, borderRadius: 12, border: 'none',
+                background: 'rgba(255,255,255,0.15)', color: '#fff', fontSize: 22, cursor: 'pointer',
+              }}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              title="Cerrar"
+              onClick={() => setLightbox(null)}
+              style={{
+                width: 48, height: 48, borderRadius: 12, border: 'none',
+                background: 'rgba(255,255,255,0.15)', color: '#fff', fontSize: 22, cursor: 'pointer',
+              }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
     </div>
