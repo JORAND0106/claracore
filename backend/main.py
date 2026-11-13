@@ -3490,12 +3490,16 @@ def _sicoe_vm_grilla_paginar(
     excluir_estados_avanzados: bool = False,
     reporte_ids: Optional[List[int]] = None,
 ) -> Tuple[List[int], bool]:
-    """IDs de reporte ordenados por numero_reporte desc desde vm_sicoe_grilla."""
+    """IDs de reporte: created_at desc, luego numero_reporte desc (vm_sicoe_grilla)."""
     page_lim = max(1, min(int(limit or 50), 100))
     off = max(0, int(offset or 0))
 
     def _q():
-        q = supabase.table("vm_sicoe_grilla").select("id, numero_reporte").eq("contrato_id", contrato_id)
+        q = (
+            supabase.table("vm_sicoe_grilla")
+            .select("id, numero_reporte, created_at")
+            .eq("contrato_id", contrato_id)
+        )
         if numero_reporte is not None:
             q = q.eq("numero_reporte", numero_reporte)
         if semana_id is not None:
@@ -3510,7 +3514,12 @@ def _sicoe_vm_grilla_paginar(
             if not reporte_ids:
                 return type("R", (), {"data": []})()
             q = q.in_("id", reporte_ids)
-        return q.order("numero_reporte", desc=True).range(off, off + page_lim).execute()
+        return (
+            q.order("created_at", desc=True, nullsfirst=False)
+            .order("numero_reporte", desc=True)
+            .range(off, off + page_lim)
+            .execute()
+        )
 
     data = supabase_execute(_q).data or []
     ids = [int(r["id"]) for r in data if r.get("id") is not None]
@@ -22257,7 +22266,7 @@ def buscar_reportes_obra(
 
     def _build_q(ids_chunk=None, lite: bool = False):
         cols = (
-            "id, numero_reporte"
+            "id, numero_reporte, created_at"
             if lite
             else "*, subcontratistas(razon_social)"
         )
@@ -22296,8 +22305,11 @@ def buscar_reportes_obra(
 
     # ── Cabeceras: sin precargar miles de reportes (*) para ordenar/paginar en Python.
     #    - Sin universo por línea: orden + range en BD (solo la página solicitada).
-    #    - Con reporte_ids_from_reg: sólo id+numero_reporte para ordenar todo el universo filtrado;
+    #    - Con reporte_ids_from_reg: id+created_at+numero_reporte para ordenar el universo filtrado;
     #      luego select * + join sólo para offset..offset+limit de esos IDs (~50 filas típ.).
+    #    Orden predeterminado: created_at DESC, numero_reporte DESC.
+    from sicoe_grilla_orden import ordenar_ids_reporte_reciente
+
     rows: List[Dict[str, Any]] = []
     hay_mas = False
     _vm_grilla_usada = False
@@ -22351,7 +22363,7 @@ def buscar_reportes_obra(
             hay_mas = False
 
     if reporte_ids_from_reg is not None and not rows:
-        id_num: Dict[int, int] = {}
+        id_meta: Dict[int, Tuple[Any, Any]] = {}
         seen_rid = set()
         for i in range(0, len(reporte_ids_from_reg), _IDS_CHUNK_SIZE):
             _chunk = reporte_ids_from_reg[i : i + _IDS_CHUNK_SIZE]
@@ -22364,12 +22376,8 @@ def buscar_reportes_obra(
                 if rid_one is None or rid_one in seen_rid:
                     continue
                 seen_rid.add(rid_one)
-                try:
-                    n = int(row.get("numero_reporte") or 0)
-                except (TypeError, ValueError):
-                    n = 0
-                id_num[int(rid_one)] = n
-        sorted_ids = sorted(id_num.keys(), key=lambda rr: id_num[rr], reverse=True)
+                id_meta[int(rid_one)] = (row.get("created_at"), row.get("numero_reporte"))
+        sorted_ids = ordenar_ids_reporte_reciente(id_meta)
         page_slice = sorted_ids[offset : offset + limit + 1]
         hay_mas = len(page_slice) > limit
         page_ids_ordered = page_slice[:limit]
@@ -22386,7 +22394,11 @@ def buscar_reportes_obra(
                 if rid_one in by_id:
                     rows.append(by_id[rid_one])
     elif not rows:
-        q_page = _build_q(None).order("numero_reporte", desc=True)
+        q_page = (
+            _build_q(None)
+            .order("created_at", desc=True, nullsfirst=False)
+            .order("numero_reporte", desc=True)
+        )
 
         def _qrange_pg():
             return q_page.range(offset, offset + limit).execute().data
@@ -22663,7 +22675,10 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         try:
             rep_rows = supabase_execute(
                 lambda: supabase.table("so_reportes")
-                .select("id, numero_reporte, acta_rpo_id, semana_id, pk_id_id, subcontratista_id, inspector_id")
+                .select(
+                    "id, numero_reporte, created_at, acta_rpo_id, semana_id, "
+                    "pk_id_id, subcontratista_id, inspector_id"
+                )
                 .in_("id", reporte_ids)
                 .execute()
                 .data
@@ -22821,6 +22836,7 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         sub_id = r.get("subcontratista_id") or rep.get("subcontratista_id")
         insp_id = r.get("inspector_id") or rep.get("inspector_id")
         r["reporte_numero"] = rep.get("numero_reporte")
+        r["_reporte_created_at"] = rep.get("created_at")
         r["acta_rpo_numero"] = acta_map.get(acta_id)
         r["semana_numero"] = semana_map.get(sem_id)
         # pk_id en so_registros es el valor de negocio; pk_id_id es FK interna opcional.
@@ -24267,6 +24283,8 @@ def exportar_registros_sicoe(
             registros = _filtrar_registros_validacion_capas_sicoe(
                 registros, capas_exp_export, None, "or", contrato_id
             )
+        from sicoe_grilla_orden import ordenar_registros_export_como_grilla
+        registros = ordenar_registros_export_como_grilla(registros)
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             registrar_log(
@@ -24292,6 +24310,8 @@ def exportar_registros_sicoe(
         registros = _filtrar_registros_validacion_capas_sicoe(
             registros, capas_exp_export, None, "or", contrato_id
         )
+    from sicoe_grilla_orden import ordenar_registros_export_como_grilla
+    registros = ordenar_registros_export_como_grilla(registros)
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
