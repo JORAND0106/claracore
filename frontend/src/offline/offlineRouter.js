@@ -507,7 +507,13 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
   })
 
   console.log('[buscarReportesOffline] reportes tras filtros:', todos.length, '| repIdsDesdeReg:', reporteIdsDesdeRegistros?.size ?? 'N/A')
-  todos.sort((a, b) => (b.numero_reporte ?? 0) - (a.numero_reporte ?? 0))
+  // Orden grilla: created_at DESC, luego numero_reporte DESC (número reutilizado no oculta lo reciente).
+  todos.sort((a, b) => {
+    const ta = String(a.created_at || '')
+    const tb = String(b.created_at || '')
+    if (ta !== tb) return tb.localeCompare(ta)
+    return (b.numero_reporte ?? 0) - (a.numero_reporte ?? 0)
+  })
 
   const total = todos.length
   const pagina = todos.slice(offset, offset + limit)

@@ -10,6 +10,7 @@ CREATE MATERIALIZED VIEW public.vm_sicoe_grilla AS
 SELECT
     r.id,
     r.numero_reporte,
+    r.created_at,
     r.capitulo,
     r.tramo,
     r.calzada AS costado,
@@ -27,7 +28,7 @@ SELECT
 FROM public.so_reportes r
 LEFT JOIN public.so_registros reg ON reg.reporte_id = r.id
 GROUP BY
-    r.id, r.numero_reporte, r.capitulo, r.tramo, r.calzada,
+    r.id, r.numero_reporte, r.created_at, r.capitulo, r.tramo, r.calzada,
     r.abs_inicio, r.abs_final, r.nodo_ini, r.nodo_fin,
     r.subcontratista_id, r.acta_rpo_id, r.semana_id, r.estado, r.contrato_id;
 
@@ -37,6 +38,8 @@ CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_acta ON public.vm_sicoe_grilla (a
 CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_contrato_acta ON public.vm_sicoe_grilla (contrato_id, acta_rpo_id);
 CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_contrato_semana ON public.vm_sicoe_grilla (contrato_id, semana_id);
 CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_num_rep ON public.vm_sicoe_grilla (contrato_id, numero_reporte DESC);
+CREATE INDEX IF NOT EXISTS idx_vm_sicoe_grilla_contrato_created
+    ON public.vm_sicoe_grilla (contrato_id, created_at DESC NULLS LAST, numero_reporte DESC);
 
 -- ── 2. Vista detalle registro (Realtime carpeta abierta) ───────────────────
 DROP MATERIALIZED VIEW IF EXISTS public.vm_sicoe_registro_detalle CASCADE;
