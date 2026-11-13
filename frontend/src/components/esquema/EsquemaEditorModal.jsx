@@ -6302,10 +6302,26 @@ export default function EsquemaEditorModal({
     : ''
   const canvasHint = toolHint || pickFromMapHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || (insertHintVisible ? insertHint : '')
 
+  /** Vista actual (mapa + capa dibujo) → data URL PNG cruda, sin encabezado. */
+  const captureHuellaVistaRaw = async () => {
+    redraw()
+    await new Promise((r) => requestAnimationFrame(r))
+    await new Promise((r) => setTimeout(r, 80))
+    const drawC = canvasRef.current
+    const { w, h } = cssSize()
+    if (!drawC || !w || !h) return null
+    const area = { x: 0, y: 0, w, h }
+    const map = mapActiveRef.current ? mapRef.current : null
+    const mapCanvas = map && typeof map.getCanvas === 'function' ? map.getCanvas() : null
+    // Import local evita ciclo al cargar el modal.
+    const { compositeMapaYDibujoToDataUrl } = await import('../../modules/sicoe-obra/sicoeDibujoComoGrafico.js')
+    return compositeMapaYDibujoToDataUrl(mapCanvas, drawC, mapOpacity, area)
+  }
+
   const pedirGuardar = () => {
     if (busy) return
     if (huellaMode) {
-      // Flujo SicoeObra: guardar geometrías sin capturar PNG del mapa
+      // Flujo SicoeObra: guardar geometrías; PNG opcional vía puente (C-OUT-23).
       void (async () => {
         setBusy(true)
         try {
@@ -6314,6 +6330,21 @@ export default function EsquemaEditorModal({
             objects: cloneScene(objectsRef.current),
             originLngLat: origin,
             coordRows: coordRowsRef.current,
+            captureVistaPng: async ({ title } = {}) => {
+              const raw = await captureHuellaVistaRaw()
+              if (!raw) throw new Error('No se pudo capturar la vista del dibujo')
+              const { composeVistaConEncabezado } = await import('../../modules/sicoe-obra/sicoeDibujoComoGrafico.js')
+              return composeVistaConEncabezado(raw, {
+                title: title || 'Dibujo',
+                tipoTitulo: 'Dibujo',
+              })
+            },
+            collectSceneSnapshot: () => ({
+              ...collectDraftSnapshot(),
+              objects: cloneScene(objectsRef.current),
+              origin_lnglat: origin,
+              dibujo_tipo: dibujoTipoRef.current || 'nodo',
+            }),
           })
           if (resolvedDraftKeyRef.current) {
             await esquemaDraftClear(resolvedDraftKeyRef.current)

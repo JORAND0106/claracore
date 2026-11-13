@@ -42,6 +42,9 @@ export function entradaDesdeFilaLista(row, reporteId = null) {
     esquemaId: row.esquema_id || row.entrada?.esquema_id,
     scene: row.scene || row.entrada?.scene || row.entrada?.esquema_scene || null,
     reporteId,
+    fuente: row.fuente || row.entrada?.fuente || null,
+    dibujoReporte: !!(row.dibujo_reporte || row.entrada?.dibujo_reporte
+      || row.fuente === 'dibujo_reporte' || row.entrada?.fuente === 'dibujo_reporte'),
   })
 }
 
