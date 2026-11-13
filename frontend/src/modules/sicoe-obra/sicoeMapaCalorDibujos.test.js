@@ -34,6 +34,22 @@ function huella(registroId, reporteId, geom = {
   }
 }
 
+function dibujoReporte(reporteId, geom = {
+  type: 'Polygon',
+  coordinates: [[[-74.1, 4.7], [-74.09, 4.7], [-74.09, 4.71], [-74.1, 4.71], [-74.1, 4.7]]],
+}) {
+  return {
+    type: 'Feature',
+    geometry: geom,
+    properties: {
+      reporte_id: reporteId,
+      origen: 'reporte_dibujo',
+      huella_tipo: 'poligono',
+      dibujo_tipo: 'poligono',
+    },
+  }
+}
+
 describe('construirCalorSobreDibujos', () => {
   it('sin puntos de calor → colecciones vacías', () => {
     const r = construirCalorSobreDibujos(
@@ -101,5 +117,35 @@ describe('construirCalorSobreDibujos', () => {
     const lod = r.dibujosFc.features.filter((f) => f.properties.is_lod_marker === 1)
     assert.equal(lod.length, 1)
     assert.equal(lod[0].geometry.type, 'Point')
+  })
+
+  it('dibujo del reporte (botón Dibujar) cubre todos los ítems filtrados del reporte', () => {
+    const heat = {
+      type: 'FeatureCollection',
+      features: [
+        heatPoint(1, 60, 0.8, 800),
+        heatPoint(2, 60, 0.4, 400),
+        heatPoint(3, 99, 0.2, 200),
+      ],
+    }
+    const r = construirCalorSobreDibujos(heat, [dibujoReporte(60)])
+    assert.equal(r.meta.con_dibujo, 1)
+    assert.equal(r.meta.sin_dibujo, 1)
+    assert.equal(r.puntosSinDibujoFc.features[0].properties.id, 3)
+    assert.equal(r.dibujosFc.features[0].properties.weight, 0.8)
+  })
+
+  it('match por registro_id tiene prioridad sobre reporte_id', () => {
+    const heat = {
+      type: 'FeatureCollection',
+      features: [heatPoint(1, 10, 1, 100)],
+    }
+    const r = construirCalorSobreDibujos(heat, [
+      huella(1, 10),
+      dibujoReporte(10),
+    ])
+    // Ambos matchean el mismo reporte/registro; dedupe por geometría → 1 dibujo
+    assert.equal(r.meta.con_dibujo, 1)
+    assert.equal(r.meta.sin_dibujo, 0)
   })
 })

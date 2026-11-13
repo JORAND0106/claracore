@@ -490,6 +490,11 @@ export default function ModuloPlanoMapaCalor({
         type: 'FeatureCollection',
         features: Array.isArray(data.features) ? data.features : [],
       }
+      // Dibujos del botón Dibujar / huellas del conjunto filtrado (vienen en analisis).
+      const dibujosFeats = Array.isArray(data.dibujos?.features)
+        ? data.dibujos.features
+        : []
+      allHuellasRef.current = dibujosFeats
       setPuntosFc(fc)
       setMeta(data.meta || null)
       setBusquedaRealizada(true)
@@ -977,7 +982,8 @@ export default function ModuloPlanoMapaCalor({
         },
       })
 
-      fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`, {
+      // Solo eje + nodos PK (liviano). Los dibujos filtrados llegan en analisis?formato=mapa_calor.
+      fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true&incluir_huellas=false`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((r) => (r.ok ? r.json() : null))
@@ -985,15 +991,17 @@ export default function ModuloPlanoMapaCalor({
           if (!data || !mapInstance.current) return
           try {
             map.getSource('sicoe-eje')?.setData(data.eje || EMPTY_FC)
-            allHuellasRef.current = Array.isArray(data.features) ? data.features : []
             map.getSource('sicoe-nodos')?.setData(data.nodos || EMPTY_FC)
-            const joined = construirCalorSobreDibujos(heatFcRef.current || EMPTY_FC, allHuellasRef.current)
-            map.getSource('sicoe-huellas')?.setData(joined.dibujosFc)
-            map.getSource('sicoe-calor')?.setData(joined.puntosSinDibujoFc)
-            setLeyendaVista({
-              con_dibujo: joined.meta.con_dibujo,
-              sin_dibujo: joined.meta.sin_dibujo,
-            })
+            // No pisar allHuellasRef: ya viene de analisis.dibujos del filtro activo.
+            if (heatFcRef.current?.features?.length && allHuellasRef.current.length) {
+              const joined = construirCalorSobreDibujos(heatFcRef.current, allHuellasRef.current)
+              map.getSource('sicoe-huellas')?.setData(joined.dibujosFc)
+              map.getSource('sicoe-calor')?.setData(joined.puntosSinDibujoFc)
+              setLeyendaVista({
+                con_dibujo: joined.meta.con_dibujo,
+                sin_dibujo: joined.meta.sin_dibujo,
+              })
+            }
           } catch { /* ignore */ }
         })
         .catch(() => {})

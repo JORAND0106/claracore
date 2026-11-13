@@ -25302,27 +25302,89 @@ def analisis_registros_obra(
     if rep_ids_found:
         # Procesar en lotes de 500 para no exceder límites de URL con .in_()
         _cid_l = contrato_id
-        _sel_rep = (
-            "id, capitulo, estado, numero_reporte, descripcion_actividad, coord_lat, coord_lng"
-            if _formato_mapa
-            else "id, capitulo, estado"
-        )
+        # ClaraGIS: traer dibujo del reporte (botón Dibujar) junto al mapa de calor
+        # para no depender de /huellas del contrato entero (~40s).
+        if _formato_mapa:
+            _sel_rep_candidates = (
+                "id, capitulo, estado, numero_reporte, descripcion_actividad, "
+                "coord_lat, coord_lng, dibujo_geojson, perimetro_geojson",
+                "id, capitulo, estado, numero_reporte, descripcion_actividad, "
+                "coord_lat, coord_lng, dibujo_geojson",
+                "id, capitulo, estado, numero_reporte, descripcion_actividad, "
+                "coord_lat, coord_lng, perimetro_geojson",
+                "id, capitulo, estado, numero_reporte, descripcion_actividad, "
+                "coord_lat, coord_lng",
+            )
+        else:
+            _sel_rep_candidates = ("id, capitulo, estado",)
         for chunk_start in range(0, len(rep_ids_found), 500):
             chunk = rep_ids_found[chunk_start:chunk_start + 500]
-            try:
-                def _ri(ids=chunk, sel=_sel_rep):
-                    return supabase.table("so_reportes").select(sel)\
-                        .eq("contrato_id", _cid_l).in_("id", ids).execute().data
-                for r in supabase_execute(_ri):
-                    reporte_map[r["id"]] = r
-            except Exception:
-                pass
+            for _sel_rep in _sel_rep_candidates:
+                try:
+                    def _ri(ids=chunk, sel=_sel_rep):
+                        return supabase.table("so_reportes").select(sel)\
+                            .eq("contrato_id", _cid_l).in_("id", ids).execute().data
+                    for r in supabase_execute(_ri):
+                        reporte_map[r["id"]] = r
+                        reporte_map[str(r["id"])] = r
+                    break
+                except Exception:
+                    continue
 
     # Ítem / descripción / unidad en vivo desde listado (mapa y grupos).
     registros = _overlay_sicoe_meta_vivo(contrato_id, registros or [])
 
     if _formato_mapa:
-        geo = _sicoe_build_mapa_calor_geojson(registros, reporte_map)
+        # Huellas solo de registros cuyo reporte NO trae dibujo (fallback).
+        # ClaraGIS ya no consulta /huellas del contrato entero (~40s).
+        try:
+            _reg_ids_sin_dibujo = []
+            for r in registros or []:
+                if r.get("id") is None:
+                    continue
+                rep = reporte_map.get(r.get("reporte_id")) or reporte_map.get(
+                    str(r.get("reporte_id") or "")
+                ) or {}
+                dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+                if _sicoe_reporte_geojson_tiene_dibujo(dg):
+                    continue
+                _reg_ids_sin_dibujo.append(r["id"])
+            _huellas_by_id: dict = {}
+            for chunk_start in range(0, len(_reg_ids_sin_dibujo), 200):
+                chunk = _reg_ids_sin_dibujo[chunk_start:chunk_start + 200]
+                try:
+                    def _qh(ids=chunk):
+                        return (
+                            supabase.table("so_registros")
+                            .select("id, huella_geojson, huella_tipo")
+                            .eq("contrato_id", contrato_id)
+                            .in_("id", ids)
+                            .not_.is_("huella_geojson", "null")
+                            .execute()
+                            .data
+                        )
+                    for row in supabase_execute(_qh) or []:
+                        _huellas_by_id[row["id"]] = row
+                        _huellas_by_id[str(row["id"])] = row
+                except Exception:
+                    break
+            if _huellas_by_id:
+                for r in registros:
+                    h = _huellas_by_id.get(r.get("id")) or _huellas_by_id.get(
+                        str(r.get("id") or "")
+                    )
+                    if h and h.get("huella_geojson"):
+                        r["huella_geojson"] = h["huella_geojson"]
+                        if h.get("huella_tipo"):
+                            r["huella_tipo"] = h["huella_tipo"]
+        except Exception as exc:
+            _log_api.warning(
+                "mapa_calor huellas filtradas contrato=%s: %s", contrato_id, exc
+            )
+
+        geo = _sicoe_build_mapa_calor_geojson(
+            registros, reporte_map, incluir_dibujos=True
+        )
         _dashboard_response_cache_set(_analisis_cache_key, geo)
         return geo
 
@@ -33847,84 +33909,91 @@ def sicoe_huellas_geojson(
     item_numero: Optional[str] = None,
     incluir_eje: bool = True,
     incluir_nodos: bool = True,
+    incluir_huellas: bool = True,
     current_user=Depends(get_current_user),
 ):
-    """FeatureCollection de huellas (franja/nodo/polígono) + eje + nodos PK."""
+    """FeatureCollection de huellas (franja/nodo/polígono) + eje + nodos PK.
+
+    ClaraGIS pasa incluir_huellas=false: los dibujos del filtro llegan en
+    analisis?formato=mapa_calor (clave `dibujos`) y este endpoint solo aporta
+    eje/nodos PK, evitando leer todas las huellas del contrato (~40s).
+    """
     from sicoe_eje_franjas import ejes_to_geojson
     from sicoe_huellas_espacial import nodos_to_geojson
 
     _ = current_user
-    try:
-        def _q():
-            q = (
-                supabase.table("so_registros")
-                .select(
-                    "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
-                    "huella_tipo, geometria_tipo, abs_inicio, abs_final, margen, ancho, pk_id_id"
-                )
-                .eq("contrato_id", contrato_id)
-                .not_.is_("huella_geojson", "null")
-            )
-            if item_numero:
-                q = q.eq("item_numero", item_numero)
-            return q.execute().data
-        rows = supabase_execute(_q) or []
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "huella_" in msg or "geometria_tipo" in msg:
-            # Fallback sin columnas nuevas
-            try:
-                def _q2():
-                    q = (
-                        supabase.table("so_registros")
-                        .select(
-                            "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
-                            "abs_inicio, abs_final, margen, ancho"
-                        )
-                        .eq("contrato_id", contrato_id)
-                        .not_.is_("huella_geojson", "null")
-                    )
-                    if item_numero:
-                        q = q.eq("item_numero", item_numero)
-                    return q.execute().data
-                rows = supabase_execute(_q2) or []
-            except Exception as exc2:
-                if "huella_" in str(exc2).lower():
-                    return {
-                        "type": "FeatureCollection",
-                        "features": [],
-                        "eje": {"type": "FeatureCollection", "features": []},
-                        "nodos": {"type": "FeatureCollection", "features": []},
-                        "migracion_pendiente": True,
-                    }
-                raise HTTPException(500, f"No se pudieron leer huellas: {exc2}") from exc2
-        else:
-            raise HTTPException(500, f"No se pudieron leer huellas: {exc}") from exc
-
     features = []
-    for r in rows:
-        feat = r.get("huella_geojson")
-        if not feat or not isinstance(feat, dict):
-            continue
-        # Omitidas del dibujo masivo (sin geometría) no se dibujan
-        if feat.get("geometry") is None or (feat.get("properties") or {}).get("omitida"):
-            continue
-        props = dict(feat.get("properties") or {})
-        props.update({
-            "registro_id": r.get("id"),
-            "numero_registro": r.get("numero_registro"),
-            "reporte_id": r.get("reporte_id"),
-            "item_numero": r.get("item_numero"),
-            "precision": r.get("huella_precision") or props.get("precision"),
-            "huella_tipo": r.get("huella_tipo") or props.get("huella_tipo") or "franja",
-            "geometria_tipo": r.get("geometria_tipo"),
-            "pk_id_id": r.get("pk_id_id"),
-        })
-        features.append({
-            "type": "Feature",
-            "geometry": feat.get("geometry"),
-            "properties": props,
-        })
+    if incluir_huellas:
+        try:
+            def _q():
+                q = (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
+                        "huella_tipo, geometria_tipo, abs_inicio, abs_final, margen, ancho, pk_id_id"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .not_.is_("huella_geojson", "null")
+                )
+                if item_numero:
+                    q = q.eq("item_numero", item_numero)
+                return q.execute().data
+            rows = supabase_execute(_q) or []
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "huella_" in msg or "geometria_tipo" in msg:
+                # Fallback sin columnas nuevas
+                try:
+                    def _q2():
+                        q = (
+                            supabase.table("so_registros")
+                            .select(
+                                "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
+                                "abs_inicio, abs_final, margen, ancho"
+                            )
+                            .eq("contrato_id", contrato_id)
+                            .not_.is_("huella_geojson", "null")
+                        )
+                        if item_numero:
+                            q = q.eq("item_numero", item_numero)
+                        return q.execute().data
+                    rows = supabase_execute(_q2) or []
+                except Exception as exc2:
+                    if "huella_" in str(exc2).lower():
+                        return {
+                            "type": "FeatureCollection",
+                            "features": [],
+                            "eje": {"type": "FeatureCollection", "features": []},
+                            "nodos": {"type": "FeatureCollection", "features": []},
+                            "migracion_pendiente": True,
+                        }
+                    raise HTTPException(500, f"No se pudieron leer huellas: {exc2}") from exc2
+            else:
+                raise HTTPException(500, f"No se pudieron leer huellas: {exc}") from exc
+
+        for r in rows:
+            feat = r.get("huella_geojson")
+            if not feat or not isinstance(feat, dict):
+                continue
+            # Omitidas del dibujo masivo (sin geometría) no se dibujan
+            if feat.get("geometry") is None or (feat.get("properties") or {}).get("omitida"):
+                continue
+            props = dict(feat.get("properties") or {})
+            props.update({
+                "registro_id": r.get("id"),
+                "numero_registro": r.get("numero_registro"),
+                "reporte_id": r.get("reporte_id"),
+                "item_numero": r.get("item_numero"),
+                "precision": r.get("huella_precision") or props.get("precision"),
+                "huella_tipo": r.get("huella_tipo") or props.get("huella_tipo") or "franja",
+                "geometria_tipo": r.get("geometria_tipo"),
+                "pk_id_id": r.get("pk_id_id"),
+            })
+            features.append({
+                "type": "Feature",
+                "geometry": feat.get("geometry"),
+                "properties": props,
+            })
 
     eje = {"type": "FeatureCollection", "features": []}
     if incluir_eje:
