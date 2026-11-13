@@ -177,6 +177,7 @@ import {
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
+import ClaraGisVerificarFicha from './modules/sicoe-obra/ClaraGisVerificarFicha'
 import SicoePlanillaTuberiaOrigenTab from './modules/sicoe-obra/SicoePlanillaTuberiaOrigenTab'
 import {
   sicoeAutoRegistroNavState,
@@ -6750,7 +6751,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     ? registros
     : registros.filter((r) => esRegistroSinItemAsignado(r) || cumplePrereqsVerTodos(r))
 
-  const [tabActiva, setTabActiva]                 = useState('portada')
+  const [tabActiva, setTabActiva]                 = useState(() => (layout === 'embed' ? 'items' : 'portada'))
+  /** ClaraGIS embed: ficha de lectura (default) vs formulario completo. */
+  const [claragisVistaModo, setClaragisVistaModo] = useState('verificar')
   const [tienePlanillaTuberiaOrigen, setTienePlanillaTuberiaOrigen] = useState(false)
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
   const [enlaces, setEnlaces]                      = useState(() => parseEnlacesSoporteReporte(repoProp.enlace_soporte))
@@ -7224,6 +7227,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     () => registrosVisibles.filter((r) => String(r?.item_numero || '').trim()),
     [registrosVisibles],
   )
+
+  // ClaraGIS: al cambiar de reporte, volver a Verificar.
+  useEffect(() => {
+    if (!isEmbed) return
+    setClaragisVistaModo('verificar')
+  }, [isEmbed, reporte?.id, repoProp?.id])
+
+  // ClaraGIS Verificar: anclar un registro para foco de plano al abrir.
+  useEffect(() => {
+    if (!isEmbed || claragisVistaModo !== 'verificar') return
+    if (registroExpandido != null) return
+    const firstId = registrosConItem[0]?.id
+    if (firstId != null) setRegistroExpandido(firstId)
+  }, [isEmbed, claragisVistaModo, registrosConItem, registroExpandido])
 
   // Tabs fijos: portada | sin_asignar | items | (planilla_tuberia si hay vínculo)
   useEffect(() => {
@@ -9110,7 +9127,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         </div>
 
         {/* ─ Contenido del tab ─ */}
-        <div className={`cc-sicoe-carpeta-content${isEmbed ? ' cc-claragis-embed-content' : ''}`} style={{ flex:1, padding: isEmbed ? '8px 8px' : (carpetaCompact ? '10px 8px' : '16px 14px'), overflowY:'auto', overflowX: isEmbed ? 'hidden' : undefined, minHeight: 0 }}>
+        <div
+          className={`cc-sicoe-carpeta-content${isEmbed ? ' cc-claragis-embed-content' : ''}`}
+          style={{
+            flex: 1,
+            padding: isEmbed ? '8px 8px' : (carpetaCompact ? '10px 8px' : '16px 14px'),
+            overflowY: (isEmbed && claragisVistaModo === 'verificar' && tabActiva === 'items') ? 'hidden' : 'auto',
+            overflowX: isEmbed ? 'hidden' : undefined,
+            minHeight: 0,
+            display: (isEmbed && claragisVistaModo === 'verificar' && tabActiva === 'items') ? 'flex' : undefined,
+            flexDirection: (isEmbed && claragisVistaModo === 'verificar' && tabActiva === 'items') ? 'column' : undefined,
+          }}
+        >
           {msgMasivo && (
             <div style={{
               marginBottom:'16px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
@@ -9590,7 +9618,69 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* ── TAB ÍTEMS Y REGISTROS (tabla única expandible) ── */}
           {tabActiva === 'items' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:'8px', flex: isEmbed ? 1 : undefined, minHeight: isEmbed ? 0 : undefined }}>
+              {isEmbed && claragisVistaModo === 'verificar' ? (
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <ClaraGisVerificarFicha
+                    t={t}
+                    registros={registrosConItem}
+                    reporte={reporte}
+                    registroId={registroExpandido}
+                    onRegistroChange={(id) => {
+                      setMenuAccionesRegId(null)
+                      setRegistroExpandido(id)
+                    }}
+                    onCambiarModo={(modo) => {
+                      setClaragisVistaModo(modo === 'editar' ? 'editar' : 'verificar')
+                      if (modo === 'editar' && registroExpandido == null && registrosConItem[0]?.id != null) {
+                        setRegistroExpandido(registrosConItem[0].id)
+                      }
+                    }}
+                    estadoMiNivel={estadoMiNivelRegistro}
+                    puedeValidarRapido={puedeValidarRapidoRegistro}
+                    onAprobar={(ids) => {
+                      const elegibles = (ids || []).filter((id) => {
+                        const r = registrosVisibles.find((x) => x.id === id)
+                        return r && puedeValidarRapidoRegistro(r)
+                      })
+                      void ejecutarMasivoSeleccion('Aprobado', null, elegibles)
+                    }}
+                    onPedirComentario={(estado, ids) => {
+                      const elegibles = (ids || []).filter((id) => {
+                        const r = registrosVisibles.find((x) => x.id === id)
+                        return r && puedeValidarRapidoRegistro(r)
+                      })
+                      setPopupMasivo({ estado, idsOverride: elegibles })
+                    }}
+                    ejecutando={ejecutandoMasivo}
+                    nivelesActivos={nivelesActivosTabla}
+                    encabezadosNivel={encPorNivelHoja}
+                    nivelesContrato={nivelesContrato}
+                  />
+                </div>
+              ) : (
+              <>
+              {isEmbed && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+                  <button
+                    type="button"
+                    title="Volver a Verificar (ficha de lectura)"
+                    aria-label="Volver a Verificar"
+                    onClick={() => setClaragisVistaModo('verificar')}
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 10,
+                      border: `1px solid ${t.border}`,
+                      background: t.card || t.bg,
+                      cursor: 'pointer',
+                      fontSize: 18,
+                    }}
+                  >
+                    👁️
+                  </button>
+                </div>
+              )}
               <SicoeReporteItemsTabla
                 t={t}
                 reporte={reporte}
@@ -9681,6 +9771,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   />
                 )}
               />
+              </>
+              )}
             </div>
           )}
 
