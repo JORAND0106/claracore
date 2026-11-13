@@ -9,6 +9,9 @@ import {
   indiceSiguientePendiente,
   fmtCantidadVerificar,
   lineaItemVerificar,
+  puedeMostrarBotonesValidacion,
+  fmtAbscisaCostado,
+  buildSlidesMediaVerificar,
 } from './claraGisVerificarHelpers.js'
 
 describe('clasificarUnidadItem', () => {
@@ -170,5 +173,48 @@ describe('formato ficha', () => {
     assert.match(cant, /25/)
     assert.match(cant, /87/)
     assert.match(cant, /m²/)
+  })
+})
+
+describe('puedeMostrarBotonesValidacion', () => {
+  it('solo No Revisado / Pendiente y validable', () => {
+    const reg = { id: 1, bloqueado: false }
+    assert.equal(
+      puedeMostrarBotonesValidacion(reg, {
+        puedeValidarRapido: () => true,
+        estadoMiNivel: () => 'Aprobado',
+      }),
+      false,
+    )
+    assert.equal(
+      puedeMostrarBotonesValidacion(reg, {
+        puedeValidarRapido: () => true,
+        estadoMiNivel: () => 'No Revisado',
+      }),
+      true,
+    )
+    assert.equal(
+      puedeMostrarBotonesValidacion({ ...reg, bloqueado: true }, {
+        puedeValidarRapido: () => true,
+        estadoMiNivel: () => 'No Revisado',
+      }),
+      false,
+    )
+  })
+})
+
+describe('fmtAbscisaCostado / slides', () => {
+  it('formatea abscisa y arma slides foto+grafico', () => {
+    assert.match(
+      fmtAbscisaCostado({ abs_inicio: '1+200', abs_final: '1+250', margen: 'Izquierdo' }),
+      /1\+200/,
+    )
+    const slides = buildSlidesMediaVerificar(
+      [{ url: 'a.jpg', numero: 1 }],
+      [{ url: 'b.png', numero: 2 }],
+    )
+    assert.equal(slides.length, 2)
+    assert.equal(slides[0].tipo, 'foto')
+    assert.equal(slides[1].tipo, 'grafico')
   })
 })

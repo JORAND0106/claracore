@@ -269,3 +269,66 @@ export function indiceRegistroPorId(regs, registroId) {
   const i = (regs || []).findIndex((r) => r && String(r.id) === String(registroId))
   return i >= 0 ? i : 0
 }
+
+/** ¿Corresponde mostrar ✓/✗? Solo pendiente/no revisado en el nivel del usuario. */
+export function puedeMostrarBotonesValidacion(reg, { puedeValidarRapido, estadoMiNivel } = {}) {
+  if (!reg) return false
+  if (typeof puedeValidarRapido === 'function' && !puedeValidarRapido(reg)) return false
+  if (reg.bloqueado) return false
+  const est = typeof estadoMiNivel === 'function'
+    ? estadoMiNivel(reg)
+    : 'No Revisado'
+  return est === 'No Revisado' || est === 'Pendiente'
+}
+
+/** Abscisa + costado legibles para la ficha. */
+export function fmtAbscisaCostado(reg) {
+  if (!reg) return null
+  const ai = reg.abs_inicio
+  const af = reg.abs_final
+  const margen = String(reg.margen || reg.costado || '').trim()
+  const parts = []
+  const hasAi = ai !== null && ai !== undefined && String(ai).trim() !== ''
+  const hasAf = af !== null && af !== undefined && String(af).trim() !== ''
+  if (hasAi && hasAf && String(ai) !== String(af)) {
+    parts.push(`Abscisa ${ai} → ${af}`)
+  } else if (hasAi || hasAf) {
+    parts.push(`Abscisa ${hasAi ? ai : af}`)
+  }
+  if (margen) parts.push(`Costado ${margen}`)
+  return parts.length ? parts.join(' · ') : null
+}
+
+/**
+ * Slides unificados foto + gráfico para el carrusel Verificar.
+ * @returns {{ url: string, tipo: 'foto'|'grafico', numero: number|null, label: string }[]}
+ */
+export function slidesMediaVerificar(reg) {
+  // Import local lazy via dynamic would break sync tests; callers pass lists.
+  return []
+}
+
+export function buildSlidesMediaVerificar(fotos = [], graficos = []) {
+  const out = []
+  ;(fotos || []).forEach((f, i) => {
+    if (!f?.url) return
+    const n = f.numero != null ? f.numero : i + 1
+    out.push({
+      url: f.url,
+      tipo: 'foto',
+      numero: n,
+      label: `Foto ${n}`,
+    })
+  })
+  ;(graficos || []).forEach((g, i) => {
+    if (!g?.url) return
+    const n = g.numero != null ? g.numero : i + 1
+    out.push({
+      url: g.url,
+      tipo: 'grafico',
+      numero: n,
+      label: `Gráfico ${n}`,
+    })
+  })
+  return out
+}

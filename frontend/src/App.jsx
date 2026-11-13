@@ -178,6 +178,7 @@ import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
 import ClaraGisVerificarFicha from './modules/sicoe-obra/ClaraGisVerificarFicha'
+import { notifyDibujoReporteActualizado } from './modules/sicoe-obra/sicoeDibujoActualizado'
 import SicoePlanillaTuberiaOrigenTab from './modules/sicoe-obra/SicoePlanillaTuberiaOrigenTab'
 import {
   sicoeAutoRegistroNavState,
@@ -7234,14 +7235,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setClaragisVistaModo('verificar')
   }, [isEmbed, reporte?.id, repoProp?.id])
 
-  // ClaraGIS Verificar: anclar un registro para foco de plano al abrir.
-  useEffect(() => {
-    if (!isEmbed || claragisVistaModo !== 'verificar') return
-    if (registroExpandido != null) return
-    const firstId = registrosConItem[0]?.id
-    if (firstId != null) setRegistroExpandido(firstId)
-  }, [isEmbed, claragisVistaModo, registrosConItem, registroExpandido])
-
   // Tabs fijos: portada | sin_asignar | items | (planilla_tuberia si hay vínculo)
   useEffect(() => {
     if (tabActiva === 'portada' || tabActiva === 'sin_asignar' || tabActiva === 'items') return
@@ -10243,11 +10236,21 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             const puntosSync = Array.isArray(patch.puntos)
               ? patch.puntos
               : (Array.isArray(data?.puntos) ? data.puntos : null)
+            // Reemplazo total del dibujo: no conservar geojson/escena/perímetro previos.
+            const dibujoNuevo = Object.prototype.hasOwnProperty.call(patch, 'dibujo_geojson')
+              ? patch.dibujo_geojson
+              : null
+            const escenaNueva = Object.prototype.hasOwnProperty.call(patch, 'dibujo_escena')
+              ? patch.dibujo_escena
+              : null
             setReporte((prev) => ({
               ...prev,
               ...patch,
-              dibujo_geojson: patch.dibujo_geojson ?? prev.dibujo_geojson,
-              dibujo_escena: patch.dibujo_escena ?? prev.dibujo_escena,
+              dibujo_geojson: dibujoNuevo,
+              dibujo_escena: escenaNueva,
+              perimetro_geojson: Object.prototype.hasOwnProperty.call(patch, 'perimetro_geojson')
+                ? patch.perimetro_geojson
+                : null,
               nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id ?? prev.nodo_contenedor_id,
               tiene_dibujo: true,
               ...(puntosSync ? { puntos: puntosSync } : {}),
@@ -10258,10 +10261,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             try {
               propagarReporteGuardado({
                 id: reporte?.id,
-                dibujo_geojson: patch.dibujo_geojson,
+                dibujo_geojson: dibujoNuevo,
+                dibujo_escena: escenaNueva,
+                perimetro_geojson: Object.prototype.hasOwnProperty.call(patch, 'perimetro_geojson')
+                  ? patch.perimetro_geojson
+                  : null,
                 tiene_dibujo: true,
                 nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id,
                 ...(puntosSync ? { puntos: puntosSync } : {}),
+              })
+            } catch { /* noop */ }
+            try {
+              notifyDibujoReporteActualizado({
+                contratoId: contrato_id,
+                reporteId: reporte?.id,
+                dibujo_geojson: dibujoNuevo,
+                dibujo_escena: escenaNueva,
+                puntos: puntosSync,
+                tiene_dibujo: true,
               })
             } catch { /* noop */ }
             const cmd = data?.mensaje_cmd
