@@ -5,10 +5,16 @@
  * 1) registro_id (huella por ítem)
  * 2) reporte_id (dibujo del botón Dibujar en la cabecera del reporte)
  *
- * Solo deja dibujos de registros/reportes filtrados; el resto aparece como punto sin dibujo.
+ * ClaraGIS pinta el dibujo REAL (entidad / línea / polígono). No convierte
+ * reportes con dibujo en marcadores LOD ni en puntos GPS.
  */
 
+import { colorDibujoPorItems } from './sicoeItemColores.js'
+
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
+
+/** Radio visual (m) cuando el dibujo solo trae un Point sin polígono de entidad. */
+const RADIO_PUNTO_DIBUJO_M = 5
 
 function idSet(values) {
   const s = new Set()
@@ -31,53 +37,56 @@ function weightColorExpr() {
   ]
 }
 
-function centroidePolygon(geom) {
-  const ring = geom?.coordinates?.[0]
-  if (!Array.isArray(ring) || !ring.length) return null
-  let sx = 0
-  let sy = 0
-  let n = 0
-  for (const pt of ring) {
-    if (!Array.isArray(pt) || pt.length < 2) continue
-    sx += Number(pt[0])
-    sy += Number(pt[1])
-    n += 1
+function pointToCirclePolygon(coords, radiusM = RADIO_PUNTO_DIBUJO_M) {
+  if (!Array.isArray(coords) || coords.length < 2) return null
+  const lng = Number(coords[0])
+  const lat = Number(coords[1])
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
+  const dLat = radiusM / 111320
+  const cosLat = Math.cos((lat * Math.PI) / 180)
+  const dLng = radiusM / (111320 * (Math.abs(cosLat) < 1e-6 ? 1e-6 : cosLat))
+  const ring = []
+  const steps = 20
+  for (let i = 0; i <= steps; i += 1) {
+    const a = (i / steps) * Math.PI * 2
+    ring.push([lng + dLng * Math.cos(a), lat + dLat * Math.sin(a)])
   }
-  if (!n) return null
-  return [sx / n, sy / n]
+  return { type: 'Polygon', coordinates: [ring] }
 }
 
-function pushLodSiNodo(dibujos, f, baseProps) {
-  const ht = String(baseProps.huella_tipo || baseProps.dibujo_tipo || '').toLowerCase()
-  if ((ht === 'nodo' || ht === 'punto') && f.geometry?.type === 'Polygon') {
-    const center = centroidePolygon(f.geometry)
-    if (center) {
-      dibujos.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: center },
-        properties: {
-          ...baseProps,
-          is_lod_marker: 1,
-        },
-      })
-    }
-  } else if ((ht === 'nodo' || ht === 'punto') && f.geometry?.type === 'Point') {
-    const last = dibujos[dibujos.length - 1]
-    if (last) {
-      dibujos[dibujos.length - 1] = {
-        ...last,
-        properties: {
-          ...last.properties,
-          is_lod_marker: 1,
-        },
-      }
+/**
+ * Normaliza geometría para pintar fill+line en Mapbox:
+ * - Polygon / MultiPolygon / LineString / MultiLineString: intactos
+ * - Point: disco pequeño (nunca marcador LOD)
+ */
+export function geometriaDibujoParaPlano(geom, props = {}) {
+  if (!geom || !geom.type) return null
+  if (geom.type === 'Point') {
+    const poly = pointToCirclePolygon(geom.coordinates)
+    if (!poly) return null
+    return {
+      geometry: poly,
+      propsExtra: {
+        huella_tipo: props.huella_tipo || props.dibujo_tipo || 'nodo',
+        dibujo_tipo: props.dibujo_tipo || props.huella_tipo || 'nodo',
+        geometria_origen: 'point_expandido',
+      },
     }
   }
+  if (
+    geom.type === 'Polygon'
+    || geom.type === 'MultiPolygon'
+    || geom.type === 'LineString'
+    || geom.type === 'MultiLineString'
+  ) {
+    return { geometry: geom, propsExtra: {} }
+  }
+  return null
 }
 
 /**
  * @param {object} heatFc FeatureCollection de puntos del mapa de calor (ya filtrados)
- * @param {object[]} allHuellas features de /huellas o de analisis.dibujos
+ * @param {object[]} allHuellas features de analisis.dibujos (o /huellas)
  * @returns {{ dibujosFc, puntosSinDibujoFc, meta }}
  */
 export function construirCalorSobreDibujos(heatFc, allHuellas) {
@@ -141,6 +150,23 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
   const matchedRepIds = new Set()
   const dibujos = []
   const dibujosSeen = new Set()
+  /** Reportes que ya tienen polígono/línea real → no expandir Point redundante */
+  const repConGeomAreaOLinea = new Set()
+
+  // Primera pasada: detectar polígonos/líneas por reporte
+  for (const f of allHuellas || []) {
+    if (!f?.geometry) continue
+    const p = f.properties || {}
+    if (p.is_lod_marker === 1) continue
+    const repId = p.reporte_id != null ? String(p.reporte_id) : ''
+    const gt = f.geometry.type
+    if (
+      repId
+      && (gt === 'Polygon' || gt === 'MultiPolygon' || gt === 'LineString' || gt === 'MultiLineString')
+    ) {
+      repConGeomAreaOLinea.add(repId)
+    }
+  }
 
   for (const f of allHuellas || []) {
     if (!f?.geometry) continue
@@ -156,6 +182,17 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
     const matchByRep = !matchByReg && repId && byReporte.has(repId)
     if (!matchByReg && !matchByRep) continue
 
+    // Si el reporte ya trae entidad/línea/polígono, omitir Point GPS del mismo FC
+    if (f.geometry.type === 'Point' && repId && repConGeomAreaOLinea.has(repId)) {
+      if (matchByReg) matchedRegIds.add(rid)
+      else if (matchByRep) {
+        matchedRepIds.add(repId)
+        const peers = byReporte.get(repId)?.registroIds
+        if (peers) for (const peerId of peers) matchedRegIds.add(peerId)
+      }
+      continue
+    }
+
     const info = matchByReg
       ? (byRegistro.get(rid) || { weight: 0.05, costo: 0, props: {} })
       : (byReporte.get(repId) || { weight: 0.05, costo: 0, props: {} })
@@ -170,18 +207,28 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
       }
     }
 
-    // Evitar duplicar la misma geometría del reporte si llega por huella + dibujo
-    const geomKey = `${repId || rid}|${p.dibujo_parte ?? ''}|${f.geometry?.type}|${JSON.stringify(f.geometry?.coordinates)?.slice(0, 80)}`
+    const norm = geometriaDibujoParaPlano(f.geometry, p)
+    if (!norm) continue
+
+    const geomKey = `${repId || rid}|${p.dibujo_parte ?? ''}|${norm.geometry.type}|${JSON.stringify(norm.geometry.coordinates)?.slice(0, 80)}`
     if (dibujosSeen.has(geomKey)) continue
     dibujosSeen.add(geomKey)
+
+    const itemNumero = p.item_numero ?? info.props?.item_numero
+    const weight = Number(p.weight) > 0 ? Number(p.weight) : info.weight
+    const costo = Number(p.costo_directo) > 0 ? Number(p.costo_directo) : info.costo
+    const colorItem = colorDibujoPorItems(itemNumero)
 
     const baseProps = {
       ...p,
       ...info.props,
-      weight: Number(p.weight) > 0 ? Number(p.weight) : info.weight,
-      costo_directo: Number(p.costo_directo) > 0 ? Number(p.costo_directo) : info.costo,
+      ...norm.propsExtra,
+      weight,
+      costo_directo: costo,
+      item_numero: itemNumero,
+      color: colorItem,
+      color_item: colorItem,
       reporte_id: p.reporte_id ?? info.props?.reporte_id,
-      // Conservar tipo original (número) del huella/dibujo cuando exista
       registro_id: matchByReg
         ? (p.registro_id != null ? p.registro_id : (p.id != null ? p.id : rid))
         : (p.registro_id ?? info.props?.id),
@@ -191,10 +238,10 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
       sin_dibujo: 0,
     }
     dibujos.push({
-      ...f,
+      type: 'Feature',
+      geometry: norm.geometry,
       properties: baseProps,
     })
-    pushLodSiNodo(dibujos, f, baseProps)
   }
 
   const puntosSin = []
@@ -214,14 +261,11 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
     })
   }
 
-  // Contar dibujos “reales” (sin LOD markers)
-  const nDibujos = dibujos.filter((f) => f?.properties?.is_lod_marker !== 1).length
-
   return {
     dibujosFc: { type: 'FeatureCollection', features: dibujos },
     puntosSinDibujoFc: { type: 'FeatureCollection', features: puntosSin },
     meta: {
-      con_dibujo: nDibujos,
+      con_dibujo: dibujos.length,
       sin_dibujo: puntosSin.length,
       reportes_filtrados: repIds.size,
       total_filtrados: heatFeats.length,
@@ -229,4 +273,4 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
   }
 }
 
-export { weightColorExpr, EMPTY_FC as EMPTY_FC_CALOR }
+export { weightColorExpr, EMPTY_FC as EMPTY_FC_CALOR, pointToCirclePolygon }
