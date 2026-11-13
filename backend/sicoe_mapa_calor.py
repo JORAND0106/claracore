@@ -204,6 +204,11 @@ def build_dibujos_mapa_calor(
                     pass
 
         if _reporte_geojson_tiene_dibujo(dg):
+            peer0 = peers[0]
+            item_peer = next(
+                (p.get("item_numero") for p in peers if p.get("item_numero")),
+                peer0.get("item_numero"),
+            )
             for feat in features_desde_dibujo_reporte(dg, rid_rep):
                 props = dict(feat.get("properties") or {})
                 props.update({
@@ -212,9 +217,11 @@ def build_dibujos_mapa_calor(
                     "tiene_dibujo": 1,
                     "color_mode": "calor",
                     "sin_dibujo": 0,
+                    "item_numero": props.get("item_numero") or item_peer,
                     # ancla al primer registro filtrado (click / foco)
-                    "registro_id": peers[0].get("id"),
-                    "id": peers[0].get("id"),
+                    "registro_id": peer0.get("id"),
+                    "id": peer0.get("id"),
+                    "numero_registro": peer0.get("numero_registro"),
                 })
                 features.append({**feat, "properties": props})
             continue
@@ -251,8 +258,10 @@ def build_dibujos_mapa_calor(
                     "tiene_dibujo": 1,
                     "color_mode": "calor",
                     "sin_dibujo": 0,
+                    "item_numero": props.get("item_numero") or peer.get("item_numero"),
                     "registro_id": peer.get("id"),
                     "id": peer.get("id"),
+                    "numero_registro": peer.get("numero_registro"),
                 })
                 features.append({**feat, "properties": props})
 

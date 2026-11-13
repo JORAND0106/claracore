@@ -863,34 +863,30 @@ export default function ModuloPlanoMapaCalor({
         id: 'sicoe-huellas-fill',
         type: 'fill',
         source: 'sicoe-huellas',
+        // Entidad / polígono / nodo-bloque: siempre visibles (no LOD por zoom).
         filter: [
           'all',
           ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
           ['!=', ['get', 'is_lod_marker'], 1],
-          ['any',
-            ['all',
-              ['!=', ['get', 'huella_tipo'], 'nodo'],
-              ['!=', ['get', 'huella_tipo'], 'punto'],
-            ],
-            ['>=', ['zoom'], 16],
-          ],
         ],
         paint: {
+          // Calor sobre el dibujo; trazo usa color estándar del ítem.
           'fill-color': [
             'case',
             ['==', ['get', 'color_mode'], 'calor'],
             weightColorExpr(),
-            [
-              'case',
-              ['==', ['get', 'precision'], 'precisa'],
-              '#2563eb',
-              '#94a3b8',
-            ],
+            ['coalesce', ['get', 'color'], '#2563eb'],
           ],
           'fill-opacity': [
             'case',
             ['==', ['get', 'color_mode'], 'calor'],
-            0.55,
+            [
+              'interpolate', ['linear'],
+              ['coalesce', ['get', 'weight'], 0.05],
+              0, 0.35,
+              0.5, 0.55,
+              1, 0.72,
+            ],
             [
               'case',
               ['==', ['get', 'precision'], 'precisa'],
@@ -906,23 +902,24 @@ export default function ModuloPlanoMapaCalor({
         source: 'sicoe-huellas',
         filter: ['!=', ['get', 'is_lod_marker'], 1],
         paint: {
+          // Contorno / trazo: color estándar del ítem; calor en el relleno.
           'line-color': [
-            'case',
-            ['==', ['get', 'color_mode'], 'calor'],
-            weightColorExpr(),
+            'coalesce',
+            ['get', 'color'],
             [
               'case',
-              ['==', ['get', 'precision'], 'precisa'],
+              ['==', ['get', 'color_mode'], 'calor'],
+              weightColorExpr(),
               '#1d4ed8',
-              '#64748b',
             ],
           ],
           'line-width': [
             'case',
             ['==', ['get', 'color_mode'], 'calor'],
-            2.4,
+            2.6,
             1.4,
           ],
+          'line-opacity': 0.95,
           'line-dasharray': [
             'case',
             ['==', ['get', 'precision'], 'aproximada'],
@@ -931,23 +928,19 @@ export default function ModuloPlanoMapaCalor({
           ],
         },
       })
+      // Capa residual (por compatibilidad); ClaraGIS ya no emite is_lod_marker=1.
       map.addLayer({
         id: 'sicoe-huellas-nodo-lod',
         type: 'circle',
         source: 'sicoe-huellas',
         filter: ['==', ['get', 'is_lod_marker'], 1],
-        maxzoom: 16.5,
+        layout: { visibility: 'none' },
         paint: {
-          'circle-color': [
-            'case',
-            ['==', ['get', 'color_mode'], 'calor'],
-            weightColorExpr(),
-            '#2563eb',
-          ],
+          'circle-color': weightColorExpr(),
           'circle-radius': 7,
           'circle-stroke-width': 1.6,
           'circle-stroke-color': '#fff',
-          'circle-opacity': 0.95,
+          'circle-opacity': 0,
         },
       })
       map.addSource('sicoe-nodos', { type: 'geojson', data: EMPTY_FC })
@@ -1088,8 +1081,12 @@ export default function ModuloPlanoMapaCalor({
     if (map.getLayer('sicoe-calor-puntos')) map.setLayoutProperty('sicoe-calor-puntos', 'visibility', visPts)
     if (map.getLayer('sicoe-calor-puntos-halo')) map.setLayoutProperty('sicoe-calor-puntos-halo', 'visibility', visPts)
     if (map.getLayer('sicoe-eje-line')) map.setLayoutProperty('sicoe-eje-line', 'visibility', visEje)
-    for (const id of ['sicoe-huellas-fill', 'sicoe-huellas-line', 'sicoe-huellas-nodo-lod']) {
+    for (const id of ['sicoe-huellas-fill', 'sicoe-huellas-line']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visHuellas)
+    }
+    // Nunca mostrar marcadores LOD: el dibujo real (entidad/línea/polígono) es la única representación.
+    if (map.getLayer('sicoe-huellas-nodo-lod')) {
+      map.setLayoutProperty('sicoe-huellas-nodo-lod', 'visibility', 'none')
     }
     for (const id of ['sicoe-nodos-fill', 'sicoe-nodos-line', 'sicoe-nodos-point']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visNodos)
