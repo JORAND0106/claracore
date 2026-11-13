@@ -552,14 +552,14 @@ export const REPORTE_ERRORES_JERARQUIA = {
   },
 
   semaforo: {
-    label: 'Plano Semáforo',
+    label: 'ClaraGIS',
     ubicaciones: {
       mapa: {
         label: 'Mapa',
         sectores: {
           capas: 'Capas polígonos y etiquetas',
           navegacion: 'Controles de navegación Mapbox',
-          detalle: 'Clic en polígono → panel detalle',
+          detalle: 'Clic en dibujo → ventana incrustada del reporte',
         },
       },
       etiquetas: {

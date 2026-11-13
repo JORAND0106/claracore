@@ -955,6 +955,40 @@ select.cc-dashboard-acta-select--light option {
   margin-top: 8px;
 }
 
+.cc-sicoe-filtro-chips--una-linea {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.cc-sicoe-filtro-chip--compacto {
+  padding: 3px 8px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.cc-sicoe-carpeta-shell--embed {
+  min-height: 0 !important;
+}
+
+.cc-sicoe-carpeta-overlay--embed .cc-sicoe-carpeta-content {
+  min-height: 0;
+}
+
+@media (max-width: 767px) {
+  .cc-claragis-root {
+    height: calc(100dvh - 112px) !important;
+    min-height: 280px;
+  }
+
+  .cc-sicoe-carpeta-shell--embed {
+    width: min(100%, 100%) !important;
+    max-height: 55% !important;
+    min-height: 38% !important;
+  }
+}
+
 .cc-sicoe-filtro-chips--suave {
   gap: 5px;
   margin-top: 6px;
