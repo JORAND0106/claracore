@@ -3300,6 +3300,73 @@ def _sicoe_reporte_geojson_tiene_dibujo(dg) -> bool:
     return True
 
 
+# Columnas de grilla Por reporte (sin GeoJSON). Se omiten las que PostgREST
+# reporte como ausentes (PGRST204), p. ej. valor_total en algunos entornos.
+_SICOE_GRILLA_COLS_OMIT: Set[str] = set()
+_SICOE_GRILLA_HEAVY_KEYS = frozenset({
+    "dibujo_geojson", "perimetro_geojson", "dibujo_escena",
+})
+_SICOE_GRILLA_COLS_PARTS = (
+    "id", "numero_reporte", "created_at", "updated_at", "estado",
+    "capitulo", "tramo", "calzada", "abs_inicio", "abs_final",
+    "nodo_ini", "nodo_fin", "subcontratista_id", "acta_rpo_id",
+    "semana_id", "contrato_id", "descripcion_actividad", "creado_por",
+    "enlace_soporte", "pk_id_id",
+)
+
+
+def _sicoe_grilla_cols_select() -> str:
+    parts = [c for c in _SICOE_GRILLA_COLS_PARTS if c not in _SICOE_GRILLA_COLS_OMIT]
+    return ", ".join(parts) + ", subcontratistas(razon_social)"
+
+
+def _sicoe_strip_reporte_pesado(row: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return row
+    for k in _SICOE_GRILLA_HEAVY_KEYS:
+        row.pop(k, None)
+    return row
+
+
+def _sicoe_fetch_so_reportes_grilla(q_factory) -> List[Dict[str, Any]]:
+    """Ejecuta select liviano; ante PGRST204 omite la columna o cae a * sin GeoJSON."""
+    cols = _sicoe_grilla_cols_select()
+    last_err: Optional[BaseException] = None
+    for _ in range(10):
+        try:
+            return list(supabase_execute(lambda c=cols: q_factory(c), retries=1) or [])
+        except Exception as e:
+            last_err = e
+            missing = _logs_pgrst_unknown_column(e) or _so_registros_pgrst_unknown_column(e)
+            if not missing:
+                break
+            # Quitar de la lista fija o del string actual
+            if missing in _SICOE_GRILLA_COLS_PARTS:
+                _SICOE_GRILLA_COLS_OMIT.add(missing)
+            # También cubrir nombres embebidos en el select string
+            if missing in cols.split(", "):
+                _SICOE_GRILLA_COLS_OMIT.add(missing)
+            new_cols = _sicoe_grilla_cols_select()
+            if new_cols == cols:
+                break
+            cols = new_cols
+    try:
+        rows = list(
+            supabase_execute(
+                lambda: q_factory("*, subcontratistas(razon_social)"),
+                retries=1,
+            )
+            or []
+        )
+        for r in rows:
+            _sicoe_strip_reporte_pesado(r)
+        return rows
+    except Exception:
+        if last_err is not None:
+            raise last_err
+        raise
+
+
 def _sicoe_batch_reportes_con_dibujo(ids: List[int]) -> set:
     """
     Marca reportes con dibujo sin descargar el GeoJSON completo (grilla <2s).
@@ -22314,19 +22381,15 @@ def buscar_reportes_obra(
     # para garantizar que todos los IDs se filtren correctamente.
     _IDS_CHUNK_SIZE = 200
 
-    def _build_q(ids_chunk=None, lite: bool = False):
+    def _build_q(ids_chunk=None, lite: bool = False, cols: Optional[str] = None):
         # Grilla: omitir GeoJSON/escena (megabytes) — flags van por enrich liviano.
-        _GRILLA_COLS = (
-            "id, numero_reporte, created_at, updated_at, estado, capitulo, tramo, calzada, "
-            "abs_inicio, abs_final, nodo_ini, nodo_fin, subcontratista_id, acta_rpo_id, "
-            "semana_id, contrato_id, descripcion_actividad, creado_por, enlace_soporte, "
-            "pk_id_id, valor_total, subcontratistas(razon_social)"
-        )
-        cols = (
-            "id, numero_reporte, created_at"
-            if lite
-            else _GRILLA_COLS
-        )
+        # Sin valor_total (no existe en todos los entornos → PGRST204 → 500).
+        if cols is None:
+            cols = (
+                "id, numero_reporte, created_at"
+                if lite
+                else _sicoe_grilla_cols_select()
+            )
         q = supabase.table("so_reportes").select(cols).eq("contrato_id", contrato_id)
         if numero_reporte is not None:
             q = q.eq("numero_reporte", numero_reporte)
@@ -22405,10 +22468,10 @@ def buscar_reportes_obra(
             for j in range(0, len(page_ids_ordered), _IDS_CHUNK_SIZE):
                 chk = page_ids_ordered[j : j + _IDS_CHUNK_SIZE]
 
-                def _qfull_ids(c=chk):
-                    return _build_q(c).execute().data
+                def _factory(cols, c=chk):
+                    return _build_q(c, cols=cols).execute().data
 
-                batch = supabase_execute(_qfull_ids) or []
+                batch = _sicoe_fetch_so_reportes_grilla(_factory)
                 by_id = {r["id"]: r for r in batch}
                 for rid_one in chk:
                     if rid_one in by_id:
@@ -22442,25 +22505,26 @@ def buscar_reportes_obra(
         for j in range(0, len(page_ids_ordered), _IDS_CHUNK_SIZE):
             chk = page_ids_ordered[j : j + _IDS_CHUNK_SIZE]
 
-            def _qfull_ids(c=chk):
-                return _build_q(c).execute().data
+            def _factory(cols, c=chk):
+                return _build_q(c, cols=cols).execute().data
 
-            batch = supabase_execute(_qfull_ids) or []
+            batch = _sicoe_fetch_so_reportes_grilla(_factory)
             by_id = {r["id"]: r for r in batch}
             for rid_one in chk:
                 if rid_one in by_id:
                     rows.append(by_id[rid_one])
     elif not rows:
-        q_page = (
-            _build_q(None)
-            .order("created_at", desc=True, nullsfirst=False)
-            .order("numero_reporte", desc=True)
-        )
+        def _factory_page(cols):
+            return (
+                _build_q(None, cols=cols)
+                .order("created_at", desc=True, nullsfirst=False)
+                .order("numero_reporte", desc=True)
+                .range(offset, offset + limit)
+                .execute()
+                .data
+            )
 
-        def _qrange_pg():
-            return q_page.range(offset, offset + limit).execute().data
-
-        pg = supabase_execute(_qrange_pg) or []
+        pg = _sicoe_fetch_so_reportes_grilla(_factory_page)
         hay_mas = len(pg) > limit
         rows = pg[:limit]
 
