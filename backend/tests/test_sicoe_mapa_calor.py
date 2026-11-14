@@ -233,7 +233,10 @@ def test_build_dibujos_prioriza_dibujo_del_reporte_sobre_huella():
     dibujos = build_dibujos_mapa_calor(registros, reporte_map, heat_features=heat["features"])
     assert len(dibujos["features"]) == 1
     assert dibujos["features"][0]["properties"]["origen"] == "reporte_dibujo"
-    assert dibujos["features"][0]["properties"]["weight"] == 1.0  # max del reporte
+    # CD del dibujo = suma de registros filtrados (800+400); weight relativo al máx del filtro (800).
+    assert dibujos["features"][0]["properties"]["costo_directo"] == 1200
+    assert dibujos["features"][0]["properties"]["weight"] == 1.0
+    assert dibujos["features"][0]["properties"]["calor_agregado"] == "suma_registros_filtrados"
     assert dibujos["meta"]["reportes_con_dibujo"] == 1
 
 

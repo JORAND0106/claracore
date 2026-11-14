@@ -434,8 +434,10 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
       : (p.id != null ? String(p.id) : '')
     const repId = p.reporte_id != null ? String(p.reporte_id) : ''
 
-    const matchByReg = rid && regIds.has(rid)
-    const matchByRep = !matchByReg && repId && byReporte.has(repId)
+    // Dibujo de cabecera del reporte: agregar por reporte (suma CD filtrado), no por un solo registro ancla.
+    const esDibujoReporte = (p.origen === 'reporte_dibujo') || p.calor_agregado === 'suma_registros_filtrados'
+    const matchByRep = repId && byReporte.has(repId) && (esDibujoReporte || !(rid && regIds.has(rid)))
+    const matchByReg = !matchByRep && rid && regIds.has(rid)
     if (!matchByReg && !matchByRep) continue
 
     if (f.geometry.type === 'Point' && repId && repConGeomAreaOLinea.has(repId)) {
@@ -448,9 +450,9 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
       continue
     }
 
-    const info = matchByReg
-      ? (byRegistro.get(rid) || { weight: 0.05, costo: 0, props: {} })
-      : (byReporte.get(repId) || { weight: 0.05, costo: 0, props: {} })
+    const info = matchByRep
+      ? (byReporte.get(repId) || { weight: 0.05, costo: 0, props: {} })
+      : (byRegistro.get(rid) || { weight: 0.05, costo: 0, props: {} })
 
     if (matchByReg) {
       matchedRegIds.add(rid)
@@ -470,8 +472,13 @@ export function construirCalorSobreDibujos(heatFc, allHuellas) {
     dibujosSeen.add(geomKey)
 
     const itemNumero = p.item_numero ?? info.props?.item_numero
-    const weight = Number(p.weight) > 0 ? Number(p.weight) : info.weight
-    const costo = Number(p.costo_directo) > 0 ? Number(p.costo_directo) : info.costo
+    // Preferir suma agregada del conjunto filtrado (backend o byReporte) sobre un ancla suelto.
+    const weight = matchByRep
+      ? (Number(info.weight) > 0 ? Number(info.weight) : (Number(p.weight) > 0 ? Number(p.weight) : 0.05))
+      : (Number(p.weight) > 0 ? Number(p.weight) : info.weight)
+    const costo = matchByRep
+      ? (Number(info.costo) > 0 ? Number(info.costo) : (Number(p.costo_directo) || 0))
+      : (Number(p.costo_directo) > 0 ? Number(p.costo_directo) : info.costo)
     const colorItem = colorDibujoPorItems(itemNumero)
 
     const baseProps = {

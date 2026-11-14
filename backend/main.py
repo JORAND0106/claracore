@@ -5781,14 +5781,17 @@ def _sicoe_analisis_aplicar_filtro_actas(
     mapa_calor: bool,
 ):
     """
-    Panel /analisis (KPI): filtra por acta en la *línea* (totales alineados a SQL de validación).
-    Mapa de calor: filtra por acta en la *cabecera* del reporte (mismo alcance que la grilla
-    y que la vista de detalle, donde las coords GPS suelen vivir en so_reportes).
+    Panel /analisis, grilla y mapa de calor ClaraGIS: misma semántica de Acta RPO —
+    filtra por so_registros.acta_rpo_id (línea / registro).
+
+    Un reporte aparece en el plano si al menos un registro cumple el filtro; el calor
+    y los conteos usan solo esos registros. `mapa_calor` se conserva por compatibilidad
+    de firma; ya no cambia el alcance del filtro.
     """
     if not acta_rpo_ids:
         return q
-    if mapa_calor:
-        return _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), acta_rpo_ids)
+    # contrato_id / mapa_calor: firma estable para callers y tests; alcance = línea.
+    _ = (contrato_id, mapa_calor)
     return _sicoe_registros_q_filtrar_actas_linea(q, acta_rpo_ids)
 
 
@@ -25133,6 +25136,21 @@ def analisis_registros_obra(
             if not reporte_ids_base:
                 return _empty
 
+    # Editado por: misma unión cabecera ∪ línea que /reportes/buscar (grilla).
+    if _editado_por_ids_ana:
+        try:
+            ids_ed = set(_sicoe_collect_reporte_ids_editado_por(contrato_id, _editado_por_ids_ana))
+            if not ids_ed:
+                return _empty
+            if reporte_ids_base is not None:
+                reporte_ids_base = [x for x in reporte_ids_base if x in ids_ed]
+            else:
+                reporte_ids_base = list(ids_ed)
+            if not reporte_ids_base:
+                return _empty
+        except Exception:
+            return _empty
+
     # Abscisa: filtrar en la propia línea (evita .in_(reporte_id) gigante que rompe PostgREST / panel vacío)
     _abs_ai = abs_inicio
     _abs_af = abs_final
@@ -25232,8 +25250,7 @@ def analisis_registros_obra(
                 q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
                 if _uid_fu is not None:
                     q = _sicoe_aplicar_filtro_usuario_registros_q(q, _uid_fu, _uacc_fu)
-            if _editado_por_ids_ana:
-                q = _sicoe_aplicar_filtro_editado_por_registros_q(q, _editado_por_ids_ana)
+            # Editado por ya restringió reporte_ids_base (cabecera ∪ línea); no filtrar otra vez solo por línea.
             if _sub_restricto_ana:
                 q = q.eq("nivel2_objeto_pago_sub", True)
             return q

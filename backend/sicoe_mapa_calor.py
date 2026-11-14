@@ -182,26 +182,36 @@ def build_dibujos_mapa_calor(
         dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
         peers = regs_by_rep.get(rep_key) or [r]
 
-        # Peso = máximo de los registros filtrados del reporte (calor relativo)
-        max_w = 0.05
-        max_costo = 0.0
+        # CD del dibujo = suma de los registros filtrados del reporte (no el total del reporte).
+        sum_costo = 0.0
         for peer in peers:
             pid = peer.get("id")
             hp = heat_by_reg.get(str(pid)) if pid is not None else None
-            if hp:
+            if hp and hp.get("costo_directo") is not None:
                 try:
-                    max_w = max(max_w, float(hp.get("weight") or 0.05))
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    max_costo = max(max_costo, float(hp.get("costo_directo") or 0))
+                    sum_costo += float(hp.get("costo_directo") or 0)
                 except (TypeError, ValueError):
                     pass
             else:
                 try:
-                    max_costo = max(max_costo, float(peer.get("costo_directo") or 0))
+                    sum_costo += float(peer.get("costo_directo") or 0)
                 except (TypeError, ValueError):
                     pass
+        # Intensidad relativa al máximo del conjunto filtrado (misma base que heat points).
+        max_costo_filtro = 0.0
+        for hp in heat_by_reg.values():
+            try:
+                max_costo_filtro = max(max_costo_filtro, float(hp.get("costo_directo") or 0))
+            except (TypeError, ValueError):
+                pass
+        if max_costo_filtro <= 0:
+            max_costo_filtro = sum_costo
+        if max_costo_filtro > 0:
+            sum_w = min(1.0, max(0.0, sum_costo / max_costo_filtro))
+        else:
+            sum_w = 0.05
+        if sum_w <= 0 and sum_costo >= 0:
+            sum_w = 0.05
 
         if _reporte_geojson_tiene_dibujo(dg):
             peer0 = peers[0]
@@ -212,16 +222,17 @@ def build_dibujos_mapa_calor(
             for feat in features_desde_dibujo_reporte(dg, rid_rep):
                 props = dict(feat.get("properties") or {})
                 props.update({
-                    "weight": max_w,
-                    "costo_directo": max_costo,
+                    "weight": round(sum_w, 6),
+                    "costo_directo": sum_costo,
                     "tiene_dibujo": 1,
                     "color_mode": "calor",
                     "sin_dibujo": 0,
                     "item_numero": props.get("item_numero") or item_peer,
-                    # ancla al primer registro filtrado (click / foco)
+                    # Ancla de click: primer registro filtrado; el calor usa la suma del set.
                     "registro_id": peer0.get("id"),
                     "id": peer0.get("id"),
                     "numero_registro": peer0.get("numero_registro"),
+                    "calor_agregado": "suma_registros_filtrados",
                 })
                 features.append({**feat, "properties": props})
             continue

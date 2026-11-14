@@ -514,13 +514,23 @@ export default function ModuloPlanoMapaCalor({
     if (!sicoeBundleTieneCriteriosUsuario(bundle)) {
       setPuntosFc(EMPTY_FC)
       setMeta(null)
+      setLeyendaVista({ con_dibujo: 0, sin_dibujo: 0 })
       setBusquedaRealizada(false)
+      allHuellasRef.current = []
+      heatFcRef.current = EMPTY_FC
       aplicarPuntosAlMapa(EMPTY_FC)
       return
     }
     if (abortRef.current) abortRef.current.abort()
     const ac = new AbortController()
     abortRef.current = ac
+    // Sin restos de la consulta anterior mientras llega la nueva.
+    setPuntosFc(EMPTY_FC)
+    setMeta(null)
+    setLeyendaVista({ con_dibujo: 0, sin_dibujo: 0 })
+    allHuellasRef.current = []
+    heatFcRef.current = EMPTY_FC
+    aplicarPuntosAlMapa(EMPTY_FC)
     setBuscando(true)
     setErrorMsg(null)
     try {
@@ -1394,7 +1404,10 @@ export default function ModuloPlanoMapaCalor({
   const nPts = puntosFc?.features?.length || 0
   const sinCoords = meta?.sin_coords || 0
   const totalRegs = meta?.total_registros || 0
-  const enPlano = (leyendaVista.con_dibujo || 0) + (leyendaVista.sin_dibujo || 0)
+  // Conteos alineados al conjunto filtrado (registros), no a features densificadas.
+  const enPlano = totalRegs > 0
+    ? Math.max(0, (meta?.con_coords ?? 0) + (meta?.sin_coords ?? 0))
+    : ((leyendaVista.con_dibujo || 0) + (leyendaVista.sin_dibujo || 0))
 
   const filtroTip = esMesaValidador
     ? 'Filtros — al entrar se carga No Revisado de su nivel. Sin filtros el plano muestra eje y abscisado para ubicarse.'
