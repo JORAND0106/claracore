@@ -23,6 +23,15 @@ describe('Dibujar desde ClaraGIS = misma herramienta portaleada', () => {
     assert.match(src, /document\.body/)
   })
 
+  it('SicoeEsquemasReporteModal no redeclara ui (rompe vite build)', () => {
+    const src = read('modules/sicoe-obra/SicoeEsquemasReporteModal.jsx')
+    assert.match(src, /createPortal\(modal, document\.body\)/)
+    // Un solo `const ui` de tema; el JSX del portal se llama `modal`.
+    const decls = src.match(/\bconst ui\b/g) || []
+    assert.equal(decls.length, 1)
+    assert.match(src, /\bconst modal = \(/)
+  })
+
   it('EsquemaEditorModal se porta a body (fuera del embed)', () => {
     const src = read('components/esquema/EsquemaEditorModal.jsx')
     assert.match(src, /createPortal\(overlay, document\.body\)/)
