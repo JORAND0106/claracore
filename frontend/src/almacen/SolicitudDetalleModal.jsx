@@ -201,7 +201,7 @@ export default function SolicitudDetalleModal({
   const puedeGenerarOc = Boolean(permisos?.puedeGenerarOc) && puedeValidar
   const motivoAprobacion = motivoAprobacionNoDisponible(sol, permisos)
   const puedeEnviar = puedeEnviarSolicitudAlmacen(permisos, sol)
-  const verEconomicos = permisos?.verEconomicos !== false
+  const verEconomicos = permisos?.verEconomicos === true
   const resumenProveedores = useMemo(
     () => resumenProveedoresSolicitud(items),
     [items],

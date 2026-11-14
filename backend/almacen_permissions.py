@@ -165,12 +165,17 @@ def require_regenerar_pdf_oc(current_user) -> None:
 
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
     """
-    Cifras en dinero para gerencia contratista, el rol Administrativo y Desarrollador.
+    Cifras en dinero: únicamente Contratista Gerencial, Administrativo y Desarrollador.
     Desarrollador las ve siempre, sin depender de los permisos por función.
-    Los demás roles ven solo cantidades.
+    Roles operativos (campo / contratista / gerencial operativo) nunca ven dinero.
     """
+    if rol_excluido_almacen(current_user):
+        return False
     if es_desarrollador_almacen(current_user):
         return True
+    # Defensa: cualquier rol «operativo» queda fuera, aunque el nombre mezcle otras palabras.
+    if "operativo" in _norm_rol(current_user):
+        return False
     if es_gerencia_contratista_rol(current_user):
         return True
     if es_rol_administrativo(current_user):

@@ -309,7 +309,7 @@ export default function SolicitudRevisionModal({
         <OcProveedoresModal
           grupos={gruposOc.grupos}
           sinInsumoCount={gruposOc.sinInsumoCount}
-          verEconomicos={permisos?.verEconomicos !== false}
+          verEconomicos={permisos?.verEconomicos === true}
           busy={busy}
           onCancel={() => !busy && setSelectorOc(false)}
           onConfirm={(ids) => abrirNotificarOc(ids)}
@@ -335,7 +335,7 @@ export default function SolicitudRevisionModal({
         <ExpedienteCompraModal
           ocId={expedienteOcId}
           token={token}
-          verEconomicos={permisos?.verEconomicos !== false}
+          verEconomicos={permisos?.verEconomicos === true}
           puedeReenviar={Boolean(permisos?.puedeGenerarOc)}
           onClose={() => {
             setExpedienteOcId(null)

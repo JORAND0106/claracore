@@ -67,7 +67,12 @@ export default function ActaGestionObraPanel({
     [usuario, contratoId],
   )
   const puedeAbrirSolicitud = Boolean(accesoAlm?.verSolicitudesInventario)
-  const permisosAlm = accesoAlm?.permisos || null
+  const permisosAlm = accesoAlm?.permisos
+    ? {
+        ...accesoAlm.permisos,
+        verEconomicos: accesoAlm.verEconomicos === true,
+      }
+    : null
 
   useEffect(() => {
     if (snap?.fecha_desde && snap?.fecha_hasta) {

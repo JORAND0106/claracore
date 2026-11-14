@@ -80,6 +80,8 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   const puedeVerCatalogo = Boolean(permisos?.verCatalogo)
   const puedeVerEntsal = Boolean(permisos?.verEntradasSalidas)
   const puedeVerSolicitudesInventario = Boolean(permisos?.verSolicitudesInventario)
+  /** Resumen = vista económica por proveedor: solo quien puede ver dinero. */
+  const puedeVerResumen = Boolean(permisos?.verEconomicos === true)
 
   const theme = useMemo(() => t || {
     primary: ui.accent,
@@ -130,9 +132,10 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
 
   const visibleTabs = useMemo(() => TABS.filter((tb) => {
     if (tb.ambito === 'entsal') return puedeVerEntsal
+    if (tb.id === 'resumen') return puedeVerSolicitudesInventario && puedeVerResumen
     if (tb.ambito === 'almacen') return puedeVerSolicitudesInventario
     return false
-  }), [puedeVerEntsal, puedeVerSolicitudesInventario])
+  }), [puedeVerEntsal, puedeVerSolicitudesInventario, puedeVerResumen])
 
   // Tab / vista inicial según permisos (sin mezclar ámbitos).
   // Accesos legacy a Tab Salidas → Entradas + popup historial «Salió material».
@@ -313,7 +316,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           onDataLoaded={onDataLoaded}
         />
       )}
-      {tab === 'resumen' && puedeVerSolicitudesInventario && (
+      {tab === 'resumen' && puedeVerSolicitudesInventario && puedeVerResumen && (
         <ResumenProveedoresPanel
           permisos={solicitudesPerms}
           t={t}

@@ -268,7 +268,7 @@ export default function InventarioPanel({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
-  const verEconomicos = permisos?.verEconomicos !== false
+  const verEconomicos = permisos?.verEconomicos === true
   const puedeExportar = Boolean(permisos?.exportar)
   const [exportBusy, setExportBusy] = useState(false)
 
