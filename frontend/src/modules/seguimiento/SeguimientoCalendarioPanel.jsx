@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { API_BASE, apiFetchSignal } from '../../apiBase'
 import ActaEditor from './ActaEditor'
+import BitacoraEditorErrorBoundary from './BitacoraEditorErrorBoundary'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
 import SeguimientoCalendario from './SeguimientoCalendario'
 import { accesoBitacora } from './bitacoraPermisos'
@@ -253,23 +254,29 @@ export default function SeguimientoCalendarioPanel({
       )}
 
       {bitacoraEditor && (
-        <BitacoraEntradaEditor
-          key={`bit-${bitacoraEditor.modo}-${bitacoraEditor.entrada?.id || 'new'}-${bitacoraEditor.fechaInicial || ''}`}
+        <BitacoraEditorErrorBoundary
           t={t}
-          api={api}
-          usuario={usuario}
-          token={token}
-          contratoId={cid}
-          permisos={permisosBitacora}
-          modo={bitacoraEditor.modo}
-          entrada={bitacoraEditor.entrada}
-          fechaInicial={bitacoraEditor.fechaInicial}
-          viewportCompact={viewportCompact}
+          resetKey={`bit-${bitacoraEditor.modo}-${bitacoraEditor.entrada?.id || 'new'}-${bitacoraEditor.fechaInicial || ''}`}
           onClose={closeBitacoraEditor}
-          onSaved={() => {
-            setLocalKey((n) => n + 1)
-          }}
-        />
+        >
+          <BitacoraEntradaEditor
+            key={`bit-${bitacoraEditor.modo}-${bitacoraEditor.entrada?.id || 'new'}-${bitacoraEditor.fechaInicial || ''}`}
+            t={t}
+            api={api}
+            usuario={usuario}
+            token={token}
+            contratoId={cid}
+            permisos={permisosBitacora}
+            modo={bitacoraEditor.modo}
+            entrada={bitacoraEditor.entrada}
+            fechaInicial={bitacoraEditor.fechaInicial}
+            viewportCompact={viewportCompact}
+            onClose={closeBitacoraEditor}
+            onSaved={() => {
+              setLocalKey((n) => n + 1)
+            }}
+          />
+        </BitacoraEditorErrorBoundary>
       )}
     </>
   )

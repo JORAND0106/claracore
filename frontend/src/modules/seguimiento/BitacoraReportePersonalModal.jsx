@@ -1,28 +1,30 @@
 /**
- * Resumen Cruzado Tramo × Empresa: tablas separadas Personal / Maquinaria / Materiales.
- * PNG → copiar al portapapeles (mismo mecanismo del informe Dashboard 9 a.m.).
+ * Resumen completo de Bitácora → tablas por sección → PNG al portapapeles.
+ * Si el contenido es muy alto, se parte en varias imágenes (copiar parte a parte).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Copy, Download } from 'lucide-react'
+import { Check, Copy } from 'lucide-react'
+import CcConfirmModal from '../../components/CcConfirmModal'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import {
   copyInformePeriodicoBlob,
-  downloadInformePeriodicoBlob,
   isClipboardImageAvailable,
 } from '../../utils/informePeriodicoCapture'
 import {
-  buildResumenTramoEmpresa,
+  buildResumenBitacoraCompleto,
   formatearFechaReportePersonal,
   formatoCeldaCantidad,
-  nombreArchivoResumenPng,
   resolveLogosPorEmpresa,
   tituloReportePersonal,
 } from './bitacoraReportePersonal'
 
+/** Altura máxima por parte (px CSS) para no saturar html-to-image / portapapeles. */
+const MAX_CHUNK_HEIGHT_PX = 4200
+
 const CAPTURE_OPTS = {
-  pixelRatio: Math.min(3, typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2),
+  pixelRatio: Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2),
   backgroundColor: '#ffffff',
   cacheBust: true,
 }
@@ -97,7 +99,7 @@ function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
   if (!matrix?.hasData) return null
   const { tramos, empresas, cells, rowTotals, colTotals, grandTotal } = matrix
   return (
-    <div style={{ marginBottom: 18 }}>
+    <div data-resumen-chunk style={{ marginBottom: 18 }}>
       <h2 style={{
         margin: '0 0 8px',
         fontSize: 14,
@@ -119,62 +121,50 @@ function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
         >
           <thead>
             <tr>
-              <th
-                style={{
-                  textAlign: 'left',
-                  padding: '8px 10px',
-                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                  borderBottom: `1px solid ${border}`,
-                  borderRight: `1px solid ${border}`,
-                  color: muted,
-                  fontWeight: 800,
-                  fontSize: 11,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.03em',
-                  position: 'sticky',
-                  left: 0,
-                  zIndex: 1,
-                }}
-              >
+              <th style={{
+                padding: '8px 10px',
+                textAlign: 'left',
+                borderBottom: `2px solid ${border}`,
+                borderRight: `1px solid ${border}`,
+                background: t?.inputBg || '#f1f5f9',
+                color: muted,
+                fontWeight: 700,
+                position: 'sticky',
+                left: 0,
+                zIndex: 1,
+              }}>
                 Tramo
               </th>
               {empresas.map((emp) => (
                 <th
                   key={emp.key}
                   style={{
-                    padding: '8px 8px 6px',
-                    background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                    borderBottom: `1px solid ${border}`,
+                    padding: '8px 6px',
+                    textAlign: 'center',
+                    borderBottom: `2px solid ${border}`,
                     borderRight: `1px solid ${border}`,
+                    background: t?.inputBg || '#f1f5f9',
                     color: text,
                     fontWeight: 700,
-                    fontSize: 11,
-                    verticalAlign: 'bottom',
-                    minWidth: 80,
+                    minWidth: 72,
                   }}
                 >
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                     <EmpresaLogo url={emp.logo_url} nombre={emp.nombre} t={t} />
-                    <span style={{ textAlign: 'center', lineHeight: 1.2 }}>{emp.nombre}</span>
+                    <span style={{ fontSize: 10, lineHeight: 1.2, maxWidth: 88, wordBreak: 'break-word' }}>
+                      {emp.nombre}
+                    </span>
                   </div>
                 </th>
               ))}
-              <th
-                style={{
-                  padding: '8px 10px',
-                  background: t?.primary ? `${t.primary}22` : '#cfe7f5',
-                  borderBottom: `1px solid ${border}`,
-                  color: text,
-                  fontWeight: 800,
-                  fontSize: 11,
-                  textAlign: 'center',
-                }}
-              >
+              <th style={{
+                padding: '8px 10px',
+                textAlign: 'center',
+                borderBottom: `2px solid ${border}`,
+                background: t?.inputBg || '#e2e8f0',
+                color: text,
+                fontWeight: 800,
+              }}>
                 Total
               </th>
             </tr>
@@ -182,25 +172,22 @@ function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
           <tbody>
             {tramos.map((tr) => (
               <tr key={tr.key}>
-                <td
-                  style={{
-                    padding: '8px 10px',
-                    borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
-                    borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                    color: text,
-                    fontWeight: 700,
-                    whiteSpace: 'nowrap',
-                    background: '#fff',
-                    position: 'sticky',
-                    left: 0,
-                    zIndex: 1,
-                  }}
-                >
+                <td style={{
+                  padding: '8px 10px',
+                  borderBottom: `1px solid ${border}`,
+                  borderRight: `1px solid ${border}`,
+                  fontWeight: 700,
+                  color: text,
+                  whiteSpace: 'nowrap',
+                  background: '#fff',
+                  position: 'sticky',
+                  left: 0,
+                }}>
                   {tr.nombre}
                 </td>
                 {empresas.map((emp) => (
                   <CeldaCantidad
-                    key={`${tr.key}-${emp.key}`}
+                    key={emp.key}
                     value={cells[tr.key]?.[emp.key]}
                     t={t}
                   />
@@ -209,28 +196,20 @@ function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
               </tr>
             ))}
             <tr>
-              <td
-                style={{
-                  padding: '8px 10px',
-                  borderTop: `2px solid ${border}`,
-                  borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                  color: text,
-                  fontWeight: 800,
-                  background: t?.inputBg || '#f8fafc',
-                  position: 'sticky',
-                  left: 0,
-                  zIndex: 1,
-                }}
-              >
+              <td style={{
+                padding: '8px 10px',
+                borderTop: `2px solid ${border}`,
+                borderRight: `1px solid ${border}`,
+                fontWeight: 800,
+                color: text,
+                background: t?.inputBg || '#f8fafc',
+                position: 'sticky',
+                left: 0,
+              }}>
                 Total
               </td>
               {empresas.map((emp) => (
-                <CeldaCantidad
-                  key={`tot-${emp.key}`}
-                  value={colTotals[emp.key]}
-                  t={t}
-                  strong
-                />
+                <CeldaCantidad key={emp.key} value={colTotals[emp.key]} t={t} strong />
               ))}
               <CeldaCantidad value={grandTotal} t={t} strong />
             </tr>
@@ -243,19 +222,9 @@ function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
 
 function TablaMateriales({ matrix, t, border, text, muted }) {
   if (!matrix?.hasData) return null
-  const { rows = [], colTotals = {}, grandTotal = {} } = matrix
-  const thBase = {
-    padding: '8px 10px',
-    background: t?.primary ? `${t.primary}14` : '#ddeff8',
-    borderBottom: `1px solid ${border}`,
-    borderRight: `1px solid ${border}`,
-    fontWeight: 800,
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: '0.03em',
-  }
+  const { rows, colTotals } = matrix
   return (
-    <div style={{ marginBottom: 8 }}>
+    <div data-resumen-chunk style={{ marginBottom: 18 }}>
       <h2 style={{
         margin: '0 0 8px',
         fontSize: 14,
@@ -263,7 +232,7 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
         color: text,
         fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
       }}>
-        Materiales
+        Materiales (ingresos / salidas)
       </h2>
       <div style={{ overflowX: 'auto' }}>
         <table
@@ -272,65 +241,48 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
             borderCollapse: 'collapse',
             fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
             fontSize: 12,
-            minWidth: 360,
+            minWidth: 320,
           }}
         >
           <thead>
             <tr>
-              <th style={{ ...thBase, textAlign: 'left', color: muted }}>
-                Tipo de material
-              </th>
-              <th style={{ ...thBase, textAlign: 'left', color: muted }}>
-                Tramo
-              </th>
-              <th style={{ ...thBase, textAlign: 'center', color: text }}>
-                Ingreso
-              </th>
-              <th style={{ ...thBase, textAlign: 'center', color: text }}>
-                Salida
-              </th>
-              <th
-                style={{
-                  ...thBase,
-                  borderRight: 'none',
-                  background: t?.primary ? `${t.primary}22` : '#cfe7f5',
-                  textAlign: 'center',
-                  color: text,
-                }}
-              >
-                Total
-              </th>
+              {['Tipo de material', 'Tramo', 'Ingreso', 'Salida'].map((h) => (
+                <th
+                  key={h}
+                  style={{
+                    padding: '8px 10px',
+                    textAlign: h === 'Tipo de material' || h === 'Tramo' ? 'left' : 'center',
+                    borderBottom: `2px solid ${border}`,
+                    background: t?.inputBg || '#f1f5f9',
+                    color: muted,
+                    fontWeight: 700,
+                  }}
+                >
+                  {h}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.key}>
-                <td
-                  style={{
-                    padding: '8px 10px',
-                    borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
-                    borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                    color: text,
-                    fontWeight: 700,
-                  }}
-                >
+                <td style={{
+                  padding: '8px 10px',
+                  borderBottom: `1px solid ${border}`,
+                  color: text,
+                  fontWeight: 600,
+                }}>
                   {r.tipo}
                 </td>
-                <td
-                  style={{
-                    padding: '8px 10px',
-                    borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
-                    borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                    color: text,
-                    fontWeight: 600,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
+                <td style={{
+                  padding: '8px 10px',
+                  borderBottom: `1px solid ${border}`,
+                  color: text,
+                }}>
                   {r.tramo}
                 </td>
                 <CeldaCantidad value={r.ingreso} t={t} />
                 <CeldaCantidad value={r.salida} t={t} />
-                <CeldaCantidad value={(r.ingreso || 0) + (r.salida || 0)} t={t} strong />
               </tr>
             ))}
             <tr>
@@ -339,9 +291,8 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
                 style={{
                   padding: '8px 10px',
                   borderTop: `2px solid ${border}`,
-                  borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                  color: text,
                   fontWeight: 800,
+                  color: text,
                   background: t?.inputBg || '#f8fafc',
                 }}
               >
@@ -349,11 +300,6 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
               </td>
               <CeldaCantidad value={colTotals.ingreso} t={t} strong />
               <CeldaCantidad value={colTotals.salida} t={t} strong />
-              <CeldaCantidad
-                value={(grandTotal.ingreso || 0) + (grandTotal.salida || 0)}
-                t={t}
-                strong
-              />
             </tr>
           </tbody>
         </table>
@@ -362,8 +308,216 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
   )
 }
 
+function TablaKv({ titulo, rows, t, border, text, muted }) {
+  if (!rows?.length) return null
+  return (
+    <div data-resumen-chunk style={{ marginBottom: 18 }}>
+      <h2 style={{
+        margin: '0 0 8px',
+        fontSize: 14,
+        fontWeight: 800,
+        color: text,
+        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+      }}>
+        {titulo}
+      </h2>
+      <table
+        style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+          fontSize: 12,
+        }}
+      >
+        <tbody>
+          {rows.map((r) => (
+            <tr key={`${r.label}-${r.value}`}>
+              <td style={{
+                padding: '7px 10px',
+                borderBottom: `1px solid ${border}`,
+                color: muted,
+                fontWeight: 700,
+                width: '36%',
+                background: t?.inputBg || '#f8fafc',
+              }}>
+                {r.label}
+              </td>
+              <td style={{
+                padding: '7px 10px',
+                borderBottom: `1px solid ${border}`,
+                color: text,
+              }}>
+                {r.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function TablaGenerica({ titulo, columns, rows, t, border, text, muted }) {
+  if (!rows?.length) return null
+  return (
+    <div data-resumen-chunk style={{ marginBottom: 18 }}>
+      <h2 style={{
+        margin: '0 0 8px',
+        fontSize: 14,
+        fontWeight: 800,
+        color: text,
+        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+      }}>
+        {titulo}
+      </h2>
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+            fontSize: 12,
+            minWidth: 280,
+          }}
+        >
+          <thead>
+            <tr>
+              {(columns || []).map((c) => (
+                <th
+                  key={c.key}
+                  style={{
+                    padding: '8px 10px',
+                    textAlign: 'left',
+                    borderBottom: `2px solid ${border}`,
+                    background: t?.inputBg || '#f1f5f9',
+                    color: muted,
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, idx) => (
+              <tr key={idx}>
+                {(columns || []).map((c) => (
+                  <td
+                    key={c.key}
+                    style={{
+                      padding: '7px 10px',
+                      borderBottom: `1px solid ${border}`,
+                      color: text,
+                      verticalAlign: 'top',
+                      maxWidth: c.key === 'resumen' || c.key === 'texto' || c.key === 'observacion'
+                        ? 320
+                        : undefined,
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {r[c.key] != null && r[c.key] !== '' ? String(r[c.key]) : '—'}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function renderSeccion(sec, { t, border, text, muted }) {
+  if (!sec?.hasData) return null
+  if (sec.kind === 'tramo_empresa') {
+    return (
+      <TablaEmpresaTramo
+        key={sec.id}
+        tituloSeccion={sec.title}
+        matrix={sec}
+        t={t}
+        border={border}
+        text={text}
+        muted={muted}
+      />
+    )
+  }
+  if (sec.kind === 'materiales') {
+    return (
+      <TablaMateriales
+        key={sec.id}
+        matrix={sec}
+        t={t}
+        border={border}
+        text={text}
+        muted={muted}
+      />
+    )
+  }
+  if (sec.kind === 'kv') {
+    return (
+      <TablaKv
+        key={sec.id}
+        titulo={sec.title}
+        rows={sec.rows}
+        t={t}
+        border={border}
+        text={text}
+        muted={muted}
+      />
+    )
+  }
+  return (
+    <TablaGenerica
+      key={sec.id}
+      titulo={sec.title}
+      columns={sec.columns}
+      rows={sec.rows}
+      t={t}
+      border={border}
+      text={text}
+      muted={muted}
+    />
+  )
+}
+
+async function waitImages(node) {
+  const imgs = [...node.querySelectorAll('img')]
+  await Promise.all(imgs.map((img) => (
+    img.complete ? Promise.resolve() : new Promise((res) => {
+      img.onload = img.onerror = () => res()
+    })
+  )))
+}
+
+/**
+ * Parte nodos [data-resumen-chunk] en grupos cuya altura acumulada
+ * no supera MAX_CHUNK_HEIGHT_PX (conserva orden y no omite secciones).
+ */
+function planChunks(root) {
+  const chunks = [...root.querySelectorAll('[data-resumen-chunk]')]
+  if (!chunks.length) return [[root]]
+  const groups = []
+  let current = []
+  let height = 0
+  for (const el of chunks) {
+    const h = el.offsetHeight || 0
+    if (current.length && height + h > MAX_CHUNK_HEIGHT_PX) {
+      groups.push(current)
+      current = []
+      height = 0
+    }
+    current.push(el)
+    height += h
+  }
+  if (current.length) groups.push(current)
+  return groups
+}
+
 export default function BitacoraReportePersonalModal({
-  open,
+  open = false,
   onClose,
   t,
   fecha,
@@ -371,14 +525,25 @@ export default function BitacoraReportePersonalModal({
   usos = [],
   materiales = [],
   rrhhCatalogo = [],
+  eventos = [],
+  clima = {},
+  horaInicio = '',
+  cuerpoHtml = '',
+  imagenes = [],
+  elaboradoPor = '',
   contratoId,
   token,
   contratoMeta = {},
 }) {
+  const border = t?.border || '#bae6fd'
+  const text = t?.text || '#0f2942'
+  const muted = t?.textMuted || '#4a7fa5'
+
   const [empresasOpts, setEmpresasOpts] = useState([])
   const [pngBusy, setPngBusy] = useState(false)
-  const [pngError, setPngError] = useState('')
   const [pngCopied, setPngCopied] = useState(false)
+  const [aviso, setAviso] = useState(null)
+  const [partQueue, setPartQueue] = useState(null)
   const captureRef = useRef(null)
   const copiedTimer = useRef(null)
 
@@ -404,6 +569,14 @@ export default function BitacoraReportePersonalModal({
     if (copiedTimer.current) clearTimeout(copiedTimer.current)
   }, [])
 
+  useEffect(() => {
+    if (!open) {
+      setPartQueue(null)
+      setAviso(null)
+      setPngCopied(false)
+    }
+  }, [open])
+
   const logosByEmpresaKey = useMemo(
     () => resolveLogosPorEmpresa({
       empresasOpciones: empresasOpts,
@@ -413,14 +586,23 @@ export default function BitacoraReportePersonalModal({
   )
 
   const resumen = useMemo(
-    () => buildResumenTramoEmpresa({
+    () => buildResumenBitacoraCompleto({
       asistencia,
       usos,
       materiales,
       rrhhCatalogo,
       logosByEmpresaKey,
+      eventos,
+      clima,
+      horaInicio,
+      cuerpoHtml,
+      imagenes,
+      elaboradoPor,
     }),
-    [asistencia, usos, materiales, rrhhCatalogo, logosByEmpresaKey],
+    [
+      asistencia, usos, materiales, rrhhCatalogo, logosByEmpresaKey,
+      eventos, clima, horaInicio, cuerpoHtml, imagenes, elaboradoPor,
+    ],
   )
 
   const titulo = tituloReportePersonal(fecha)
@@ -428,69 +610,135 @@ export default function BitacoraReportePersonalModal({
   const numero = String(contratoMeta?.numero || '').trim()
   const objeto = String(contratoMeta?.objeto || '').trim()
   const proyecto = String(contratoMeta?.contratista || '').trim()
-  const vacio = !resumen.personal.hasData
-    && !resumen.maquinaria.hasData
-    && !resumen.materiales.hasData
+  const vacio = !resumen.hasAnyData
   const clipboardOk = isClipboardImageAvailable()
 
-  const generarPngBlob = useCallback(async () => {
-    const node = captureRef.current
-    if (!node || typeof window === 'undefined') return null
-    const imgs = [...node.querySelectorAll('img')]
-    await Promise.all(imgs.map((img) => (
-      img.complete ? Promise.resolve() : new Promise((res) => {
-        img.onload = img.onerror = () => res()
-      })
-    )))
+  const markCopied = useCallback(() => {
+    setPngCopied(true)
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
+    copiedTimer.current = setTimeout(() => setPngCopied(false), 2500)
+  }, [])
+
+  const captureNodeBlob = useCallback(async (node) => {
+    if (!node) return null
+    await waitImages(node)
     const { toBlob } = await import('html-to-image')
     const blob = await toBlob(node, CAPTURE_OPTS)
     if (!blob) throw new Error('No se pudo generar la imagen')
     return blob
   }, [])
 
+  const copiarBlob = useCallback(async (blob) => {
+    if (!clipboardOk) {
+      throw new Error(
+        'Este navegador o dispositivo no permite copiar imágenes al portapapeles. Pruebe en Chrome/Edge de escritorio o pegue desde otra captura.',
+      )
+    }
+    await copyInformePeriodicoBlob(blob)
+  }, [clipboardOk])
+
+  const construirPartes = useCallback(async () => {
+    const root = captureRef.current
+    if (!root) return []
+    await waitImages(root)
+    const groups = planChunks(root)
+    if (groups.length <= 1) {
+      const blob = await captureNodeBlob(root)
+      return blob ? [blob] : []
+    }
+
+    const { toBlob } = await import('html-to-image')
+    const blobs = []
+    const header = root.querySelector('[data-resumen-header]')
+    for (let i = 0; i < groups.length; i += 1) {
+      const wrap = document.createElement('div')
+      wrap.style.cssText = 'padding:16px;background:#fff;color:#0f2942;width:920px;font-family:system-ui,sans-serif;'
+      if (header) wrap.appendChild(header.cloneNode(true))
+      const partLabel = document.createElement('div')
+      partLabel.style.cssText = 'font-size:11px;color:#64748b;margin:0 0 10px;font-weight:700;'
+      partLabel.textContent = `Parte ${i + 1} de ${groups.length}`
+      wrap.appendChild(partLabel)
+      for (const el of groups[i]) {
+        wrap.appendChild(el.cloneNode(true))
+      }
+      document.body.appendChild(wrap)
+      try {
+        await waitImages(wrap)
+        const blob = await toBlob(wrap, CAPTURE_OPTS)
+        if (blob) blobs.push(blob)
+      } finally {
+        wrap.remove()
+      }
+    }
+    return blobs
+  }, [captureNodeBlob])
+
   const copiarPng = useCallback(async () => {
     setPngBusy(true)
-    setPngError('')
     setPngCopied(false)
+    setAviso(null)
+    setPartQueue(null)
     try {
-      const blob = await generarPngBlob()
-      if (!blob) return
-      if (clipboardOk) {
-        await copyInformePeriodicoBlob(blob)
-        setPngCopied(true)
-        if (copiedTimer.current) clearTimeout(copiedTimer.current)
-        copiedTimer.current = setTimeout(() => setPngCopied(false), 2500)
-      } else {
-        downloadInformePeriodicoBlob(blob, nombreArchivoResumenPng(fecha))
-        setPngError('Portapapeles no disponible: se descargó el PNG')
+      const blobs = await construirPartes()
+      if (!blobs.length) return
+      await copiarBlob(blobs[0])
+      markCopied()
+      if (blobs.length > 1) {
+        setPartQueue({ blobs, index: 0 })
+        setAviso({
+          tipo: 'info',
+          titulo: 'Resumen en varias partes',
+          mensaje: `El resumen es largo: se partió en ${blobs.length} imágenes. La parte 1 ya está en el portapapeles. Puede pegarla ahora y luego copiar la siguiente.`,
+        })
       }
     } catch (err) {
-      setPngError(err?.message || 'No se pudo copiar la imagen')
+      setAviso({
+        tipo: 'warn',
+        titulo: 'No se pudo copiar el resumen',
+        mensaje: err?.message || 'No se pudo copiar la imagen al portapapeles.',
+      })
     } finally {
       setPngBusy(false)
     }
-  }, [fecha, clipboardOk, generarPngBlob])
+  }, [construirPartes, copiarBlob, markCopied])
 
-  const descargarPng = useCallback(async () => {
+  const copiarSiguienteParte = useCallback(async () => {
+    if (!partQueue) return
+    const next = partQueue.index + 1
+    if (next >= partQueue.blobs.length) {
+      setPartQueue(null)
+      setAviso(null)
+      return
+    }
     setPngBusy(true)
-    setPngError('')
-    setPngCopied(false)
     try {
-      const blob = await generarPngBlob()
-      if (!blob) return
-      downloadInformePeriodicoBlob(blob, nombreArchivoResumenPng(fecha))
+      await copiarBlob(partQueue.blobs[next])
+      markCopied()
+      const last = next >= partQueue.blobs.length - 1
+      setPartQueue(last ? null : { ...partQueue, index: next })
+      setAviso(last
+        ? {
+          tipo: 'success',
+          titulo: 'Partes copiadas',
+          mensaje: `Se copió la última parte (${next + 1} de ${partQueue.blobs.length}). Ya puede pegarla.`,
+        }
+        : {
+          tipo: 'info',
+          titulo: 'Siguiente parte lista',
+          mensaje: `Parte ${next + 1} de ${partQueue.blobs.length} copiada al portapapeles. Péguela y continue con la siguiente si aplica.`,
+        })
     } catch (err) {
-      setPngError(err?.message || 'No se pudo descargar el PNG')
+      setAviso({
+        tipo: 'warn',
+        titulo: 'No se pudo copiar la parte',
+        mensaje: err?.message || 'No se pudo copiar la imagen al portapapeles.',
+      })
     } finally {
       setPngBusy(false)
     }
-  }, [fecha, generarPngBlob])
+  }, [partQueue, copiarBlob, markCopied])
 
   if (!open) return null
-
-  const border = t?.border || '#bae6fd'
-  const text = t?.text || '#0f2942'
-  const muted = t?.textMuted || '#4a7fa5'
 
   const overlay = (
     <div
@@ -548,13 +796,10 @@ export default function BitacoraReportePersonalModal({
                 Imagen copiada
               </span>
             ) : null}
-            {pngError ? (
-              <span style={{ fontSize: 11, color: '#b91c1c', maxWidth: 260 }}>{pngError}</span>
-            ) : null}
           </div>
           <button
             type="button"
-            onClick={() => void descargarPng()}
+            onClick={() => void copiarPng()}
             disabled={pngBusy || vacio}
             style={{
               padding: '6px 12px',
@@ -570,33 +815,8 @@ export default function BitacoraReportePersonalModal({
               alignItems: 'center',
               gap: 6,
             }}
-            title="Descargar resumen en PNG"
-            aria-label="Descargar PNG"
-          >
-            <Download size={14} aria-hidden />
-            {pngBusy ? 'Generando…' : 'Descargar PNG'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void copiarPng()}
-            disabled={pngBusy || vacio}
-            style={{
-              padding: '6px 12px',
-              borderRadius: 8,
-              border: `1px solid ${border}`,
-              background: t?.inputBg || '#f8fafc',
-              color: text,
-              fontWeight: 700,
-              fontSize: 12,
-              cursor: pngBusy || vacio ? 'not-allowed' : 'pointer',
-              opacity: pngBusy || vacio ? 0.65 : 1,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-            title={clipboardOk
-              ? 'Copia el resumen al portapapeles como imagen PNG'
-              : 'Portapapeles no disponible: descargará el PNG'}
+            title="Copia el resumen al portapapeles como imagen PNG"
+            aria-label="Copiar imagen PNG"
           >
             <Copy size={14} aria-hidden />
             {pngBusy ? 'Generando…' : (pngCopied ? 'Copiado' : 'Copiar imagen')}
@@ -619,7 +839,6 @@ export default function BitacoraReportePersonalModal({
           </button>
         </div>
 
-        {/* Vista previa = fuente del PNG (título principal una sola vez aquí). */}
         <div
           ref={captureRef}
           style={{
@@ -628,72 +847,88 @@ export default function BitacoraReportePersonalModal({
             color: text,
           }}
         >
-          <h1 style={{
-            margin: '0 0 4px',
-            fontSize: 17,
-            color: text,
-            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-          }}>
-            Resumen por tramo y empresa · {fechaFmt || fecha || '—'}
-          </h1>
-          <div style={{
-            fontSize: 12,
-            color: muted,
-            marginBottom: 14,
-            lineHeight: 1.4,
-            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-          }}>
-            {numero ? <>Contrato {numero}</> : null}
-            {numero && (proyecto || objeto) ? ' · ' : null}
-            {proyecto || null}
-            {proyecto && objeto ? ' — ' : null}
-            {objeto || null}
-            {!numero && !proyecto && !objeto ? 'Bitácora de obra' : null}
+          <div data-resumen-header>
+            <h1 style={{
+              margin: '0 0 4px',
+              fontSize: 17,
+              color: text,
+              fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+            }}>
+              Resumen de bitácora · {fechaFmt || fecha || '—'}
+            </h1>
+            <div style={{
+              fontSize: 12,
+              color: muted,
+              marginBottom: 14,
+              lineHeight: 1.4,
+              fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+            }}>
+              {numero ? <>Contrato {numero}</> : null}
+              {numero && (proyecto || objeto) ? ' · ' : null}
+              {proyecto || null}
+              {proyecto && objeto ? ' — ' : null}
+              {objeto || null}
+              {!numero && !proyecto && !objeto ? 'Bitácora de obra' : null}
+            </div>
           </div>
 
           {vacio ? (
-            <div style={{
-              padding: 16,
-              borderRadius: 10,
-              border: `1px dashed ${t?.border || '#cbd5e1'}`,
-              color: muted,
-              fontSize: 13,
-            }}>
-              No hay personal, maquinaria ni materiales registrados para este día.
+            <div
+              data-resumen-chunk
+              style={{
+                padding: 16,
+                borderRadius: 10,
+                border: `1px dashed ${t?.border || '#cbd5e1'}`,
+                color: muted,
+                fontSize: 13,
+              }}
+            >
+              No hay información registrada en las secciones de este día.
             </div>
           ) : (
-            <>
-              <TablaEmpresaTramo
-                tituloSeccion="Personal"
-                matrix={resumen.personal}
-                t={t}
-                border={border}
-                text={text}
-                muted={muted}
-              />
-              <TablaEmpresaTramo
-                tituloSeccion="Maquinaria"
-                matrix={resumen.maquinaria}
-                t={t}
-                border={border}
-                text={text}
-                muted={muted}
-              />
-              <TablaMateriales
-                matrix={resumen.materiales}
-                t={t}
-                border={border}
-                text={text}
-                muted={muted}
-              />
-            </>
+            (resumen.sections || []).map((sec) => renderSeccion(sec, { t, border, text, muted }))
           )}
         </div>
       </div>
     </div>
   )
 
-  return typeof document !== 'undefined'
+  const portal = typeof document !== 'undefined'
     ? createPortal(overlay, document.body)
     : overlay
+
+  const haySiguiente = Boolean(partQueue && partQueue.index + 1 < partQueue.blobs.length)
+
+  return (
+    <>
+      {portal}
+      {aviso && createPortal(
+        <CcConfirmModal
+          theme={t}
+          titulo={aviso.titulo}
+          tipo={aviso.tipo || 'info'}
+          confirmar={haySiguiente ? 'Copiar siguiente parte' : 'Entendido'}
+          cancelar={haySiguiente ? 'Cerrar' : undefined}
+          soloConfirmar={!haySiguiente}
+          zIndex={100090}
+          procesando={pngBusy}
+          onConfirm={() => {
+            if (haySiguiente) {
+              void copiarSiguienteParte()
+            } else {
+              setAviso(null)
+              if (!haySiguiente) setPartQueue(null)
+            }
+          }}
+          onCancel={() => {
+            setAviso(null)
+            setPartQueue(null)
+          }}
+        >
+          <p style={{ margin: 0, lineHeight: 1.45 }}>{aviso.mensaje}</p>
+        </CcConfirmModal>,
+        document.body,
+      )}
+    </>
+  )
 }

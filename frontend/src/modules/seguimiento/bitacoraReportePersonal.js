@@ -1,10 +1,15 @@
 /**
- * Resumen cruzado Tramo × Empresa (Bitácora Diario):
- * tablas separadas de Personal, Maquinaria y (si aplica) Materiales.
- * Empresa de maquinaria = empresa del operador vía catálogo RRHH.
+ * Resumen completo de Bitácora (diario + eventos embebidos):
+ * tablas por sección (Personal, Maquinaria, Materiales/vales, Eventos,
+ * Recorridos, Actividades, Clima, Observaciones, Adjuntos, …).
+ * Personal/Maquinaria se agrupan Tramo × Empresa; el resto en tablas propias.
+ * Nuevas secciones se registran en SECTION_BUILDERS sin tocar el botón.
  */
 
+import { labelClima, labelEventoTipo } from './bitacoraConstants.js'
 import { labelTramoBitacora, normalizeTramoValue } from './bitacoraTramoHelpers.js'
+import { htmlToPlainText, isRichTextEmpty } from './richTextUtils.js'
+import { visitantesFromDetalle } from './visitantesEventoHelpers.js'
 import {
   EMPRESA_SIN_NOMBRE,
   esEtiquetaAdministrativoExcluida,
@@ -372,8 +377,8 @@ export function buildReportePersonalPorEmpresa(opts = {}) {
 export function tituloReportePersonal(fecha) {
   const f = String(fecha || '').trim()
   return f
-    ? `Resumen por tramo y empresa · ${f}`
-    : 'Resumen por tramo y empresa'
+    ? `Resumen de bitácora · ${f}`
+    : 'Resumen de bitácora'
 }
 
 /** Formatea ISO date a dd/mm/yyyy si aplica. */
@@ -384,10 +389,364 @@ export function formatearFechaReportePersonal(fecha) {
   return `${m[3]}/${m[2]}/${m[1]}`
 }
 
-/** Nombre de archivo PNG sugerido. */
+/** Nombre de archivo PNG sugerido (fallback interno; el flujo principal solo copia). */
 export function nombreArchivoResumenPng(fecha) {
   const f = String(fecha || '').trim().slice(0, 10) || 'dia'
-  return `resumen-tramo-empresa-${f}.png`
+  return `resumen-bitacora-${f}.png`
+}
+
+function textoCorto(htmlOrText, max = 280) {
+  const plain = htmlToPlainText(htmlOrText || '').replace(/\s+/g, ' ').trim()
+  if (!plain) return ''
+  if (plain.length <= max) return plain
+  return `${plain.slice(0, max - 1)}…`
+}
+
+function buildMaterialesDetalle(materiales = []) {
+  const rows = []
+  for (const m of Array.isArray(materiales) ? materiales : []) {
+    if (!materialRowActiva(m)) continue
+    const movimiento = String(m?.movimiento || '').toLowerCase() === 'salida' ? 'Salida' : 'Ingreso'
+    rows.push({
+      movimiento,
+      tipo: labelTipoMaterial(m?.tipo_material),
+      cantidad: cantidadMaterial(m),
+      tramo: labelTramoBitacora(m?.tramo),
+      proveedor: String(m?.proveedor || '').trim() || '—',
+      placa: String(m?.placa || '').trim() || '—',
+      vales: String(m?.numeros_vale || '').trim() || '—',
+      ubicacion: String(m?.ubicacion_pk || '').trim() || '—',
+    })
+  }
+  return { rows, hasData: rows.length > 0 }
+}
+
+function buildEventosTabla(eventos = []) {
+  const rows = []
+  for (const ev of Array.isArray(eventos) ? eventos : []) {
+    if (!ev || typeof ev !== 'object') continue
+    const tipo = String(ev.evento_tipo || '').trim() || 'reporte_actividades'
+    const det = ev.evento_detalle && typeof ev.evento_detalle === 'object' ? ev.evento_detalle : {}
+    const partes = []
+    const cuerpo = textoCorto(ev.cuerpo_html)
+    if (cuerpo) partes.push(cuerpo)
+    if (tipo === 'incidente_sst') {
+      const desc = String(det.descripcion_incidente || '').trim()
+      const lugar = String(det.lugar || '').trim()
+      if (desc) partes.push(desc)
+      if (lugar) partes.push(`Lugar: ${lugar}`)
+      if (det.gravedad) partes.push(`Gravedad: ${det.gravedad}`)
+    }
+    if (tipo === 'visita_terceros') {
+      const entidad = String(det.entidad || '').trim()
+      const motivo = String(det.motivo || '').trim()
+      if (entidad) partes.push(`Entidad: ${entidad}`)
+      if (motivo) partes.push(`Motivo: ${motivo}`)
+    }
+    const resumen = partes.join(' · ') || '—'
+    rows.push({
+      tipo: labelEventoTipo(tipo),
+      dirigido_a: String(ev.dirigido_a || '').trim() || '—',
+      resumen,
+    })
+  }
+  return { rows, hasData: rows.length > 0 }
+}
+
+function buildRecorridosTabla(eventos = []) {
+  const rows = []
+  for (const ev of Array.isArray(eventos) ? eventos : []) {
+    if (!ev || String(ev.evento_tipo || '') !== 'visita_terceros') continue
+    const det = ev.evento_detalle && typeof ev.evento_detalle === 'object' ? ev.evento_detalle : {}
+    const lista = visitantesFromDetalle(det)
+    const entidad = String(det.entidad || '').trim() || '—'
+    const motivo = String(det.motivo || '').trim() || '—'
+    for (const v of lista) {
+      const nombre = String(v?.nombre || '').trim()
+      if (!nombre) continue
+      rows.push({
+        nombre,
+        cargo: String(v?.cargo || '').trim() || '—',
+        entidad,
+        motivo,
+        dirigido_a: String(ev.dirigido_a || '').trim() || '—',
+      })
+    }
+  }
+  return { rows, hasData: rows.length > 0 }
+}
+
+function buildActividadesTabla(eventos = []) {
+  const rows = []
+  for (const ev of Array.isArray(eventos) ? eventos : []) {
+    if (!ev) continue
+    const det = ev.evento_detalle && typeof ev.evento_detalle === 'object' ? ev.evento_detalle : {}
+    const acts = Array.isArray(det.actividades) ? det.actividades : []
+    const tipoLabel = labelEventoTipo(ev.evento_tipo)
+    for (const a of acts) {
+      const actividad = String(a?.actividad || '').trim()
+      if (!actividad) continue
+      rows.push({
+        origen: tipoLabel,
+        actividad,
+        abs: [a?.abs_inicio, a?.abs_fin].filter(Boolean).join(' – ') || '—',
+        tramo: String(a?.ubicacion_tramo || '').trim() || '—',
+        pk: String(a?.ubicacion_pk || '').trim() || '—',
+        cantidad: a?.cantidad != null && a.cantidad !== '' ? String(a.cantidad) : '—',
+        observacion: String(a?.observacion || '').trim() || '—',
+      })
+    }
+  }
+  return { rows, hasData: rows.length > 0 }
+}
+
+function buildClimaKv(clima = {}, horaInicio = '') {
+  const rows = []
+  const hora = String(horaInicio || '').trim()
+  if (hora) rows.push({ label: 'Hora de inicio de labores', value: hora.slice(0, 5) })
+  const desc = String(clima?.clima_descripcion || '').trim()
+    || labelClima(clima?.clima_codigo)
+  if (desc) rows.push({ label: 'Clima', value: desc })
+  if (clima?.clima_temp_c != null && clima.clima_temp_c !== '') {
+    rows.push({ label: 'Temperatura', value: `${clima.clima_temp_c} °C` })
+  }
+  return { rows, hasData: rows.length > 0 }
+}
+
+function buildObservaciones(cuerpoHtml = '', eventos = []) {
+  const chunks = []
+  if (!isRichTextEmpty(cuerpoHtml)) {
+    chunks.push({ origen: 'Observaciones del día', texto: textoCorto(cuerpoHtml, 600) })
+  }
+  for (const ev of Array.isArray(eventos) ? eventos : []) {
+    if (!ev) continue
+    const tipo = String(ev.evento_tipo || '')
+    if (tipo !== 'novedades' && tipo !== 'incidente_sst') continue
+    const plain = textoCorto(ev.cuerpo_html, 600)
+    const det = ev.evento_detalle && typeof ev.evento_detalle === 'object' ? ev.evento_detalle : {}
+    const extra = tipo === 'incidente_sst'
+      ? textoCorto(det.descripcion_incidente || '', 400)
+      : ''
+    const texto = [plain, extra].filter(Boolean).join(' · ')
+    if (!texto) continue
+    chunks.push({
+      origen: labelEventoTipo(tipo),
+      texto,
+    })
+  }
+  return { rows: chunks, hasData: chunks.length > 0 }
+}
+
+function buildAdjuntos(imagenes = [], eventos = []) {
+  const rows = []
+  const pushImg = (im, origen) => {
+    if (!im) return
+    const nombre = String(im.nombre || im.blob_path || im.url || '').trim()
+      || (im.data_uri || im.data_base64 ? 'Imagen adjunta' : '')
+    if (!nombre && !(im.data_uri || im.data_base64 || im.blob_path || im.url)) return
+    rows.push({
+      origen,
+      nombre: nombre || 'Imagen adjunta',
+      mime: String(im.mime_type || '').trim() || '—',
+    })
+  }
+  for (const im of Array.isArray(imagenes) ? imagenes : []) {
+    pushImg(im, 'Reporte diario')
+  }
+  for (const ev of Array.isArray(eventos) ? eventos : []) {
+    const origen = labelEventoTipo(ev?.evento_tipo)
+    for (const im of Array.isArray(ev?.imagenes) ? ev.imagenes : []) {
+      pushImg(im, origen)
+    }
+  }
+  return { rows, hasData: rows.length > 0 }
+}
+
+/**
+ * Registro de secciones del resumen. Agregar aquí una sección nueva
+ * la incluye automáticamente en el modal/PNG (sin cambiar el botón).
+ */
+export const RESUMEN_SECTION_BUILDERS = [
+  {
+    id: 'clima',
+    title: 'Clima y hora de inicio',
+    kind: 'kv',
+    groupByTramoEmpresa: false,
+    build: ({ clima, horaInicio }) => buildClimaKv(clima, horaInicio),
+  },
+  {
+    id: 'personal',
+    title: 'Personal',
+    kind: 'tramo_empresa',
+    groupByTramoEmpresa: true,
+    build: ({ matrices }) => matrices.personal,
+  },
+  {
+    id: 'maquinaria',
+    title: 'Maquinaria',
+    kind: 'tramo_empresa',
+    groupByTramoEmpresa: true,
+    build: ({ matrices }) => matrices.maquinaria,
+  },
+  {
+    id: 'materiales',
+    title: 'Materiales (ingresos / salidas)',
+    kind: 'materiales',
+    groupByTramoEmpresa: false,
+    build: ({ matrices }) => matrices.materiales,
+  },
+  {
+    id: 'materiales_vales',
+    title: 'Materiales · detalle y vales',
+    kind: 'table',
+    groupByTramoEmpresa: false,
+    columns: [
+      { key: 'movimiento', label: 'Movimiento' },
+      { key: 'tipo', label: 'Tipo' },
+      { key: 'cantidad', label: 'Cant.' },
+      { key: 'tramo', label: 'Tramo' },
+      { key: 'proveedor', label: 'Proveedor' },
+      { key: 'placa', label: 'Placa' },
+      { key: 'vales', label: 'Nº vale(s)' },
+      { key: 'ubicacion', label: 'Ubicación PK' },
+    ],
+    build: ({ materiales }) => buildMaterialesDetalle(materiales),
+  },
+  {
+    id: 'eventos',
+    title: 'Eventos',
+    kind: 'table',
+    groupByTramoEmpresa: false,
+    columns: [
+      { key: 'tipo', label: 'Tipo' },
+      { key: 'dirigido_a', label: 'Dirigido a' },
+      { key: 'resumen', label: 'Resumen' },
+    ],
+    build: ({ eventos }) => buildEventosTabla(eventos),
+  },
+  {
+    id: 'recorridos',
+    title: 'Recorridos de obra',
+    kind: 'table',
+    groupByTramoEmpresa: false,
+    columns: [
+      { key: 'nombre', label: 'Asistente' },
+      { key: 'cargo', label: 'Cargo' },
+      { key: 'entidad', label: 'Entidad' },
+      { key: 'motivo', label: 'Motivo' },
+      { key: 'dirigido_a', label: 'Dirigido a' },
+    ],
+    build: ({ eventos }) => buildRecorridosTabla(eventos),
+  },
+  {
+    id: 'actividades',
+    title: 'Actividades ejecutadas',
+    kind: 'table',
+    groupByTramoEmpresa: false,
+    columns: [
+      { key: 'origen', label: 'Origen' },
+      { key: 'actividad', label: 'Actividad' },
+      { key: 'abs', label: 'ABS' },
+      { key: 'tramo', label: 'Tramo' },
+      { key: 'pk', label: 'PK' },
+      { key: 'cantidad', label: 'Cant.' },
+      { key: 'observacion', label: 'Observación' },
+    ],
+    build: ({ eventos }) => buildActividadesTabla(eventos),
+  },
+  {
+    id: 'observaciones',
+    title: 'Observaciones y notas',
+    kind: 'table',
+    groupByTramoEmpresa: false,
+    columns: [
+      { key: 'origen', label: 'Origen' },
+      { key: 'texto', label: 'Texto' },
+    ],
+    build: ({ cuerpoHtml, eventos }) => buildObservaciones(cuerpoHtml, eventos),
+  },
+  {
+    id: 'adjuntos',
+    title: 'Adjuntos',
+    kind: 'table',
+    groupByTramoEmpresa: false,
+    columns: [
+      { key: 'origen', label: 'Origen' },
+      { key: 'nombre', label: 'Archivo' },
+      { key: 'mime', label: 'Tipo' },
+    ],
+    build: ({ imagenes, eventos }) => buildAdjuntos(imagenes, eventos),
+  },
+]
+
+/**
+ * Resumen completo: conserva matrices Tramo×Empresa y añade `sections`
+ * para renderizar/capturar todas las secciones de la bitácora.
+ */
+export function buildResumenBitacoraCompleto({
+  asistencia = [],
+  usos = [],
+  materiales = [],
+  rrhhCatalogo = [],
+  logosByEmpresaKey = {},
+  eventos = [],
+  clima = {},
+  horaInicio = '',
+  cuerpoHtml = '',
+  imagenes = [],
+  elaboradoPor = '',
+} = {}) {
+  const matrices = buildResumenTramoEmpresa({
+    asistencia,
+    usos,
+    materiales,
+    rrhhCatalogo,
+    logosByEmpresaKey,
+  })
+
+  const ctx = {
+    matrices,
+    materiales,
+    eventos,
+    clima,
+    horaInicio,
+    cuerpoHtml,
+    imagenes,
+    elaboradoPor,
+  }
+
+  const sections = []
+  if (elaboradoPor) {
+    sections.push({
+      id: 'elaborado',
+      title: 'Elaborado por',
+      kind: 'kv',
+      groupByTramoEmpresa: false,
+      hasData: true,
+      rows: [{ label: 'Responsable', value: String(elaboradoPor) }],
+    })
+  }
+
+  for (const def of RESUMEN_SECTION_BUILDERS) {
+    const payload = def.build(ctx) || { hasData: false }
+    sections.push({
+      id: def.id,
+      title: def.title,
+      kind: def.kind,
+      groupByTramoEmpresa: Boolean(def.groupByTramoEmpresa),
+      columns: def.columns || null,
+      ...payload,
+      hasData: Boolean(payload.hasData),
+    })
+  }
+
+  const hasAnyData = sections.some((s) => s.hasData)
+
+  return {
+    ...matrices,
+    sections,
+    hasAnyData,
+  }
 }
 
 /** Formato compacto de celda combinada: «3p · 1m» o «—» si vacío. */

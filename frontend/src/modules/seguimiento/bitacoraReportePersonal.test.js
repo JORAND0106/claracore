@@ -10,12 +10,14 @@ import { fileURLToPath } from 'node:url'
 import { EMPRESA_SIN_NOMBRE } from './personalAsistenciaHelpers.js'
 import { SIN_TRAMO_ASIGNADO_LABEL } from './bitacoraTramoHelpers.js'
 import {
+  buildResumenBitacoraCompleto,
   buildResumenTramoEmpresa,
   empresaDeOperadorUso,
   formatoCeldaCantidad,
   formatoCeldaResumen,
   formatearFechaReportePersonal,
   nombreArchivoResumenPng,
+  RESUMEN_SECTION_BUILDERS,
   resolveLogosPorEmpresa,
   SIN_TIPO_MATERIAL_LABEL,
   tituloReportePersonal,
@@ -181,7 +183,7 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
   it('título, fecha, celda y nombre PNG', () => {
     assert.equal(
       tituloReportePersonal('2026-09-23'),
-      'Resumen por tramo y empresa · 2026-09-23',
+      'Resumen de bitácora · 2026-09-23',
     )
     assert.equal(formatearFechaReportePersonal('2026-09-23'), '23/09/2026')
     assert.equal(formatoCeldaResumen({ personal: 3, maquinaria: 1 }), '3p · 1m')
@@ -189,41 +191,118 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
     assert.equal(formatoCeldaResumen({ personal: 0, maquinaria: 0 }), '—')
     assert.equal(formatoCeldaCantidad(4), '4')
     assert.equal(formatoCeldaCantidad(0), '—')
-    assert.equal(nombreArchivoResumenPng('2026-09-23'), 'resumen-tramo-empresa-2026-09-23.png')
+    assert.equal(nombreArchivoResumenPng('2026-09-23'), 'resumen-bitacora-2026-09-23.png')
   })
 
-  it('editor y modal: tablas separadas + descargar/copiar PNG', () => {
+  it('resumen completo: incluye todas las secciones del registro', () => {
+    const ids = RESUMEN_SECTION_BUILDERS.map((s) => s.id)
+    for (const id of [
+      'clima', 'personal', 'maquinaria', 'materiales', 'materiales_vales',
+      'eventos', 'recorridos', 'actividades', 'observaciones', 'adjuntos',
+    ]) {
+      assert.ok(ids.includes(id), `falta sección ${id}`)
+    }
+
+    const completo = buildResumenBitacoraCompleto({
+      asistencia: [
+        { nombre: 'Ana', cargo: 'Ayudante', subcontratista_nombre: 'E1', tramo: 'Tramo 1', estado: 'activo' },
+      ],
+      usos: [
+        { equipo_nombre: 'Retro', operador: 'Ana', cantidad: 1, tramo: 'Tramo 1' },
+      ],
+      materiales: [
+        {
+          movimiento: 'ingreso', tipo_material: 'Arena', cantidad: 4, tramo: 'Tramo 1',
+          numeros_vale: 'V-9', proveedor: 'Acme', placa: 'ABC123',
+        },
+      ],
+      rrhhCatalogo: [],
+      horaInicio: '07:30',
+      clima: { clima_codigo: 61, clima_temp_c: 18, clima_descripcion: 'Lluvia' },
+      cuerpoHtml: '<p>Nota del día</p>',
+      imagenes: [{ nombre: 'foto1.png', mime_type: 'image/png', url: 'https://x/1.png' }],
+      elaboradoPor: 'Juan Pérez',
+      eventos: [
+        {
+          evento_tipo: 'visita_terceros',
+          dirigido_a: 'Interventoría',
+          cuerpo_html: '<p>Recorrido OK</p>',
+          evento_detalle: {
+            entidad: 'ICCU',
+            motivo: 'Seguimiento',
+            visitantes_lista: [{ nombre: 'Laura Gómez', cargo: 'Ing.' }],
+            actividades: [{ actividad: 'Inspección ABS', abs_inicio: '10+000', ubicacion_tramo: 'Tramo 1' }],
+          },
+          imagenes: [{ nombre: 'recorrido.jpg', mime_type: 'image/jpeg' }],
+        },
+        {
+          evento_tipo: 'novedades',
+          dirigido_a: '',
+          cuerpo_html: '<p>Observación general</p>',
+          evento_detalle: { actividades: [] },
+          imagenes: [],
+        },
+      ],
+    })
+
+    assert.equal(completo.hasAnyData, true)
+    assert.equal(completo.personal.hasData, true)
+    assert.equal(completo.maquinaria.hasData, true)
+    assert.equal(completo.materiales.hasData, true)
+
+    const byId = Object.fromEntries(completo.sections.map((s) => [s.id, s]))
+    assert.equal(byId.elaborado.hasData, true)
+    assert.equal(byId.clima.hasData, true)
+    assert.equal(byId.personal.hasData, true)
+    assert.equal(byId.maquinaria.hasData, true)
+    assert.equal(byId.materiales.hasData, true)
+    assert.equal(byId.materiales_vales.hasData, true)
+    assert.equal(byId.materiales_vales.rows[0].vales, 'V-9')
+    assert.equal(byId.eventos.hasData, true)
+    assert.equal(byId.recorridos.hasData, true)
+    assert.equal(byId.recorridos.rows[0].nombre, 'Laura Gómez')
+    assert.equal(byId.actividades.hasData, true)
+    assert.equal(byId.observaciones.hasData, true)
+    assert.equal(byId.adjuntos.hasData, true)
+    assert.ok(byId.adjuntos.rows.length >= 2)
+  })
+
+  it('editor y modal: tablas completas + copiar PNG (sin descargar)', () => {
     assert.match(editorSrc, /Resumen PNG/)
     assert.match(editorSrc, /BitacoraReportePersonalModal/)
     assert.match(editorSrc, /materiales=\{materiales\}/)
+    assert.match(editorSrc, /eventos=\{eventos\}/)
     assert.match(editorSrc, /exportBitacoraPdfBlob/)
-    assert.match(modalSrc, /buildResumenTramoEmpresa/)
+    assert.match(modalSrc, /buildResumenBitacoraCompleto/)
     assert.match(modalSrc, /copyInformePeriodicoBlob/)
-    assert.match(modalSrc, /Descargar PNG/)
-    assert.match(modalSrc, /descargarPng/)
     assert.match(modalSrc, /Copiar imagen/)
     assert.match(modalSrc, /Imagen copiada/)
-    assert.match(modalSrc, /tituloSeccion="Personal"/)
-    assert.match(modalSrc, /tituloSeccion="Maquinaria"/)
-    assert.match(modalSrc, /TablaMateriales/)
-    assert.match(modalSrc, /Tipo de material/)
+    assert.match(modalSrc, /CcConfirmModal/)
+    assert.match(modalSrc, /RESUMEN|sections|renderSeccion/)
+    assert.match(modalSrc, /data-resumen-chunk/)
     assert.match(modalSrc, /html-to-image/)
     assert.match(modalSrc, /captureRef/)
+    assert.doesNotMatch(modalSrc, /Descargar PNG/)
+    assert.doesNotMatch(modalSrc, /descargarPng/)
+    assert.doesNotMatch(modalSrc, /downloadInformePeriodicoBlob/)
     assert.doesNotMatch(modalSrc, /Imprimir \/ PDF/)
     assert.doesNotMatch(modalSrc, /generar_pdf_bitacora_dia/)
     assert.doesNotMatch(modalSrc, /window\.print/)
   })
 
-  it('editor: resumen PNG visible en header; PDF en íconos (sin duplicar en pie)', () => {
+  it('editor: resumen PNG ícono+tooltip en header; PDF en íconos (sin duplicar en pie)', () => {
     assert.match(editorSrc, /from 'lucide-react'/)
     assert.match(editorSrc, /<Table2\b/)
     assert.match(editorSrc, /Resumen PNG/)
+    assert.match(editorSrc, /title="Resumen de bitácora \(PNG al portapapeles\)"/)
     assert.match(editorSrc, /<Eye\b/)
     assert.match(editorSrc, /<Download\b/)
     assert.match(editorSrc, /aria-label="Resumen PNG por tramo y empresa"/)
     assert.match(editorSrc, /aria-label=\{pdfBusy \? 'Generando vista previa…' : 'Vista previa PDF'\}/)
     assert.match(editorSrc, /aria-label=\{pdfBusy \? 'Generando PDF…' : 'Descargar PDF'\}/)
     assert.match(editorSrc, /aria-label="Cerrar"/)
+    // Ícono sin texto «Resumen PNG» pegado al botón (solo tooltip/aria).
+    assert.doesNotMatch(editorSrc, /<Table2[^/]*\/>\s*\n\s*Resumen PNG/)
     // Un solo disparador del resumen (header); pie ya no duplica las acciones.
     const opens = editorSrc.match(/setReportePersonalOpen\(true\)/g) || []
     assert.equal(opens.length, 1)

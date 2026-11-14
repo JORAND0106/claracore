@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import BitacoraEditorErrorBoundary from './BitacoraEditorErrorBoundary'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
 import BitacoraExportRangoBar from './BitacoraExportRangoBar'
 import { accesoBitacora } from './bitacoraPermisos'
@@ -271,18 +272,24 @@ export default function BitacoraPanel({
       )}
 
       {editor && (
-        <BitacoraEntradaEditor
+        <BitacoraEditorErrorBoundary
           t={t}
-          api={api}
-          usuario={usuario}
-          token={token}
-          contratoId={cid}
-          permisos={permisos}
-          modo={editor.modo}
-          entrada={editor.entrada}
+          resetKey={`panel-${editor.modo}-${editor.entrada?.id || 'new'}`}
           onClose={() => setEditor(null)}
-          onSaved={() => { void load() }}
-        />
+        >
+          <BitacoraEntradaEditor
+            t={t}
+            api={api}
+            usuario={usuario}
+            token={token}
+            contratoId={cid}
+            permisos={permisos}
+            modo={editor.modo}
+            entrada={editor.entrada}
+            onClose={() => setEditor(null)}
+            onSaved={() => { void load() }}
+          />
+        </BitacoraEditorErrorBoundary>
       )}
     </div>
   )
