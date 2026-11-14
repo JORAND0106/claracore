@@ -49,7 +49,10 @@ from subcontratista_visibilidad import (
     es_cargo_subcontratista,
     normalizar_empresa_tipo,
     ocultar_costo_directo_reportes as _ocultar_costo_directo_reportes_vis,
+    redactar_analisis_economicos,
     redactar_filas_economicos_contrato,
+    redactar_mapa_calor_economicos,
+    redactar_valores_economicos_contrato,
     resolver_filtro_subcontratista_solicitado,
     scope_from_user_dict,
     scope_subcontratista,
@@ -24916,6 +24919,7 @@ def analisis_registros_obra(
     )
     _filtro_fu_rep = _amb_fu == "reporte" and _tiene_fu
     _filtro_fu_reg = _amb_fu == "registro" and _tiene_fu
+    _ocultar_eco_ana = _sicoe_ocultar_costo_directo_reportes(current_user)
     if _formato_mapa:
         _empty = {
             "type": "FeatureCollection",
@@ -24930,6 +24934,8 @@ def analisis_registros_obra(
                 "max_features": SICOE_MAPA_CALOR_MAX_FEATURES,
             },
         }
+        if _ocultar_eco_ana:
+            _empty = redactar_mapa_calor_economicos(_empty)
     else:
         _empty = {
             "modo": "general",
@@ -24943,6 +24949,8 @@ def analisis_registros_obra(
             "total_rechazados": 0,
             "verificacion": {"suma_costo_directo_registros": 0, "conteo_registros": 0, "metodo": "suma_linea_a_linea_por_id_unico"},
         }
+        if _ocultar_eco_ana:
+            _empty = redactar_analisis_economicos(_empty)
 
     items_ana = _normalize_items_filtro_list(items_filtro, item)
     caps_ana = _normalize_items_filtro_list(capitulos_filtro, capitulo)
@@ -25405,6 +25413,8 @@ def analisis_registros_obra(
         geo = _sicoe_build_mapa_calor_geojson(
             registros, reporte_map, incluir_dibujos=True
         )
+        if _sicoe_ocultar_costo_directo_reportes(current_user):
+            geo = redactar_mapa_calor_economicos(geo)
         _dashboard_response_cache_set(_analisis_cache_key, geo)
         return geo
 
@@ -25666,6 +25676,8 @@ def analisis_registros_obra(
         "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
         "trazabilidad_precios": TRAZABILIDAD_PRECIOS_STATUS,
     }
+    if _sicoe_ocultar_costo_directo_reportes(current_user):
+        result = redactar_analisis_economicos(result)
     _dashboard_response_cache_set(_analisis_cache_key, result)
     return result
 
@@ -26383,6 +26395,11 @@ def obtener_reporte(
         _enriquecer_num_comentarios_visibles(regs_raw, current_user)
         _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
     r["registros"] = _overlay_sicoe_meta_vivo(contrato_id, regs_raw or [])
+    # Operativos / aislamiento: no enviar montos de contrato al dispositivo.
+    # Subcontratista ya recibió overlay de precios propios (economia_subcontratista).
+    if _sicoe_ocultar_costo_directo_reportes(current_user) and not r.get("economia_subcontratista"):
+        r["registros"] = redactar_filas_economicos_contrato(r.get("registros") or [])
+        r = redactar_valores_economicos_contrato(r)
     r["puntos"] = puntos_rows
     if aplicar_filtros_busqueda:
         r["registros_vista_filtrada"] = True
@@ -30245,6 +30262,7 @@ def sicoe_dibujo_referencias_mismo_item(
 ):
     """Dibujos de referencia: otros reportes del contrato con ítems en común."""
     _require_contract_access(current_user, contrato_id)
+    # Redacción de costos se aplica al final si el usuario no debe ver economía.
 
     def _exists():
         return (
@@ -30260,7 +30278,19 @@ def sicoe_dibujo_referencias_mismo_item(
     rows = supabase_execute(_exists) or []
     if not rows:
         raise HTTPException(404, "Reporte no encontrado")
-    return _sicoe_dibujo_referencias_mismo_item(contrato_id, reporte_id)
+    out = _sicoe_dibujo_referencias_mismo_item(contrato_id, reporte_id)
+    if _sicoe_ocultar_costo_directo_reportes(current_user):
+        refs = []
+        for ref in out.get("referencias") or []:
+            if not isinstance(ref, dict):
+                refs.append(ref)
+                continue
+            ref2 = redactar_valores_economicos_contrato(ref)
+            if isinstance(ref2.get("registros"), list):
+                ref2["registros"] = redactar_filas_economicos_contrato(ref2["registros"])
+            refs.append(ref2)
+        out = {**out, "referencias": refs}
+    return out
 
 
 @app.post("/sicoe-obra/{contrato_id}/reportes/asignar-actores-por-pk")
