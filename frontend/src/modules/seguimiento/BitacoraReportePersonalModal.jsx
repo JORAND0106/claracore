@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, Download } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import {
@@ -433,22 +433,28 @@ export default function BitacoraReportePersonalModal({
     && !resumen.materiales.hasData
   const clipboardOk = isClipboardImageAvailable()
 
-  const copiarPng = useCallback(async () => {
+  const generarPngBlob = useCallback(async () => {
     const node = captureRef.current
-    if (!node || typeof window === 'undefined') return
+    if (!node || typeof window === 'undefined') return null
+    const imgs = [...node.querySelectorAll('img')]
+    await Promise.all(imgs.map((img) => (
+      img.complete ? Promise.resolve() : new Promise((res) => {
+        img.onload = img.onerror = () => res()
+      })
+    )))
+    const { toBlob } = await import('html-to-image')
+    const blob = await toBlob(node, CAPTURE_OPTS)
+    if (!blob) throw new Error('No se pudo generar la imagen')
+    return blob
+  }, [])
+
+  const copiarPng = useCallback(async () => {
     setPngBusy(true)
     setPngError('')
     setPngCopied(false)
     try {
-      const imgs = [...node.querySelectorAll('img')]
-      await Promise.all(imgs.map((img) => (
-        img.complete ? Promise.resolve() : new Promise((res) => {
-          img.onload = img.onerror = () => res()
-        })
-      )))
-      const { toBlob } = await import('html-to-image')
-      const blob = await toBlob(node, CAPTURE_OPTS)
-      if (!blob) throw new Error('No se pudo generar la imagen')
+      const blob = await generarPngBlob()
+      if (!blob) return
       if (clipboardOk) {
         await copyInformePeriodicoBlob(blob)
         setPngCopied(true)
@@ -463,7 +469,22 @@ export default function BitacoraReportePersonalModal({
     } finally {
       setPngBusy(false)
     }
-  }, [fecha, clipboardOk])
+  }, [fecha, clipboardOk, generarPngBlob])
+
+  const descargarPng = useCallback(async () => {
+    setPngBusy(true)
+    setPngError('')
+    setPngCopied(false)
+    try {
+      const blob = await generarPngBlob()
+      if (!blob) return
+      downloadInformePeriodicoBlob(blob, nombreArchivoResumenPng(fecha))
+    } catch (err) {
+      setPngError(err?.message || 'No se pudo descargar el PNG')
+    } finally {
+      setPngBusy(false)
+    }
+  }, [fecha, generarPngBlob])
 
   if (!open) return null
 
@@ -533,7 +554,7 @@ export default function BitacoraReportePersonalModal({
           </div>
           <button
             type="button"
-            onClick={() => void copiarPng()}
+            onClick={() => void descargarPng()}
             disabled={pngBusy || vacio}
             style={{
               padding: '6px 12px',
@@ -541,6 +562,30 @@ export default function BitacoraReportePersonalModal({
               border: 'none',
               background: t?.primary || '#0077B6',
               color: '#fff',
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: pngBusy || vacio ? 'not-allowed' : 'pointer',
+              opacity: pngBusy || vacio ? 0.65 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+            title="Descargar resumen en PNG"
+            aria-label="Descargar PNG"
+          >
+            <Download size={14} aria-hidden />
+            {pngBusy ? 'Generando…' : 'Descargar PNG'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void copiarPng()}
+            disabled={pngBusy || vacio}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: `1px solid ${border}`,
+              background: t?.inputBg || '#f8fafc',
+              color: text,
               fontWeight: 700,
               fontSize: 12,
               cursor: pngBusy || vacio ? 'not-allowed' : 'pointer',

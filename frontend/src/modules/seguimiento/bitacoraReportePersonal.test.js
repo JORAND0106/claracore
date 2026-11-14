@@ -192,13 +192,15 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
     assert.equal(nombreArchivoResumenPng('2026-09-23'), 'resumen-tramo-empresa-2026-09-23.png')
   })
 
-  it('editor y modal: tablas separadas + copiar imagen (no descarga por defecto)', () => {
-    assert.match(editorSrc, /Resumen por tramo y empresa/)
+  it('editor y modal: tablas separadas + descargar/copiar PNG', () => {
+    assert.match(editorSrc, /Resumen PNG/)
     assert.match(editorSrc, /BitacoraReportePersonalModal/)
     assert.match(editorSrc, /materiales=\{materiales\}/)
     assert.match(editorSrc, /exportBitacoraPdfBlob/)
     assert.match(modalSrc, /buildResumenTramoEmpresa/)
     assert.match(modalSrc, /copyInformePeriodicoBlob/)
+    assert.match(modalSrc, /Descargar PNG/)
+    assert.match(modalSrc, /descargarPng/)
     assert.match(modalSrc, /Copiar imagen/)
     assert.match(modalSrc, /Imagen copiada/)
     assert.match(modalSrc, /tituloSeccion="Personal"/)
@@ -207,24 +209,22 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
     assert.match(modalSrc, /Tipo de material/)
     assert.match(modalSrc, /html-to-image/)
     assert.match(modalSrc, /captureRef/)
-    assert.doesNotMatch(modalSrc, /Descargar PNG/)
     assert.doesNotMatch(modalSrc, /Imprimir \/ PDF/)
     assert.doesNotMatch(modalSrc, /generar_pdf_bitacora_dia/)
     assert.doesNotMatch(modalSrc, /window\.print/)
   })
 
-  it('editor: acciones resumen/PDF solo en header como íconos (sin duplicar en pie)', () => {
+  it('editor: resumen PNG visible en header; PDF en íconos (sin duplicar en pie)', () => {
     assert.match(editorSrc, /from 'lucide-react'/)
     assert.match(editorSrc, /<Table2\b/)
+    assert.match(editorSrc, /Resumen PNG/)
     assert.match(editorSrc, /<Eye\b/)
     assert.match(editorSrc, /<Download\b/)
-    assert.match(editorSrc, /aria-label="Resumen por tramo y empresa"/)
+    assert.match(editorSrc, /aria-label="Resumen PNG por tramo y empresa"/)
     assert.match(editorSrc, /aria-label=\{pdfBusy \? 'Generando vista previa…' : 'Vista previa PDF'\}/)
     assert.match(editorSrc, /aria-label=\{pdfBusy \? 'Generando PDF…' : 'Descargar PDF'\}/)
     assert.match(editorSrc, /aria-label="Cerrar"/)
-    // Label de texto del resumen no aparece como hijo del botón (solo title/aria).
-    assert.doesNotMatch(editorSrc, />\s*Resumen por tramo y empresa\s*</)
-    // Un solo disparador del resumen (header); pie ya no duplica las tres acciones.
+    // Un solo disparador del resumen (header); pie ya no duplica las acciones.
     const opens = editorSrc.match(/setReportePersonalOpen\(true\)/g) || []
     assert.equal(opens.length, 1)
     const previewCalls = editorSrc.match(/exportarPdfDia\(\{\s*preview:\s*true\s*\}\)/g) || []
