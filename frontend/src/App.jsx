@@ -9649,6 +9649,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     nivelesActivos={nivelesActivosTabla}
                     encabezadosNivel={encPorNivelHoja}
                     nivelesContrato={nivelesContrato}
+                    verValoresEconomicos={nivelInfo.verValoresEconomicos}
                   />
                 </div>
               ) : (

@@ -40,6 +40,7 @@ import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNi
 import { addMapboxGeolocateControl } from '../../mapboxSafe'
 import { useClaraViewport } from '../../useClaraViewport'
 import { subscribeDibujoReporteActualizado } from './sicoeDibujoActualizado'
+import { sicoeUsuarioVeValoresEconomicos } from '../../utils/sicoeVisibilidadEconomica'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -264,6 +265,7 @@ export default function ModuloPlanoMapaCalor({
     return {
       esInterventoria: rol.includes('intervent'),
       rolOrigen: rol,
+      verValoresEconomicos: sicoeUsuarioVeValoresEconomicos(usuario),
     }
   }, [usuario])
 
@@ -1209,10 +1211,11 @@ export default function ModuloPlanoMapaCalor({
     </div>
   )
 
+  const verEco = !!nivelInfo.verValoresEconomicos
   const intensidadPanel = (
     <div>
       <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-        INTENSIDAD RELATIVA · COSTO DIRECTO
+        {verEco ? 'INTENSIDAD RELATIVA · COSTO DIRECTO' : 'INTENSIDAD RELATIVA'}
       </div>
       <div style={{
         height: 10, borderRadius: 6, marginBottom: 6,
@@ -1227,7 +1230,7 @@ export default function ModuloPlanoMapaCalor({
           {enPlano} en plano
           {leyendaVista.con_dibujo ? ` · ${leyendaVista.con_dibujo} con dibujo` : ''}
           {leyendaVista.sin_dibujo ? ` · ${leyendaVista.sin_dibujo} sin dibujo` : ''}
-          {meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
+          {verEco && meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
           {meta.sin_coords ? ` · ${meta.sin_coords} sin coords` : ''}
           {meta.truncado ? ` · truncado a ${meta.max_features}` : ''}
           {focusActive ? ' · foco de revisión' : ''}

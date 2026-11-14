@@ -114,6 +114,7 @@ function SemaforoMini({ reg, nivelesActivos, encabezadosNivel, t }) {
   )
 }
 
+/** @param {boolean} [props.verValoresEconomicos=true] */
 export default function ClaraGisVerificarFicha({
   t,
   registros = [],
@@ -129,6 +130,7 @@ export default function ClaraGisVerificarFicha({
   nivelesActivos = [1, 2, 3],
   encabezadosNivel = {},
   nivelesContrato = null,
+  verValoresEconomicos = true,
 }) {
   const regsAll = Array.isArray(registros) ? registros : []
   const filasItem = useMemo(() => agruparRegistrosPorItem(regsAll), [regsAll])
@@ -307,7 +309,9 @@ export default function ClaraGisVerificarFicha({
               </div>
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
                 <span>Cant {fmtNum(fila.sumCant)} {fila.unidad}</span>
-                <span style={{ color: '#16a34a' }}>{fmtPesos(fila.sumCd)}</span>
+                {verValoresEconomicos ? (
+                  <span style={{ color: '#16a34a' }}>{fmtPesos(fila.sumCd)}</span>
+                ) : null}
                 <span style={{ color: muted, fontWeight: 600 }}>{fila.regs.length} reg.</span>
               </div>
             </button>
@@ -340,7 +344,9 @@ export default function ClaraGisVerificarFicha({
               <tr style={{ color: muted, textAlign: 'left' }}>
                 <th style={{ padding: '6px 4px', fontWeight: 700 }}>#</th>
                 <th style={{ padding: '6px 4px', fontWeight: 700 }}>Cantidad</th>
-                <th style={{ padding: '6px 4px', fontWeight: 700 }}>CD</th>
+                {verValoresEconomicos ? (
+                  <th style={{ padding: '6px 4px', fontWeight: 700 }}>CD</th>
+                ) : null}
                 <th style={{ padding: '6px 4px', fontWeight: 700 }}>Val.</th>
               </tr>
             </thead>
@@ -371,14 +377,16 @@ export default function ClaraGisVerificarFicha({
                     }}>
                       {fmtCantidadConDimensiones(r)}
                     </td>
-                    <td style={{
-                      padding: '4px 4px',
-                      fontWeight: 700,
-                      color: '#16a34a',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {fmtPesos(r.costo_directo)}
-                    </td>
+                    {verValoresEconomicos ? (
+                      <td style={{
+                        padding: '4px 4px',
+                        fontWeight: 700,
+                        color: '#16a34a',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {fmtPesos(r.costo_directo)}
+                      </td>
+                    ) : null}
                     <td style={{ padding: '4px 4px' }}>
                       <SemaforoMini
                         reg={r}
@@ -558,7 +566,11 @@ export default function ClaraGisVerificarFicha({
             <div style={{ color: muted }}>
               Capítulo: {reg.capitulo || reporte?.capitulo || '—'}
               {' · '}Unidad: {reg.unidad || '—'}
-              {' · '}V.U.: {fmtCostoDirectoVerificar(reg.vlr_unitario)}
+              {verValoresEconomicos ? (
+                <>
+                  {' · '}V.U.: {fmtCostoDirectoVerificar(reg.vlr_unitario)}
+                </>
+              ) : null}
             </div>
           </div>
         )}
@@ -573,14 +585,17 @@ export default function ClaraGisVerificarFicha({
           {fmtCantidadVerificar(reg)}
         </div>
 
-        <div style={{
-          fontSize: 'calc(var(--cc-lg) * 1.35)',
-          fontWeight: 800,
-          color: '#16a34a',
-          padding: '0 2px 8px',
-        }}>
-          {fmtCostoDirectoVerificar(reg.costo_directo)}
-        </div>
+        {/* Costo */}
+        {verValoresEconomicos ? (
+          <div style={{
+            fontSize: 'calc(var(--cc-lg) * 1.35)',
+            fontWeight: 800,
+            color: '#16a34a',
+            padding: '0 2px 8px',
+          }}>
+            {fmtCostoDirectoVerificar(reg.costo_directo)}
+          </div>
+        ) : null}
 
         {abscisaTxt && (
           <div style={{

@@ -201,6 +201,110 @@ def redactar_filas_economicos_contrato(rows: Optional[Iterable[Any]]) -> List[An
     return [redactar_valores_economicos_contrato(r) for r in rows]
 
 
+# Claves de montos en agregados /analisis (panel + ClaraGIS).
+_ANALISIS_TOTALES_ECONOMICOS = (
+    "total_costo_directo",
+    "total_no_revisados_costo",
+    "total_aprobados",
+    "total_pendientes",
+    "total_rechazados",
+)
+_ANALISIS_GRUPO_ECONOMICOS = (
+    "costo_directo",
+    "aprobados",
+    "pendientes",
+    "rechazados",
+    "no_revisados_costo",
+)
+
+
+def redactar_analisis_economicos(payload: Any) -> Any:
+    """
+    Anula cifras económicas en la respuesta de /analisis (no mapa_calor).
+    Conserva conteos y cantidades; quita montos absolutos.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    for k in _ANALISIS_TOTALES_ECONOMICOS:
+        if k in out:
+            out[k] = None
+    grupos = out.get("grupos")
+    if isinstance(grupos, list):
+        out["grupos"] = [
+            {
+                **g,
+                **{k: None for k in _ANALISIS_GRUPO_ECONOMICOS if isinstance(g, dict) and k in g},
+            }
+            if isinstance(g, dict)
+            else g
+            for g in grupos
+        ]
+    integ = out.get("integridad")
+    if isinstance(integ, dict):
+        integ2 = dict(integ)
+        if "impacto_plata" in integ2:
+            integ2["impacto_plata"] = None
+        if integ2.get("aviso") and "impacto" in str(integ2.get("aviso") or "").lower():
+            n = integ2.get("n_registros_afectados")
+            integ2["aviso"] = (
+                f"{n} registro(s) con inconsistencias vs listado."
+                if n is not None
+                else "Hay inconsistencias vs listado."
+            )
+        out["integridad"] = integ2
+    ver = out.get("verificacion")
+    if isinstance(ver, dict):
+        ver2 = dict(ver)
+        for k in list(ver2.keys()):
+            lk = str(k).lower()
+            if any(tok in lk for tok in ("costo", "valor", "plata", "cobrado", "precio", "vu")):
+                ver2[k] = None
+        out["verificacion"] = ver2
+    return out
+
+
+def redactar_mapa_calor_economicos(geo: Any) -> Any:
+    """
+    Quita montos absolutos del FeatureCollection de mapa_calor.
+    Conserva `weight` (intensidad relativa) para el heatmap.
+    """
+    if not isinstance(geo, dict):
+        return geo
+    out = dict(geo)
+    meta = out.get("meta")
+    if isinstance(meta, dict):
+        meta2 = dict(meta)
+        if "max_costo_directo" in meta2:
+            meta2["max_costo_directo"] = None
+        out["meta"] = meta2
+
+    def _strip_feats(fc):
+        if not isinstance(fc, dict):
+            return fc
+        feats = fc.get("features")
+        if not isinstance(feats, list):
+            return fc
+        cleaned = []
+        for f in feats:
+            if not isinstance(f, dict):
+                cleaned.append(f)
+                continue
+            props = f.get("properties")
+            if isinstance(props, dict):
+                props2 = redactar_valores_economicos_contrato(props)
+                cleaned.append({**f, "properties": props2})
+            else:
+                cleaned.append(f)
+        return {**fc, "features": cleaned}
+
+    out = _strip_feats(out)
+    dibujos = out.get("dibujos")
+    if isinstance(dibujos, dict):
+        out["dibujos"] = _strip_feats(dibujos)
+    return out
+
+
 def validar_vinculo_subcontratista_en_contrato(
     *,
     cargo_nombre: Optional[str],

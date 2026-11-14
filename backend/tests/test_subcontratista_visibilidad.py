@@ -7,7 +7,9 @@ from subcontratista_visibilidad import (
     normalizar_empresa_tipo,
     ocultar_costo_directo_reportes,
     parse_subcontratista_id,
+    redactar_analisis_economicos,
     redactar_filas_economicos_contrato,
+    redactar_mapa_calor_economicos,
     redactar_valores_economicos_contrato,
     resolver_empresa_desde_key,
     resolver_filtro_subcontratista_solicitado,
@@ -124,6 +126,53 @@ def test_ve_economicos_contrato():
     ) is True
     assert usuario_ve_valores_economicos_contrato("Residente", "operativo contratista") is False
     assert usuario_ve_valores_economicos_contrato("Residente", "contratista") is True
+
+
+def test_redactar_analisis_y_mapa_calor_economicos():
+    ana = redactar_analisis_economicos(
+        {
+            "total_costo_directo": 1000,
+            "total_registros": 3,
+            "total_aprobados": 400,
+            "grupos": [{"label": "A", "costo_directo": 100, "aprobados": 50, "total_registros": 1}],
+            "integridad": {"impacto_plata": 99, "n_registros_afectados": 2, "aviso": "x impacto ≈ $99"},
+            "verificacion": {"dashboard_kpi_cobrado": 10, "conteo_registros": 3},
+        }
+    )
+    assert ana["total_costo_directo"] is None
+    assert ana["total_registros"] == 3
+    assert ana["grupos"][0]["costo_directo"] is None
+    assert ana["grupos"][0]["total_registros"] == 1
+    assert ana["integridad"]["impacto_plata"] is None
+    assert ana["verificacion"]["dashboard_kpi_cobrado"] is None
+    assert ana["verificacion"]["conteo_registros"] == 3
+
+    geo = redactar_mapa_calor_economicos(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"id": 1, "costo_directo": 500, "weight": 0.5, "item_numero": "1.1"},
+                }
+            ],
+            "meta": {"max_costo_directo": 500, "con_coords": 1},
+            "dibujos": {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"costo_directo": 500, "weight": 0.9, "origen": "reporte_dibujo"},
+                    }
+                ],
+            },
+        }
+    )
+    assert geo["meta"]["max_costo_directo"] is None
+    assert geo["features"][0]["properties"]["costo_directo"] is None
+    assert geo["features"][0]["properties"]["weight"] == 0.5
+    assert geo["dibujos"]["features"][0]["properties"]["costo_directo"] is None
+    assert geo["dibujos"]["features"][0]["properties"]["weight"] == 0.9
 
 
 def test_ocultar_costo_sicoe():
