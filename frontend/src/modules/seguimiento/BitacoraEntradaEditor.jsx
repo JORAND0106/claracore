@@ -1108,11 +1108,23 @@ export default function BitacoraEntradaEditor({
                   type="button"
                   disabled={busy || !fecha}
                   onClick={() => setReportePersonalOpen(true)}
-                  style={btnIcon({ disabled: busy || !fecha })}
-                  title="Resumen por tramo y empresa"
-                  aria-label="Resumen por tramo y empresa"
+                  style={{
+                    ...btnGhost,
+                    padding: viewportCompact ? '6px 10px' : '5px 10px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontWeight: 700,
+                    fontSize: 'var(--cc-xs)',
+                    opacity: busy || !fecha ? 0.55 : 1,
+                    cursor: busy || !fecha ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Resumen por tramo y empresa en PNG"
+                  aria-label="Resumen PNG por tramo y empresa"
                 >
                   <Table2 size={iconSz} strokeWidth={2.2} aria-hidden />
+                  Resumen PNG
                 </button>
                 <button
                   type="button"
