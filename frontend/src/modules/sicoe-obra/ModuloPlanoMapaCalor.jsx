@@ -479,6 +479,10 @@ export default function ModuloPlanoMapaCalor({
     if (srcPts) {
       try { srcPts.setData(joined.puntosSinDibujoFc) } catch { /* ignore */ }
     }
+    const srcSamples = map.getSource('sicoe-calor-samples')
+    if (srcSamples) {
+      try { srcSamples.setData(joined.calorSamplesFc || EMPTY_FC) } catch { /* ignore */ }
+    }
 
     aplicarPaintFoco(map, !!rid)
     focoActivoRef.current = !!rid
@@ -857,12 +861,17 @@ export default function ModuloPlanoMapaCalor({
         type: 'geojson',
         data: puntosRef.current || EMPTY_FC,
       })
+      // Muestras densificadas a lo largo/área del dibujo (heatmap suma superposiciones).
+      map.addSource('sicoe-calor-samples', {
+        type: 'geojson',
+        data: EMPTY_FC,
+      })
 
       map.addLayer({
         id: 'sicoe-calor-heat',
         type: 'heatmap',
-        source: 'sicoe-calor',
-        maxzoom: 18,
+        source: 'sicoe-calor-samples',
+        maxzoom: 20,
         layout: { visibility: 'none' },
         paint: {
           'heatmap-weight': [
@@ -871,9 +880,10 @@ export default function ModuloPlanoMapaCalor({
             0, 0,
             1, 1,
           ],
-          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.7, 15, 1.5],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 18, 15, 40],
-          'heatmap-opacity': 0.85,
+          // Radio contenido: al alejarse no tapa todo; al acercarse no se fragmenta.
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 9, 0.45, 13, 0.85, 17, 1.15],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 9, 6, 13, 12, 17, 18],
+          'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.72, 15, 0.88],
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0, 'rgba(33,102,172,0)',
@@ -1062,6 +1072,7 @@ export default function ModuloPlanoMapaCalor({
               const joined = construirCalorSobreDibujos(heatFcRef.current, allHuellasRef.current)
               map.getSource('sicoe-huellas')?.setData(joined.dibujosFc)
               map.getSource('sicoe-calor')?.setData(joined.puntosSinDibujoFc)
+              map.getSource('sicoe-calor-samples')?.setData(joined.calorSamplesFc || EMPTY_FC)
               setLeyendaVista({
                 con_dibujo: joined.meta.con_dibujo,
                 sin_dibujo: joined.meta.sin_dibujo,
@@ -1245,13 +1256,73 @@ export default function ModuloPlanoMapaCalor({
     try {
       setMapboxAbscisaLabelsVisibility(map, 'plano-underlay-labels-abscisa', mostrarPlano)
     } catch { /* ignore */ }
-    if (map.getLayer('sicoe-calor-heat')) map.setLayoutProperty('sicoe-calor-heat', 'visibility', 'none')
+    // Calor sobre la forma: heatmap de muestras densificadas.
+    if (map.getLayer('sicoe-calor-heat')) {
+      map.setLayoutProperty('sicoe-calor-heat', 'visibility', mostrarHeat ? 'visible' : 'none')
+    }
     if (map.getLayer('sicoe-calor-puntos')) map.setLayoutProperty('sicoe-calor-puntos', 'visibility', visPts)
     if (map.getLayer('sicoe-calor-puntos-halo')) map.setLayoutProperty('sicoe-calor-puntos-halo', 'visibility', visPts)
     if (map.getLayer('sicoe-eje-line')) map.setLayoutProperty('sicoe-eje-line', 'visibility', visEje)
     for (const id of ['sicoe-huellas-fill', 'sicoe-huellas-line']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visHuellas)
     }
+    // Con calor activo: contorno/ítem estándar; la intensidad la lleva el heatmap.
+    try {
+      if (map.getLayer('sicoe-huellas-fill')) {
+        map.setPaintProperty(
+          'sicoe-huellas-fill',
+          'fill-color',
+          mostrarHeat
+            ? ['coalesce', ['get', 'color'], '#2563eb']
+            : [
+              'case',
+              ['==', ['get', 'color_mode'], 'calor'],
+              weightColorExpr(),
+              ['coalesce', ['get', 'color'], '#2563eb'],
+            ],
+        )
+        map.setPaintProperty(
+          'sicoe-huellas-fill',
+          'fill-opacity',
+          mostrarHeat
+            ? 0.18
+            : [
+              'case',
+              ['==', ['get', 'color_mode'], 'calor'],
+              [
+                'interpolate', ['linear'],
+                ['coalesce', ['get', 'weight'], 0.05],
+                0, 0.35,
+                0.5, 0.55,
+                1, 0.72,
+              ],
+              [
+                'case',
+                ['==', ['get', 'precision'], 'precisa'],
+                0.4,
+                0.22,
+              ],
+            ],
+        )
+      }
+      if (map.getLayer('sicoe-huellas-line')) {
+        map.setPaintProperty(
+          'sicoe-huellas-line',
+          'line-color',
+          ['coalesce', ['get', 'color'], '#1d4ed8'],
+        )
+        map.setPaintProperty(
+          'sicoe-huellas-line',
+          'line-width',
+          mostrarHeat ? 1.6 : [
+            'case',
+            ['==', ['get', 'color_mode'], 'calor'],
+            2.6,
+            1.4,
+          ],
+        )
+      }
+    } catch { /* ignore */ }
     // Nunca mostrar marcadores LOD: el dibujo real (entidad/línea/polígono) es la única representación.
     if (map.getLayer('sicoe-huellas-nodo-lod')) {
       map.setLayoutProperty('sicoe-huellas-nodo-lod', 'visibility', 'none')
