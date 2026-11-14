@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
 import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
 import { dataUriEsquemaAFile } from './sicoeGraficosHelpers.js'
@@ -529,7 +530,7 @@ export default function SicoeEsquemasReporteModal({
         aria-modal="true"
         data-testid="sicoe-esquemas-reporte-modal"
         style={{
-          position: 'fixed', inset: 0, zIndex: 12000,
+          position: 'fixed', inset: 0, zIndex: SICOE_POPUP_SOBRE_CARPETA_Z,
           background: 'rgba(15,23,42,0.55)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           padding: 16,

@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
 
 /** Popup institucional de una línea: ¿crear cuadro de aceros? */
 export default function SicoeCuadroAcerosPregunta({
@@ -23,7 +24,7 @@ export default function SicoeCuadroAcerosPregunta({
       data-testid="sicoe-cuadro-aceros-pregunta"
       onClick={(e) => { if (e.target === e.currentTarget) onNo?.() }}
       style={{
-        position: 'fixed', inset: 0, zIndex: 12050,
+        position: 'fixed', inset: 0, zIndex: SICOE_POPUP_SOBRE_CARPETA_Z,
         background: 'rgba(0,0,0,0.65)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 20,

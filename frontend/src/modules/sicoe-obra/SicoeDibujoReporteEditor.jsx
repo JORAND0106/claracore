@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import { SICOE_HERRAMIENTA_POPUP_Z, SICOE_HERRAMIENTA_TOAST_Z } from './sicoeZIndex'
 import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
 import { composeEsquemaPdf } from '../../components/esquema/esquemaExportPdf'
@@ -96,7 +97,7 @@ function CcOfferPopup({ t, title, onYes, onNo }) {
       aria-modal="true"
       data-testid="sicoe-dibujo-offer-grafico"
       style={{
-        position: 'fixed', inset: 0, zIndex: 14500,
+        position: 'fixed', inset: 0, zIndex: SICOE_HERRAMIENTA_POPUP_Z,
         background: 'rgba(15,23,42,0.45)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
@@ -735,7 +736,7 @@ export default function SicoeDibujoReporteEditor({
             left: 16,
             right: 16,
             bottom: 16,
-            zIndex: 14600,
+            zIndex: SICOE_HERRAMIENTA_TOAST_Z,
             maxWidth: 560,
             margin: '0 auto',
             background: error ? '#dc2626' : (aviso ? '#b45309' : t.primary),

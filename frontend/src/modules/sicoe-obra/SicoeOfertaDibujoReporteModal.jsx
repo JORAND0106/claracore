@@ -2,6 +2,8 @@
  * Oferta no bloqueante: dibujar el reporte ahora o después
  * (tras guardar el primer registro).
  */
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
+
 export default function SicoeOfertaDibujoReporteModal({
   t,
   numeroReporte = null,
@@ -13,7 +15,7 @@ export default function SicoeOfertaDibujoReporteModal({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 12500,
+        zIndex: SICOE_POPUP_SOBRE_CARPETA_Z,
         background: 'rgba(0,0,0,0.55)',
         display: 'flex',
         alignItems: 'center',

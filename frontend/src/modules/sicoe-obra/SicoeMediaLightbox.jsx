@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 /**
  * Visor de foto/gráfico con estilo ClaraCore: encabezado, meta del registro e imagen.
@@ -145,7 +146,7 @@ export default function SicoeMediaLightbox({
     { label: 'Vlr. unitario', value: meta?.vlrUnitario },
   ].filter((row) => row.value != null && String(row.value).trim() !== '')
 
-  return (
+  const overlay = (
     <div
       className="cc-sicoe-lightbox"
       role="dialog"
@@ -262,4 +263,7 @@ export default function SicoeMediaLightbox({
       </div>
     </div>
   )
+
+  if (typeof document === 'undefined') return overlay
+  return createPortal(overlay, document.body)
 }

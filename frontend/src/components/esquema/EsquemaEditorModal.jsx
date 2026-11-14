@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  SICOE_HERRAMIENTA_POPUP_Z,
+  SICOE_HERRAMIENTA_Z,
+} from '../../modules/sicoe-obra/sicoeZIndex'
+import {
   createHatchRegionFromClick,
   drawHatchRegion,
   makeHatchPattern,
@@ -7137,7 +7141,8 @@ export default function EsquemaEditorModal({
         e.stopPropagation()
       }}
       style={{
-        position: 'fixed', inset: 0, zIndex: 13000,
+        // Por encima de CarpetaReporte (15000): portal a body.
+        position: 'fixed', inset: 0, zIndex: SICOE_HERRAMIENTA_Z,
         background: t.overlay || ui.overlay,
         display: 'flex',
         alignItems: isPhoneLayout ? 'stretch' : 'center',
@@ -10366,7 +10371,7 @@ function ReferenciaPanel({ t, refInfo, onClose, embedded = false }) {
         position: 'fixed',
         top: 64,
         right: 12,
-        zIndex: 14080,
+        zIndex: SICOE_HERRAMIENTA_POPUP_Z + 80,
         width: 'min(300px, calc(100vw - 24px))',
         maxHeight: 'min(70vh, 420px)',
         overflow: 'auto',

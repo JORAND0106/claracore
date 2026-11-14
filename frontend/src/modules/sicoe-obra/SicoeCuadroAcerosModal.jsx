@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
 import { EsquemaDespiecePanel } from '../../components/esquema/esquemaDespiecePanel.jsx'
 import {
   createEmptySchedule,
@@ -147,7 +148,7 @@ export default function SicoeCuadroAcerosModal({
       aria-modal="true"
       data-testid="sicoe-cuadro-aceros-modal"
       style={{
-        position: 'fixed', inset: 0, zIndex: 12100,
+        position: 'fixed', inset: 0, zIndex: SICOE_POPUP_SOBRE_CARPETA_Z,
         background: 'rgba(0,0,0,0.7)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 12,
