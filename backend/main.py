@@ -5781,14 +5781,17 @@ def _sicoe_analisis_aplicar_filtro_actas(
     mapa_calor: bool,
 ):
     """
-    Panel /analisis (KPI): filtra por acta en la *línea* (totales alineados a SQL de validación).
-    Mapa de calor: filtra por acta en la *cabecera* del reporte (mismo alcance que la grilla
-    y que la vista de detalle, donde las coords GPS suelen vivir en so_reportes).
+    Panel /analisis, grilla y mapa de calor ClaraGIS: misma semántica de Acta RPO —
+    filtra por so_registros.acta_rpo_id (línea / registro).
+
+    Un reporte aparece en el plano si al menos un registro cumple el filtro; el calor
+    y los conteos usan solo esos registros. `mapa_calor` se conserva por compatibilidad
+    de firma; ya no cambia el alcance del filtro.
     """
     if not acta_rpo_ids:
         return q
-    if mapa_calor:
-        return _sicoe_registros_q_filtrar_actas_scope(q, int(contrato_id), acta_rpo_ids)
+    # contrato_id / mapa_calor: firma estable para callers y tests; alcance = línea.
+    _ = (contrato_id, mapa_calor)
     return _sicoe_registros_q_filtrar_actas_linea(q, acta_rpo_ids)
 
 

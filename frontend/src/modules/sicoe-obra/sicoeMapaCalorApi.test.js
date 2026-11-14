@@ -43,4 +43,40 @@ describe('sicoeMapaCalorParams', () => {
     const capas = JSON.parse(params.get('validacion_capas'))
     assert.deepEqual(capas[0], { nivel: 1, estado: 'Aprobado' })
   })
+
+  it('serializa Acta RPO, ítem, semana y tramo igual que la grilla', () => {
+    const params = sicoeBuildMapaCalorSearchParams({
+      fSicoe: {
+        acta_rpo: '616',
+        semana: '12',
+        item: '3.9.',
+        tramo: 'T1',
+        costado: 'Derecho',
+      },
+      itemsChips: ['3.9.'],
+      itemsOp: 'and',
+      capasValidacion: [],
+      panelCapitulos: [],
+      panelActasRpo: [],
+    })
+    assert.equal(params.get('formato'), 'mapa_calor')
+    assert.equal(params.get('acta_rpo'), '616')
+    assert.equal(params.get('semana'), '12')
+    assert.equal(params.get('item'), '3.9.')
+    assert.equal(params.get('tramo'), 'T1')
+    assert.equal(params.get('costado'), 'Derecho')
+  })
+
+  it('actas_filtro / capitulos_filtro del panel tienen prioridad', () => {
+    const params = sicoeBuildMapaCalorSearchParams({
+      fSicoe: { acta_rpo: '1', capitulo: '01' },
+      panelActasRpo: [616, 617],
+      panelCapitulos: ['01', '02'],
+      capasValidacion: [],
+    })
+    assert.equal(params.get('actas_filtro'), JSON.stringify([616, 617]))
+    assert.equal(params.get('acta_rpo'), null)
+    assert.equal(params.get('capitulos_filtro'), JSON.stringify(['01', '02']))
+    assert.equal(params.get('capitulo'), null)
+  })
 })
