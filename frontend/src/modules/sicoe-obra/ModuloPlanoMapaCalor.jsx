@@ -5,6 +5,7 @@ import {
   sicoeBundleTieneCriteriosUsuario,
   sicoeEstadosReporteFiltro,
   sicoeFiltroSnapshot,
+  sicoeFiltrosActivosKeys,
   sicoePuedeVerFiltroSubcontratista,
 } from './sicoeFiltroCatalogo'
 import {
@@ -281,7 +282,6 @@ export default function ModuloPlanoMapaCalor({
   const [nivelesDisponibles, setNivelesDisponibles] = useState([1, 2, 3])
   const [encabezadoPorNivel, setEncabezadoPorNivel] = useState({})
   const [panelAbierto, setPanelAbierto] = useState(null) // 'filtros' | 'capas' | 'intensidad' | null
-  const [openFiltroSignal, setOpenFiltroSignal] = useState(0)
   const [embedReporte, setEmbedReporte] = useState(null)
   const [embedMin, setEmbedMin] = useState(false)
   const [embedCargando, setEmbedCargando] = useState(false)
@@ -320,6 +320,13 @@ export default function ModuloPlanoMapaCalor({
     () => sicoeBundleTieneCriteriosUsuario(bundleAplicado),
     [bundleAplicado],
   )
+
+  const nFiltrosActivos = useMemo(() => {
+    if (!tieneCriterios) return 0
+    return sicoeFiltrosActivosKeys(bundleAplicado?.fSicoe || {}, {
+      capasValidacion: bundleAplicado?.capasValidacion,
+    }).length
+  }, [bundleAplicado, tieneCriterios])
 
   const focusActive = !!(focoRevision?.registroId)
 
@@ -1346,6 +1353,33 @@ export default function ModuloPlanoMapaCalor({
     return () => clearTimeout(tmr)
   }, [panelAbierto, embedReporte, embedMin, mapReady, panelsAsIcons])
 
+  // Cerrar popup de filtros con Escape o clic fuera (el plano sigue usable).
+  useEffect(() => {
+    if (panelAbierto !== 'filtros') return undefined
+    const onKey = (e) => {
+      if (e.key === 'Escape') setPanelAbierto(null)
+    }
+    const onPointer = (e) => {
+      const el = e.target
+      if (!(el instanceof Element)) return
+      if (el.closest('.cc-claragis-filtro-popup')) return
+      if (el.closest('[data-claragis-filtro-btn]')) return
+      // No cerrar si el modal de filtros (z alto) está abierto.
+      if (el.closest('.cc-sicoe-filtro-modal-overlay')) return
+      setPanelAbierto(null)
+    }
+    window.addEventListener('keydown', onKey)
+    // delay: evita cerrar por el mismo click que abrió el popup
+    const tmr = window.setTimeout(() => {
+      window.addEventListener('pointerdown', onPointer, true)
+    }, 0)
+    return () => {
+      window.clearTimeout(tmr)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerdown', onPointer, true)
+    }
+  }, [panelAbierto])
+
   if (!MAPBOX_TOKEN) {
     return (
       <div style={{ padding: '24px', borderRadius: '12px', border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, maxWidth: '520px' }}>
@@ -1366,22 +1400,19 @@ export default function ModuloPlanoMapaCalor({
     ? 'Filtros — al entrar se carga No Revisado de su nivel. Sin filtros el plano muestra eje y abscisado para ubicarse.'
     : 'Filtros — elija criterios y Buscar para ver reportes en el plano. Sin filtros el plano muestra eje y abscisado para ubicarse.'
 
-  const iconBtn = (id, label, emoji) => (
+  const iconBtn = (id, label, emoji, { badge } = {}) => (
     <button
       key={id}
       type="button"
       title={id === 'filtros' ? filtroTip : label}
       aria-label={id === 'filtros' ? filtroTip : label}
       aria-pressed={panelAbierto === id}
+      data-claragis-filtro-btn={id === 'filtros' ? '1' : undefined}
       onClick={() => {
-        if (id === 'filtros') {
-          setOpenFiltroSignal((n) => n + 1)
-          setPanelAbierto(null)
-          return
-        }
         setPanelAbierto((cur) => (cur === id ? null : id))
       }}
       style={{
+        position: 'relative',
         width: 40,
         height: 40,
         borderRadius: 10,
@@ -1394,11 +1425,93 @@ export default function ModuloPlanoMapaCalor({
         alignItems: 'center',
         justifyContent: 'center',
         boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+        flexShrink: 0,
       }}
     >
       {emoji}
+      {badge > 0 ? (
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: -5,
+            right: -5,
+            minWidth: 18,
+            height: 18,
+            padding: '0 4px',
+            borderRadius: 9,
+            background: t.primary,
+            color: '#fff',
+            fontSize: 10,
+            fontWeight: 800,
+            lineHeight: '18px',
+            textAlign: 'center',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+          }}
+        >
+          {badge > 99 ? '99+' : badge}
+        </span>
+      ) : null}
     </button>
   )
+
+  const filtroPopup = panelAbierto === 'filtros' ? (
+    <div
+      className="cc-claragis-filtro-popup"
+      role="dialog"
+      aria-label="Filtros del plano"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        background: `${t.bgCard}F8`,
+        border: `1px solid ${t.border}`,
+        borderRadius: 12,
+        padding: '10px 12px',
+        boxShadow: '0 8px 28px rgba(0,0,0,0.28)',
+        width: 'min(440px, calc(100vw - 48px))',
+        maxWidth: '100%',
+        maxHeight: 'min(62vh, 480px)',
+        overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+        <strong style={{ fontSize: 'var(--cc-sm)', color: t.text }}>Filtros</strong>
+        <button
+          type="button"
+          onClick={() => setPanelAbierto(null)}
+          aria-label="Cerrar filtros"
+          title="Cerrar"
+          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted, fontSize: 16, lineHeight: 1, padding: 4 }}
+        >
+          ✕
+        </button>
+      </div>
+      <SicoeFiltroObraVista
+        t={t}
+        contratoId={contratoId}
+        token={token}
+        bundleAplicado={bundleAplicado}
+        onBuscar={(snap) => {
+          onBuscar(snap)
+        }}
+        onLimpiar={onLimpiar}
+        onActualizar={() => void cargarMapaCalor(bundleAplicado, { registroFocoId: focoRevision?.registroId })}
+        actualizarDisabled={!tieneCriterios || buscando}
+        buscando={buscando}
+        puedeExportar={false}
+        puedeVerSubcontratista={puedeVerSubcontratista}
+        estadosReporte={estadosReporte}
+        etiquetasValidacion={ETIQUETAS_VALIDACION}
+        nivelesDisponibles={nivelesDisponibles}
+        encabezadoPorNivel={encabezadoPorNivel}
+        filtroSubcList={filtroSubcList}
+        busquedaRealizada={busquedaRealizada}
+        chipsUnaLinea
+        compactBar
+      />
+    </div>
+  ) : null
 
   const capasPanel = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1457,95 +1570,14 @@ export default function ModuloPlanoMapaCalor({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: panelsAsIcons ? 6 : 10,
-        height: 'calc(100dvh - 140px)',
+        gap: 0,
+        height: 'calc(100dvh - 72px)',
         minHeight: 360,
         isolation: 'isolate',
         position: 'relative',
         zIndex: 0,
       }}
     >
-      <div style={{ flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: panelsAsIcons ? 4 : 8 }}>
-          <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text }}>
-            🗺️ {CLARAGIS_TITULO}
-          </div>
-          <span
-            title={CLARAGIS_HINT}
-            aria-label={CLARAGIS_HINT}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 22,
-              height: 22,
-              borderRadius: '50%',
-              border: `1px solid ${t.border}`,
-              color: t.textMuted,
-              fontSize: 12,
-              fontWeight: 800,
-              cursor: 'help',
-              userSelect: 'none',
-            }}
-          >
-            i
-          </span>
-          {esMesaValidador && (
-            <span style={{ fontSize: 'var(--cc-caption)', color: t.primary, fontWeight: 700 }}>
-              Mesa de validación
-            </span>
-          )}
-        </div>
-
-        {!panelsAsIcons && (
-          <SicoeFiltroObraVista
-            t={t}
-            contratoId={contratoId}
-            token={token}
-            bundleAplicado={bundleAplicado}
-            onBuscar={onBuscar}
-            onLimpiar={onLimpiar}
-            onActualizar={() => void cargarMapaCalor(bundleAplicado, { registroFocoId: focoRevision?.registroId })}
-            actualizarDisabled={!tieneCriterios || buscando}
-            buscando={buscando}
-            puedeExportar={false}
-            puedeVerSubcontratista={puedeVerSubcontratista}
-            estadosReporte={estadosReporte}
-            etiquetasValidacion={ETIQUETAS_VALIDACION}
-            nivelesDisponibles={nivelesDisponibles}
-            encabezadoPorNivel={encabezadoPorNivel}
-            filtroSubcList={filtroSubcList}
-            busquedaRealizada={busquedaRealizada}
-            chipsUnaLinea
-          />
-        )}
-
-        {panelsAsIcons && (
-          <SicoeFiltroObraVista
-            t={t}
-            contratoId={contratoId}
-            token={token}
-            bundleAplicado={bundleAplicado}
-            onBuscar={onBuscar}
-            onLimpiar={onLimpiar}
-            onActualizar={() => void cargarMapaCalor(bundleAplicado, { registroFocoId: focoRevision?.registroId })}
-            actualizarDisabled={!tieneCriterios || buscando}
-            buscando={buscando}
-            puedeExportar={false}
-            puedeVerSubcontratista={puedeVerSubcontratista}
-            estadosReporte={estadosReporte}
-            etiquetasValidacion={ETIQUETAS_VALIDACION}
-            nivelesDisponibles={nivelesDisponibles}
-            encabezadoPorNivel={encabezadoPorNivel}
-            filtroSubcList={filtroSubcList}
-            busquedaRealizada={busquedaRealizada}
-            hideToolbar
-            chipsUnaLinea
-            openModalSignal={openFiltroSignal}
-          />
-        )}
-      </div>
-
       <div style={{
         position: 'relative',
         flex: 1,
@@ -1555,6 +1587,61 @@ export default function ModuloPlanoMapaCalor({
         border: `1px solid ${t.border}`,
       }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+
+        {/* Título mínimo sobre el plano (sin franja propia). */}
+        <div
+          className="cc-claragis-titulo-overlay"
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 6,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            maxWidth: 'min(280px, calc(100% - 120px))',
+            padding: '4px 10px',
+            borderRadius: 999,
+            background: `${t.bgCard}E8`,
+            border: `1px solid ${t.border}`,
+            boxShadow: '0 2px 10px rgba(0,0,0,0.16)',
+            pointerEvents: 'auto',
+          }}
+        >
+          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.text, whiteSpace: 'nowrap' }}>
+            🗺️ {CLARAGIS_TITULO}
+          </span>
+          <span
+            title={CLARAGIS_HINT}
+            aria-label={CLARAGIS_HINT}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              borderRadius: '50%',
+              border: `1px solid ${t.border}`,
+              color: t.textMuted,
+              fontSize: 10,
+              fontWeight: 800,
+              cursor: 'help',
+              userSelect: 'none',
+              flexShrink: 0,
+            }}
+          >
+            i
+          </span>
+          {esMesaValidador && (
+            <span
+              title="Mesa de validación"
+              style={{ fontSize: 10, color: t.primary, fontWeight: 700, whiteSpace: 'nowrap' }}
+            >
+              Validación
+            </span>
+          )}
+        </div>
 
         {/* Listado osnap: varios reportes bajo el punto (nunca sobre la ventana incrustada). */}
         {osnapPicker && !embedReporte && Array.isArray(osnapPicker.opciones) && osnapPicker.opciones.length > 1 && (
@@ -1624,48 +1711,54 @@ export default function ModuloPlanoMapaCalor({
           </div>
         )}
 
-        {/* Controles recogidos (móvil/tablet) o paneles abiertos (desktop capas/intensidad) */}
-        {panelsAsIcons ? (
-          <div style={{
-            position: 'absolute', top: 12, left: 12, zIndex: 8,
-            display: 'flex', flexDirection: 'column', gap: 8,
-          }}>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {iconBtn('filtros', 'Filtros', '🔍')}
-              {iconBtn('capas', 'Capas del plano', '🗂️')}
-              {iconBtn('intensidad', 'Intensidad y conteos', '🌡️')}
-            </div>
-            {panelAbierto === 'capas' && (
-              <div style={{
-                background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
-                borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-                maxWidth: 260,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Capas</strong>
-                  <button type="button" onClick={() => setPanelAbierto(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted }}>✕</button>
-                </div>
-                {capasPanel}
-              </div>
-            )}
-            {panelAbierto === 'intensidad' && (
-              <div style={{
-                background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
-                borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-                maxWidth: 280,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Intensidad</strong>
-                  <button type="button" onClick={() => setPanelAbierto(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted }}>✕</button>
-                </div>
-                {intensidadPanel}
-              </div>
-            )}
+        {/* Filtros (siempre icono + popup) y capas/intensidad (iconos en móvil/tablet; paneles en escritorio). */}
+        <div style={{
+          position: 'absolute', top: 12, left: 12, zIndex: 28,
+          display: 'flex', flexDirection: 'column', gap: 8,
+          alignItems: 'flex-start',
+          maxWidth: 'calc(100% - 24px)',
+          pointerEvents: 'none',
+        }}>
+          <div style={{ display: 'flex', gap: 6, pointerEvents: 'auto' }}>
+            {iconBtn('filtros', 'Filtros', '🔍', { badge: nFiltrosActivos })}
+            {panelsAsIcons && iconBtn('capas', 'Capas del plano', '🗂️')}
+            {panelsAsIcons && iconBtn('intensidad', 'Intensidad y conteos', '🌡️')}
           </div>
-        ) : (
+          <div style={{ pointerEvents: 'auto' }}>
+            {filtroPopup}
+          </div>
+          {panelsAsIcons && panelAbierto === 'capas' && (
+            <div style={{
+              background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
+              borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              maxWidth: 260, pointerEvents: 'auto',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Capas</strong>
+                <button type="button" onClick={() => setPanelAbierto(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted }}>✕</button>
+              </div>
+              {capasPanel}
+            </div>
+          )}
+          {panelsAsIcons && panelAbierto === 'intensidad' && (
+            <div style={{
+              background: `${t.bgCard}F5`, border: `1px solid ${t.border}`,
+              borderRadius: 10, padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              maxWidth: 280, pointerEvents: 'auto',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Intensidad</strong>
+                <button type="button" onClick={() => setPanelAbierto(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted }}>✕</button>
+              </div>
+              {intensidadPanel}
+            </div>
+          )}
+        </div>
+
+        {!panelsAsIcons && (
           <>
             <div style={{
-              position: 'absolute', top: 12, left: 12, zIndex: 5,
+              position: 'absolute', top: 58, left: 12, zIndex: 5,
               background: `${t.bgCard}EE`, border: `1px solid ${t.border}`,
               borderRadius: 10, padding: '8px 10px', boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
             }}>

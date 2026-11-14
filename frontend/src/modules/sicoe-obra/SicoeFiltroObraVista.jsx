@@ -45,6 +45,10 @@ export default function SicoeFiltroObraVista({
   chipsSuaves = false,
   /** ClaraGIS: oculta la barra de botones (el host abre el modal). */
   hideToolbar = false,
+  /** ClaraGIS: no renderiza chips fuera del popup (solo modal host). */
+  hideChips = false,
+  /** ClaraGIS: barra embebida en popup flotante (sin sticky ni margen inferior). */
+  compactBar = false,
   /** ClaraGIS: chips en una sola línea con scroll horizontal. */
   chipsUnaLinea = false,
   /** Incrementar para abrir el modal de filtros desde fuera. */
@@ -159,7 +163,7 @@ export default function SicoeFiltroObraVista({
     whiteSpace: 'nowrap',
   }
 
-  const chipsEl = chipsActivos.length > 0 ? (
+  const chipsEl = (!hideChips && chipsActivos.length > 0) ? (
     <div
       className={`cc-sicoe-filtro-chips${chipsSuaves ? ' cc-sicoe-filtro-chips--suave' : ''}${chipsUnaLinea ? ' cc-sicoe-filtro-chips--una-linea' : ''}`}
       aria-label="Filtros activos"
@@ -168,7 +172,7 @@ export default function SicoeFiltroObraVista({
         flexWrap: 'nowrap',
         overflowX: 'auto',
         gap: 6,
-        marginTop: hideToolbar ? 0 : 8,
+        marginTop: hideToolbar || compactBar ? 0 : 8,
         paddingBottom: 2,
         WebkitOverflowScrolling: 'touch',
       } : undefined}
@@ -209,16 +213,16 @@ export default function SicoeFiltroObraVista({
     <>
       {!hideToolbar && (
         <div
-          className="cc-sicoe-filtro-bar"
+          className={`cc-sicoe-filtro-bar${compactBar ? ' cc-sicoe-filtro-bar--popup' : ''}`}
           style={{
-            background: t.bgCard,
-            border: `1px solid ${t.border}`,
-            borderRadius: 10,
-            padding: '10px 12px',
-            marginBottom: 12,
-            position: 'sticky',
+            background: compactBar ? 'transparent' : t.bgCard,
+            border: compactBar ? 'none' : `1px solid ${t.border}`,
+            borderRadius: compactBar ? 0 : 10,
+            padding: compactBar ? '0' : '10px 12px',
+            marginBottom: compactBar ? 0 : 12,
+            position: compactBar ? 'static' : 'sticky',
             top: 0,
-            zIndex: 10,
+            zIndex: compactBar ? 'auto' : 10,
           }}
         >
           <div className="cc-sicoe-filtro-bar-actions" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
@@ -322,7 +326,7 @@ export default function SicoeFiltroObraVista({
         </div>
       )}
 
-      {hideToolbar && chipsEl}
+      {hideToolbar && !hideChips && chipsEl}
 
       <SicoeFiltroModal
         open={modalOpen}
