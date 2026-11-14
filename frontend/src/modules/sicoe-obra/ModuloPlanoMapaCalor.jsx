@@ -41,6 +41,14 @@ import { addMapboxGeolocateControl } from '../../mapboxSafe'
 import { useClaraViewport } from '../../useClaraViewport'
 import { subscribeDibujoReporteActualizado } from './sicoeDibujoActualizado'
 import { sicoeUsuarioVeValoresEconomicos } from '../../utils/sicoeVisibilidadEconomica'
+import {
+  CLARAGIS_OSNAP_LAYERS,
+  claragisCentroideLngLat,
+  claragisEventoEsTactil,
+  claragisHitsAOpcionesPicker,
+  claragisOsnapBbox,
+  claragisOsnapTolerancePx,
+} from './claraGisOsnapSeleccion'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -201,6 +209,25 @@ function fitMapBounds(map, bounds, { padding = 48, maxZoom = 17, duration = 0 } 
   } catch { /* ignore */ }
 }
 
+/** Desplaza el mapa sin cambiar zoom si el punto queda fuera del viewport. */
+function panSiFueraDeVista(map, lngLat, { padding = 72, duration = 280 } = {}) {
+  if (!map || !Array.isArray(lngLat) || lngLat.length < 2) return
+  const [lng, lat] = lngLat
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+  try {
+    const canvas = map.getCanvas()
+    const w = canvas?.clientWidth || 0
+    const h = canvas?.clientHeight || 0
+    if (w < 8 || h < 8) return
+    const p = map.project(lngLat)
+    const pad = Math.max(24, Number(padding) || 0)
+    const inside = p.x >= pad && p.x <= w - pad && p.y >= pad && p.y <= h - pad
+    if (inside) return
+    const zoom = map.getZoom()
+    map.easeTo({ center: lngLat, zoom, duration, essential: true })
+  } catch { /* ignore */ }
+}
+
 /**
  * ClaraGIS (antes Plano Semáforo): mapa de calor + mesa de validación.
  */
@@ -259,6 +286,12 @@ export default function ModuloPlanoMapaCalor({
   const [embedMin, setEmbedMin] = useState(false)
   const [embedCargando, setEmbedCargando] = useState(false)
   const [focoRevision, setFocoRevision] = useState(null) // { registroId, itemNumero }
+  /** Listado compacto cuando hay varios reportes bajo la tolerancia osnap. */
+  const [osnapPicker, setOsnapPicker] = useState(null) // { x, y, opciones[] }
+  const osnapPickerRef = useRef(null)
+  osnapPickerRef.current = osnapPicker
+  const setOsnapPickerRef = useRef(setOsnapPicker)
+  setOsnapPickerRef.current = setOsnapPicker
 
   const nivelInfo = useMemo(() => {
     const rol = String(usuario?.rol_nombre || usuario?.rol || '').toLowerCase()
@@ -681,12 +714,22 @@ export default function ModuloPlanoMapaCalor({
     if (map) centrarEnProyecto(map, { duration: 400 })
   }, [contratoId, aplicarPuntosAlMapa, centrarEnProyecto, esMesaValidador, capasInicialesValidacion])
 
-  const abrirReporteDesdeMapa = useCallback(async (props) => {
+  const abrirReporteDesdeMapa = useCallback(async (props, { geometry = null } = {}) => {
     const reporteId = props?.reporte_id
-    const registroId = props?.id
+    const registroId = props?.registro_id != null ? props.registro_id : props?.id
     if (!reporteId || !contratoId || !token) return
+    setOsnapPicker(null)
     setEmbedCargando(true)
     setEmbedMin(false)
+    // Sin zoom: solo pan si el dibujo queda fuera de la vista.
+    const map = mapInstance.current
+    const centro = claragisCentroideLngLat(geometry)
+      || (
+        Number.isFinite(Number(props?.coord_lng)) && Number.isFinite(Number(props?.coord_lat))
+          ? [Number(props.coord_lng), Number(props.coord_lat)]
+          : null
+      )
+    if (map && centro) panSiFueraDeVista(map, centro)
     setEmbedReporte({
       id: reporteId,
       numero_reporte: props?.numero_reporte,
@@ -724,7 +767,8 @@ export default function ModuloPlanoMapaCalor({
     const item = String(info.itemNumero || '').trim()
     if (!item) {
       setFocoRevision({ registroId: info.registroId, itemNumero: null })
-      aplicarPuntosAlMapa(puntosRef.current, { registroFocoId: info.registroId, fit: true })
+      // Foco de revisión: nunca cambia el zoom del usuario.
+      aplicarPuntosAlMapa(puntosRef.current, { registroFocoId: info.registroId, fit: false })
       return
     }
     if (!trabajoBundleRef.current) {
@@ -733,7 +777,7 @@ export default function ModuloPlanoMapaCalor({
     const focoBundle = claraGisBundleFocoItem(item, info.itemDescripcion)
     setFocoRevision({ registroId: info.registroId, itemNumero: item })
     setBundleAplicado(focoBundle)
-    void cargarMapaCalor(focoBundle, { registroFocoId: info.registroId, fit: true })
+    void cargarMapaCalor(focoBundle, { registroFocoId: info.registroId, fit: false })
   }, [focoRevision, restaurarBloqueTrabajo, aplicarPuntosAlMapa, bundleAplicado, cargarMapaCalor])
 
   const cerrarEmbed = useCallback(() => {
@@ -1027,30 +1071,126 @@ export default function ModuloPlanoMapaCalor({
         })
         .catch(() => {})
 
-      const abrirDesdeFeature = (props) => {
-        if (!props) return
-        const p = { ...props }
+      // Capas de resalte sutil (osnap hover / picker).
+      map.addSource('sicoe-osnap-hl', { type: 'geojson', data: EMPTY_FC })
+      map.addLayer({
+        id: 'sicoe-osnap-hl-fill',
+        type: 'fill',
+        source: 'sicoe-osnap-hl',
+        filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+        paint: {
+          'fill-color': '#38bdf8',
+          'fill-opacity': 0.28,
+        },
+      })
+      map.addLayer({
+        id: 'sicoe-osnap-hl-line',
+        type: 'line',
+        source: 'sicoe-osnap-hl',
+        paint: {
+          'line-color': '#0ea5e9',
+          'line-width': 3.2,
+          'line-opacity': 0.95,
+        },
+      })
+      map.addLayer({
+        id: 'sicoe-osnap-hl-point',
+        type: 'circle',
+        source: 'sicoe-osnap-hl',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-radius': 9,
+          'circle-color': '#0ea5e9',
+          'circle-opacity': 0.35,
+          'circle-stroke-width': 2.2,
+          'circle-stroke-color': '#0284c7',
+        },
+      })
+
+      const setOsnapHighlight = (featureOrNull) => {
+        try {
+          const src = map.getSource('sicoe-osnap-hl')
+          if (!src) return
+          if (!featureOrNull?.geometry) {
+            src.setData(EMPTY_FC)
+            return
+          }
+          src.setData({
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              geometry: featureOrNull.geometry,
+              properties: featureOrNull.properties || {},
+            }],
+          })
+        } catch { /* ignore */ }
+      }
+
+      const queryOsnap = (point, mapEvent) => {
+        const touch = claragisEventoEsTactil(mapEvent)
+        const r = claragisOsnapTolerancePx({ touch })
+        const bbox = claragisOsnapBbox(point, r)
+        let feats = []
+        try {
+          const layers = CLARAGIS_OSNAP_LAYERS.filter((id) => map.getLayer(id))
+          if (!layers.length) return []
+          feats = map.queryRenderedFeatures(bbox, { layers }) || []
+        } catch {
+          feats = []
+        }
+        return claragisHitsAOpcionesPicker(feats)
+      }
+
+      const abrirOpcion = (op) => {
+        if (!op?.props) return
+        setOsnapHighlight(op.geometry ? { geometry: op.geometry, properties: op.props } : null)
         if (typeof abrirReporteRef.current === 'function') {
-          void abrirReporteRef.current(p)
+          void abrirReporteRef.current(op.props, { geometry: op.geometry })
         }
       }
 
-      map.on('mouseenter', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = 'pointer' })
-      map.on('mouseleave', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = '' })
-      map.on('click', 'sicoe-calor-puntos', (e) => {
-        const f = e.features?.[0]
-        if (!f) return
-        abrirDesdeFeature(f.properties)
+      map.on('mousemove', (e) => {
+        if (osnapPickerRef.current) return
+        const opts = queryOsnap(e.point, e)
+        if (!opts.length) {
+          map.getCanvas().style.cursor = ''
+          setOsnapHighlight(null)
+          return
+        }
+        map.getCanvas().style.cursor = 'pointer'
+        const first = opts[0]
+        setOsnapHighlight(first.geometry
+          ? { geometry: first.geometry, properties: first.props }
+          : null)
       })
-      for (const layerId of ['sicoe-huellas-fill', 'sicoe-huellas-line', 'sicoe-huellas-nodo-lod']) {
-        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer' })
-        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = '' })
-        map.on('click', layerId, (e) => {
-          const f = e.features?.[0]
-          if (!f || f.properties?.color_mode !== 'calor') return
-          abrirDesdeFeature(f.properties)
+
+      map.on('mouseleave', () => {
+        if (osnapPickerRef.current) return
+        map.getCanvas().style.cursor = ''
+        setOsnapHighlight(null)
+      })
+
+      map.on('click', (e) => {
+        // Cerrar picker si el clic no es sobre el listado (el listado detiene propagación).
+        const opts = queryOsnap(e.point, e)
+        if (!opts.length) {
+          setOsnapPickerRef.current?.(null)
+          setOsnapHighlight(null)
+          return
+        }
+        if (opts.length === 1) {
+          setOsnapPickerRef.current?.(null)
+          abrirOpcion(opts[0])
+          return
+        }
+        // Varias entidades: listado compacto junto al punto.
+        setOsnapHighlight(null)
+        setOsnapPickerRef.current?.({
+          x: e.point.x,
+          y: e.point.y,
+          opciones: opts,
         })
-      }
+      })
 
       try { map.resize() } catch { /* ignore */ }
       mapReadyRef.current = true
@@ -1344,6 +1484,74 @@ export default function ModuloPlanoMapaCalor({
         border: `1px solid ${t.border}`,
       }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+
+        {/* Listado osnap: varios reportes bajo el punto (nunca sobre la ventana incrustada). */}
+        {osnapPicker && !embedReporte && Array.isArray(osnapPicker.opciones) && osnapPicker.opciones.length > 1 && (
+          <div
+            role="listbox"
+            aria-label="Reportes en este punto"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              left: Math.max(8, Math.min((osnapPicker.x || 0) + 10, (mapRef.current?.clientWidth || 320) - 268)),
+              top: Math.max(8, Math.min((osnapPicker.y || 0) + 10, (mapRef.current?.clientHeight || 280) - 160)),
+              zIndex: 9,
+              width: 260,
+              maxHeight: 220,
+              overflowY: 'auto',
+              background: t.bgCard || t.card || '#0f172a',
+              border: `1px solid ${t.border}`,
+              borderRadius: 10,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+              padding: 4,
+            }}
+          >
+            {osnapPicker.opciones.map((op) => {
+              const label = `#${op.numeroReporte ?? op.reporteId} · ${op.descripcion}`
+              return (
+                <button
+                  key={op.reporteId}
+                  type="button"
+                  role="option"
+                  title={label}
+                  onMouseEnter={() => {
+                    const map = mapInstance.current
+                    if (!map || !op.geometry) return
+                    try {
+                      map.getSource('sicoe-osnap-hl')?.setData({
+                        type: 'FeatureCollection',
+                        features: [{ type: 'Feature', geometry: op.geometry, properties: op.props || {} }],
+                      })
+                    } catch { /* ignore */ }
+                  }}
+                  onClick={() => {
+                    setOsnapPicker(null)
+                    void abrirReporteDesdeMapa(op.props, { geometry: op.geometry })
+                  }}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    border: 'none',
+                    background: 'transparent',
+                    color: t.text,
+                    cursor: 'pointer',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* Controles recogidos (móvil/tablet) o paneles abiertos (desktop capas/intensidad) */}
         {panelsAsIcons ? (
