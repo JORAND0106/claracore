@@ -10,9 +10,9 @@ const publicDir = join(__dirname, '../../public')
 const root = join(__dirname, '../..')
 
 describe('PWA shell offline', () => {
-  it('service worker precachea shell en install (v10 + cache-first)', () => {
+  it('service worker precachea shell en install (v11 + cache-first)', () => {
     const sw = readFileSync(join(publicDir, 'sw.js'), 'utf8')
-    assert.match(sw, /claracore-shell-v10/)
+    assert.match(sw, /claracore-shell-v11/)
     assert.match(sw, /SHELL_PRECACHE|__CLARACORE_PRECACHE__/)
     assert.match(sw, /\/index\.html/)
     assert.match(sw, /\/manifest\.webmanifest/)

@@ -322,70 +322,102 @@ def _pizarra_table_error(exc: BaseException) -> HTTPException:
     return _table_error(exc)
 
 
-def _enrich_pizarra_item(row: Dict[str, Any], viewer_uid: int) -> Optional[Dict[str, Any]]:
-    """Adjunta título/cuerpo vivos de la nota; omite si la nota fue eliminada."""
-    note_id = row.get("note_id")
-    if not note_id:
-        return None
-    try:
-        notes = (
-            supabase.table("bloc_notas_notes")
-            .select("id, title, body, usuario_id, folder_id, deleted_at, updated_at")
-            .eq("id", note_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-    except Exception:
-        notes = []
-    if not notes:
-        return None
-    note = notes[0]
-    if note.get("deleted_at"):
-        return None
-    owner_id = int(note.get("usuario_id") or row.get("usuario_id") or 0)
-    vis = row.get("visibilidad")
-    # Privacidad: solo_yo solo al dueño
-    if vis == "solo_yo" and owner_id != viewer_uid:
-        return None
-    owner_nombre = None
-    try:
-        urows = (
-            supabase.table("usuarios")
-            .select("id, nombre, nombre_completo, email")
-            .eq("id", owner_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if urows:
-            u = urows[0]
-            owner_nombre = (
-                u.get("nombre_completo")
-                or u.get("nombre")
-                or u.get("email")
-            )
-    except Exception:
-        owner_nombre = None
-    return {
-        "id": row.get("id"),
-        "note_id": note_id,
-        "folder_id": note.get("folder_id"),
-        "contrato_id": row.get("contrato_id"),
-        "usuario_id": owner_id,
-        "visibilidad": vis,
-        "title": note.get("title") or "Nota",
-        "body": note.get("body") or {},
-        "owner_nombre": owner_nombre,
-        "created_at": row.get("created_at"),
-        "updated_at": note.get("updated_at") or row.get("updated_at"),
-        "deleted_at": row.get("deleted_at"),
-        "rev": row.get("rev") or 1,
-        "device_id": row.get("device_id"),
-        "es_dueno": owner_id == viewer_uid,
-    }
+def _enrich_pizarra_items_batch(
+    rows: List[Dict[str, Any]], viewer_uid: int
+) -> List[Dict[str, Any]]:
+    """Adjunta notas/usuarios en 1–2 queries (evita N+1 y timeouts 503)."""
+    if not rows:
+        return []
+    note_ids = [str(r.get("note_id")) for r in rows if r.get("note_id")]
+    notes_map: Dict[str, Dict[str, Any]] = {}
+    if note_ids:
+        try:
+            uniq = list(dict.fromkeys(note_ids))
+            for i in range(0, len(uniq), 200):
+                chunk = uniq[i : i + 200]
+                batch = (
+                    supabase.table("bloc_notas_notes")
+                    .select("id, title, body, usuario_id, folder_id, deleted_at, updated_at")
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+                for n in batch:
+                    if n.get("id") is not None:
+                        notes_map[str(n["id"])] = n
+        except Exception:
+            notes_map = {}
+
+    owner_ids: List[int] = []
+    for row in rows:
+        note = notes_map.get(str(row.get("note_id") or ""))
+        if not note or note.get("deleted_at"):
+            continue
+        try:
+            owner_ids.append(int(note.get("usuario_id") or row.get("usuario_id") or 0))
+        except (TypeError, ValueError):
+            continue
+    users_map: Dict[int, str] = {}
+    if owner_ids:
+        try:
+            uniq_u = list({x for x in owner_ids if x})
+            for i in range(0, len(uniq_u), 200):
+                chunk = uniq_u[i : i + 200]
+                batch = (
+                    supabase.table("usuarios")
+                    .select("id, nombre, nombre_completo, email")
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+                for u in batch:
+                    if u.get("id") is None:
+                        continue
+                    users_map[int(u["id"])] = (
+                        u.get("nombre_completo")
+                        or u.get("nombre")
+                        or u.get("email")
+                    )
+        except Exception:
+            users_map = {}
+
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        note_id = row.get("note_id")
+        if not note_id:
+            continue
+        note = notes_map.get(str(note_id))
+        if not note or note.get("deleted_at"):
+            continue
+        try:
+            owner_id = int(note.get("usuario_id") or row.get("usuario_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        vis = row.get("visibilidad")
+        if vis == "solo_yo" and owner_id != viewer_uid:
+            continue
+        if vis not in ("solo_yo", "contrato"):
+            continue
+        items.append({
+            "id": row.get("id"),
+            "note_id": note_id,
+            "folder_id": note.get("folder_id"),
+            "contrato_id": row.get("contrato_id"),
+            "usuario_id": owner_id,
+            "visibilidad": vis,
+            "title": note.get("title") or "Nota",
+            "body": note.get("body") or {},
+            "owner_nombre": users_map.get(owner_id),
+            "created_at": row.get("created_at"),
+            "updated_at": note.get("updated_at") or row.get("updated_at"),
+            "deleted_at": row.get("deleted_at"),
+            "rev": row.get("rev") or 1,
+            "device_id": row.get("device_id"),
+            "es_dueno": owner_id == viewer_uid,
+        })
+    return items
 
 
 @router.get("/{contrato_id}/pizarra")
@@ -403,7 +435,7 @@ def list_pizarra(contrato_id: int, current_user=Depends(get_current_user)):
             .data
             or []
         )
-        items: List[Dict[str, Any]] = []
+        visible = []
         for row in rows:
             vis = row.get("visibilidad")
             owner = int(row.get("usuario_id") or 0)
@@ -411,12 +443,21 @@ def list_pizarra(contrato_id: int, current_user=Depends(get_current_user)):
                 continue
             if vis not in ("solo_yo", "contrato"):
                 continue
-            enriched = _enrich_pizarra_item(row, uid)
-            if enriched:
-                items.append(enriched)
+            visible.append(row)
+        items = _enrich_pizarra_items_batch(visible, uid)
         items.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)
         return {"items": items, "server_time": _now_iso()}
     except Exception as e:
+        # Tabla ausente / cold start: no tumbar Inicio con 503 ruidoso.
+        if "bloc_notas_pizarra" in str(e) and (
+            "does not exist" in str(e) or "PGRST205" in str(e) or "42P01" in str(e)
+        ):
+            _log.warning("pizarra table missing; returning empty set")
+            return {
+                "items": [],
+                "server_time": _now_iso(),
+                "aviso": "pizarra_no_disponible",
+            }
         raise _pizarra_table_error(e) from e
 
 
@@ -502,5 +543,16 @@ def sync_pizarra(
     except HTTPException:
         raise
     except Exception as e:
+        msg = str(e)
+        if "bloc_notas_pizarra" in msg and (
+            "does not exist" in msg or "PGRST205" in msg or "42P01" in msg
+        ):
+            _log.warning("pizarra sync skipped; table missing")
+            return {
+                "ok": False,
+                "acked": [],
+                "server_time": _now_iso(),
+                "aviso": "pizarra_no_disponible",
+            }
         _log.exception("bloc-notas pizarra sync failed")
         raise _pizarra_table_error(e) from e

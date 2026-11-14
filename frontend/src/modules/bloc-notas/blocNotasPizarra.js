@@ -148,6 +148,30 @@ export async function refreshPizarraFromNote(note) {
   })
 }
 
+async function fetchPizarraConReintento(url, options, { intentos = 3 } = {}) {
+  let last = null
+  for (let i = 0; i < intentos; i += 1) {
+    try {
+      const res = await fetch(url, options)
+      // 503 temporal (cold start / tabla aún no lista): reintentar sin ensuciar consola.
+      if (res.status === 503 && i < intentos - 1) {
+        await new Promise((r) => setTimeout(r, 600 * (i + 1)))
+        continue
+      }
+      return res
+    } catch (e) {
+      last = e
+      if (i < intentos - 1) {
+        await new Promise((r) => setTimeout(r, 600 * (i + 1)))
+        continue
+      }
+      throw e
+    }
+  }
+  if (last) throw last
+  return null
+}
+
 export async function syncPizarra({ contratoId, usuarioId, token }) {
   if (!contratoId || !usuarioId || !token) return { ok: false }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -163,7 +187,7 @@ export async function syncPizarra({ contratoId, usuarioId, token }) {
 
   if (dirty.length) {
     try {
-      const res = await fetch(`${API_BASE}/bloc-notas/${cid}/pizarra/sync`, {
+      const res = await fetchPizarraConReintento(`${API_BASE}/bloc-notas/${cid}/pizarra/sync`, {
         method: 'POST',
         headers: authHeaders(token),
         body: JSON.stringify({
@@ -179,7 +203,7 @@ export async function syncPizarra({ contratoId, usuarioId, token }) {
           })),
         }),
       })
-      if (res.ok) {
+      if (res?.ok) {
         const data = await res.json()
         for (const id of data.acked || dirty.map((d) => d.id)) {
           const row = await blocDb.pizarra.get(id)
@@ -193,10 +217,10 @@ export async function syncPizarra({ contratoId, usuarioId, token }) {
 
   // Pull visibles
   try {
-    const res = await fetch(`${API_BASE}/bloc-notas/${cid}/pizarra`, {
+    const res = await fetchPizarraConReintento(`${API_BASE}/bloc-notas/${cid}/pizarra`, {
       headers: authHeaders(token),
     })
-    if (!res.ok) return { ok: false, status: res.status }
+    if (!res || !res.ok) return { ok: false, status: res?.status || 0 }
     const data = await res.json()
     const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []
     const remoteIds = new Set()
