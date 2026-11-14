@@ -522,7 +522,7 @@ export default function SicoeEsquemasReporteModal({
     ? (editTarget.registros || []).map((r) => r.id)
     : []
 
-  const ui = (
+  const modal = (
     <>
       <div
         role="dialog"
@@ -696,8 +696,8 @@ export default function SicoeEsquemasReporteModal({
     </>
   )
 
-  if (typeof document === 'undefined') return ui
-  return createPortal(ui, document.body)
+  if (typeof document === 'undefined') return modal
+  return createPortal(modal, document.body)
 }
 
 const th = { padding: '10px 8px', fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase' }
