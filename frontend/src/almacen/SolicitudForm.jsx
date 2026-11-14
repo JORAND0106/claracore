@@ -211,7 +211,7 @@ export default function SolicitudForm({
       sol?.estado === 'aprobada' || Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
     )),
   )
-  const verEconomicos = permisos?.verEconomicos !== false
+  const verEconomicos = permisos?.verEconomicos === true
   const tituloAuto = formatSolicitudTituloAuto(
     sol?.consecutivo ?? proximoConsecutivo,
     sol?.created_at,

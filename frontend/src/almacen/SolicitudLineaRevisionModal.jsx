@@ -166,7 +166,7 @@ export default function SolicitudLineaRevisionModal({
   const puedeEditarMapeo = puedeAsignarInsumo || puedeCorregirPostOc
   const puedeCambiarProveedor = puedeCambiarProveedorLineaAprobada(item, permisos) && !puedeEditarMapeo
   const proveedorBloqueadoOc = Boolean(puedeCambiarProveedor && item?.en_orden_compra)
-  const verEconomicos = permisos?.verEconomicos !== false
+  const verEconomicos = permisos?.verEconomicos === true
   const puedeAbrir = puedeAbrirRevisionLinea(permisos)
 
   useEffect(() => {

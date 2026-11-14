@@ -839,15 +839,27 @@ def route_presupuesto_context(
 
 @router.get("/{contrato_id}/resumen-proveedores")
 def route_resumen_proveedores(contrato_id: int, current_user=Depends(get_current_user)):
-    """Líneas con insumo, agrupadas en el cliente por el proveedor guardado. No escribe."""
+    """Líneas con insumo, agrupadas en el cliente por el proveedor guardado. No escribe.
+
+    Reservado a quien puede ver valores económicos (Contratista Gerencial,
+    Administrativo, Desarrollador). Operativo no tiene acceso a esta vista.
+    """
     from almacen_resumen import cargar_resumen_proveedores
 
     _check_contrato(current_user, contrato_id)
     require_lectura_almacen(current_user)
+    if not puede_ver_valores_economicos_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "El resumen por proveedor está reservado a roles con visibilidad "
+                "de valores económicos (Contratista Gerencial, Administrativo)."
+            ),
+        )
     try:
         return cargar_resumen_proveedores(
             contrato_id,
-            ver_economicos=puede_ver_valores_economicos_almacen(current_user),
+            ver_economicos=True,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

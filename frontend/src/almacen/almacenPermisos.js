@@ -105,15 +105,27 @@ export function puedeGenerarOrdenCompraAlmacen(usuario, contratoId) {
 }
 
 /**
- * Cifras en dinero: gerencia contratista, rol Administrativo y Desarrollador.
+ * Cifras en dinero: únicamente roles Contratista Gerencial, Administrativo y Desarrollador.
  * Desarrollador las ve siempre, sin depender de los permisos por función.
- * Los demás roles ven solo cantidades.
+ * Operativo (campo / contratista / gerencial operativo) y el resto ven solo cantidades.
  */
 export function puedeVerValoresEconomicosAlmacen(usuario) {
+  if (rolExcluidoAlmacen(usuario)) return false
   if (esDesarrolladorUsuario(usuario)) return true
+  // Defensa: roles operativos nunca ven dinero, aunque el nombre contenga otras palabras.
+  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
+  if (rol.includes('operativo')) return false
   if (esGerenciaContratistaRol(usuario)) return true
   if (esRolAdministrativo(usuario)) return true
   return false
+}
+
+/** Tab Resumen (vista por proveedor con cifras): solo quien puede ver económicos. */
+export function puedeVerResumenEconomicoAlmacen(usuario, permisoBag = null) {
+  if (permisoBag && typeof permisoBag.verEconomicos === 'boolean') {
+    return permisoBag.verEconomicos === true
+  }
+  return puedeVerValoresEconomicosAlmacen(usuario)
 }
 
 /**
@@ -214,12 +226,15 @@ export function accesoAlmacen(usuario, contratoId) {
   const esGerencial = !bloqueado && esContratistaGerencialUsuario(usuario)
   const puedeEntrar = !bloqueado && tieneAccesoUiModuloAlmacen(usuario, cid)
   const algunaAlmacen = !bloqueado && tieneAlgunaAccionAlmacen(usuario, cid)
+  const verEconomicos = !bloqueado && puedeVerValoresEconomicosAlmacen(usuario)
   return {
     bloqueado,
     /** Entrada al módulo (Ver sintético si solo tiene CATINS o ENTSAL). */
     puedeEntrar,
     /** Tabs Solicitudes / Inventario: requiere permiso propio en Almacén. */
     verSolicitudesInventario: algunaAlmacen,
+    /** Tab Resumen (cifras por proveedor): solo roles con visibilidad económica. */
+    verResumenEconomico: verEconomicos,
     /** Botón / vista Catálogo: permiso propio en CATINS. */
     verCatalogo: !bloqueado && tieneAlgunaAccionCatalogoInsumos(usuario, cid),
     /** Tabs Entradas / Salidas: permiso propio en ENTSAL. */
@@ -227,10 +242,12 @@ export function accesoAlmacen(usuario, contratoId) {
     permisos: {
       ...permisos,
       esContratistaGerencial: esGerencial,
+      // Incluido en el bag para consumidores que solo reciben `.permisos`.
+      verEconomicos,
     },
     catalogo,
     entradasSalidas,
-    verEconomicos: !bloqueado && puedeVerValoresEconomicosAlmacen(usuario),
+    verEconomicos,
     puedeGenerarOc: !bloqueado && puedeGenerarOrdenCompraAlmacen(usuario, cid),
     puedeRegenerarPdfOc: !bloqueado && puedeRegenerarPdfOcAlmacen(usuario),
     esContratistaGerencial: esGerencial,
