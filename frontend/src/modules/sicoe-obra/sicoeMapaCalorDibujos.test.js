@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   construirCalorSobreDibujos,
+  densificarDibujoAPuntosCalor,
   geometriaDibujoParaPlano,
 } from './sicoeMapaCalorDibujos.js'
 
@@ -205,6 +206,79 @@ describe('construirCalorSobreDibujos', () => {
     assert.equal(r.dibujosFc.features[0].geometry.type, 'LineString')
     assert.equal(r.meta.sin_dibujo, 0)
   })
+
+  it('densifica línea/polígono y reparte weight; nodo-punto = 1 muestra', () => {
+    const heat = {
+      type: 'FeatureCollection',
+      features: [
+        heatPoint(1, 12, 1, 500),
+        heatPoint(2, 13, 0.5, 250),
+        heatPoint(3, 14, 0.8, 400),
+      ],
+    }
+    const r = construirCalorSobreDibujos(heat, [
+      dibujoReporte(12, {
+        type: 'LineString',
+        coordinates: [[-74.10, 4.70], [-74.09, 4.70], [-74.08, 4.70]],
+      }, { huella_tipo: 'linea', dibujo_tipo: 'linea' }),
+      dibujoReporte(13, {
+        type: 'Polygon',
+        coordinates: [[[-74.1, 4.7], [-74.09, 4.7], [-74.09, 4.71], [-74.1, 4.71], [-74.1, 4.7]]],
+      }),
+      {
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [-74.1, 4.7] },
+        properties: {
+          reporte_id: 14,
+          origen: 'reporte_dibujo',
+          huella_tipo: 'nodo',
+          dibujo_tipo: 'nodo',
+        },
+      },
+    ])
+    assert.ok(r.calorSamplesFc.features.length >= 3)
+    assert.ok(r.meta.samples >= 3)
+
+    const lineSamples = r.calorSamplesFc.features.filter((f) => String(f.properties.reporte_id) === '12')
+    assert.ok(lineSamples.length >= 2)
+    const sumW = lineSamples.reduce((a, f) => a + Number(f.properties.weight), 0)
+    assert.ok(Math.abs(sumW - 1) < 1e-6)
+
+    const nodoSamples = r.calorSamplesFc.features.filter((f) => String(f.properties.reporte_id) === '14')
+    assert.equal(nodoSamples.length, 1)
+    assert.equal(nodoSamples[0].properties.weight, 0.8)
+  })
+
+  it('varios registros del mismo reporte suman costo en el dibujo del reporte', () => {
+    const heat = {
+      type: 'FeatureCollection',
+      features: [
+        heatPoint(1, 60, 0.8, 800),
+        heatPoint(2, 60, 0.4, 400),
+      ],
+    }
+    const r = construirCalorSobreDibujos(heat, [dibujoReporte(60)])
+    assert.equal(r.dibujosFc.features[0].properties.costo_directo, 1200)
+    assert.ok(Math.abs(r.dibujosFc.features[0].properties.weight - 1) < 1e-9)
+  })
+})
+
+describe('densificarDibujoAPuntosCalor', () => {
+  it('reparte weight uniforme en la línea', () => {
+    const samples = densificarDibujoAPuntosCalor({
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [[-74.10, 4.70], [-74.09, 4.70]],
+      },
+      properties: { weight: 1, costo_directo: 100, reporte_id: 1 },
+    }, { spacingM: 20, maxSamples: 40 })
+    assert.ok(samples.length >= 2)
+    const sum = samples.reduce((a, f) => a + f.properties.weight, 0)
+    assert.ok(Math.abs(sum - 1) < 1e-9)
+    const sumC = samples.reduce((a, f) => a + f.properties.costo_directo, 0)
+    assert.ok(Math.abs(sumC - 100) < 1e-6)
+  })
 })
 
 describe('geometriaDibujoParaPlano', () => {
@@ -214,9 +288,11 @@ describe('geometriaDibujoParaPlano', () => {
     assert.equal(r.geometry.type, 'Polygon')
   })
 
-  it('Point → Polygon disco', () => {
+  it('Point → Polygon disco con centro guardado', () => {
     const r = geometriaDibujoParaPlano({ type: 'Point', coordinates: [-74.1, 4.7] })
     assert.equal(r.geometry.type, 'Polygon')
     assert.ok(r.geometry.coordinates[0].length > 8)
+    assert.equal(r.propsExtra.punto_nodo_lng, -74.1)
+    assert.equal(r.propsExtra.punto_nodo_lat, 4.7)
   })
 })
