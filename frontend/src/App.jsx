@@ -9050,8 +9050,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 data-dibujo-pendiente={reporteTieneDibujo(reporte) ? '0' : '1'}
                 onClick={() => setEditorDibujoReporte(true)}
                 title={reporteTieneDibujo(reporte)
-                  ? 'Editar dibujo del reporte (huella de todos los registros)'
-                  : 'Dibujo pendiente: dibujar el reporte sobre el plano (no bloquea asignar ítem)'}
+                  ? 'Dibujar / editar dibujo del reporte (igual que SicoeObra)'
+                  : 'Dibujar reporte (igual que SicoeObra · pendiente)'}
+                aria-label={reporteTieneDibujo(reporte)
+                  ? 'Dibujar / editar dibujo del reporte'
+                  : 'Dibujar reporte'}
                 style={{
                   background: reporteTieneDibujo(reporte) ? t.bgCard : '#d9770618',
                   color: reporteTieneDibujo(reporte) ? t.text : '#b45309',
@@ -9078,7 +9081,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 type="button"
                 data-testid="sicoe-esquemas-reporte-btn"
                 onClick={() => setEsquemasReporteOpen(true)}
-                title="Esquemas del reporte (asignables a varios registros)"
+                title="Esquemas del reporte (herramienta distinta a Dibujar)"
+                aria-label="Esquemas del reporte"
                 style={{
                   background: t.bgCard,
                   color: t.text,
