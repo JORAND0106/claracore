@@ -44,4 +44,15 @@ describe('ClaraGIS filtros sync con SicoeObra', () => {
     assert.equal(params.get('item'), '3.9.')
     assert.ok(params.get('validacion_capas'))
   })
+
+  it('analisis/mapa aplica Editado por vía collect cabecera∪línea (como grilla)', () => {
+    assert.match(
+      backendMain,
+      /Editado por: misma unión cabecera ∪ línea que \/reportes\/buscar/,
+    )
+    assert.match(
+      backendMain,
+      /_sicoe_collect_reporte_ids_editado_por\(contrato_id, _editado_por_ids_ana\)/,
+    )
+  })
 })
