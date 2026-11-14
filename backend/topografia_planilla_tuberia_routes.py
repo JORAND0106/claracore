@@ -1027,8 +1027,52 @@ def listar(contrato_id: int, current_user=Depends(get_current_user)):
     # Misma consulta y la misma vigencia que la alerta del ícono: el número
     # guardado en la planilla no cuenta si el reporte ya no existe en SICOE Obra.
     vigentes = _so_reportes_existentes(contrato_id, ids_reporte_enlazados(rows))
+    # Abscisas de cartera (min/max) como respaldo cuando aún no hay reporte asociado.
+    abs_por_planilla: dict[str, tuple[Optional[float], Optional[float]]] = {}
+    planilla_ids = [str(r.get("id")) for r in rows if r.get("id") is not None]
+    if planilla_ids:
+        try:
+            filas_abs = (
+                supabase.table("topo_planilla_tuberia_filas")
+                .select("planilla_id,abscisa")
+                .in_("planilla_id", planilla_ids)
+                .execute()
+                .data
+            ) or []
+            buckets: dict[str, list[float]] = {}
+            for f in filas_abs:
+                pid = str(f.get("planilla_id") or "")
+                if not pid:
+                    continue
+                try:
+                    v = float(f.get("abscisa")) if f.get("abscisa") is not None else None
+                except (TypeError, ValueError):
+                    v = None
+                if v is None:
+                    continue
+                buckets.setdefault(pid, []).append(v)
+            for pid, vals in buckets.items():
+                abs_por_planilla[pid] = (min(vals), max(vals))
+        except Exception:
+            logger.exception("No se pudieron agregar abscisas de cartera al listado")
+
     for item, src in zip(out, rows):
-        item["reportes_sicoe"] = reportes_sicoe_para_listado(src, vigentes)
+        links = reportes_sicoe_para_listado(src, vigentes)
+        item["reportes_sicoe"] = links
+        abs0 = abs1 = None
+        for lk in links:
+            if lk.get("abs_inicio") is not None:
+                abs0 = lk.get("abs_inicio")
+            if lk.get("abs_final") is not None:
+                abs1 = lk.get("abs_final")
+            if abs0 is not None or abs1 is not None:
+                break
+        if abs0 is None and abs1 is None:
+            pid = str(src.get("id") or "")
+            if pid in abs_por_planilla:
+                abs0, abs1 = abs_por_planilla[pid]
+        item["abs_inicio"] = abs0
+        item["abs_final"] = abs1
     return out
 
 
@@ -1168,7 +1212,7 @@ def _so_reportes_existentes(contrato_id: int, ids: list[int]) -> list[dict]:
     try:
         return (
             supabase.table("so_reportes")
-            .select("id, numero_reporte")
+            .select("id, numero_reporte, abs_inicio, abs_final")
             .eq("contrato_id", int(contrato_id))
             .in_("id", ids)
             .execute()

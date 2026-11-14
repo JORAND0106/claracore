@@ -11,6 +11,7 @@ import {
   PLANILLA_TUBERIA_ALERTA_EVENT,
   planillaListaSinReporteVigente,
   etiquetaReportesAsociadosLista,
+  etiquetaAbscisadoLista,
 } from './planillaTuberiaUtils.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -61,5 +62,20 @@ describe('alerta del ícono de Topografía', () => {
     assert.match(formSrc, /planillaListaSinReporteVigente/)
     assert.match(formSrc, /#fffbeb/)
     assert.match(formSrc, /Sin reporte vigente en SICOE Obra/)
+  })
+
+  it('muestra abscisado del reporte (o de la cartera del listado)', () => {
+    assert.equal(etiquetaAbscisadoLista({ reportes_sicoe: [] }), '—')
+    assert.equal(
+      etiquetaAbscisadoLista({
+        reportes_sicoe: [{ reporte_id: 9, numero_reporte: 64, abs_inicio: 100.5, abs_final: 120 }],
+      }),
+      '100.50 → 120.00',
+    )
+    assert.equal(
+      etiquetaAbscisadoLista({ abs_inicio: 10, abs_final: 20, reportes_sicoe: [] }),
+      '10.00 → 20.00',
+    )
+    assert.match(formSrc, /etiquetaAbscisadoLista/)
   })
 })

@@ -845,6 +845,39 @@ export function etiquetaReportesAsociadosLista(planillaOLinks) {
   return nums.length ? nums.join(', ') : '—'
 }
 
+/**
+ * Abscisado para la grilla de planillas: prioriza el del reporte SICOE
+ * (abs_inicio/abs_final); si no hay, usa los extremos que ya trae el listado
+ * (derivados de la cartera del reporte/planilla).
+ */
+export function etiquetaAbscisadoLista(planilla) {
+  const toNum = (v) => {
+    if (v == null || v === '') return null
+    const n = typeof v === 'number' ? v : Number(String(v).trim().replace(',', '.'))
+    return Number.isFinite(n) ? n : null
+  }
+  let a0 = null
+  let a1 = null
+  const links = Array.isArray(planilla?.reportes_sicoe) ? planilla.reportes_sicoe : []
+  for (const lk of links) {
+    const n0 = toNum(lk?.abs_inicio)
+    const n1 = toNum(lk?.abs_final)
+    if (n0 != null || n1 != null) {
+      a0 = n0
+      a1 = n1
+      break
+    }
+  }
+  if (a0 == null && a1 == null) {
+    a0 = toNum(planilla?.abs_inicio)
+    a1 = toNum(planilla?.abs_final)
+  }
+  if (a0 == null && a1 == null) return '—'
+  const s0 = a0 != null ? Number(a0).toFixed(2) : '—'
+  const s1 = a1 != null ? Number(a1).toFixed(2) : '—'
+  return `${s0} → ${s1}`
+}
+
 /** Celda de validación N1/N2 en listado: estado (+ fecha corta si hay). */
 export function etiquetaValidacionLista(estado, fechaIso) {
   const est = String(estado || '').trim() || 'No Revisado'

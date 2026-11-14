@@ -77,6 +77,29 @@ class TestAlertaPlanillasSinReporte(unittest.TestCase):
             [{"reporte_id": 3, "numero_reporte": 7}],
         )
 
+    def test_listado_incluye_abscisas_del_reporte(self):
+        vigentes = [
+            {"id": 9, "numero_reporte": 128, "abs_inicio": 100.5, "abs_final": 120.0},
+        ]
+        p = _planilla([{"reporte_id": 9, "numero_reporte": 1}])
+        self.assertEqual(
+            reportes_sicoe_para_listado(p, vigentes),
+            [{
+                "reporte_id": 9,
+                "numero_reporte": 128,
+                "abs_inicio": 100.5,
+                "abs_final": 120.0,
+            }],
+        )
+        src = (
+            Path(__file__).resolve().parents[1] / "topografia_planilla_tuberia_routes.py"
+        ).read_text(encoding="utf-8")
+        so = src.split("def _so_reportes_existentes", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("abs_inicio, abs_final", so)
+        listar = src.split("def listar(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('item["abs_inicio"]', listar)
+        self.assertIn('item["abs_final"]', listar)
+
 
 if __name__ == "__main__":
     unittest.main()
