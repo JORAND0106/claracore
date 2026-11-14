@@ -24,6 +24,10 @@ import {
   semaforoNivelesRegistro,
   textoSelladoRegistro,
 } from './claraGisVerificarHelpers'
+import {
+  sicoeActaRpoNumeroCorto,
+  sicoeLabelActaRpoRegistro,
+} from './sicoeActaRegistroLabel'
 
 function IconBtn({ title, onClick, children, disabled, accent, size = 44 }) {
   return (
@@ -119,6 +123,7 @@ export default function ClaraGisVerificarFicha({
   t,
   registros = [],
   reporte,
+  actasList = [],
   registroId = null,
   onRegistroChange,
   onCambiarModo,
@@ -232,6 +237,7 @@ export default function ClaraGisVerificarFicha({
   const selladoTip = textoSelladoRegistro(reg, nivelesContrato)
   const subNombre = sicoeNombreSubcontratistaRegistro({ registro: reg, reporte }) || 'Sin subcontratista'
   const corteNum = sicoeCorteNumeroDeRegistro({ registro: reg, reporte })
+  const actaLabel = reg ? sicoeLabelActaRpoRegistro(reg, { actasList }) : 'Sin acta'
   const abscisaTxt = fmtAbscisaCostado(reg)
 
   const trasDecision = () => {
@@ -343,6 +349,7 @@ export default function ClaraGisVerificarFicha({
             <thead>
               <tr style={{ color: muted, textAlign: 'left' }}>
                 <th style={{ padding: '6px 4px', fontWeight: 700 }}>#</th>
+                <th style={{ padding: '6px 4px', fontWeight: 700 }}>Acta</th>
                 <th style={{ padding: '6px 4px', fontWeight: 700 }}>Cantidad</th>
                 {verValoresEconomicos ? (
                   <th style={{ padding: '6px 4px', fontWeight: 700 }}>CD</th>
@@ -353,6 +360,8 @@ export default function ClaraGisVerificarFicha({
             <tbody>
               {regsItem.map((r, i) => {
                 const pastel = pastelDeEstadoValidacion(estadoMiNivel?.(r) || 'No Revisado')
+                const actaCorta = sicoeActaRpoNumeroCorto(r, { actasList })
+                const actaTip = sicoeLabelActaRpoRegistro(r, { actasList })
                 return (
                   <tr
                     key={r.id}
@@ -366,6 +375,20 @@ export default function ClaraGisVerificarFicha({
                   >
                     <td style={{ padding: '4px 4px', fontWeight: 800, whiteSpace: 'nowrap' }}>
                       {r.numero_registro ?? '—'}
+                    </td>
+                    <td
+                      style={{
+                        padding: '4px 4px',
+                        fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                        maxWidth: 56,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        color: actaCorta === '—' ? muted : textMain,
+                      }}
+                      title={actaTip}
+                    >
+                      {actaCorta}
                     </td>
                     <td style={{
                       padding: '4px 4px',
@@ -694,10 +717,31 @@ export default function ClaraGisVerificarFicha({
         <div style={{
           display: 'flex',
           flexWrap: 'wrap',
+          alignItems: 'center',
           gap: 4,
           padding: '10px 0 8px',
           borderTop: `1px solid ${border}`,
         }}>
+          <span
+            title={actaLabel}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              minHeight: 40,
+              padding: '0 10px',
+              borderRadius: 12,
+              border: `1px solid ${border}`,
+              background: cardBg,
+              fontWeight: 800,
+              fontSize: 'var(--cc-sm)',
+              color: actaLabel === 'Sin acta' ? muted : textMain,
+              whiteSpace: 'nowrap',
+              maxWidth: '100%',
+            }}
+          >
+            📋 {actaLabel}
+          </span>
           <IconBtn title={selladoTip} size={40}>🔒</IconBtn>
           <IconBtn title="Reversión de sellado" size={40} onClick={() => setPanel('reversion')}>♻️</IconBtn>
           <IconBtn title={`Subcontratista: ${subNombre}`} size={40}>👷</IconBtn>

@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  sicoeBuildDetalleFiltradoSearchParams,
   sicoeBuildMapaCalorSearchParams,
   sicoeSerializarCapasMapa,
+  sicoeUrlReporteDetalleFiltrado,
 } from './sicoeMapaCalorParams.js'
 
 describe('sicoeMapaCalorParams', () => {
@@ -78,5 +80,28 @@ describe('sicoeMapaCalorParams', () => {
     assert.equal(params.get('acta_rpo'), null)
     assert.equal(params.get('capitulos_filtro'), JSON.stringify(['01', '02']))
     assert.equal(params.get('capitulo'), null)
+  })
+
+  it('detalle filtrado reutiliza filtros del plano sin formato=mapa_calor', () => {
+    const params = sicoeBuildDetalleFiltradoSearchParams({
+      fSicoe: { acta_rpo: '75', capitulo: '03' },
+      capasValidacion: [{ nivel: 2, estado: 'No Revisado' }],
+      panelActasRpo: [],
+      panelCapitulos: [],
+    })
+    assert.ok(params)
+    assert.equal(params.get('formato'), null)
+    assert.equal(params.get('aplicar_filtros_busqueda'), 'true')
+    assert.equal(params.get('ligero'), '1')
+    assert.equal(params.get('acta_rpo'), '75')
+    assert.equal(params.get('capitulo'), '03')
+  })
+
+  it('detalle filtrado es null sin criterios', () => {
+    assert.equal(sicoeBuildDetalleFiltradoSearchParams({ fSicoe: {}, capasValidacion: [] }), null)
+    assert.equal(
+      sicoeUrlReporteDetalleFiltrado('https://api', 1, 99, { fSicoe: {}, capasValidacion: [] }),
+      null,
+    )
   })
 })

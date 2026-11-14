@@ -1,4 +1,7 @@
-import { sicoeAppendFSicoeToSearchParams } from './sicoeFiltroCatalogo.js'
+import {
+  sicoeAppendFSicoeToSearchParams,
+  sicoeBundleTieneCriteriosUsuario,
+} from './sicoeFiltroCatalogo.js'
 
 /** Serializa capas de validación (misma forma que la grilla SicoeObra). */
 export function sicoeSerializarCapasMapa(capas) {
@@ -47,6 +50,28 @@ export function sicoeBuildMapaCalorSearchParams(bundle) {
   }
   params.set('formato', 'mapa_calor')
   return params
+}
+
+/**
+ * Query params para GET detalle de reporte con los mismos filtros que el plano.
+ * null si el bundle no tiene criterios de usuario (abrir reporte completo).
+ */
+export function sicoeBuildDetalleFiltradoSearchParams(bundle) {
+  if (!sicoeBundleTieneCriteriosUsuario(bundle)) return null
+  const params = sicoeBuildMapaCalorSearchParams(bundle)
+  params.delete('formato')
+  params.set('aplicar_filtros_busqueda', 'true')
+  params.set('ligero', '1')
+  return params
+}
+
+/** URL completa del detalle filtrado, o null si no aplica filtro. */
+export function sicoeUrlReporteDetalleFiltrado(apiBase, contratoId, reporteId, bundle) {
+  const params = sicoeBuildDetalleFiltradoSearchParams(bundle)
+  if (!params) return null
+  const base = `${apiBase}/sicoe-obra/${contratoId}/reportes/${reporteId}`
+  const qs = params.toString()
+  return qs ? `${base}?${qs}` : base
 }
 
 export function fmtCostoMapa(n) {

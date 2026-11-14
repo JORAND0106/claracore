@@ -55,4 +55,13 @@ describe('ClaraGIS filtros sync con SicoeObra', () => {
       /_sicoe_collect_reporte_ids_editado_por\(contrato_id, _editado_por_ids_ana\)/,
     )
   })
+
+  it('detalle de reporte acepta actas_filtro/capitulos_filtro y enriquece acta_rpo_numero', () => {
+    assert.match(backendMain, /def _enriquecer_registros_acta_rpo_numero/)
+    const idx = backendMain.indexOf('def obtener_reporte(')
+    const chunk = backendMain.slice(idx, idx + 3500)
+    assert.match(chunk, /actas_filtro/)
+    assert.match(chunk, /capitulos_filtro/)
+    assert.match(backendMain, /_enriquecer_registros_acta_rpo_numero\(regs_raw/)
+  })
 })

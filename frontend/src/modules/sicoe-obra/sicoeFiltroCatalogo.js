@@ -259,7 +259,19 @@ export function sicoeBundleTieneCriteriosUsuario(bundle) {
     !!(String(f.cantidadMin ?? '').trim() || String(f.cantidadMax ?? '').trim()) ||
     !!(String(f.costoDirectoMin ?? '').trim() || String(f.costoDirectoMax ?? '').trim())
   const tieneCapas = Array.isArray(b.capasValidacion) && b.capasValidacion.length > 0
-  return tieneCatalogo || tienePk || tieneFechas || tieneChips || tieneRefinar || tieneValores || tieneCapas
+  const tienePanelActas = Array.isArray(b.panelActasRpo) && b.panelActasRpo.length > 0
+  const tienePanelCaps = Array.isArray(b.panelCapitulos) && b.panelCapitulos.length > 0
+  return (
+    tieneCatalogo
+    || tienePk
+    || tieneFechas
+    || tieneChips
+    || tieneRefinar
+    || tieneValores
+    || tieneCapas
+    || tienePanelActas
+    || tienePanelCaps
+  )
 }
 
 export function sicoeFiltroPatchLista(def, valores) {

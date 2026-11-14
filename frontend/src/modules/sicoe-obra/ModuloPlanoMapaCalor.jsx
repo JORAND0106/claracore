@@ -14,7 +14,7 @@ import {
   limpiarSicoeFiltroSesion,
 } from './sicoeFiltroSesion'
 import { fetchSicoeMapaCalor } from './sicoeMapaCalorApi'
-import { fmtCostoMapa } from './sicoeMapaCalorParams'
+import { fmtCostoMapa, sicoeUrlReporteDetalleFiltrado } from './sicoeMapaCalorParams'
 import { construirCalorSobreDibujos, weightColorExpr } from './sicoeMapaCalorDibujos'
 import {
   CLARAGIS_HINT,
@@ -283,6 +283,8 @@ export default function ModuloPlanoMapaCalor({
   const [encabezadoPorNivel, setEncabezadoPorNivel] = useState({})
   const [panelAbierto, setPanelAbierto] = useState(null) // 'filtros' | 'capas' | 'intensidad' | null
   const [embedReporte, setEmbedReporte] = useState(null)
+  const embedReporteRef = useRef(null)
+  embedReporteRef.current = embedReporte
   const [embedMin, setEmbedMin] = useState(false)
   const [embedCargando, setEmbedCargando] = useState(false)
   const [focoRevision, setFocoRevision] = useState(null) // { registroId, itemNumero }
@@ -677,14 +679,7 @@ export default function ModuloPlanoMapaCalor({
     void cargarMapaCalor(bundleAplicado)
   }, [contratoId, token, tieneCriterios, bundleAplicado, busquedaRealizada, buscando, cargarMapaCalor, esMesaValidador, capasInicialesValidacion])
 
-  const onBuscar = useCallback((snap) => {
-    const b = sicoeFiltroSnapshot(snap)
-    setBundleAplicado(b)
-    guardarSicoeFiltroSesion(contratoId, b)
-    if (!focoRevision) trabajoBundleRef.current = b
-    setPanelAbierto(null)
-    void cargarMapaCalor(b)
-  }, [contratoId, cargarMapaCalor, focoRevision])
+  // onBuscar se define más abajo (tras refrescarEmbedConBundle).
 
   // Dibujo guardado en otra vista (editor / Carpeta): refrescar geometrías del plano.
   useEffect(() => {
@@ -730,10 +725,35 @@ export default function ModuloPlanoMapaCalor({
     setErrorMsg(null)
     setLeyendaVista({ con_dibujo: 0, sin_dibujo: 0 })
     setFocoRevision(null)
+    setEmbedReporte(null)
+    setEmbedMin(false)
     aplicarPuntosAlMapa(EMPTY_FC)
     const map = mapInstance.current
     if (map) centrarEnProyecto(map, { duration: 400 })
   }, [contratoId, aplicarPuntosAlMapa, centrarEnProyecto, esMesaValidador, capasInicialesValidacion])
+
+  const urlDetalleFiltradoClaraGis = useCallback((reporteId, bundle) => {
+    if (!contratoId || reporteId == null) return null
+    return sicoeUrlReporteDetalleFiltrado(API_BASE, contratoId, reporteId, bundle)
+  }, [contratoId])
+
+  const fetchDetalleEmbed = useCallback(async (reporteId, bundle, { signal, aplicarFiltros = true } = {}) => {
+    const filtrada = aplicarFiltros ? urlDetalleFiltradoClaraGis(reporteId, bundle) : null
+    const url = filtrada
+      || `${API_BASE}/sicoe-obra/${contratoId}/reportes/${reporteId}?ligero=1`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+      cache: 'no-store',
+    })
+    if (!res.ok) throw new Error(`No se pudo abrir el reporte (${res.status})`)
+    const data = await res.json()
+    if (!data?.id) throw new Error('Respuesta inválida del reporte')
+    return {
+      ...data,
+      registros_vista_filtrada: !!filtrada || !!data.registros_vista_filtrada,
+    }
+  }, [contratoId, token, urlDetalleFiltradoClaraGis])
 
   const abrirReporteDesdeMapa = useCallback(async (props, { geometry = null } = {}) => {
     const reporteId = props?.reporte_id
@@ -751,34 +771,73 @@ export default function ModuloPlanoMapaCalor({
           : null
       )
     if (map && centro) panSiFueraDeVista(map, centro)
+    const bundle = focoRevision
+      ? (trabajoBundleRef.current || bundleAplicado)
+      : bundleAplicado
     setEmbedReporte({
       id: reporteId,
       numero_reporte: props?.numero_reporte,
       _cargandoDetalle: true,
       registros: [],
       puntos: [],
+      registros_vista_filtrada: !!urlDetalleFiltradoClaraGis(reporteId, bundle),
       ...(registroId != null ? { _autoRegistro: registroId } : {}),
     })
     try {
-      const res = await fetch(`${API_BASE}/sicoe-obra/${contratoId}/reportes/${reporteId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error(`No se pudo abrir el reporte (${res.status})`)
-      const data = await res.json()
+      const data = await fetchDetalleEmbed(reporteId, bundle, { aplicarFiltros: true })
       setEmbedReporte({
         ...data,
         _cargandoDetalle: false,
         ...(registroId != null ? { _autoRegistro: registroId } : {}),
       })
     } catch (e) {
+      if (e?.name === 'AbortError') return
       setErrorMsg(e?.message || String(e))
       setEmbedReporte(null)
     } finally {
       setEmbedCargando(false)
     }
-  }, [contratoId, token])
+  }, [contratoId, token, focoRevision, bundleAplicado, fetchDetalleEmbed, urlDetalleFiltradoClaraGis])
 
   abrirReporteRef.current = abrirReporteDesdeMapa
+
+  /** Si el filtro cambia con la carpeta abierta, recargar solo líneas que cumplen. */
+  const refrescarEmbedConBundle = useCallback(async (bundle) => {
+    const prev = embedReporteRef.current
+    if (!prev?.id || !contratoId || !token) return
+    const reporteId = prev.id
+    const registroId = prev._autoRegistro ?? null
+    setEmbedCargando(true)
+    setEmbedReporte((p) => (p ? {
+      ...p,
+      _cargandoDetalle: true,
+      registros: [],
+      registros_vista_filtrada: !!urlDetalleFiltradoClaraGis(reporteId, bundle),
+    } : p))
+    try {
+      const data = await fetchDetalleEmbed(reporteId, bundle, { aplicarFiltros: true })
+      setEmbedReporte({
+        ...data,
+        _cargandoDetalle: false,
+        ...(registroId != null ? { _autoRegistro: registroId } : {}),
+      })
+    } catch (e) {
+      if (e?.name === 'AbortError') return
+      setErrorMsg(e?.message || String(e))
+    } finally {
+      setEmbedCargando(false)
+    }
+  }, [contratoId, token, fetchDetalleEmbed, urlDetalleFiltradoClaraGis])
+
+  const onBuscar = useCallback((snap) => {
+    const b = sicoeFiltroSnapshot(snap)
+    setBundleAplicado(b)
+    guardarSicoeFiltroSesion(contratoId, b)
+    if (!focoRevision) trabajoBundleRef.current = b
+    setPanelAbierto(null)
+    void cargarMapaCalor(b)
+    void refrescarEmbedConBundle(b)
+  }, [contratoId, cargarMapaCalor, focoRevision, refrescarEmbedConBundle])
 
   const onRegistroExpandidoChange = useCallback((info) => {
     if (!info?.registroId) {
@@ -1857,6 +1916,10 @@ export default function ModuloPlanoMapaCalor({
               ? bundleAplicado.capasValidacion
               : null,
             capasFiltroValidacionOp: bundleAplicado?.capasValidacionOp || 'and',
+            urlReporteDetalleFiltrado: (repId) => urlDetalleFiltradoClaraGis(
+              repId,
+              focoRevision ? (trabajoBundleRef.current || bundleAplicado) : bundleAplicado,
+            ),
           })
         )}
       </div>
