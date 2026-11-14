@@ -4,6 +4,7 @@
  */
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
 import { listaGraficosRegistro } from './sicoeGraficosHelpers'
 import { slidesFromRegistro } from '../../components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
@@ -141,7 +142,7 @@ function FloatingMenu({ anchor, onClose, children, width = 168, t }) {
       <div
         role="presentation"
         onClick={onClose}
-        style={{ position: 'fixed', inset: 0, zIndex: 11040, background: 'transparent' }}
+        style={{ position: 'fixed', inset: 0, zIndex: SICOE_POPUP_SOBRE_CARPETA_Z, background: 'transparent' }}
       />
       <div
         role="menu"
@@ -149,7 +150,7 @@ function FloatingMenu({ anchor, onClose, children, width = 168, t }) {
           position: 'fixed',
           top,
           left,
-          zIndex: 11050,
+          zIndex: SICOE_POPUP_SOBRE_CARPETA_Z + 10,
           minWidth: menuW,
           background: t?.bgCard || '#fff',
           border: `1px solid ${t?.border || '#cbd5e1'}`,

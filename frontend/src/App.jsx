@@ -10390,7 +10390,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             left: 16,
             right: 16,
             bottom: 16,
-            zIndex: 14000,
+            zIndex: 18100,
             maxWidth: 560,
             margin: '0 auto',
             background: '#0369a1',

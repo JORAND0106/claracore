@@ -4,6 +4,7 @@ import {
   progresoDibujoPct,
   resumenDibujoVacio,
 } from './sicoeDibujarMasivoApi'
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
 
 /**
  * Modal Desarrollador: dibuja huellas faltantes del contrato.
@@ -69,7 +70,7 @@ export default function SicoeDibujarMasivoModal({
   return (
     <div
       style={{
-        position: 'fixed', inset: 0, zIndex: 12000,
+        position: 'fixed', inset: 0, zIndex: SICOE_POPUP_SOBRE_CARPETA_Z,
         background: 'rgba(0,0,0,0.45)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,

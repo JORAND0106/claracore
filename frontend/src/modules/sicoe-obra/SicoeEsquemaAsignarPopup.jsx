@@ -4,6 +4,7 @@
  * (solo cambia la asignación del esquema; no toca cantidades).
  */
 import { useState } from 'react'
+import { SICOE_HERRAMIENTA_POPUP_Z } from './sicoeZIndex'
 
 function fmtMedidas(reg) {
   const L = reg?.longitud
@@ -73,7 +74,7 @@ export default function SicoeEsquemaAsignarPopup({
       aria-modal="true"
       data-testid="sicoe-esquema-asignar"
       style={{
-        position: 'fixed', inset: 0, zIndex: 14000,
+        position: 'fixed', inset: 0, zIndex: SICOE_HERRAMIENTA_POPUP_Z,
         background: ui.overlay,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,

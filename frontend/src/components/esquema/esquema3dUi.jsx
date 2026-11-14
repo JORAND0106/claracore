@@ -2,6 +2,7 @@
  * UI del modo 3D: popup de cotas/longitud, toolbar de 6 caras + isométricas.
  */
 import React, { useState } from 'react'
+import { SICOE_HERRAMIENTA_POPUP_Z } from '../../modules/sicoe-obra/sicoeZIndex'
 import {
   ESQUEMA_3D_VIEWS,
   extrudeModeForView,
@@ -225,7 +226,7 @@ export function Esquema3dExtrudePopup({
       aria-modal="true"
       data-phone-fullscreen={phoneFullscreen ? '1' : '0'}
       style={{
-        position: 'fixed', inset: 0, zIndex: 14000,
+        position: 'fixed', inset: 0, zIndex: SICOE_HERRAMIENTA_POPUP_Z,
         background: t.overlay || 'rgba(15,23,42,0.45)',
         display: 'flex',
         alignItems: phoneFullscreen ? 'stretch' : 'center',

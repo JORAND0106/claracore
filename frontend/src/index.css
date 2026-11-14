@@ -1664,11 +1664,12 @@ body:has(.cc-claragis-root) .cc-app-header {
   }
 }
 
-/* Lightbox media — popup ClaraCore (foto/gráfico) */
+/* Lightbox media — popup ClaraCore (foto/gráfico).
+   Por encima de CarpetaReporte (15000) si se porta a body. */
 .cc-sicoe-lightbox {
   position: fixed;
   inset: 0;
-  z-index: 12000;
+  z-index: 16000;
   background: rgba(15, 23, 42, 0.72);
   display: flex;
   align-items: center;
@@ -1841,11 +1842,12 @@ body:has(.cc-claragis-root) .cc-app-header {
   }
 }
 
-/* Popup info ítem (descripción truncada → detalle ClaraCore) */
+/* Popup info ítem (descripción truncada → detalle ClaraCore).
+   Portaleado a body: debe superar CarpetaReporte (15000). */
 .cc-sicoe-item-info-overlay {
   position: fixed;
   inset: 0;
-  z-index: 12100;
+  z-index: 16000;
   background: rgba(15, 23, 42, 0.72);
   display: flex;
   align-items: center;

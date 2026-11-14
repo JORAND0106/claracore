@@ -38,6 +38,16 @@ describe('Dibujar desde ClaraGIS = misma herramienta portaleada', () => {
     assert.match(src, /data-testid="esquema-editor-overlay"/)
   })
 
+  it('herramientas portaleadas quedan por encima de CarpetaReporte (15000)', () => {
+    const z = read('modules/sicoe-obra/sicoeZIndex.js')
+    assert.match(z, /SICOE_CARPETA_Z = 15000/)
+    assert.match(z, /SICOE_HERRAMIENTA_Z = 17000/)
+    const editor = read('components/esquema/EsquemaEditorModal.jsx')
+    assert.match(editor, /zIndex:\s*SICOE_HERRAMIENTA_Z/)
+    const lista = read('modules/sicoe-obra/SicoeEsquemasReporteModal.jsx')
+    assert.match(lista, /zIndex:\s*SICOE_POPUP_SOBRE_CARPETA_Z/)
+  })
+
   it('móvil muestra selector Nodo|Línea|Polígono también en huellaMode', () => {
     const src = read('components/esquema/EsquemaEditorModal.jsx')
     // El bloque phone ya no condiciona !huellaMode para ocultar el tipo.

@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import { SICOE_POPUP_SOBRE_CARPETA_Z } from './sicoeZIndex'
 
 /**
  * Ventana institucional ClaraCore para avisos breves (errores de foto, etc.).
@@ -33,7 +34,7 @@ export default function SicoeMensajeModal({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 12000,
+        zIndex: SICOE_POPUP_SOBRE_CARPETA_Z,
         background: 'rgba(0,0,0,0.65)',
         display: 'flex',
         alignItems: 'center',
