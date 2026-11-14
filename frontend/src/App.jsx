@@ -10707,6 +10707,8 @@ function ModuloSicoeObra({
   const sicoePanelCapitulosRef = useRef([])
   const sicoePanelActasRpoRef = useRef([])
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
+  /** Error de /reportes/buscar: no confundir con «Sin resultados». */
+  const [errorGrillaBusqueda, setErrorGrillaBusqueda] = useState(null)
   const sicoeAutoBusquedaTimerRef = useRef(null)
   const sicoeSkipAutoBusquedaOnceRef = useRef(true)
   const [popupMasivoFiltro, setPopupMasivoFiltro] = useState(null)
@@ -11306,6 +11308,7 @@ function ModuloSicoeObra({
     else setBusquedaAmplia(false)
     let resultado = null
     try {
+      if (nuevoOffset === 0) setErrorGrillaBusqueda(null)
       const params = new URLSearchParams()
       sicoeAppendParamsBusquedaActivos(params, capas)
       if (capas.length > 1) {
@@ -11322,7 +11325,19 @@ function ModuloSicoeObra({
           signal: abortSignal,
           cache: 'no-store',
         })
-        return res.json()
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          const detail = typeof body?.detail === 'string' ? body.detail.trim() : ''
+          const err = new Error(
+            detail && !/traceback|exception|pgrst|sql/i.test(detail)
+              ? detail
+              : 'No se pudo cargar la grilla. El servidor respondió con un error interno.',
+          )
+          err.status = res.status
+          err.grilla = true
+          throw err
+        }
+        return body
       }
 
       const data = await fetchPage(nuevoOffset)
@@ -11332,6 +11347,7 @@ function ModuloSicoeObra({
       // Antes: con validación se traían TODAS las páginas en serie (N×50 request) y bloqueaba la UI 10–60+ s.
       // El análisis KPI sigue yendo a /sicoe-obra/.../analisis (mismo criterio). La grilla pagina con «Cargar 50 más».
       if (!seqVigente) return null
+      setErrorGrillaBusqueda(null)
       if (nuevoOffset === 0) {
         setReportesConPlanillaTopo(lista)
       } else {
@@ -11372,6 +11388,15 @@ function ModuloSicoeObra({
       const seqVigenteFin = opSeqParam != null ? seq === sicoeOperacionSeqRef.current : seq === sicoeBusquedaPaginaSeqRef.current
       if (isOfflineReady && seqVigenteFin) {
         try { return await usarIndexedDB() } catch { setReportes([]) }
+      }
+      if (seqVigenteFin) {
+        setBusquedaRealizada(true)
+        if (nuevoOffset === 0) setReportes([])
+        setErrorGrillaBusqueda(
+          e?.grilla
+            ? (e.message || 'No se pudo cargar la grilla. Intente de nuevo.')
+            : 'No se pudo cargar la grilla. Revise la conexión e intente de nuevo.',
+        )
       }
     }
     finally {
@@ -14904,6 +14929,45 @@ function ModuloSicoeObra({
         ) : !sicoeVistaResultadosActiva ? (
           <div style={{ padding:'48px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-body)' }}>
             🔍 Defina criterios en <strong>Filtros</strong> y pulse <strong>Buscar</strong> para ver la grilla y el panel.
+          </div>
+        ) : errorGrillaBusqueda ? (
+          <div
+            role="alert"
+            style={{
+              padding: '28px 20px',
+              textAlign: 'center',
+              color: t.text,
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              borderRadius: 12,
+              maxWidth: 520,
+              margin: '24px auto',
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>No se pudo cargar la grilla</div>
+            <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: 1.45, marginBottom: 14 }}>
+              {errorGrillaBusqueda}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const f = { ...filtros }
+                const capas = capasValidacion
+                const capasOp = capasValidacionOp
+                void (buscarReportesSicoeRef.current?.(f, 0, capas, capasOp))
+              }}
+              style={{
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 10,
+                padding: '10px 18px',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              Reintentar
+            </button>
           </div>
         ) : reportes.length === 0 ? (
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
