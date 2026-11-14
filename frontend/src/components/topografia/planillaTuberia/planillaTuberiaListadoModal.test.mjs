@@ -25,17 +25,28 @@ describe('Planillas de Tubería — listado + modal', () => {
   it('muestra listado tipo Excel como vista principal', () => {
     assert.match(formSrc, /Planillas del contrato/)
     assert.match(formSrc, /Nombre Planilla/)
+    assert.match(formSrc, /Abscisado/)
     assert.match(formSrc, /Fecha Creación/)
     assert.match(formSrc, /Validación Contratista/)
     assert.match(formSrc, /Validación Interventoría/)
     assert.match(formSrc, /Reporte asociado/)
     assert.match(formSrc, /etiquetaValidacionLista/)
     assert.match(formSrc, /etiquetaReportesAsociadosLista/)
+    assert.match(formSrc, /etiquetaAbscisadoLista/)
+    assert.match(formSrc, /filtroTipoLista/)
+    assert.match(formSrc, /listaFiltrada/)
     assert.match(formSrc, /fmtFechaLista/)
     assert.match(formSrc, /Nueva planilla/)
     assert.match(formSrc, /api\('\/planillas-tuberia'\)/)
     assert.doesNotMatch(formSrc, /Fecha de generada/)
     assert.doesNotMatch(formSrc, /Quien Validó por última vez/)
+  })
+
+  it('enriquece el listado con abscisas del reporte/cartera', () => {
+    assert.match(routesSrc, /abs_inicio/)
+    assert.match(routesSrc, /abs_final/)
+    assert.match(routesSrc, /topo_planilla_tuberia_filas/)
+    assert.match(routesSrc, /abs_inicio, abs_final/)
   })
 
   it('abre edición en popup no descartable por clic fuera', () => {

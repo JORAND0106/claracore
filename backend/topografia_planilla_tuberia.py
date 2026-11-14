@@ -2215,9 +2215,15 @@ def conservar_links_sicoe_vigentes(links: Any, filas_so_reportes: Any) -> list[d
         if rid not in by_id:
             continue
         out = dict(item)
-        nr = by_id[rid].get("numero_reporte")
+        vivo = by_id[rid]
+        nr = vivo.get("numero_reporte")
         if nr is not None:
             out["numero_reporte"] = nr
+        # Abscisado vive en el reporte SICOE (no en el formato FILTRO/ALCANTARILLA).
+        if "abs_inicio" in vivo:
+            out["abs_inicio"] = vivo.get("abs_inicio")
+        if "abs_final" in vivo:
+            out["abs_final"] = vivo.get("abs_final")
         kept.append(out)
     return kept
 
@@ -2263,10 +2269,15 @@ def reportes_sicoe_para_listado(planilla: Any, filas_so_reportes: Any) -> list[d
     for lk in kept:
         if lk.get("reporte_id") is None:
             continue
-        out.append({
+        entry = {
             "reporte_id": lk.get("reporte_id"),
             "numero_reporte": lk.get("numero_reporte"),
-        })
+        }
+        if lk.get("abs_inicio") is not None:
+            entry["abs_inicio"] = lk.get("abs_inicio")
+        if lk.get("abs_final") is not None:
+            entry["abs_final"] = lk.get("abs_final")
+        out.append(entry)
     return out
 
 

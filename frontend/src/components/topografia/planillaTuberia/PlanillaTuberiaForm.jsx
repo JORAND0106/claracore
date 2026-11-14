@@ -69,6 +69,7 @@ import {
   puedeCrearReporteSicoe,
   puedeVerBotonCrearReporteSicoe,
   etiquetaReportesAsociadosLista,
+  etiquetaAbscisadoLista,
   planillaListaSinReporteVigente,
   etiquetaValidacionLista,
   normalizarEvidenciasFotograficas,
@@ -184,6 +185,8 @@ export default function PlanillaTuberiaForm({
   const [infos, setInfos] = useState([])
   const [busy, setBusy] = useState(false)
   const [lista, setLista] = useState([])
+  /** Filtro de la grilla: '' = todos, ALCANTARILLA | FILTRO. */
+  const [filtroTipoLista, setFiltroTipoLista] = useState('')
   const [editorOpen, setEditorOpen] = useState(() => Boolean(modoSoloLectura && detalleInicial))
   const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
   const [pkMapOpen, setPkMapOpen] = useState(false)
@@ -956,6 +959,12 @@ export default function PlanillaTuberiaForm({
     overridesByCodigo,
     displayNeto: displayNetoCant,
   }), [calculoVista?.netos, params.tipo, overridesByCodigo, cantManuales])
+
+  const listaFiltrada = useMemo(() => {
+    const tipo = String(filtroTipoLista || '').toUpperCase()
+    if (!tipo) return lista
+    return (lista || []).filter((p) => String(p?.tipo || '').toUpperCase() === tipo)
+  }, [lista, filtroTipoLista])
 
   const absExtremos = useMemo(
     () => abscisasExtremosPlanilla(calculoVista, filas),
@@ -2295,16 +2304,48 @@ export default function PlanillaTuberiaForm({
       {!editorOpen && msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
 
       <div style={{ ...cardPad, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Planillas del contrato</div>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>Planillas del contrato</div>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)' }}>
+            <span style={{ color: ui.textMuted, fontWeight: 500 }}>Tipo</span>
+            <select
+              value={filtroTipoLista}
+              disabled={busy}
+              onChange={(e) => setFiltroTipoLista(e.target.value)}
+              aria-label="Filtrar planillas por tipo"
+              title="Filtrar por Filtro o Alcantarilla"
+              style={{
+                ...sheet.cellInp,
+                height: 32,
+                padding: '2px 8px',
+                minWidth: 140,
+              }}
+            >
+              <option value="">Todos</option>
+              <option value="ALCANTARILLA">Alcantarilla</option>
+              <option value="FILTRO">Filtro</option>
+            </select>
+          </label>
+        </div>
         <div
           style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
           className="cc-topo-table-scroll"
         >
-          <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720, width: '100%' }}>
+          <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 820, width: '100%' }}>
             <thead>
               <tr>
                 <th style={{ ...thLista, width: 48, textAlign: 'center' }}>No.</th>
                 <th style={thLista}>Nombre Planilla</th>
+                <th style={thLista}>Abscisado</th>
                 <th style={thLista}>Fecha Creación</th>
                 <th style={thLista}>Validación Contratista</th>
                 <th style={thLista}>Validación Interventoría</th>
@@ -2313,7 +2354,7 @@ export default function PlanillaTuberiaForm({
               </tr>
             </thead>
             <tbody>
-              {lista.map((p, idx) => {
+              {listaFiltrada.map((p, idx) => {
                 const sinReporteVigente = planillaListaSinReporteVigente(p)
                 const tdFila = sinReporteVigente ? { ...tdLista, background: '#fffbeb' } : tdLista
                 return (
@@ -2345,6 +2386,9 @@ export default function PlanillaTuberiaForm({
                       {p.tipo} · {p.estado}{p.pk_id ? ` · ${p.pk_id}` : ''}
                     </span>
                   </td>
+                  <td style={tdFila} title="Abscisado del reporte (o de la cartera si aún no hay reporte)">
+                    {etiquetaAbscisadoLista(p)}
+                  </td>
                   <td style={tdFila}>{fmtFechaLista(p.created_at)}</td>
                   <td style={tdFila} title={p.nivel1_usuario_nombre || undefined}>
                     {etiquetaValidacionLista(p.nivel1_estado, p.nivel1_fecha)}
@@ -2373,8 +2417,15 @@ export default function PlanillaTuberiaForm({
               })}
               {!lista.length && (
                 <tr>
-                  <td colSpan={7} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
+                  <td colSpan={8} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
                     Sin planillas aún. Use «Nueva planilla» para crear la primera.
+                  </td>
+                </tr>
+              )}
+              {!!lista.length && !listaFiltrada.length && (
+                <tr>
+                  <td colSpan={8} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
+                    No hay planillas de este tipo. Cambie el filtro a «Todos» o elija otro tipo.
                   </td>
                 </tr>
               )}
