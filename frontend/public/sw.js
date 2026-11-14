@@ -8,7 +8,7 @@
  *
  * No modifica el modo offline de SicoeObra (solo tiles MapTiler cache-first).
  */
-const CACHE_NAME = 'claracore-shell-v10'
+const CACHE_NAME = 'claracore-shell-v11'
 const TILES_CACHE_NAME = 'claracore-tiles-v1'
 const PRECACHE_MSG = 'CLARACORE_PRECACHE_URLS'
 
@@ -17,6 +17,9 @@ const SHELL_PRECACHE = self.__CLARACORE_PRECACHE__ || [
   '/',
   '/index.html',
   '/favicon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon.png',
   '/manifest.webmanifest',
 ]
 
@@ -152,16 +155,20 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Poll de versión (index.html?_=…): red primero; sin red → shell en caché
+  // Poll de versión (index.html?_=…): red primero; sin red → shell en caché.
+  // Clonar YA (sync) antes de caches.open: la app también lee el body (res.text)
+  // y un clone tardío falla con bodyUsed.
   if (url.pathname === '/index.html' && url.searchParams.has('_')) {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
           if (response && response.ok) {
+            const forIndex = response.clone()
+            const forRoot = response.clone()
             caches.open(CACHE_NAME).then((c) => {
-              c.put('/index.html', response.clone())
-              c.put('/', response.clone())
-            })
+              c.put('/index.html', forIndex)
+              c.put('/', forRoot)
+            }).catch(() => undefined)
           }
           return response
         })

@@ -7248,6 +7248,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setTienePlanillaTuberiaOrigen(false)
       return
     }
+    // Solo consultar planilla si la grilla ya marcó el vínculo (evita 404 "no existe").
+    const flag =
+      reporte?.tiene_planilla_topografia === true
+      || repoProp?.tiene_planilla_topografia === true
+    if (!flag) {
+      setTienePlanillaTuberiaOrigen(false)
+      return
+    }
     let cancelled = false
     const tok = getToken()
     fetch(`${API_URL}/topografia/${contrato_id}/planillas-tuberia/por-reporte-sicoe/${rid}`, {
@@ -7275,7 +7283,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         } catch { /* noop */ }
       })
     return () => { cancelled = true }
-  }, [reporte?.id, repoProp?.id, contrato_id, API_URL])
+  }, [
+    reporte?.id,
+    repoProp?.id,
+    contrato_id,
+    API_URL,
+    reporte?.tiene_planilla_topografia,
+    repoProp?.tiene_planilla_topografia,
+  ])
 
   useEffect(() => {
     setMsgMasivo('')

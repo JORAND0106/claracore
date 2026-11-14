@@ -3302,19 +3302,43 @@ def _sicoe_reporte_geojson_tiene_dibujo(dg) -> bool:
 
 def _sicoe_batch_reportes_con_dibujo(ids: List[int]) -> set:
     """
-    Consulta so_reportes omitiendo columnas ausentes (PGRST204).
-    Prod a veces tiene dibujo_* pero no perimetro_geojson (o al revés).
+    Marca reportes con dibujo sin descargar el GeoJSON completo (grilla <2s).
+    1) Probe liviano: solo `id` donde dibujo/perímetro no es null.
+    2) Fallback legacy si PostgREST rechaza el filtro (columna ausente).
     """
     con_dibujo: set = set()
     if not ids:
         return con_dibujo
-    select_candidates = (
-        "id, dibujo_geojson, perimetro_geojson",
-        "id, dibujo_geojson",
-        "id, perimetro_geojson",
-    )
     for chunk in _sicoe_chunks_int(ids, 200):
         ch = list(chunk)
+        probed = False
+        for col in ("dibujo_geojson", "perimetro_geojson"):
+            try:
+                def _qd_light(ids=ch, c=col):
+                    return (
+                        supabase.table("so_reportes")
+                        .select("id")
+                        .in_("id", ids)
+                        .not_.is_(c, "null")
+                        .execute()
+                        .data
+                    )
+
+                for rep in supabase_execute(_qd_light) or []:
+                    rid = rep.get("id")
+                    if rid is not None:
+                        con_dibujo.add(int(rid))
+                probed = True
+            except Exception:
+                continue
+        if probed:
+            continue
+        # Fallback: select geojson (prod con schema incompleto / PGRST204).
+        select_candidates = (
+            "id, dibujo_geojson, perimetro_geojson",
+            "id, dibujo_geojson",
+            "id, perimetro_geojson",
+        )
         batch = []
         for cols in select_candidates:
             try:
@@ -3326,6 +3350,7 @@ def _sicoe_batch_reportes_con_dibujo(ids: List[int]) -> set:
                         .execute()
                         .data
                     )
+
                 batch = supabase_execute(_qd) or []
                 break
             except Exception:
@@ -3367,21 +3392,40 @@ def _sicoe_batch_reportes_con_planilla_topografia(
     if not wanted:
         return set()
     found: set = set()
-    try:
-        def _q():
-            return (
-                supabase.table("topo_planillas_tuberia")
-                .select("meta_cabecera")
-                .eq("contrato_id", int(contrato_id))
-                .execute()
-                .data
-            )
+    # Solo el array de vínculos (más liviano que meta_cabecera completo).
+    select_candidates = (
+        "meta_cabecera->sicoe_reportes",
+        "meta_cabecera",
+    )
+    rows = []
+    for cols in select_candidates:
+        try:
+            def _q(select_cols=cols):
+                return (
+                    supabase.table("topo_planillas_tuberia")
+                    .select(select_cols)
+                    .eq("contrato_id", int(contrato_id))
+                    .execute()
+                    .data
+                )
 
-        rows = supabase_execute(_q) or []
-    except Exception:
-        return set()
+            rows = supabase_execute(_q) or []
+            break
+        except Exception:
+            rows = []
+            continue
     for row in rows:
-        ids = _sicoe_reporte_ids_desde_meta_planilla_topo(row.get("meta_cabecera"))
+        meta = row.get("meta_cabecera")
+        if meta is None and "sicoe_reportes" in row:
+            meta = {"sicoe_reportes": row.get("sicoe_reportes")}
+        # PostgREST a veces devuelve la ruta embebida como clave anidada.
+        if not isinstance(meta, dict):
+            raw = row.get("sicoe_reportes")
+            if isinstance(raw, list):
+                meta = {"sicoe_reportes": raw}
+            else:
+                continue
+        ids = _sicoe_reporte_ids_desde_meta_planilla_topo(meta)
         for rid in ids:
             if rid in wanted:
                 found.add(rid)
@@ -22271,10 +22315,17 @@ def buscar_reportes_obra(
     _IDS_CHUNK_SIZE = 200
 
     def _build_q(ids_chunk=None, lite: bool = False):
+        # Grilla: omitir GeoJSON/escena (megabytes) — flags van por enrich liviano.
+        _GRILLA_COLS = (
+            "id, numero_reporte, created_at, updated_at, estado, capitulo, tramo, calzada, "
+            "abs_inicio, abs_final, nodo_ini, nodo_fin, subcontratista_id, acta_rpo_id, "
+            "semana_id, contrato_id, descripcion_actividad, creado_por, enlace_soporte, "
+            "pk_id_id, valor_total, subcontratistas(razon_social)"
+        )
         cols = (
             "id, numero_reporte, created_at"
             if lite
-            else "*, subcontratistas(razon_social)"
+            else _GRILLA_COLS
         )
         q = supabase.table("so_reportes").select(cols).eq("contrato_id", contrato_id)
         if numero_reporte is not None:
