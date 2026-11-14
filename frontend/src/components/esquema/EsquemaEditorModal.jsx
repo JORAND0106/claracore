@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   createHatchRegionFromClick,
   drawHatchRegion,
@@ -7122,7 +7123,9 @@ export default function EsquemaEditorModal({
     ? phoneSheetHeightPx(phoneSheetSnap, viewport.height || (typeof window !== 'undefined' ? window.innerHeight : 640))
     : 0
 
-  return (
+  // Portal a body: evita que ClaraGIS embed (transform/overflow) recorte o
+  // apile mal el modal fixed y deje sin Nodo|Línea|Polígono / coordenadas.
+  const overlay = (
     <div
       role="dialog"
       aria-modal="true"
@@ -9291,32 +9294,30 @@ export default function EsquemaEditorModal({
                 background: ui?.wrap || t.bgMuted || '#f8fafc',
               }}
             >
-              {!huellaMode ? (
-                <div
-                  data-testid="esquema-coords-tool-block"
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 10,
-                    padding: '8px 10px 4px',
+              <div
+                data-testid="esquema-coords-tool-block"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  padding: '8px 10px 4px',
+                }}
+              >
+                <CursorCoordsPanel t={t} coords={cursorCoords} embedded />
+                <DibujoTipoCompactPanel
+                  t={t}
+                  tipo={effectiveDibujoTipo}
+                  referenciasCount={huellaMode ? referenciasCount : 0}
+                  embedded
+                  onTipoChange={(next) => {
+                    setSentidoEjePrompt(false)
+                    pendingDrawRowsRef.current = null
+                    poligonoSentidoEjeRef.current = false
+                    setEffectiveDibujoTipo(next)
                   }}
-                >
-                  <CursorCoordsPanel t={t} coords={cursorCoords} embedded />
-                  <DibujoTipoCompactPanel
-                    t={t}
-                    tipo={effectiveDibujoTipo}
-                    referenciasCount={0}
-                    embedded
-                    onTipoChange={(next) => {
-                      setSentidoEjePrompt(false)
-                      pendingDrawRowsRef.current = null
-                      poligonoSentidoEjeRef.current = false
-                      setEffectiveDibujoTipo(next)
-                    }}
-                    onDibujar={() => requestDrawFromCoords(coordRows)}
-                  />
-                </div>
-              ) : null}
+                  onDibujar={() => requestDrawFromCoords(coordRows)}
+                />
+              </div>
               <EsquemaSidebarSection
                 t={t}
                 id="propiedades"
@@ -10010,6 +10011,9 @@ export default function EsquemaEditorModal({
       </div>
     </div>
   )
+
+  if (typeof document === 'undefined') return overlay
+  return createPortal(overlay, document.body)
 }
 
 function entityTypeLabel(type) {

@@ -2,6 +2,7 @@
  * Lista Excel de esquemas del reporte + crear / editar / cambiar asignación.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
@@ -521,7 +522,7 @@ export default function SicoeEsquemasReporteModal({
     ? (editTarget.registros || []).map((r) => r.id)
     : []
 
-  return (
+  const ui = (
     <>
       <div
         role="dialog"
@@ -694,6 +695,9 @@ export default function SicoeEsquemasReporteModal({
       )}
     </>
   )
+
+  if (typeof document === 'undefined') return ui
+  return createPortal(ui, document.body)
 }
 
 const th = { padding: '10px 8px', fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase' }

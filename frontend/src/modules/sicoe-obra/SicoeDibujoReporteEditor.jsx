@@ -5,6 +5,7 @@
  * C-OUT-23: puente opcional dibujo → gráfico asignable a registros.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { presentEsquemaExportPopup } from '../../components/esquema/esquemaExportHost'
 import { applyEsquemaSaveBundle } from '../../components/esquema/applyEsquemaSaveBundle'
@@ -661,7 +662,7 @@ export default function SicoeDibujoReporteEditor({
     }
   }
 
-  return (
+  const ui = (
     <>
       <EsquemaEditorModal
         t={t}
@@ -751,4 +752,7 @@ export default function SicoeDibujoReporteEditor({
       )}
     </>
   )
+
+  if (typeof document === 'undefined') return ui
+  return createPortal(ui, document.body)
 }
