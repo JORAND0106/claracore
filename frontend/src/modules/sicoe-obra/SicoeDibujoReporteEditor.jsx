@@ -40,6 +40,7 @@ import {
   planificarAsignacionEsquema,
 } from './sicoeEsquemasReporte.js'
 import { dataUriEsquemaAFile } from './sicoeGraficosHelpers.js'
+import { subscribeDibujoReporteActualizado } from './sicoeDibujoActualizado'
 import SicoeEsquemaAsignarPopup from './SicoeEsquemaAsignarPopup'
 
 async function nextGraficoNumero(API_URL, contratoId, hdrs) {
@@ -168,6 +169,7 @@ export default function SicoeDibujoReporteEditor({
   const [guardando, setGuardando] = useState(false)
   const [referencias, setReferencias] = useState([])
   const [refSeleccionada, setRefSeleccionada] = useState(null)
+  const [refsReloadNonce, setRefsReloadNonce] = useState(0)
 
   const [offerOpen, setOfferOpen] = useState(false)
   const [assignOpen, setAssignOpen] = useState(false)
@@ -178,6 +180,16 @@ export default function SicoeDibujoReporteEditor({
   const hdrs = useMemo(() => ({
     Authorization: `Bearer ${token || ''}`,
   }), [token])
+
+  useEffect(() => {
+    if (!contratoId) return undefined
+    return subscribeDibujoReporteActualizado((detail) => {
+      if (detail?.contratoId != null && Number(detail.contratoId) !== Number(contratoId)) return
+      // Otro reporte del contrato cambió su dibujo: refrescar capas de referencia.
+      if (detail?.reporteId != null && String(detail.reporteId) === String(reporte?.id)) return
+      setRefsReloadNonce((n) => n + 1)
+    })
+  }, [contratoId, reporte?.id])
 
   useEffect(() => {
     let cancelled = false
@@ -202,7 +214,7 @@ export default function SicoeDibujoReporteEditor({
       }
     })()
     return () => { cancelled = true }
-  }, [API_URL, contratoId, token, reporte?.id])
+  }, [API_URL, contratoId, token, reporte?.id, refsReloadNonce])
 
   const mapLocation = useMemo(() => {
     const lat = Number(reporte?.coord_lat)
@@ -466,7 +478,10 @@ export default function SicoeDibujoReporteEditor({
         ...(data || {}),
         reporte: {
           ...(data?.reporte || {}),
+          // Siempre el FC recién generado (evita conservar dibujo_geojson stale si la API omite jsonb).
+          dibujo_geojson: fc,
           dibujo_escena: dibujoEscenaBase,
+          tiene_dibujo: true,
           puntos: puntosGuardados,
         },
         puntos: puntosGuardados,

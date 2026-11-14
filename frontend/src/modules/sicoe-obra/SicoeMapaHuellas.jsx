@@ -14,6 +14,7 @@ import {
   mapboxPlanoSymbolLayout,
 } from '../../mapboxPlanoLabels'
 import { colorDibujoPorItems, leyendaColoresItems } from './sicoeItemColores'
+import { subscribeDibujoReporteActualizado } from './sicoeDibujoActualizado'
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
 
@@ -249,6 +250,14 @@ export default function SicoeMapaHuellas({
   const [listo, setListo] = useState(false)
   const [error, setError] = useState('')
   const [reloadNonce, setReloadNonce] = useState(0)
+
+  useEffect(() => {
+    if (!contratoId) return undefined
+    return subscribeDibujoReporteActualizado((detail) => {
+      if (detail?.contratoId != null && Number(detail.contratoId) !== Number(contratoId)) return
+      setReloadNonce((n) => n + 1)
+    })
+  }, [contratoId])
   const [mostrarNodosPk, setMostrarNodosPk] = useState(false)
   const [leyendaItems, setLeyendaItems] = useState([])
   const highlightRef = useRef({ highlightRegistroIds, highlightPkIds })

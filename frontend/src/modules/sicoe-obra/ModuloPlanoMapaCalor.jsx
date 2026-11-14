@@ -39,6 +39,7 @@ import {
 import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNivelacionMapaCapa'
 import { addMapboxGeolocateControl } from '../../mapboxSafe'
 import { useClaraViewport } from '../../useClaraViewport'
+import { subscribeDibujoReporteActualizado } from './sicoeDibujoActualizado'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -628,6 +629,31 @@ export default function ModuloPlanoMapaCalor({
     setPanelAbierto(null)
     void cargarMapaCalor(b)
   }, [contratoId, cargarMapaCalor, focoRevision])
+
+  // Dibujo guardado en otra vista (editor / Carpeta): refrescar geometrías del plano.
+  useEffect(() => {
+    if (!contratoId) return undefined
+    return subscribeDibujoReporteActualizado((detail) => {
+      if (detail?.contratoId != null && Number(detail.contratoId) !== Number(contratoId)) return
+      setEmbedReporte((prev) => {
+        if (!prev || String(prev.id) !== String(detail?.reporteId)) return prev
+        return {
+          ...prev,
+          dibujo_geojson: detail.dibujo_geojson,
+          dibujo_escena: detail.dibujo_escena ?? prev.dibujo_escena,
+          tiene_dibujo: detail.tiene_dibujo !== false,
+          ...(Array.isArray(detail.puntos) ? { puntos: detail.puntos } : {}),
+        }
+      })
+      const b = focoRevision
+        ? (trabajoBundleRef.current || bundleAplicado)
+        : bundleAplicado
+      void cargarMapaCalor(b, {
+        registroFocoId: focoRevision?.registroId ?? null,
+        fit: false,
+      })
+    })
+  }, [contratoId, cargarMapaCalor, focoRevision, bundleAplicado])
 
   const onLimpiar = useCallback(() => {
     fetchGenRef.current += 1
@@ -1428,6 +1454,16 @@ export default function ModuloPlanoMapaCalor({
               setEmbedReporte((prev) =>
                 prev && String(prev.id) === String(patch?.id) ? { ...prev, ...patch } : prev,
               )
+              // Dibujo nuevo → refrescar calor/dibujos del plano (sin esperar TTL de caché).
+              if (patch && (patch.dibujo_geojson != null || patch.tiene_dibujo)) {
+                const b = focoRevision
+                  ? (trabajoBundleRef.current || bundleAplicado)
+                  : bundleAplicado
+                void cargarMapaCalor(b, {
+                  registroFocoId: focoRevision?.registroId ?? null,
+                  fit: false,
+                })
+              }
             },
             capasFiltroValidacion: !focoRevision && Array.isArray(bundleAplicado?.capasValidacion) && bundleAplicado.capasValidacion.length
               ? bundleAplicado.capasValidacion

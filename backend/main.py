@@ -29696,7 +29696,8 @@ def sicoe_guardar_dibujo_reporte(
 
     now = datetime.now(timezone.utc).isoformat()
     uid = _sicoe_uid_from_user(current_user)
-    # Compat: perimetro_geojson solo admite polígonos; para línea/punto guardar feat tal cual si es polígono
+    # Compat: perimetro_geojson solo admite polígonos; si el dibujo nuevo no es polígono,
+    # limpiar el perímetro anterior para no mezclar geometrías viejas en lectores legacy.
     perimetro = feat if (feat.get("geometry") or {}).get("type") in ("Polygon", "MultiPolygon") else None
     patch = {
         "dibujo_geojson": fc,
@@ -29704,9 +29705,8 @@ def sicoe_guardar_dibujo_reporte(
         "dibujo_actualizado_en": now,
         "dibujo_por": uid,
         "updated_at": "now()",
+        "perimetro_geojson": perimetro,
     }
-    if perimetro is not None:
-        patch["perimetro_geojson"] = perimetro
     last_written: dict = {}
     try:
         # Prod puede no tener aún perimetro_geojson y/o dibujo_* (PGRST204).
@@ -29767,6 +29767,22 @@ def sicoe_guardar_dibujo_reporte(
         )
     except Exception as exc:
         _log_api.warning("encolar auditoria dibujos: %s", exc)
+
+    # El mapa de calor / analisis cachea dibujos; invalidar para no servir geometría vieja.
+    try:
+        _dashboard_response_cache_invalidate_contrato(int(contrato_id))
+    except Exception as exc:
+        _log_api.warning("invalidate cache tras dibujo: %s", exc)
+
+    # Garantizar que la respuesta traiga el FC nuevo (Supabase a veces omite jsonb grandes).
+    out["dibujo_geojson"] = fc
+    if body.dibujo_escena is not None:
+        out["dibujo_escena"] = body.dibujo_escena
+    if perimetro is not None:
+        out["perimetro_geojson"] = perimetro
+    else:
+        # Línea/punto: no dejar perímetro polígono antiguo mezclado.
+        out["perimetro_geojson"] = None
 
     try:
         registrar_log(
@@ -38503,6 +38519,32 @@ def _dashboard_response_cache_set(cache_key: tuple, data: Any) -> None:
             oldest = min(_dashboard_response_cache, key=lambda k: _dashboard_response_cache[k]["ts"])
             _dashboard_response_cache.pop(oldest, None)
 
+
+
+def _dashboard_response_cache_invalidate_contrato(contrato_id: int) -> int:
+    """Invalida entradas de caché dashboard/analisis del contrato (p. ej. tras guardar dibujo)."""
+    cid = int(contrato_id)
+    removed = 0
+    with _dashboard_rpc_cache_lock:
+        keys = [k for k in list(_dashboard_response_cache.keys()) if _cache_key_belongs_contrato(k, cid)]
+        for k in keys:
+            _dashboard_response_cache.pop(k, None)
+            removed += 1
+    return removed
+
+
+def _cache_key_belongs_contrato(cache_key, contrato_id: int) -> bool:
+    """Heurística: la clave de analisis/dashboard incluye contrato_id como int temprano en la tupla."""
+    if not isinstance(cache_key, tuple):
+        return False
+    cid = int(contrato_id)
+    for part in cache_key[:6]:
+        try:
+            if int(part) == cid:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 def _dashboard_resumen_user_cache_key(current_user) -> int:
     if isinstance(current_user, dict):
