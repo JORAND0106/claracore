@@ -23244,11 +23244,14 @@ const [navReporteId, setNavReporteId] = useState(null)
     [usuario, onCambiarContrato, setUsuario],
   )
 
-  const selectorContratoHeader = progRibbonEnHeader ? (
+  /** Selector de contrato en la barra superior (toda la plataforma, no solo Programación). */
+  const selectorContratoHeader = !esContador ? (
     usuario?._contratos?.length > 1 ? (
       <select
         value={usuario.contrato_id || ''}
         onChange={(e) => void handleCambioContratoUsuario(e)}
+        aria-label="Contrato activo"
+        title="Cambiar contrato"
         style={{
           fontSize: 'var(--cc-sm)',
           background: t.bgCard,
@@ -23260,6 +23263,7 @@ const [navReporteId, setNavReporteId] = useState(null)
           cursor: 'pointer',
           outline: 'none',
           maxWidth: 'min(320px, 36vw)',
+          minWidth: 0,
         }}
       >
         {!usuario.contrato_id && <option value="">— Selecciona un contrato —</option>}
@@ -23276,7 +23280,11 @@ const [navReporteId, setNavReporteId] = useState(null)
           color: t.primary,
           fontWeight: 600,
           whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          maxWidth: 'min(280px, 32vw)',
         }}
+        title={usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
       >
         {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
       </span>
@@ -23423,11 +23431,11 @@ const [navReporteId, setNavReporteId] = useState(null)
               className={`cc-header-partner-logo${viewportNavDrawer ? ' cc-header-partner-logo--compact' : ''}`}
             />
           )}
-          {!viewportNavDrawer && progRibbonEnHeader && (
+          {!viewportNavDrawer && !esContador && (
             <>
               <div style={{ width: 1, height: 28, background: t.border, flexShrink: 0 }} aria-hidden />
               {selectorContratoHeader}
-              {progRibbon && <ProgObraHeaderRibbon t={t} {...progRibbon} />}
+              {progRibbonEnHeader && progRibbon && <ProgObraHeaderRibbon t={t} {...progRibbon} />}
             </>
           )}
         </div>
@@ -23929,7 +23937,9 @@ const [navReporteId, setNavReporteId] = useState(null)
           className={moduloActivo === 'dashboard' ? 'cc-app-content cc-app-content--dashboard' : 'cc-app-content'}
           style={{
             flex: 1,
-            padding: isMobileHeader ? '12px 12px' : '20px 24px',
+            padding: moduloActivo === 'semaforo'
+              ? (isMobileHeader ? '6px 8px' : '8px 12px')
+              : (isMobileHeader ? '12px 12px' : '20px 24px'),
             minWidth: 0,
             /*
              * iPhone Safari: overflow:auto anidado en flex + overflow-x:clip/hidden
@@ -24000,31 +24010,6 @@ const [navReporteId, setNavReporteId] = useState(null)
             })}
           </div>
         )}
-        {moduloActivo !== 'dashboard' && !progRibbonEnHeader && !esContador && !viewportNavDrawer && (
-        <div style={s.topBar}>
-          {usuario?._contratos?.length > 1 ? (
-            <select
-              value={usuario.contrato_id || ''}
-              onChange={(e) => void handleCambioContratoUsuario(e)}
-              style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', width: 'auto', maxWidth: 'min(420px, 100%)' }}
-            >
-              {!usuario.contrato_id && (
-                <option value="">— Selecciona un contrato —</option>
-              )}
-              {usuario._contratos.map(c => (
-                <option key={c.id} value={c.id}>📋 {c.numero}</option>
-              ))}
-            </select>
-          ) : (
-            <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-              📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
-            </span>
-          )}
-        </div>
-        )}
-
-
-
         {moduloActivo === 'inicio' && (
           <ModuloInicio
             key={`inicio-${usuario?.contrato_id ?? 'x'}`}
@@ -24356,31 +24341,6 @@ const [navReporteId, setNavReporteId] = useState(null)
                   dashKpiLoading={dashRefreshBusy}
                   onRefresh={() => { void cargarDashboardResumen({ force: true }); void cargarDashCapFin({ force: true }); void cargarConfrontacionPresupuesto() }}
                 />
-                {!viewportNavDrawer && (
-                  usuario?._contratos?.length > 1 ? (
-                    <select
-                      value={usuario.contrato_id || ''}
-                      className={dashMobile ? 'cc-dash-touch-select' : undefined}
-                      onChange={async (e) => {
-                        const cid = parseInt(e.target.value, 10)
-                        const contrato = usuario._contratos.find(c => c.id === cid)
-                        if (!contrato) return
-                        if (onCambiarContrato) await onCambiarContrato(contrato)
-                        else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
-                      }}
-                      style={{ fontSize: `${du.sub}px`, background: t.bgCard, border: `1px solid ${t.primary}33`, borderRadius: 8, padding: dashMobile ? '10px 12px' : '5px 10px', color: t.primary, fontWeight: 700, cursor: 'pointer', outline: 'none', maxWidth: dashMobile ? '100%' : 'min(220px, 42vw)', ...dashTouchSelect }}
-                    >
-                      {!usuario.contrato_id && <option value="">Contrato…</option>}
-                      {usuario._contratos.map(c => (
-                        <option key={c.id} value={c.id}>{c.numero}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span style={{ fontSize: `${du.sub}px`, color: t.textMuted, whiteSpace: 'nowrap' }}>
-                      📋 {usuario?.contrato_numero || '—'}
-                    </span>
-                  )
-                )}
               </div>
             </div>
 

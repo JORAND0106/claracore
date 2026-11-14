@@ -1017,17 +1017,26 @@ body:has(.cc-claragis-root) .cc-app-header {
   display: block;
 }
 
+.cc-claragis-filtro-popup .cc-sicoe-filtro-bar {
+  margin-bottom: 0 !important;
+}
+
 @media (max-width: 1366px) {
   .cc-claragis-root {
-    height: calc(100dvh - 120px) !important;
+    height: calc(100dvh - 64px) !important;
     min-height: 280px;
   }
 }
 
 @media (max-width: 767px) {
   .cc-claragis-root {
-    height: calc(100dvh - 112px) !important;
+    height: calc(100dvh - 56px) !important;
     min-height: 280px;
+  }
+
+  /* En móvil el popup de filtros no debe tapar de forma permanente el abscisado. */
+  .cc-claragis-filtro-popup {
+    max-height: min(48vh, 360px) !important;
   }
 
   .cc-sicoe-carpeta-shell--embed-mobile {
