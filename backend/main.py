@@ -26156,6 +26156,41 @@ def _sicoe_resolver_nombres_creador_modificador_reporte(r: dict) -> None:
         r[key] = by_id.get(uid)
 
 
+def _enriquecer_registros_acta_rpo_numero(regs: list) -> list:
+    """Rellena acta_rpo_numero en cada registro (batch) para ficha Verificar / listados."""
+    if not regs:
+        return regs
+    aids: List[int] = []
+    for r in regs:
+        aid = _as_int_id(r.get("acta_rpo_id"))
+        if aid is not None:
+            aids.append(aid)
+    aids = sorted(set(aids))
+    acta_map: Dict[int, Any] = {}
+    if aids:
+        try:
+            rows = supabase_execute(
+                lambda: supabase.table("actas")
+                .select("id, numero_rpo")
+                .in_("id", aids)
+                .execute()
+                .data
+            )
+            for a in rows or []:
+                if a.get("id") is None:
+                    continue
+                acta_map[int(a["id"])] = a.get("numero_rpo")
+        except Exception:
+            acta_map = {}
+    for r in regs:
+        aid = _as_int_id(r.get("acta_rpo_id"))
+        if aid is None:
+            r["acta_rpo_numero"] = None
+        else:
+            r["acta_rpo_numero"] = acta_map.get(aid)
+    return regs
+
+
 @app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def obtener_reporte(
     contrato_id: int,
@@ -26169,8 +26204,10 @@ def obtener_reporte(
     numero_registro: Optional[int] = None,
     semana: Optional[int] = None,
     acta_rpo: Optional[int] = None,
+    actas_filtro: Optional[str] = Query(None),
     subcontratista_id: Optional[int] = None,
     capitulo: Optional[str] = None,
+    capitulos_filtro: Optional[str] = Query(None),
     item: Optional[str] = None,
     items_filtro: Optional[str] = Query(None),
     items_filtro_op: Optional[str] = Query(None),
@@ -26190,12 +26227,24 @@ def obtener_reporte(
     etiqueta_validacion: Optional[str] = Query(None),
     pendiente_item: bool = Query(False),
     editado_por_filtro: Optional[str] = Query(None),
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    tipo_fecha: Optional[str] = Query(None),
+    ambito_fecha: Optional[str] = Query(None),
+    usuario_id: Optional[int] = Query(None),
+    usuario_accion: Optional[str] = Query(None),
+    cantidad_desde: Optional[float] = Query(None),
+    cantidad_hasta: Optional[float] = Query(None),
+    costo_directo_desde: Optional[float] = Query(None),
+    costo_directo_hasta: Optional[float] = Query(None),
     current_user=Depends(get_current_user),
 ):
     # Aislamiento cargo subcontratista: solo su sub + objeto de pago.
     subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
     _sub_restricto, _sub_forced = _scope_subcontratista_usuario(current_user)
     items_detalle_norm = _normalize_items_filtro_list(items_filtro, item)
+    caps_detalle_norm = _normalize_items_filtro_list(capitulos_filtro, capitulo)
+    actas_rpo_detalle_norm = _normalize_actas_filtro_list(actas_filtro, acta_rpo)
     _editado_por_ids_det = _sicoe_normalize_editado_por_ids(editado_por_filtro)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     # Misma semántica que GET …/reportes/buscar: por N° reporte o N° registro no se cruzan capas/semana/acta.
@@ -26206,6 +26255,7 @@ def obtener_reporte(
         capas_v = []
         semana = None
         acta_rpo = None
+        actas_rpo_detalle_norm = []
     capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
     _cap_op_det = _parse_capas_validacion_op(validacion_capas_op)
     _defer_capas_or_detalle = (
@@ -26244,33 +26294,24 @@ def obtener_reporte(
             except Exception:
                 return []
 
-        acta_id_filtro = None
-        if acta_rpo is not None:
-            try:
-                def _acta_id():
-                    rows = supabase.table("actas").select("id")\
-                        .eq("contrato_id", contrato_id)\
-                        .eq("numero_rpo", acta_rpo).execute().data
-                    if not rows:
-                        rows = supabase.table("actas").select("id")\
-                            .eq("contrato_id", contrato_id)\
-                            .eq("consecutivo", acta_rpo).execute().data
-                    return rows
-                acta_rows = supabase_execute(_acta_id)
-                if acta_rows:
-                    acta_id_filtro = acta_rows[0]["id"]
-                else:
-                    return []
-            except Exception:
+        acta_ids_lineas: List[int] = []
+        if actas_rpo_detalle_norm:
+            acta_ids_lineas = _sicoe_resolve_acta_ids_por_rpo(contrato_id, actas_rpo_detalle_norm)
+            if not acta_ids_lineas:
                 return []
-
-        acta_id_lineas = acta_id_filtro
-        if acta_rpo is None and semana is None and acta_id_lineas is None and pendiente_item:
+        elif pendiente_item and semana is None:
             aid_inj = _acta_rpo_id_matriz_dashboard_default(contrato_id)
             if aid_inj is not None:
-                acta_id_lineas = aid_inj
+                acta_ids_lineas = [int(aid_inj)]
 
         _rev_modo_det = _sicoe_reversion_modo_filtro(estado, current_user)
+        _ambito_reg_det = (str(ambito_fecha or "").strip().lower() != "reporte")
+        _uid_det = None
+        if usuario_id is not None:
+            try:
+                _uid_det = int(usuario_id)
+            except Exception:
+                _uid_det = None
 
         if reg_tag_detalle is not None and not reg_tag_detalle:
             return []
@@ -26287,7 +26328,11 @@ def obtener_reporte(
                     numero_registro=numero_registro,
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
-                    capitulo=capitulo,
+                    cantidad_desde=cantidad_desde,
+                    cantidad_hasta=cantidad_hasta,
+                    costo_directo_desde=costo_directo_desde,
+                    costo_directo_hasta=costo_directo_hasta,
+                    capitulos=caps_detalle_norm or None,
                     competencia=(str(competencia).strip() if competencia and str(competencia).strip() else None),
                     items=items_detalle_norm,
                     items_op=items_filtro_op,
@@ -26297,8 +26342,8 @@ def obtener_reporte(
                     pk_id=pk_id,
                     q_observacion=q_observacion,
                     semana_id=semana_id_filtro,
-                    acta_rpo_id=acta_id_lineas,
-                    require_item=(acta_id_lineas is not None),
+                    acta_rpo_ids=acta_ids_lineas or None,
+                    require_item=bool(acta_ids_lineas),
                     capas_v=(
                         None
                         if _defer_capas_or_detalle
@@ -26307,6 +26352,12 @@ def obtener_reporte(
                     estado=estado,
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta,
+                    tipo_fecha=tipo_fecha,
+                    usuario_id=_uid_det,
+                    usuario_accion=usuario_accion,
+                    ambito_fecha_registro=_ambito_reg_det,
                     reversion_modo=_rev_modo_det,
                     editado_por_ids=_editado_por_ids_det or None,
                     solo_objeto_pago_sub=_sub_restricto,
@@ -26411,6 +26462,8 @@ def obtener_reporte(
     else:
         _enriquecer_num_comentarios_visibles(regs_raw, current_user)
         _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
+    # Número de Acta RPO por línea (también con ligero=1) para ficha Verificar / listado.
+    _enriquecer_registros_acta_rpo_numero(regs_raw or [])
     r["registros"] = _overlay_sicoe_meta_vivo(contrato_id, regs_raw or [])
     # Operativos / aislamiento: no enviar montos de contrato al dispositivo.
     # Subcontratista ya recibió overlay de precios propios (economia_subcontratista).

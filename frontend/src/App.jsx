@@ -8812,6 +8812,57 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 >
                   #{reporte.numero_reporte}
                 </span>
+                {isEmbed && typeof urlReporteDetalleFiltradoFn === 'function' && urlReporteDetalleFiltradoFn(reporte?.id) && (
+                  reporte.registros_vista_filtrada ? (
+                    <button
+                      type="button"
+                      disabled={recargando}
+                      onClick={() => { void recargar({ forzarSinFiltros: true }) }}
+                      aria-label="Ver reporte completo"
+                      title="Ver reporte completo (sin filtro)"
+                      style={{
+                        background: 'rgba(255,255,255,0.15)',
+                        border: 'none',
+                        color: '#fff',
+                        borderRadius: 8,
+                        width: 36,
+                        height: 36,
+                        minWidth: 36,
+                        fontSize: 'var(--cc-body)',
+                        cursor: recargando ? 'wait' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      📂
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={recargando}
+                      onClick={() => { void recargar() }}
+                      aria-label="Volver a vista filtrada"
+                      title="Volver a la vista filtrada"
+                      style={{
+                        background: 'rgba(217,249,157,0.25)',
+                        border: '1px solid rgba(217,249,157,0.55)',
+                        color: '#D9F99D',
+                        borderRadius: 8,
+                        width: 36,
+                        height: 36,
+                        minWidth: 36,
+                        fontSize: 'var(--cc-body)',
+                        cursor: recargando ? 'wait' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      🔍
+                    </button>
+                  )
+                )}
                 <button
                   type="button"
                   disabled={recargando}
@@ -9622,6 +9673,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     t={t}
                     registros={registrosConItem}
                     reporte={reporte}
+                    actasList={actasList}
                     registroId={registroExpandido}
                     onRegistroChange={(id) => {
                       setMenuAccionesRegId(null)
@@ -21428,16 +21480,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         API_URL={API_URL}
         contrato_id={usuario?.contrato_id}
         reporte={slot?.reporte}
-        actasList={[]}
+        actasList={actasListaMatriz}
         nivelesContrato={nivelesDashContrato}
         capasFiltroValidacion={slot?.capasFiltroValidacion || null}
         capasFiltroValidacionOp={slot?.capasFiltroValidacionOp || 'and'}
+        urlReporteDetalleFiltrado={slot?.urlReporteDetalleFiltrado || null}
         onClose={slot?.onClose}
         onActualizar={slot?.onActualizar}
         onReporteActualizado={slot?.onReporteActualizado}
       />
     </OfflineProvider>
-  ), [usuario, t, API_URL, nivelesDashContrato])
+  ), [usuario, t, API_URL, nivelesDashContrato, actasListaMatriz])
 
   const limpiarCachesDashVista = useCallback(() => {
     dashDrillFetchSeqRef.current += 1
