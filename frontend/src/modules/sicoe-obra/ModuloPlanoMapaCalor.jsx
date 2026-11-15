@@ -643,13 +643,22 @@ export default function ModuloPlanoMapaCalor({
     [capasInicialesValidacion],
   )
 
+  const cargarMapaCalorRef = useRef(cargarMapaCalor)
+  cargarMapaCalorRef.current = cargarMapaCalor
+
+  // Entrada / cambio de contrato o capas del validador: aplicar bundle inicial
+  // y ejecutar la búsqueda de inmediato (No Revisado para mesa), sin esperar a Buscar.
+  // Importante: llamar cargarMapaCalor(inicial) con el bundle de este efecto — no con
+  // el state anterior — para evitar la carrera setState + effect que dejaba el plano vacío.
   useEffect(() => {
+    if (!contratoId) return
     autoBusquedaHechaRef.current = false
     const inicial = bundleInicialClaraGis(contratoId, capasInicialesValidacion, usuario)
     setBundleAplicado(inicial)
-    trabajoBundleRef.current = esMesaValidador
+    const trabajo = esMesaValidador
       ? claraGisBundleNoRevisado(capasInicialesValidacion)
       : (sicoeBundleTieneCriteriosUsuario(inicial) ? inicial : null)
+    trabajoBundleRef.current = trabajo
     if (sicoeBundleTieneCriteriosUsuario(inicial)) {
       try { guardarSicoeFiltroSesion(contratoId, inicial) } catch { /* ignore */ }
     }
@@ -662,22 +671,13 @@ export default function ModuloPlanoMapaCalor({
     setFocoRevision(null)
     puntosRef.current = EMPTY_FC
     fetchGenRef.current += 1
+    if (!token) return
+    if (!sicoeBundleTieneCriteriosUsuario(inicial)) return
+    autoBusquedaHechaRef.current = true
+    void cargarMapaCalorRef.current(inicial)
   // capasIniKey evita reinicios por nueva referencia de array idéntico
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contratoId, capasIniKey, esMesaValidador])
-
-  useEffect(() => {
-    if (!contratoId || !token) return
-    if (!tieneCriterios) return
-    if (autoBusquedaHechaRef.current || busquedaRealizada || buscando) return
-    autoBusquedaHechaRef.current = true
-    if (!trabajoBundleRef.current && esMesaValidador) {
-      trabajoBundleRef.current = claraGisBundleNoRevisado(capasInicialesValidacion)
-    } else if (!trabajoBundleRef.current && tieneCriterios) {
-      trabajoBundleRef.current = bundleAplicado
-    }
-    void cargarMapaCalor(bundleAplicado)
-  }, [contratoId, token, tieneCriterios, bundleAplicado, busquedaRealizada, buscando, cargarMapaCalor, esMesaValidador, capasInicialesValidacion])
+  }, [contratoId, capasIniKey, esMesaValidador, token])
 
   // onBuscar se define más abajo (tras refrescarEmbedConBundle).
 
@@ -1477,6 +1477,10 @@ export default function ModuloPlanoMapaCalor({
     ? 'Filtros — al entrar se carga No Revisado de su nivel. Sin filtros el plano muestra eje y abscisado para ubicarse.'
     : 'Filtros — elija criterios y Buscar para ver reportes en el plano. Sin filtros el plano muestra eje y abscisado para ubicarse.'
 
+  const hideCcTip = () => {
+    try { document.dispatchEvent(new CustomEvent('cc-title-tooltip-hide')) } catch { /* ignore */ }
+  }
+
   const iconBtn = (id, label, emoji, { badge } = {}) => (
     <button
       key={id}
@@ -1485,7 +1489,10 @@ export default function ModuloPlanoMapaCalor({
       aria-label={id === 'filtros' ? filtroTip : label}
       aria-pressed={panelAbierto === id}
       data-claragis-filtro-btn={id === 'filtros' ? '1' : undefined}
+      data-cc-tip-action="1"
+      onPointerDown={() => { hideCcTip() }}
       onClick={() => {
+        hideCcTip()
         setPanelAbierto((cur) => (cur === id ? null : id))
       }}
       style={{

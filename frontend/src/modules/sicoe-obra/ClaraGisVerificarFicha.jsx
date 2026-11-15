@@ -30,14 +30,20 @@ import {
 } from './sicoeActaRegistroLabel'
 
 function IconBtn({ title, onClick, children, disabled, accent, size = 44 }) {
+  const hideCcTip = () => {
+    try { document.dispatchEvent(new CustomEvent('cc-title-tooltip-hide')) } catch { /* ignore */ }
+  }
   return (
     <button
       type="button"
       title={title}
       aria-label={title}
+      data-cc-tip-action="1"
       disabled={disabled}
+      onPointerDown={() => { hideCcTip() }}
       onClick={(e) => {
         e?.stopPropagation?.()
+        hideCcTip()
         onClick?.(e)
       }}
       style={{
