@@ -64,4 +64,13 @@ describe('ClaraGIS filtros sync con SicoeObra', () => {
     assert.match(chunk, /capitulos_filtro/)
     assert.match(backendMain, /_enriquecer_registros_acta_rpo_numero\(regs_raw/)
   })
+
+  it('analisis/mapa_calor usa la misma q de línea que la grilla (require_item con Acta)', () => {
+    const idx = backendMain.indexOf('def _build_regs_q')
+    assert.ok(idx > 0, 'debe existir _build_regs_q en analisis')
+    const chunk = backendMain.slice(idx, idx + 2200)
+    assert.match(chunk, /_sicoe_so_registros_q_linea_filtros_busqueda/)
+    assert.match(chunk, /require_item=bool\(_aids_l\)/)
+    assert.match(chunk, /acta_rpo_ids=_aids_l/)
+  })
 })

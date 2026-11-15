@@ -21,12 +21,23 @@ describe('claraGisMesaValidacion', () => {
     assert.equal(claraGisTieneCriterios(claraGisBundleNoRevisado([])), false)
   })
 
-  it('foco por ítem filtra solo ese ítem sin capas', () => {
+  it('foco por ítem filtra solo ese ítem sin capas (sin base)', () => {
     const b = claraGisBundleFocoItem('01.02.03')
     assert.equal(b.fSicoe.item, '01.02.03')
     assert.deepEqual(b.itemsChips, ['01.02.03'])
     assert.deepEqual(b.capasValidacion, [])
     assert.equal(claraGisTieneCriterios(b), true)
+  })
+
+  it('foco por ítem conserva Acta RPO y capas del bloque de trabajo', () => {
+    const base = claraGisBundleNoRevisado([{ nivel: 2, estado: 'No Revisado' }])
+    base.fSicoe.acta_rpo = '75'
+    base.panelActasRpo = [75]
+    const b = claraGisBundleFocoItem('01.02.03', '', base)
+    assert.equal(b.fSicoe.item, '01.02.03')
+    assert.equal(b.fSicoe.acta_rpo, '75')
+    assert.deepEqual(b.panelActasRpo, [75])
+    assert.deepEqual(b.capasValidacion, [{ nivel: 2, estado: 'No Revisado' }])
   })
 
   it('anotar foco marca activo y referencia', () => {

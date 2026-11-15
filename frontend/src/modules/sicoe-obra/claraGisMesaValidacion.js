@@ -56,17 +56,23 @@ export function claraGisEsMesaValidador(usuario, contratoId, capasIniciales) {
 }
 
 /**
- * Bundle de foco: solo el ítem del registro en revisión (sin capas No Revisado),
- * para ver también reportes anteriores del mismo ítem.
+ * Bundle de foco: intersecta el bloque de trabajo activo con el ítem en revisión.
+ * Conserva Acta RPO, capas, fechas y el resto del filtro; solo acota al ítem.
+ * (Antes se descartaba el filtro y se recargaba solo por ítem → otras actas en el plano.)
+ *
+ * @param {string} itemNumero
+ * @param {string} [itemDescripcion]
+ * @param {object|null} [baseBundle] — snapshot del bloque de trabajo (filtros del usuario)
  */
-export function claraGisBundleFocoItem(itemNumero, itemDescripcion = '') {
+export function claraGisBundleFocoItem(itemNumero, itemDescripcion = '', baseBundle = null) {
   const item = String(itemNumero || '').trim()
-  if (!item) return claraGisBundleVacio()
-  const f = sicoeFSicoeVacios()
+  if (!item) return sicoeFiltroSnapshot(baseBundle || claraGisBundleVacio())
+  const base = sicoeFiltroSnapshot(baseBundle || claraGisBundleVacio())
+  const f = { ...(base.fSicoe || sicoeFSicoeVacios()) }
   f.item = item
   f.items = []
   return sicoeFiltroSnapshot({
-    ...claraGisBundleVacio(),
+    ...base,
     fSicoe: f,
     itemsChips: [item],
     itemsOp: 'and',

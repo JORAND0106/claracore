@@ -854,7 +854,12 @@ export default function ModuloPlanoMapaCalor({
     if (!trabajoBundleRef.current) {
       trabajoBundleRef.current = sicoeFiltroSnapshot(bundleAplicado)
     }
-    const focoBundle = claraGisBundleFocoItem(item, info.itemDescripcion)
+    // Conservar Acta RPO / capas / etc. del bloque; solo acotar al ítem.
+    const focoBundle = claraGisBundleFocoItem(
+      item,
+      info.itemDescripcion,
+      trabajoBundleRef.current,
+    )
     setFocoRevision({ registroId: info.registroId, itemNumero: item })
     setBundleAplicado(focoBundle)
     void cargarMapaCalor(focoBundle, { registroFocoId: info.registroId, fit: false })
@@ -1626,6 +1631,7 @@ export default function ModuloPlanoMapaCalor({
           {enPlano} en plano
           {leyendaVista.con_dibujo ? ` · ${leyendaVista.con_dibujo} con dibujo` : ''}
           {leyendaVista.sin_dibujo ? ` · ${leyendaVista.sin_dibujo} sin dibujo` : ''}
+          {verEco && meta.suma_costo_directo != null ? ` · CD ${fmtCostoMapa(meta.suma_costo_directo)}` : ''}
           {verEco && meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
           {meta.sin_coords ? ` · ${meta.sin_coords} sin coords` : ''}
           {meta.truncado ? ` · truncado a ${meta.max_features}` : ''}
