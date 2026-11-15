@@ -113,8 +113,12 @@ describe('bitacoraReporteDiarioPng — descarga colaboradores + eventos', () => 
     assert.doesNotMatch(captureSrc, /Maquinaria en uso/)
     assert.doesNotMatch(captureSrc, /Hrs extra/)
     assert.doesNotMatch(captureSrc, /Residente de obra/)
-    // Estilo de parque: left:-10000px (no -9999). La captura lo mueve a (0,0).
+    // Parque off-screen del nodo fuente; la captura clona al viewport.
     assert.match(captureSrc, /left:\s*'-10000px'/)
-    assert.match(captureSrc, /withCapturePosition|data-bitacora-png-capture/)
+    assert.match(captureSrc, /data-bitacora-png-capture/)
+    const helpers = readFileSync(join(dir, 'bitacoraReporteDiarioPng.js'), 'utf8')
+    assert.match(helpers, /cloneNode\(true\)/)
+    assert.match(helpers, /data-bitacora-png-host/)
+    assert.doesNotMatch(helpers, /zIndex:\s*'-1'/)
   })
 })

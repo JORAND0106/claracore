@@ -117,39 +117,49 @@ export function optsCapturaBitacoraPng(node, {
 }
 
 /**
- * Posiciona el nodo para captura (visible al motor de layout, no a la UI)
- * y restaura estilos al terminar. Evita left:-9999 → PNG blanco.
+ * Clona el nodo en el viewport (opacity 1) para que html-to-image lo pinte.
+ * left:-9999 / opacity:0 / z-index:-1 producen PNG en blanco en Chrome/Safari/iPad.
+ * El clon se elimina al terminar; el flash en pantalla es mínimo (~1–2 frames).
  */
 export async function withCapturePosition(node, run) {
-  if (!node) throw new Error('No hay contenido para capturar')
-  const prev = {
-    position: node.style.position,
-    left: node.style.left,
-    top: node.style.top,
-    right: node.style.right,
-    bottom: node.style.bottom,
-    opacity: node.style.opacity,
-    visibility: node.style.visibility,
-    zIndex: node.style.zIndex,
-    pointerEvents: node.style.pointerEvents,
-    transform: node.style.transform,
+  if (!node || typeof document === 'undefined') {
+    throw new Error('No hay contenido para capturar')
   }
-  Object.assign(node.style, {
+  const host = document.createElement('div')
+  host.setAttribute('data-bitacora-png-host', '1')
+  Object.assign(host.style, {
     position: 'fixed',
     left: '0px',
     top: '0px',
+    width: `${Math.max(920, node.scrollWidth || node.offsetWidth || 920)}px`,
+    background: '#ffffff',
+    zIndex: '2147483000',
     opacity: '1',
     visibility: 'visible',
-    zIndex: '-1',
     pointerEvents: 'none',
-    transform: 'none',
+    overflow: 'visible',
   })
+  const clone = node.cloneNode(true)
+  Object.assign(clone.style, {
+    position: 'static',
+    left: 'auto',
+    top: 'auto',
+    right: 'auto',
+    bottom: 'auto',
+    opacity: '1',
+    visibility: 'visible',
+    transform: 'none',
+    pointerEvents: 'none',
+    zIndex: 'auto',
+  })
+  host.appendChild(clone)
+  document.body.appendChild(host)
   await new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve))
   })
   try {
-    return await run(node)
+    return await run(clone)
   } finally {
-    Object.assign(node.style, prev)
+    try { host.remove() } catch { /* ignore */ }
   }
 }
