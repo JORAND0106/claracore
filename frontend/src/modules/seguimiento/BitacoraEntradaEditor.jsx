@@ -17,6 +17,11 @@ import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import BitacoraReportePersonalModal from './BitacoraReportePersonalModal'
 import BitacoraReporteDiarioPngCapture from './BitacoraReporteDiarioPngCapture'
 import {
+  nombreArchivoBitacoraPng,
+  optsCapturaBitacoraPng,
+  withCapturePosition,
+} from './bitacoraReporteDiarioPng'
+import {
   horasPrecargaDesdeHorario,
   normalizeHorario,
 } from './bitacoraHorario'
@@ -321,6 +326,7 @@ export default function BitacoraEntradaEditor({
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
   const [reportePersonalOpen, setReportePersonalOpen] = useState(false)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [pngAviso, setPngAviso] = useState(null)
   const [contratoMeta, setContratoMeta] = useState({})
   const [bitacoraHorario, setBitacoraHorario] = useState(null)
   const [firmasBitacora, setFirmasBitacora] = useState(null)
@@ -527,18 +533,27 @@ export default function BitacoraEntradaEditor({
     if (!node || typeof window === 'undefined') return
     setPngBusy(true)
     setError('')
+    setOkMsg('')
     try {
-      const { toBlob } = await import('html-to-image')
-      const blob = await toBlob(node, {
-        pixelRatio: Math.min(3, window.devicePixelRatio || 2),
-        backgroundColor: '#ffffff',
-        cacheBust: true,
+      // No bloquear el hilo principal: ceder un frame antes de capturar.
+      await new Promise((r) => requestAnimationFrame(() => r()))
+      const blob = await withCapturePosition(node, async (el) => {
+        const { toBlob } = await import('html-to-image')
+        const opts = optsCapturaBitacoraPng(el)
+        const b = await toBlob(el, opts)
+        if (!b || b.size < 200) {
+          throw new Error('imagen_vacia')
+        }
+        return b
       })
-      if (!blob) throw new Error('No se pudo generar la imagen')
-      downloadInformePeriodicoBlob(blob, `bitacora_reporte_${fecha}.png`)
-      setOkMsg('PNG del reporte diario descargado.')
+      downloadInformePeriodicoBlob(blob, nombreArchivoBitacoraPng(fecha))
+      setOkMsg('PNG del resumen descargado.')
     } catch (e) {
-      setError(e?.message || 'No se pudo generar el PNG')
+      const code = String(e?.message || e || '')
+      const mensaje = code === 'imagen_vacia'
+        ? 'No se pudo generar la imagen del resumen. Intente de nuevo o use otro dispositivo.'
+        : 'No se pudo descargar el PNG en este dispositivo. Revise el permiso de descargas e intente otra vez.'
+      setPngAviso({ titulo: 'Descarga de PNG', mensaje })
     } finally {
       setPngBusy(false)
     }
@@ -1119,8 +1134,8 @@ export default function BitacoraEntradaEditor({
                   disabled={pngBusy || pdfBusy || busy || !fecha}
                   onClick={() => void exportarPngDia()}
                   style={btnIcon({ disabled: pngBusy || pdfBusy || busy || !fecha })}
-                  title={pngBusy ? 'Generando PNG…' : 'Descargar PNG del reporte diario'}
-                  aria-label={pngBusy ? 'Generando PNG…' : 'Descargar PNG del reporte diario'}
+                  title={pngBusy ? 'Generando PNG…' : 'Descargar PNG (colaboradores y eventos)'}
+                  aria-label={pngBusy ? 'Generando PNG…' : 'Descargar PNG (colaboradores y eventos)'}
                 >
                   <ImageIcon size={iconSz} strokeWidth={2.2} aria-hidden />
                 </button>
@@ -2206,10 +2221,10 @@ export default function BitacoraEntradaEditor({
         ref={pngCaptureRef}
         fecha={fecha}
         asistencia={asistencia}
-        usos={usos}
+        eventos={eventos}
+        rrhhCatalogo={rrhhCatalogo}
         contratoMeta={contratoMeta}
-        horario={horarioEfectivoUi}
-        firmas={firmasBitacora}
+        theme={t}
       />
 
       {confirmDeleteOpen && createPortal(
@@ -2240,6 +2255,24 @@ export default function BitacoraEntradaEditor({
             Se eliminará de forma <strong>irreversible</strong> el reporte del día{' '}
             <strong>{fecha || '—'}</strong> y todo su contenido (personal, maquinaria,
             materiales y fotos). Esta acción no se puede deshacer.
+          </p>
+        </CcConfirmModal>,
+        document.body,
+      )}
+
+      {pngAviso && createPortal(
+        <CcConfirmModal
+          theme={t}
+          tipo="warn"
+          titulo={pngAviso.titulo || 'Descarga de PNG'}
+          confirmar="Entendido"
+          soloConfirmar
+          zIndex={100090}
+          onConfirm={() => setPngAviso(null)}
+          onCancel={() => setPngAviso(null)}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+            {pngAviso.mensaje}
           </p>
         </CcConfirmModal>,
         document.body,

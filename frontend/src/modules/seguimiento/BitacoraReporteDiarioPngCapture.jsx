@@ -1,179 +1,311 @@
 /**
- * Hoja compacta para exportar PNG del reporte diario (html-to-image).
+ * Hoja para descargar PNG del día: colaboradores (tramo×empresa) + eventos.
+ * Debe permanecer montada; la posición off-screen se corrige en la captura
+ * (left:-9999 produce PNG en blanco con html-to-image).
  */
 import { forwardRef, useMemo } from 'react'
-import {
-  calcularHorasExtra,
-  formatoHorasDecimal,
-  normalizeHorario,
-} from './bitacoraHorario'
-import { formatearFechaReportePersonal } from './bitacoraReportePersonal'
+import { formatoCeldaCantidad } from './bitacoraReportePersonal'
+import { buildBitacoraPngPayload } from './bitacoraReporteDiarioPng'
 
-function justificacionFila(row, extra) {
-  if (!(extra > 0)) return '—'
-  const txt = String(
-    row?.justificacion_horas_extra
-      || row?.justificacion_extra
-      || row?.justificacion
-      || row?.observacion
-      || '',
-  ).trim()
-  return txt || '—'
+function formatoCantidad(n) {
+  return formatoCeldaCantidad(n)
 }
 
 const BitacoraReporteDiarioPngCapture = forwardRef(function BitacoraReporteDiarioPngCapture(
   {
     fecha,
     asistencia = [],
-    usos = [],
+    eventos = [],
+    rrhhCatalogo = [],
     contratoMeta = {},
-    horario = null,
-    firmas = null,
+    theme = null,
   },
   ref,
 ) {
-  const horarioN = useMemo(() => normalizeHorario(horario), [horario])
-  const fechaFmt = formatearFechaReportePersonal(fecha)
-  const filas = useMemo(() => (Array.isArray(asistencia) ? asistencia : [])
-    .filter((r) => String(r?.nombre || '').trim())
-    .map((r) => {
-      const ini = String(r.hora_ingreso || '').slice(0, 5)
-      const fin = String(r.hora_salida || '').slice(0, 5)
-      const extra = calcularHorasExtra({
-        hora_ingreso: ini,
-        hora_salida: fin,
-        horario: horarioN,
-        fechaISO: fecha,
-      })
-      return {
-        nombre: String(r.nombre || '').trim(),
-        cargo: String(r.cargo || '—').trim() || '—',
-        empresa: String(r.subcontratista_nombre || '—').trim() || '—',
-        entrada: ini || '—',
-        salida: fin || '—',
-        extra: formatoHorasDecimal(extra),
-        justif: justificacionFila(r, extra),
-      }
-    }), [asistencia, horarioN, fecha])
+  const t = theme || {}
+  const border = t.border || '#bae6fd'
+  const text = t.text || '#0f2942'
+  const muted = t.textMuted || '#4a7fa5'
+  const headerBg = t.inputBg || '#eef7fb'
+  const primary = t.primary || '#1F4E70'
+  const surface = '#ffffff'
 
-  const totalExtra = useMemo(() => filas.reduce((acc, r) => {
-    const v = Number(String(r.extra).replace('—', '0'))
-    return acc + (Number.isFinite(v) ? v : 0)
-  }, 0), [filas])
+  const payload = useMemo(
+    () => buildBitacoraPngPayload({
+      asistencia,
+      eventos,
+      rrhhCatalogo,
+      fecha,
+      contratoMeta,
+    }),
+    [asistencia, eventos, rrhhCatalogo, fecha, contratoMeta],
+  )
 
-  const maqCount = (Array.isArray(usos) ? usos : []).filter(
-    (u) => String(u?.equipo_nombre || '').trim(),
-  ).length
-
-  const numero = String(contratoMeta?.numero || '').trim()
-  const contratista = String(contratoMeta?.contratista || '').trim()
+  const { personal, eventosRows, fechaFmt, numero, contratista } = payload
 
   return (
     <div
       ref={ref}
+      data-bitacora-png-capture="1"
+      aria-hidden
       style={{
+        /* Parqueo inicial: fuera de vista. La captura lo mueve a (0,0) temporalmente. */
         position: 'fixed',
-        left: -9999,
-        top: 0,
+        left: '-10000px',
+        top: '0',
         width: 920,
-        background: '#fff',
-        color: '#0f2942',
-        fontFamily: 'Helvetica, Arial, sans-serif',
+        background: surface,
+        color: text,
+        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
         fontSize: 12,
-        padding: '20px 24px',
+        padding: '22px 26px',
         boxSizing: 'border-box',
+        pointerEvents: 'none',
       }}
     >
-      <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>
-        Reporte diario — Bitácora de obra
+      <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 4, color: primary }}>
+        Resumen de bitácora
       </div>
-      <div style={{ fontSize: 11, color: '#4a7fa5', marginBottom: 12 }}>
+      <div style={{ fontSize: 11, color: muted, marginBottom: 16, lineHeight: 1.4 }}>
         {fechaFmt}
         {numero ? ` · Contrato ${numero}` : ''}
         {contratista ? ` · ${contratista}` : ''}
       </div>
 
-      <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>Personal</div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-        <thead>
-          <tr style={{ background: '#eef7fb' }}>
-            {['Nombre', 'Cargo', 'Empresa', 'Entrada', 'Salida', 'Hrs extra', 'Justificación'].map((h) => (
-              <th
-                key={h}
-                style={{
-                  textAlign: 'left',
-                  padding: '6px 8px',
-                  border: '1px solid #bae6fd',
-                  fontWeight: 700,
-                }}
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {filas.length ? filas.map((r, i) => (
-            <tr key={`${r.nombre}-${i}`} style={{ background: i % 2 ? '#f8fafc' : '#fff' }}>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.nombre}</td>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.cargo}</td>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.empresa}</td>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.entrada}</td>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.salida}</td>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.extra}</td>
-              <td style={{ padding: '5px 8px', border: '1px solid #e2e8f0' }}>{r.justif}</td>
-            </tr>
-          )) : (
+      {/* —— 1. Colaboradores por tramo × empresa —— */}
+      <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8, color: text }}>
+        Colaboradores (por tramo y empresa)
+      </div>
+      {personal?.hasData ? (
+        <table style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          fontSize: 11,
+          marginBottom: 18,
+          background: surface,
+        }}
+        >
+          <thead>
             <tr>
-              <td colSpan={7} style={{ padding: 8, border: '1px solid #e2e8f0', color: '#64748b' }}>
-                Sin personal registrado
+              <th style={{
+                textAlign: 'left',
+                padding: '8px 10px',
+                border: `1.5px solid ${border}`,
+                background: headerBg,
+                color: muted,
+                fontWeight: 800,
+              }}
+              >
+                Tramo
+              </th>
+              {(personal.empresas || []).map((emp) => (
+                <th
+                  key={emp.key}
+                  style={{
+                    textAlign: 'center',
+                    padding: '8px 8px',
+                    border: `1.5px solid ${border}`,
+                    background: headerBg,
+                    color: text,
+                    fontWeight: 800,
+                    minWidth: 64,
+                  }}
+                >
+                  {emp.nombre}
+                </th>
+              ))}
+              <th style={{
+                textAlign: 'center',
+                padding: '8px 10px',
+                border: `1.5px solid ${border}`,
+                background: headerBg,
+                color: text,
+                fontWeight: 800,
+              }}
+              >
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {(personal.tramos || []).map((tr, i) => (
+              <tr key={tr.key} style={{ background: i % 2 ? '#f8fafc' : surface }}>
+                <td style={{
+                  padding: '7px 10px',
+                  border: `1px solid ${border}`,
+                  fontWeight: 700,
+                  color: text,
+                  whiteSpace: 'nowrap',
+                }}
+                >
+                  {tr.nombre}
+                </td>
+                {(personal.empresas || []).map((emp) => {
+                  const n = personal.cells?.[tr.key]?.[emp.key] || 0
+                  const empty = !(Number(n) > 0)
+                  return (
+                    <td
+                      key={emp.key}
+                      style={{
+                        padding: '7px 8px',
+                        border: `1px solid ${border}`,
+                        textAlign: 'center',
+                        fontWeight: empty ? 500 : 700,
+                        color: empty ? muted : text,
+                      }}
+                    >
+                      {formatoCantidad(n)}
+                    </td>
+                  )
+                })}
+                <td style={{
+                  padding: '7px 10px',
+                  border: `1px solid ${border}`,
+                  textAlign: 'center',
+                  fontWeight: 800,
+                  background: headerBg,
+                  color: text,
+                }}
+                >
+                  {formatoCantidad(personal.rowTotals?.[tr.key])}
+                </td>
+              </tr>
+            ))}
+            <tr>
+              <td style={{
+                padding: '8px 10px',
+                border: `1.5px solid ${border}`,
+                fontWeight: 800,
+                background: headerBg,
+                color: text,
+              }}
+              >
+                Total
+              </td>
+              {(personal.empresas || []).map((emp) => (
+                <td
+                  key={emp.key}
+                  style={{
+                    padding: '8px 8px',
+                    border: `1.5px solid ${border}`,
+                    textAlign: 'center',
+                    fontWeight: 800,
+                    background: headerBg,
+                    color: text,
+                  }}
+                >
+                  {formatoCantidad(personal.colTotals?.[emp.key])}
+                </td>
+              ))}
+              <td style={{
+                padding: '8px 10px',
+                border: `1.5px solid ${border}`,
+                textAlign: 'center',
+                fontWeight: 800,
+                background: headerBg,
+                color: primary,
+              }}
+              >
+                {formatoCantidad(personal.grandTotal)}
               </td>
             </tr>
-          )}
-        </tbody>
-      </table>
-      <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 700, marginTop: 6 }}>
-        Total horas extra del día: {formatoHorasDecimal(totalExtra)}
-      </div>
+          </tbody>
+        </table>
+      ) : (
+        <div style={{
+          marginBottom: 18,
+          padding: '10px 12px',
+          border: `1px dashed ${border}`,
+          color: muted,
+          fontSize: 12,
+          background: surface,
+        }}
+        >
+          Sin colaboradores registrados
+        </div>
+      )}
 
-      <div style={{ fontWeight: 700, fontSize: 12, marginTop: 14 }}>
-        Maquinaria en uso: {maqCount || '—'}
+      {/* —— 2. Eventos del día —— */}
+      <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8, color: text }}>
+        Eventos del día
       </div>
-
-      <div style={{
-        display: 'flex',
-        gap: 24,
-        marginTop: 28,
-        paddingTop: 12,
-        borderTop: '1px solid #e2e8f0',
-      }}>
-        {[
-          {
-            label: 'Residente de obra',
-            nombre: String(firmas?.elaboro_nombre || '').trim() || '—',
-            cargo: String(firmas?.elaboro_cargo || '').trim() || 'Residente de obra',
-          },
-          {
-            label: 'Director de obra',
-            nombre: String(firmas?.reviso_nombre || '').trim() || '—',
-            cargo: String(firmas?.reviso_cargo || '').trim() || 'Director de obra',
-          },
-        ].map((f) => (
-          <div key={f.label} style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#1F4E70', marginBottom: 6 }}>
-              {f.label}
-            </div>
-            <div style={{
-              minHeight: 48,
-              borderBottom: '1px solid #94a3b8',
-              marginBottom: 6,
-            }}
-            />
-            <div style={{ fontSize: 11, fontWeight: 700 }}>{f.nombre}</div>
-            <div style={{ fontSize: 10, color: '#64748b' }}>{f.cargo}</div>
-          </div>
-        ))}
-      </div>
+      {eventosRows.length ? (
+        <table style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          fontSize: 11,
+          background: surface,
+        }}
+        >
+          <thead>
+            <tr>
+              {['Tipo', 'Dirigido a', 'Resumen'].map((h) => (
+                <th
+                  key={h}
+                  style={{
+                    textAlign: 'left',
+                    padding: '8px 10px',
+                    border: `1.5px solid ${border}`,
+                    background: headerBg,
+                    color: muted,
+                    fontWeight: 800,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {eventosRows.map((r, i) => (
+              <tr key={`${r.tipo}-${i}`} style={{ background: i % 2 ? '#f8fafc' : surface }}>
+                <td style={{
+                  padding: '7px 10px',
+                  border: `1px solid ${border}`,
+                  fontWeight: 700,
+                  color: text,
+                  verticalAlign: 'top',
+                  whiteSpace: 'nowrap',
+                }}
+                >
+                  {r.tipo}
+                </td>
+                <td style={{
+                  padding: '7px 10px',
+                  border: `1px solid ${border}`,
+                  color: text,
+                  verticalAlign: 'top',
+                }}
+                >
+                  {r.dirigido_a}
+                </td>
+                <td style={{
+                  padding: '7px 10px',
+                  border: `1px solid ${border}`,
+                  color: text,
+                  verticalAlign: 'top',
+                  wordBreak: 'break-word',
+                }}
+                >
+                  {r.resumen}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div style={{
+          padding: '10px 12px',
+          border: `1px dashed ${border}`,
+          color: muted,
+          fontSize: 12,
+          background: surface,
+        }}
+        >
+          Sin eventos registrados
+        </div>
+      )}
     </div>
   )
 })
