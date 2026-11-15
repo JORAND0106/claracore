@@ -33897,6 +33897,7 @@ def _sicoe_hallazgo_row_from_analisis(contrato_id: int, h: dict, prev: Optional[
         "texto": h.get("texto") or None,
         "payload": {
             "modo": "contrato",
+            **({"evidencia": h.get("evidencia")} if h.get("evidencia") else {}),
         },
         "actualizado_en": now,
         # Conserva justificación si aplica
@@ -34248,6 +34249,7 @@ def _sicoe_hallazgos_max_actualizado_en(filas: List[dict]) -> Optional[str]:
 def sicoe_huellas_geojson(
     contrato_id: int,
     item_numero: Optional[str] = None,
+    registro_ids: Optional[str] = None,
     incluir_eje: bool = True,
     incluir_nodos: bool = True,
     incluir_huellas: bool = True,
@@ -34255,16 +34257,29 @@ def sicoe_huellas_geojson(
 ):
     """FeatureCollection de huellas (franja/nodo/polígono) + eje + nodos PK.
 
-    ClaraGIS pasa incluir_huellas=false: los dibujos del filtro llegan en
-    analisis?formato=mapa_calor (clave `dibujos`) y este endpoint solo aporta
-    eje/nodos PK, evitando leer todas las huellas del contrato (~40s).
+    ClaraGIS / Auditoría pasan incluir_huellas=false al abrir el plano (solo eje).
+    Con registro_ids se cargan únicamente esas huellas (hallazgo seleccionado).
     """
     from sicoe_eje_franjas import ejes_to_geojson
     from sicoe_huellas_espacial import nodos_to_geojson
 
     _ = current_user
     features = []
-    if incluir_huellas:
+    ids_filtro: List[int] = []
+    if registro_ids:
+        for part in str(registro_ids).split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids_filtro.append(int(part))
+            except (TypeError, ValueError):
+                continue
+        ids_filtro = list(dict.fromkeys(ids_filtro))[:80]
+
+    # Sin IDs pedidos y con incluir_huellas: Auditoría no debe pedir el contrato entero.
+    # Si registro_ids="" explícito vía query vacía, ids_filtro=[] → 0 features.
+    if incluir_huellas and ids_filtro:
         try:
             def _q():
                 q = (
@@ -34274,6 +34289,7 @@ def sicoe_huellas_geojson(
                         "huella_tipo, geometria_tipo, abs_inicio, abs_final, margen, ancho, pk_id_id"
                     )
                     .eq("contrato_id", contrato_id)
+                    .in_("id", ids_filtro)
                     .not_.is_("huella_geojson", "null")
                 )
                 if item_numero:
@@ -34283,7 +34299,6 @@ def sicoe_huellas_geojson(
         except Exception as exc:
             msg = str(exc).lower()
             if "huella_" in msg or "geometria_tipo" in msg:
-                # Fallback sin columnas nuevas
                 try:
                     def _q2():
                         q = (
@@ -34293,6 +34308,7 @@ def sicoe_huellas_geojson(
                                 "abs_inicio, abs_final, margen, ancho"
                             )
                             .eq("contrato_id", contrato_id)
+                            .in_("id", ids_filtro)
                             .not_.is_("huella_geojson", "null")
                         )
                         if item_numero:
@@ -34316,7 +34332,51 @@ def sicoe_huellas_geojson(
             feat = r.get("huella_geojson")
             if not feat or not isinstance(feat, dict):
                 continue
-            # Omitidas del dibujo masivo (sin geometría) no se dibujan
+            if feat.get("geometry") is None or (feat.get("properties") or {}).get("omitida"):
+                continue
+            props = dict(feat.get("properties") or {})
+            props.update({
+                "registro_id": r.get("id"),
+                "numero_registro": r.get("numero_registro"),
+                "reporte_id": r.get("reporte_id"),
+                "item_numero": r.get("item_numero"),
+                "precision": r.get("huella_precision") or props.get("precision"),
+                "huella_tipo": r.get("huella_tipo") or props.get("huella_tipo") or "franja",
+                "geometria_tipo": r.get("geometria_tipo"),
+                "pk_id_id": r.get("pk_id_id"),
+            })
+            features.append({
+                "type": "Feature",
+                "geometry": feat.get("geometry"),
+                "properties": props,
+            })
+    elif incluir_huellas and not ids_filtro and not registro_ids:
+        # Compat ClaraGIS/legado: contrato completo solo si no se pasó registro_ids.
+        try:
+            def _q_all():
+                q = (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
+                        "huella_tipo, geometria_tipo, abs_inicio, abs_final, margen, ancho, pk_id_id"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .not_.is_("huella_geojson", "null")
+                )
+                if item_numero:
+                    q = q.eq("item_numero", item_numero)
+                return q.execute().data
+            rows = supabase_execute(_q_all) or []
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "huella_" in msg or "geometria_tipo" in msg:
+                rows = []
+            else:
+                raise HTTPException(500, f"No se pudieron leer huellas: {exc}") from exc
+        for r in rows:
+            feat = r.get("huella_geojson")
+            if not feat or not isinstance(feat, dict):
+                continue
             if feat.get("geometry") is None or (feat.get("properties") or {}).get("omitida"):
                 continue
             props = dict(feat.get("properties") or {})

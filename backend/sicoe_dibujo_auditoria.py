@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sicoe_auditoria_traslapos import canonizar_hallazgo
 from sicoe_eje_franjas import (
     abscisa_a_metros,
-    analizar_registro_franja,
+    costados_coinciden,
     haversine_m,
     normalizar_costado_digitado,
     proyectar_sobre_eje,
@@ -357,6 +357,85 @@ def hallazgos_cantidad_mayor_area_dibujo(
     return out
 
 
+def extremos_lnglat_desde_feature(feat: Optional[dict]) -> List[dict]:
+    """
+    Puntos fiables del dibujo para comparar con abscisas/costado/PK.
+    Punto → 1; línea → extremos; polígono → vértices del anillo (sin centroide).
+    """
+    if not isinstance(feat, dict):
+        return []
+    g = feat.get("geometry") if feat.get("type") == "Feature" else feat
+    if not isinstance(g, dict):
+        return []
+    t = g.get("type")
+    coords = g.get("coordinates")
+    out: List[dict] = []
+
+    def _add(lng: Any, lat: Any) -> None:
+        try:
+            out.append({"lng": float(lng), "lat": float(lat)})
+        except (TypeError, ValueError):
+            return
+
+    if t == "Point" and isinstance(coords, (list, tuple)) and len(coords) >= 2:
+        _add(coords[0], coords[1])
+    elif t == "LineString" and isinstance(coords, list) and len(coords) >= 2:
+        a, b = coords[0], coords[-1]
+        if isinstance(a, (list, tuple)) and len(a) >= 2:
+            _add(a[0], a[1])
+        if isinstance(b, (list, tuple)) and len(b) >= 2:
+            _add(b[0], b[1])
+    elif t == "MultiLineString" and isinstance(coords, list):
+        for line in coords:
+            if not isinstance(line, list) or len(line) < 2:
+                continue
+            a, b = line[0], line[-1]
+            if isinstance(a, (list, tuple)) and len(a) >= 2:
+                _add(a[0], a[1])
+            if isinstance(b, (list, tuple)) and len(b) >= 2:
+                _add(b[0], b[1])
+    elif t == "Polygon" and coords and coords[0]:
+        ring = coords[0]
+        pts = ring[:-1] if len(ring) > 1 and ring[0] == ring[-1] else ring
+        # Muestrear hasta 12 vértices + primero/último para no saturar
+        if len(pts) <= 12:
+            sample = pts
+        else:
+            step = max(1, len(pts) // 10)
+            sample = [pts[0], pts[-1]] + list(pts[1:-1:step])[:10]
+        for c in sample:
+            if isinstance(c, (list, tuple)) and len(c) >= 2:
+                _add(c[0], c[1])
+    elif t == "MultiPolygon" and coords:
+        for poly in coords[:3]:
+            sub = extremos_lnglat_desde_feature({"type": "Polygon", "coordinates": poly})
+            out.extend(sub)
+    return out
+
+
+def _fmt_abs_m(v: Optional[float]) -> str:
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.1f} m"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _explicacion_inconsistencia(
+    *,
+    titulo: str,
+    digitado: str,
+    real: str,
+    diferencia: str,
+    tolerancia: str,
+) -> str:
+    return (
+        f"{titulo} · digitado: {digitado}; real: {real}; "
+        f"diferencia: {diferencia}; tolerancia: {tolerancia}"
+    )
+
+
 def hallazgos_consistencia_dibujo_registro(
     registro: dict,
     feat: dict,
@@ -366,85 +445,160 @@ def hallazgos_consistencia_dibujo_registro(
     pk_poligono: Optional[dict] = None,
 ) -> List[dict]:
     """
-    Abscisa / costado / PK-ID inconsistentes respecto a donde cae el dibujo.
-    Reutiliza semántica de franja cuando hay ejes; PK-ID si hay polígono oficial.
+    Abscisa / costado / PK-ID inconsistentes respecto al dibujo.
+
+    Regla: solo alertar con geometría fiable (extremos del dibujo, no el centroide).
+    Línea/polígono: el rango de abscisas del dibujo debe solapar el digitado ± tol.
+    Preferible no alertar a alertar en falso.
     """
-    centro = centro_desde_feature(feat)
-    if not centro:
+    puntos = extremos_lnglat_desde_feature(feat)
+    if not puntos:
         return []
     hallazgos: List[dict] = []
     tol = max(0.1, float(tolerancia_ubicacion_m or 1.0))
+    evidencia = {
+        "digitado": None,
+        "real": None,
+        "diferencia": None,
+        "tolerancia_m": tol,
+        "metodo": "extremos_dibujo",
+    }
 
-    # PK-ID: dibujo fuera del polígono del PK
-    if pk_poligono and isinstance(pk_poligono, dict):
+    # PK-ID: alerta solo si TODOS los extremos quedan fuera del polígono
+    if pk_poligono and isinstance(pk_poligono, dict) and registro.get("pk_id_id") is not None:
         g = pk_poligono.get("geometry") if pk_poligono.get("type") == "Feature" else pk_poligono
         if (g or {}).get("type") == "Polygon":
-            if not punto_en_poligono(centro["lng"], centro["lat"], g.get("coordinates")):
+            dentro = [
+                punto_en_poligono(p["lng"], p["lat"], g.get("coordinates"))
+                for p in puntos
+            ]
+            if dentro and not any(dentro):
+                dig = f"PK {registro.get('pk_id_id')}"
+                real = "dibujo fuera del polígono del PK"
+                texto = _explicacion_inconsistencia(
+                    titulo="PK-ID inconsistente",
+                    digitado=dig,
+                    real=real,
+                    diferencia="sin intersección",
+                    tolerancia=f"{tol:.1f} m (vértices)",
+                )
                 hallazgos.append(
                     _mk_hallazgo(
                         "ubicacion_inconsistente",
-                        f"PK-ID inconsistente · dibujo fuera del polígono del PK {registro.get('pk_id_id')}",
+                        texto,
                         [registro],
-                        ubicacion=f"PK {registro.get('pk_id_id')}",
+                        ubicacion=dig,
+                        evidencia={
+                            **evidencia,
+                            "digitado": dig,
+                            "real": real,
+                            "diferencia": "sin intersección",
+                            "subtipo": "pk_id",
+                        },
                     )
                 )
 
     if not ejes:
         return hallazgos
 
-    # Reusar analizar_registro_franja con coords del centro del dibujo
-    reg_virtual = dict(registro or {})
-    reg_virtual["coord_lat"] = centro["lat"]
-    reg_virtual["coord_lng"] = centro["lng"]
-    # Sin segundo punto: franja compara contra abs cercana
-    try:
-        fr = analizar_registro_franja(
-            registro=reg_virtual,
-            ejes=ejes,
-            tolerancia_ubicacion_m=tol,
-        )
-        for h in fr.get("hallazgos") or []:
-            tipo = _txt(h.get("tipo")).casefold()
-            if tipo in ("ubicacion_inconsistente", "costado_inconsistente"):
-                # Prefijo para dejar claro que viene del dibujo
-                texto = _txt(h.get("texto"))
-                if "dibujo" not in texto.casefold():
-                    texto = texto.replace("Ubicación inconsistente", "Abscisa inconsistente · dibujo", 1)
-                    if tipo == "costado_inconsistente" and "dibujo" not in texto.casefold():
-                        texto = f"{texto} (según dibujo)"
-                hallazgos.append(
-                    _mk_hallazgo(
-                        tipo,
-                        texto,
-                        [registro],
-                        medida_m=h.get("medida_m"),
-                        ubicacion=h.get("ubicacion"),
-                    )
-                )
-    except Exception:
-        # Fallback mínimo: proyección directa
-        proy = proyectar_sobre_eje(ejes, centro["lng"], centro["lat"], max_dist_m=60)
+    proyecciones = []
+    for p in puntos:
+        proy = proyectar_sobre_eje(ejes, p["lng"], p["lat"], max_dist_m=60)
         if proy and proy.get("sobre_eje"):
-            abs_dig = abscisa_a_metros(registro.get("abs_inicio"))
-            if abs_dig is not None:
-                delta = abs(float(proy["abs_m"]) - float(abs_dig))
-                if delta > tol:
-                    hallazgos.append(
-                        _mk_hallazgo(
-                            "ubicacion_inconsistente",
-                            f"Abscisa inconsistente · dibujo en {proy['abs_m']:.1f} vs digitada {abs_dig} (Δ {delta:.1f} m)",
-                            [registro],
-                            medida_m=round(delta, 2),
-                        )
-                    )
-            costado = normalizar_costado_digitado(registro.get("margen") or registro.get("calzada"))
-            lado = normalizar_costado_digitado(proy.get("lado"))
-            if costado and lado and costado != "central" and lado != "central" and costado != lado:
+            proyecciones.append(proy)
+
+    # Sin proyección fiable sobre el eje → no inventar inconsistencia
+    if not proyecciones:
+        return hallazgos
+
+    abs_dig_ini = abscisa_a_metros((registro or {}).get("abs_inicio"))
+    abs_dig_fin = abscisa_a_metros((registro or {}).get("abs_final"))
+    if abs_dig_fin is None:
+        abs_dig_fin = abs_dig_ini
+
+    abs_real_vals = [float(p["abs_m"]) for p in proyecciones if p.get("abs_m") is not None]
+    if abs_dig_ini is not None and abs_real_vals:
+        dig_lo = min(float(abs_dig_ini), float(abs_dig_fin if abs_dig_fin is not None else abs_dig_ini))
+        dig_hi = max(float(abs_dig_ini), float(abs_dig_fin if abs_dig_fin is not None else abs_dig_ini))
+        real_lo = min(abs_real_vals)
+        real_hi = max(abs_real_vals)
+        # Solape de rangos (expandido por tolerancia): sin solape → gap
+        gap = max(0.0, dig_lo - real_hi, real_lo - dig_hi)
+        if gap > tol:
+            dig_txt = (
+                _fmt_abs_m(dig_lo)
+                if abs(dig_hi - dig_lo) < 0.05
+                else f"{_fmt_abs_m(dig_lo)}–{_fmt_abs_m(dig_hi)}"
+            )
+            real_txt = (
+                _fmt_abs_m(real_lo)
+                if abs(real_hi - real_lo) < 0.05
+                else f"{_fmt_abs_m(real_lo)}–{_fmt_abs_m(real_hi)}"
+            )
+            texto = _explicacion_inconsistencia(
+                titulo="Abscisa inconsistente · dibujo",
+                digitado=dig_txt,
+                real=real_txt,
+                diferencia=f"{gap:.1f} m",
+                tolerancia=f"{tol:.1f} m",
+            )
+            hallazgos.append(
+                _mk_hallazgo(
+                    "ubicacion_inconsistente",
+                    texto,
+                    [registro],
+                    medida_m=round(gap, 2),
+                    ubicacion=f"digitado {dig_txt} · real {real_txt}",
+                    evidencia={
+                        **evidencia,
+                        "digitado": dig_txt,
+                        "real": real_txt,
+                        "diferencia_m": round(gap, 2),
+                        "subtipo": "abscisa",
+                    },
+                )
+            )
+
+    # Costado: mayoría de lados con dist transversal significativa (no «central»)
+    costado_dig = normalizar_costado_digitado(
+        (registro or {}).get("margen") or (registro or {}).get("calzada")
+    )
+    lados_fiables = []
+    for p in proyecciones:
+        dist = float(p.get("dist_m") or 0)
+        lado = normalizar_costado_digitado(p.get("lado"))
+        if dist < max(0.35, tol * 0.35):
+            continue  # demasiado cerca del eje → no afirmar izq/der
+        if lado and lado != "central":
+            lados_fiables.append(lado)
+    if costado_dig and costado_dig != "central" and lados_fiables:
+        # Mayoria
+        izquierda = sum(1 for x in lados_fiables if x == "izquierda")
+        derecha = sum(1 for x in lados_fiables if x == "derecha")
+        if izquierda == derecha:
+            pass  # empatado → no alertar
+        else:
+            lado_real = "izquierda" if izquierda > derecha else "derecha"
+            if not costados_coinciden(costado_dig, lado_real):
+                texto = _explicacion_inconsistencia(
+                    titulo="Costado inconsistente · dibujo",
+                    digitado=costado_dig,
+                    real=lado_real,
+                    diferencia="lados opuestos",
+                    tolerancia=f"{tol:.1f} m (dist. al eje)",
+                )
                 hallazgos.append(
                     _mk_hallazgo(
                         "costado_inconsistente",
-                        f"Costado inconsistente · dibujo en {lado} vs digitado {costado}",
+                        texto,
                         [registro],
+                        evidencia={
+                            **evidencia,
+                            "digitado": costado_dig,
+                            "real": lado_real,
+                            "diferencia": "lados opuestos",
+                            "subtipo": "costado",
+                        },
                     )
                 )
     return hallazgos
