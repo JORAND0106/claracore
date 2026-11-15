@@ -73,7 +73,7 @@ function PanelSecundario({ t, titulo, onClose, children }) {
         position: 'absolute',
         inset: 0,
         zIndex: 6,
-        background: t.card || t.bg || '#0f172a',
+        background: t.bgCard || t.bg || '#fff',
         display: 'flex',
         flexDirection: 'column',
         borderRadius: 12,
@@ -260,10 +260,11 @@ export default function ClaraGisVerificarFicha({
     onPedirComentario?.('Rechazado', [reg.id])
   }
 
-  const textMain = t.text || '#e2e8f0'
-  const muted = t.textMuted || '#94a3b8'
-  const border = t.border || '#334155'
-  const cardBg = t.card || t.bgSecondary || '#111827'
+  const textMain = t.text || '#0F2942'
+  const muted = t.textMuted || '#4A7FA5'
+  const border = t.border || '#BAE6FD'
+  // Temas de plataforma usan bgCard (no t.card / bgSecondary).
+  const cardBg = t.bgCard || t.bg || '#FFFFFF'
 
   const fmtNum = (v) => {
     try {
@@ -724,6 +725,7 @@ export default function ClaraGisVerificarFicha({
         }}>
           <span
             title={actaLabel}
+            aria-label={actaLabel}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -731,13 +733,14 @@ export default function ClaraGisVerificarFicha({
               minHeight: 40,
               padding: '0 10px',
               borderRadius: 12,
-              border: `1px solid ${border}`,
-              background: cardBg,
+              border: '1px solid transparent',
+              background: 'transparent',
               fontWeight: 800,
               fontSize: 'var(--cc-sm)',
-              color: actaLabel === 'Sin acta' ? muted : textMain,
+              color: 'inherit',
               whiteSpace: 'nowrap',
               maxWidth: '100%',
+              opacity: actaLabel === 'Sin acta' ? 0.75 : 1,
             }}
           >
             📋 {actaLabel}

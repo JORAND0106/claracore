@@ -5286,17 +5286,17 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = q.eq("pk_id_id", pk_id)
     if semana_id is not None:
         q = q.eq("semana_id", semana_id)
-    # reporte_id_in tiene precedencia (p. ej. chunk de IDs ya resueltos).
-    # Acta del modal: misma semántica que panel /analisis → so_registros.acta_rpo_id (línea).
-    # Antes se usaba cabecera so_reportes vía scope y la grilla divergía del panel.
+    # reporte_id_in (p. ej. estado/editado/pk ya resueltos) y Acta RPO de línea son AND.
+    # No excluir acta cuando hay reporte_id_in: eso dejaba pasar líneas de otras actas
+    # en reportes que también tenían algún registro del acta filtrada.
     if reporte_id_in is not None:
         q = q.in_("reporte_id", reporte_id_in)
-    else:
-        aids_eff = list(acta_rpo_ids) if acta_rpo_ids else []
-        if not aids_eff and acta_rpo_id is not None:
-            aids_eff = [int(acta_rpo_id)]
-        if aids_eff:
-            q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_eff)
+    aids_eff = list(acta_rpo_ids) if acta_rpo_ids else []
+    if not aids_eff and acta_rpo_id is not None:
+        aids_eff = [int(acta_rpo_id)]
+    if aids_eff:
+        # Misma semántica que panel /analisis y grilla: so_registros.acta_rpo_id (línea).
+        q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_eff)
     if q_observacion and str(q_observacion).strip():
         q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
     if capas_v:
@@ -25308,66 +25308,63 @@ def analisis_registros_obra(
             )
 
         def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
+            # Misma semántica AND de línea que /reportes/buscar (grilla) y detalle filtrado.
+            # Sin filtro paralelo propio: ClaraGIS (mapa_calor) y panel /analisis usan
+            # `_sicoe_so_registros_q_linea_filtros_busqueda` (incl. require_item con Acta RPO).
             q = supabase.table("so_registros")\
                 .select(_select_regs_ana)\
                 .eq("contrato_id", contrato_id)
-            q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
-            if _nr is not None:
-                q = q.eq("numero_registro", _nr)
-            if _aids_l:
-                q = _sicoe_analisis_aplicar_filtro_actas(
-                    q, contrato_id, _aids_l, mapa_calor=_formato_mapa
+            # Capas OR multi: se aplican en memoria tras el fetch (igual que antes).
+            _capas_para_sql = (
+                None
+                if _defer_capas_or_ana
+                else (
+                    _capas_sql
+                    if (_capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado))
+                    else None
                 )
-            if _s_l is not None:
-                q = q.eq("semana_id", _s_l)
-            q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
-            if _caps_l:
-                q = _apply_capitulos_to_so_registros_q(q, _caps_l)
-            if competencia is not None and str(competencia).strip():
-                q = q.eq("competencia", str(competencia).strip())
-            if _sub_l is not None:
-                q = q.eq("subcontratista_id", _sub_l)
-            if _rp_l is not None:
-                q = q.in_("reporte_id", _rp_l)
-            if reg_id_filter is not None:
-                q = q.in_("id", reg_id_filter)
-            if tramo:
-                q = q.eq("tramo", tramo)
-            if costado:
-                q = _so_reg_filtro_costado(q, costado)
-            if pk_id is not None:
-                q = q.eq("pk_id_id", pk_id)
-            if q_observacion is not None and str(q_observacion).strip():
-                q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
-            # Cantidad real de la línea: cantidad_total (la columna `cantidad`
-            # quedó casi vacía y es la que mostraba 0 resultados).
-            if cantidad_desde is not None:
-                q = q.gte("cantidad_total", cantidad_desde)
-            if cantidad_hasta is not None:
-                q = q.lte("cantidad_total", cantidad_hasta)
-            if costo_directo_desde is not None:
-                q = q.gte("costo_directo", costo_directo_desde)
-            if costo_directo_hasta is not None:
-                q = q.lte("costo_directo", costo_directo_hasta)
-            if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
-                _cap_capas = _caps_l[0] if len(_caps_l) == 1 else None
-                q = _so_registros_q_y_capas_validacion(
-                    q, _capas_sql, pk_id, tramo, costado, _cap_capas, _sub_l, None, contrato_id
-                )
-            if _estado_filtro_es_sin_asignar_item(estado):
-                q = _so_reg_sin_item_asignado(q)
-            if pendiente_item:
-                q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q, contrato_id=contrato_id)
-            if _rev_modo_ana:
-                q = _so_reg_q_aplicar_filtro_reversion(q, _rev_modo_ana)
-            if _filtro_fu_reg:
-                col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
-                q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
-                if _uid_fu is not None:
-                    q = _sicoe_aplicar_filtro_usuario_registros_q(q, _uid_fu, _uacc_fu)
-            # Editado por ya restringió reporte_ids_base (cabecera ∪ línea); no filtrar otra vez solo por línea.
-            if _sub_restricto_ana:
-                q = q.eq("nivel2_objeto_pago_sub", True)
+            )
+            q = _sicoe_so_registros_q_linea_filtros_busqueda(
+                q,
+                numero_registro=_nr,
+                abs_inicio=_abs_ai,
+                abs_final=_abs_af,
+                cantidad_desde=cantidad_desde,
+                cantidad_hasta=cantidad_hasta,
+                costo_directo_desde=costo_directo_desde,
+                costo_directo_hasta=costo_directo_hasta,
+                capitulos=_caps_l or None,
+                competencia=(
+                    str(competencia).strip()
+                    if competencia and str(competencia).strip()
+                    else None
+                ),
+                items=items_ana,
+                items_op=items_filtro_op,
+                subcontratista_id=_sub_l,
+                tramo=tramo,
+                costado=costado,
+                pk_id=pk_id,
+                q_observacion=q_observacion,
+                semana_id=_s_l,
+                acta_rpo_ids=_aids_l or None,
+                reporte_id_in=_rp_l,
+                require_item=bool(_aids_l),
+                capas_v=_capas_para_sql,
+                estado=estado,
+                pendiente_item=pendiente_item,
+                registro_id_in=reg_id_filter,
+                contrato_id=contrato_id,
+                fecha_desde=_fd_fu if _filtro_fu_reg else None,
+                fecha_hasta=_fh_fu if _filtro_fu_reg else None,
+                tipo_fecha=_tip_fu if _filtro_fu_reg else None,
+                usuario_id=_uid_fu if _filtro_fu_reg else None,
+                usuario_accion=_uacc_fu if _filtro_fu_reg else None,
+                ambito_fecha_registro=True,
+                reversion_modo=_rev_modo_ana,
+                # Editado por ya restringió reporte_ids_base (cabecera ∪ línea).
+                solo_objeto_pago_sub=_sub_restricto_ana,
+            )
             return q
 
         if reg_ids_etiqueta_ana is not None:

@@ -135,10 +135,11 @@ def test_intensidad_relativa_al_conjunto_filtrado():
         "costo_directo": 100,
         "coord_lat": 4.7,
         "coord_lng": -74.0,
+        "acta_rpo_id": 11,
     }
     filtro_acta = [
         base,
-        {**base, "id": 2, "costo_directo": 400, "coord_lat": 4.71},
+        {**base, "id": 2, "costo_directo": 400, "coord_lat": 4.71, "acta_rpo_id": 11},
     ]
     filtro_item = [base]  # solo el de 100
     g_acta = build_mapa_calor_geojson(filtro_acta, {1: {}})
@@ -150,6 +151,9 @@ def test_intensidad_relativa_al_conjunto_filtrado():
     assert g_acta["meta"]["intensidad"] == "relativa_conjunto_filtrado"
     assert g_acta["meta"]["max_costo_directo"] == 400
     assert g_item["meta"]["max_costo_directo"] == 100
+    assert g_acta["meta"]["suma_costo_directo"] == 500
+    assert g_acta["meta"]["total_registros"] == 2
+    assert all(f["properties"].get("acta_rpo_id") == 11 for f in g_acta["features"])
 
 
 def _poly():

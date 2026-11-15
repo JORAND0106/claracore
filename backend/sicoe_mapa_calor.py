@@ -323,10 +323,16 @@ def build_mapa_calor_geojson(
     features: List[dict] = []
     sin_coords = 0
     truncado = False
+    suma_cd = 0.0
     for r in registros or []:
+        try:
+            suma_cd += float(r.get("costo_directo") or 0)
+        except (TypeError, ValueError):
+            pass
         if len(features) >= max_features:
             truncado = True
-            break
+            # Seguimos sumando CD del conjunto completo aunque no quepan más puntos.
+            continue
         coords = parse_coord_wgs84(r.get("coord_lat"), r.get("coord_lng"))
         origen = "registro"
         rep = reporte_map.get(r.get("reporte_id")) or reporte_map.get(str(r.get("reporte_id") or "")) or {}
@@ -366,6 +372,7 @@ def build_mapa_calor_geojson(
                     "item_descripcion": r.get("item_descripcion"),
                     "cantidad_total": r.get("cantidad_total"),
                     "costo_directo": costo,
+                    "acta_rpo_id": r.get("acta_rpo_id"),
                     "weight": round(weight, 6),
                     "estado_reporte": rep.get("estado"),
                     "descripcion_actividad": rep.get("descripcion_actividad"),
@@ -386,6 +393,7 @@ def build_mapa_calor_geojson(
         "features": features,
         "meta": {
             "total_registros": len(registros or []),
+            "suma_costo_directo": round(suma_cd, 2),
             "con_coords": len(features),
             "sin_coords": sin_coords,
             "max_costo_directo": max_costo,
