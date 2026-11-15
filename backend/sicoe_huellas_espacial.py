@@ -398,14 +398,16 @@ def analizar_nodo(
     pares = pares_mismo_item_en_nodo or []
     item = _txt(reg.get("item_numero"))
     if item and pk is not None and pares:
+        # Solo traslapo entre reportes distintos: si falta reporte_id en
+        # cualquiera, no se genera (evita falsos positivos 306↔307 del mismo reporte).
         otros = [
             p for p in pares
             if str(p.get("id")) != str(reg.get("id"))
-            and (
-                reg.get("reporte_id") is None
-                or p.get("reporte_id") is None
-                or str(reg.get("reporte_id")) != str(p.get("reporte_id"))
-            )
+            and reg.get("reporte_id") is not None
+            and p.get("reporte_id") is not None
+            and str(reg.get("reporte_id")).strip() != ""
+            and str(p.get("reporte_id")).strip() != ""
+            and str(reg.get("reporte_id")) != str(p.get("reporte_id"))
         ]
         if otros:
             inv = [

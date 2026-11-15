@@ -286,7 +286,7 @@ export default function SicoeFiltroObraVista({
                 title={resumen}
               >
                 <strong style={{ color: t.text }}>Criterios:</strong>{' '}
-                {busquedaRealizada && tieneCriterios ? resumen : 'Ninguno'}
+                {tieneCriterios ? resumen : 'Ninguno'}
               </div>
             )}
 
