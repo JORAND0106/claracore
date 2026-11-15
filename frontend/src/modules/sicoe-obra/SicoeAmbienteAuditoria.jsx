@@ -161,10 +161,12 @@ export default function SicoeAmbienteAuditoria({
   const [mostrandoGuardados, setMostrandoGuardados] = useState(false)
   /**
    * Ámbito de filtros del módulo (Acta RPO / capítulo / ítem / …).
-   * null = sin filtro de módulo (muestra todo).
-   * Set vacío = filtros activos pero 0 registros.
+   * null = sin búsqueda activa (no mostrar hallazgos del contrato).
+   * Set vacío = criterios activos pero 0 registros o ámbito aún cargando.
    */
   const [ambitoRegIds, setAmbitoRegIds] = useState(null)
+  /** false mientras se resuelve el ámbito tras Buscar / cambio de filtros. */
+  const [ambitoListo, setAmbitoListo] = useState(false)
 
   const aplicarDatos = useCallback((data, { desdeSync = false } = {}) => {
     const vmax = data?.vacio_max_m
@@ -280,13 +282,24 @@ export default function SicoeAmbienteAuditoria({
     let cancelled = false
     const loadAmbito = async () => {
       if (!busquedaActiva || typeof buildFiltrosParams !== 'function') {
-        if (!cancelled) setAmbitoRegIds(null)
+        if (!cancelled) {
+          setAmbitoRegIds(null)
+          setAmbitoListo(false)
+        }
         return
+      }
+      // Mientras llega el ámbito: Set vacío → no mostrar hallazgos de otros filtros.
+      if (!cancelled) {
+        setAmbitoListo(false)
+        setAmbitoRegIds(new Set())
       }
       try {
         const params = buildFiltrosParams()
         if (!params || ![...params.keys()].length) {
-          if (!cancelled) setAmbitoRegIds(new Set())
+          if (!cancelled) {
+            setAmbitoRegIds(new Set())
+            setAmbitoListo(true)
+          }
           return
         }
         const res = await fetch(
@@ -300,10 +313,23 @@ export default function SicoeAmbienteAuditoria({
             .map((r) => (r?.id != null ? String(r.id) : ''))
             .filter(Boolean),
         )
-        if (!cancelled) setAmbitoRegIds(ids)
-      } catch {
-        // Si falla el ámbito, no bloquear: mostrar hallazgos sin filtro de módulo.
-        if (!cancelled) setAmbitoRegIds(null)
+        if (!cancelled) {
+          setAmbitoRegIds(ids)
+          setAmbitoListo(true)
+        }
+      } catch (e) {
+        // No degradar a «todo el contrato»: ámbito vacío + aviso.
+        if (!cancelled) {
+          setAmbitoRegIds(new Set())
+          setAmbitoListo(true)
+          setError(
+            mensajeErrorCarga(
+              e,
+              'No se pudo aplicar el filtro del módulo a los hallazgos. Reintente la búsqueda.',
+              { status: e?.status, context: 'ambito' },
+            ),
+          )
+        }
       }
     }
     void loadAmbito()
@@ -797,25 +823,55 @@ export default function SicoeAmbienteAuditoria({
   }
 
   const isNarrow = typeof window !== 'undefined' && window.innerWidth < 900
+  const mostrarHallazgosAmbito = !!busquedaActiva && ambitoListo
+  const sincronizandoAmbito = !!busquedaActiva && !ambitoListo
+
+  if (!busquedaActiva) {
+    return (
+      <div
+        style={{
+          padding: '28px 16px',
+          textAlign: 'center',
+          color: t.textMuted,
+          fontSize: 'var(--cc-sm)',
+          background: t.bgCard,
+          border: `1px solid ${t.border}`,
+          borderRadius: 12,
+        }}
+      >
+        Defina criterios en <strong style={{ color: t.text }}>Filtros</strong> y pulse{' '}
+        <strong style={{ color: t.text }}>Buscar</strong> para ver el ambiente de Auditoría.
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {sincronizandoAmbito && (
+        <div style={{ padding: '12px 14px', textAlign: 'center', color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+          Aplicando filtros del módulo a los hallazgos…
+        </div>
+      )}
       {/* Resumen */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: isNarrow ? '1fr 1fr' : 'repeat(5, 1fr)',
           gap: 8,
+          opacity: mostrarHallazgosAmbito ? 1 : 0.45,
+          pointerEvents: mostrarHallazgosAmbito ? 'auto' : 'none',
         }}
       >
         {RESUMEN_KEYS.map(({ key, label, color }) => {
-          const block = cargaOk ? (resumenVista?.[key] || { cantidad: 0, valor: 0 }) : null
+          const block = (cargaOk && mostrarHallazgosAmbito)
+            ? (resumenVista?.[key] || { cantidad: 0, valor: 0 })
+            : null
           const active = resumenFiltro === key
           return (
             <button
               key={key}
               type="button"
-              disabled={!cargaOk}
+              disabled={!cargaOk || !mostrarHallazgosAmbito}
               onClick={() => {
                 if (!cargaOk) return
                 setResumenFiltro((prev) => (prev === key ? null : key))

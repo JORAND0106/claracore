@@ -33662,10 +33662,100 @@ class AuditoriaHallazgoJustificarBody(BaseModel):
     observacion: Optional[str] = None
 
 
+def _sicoe_backfill_reporte_id_involucrados(contrato_id: int, filas: List[dict]) -> List[dict]:
+    """Rellena reporte_id / numero_reporte faltantes en involucrados (snapshots viejos)."""
+    need_ids: List[int] = []
+    for f in filas or []:
+        for r in f.get("registros_involucrados") or []:
+            if not isinstance(r, dict) or r.get("id") is None:
+                continue
+            if r.get("reporte_id") is not None and str(r.get("reporte_id")).strip() != "":
+                continue
+            try:
+                need_ids.append(int(r["id"]))
+            except (TypeError, ValueError):
+                continue
+    need_ids = list(dict.fromkeys(need_ids))
+    if not need_ids:
+        return filas or []
+    by_id: Dict[Any, dict] = {}
+    try:
+        for i in range(0, len(need_ids), 200):
+            chunk = need_ids[i : i + 200]
+
+            def _q(ids=chunk):
+                return (
+                    supabase.table("so_registros")
+                    .select("id, reporte_id")
+                    .eq("contrato_id", contrato_id)
+                    .in_("id", ids)
+                    .execute()
+                    .data
+                )
+
+            for row in supabase_execute(_q) or []:
+                by_id[row.get("id")] = row
+                by_id[str(row.get("id"))] = row
+    except Exception as exc:
+        _log_api.warning("backfill reporte_id involucrados contrato=%s: %s", contrato_id, exc)
+        return filas or []
+
+    rep_ids = []
+    for row in by_id.values():
+        rid = row.get("reporte_id")
+        if rid is not None:
+            try:
+                rep_ids.append(int(rid))
+            except (TypeError, ValueError):
+                pass
+    rep_ids = list(dict.fromkeys(rep_ids))
+    num_by_rep: Dict[Any, Any] = {}
+    if rep_ids:
+        try:
+            for i in range(0, len(rep_ids), 200):
+                chunk = rep_ids[i : i + 200]
+
+                def _qr(ids=chunk):
+                    return (
+                        supabase.table("so_reportes")
+                        .select("id, numero_reporte")
+                        .eq("contrato_id", contrato_id)
+                        .in_("id", ids)
+                        .execute()
+                        .data
+                    )
+
+                for row in supabase_execute(_qr) or []:
+                    num_by_rep[row.get("id")] = row.get("numero_reporte")
+                    num_by_rep[str(row.get("id"))] = row.get("numero_reporte")
+        except Exception as exc:
+            _log_api.warning("backfill numero_reporte involucrados: %s", exc)
+
+    for f in filas or []:
+        inv = f.get("registros_involucrados")
+        if not isinstance(inv, list):
+            continue
+        for r in inv:
+            if not isinstance(r, dict) or r.get("id") is None:
+                continue
+            src = by_id.get(r.get("id")) or by_id.get(str(r.get("id")))
+            if not src:
+                continue
+            if r.get("reporte_id") is None or str(r.get("reporte_id")).strip() == "":
+                if src.get("reporte_id") is not None:
+                    r["reporte_id"] = src.get("reporte_id")
+            if r.get("numero_reporte") is None:
+                rid = r.get("reporte_id")
+                if rid is not None and (rid in num_by_rep or str(rid) in num_by_rep):
+                    r["numero_reporte"] = num_by_rep.get(rid, num_by_rep.get(str(rid)))
+    return filas or []
+
+
 def _sicoe_filtrar_hallazgos_tabla(
     filas: List[dict],
     *,
     vacio_max_m: Optional[float] = None,
+    contrato_id: Optional[int] = None,
 ) -> List[dict]:
     """Oculta traslapos mismo-reporte y vacíos ≥ tope máximo."""
     from sicoe_auditoria_traslapos import (
@@ -33674,6 +33764,8 @@ def _sicoe_filtrar_hallazgos_tabla(
         normalizar_vacio_max_m,
     )
 
+    if contrato_id is not None:
+        filas = _sicoe_backfill_reporte_id_involucrados(contrato_id, filas)
     vmax = normalizar_vacio_max_m(vacio_max_m)
     out = []
     for f in filas or []:
@@ -34107,6 +34199,7 @@ def _sicoe_auditoria_hallazgos_sincronizar_impl(
     filas = _sicoe_filtrar_hallazgos_tabla(
         _sicoe_hallazgos_tabla_lista(contrato_id),
         vacio_max_m=vacio_max,
+        contrato_id=contrato_id,
     )
     eje_fc = {"type": "FeatureCollection", "features": []}
     if incluir_huellas:
@@ -34623,6 +34716,7 @@ def sicoe_auditoria_hallazgos_listar(
     filas = _sicoe_filtrar_hallazgos_tabla(
         _sicoe_hallazgos_tabla_lista(contrato_id),
         vacio_max_m=vacio_max,
+        contrato_id=contrato_id,
     )
     return {
         "ok": True,
@@ -34767,6 +34861,7 @@ def sicoe_auditoria_hallazgos_export(
     filas = _sicoe_filtrar_hallazgos_tabla(
         _sicoe_hallazgos_tabla_lista(contrato_id),
         vacio_max_m=vacio_max,
+        contrato_id=contrato_id,
     )
 
     def _ok(f: dict) -> bool:

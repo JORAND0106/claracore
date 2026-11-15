@@ -175,6 +175,9 @@ export function esTraslapoMismoReporte(hallazgo) {
       key = `id:${String(r.reporte_id).trim()}`
     } else if (r.numero_reporte != null && String(r.numero_reporte).trim() !== '') {
       key = `n:${String(r.numero_reporte).trim()}`
+    } else if (r.nombre_reporte != null && String(r.nombre_reporte).trim() !== '') {
+      // Fallback débil: mismo nombre de reporte en snapshot incompleto
+      key = `nr:${String(r.nombre_reporte).trim().toLowerCase()}`
     } else {
       return false
     }

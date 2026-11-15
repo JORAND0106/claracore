@@ -11653,9 +11653,13 @@ function ModuloSicoeObra({
     const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
       if (vista === 'cantidades_item' || vista === 'ejecucion_consolidada') {
-        // Solo la vista activa (CPI / consolidada). Marcar grilla y panel como pendientes.
+        // Solo la vista activa (CPI / consolidada / Auditoría). Marcar grilla y panel como pendientes.
+        // busquedaRealizada debe quedar true: chips, «Criterios», panel y ámbito de Auditoría
+        // dependen de sicoeVistaResultadosActiva (busquedaRealizada && criterios).
         reportesStaleRef.current = true
         cpiStaleRef.current = false
+        setBusquedaRealizada(true)
+        setErrorGrillaBusqueda(null)
         setCpiFiltrosVersion((n) => n + 1)
         const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
         setSicoeCargaVistaMs({ vista, ms, fuente: 'cpi-kickoff' })
