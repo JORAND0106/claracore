@@ -8,6 +8,7 @@ import {
   adoptNativeTitle,
   adoptNativeTitlesInTree,
   ccTooltipPalette,
+  isActionableTipTarget,
   placeTooltipRect,
   resolveTooltipThemeMode,
   resolveTooltipVariant,
@@ -71,6 +72,32 @@ describe('ccTooltipTheme', () => {
     const pos = placeTooltipRect(anchor, tip, vp)
     assert.ok(pos.top + tip.height <= vp.height - 10)
     assert.ok(pos.left + tip.width <= vp.width - 10)
+  })
+})
+
+describe('isActionableTipTarget', () => {
+  it('detecta botones y data-cc-tip-action; ignora spans informativos', () => {
+    const mk = (tag, attrs = {}) => {
+      const el = {
+        tagName: tag.toUpperCase(),
+        closest(sel) {
+          const parts = String(sel).split(',').map((s) => s.trim())
+          for (const p of parts) {
+            if (p === 'button' && this.tagName === 'BUTTON') return this
+            if (p === '[role="button"]' && attrs.role === 'button') return this
+            if (p === '[data-cc-tip-action]' && attrs['data-cc-tip-action']) return this
+            if (p === 'span' && this.tagName === 'SPAN') return this
+          }
+          return null
+        },
+      }
+      return el
+    }
+    assert.equal(isActionableTipTarget(mk('button')), true)
+    assert.equal(isActionableTipTarget(mk('div', { role: 'button' })), true)
+    assert.equal(isActionableTipTarget(mk('span', { 'data-cc-tip-action': '1' })), true)
+    assert.equal(isActionableTipTarget(mk('span')), false)
+    assert.equal(isActionableTipTarget(null), false)
   })
 })
 

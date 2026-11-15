@@ -5,6 +5,7 @@ import {
   adoptNativeTitle,
   adoptNativeTitlesInTree,
   ccTooltipPalette,
+  isActionableTipTarget,
   placeTooltipRect,
   resolveTooltipThemeMode,
   resolveTooltipVariant,
@@ -17,8 +18,9 @@ const TIP_TARGET_SEL = '[data-cc-title-held], [data-cc-tooltip], [title]'
  * - Adopta todos los `title` nativos (sin excepciones de apariencia).
  * - Cortos (botones/iconos): sobrios, sin logo.
  * - Ayuda (`data-cc-tooltip-help` / texto largo): encabezado con favicon + ClaraCore.
- * - Hover: permanece mientras el cursor está sobre el elemento (sin cierre por tiempo).
- * - Táctil: al tocar; permanece hasta tocar en otro lugar.
+ * - Hover: permanece mientras el cursor está sobre el elemento; se cierra al hacer clic.
+ * - Táctil: en botones/controles con acción, el toque ejecuta la acción (sin tip primero).
+ *   En elementos no accionables, tip al tocar hasta tocar fuera.
  */
 export default function CcTitleTooltips() {
   useEffect(() => {
@@ -296,12 +298,17 @@ export default function CcTitleTooltips() {
       scheduleHideHover()
     }
 
-    /** Táctil: al tocar un control con tip, mostrar y permanecer hasta tocar fuera. */
+    /** Táctil: tip solo en elementos no accionables; en botones el toque ejecuta la acción. */
     const onPointerUp = (e) => {
       if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
       const el = e.target?.closest?.(TIP_TARGET_SEL)
       if (!el || el === tip) return
       if (el.closest('[data-cc-tooltip-off]')) return
+      if (isActionableTipTarget(el)) {
+        // Cerrar tip previo si lo hubiera; no mostrar en este toque.
+        if (activeEl) hide()
+        return
+      }
       const text = resolveText(el)
       if (!text) return
       const now = Date.now()
@@ -311,6 +318,17 @@ export default function CcTitleTooltips() {
     }
 
     const onPointerDownOutside = (e) => {
+      // Ratón: al pulsar el control con tip abierto (hover), cerrar de inmediato
+      // para que no quede encima del panel que se abre.
+      if (e.pointerType === 'mouse' || e.pointerType === '' || e.pointerType == null) {
+        if (activeEl && mode === 'hover') {
+          const hit = e.target?.closest?.(TIP_TARGET_SEL)
+          if (hit === activeEl || (hit && activeEl.contains?.(hit))) {
+            hide()
+            return
+          }
+        }
+      }
       if (!activeEl) return
       if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
       const el = e.target?.closest?.(TIP_TARGET_SEL)

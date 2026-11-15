@@ -119,6 +119,18 @@ export function placeTooltipRect(anchorRect, tipSize, viewport, gap = 10, pad = 
 }
 
 /**
+ * Controles que ejecutan una acción al tocar/clic: el tip táctil no debe
+ * interponerse en el primer toque (p. ej. iconos ClaraGIS filtros/capas).
+ * @param {Element|null|undefined} el
+ */
+export function isActionableTipTarget(el) {
+  if (!el || typeof el.closest !== 'function') return false
+  return !!el.closest(
+    'button, [role="button"], a[href], input, select, summary, label[for], [data-cc-tip-action]',
+  )
+}
+
+/**
  * Mueve `title` → `data-cc-title-held` para que el tip nativo del navegador
  * (negro/blanco, auto-cierre ~2s) nunca aparezca.
  * @param {Element} el
