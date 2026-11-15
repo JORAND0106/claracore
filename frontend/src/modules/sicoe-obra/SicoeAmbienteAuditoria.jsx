@@ -449,18 +449,15 @@ export default function SicoeAmbienteAuditoria({
     [filterItemKey],
   )
 
-  /** Solo el hallazgo seleccionado; si no, el ámbito de filtros; si no, ninguna huella (solo eje). */
+  /** Solo dibujos del hallazgo seleccionado (nunca el contrato ni todo el ámbito). */
   const filterRegistroIds = useMemo(() => {
-    if (seleccionado) {
-      const ids = []
-      for (const r of seleccionado?.registros_involucrados || []) {
-        if (r?.id != null) ids.push(r.id)
-      }
-      return [...new Set(ids.map(String))]
+    if (!seleccionado) return []
+    const ids = []
+    for (const r of seleccionado?.registros_involucrados || []) {
+      if (r?.id != null) ids.push(r.id)
     }
-    if (ambitoRegIds != null) return [...ambitoRegIds]
-    return []
-  }, [seleccionado, ambitoRegIds])
+    return [...new Set(ids.map(String))]
+  }, [seleccionado])
 
   const toggleOrden = (col) => {
     setOrden((prev) => {

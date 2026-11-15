@@ -8,7 +8,9 @@ from sicoe_dibujo_auditoria import (
     cluster_puntos_por_radio,
     dibujo_tipo_desde_feature,
     elegir_contenedor_cercano,
+    extremos_lnglat_desde_feature,
     hallazgos_cantidad_mayor_area_dibujo,
+    hallazgos_consistencia_dibujo_registro,
     hallazgos_traslapo_nodo_contenedor,
     interseccion_lineas_aprox_m,
     mensaje_nodo_alojado,
@@ -115,6 +117,73 @@ class TestHallazgosDibujo(unittest.TestCase):
         b = [[-74.05, 4.70], [-74.05, 4.7001]]
         m = interseccion_lineas_aprox_m(a, b, step_m=1.0)
         self.assertGreater(m, 0)
+
+    def test_extremos_linea_no_centroide(self):
+        feat = {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[-74.05, 4.70], [-74.05, 4.7005], [-74.05, 4.701]],
+            },
+        }
+        pts = extremos_lnglat_desde_feature(feat)
+        self.assertEqual(len(pts), 2)
+        self.assertAlmostEqual(pts[0]["lat"], 4.70)
+        self.assertAlmostEqual(pts[1]["lat"], 4.701)
+
+    def _eje_100m(self):
+        pts = []
+        for m in range(0, 101, 10):
+            pts.append({"m": float(m), "lng": -74.05, "lat": 4.72 + m * 0.000009})
+        return [{"id": 0, "puntos": pts}]
+
+    def test_consistencia_linea_alineada_sin_falso_positivo_centroide(self):
+        """Línea larga alineada con abs digitadas: centroide engañaba; extremos no."""
+        ejes = self._eje_100m()
+        # Dibujo cubre el tramo digitado 10–90 (antes el centro ~50 vs un extremo fallaba)
+        feat = {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [-74.05, 4.72 + 10 * 0.000009],
+                    [-74.05, 4.72 + 90 * 0.000009],
+                ],
+            },
+            "properties": {"dibujo_tipo": "linea"},
+        }
+        reg = {
+            "id": 1,
+            "abs_inicio": 10,
+            "abs_final": 90,
+            "margen": "central",
+            "item_numero": "3.9",
+        }
+        hs = hallazgos_consistencia_dibujo_registro(
+            reg, feat, ejes=ejes, tolerancia_ubicacion_m=1.0,
+        )
+        tipos = [h["tipo"] for h in hs]
+        self.assertNotIn("ubicacion_inconsistente", tipos)
+
+    def test_consistencia_punto_desplazado_si_alerta(self):
+        ejes = self._eje_100m()
+        # Punto en ~90 m pero digita 0–5
+        feat = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [-74.05, 4.72 + 90 * 0.000009],
+            },
+            "properties": {"dibujo_tipo": "nodo"},
+        }
+        reg = {"id": 2, "abs_inicio": 0, "abs_final": 5, "item_numero": "1.1"}
+        hs = hallazgos_consistencia_dibujo_registro(
+            reg, feat, ejes=ejes, tolerancia_ubicacion_m=1.0,
+        )
+        self.assertTrue(any(h["tipo"] == "ubicacion_inconsistente" for h in hs))
+        self.assertIn("digitado", (hs[0].get("texto") or "").lower())
+        self.assertIn("tolerancia", (hs[0].get("texto") or "").lower())
+        self.assertIsNotNone(hs[0].get("evidencia"))
 
 
 if __name__ == "__main__":

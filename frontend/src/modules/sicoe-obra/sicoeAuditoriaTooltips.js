@@ -95,22 +95,29 @@ export function tooltipTipoHallazgo(h) {
     ].filter(Boolean).join(' ')
   }
   if (tipo === 'ubicacion_inconsistente') {
+    const ev = h.evidencia || h.payload?.evidencia || {}
     return [
-      'Ubicación inconsistente: la abscisa o el punto digitado no coincide con donde cae el dibujo o la coordenada real.',
-      digitadas ? `Abscisa digitada: ${digitadas}.` : null,
-      medida != null ? `Diferencia: ${fmtMedida(medida, 'm')}.` : null,
+      'Ubicación inconsistente: lo digitado no coincide con el dibujo o la coordenada real (dato fiable).',
+      ev.digitado ? `Digitado: ${ev.digitado}.` : (digitadas ? `Abscisa digitada: ${digitadas}.` : null),
+      ev.real ? `Real: ${ev.real}.` : null,
+      (ev.diferencia_m != null || ev.diferencia != null)
+        ? `Diferencia: ${ev.diferencia_m != null ? fmtMedida(ev.diferencia_m, 'm') : ev.diferencia}.`
+        : (medida != null ? `Diferencia: ${fmtMedida(medida, 'm')}.` : null),
+      ev.tolerancia_m != null ? `Tolerancia: ${fmtMedida(ev.tolerancia_m, 'm')}.` : null,
       ubi ? `Ubicación: ${ubi}.` : null,
       texto || null,
-      'Revise coordenadas, abscisas y el dibujo del reporte frente al eje.',
     ].filter(Boolean).join(' ')
   }
   if (tipo === 'costado_inconsistente') {
-    const digitado = txt(prim.costado || h.costado)
+    const ev = h.evidencia || h.payload?.evidencia || {}
+    const digitado = txt(ev.digitado || prim.costado || h.costado)
     return [
-      'Costado inconsistente: el costado/margen digitado no coincide con el lado real del dibujo respecto al eje.',
-      digitado ? `Costado digitado: ${digitado}.` : null,
+      'Costado inconsistente: el costado digitado no coincide con el lado real del dibujo respecto al eje.',
+      digitado ? `Digitado: ${digitado}.` : null,
+      ev.real ? `Real: ${ev.real}.` : null,
+      ev.diferencia ? `Diferencia: ${ev.diferencia}.` : null,
+      ev.tolerancia_m != null ? `Tolerancia: ${fmtMedida(ev.tolerancia_m, 'm')}.` : null,
       texto || null,
-      'Revise calzada/margen del registro y la posición del dibujo (izquierda/derecha/central).',
     ].filter(Boolean).join(' ')
   }
   if (tipo === 'cantidad_mayor_area') {

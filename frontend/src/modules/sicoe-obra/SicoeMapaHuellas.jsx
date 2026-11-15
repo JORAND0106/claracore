@@ -250,6 +250,8 @@ export default function SicoeMapaHuellas({
   const [listo, setListo] = useState(false)
   const [error, setError] = useState('')
   const [reloadNonce, setReloadNonce] = useState(0)
+  const [cargandoDibujos, setCargandoDibujos] = useState(false)
+  const [cargaMs, setCargaMs] = useState(null)
 
   useEffect(() => {
     if (!contratoId) return undefined
@@ -302,32 +304,20 @@ export default function SicoeMapaHuellas({
     setError('')
 
     const boot = async () => {
+      const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
       try {
         const tokenMb = import.meta.env.VITE_MAPBOX_TOKEN
         if (!tokenMb) {
           throw new Error('Falta la configuración del mapa (Mapbox). Contacte al administrador.')
         }
 
-        // Plano primero (timeout: un GeoJSON grande no debe dejar el spinner infinito).
-        // Si falla/tarda, se intenta abrir solo con eje/huellas.
-        let planoPack = null
-        let planoErrMsg = ''
-        try {
-          planoPack = await getContratoPlanoGeojson(API_BASE, contratoId, token, { timeoutMs: 20000 })
-        } catch (e) {
-          if (cancelled) return
-          planoPack = null
-          planoErrMsg = mensajeErrorMapa(e)
-        }
-        if (cancelled) return
-
-        const plano = planoPack?.plano_geojson || EMPTY_FC
+        // Apertura liviana (<2s): solo eje + nodos PK. Sin huellas del contrato ni plano 60MB.
         let huellasRes = EMPTY_FC
         try {
           const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
-          const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null
+          const timer = ctrl ? setTimeout(() => ctrl.abort(), 8000) : null
           const r = await fetch(
-            `${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`,
+            `${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true&incluir_huellas=false`,
             {
               headers: { Authorization: `Bearer ${token}` },
               signal: ctrl?.signal,
@@ -340,32 +330,22 @@ export default function SicoeMapaHuellas({
         }
         if (cancelled) return
 
-        const allHuellas = Array.isArray(huellasRes?.features) ? huellasRes.features : []
-        allHuellasRef.current = allHuellas
-        const regKey = filterRegKeyRef.current
-        const byReg = filterHuellasByRegistroIds(
-          allHuellas,
-          regKey == null ? null : (regKey ? regKey.split('|') : []),
-        )
-        const items = filterKeyRef.current ? filterKeyRef.current.split('|') : []
-        const huellasFeats = byReg != null
-          ? byReg
-          : filterHuellasByItems(allHuellas, items)
-        rawHuellasRef.current = huellasFeats
-        setLeyendaItems(leyendaColoresItems(
-          (huellasFeats || []).map((f) => f?.properties?.item_numero),
-        ))
+        allHuellasRef.current = []
+        rawHuellasRef.current = []
+        setLeyendaItems([])
         rawNodosRef.current = huellasRes?.nodos || EMPTY_FC
         const eje = huellasRes?.eje || EMPTY_FC
-        planoBoundsRef.current = boundsFromFc(plano) || boundsFromFc(eje) || boundsFromFc({
-          type: 'FeatureCollection',
-          features: allHuellas,
-        })
+        const plano = EMPTY_FC
+        planoBoundsRef.current = boundsFromFc(eje) || boundsFromFc(rawNodosRef.current)
         if (!planoBoundsRef.current) {
           throw new Error(
-            planoErrMsg
-              || 'No se pudo abrir el plano de obra: el contrato no tiene GeoJSON de proyecto ni eje cargado.',
+            'No se pudo abrir el plano: el contrato no tiene eje/abscisado cargado.',
           )
+        }
+        const msEje = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+        setCargaMs({ eje: msEje })
+        if (typeof console !== 'undefined') {
+          console.info(`[SicoeAuditoria] Plano eje/abscisado listo en ${msEje} ms`)
         }
 
         mapboxgl.accessToken = tokenMb
@@ -443,8 +423,23 @@ export default function SicoeMapaHuellas({
             },
           })
 
+          // Plano de proyecto en background (no bloquea eje/abscisado).
+          void (async () => {
+            try {
+              const pack = await getContratoPlanoGeojson(API_BASE, contratoId, token, { timeoutMs: 20000 })
+              if (cancelled || !mapInstance.current) return
+              const fc = pack?.plano_geojson || EMPTY_FC
+              const src = mapInstance.current.getSource('plano-base')
+              if (src) src.setData(fc)
+              const b = boundsFromFc(fc)
+              if (b && !filterRegKeyRef.current) {
+                planoBoundsRef.current = b
+              }
+            } catch { /* eje ya visible */ }
+          })()
+
           const { highlightRegistroIds: hrs, highlightPkIds: hps } = highlightRef.current
-          const withColors = paintHuellas(huellasFeats, hrs, hps)
+          const withColors = paintHuellas([], hrs, hps)
           map.addSource('huellas-franjas', { type: 'geojson', data: withColors })
           map.addLayer({
             id: 'huellas-fill',
@@ -576,10 +571,63 @@ export default function SicoeMapaHuellas({
     // filterItemNumeros NO remonta: se aplica en efecto aparte
   }, [contratoId, token, t?.bg, reloadNonce])
 
-  // Filtrar huellas por registro/ítem sin destruir el mapa / plano de fondo
+  // Dibujos on-demand: solo al seleccionar hallazgo (registro_ids), nunca el contrato entero.
   useEffect(() => {
-    aplicarFiltroHuellas()
-  }, [filterKey, filterRegKey, aplicarFiltroHuellas])
+    if (!contratoId || !token || !listo) return undefined
+    let cancelled = false
+    const ids = filterRegKey ? filterRegKey.split('|').filter(Boolean) : []
+
+    const loadDibujos = async () => {
+      if (!ids.length) {
+        allHuellasRef.current = []
+        rawHuellasRef.current = []
+        setLeyendaItems([])
+        setCargandoDibujos(false)
+        aplicarFiltroHuellas()
+        return
+      }
+      setCargandoDibujos(true)
+      const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+      try {
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), 8000) : null
+        const qs = new URLSearchParams({
+          incluir_eje: 'false',
+          incluir_nodos: 'false',
+          incluir_huellas: 'true',
+          registro_ids: ids.join(','),
+        })
+        const r = await fetch(
+          `${API_BASE}/sicoe-obra/${contratoId}/huellas?${qs}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: ctrl?.signal,
+          },
+        )
+        if (timer) clearTimeout(timer)
+        if (cancelled) return
+        const data = r.ok ? await r.json() : EMPTY_FC
+        const feats = Array.isArray(data?.features) ? data.features : []
+        allHuellasRef.current = feats
+        const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0)
+        setCargaMs((prev) => ({ ...(prev || {}), dibujos: ms, n: feats.length }))
+        if (typeof console !== 'undefined') {
+          console.info(`[SicoeAuditoria] Dibujos del hallazgo (${feats.length}) en ${ms} ms`)
+        }
+        aplicarFiltroHuellas()
+      } catch {
+        if (!cancelled) {
+          allHuellasRef.current = []
+          aplicarFiltroHuellas()
+        }
+      } finally {
+        if (!cancelled) setCargandoDibujos(false)
+      }
+    }
+
+    void loadDibujos()
+    return () => { cancelled = true }
+  }, [contratoId, token, listo, filterRegKey, filterKey, aplicarFiltroHuellas])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -648,7 +696,19 @@ export default function SicoeMapaHuellas({
             color: t?.textMuted, fontSize: 'var(--cc-sm)',
           }}
         >
-          Cargando plano de obra…
+          Cargando eje y abscisado…
+        </div>
+      )}
+      {listo && cargandoDibujos && (
+        <div
+          style={{
+            position: 'absolute', top: 40, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 6, background: `${t?.bgCard || '#fff'}EE`, border: `1px solid ${t?.border}`,
+            borderRadius: 8, padding: '6px 12px', color: t?.textMuted, fontSize: 'var(--cc-caption)',
+          }}
+        >
+          Cargando dibujos del hallazgo…
+          {cargaMs?.dibujos != null ? ` · última ${cargaMs.dibujos} ms` : ''}
         </div>
       )}
       {error && (
