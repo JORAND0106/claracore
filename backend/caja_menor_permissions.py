@@ -21,17 +21,52 @@ def _norm(txt: str) -> str:
     return " ".join(s.lower().split())
 
 
-def es_desarrollador_usuario(current_user) -> bool:
-    cargo = _norm((current_user or {}).get("cargo_nombre") or (current_user or {}).get("cargo") or "")
-    rol = _norm((current_user or {}).get("rol_nombre") or (current_user or {}).get("rol") or "")
+def _jwt_es_desarrollador(current_user) -> bool:
+    user = current_user or {}
+    cargo = _norm(user.get("cargo_nombre") or user.get("cargo") or "")
+    rol = _norm(user.get("rol_nombre") or user.get("rol") or "")
     if cargo == "desarrollador" or rol == "desarrollador":
+        return True
+    if user.get("es_desarrollador") is True or user.get("acceso_total") is True:
+        return True
+    try:
+        return int(user.get("rol_id") or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _rol_desarrollador_en_bd(current_user) -> bool:
+    """El token a veces no trae el rol. El id 1 y el nombre Desarrollador sí entran."""
+    try:
+        uid = int((current_user or {}).get("sub") or (current_user or {}).get("id"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        from main import supabase
+
+        rows = supabase.table("usuarios").select("rol_id").eq("id", uid).limit(1).execute().data or []
+        if not rows or rows[0].get("rol_id") is None:
+            return False
+        rol_id = int(rows[0]["rol_id"])
+        if rol_id == 1:
+            return True
+        roles = supabase.table("roles").select("nombre").eq("id", rol_id).limit(1).execute().data or []
+        return bool(roles) and _norm(roles[0].get("nombre")) == "desarrollador"
+    except Exception:
+        return False
+
+
+def es_desarrollador_usuario(current_user) -> bool:
+    if _jwt_es_desarrollador(current_user):
         return True
     try:
         from main import _es_desarrollador
 
-        return bool(_es_desarrollador(current_user))
+        if _es_desarrollador(current_user):
+            return True
     except Exception:
-        return False
+        pass
+    return _rol_desarrollador_en_bd(current_user)
 
 
 def _es_funcion(row: dict) -> bool:
@@ -111,7 +146,9 @@ def tiene_permiso_caja_menor(current_user, accion: CajaAccion, contrato_id: Opti
 
 
 def acceso_caja_menor(current_user, contrato_id: Optional[int] = None) -> dict:
-    return {a: tiene_permiso_caja_menor(current_user, a, contrato_id) for a in ACCIONES}
+    flags = {a: tiene_permiso_caja_menor(current_user, a, contrato_id) for a in ACCIONES}
+    flags["puedeEntrar"] = bool(flags["ver"])
+    return flags
 
 
 def require_permiso_caja_menor(current_user, accion: CajaAccion, contrato_id: Optional[int] = None) -> None:
