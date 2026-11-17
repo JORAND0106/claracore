@@ -211,6 +211,8 @@ def test_desarrollador_no_depende_de_la_matriz():
     ) is True
     assert perm.acceso_caja_menor({"rol_nombre": "desarrollador"}, 3)["validar"] is True
     assert perm.tiene_permiso_caja_menor({"rol_nombre": "Administrador"}, "ver", 3) is True
+    assert perm.tiene_permiso_caja_menor({"sub": "4", "rol_id": 1}, "crear", 3) is True
+    assert perm.acceso_caja_menor({"es_desarrollador": True}, 3)["eliminar"] is True
 
 
 def test_ocr_extrae_impuestos_sin_red():

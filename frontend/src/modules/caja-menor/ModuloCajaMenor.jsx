@@ -8,7 +8,7 @@ import { useClaraViewport } from '../../useClaraViewport'
 import CajaMenorLogo from './CajaMenorLogo'
 import { createCajaMenorApi, fdGasto, fdIngreso } from './cajaMenorApi'
 import { ETIQUETA_ESTADO, fmtPct, hoyColombia, normalizarDocumento, valorNeto } from './cajaMenorCalc'
-import { accesoCajaMenor } from './cajaMenorPermisos'
+import { accesoCajaMenor, esDesarrolladorCajaMenor } from './cajaMenorPermisos'
 import { comprimirImagen, imagenDePortapapeles } from './cajaMenorImagen'
 
 function IconBtn({ title, onClick, disabled, children, t, tono }) {
@@ -114,7 +114,13 @@ export default function ModuloCajaMenor({
   const fileIngreso = useRef(null)
   const tomarRef = useRef(null)
 
-  const acceso = detalle?.acceso || lista?.acceso || accesoLocal
+  const accesoRemoto = detalle?.acceso || lista?.acceso
+  const acceso = esDesarrolladorCajaMenor(usuario)
+    ? accesoLocal
+    : {
+        ...(accesoRemoto || accesoLocal),
+        puedeEntrar: accesoRemoto ? !!accesoRemoto.ver : !!accesoLocal.puedeEntrar,
+      }
   const caja = detalle?.caja
   const ind = detalle?.indicadores
   const abierta = caja?.estado === 'abierta'

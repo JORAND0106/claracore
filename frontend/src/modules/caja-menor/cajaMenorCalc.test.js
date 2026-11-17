@@ -33,6 +33,11 @@ describe('caja menor', () => {
     assert.equal(acceso.ver, true)
     assert.equal(acceso.validar, true)
     assert.equal(acceso.exportar, true)
+    assert.equal(acceso.accesoTotal, true)
+    const porRol = accesoCajaMenor({ rol_id: 1 }, 4)
+    assert.equal(porRol.crear, true)
+    assert.equal(porRol.eliminar, true)
+    assert.equal(porRol.accesoTotal, true)
     const otro = accesoCajaMenor({
       permisos: [{ funcion_nombre: 'Caja Menor', contrato_id: 4, ver: true, crear: false, validar: true }],
     }, 4)
