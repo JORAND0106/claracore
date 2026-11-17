@@ -38,6 +38,33 @@ from caja_menor_permissions import es_desarrollador_usuario, require_permiso_caj
 
 _log = logging.getLogger("claracore.caja_menor")
 
+_MSG_API_NO_VE_TABLAS = (
+    "Caja Menor no está visible para el API. En Supabase ejecute "
+    "backend/sql/caja_menor_grants.sql y vuelva a abrir el módulo."
+)
+
+
+def mensaje_falla_datos(exc: Exception) -> str:
+    """Traduce el Not Found de PostgREST cuando el rol del API no ve las tablas."""
+    partes = [str(exc or "")]
+    for attr in ("message", "details", "hint", "code"):
+        val = getattr(exc, attr, None)
+        if val:
+            partes.append(str(val))
+    blob = " ".join(partes).lower()
+    if any(k in blob for k in (
+        "pgrst205",
+        "schema cache",
+        "could not find the table",
+        "could not find the ",
+        "42p01",
+        "does not exist",
+        "permission denied",
+        "not found",
+    )):
+        return _MSG_API_NO_VE_TABLAS
+    return "No se pudo completar la operación de Caja Menor."
+
 _GASTO_CAMPOS = (
     "fecha",
     "tercero_razon_social",

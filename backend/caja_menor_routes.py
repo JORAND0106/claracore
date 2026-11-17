@@ -14,7 +14,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from caja_menor_ocr import analyze_recibo_bytes
-from caja_menor_service import DuplicadoCajaMenor
+from caja_menor_service import DuplicadoCajaMenor, mensaje_falla_datos
 from main import _require_contract_access, get_current_user
 
 _log = logging.getLogger("claracore.caja_menor.routes")
@@ -39,7 +39,7 @@ def _http(exc: Exception) -> HTTPException:
         code = 404 if "no encontrad" in msg.lower() else 400
         return HTTPException(status_code=code, detail=msg)
     _log.exception("caja menor: %s", exc)
-    return HTTPException(status_code=400, detail="No se pudo completar la operación de Caja Menor.")
+    return HTTPException(status_code=400, detail=mensaje_falla_datos(exc))
 
 
 def _svc():

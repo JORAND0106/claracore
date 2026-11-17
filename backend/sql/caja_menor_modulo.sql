@@ -194,4 +194,39 @@ CREATE INDEX IF NOT EXISTS idx_caja_menor_saldo_pendiente
 COMMENT ON TABLE public.caja_menor_saldo_pendiente IS
   'Saldo de una caja legalizada que aún no tiene caja abierta del mismo responsable.';
 
+-- Sin este GRANT el rol del API no ve las tablas y PostgREST responde Not Found.
+DO $$
+DECLARE
+  t text;
+  s text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'caja_menor',
+    'caja_menor_ingreso',
+    'caja_menor_gasto',
+    'caja_menor_tercero',
+    'caja_menor_saldo_pendiente'
+  ]
+  LOOP
+    IF to_regclass('public.' || t) IS NULL THEN
+      RAISE EXCEPTION 'Falta la tabla public.% . Ejecute el SQL completo de Caja Menor.', t;
+    END IF;
+    EXECUTE format(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO service_role',
+      t
+    );
+  END LOOP;
+
+  FOR s IN
+    SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'S'
+      AND c.relname LIKE 'caja_menor%'
+  LOOP
+    EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE public.%I TO service_role', s);
+  END LOOP;
+END $$;
+
 NOTIFY pgrst, 'reload schema';
