@@ -11,6 +11,7 @@ export const MODULOS_LOG = [
   'Subcontratistas',
   'Catálogo de insumos',
   'Contabilidad',
+  'Caja Menor',
   'Contratos',
   'Usuarios',
   'Cargos y permisos',
@@ -29,6 +30,8 @@ export const ACCIONES_LOG = [
   { value: 'CREAR', label: 'Creación' },
   { value: 'EDITAR', label: 'Edición' },
   { value: 'ELIMINAR', label: 'Eliminación' },
+  { value: 'VALIDAR', label: 'Validación' },
+  { value: 'RECHAZAR', label: 'Rechazo' },
   { value: 'CARGA_MASIVA', label: 'Carga masiva' },
 ]
 
@@ -36,6 +39,8 @@ const OPS = {
   CREAR: 'Creación',
   EDITAR: 'Edición',
   ELIMINAR: 'Eliminación',
+  VALIDAR: 'Validación',
+  RECHAZAR: 'Rechazo',
 }
 
 export function detalleDe(log) {
@@ -94,8 +99,8 @@ export function cargaDeLog(log) {
 }
 
 export function tonoAccion(accion) {
-  if (accion === 'CREAR') return '#15803D'
-  if (accion === 'ELIMINAR') return '#B91C1C'
+  if (accion === 'CREAR' || accion === 'VALIDAR') return '#15803D'
+  if (accion === 'ELIMINAR' || accion === 'RECHAZAR') return '#B91C1C'
   if (accion === 'CARGA_MASIVA') return '#0F766E'
   return '#B45309'
 }
