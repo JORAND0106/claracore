@@ -320,6 +320,8 @@ import AlmacenMain from './almacen/AlmacenMain'
 import ModuloSeguimiento from './modules/seguimiento/ModuloSeguimiento'
 import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
 import ModuloRrhh, { accesoRrhh } from './modules/rrhh'
+import ModuloCajaMenor, { accesoCajaMenor, CajaMenorLogo } from './modules/caja-menor'
+import { capturarCajaMenorDeepLink, limpiarCajaMenorDeepLink } from './modules/caja-menor/cajaMenorDeepLink'
 import EmojiPicker from './EmojiPicker'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
 import DeployVersionBadge from './components/DeployVersionBadge'
@@ -21349,6 +21351,10 @@ function IconoModuloConAlerta({ icon, total = 0, title, ring }) {
 
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, onRefreshContratos, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
+  const [cajaMenorDeep, setCajaMenorDeep] = useState(() => capturarCajaMenorDeepLink(
+    typeof window === 'undefined' ? '' : window.location.search,
+    typeof sessionStorage === 'undefined' ? null : sessionStorage,
+  ))
   const [blocOpenTarget, setBlocOpenTarget] = useState(null)
   const [offlineModuloAviso, setOfflineModuloAviso] = useState(false)
   const irAModulo = useCallback((key, after) => {
@@ -23342,6 +23348,9 @@ const [navReporteId, setNavReporteId] = useState(null)
   const tienePermisoSeguimiento = !esContador && !!seguimientoAcceso.ver
   const rrhhAcceso = accesoRrhh(usuario, usuario?.contrato_id)
   const tienePermisoRrhh = esDeveloper || (!esContador && !!rrhhAcceso.ver)
+  const cajaMenorContratoId = cajaMenorDeep?.contratoId || usuario?.contrato_id
+  const cajaMenorAcceso = accesoCajaMenor(usuario, cajaMenorContratoId)
+  const tienePermisoCajaMenor = esDeveloper || (!esContador && (cajaMenorAcceso.puedeEntrar || !!cajaMenorDeep?.cajaId))
   const tieneAccesoContabilidad = esDeveloper || esContador
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
@@ -23367,6 +23376,12 @@ const [navReporteId, setNavReporteId] = useState(null)
       setModuloActivo('inicio')
     }
   }, [esContador, moduloActivo])
+
+  useEffect(() => {
+    if (cajaMenorDeep?.cajaId && !cajaMenorDeep.consumido && !esContador) {
+      setModuloActivo('caja_menor')
+    }
+  }, [cajaMenorDeep, esContador])
 
   useEffect(() => {
     if (moduloActivo === 'bloc_notas' && !puedeVerBlocNotas) {
@@ -24036,6 +24051,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
             ['seguimiento',  '📌', 'Seguimiento',    !esContador && tienePermisoSeguimiento],
             ['rrhh',         '👥', 'Recursos Humanos', !esContador && tienePermisoRrhh],
+            ['caja_menor',   'CM', 'Caja Menor',     tienePermisoCajaMenor],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'ClaraGIS', !esContador],
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
@@ -24062,7 +24078,9 @@ const [navReporteId, setNavReporteId] = useState(null)
               fontSize: 'var(--cc-sm)', whiteSpace: 'nowrap', width: '100%',
               transition: 'all 0.15s', textAlign: 'left',
             }}>
-              {alertaIcono > 0 ? (
+              {key === 'caja_menor' ? (
+                <CajaMenorLogo size={18} />
+              ) : alertaIcono > 0 ? (
                 <IconoModuloConAlerta icon={icon} total={alertaIcono} title={tituloAlerta} ring={t.headerBg} />
               ) : (
                 <span style={{ fontSize:'var(--cc-lg)', lineHeight:1, flexShrink:0 }}>{icon}</span>
@@ -24109,6 +24127,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
               ['seguimiento', '📌', 'Seguim.', !esContador && tienePermisoSeguimiento],
               ['rrhh', '👥', 'Recursos Humanos', !esContador && tienePermisoRrhh],
+              ['caja_menor', 'CM', 'Caja Menor', tienePermisoCajaMenor],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'ClaraGIS', !esContador],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
@@ -24143,7 +24162,9 @@ const [navReporteId, setNavReporteId] = useState(null)
                   minHeight: 40,
                 }}
               >
-                {alertaIcono > 0 ? (
+                {key === 'caja_menor' ? (
+                  <CajaMenorLogo size={16} />
+                ) : alertaIcono > 0 ? (
                   <IconoModuloConAlerta icon={icon} total={alertaIcono} title={tituloAlerta} ring={t.bgCard} />
                 ) : icon}{' '}{label}
               </button>
@@ -27112,6 +27133,26 @@ const [navReporteId, setNavReporteId] = useState(null)
               </div>
             </div>
           )
+        )}
+        {moduloActivo === 'caja_menor' && tienePermisoCajaMenor && (
+          <ModuloCajaMenor
+            key={`caja-menor-${cajaMenorContratoId ?? 'x'}`}
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            contratoId={cajaMenorContratoId}
+            deepLink={cajaMenorDeep}
+            onDeepLinkConsumed={() => {
+              limpiarCajaMenorDeepLink(typeof sessionStorage === 'undefined' ? null : sessionStorage)
+              setCajaMenorDeep((prev) => (prev ? { ...prev, consumido: true } : prev))
+              try {
+                const url = new URL(window.location.href)
+                ;['modulo', 'caja', 'contrato', 'gasto'].forEach((k) => url.searchParams.delete(k))
+                const qs = url.searchParams.toString()
+                window.history.replaceState({}, '', url.pathname + (qs ? `?${qs}` : '') + url.hash)
+              } catch { /* el enlace ya abrió la caja */ }
+            }}
+          />
         )}
         {moduloActivo === 'semaforo' && (
           <ModuloPlanoMapaCalor

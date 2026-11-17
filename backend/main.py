@@ -3091,6 +3091,9 @@ app.include_router(contrato_orden_pago_router)
 from contabilidad_routes import router as contabilidad_router
 app.include_router(contabilidad_router)
 
+from caja_menor_routes import router as caja_menor_router
+app.include_router(caja_menor_router)
+
 from almacen_routes import router as almacen_router
 app.include_router(almacen_router)
 

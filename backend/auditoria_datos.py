@@ -72,6 +72,7 @@ _SENSIBLES = frozenset({
 
 # Prefijos más largos primero.
 _PREFIJOS_MODULO: Tuple[Tuple[str, str], ...] = (
+    ("caja_menor", "Caja Menor"),
     ("catalogo_insumo", "Catálogo de insumos"),
     ("catalogo_", "Catálogo de insumos"),
     ("almacen_", "Almacén"),
@@ -134,6 +135,11 @@ _TABLAS: Dict[str, str] = {
     "topo_diseno_rasante": "Rasante de diseño",
     "topo_diseno_ejes": "Eje de diseño",
     "bitacora_entradas": "Entrada de bitácora",
+    "caja_menor": "Caja menor",
+    "caja_menor_gasto": "Gasto de caja menor",
+    "caja_menor_ingreso": "Consignación de caja menor",
+    "caja_menor_tercero": "Tercero",
+    "caja_menor_saldo_pendiente": "Saldo trasladado",
 }
 
 _ETIQUETAS: Dict[str, str] = {
@@ -195,6 +201,24 @@ _ETIQUETAS: Dict[str, str] = {
     "notas": "Notas",
     "razon_social": "Razón social",
     "nit": "NIT",
+    "valor_bruto": "Valor bruto",
+    "valor_neto": "Valor neto",
+    "impuesto_consumo": "Impuesto al consumo",
+    "otros_deducibles": "Otros deducibles",
+    "retenciones": "Retenciones",
+    "iva": "IVA",
+    "centro_costos": "Centro de costos",
+    "documento_no": "Documento No.",
+    "tercero_razon_social": "Tercero",
+    "tercero_documento": "NIT o cédula",
+    "estado_validacion": "Validación",
+    "observacion_validacion": "Observación",
+    "saldo_trasladado": "Saldo trasladado",
+    "firma_elaboro": "Elaboró",
+    "firma_reviso": "Revisó",
+    "firma_aprobo": "Aprobó",
+    "periodo_desde": "Periodo desde",
+    "periodo_hasta": "Periodo hasta",
     "cargo_nombre": "Cargo",
     "rol_nombre": "Rol",
 }
