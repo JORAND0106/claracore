@@ -449,6 +449,32 @@ def test_excel_y_pdf_icontec():
     assert FORMATO_CALIDAD["codigo"] == "CC-CM-001"
 
 
+def test_not_found_pide_permisos_del_api():
+    from pathlib import Path
+
+    from caja_menor_service import mensaje_falla_datos
+
+    class Falla(Exception):
+        def __init__(self):
+            super().__init__("Error 404:\nMessage: Not Found")
+            self.message = "Not Found"
+            self.code = "404"
+
+    texto = mensaje_falla_datos(Falla())
+    assert "caja_menor_grants.sql" in texto
+    raiz = Path(__file__).resolve().parents[1]
+    for nombre in (
+        "sql/caja_menor_grants.sql",
+        "sql/caja_menor_modulo.sql",
+        "migrations/20261117180000_caja_menor.sql",
+        "migrations/20261117223000_caja_menor_grants.sql",
+    ):
+        sql = (raiz / nombre).read_text(encoding="utf-8")
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE" in sql
+        assert "service_role" in sql
+        assert "NOTIFY pgrst, 'reload schema'" in sql
+
+
 def test_auditoria_etiqueta_caja_menor():
     from auditoria_datos import modulo_de_tabla
 
