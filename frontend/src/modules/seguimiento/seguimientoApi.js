@@ -377,11 +377,25 @@ export function createSeguimientoApi(contratoId, token) {
         activa: Boolean(activa),
       }),
     listSubcontratistasActivos: () => get(`/sicoe-obra/${cid}/subcontratistas-activos`),
-    plantillaAutocompletarDiario: (tramo) => {
-      const q = tramo != null && String(tramo).trim() !== ''
-        ? `?tramo=${encodeURIComponent(String(tramo).trim())}`
+    /**
+     * Plantilla del último diario diligenciado anterior a `antesDe` (YYYY-MM-DD).
+     * `tramo` se conserva por compat pero el backend lo ignora.
+     */
+    plantillaAutocompletarDiario: (tramoOrOpts, maybeAntesDe) => {
+      const opts = tramoOrOpts && typeof tramoOrOpts === 'object' && !Array.isArray(tramoOrOpts)
+        ? tramoOrOpts
+        : { tramo: tramoOrOpts, antesDe: maybeAntesDe }
+      const q = new URLSearchParams()
+      const tramo = opts.tramo != null && String(opts.tramo).trim() !== ''
+        ? String(opts.tramo).trim()
         : ''
-      return get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar${q}`)
+      const antesDe = opts.antesDe != null && String(opts.antesDe).trim() !== ''
+        ? String(opts.antesDe).trim().slice(0, 10)
+        : (opts.antes_de != null ? String(opts.antes_de).trim().slice(0, 10) : '')
+      if (tramo) q.set('tramo', tramo)
+      if (antesDe) q.set('antes_de', antesDe)
+      const qs = q.toString()
+      return get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar${qs ? `?${qs}` : ''}`)
     },
     listBitacoraGaleria: (q = '') => {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''

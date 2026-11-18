@@ -69,7 +69,7 @@ import {
 } from './bitacoraConstants'
 import { debeUsarGrillaDiarioCompacta } from './bitacoraDiarioMobile'
 import { bitacoraSheetCssVars, bitacoraSheetStyles } from './bitacoraSheetStyles'
-import { labelTramoBitacora, normalizeTramoValue } from './bitacoraTramoHelpers'
+import { normalizeTramoValue } from './bitacoraTramoHelpers'
 import { API_BASE } from '../../apiBase'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import {
@@ -326,6 +326,7 @@ export default function BitacoraEntradaEditor({
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
   const [reportePersonalOpen, setReportePersonalOpen] = useState(false)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [autoAviso, setAutoAviso] = useState(null)
   const [pngAviso, setPngAviso] = useState(null)
   const [contratoMeta, setContratoMeta] = useState({})
   const [bitacoraHorario, setBitacoraHorario] = useState(null)
@@ -877,15 +878,20 @@ export default function BitacoraEntradaEditor({
     setAutoBusy(true)
     setError('')
     setOkMsg('')
+    setAutoAviso(null)
     try {
-      const data = await api.plantillaAutocompletarDiario()
+      const data = await api.plantillaAutocompletarDiario({ antesDe: fecha })
       const prevAsist = stripTramoFilasAutocompletar(asistenciaFromEntrada(data))
-      const hasManual = Array.isArray(data.personal_manual) && data.personal_manual.length
+      const hasManual = Array.isArray(data?.personal_manual) && data.personal_manual.length
       if (!data || (!prevAsist.length && !data.personal?.length && !hasManual && !data.equipos_uso?.length)) {
-        setError('No hay una Bitácora anterior para autocompletar.')
+        setAutoAviso({
+          titulo: 'Sin reporte anterior',
+          mensaje: 'No hay un Reporte Diario diligenciado anterior a esta fecha para autocompletar.',
+        })
         return
       }
       // No tocar fecha / hora / clima ni materiales; tramo por fila queda vacío.
+      // Sustituye el bloque (no concatena) para no duplicar filas si ya había datos.
       if (prevAsist.length) {
         setAsistencia(prevAsist)
       }
@@ -905,16 +911,16 @@ export default function BitacoraEntradaEditor({
       }
       // Materiales siempre vacíos al autocompletar (movimientos del día)
       setMateriales([emptyMaterial()])
-      const fuente = [
-        data.fuente_fecha ? data.fuente_fecha : null,
-        data.fuente_tramo ? labelTramoBitacora(data.fuente_tramo) : null,
-      ].filter(Boolean).join(' · ')
+      const fuente = data.fuente_fecha ? String(data.fuente_fecha).slice(0, 10) : null
       setOkMsg(
-        `Asistencia, cargos y maquinaria cargados desde el reporte anterior${fuente ? ` (${fuente})` : ''}. `
+        `Asistencia, cargos y maquinaria cargados desde el último reporte diligenciado${fuente ? ` (${fuente})` : ''}. `
         + 'Materiales quedan vacíos. Asigne Tramo en cada fila. Fecha, hora y clima no se modificaron.',
       )
     } catch (e) {
-      setError(e.message || 'No se pudo autocompletar')
+      setAutoAviso({
+        titulo: 'No se pudo autocompletar',
+        mensaje: 'No fue posible cargar el reporte anterior. Intente de nuevo en unos momentos.',
+      })
     } finally {
       setAutoBusy(false)
     }
@@ -1098,7 +1104,7 @@ export default function BitacoraEntradaEditor({
                 disabled={autoBusy || busy}
                 onClick={() => void autocompletarDesdeAnterior()}
                 style={btnGhost}
-                title="Carga asistencia y maquinaria de la bitácora anterior. Materiales no se autocompletan. No modifica fecha, hora ni clima. Debe asignar Tramo en cada fila."
+                title="Carga Personal y Maquinaria del último Reporte Diario diligenciado anterior a esta fecha. Materiales no se autocompletan. Debe asignar Tramo en cada fila."
               >
                 {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
               </button>
@@ -1304,7 +1310,7 @@ export default function BitacoraEntradaEditor({
                 fechaISO={fecha}
                 fetchPlantillaAutocompletar={
                   editable && esNuevo
-                    ? () => api.plantillaAutocompletarDiario()
+                    ? () => api.plantillaAutocompletarDiario({ antesDe: fecha })
                     : null
                 }
               />
@@ -2255,6 +2261,24 @@ export default function BitacoraEntradaEditor({
             Se eliminará de forma <strong>irreversible</strong> el reporte del día{' '}
             <strong>{fecha || '—'}</strong> y todo su contenido (personal, maquinaria,
             materiales y fotos). Esta acción no se puede deshacer.
+          </p>
+        </CcConfirmModal>,
+        document.body,
+      )}
+
+      {autoAviso && createPortal(
+        <CcConfirmModal
+          theme={t}
+          tipo="info"
+          titulo={autoAviso.titulo || 'Autocompletar'}
+          confirmar="Entendido"
+          soloConfirmar
+          zIndex={100090}
+          onConfirm={() => setAutoAviso(null)}
+          onCancel={() => setAutoAviso(null)}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', lineHeight: 1.45 }}>
+            {autoAviso.mensaje}
           </p>
         </CcConfirmModal>,
         document.body,

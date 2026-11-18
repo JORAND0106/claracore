@@ -382,6 +382,65 @@ def test_strip_autocompletar_excluye_materiales():
     assert out.get("fuente_fecha") == "2026-08-20"
 
 
+def test_elegir_diario_autocompletar_ultimo_diligenciado_antes_de():
+    """Lunes con último diligenciado = miércoles semana previa; omite vacíos y eventos."""
+    candidatos = [
+        # Lunes objetivo (no elegible: >= antes_de)
+        {"id": 10, "tipo": "diario", "fecha": "2026-11-16", "asistencia_colaboradores": [{"nombre": "Hoy"}]},
+        # Domingo vacío (omitir)
+        {"id": 9, "tipo": "diario", "fecha": "2026-11-15", "asistencia_colaboradores": [], "personal": [], "equipos_uso": []},
+        # Viernes vacío (omitir)
+        {"id": 8, "tipo": "diario", "fecha": "2026-11-14", "personal": [{"cargo": "Oficial", "cantidad": 0}]},
+        # Evento (omitir)
+        {"id": 7, "tipo": "evento", "fecha": "2026-11-13", "asistencia_colaboradores": [{"nombre": "X"}]},
+        # Miércoles diligenciado (elegible)
+        {
+            "id": 6, "tipo": "diario", "fecha": "2026-11-11", "created_at": "2026-11-11T18:00:00Z",
+            "asistencia_colaboradores": [{"nombre": "Ana"}],
+            "equipos_uso": [],
+        },
+        # Martes más viejo también diligenciado
+        {
+            "id": 5, "tipo": "diario", "fecha": "2026-11-10",
+            "equipos_uso": [{"equipo_nombre": "Retro"}],
+        },
+    ]
+    elegido = svc._elegir_diario_autocompletar(candidatos, antes_de="2026-11-16")
+    assert elegido is not None
+    assert elegido["id"] == 6
+    assert elegido["fecha"] == "2026-11-11"
+
+    # Reporte atrasado (jueves 13): no debe tomar el miércoles? Wait - miércoles 11 < jueves 13, so 11 is OK.
+    # But if there's Friday 14 empty and Wednesday 11 filled, before Thursday 13 → Wednesday 11.
+    elegido_atrasado = svc._elegir_diario_autocompletar(candidatos, antes_de="2026-11-13")
+    assert elegido_atrasado["id"] == 6
+
+    # Sin reportes previos
+    assert svc._elegir_diario_autocompletar([], antes_de="2026-11-16") is None
+    assert svc._elegir_diario_autocompletar(
+        [{"id": 1, "tipo": "diario", "fecha": "2026-11-16", "asistencia_colaboradores": [{"nombre": "A"}]}],
+        antes_de="2026-11-16",
+    ) is None
+
+
+def test_diario_esta_diligenciado():
+    assert svc._diario_esta_diligenciado({
+        "asistencia_colaboradores": [{"nombre": "Ana"}],
+    }) is True
+    assert svc._diario_esta_diligenciado({
+        "equipos_uso": [{"equipo_nombre": "Retro"}],
+    }) is True
+    assert svc._diario_esta_diligenciado({
+        "personal": [{"cargo": "Oficial", "cantidad": 2}],
+    }) is True
+    assert svc._diario_esta_diligenciado({
+        "personal": [{"cargo": "Oficial", "cantidad": 0}],
+        "asistencia_colaboradores": [],
+        "equipos_uso": [{}],
+    }) is False
+    assert svc._diario_esta_diligenciado(None) is False
+
+
 def test_asegurar_autocierre_llama_cierre(monkeypatch):
     anteayer = (svc.hoy_bogota() - timedelta(days=2)).isoformat()
     entrada = {"id": 9, "tipo": "diario", "estado": "abierto", "fecha": anteayer}

@@ -3503,36 +3503,108 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
     }
 
 
-def plantilla_autocompletar_diario(
-    sb, contrato_id: int, *, tramo: Optional[str] = None,
+def _diario_esta_diligenciado(entrada: Optional[dict]) -> bool:
+    """
+    True si el diario tiene Personal/asistencia o Maquinaria con datos.
+    Días vacíos (solo fecha/clima/cáscara) no sirven de referencia.
+    """
+    if not isinstance(entrada, dict):
+        return False
+    for a in entrada.get("asistencia_colaboradores") or []:
+        if isinstance(a, dict) and str(a.get("nombre") or "").strip():
+            return True
+    for p in entrada.get("personal") or []:
+        if not isinstance(p, dict):
+            continue
+        if not str(p.get("cargo") or "").strip():
+            continue
+        try:
+            cant = float(p.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        if cant > 0:
+            return True
+    for u in entrada.get("equipos_uso") or []:
+        if isinstance(u, dict) and str(u.get("equipo_nombre") or "").strip():
+            return True
+    return False
+
+
+def _elegir_diario_autocompletar(
+    candidatos: List[dict],
+    *,
+    antes_de: Optional[str] = None,
 ) -> Optional[dict]:
     """
-    Último Reporte Diario del contrato (preferir cerrado; si no, el más reciente).
-    El parámetro `tramo` se ignora (compat API): ya no hay un diario por tramo.
-    No incluye fecha/hora/clima; Tramo por fila queda vacío a propósito.
+    Último diario diligenciado con fecha estrictamente anterior a `antes_de`.
+    Omite eventos, vacíos y fechas >= antes_de. No depende de la semana.
+    """
+    corte = str(antes_de or "").strip()[:10] or None
+    elegibles: List[dict] = []
+    for row in candidatos or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("tipo") or "").strip().lower() != "diario":
+            continue
+        fecha = str(row.get("fecha") or "").strip()[:10]
+        if not fecha:
+            continue
+        if corte and fecha >= corte:
+            continue
+        if not _diario_esta_diligenciado(row):
+            continue
+        elegibles.append(row)
+    if not elegibles:
+        return None
+    elegibles.sort(
+        key=lambda r: (
+            str(r.get("fecha") or "")[:10],
+            str(r.get("created_at") or ""),
+            int(r.get("id") or 0),
+        ),
+        reverse=True,
+    )
+    return elegibles[0]
+
+
+def plantilla_autocompletar_diario(
+    sb,
+    contrato_id: int,
+    *,
+    tramo: Optional[str] = None,
+    antes_de: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Último Reporte Diario diligenciado del contrato con fecha < `antes_de`.
+    Omite días sin reporte y reportes vacíos. Ignora semana calendario.
+    `tramo` se ignora (compat API). Tramo por fila queda vacío a propósito.
     """
     void_tramo = tramo  # compat firma API
     del void_tramo
 
-    def _query(estado: Optional[str] = None):
-        q = (
-            sb.table("seguimiento_bitacora_entrada")
-            .select("*")
-            .eq("contrato_id", int(contrato_id))
-            .eq("tipo", "diario")
-            .order("fecha", desc=True)
-            .limit(1)
-        )
-        if estado:
-            q = q.eq("estado", estado)
-        return q.execute().data or []
+    corte = str(antes_de or "").strip()[:10] or None
+    # Pedir un lote amplio: puede haber varios vacíos entre el día actual
+    # y el último diligenciado (huecos de varios días / semanas).
+    q = (
+        sb.table("seguimiento_bitacora_entrada")
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .eq("tipo", "diario")
+        .order("fecha", desc=True)
+        .order("created_at", desc=True)
+        .limit(60)
+    )
+    if corte:
+        q = q.lt("fecha", corte)
+    rows = q.execute().data or []
 
-    rows = _query("cerrado")
-    if not rows:
-        rows = _query(None)
-    if not rows:
+    elegido = _elegir_diario_autocompletar(rows, antes_de=corte)
+    if not elegido:
         return None
-    enriched = _enrich_entrada(sb, rows[0])
+    enriched = _enrich_entrada(sb, elegido)
+    if not _diario_esta_diligenciado(enriched):
+        # Enrichment a veces rellena listas vacías; revalidar.
+        return None
     return _strip_para_autocompletar(enriched)
 
 

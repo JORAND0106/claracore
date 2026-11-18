@@ -1779,11 +1779,17 @@ def route_get_diario_fecha(
 def route_plantilla_autocompletar(
     contrato_id: int,
     tramo: Optional[str] = Query(None),
+    antes_de: Optional[str] = Query(
+        None,
+        description="Fecha YYYY-MM-DD del reporte en edición; se toma el último diario diligenciado anterior.",
+    ),
     current_user=Depends(get_current_user),
 ):
     require_permiso_bitacora(current_user, "crear", contrato_id)
     _check_contrato(current_user, contrato_id)
-    data = plantilla_autocompletar_diario(supabase, contrato_id, tramo=tramo)
+    data = plantilla_autocompletar_diario(
+        supabase, contrato_id, tramo=tramo, antes_de=antes_de,
+    )
     return data or {}
 
 
