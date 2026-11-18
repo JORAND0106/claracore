@@ -9830,9 +9830,7 @@ def todos_usuarios(current_user=Depends(get_current_user)):
     except Exception:
         try:
             result = supabase.table("usuarios").select(_cols_base).order("nombre").execute()
-            for u in (result.data or []):
-                if u.get("subcontratista_id") is not None and not u.get("empresa_tipo"):
-                    u["empresa_tipo"] = "subcontratista"
+            # No inventar empresa_tipo=subcontratista desde sid residual.
         except Exception:
             # Esquemas sin foto_perfil_url: listado sigue funcionando; ficha usa iniciales.
             try:
@@ -9841,9 +9839,6 @@ def todos_usuarios(current_user=Depends(get_current_user)):
                 ).order("nombre").execute()
             except Exception:
                 result = supabase.table("usuarios").select(_cols_core).order("nombre").execute()
-                for u in (result.data or []):
-                    if u.get("subcontratista_id") is not None and not u.get("empresa_tipo"):
-                        u["empresa_tipo"] = "subcontratista"
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
     contratos = {c["id"]: c["numero"] for c in supabase.table("contratos").select("id, numero").execute().data}
@@ -9943,27 +9938,32 @@ def actualizar_usuario(
     final_empresa_tipo = (
         data["empresa_tipo"] if "empresa_tipo" in data else prev_snap.get("empresa_tipo")
     )
-    # Si solo llega subcontratista_id sin empresa_tipo, inferir tipo
-    if "subcontratista_id" in data and "empresa_tipo" not in data:
-        if final_sub_id is not None:
-            final_empresa_tipo = "subcontratista"
-            data["empresa_tipo"] = "subcontratista"
-        elif final_empresa_tipo == "subcontratista":
-            final_empresa_tipo = None
-            data["empresa_tipo"] = None
-    # Consistencia: contratista/interventoría limpian subcontratista_id
-    if normalizar_empresa_tipo(final_empresa_tipo) in ("contratista", "interventoria"):
+    # Consistencia por tipo explícito. NUNCA forzar subcontratista solo por sid residual
+    # (eso re-envenenaba interventoría/consorcio al guardar cualquier campo).
+    tipo_n = normalizar_empresa_tipo(final_empresa_tipo)
+    if tipo_n in ("contratista", "interventoria"):
         final_sub_id = None
         data["subcontratista_id"] = None
-        data["empresa_tipo"] = normalizar_empresa_tipo(final_empresa_tipo)
-        final_empresa_tipo = data["empresa_tipo"]
-    elif final_sub_id is not None:
+        data["empresa_tipo"] = tipo_n
+        final_empresa_tipo = tipo_n
+    elif tipo_n == "subcontratista":
         data["empresa_tipo"] = "subcontratista"
         final_empresa_tipo = "subcontratista"
-        data["subcontratista_id"] = int(final_sub_id)
-    elif "empresa_tipo" in data and data["empresa_tipo"] is None and "subcontratista_id" in data:
-        data["subcontratista_id"] = None
-        final_sub_id = None
+        if final_sub_id is not None:
+            data["subcontratista_id"] = int(final_sub_id)
+        else:
+            data["subcontratista_id"] = None
+            final_sub_id = None
+    else:
+        # Sin empresa: limpiar sid legado; no inventar tipo=subcontratista.
+        if "empresa_tipo" in data or "subcontratista_id" in data:
+            data["empresa_tipo"] = None
+            final_empresa_tipo = None
+            data["subcontratista_id"] = None
+            final_sub_id = None
+        elif final_sub_id is not None and tipo_n is None:
+            # Persistido con sid pero sin tipo: limpiar sid en este update si toca empresa
+            pass
 
     cargo_nombre_final = None
     if final_cargo_id is not None:
@@ -10296,6 +10296,7 @@ def refresh_token(current_user=Depends(get_current_user)):
             "contrato_id": usuario.get("contrato_id"),
             "contrato_numero": contrato_numero or "",
             "subcontratista_id": usuario.get("subcontratista_id"),
+            "empresa_tipo": usuario.get("empresa_tipo"),
         })
         return {"access_token": new_token, "token_type": "bearer"}
     except HTTPException:
@@ -20303,57 +20304,53 @@ class SubcontratistaTributosBody(BaseModel):
 
 
 def _usuario_empresa_campos(current_user) -> Tuple[Optional[int], Optional[str]]:
-    """(subcontratista_id, empresa_tipo) del usuario autenticado (JWT o BD).
+    """(subcontratista_id, empresa_tipo) del usuario autenticado.
 
-    No infiere ``empresa_tipo=subcontratista`` solo por un ``subcontratista_id``
-    residual: el aislamiento exige tipo explícito (Gestión de usuarios → Empresa).
-    Si la empresa es contratista/interventoría, el sid legado se ignora.
+    Preferencia: **BD** sobre JWT (así un cambio en Gestión de usuarios aplica
+    sin esperar re-login). Nunca infiere ``empresa_tipo=subcontratista`` solo
+    por un ``subcontratista_id`` residual.
     """
-    sid = None
-    empresa_tipo = None
+    sid_jwt = None
+    tipo_jwt_raw = None
     if isinstance(current_user, dict):
-        empresa_tipo = current_user.get("empresa_tipo")
+        tipo_jwt_raw = current_user.get("empresa_tipo")
         for key in ("subcontratista_id", "sub_id"):
             raw = current_user.get(key)
             if raw is not None:
                 try:
-                    sid = int(raw)
+                    sid_jwt = int(raw)
                     break
                 except (TypeError, ValueError):
                     pass
-        if sid is not None and sid <= 0:
-            sid = None
-        tipo_jwt = normalizar_empresa_tipo(empresa_tipo)
-        # JWT con tipo claro: no consultar BD. Nunca inventar tipo desde sid.
-        if tipo_jwt in ("contratista", "interventoria", "subcontratista"):
-            return normalizar_campos_empresa_scope(sid, tipo_jwt)
-        if empresa_tipo is not None and tipo_jwt is None and sid is None:
-            return None, None
+        if sid_jwt is not None and sid_jwt <= 0:
+            sid_jwt = None
     try:
         uid = int(current_user.get("sub") or current_user.get("id") or 0) if isinstance(current_user, dict) else 0
     except (TypeError, ValueError):
-        return normalizar_campos_empresa_scope(sid, empresa_tipo)
-    if not uid:
-        return normalizar_campos_empresa_scope(sid, empresa_tipo)
-    try:
-        rows = (
-            supabase.table("usuarios")
-            .select("subcontratista_id, empresa_tipo")
-            .eq("id", uid)
-            .limit(1)
-            .execute()
-            .data
-        )
-        if rows:
-            if sid is None and rows[0].get("subcontratista_id") is not None:
-                try:
-                    sid = int(rows[0]["subcontratista_id"])
-                except (TypeError, ValueError):
-                    sid = None
-            if empresa_tipo is None:
+        uid = 0
+
+    sid, empresa_tipo = sid_jwt, tipo_jwt_raw
+    if uid:
+        try:
+            rows = (
+                supabase.table("usuarios")
+                .select("subcontratista_id, empresa_tipo")
+                .eq("id", uid)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if rows:
+                # BD manda: corrige JWT envenenado (tipo=sub por migración #1056).
                 empresa_tipo = rows[0].get("empresa_tipo")
-    except Exception:
-        pass
+                sid = None
+                if rows[0].get("subcontratista_id") is not None:
+                    try:
+                        sid = int(rows[0]["subcontratista_id"])
+                    except (TypeError, ValueError):
+                        sid = None
+        except Exception:
+            pass
     if sid is not None and sid <= 0:
         sid = None
     return normalizar_campos_empresa_scope(sid, empresa_tipo)
