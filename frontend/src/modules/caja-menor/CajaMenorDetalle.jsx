@@ -7,6 +7,7 @@ import { formatFechaHoraColombia } from '../../utils/fechaColombia'
 import CajaMenorLogo from './CajaMenorLogo'
 import { ETIQUETA_ESTADO, dinero, fmtPct, hoyColombia } from './cajaMenorCalc'
 import { comprimirImagen } from './cajaMenorImagen'
+import { manejarTeclaCajaMenor } from './cajaMenorTeclado'
 
 const CM_CSS = `
 .cm-marco { animation: cm-marco-in 200ms ease; }
@@ -49,16 +50,33 @@ const CM_CSS = `
   font-size: 12px;
   white-space: nowrap;
 }
+.cm-teclado input:focus,
+.cm-teclado textarea:focus {
+  outline: 2px solid var(--cm-primary, #0077B6);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px var(--cm-foco, rgba(0, 119, 182, 0.28));
+}
+.cm-teclado button:focus-visible {
+  outline: 2px solid var(--cm-primary, #0077B6);
+  outline-offset: 2px;
+}
 @media (prefers-reduced-motion: reduce) {
   .cm-marco, .cm-vista { animation: none; }
 }
 `
 
-function IconBtn({ title, onClick, disabled, children, t, compact }) {
+function anilloFoco(t) {
+  if (t?.bg === '#0A1628') return 'rgba(0, 180, 198, 0.40)'
+  if (t?.bg === '#E8E0D5') return 'rgba(14, 116, 144, 0.32)'
+  return 'rgba(0, 119, 182, 0.28)'
+}
+
+function IconBtn({ title, onClick, disabled, children, t, compact, ...resto }) {
   const lado = compact ? 22 : 40
   return (
     <button
       type="button"
+      {...resto}
       title={title}
       aria-label={title}
       disabled={disabled}
@@ -177,10 +195,11 @@ function Aviso({ aviso, t, ocupado, onContinuar, onCerrar }) {
   )
 }
 
-function Miniatura({ url, titulo, onAmpliar, t, lado = 32 }) {
+function Miniatura({ url, titulo, onAmpliar, t, lado = 32, orden }) {
   return (
     <button
       type="button"
+      data-cm-orden={orden}
       title="Ampliar soporte"
       aria-label="Ampliar soporte"
       onClick={onAmpliar}
@@ -339,6 +358,7 @@ function MarcoPopup({ t, movil, children }) {
           '--cm-input': t.inputBg || t.bg,
           '--cm-header': t.headerBg || t.bgCard,
           '--cm-primary': t.primary,
+          '--cm-foco': anilloFoco(t),
           '--cm-muted': t.textMuted,
           '--cm-head-bg': t.bg === '#0A1628' ? '#075985' : t.primary,
           '--cm-head-text': '#F0F9FF',
@@ -450,6 +470,7 @@ export default function CajaMenorDetalle(props) {
 
   return (
     <div style={{ color: t.text, minWidth: 0 }}>
+      <style>{CM_CSS}</style>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
         <IconBtn title="Volver a las cajas" t={t} onClick={onVolverCajas}><ArrowLeft size={16} /></IconBtn>
         <CajaMenorLogo size={movil ? 40 : 52} plate={t.bgCard} />
@@ -572,35 +593,49 @@ export default function CajaMenorDetalle(props) {
       </div>
 
       {meta && (
-        <section style={{ border: `1px solid ${t.border}`, borderRadius: 12, background: t.bgCard, padding: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <strong style={{ fontSize: 'var(--cc-sm)' }}>Observaciones y firmas</strong>
-            {acceso.editar && !bloqueada(caja) && (
-              <IconBtn title="Guardar observaciones" t={t} disabled={ocupado} onClick={onGuardarMeta}><Save size={16} /></IconBtn>
-            )}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : '1fr 1fr', gap: 10 }}>
+        <section
+          className="cm-teclado"
+          onKeyDown={manejarTeclaCajaMenor}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) auto',
+            alignItems: 'center',
+            border: `1px solid ${t.border}`,
+            borderRadius: 12,
+            background: t.bgCard,
+            padding: 12,
+            '--cm-primary': t.primary,
+            '--cm-foco': anilloFoco(t),
+          }}
+        >
+          <strong style={{ gridColumn: 1, gridRow: 1, fontSize: 'var(--cc-sm)', marginBottom: 10 }}>Observaciones y firmas</strong>
+          <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: movil ? '1fr' : '1fr 1fr', gap: 10 }}>
             <label>
               <span style={etiquetaCampo(t)}>Observaciones</span>
-              <input aria-label="Observaciones" disabled={bloqueada(caja) || !acceso.editar} value={meta.observaciones} onChange={(e) => setMeta({ ...meta, observaciones: e.target.value })} style={campo(t)} />
+              <input data-cm-orden="1" enterKeyHint="next" aria-label="Observaciones" disabled={bloqueada(caja) || !acceso.editar} value={meta.observaciones} onChange={(e) => setMeta({ ...meta, observaciones: e.target.value })} style={campo(t)} />
             </label>
             <label>
               <span style={etiquetaCampo(t)}>Control</span>
-              <input aria-label="Control" disabled={bloqueada(caja) || !acceso.editar} value={meta.control} onChange={(e) => setMeta({ ...meta, control: e.target.value })} style={campo(t)} />
+              <input data-cm-orden="2" enterKeyHint="next" aria-label="Control" disabled={bloqueada(caja) || !acceso.editar} value={meta.control} onChange={(e) => setMeta({ ...meta, control: e.target.value })} style={campo(t)} />
             </label>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : '1fr 1fr 1fr', gap: 10, marginTop: 10 }}>
+          <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: movil ? '1fr' : '1fr 1fr 1fr', gap: 10, marginTop: 10 }}>
             {[
-              ['firma_elaboro', 'Elaboró'],
-              ['firma_reviso', 'Revisó'],
-              ['firma_aprobo', 'Aprobó'],
-            ].map(([clave, nombre]) => (
+              ['firma_elaboro', 'Elaboró', '3'],
+              ['firma_reviso', 'Revisó', '4'],
+              ['firma_aprobo', 'Aprobó', '5'],
+            ].map(([clave, nombre, orden]) => (
               <label key={clave}>
                 <span style={etiquetaCampo(t)}>{nombre}</span>
-                <input aria-label={nombre} disabled={bloqueada(caja) || !acceso.editar} value={meta[clave]} onChange={(e) => setMeta({ ...meta, [clave]: e.target.value })} style={campo(t)} />
+                <input data-cm-orden={orden} enterKeyHint="next" aria-label={nombre} disabled={bloqueada(caja) || !acceso.editar} value={meta[clave]} onChange={(e) => setMeta({ ...meta, [clave]: e.target.value })} style={campo(t)} />
               </label>
             ))}
           </div>
+          {acceso.editar && !bloqueada(caja) && (
+            <div style={{ gridColumn: 2, gridRow: 1, marginBottom: 10 }}>
+              <IconBtn data-cm-orden="6" data-cm-guardar="" title="Guardar observaciones" t={t} disabled={ocupado} onClick={onGuardarMeta}><Save size={16} /></IconBtn>
+            </div>
+          )}
         </section>
       )}
 
@@ -731,31 +766,33 @@ function PanelIngresos({
   }
   if (vista === 'formulario' && ingreso) {
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : 'minmax(220px, 340px) minmax(0, 1fr)', gap: 16, minWidth: 0 }}>
-        <ZonaSoporte t={t} file={ingreso.file} onSoltar={(archivo) => tomarArchivo({ target: { files: [archivo] } }, setIngreso)}>
-          <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
-          <IconBtn title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
-          <input ref={inputArchivo} type="file" accept="image/*" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
-          <IconBtn title="Cargar soporte" t={t} onClick={() => inputArchivo.current?.click()}><ImageIcon size={16} /></IconBtn>
-        </ZonaSoporte>
-        <div style={{ display: 'grid', gap: 14, alignContent: 'start', minWidth: 0 }}>
+      <div className="cm-teclado" onKeyDown={manejarTeclaCajaMenor} style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : 'minmax(220px, 340px) minmax(0, 1fr)', gap: 16, minWidth: 0 }}>
+        <div style={{ gridColumn: movil ? '1' : '2', gridRow: '1', display: 'grid', gap: 14, alignContent: 'start', minWidth: 0 }}>
           <section style={{ display: 'grid', gap: 8 }}>
             <TituloSeccion t={t} icono={<FileText size={14} />}>Documento</TituloSeccion>
             <label>
               <span style={etiquetaCampo(t)}>Fecha</span>
-              <input className="cm-gasto-fecha" type="date" aria-label="Fecha de consignación" max={hoyColombia()} value={ingreso.fecha} onChange={(e) => setIngreso({ ...ingreso, fecha: e.target.value })} style={{ ...campo(t), textAlign: 'left' }} />
+              <input data-cm-orden="1" enterKeyHint="next" className="cm-gasto-fecha" type="date" aria-label="Fecha de consignación" max={hoyColombia()} value={ingreso.fecha} onChange={(e) => setIngreso({ ...ingreso, fecha: e.target.value })} style={{ ...campo(t), textAlign: 'left' }} />
             </label>
           </section>
           <section style={{ display: 'grid', gap: 8 }}>
             <TituloSeccion t={t} icono={<Coins size={14} />}>Valores</TituloSeccion>
             <label>
               <span style={etiquetaCampo(t)}>Valor</span>
-              <input inputMode="numeric" aria-label="Valor de consignación" value={textoMoneda(ingreso.valor)} onChange={(e) => setIngreso({ ...ingreso, valor: String(e.target.value || '').replace(/\D/g, '') })} style={{ ...campo(t), textAlign: 'right' }} />
+              <input data-cm-orden="2" enterKeyHint="next" inputMode="numeric" aria-label="Valor de consignación" value={textoMoneda(ingreso.valor)} onChange={(e) => setIngreso({ ...ingreso, valor: String(e.target.value || '').replace(/\D/g, '') })} style={{ ...campo(t), textAlign: 'right' }} />
             </label>
           </section>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <IconBtn title="Guardar consignación" t={t} disabled={ocupado} onClick={onGuardar}><Check size={16} /></IconBtn>
-          </div>
+        </div>
+        <div style={{ gridColumn: '1', gridRow: movil ? '2' : '1 / span 2', minWidth: 0 }}>
+          <ZonaSoporte t={t} file={ingreso.file} onSoltar={(archivo) => tomarArchivo({ target: { files: [archivo] } }, setIngreso)}>
+            <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
+            <IconBtn data-cm-orden="20" title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
+            <input ref={inputArchivo} type="file" accept="image/*" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
+            <IconBtn data-cm-orden="21" title="Cargar soporte" t={t} onClick={() => inputArchivo.current?.click()}><ImageIcon size={16} /></IconBtn>
+          </ZonaSoporte>
+        </div>
+        <div style={{ gridColumn: movil ? '1' : '2', display: 'flex', justifyContent: 'flex-end' }}>
+          <IconBtn data-cm-orden="30" data-cm-guardar="" title="Guardar consignación" t={t} disabled={ocupado} onClick={onGuardar}><Check size={16} /></IconBtn>
         </div>
       </div>
     )
@@ -897,13 +934,16 @@ function PanelGastos(props) {
   }
   if (vista === 'formulario' && gasto) {
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : 'minmax(220px, 340px) 1fr', gap: 16 }}>
-        <div>
+      <div className="cm-teclado" onKeyDown={manejarTeclaCajaMenor} style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : 'minmax(220px, 340px) 1fr', gap: 16 }}>
+        <div style={{ gridColumn: movil ? '1' : '2', gridRow: '1', minWidth: 0 }}>
+          <FormularioGasto t={t} movil={movil} gasto={gasto} setGasto={setGasto} neto={neto} leyendo={leyendo} onDocumento={onDocumento} />
+        </div>
+        <div style={{ gridColumn: '1', gridRow: movil ? '2' : '1 / span 2', minWidth: 0 }}>
           <ZonaSoporte t={t} file={gasto.file} onSoltar={onTomar}>
             <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => e.target.files?.[0] && onTomar(e.target.files[0])} />
-            <IconBtn title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
+            <IconBtn data-cm-orden="20" title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
             <input ref={inputArchivo} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && onTomar(e.target.files[0])} />
-            <IconBtn title="Cargar o pegar recibo" t={t} onClick={() => inputArchivo.current?.click()}><ImageIcon size={16} /></IconBtn>
+            <IconBtn data-cm-orden="21" title="Cargar o pegar recibo" t={t} onClick={() => inputArchivo.current?.click()}><ImageIcon size={16} /></IconBtn>
           </ZonaSoporte>
           {!gasto.file && gasto.id && (
             <div style={{ marginTop: 8 }}>
@@ -911,7 +951,9 @@ function PanelGastos(props) {
             </div>
           )}
         </div>
-        <FormularioGasto t={t} movil={movil} gasto={gasto} setGasto={setGasto} neto={neto} ocupado={ocupado || leyendo} leyendo={leyendo} onDocumento={onDocumento} onGuardar={onGuardar} />
+        <div style={{ gridColumn: movil ? '1' : '2', display: 'flex', justifyContent: 'flex-end' }}>
+          <IconBtn data-cm-orden="30" data-cm-guardar="" title="Guardar gasto" t={t} disabled={ocupado || leyendo || neto <= 0} onClick={onGuardar}><Check size={16} /></IconBtn>
+        </div>
       </div>
     )
   }
@@ -1059,17 +1101,21 @@ function textoMoneda(valor) {
   return formatCOP(Number(digitos))
 }
 
-function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, onDocumento, onGuardar }) {
+function FormularioGasto({ t, movil, gasto, setGasto, neto, leyendo, onDocumento }) {
   const set = (clave) => (e) => setGasto({ ...gasto, [clave]: e.target.value })
   const setMoneda = (clave) => (e) => setGasto({ ...gasto, [clave]: String(e.target.value || '').replace(/\D/g, '') })
   const columnas = movil ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1fr)'
   const valores = movil ? 'minmax(0, 1fr)' : 'repeat(3, minmax(0, 1fr))'
   const hueco = { minWidth: 0, display: 'flex', flexDirection: 'column' }
-  const texto = (clave, label, tipo = 'text', span) => (
+  const texto = (clave, label, tipo = 'text', span, extra = {}) => (
     <label style={{ ...hueco, gridColumn: span || 'auto' }}>
       <span style={etiquetaSuave(t)}>{label}</span>
       <input
         aria-label={label}
+        data-cm-orden={extra.saltar ? undefined : extra.orden}
+        data-cm-saltar={extra.saltar ? '' : undefined}
+        tabIndex={extra.saltar ? -1 : undefined}
+        enterKeyHint={extra.saltar ? undefined : 'next'}
         className={tipo === 'date' ? 'cm-gasto-fecha' : undefined}
         type={tipo}
         max={tipo === 'date' ? hoyColombia() : undefined}
@@ -1080,11 +1126,13 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, on
       />
     </label>
   )
-  const moneda = (clave, label, opcional) => (
+  const moneda = (clave, label, opcional, orden) => (
     <label style={hueco}>
       <span style={etiquetaSuave(t)}>{label}</span>
       <input
         aria-label={label}
+        data-cm-orden={orden}
+        enterKeyHint="next"
         inputMode="numeric"
         placeholder={opcional ? 'Opcional' : undefined}
         value={textoMoneda(gasto[clave])}
@@ -1108,23 +1156,33 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, on
       <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
         <TituloSeccion t={t} icono={<FileText size={14} />}>Documento</TituloSeccion>
         <div style={{ display: 'grid', gridTemplateColumns: columnas, gap: 8, minWidth: 0 }}>
-          {texto('fecha', 'Fecha', 'date')}
-          {texto('documento_no', 'Documento No.')}
-          {texto('tercero_razon_social', 'Razón Social', 'text', movil ? 'auto' : '1 / -1')}
-          {texto('tercero_documento', 'NIT o cédula')}
-          {texto('centro_costos', 'Centro de costos')}
+          {texto('fecha', 'Fecha', 'date', undefined, { orden: '1' })}
+          {texto('documento_no', 'Documento No.', 'text', undefined, { orden: '2' })}
+          {texto('tercero_razon_social', 'Razón Social', 'text', movil ? 'auto' : '1 / -1', { orden: '3' })}
+          {texto('tercero_documento', 'NIT o cédula', 'text', undefined, { orden: '4' })}
+          {texto('centro_costos', 'Centro de costos', 'text', undefined, { saltar: true })}
         </div>
       </section>
       <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
         <TituloSeccion t={t} icono={<AlignLeft size={14} />}>Descripción</TituloSeccion>
         <label style={hueco}>
           <span style={etiquetaSuave(t)}>Descripción</span>
-          <input aria-label="Descripción" value={gasto.descripcion ?? ''} onChange={set('descripcion')} style={estiloSuave(t, gasto, 'descripcion')} />
+          <textarea
+            aria-label="Descripción"
+            data-cm-orden="5"
+            enterKeyHint="enter"
+            rows={2}
+            value={gasto.descripcion ?? ''}
+            onChange={set('descripcion')}
+            style={{ ...estiloSuave(t, gasto, 'descripcion'), minHeight: 56, resize: 'vertical' }}
+          />
         </label>
         <label style={hueco}>
           <span style={etiquetaSuave(t)}>Observaciones</span>
           <textarea
             aria-label="Observaciones"
+            data-cm-orden="6"
+            enterKeyHint="enter"
             rows={3}
             placeholder="Opcional"
             value={gasto.observaciones ?? ''}
@@ -1136,11 +1194,11 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, on
       <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
         <TituloSeccion t={t} icono={<Coins size={14} />}>Valores</TituloSeccion>
         <div style={{ display: 'grid', gridTemplateColumns: valores, gap: 8, minWidth: 0 }}>
-          {moneda('valor_bruto', 'Valor bruto', false)}
-          {moneda('iva', 'IVA', true)}
-          {moneda('retenciones', 'Retenciones', true)}
-          {moneda('impuesto_consumo', 'Impuesto al consumo', true)}
-          {moneda('otros_deducibles', 'Otros deducibles', true)}
+          {moneda('valor_bruto', 'Valor bruto', false, '7')}
+          {moneda('iva', 'IVA', true, '8')}
+          {moneda('retenciones', 'Retenciones', true, '9')}
+          {moneda('impuesto_consumo', 'Impuesto al consumo', true, '10')}
+          {moneda('otros_deducibles', 'Otros deducibles', true, '11')}
           <div style={hueco}>
             <span style={etiquetaSuave(t)}>Valor neto</span>
             <div style={{
@@ -1160,9 +1218,6 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, on
           </div>
         </div>
       </section>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <IconBtn title="Guardar gasto" t={t} disabled={ocupado || neto <= 0} onClick={onGuardar}><Check size={16} /></IconBtn>
-      </div>
     </div>
   )
 }
@@ -1271,5 +1326,5 @@ function TarjetaGasto(props) {
 
 function SoporteGuardado({ api, contratoId, cajaId, itemId, t, onVer }) {
   const url = useSoporte(api, contratoId, cajaId, 'gastos', itemId, true)
-  return <Miniatura url={url} titulo="Recibo guardado" t={t} onAmpliar={onVer} />
+  return <Miniatura orden="22" url={url} titulo="Recibo guardado" t={t} onAmpliar={onVer} />
 }
