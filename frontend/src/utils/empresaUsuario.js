@@ -1,6 +1,7 @@
 /**
  * Empresa del usuario (Gestión de usuarios) y aislamiento por subcontratista.
- * Independiente del cargo/rol: si la empresa es un subcontratista, aísla.
+ * El aislamiento aplica solo cuando empresa_tipo === 'subcontratista'.
+ * No aísla por cargo/rol ni por un subcontratista_id residual sin ese tipo.
  */
 
 export function normalizarEmpresaTipo(tipo) {
@@ -52,19 +53,16 @@ export function empresaFromKey(key) {
 
 /**
  * (restricted, forcedId) — espejo de scope_subcontratista del backend.
+ * Solo aísla si Empresa = subcontratista (no por cargo ni sid legado).
  */
 export function scopeEmpresaSubcontratista(usuario) {
-  const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '').trim().toLowerCase()
   const tipo = normalizarEmpresaTipo(usuario?.empresa_tipo)
-  if (tipo === 'contratista' || tipo === 'interventoria') {
+  if (tipo !== 'subcontratista') {
     return { restricted: false, forcedId: null }
   }
   const sid = parseSubcontratistaId(usuario?.subcontratista_id ?? usuario?.sub_id)
   if (sid != null) return { restricted: true, forcedId: sid }
-  if (tipo === 'subcontratista' || cargo === 'subcontratista') {
-    return { restricted: true, forcedId: null }
-  }
-  return { restricted: false, forcedId: null }
+  return { restricted: true, forcedId: null }
 }
 
 /** True si el usuario está aislado por empresa subcontratista. */

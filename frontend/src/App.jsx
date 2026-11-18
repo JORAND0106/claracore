@@ -11299,10 +11299,17 @@ function ModuloSicoeObra({
     if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
       setCargando(true)
       try {
+        setErrorGrillaBusqueda(null)
         return await usarIndexedDB()
       } catch(e) {
         console.warn('[Offline] buscarReportes local falló:', e)
-        setReportes([])
+        if (nuevoOffset === 0) setReportes([])
+        setBusquedaRealizada(true)
+        setErrorGrillaBusqueda(
+          e?.message && String(e.message).trim() && !/traceback|exception|indexeddb/i.test(String(e.message))
+            ? String(e.message).trim()
+            : 'No se pudo completar la consulta offline. Intente de nuevo o vuelva a sincronizar.',
+        )
         return null
       } finally {
         setCargando(false)
@@ -11396,7 +11403,17 @@ function ModuloSicoeObra({
       // Red caída → fallback a IndexedDB si hay cache
       const seqVigenteFin = opSeqParam != null ? seq === sicoeOperacionSeqRef.current : seq === sicoeBusquedaPaginaSeqRef.current
       if (isOfflineReady && seqVigenteFin) {
-        try { return await usarIndexedDB() } catch { setReportes([]) }
+        try {
+          setErrorGrillaBusqueda(null)
+          return await usarIndexedDB()
+        } catch (offErr) {
+          if (nuevoOffset === 0) setReportes([])
+          setBusquedaRealizada(true)
+          setErrorGrillaBusqueda(
+            'No se pudo completar la consulta (red e índice local). Revise la conexión e intente de nuevo.',
+          )
+          return null
+        }
       }
       if (seqVigenteFin) {
         setBusquedaRealizada(true)

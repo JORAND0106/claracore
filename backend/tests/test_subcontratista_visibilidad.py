@@ -4,6 +4,7 @@ from __future__ import annotations
 from subcontratista_visibilidad import (
     apply_subcontratista_filter_q,
     es_cargo_subcontratista,
+    normalizar_campos_empresa_scope,
     normalizar_empresa_tipo,
     ocultar_costo_directo_reportes,
     parse_subcontratista_id,
@@ -47,25 +48,37 @@ def test_normalizar_empresa_tipo():
 def test_scope_sin_empresa_sub_aunque_tenga_cargo_otro():
     # Cargo no-sub sin empresa → sin aislamiento
     assert scope_subcontratista("Residente", None) == (False, None)
-    # Empresa contratista ignora un id residual (validación lo limpia, scope también)
+    # Empresa contratista/interventoría ignora id residual
     assert scope_subcontratista("Residente", 5, empresa_tipo="contratista") == (False, None)
+    assert scope_subcontratista("Residente", 5, empresa_tipo="interventoria") == (False, None)
     assert scope_subcontratista("Residente", None, empresa_tipo="interventoria") == (False, None)
+    # Consorcio (= contratista)
+    assert scope_subcontratista("Residente", 9, empresa_tipo="consorcio") == (False, None)
+
+
+def test_scope_sid_residual_sin_empresa_tipo_no_aisla():
+    """Bug: sid legado sin empresa_tipo no debe aislar (interventoría/consorcio mal migrados)."""
+    assert scope_subcontratista("Inspector", 12) == (False, None)
+    assert scope_subcontratista("Coordinador de Topografía", 7, empresa_tipo=None) == (False, None)
+    # Cargo Subcontratista sin empresa asignada → tampoco aísla (rige por empresa)
+    assert scope_subcontratista("Subcontratista", None) == (False, None)
+    assert scope_subcontratista("Subcontratista", 3) == (False, None)
 
 
 def test_scope_por_empresa_sub_independiente_de_cargo_y_rol():
     # Coordinador de Topografía + empresa sub → aislamiento
-    assert scope_subcontratista("Coordinador de Topografía", 12) == (True, 12)
+    assert scope_subcontratista(
+        "Coordinador de Topografía", 12, empresa_tipo="subcontratista"
+    ) == (True, 12)
     assert scope_subcontratista(
         "Coordinador de Topografía", 7, empresa_tipo="subcontratista"
     ) == (True, 7)
-    # Rol operativo contratista no importa: el aislamiento lo da la empresa
     assert scope_subcontratista("Inspector", 9, empresa_tipo="subcontratista") == (True, 9)
 
 
-def test_scope_cargo_sub_sin_vinculo():
-    assert scope_subcontratista("subcontratista", None) == (True, None)
-    assert scope_subcontratista("Subcontratista", "") == (True, None)
+def test_scope_empresa_sub_sin_vinculo():
     assert scope_subcontratista(None, None, empresa_tipo="subcontratista") == (True, None)
+    assert scope_subcontratista("Residente", "", empresa_tipo="subcontratista") == (True, None)
 
 
 def test_scope_from_user_dict():
@@ -77,8 +90,17 @@ def test_scope_from_user_dict():
         None,
     )
     assert scope_from_user_dict({"cargo_nombre": "Inspector"}) == (False, None)
-    # Legacy: cargo Subcontratista sin empresa_tipo
-    assert scope_from_user_dict({"cargo_nombre": "Subcontratista", "subcontratista_id": 3}) == (True, 3)
+    # Sid residual sin tipo → sin aislamiento
+    assert scope_from_user_dict({"cargo_nombre": "Inspector", "subcontratista_id": 3}) == (False, None)
+    # Interventoría con sid residual → sin aislamiento
+    assert scope_from_user_dict(
+        {"cargo_nombre": "Inspector", "subcontratista_id": 3, "empresa_tipo": "interventoria"}
+    ) == (False, None)
+    # Cargo Subcontratista solo (sin empresa) → sin aislamiento
+    assert scope_from_user_dict({"cargo_nombre": "Subcontratista", "subcontratista_id": 3}) == (
+        False,
+        None,
+    )
 
 
 def test_apply_filter_q():
@@ -117,10 +139,22 @@ def test_redactar_economicos():
 
 
 def test_ve_economicos_contrato():
-    assert usuario_ve_valores_economicos_contrato("Subcontratista") is False
+    assert usuario_ve_valores_economicos_contrato(
+        "Subcontratista", empresa_tipo="subcontratista"
+    ) is False
+    assert usuario_ve_valores_economicos_contrato(
+        "Coordinador de Topografía",
+        "operativo contratista",
+        subcontratista_id=5,
+        empresa_tipo="subcontratista",
+    ) is False
+    # Sid residual sin empresa sub → sí ve economía (no aislamiento)
     assert usuario_ve_valores_economicos_contrato(
         "Coordinador de Topografía", "operativo contratista", subcontratista_id=5
-    ) is False
+    ) is False  # rol operativo sigue ocultando
+    assert usuario_ve_valores_economicos_contrato(
+        "Residente", "contratista", subcontratista_id=5
+    ) is True
     assert usuario_ve_valores_economicos_contrato(
         "Residente", "contratista", empresa_tipo="contratista"
     ) is True
@@ -162,7 +196,7 @@ def test_redactar_analisis_y_mapa_calor_economicos():
                 "features": [
                     {
                         "type": "Feature",
-                        "properties": {"costo_directo": 500, "weight": 0.9, "origen": "reporte_dibujo"},
+                        "properties": {"costo_directo": 500, "weight": 0.9, "origen": "esquema"},
                     }
                 ],
             },
@@ -176,13 +210,22 @@ def test_redactar_analisis_y_mapa_calor_economicos():
 
 
 def test_ocultar_costo_sicoe():
-    assert ocultar_costo_directo_reportes("Subcontratista", "subcontratista") is True
     assert ocultar_costo_directo_reportes(
-        "Coordinador de Topografía", "operativo contratista", subcontratista_id=3
+        "Subcontratista", "subcontratista", empresa_tipo="subcontratista"
+    ) is True
+    assert ocultar_costo_directo_reportes(
+        "Coordinador de Topografía",
+        "operativo contratista",
+        subcontratista_id=3,
+        empresa_tipo="subcontratista",
     ) is True
     assert ocultar_costo_directo_reportes("Inspector", "operativo interventoria") is True
     assert ocultar_costo_directo_reportes(
         "Residente", "contratista", empresa_tipo="interventoria"
+    ) is False
+    # Sid residual sin tipo → no ocultar por aislamiento
+    assert ocultar_costo_directo_reportes(
+        "Residente", "contratista", subcontratista_id=3
     ) is False
 
 
@@ -247,3 +290,11 @@ def test_parse_subcontratista_id():
     assert parse_subcontratista_id(0) is None
     assert parse_subcontratista_id(-3) is None
     assert parse_subcontratista_id("12") == 12
+
+
+def test_normalizar_campos_empresa_scope():
+    assert normalizar_campos_empresa_scope(9, "interventoria") == (None, "interventoria")
+    assert normalizar_campos_empresa_scope(9, "consorcio") == (None, "contratista")
+    assert normalizar_campos_empresa_scope(9, None) == (None, None)
+    assert normalizar_campos_empresa_scope(9, "subcontratista") == (9, "subcontratista")
+    assert normalizar_campos_empresa_scope(None, "subcontratista") == (None, "subcontratista")

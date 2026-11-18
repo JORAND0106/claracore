@@ -26,6 +26,11 @@ describe('grilla Por reporte — error vs sin resultados', () => {
     assert.ok(errIdx > 0 && emptyIdx > errIdx)
   })
 
+  it('falla offline o de red+índice también setea errorGrillaBusqueda (no Sin resultados)', () => {
+    assert.match(app, /No se pudo completar la consulta offline/)
+    assert.match(app, /No se pudo completar la consulta \(red e índice local\)/)
+  })
+
   it('select liviano backend omite valor_total', () => {
     const main = readFileSync(join(here, '../../../../backend/main.py'), 'utf8')
     const parts = main.split('_SICOE_GRILLA_COLS_PARTS')[1] || ''
