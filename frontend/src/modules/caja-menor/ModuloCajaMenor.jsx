@@ -10,6 +10,7 @@ import { createCajaMenorApi, fdGasto, fdIngreso } from './cajaMenorApi'
 import { ETIQUETA_ESTADO, fmtPct, hoyColombia, normalizarDocumento, valorNeto } from './cajaMenorCalc'
 import { accesoCajaMenor, esDesarrolladorCajaMenor } from './cajaMenorPermisos'
 import { comprimirImagen, imagenDePortapapeles } from './cajaMenorImagen'
+import { formatearDescripcion } from './cajaMenorLenguaje'
 import { borrarBorradorCaja, guardarBorradorCaja, leerBorradorCaja } from './cajaMenorBorrador'
 
 function IconBtn({ title, onClick, disabled, children, t, tono }) {
@@ -281,7 +282,7 @@ export default function ModuloCajaMenor({
         fecha: sug.fecha && sug.fecha <= hoyColombia() ? sug.fecha : '',
         tercero_razon_social: valorLeido(sug, 'tercero_razon_social'),
         tercero_documento: valorLeido(sug, 'tercero_documento'),
-        descripcion: valorLeido(sug, 'descripcion'),
+        descripcion: formatearDescripcion(valorLeido(sug, 'descripcion')),
         documento_no: valorLeido(sug, 'documento_no'),
         centro_costos: prev?.centro_costos || detalle?.contrato?.numero || '',
         valor_bruto: valorLeido(sug, 'valor_bruto'),

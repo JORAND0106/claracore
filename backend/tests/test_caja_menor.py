@@ -507,6 +507,8 @@ def test_excel_y_pdf_icontec():
     )
     doc = fitz.open(stream=pdf, filetype="pdf")
     assert doc.page_count == 2
+    assert doc[0].rect.width > doc[0].rect.height
+    assert doc[1].rect.height > doc[1].rect.width
     texto0 = doc[0].get_text()
     assert "CONTROL DE GASTOS POR CAJA MENOR" in texto0
     assert "CC-CM-001" in texto0
@@ -557,6 +559,53 @@ def test_not_found_pide_permisos_del_api():
         assert "NOTIFY pgrst, 'reload schema'" in sql
 
 
+def test_cada_responsable_solo_ve_su_caja(monkeypatch):
+    monkeypatch.setattr(svc, "require_permiso_caja_menor", lambda *a, **k: None)
+    sb = _semilla()
+    de_luis = svc.crear_caja(sb, DEV, 1, 3)
+    de_marta = svc.crear_caja(sb, DEV, 1, 4)
+    luis = {"sub": "3", "rol_nombre": "Residente", "nombre": "Luis Pérez"}
+    lista = svc.listar_cajas(sb, luis, 1)
+    assert [c["id"] for c in lista["cajas"]] == [de_luis["caja"]["id"]]
+    assert svc.obtener_caja(sb, luis, 1, de_luis["caja"]["id"])["caja"]["numero"] == de_luis["caja"]["numero"]
+    try:
+        svc.obtener_caja(sb, luis, 1, de_marta["caja"]["id"])
+        raise AssertionError("vio la caja de otro")
+    except ValueError as exc:
+        assert "no encontrada" in str(exc).lower()
+    try:
+        svc.exportar_pdf(sb, luis, 1, de_marta["caja"]["id"], storage=Memoria())
+        raise AssertionError("exportó la caja de otro")
+    except ValueError:
+        pass
+    assert [p["id"] for p in svc.listar_responsables(sb, luis, 1)] == [3]
+    admin = {"sub": "4"}
+    assert {c["responsable_id"] for c in svc.listar_cajas(sb, admin, 1)["cajas"]} == {3, 4}
+    assert len(svc.listar_cajas(sb, DEV, 1)["cajas"]) == 2
+    try:
+        svc.crear_caja(sb, luis, 1, 4)
+        raise AssertionError("abrió caja ajena")
+    except ValueError as exc:
+        assert "propia" in str(exc).lower()
+
+
+def test_descripcion_se_formatea_al_guardar():
+    sb = _semilla()
+    det = svc.crear_caja(sb, DEV, 1, 3)
+    det = svc.crear_gasto(
+        sb, DEV, 1, det["caja"]["id"],
+        _gasto(
+            descripcion='TUBO PRESION 1/2 X 6M · UNION PRESION 1/2" · SOLDADURA PVC 1/32 PAVCO',
+            iva=0,
+        ),
+        (_png(), "image/png", "r.png"),
+        storage=Memoria(),
+    )
+    assert det["gastos"][0]["descripcion"] == (
+        'Tubo presión 1/2 x 6M · Unión presión 1/2" · Soldadura PVC 1/32 PAVCO'
+    )
+
+
 def test_auditoria_etiqueta_caja_menor():
     from auditoria_datos import modulo_de_tabla
 
@@ -577,6 +626,7 @@ def test_modulos_no_importan_contabilidad():
         "caja_menor_export.py",
         "caja_menor_permissions.py",
         "caja_menor_email.py",
+        "caja_menor_texto.py",
     ):
         texto = (raiz / nombre).read_text(encoding="utf-8")
         assert "import contabilidad" not in texto

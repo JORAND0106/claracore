@@ -8,6 +8,7 @@ import CajaMenorLogo from './CajaMenorLogo'
 import { ETIQUETA_ESTADO, dinero, fmtPct, hoyColombia } from './cajaMenorCalc'
 import { comprimirImagen } from './cajaMenorImagen'
 import { manejarTeclaCajaMenor } from './cajaMenorTeclado'
+import { formatearDescripcion, revisarDescripcion } from './cajaMenorLenguaje'
 
 const CM_CSS = `
 .cm-marco { animation: cm-marco-in 200ms ease; }
@@ -1120,6 +1121,149 @@ function textoMoneda(valor) {
   return formatCOP(Number(digitos))
 }
 
+function trozosDescripcion(valor, marcas, t) {
+  if (!valor) return ' '
+  const nodos = []
+  let cursor = 0
+  marcas.forEach((marca, i) => {
+    if (marca.inicio > cursor) nodos.push(valor.slice(cursor, marca.inicio))
+    nodos.push(
+      <span
+        key={`${marca.inicio}-${i}`}
+        style={{
+          textDecoration: 'underline',
+          textDecorationColor: t.primary,
+          textDecorationThickness: '1px',
+          textUnderlineOffset: '3px',
+        }}
+      >{valor.slice(marca.inicio, marca.fin)}
+      </span>,
+    )
+    cursor = marca.fin
+  })
+  if (cursor < valor.length) nodos.push(valor.slice(cursor))
+  return nodos
+}
+
+function CampoDescripcion({ t, gasto, setGasto }) {
+  const fondo = useRef(null)
+  const [menu, setMenu] = useState(null)
+  const valor = gasto.descripcion ?? ''
+  const marcas = revisarDescripcion(valor)
+  const capa = {
+    width: '100%',
+    maxWidth: '100%',
+    minHeight: 56,
+    border: `1px solid ${campoPendiente(gasto, 'descripcion') ? '#D97706' : (t.inputBorder || t.border)}`,
+    borderRadius: 6,
+    background: t.inputBg,
+    color: t.text,
+    padding: '4px 8px',
+    fontSize: 'var(--cc-sm)',
+    lineHeight: 1.35,
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    textAlign: 'left',
+  }
+  function elegir(sugerencia) {
+    if (!menu) return
+    const siguiente = `${valor.slice(0, menu.inicio)}${sugerencia}${valor.slice(menu.fin)}`
+    setGasto({ ...gasto, descripcion: siguiente })
+    setMenu(null)
+  }
+  function alApuntar(evento) {
+    const pos = evento.currentTarget.selectionStart || 0
+    const marca = marcas.find((item) => pos >= item.inicio && pos <= item.fin)
+    setMenu(marca ? { ...marca } : null)
+  }
+  return (
+    <label style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      <span style={etiquetaSuave(t)}>Descripción</span>
+      <div style={{ position: 'relative', minWidth: 0 }}>
+        <div aria-hidden="true" ref={fondo} style={capa}>{trozosDescripcion(valor, marcas, t)}</div>
+        <textarea
+          aria-label="Descripción"
+          data-cm-orden="5"
+          enterKeyHint="enter"
+          rows={2}
+          value={valor}
+          onChange={(e) => {
+            setMenu(null)
+            setGasto({ ...gasto, descripcion: e.target.value })
+          }}
+          onClick={alApuntar}
+          onTouchEnd={alApuntar}
+          onScroll={(e) => { if (fondo.current) fondo.current.scrollTop = e.target.scrollTop }}
+          onBlur={() => {
+            const listo = formatearDescripcion(valor)
+            setMenu(null)
+            if (listo !== valor) setGasto({ ...gasto, descripcion: listo })
+          }}
+          style={{
+            ...capa,
+            position: 'absolute',
+            inset: 0,
+            height: '100%',
+            margin: 0,
+            resize: 'none',
+            overflow: 'hidden',
+            color: 'transparent',
+            caretColor: t.text,
+            background: 'transparent',
+          }}
+        />
+        {menu && (
+          <div
+            role="listbox"
+            aria-label="Sugerencias de corrección"
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: '100%',
+              zIndex: 4,
+              marginTop: 4,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              padding: 8,
+              borderRadius: 8,
+              border: `1px solid ${t.border}`,
+              background: t.bgCard,
+              boxShadow: t.shadow,
+            }}
+          >
+            {menu.sugerencias.length ? menu.sugerencias.map((sugerencia) => (
+              <button
+                key={sugerencia}
+                type="button"
+                role="option"
+                onMouseDown={(e) => { e.preventDefault(); elegir(sugerencia) }}
+                onTouchStart={(e) => { e.preventDefault(); elegir(sugerencia) }}
+                style={{
+                  border: `1px solid ${t.border}`,
+                  background: t.inputBg,
+                  color: t.text,
+                  borderRadius: 8,
+                  minHeight: 36,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  fontSize: 'var(--cc-sm)',
+                }}
+              >{sugerencia}
+              </button>
+            )) : (
+              <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin sugerencias</span>
+            )}
+          </div>
+        )}
+      </div>
+    </label>
+  )
+}
+
 function FormularioGasto({ t, movil, gasto, setGasto, neto, leyendo, onDocumento }) {
   const set = (clave) => (e) => setGasto({ ...gasto, [clave]: e.target.value })
   const setMoneda = (clave) => (e) => setGasto({ ...gasto, [clave]: String(e.target.value || '').replace(/\D/g, '') })
@@ -1184,18 +1328,7 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, leyendo, onDocumento
       </section>
       <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
         <TituloSeccion t={t} icono={<AlignLeft size={14} />}>Descripción</TituloSeccion>
-        <label style={hueco}>
-          <span style={etiquetaSuave(t)}>Descripción</span>
-          <textarea
-            aria-label="Descripción"
-            data-cm-orden="5"
-            enterKeyHint="enter"
-            rows={2}
-            value={gasto.descripcion ?? ''}
-            onChange={set('descripcion')}
-            style={{ ...estiloSuave(t, gasto, 'descripcion'), minHeight: 56, resize: 'vertical' }}
-          />
-        </label>
+        <CampoDescripcion t={t} gasto={gasto} setGasto={setGasto} />
         <label style={hueco}>
           <span style={etiquetaSuave(t)}>Observaciones</span>
           <textarea

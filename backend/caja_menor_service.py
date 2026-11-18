@@ -35,6 +35,7 @@ from caja_menor_calc import (
 from caja_menor_email import enlace_caja, enviar_alerta_80
 from caja_menor_export import build_excel, build_pdf, bytes_imagen_url, enlace_gasto, fmt_cop
 from caja_menor_permissions import es_desarrollador_usuario, require_permiso_caja_menor, tiene_permiso_caja_menor
+from caja_menor_texto import formatear_descripcion
 
 _log = logging.getLogger("claracore.caja_menor")
 
@@ -239,6 +240,82 @@ def _caja(sb, contrato_id: int, caja_id: int) -> dict:
     return row
 
 
+def _uid_seguro(user):
+    try:
+        return _uid(user)
+    except Exception:
+        return None
+
+
+def _es_desarrollador_token(user, rol: str, cargo: str) -> bool:
+    from caja_menor_permissions import _norm
+
+    if _norm(rol) == "desarrollador" or _norm(cargo) == "desarrollador":
+        return True
+    if user.get("es_desarrollador") is True or user.get("acceso_total") is True:
+        return True
+    try:
+        return int(user.get("rol_id") or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _rol_amplio_en_bd(sb, user) -> bool:
+    from caja_menor_permissions import _norm
+
+    uid = _uid_seguro(user)
+    if uid is None:
+        return False
+    persona = _first(
+        sb.table("usuarios").select("rol_id").eq("id", int(uid)).limit(1).execute()
+    )
+    if not persona or persona.get("rol_id") is None:
+        return False
+    role = _first(
+        sb.table("roles").select("nombre").eq("id", int(persona["rol_id"])).limit(1).execute()
+    )
+    nombre = str((role or {}).get("nombre") or "")
+    return es_rol_administrador_gerencia(nombre) or _norm(nombre) == "desarrollador"
+
+
+def _ve_todas_las_cajas(sb, user) -> bool:
+    """Administrador y Desarrollador ven las cajas del contrato. Los demás, solo la suya."""
+    user = user or {}
+    rol = str(user.get("rol_nombre") or user.get("rol") or "")
+    cargo = str(user.get("cargo_nombre") or user.get("cargo") or "")
+    if es_rol_administrador_gerencia(rol) or _es_desarrollador_token(user, rol, cargo):
+        return True
+    if _rol_amplio_en_bd(sb, user):
+        return True
+    if not rol and not cargo:
+        return es_desarrollador_usuario(user)
+    return False
+
+
+def _filtro_cajas(sb, user, contrato_id: int):
+    if _ve_todas_las_cajas(sb, user):
+        return None
+    uid = _uid_seguro(user)
+    return {
+        int(c["id"]) for c in _cajas(sb, contrato_id)
+        if uid is not None and int(c.get("responsable_id") or 0) == int(uid)
+    }
+
+
+def _caja_visible(sb, user, contrato_id: int, caja_id: int) -> dict:
+    caja = _caja(sb, contrato_id, caja_id)
+    if _ve_todas_las_cajas(sb, user):
+        return caja
+    uid = _uid_seguro(user)
+    try:
+        propia = uid is not None and int(caja.get("responsable_id")) == int(uid)
+    except (TypeError, ValueError):
+        propia = False
+    if not propia:
+        raise ValueError("Caja no encontrada.")
+    return caja
+
+
 def _ingresos(sb, contrato_id: int, caja_id: Optional[int] = None) -> list:
     q = sb.table("caja_menor_ingreso").select("*").eq("contrato_id", int(contrato_id))
     if caja_id is not None:
@@ -286,7 +363,14 @@ def listar_cajas(sb, user, contrato_id: int) -> dict:
     ingresos = _ingresos(sb, contrato_id)
     gastos = _gastos(sb, contrato_id)
     cajas = []
-    for caja in _cajas(sb, contrato_id):
+    propias = _cajas(sb, contrato_id)
+    if not _ve_todas_las_cajas(sb, user):
+        uid = _uid_seguro(user)
+        propias = [
+            c for c in propias
+            if uid is not None and int(c.get("responsable_id") or 0) == int(uid)
+        ]
+    for caja in propias:
         cid = int(caja["id"])
         ing = [i for i in ingresos if int(i["caja_id"]) == cid]
         gas = [g for g in gastos if int(g["caja_id"]) == cid]
@@ -302,8 +386,12 @@ def listar_responsables(sb, user, contrato_id: int) -> list:
         for c in _cajas(sb, contrato_id)
         if c.get("estado") == "abierta"
     }
+    todas = _ve_todas_las_cajas(sb, user)
+    uid = _uid_seguro(user)
     out = []
     for u in _usuarios_contrato(sb, contrato_id):
+        if not todas and int(u["id"]) != int(uid or 0):
+            continue
         out.append({**u, "tiene_abierta": u["id"] in abiertas})
     return out
 
@@ -330,7 +418,7 @@ def buscar_tercero(sb, user, contrato_id: int, documento: str) -> dict:
 
 
 def _detalle(sb, user, contrato_id: int, caja_id: int) -> dict:
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     personas = _usuarios_contrato(sb, contrato_id)
     ingresos = sorted(
         [i for i in _ingresos(sb, contrato_id, caja_id)],
@@ -374,6 +462,8 @@ def _usuario_en_contrato(personas, responsable_id: int) -> dict:
 
 def crear_caja(sb, user, contrato_id: int, responsable_id: int) -> dict:
     require_permiso_caja_menor(user, "crear", contrato_id)
+    if not _ve_todas_las_cajas(sb, user) and _uid_seguro(user) != int(responsable_id):
+        raise ValueError("Solo puede abrir su propia caja menor.")
     personas = _usuarios_contrato(sb, contrato_id)
     responsable = _usuario_en_contrato(personas, responsable_id)
     propias = [
@@ -416,7 +506,7 @@ _META = ("observaciones", "control", "firma_elaboro", "firma_reviso", "firma_apr
 
 def actualizar_caja(sb, user, contrato_id: int, caja_id: int, campos: dict) -> dict:
     require_permiso_caja_menor(user, "editar", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     if caja.get("estado") == "legalizada":
         raise ValueError("La caja legalizada está bloqueada.")
     patch = {}
@@ -442,7 +532,7 @@ def _puede_cerrar(user, caja, contrato_id: int) -> bool:
 
 def solicitar_cierre(sb, user, contrato_id: int, caja_id: int) -> dict:
     require_permiso_caja_menor(user, "ver", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     if not _puede_cerrar(user, caja, contrato_id):
         raise ValueError("Solo el responsable o quien edita puede solicitar el cierre.")
     if caja.get("estado") != "abierta":
@@ -463,7 +553,7 @@ def solicitar_cierre(sb, user, contrato_id: int, caja_id: int) -> dict:
 
 def eliminar_caja(sb, user, contrato_id: int, caja_id: int) -> dict:
     require_permiso_caja_menor(user, "eliminar", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     if caja.get("estado") != "abierta":
         raise ValueError("Solo se elimina una caja abierta y sin movimientos.")
     if _ingresos(sb, contrato_id, caja_id) or _gastos(sb, contrato_id, caja_id):
@@ -510,7 +600,7 @@ def _touch_periodo(sb, contrato_id: int, caja_id: int) -> None:
 
 def crear_ingreso(sb, user, contrato_id, caja_id, fecha, valor, archivo, *, storage=None, mailer=None) -> dict:
     require_permiso_caja_menor(user, "crear", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     _exigir_abierta(caja)
     dia = fecha_no_futura(fecha)
     monto = dinero(valor)
@@ -536,7 +626,7 @@ def crear_ingreso(sb, user, contrato_id, caja_id, fecha, valor, archivo, *, stor
 
 def eliminar_ingreso(sb, user, contrato_id, caja_id, ingreso_id, *, mailer=None) -> dict:
     require_permiso_caja_menor(user, "eliminar", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     _exigir_abierta(caja)
     row = _first(
         sb.table("caja_menor_ingreso")
@@ -623,7 +713,7 @@ def _armar_gasto(campos: dict, *, centro_defecto: str, numero_caja: int, consecu
         "tercero_razon_social": str(campos.get("tercero_razon_social") or "").strip()[:200],
         "tercero_documento": str(campos.get("tercero_documento") or "").strip()[:40],
         "documento_norm": normalizar_documento(campos.get("tercero_documento")),
-        "descripcion": str(campos.get("descripcion") or "").strip()[:500],
+        "descripcion": formatear_descripcion(campos.get("descripcion")),
         "documento_no": documento,
         "centro_costos": centro,
         "valor_bruto": dinero(campos.get("valor_bruto")),
@@ -636,10 +726,12 @@ def _armar_gasto(campos: dict, *, centro_defecto: str, numero_caja: int, consecu
     }
 
 
-def _alerta_si_duplicado(sb, contrato_id, campos_gasto, *, excluir_id=None, confirmar=False):
+def _alerta_si_duplicado(sb, contrato_id, campos_gasto, *, excluir_id=None, confirmar=False, cajas_visibles=None):
     if confirmar:
         return None
     existentes = _gastos(sb, contrato_id)
+    if cajas_visibles is not None:
+        existentes = [g for g in existentes if int(g.get("caja_id") or 0) in cajas_visibles]
     dup = buscar_duplicado(
         existentes,
         campos_gasto["documento_norm"],
@@ -664,7 +756,7 @@ def crear_gasto(
     confirmar_duplicado=False, storage=None, mailer=None,
 ) -> dict:
     require_permiso_caja_menor(user, "crear", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     _exigir_abierta(caja)
     contrato = _contrato(sb, contrato_id)
     gastos = _gastos(sb, contrato_id, caja_id)
@@ -675,7 +767,10 @@ def crear_gasto(
         numero_caja=int(caja["numero"]),
         consecutivo=consecutivo,
     )
-    _alerta_si_duplicado(sb, contrato_id, payload, confirmar=confirmar_duplicado)
+    _alerta_si_duplicado(
+        sb, contrato_id, payload, confirmar=confirmar_duplicado,
+        cajas_visibles=_filtro_cajas(sb, user, contrato_id),
+    )
     data, mime, nombre = _leer_archivo(archivo)
     path = _storage(storage).save(contrato_id, caja_id, "gastos", data, mime, nombre)
     tercero_id = _upsert_tercero(sb, user, payload["tercero_documento"], payload["tercero_razon_social"])
@@ -701,7 +796,7 @@ def actualizar_gasto(
     confirmar_duplicado=False, storage=None, mailer=None,
 ) -> dict:
     require_permiso_caja_menor(user, "editar", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     _exigir_abierta(caja)
     previo = _first(
         sb.table("caja_menor_gasto")
@@ -727,6 +822,7 @@ def actualizar_gasto(
     )
     _alerta_si_duplicado(
         sb, contrato_id, payload, excluir_id=gasto_id, confirmar=confirmar_duplicado,
+        cajas_visibles=_filtro_cajas(sb, user, contrato_id),
     )
     patch = dict(payload)
     patch["tercero_id"] = _upsert_tercero(sb, user, payload["tercero_documento"], payload["tercero_razon_social"])
@@ -744,7 +840,7 @@ def actualizar_gasto(
 
 def eliminar_gasto(sb, user, contrato_id, caja_id, gasto_id, *, mailer=None) -> dict:
     require_permiso_caja_menor(user, "eliminar", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     _exigir_abierta(caja)
     row = _first(
         sb.table("caja_menor_gasto")
@@ -835,7 +931,7 @@ def validar_gasto(
     sb, user, contrato_id, caja_id, gasto_id, decision: str, observacion: str = "",
 ) -> dict:
     require_permiso_caja_menor(user, "validar", contrato_id)
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     if not puede_validar_estado(caja.get("estado")):
         raise ValueError("La caja no está en legalización.")
     gasto = _first(
@@ -878,7 +974,7 @@ def validar_gasto(
 
 
 def _legalizar(sb, user, contrato_id: int, caja_id: int) -> None:
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     if caja.get("estado") == "legalizada":
         return
     ingresos = _ingresos(sb, contrato_id, caja_id)
@@ -926,7 +1022,7 @@ def _legalizar(sb, user, contrato_id: int, caja_id: int) -> None:
 
 
 def _revisar_80(sb, user, contrato_id, caja_id, *, mailer=None) -> None:
-    caja = _caja(sb, contrato_id, caja_id)
+    caja = _caja_visible(sb, user, contrato_id, caja_id)
     ingresos = _ingresos(sb, contrato_id, caja_id)
     gastos = _gastos(sb, contrato_id, caja_id)
     ind = indicadores(caja.get("saldo_trasladado"), ingresos, gastos)
@@ -957,7 +1053,7 @@ def _revisar_80(sb, user, contrato_id, caja_id, *, mailer=None) -> None:
 
 def leer_soporte(sb, user, contrato_id, caja_id, kind: str, item_id: int, *, storage=None):
     require_permiso_caja_menor(user, "ver", contrato_id)
-    _caja(sb, contrato_id, caja_id)
+    _caja_visible(sb, user, contrato_id, caja_id)
     tabla = "caja_menor_gasto" if kind == "gastos" else "caja_menor_ingreso"
     if kind not in ("gastos", "ingresos"):
         raise ValueError("Soporte no encontrado.")

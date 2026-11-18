@@ -331,22 +331,44 @@ def build_pdf(
     logo: bytes | None = None,
 ) -> bytes:
     """
-    Carta vertical: encabezado en cada página, cuadro de la caja, tabla de gastos
-    y soportes a cuatro imágenes por página, cada una en un cuadro fijo.
+    La tabla va en carta horizontal, con margen mínimo. Los soportes siguen en
+    carta vertical, cuatro imágenes por página, cada una en un cuadro fijo.
     """
     import fitz
     from PIL import Image
 
-    ancho, alto_pag = fitz.paper_size("letter")
+    carta_w, carta_h = fitz.paper_size("letter")
+    header_h = 44
+    pie_h = 14
+    ancho, alto_pag = carta_w, carta_h
     izquierda = _MARGEN_IZQ
     derecha = ancho - _MARGEN_DER
     arriba = _MARGEN_SUP
     abajo = alto_pag - _MARGEN_INF
     content_w = derecha - izquierda
-    header_h = 48
-    pie_h = 14
-    y_contenido = arriba + header_h + 8
+    y_contenido = arriba + header_h + 6
     y_limite = abajo - pie_h
+
+    def usar(horizontal):
+        nonlocal ancho, alto_pag, izquierda, derecha, arriba, abajo, content_w, y_contenido, y_limite
+        if horizontal:
+            ancho, alto_pag = carta_h, carta_w
+            margen = 0.5 * _CM
+            izquierda = margen
+            derecha = ancho - margen
+            arriba = margen
+            abajo = alto_pag - margen
+        else:
+            ancho, alto_pag = carta_w, carta_h
+            izquierda = _MARGEN_IZQ
+            derecha = ancho - _MARGEN_DER
+            arriba = _MARGEN_SUP
+            abajo = alto_pag - _MARGEN_INF
+        content_w = derecha - izquierda
+        y_contenido = arriba + header_h + 6
+        y_limite = abajo - pie_h
+
+    usar(True)
     teal = (0.055, 0.455, 0.565)
     tinta = (0.06, 0.16, 0.26)
     muted = (0.28, 0.36, 0.44)
@@ -387,17 +409,20 @@ def build_pdf(
                 logo_box, contratista[:42], fontsize=7, fontname="hebo",
                 color=blanco, align=1,
             )
-        titulo = fitz.Rect(izquierda + 52, arriba + 8, derecha - 78, arriba + header_h - 6)
+        titulo = fitz.Rect(izquierda + 52, arriba + 8, derecha - 120, arriba + header_h - 6)
         pagina.insert_textbox(
             titulo, FORMATO_CALIDAD["nombre_mayus"], fontsize=11, fontname="hebo",
             color=blanco, align=1,
         )
-        calidad = fitz.Rect(derecha - 74, arriba + 6, derecha - 4, arriba + header_h - 6)
-        pagina.insert_textbox(
-            calidad,
-            f"Formato {FORMATO_CALIDAD['codigo']}\nVersión {FORMATO_CALIDAD['version']}",
-            fontsize=8, fontname="hebo", color=blanco, align=1,
-        )
+        for i, linea in enumerate((
+            f"Formato {FORMATO_CALIDAD['codigo']}",
+            f"Versión {FORMATO_CALIDAD['version']}",
+        )):
+            largo = fitz.get_text_length(linea, fontname="hebo", fontsize=8)
+            pagina.insert_text(
+                (derecha - 6 - largo, arriba + 16 + i * 12),
+                linea, fontsize=8, fontname="hebo", color=blanco,
+            )
 
     def asegurar(alto_necesario):
         if estado["page"] is None or estado["y"] + alto_necesario > y_limite:
@@ -497,34 +522,30 @@ def build_pdf(
     # línea. La descripción y las observaciones usan el ancho que sobra y se
     # parten dentro de la fila; la fila no salta de página.
     columnas = [
-        ("#", 12, "c", 7),
-        ("Fecha", 40, "l", 7),
-        ("Razón Social", 34, "l", 7),
-        ("NIT", 48, "l", 7),
-        ("Descripción del gasto", 31, "l", 7),
-        ("Observaciones", 32, "l", 7),
-        ("Documento No.", 22, "l", 7),
-        ("Centro de costos", 34, "l", 7),
-        ("Valor bruto", 31, "r", 6),
-        ("IVA", 31, "r", 6),
-        ("Retenciones", 31, "r", 6),
-        ("Impuesto al consumo", 31, "r", 6),
-        ("Otros deducibles", 31, "r", 6),
-        ("Valor neto", 31, "r", 6),
-        ("Soporte", 28, "l", 7),
-        ("Estado", 40, "l", 7),
+        ("#", 16, "c", 8),
+        ("Fecha", 46, "l", 8),
+        ("Razón Social", 52, "l", 8),
+        ("NIT", 58, "l", 8),
+        ("Descripción del gasto", 70, "l", 8),
+        ("Observaciones", 58, "l", 8),
+        ("Documento No.", 48, "l", 8),
+        ("Centro de costos", 48, "l", 8),
+        ("Valor bruto", 48, "r", 7.5),
+        ("IVA", 36, "r", 7.5),
+        ("Retenciones", 52, "r", 7.5),
+        ("Impuesto al consumo", 52, "r", 7.5),
+        ("Otros deducibles", 48, "r", 7.5),
+        ("Valor neto", 48, "r", 7.5),
+        ("Soporte", 40, "l", 8),
+        ("Estado", 46, "l", 8),
     ]
-    sobra = content_w - sum(item[1] for item in columnas)
-    flexible = [i for i, item in enumerate(columnas) if item[0] in ("Descripción del gasto", "Observaciones")]
-    extra = sobra / len(flexible) if flexible else 0
-    anchos = [
-        max(16, item[1] + (extra if i in flexible else 0))
-        for i, item in enumerate(columnas)
-    ]
+    base = sum(item[1] for item in columnas) or 1
+    factor = content_w / base
+    anchos = [item[1] * factor for item in columnas]
     ajuste = content_w - sum(anchos)
     if anchos and abs(ajuste) > 0.05:
-        anchos[-2] += ajuste
-    tam_cabeza = 6.5
+        anchos[4] += ajuste
+    tam_cabeza = 7.5
 
     def alto_de(textos, tam_fijo=None):
         n = 1
@@ -707,6 +728,7 @@ def build_pdf(
     def soportes():
         if not gastos:
             return
+        usar(False)
         gap = 8
         rotulo_h = 26
         zona_h = y_limite - y_contenido
@@ -776,8 +798,9 @@ def build_pdf(
     for i, pagina in enumerate(doc, start=1):
         texto = f"Página {i} de {total}"
         largo = fitz.get_text_length(texto, fontname="helv", fontsize=8)
+        rect = pagina.rect
         pagina.insert_text(
-            ((ancho - largo) / 2, alto_pag - 18),
+            ((rect.width - largo) / 2, rect.height - 12),
             texto, fontsize=8, fontname="helv", color=muted,
         )
     return doc.tobytes()
