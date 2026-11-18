@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  AlignLeft, ArrowLeft, Camera, Check, Coins, FileSpreadsheet, FileText, Image as ImageIcon, Pencil, Plus, Save, Trash2, X,
+  AlignLeft, ArrowLeft, Camera, Check, Coins, FileText, Image as ImageIcon, Pencil, Plus, Save, Trash2, X,
 } from 'lucide-react'
 import { formatCOP } from '../../utils/formatCOP'
 import { formatFechaHoraColombia } from '../../utils/fechaColombia'
@@ -69,6 +69,25 @@ function anilloFoco(t) {
   if (t?.bg === '#0A1628') return 'rgba(0, 180, 198, 0.40)'
   if (t?.bg === '#E8E0D5') return 'rgba(14, 116, 144, 0.32)'
   return 'rgba(0, 119, 182, 0.28)'
+}
+
+function IconoExcel() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="1" y="1" width="22" height="22" rx="4" fill="#217346" />
+      <path d="M8 7l8 10M16 7L8 17" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconoPdf() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 1.5h8.2L19 6.3V21a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 21V3A1.5 1.5 0 0 1 6 1.5z" fill="#E5252A" />
+      <path d="M14.2 1.5V6.3H19" fill="#fff" opacity="0.9" />
+      <text x="12" y="17.2" textAnchor="middle" fontSize="6.2" fontFamily="Arial, sans-serif" fontWeight="700" fill="#fff">PDF</text>
+    </svg>
+  )
 }
 
 function IconBtn({ title, onClick, disabled, children, t, compact, ...resto }) {
@@ -503,8 +522,8 @@ export default function CajaMenorDetalle(props) {
           )}
           {acceso.exportar && (
             <>
-              <IconBtn title="Exportar Excel" t={t} disabled={ocupado} onClick={onExcel}><FileSpreadsheet size={16} /></IconBtn>
-              <IconBtn title="Exportar recibos PDF" t={t} disabled={ocupado} onClick={onPdf}><FileText size={16} /></IconBtn>
+              <IconBtn title="Exportar Excel" t={t} disabled={ocupado} onClick={onExcel}><IconoExcel /></IconBtn>
+              <IconBtn title="Exportar PDF" t={t} disabled={ocupado} onClick={onPdf}><IconoPdf /></IconBtn>
             </>
           )}
         </div>

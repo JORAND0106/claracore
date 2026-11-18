@@ -464,9 +464,11 @@ def test_excel_y_pdf_icontec():
         "valor_neto": 119000,
         "estado_validacion": "aprobado",
     }]
+    logo = _png(ancho=80, alto=80, color=(14, 116, 144))
     data = build_excel(
         caja=caja, contrato=contrato, ingresos=[{"valor": 200000}],
         gastos=gastos, enlace_por_gasto={9: "https://app.claracore.co/?modulo=caja_menor&caja=4&gasto=9"},
+        logo=logo,
     )
     wb = load_workbook(io.BytesIO(data))
     ws = wb.active
@@ -482,22 +484,42 @@ def test_excel_y_pdf_icontec():
     assert ws.cell(10, soporte).hyperlink.target.startswith("https://")
     assert ws.cell(11, neto).value == 119000
     assert ws["A13"].value == "Elaboró"
+    assert ws.sheet_view.showGridLines is False
     assert any(ws._images)
 
     alto = _png(ancho=200, alto=2400)
     corto = _png(ancho=200, alto=80, color=(200, 120, 20))
-    pdf = build_pdf(caja=caja, recibos=[
-        {"consecutivo": 1, "fecha": "2026-11-02", "tercero": "Ferretería", "estado": "aprobado", "imagen": alto},
-        {"consecutivo": 2, "fecha": "2026-11-03", "tercero": "Papelería", "estado": "aprobado", "imagen": corto},
-    ])
+    gastos_pdf = [
+        {**gastos[0], "imagen": alto},
+        {
+            "consecutivo": 2,
+            "fecha": "2026-11-03",
+            "tercero_razon_social": "Papelería",
+            "documento_no": "RC-2",
+            "valor_neto": 50000,
+            "estado_validacion": "aprobado",
+            "imagen": corto,
+        },
+    ]
+    pdf = build_pdf(
+        caja=caja, contrato=contrato, ingresos=[{"valor": 200000}],
+        gastos=gastos_pdf, logo=logo,
+    )
     doc = fitz.open(stream=pdf, filetype="pdf")
-    assert doc.page_count >= 2
-    assert doc[0].get_images()
-    assert doc[1].get_images()
-    # El segundo recibo no abre una página vacía: cada página usada tiene imagen.
-    for pagina in doc:
-        assert pagina.get_images()
-    assert "Razón Social" in doc[0].get_text()
+    assert doc.page_count == 2
+    texto0 = doc[0].get_text()
+    assert "CONTROL DE GASTOS POR CAJA MENOR" in texto0
+    assert "CC-CM-001" in texto0
+    assert "Legalización de Caja Menor No." in texto0
+    assert "Razón" in texto0 and "Social" in texto0
+    assert "Elaboró" in texto0
+    assert "Página 1 de 2" in texto0
+    assert "Página 2 de 2" in doc[1].get_text()
+    assert "Ferretería" in doc[1].get_text()
+    assert "Papelería" in doc[1].get_text()
+    # El logo va en cada página. Los dos recibos caben juntos y no se parten.
+    assert len(doc[0].get_images()) == 1
+    assert len(doc[1].get_images()) == 3
     assert FORMATO_CALIDAD["codigo"] == "CC-CM-001"
 
 
