@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowLeft, Check, FileSpreadsheet, FileText, Image as ImageIcon, Pencil, Plus, Save, Trash2, X,
+  ArrowLeft, Check, Plus, Trash2, X,
 } from 'lucide-react'
 import { formatCOP } from '../../utils/formatCOP'
-import { formatFechaHoraColombia } from '../../utils/fechaColombia'
 import { useClaraViewport } from '../../useClaraViewport'
 import CajaMenorLogo from './CajaMenorLogo'
+import CajaMenorDetalle from './CajaMenorDetalle'
 import { createCajaMenorApi, fdGasto, fdIngreso } from './cajaMenorApi'
 import { ETIQUETA_ESTADO, fmtPct, hoyColombia, normalizarDocumento, valorNeto } from './cajaMenorCalc'
 import { accesoCajaMenor, esDesarrolladorCajaMenor } from './cajaMenorPermisos'
@@ -20,9 +20,9 @@ function IconBtn({ title, onClick, disabled, children, t, tono }) {
       disabled={disabled}
       onClick={onClick}
       style={{
-        width: 36,
-        height: 36,
-        minWidth: 36,
+        width: 40,
+        height: 40,
+        minWidth: 40,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -110,8 +110,9 @@ export default function ModuloCajaMenor({
   const [preview, setPreview] = useState(null)
   const [ocupado, setOcupado] = useState(false)
   const [borrarId, setBorrarId] = useState(null)
-  const fileGasto = useRef(null)
-  const fileIngreso = useRef(null)
+  const [panel, setPanel] = useState(null)
+  const [vista, setVista] = useState('lista')
+  const [origen, setOrigen] = useState('lista')
   const tomarRef = useRef(null)
 
   const accesoRemoto = detalle?.acceso || lista?.acceso
@@ -123,8 +124,6 @@ export default function ModuloCajaMenor({
       }
   const caja = detalle?.caja
   const ind = detalle?.indicadores
-  const abierta = caja?.estado === 'abierta'
-  const enLegalizacion = caja?.estado === 'en_legalizacion'
 
   function aplicar(det) {
     setDetalle(det)
@@ -157,9 +156,16 @@ export default function ModuloCajaMenor({
     try {
       const det = await api.detalle(contratoId, cajaId)
       aplicar(det)
+      setPanel(null)
+      setVista('lista')
+      setOrigen('lista')
       if (gastoId) {
         const g = (det.gastos || []).find((row) => Number(row.id) === Number(gastoId))
-        if (g) verImagen('gastos', g.id, `Recibo ${g.consecutivo}`, det.caja.id)
+        if (g) {
+          setPanel('gastos')
+          setVista('imagen')
+          verImagen('gastos', g.id, `Recibo ${g.consecutivo}`, det.caja.id)
+        }
       }
     } catch (e) {
       setAviso({ tipo: 'error', texto: e.message })
@@ -299,7 +305,11 @@ export default function ModuloCajaMenor({
         ? api.editarGasto(contratoId, caja.id, gasto.id, fd)
         : api.gasto(contratoId, caja.id, fd)
     ))
-    if (det?.caja) setGasto(null)
+    if (det?.caja) {
+      setGasto(null)
+      setVista('lista')
+      setRechazo(null)
+    }
   }
 
   tomarRef.current = tomarRecibo
@@ -312,7 +322,87 @@ export default function ModuloCajaMenor({
     const det = await correr(() => api.ingreso(
       contratoId, caja.id, fdIngreso(ingreso.fecha, ingreso.valor, ingreso.file),
     ))
-    if (det?.caja) setIngreso(null)
+    if (det?.caja) {
+      setIngreso(null)
+      setVista('lista')
+    }
+  }
+
+  function abrirPanel(nombre) {
+    setPanel(nombre)
+    setVista('lista')
+    setOrigen('lista')
+    setIngreso(null)
+    setGasto(null)
+    setRechazo(null)
+    setPreview(null)
+  }
+
+  function cerrarPanel() {
+    setPanel(null)
+    setVista('lista')
+    setOrigen('lista')
+    setIngreso(null)
+    setGasto(null)
+    setRechazo(null)
+    setPreview(null)
+  }
+
+  function volverVista() {
+    if (vista === 'imagen' && origen !== 'lista') {
+      setVista(origen)
+      setPreview(null)
+      return
+    }
+    setVista('lista')
+    setOrigen('lista')
+    setIngreso(null)
+    setGasto(null)
+    setRechazo(null)
+    setPreview(null)
+  }
+
+  function nuevaConsignacion() {
+    setIngreso({ fecha: hoyColombia(), valor: '', file: null })
+    setVista('formulario')
+  }
+
+  function nuevoGasto() {
+    setGasto(borradorGasto(detalle))
+    setVista('formulario')
+  }
+
+  function editarGasto(row) {
+    setGasto({
+      id: row.id,
+      consecutivo: row.consecutivo,
+      fecha: row.fecha || hoyColombia(),
+      tercero_razon_social: row.tercero_razon_social || '',
+      tercero_documento: row.tercero_documento || '',
+      descripcion: row.descripcion || '',
+      documento_no: row.documento_no || '',
+      centro_costos: row.centro_costos || '',
+      valor_bruto: row.valor_bruto ?? '',
+      iva: row.iva ?? '0',
+      retenciones: row.retenciones ?? '0',
+      impuesto_consumo: row.impuesto_consumo ?? '0',
+      otros_deducibles: row.otros_deducibles ?? '0',
+      total_leido: null,
+      file: null,
+    })
+    setVista('formulario')
+  }
+
+  function verSoporte(kind, itemId, titulo) {
+    setOrigen(vista)
+    setVista('imagen')
+    verImagen(kind, itemId, titulo)
+  }
+
+  function revisarGasto(row) {
+    setRechazo({ id: row.id, texto: '', consecutivo: row.consecutivo })
+    setVista('validar')
+    verImagen('gastos', row.id, `Recibo ${row.consecutivo}`)
   }
 
   if (!contratoId) {
@@ -337,529 +427,237 @@ export default function ModuloCajaMenor({
     impuestoConsumo: gasto.impuesto_consumo,
     otros: gasto.otros_deducibles,
   }) : 0
+  const movil = vp.isMobile || vp.isLandscapeMobile
+
+  function volverCajas() {
+    setDetalle(null)
+    setPanel(null)
+    setVista('lista')
+    setIngreso(null)
+    setGasto(null)
+    setRechazo(null)
+    setPreview(null)
+    cargarLista()
+  }
 
   return (
     <div style={{ color: t.text, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-        {detalle && (
-          <IconBtn title="Volver a las cajas" t={t} onClick={() => { setDetalle(null); setPreview(null); cargarLista() }}>
-            <ArrowLeft size={16} />
-          </IconBtn>
-        )}
-        <CajaMenorLogo size={vp.isMobile ? 28 : 36} />
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 'var(--cc-lg)' }}>Caja Menor</div>
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-            {detalle
-              ? `No. ${caja?.numero} · ${caja?.responsable_nombre || ''} · ${ETIQUETA_ESTADO[caja?.estado] || ''}`
-              : (lista?.contrato?.numero || 'Contrato')}
-          </div>
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          {!detalle && acceso.crear && (
-            <IconBtn title="Asignar caja" t={t} onClick={async () => {
-              setAsignando(true)
-              try { setResponsables(await api.responsables(contratoId)) } catch (e) {
-                setAviso({ tipo: 'error', texto: e.message })
-              }
-            }}
-            >
-              <Plus size={16} />
-            </IconBtn>
-          )}
-          {detalle && abierta && acceso.eliminar && !detalle.ingresos?.length && !detalle.gastos?.length && (
-            <IconBtn
-              title={borrarId === 'caja' ? 'Confirmar eliminación' : 'Eliminar caja'}
-              t={t}
-              disabled={ocupado}
-              onClick={async () => {
-                if (borrarId !== 'caja') { setBorrarId('caja'); return }
-                setOcupado(true)
-                try {
-                  await api.eliminar(contratoId, caja.id)
-                  setDetalle(null)
-                  setBorrarId(null)
-                  await cargarLista()
-                } catch (e) {
-                  setAviso({ tipo: 'error', texto: e.message })
-                } finally {
-                  setOcupado(false)
-                }
-              }}
-            >
-              <Trash2 size={16} />
-            </IconBtn>
-          )}
-          {detalle && acceso.exportar && (
-            <>
-              <IconBtn title="Exportar Excel" t={t} disabled={ocupado} onClick={() => api.excel(contratoId, caja.id, `CajaMenor_${caja.numero}.xlsx`).catch((e) => setAviso({ tipo: 'error', texto: e.message }))}>
-                <FileSpreadsheet size={16} />
-              </IconBtn>
-              <IconBtn title="Exportar recibos PDF" t={t} disabled={ocupado} onClick={() => api.pdf(contratoId, caja.id, `CajaMenor_${caja.numero}_recibos.pdf`).catch((e) => setAviso({ tipo: 'error', texto: e.message }))}>
-                <FileText size={16} />
-              </IconBtn>
-            </>
-          )}
-        </div>
-      </div>
-
-      {aviso && (
-        <div style={{
-          display: 'flex',
-          gap: 8,
-          alignItems: 'center',
-          marginBottom: 10,
-          padding: '8px 10px',
-          borderRadius: 8,
-          border: `1px solid ${t.border}`,
-          background: t.bgCard,
-          color: t.text,
-          fontSize: 'var(--cc-sm)',
-        }}
-        >
-          <span style={{ flex: 1 }}>{aviso.texto}</span>
-          {aviso.tipo === 'duplicado' && (
-            <IconBtn title="Continuar" t={t} disabled={ocupado} onClick={() => guardarGasto(true)}>
-              <Check size={16} />
-            </IconBtn>
-          )}
-          <IconBtn title="Cerrar aviso" t={t} onClick={() => setAviso(null)}><X size={14} /></IconBtn>
-        </div>
-      )}
-
       {cargando && <p style={{ color: t.textMuted }}>Cargando…</p>}
 
       {!detalle && !cargando && (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: vp.isMobile ? 760 : 880 }}>
-            <thead>
-              <tr>
-                {['No.', 'Responsable', 'Estado', 'Desde', 'Hasta', 'Fondo', 'Gastos', '%', 'Disponible', ''].map((h) => (
-                  <th key={h || 'acc'} style={{ ...celda(t), background: t.headerBg, fontWeight: 700, textAlign: 'left' }}>{h}</th>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <CajaMenorLogo size={movil ? 36 : 40} plate={t.bgCard} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 'var(--cc-lg)' }}>Caja Menor</div>
+              <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>{lista?.contrato?.numero || 'Contrato'}</div>
+            </div>
+            {acceso.crear && (
+              <IconBtn title="Asignar caja" t={t} onClick={async () => {
+                setAsignando(true)
+                try { setResponsables(await api.responsables(contratoId)) } catch (e) {
+                  setAviso({ tipo: 'error', texto: e.message })
+                }
+              }}
+              >
+                <Plus size={16} />
+              </IconBtn>
+            )}
+          </div>
+
+          {aviso && (
+            <div style={{
+              display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, padding: '8px 10px',
+              borderRadius: 8, border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, fontSize: 'var(--cc-sm)',
+            }}
+            >
+              <span style={{ flex: 1 }}>{aviso.texto}</span>
+              <IconBtn title="Cerrar aviso" t={t} onClick={() => setAviso(null)}><X size={14} /></IconBtn>
+            </div>
+          )}
+
+          {asignando && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+              <select
+                aria-label="Responsable"
+                value={responsableId}
+                onChange={(e) => setResponsableId(e.target.value)}
+                style={{ ...entrada(t), background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 8, minHeight: 40, flex: 1 }}
+              >
+                <option value="">Responsable</option>
+                {responsables.map((u) => (
+                  <option key={u.id} value={u.id} disabled={u.tiene_abierta}>
+                    {u.nombre}{u.tiene_abierta ? ' · caja abierta' : ''}
+                  </option>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {asignando && (
-                <tr>
-                  <td style={celda(t)} colSpan={9}>
-                    <select
-                      aria-label="Responsable"
-                      value={responsableId}
-                      onChange={(e) => setResponsableId(e.target.value)}
-                      style={{ ...entrada(t), background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: 6, minHeight: 36 }}
-                    >
-                      <option value="">Responsable</option>
-                      {responsables.map((u) => (
-                        <option key={u.id} value={u.id} disabled={u.tiene_abierta}>
-                          {u.nombre}{u.tiene_abierta ? ' · caja abierta' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td style={celda(t)}>
-                    <span style={{ display: 'flex', gap: 4 }}>
-                      <IconBtn title="Abrir caja" t={t} disabled={ocupado || !responsableId} onClick={async () => {
-                        const det = await correr(() => api.crear(contratoId, Number(responsableId)))
-                        if (det?.caja) {
-                          setAsignando(false)
-                          aplicar(det)
-                        }
-                      }}
-                      >
-                        <Check size={16} />
-                      </IconBtn>
-                      <IconBtn title="Cancelar" t={t} onClick={() => setAsignando(false)}><X size={16} /></IconBtn>
-                    </span>
-                  </td>
-                </tr>
-              )}
+              </select>
+              <IconBtn title="Abrir caja" t={t} disabled={ocupado || !responsableId} onClick={async () => {
+                const det = await correr(() => api.crear(contratoId, Number(responsableId)))
+                if (det?.caja) {
+                  setAsignando(false)
+                  setPanel(null)
+                  aplicar(det)
+                }
+              }}
+              >
+                <Check size={16} />
+              </IconBtn>
+              <IconBtn title="Cancelar" t={t} onClick={() => setAsignando(false)}><X size={16} /></IconBtn>
+            </div>
+          )}
+
+          {movil ? (
+            <div style={{ display: 'grid', gap: 8 }}>
               {(lista?.cajas || []).map((row) => {
                 const m = row.indicadores || {}
                 return (
-                  <tr key={row.id}>
-                    <td style={celda(t)}>{row.numero}</td>
-                    <td style={celda(t)}>{row.responsable_nombre}</td>
-                    <td style={celda(t)}>{ETIQUETA_ESTADO[row.estado] || row.estado}</td>
-                    <td style={celda(t)}>{row.periodo_desde || '—'}</td>
-                    <td style={celda(t)}>{row.periodo_hasta || '—'}</td>
-                    <td style={celda(t)}>{formatCOP(m.fondo_establecido)}</td>
-                    <td style={celda(t)}>{formatCOP(m.gastos_periodo)}</td>
-                    <td style={celda(t)}>{fmtPct(m.gasto_actual)}</td>
-                    <td style={celda(t)}>{formatCOP(m.disponible)}</td>
-                    <td style={celda(t)}>
-                      <IconBtn title="Abrir caja" t={t} onClick={() => abrir(row.id)}>
-                        <ArrowLeft size={16} style={{ transform: 'rotate(180deg)' }} />
-                      </IconBtn>
-                    </td>
-                  </tr>
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => abrir(row.id)}
+                    style={{
+                      textAlign: 'left', border: `1px solid ${t.border}`, borderRadius: 12, background: t.bgCard,
+                      color: t.text, padding: 12, cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <strong>No. {row.numero}</strong>
+                      <span>{ETIQUETA_ESTADO[row.estado] || row.estado}</span>
+                    </div>
+                    <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', marginTop: 4 }}>{row.responsable_nombre}</div>
+                    <div style={{ fontSize: 'var(--cc-sm)', marginTop: 6 }}>
+                      Fondo {formatCOP(m.fondo_establecido)} · Disponible {formatCOP(m.disponible)}
+                    </div>
+                  </button>
                 )
               })}
-              {!lista?.cajas?.length && !asignando && (
-                <tr><td style={celda(t)} colSpan={10}>Sin cajas.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {detalle && !cargando && (
-        <>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: vp.isMobile ? '1fr 1fr' : 'repeat(4, minmax(0, 1fr))',
-            gap: 8,
-            marginBottom: 12,
-          }}
-          >
-            {[
-              ['Fondo establecido', formatCOP(ind?.fondo_establecido)],
-              ['Gastos del periodo', formatCOP(ind?.gastos_periodo)],
-              ['Gasto actual', fmtPct(ind?.gasto_actual)],
-              ['Disponible en caja', formatCOP(ind?.disponible)],
-            ].map(([k, v]) => (
-              <div key={k} style={{ border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 10px', background: t.bgCard }}>
-                <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>{k}</div>
-                <div style={{ fontWeight: 700 }}>{v}</div>
-              </div>
-            ))}
-          </div>
-          <p style={{ margin: '0 0 10px', color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-            {lista?.contrato?.contratista || detalle.contrato?.contratista} · NIT {detalle.contrato?.nit || '—'}
-            {' · '}Saldo trasladado {formatCOP(ind?.saldo_trasladado)}
-            {' · '}Consignaciones {formatCOP(ind?.consignaciones)}
-            {ind?.gasto_actual != null && ind.gasto_actual >= 80 ? ' · Gasto al 80 % o más' : ''}
-          </p>
-
-          {meta && (
-            <div style={{ overflowX: 'auto', marginBottom: 12 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
-                <tbody>
+              {!lista?.cajas?.length && !asignando && <p style={{ color: t.textMuted }}>Sin cajas.</p>}
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
                   <tr>
-                    <th style={celda(t, { background: t.headerBg })}>Observaciones</th>
-                    <td style={celda(t)}>
-                      <input aria-label="Observaciones" disabled={bloqueada(caja) || !acceso.editar} value={meta.observaciones} onChange={(e) => setMeta({ ...meta, observaciones: e.target.value })} style={entrada(t)} />
-                    </td>
-                    <th style={celda(t, { background: t.headerBg })}>Control</th>
-                    <td style={celda(t)}>
-                      <input aria-label="Control" disabled={bloqueada(caja) || !acceso.editar} value={meta.control} onChange={(e) => setMeta({ ...meta, control: e.target.value })} style={entrada(t)} />
-                    </td>
-                    {acceso.editar && !bloqueada(caja) && (
-                      <td style={celda(t)}>
-                        <IconBtn title="Guardar observaciones" t={t} disabled={ocupado} onClick={() => correr(() => api.meta(contratoId, caja.id, meta))}>
-                          <Save size={16} />
-                        </IconBtn>
-                      </td>
-                    )}
-                  </tr>
-                  <tr>
-                    {['firma_elaboro', 'firma_reviso', 'firma_aprobo'].map((clave) => (
-                      <td key={clave} style={celda(t)} colSpan={clave === 'firma_aprobo' ? 2 : 1}>
-                        <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
-                          {clave === 'firma_elaboro' ? 'Elaboró' : clave === 'firma_reviso' ? 'Revisó' : 'Aprobó'}
-                        </div>
-                        <input
-                          aria-label={clave}
-                          disabled={bloqueada(caja) || !acceso.editar}
-                          value={meta[clave]}
-                          onChange={(e) => setMeta({ ...meta, [clave]: e.target.value })}
-                          style={entrada(t)}
-                        />
-                      </td>
+                    {['No.', 'Responsable', 'Estado', 'Desde', 'Hasta', 'Fondo', 'Gastos', '%', 'Disponible', ''].map((h) => (
+                      <th key={h || 'acc'} style={{ ...celda(t), background: t.headerBg, fontWeight: 700, textAlign: 'left' }}>{h}</th>
                     ))}
                   </tr>
+                </thead>
+                <tbody>
+                  {(lista?.cajas || []).map((row) => {
+                    const m = row.indicadores || {}
+                    return (
+                      <tr key={row.id}>
+                        <td style={celda(t)}>{row.numero}</td>
+                        <td style={celda(t)}>{row.responsable_nombre}</td>
+                        <td style={celda(t)}>{ETIQUETA_ESTADO[row.estado] || row.estado}</td>
+                        <td style={celda(t)}>{row.periodo_desde || '—'}</td>
+                        <td style={celda(t)}>{row.periodo_hasta || '—'}</td>
+                        <td style={{ ...celda(t), textAlign: 'right' }}>{formatCOP(m.fondo_establecido)}</td>
+                        <td style={{ ...celda(t), textAlign: 'right' }}>{formatCOP(m.gastos_periodo)}</td>
+                        <td style={celda(t)}>{fmtPct(m.gasto_actual)}</td>
+                        <td style={{ ...celda(t), textAlign: 'right' }}>{formatCOP(m.disponible)}</td>
+                        <td style={celda(t)}>
+                          <IconBtn title="Abrir caja" t={t} onClick={() => abrir(row.id)}>
+                            <ArrowLeft size={16} style={{ transform: 'rotate(180deg)' }} />
+                          </IconBtn>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {!lista?.cajas?.length && !asignando && (
+                    <tr><td style={celda(t)} colSpan={10}>Sin cajas.</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
           )}
+        </div>
+      )}
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
-            <strong style={{ fontSize: 'var(--cc-sm)' }}>Consignaciones</strong>
-            {abierta && acceso.crear && (
-              <IconBtn title="Nueva consignación" t={t} onClick={() => setIngreso({ fecha: hoyColombia(), valor: '', file: null })}>
-                <Plus size={16} />
-              </IconBtn>
-            )}
-          </div>
-          <div style={{ overflowX: 'auto', marginBottom: 14 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
-              <thead>
-                <tr>
-                  {['Fecha', 'Valor', 'Soporte', ''].map((h) => (
-                    <th key={h || 'a'} style={{ ...celda(t), background: t.headerBg }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {ingreso && (
-                  <tr>
-                    <td style={celda(t)}>
-                      <input type="date" aria-label="Fecha de consignación" max={hoyColombia()} value={ingreso.fecha} onChange={(e) => setIngreso({ ...ingreso, fecha: e.target.value })} style={entrada(t)} />
-                    </td>
-                    <td style={celda(t)}>
-                      <input inputMode="numeric" aria-label="Valor de consignación" value={ingreso.valor} onChange={(e) => setIngreso({ ...ingreso, valor: e.target.value })} style={entrada(t)} />
-                    </td>
-                    <td style={celda(t)}>
-                      <input ref={fileIngreso} type="file" accept="image/*" hidden onChange={async (e) => {
-                        const file = e.target.files?.[0]
-                        if (!file) return
-                        const listo = await comprimirImagen(file)
-                        setIngreso((prev) => (prev ? { ...prev, file: listo } : prev))
-                      }}
-                      />
-                      <IconBtn title={ingreso.file ? 'Soporte listo. Puede pegar otra imagen' : 'Cargar o pegar soporte'} t={t} onClick={() => fileIngreso.current?.click()}>
-                        <ImageIcon size={16} />
-                      </IconBtn>
-                    </td>
-                    <td style={celda(t)}>
-                      <span style={{ display: 'flex', gap: 4 }}>
-                        <IconBtn title="Guardar consignación" t={t} disabled={ocupado} onClick={guardarIngreso}><Check size={16} /></IconBtn>
-                        <IconBtn title="Cancelar" t={t} onClick={() => setIngreso(null)}><X size={16} /></IconBtn>
-                      </span>
-                    </td>
-                  </tr>
-                )}
-                {(detalle.ingresos || []).map((row) => (
-                  <tr key={row.id}>
-                    <td style={celda(t)}>{row.fecha}</td>
-                    <td style={celda(t)}>{formatCOP(row.valor)}</td>
-                    <td style={celda(t)}>
-                      <IconBtn title="Ver soporte" t={t} onClick={() => verImagen('ingresos', row.id, 'Consignación')}>
-                        <ImageIcon size={16} />
-                      </IconBtn>
-                    </td>
-                    <td style={celda(t)}>
-                      {abierta && acceso.eliminar && (
-                        <IconBtn title={borrarId === `i${row.id}` ? 'Confirmar eliminación' : 'Eliminar consignación'} t={t} onClick={() => {
-                          if (borrarId !== `i${row.id}`) { setBorrarId(`i${row.id}`); return }
-                          correr(() => api.eliminarIngreso(contratoId, caja.id, row.id))
-                        }}
-                        >
-                          <Trash2 size={16} />
-                        </IconBtn>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {!detalle.ingresos?.length && !ingreso && (
-                  <tr><td style={celda(t)} colSpan={4}>Sin consignaciones.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
-            <strong style={{ fontSize: 'var(--cc-sm)' }}>Gastos</strong>
-            {abierta && acceso.crear && !gasto && (
-              <IconBtn title="Nuevo gasto" t={t} onClick={() => setGasto(borradorGasto(detalle))}>
-                <Plus size={16} />
-              </IconBtn>
-            )}
-            {enLegalizacion && (acceso.editar || Number(usuario?.id || usuario?.sub) === Number(caja.responsable_id)) && (
-              <span style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>En legalización</span>
-            )}
-            {abierta && (acceso.editar || Number(usuario?.id || usuario?.sub) === Number(caja.responsable_id)) && (
-              <IconBtn title="Solicitar cierre" t={t} disabled={ocupado} onClick={() => correr(() => api.cierre(contratoId, caja.id))}>
-                <Check size={16} />
-              </IconBtn>
-            )}
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
-              <thead>
-                <tr>
-                  {['#', 'Fecha', 'Tercero', 'NIT', 'Descripción', 'Documento', 'Centro', 'Bruto', 'IVA', 'Retenciones', 'Consumo', 'Otros', 'Neto', '', ''].map((h, i) => (
-                    <th key={`${h}-${i}`} style={{ ...celda(t), background: t.headerBg, whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {gasto && (
-                  <FilaGasto
-                    t={t}
-                    gasto={gasto}
-                    setGasto={setGasto}
-                    neto={netoBorrador}
-                    ocupado={ocupado}
-                    onArchivo={() => fileGasto.current?.click()}
-                    onGuardar={() => guardarGasto(false)}
-                    onCancelar={() => setGasto(null)}
-                    onDocumento={(doc) => completarTercero(doc)}
-                    imagenLista={!!gasto.file || !!gasto.id}
-                  />
-                )}
-                {(detalle.gastos || []).filter((row) => Number(row.id) !== Number(gasto?.id || 0)).map((row) => (
-                  <tr key={row.id} style={{ opacity: row.estado_validacion === 'rechazado' ? 0.55 : 1 }}>
-                    <td style={celda(t)}>{row.consecutivo}</td>
-                    <td style={celda(t)}>{row.fecha}</td>
-                    <td style={celda(t)}>{row.tercero_razon_social}</td>
-                    <td style={celda(t)}>{row.tercero_documento}</td>
-                    <td style={celda(t)}>{row.descripcion}</td>
-                    <td style={celda(t)}>{row.documento_no}</td>
-                    <td style={celda(t)}>{row.centro_costos}</td>
-                    <td style={celda(t)}>{formatCOP(row.valor_bruto)}</td>
-                    <td style={celda(t)}>{formatCOP(row.iva)}</td>
-                    <td style={celda(t)}>{formatCOP(row.retenciones)}</td>
-                    <td style={celda(t)}>{formatCOP(row.impuesto_consumo)}</td>
-                    <td style={celda(t)}>{formatCOP(row.otros_deducibles)}</td>
-                    <td style={celda(t)}>{row.estado_validacion === 'rechazado' ? formatCOP(0) : formatCOP(row.valor_neto)}</td>
-                    <td style={celda(t)}>
-                      <IconBtn title="Ver recibo" t={t} onClick={() => verImagen('gastos', row.id, `Recibo ${row.consecutivo}`)}>
-                        <ImageIcon size={16} />
-                      </IconBtn>
-                    </td>
-                    <td style={celda(t)}>
-                      <span style={{ display: 'flex', gap: 4 }}>
-                        {enLegalizacion && acceso.validar && row.estado_validacion === 'pendiente' && (
-                          <>
-                            <IconBtn title="Aprobar gasto" t={t} disabled={ocupado} onClick={() => correr(() => api.validar(contratoId, caja.id, row.id, { decision: 'aprobado', observacion: '' }))}>
-                              <Check size={16} />
-                            </IconBtn>
-                            <IconBtn title="Rechazar gasto" t={t} onClick={() => setRechazo({ id: row.id, texto: '' })}>
-                              <X size={16} />
-                            </IconBtn>
-                          </>
-                        )}
-                        {abierta && acceso.editar && row.estado_validacion === 'pendiente' && (
-                          <IconBtn
-                            title="Editar gasto"
-                            t={t}
-                            onClick={() => setGasto({
-                              id: row.id,
-                              fecha: row.fecha || hoyColombia(),
-                              tercero_razon_social: row.tercero_razon_social || '',
-                              tercero_documento: row.tercero_documento || '',
-                              descripcion: row.descripcion || '',
-                              documento_no: row.documento_no || '',
-                              centro_costos: row.centro_costos || '',
-                              valor_bruto: row.valor_bruto ?? '',
-                              iva: row.iva ?? '0',
-                              retenciones: row.retenciones ?? '0',
-                              impuesto_consumo: row.impuesto_consumo ?? '0',
-                              otros_deducibles: row.otros_deducibles ?? '0',
-                              total_leido: null,
-                              file: null,
-                            })}
-                          >
-                            <Pencil size={16} />
-                          </IconBtn>
-                        )}
-                        {abierta && acceso.eliminar && (
-                          <IconBtn title={borrarId === `g${row.id}` ? 'Confirmar eliminación' : 'Eliminar gasto'} t={t} onClick={() => {
-                            if (borrarId !== `g${row.id}`) { setBorrarId(`g${row.id}`); return }
-                            correr(() => api.eliminarGasto(contratoId, caja.id, row.id))
-                          }}
-                          >
-                            <Trash2 size={16} />
-                          </IconBtn>
-                        )}
-                        {row.estado_validacion !== 'pendiente' && (
-                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>{ETIQUETA_ESTADO[row.estado_validacion]}</span>
-                        )}
-                      </span>
-                      {rechazo?.id === row.id && (
-                        <span style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                          <input
-                            aria-label="Observación del rechazo"
-                            placeholder="Observación"
-                            value={rechazo.texto}
-                            onChange={(e) => setRechazo({ ...rechazo, texto: e.target.value })}
-                            style={{ ...entrada(t), border: `1px solid ${t.border}`, borderRadius: 6, background: t.inputBg }}
-                          />
-                          <IconBtn title="Confirmar rechazo" t={t} disabled={ocupado || !rechazo.texto.trim()} onClick={async () => {
-                            const det = await correr(() => api.validar(contratoId, caja.id, row.id, { decision: 'rechazado', observacion: rechazo.texto.trim() }))
-                            if (det?.caja) setRechazo(null)
-                          }}
-                          >
-                            <Check size={16} />
-                          </IconBtn>
-                        </span>
-                      )}
-                      {row.observacion_validacion ? (
-                        <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>{row.observacion_validacion}</div>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-                {!detalle.gastos?.length && !gasto && (
-                  <tr><td style={celda(t)} colSpan={15}>Sin gastos.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <input
-            ref={fileGasto}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={async (e) => {
-              const file = e.target.files?.[0]
-              if (file) await tomarRecibo(file)
-            }}
-          />
-          {preview && (
-            <div style={{ marginTop: 12, border: `1px solid ${t.border}`, borderRadius: 8, padding: 8, background: t.bgCard }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <span style={{ fontSize: 'var(--cc-sm)' }}>{preview.titulo}</span>
-                <IconBtn title="Cerrar imagen" t={t} onClick={() => setPreview(null)}><X size={14} /></IconBtn>
-              </div>
-              <img src={preview.url} alt={preview.titulo} style={{ maxWidth: '100%', maxHeight: vp.isMobile ? 320 : 520, objectFit: 'contain' }} />
-            </div>
-          )}
-          {caja?.legalizada_en && (
-            <p style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
-              Legalizada {formatFechaHoraColombia(caja.legalizada_en)}
-            </p>
-          )}
-        </>
+      {detalle && !cargando && (
+        <CajaMenorDetalle
+          t={t}
+          vp={vp}
+          api={api}
+          contratoId={contratoId}
+          caja={caja}
+          detalle={detalle}
+          ind={ind}
+          meta={meta}
+          setMeta={setMeta}
+          acceso={acceso}
+          usuario={usuario}
+          aviso={aviso}
+          ocupado={ocupado}
+          borrarId={borrarId}
+          panel={panel}
+          vista={vista}
+          ingreso={ingreso}
+          gasto={gasto}
+          rechazo={rechazo}
+          preview={preview}
+          neto={netoBorrador}
+          setIngreso={setIngreso}
+          setGasto={setGasto}
+          setRechazo={setRechazo}
+          onVolverCajas={volverCajas}
+          onEliminarCaja={async () => {
+            if (borrarId !== 'caja') { setBorrarId('caja'); return }
+            setOcupado(true)
+            try {
+              await api.eliminar(contratoId, caja.id)
+              setBorrarId(null)
+              volverCajas()
+            } catch (e) {
+              setAviso({ tipo: 'error', texto: e.message })
+            } finally {
+              setOcupado(false)
+            }
+          }}
+          onExcel={() => api.excel(contratoId, caja.id, `CajaMenor_${caja.numero}.xlsx`).catch((e) => setAviso({ tipo: 'error', texto: e.message }))}
+          onPdf={() => api.pdf(contratoId, caja.id, `CajaMenor_${caja.numero}_recibos.pdf`).catch((e) => setAviso({ tipo: 'error', texto: e.message }))}
+          onCierre={() => correr(() => api.cierre(contratoId, caja.id))}
+          onGuardarMeta={() => correr(() => api.meta(contratoId, caja.id, meta))}
+          onAbrirPanel={abrirPanel}
+          onCerrarPanel={cerrarPanel}
+          onVolverVista={volverVista}
+          onNuevaConsignacion={nuevaConsignacion}
+          onGuardarIngreso={guardarIngreso}
+          onEliminarIngreso={(row) => {
+            if (borrarId !== `i${row.id}`) { setBorrarId(`i${row.id}`); return }
+            correr(() => api.eliminarIngreso(contratoId, caja.id, row.id))
+          }}
+          onNuevoGasto={nuevoGasto}
+          onEditarGasto={editarGasto}
+          onGuardarGasto={guardarGasto}
+          onDocumento={completarTercero}
+          onTomarRecibo={tomarRecibo}
+          onVerSoporte={verSoporte}
+          onAprobar={async (row) => {
+            const det = await correr(() => api.validar(contratoId, caja.id, row.id, { decision: 'aprobado', observacion: '' }))
+            if (det?.caja) {
+              setRechazo(null)
+              setVista('lista')
+              setPreview(null)
+            }
+          }}
+          onPedirRechazo={revisarGasto}
+          onConfirmarRechazo={async () => {
+            const det = await correr(() => api.validar(contratoId, caja.id, rechazo.id, { decision: 'rechazado', observacion: rechazo.texto.trim() }))
+            if (det?.caja) {
+              setRechazo(null)
+              setVista('lista')
+              setPreview(null)
+            }
+          }}
+          onEliminarGasto={(row) => {
+            if (borrarId !== `g${row.id}`) { setBorrarId(`g${row.id}`); return }
+            correr(() => api.eliminarGasto(contratoId, caja.id, row.id))
+          }}
+          onCerrarAviso={() => setAviso(null)}
+        />
       )}
     </div>
-  )
-}
-
-function bloqueada(caja) {
-  return caja?.estado === 'legalizada'
-}
-
-function FilaGasto({ t, gasto, setGasto, neto, ocupado, onArchivo, onGuardar, onCancelar, onDocumento, imagenLista }) {
-  const set = (clave) => (e) => setGasto({ ...gasto, [clave]: e.target.value })
-  const campo = (clave, label, tipo = 'text') => (
-    <td style={celda(t)}>
-      <input
-        aria-label={label}
-        type={tipo}
-        max={tipo === 'date' ? hoyColombia() : undefined}
-        value={gasto[clave] ?? ''}
-        onChange={set(clave)}
-        onBlur={clave === 'tercero_documento' ? () => onDocumento(gasto.tercero_documento) : undefined}
-        style={entrada(t)}
-      />
-    </td>
-  )
-  return (
-    <tr>
-      <td style={celda(t)} />
-      {campo('fecha', 'Fecha', 'date')}
-      {campo('tercero_razon_social', 'Tercero')}
-      {campo('tercero_documento', 'NIT o cédula')}
-      {campo('descripcion', 'Descripción')}
-      {campo('documento_no', 'Documento No.')}
-      {campo('centro_costos', 'Centro de costos')}
-      {campo('valor_bruto', 'Valor bruto')}
-      {campo('iva', 'IVA')}
-      {campo('retenciones', 'Retenciones')}
-      {campo('impuesto_consumo', 'Impuesto al consumo')}
-      {campo('otros_deducibles', 'Otros deducibles')}
-      <td style={celda(t)}>{formatCOP(neto > 0 ? neto : 0)}</td>
-      <td style={celda(t)}>
-        <IconBtn title={imagenLista ? 'Recibo listo. Puede pegar otra imagen' : 'Cargar o pegar recibo'} t={t} onClick={onArchivo}><ImageIcon size={16} /></IconBtn>
-      </td>
-      <td style={celda(t)}>
-        <span style={{ display: 'flex', gap: 4 }}>
-          <IconBtn title="Guardar gasto" t={t} disabled={ocupado || neto <= 0} onClick={onGuardar}><Check size={16} /></IconBtn>
-          <IconBtn title="Cancelar" t={t} onClick={onCancelar}><X size={16} /></IconBtn>
-        </span>
-      </td>
-    </tr>
   )
 }
