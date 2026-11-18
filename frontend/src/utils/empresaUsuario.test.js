@@ -68,4 +68,20 @@ describe('empresaUsuario', () => {
     assert.equal(empresaKeyFromUsuario({ empresa_tipo: 'contratista' }), 'contratista')
     assert.equal(empresaKeyFromUsuario({ empresa_tipo: 'subcontratista', subcontratista_id: 3 }), 'sub:3')
   })
+
+  it('sid residual sin tipo no aparece como Empresa=sub en el selector', () => {
+    assert.equal(empresaKeyFromUsuario({ subcontratista_id: 12 }), '')
+    assert.equal(empresaKeyFromUsuario({ empresa_tipo: null, subcontratista_id: 4 }), '')
+  })
+
+  it('rol subcontratista sin empresa no aísla ni activa vista sub', () => {
+    assert.equal(
+      esVistaSubcontratista({ rol_nombre: 'subcontratista', subcontratista_id: 8 }),
+      false,
+    )
+    assert.equal(
+      esVistaSubcontratista({ rol_nombre: 'Operativo Interventoria', empresa_tipo: 'interventoria' }),
+      false,
+    )
+  })
 })

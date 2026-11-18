@@ -28,7 +28,8 @@ export function empresaKeyFromUsuario(u) {
   const sid = parseSubcontratistaId(u?.subcontratista_id ?? u?.sub_id)
   if (tipo === 'contratista') return 'contratista'
   if (tipo === 'interventoria') return 'interventoria'
-  if (sid != null) return `sub:${sid}`
+  // Solo sub:{id} con tipo explícito. Un sid residual sin tipo no es empresa sub.
+  if (tipo === 'subcontratista' && sid != null) return `sub:${sid}`
   if (tipo === 'subcontratista') return ''
   return ''
 }
@@ -72,13 +73,8 @@ export function usuarioAisladoPorEmpresaSub(usuario) {
 
 /**
  * ¿Debe tratarse como «vista subcontratista» (economía propia, filtro de datos)?
- * Incluye rol legacy «subcontratista».
+ * Solo por Empresa=subcontratista. El rol/cargo no aíslan.
  */
 export function esVistaSubcontratista(usuario) {
-  const rol = String(usuario?.rol_nombre || usuario?.rol || '')
-    .trim()
-    .toLowerCase()
-    .replace(/í/g, 'i')
-  if (rol === 'subcontratista') return true
   return usuarioAisladoPorEmpresaSub(usuario)
 }

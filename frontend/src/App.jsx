@@ -310,7 +310,7 @@ import {
 import { sicoeFiltrarRegistrosParaSub } from './modules/sicoe-obra/sicoeSubcontratistaRegistros'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { permisosTopografia, usuarioPuedeEditarRegistrosSicoe } from './utils/permisosContrato'
-import { esVistaSubcontratista } from './utils/empresaUsuario'
+import { esVistaSubcontratista, usuarioAisladoPorEmpresaSub } from './utils/empresaUsuario'
 import { SICOE_ALERTA_SYNC_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -11162,7 +11162,8 @@ function ModuloSicoeObra({
         panelActasRpo: sicoePanelActasRpoRef.current,
       },
     })
-    if (esSub && subIdUsuario && !params.has('subcontratista_id')) {
+    // Solo inyectar filtro de sub si Empresa=subcontratista (no por rol/cargo).
+    if (usuarioAisladoPorEmpresaSub(usuario) && subIdUsuario && !params.has('subcontratista_id')) {
       params.set('subcontratista_id', String(subIdUsuario))
     }
     if (capas.length > 0) {
