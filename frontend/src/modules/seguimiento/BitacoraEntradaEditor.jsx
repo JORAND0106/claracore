@@ -69,7 +69,7 @@ import {
 } from './bitacoraConstants'
 import { debeUsarGrillaDiarioCompacta } from './bitacoraDiarioMobile'
 import { bitacoraSheetCssVars, bitacoraSheetStyles } from './bitacoraSheetStyles'
-import { labelTramoBitacora, normalizeTramoValue } from './bitacoraTramoHelpers'
+import { normalizeTramoValue } from './bitacoraTramoHelpers'
 import { API_BASE } from '../../apiBase'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import {
