@@ -90,7 +90,8 @@ function celda(t, extra) {
     background: t.bgCard,
     fontSize: 'var(--cc-sm)',
     verticalAlign: 'middle',
-    overflowWrap: 'anywhere',
+    whiteSpace: 'nowrap',
+    boxSizing: 'border-box',
     ...extra,
   }
 }
@@ -244,10 +245,13 @@ function MarcoPopup({ t, movil, children }) {
         justifyContent: 'center',
       }}
     >
-      <div style={{
-        width: movil ? '100%' : 'min(1120px, 96vw)',
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+        width: movil ? '100%' : 'calc(100vw - 16px)',
+        maxWidth: movil ? '100%' : 'calc(100vw - 16px)',
         height: movil ? '100%' : 'auto',
-        maxHeight: movil ? '100%' : '92vh',
+        maxHeight: movil ? '100%' : '94vh',
         background: t.bg,
         color: t.text,
         borderRadius: movil ? 0 : 16,
@@ -267,7 +271,7 @@ function MarcoPopup({ t, movil, children }) {
 export default function CajaMenorDetalle(props) {
   const {
     t, vp, api, contratoId, caja, detalle, ind, meta, setMeta, acceso, usuario,
-    aviso, ocupado, borrarId, panel, vista, ingreso, gasto, rechazo, preview, neto,
+    aviso, ocupado, borrarId, panel, vista, ingreso, gasto, rechazo, preview, neto, leyendo,
     onVolverCajas, onEliminarCaja, onExcel, onPdf, onCierre, onGuardarMeta,
     onAbrirPanel, onCerrarPanel, onVolverVista,
     setIngreso, onGuardarIngreso, onEliminarIngreso,
@@ -276,7 +280,6 @@ export default function CajaMenorDetalle(props) {
     onVerSoporte, onCerrarAviso,
   } = props
   const movil = vp.isMobile || vp.isLandscapeMobile
-  const angosto = !vp.isDesktop
   const contrato = detalle?.contrato || {}
   const ingresos = detalle?.ingresos || []
   const gastos = detalle?.gastos || []
@@ -294,17 +297,10 @@ export default function CajaMenorDetalle(props) {
     if (!panel) return undefined
     const previo = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    const onKey = (event) => {
-      if (event.key !== 'Escape') return
-      if (vista === 'lista') onCerrarPanel()
-      else onVolverVista()
-    }
-    window.addEventListener('keydown', onKey)
     return () => {
       document.body.style.overflow = previo
-      window.removeEventListener('keydown', onKey)
     }
-  }, [panel, vista, onCerrarPanel, onVolverVista])
+  }, [panel])
 
   return (
     <div style={{ color: t.text, minWidth: 0 }}>
@@ -476,7 +472,7 @@ export default function CajaMenorDetalle(props) {
             <Aviso aviso={aviso} t={t} ocupado={ocupado} onContinuar={() => onGuardarGasto(true)} onCerrar={onCerrarAviso} />
             {panel === 'ingresos' && (
               <PanelIngresos
-                t={t} movil={movil} angosto={angosto} api={api} contratoId={contratoId} caja={caja}
+                t={t} movil={movil} api={api} contratoId={contratoId} caja={caja}
                 ingresos={ingresos} total={totalIngresos} acceso={acceso} abierta={caja?.estado === 'abierta'}
                 vista={vista} ingreso={ingreso} setIngreso={setIngreso} preview={preview}
                 ocupado={ocupado} borrarId={borrarId}
@@ -486,7 +482,7 @@ export default function CajaMenorDetalle(props) {
             )}
             {panel === 'gastos' && (
               <PanelGastos
-                t={t} movil={movil} angosto={angosto} api={api} contratoId={contratoId} caja={caja}
+                t={t} movil={movil} leyendo={leyendo} api={api} contratoId={contratoId} caja={caja}
                 gastos={gastos} acceso={acceso} ind={ind} vista={vista} gasto={gasto} setGasto={setGasto}
                 neto={neto} preview={preview} rechazo={rechazo} setRechazo={setRechazo}
                 ocupado={ocupado} borrarId={borrarId} enLegalizacion={caja?.estado === 'en_legalizacion'}
@@ -551,7 +547,7 @@ function ZonaSoporte({ t, file, children }) {
 }
 
 function PanelIngresos({
-  t, movil, angosto, api, contratoId, caja, ingresos, total, acceso, abierta, vista, ingreso, setIngreso,
+  t, movil, api, contratoId, caja, ingresos, total, acceso, abierta, vista, ingreso, setIngreso,
   preview, ocupado, borrarId, onGuardar, onEliminar, onVer, onNuevo,
 }) {
   const inputArchivo = useRef(null)
@@ -563,12 +559,8 @@ function PanelIngresos({
     return (
       <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : 'minmax(220px, 340px) 1fr', gap: 16 }}>
         <ZonaSoporte t={t} file={ingreso.file}>
-          {movil && (
-            <>
-              <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
-              <IconBtn title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
-            </>
-          )}
+          <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
+          <IconBtn title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
           <input ref={inputArchivo} type="file" accept="image/*" hidden onChange={(e) => tomarArchivo(e, setIngreso)} />
           <IconBtn title="Cargar soporte" t={t} onClick={() => inputArchivo.current?.click()}><ImageIcon size={16} /></IconBtn>
         </ZonaSoporte>
@@ -597,7 +589,7 @@ function PanelIngresos({
           </IconBtn>
         )}
       </div>
-      {angosto ? (
+      {movil ? (
         <div style={{ display: 'grid', gap: 8 }}>
           {ingresos.map((row) => (
             <TarjetaIngreso key={row.id} t={t} row={row} api={api} contratoId={contratoId} cajaId={caja.id} acceso={acceso} abierta={abierta} borrarId={borrarId} onEliminar={onEliminar} onVer={onVer} />
@@ -609,7 +601,8 @@ function PanelIngresos({
           </div>
         </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{ overflow: 'auto' }}>
+        <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
               {['Fecha', 'Valor', 'Soporte', 'Acciones'].map((h) => (
@@ -629,6 +622,7 @@ function PanelIngresos({
             </tr>
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )
@@ -686,7 +680,7 @@ function ImagenGrande({ preview, t }) {
 
 function PanelGastos(props) {
   const {
-    t, movil, angosto, api, contratoId, caja, gastos, acceso, ind, vista, gasto, setGasto, neto, preview,
+    t, movil, leyendo, api, contratoId, caja, gastos, acceso, ind, vista, gasto, setGasto, neto, preview,
     rechazo, setRechazo, ocupado, borrarId, enLegalizacion, onNuevo, onEditar, onGuardar,
     onDocumento, onTomar, onVer, onAprobar, onPedirRechazo, onConfirmarRechazo, onEliminar,
   } = props
@@ -719,12 +713,8 @@ function PanelGastos(props) {
       <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : 'minmax(220px, 340px) 1fr', gap: 16 }}>
         <div>
           <ZonaSoporte t={t} file={gasto.file}>
-            {movil && (
-              <>
-                <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => e.target.files?.[0] && onTomar(e.target.files[0])} />
-                <IconBtn title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
-              </>
-            )}
+            <input ref={inputCamara} type="file" accept="image/*" capture="environment" hidden onChange={(e) => e.target.files?.[0] && onTomar(e.target.files[0])} />
+            <IconBtn title="Tomar foto" t={t} onClick={() => inputCamara.current?.click()}><Camera size={16} /></IconBtn>
             <input ref={inputArchivo} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && onTomar(e.target.files[0])} />
             <IconBtn title="Cargar o pegar recibo" t={t} onClick={() => inputArchivo.current?.click()}><ImageIcon size={16} /></IconBtn>
           </ZonaSoporte>
@@ -734,7 +724,7 @@ function PanelGastos(props) {
             </div>
           )}
         </div>
-        <FormularioGasto t={t} movil={movil} gasto={gasto} setGasto={setGasto} neto={neto} ocupado={ocupado} onDocumento={onDocumento} onGuardar={onGuardar} />
+        <FormularioGasto t={t} movil={movil} gasto={gasto} setGasto={setGasto} neto={neto} ocupado={ocupado || leyendo} leyendo={leyendo} onDocumento={onDocumento} onGuardar={onGuardar} />
       </div>
     )
   }
@@ -745,7 +735,7 @@ function PanelGastos(props) {
           <IconBtn title="Nuevo gasto" t={t} onClick={onNuevo}><Plus size={16} /></IconBtn>
         )}
       </div>
-      {angosto ? (
+      {movil ? (
         <div style={{ display: 'grid', gap: 8 }}>
           {gastos.map((row) => (
             <TarjetaGasto key={row.id} t={t} row={row} api={api} contratoId={contratoId} caja={caja} acceso={acceso} enLegalizacion={enLegalizacion} borrarId={borrarId} onVer={onVer} onEditar={onEditar} onAprobar={onAprobar} onPedirRechazo={onPedirRechazo} onEliminar={onEliminar} />
@@ -757,11 +747,25 @@ function PanelGastos(props) {
           </div>
         </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(94vh - 150px)' }}>
+          <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
             <thead>
               <tr>
-                {['#', 'Fecha', 'Tercero', 'NIT', 'Descripción', 'Documento', 'Centro de costos', 'Bruto', 'IVA', 'Retenciones', 'Consumo', 'Otros', 'Neto', 'Soporte', 'Estado', 'Acciones'].map((h) => (
-                  <th key={h} style={{ ...celda(t), background: t.headerBg, fontWeight: 700, textAlign: esValor(h) ? 'right' : 'left', width: ANCHO_GASTO[h] }}>{h}</th>
+                <th rowSpan={2} style={thFijo(t, 0, 56)}>#</th>
+                <th rowSpan={2} style={thFijo(t, 56, 240)}>Tercero</th>
+                <th rowSpan={2} style={thTexto(t, 118)}>Fecha</th>
+                <th rowSpan={2} style={thTexto(t, 132)}>NIT</th>
+                <th rowSpan={2} style={thTexto(t, 280)}>Descripción</th>
+                <th rowSpan={2} style={thTexto(t, 150)}>Documento</th>
+                <th rowSpan={2} style={thTexto(t, 160)}>Centro de costos</th>
+                <th colSpan={6} style={thTexto(t, 118 * 6, 'center')}>Valores</th>
+                <th rowSpan={2} style={thTexto(t, 84)}>Soporte</th>
+                <th rowSpan={2} style={thTexto(t, 132)}>Estado</th>
+                <th rowSpan={2} style={thTexto(t, 140)}>Acciones</th>
+              </tr>
+              <tr>
+                {['Bruto', 'IVA', 'Retenciones', 'Consumo', 'Otros', 'Neto'].map((h) => (
+                  <th key={h} style={thTexto(t, 118, 'right')}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -777,35 +781,54 @@ function PanelGastos(props) {
               </tr>
             </tbody>
           </table>
+        </div>
       )}
     </div>
   )
 }
 
-const ANCHO_GASTO = {
-  '#': '4%',
-  Fecha: '6%',
-  Tercero: '11%',
-  NIT: '7%',
-  Descripción: '11%',
-  Documento: '6%',
-  'Centro de costos': '6%',
-  Bruto: '6%',
-  IVA: '4%',
-  Retenciones: '6%',
-  Consumo: '4%',
-  Otros: '4%',
-  Neto: '6%',
-  Soporte: '6%',
-  Estado: '5%',
-  Acciones: '8%',
+function thTexto(t, min, align = 'left') {
+  return {
+    ...celda(t),
+    background: t.headerBg,
+    fontWeight: 700,
+    textAlign: align,
+    minWidth: min,
+  }
 }
 
-function esValor(h) {
-  return ['Bruto', 'IVA', 'Retenciones', 'Consumo', 'Otros', 'Neto'].includes(h)
+function thFijo(t, left, ancho) {
+  return {
+    ...thTexto(t, ancho),
+    position: 'sticky',
+    left,
+    zIndex: 3,
+    width: ancho,
+  }
 }
 
-function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, onDocumento, onGuardar }) {
+function tdFijo(t, left, ancho) {
+  return {
+    ...celda(t),
+    position: 'sticky',
+    left,
+    zIndex: 2,
+    minWidth: ancho,
+    width: ancho,
+    background: t.bgCard,
+  }
+}
+
+function estiloCampo(t, gasto, clave) {
+  const base = campo(t)
+  if (!gasto?.ocrHecho) return base
+  const vacio = String(gasto[clave] ?? '').trim() === ''
+  const leido = (gasto.leidos || []).includes(clave)
+  if (vacio && !leido) return { ...base, border: '1.5px solid #D97706' }
+  return base
+}
+
+function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, onDocumento, onGuardar }) {
   const set = (clave) => (e) => setGasto({ ...gasto, [clave]: e.target.value })
   const item = (clave, label, tipo = 'text') => (
     <label>
@@ -817,19 +840,24 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, onDocumento
         value={gasto[clave] ?? ''}
         onChange={set(clave)}
         onBlur={clave === 'tercero_documento' ? () => onDocumento(gasto.tercero_documento) : undefined}
-        style={campo(t)}
+        style={estiloCampo(t, gasto, clave)}
       />
     </label>
   )
   return (
     <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : '1fr 1fr', gap: 10, alignContent: 'start' }}>
+      {leyendo && (
+        <div style={{ gridColumn: movil ? 'auto' : '1 / -1', color: t.primary, fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
+          Leyendo la factura…
+        </div>
+      )}
       {item('fecha', 'Fecha', 'date')}
       {item('tercero_razon_social', 'Tercero')}
       {item('tercero_documento', 'NIT o cédula')}
       {item('documento_no', 'Documento No.')}
       <label style={{ gridColumn: movil ? 'auto' : '1 / -1' }}>
         <span style={etiquetaCampo(t)}>Descripción</span>
-        <input aria-label="Descripción" value={gasto.descripcion ?? ''} onChange={set('descripcion')} style={campo(t)} />
+        <input aria-label="Descripción" value={gasto.descripcion ?? ''} onChange={set('descripcion')} style={estiloCampo(t, gasto, 'descripcion')} />
       </label>
       {item('centro_costos', 'Centro de costos')}
       {item('valor_bruto', 'Valor bruto')}
@@ -839,7 +867,17 @@ function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, onDocumento
       {item('otros_deducibles', 'Otros deducibles')}
       <div>
         <span style={etiquetaCampo(t)}>Valor neto</span>
-        <div style={{ fontWeight: 700, minHeight: 40, display: 'flex', alignItems: 'center' }}>{formatCOP(neto > 0 ? neto : 0)}</div>
+        <div style={{
+          fontWeight: 700,
+          minHeight: 40,
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 10px',
+          borderRadius: 8,
+          border: gasto?.ocrHecho && !(neto > 0) ? '1.5px solid #D97706' : '1px solid transparent',
+        }}
+        >{formatCOP(neto > 0 ? neto : 0)}
+        </div>
       </div>
       <div style={{ gridColumn: movil ? 'auto' : '1 / -1' }}>
         <IconBtn title="Guardar gasto" t={t} disabled={ocupado || neto <= 0} onClick={onGuardar}><Check size={16} /></IconBtn>
@@ -874,9 +912,9 @@ function FilaGastoLista(props) {
   const dinero = (n) => <td style={{ ...celda(t), textAlign: 'right' }}>{formatCOP(n)}</td>
   return (
     <tr style={{ opacity: row.estado_validacion === 'rechazado' ? 0.55 : 1 }}>
-      <td style={celda(t)}>{row.consecutivo}</td>
-      <td style={celda(t)}>{row.fecha}</td>
-      <td style={celda(t)}>{row.tercero_razon_social}</td>
+      <td style={tdFijo(t, 0, 56)}>{row.consecutivo}</td>
+      <td style={tdFijo(t, 56, 240)}>{row.tercero_razon_social}</td>
+      <td style={{ ...celda(t), minWidth: 118 }}>{row.fecha}</td>
       <td style={celda(t)}>{row.tercero_documento}</td>
       <td style={celda(t)}>{row.descripcion}</td>
       <td style={celda(t)}>{row.documento_no}</td>
@@ -890,7 +928,7 @@ function FilaGastoLista(props) {
       <td style={celda(t)}>
         <Miniatura url={url} titulo={`Recibo ${row.consecutivo}`} t={t} onAmpliar={() => props.onVer('gastos', row.id, `Recibo ${row.consecutivo}`)} />
       </td>
-      <td style={celda(t)}>
+      <td style={{ ...celda(t), whiteSpace: 'normal', minWidth: 132, maxWidth: 220 }}>
         <Etiqueta estado={row.estado_validacion} />
         {row.observacion_validacion ? <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', marginTop: 4 }}>{row.observacion_validacion}</div> : null}
       </td>

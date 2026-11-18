@@ -242,6 +242,9 @@ def test_ocr_extrae_impuestos_sin_red():
     assert "fecha" in out["campos_detectados"]
     vacio = ocr.analyze_recibo_bytes(b"")
     assert vacio["ok"] is False
+    assert "locale=es-ES" in ocr.url_analisis()
+    cuerpo = ocr.cuerpo_analisis(b"factura")
+    assert cuerpo["base64Source"]
 
 
 def test_flujo_caja_traslado_rechazo_y_80():

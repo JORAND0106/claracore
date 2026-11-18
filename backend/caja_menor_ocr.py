@@ -8,6 +8,7 @@ Variables (las mismas de la plataforma, no un almacén de datos compartido):
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import re
@@ -120,7 +121,13 @@ def mapear_analisis(analyze: dict) -> dict:
 
     if iva is None:
         iva = _buscar_etiqueta(content, ("iva", "i\\.v\\.a"))
-    retenciones = _buscar_etiqueta(content, ("retenci[oó]n", "retefuente", "reteica", "reteiva"))
+    retenciones = None
+    for nombre in ("WithholdingTax", "TaxWithheld"):
+        retenciones = _monto(_field(fields, nombre))
+        if retenciones is not None:
+            break
+    if retenciones is None:
+        retenciones = _buscar_etiqueta(content, ("retenci[oó]n", "retefuente", "reteica", "reteiva"))
     impoconsumo = _buscar_etiqueta(content, ("impoconsumo", "impuesto al consumo", "impoconsumo"))
     otros = _buscar_etiqueta(content, ("otros deducibles", "otras deducciones", "descuento"))
 
@@ -171,6 +178,17 @@ def mapear_analisis(analyze: dict) -> dict:
     }
 
 
+def url_analisis() -> str:
+    return (
+        f"{_endpoint()}/documentintelligence/documentModels/{MODEL_ID}:analyze"
+        f"?api-version={API_VERSION}&locale=es-ES"
+    )
+
+
+def cuerpo_analisis(data: bytes) -> dict:
+    return {"base64Source": base64.b64encode(data).decode("ascii")}
+
+
 def analyze_recibo_bytes(data: bytes, content_type: str = "image/jpeg") -> dict:
     if not data:
         return {"ok": False, "configured": ocr_configured(), "mensaje": "Falta la imagen.", "sugerencias": {}, "campos_detectados": []}
@@ -195,14 +213,15 @@ def analyze_recibo_bytes(data: bytes, content_type: str = "image/jpeg") -> dict:
             "campos_detectados": [],
         }
 
-    url = f"{_endpoint()}/documentintelligence/documentModels/{MODEL_ID}:analyze?api-version={API_VERSION}"
+    _ = content_type
+    url = url_analisis()
     headers = {
         "Ocp-Apim-Subscription-Key": _key(),
-        "Content-Type": content_type or "application/octet-stream",
+        "Content-Type": "application/json",
     }
     try:
         with httpx.Client(timeout=MAX_WAIT_SEC + 5) as client:
-            res = client.post(url, content=data, headers=headers)
+            res = client.post(url, json=cuerpo_analisis(data), headers=headers)
             if res.status_code not in (200, 202):
                 _log.warning("ocr caja menor status %s", res.status_code)
                 return {

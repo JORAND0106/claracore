@@ -1,3 +1,4 @@
+import { tokenActual } from '../../auth/tokenParaUi'
 import { API_BASE } from '../../apiBase'
 
 function mensajeDe(data, status) {
@@ -9,7 +10,7 @@ function mensajeDe(data, status) {
 }
 
 export function createCajaMenorApi(token) {
-  const auth = () => ({ Authorization: `Bearer ${token || ''}` })
+  const auth = () => ({ Authorization: `Bearer ${tokenActual() || token || ''}` })
 
   async function leer(res) {
     const text = await res.text()

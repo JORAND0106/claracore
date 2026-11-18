@@ -100,7 +100,7 @@ npm run test:cache
 ## Aviso al recargar (F5)
 
 - Con sesión y contrato activo, `RefreshCacheGuard` intercepta **F5**, **Ctrl+R** y **Ctrl+F5** y muestra modal ClaraCore.
-- El **botón de recarga del navegador** dispara el diálogo nativo del browser (`beforeunload`); el texto personalizado no es posible por política de seguridad.
+- No registra `beforeunload`: ese aviso impedía congelar la página y, al cambiar de aplicación, el navegador la recargaba.
 - Recomienda usar **🔄 Actualizar** del módulo en lugar de recargar la página.
 
 
