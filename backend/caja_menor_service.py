@@ -42,6 +42,11 @@ _MSG_API_NO_VE_TABLAS = (
     "Caja Menor no está visible para el API. En Supabase ejecute "
     "backend/sql/caja_menor_grants.sql y vuelva a abrir el módulo."
 )
+_MSG_FALTA_OBSERVACIONES = (
+    "Falta la columna de observaciones del gasto. En Supabase ejecute "
+    "backend/migrations/20261118161000_caja_menor_gasto_observaciones.sql "
+    "y vuelva a abrir el módulo."
+)
 
 
 def mensaje_falla_datos(exc: Exception) -> str:
@@ -52,6 +57,8 @@ def mensaje_falla_datos(exc: Exception) -> str:
         if val:
             partes.append(str(val))
     blob = " ".join(partes).lower()
+    if "observaciones" in blob and "could not find" in blob:
+        return _MSG_FALTA_OBSERVACIONES
     if any(k in blob for k in (
         "pgrst205",
         "schema cache",
@@ -77,6 +84,7 @@ _GASTO_CAMPOS = (
     "retenciones",
     "impuesto_consumo",
     "otros_deducibles",
+    "observaciones",
 )
 
 
@@ -589,13 +597,15 @@ def _armar_gasto(campos: dict, *, centro_defecto: str, numero_caja: int, consecu
     if _vacio(campos.get("centro_costos")):
         campos["centro_costos"] = centro_defecto
     texto = ("fecha", "tercero_razon_social", "tercero_documento", "descripcion", "documento_no", "centro_costos")
-    numeros = ("valor_bruto", "iva", "retenciones", "impuesto_consumo", "otros_deducibles")
-    if any(_vacio(campos.get(c)) for c in texto) or any(_vacio(campos.get(c)) for c in numeros):
+    for clave in ("iva", "retenciones", "impuesto_consumo", "otros_deducibles"):
+        if _vacio(campos.get(clave)):
+            campos[clave] = 0
+    if any(_vacio(campos.get(c)) for c in texto) or _vacio(campos.get("valor_bruto")):
         raise ValueError("Todos los campos del gasto son obligatorios.")
     if not documento_valido(campos.get("tercero_documento")):
         raise ValueError("Indique el NIT o la cédula.")
     dia = fecha_no_futura(campos.get("fecha"))
-    for clave in numeros:
+    for clave in ("valor_bruto", "iva", "retenciones", "impuesto_consumo", "otros_deducibles"):
         if dinero(campos.get(clave)) < 0:
             raise ValueError("Los valores no pueden ser negativos.")
     neto = valor_neto(
@@ -621,6 +631,7 @@ def _armar_gasto(campos: dict, *, centro_defecto: str, numero_caja: int, consecu
         "impuesto_consumo": dinero(campos.get("impuesto_consumo")),
         "otros_deducibles": dinero(campos.get("otros_deducibles")),
         "valor_neto": neto,
+        "observaciones": str(campos.get("observaciones") or "").strip()[:1000],
     }
 
 
@@ -1001,6 +1012,8 @@ def exportar_pdf(sb, user, contrato_id, caja_id, *, storage=None) -> tuple:
             "consecutivo": g.get("consecutivo"),
             "fecha": g.get("fecha"),
             "tercero": g.get("tercero_razon_social"),
+            "razon_social": g.get("tercero_razon_social"),
+            "observaciones": g.get("observaciones") or "",
             "estado": g.get("estado_validacion"),
             "imagen": imagen,
         })

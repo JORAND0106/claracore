@@ -124,6 +124,7 @@ export function fdGasto(draft, file, confirmar) {
   fd.append('retenciones', draft.retenciones === '' || draft.retenciones == null ? '0' : String(draft.retenciones))
   fd.append('impuesto_consumo', draft.impuesto_consumo === '' || draft.impuesto_consumo == null ? '0' : String(draft.impuesto_consumo))
   fd.append('otros_deducibles', draft.otros_deducibles === '' || draft.otros_deducibles == null ? '0' : String(draft.otros_deducibles))
+  fd.append('observaciones', draft.observaciones || '')
   fd.append('confirmar_duplicado', confirmar ? '1' : '0')
   if (file) fd.append('soporte', file, file.name || 'soporte.jpg')
   return fd

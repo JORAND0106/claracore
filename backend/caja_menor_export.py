@@ -115,9 +115,10 @@ def build_excel(
     headers = [
         "#",
         "Fecha",
-        "Tercero",
+        "Razón Social",
         "NIT",
         "Descripción del gasto",
+        "Observaciones",
         "Documento No.",
         "Centro de costos",
         "Valor bruto",
@@ -190,7 +191,13 @@ def build_excel(
     ws.freeze_panes = "A10"
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(n_cols)}{max(header_row, header_row + len(gastos))}"
 
-    money_cols = {8, 9, 10, 11, 12, 13}
+    money_names = (
+        "Valor bruto", "IVA", "Retenciones", "Impuesto al consumo",
+        "Otros deducibles", "Valor neto",
+    )
+    money_cols = {headers.index(nombre) + 1 for nombre in money_names}
+    col_neto = headers.index("Valor neto") + 1
+    col_soporte = headers.index("Soporte") + 1
     fila = header_row + 1
     for g in gastos:
         valores = [
@@ -199,6 +206,7 @@ def build_excel(
             g.get("tercero_razon_social"),
             g.get("tercero_documento"),
             g.get("descripcion"),
+            g.get("observaciones") or "",
             g.get("documento_no"),
             g.get("centro_costos"),
             int(g.get("valor_bruto") or 0),
@@ -219,7 +227,7 @@ def build_excel(
                 cell.number_format = '#,##0'
         url = enlace_por_gasto.get(g.get("id")) or enlace_por_gasto.get(str(g.get("id")))
         if url:
-            link = ws.cell(fila, 14)
+            link = ws.cell(fila, col_soporte)
             link.hyperlink = url
             link.font = Font(name="Calibri", size=9, color="0E7490", underline="single")
         if g.get("estado_validacion") == "rechazado":
@@ -231,11 +239,11 @@ def build_excel(
         ws.cell(fila, 1, "Sin gastos").font = body_font
         fila += 1
 
-    tot = ws.cell(fila, 12, "Total")
+    tot = ws.cell(fila, col_neto - 1, "Total")
     tot.font = label_font
     tot.fill = total_fill
     tot.border = thin
-    total_cell = ws.cell(fila, 13, ind["gastos_periodo"])
+    total_cell = ws.cell(fila, col_neto, ind["gastos_periodo"])
     total_cell.font = label_font
     total_cell.fill = total_fill
     total_cell.border = thin
@@ -327,10 +335,11 @@ def build_pdf(*, caja: dict, recibos: List[dict]) -> bytes:
     for rec in recibos:
         if estado["page"] is None or espacio() < 36:
             nueva()
+        razon = rec.get("razon_social") or rec.get("tercero") or ""
         caption = (
             f"{int(rec.get('consecutivo') or 0)}.  "
             f"{fmt_fecha_co(rec.get('fecha'))}  "
-            f"{rec.get('tercero') or ''}  "
+            f"Razón Social: {razon}  "
             f"{etiqueta_estado(rec.get('estado'))}"
         )
         estado["page"].insert_text(
@@ -341,6 +350,18 @@ def build_pdf(*, caja: dict, recibos: List[dict]) -> bytes:
             color=(0.1, 0.16, 0.24),
         )
         estado["y"] += 16
+        nota = str(rec.get("observaciones") or "").strip()
+        if nota:
+            if espacio() < 16:
+                nueva()
+            estado["page"].insert_text(
+                (izquierda, estado["y"] + 10),
+                f"Observaciones: {nota}"[:180],
+                fontsize=8,
+                fontname="helv",
+                color=(0.2, 0.28, 0.36),
+            )
+            estado["y"] += 14
         imagen = rec.get("imagen")
         if not imagen:
             if espacio() < 20:

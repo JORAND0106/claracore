@@ -231,6 +231,7 @@ async def crear_gasto(
     retenciones: str = Form("0"),
     impuesto_consumo: str = Form("0"),
     otros_deducibles: str = Form("0"),
+    observaciones: str = Form(""),
     confirmar_duplicado: str = Form("0"),
     soporte: UploadFile = File(...),
     current_user=Depends(get_current_user),
@@ -251,6 +252,7 @@ async def crear_gasto(
             "retenciones": retenciones,
             "impuesto_consumo": impuesto_consumo,
             "otros_deducibles": otros_deducibles,
+            "observaciones": observaciones,
         }
         return _svc().crear_gasto(
             supabase,
@@ -281,6 +283,7 @@ async def editar_gasto(
     retenciones: Optional[str] = Form(None),
     impuesto_consumo: Optional[str] = Form(None),
     otros_deducibles: Optional[str] = Form(None),
+    observaciones: Optional[str] = Form(None),
     confirmar_duplicado: str = Form("0"),
     soporte: Optional[UploadFile] = File(None),
     current_user=Depends(get_current_user),
@@ -302,6 +305,7 @@ async def editar_gasto(
                 "retenciones": retenciones,
                 "impuesto_consumo": impuesto_consumo,
                 "otros_deducibles": otros_deducibles,
+                "observaciones": observaciones,
             }.items() if v is not None
         }
         return _svc().actualizar_gasto(

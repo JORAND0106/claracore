@@ -752,7 +752,7 @@ function PanelGastos(props) {
             <thead>
               <tr>
                 <th rowSpan={2} style={thFijo(t, 0, 56)}>#</th>
-                <th rowSpan={2} style={thFijo(t, 56, 240)}>Tercero</th>
+                <th rowSpan={2} style={thFijo(t, 56, 240)}>Razón Social</th>
                 <th rowSpan={2} style={thTexto(t, 118)}>Fecha</th>
                 <th rowSpan={2} style={thTexto(t, 132)}>NIT</th>
                 <th rowSpan={2} style={thTexto(t, 280)}>Descripción</th>
@@ -819,67 +819,156 @@ function tdFijo(t, left, ancho) {
   }
 }
 
-function estiloCampo(t, gasto, clave) {
-  const base = campo(t)
-  if (!gasto?.ocrHecho) return base
-  const vacio = String(gasto[clave] ?? '').trim() === ''
-  const leido = (gasto.leidos || []).includes(clave)
-  if (vacio && !leido) return { ...base, border: '1.5px solid #D97706' }
-  return base
+const CAMPOS_OBLIGATORIOS = new Set([
+  'fecha',
+  'tercero_razon_social',
+  'tercero_documento',
+  'documento_no',
+  'descripcion',
+  'centro_costos',
+  'valor_bruto',
+])
+
+function campoSuave(t, extra) {
+  return {
+    width: '100%',
+    maxWidth: '100%',
+    minHeight: 32,
+    border: `1px solid ${t.inputBorder || t.border}`,
+    borderRadius: 6,
+    background: t.inputBg,
+    color: t.text,
+    padding: '4px 8px',
+    fontSize: 'var(--cc-sm)',
+    lineHeight: 1.3,
+    boxSizing: 'border-box',
+    textAlign: 'left',
+    ...extra,
+  }
+}
+
+function etiquetaSuave(t) {
+  return { display: 'block', color: t.textMuted, fontSize: 11, lineHeight: 1.2, marginBottom: 3 }
+}
+
+function campoPendiente(gasto, clave) {
+  if (!CAMPOS_OBLIGATORIOS.has(clave)) return false
+  return String(gasto?.[clave] ?? '').trim() === ''
+}
+
+function estiloSuave(t, gasto, clave, extra) {
+  const base = campoSuave(t, extra)
+  if (!campoPendiente(gasto, clave)) return base
+  return { ...base, border: '1.5px solid #D97706' }
+}
+
+function textoMoneda(valor) {
+  if (valor === '' || valor == null) return ''
+  const crudo = String(valor).trim()
+  if (!crudo.includes('$') && Number.isFinite(Number(crudo))) return formatCOP(Number(crudo))
+  const digitos = crudo.replace(/\D/g, '')
+  if (!digitos) return ''
+  return formatCOP(Number(digitos))
 }
 
 function FormularioGasto({ t, movil, gasto, setGasto, neto, ocupado, leyendo, onDocumento, onGuardar }) {
   const set = (clave) => (e) => setGasto({ ...gasto, [clave]: e.target.value })
-  const item = (clave, label, tipo = 'text') => (
-    <label>
-      <span style={etiquetaCampo(t)}>{label}</span>
+  const setMoneda = (clave) => (e) => setGasto({ ...gasto, [clave]: String(e.target.value || '').replace(/\D/g, '') })
+  const columnas = movil ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1fr)'
+  const valores = movil ? 'minmax(0, 1fr)' : 'repeat(3, minmax(0, 1fr))'
+  const hueco = { minWidth: 0, display: 'flex', flexDirection: 'column' }
+  const texto = (clave, label, tipo = 'text', span) => (
+    <label style={{ ...hueco, gridColumn: span || 'auto' }}>
+      <span style={etiquetaSuave(t)}>{label}</span>
       <input
         aria-label={label}
+        className={tipo === 'date' ? 'cm-gasto-fecha' : undefined}
         type={tipo}
         max={tipo === 'date' ? hoyColombia() : undefined}
         value={gasto[clave] ?? ''}
         onChange={set(clave)}
         onBlur={clave === 'tercero_documento' ? () => onDocumento(gasto.tercero_documento) : undefined}
-        style={estiloCampo(t, gasto, clave)}
+        style={estiloSuave(t, gasto, clave)}
+      />
+    </label>
+  )
+  const moneda = (clave, label, opcional) => (
+    <label style={hueco}>
+      <span style={etiquetaSuave(t)}>{label}</span>
+      <input
+        aria-label={label}
+        inputMode="numeric"
+        placeholder={opcional ? 'Opcional' : undefined}
+        value={textoMoneda(gasto[clave])}
+        onChange={setMoneda(clave)}
+        style={estiloSuave(t, gasto, clave, { textAlign: 'right' })}
       />
     </label>
   )
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: movil ? '1fr' : '1fr 1fr', gap: 10, alignContent: 'start' }}>
+    <div style={{ display: 'grid', gap: 12, alignContent: 'start', minWidth: 0 }}>
+      <style>{`
+        .cm-gasto-fecha { text-align: left; }
+        .cm-gasto-fecha::-webkit-datetime-edit,
+        .cm-gasto-fecha::-webkit-date-and-time-value { text-align: left; }
+      `}</style>
       {leyendo && (
-        <div style={{ gridColumn: movil ? 'auto' : '1 / -1', color: t.primary, fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
+        <div style={{ color: t.primary, fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
           Leyendo la factura…
         </div>
       )}
-      {item('fecha', 'Fecha', 'date')}
-      {item('tercero_razon_social', 'Tercero')}
-      {item('tercero_documento', 'NIT o cédula')}
-      {item('documento_no', 'Documento No.')}
-      <label style={{ gridColumn: movil ? 'auto' : '1 / -1' }}>
-        <span style={etiquetaCampo(t)}>Descripción</span>
-        <input aria-label="Descripción" value={gasto.descripcion ?? ''} onChange={set('descripcion')} style={estiloCampo(t, gasto, 'descripcion')} />
-      </label>
-      {item('centro_costos', 'Centro de costos')}
-      {item('valor_bruto', 'Valor bruto')}
-      {item('iva', 'IVA')}
-      {item('retenciones', 'Retenciones')}
-      {item('impuesto_consumo', 'Impuesto al consumo')}
-      {item('otros_deducibles', 'Otros deducibles')}
-      <div>
-        <span style={etiquetaCampo(t)}>Valor neto</span>
-        <div style={{
-          fontWeight: 700,
-          minHeight: 40,
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 10px',
-          borderRadius: 8,
-          border: gasto?.ocrHecho && !(neto > 0) ? '1.5px solid #D97706' : '1px solid transparent',
-        }}
-        >{formatCOP(neto > 0 ? neto : 0)}
+      <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+        <span style={etiquetaSuave(t)}>Datos del documento</span>
+        <div style={{ display: 'grid', gridTemplateColumns: columnas, gap: 8, minWidth: 0 }}>
+          {texto('fecha', 'Fecha', 'date')}
+          {texto('documento_no', 'Documento No.')}
+          {texto('tercero_razon_social', 'Razón Social', 'text', movil ? 'auto' : '1 / -1')}
+          {texto('tercero_documento', 'NIT o cédula')}
+          {texto('centro_costos', 'Centro de costos')}
         </div>
-      </div>
-      <div style={{ gridColumn: movil ? 'auto' : '1 / -1' }}>
+      </section>
+      <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+        <label style={hueco}>
+          <span style={etiquetaSuave(t)}>Descripción</span>
+          <input aria-label="Descripción" value={gasto.descripcion ?? ''} onChange={set('descripcion')} style={estiloSuave(t, gasto, 'descripcion')} />
+        </label>
+        <label style={hueco}>
+          <span style={etiquetaSuave(t)}>Observaciones</span>
+          <textarea
+            aria-label="Observaciones"
+            rows={3}
+            placeholder="Opcional"
+            value={gasto.observaciones ?? ''}
+            onChange={set('observaciones')}
+            style={{ ...campoSuave(t), minHeight: 64, resize: 'vertical' }}
+          />
+        </label>
+      </section>
+      <section style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+        <span style={etiquetaSuave(t)}>Valores</span>
+        <div style={{ display: 'grid', gridTemplateColumns: valores, gap: 8, minWidth: 0 }}>
+          {moneda('valor_bruto', 'Valor bruto', false)}
+          {moneda('iva', 'IVA', true)}
+          {moneda('retenciones', 'Retenciones', true)}
+          {moneda('impuesto_consumo', 'Impuesto al consumo', true)}
+          {moneda('otros_deducibles', 'Otros deducibles', true)}
+          <div style={hueco}>
+            <span style={etiquetaSuave(t)}>Valor neto</span>
+            <div style={{
+              ...campoSuave(t),
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              fontWeight: 700,
+              textAlign: 'right',
+              background: t.headerBg,
+            }}
+            >{formatCOP(neto > 0 ? neto : 0)}
+            </div>
+          </div>
+        </div>
+      </section>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <IconBtn title="Guardar gasto" t={t} disabled={ocupado || neto <= 0} onClick={onGuardar}><Check size={16} /></IconBtn>
       </div>
     </div>
@@ -950,6 +1039,7 @@ function TarjetaGasto(props) {
         <Miniatura url={url} titulo={`Recibo ${row.consecutivo}`} t={t} onAmpliar={() => props.onVer('gastos', row.id, `Recibo ${row.consecutivo}`)} />
         <button type="button" onClick={() => setAbierta((v) => !v)} style={{ flex: 1, minWidth: 0, display: 'flex', gap: 8, alignItems: 'center', textAlign: 'left', background: 'transparent', border: 'none', color: t.text, padding: 0, cursor: 'pointer' }}>
           <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', color: t.textMuted, fontSize: 'var(--cc-caption)' }}>Razón Social</span>
             <span style={{ display: 'block', fontWeight: 700 }}>#{row.consecutivo} · {row.tercero_razon_social}</span>
             <span style={{ display: 'block', color: t.textMuted, fontSize: 'var(--cc-caption)' }}>{row.fecha}</span>
             <span style={{ display: 'block', fontWeight: 700 }}>{formatCOP(neto)}</span>
@@ -961,6 +1051,7 @@ function TarjetaGasto(props) {
         <div style={{ marginTop: 8, display: 'grid', gap: 4, fontSize: 'var(--cc-sm)' }}>
           <div>NIT {row.tercero_documento}</div>
           <div>{row.descripcion}</div>
+          {row.observaciones ? <div>{row.observaciones}</div> : null}
           <div>Documento {row.documento_no} · Centro {row.centro_costos}</div>
           <div>Bruto {formatCOP(row.valor_bruto)} · IVA {formatCOP(row.iva)} · Retenciones {formatCOP(row.retenciones)}</div>
           <div>Consumo {formatCOP(row.impuesto_consumo)} · Otros {formatCOP(row.otros_deducibles)}</div>

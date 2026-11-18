@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS public.caja_menor_gasto (
   documento_norm          text NOT NULL,
   tercero_razon_social    text NOT NULL,
   descripcion             text NOT NULL,
+  observaciones           text,
   documento_no            text NOT NULL,
   centro_costos           text NOT NULL,
   valor_bruto             numeric(18,2) NOT NULL DEFAULT 0 CHECK (valor_bruto >= 0),
@@ -228,5 +229,11 @@ BEGIN
     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE public.%I TO service_role', s);
   END LOOP;
 END $$;
+
+ALTER TABLE public.caja_menor_gasto
+  ADD COLUMN IF NOT EXISTS observaciones text;
+
+COMMENT ON COLUMN public.caja_menor_gasto.observaciones IS
+  'Nota opcional del gasto, escrita por quien registra la compra.';
 
 NOTIFY pgrst, 'reload schema';

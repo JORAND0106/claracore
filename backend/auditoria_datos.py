@@ -209,7 +209,7 @@ _ETIQUETAS: Dict[str, str] = {
     "iva": "IVA",
     "centro_costos": "Centro de costos",
     "documento_no": "Documento No.",
-    "tercero_razon_social": "Tercero",
+    "tercero_razon_social": "Razón Social",
     "tercero_documento": "NIT o cédula",
     "estado_validacion": "Validación",
     "observacion_validacion": "Observación",

@@ -34,6 +34,55 @@ def _key() -> str:
     return (os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY") or "").strip()
 
 
+def _compacto(texto: str) -> str:
+    return re.sub(r"[\s\-–—·•|/]+", "", str(texto or "")).upper()
+
+
+def _dehyphen_lineas(texto: str) -> str:
+    limpio = str(texto or "").replace("\u00ad", "")
+    return re.sub(r"-\s*[\r\n]+\s*", "", limpio)
+
+
+def recuperar_razon_social(nombre: str, contenido: str = "") -> str:
+    """Devuelve la razón social con las palabras de la factura, sin cortes de línea."""
+    base = re.sub(r"\s+", " ", str(nombre or "")).strip()
+    if not base:
+        return ""
+    clave = _compacto(base)
+    texto = _dehyphen_lineas(contenido)
+    for raw in texto.splitlines():
+        tokens = raw.strip().split()
+        acc = []
+        for tok in tokens:
+            acc.append(tok)
+            junto = " ".join(acc)
+            if _compacto(junto) == clave:
+                return junto.strip()[:200]
+            if len(_compacto(junto)) > len(clave):
+                break
+    return re.sub(r"\s+", " ", base).strip(" -·•")[:200]
+
+
+def limpiar_item(texto: str) -> str:
+    t = _dehyphen_lineas(texto)
+    t = re.sub(r"[\s]*[·•|]+[\s]*", " ", t)
+    t = re.sub(r"(?:^|\s)-\s+", " ", t)
+    t = re.sub(r"\s+-\s*$", "", t)
+    t = re.sub(r"\s+", " ", t).strip(" -·•|")
+    return t
+
+
+def limpiar_descripcion(partes) -> Optional[str]:
+    limpios = []
+    for parte in partes or []:
+        item = limpiar_item(parte)
+        if item:
+            limpios.append(item)
+    if not limpios:
+        return None
+    return "; ".join(limpios)[:500]
+
+
 def _field(fields: dict, name: str) -> Any:
     f = fields.get(name) or {}
     if not isinstance(f, dict):
@@ -103,7 +152,14 @@ def mapear_analisis(analyze: dict) -> dict:
     fields = (docs[0].get("fields") if docs else None) or {}
     content = (analyze or {}).get("content") or ""
 
-    tercero = _field(fields, "VendorName") or _field(fields, "MerchantName")
+    tercero_crudo = _field(fields, "VendorName") or _field(fields, "MerchantName")
+    tercero_contenido = ""
+    for nombre in ("VendorName", "MerchantName"):
+        campo = fields.get(nombre) or {}
+        if isinstance(campo, dict) and campo.get("content"):
+            tercero_contenido = str(campo.get("content"))
+            break
+    tercero = recuperar_razon_social(tercero_crudo or "", f"{tercero_contenido}\n{content}")
     nit = _field(fields, "VendorTaxId") or _field(fields, "VendorAddressRecipient")
     if nit and not re.search(r"\d", str(nit)):
         nit = None
@@ -137,8 +193,8 @@ def mapear_analisis(analyze: dict) -> dict:
         obj = (item or {}).get("valueObject") or {}
         desc = _field(obj, "Description") or _field(obj, "ProductCode")
         if desc:
-            items.append(str(desc).strip())
-    descripcion = " · ".join(items)[:500] if items else None
+            items.append(str(desc))
+    descripcion = limpiar_descripcion(items)
 
     if bruto is None and total is not None:
         bruto = total - (iva or 0) - (impoconsumo or 0) + (retenciones or 0) + (otros or 0)
