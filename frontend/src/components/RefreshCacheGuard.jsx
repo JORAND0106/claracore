@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import CcModalBrandHeader from './CcModalBrandHeader'
 import { useModulo } from '../context/ModuloContext'
 
@@ -11,23 +11,15 @@ function isRefreshShortcut(e) {
 }
 
 /**
- * Mensaje para beforeunload (botón recarga del navegador).
- * Chrome/Edge suelen mostrar texto genérico; Firefox a veces muestra este texto.
- * Estrategia: desaconsejar el botón del navegador y dirigir a F5 → modal ClaraCore.
- */
-const AVISO_RECARGA_NAVEGADOR =
-  'Riesgo de borrar la caché y perder el trabajo en pantalla. '
-  + 'No use el botón de recarga del navegador. Pulse F5 o Ctrl+F5 y luego Actualizar.'
-
-/**
  * Intercepta F5 / Ctrl+R y ofrece «Actualizar» del módulo activo.
- * El botón de recarga del navegador dispara beforeunload con el aviso estratégico.
+ * No se registra beforeunload: ese aviso saca la página de la caché de navegación
+ * y, al cambiar de aplicación en el iPad o de ventana en el PC, el navegador
+ * la descarta y al volver hay que empezar de cero.
  */
 export default function RefreshCacheGuard({ theme, active = false }) {
   const { moduloRefresh } = useModulo()
   const [open, setOpen] = useState(false)
   const [actualizando, setActualizando] = useState(false)
-  const allowUnloadRef = useRef(false)
 
   const t = theme || {}
   const primary = t.primary || '#0077B6'
@@ -48,20 +40,6 @@ export default function RefreshCacheGuard({ theme, active = false }) {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [active])
 
-  useEffect(() => {
-    if (!active) return undefined
-
-    const onBeforeUnload = (e) => {
-      if (allowUnloadRef.current) return
-      e.preventDefault()
-      e.returnValue = AVISO_RECARGA_NAVEGADOR
-      return AVISO_RECARGA_NAVEGADOR
-    }
-
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [active])
-
   if (!open) return null
 
   const cerrar = () => {
@@ -70,7 +48,6 @@ export default function RefreshCacheGuard({ theme, active = false }) {
   }
 
   const recargarPagina = () => {
-    allowUnloadRef.current = true
     setOpen(false)
     window.location.reload()
   }

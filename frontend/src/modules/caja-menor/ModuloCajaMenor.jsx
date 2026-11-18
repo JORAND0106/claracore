@@ -10,6 +10,7 @@ import { createCajaMenorApi, fdGasto, fdIngreso } from './cajaMenorApi'
 import { ETIQUETA_ESTADO, fmtPct, hoyColombia, normalizarDocumento, valorNeto } from './cajaMenorCalc'
 import { accesoCajaMenor, esDesarrolladorCajaMenor } from './cajaMenorPermisos'
 import { comprimirImagen, imagenDePortapapeles } from './cajaMenorImagen'
+import { borrarBorradorCaja, guardarBorradorCaja, leerBorradorCaja } from './cajaMenorBorrador'
 
 function IconBtn({ title, onClick, disabled, children, t, tono }) {
   return (
@@ -113,7 +114,10 @@ export default function ModuloCajaMenor({
   const [panel, setPanel] = useState(null)
   const [vista, setVista] = useState('lista')
   const [origen, setOrigen] = useState('lista')
+  const [leyendo, setLeyendo] = useState(false)
   const tomarRef = useRef(null)
+  const restaurado = useRef(false)
+  const borradorRef = useRef(null)
 
   const accesoRemoto = detalle?.acceso || lista?.acceso
   const acceso = esDesarrolladorCajaMenor(usuario)
@@ -150,21 +154,36 @@ export default function ModuloCajaMenor({
     }
   }
 
-  async function abrir(cajaId, gastoId) {
+  function aplicarBorrador(snapshot) {
+    if (!snapshot) return
+    setPanel(snapshot.panel || null)
+    setVista(snapshot.vista || 'lista')
+    setOrigen(snapshot.origen || 'lista')
+    if (snapshot.meta) setMeta(snapshot.meta)
+    if (snapshot.gasto) setGasto(snapshot.gasto)
+    if (snapshot.ingreso) setIngreso(snapshot.ingreso)
+    if (snapshot.rechazo) setRechazo(snapshot.rechazo)
+  }
+
+  async function abrir(cajaId, gastoId, snapshot) {
     setCargando(true)
     setAviso(null)
     try {
       const det = await api.detalle(contratoId, cajaId)
       aplicar(det)
-      setPanel(null)
-      setVista('lista')
-      setOrigen('lista')
-      if (gastoId) {
-        const g = (det.gastos || []).find((row) => Number(row.id) === Number(gastoId))
-        if (g) {
-          setPanel('gastos')
-          setVista('imagen')
-          verImagen('gastos', g.id, `Recibo ${g.consecutivo}`, det.caja.id)
+      if (snapshot) {
+        aplicarBorrador(snapshot)
+      } else {
+        setPanel(null)
+        setVista('lista')
+        setOrigen('lista')
+        if (gastoId) {
+          const g = (det.gastos || []).find((row) => Number(row.id) === Number(gastoId))
+          if (g) {
+            setPanel('gastos')
+            setVista('imagen')
+            verImagen('gastos', g.id, `Recibo ${g.consecutivo}`, det.caja.id)
+          }
         }
       }
     } catch (e) {
@@ -181,18 +200,23 @@ export default function ModuloCajaMenor({
     }
     let vivo = true
     const deep = deepInicial.current
+    const userId = usuario?.id || usuario?.sub
     ;(async () => {
-      if (deep?.cajaId && (!deep.contratoId || Number(deep.contratoId) === Number(contratoId))) {
+      if (deep?.cajaId && !deep.consumido && (!deep.contratoId || Number(deep.contratoId) === Number(contratoId))) {
         await abrir(deep.cajaId, deep.gastoId)
         if (vivo) onDeepLinkConsumed?.()
-      } else if (vivo) {
-        await cargarLista()
+      } else {
+        const draft = await leerBorradorCaja(userId, contratoId).catch(() => null)
+        if (!vivo) return
+        if (draft?.cajaId) await abrir(draft.cajaId, null, draft)
+        else await cargarLista()
       }
+      restaurado.current = true
     })()
     return () => { vivo = false }
-    // La caja del enlace se abre una vez por contrato.
+    // La caja se abre una vez por contrato. Renovar el token no reinicia la pantalla.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contratoId, token])
+  }, [contratoId])
 
   const modoPegado = gasto ? 'gasto' : ingreso ? 'ingreso' : ''
   useEffect(() => {
@@ -227,36 +251,52 @@ export default function ModuloCajaMenor({
     }
   }
 
+  function valorLeido(sug, clave) {
+    const valor = sug?.[clave]
+    if (valor == null || valor === '') return ''
+    return valor
+  }
+
   async function tomarRecibo(file) {
-    const listo = await comprimirImagen(file)
-    setGasto((prev) => ({ ...(prev || borradorGasto(detalle)), file: listo }))
-    if (!acceso.crear) return
+    setLeyendo(true)
+    setAviso(null)
     try {
+      const listo = await comprimirImagen(file)
+      setGasto((prev) => ({ ...(prev || borradorGasto(detalle)), file: listo }))
+      if (!acceso.crear) {
+        setAviso({ tipo: 'info', texto: 'La imagen quedó lista. Complete los datos.' })
+        return
+      }
       const fd = new FormData()
       fd.append('soporte', listo, listo.name || 'soporte.jpg')
       const leido = await api.ocr(contratoId, fd)
       const sug = leido?.sugerencias || {}
+      const leidos = Array.isArray(leido?.campos_detectados) ? leido.campos_detectados : []
       setGasto((prev) => ({
         ...(prev || borradorGasto(detalle)),
         file: listo,
-        fecha: sug.fecha && sug.fecha <= hoyColombia() ? sug.fecha : (prev?.fecha || hoyColombia()),
-        tercero_razon_social: sug.tercero_razon_social || prev?.tercero_razon_social || '',
-        tercero_documento: sug.tercero_documento || prev?.tercero_documento || '',
-        descripcion: sug.descripcion || prev?.descripcion || '',
-        documento_no: sug.documento_no || prev?.documento_no || detalle?.documento_sugerido || '',
-        valor_bruto: sug.valor_bruto ?? prev?.valor_bruto ?? '',
-        iva: sug.iva ?? prev?.iva ?? '0',
-        retenciones: sug.retenciones ?? prev?.retenciones ?? '0',
-        impuesto_consumo: sug.impuesto_consumo ?? prev?.impuesto_consumo ?? '0',
-        otros_deducibles: sug.otros_deducibles ?? prev?.otros_deducibles ?? '0',
+        ocrHecho: true,
+        leidos,
+        fecha: sug.fecha && sug.fecha <= hoyColombia() ? sug.fecha : '',
+        tercero_razon_social: valorLeido(sug, 'tercero_razon_social'),
+        tercero_documento: valorLeido(sug, 'tercero_documento'),
+        descripcion: valorLeido(sug, 'descripcion'),
+        documento_no: valorLeido(sug, 'documento_no'),
+        centro_costos: prev?.centro_costos || detalle?.contrato?.numero || '',
+        valor_bruto: valorLeido(sug, 'valor_bruto'),
+        iva: valorLeido(sug, 'iva'),
+        retenciones: valorLeido(sug, 'retenciones'),
+        impuesto_consumo: valorLeido(sug, 'impuesto_consumo'),
+        otros_deducibles: valorLeido(sug, 'otros_deducibles'),
         total_leido: sug.total_leido ?? null,
       }))
-      if (sug.total_leido != null) {
-        setAviso({ tipo: 'info', texto: leido.mensaje || 'Revise los datos antes de guardar.' })
-      }
+      setAviso({ tipo: 'info', texto: leido?.mensaje || 'Revise los datos antes de guardar.' })
       if (sug.tercero_documento) completarTercero(sug.tercero_documento)
     } catch (e) {
-      setAviso({ tipo: 'info', texto: e.message })
+      setGasto((prev) => (prev ? { ...prev, ocrHecho: true, leidos: prev.leidos || [] } : prev))
+      setAviso({ tipo: 'info', texto: e.message || 'No se pudo leer la factura. Complete los datos.' })
+    } finally {
+      setLeyendo(false)
     }
   }
 
@@ -313,6 +353,36 @@ export default function ModuloCajaMenor({
   }
 
   tomarRef.current = tomarRecibo
+
+  const userId = usuario?.id || usuario?.sub
+  borradorRef.current = {
+    cajaId: caja?.id,
+    panel,
+    vista,
+    origen,
+    meta,
+    ingreso,
+    gasto,
+    rechazo,
+  }
+  useEffect(() => {
+    const flush = () => {
+      const snap = borradorRef.current
+      if (!restaurado.current || !userId || !contratoId || !snap?.cajaId) return
+      guardarBorradorCaja(userId, contratoId, snap).catch(() => {})
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('pagehide', flush)
+    const id = setTimeout(flush, 400)
+    return () => {
+      clearTimeout(id)
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('pagehide', flush)
+    }
+  }, [userId, contratoId, caja?.id, panel, vista, origen, meta, ingreso, gasto, rechazo])
 
   async function guardarIngreso() {
     if (!ingreso?.file) {
@@ -430,6 +500,8 @@ export default function ModuloCajaMenor({
   const movil = vp.isMobile || vp.isLandscapeMobile
 
   function volverCajas() {
+    const uid = usuario?.id || usuario?.sub
+    borrarBorradorCaja(uid, contratoId).catch(() => {})
     setDetalle(null)
     setPanel(null)
     setVista('lista')
@@ -598,6 +670,7 @@ export default function ModuloCajaMenor({
           rechazo={rechazo}
           preview={preview}
           neto={netoBorrador}
+          leyendo={leyendo}
           setIngreso={setIngreso}
           setGasto={setGasto}
           setRechazo={setRechazo}

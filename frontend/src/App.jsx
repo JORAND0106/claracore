@@ -322,6 +322,9 @@ import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
 import ModuloRrhh, { accesoRrhh } from './modules/rrhh'
 import ModuloCajaMenor, { accesoCajaMenor, CajaMenorLogo } from './modules/caja-menor'
 import { capturarCajaMenorDeepLink, limpiarCajaMenorDeepLink } from './modules/caja-menor/cajaMenorDeepLink'
+import { olvidarBorradoresCaja } from './modules/caja-menor/cajaMenorBorrador'
+import { olvidarTokenUi, tokenParaUi } from './auth/tokenParaUi'
+import { leerPantalla, olvidarPantalla, recordarPantalla } from './workspace/pantallaSesion'
 import EmojiPicker from './EmojiPicker'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
 import DeployVersionBadge from './components/DeployVersionBadge'
@@ -932,6 +935,9 @@ function clearSessionCredentials() {
   sessionStorage.removeItem('cc_token')
   sessionStorage.removeItem('cc_usuario')
   sessionStorage.removeItem(SESSION_LAST_ACTIVITY_KEY)
+  olvidarTokenUi()
+  olvidarPantalla()
+  olvidarBorradoresCaja()
 }
 
 function markSessionExpiredOnLoad() {
@@ -5984,7 +5990,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         {editableCamposDimensionales ? (
           <SicoeLocalizacionFields
             t={t}
-            token={getToken()}
+            token={tokenParaUi()}
             contratoId={contrato_id}
             value={locRegistro}
             onChange={setLocRegistro}
@@ -5998,7 +6004,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         ) : (
           <SicoeLocalizacionFields
             t={t}
-            token={getToken()}
+            token={tokenParaUi()}
             contratoId={contrato_id}
             value={sicoeLocFromRegistro(registro, pkIdsHoja)}
             unidadItem={unidadMedicion}
@@ -9279,7 +9285,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 {esLocMultipleReporte ? null : modoEdicion && puedeEditarCabecera ? (
                   <SicoeLocalizacionFields
                     t={t}
-                    token={getToken()}
+                    token={tokenParaUi()}
                     contratoId={contrato_id}
                     value={locPortada}
                     onChange={setLocPortada}
@@ -9847,7 +9853,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <SicoePlanillaTuberiaOrigenTab
               t={t}
               contratoId={contrato_id}
-              token={getToken()}
+              token={tokenParaUi()}
               reporteId={reporte?.id || repoProp?.id}
             />
           )}
@@ -10033,7 +10039,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       {modalTrazabilidadSicoe && (
         <TrazabilidadRegistroModal
           apiBase={API_URL}
-          token={getToken()}
+          token={tokenParaUi()}
           entidadTipo="registro"
           entidadId={modalTrazabilidadSicoe.id}
           titulo={`SICOE obra · Registro #${modalTrazabilidadSicoe.numero_registro ?? modalTrazabilidadSicoe.id} · id ${modalTrazabilidadSicoe.id}`}
@@ -10287,7 +10293,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         <SicoeDibujoReporteEditor
           t={t}
           API_URL={API_URL}
-          token={getToken()}
+          token={tokenParaUi()}
           contratoId={contrato_id}
           reporte={reporte}
           esDesarrollador={esUsuarioDesarrollador(usuario)}
@@ -10375,7 +10381,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           API_URL={API_URL}
           contratoId={contrato_id}
           hdrs={hdrs}
-          token={getToken()}
+          token={tokenParaUi()}
           reporte={reporte}
           registros={registros}
           isSellado={(reg) => sicoeRegistroSelladoMaxActivo(reg, nivelesContrato)}
@@ -14152,7 +14158,7 @@ function ModuloSicoeObra({
         <SicoeMoverRegistrosActasModal
           t={t}
           API_URL={API_URL}
-          token={getToken()}
+          token={tokenParaUi()}
           contratoId={contrato_id}
           contratoLabel={usuario?.contrato_numero ? `Contrato ${usuario.contrato_numero}` : `Contrato #${contrato_id}`}
           onClose={() => setModalMoverActasDev(false)}
@@ -14718,7 +14724,7 @@ function ModuloSicoeObra({
             t={t}
             usuario={usuario}
             contratoId={contrato_id}
-            token={getToken()}
+            token={tokenParaUi()}
             API_URL={API_URL}
             nivelInfo={nivelInfo}
             nivelesContrato={nivelesContrato}
@@ -14734,7 +14740,7 @@ function ModuloSicoeObra({
               <SicoeMapaHuellas
                 t={t}
                 contratoId={contrato_id}
-                token={getToken()}
+                token={tokenParaUi()}
                 height={height || 320}
                 highlightRegistroIds={seleccionado ? (highlightRegistroIds || []) : []}
                 highlightPkIds={seleccionado ? (highlightPkIds || []) : []}
@@ -14747,7 +14753,7 @@ function ModuloSicoeObra({
           <SicoeCantidadesPorItemVista
             t={t}
             contratoId={contrato_id}
-            token={getToken()}
+            token={tokenParaUi()}
             API_URL={API_URL}
             nivelInfo={nivelInfo}
             nivelesContrato={nivelesContrato}
@@ -14764,7 +14770,7 @@ function ModuloSicoeObra({
         <SicoeEjecucionConsolidadaVista
           t={t}
           contratoId={contrato_id}
-          token={getToken()}
+          token={tokenParaUi()}
           API_URL={API_URL}
           nivelInfo={nivelInfo}
           nivelesContrato={nivelesContrato}
@@ -15614,7 +15620,7 @@ function ModuloSicoeObra({
       {/* ── Modal Nuevo Reporte ── */}
       {modalNuevoReporte && (
         <ModalNuevoReporte
-          t={t} usuario={usuario} token={getToken()}
+          t={t} usuario={usuario} token={tokenParaUi()}
           API_URL={API_URL} contrato_id={contrato_id}
           reporteInicial={reporteEditando}
           isOnline={isOnline}
@@ -21350,7 +21356,12 @@ function IconoModuloConAlerta({ icon, total = 0, title, ring }) {
 }
 
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, onRefreshContratos, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
-  const [moduloActivo, setModuloActivo] = useState('inicio')
+  const [moduloActivo, setModuloActivo] = useState(() => (
+    leerPantalla(usuario?.id || usuario?.sub, usuario?.contrato_id) || 'inicio'
+  ))
+  useEffect(() => {
+    recordarPantalla(usuario?.id || usuario?.sub, usuario?.contrato_id, moduloActivo)
+  }, [moduloActivo, usuario?.id, usuario?.sub, usuario?.contrato_id])
   const [cajaMenorDeep, setCajaMenorDeep] = useState(() => capturarCajaMenorDeepLink(
     typeof window === 'undefined' ? '' : window.location.search,
     typeof sessionStorage === 'undefined' ? null : sessionStorage,
@@ -23698,8 +23709,8 @@ const [navReporteId, setNavReporteId] = useState(null)
                 )}
               </span>
             </button>
-            <ReporteErroresBtn t={t} usuario={usuario} token={getToken()} />
-            <PanelSoporteTecnico t={t} usuario={usuario} token={getToken()} />
+            <ReporteErroresBtn t={t} usuario={usuario} token={tokenParaUi()} />
+            <PanelSoporteTecnico t={t} usuario={usuario} token={tokenParaUi()} />
             <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} onNavegar={handleNavegar} />
             {canAdmin && (
               <button className="cc-header-admin-btn" onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
@@ -23719,7 +23730,7 @@ const [navReporteId, setNavReporteId] = useState(null)
           <ReporteErroresBtn
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             hideTrigger
             openSignal={mobileReporteSignal}
             onOpenChange={(open) => { if (open) setMobileNavOpen(false) }}
@@ -23727,7 +23738,7 @@ const [navReporteId, setNavReporteId] = useState(null)
           <PanelSoporteTecnico
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             hideTrigger
             openSignal={mobileSoporteSignal}
             onOpenChange={(open) => { if (open) setMobileNavOpen(false) }}
@@ -24178,7 +24189,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             t={t}
             usuario={usuario}
             fontSize={fontSize}
-            token={getToken()}
+            token={tokenParaUi()}
             esContador={esContador}
             onIrSeguimiento={tienePermisoSeguimiento ? () => irAModulo('seguimiento') : undefined}
             onAbrirBlocNota={(pin) => {
@@ -24195,7 +24206,7 @@ const [navReporteId, setNavReporteId] = useState(null)
           <ModuloMapaNavegacion
             key="mapa-navegacion"
             t={t}
-            token={getToken()}
+            token={tokenParaUi()}
             usuario={usuario}
             compact={false}
             showEditor
@@ -24206,7 +24217,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             key={`bloc-notas-${usuario?.contrato_id ?? 'x'}`}
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             contratoId={usuario?.contrato_id}
             initialNoteId={blocOpenTarget?.noteId || null}
             initialFolderId={blocOpenTarget?.folderId || null}
@@ -24923,7 +24934,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                         t={t}
                         colores={miniMapaColores}
                         contratoId={contratoIdDash}
-                        token={getToken()}
+                        token={tokenParaUi()}
                         height={200}
                         onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null}
                         soloPkConDatos={dashDrill.length >= 2}
@@ -25431,7 +25442,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                       t={t}
                       colores={analisisMapaColores}
                       contratoId={contratoIdDash}
-                      token={getToken()}
+                      token={tokenParaUi()}
                       height={dashMobile ? 220 : 260}
                       bearing={270}
                       onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
@@ -25635,7 +25646,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                         </div>
                       ) : <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
                     </div>
-                    <MiniMapaSemaforo t={t} colores={liqMapaColores} contratoId={contratoIdDash} token={getToken()} height={dashMobile ? 220 : 260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
+                    <MiniMapaSemaforo t={t} colores={liqMapaColores} contratoId={contratoIdDash} token={tokenParaUi()} height={dashMobile ? 220 : 260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
                     <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                       {Object.keys(liqMapaColores).length > 0 ? `${Object.keys(liqMapaColores).length} PK_IDs activos` : liqSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila'}
                     </div>
@@ -26958,7 +26969,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             key={`ppto-${usuario?.contrato_id ?? 'x'}`}
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             s={s}
             navRegistroId={navRegistroId}
             onNavRegistroConsumed={() => setNavRegistroId(null)}
@@ -26971,7 +26982,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               key={`sicoe-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
-              token={getToken()}
+              token={tokenParaUi()}
               s={s}
               navReporteId={navReporteId}
               navRegistroNumero={navRegistroNumero}
@@ -26990,7 +27001,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               key={`informes-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
-              token={getToken()}
+              token={tokenParaUi()}
               s={s}
               fontSize={fontSize}
               puedeEditarCcd={puedeEditarInformesCcd}
@@ -27016,7 +27027,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               key={`prog-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
-              token={getToken()}
+              token={tokenParaUi()}
               puedeEditar={puedeEditarProgramacionObra}
               puedeCrear={puedeCrearProgramacionObra}
               puedeValidar={puedeValidarProgramacionObra}
@@ -27039,7 +27050,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               key={`topo-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
-              token={getToken()}
+              token={tokenParaUi()}
               permisos={{
                 crear: puedeCrearTopografia,
                 editar: puedeEditarTopografia,
@@ -27070,7 +27081,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               key={`almacen-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               activeTheme={activeTheme}
-              token={getToken()}
+              token={tokenParaUi()}
               usuario={usuario}
               permisos={{
                 ...almacenPerm,
@@ -27111,7 +27122,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             key={`seguimiento-${usuario?.contrato_id ?? 'x'}`}
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             contratoId={usuario?.contrato_id}
           />
         )}
@@ -27122,7 +27133,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               t={t}
               themeMode={activeTheme}
               usuario={usuario}
-              token={getToken()}
+              token={tokenParaUi()}
               contratoId={usuario?.contrato_id}
             />
           ) : (
@@ -27139,7 +27150,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             key={`caja-menor-${cajaMenorContratoId ?? 'x'}`}
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             contratoId={cajaMenorContratoId}
             deepLink={cajaMenorDeep}
             onDeepLinkConsumed={() => {
@@ -27159,7 +27170,7 @@ const [navReporteId, setNavReporteId] = useState(null)
             key={`claragis-${usuario?.contrato_id ?? 'x'}`}
             t={t}
             usuario={usuario}
-            token={getToken()}
+            token={tokenParaUi()}
             capasInicialesValidacion={claraGisCapasIniciales}
             renderEmbedCarpeta={renderClaraGisEmbedCarpeta}
           />
@@ -27200,7 +27211,7 @@ const [navReporteId, setNavReporteId] = useState(null)
       {showAdmin && (
         <AdminPanel
           user={usuario}
-          token={getToken()}
+          token={tokenParaUi()}
           onClose={() => {
             setShowAdmin(false)
             // Tras crear/editar contratos en Admin, refrescar selector (Desarrollador ve todos).
@@ -27216,7 +27227,7 @@ const [navReporteId, setNavReporteId] = useState(null)
       {showContabilidad && tieneAccesoContabilidad && (
         <ModuloContabilidad
           t={t}
-          token={getToken()}
+          token={tokenParaUi()}
           fontSize={fontSize}
           onClose={() => setShowContabilidad(false)}
           esDeveloper={esDeveloper}
@@ -27926,7 +27937,7 @@ export default function App() {
         <PoliticasConfidencialidadModal
           t={{ ...themes[activeTheme], textSecondary: themes[activeTheme].textMuted }}
           apiBase={API}
-          token={getToken()}
+          token={tokenParaUi()}
           version={POLITICAS_TEXTO_VERSION}
           onAccepted={(data) => {
             setUsuario((prev) => {
@@ -28124,7 +28135,7 @@ export default function App() {
         <PerfilUsuarioModal
           t={t}
           apiBase={API}
-          token={getToken()}
+          token={tokenParaUi()}
           usuario={usuario}
           onClose={() => setPerfilModalAbierto(false)}
           onSaved={aplicarPerfilServidor}
