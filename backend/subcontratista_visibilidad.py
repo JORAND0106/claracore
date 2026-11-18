@@ -2,13 +2,12 @@
 Visibilidad y aislamiento por empresa del usuario (Gestión de usuarios).
 
 Regla:
-- Si la empresa asignada es un subcontratista (`subcontratista_id` o
-  `empresa_tipo=subcontratista`), se aplica aislamiento: solo datos de ese
-  subcontratista, sin economía del contrato principal. Independiente del cargo
-  y del rol (incluido operativo del contratista).
-- Si la empresa es contratista o interventoría, este campo no activa
-  restricciones propias (rigen permisos/roles habituales).
-- El cargo «Subcontratista» sigue exigiendo empresa subcontratista (obligatorio).
+- Solo si ``empresa_tipo=subcontratista`` se aplica aislamiento: datos de ese
+  subcontratista (o vacío si falta el id), sin economía del contrato principal.
+- Contratista / consorcio / interventoría / sin empresa: no aísla (rigen
+  permisos/roles habituales). Un ``subcontratista_id`` residual no cuenta.
+- No se aísla por cargo ni por rol. El cargo «Subcontratista» sigue exigiendo
+  empresa subcontratista al guardar en Gestión de usuarios.
 
 Helpers puros (testeables) + utilidades de query/redacción.
 """
@@ -87,24 +86,43 @@ def scope_subcontratista(
     """
     (restricted, forced_id).
 
-    Aislamiento por empresa subcontratista (no por cargo/rol):
-    - empresa contratista/interventoría → sin restricción por este campo.
-    - subcontratista_id válido → forzar ese id.
-    - empresa_tipo=subcontratista sin id, o cargo Subcontratista sin vínculo →
-      restricted vacío.
+    Aislamiento **solo** cuando la empresa asignada es un subcontratista
+    (`empresa_tipo=subcontratista`). No aísla por cargo, rol ni por un
+    `subcontratista_id` residual sin ese tipo (p. ej. usuarios de interventoría
+    o consorcio contratista con dato legado).
+
+    - empresa contratista / interventoría / sin empresa → sin aislamiento.
+    - empresa_tipo=subcontratista + id → forzar ese id.
+    - empresa_tipo=subcontratista sin id → restricted vacío (id -1 en query).
     """
+    # cargo_nombre se conserva en la firma por compatibilidad; no decide el aislamiento.
+    _ = cargo_nombre
     tipo = normalizar_empresa_tipo(empresa_tipo)
-    if tipo in ("contratista", "interventoria"):
+    if tipo != "subcontratista":
         return False, None
 
     sid = parse_subcontratista_id(subcontratista_id)
     if sid is not None:
         return True, sid
+    return True, None
 
-    if tipo == "subcontratista" or es_cargo_subcontratista(cargo_nombre):
-        return True, None
 
-    return False, None
+def normalizar_campos_empresa_scope(
+    subcontratista_id: Any,
+    empresa_tipo: Optional[str],
+) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Normaliza (sid, tipo) para aislamiento.
+    - contratista/interventoría → sid None (ignora residual).
+    - sin tipo subcontratista → sid None (no inferir por sid).
+    - subcontratista → sid parseado (puede ser None).
+    """
+    tipo = normalizar_empresa_tipo(empresa_tipo)
+    if tipo in ("contratista", "interventoria"):
+        return None, tipo
+    if tipo != "subcontratista":
+        return None, tipo
+    return parse_subcontratista_id(subcontratista_id), tipo
 
 
 def scope_from_user_dict(current_user: Optional[dict]) -> Tuple[bool, Optional[int]]:
@@ -115,7 +133,8 @@ def scope_from_user_dict(current_user: Optional[dict]) -> Tuple[bool, Optional[i
     if sid is None:
         sid = u.get("sub_id")
     empresa_tipo = u.get("empresa_tipo")
-    return scope_subcontratista(cargo, sid, empresa_tipo=empresa_tipo)
+    sid_n, tipo_n = normalizar_campos_empresa_scope(sid, empresa_tipo)
+    return scope_subcontratista(cargo, sid_n, empresa_tipo=tipo_n)
 
 
 def apply_subcontratista_filter_q(q, restricted: bool, forced_id: Optional[int]):

@@ -47,6 +47,7 @@ from presupuesto_helpers import (
 from subcontratista_visibilidad import (
     apply_subcontratista_filter_q,
     es_cargo_subcontratista,
+    normalizar_campos_empresa_scope,
     normalizar_empresa_tipo,
     ocultar_costo_directo_reportes as _ocultar_costo_directo_reportes_vis,
     redactar_analisis_economicos,
@@ -20302,7 +20303,12 @@ class SubcontratistaTributosBody(BaseModel):
 
 
 def _usuario_empresa_campos(current_user) -> Tuple[Optional[int], Optional[str]]:
-    """(subcontratista_id, empresa_tipo) del usuario autenticado (JWT o BD)."""
+    """(subcontratista_id, empresa_tipo) del usuario autenticado (JWT o BD).
+
+    No infiere ``empresa_tipo=subcontratista`` solo por un ``subcontratista_id``
+    residual: el aislamiento exige tipo explícito (Gestión de usuarios → Empresa).
+    Si la empresa es contratista/interventoría, el sid legado se ignora.
+    """
     sid = None
     empresa_tipo = None
     if isinstance(current_user, dict):
@@ -20317,22 +20323,18 @@ def _usuario_empresa_campos(current_user) -> Tuple[Optional[int], Optional[str]]
                     pass
         if sid is not None and sid <= 0:
             sid = None
-        # Si JWT ya trae ambos, no consultar BD
-        if sid is not None or empresa_tipo is not None:
-            if sid is not None or normalizar_empresa_tipo(empresa_tipo) in (
-                "contratista",
-                "interventoria",
-                "subcontratista",
-            ):
-                return sid, normalizar_empresa_tipo(empresa_tipo) or (
-                    "subcontratista" if sid is not None else None
-                )
+        tipo_jwt = normalizar_empresa_tipo(empresa_tipo)
+        # JWT con tipo claro: no consultar BD. Nunca inventar tipo desde sid.
+        if tipo_jwt in ("contratista", "interventoria", "subcontratista"):
+            return normalizar_campos_empresa_scope(sid, tipo_jwt)
+        if empresa_tipo is not None and tipo_jwt is None and sid is None:
+            return None, None
     try:
         uid = int(current_user.get("sub") or current_user.get("id") or 0) if isinstance(current_user, dict) else 0
     except (TypeError, ValueError):
-        return sid, normalizar_empresa_tipo(empresa_tipo)
+        return normalizar_campos_empresa_scope(sid, empresa_tipo)
     if not uid:
-        return sid, normalizar_empresa_tipo(empresa_tipo)
+        return normalizar_campos_empresa_scope(sid, empresa_tipo)
     try:
         rows = (
             supabase.table("usuarios")
@@ -20354,10 +20356,7 @@ def _usuario_empresa_campos(current_user) -> Tuple[Optional[int], Optional[str]]
         pass
     if sid is not None and sid <= 0:
         sid = None
-    tipo = normalizar_empresa_tipo(empresa_tipo)
-    if tipo is None and sid is not None:
-        tipo = "subcontratista"
-    return sid, tipo
+    return normalizar_campos_empresa_scope(sid, empresa_tipo)
 
 
 def _usuario_subcontratista_id(current_user) -> Optional[int]:
