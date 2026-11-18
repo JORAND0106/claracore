@@ -242,6 +242,23 @@ def test_ocr_extrae_impuestos_sin_red():
     assert "fecha" in out["campos_detectados"]
     vacio = ocr.analyze_recibo_bytes(b"")
     assert vacio["ok"] is False
+    partido = ocr.mapear_analisis({
+        "content": "FERRETERÍA INDUSTRIAL-\nIZADA\nNIT 900555666-7",
+        "documents": [{
+            "fields": {
+                "VendorName": {
+                    "valueString": "FERRETERÍAINDUSTRIAL-IZADA",
+                    "content": "FERRETERÍA INDUSTRIAL-\nIZADA",
+                },
+                "Items": {"valueArray": [
+                    {"valueObject": {"Description": {"valueString": "Tornillos - · "}}},
+                    {"valueObject": {"Description": {"valueString": " - · Tuercas"}}},
+                ]},
+            },
+        }],
+    })
+    assert partido["sugerencias"]["tercero_razon_social"] == "FERRETERÍA INDUSTRIALIZADA"
+    assert partido["sugerencias"]["descripcion"] == "Tornillos; Tuercas"
     assert "locale=es-ES" in ocr.url_analisis()
     cuerpo = ocr.cuerpo_analisis(b"factura")
     assert cuerpo["base64Source"]
@@ -390,6 +407,31 @@ def test_pasivo_queda_pendiente_si_no_hay_caja_nueva():
     assert nueva["indicadores"]["saldo_trasladado"] == -30000
 
 
+def test_impuestos_vacios_se_guardan_en_cero():
+    sb = _semilla()
+    mem = Memoria()
+    det = svc.crear_caja(sb, DEV, 1, 3)
+    det = svc.crear_gasto(
+        sb, DEV, 1, det["caja"]["id"],
+        _gasto(
+            iva="",
+            retenciones="",
+            impuesto_consumo=None,
+            otros_deducibles="",
+            observaciones="Compra de obra",
+        ),
+        (_png(), "image/png", "r.png"),
+        storage=mem,
+    )
+    gasto = det["gastos"][0]
+    assert gasto["iva"] == 0
+    assert gasto["retenciones"] == 0
+    assert gasto["impuesto_consumo"] == 0
+    assert gasto["otros_deducibles"] == 0
+    assert gasto["valor_neto"] == 100000
+    assert gasto["observaciones"] == "Compra de obra"
+
+
 def test_excel_y_pdf_icontec():
     caja = {
         "numero": 4,
@@ -429,12 +471,16 @@ def test_excel_y_pdf_icontec():
     wb = load_workbook(io.BytesIO(data))
     ws = wb.active
     assert ws.cell(1, 2).value == "CONTROL DE GASTOS POR CAJA MENOR"
-    assert "CC-CM-001" in str(ws.cell(1, 14).value)
-    assert "Versión 1.0" in str(ws.cell(1, 14).value)
+    fila1 = " ".join(str(ws.cell(1, c).value or "") for c in range(1, 20))
+    assert "CC-CM-001" in fila1
+    assert "Versión 1.0" in fila1
+    assert ws.cell(9, 3).value == "Razón Social"
     assert ws.cell(3, 2).value == "Obra SAS"
     assert ws.cell(5, 1).value == "Saldo trasladado"
-    assert ws.cell(10, 14).hyperlink.target.startswith("https://")
-    assert ws.cell(11, 13).value == 119000
+    soporte = next(c for c in range(1, 20) if ws.cell(9, c).value == "Soporte")
+    neto = next(c for c in range(1, 20) if ws.cell(9, c).value == "Valor neto")
+    assert ws.cell(10, soporte).hyperlink.target.startswith("https://")
+    assert ws.cell(11, neto).value == 119000
     assert ws["A13"].value == "Elaboró"
     assert any(ws._images)
 
@@ -451,6 +497,7 @@ def test_excel_y_pdf_icontec():
     # El segundo recibo no abre una página vacía: cada página usada tiene imagen.
     for pagina in doc:
         assert pagina.get_images()
+    assert "Razón Social" in doc[0].get_text()
     assert FORMATO_CALIDAD["codigo"] == "CC-CM-001"
 
 
@@ -467,6 +514,14 @@ def test_not_found_pide_permisos_del_api():
 
     texto = mensaje_falla_datos(Falla())
     assert "caja_menor_grants.sql" in texto
+
+    class FaltaColumna(Exception):
+        def __init__(self):
+            super().__init__("Could not find the 'observaciones' column of 'caja_menor_gasto' in the schema cache")
+            self.message = "Could not find the 'observaciones' column of 'caja_menor_gasto' in the schema cache"
+            self.code = "PGRST204"
+
+    assert "20261118161000_caja_menor_gasto_observaciones.sql" in mensaje_falla_datos(FaltaColumna())
     raiz = Path(__file__).resolve().parents[1]
     for nombre in (
         "sql/caja_menor_grants.sql",
