@@ -33,7 +33,7 @@ from caja_menor_calc import (
     valor_neto,
 )
 from caja_menor_email import enlace_caja, enviar_alerta_80
-from caja_menor_export import build_excel, build_pdf, enlace_gasto, fmt_cop
+from caja_menor_export import build_excel, build_pdf, bytes_imagen_url, enlace_gasto, fmt_cop
 from caja_menor_permissions import es_desarrollador_usuario, require_permiso_caja_menor, tiene_permiso_caja_menor
 
 _log = logging.getLogger("claracore.caja_menor")
@@ -142,7 +142,7 @@ def _storage(storage):
 def _contrato(sb, contrato_id: int) -> dict:
     row = _first(
         sb.table("contratos")
-        .select("id, numero, contratista, nit")
+        .select("id, numero, contratista, nit, logo_contratista")
         .eq("id", int(contrato_id))
         .limit(1)
         .execute()
@@ -154,6 +154,7 @@ def _contrato(sb, contrato_id: int) -> dict:
         "numero": str(row.get("numero") or "").strip(),
         "contratista": str(row.get("contratista") or "").strip(),
         "nit": str(row.get("nit") or "").strip(),
+        "logo_contratista": str(row.get("logo_contratista") or "").strip(),
     }
 
 
@@ -990,6 +991,7 @@ def exportar_excel(sb, user, contrato_id, caja_id) -> tuple:
         ingresos=_ingresos(sb, contrato_id, caja_id),
         gastos=gastos,
         enlace_por_gasto=enlaces,
+        logo=bytes_imagen_url(det["contrato"].get("logo_contratista")),
     )
     nombre = f"CajaMenor_{int(det['caja']['numero']):03d}.xlsx"
     return data, nombre
@@ -1000,23 +1002,23 @@ def exportar_pdf(sb, user, contrato_id, caja_id, *, storage=None) -> tuple:
     det = _detalle(sb, user, contrato_id, caja_id)
     gastos = sorted(_gastos(sb, contrato_id, caja_id), key=lambda g: int(g.get("consecutivo") or 0))
     store = _storage(storage)
-    recibos = []
+    preparados = []
     for g in gastos:
+        item = dict(g)
         imagen = None
         if g.get("soporte_blob"):
             try:
                 imagen = store.read(g["soporte_blob"])
             except Exception:
                 imagen = None
-        recibos.append({
-            "consecutivo": g.get("consecutivo"),
-            "fecha": g.get("fecha"),
-            "tercero": g.get("tercero_razon_social"),
-            "razon_social": g.get("tercero_razon_social"),
-            "observaciones": g.get("observaciones") or "",
-            "estado": g.get("estado_validacion"),
-            "imagen": imagen,
-        })
-    data = build_pdf(caja=det["caja"], recibos=recibos)
+        item["imagen"] = imagen
+        preparados.append(item)
+    data = build_pdf(
+        caja=det["caja"],
+        contrato=det["contrato"],
+        ingresos=_ingresos(sb, contrato_id, caja_id),
+        gastos=preparados,
+        logo=bytes_imagen_url(det["contrato"].get("logo_contratista")),
+    )
     nombre = f"CajaMenor_{int(det['caja']['numero']):03d}_recibos.pdf"
     return data, nombre
