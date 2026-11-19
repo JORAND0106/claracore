@@ -19,7 +19,6 @@ import {
   arrowHeadLength,
   clampZoom,
   ESQUEMA_CONTEXT_SIDEBAR_W,
-  squareModalOuterSize,
   DEFAULT_COTA_OFFSET,
   degToRad,
   cursorForHandle,
@@ -165,7 +164,15 @@ import {
   isEsquemaPhoneViewport,
   phoneModalOuterSize,
   phoneSheetHeightPx,
-} from './esquemaMobileLayout.js'
+} from './esquemaMobileLayout'
+import {
+  applyEsquemaModalResizeDelta,
+  ESQUEMA_MODAL_RESIZE_EDGES,
+  esquemaModalResizeCursor,
+  esquemaModalViewportBudget,
+  resolveEsquemaModalLayout,
+  writeEsquemaModalSizePref,
+} from './esquemaModalResize'
 import { EsquemaPhoneBottomSheet } from './EsquemaPhoneBottomSheet.jsx'
 import { EsquemaPhoneToolbar } from './EsquemaPhoneToolbar.jsx'
 import {
@@ -762,8 +769,8 @@ export default function EsquemaEditorModal({
   const autosavingRef = useRef(false)
   const draftSaveStatusTimerRef = useRef(null)
   /**
-   * Ventana: altura = lado de dibujo; ancho = lado + panel lateral
-   * (el área de dibujo no se reduce para alojar el lateral).
+   * Ventana iPad/portátil: tamaño preferido del usuario (bordes/esquina),
+   * acotado al viewport; celular = pantalla completa.
    */
   const [modalLayout, setModalLayout] = useState(() => {
     let sb = ESQUEMA_CONTEXT_SIDEBAR_W
@@ -781,13 +788,12 @@ export default function EsquemaEditorModal({
     const landscape = vpW > vpH
     const phone = vpW <= 767 || (landscape && vpW <= 932)
     if (phone) return phoneModalOuterSize(vpW, vpH)
-    const maxW = Math.min(1640, vpW * 0.98 - 32)
-    const maxH = vpH * 0.92 - 32
-    return squareModalOuterSize(maxW, maxH, sb)
+    return resolveEsquemaModalLayout({ vpW, vpH, sidebarW: sb })
   })
   const modalSide = modalLayout.side
   const modalWidth = modalLayout.w
   const modalHeight = modalLayout.h
+  const modalResizeDragRef = useRef(null)
   const [contextSidebarCollapsed, setContextSidebarCollapsed] = useState(false)
   /** Ancho ampliable del panel de contexto (mínimo = ancho actual de contrato). */
   const [contextSidebarUserW, setContextSidebarUserW] = useState(() => {
@@ -1316,17 +1322,24 @@ export default function EsquemaEditorModal({
     return () => ro?.disconnect()
   }, [setupCanvas])
 
-  // Ventana: en celular pantalla completa; en iPad/portátil cuadrada + lateral.
+  // Ventana: celular = pantalla completa; iPad/portátil = tamaño preferido
+  // acotado al viewport (giro / resize de pantalla no pierden el dibujo).
   useEffect(() => {
     const update = () => {
       if (isPhoneLayoutRef.current) {
         setModalLayout(phoneModalOuterSize(window.innerWidth, window.innerHeight))
         return
       }
-      const maxW = Math.min(1640, window.innerWidth * 0.98 - 32)
-      const maxH = window.innerHeight * 0.92 - 32
-      const sb = contextSidebarCollapsed ? 36 : contextSidebarUserW
-      setModalLayout(squareModalOuterSize(maxW, maxH, huellaMode ? 0 : sb))
+      // Durante arrastre de borde no pisar el layout en vivo.
+      if (modalResizeDragRef.current) return
+      const sb = (huellaMode || contextSidebarCollapsed)
+        ? (contextSidebarCollapsed && !huellaMode ? 36 : 0)
+        : contextSidebarUserW
+      setModalLayout(resolveEsquemaModalLayout({
+        vpW: window.innerWidth,
+        vpH: window.innerHeight,
+        sidebarW: sb,
+      }))
     }
     update()
     window.addEventListener('resize', update)
@@ -1336,6 +1349,71 @@ export default function EsquemaEditorModal({
       window.removeEventListener('orientationchange', update)
     }
   }, [contextSidebarCollapsed, contextSidebarUserW, huellaMode, isPhoneLayout])
+
+  const beginModalResize = useCallback((edge, e) => {
+    if (isPhoneLayoutRef.current) return
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX ?? e.touches?.[0]?.clientX
+    const startY = e.clientY ?? e.touches?.[0]?.clientY
+    if (!Number.isFinite(startX) || !Number.isFinite(startY)) return
+    const sb = (huellaMode || contextSidebarCollapsed)
+      ? (contextSidebarCollapsed && !huellaMode ? 36 : 0)
+      : contextSidebarUserW
+    modalResizeDragRef.current = {
+      edge,
+      startX,
+      startY,
+      w0: modalLayout.w,
+      h0: modalLayout.h,
+      sidebarW: sb,
+    }
+    try { e.currentTarget?.setPointerCapture?.(e.pointerId) } catch { /* ignore */ }
+    const clientOf = (ev) => ({
+      x: ev.clientX ?? ev.touches?.[0]?.clientX,
+      y: ev.clientY ?? ev.touches?.[0]?.clientY,
+    })
+    const onMove = (ev) => {
+      const drag = modalResizeDragRef.current
+      if (!drag) return
+      ev.preventDefault?.()
+      const pt = clientOf(ev)
+      if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return
+      const budget = esquemaModalViewportBudget(window.innerWidth, window.innerHeight)
+      const next = applyEsquemaModalResizeDelta({
+        w0: drag.w0,
+        h0: drag.h0,
+        edge: drag.edge,
+        dx: pt.x - drag.startX,
+        dy: pt.y - drag.startY,
+        maxW: budget.maxW,
+        maxH: budget.maxH,
+        sidebarW: drag.sidebarW,
+      })
+      setModalLayout(next)
+    }
+    const onUp = () => {
+      modalResizeDragRef.current = null
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+      setModalLayout((cur) => {
+        writeEsquemaModalSizePref({ w: cur.w, h: cur.h })
+        return cur
+      })
+    }
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
+  }, [
+    contextSidebarCollapsed,
+    contextSidebarUserW,
+    huellaMode,
+    modalLayout.h,
+    modalLayout.w,
+  ])
 
   // Bloquear scroll de la página detrás mientras el esquema está abierto en celular.
   useEffect(() => {
@@ -7159,13 +7237,14 @@ export default function EsquemaEditorModal({
         data-modal-w={modalWidth}
         data-modal-h={modalHeight}
         data-modal-side={modalSide}
+        data-modal-resizable={isPhoneLayout ? '0' : '1'}
         data-phone-layout={isPhoneLayout ? '1' : '0'}
         style={{
-          // Celular: pantalla completa. iPad/portátil: cuadrada + lateral.
+          // Celular: pantalla completa. iPad/portátil: tamaño preferido del usuario.
           width: isPhoneLayout ? '100%' : modalWidth,
           height: isPhoneLayout ? '100%' : modalHeight,
           maxWidth: isPhoneLayout ? '100%' : '98vw',
-          maxHeight: isPhoneLayout ? '100%' : '92vh',
+          maxHeight: isPhoneLayout ? '100%' : '96vh',
           background: t.bgCard || '#fff',
           border: isPhoneLayout ? 'none' : `1px solid ${t.border}`,
           borderRadius: isPhoneLayout ? 0 : 14,
@@ -7178,6 +7257,55 @@ export default function EsquemaEditorModal({
           position: 'relative',
         }}
       >
+        {!isPhoneLayout && ESQUEMA_MODAL_RESIZE_EDGES.map((edge) => {
+          const thick = 10
+          const corner = 18
+          const style = {
+            position: 'absolute',
+            zIndex: 40,
+            touchAction: 'none',
+            cursor: esquemaModalResizeCursor(edge),
+            background: 'transparent',
+          }
+          if (edge === 'n') Object.assign(style, { top: 0, left: corner, right: corner, height: thick })
+          else if (edge === 's') Object.assign(style, { bottom: 0, left: corner, right: corner, height: thick })
+          else if (edge === 'e') Object.assign(style, { top: corner, bottom: corner, right: 0, width: thick })
+          else if (edge === 'w') Object.assign(style, { top: corner, bottom: corner, left: 0, width: thick })
+          else if (edge === 'se') Object.assign(style, { right: 0, bottom: 0, width: corner, height: corner })
+          else if (edge === 'sw') Object.assign(style, { left: 0, bottom: 0, width: corner, height: corner })
+          else if (edge === 'ne') Object.assign(style, { right: 0, top: 0, width: corner, height: corner })
+          else if (edge === 'nw') Object.assign(style, { left: 0, top: 0, width: corner, height: corner })
+          return (
+            <div
+              key={edge}
+              role="separator"
+              aria-orientation={edge === 'n' || edge === 's' ? 'horizontal' : 'vertical'}
+              aria-label={`Redimensionar ventana (${edge})`}
+              data-testid={`esquema-modal-resize-${edge}`}
+              data-resize-edge={edge}
+              onPointerDown={(ev) => beginModalResize(edge, ev)}
+              style={style}
+            >
+              {edge === 'se' ? (
+                <span
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    right: 3,
+                    bottom: 3,
+                    width: 12,
+                    height: 12,
+                    borderRight: `2px solid ${t.border || '#94a3b8'}`,
+                    borderBottom: `2px solid ${t.border || '#94a3b8'}`,
+                    borderRadius: 2,
+                    opacity: 0.85,
+                    pointerEvents: 'none',
+                  }}
+                />
+              ) : null}
+            </div>
+          )
+        })}
         <EsquemaToolbarHoverTips rootRef={modalRootRef} />
         {isPhoneLayout ? (
           <EsquemaPhoneToolbar
