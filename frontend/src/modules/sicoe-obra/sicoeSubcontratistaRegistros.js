@@ -1,6 +1,6 @@
 /**
- * Visibilidad de registros para cargo subcontratista dentro del reporte.
- * Solo líneas de su sub (con fallback a cabecera) y con objeto de pago.
+ * Visibilidad de registros para empresa subcontratista dentro del reporte.
+ * Solo líneas de su sub (con fallback a cabecera). No exige objeto de pago.
  */
 
 import { sicoeSubcontratistaIdDeRegistro } from './sicoeRegistroSubcontratista.js'
@@ -21,10 +21,9 @@ export function sicoeEsObjetoPagoSub(reg) {
   return s === '1' || s === 'true' || s === 't' || s === 'si' || s === 'sí' || s === 'yes'
 }
 
-/** Registro visible para el usuario subcontratista (pendientes de validar incluidos). */
+/** Registro visible para el usuario subcontratista (cualquier validación / objeto de pago). */
 export function sicoeRegistroVisibleParaSub(reg, subIdUsuario, reporte = null) {
   if (!reg) return false
-  if (!sicoeEsObjetoPagoSub(reg)) return false
   if (subIdUsuario == null || String(subIdUsuario).trim() === '') return false
   const eff = sicoeSubcontratistaIdDeRegistro(reg, reporte)
   return sicoeIdsSubIguales(eff, subIdUsuario)

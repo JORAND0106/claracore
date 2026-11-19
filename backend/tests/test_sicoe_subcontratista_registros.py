@@ -38,11 +38,12 @@ def test_pertenece_fallback_cabecera():
     ) is False
 
 
-def test_visible_requiere_objeto_pago():
+def test_visible_por_empresa_sin_exigir_objeto_pago():
     reg = {"subcontratista_id": 1, "nivel2_objeto_pago_sub": True}
     assert registro_visible_para_sub(reg, 1) is True
-    assert registro_visible_para_sub({**reg, "nivel2_objeto_pago_sub": False}, 1) is False
-    assert registro_visible_para_sub({**reg, "nivel2_objeto_pago_sub": None}, 1) is False
+    assert registro_visible_para_sub({**reg, "nivel2_objeto_pago_sub": False}, 1) is True
+    assert registro_visible_para_sub({**reg, "nivel2_objeto_pago_sub": None}, 1) is True
+    assert registro_visible_para_sub({**reg, "subcontratista_id": 9}, 1) is False
 
 
 def test_filtrar_mezcla():
@@ -53,7 +54,7 @@ def test_filtrar_mezcla():
         {"id": 4, "subcontratista_id": None, "nivel2_objeto_pago_sub": True},
     ]
     out = filtrar_registros_para_sub(regs, 5, {"subcontratista_id": 5})
-    assert [r["id"] for r in out] == [1, 4]
+    assert [r["id"] for r in out] == [1, 2, 4]
 
 
 def test_aplicar_precios_propios_sin_contrato():
