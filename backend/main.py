@@ -22306,7 +22306,9 @@ def buscar_reportes_obra(
             usuario_id=_uid_fu,
             usuario_accion=_uacc_fu,
             reversion_modo=_rev_modo,
-            solo_objeto_pago_sub=_sub_restricto_buscar,
+            # Visibilidad sub: por subcontratista_id (arriba). Objeto de pago NO filtra
+            # la búsqueda (sí se conserva en cortes / validar_sub).
+            solo_objeto_pago_sub=False,
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
@@ -22618,8 +22620,6 @@ def buscar_reportes_obra(
                         q = _apply_capitulos_to_so_registros_q(q, caps_buscar_norm)
                     if subcontratista_id is not None:
                         q = q.eq("subcontratista_id", subcontratista_id)
-                    if _sub_restricto_buscar:
-                        q = q.eq("nivel2_objeto_pago_sub", True)
                     q = _apply_item_patterns_to_so_registros_q(q, items_buscar_norm, items_buscar_op)
                     if tramo:
                         q = q.eq("tramo", tramo)
@@ -25364,7 +25364,8 @@ def analisis_registros_obra(
                 ambito_fecha_registro=True,
                 reversion_modo=_rev_modo_ana,
                 # Editado por ya restringió reporte_ids_base (cabecera ∪ línea).
-                solo_objeto_pago_sub=_sub_restricto_ana,
+                # Sub: aislamiento por subcontratista_id; no filtrar por objeto de pago.
+                solo_objeto_pago_sub=False,
             )
             return q
 
@@ -26473,7 +26474,7 @@ def obtener_reporte(
                     ambito_fecha_registro=_ambito_reg_det,
                     reversion_modo=_rev_modo_det,
                     editado_por_ids=_editado_por_ids_det or None,
-                    solo_objeto_pago_sub=_sub_restricto,
+                    solo_objeto_pago_sub=False,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
 
@@ -32826,7 +32827,7 @@ def sicoe_cantidades_por_item(
             usuario_accion=_uacc if _tiene_fu and _amb == "registro" else None,
             ambito_fecha_registro=_amb == "registro",
             editado_por_ids=_editado_por_ids_cpi or None,
-            solo_objeto_pago_sub=_sub_restricto_cpi,
+            solo_objeto_pago_sub=False,
         )
 
     out_rows = _sicoe_analisis_fetch_registros_paginated(_build_q)

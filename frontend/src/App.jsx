@@ -27708,12 +27708,17 @@ export default function App() {
           String(fresh.foto_perfil_url || '') !== String(prev.foto_perfil_url || '') ||
           String(fresh.firma_imagen_url || '') !== String(prev.firma_imagen_url || '') ||
           fresh.politicas_aceptadas !== prev.politicas_aceptadas
+        const empresaChanged =
+          String(fresh.empresa_tipo ?? '') !== String(prev.empresa_tipo ?? '') ||
+          String(fresh.subcontratista_id ?? fresh.sub_id ?? '') !==
+            String(prev.subcontratista_id ?? prev.sub_id ?? '')
         const adminChanged =
           fresh.cargo_id    !== prev.cargo_id   ||
           fresh.rol_id      !== prev.rol_id     ||
           fresh.estado      !== prev.estado     ||
           fresh.contrato_id !== prev.contrato_id ||
-          permisosChanged
+          permisosChanged ||
+          empresaChanged
         if (adminChanged || profileChanged) {
           const updated = {
             ...prev, ...fresh,
@@ -27723,6 +27728,12 @@ export default function App() {
             logo_contratista: prev.logo_contratista,
             logo_interventoria: prev.logo_interventoria,
             permisos: fresh.permisos ?? prev.permisos,
+            // Empresa manda desde /usuarios/me (aislamiento Sicoe).
+            empresa_tipo: fresh.empresa_tipo ?? null,
+            subcontratista_id:
+              fresh.subcontratista_id != null
+                ? fresh.subcontratista_id
+                : (fresh.sub_id != null ? fresh.sub_id : null),
           }
           const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
           storage.setItem('cc_usuario', JSON.stringify(updated))
@@ -27730,9 +27741,11 @@ export default function App() {
           if (adminChanged) {
             const msgs = []
             if (fresh.cargo_id    !== prev.cargo_id)    msgs.push('cargo')
+            if (fresh.rol_id      !== prev.rol_id)      msgs.push('rol')
             if (fresh.contrato_id !== prev.contrato_id) msgs.push('contrato')
             if (fresh.estado      !== prev.estado)      msgs.push('estado')
             if (permisosChanged)                         msgs.push('permisos')
+            if (empresaChanged)                          msgs.push('empresa')
             setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
           }
         }
