@@ -24,6 +24,19 @@ describe('caso · tubería y accesorios plantillas', () => {
     assert.match(modal, /proposePipeAutoConnect/)
     assert.match(modal, /!isPhoneLayout && \(\s*<EsquemaPipeLibraryPopup/)
     assert.match(modal, /updatePipeTemplateSolid/)
+    // Visible en barra principal (junto a Modo 3D), no solo dentro del bloque mode3d.
+    assert.match(modal, /data-testid="esquema-modo-3d"[\s\S]*?data-testid="esquema-3d-tuberia"/)
+    assert.match(modal, /openPipeLibrary[\s\S]*?setMode3d\(true\)/)
+  })
+
+  it('paridad: todos los invocadores usan el modal canónico con el botón', () => {
+    const inv = read('components/esquema/esquemaParidadInvocacion.scenario.test.js')
+    assert.match(inv, /ESQUEMA_INVOCATION_POINTS|EsquemaEditorModal/)
+    const modal = read('components/esquema/EsquemaEditorModal.jsx')
+    assert.match(modal, /aria-label="Tubería y accesorios"/)
+    // Un solo botón en el modal canónico ⇒ Bitácora, Actas, SicoeObra, Topo, Presupuesto, etc.
+    const count = (modal.match(/data-testid="esquema-3d-tuberia"/g) || []).length
+    assert.equal(count, 1)
   })
 
   it('UI biblioteca + campos por plantilla', () => {
