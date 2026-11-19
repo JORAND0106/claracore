@@ -14,6 +14,7 @@ import {
   solidVolumeM3,
 } from './esquema3dSolids.js'
 import { polygonAreaM2 } from './esquemaGeometry.js'
+import { naturalFormulaPipeFormMeta } from './esquema3dPipeTemplates.js'
 
 const SHARED_VOL_EPS = 1e-6
 
@@ -250,6 +251,11 @@ export function naturalFormulaFromOperand(op) {
   if (!op) return { dimensiones: null, formula: null, forma: 'Sólido' }
   const v = op.volumeM3
   const fm = op.formMeta
+  // Tubería / accesorios (C-3D-17)
+  if (fm?.kind === 'pipe_elbow' || fm?.kind === 'pipe_tee') {
+    const pipe = naturalFormulaPipeFormMeta(fm, v)
+    if (pipe) return pipe
+  }
   // Solevado: tronco / pirámide / cono / transición
   if (fm?.kind === 'pyramid_frustum') {
     const h = fm.heightM
