@@ -129,6 +129,15 @@ import {
   Esquema3dViewToolbar,
   Esquema3dVolumeHint,
 } from './esquema3dUi'
+import { EsquemaPipeLibraryPopup, EsquemaPipeParamsPopup } from './esquema3dPipeUi.jsx'
+import {
+  applyPipeAutoConnect,
+  buildPipeTemplateSolid,
+  isPipeTemplateSolid,
+  proposePipeAutoConnect,
+  shiftPipeTemplateEnds,
+  updatePipeTemplateSolid,
+} from './esquema3dPipeTemplates.js'
 import {
   apexPointFromEntity,
   describeContourForSolevar,
@@ -745,6 +754,9 @@ export default function EsquemaEditorModal({
   const [extrudePrompt, setExtrudePrompt] = useState(null)
   const [solevarPrompt, setSolevarPrompt] = useState(null)
   const [solevarHoverId, setSolevarHoverId] = useState(null)
+  /** C-3D-17 · Tubería y accesorios */
+  const [pipeLibraryOpen, setPipeLibraryOpen] = useState(false)
+  const [pipeParams, setPipeParams] = useState(null) // { templateId, editSolidId? }
   const solevarHoverIdRef = useRef(null)
   solevarHoverIdRef.current = solevarHoverId
   const [op3d, setOp3d] = useState(null) // unir | sustraer | cortar
@@ -2140,6 +2152,78 @@ export default function EsquemaEditorModal({
     }
     setToolHint('Seleccione dos contornos u oprima Solevar')
   }, [])
+
+  const openPipeParamsForEdit = useCallback(() => {
+    const id = selectedSolidIdsRef.current?.[0]
+    const solid = (solids3dRef.current || []).find((s) => s.id === id)
+    if (!isPipeTemplateSolid(solid)) {
+      setToolHint('Seleccione una tubería o accesorio para editar sus medidas.')
+      return
+    }
+    const params = solid.templateMeta?.params || {}
+    setPipeParams({
+      templateId: solid.templateMeta.templateId,
+      editSolidId: solid.id,
+      initialValues: Object.fromEntries(
+        Object.entries(params).map(([k, v]) => [k, v == null ? '' : String(v)]),
+      ),
+    })
+    setPipeLibraryOpen(false)
+  }, [])
+
+  const openPipeLibrary = useCallback(() => {
+    const id = selectedSolidIdsRef.current?.[0]
+    const solid = (solids3dRef.current || []).find((s) => s.id === id)
+    if (isPipeTemplateSolid(solid) && (selectedSolidIdsRef.current || []).length === 1) {
+      openPipeParamsForEdit()
+      return
+    }
+    setPipeLibraryOpen(true)
+    setToolHint('Elija una plantilla de tubería o accesorio.')
+  }, [openPipeParamsForEdit])
+
+  const confirmPipeTemplate = useCallback((values, setError) => {
+    if (!pipeParams?.templateId) return
+    const editId = pipeParams.editSolidId
+    if (editId) {
+      const prev = (solids3dRef.current || []).find((s) => s.id === editId)
+      const built = updatePipeTemplateSolid(prev, values)
+      if (!built.ok) {
+        setError?.(built.error || 'No se pudo actualizar.')
+        return
+      }
+      pushHistory()
+      const next = (solids3dRef.current || []).map((s) => (s.id === editId ? built.solid : s))
+      solids3dRef.current = next
+      setSolids3d(next)
+      setPipeParams(null)
+      setDirty(true)
+      setToolHint('Plantilla actualizada en su lugar.')
+      redraw()
+      return
+    }
+    const built = buildPipeTemplateSolid(pipeParams.templateId, values, {
+      originM: { x: 0, y: 0 },
+      yawDeg: 0,
+    })
+    if (!built.ok) {
+      setError?.(built.error || 'No se pudo construir.')
+      return
+    }
+    pushHistory()
+    const next = [...(solids3dRef.current || []), built.solid]
+    solids3dRef.current = next
+    setSolids3d(next)
+    setSelectedSolidIds([built.solid.id])
+    setPipeParams(null)
+    setMode3d(true)
+    mode3dRef.current = true
+    setView3d('top')
+    view3dRef.current = 'top'
+    setDirty(true)
+    setToolHint('Elemento insertado. Muévalo en planta; se pegará al acercarlo a otro extremo.')
+    redraw()
+  }, [pipeParams])
 
   const confirmSolevar3d = useCallback((values, setError) => {
     if (!solevarPrompt) return
@@ -5033,9 +5117,12 @@ export default function EsquemaEditorModal({
         }
         setLiveMeasure(formatMeters(Math.hypot(dx, dy)))
         let moved = translateSolidInView(d.originSolid, dx, dy, viewId)
+        const worldDelta = canvasDeltaToWorldMove(dx, dy, viewId)
+        if (isPipeTemplateSolid(moved)) {
+          moved = shiftPipeTemplateEnds(moved, worldDelta)
+        }
         // Contorno ligado: mismo desplazamiento world en su viewPlane nativo.
         if (d.originEntity?.id) {
-          const worldDelta = canvasDeltaToWorldMove(dx, dy, viewId)
           const entMoved = applyWorldDeltaToEntity(d.originEntity, worldDelta)
           if (moved.extrudeParams && Number.isFinite(Number(entMoved.viewDepthWorld))) {
             moved = {
@@ -5309,6 +5396,25 @@ export default function EsquemaEditorModal({
         dragRef.current = null
         redraw()
         return
+      }
+      // C-3D-17: al soltar un accesorio, pegar a extremo libre cercano.
+      if (dragRef.current?.mode === 'move-solid' && dragRef.current.solidId) {
+        const sid = dragRef.current.solidId
+        const moved = (solids3dRef.current || []).find((s) => s.id === sid)
+        if (isPipeTemplateSolid(moved)) {
+          const prop = proposePipeAutoConnect(
+            moved,
+            (solids3dRef.current || []).filter((s) => s.id !== sid),
+          )
+          if (prop) {
+            const connected = applyPipeAutoConnect(moved, prop)
+            const next = (solids3dRef.current || []).map((s) => (s.id === sid ? connected : s))
+            solids3dRef.current = next
+            setSolids3d(next)
+            setDirty(true)
+            setToolHint('Conectado automáticamente al extremo cercano.')
+          }
+        }
       }
       dragRef.current = null
       moveGuideRef.current = null
@@ -7893,6 +7999,32 @@ export default function EsquemaEditorModal({
                 <IconSolevar3d />
                 <span>Solevar</span>
               </button>
+              {!isPhoneLayout ? (
+                <button
+                  type="button"
+                  title="Tubería y accesorios: plantillas paramétricas"
+                  data-cc-tooltip="Tubería y accesorios: plantillas paramétricas"
+                  data-cc-tooltip-variant="short"
+                  aria-label="Tubería y accesorios"
+                  onClick={openPipeLibrary}
+                  style={{
+                    ...iconBtn(t, !!pipeLibraryOpen || !!pipeParams),
+                    display: 'inline-flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 2,
+                    fontSize: 9,
+                    fontWeight: 700,
+                    minWidth: 58,
+                    padding: '4px 6px',
+                    lineHeight: 1.05,
+                  }}
+                  data-testid="esquema-3d-tuberia"
+                >
+                  <IconTuberia3d />
+                  <span>Tubería y accesorios</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 title="Unir dos o más sólidos seleccionados"
@@ -9664,6 +9796,27 @@ export default function EsquemaEditorModal({
             phoneFullscreen={isPhoneLayout}
             onCancel={() => setExtrudePrompt(null)}
             onConfirm={confirmExtrude3d}
+          />
+        ) : null}
+        {!isPhoneLayout && (
+          <EsquemaPipeLibraryPopup
+            t={t}
+            open={pipeLibraryOpen}
+            onClose={() => setPipeLibraryOpen(false)}
+            onPick={(templateId) => {
+              setPipeLibraryOpen(false)
+              setPipeParams({ templateId, initialValues: null, editSolidId: null })
+            }}
+          />
+        )}
+        {!isPhoneLayout && pipeParams?.templateId ? (
+          <EsquemaPipeParamsPopup
+            key={`pipe-${pipeParams.templateId}-${pipeParams.editSolidId || 'new'}`}
+            t={t}
+            templateId={pipeParams.templateId}
+            initialValues={pipeParams.initialValues}
+            onCancel={() => setPipeParams(null)}
+            onConfirm={confirmPipeTemplate}
           />
         ) : null}
         {parrillaSession && !isPhoneLayout && parrillaSession.phase === 'ask-continue' ? (
@@ -12814,6 +12967,16 @@ function IconSolevar3d() {
       <path d="M4 18h16" />
       <path d="M7 18 10 6h4l3 12" />
       <path d="M9 12h6" />
+    </svg>
+  )
+}
+function IconTuberia3d() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="3" y="9" width="18" height="6" rx="3" />
+      <path d="M3 12h18" />
+      <path d="M7 7v4" />
+      <path d="M17 13v4" />
     </svg>
   )
 }
