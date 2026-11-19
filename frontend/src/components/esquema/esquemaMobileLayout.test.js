@@ -36,7 +36,7 @@ describe('esquemaMobileLayout · ventana pantalla completa', () => {
     assert.equal(s.phone, true)
   })
 
-  it('iPad/portátil sigue con ventana cuadrada + lateral (sin cambiar contrato)', () => {
+  it('default iPad/portátil (sin preferencia) sigue siendo cuadrado + lateral', () => {
     const s = squareModalOuterSize(1400, 900, ESQUEMA_CONTEXT_SIDEBAR_W)
     assert.equal(s.h, s.side)
     assert.equal(s.w, s.side + ESQUEMA_CONTEXT_SIDEBAR_W)
