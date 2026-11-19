@@ -75,25 +75,25 @@ export default function EsquemaExportPopup({
         }}
       >
         <CcModalBrandHeader theme={t} />
-        <div style={{ fontWeight: 800, color: ui.text, fontSize: 17, margin: '8px 0 6px' }}>
+        <div style={{ fontWeight: 800, color: ui.text, fontSize: 'var(--cc-md)', margin: '8px 0 6px' }}>
           Exportar
         </div>
-        <p style={{ margin: '0 0 8px', color: ui.text, fontSize: 13, lineHeight: 1.45, fontWeight: 600 }}>
+        <p style={{ margin: '0 0 8px', color: ui.text, fontSize: 'var(--cc-sm)', lineHeight: 1.45, fontWeight: 600 }}>
           El esquema ya quedó guardado como PNG en el registro (Bitácora / documento).
           No se descarga el PNG aquí.
         </p>
-        <p style={{ margin: '0 0 14px', color: ui.muted, fontSize: 13, lineHeight: 1.4 }}>
+        <p style={{ margin: '0 0 14px', color: ui.muted, fontSize: 'var(--cc-sm)', lineHeight: 1.4 }}>
           Si desea además bajar archivos a su computador, marque PDF y/o DXF y oprima Exportar.
           Si no necesita ninguno, oprima Cerrar.
         </p>
         {!hasPdf && !hasDxf && (
-          <p style={{ margin: '0 0 12px', color: '#b91c1c', fontSize: 12 }}>
+          <p style={{ margin: '0 0 12px', color: '#b91c1c', fontSize: 'var(--cc-caption)' }}>
             No se pudieron preparar PDF ni DXF en este momento. El PNG del registro sí quedó guardado.
           </p>
         )}
         <label style={{
           display: 'flex', alignItems: 'center', gap: 10,
-          marginBottom: 10, color: ui.text, fontSize: 14, cursor: hasPdf ? 'pointer' : 'not-allowed',
+          marginBottom: 10, color: ui.text, fontSize: 'var(--cc-sm)', cursor: hasPdf ? 'pointer' : 'not-allowed',
           opacity: hasPdf ? 1 : 0.45,
         }}
         >
@@ -107,7 +107,7 @@ export default function EsquemaExportPopup({
         </label>
         <label style={{
           display: 'flex', alignItems: 'center', gap: 10,
-          marginBottom: 16, color: ui.text, fontSize: 14, cursor: hasDxf ? 'pointer' : 'not-allowed',
+          marginBottom: 16, color: ui.text, fontSize: 'var(--cc-sm)', cursor: hasDxf ? 'pointer' : 'not-allowed',
           opacity: hasDxf ? 1 : 0.45,
         }}
         >

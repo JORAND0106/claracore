@@ -700,6 +700,7 @@ export function freezeCalcSnapshot(calc, solids) {
       signedM3: round2(r.signedM3),
       countsInTotal: r.countsInTotal !== false,
       color: detail?.color || r.solid?.color || '#0f766e',
+      textureId: detail?.textureId || r.solid?.textureId || null,
       discountFromNombre: targetNombre,
       detail,
     })
@@ -892,6 +893,7 @@ export function describeSolidForMemoria(solid) {
   const color = solid.color || '#0f766e'
   const base = {
     color,
+    textureId: solid.textureId || null,
     longM: dims.longM,
     anchM: dims.anchM,
     espesorM: dims.heightM || heightM,

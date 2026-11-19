@@ -98,7 +98,7 @@ function ShapeThumb({ shape, selected, onClick }) {
       }}
     >
       <ShapeSvg shape={shape} size={72} />
-      <div style={{ fontSize: 10, fontWeight: 700, marginTop: 4, color: '#0f172a' }}>{shape.nombre}</div>
+      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, marginTop: 4, color: '#0f172a' }}>{shape.nombre}</div>
     </button>
   )
 }
@@ -297,9 +297,9 @@ export function EsquemaDespiecePositionPopup({
     border: `1px solid ${t.border}`,
     background: t.inputBg || '#fff',
     color: t.text,
-    fontSize: 14,
+    fontSize: 'var(--cc-sm)',
   }
-  const label = { display: 'grid', gap: 4, fontSize: 12, fontWeight: 700 }
+  const label = { display: 'grid', gap: 4, fontSize: 'var(--cc-caption)', fontWeight: 700 }
 
   return (
     <div
@@ -321,7 +321,7 @@ export function EsquemaDespiecePositionPopup({
         }}
         >
           <div style={{ fontSize: phoneFullscreen ? 18 : 16, fontWeight: 800 }}>{initial ? 'Editar posición' : 'Agregar posición'}</div>
-          <button type="button" onClick={onCancel} style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', color: t.text, minWidth: 44, minHeight: 44 }}>×</button>
+          <button type="button" onClick={onCancel} style={{ border: 'none', background: 'transparent', fontSize: 'var(--cc-lg)', cursor: 'pointer', color: t.text, minWidth: 44, minHeight: 44 }}>×</button>
         </div>
 
         <div style={{
@@ -380,7 +380,7 @@ export function EsquemaDespiecePositionPopup({
                 inputMode="decimal"
                 data-testid="despiece-pos-espaciamiento"
               />
-              <span style={{ fontWeight: 800, fontSize: 12 }}>m</span>
+              <span style={{ fontWeight: 800, fontSize: 'var(--cc-caption)' }}>m</span>
             </div>
           </label>
           <label style={label}>
@@ -409,7 +409,7 @@ export function EsquemaDespiecePositionPopup({
                   inputMode="decimal"
                   data-testid="despiece-pos-angulo"
                 />
-                <span style={{ fontWeight: 800, fontSize: 12 }}>°</span>
+                <span style={{ fontWeight: 800, fontSize: 'var(--cc-caption)' }}>°</span>
               </div>
             </label>
           ) : (
@@ -463,7 +463,7 @@ export function EsquemaDespiecePositionPopup({
           </div>
         ) : null}
 
-        <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Forma</div>
+        <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, marginBottom: 6 }}>Forma</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
           {shapes.map((s) => (
             <ShapeThumb
@@ -487,7 +487,7 @@ export function EsquemaDespiecePositionPopup({
         }}
         >
           <div>
-            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: ui?.muted || '#64748b' }}>
+            <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, marginBottom: 8, color: ui?.muted || '#64748b' }}>
               {shape?.nombre || 'Forma'} — resalte del segmento activo
             </div>
             <ShapeSvg
@@ -514,7 +514,7 @@ export function EsquemaDespiecePositionPopup({
                         data-testid={`despiece-spiral-${k}`}
                       />
                       {k !== 'vueltas' ? (
-                        <span style={{ fontWeight: 800, fontSize: 12, color: ui?.muted || '#64748b' }}>m</span>
+                        <span style={{ fontWeight: 800, fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b' }}>m</span>
                       ) : null}
                     </div>
                   </label>
@@ -531,9 +531,9 @@ export function EsquemaDespiecePositionPopup({
                     background: activeSeg === seg.id ? 'rgba(15,118,110,0.06)' : 'transparent',
                   }}
                 >
-                  <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>{seg.name}</div>
+                  <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, marginBottom: 6 }}>{seg.name}</div>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                    <label style={{ fontSize: 11, fontWeight: 600 }}>
+                    <label style={{ fontSize: 'var(--cc-caption)', fontWeight: 600 }}>
                       <input
                         type="radio"
                         name={`mode-${seg.id}`}
@@ -541,7 +541,7 @@ export function EsquemaDespiecePositionPopup({
                         onChange={() => updateSeg(seg.id, { mode: 'unica' })}
                       />{' '}Única
                     </label>
-                    <label style={{ fontSize: 11, fontWeight: 600 }}>
+                    <label style={{ fontSize: 'var(--cc-caption)', fontWeight: 600 }}>
                       <input
                         type="radio"
                         name={`mode-${seg.id}`}
@@ -563,7 +563,7 @@ export function EsquemaDespiecePositionPopup({
                           inputMode="decimal"
                           data-testid={`despiece-seg-min-${seg.id}`}
                         />
-                        <span style={{ fontWeight: 800, fontSize: 12 }}>m</span>
+                        <span style={{ fontWeight: 800, fontSize: 'var(--cc-caption)' }}>m</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         <input
@@ -576,9 +576,9 @@ export function EsquemaDespiecePositionPopup({
                           inputMode="decimal"
                           data-testid={`despiece-seg-max-${seg.id}`}
                         />
-                        <span style={{ fontWeight: 800, fontSize: 12 }}>m</span>
+                        <span style={{ fontWeight: 800, fontSize: 'var(--cc-caption)' }}>m</span>
                       </div>
-                      <div style={{ gridColumn: '1 / -1', fontSize: 11, color: ui?.muted || '#64748b' }}>
+                      <div style={{ gridColumn: '1 / -1', fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b' }}>
                         Promedio:{' '}
                         {Number.isFinite(segmentLengthM(seg))
                           ? `${fmt2(segmentLengthM(seg))} m`
@@ -602,7 +602,7 @@ export function EsquemaDespiecePositionPopup({
                         inputMode="decimal"
                         data-testid={`despiece-seg-${seg.id}`}
                       />
-                      <span style={{ fontWeight: 800, fontSize: 12, color: ui?.muted || '#64748b' }}>m</span>
+                      <span style={{ fontWeight: 800, fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b' }}>m</span>
                     </div>
                   )}
                 </div>
@@ -623,19 +623,19 @@ export function EsquemaDespiecePositionPopup({
         }}
         >
           <div data-testid="despiece-live-parcial">
-            <div style={{ fontSize: 11, color: ui?.muted || '#64748b', fontWeight: 700 }}>Longitud parcial</div>
-            <div style={{ fontWeight: 800, fontSize: 16 }}>{metrics.ok ? `${fmt2(metrics.partialM)} m` : '—'}</div>
+            <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b', fontWeight: 700 }}>Longitud parcial</div>
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)' }}>{metrics.ok ? `${fmt2(metrics.partialM)} m` : '—'}</div>
           </div>
           <div data-testid="despiece-live-total">
-            <div style={{ fontSize: 11, color: ui?.muted || '#64748b', fontWeight: 700 }}>Longitud total</div>
-            <div style={{ fontWeight: 800, fontSize: 16 }}>{metrics.ok ? `${fmt2(metrics.totalM)} m` : '—'}</div>
+            <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b', fontWeight: 700 }}>Longitud total</div>
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)' }}>{metrics.ok ? `${fmt2(metrics.totalM)} m` : '—'}</div>
           </div>
           <div data-testid="despiece-live-peso">
-            <div style={{ fontSize: 11, color: ui?.muted || '#64748b', fontWeight: 700 }}>Peso</div>
-            <div style={{ fontWeight: 800, fontSize: 16 }}>
+            <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b', fontWeight: 700 }}>Peso</div>
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)' }}>
               {metrics.ok ? `${fmt2(metrics.pesoKg)} kg` : '—'}
               {metrics.ok ? (
-                <span style={{ fontSize: 11, fontWeight: 600, marginLeft: 6, color: ui?.muted || '#64748b' }}>
+                <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 600, marginLeft: 6, color: ui?.muted || '#64748b' }}>
                   ({despieceFmtPesoKgM(metrics.pesoKgM)} kg/m)
                 </span>
               ) : null}
@@ -644,9 +644,9 @@ export function EsquemaDespiecePositionPopup({
         </div>
 
         <details style={{ marginBottom: 12 }}>
-          <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>Crear forma nueva desde polilínea</summary>
+          <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 'var(--cc-caption)' }}>Crear forma nueva desde polilínea</summary>
           <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
-            <div style={{ fontSize: 11, color: ui?.muted || '#64748b' }}>
+            <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b' }}>
               Dibuje una polilínea, selecciónela y asígnele nombre (y nombre a cada segmento). Queda en la biblioteca del contrato para todos los usuarios.
             </div>
             <input
@@ -674,7 +674,7 @@ export function EsquemaDespiecePositionPopup({
           </div>
         </details>
 
-        {error ? <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: 12, marginBottom: 8 }}>{error}</div> : null}
+        {error ? <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: 'var(--cc-caption)', marginBottom: 8 }}>{error}</div> : null}
         </div>
 
         <div style={{
@@ -779,7 +779,7 @@ export function EsquemaDespiecePanel({
             color: '#fff',
             fontWeight: 700,
             cursor: 'pointer',
-            fontSize: 12,
+            fontSize: 'var(--cc-caption)',
           }}
           data-testid="despiece-add-cuadro"
         >
@@ -800,7 +800,7 @@ export function EsquemaDespiecePanel({
                 border: `1px solid ${t.border}`,
                 background: s.id === active?.id ? (t.primary || '#0f766e') : (t.bgCard || '#fff'),
                 color: s.id === active?.id ? '#fff' : t.text,
-                fontSize: 11,
+                fontSize: 'var(--cc-caption)',
                 fontWeight: 700,
                 cursor: 'pointer',
               }}
@@ -813,7 +813,7 @@ export function EsquemaDespiecePanel({
 
       {active ? (
         <>
-          <label style={{ display: 'grid', gap: 4, fontSize: 12, fontWeight: 700 }}>
+          <label style={{ display: 'grid', gap: 4, fontSize: 'var(--cc-caption)', fontWeight: 700 }}>
             Nombre del cuadro (obligatorio)
             <input
               value={active.nombre || ''}
@@ -827,7 +827,7 @@ export function EsquemaDespiecePanel({
                 border: `1px solid ${t.border}`,
                 background: t.inputBg || '#fff',
                 color: t.text,
-                fontSize: 13,
+                fontSize: 'var(--cc-sm)',
               }}
               data-testid="despiece-cuadro-nombre"
             />
@@ -844,7 +844,7 @@ export function EsquemaDespiecePanel({
                 background: t.bgCard || '#fff',
                 fontWeight: 700,
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: 'var(--cc-caption)',
               }}
               data-testid="despiece-add-posicion"
             >
@@ -866,14 +866,14 @@ export function EsquemaDespiecePanel({
                   color: t.primary || '#0f766e',
                   fontWeight: 800,
                   cursor: 'pointer',
-                  fontSize: 12,
+                  fontSize: 'var(--cc-caption)',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 6,
                 }}
                 data-testid="despiece-dibujar-parrilla"
               >
-                <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>⊞</span>
+                <span aria-hidden style={{ fontSize: 'var(--cc-sm)', lineHeight: 1 }}>⊞</span>
                 Dibujar parrilla
               </button>
             ) : null}
@@ -888,7 +888,7 @@ export function EsquemaDespiecePanel({
                 color: '#b91c1c',
                 fontWeight: 700,
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: 'var(--cc-caption)',
               }}
             >
               Eliminar cuadro
@@ -896,7 +896,7 @@ export function EsquemaDespiecePanel({
           </div>
 
           <div style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, fontSize: 11 }} data-testid="despiece-tabla">
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, fontSize: 'var(--cc-caption)' }} data-testid="despiece-tabla">
               <thead>
                 <tr>
                   {['Posición', 'N°', 'Espaciamiento', 'N° piezas', 'Ubicación', 'Parrilla', 'Long. parcial', 'Forma', 'Long. total', 'kg/m', 'Peso kg'].map((h) => (
@@ -965,14 +965,14 @@ export function EsquemaDespiecePanel({
               border: `1px solid ${t.border}`,
               background: t.bgHover || 'rgba(15,118,110,0.08)',
               fontWeight: 800,
-              fontSize: 14,
+              fontSize: 'var(--cc-sm)',
             }}
           >
             Total: {fmt2(totalKg)} kg
           </div>
         </>
       ) : (
-        <div style={{ fontSize: 12, color: ui?.muted || '#64748b' }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b' }}>
           Cree un cuadro de despiece e indique su nombre. Luego agregue posiciones.
         </div>
       )}

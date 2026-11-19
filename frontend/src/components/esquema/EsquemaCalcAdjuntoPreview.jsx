@@ -181,7 +181,7 @@ export default function EsquemaCalcAdjuntoPreview({
       padding: '10px 12px',
       fontWeight: 700,
       cursor: 'pointer',
-      fontSize: 13,
+      fontSize: 'var(--cc-sm)',
       minHeight: 44,
     },
     primary: {
@@ -192,7 +192,7 @@ export default function EsquemaCalcAdjuntoPreview({
       padding: '10px 14px',
       fontWeight: 700,
       cursor: 'pointer',
-      fontSize: 13,
+      fontSize: 'var(--cc-sm)',
       minHeight: 44,
     },
   }
@@ -244,7 +244,7 @@ export default function EsquemaCalcAdjuntoPreview({
           flexWrap: 'wrap',
         }}
         >
-          <strong style={{ flex: 1, color: theme.text || '#0f172a', fontSize: 14 }}>
+          <strong style={{ flex: 1, color: theme.text || '#0f172a', fontSize: 'var(--cc-sm)' }}>
             {active?.label || active?.nombre || active?.source?.nombre || (activeIsPdf ? 'Memoria de cálculo' : 'Adjunto')}
           </strong>
           {activeIsPdf && (viewUrl || pdfUrl) ? (

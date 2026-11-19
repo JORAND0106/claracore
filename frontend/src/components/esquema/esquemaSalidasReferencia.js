@@ -76,6 +76,18 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
     },
   },
   {
+    id: 'esquema-con-texturas',
+    label: 'Esquema con texturas → PNG realista (C-3D-18)',
+    requires: {
+      header: true,
+      iso: true,
+      exportView: 'iso-ne',
+      hasSolids: true,
+      textures: true,
+      minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+    },
+  },
+  {
     id: 'esquema-preview-completa',
     label: 'Vista previa / PNG con cálculo: encabezado + iso + cuadro completo (C-OUT-22)',
     requires: {
@@ -231,6 +243,9 @@ export function verifySalidaAgainstReference(meta, refId) {
       errors.push(`Vista exportada «${view || '—'}» ≠ requerida «${req.exportView}»`)
     }
   }
+  if (req.textures === true && m.texturesEnabled === false) {
+    errors.push('La salida con texturas debe exportarse en vista realista (texturesEnabled)')
+  }
   if (req.hasSolids === true && m.hasSolids === false) {
     errors.push('Se esperaban sólidos (isométrico NE)')
   }
@@ -332,6 +347,28 @@ export function runApprovedSalidasVerification(opts = {}) {
     cellFontPx: Math.max(1, (planSolids.header?.width || 1600) / 55),
     width: planSolids.header?.width || 1600,
   }, 'esquema-con-solidos-iso'))
+
+  // 3b) Con texturas → PNG realista (C-3D-18)
+  const texturedFixture = [{
+    ...solidFixture[0],
+    id: 's-tex',
+    textureId: 'concreto',
+    color: '#888888',
+  }]
+  const planTex = planEsquemaExportSalida({
+    title: 'Muro concreto',
+    solids3d: texturedFixture,
+    calcSnapshots: [snap],
+  })
+  results.push(verifySalidaAgainstReference({
+    ...planTex,
+    hasHeader: true,
+    hasIso: true,
+    hasSolids: true,
+    texturesEnabled: true,
+    cellFontPx: Math.max(1, (planTex.header?.width || 1600) / 55),
+    width: planTex.header?.width || 1600,
+  }, 'esquema-con-texturas'))
 
   // 4) Sin sólidos → top
   const planTop = planEsquemaExportSalida({

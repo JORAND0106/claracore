@@ -138,6 +138,13 @@ import {
   updatePipeTemplateSolid,
 } from './esquema3dPipeTemplates.js'
 import {
+  SOLID_TEXTURE_CATALOG,
+  SOLID_TEXTURE_NONE,
+  normalizeSolidTextureId,
+  solidTextureThumbnailDataUrl,
+} from './esquema3dTextures.js'
+import { esquemaIconBtnStyle, esquemaIconSvgProps } from './esquemaUiTypography.js'
+import {
   apexPointFromEntity,
   describeContourForSolevar,
   isApexEntity,
@@ -413,7 +420,7 @@ function createTextoAt(x, y, color) {
     h: 56,
     text: '',
     color: color || undefined,
-    fontSize: 16,
+    fontSize: 'var(--cc-body)',
     rotation: 0,
   }
 }
@@ -764,6 +771,9 @@ export default function EsquemaEditorModal({
   /** C-3D-17 · Tubería y accesorios */
   const [pipeLibraryOpen, setPipeLibraryOpen] = useState(false)
   const [pipeParams, setPipeParams] = useState(null) // { templateId, editSolidId? }
+  /** C-3D-18 · Vista realista (texturas) vs técnica (solo color). Export siempre realista. */
+  const [realisticView, setRealisticView] = useState(true)
+  const realisticViewRef = useRef(true)
   const solevarHoverIdRef = useRef(null)
   solevarHoverIdRef.current = solevarHoverId
   const [op3d, setOp3d] = useState(null) // unir | sustraer | cortar
@@ -943,6 +953,7 @@ export default function EsquemaEditorModal({
   mapActiveRef.current = mapActive
   printAreaSelectingRef.current = printAreaSelecting
   mode3dRef.current = mode3d
+  realisticViewRef.current = realisticView
   view3dRef.current = view3d
   solids3dRef.current = solids3d
   selectedSolidIdsRef.current = selectedSolidIds
@@ -1200,6 +1211,7 @@ export default function EsquemaEditorModal({
         zoom: z,
         pixelScale: z,
         orbit,
+        texturesEnabled: realisticViewRef.current !== false,
       })
       // Resaltar selección sin sustituir el color del sólido.
       for (const solid of solidsList) {
@@ -1212,6 +1224,7 @@ export default function EsquemaEditorModal({
           orbit,
           solids: solidsList,
           pass: 'edges',
+          texturesEnabled: realisticViewRef.current !== false,
         })
       }
       if (cutDraftRef.current?.a && (cutDraftRef.current.b || lastPt.current)) {
@@ -5741,6 +5754,23 @@ export default function EsquemaEditorModal({
     setPanTick((n) => n + 1)
   }
 
+  const applySolidTexture = (solidId, textureId) => {
+    if (!solidId) return
+    const solid = (solids3dRef.current || []).find((s) => s.id === solidId)
+    if (!solid) return
+    const nextId = normalizeSolidTextureId(textureId)
+    pushHistory()
+    const nextSolids = (solids3dRef.current || []).map((s) => (
+      s.id === solidId
+        ? { ...s, textureId: nextId || undefined }
+        : s
+    ))
+    solids3dRef.current = nextSolids
+    setSolids3d(nextSolids)
+    setDirty(true)
+    setPanTick((n) => n + 1)
+  }
+
   const applySelectedWidth = (nextWidth) => {
     const id = selectedIdRef.current
     const w = Number(nextWidth)
@@ -7722,7 +7752,7 @@ export default function EsquemaEditorModal({
                       : 'Autosave silencioso activo'
             }
             style={{
-              fontSize: 11,
+              fontSize: 'var(--cc-caption)',
               fontWeight: 600,
               color: draftSaveStatus === 'saving' ? (t.primary || '#0f766e')
                 : draftSaveStatus === 'offline' || draftSaveStatus === 'unsaved' ? '#b45309'
@@ -7934,7 +7964,7 @@ export default function EsquemaEditorModal({
             title={iaBlocked(iaUsos)
               ? 'Alcanzó el límite diario de 20 consultas de IA. Podrá volver a usarlo mañana.'
               : `${iaRemainingHoy(iaUsos)} consultas de IA restantes hoy`}
-            style={{ fontSize: 10, fontWeight: 700, color: t.textMuted, minWidth: 18 }}
+            style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, minWidth: 18 }}
           >
             {iaRemainingHoy(iaUsos)}
           </span>
@@ -8093,7 +8123,7 @@ export default function EsquemaEditorModal({
                 flexDirection: 'column',
                 alignItems: 'center',
                 gap: 2,
-                fontSize: 9,
+                fontSize: 'var(--cc-caption)',
                 fontWeight: 700,
                 minWidth: 64,
                 maxWidth: 76,
@@ -8106,6 +8136,44 @@ export default function EsquemaEditorModal({
             >
               <IconTuberia3d />
               <span>Tubería y accesorios</span>
+            </button>
+          ) : null}
+          {!isPhoneLayout ? (
+            <button
+              type="button"
+              title={realisticView
+                ? 'Vista realista activa: muestra texturas. Pulse para vista técnica (solo color).'
+                : 'Vista técnica activa: solo colores. Pulse para vista realista (texturas).'}
+              data-cc-tooltip={realisticView ? 'Cambiar a vista técnica' : 'Cambiar a vista realista'}
+              data-cc-tooltip-variant="short"
+              aria-label={realisticView ? 'Vista realista' : 'Vista técnica'}
+              onClick={() => {
+                setRealisticView((v) => {
+                  const next = !v
+                  realisticViewRef.current = next
+                  return next
+                })
+                setPanTick((n) => n + 1)
+              }}
+              style={{
+                ...iconBtn(t, realisticView),
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+                fontSize: 'var(--cc-caption)',
+                fontWeight: 700,
+                minWidth: 64,
+                maxWidth: 76,
+                padding: '4px 6px',
+                lineHeight: 1.05,
+                whiteSpace: 'normal',
+                textAlign: 'center',
+              }}
+              data-testid="esquema-vista-realista"
+            >
+              <IconVistaRealista3d />
+              <span>{realisticView ? 'Vista realista' : 'Vista técnica'}</span>
             </button>
           ) : null}
           {mode3d ? (
@@ -8155,7 +8223,7 @@ export default function EsquemaEditorModal({
                   flexDirection: 'column',
                   alignItems: 'center',
                   gap: 2,
-                  fontSize: 9,
+                  fontSize: 'var(--cc-caption)',
                   fontWeight: 700,
                   minWidth: 44,
                   padding: '4px 6px',
@@ -8263,7 +8331,7 @@ export default function EsquemaEditorModal({
               flexDirection: 'column',
               alignItems: 'center',
               gap: 2,
-              fontSize: 8,
+              fontSize: 'var(--cc-caption)',
               fontWeight: 700,
               minWidth: 52,
               padding: '4px 4px',
@@ -8428,7 +8496,7 @@ export default function EsquemaEditorModal({
                     borderBottom: `1px solid ${t.border}`,
                   }}
                 >
-                  <strong style={{ fontSize: 11, color: t.text, letterSpacing: '0.04em' }}>PANELES</strong>
+                  <strong style={{ fontSize: 'var(--cc-caption)', color: t.text, letterSpacing: '0.04em' }}>PANELES</strong>
                   <button
                     type="button"
                     title="Ocultar barra lateral"
@@ -8508,7 +8576,7 @@ export default function EsquemaEditorModal({
                       onClick={() => setCoordPanelOpen(true)}
                       style={{
                         ...ghost(t),
-                        fontSize: 11,
+                        fontSize: 'var(--cc-caption)',
                         fontWeight: 700,
                         justifyContent: 'flex-start',
                         padding: '8px 10px',
@@ -8528,7 +8596,7 @@ export default function EsquemaEditorModal({
                       }}
                       onPointerDown={(e) => e.stopPropagation()}
                     >
-                      <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 10 }}>
+                      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, marginBottom: 10 }}>
                         ¿En sentido del eje?
                       </div>
                       <div style={{ display: 'flex', gap: 8 }}>
@@ -8598,7 +8666,7 @@ export default function EsquemaEditorModal({
                         onClick={() => setMapPropsOpen(true)}
                         style={{
                           ...ghost(t),
-                          fontSize: 11,
+                          fontSize: 'var(--cc-caption)',
                           fontWeight: 700,
                           justifyContent: 'flex-start',
                           gap: 8,
@@ -8667,13 +8735,13 @@ export default function EsquemaEditorModal({
                         borderRadius: 10,
                         border: `1px solid ${t.border}`,
                         background: t.bg || '#fff',
-                        fontSize: 12,
+                        fontSize: 'var(--cc-caption)',
                         color: t.text,
                         fontWeight: 700,
                       }}
                     >
                       {selectedIds.length} entidades seleccionadas
-                      <div style={{ fontSize: 11, fontWeight: 600, color: t.textMuted, marginTop: 4 }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 600, color: t.textMuted, marginTop: 4 }}>
                         Puede guardarlas juntas en la biblioteca del contrato.
                       </div>
                     </div>
@@ -8832,6 +8900,7 @@ export default function EsquemaEditorModal({
                     ui={ui}
                     solid={solids3d.find((s) => s.id === selectedSolidIds[0])}
                     onColor={(c) => applySolidColor(selectedSolidIds[0], c)}
+                    onTexture={(tid) => applySolidTexture(selectedSolidIds[0], tid)}
                     embedded
                   />
                 ) : selectedIds.length > 1 ? (
@@ -8840,7 +8909,7 @@ export default function EsquemaEditorModal({
                     borderRadius: 8,
                     border: `1px solid ${t.border}`,
                     background: t.bg || '#fff',
-                    fontSize: 12,
+                    fontSize: 'var(--cc-caption)',
                     fontWeight: 700,
                     color: t.text,
                   }}
@@ -8848,7 +8917,7 @@ export default function EsquemaEditorModal({
                     {selectedIds.length} entidades seleccionadas
                   </div>
                 ) : (
-                  <div style={{ fontSize: 11, color: t.textMuted, padding: '4px 2px' }}>
+                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, padding: '4px 2px' }}>
                     Seleccione una entidad o sólido para ver sus propiedades.
                   </div>
                 )}
@@ -9001,7 +9070,7 @@ export default function EsquemaEditorModal({
                       onClick={() => { setCalcPanelOpen(true); setSectionCalcOpen(true) }}
                       style={{
                         ...ghost(t),
-                        fontSize: 12,
+                        fontSize: 'var(--cc-caption)',
                         fontWeight: 700,
                         padding: '8px 10px',
                       }}
@@ -9051,7 +9120,7 @@ export default function EsquemaEditorModal({
                     onClick={() => { setCoordPanelOpen(true); setSectionCoordsOpen(true) }}
                     style={{
                       ...ghost(t),
-                      fontSize: 11,
+                      fontSize: 'var(--cc-caption)',
                       fontWeight: 700,
                       justifyContent: 'flex-start',
                       padding: '8px 10px',
@@ -9234,10 +9303,10 @@ export default function EsquemaEditorModal({
                       boxShadow: '0 1px 4px rgba(15,23,42,0.12)',
                     }}
                   >
-                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.3, opacity: 0.72 }}>
+                    <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, letterSpacing: 0.3, opacity: 0.72 }}>
                       {field.label}
                     </div>
-                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                    <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, fontFamily: 'ui-monospace, Consolas, monospace' }}>
                       {shown}{field.value || active ? ` ${field.unit}` : ''}
                     </div>
                   </div>
@@ -9257,7 +9326,7 @@ export default function EsquemaEditorModal({
                 border: `1px solid ${dynHud.typing ? t.primary : t.border}`,
                 background: dynHud.typing ? ui.hudTyping : ui.hudBg,
                 color: t.text,
-                fontSize: 12,
+                fontSize: 'var(--cc-caption)',
                 fontWeight: 700,
                 fontFamily: 'ui-monospace, Consolas, monospace',
                 boxShadow: '0 1px 4px rgba(15,23,42,0.12)',
@@ -9339,7 +9408,7 @@ export default function EsquemaEditorModal({
                 border: `1px solid ${t.border}`,
                 background: t.bgCard || 'rgba(255,255,255,0.96)',
                 boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
-                fontSize: 11,
+                fontSize: 'var(--cc-caption)',
                 fontWeight: 700,
                 color: t.text,
                 lineHeight: 1.35,
@@ -9347,7 +9416,7 @@ export default function EsquemaEditorModal({
                 fontVariantNumeric: 'tabular-nums',
               }}
             >
-              <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
+              <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', letterSpacing: '0.04em', marginBottom: 2 }}>
                 COORDENADAS
               </div>
               <div>
@@ -9388,7 +9457,7 @@ export default function EsquemaEditorModal({
               }}
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 10 }}>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, marginBottom: 10 }}>
                 ¿En sentido del eje?
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -9472,7 +9541,7 @@ export default function EsquemaEditorModal({
                 borderRadius: 8,
                 background: ui.hudBg,
                 border: `1px solid ${t.border}`,
-                fontSize: 12,
+                fontSize: 'var(--cc-caption)',
                 fontWeight: 700,
                 color: t.text,
                 boxShadow: '0 4px 14px rgba(15,23,42,0.12)',
@@ -9500,7 +9569,7 @@ export default function EsquemaEditorModal({
               >
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: 'var(--cc-caption)',
                     fontWeight: 800,
                     letterSpacing: '0.06em',
                     color: t.textMuted,
@@ -9514,7 +9583,7 @@ export default function EsquemaEditorModal({
                   style={{
                     flex: 1,
                     minWidth: 120,
-                    fontSize: 12,
+                    fontSize: 'var(--cc-caption)',
                     fontWeight: 800,
                     color: canvasHint ? (t.primary || '#0077B6') : t.textMuted,
                     whiteSpace: 'nowrap',
@@ -9530,7 +9599,7 @@ export default function EsquemaEditorModal({
                     data-testid="esquema-cursor-coords"
                     style={{
                       flexShrink: 0,
-                      fontSize: 10,
+                      fontSize: 'var(--cc-caption)',
                       fontWeight: 700,
                       color: t.text,
                       fontVariantNumeric: 'tabular-nums',
@@ -9633,6 +9702,7 @@ export default function EsquemaEditorModal({
                     ui={ui}
                     solid={solids3d.find((s) => s.id === selectedSolidIds[0])}
                     onColor={(c) => applySolidColor(selectedSolidIds[0], c)}
+                    onTexture={(tid) => applySolidTexture(selectedSolidIds[0], tid)}
                     embedded
                   />
                 ) : selectedIds.length > 1 ? (
@@ -9641,7 +9711,7 @@ export default function EsquemaEditorModal({
                     borderRadius: 8,
                     border: `1px solid ${t.border}`,
                     background: t.bg || '#fff',
-                    fontSize: 12,
+                    fontSize: 'var(--cc-caption)',
                     fontWeight: 700,
                     color: t.text,
                   }}
@@ -9649,7 +9719,7 @@ export default function EsquemaEditorModal({
                     {selectedIds.length} entidades seleccionadas
                   </div>
                 ) : (
-                  <div style={{ fontSize: 11, color: t.textMuted, padding: '4px 2px' }}>
+                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, padding: '4px 2px' }}>
                     Seleccione una entidad o sólido para ver sus propiedades.
                   </div>
                 )}
@@ -9798,7 +9868,7 @@ export default function EsquemaEditorModal({
                       onClick={() => { setCalcPanelOpen(true); setSectionCalcOpen(true) }}
                       style={{
                         ...ghost(t),
-                        fontSize: 12,
+                        fontSize: 'var(--cc-caption)',
                         fontWeight: 700,
                         padding: '8px 10px',
                       }}
@@ -9875,7 +9945,7 @@ export default function EsquemaEditorModal({
                 borderBottom: `1px solid ${t.border}`,
                 background: `color-mix(in srgb, ${t.primary || '#0077B6'} 14%, ${t.bgCard || '#fff'})`,
               }}>
-                <div id="cc-esquema-lib-name" style={{ fontWeight: 800, color: t.primary || '#0077B6', fontSize: 14 }}>
+                <div id="cc-esquema-lib-name" style={{ fontWeight: 800, color: t.primary || '#0077B6', fontSize: 'var(--cc-sm)' }}>
                   Guardar bloque en la biblioteca
                 </div>
               </div>
@@ -9889,7 +9959,7 @@ export default function EsquemaEditorModal({
                     <img src={libNamePrompt.preview} alt="Vista previa del bloque" width={96} height={96} />
                   </div>
                 ) : null}
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+                <label style={{ display: 'block', fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
                   Nombre
                   <input
                     autoFocus
@@ -9904,12 +9974,12 @@ export default function EsquemaEditorModal({
                     style={{
                       display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4,
                       padding: '8px 10px', borderRadius: 8, border: `1px solid ${t.border}`,
-                      fontSize: 14, color: t.text, background: t.inputBg || t.bg || '#fff',
+                      fontSize: 'var(--cc-sm)', color: t.text, background: t.inputBg || t.bg || '#fff',
                     }}
                   />
                 </label>
                 {Number(libNamePrompt.ancho_m) > 0 || Number(libNamePrompt.alto_m) > 0 ? (
-                  <div style={{ fontSize: 12, color: t.textMuted, marginTop: 8 }}>
+                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 8 }}>
                     Dimensiones:{' '}
                     <strong style={{ color: t.text }}>
                       {(Number(libNamePrompt.ancho_m) || 0).toFixed(2)} × {(Number(libNamePrompt.alto_m) || 0).toFixed(2)} m
@@ -9986,7 +10056,7 @@ export default function EsquemaEditorModal({
                 padding: 14,
               }}
             >
-              <div style={{ fontWeight: 800, fontSize: 15, color: t.text, marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)', color: t.text, marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {PARRILLA_MSG.askContinue}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -10028,7 +10098,7 @@ export default function EsquemaEditorModal({
               boxShadow: t.shadow || '0 8px 20px rgba(15,23,42,0.12)',
               padding: '8px 14px',
               fontWeight: 700,
-              fontSize: 14,
+              fontSize: 'var(--cc-sm)',
               color: t.text,
               whiteSpace: 'nowrap',
             }}
@@ -10042,7 +10112,7 @@ export default function EsquemaEditorModal({
                 marginLeft: 10,
                 pointerEvents: 'auto',
                 padding: '4px 8px',
-                fontSize: 12,
+                fontSize: 'var(--cc-caption)',
               }}
             >
               Cancelar
@@ -10124,7 +10194,7 @@ export default function EsquemaEditorModal({
                 style={{
                   width: '100%', boxSizing: 'border-box', padding: '8px 10px',
                   borderRadius: 8, border: `1px solid ${t.border}`,
-                  fontSize: 14, color: t.text, background: t.inputBg || ui.inputBg,
+                  fontSize: 'var(--cc-sm)', color: t.text, background: t.inputBg || ui.inputBg,
                 }}
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
@@ -10157,11 +10227,11 @@ export default function EsquemaEditorModal({
               <div id="cc-esquema-scale-img" style={{ fontWeight: 800, marginBottom: 8 }}>
                 Escalar imagen
               </div>
-              <div style={{ fontSize: 13, lineHeight: 1.45, marginBottom: 12, color: t.textMuted }}>
+              <div style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.45, marginBottom: 12, color: t.textMuted }}>
                 Indique la distancia real en metros entre los dos puntos seleccionados
                 (ej. 4.50). La imagen y los dibujos sobre ella se ajustarán a esa escala.
               </div>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, fontWeight: 700 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 'var(--cc-caption)', fontWeight: 700 }}>
                 Distancia real (m)
                 <input
                   type="text"
@@ -10182,7 +10252,7 @@ export default function EsquemaEditorModal({
                     border: `1px solid ${t.border}`,
                     background: t.inputBg || '#fff',
                     color: t.text,
-                    fontSize: 14,
+                    fontSize: 'var(--cc-sm)',
                     fontWeight: 700,
                   }}
                 />
@@ -10230,7 +10300,7 @@ export default function EsquemaEditorModal({
               <div id="cc-esquema-mirror" style={{ fontWeight: 800, marginBottom: 8 }}>
                 Espejo
               </div>
-              <div style={{ fontSize: 13, lineHeight: 1.45, marginBottom: 14, color: t.textMuted }}>
+              <div style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.45, marginBottom: 14, color: t.textMuted }}>
                 ¿Conservar el objeto original además de la copia reflejada, o dejar solo el resultado del espejo?
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
@@ -10268,7 +10338,7 @@ export default function EsquemaEditorModal({
               <div style={{ fontWeight: 800, marginBottom: 6, color: t.text }}>
                 {iaHasScene(objectsRef.current) ? 'Ajustar esquema con IA' : 'Dibujar con IA'}
               </div>
-              <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 10 }}>
+              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 10 }}>
                 {iaHasScene(objectsRef.current)
                   ? 'Describa el ajuste. Clara modifica las entidades del lienzo (no genera una imagen).'
                   : 'Describa el esquema. Clara dibuja entidades reales (no una imagen).'}
@@ -10286,12 +10356,12 @@ export default function EsquemaEditorModal({
                 style={{
                   width: '100%', boxSizing: 'border-box', padding: '8px 10px',
                   borderRadius: 8, border: `1px solid ${t.border}`,
-                  fontSize: 14, color: t.text, resize: 'vertical',
+                  fontSize: 'var(--cc-sm)', color: t.text, resize: 'vertical',
                   fontFamily: 'inherit', background: t.inputBg || ui.inputBg,
                 }}
               />
               {iaError && (
-                <div style={{ color: t.danger || '#B91C1C', fontSize: 12, fontWeight: 600, marginTop: 8 }}>{iaError}</div>
+                <div style={{ color: t.danger || '#B91C1C', fontSize: 'var(--cc-caption)', fontWeight: 600, marginTop: 8 }}>{iaError}</div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                 <button type="button" style={ghost(t)} disabled={iaBusy} onClick={() => setIaPrompt(null)}>Cancelar</button>
@@ -10350,7 +10420,7 @@ function isNearCircle(obj) {
 
 function PropField({ t, label, value, onChange, onCommit, suffix = 'm' }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 600 }}>
       {label}
       <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <input
@@ -10367,7 +10437,7 @@ function PropField({ t, label, value, onChange, onCommit, suffix = 'm' }) {
           }}
           style={{
             width: 88, padding: '4px 6px', borderRadius: 6,
-            border: `1px solid ${t.border}`, fontSize: 12,
+            border: `1px solid ${t.border}`, fontSize: 'var(--cc-caption)',
             color: t.text, background: t.bgCard || '#fff', fontWeight: 700,
           }}
         />
@@ -10421,7 +10491,7 @@ function ArrayPanel({
   onRows, onCols, onDx, onDy, onCount, onAngle, onApplyRect,
 }) {
   const field = (label, value, onChange, suffix) => (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, fontWeight: 700, color: t.textMuted }}>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>
       {label}
       <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
         <input
@@ -10431,7 +10501,7 @@ function ArrayPanel({
           onChange={(e) => onChange(e.target.value)}
           style={{
             width: 52, padding: '3px 5px', borderRadius: 6,
-            border: `1px solid ${t.border}`, fontSize: 12, fontWeight: 700,
+            border: `1px solid ${t.border}`, fontSize: 'var(--cc-caption)', fontWeight: 700,
             color: t.text, background: t.bgCard || '#fff',
           }}
         />
@@ -10491,7 +10561,7 @@ function SelectModeRadios({
           border: `1px solid ${active ? t.primary : t.border}`,
           background: active ? `${t.primary}18` : (t.inputBg || t.bgCard),
           color: active ? t.primary : t.text,
-          fontSize: 11,
+          fontSize: 'var(--cc-caption)',
           fontWeight: 700,
           cursor: 'pointer',
           userSelect: 'none',
@@ -10523,7 +10593,7 @@ function SelectModeRadios({
 function CursorCoordsPanel({ t, coords, embedded = false }) {
   const body = (
     <>
-      <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
+      <div style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', letterSpacing: '0.04em', marginBottom: 2 }}>
         COORDENADAS
       </div>
       <div>
@@ -10555,7 +10625,7 @@ function CursorCoordsPanel({ t, coords, embedded = false }) {
           borderRadius: 10,
           border: `1px solid ${t.border}`,
           background: t.bg || '#fff',
-          fontSize: 11,
+          fontSize: 'var(--cc-caption)',
           fontWeight: 700,
           color: t.text,
           lineHeight: 1.35,
@@ -10581,7 +10651,7 @@ function CursorCoordsPanel({ t, coords, embedded = false }) {
         border: `1px solid ${t.border}`,
         background: t.bgCard || 'rgba(255,255,255,0.96)',
         boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
-        fontSize: 11,
+        fontSize: 'var(--cc-caption)',
         fontWeight: 700,
         color: t.text,
         lineHeight: 1.35,
@@ -10680,10 +10750,10 @@ function ReferenciaPanel({ t, refInfo, onClose, embedded = false }) {
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: t.textMuted, letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, letterSpacing: '0.04em' }}>
             REFERENCIA
           </div>
-          <div style={{ fontSize: 14, fontWeight: 800, marginTop: 2 }}>
+          <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, marginTop: 2 }}>
             Reporte #{refInfo.numero_reporte ?? refInfo.reporte_id ?? '—'}
           </div>
         </div>
@@ -10705,7 +10775,7 @@ function ReferenciaPanel({ t, refInfo, onClose, embedded = false }) {
           ×
         </button>
       </div>
-      <div style={{ marginTop: 12, fontSize: 12 }}>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-caption)' }}>
         <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>Ítems</div>
         {items.length ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -10725,13 +10795,13 @@ function ReferenciaPanel({ t, refInfo, onClose, embedded = false }) {
           <div style={{ fontWeight: 600 }}>—</div>
         )}
       </div>
-      <div style={{ marginTop: 12, fontSize: 12 }}>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-caption)' }}>
         <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>Valor del reporte</div>
         <div style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
           {formatCOP(Number(refInfo.costo_directo) || 0)}
         </div>
       </div>
-      <div style={{ marginTop: 12, fontSize: 12 }} data-testid="sicoe-dibujo-ref-registros">
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-caption)' }} data-testid="sicoe-dibujo-ref-registros">
         <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>Registros</div>
         {registros.length ? (
           <ul style={{
@@ -10773,7 +10843,7 @@ function ReferenciaPanel({ t, refInfo, onClose, embedded = false }) {
           <div style={{ fontWeight: 600, color: t.textMuted }}>—</div>
         )}
       </div>
-      <div style={{ marginTop: 12, fontSize: 10, color: t.textMuted, lineHeight: 1.35 }}>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
         Solo lectura · no modifica su dibujo en curso
       </div>
     </div>
@@ -10850,7 +10920,7 @@ function MapaPropiedadesPanel({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
+        <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
           Propiedades · Mapa
         </div>
         <button
@@ -10867,7 +10937,7 @@ function MapaPropiedadesPanel({
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: 16,
+            fontSize: 'var(--cc-body)',
             fontWeight: 700,
             lineHeight: 1,
             color: t.textMuted || t.text,
@@ -10876,12 +10946,12 @@ function MapaPropiedadesPanel({
           ×
         </button>
       </div>
-      <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
+      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
         {printAreaSelecting
           ? 'Arrastre el área de impresión sobre el mapa'
           : (contextHint || 'Paneo para mover o consultar PK / abscisa')}
       </div>
-      <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted }}>Capa</div>
+      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Capa</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {SICOE_MAPA_VISTAS_CALLE.map((vista) => (
           <button
@@ -10892,7 +10962,7 @@ function MapaPropiedadesPanel({
             style={{
               ...ghost(t),
               padding: '4px 8px',
-              fontSize: 11,
+              fontSize: 'var(--cc-caption)',
               fontWeight: 700,
               background: basemap === vista ? `${t.primary}22` : 'transparent',
               color: basemap === vista ? (t.primary || '#0077B6') : t.text,
@@ -10905,7 +10975,7 @@ function MapaPropiedadesPanel({
       </div>
       <label style={{
         display: 'flex', flexDirection: 'column', gap: 4,
-        fontSize: 11, color: t.textMuted, fontWeight: 600,
+        fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 600,
       }}>
         <span style={{ display: 'flex', justifyContent: 'space-between' }}>
           Opacidad
@@ -10923,7 +10993,7 @@ function MapaPropiedadesPanel({
       </label>
       {pickInfo ? (
         <div style={{
-          fontSize: 11, lineHeight: 1.4, color: t.text,
+          fontSize: 'var(--cc-caption)', lineHeight: 1.4, color: t.text,
           padding: '6px 8px', borderRadius: 8,
           background: `${t.primary || '#0077B6'}14`,
           border: `1px solid ${t.border}`,
@@ -10932,26 +11002,27 @@ function MapaPropiedadesPanel({
           <div><b>Abscisa</b> {pickInfo.abscisa || '—'}</div>
         </div>
       ) : (
-        <div style={{ fontSize: 11, color: t.textMuted }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
           Clic en un polígono (modo Paneo) para ver PK y abscisa.
         </div>
       )}
       {error ? (
-        <div style={{ fontSize: 11, color: t.danger || '#b91c1c', fontWeight: 600 }}>{error}</div>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.danger || '#b91c1c', fontWeight: 600 }}>{error}</div>
       ) : null}
-      <button type="button" style={{ ...ghost(t), fontSize: 11, marginTop: 2 }} onClick={onRemove}>
+      <button type="button" style={{ ...ghost(t), fontSize: 'var(--cc-caption)', marginTop: 2 }} onClick={onRemove}>
         Quitar mapa
       </button>
     </div>
   )
 }
 
-function SolidPropiedadesPanel({ t, ui, solid, embedded = false, onColor }) {
+function SolidPropiedadesPanel({ t, ui, solid, embedded = false, onColor, onTexture }) {
   if (!solid || solid.type !== 'solid3d') return null
   const params = solid.extrudeParams || {}
   const z0 = params.cotaInferior
   const z1 = params.cotaSuperior
   const colorVal = String(solid.color || '#0f766e')
+  const texId = normalizeSolidTextureId(solid.textureId) || SOLID_TEXTURE_NONE
   const vol = solidVolumeM3(solid)
   return (
     <div
@@ -10984,25 +11055,25 @@ function SolidPropiedadesPanel({ t, ui, solid, embedded = false, onColor }) {
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
+      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
         Propiedades · Sólido 3D
       </div>
-      <div style={{ fontSize: 12, color: t.text, fontWeight: 700 }}>
+      <div style={{ fontSize: 'var(--cc-caption)', color: t.text, fontWeight: 700 }}>
         V = {formatVolumeM3(vol)}
       </div>
       {Number.isFinite(Number(z1)) && Number.isFinite(Number(z0)) ? (
-        <div style={{ fontSize: 11, color: ui?.muted || t.textMuted, lineHeight: 1.4 }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || t.textMuted, lineHeight: 1.4 }}>
           Cota superior {Number(z1).toFixed(2)} m
           <br />
           Cota inferior {Number(z0).toFixed(2)} m
         </div>
       ) : Number.isFinite(Number(params.lengthM)) ? (
-        <div style={{ fontSize: 11, color: ui?.muted || t.textMuted }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || t.textMuted }}>
           Longitud {Number(params.lengthM).toFixed(2)} m
         </div>
       ) : null}
       {typeof onColor === 'function' ? (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: ui?.muted || t.textMuted, fontWeight: 600 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: ui?.muted || t.textMuted, fontWeight: 600 }}>
           Color del sólido
           <input
             type="color"
@@ -11011,6 +11082,51 @@ function SolidPropiedadesPanel({ t, ui, solid, embedded = false, onColor }) {
             onChange={(e) => onColor(e.target.value)}
           />
         </label>
+      ) : null}
+      {typeof onTexture === 'function' ? (
+        <div data-testid="esquema-solid-texture" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || t.textMuted, fontWeight: 700 }}>
+            Textura
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+            {SOLID_TEXTURE_CATALOG.map((tex) => {
+              const active = texId === tex.id || (!solid.textureId && tex.id === SOLID_TEXTURE_NONE)
+              const thumb = tex.id !== SOLID_TEXTURE_NONE
+                ? solidTextureThumbnailDataUrl(tex.id, colorVal, 40)
+                : null
+              return (
+                <button
+                  key={tex.id}
+                  type="button"
+                  data-testid={`esquema-texture-${tex.id}`}
+                  title={tex.label}
+                  onClick={() => onTexture(tex.id === SOLID_TEXTURE_NONE ? null : tex.id)}
+                  style={{
+                    border: `1.5px solid ${active ? (t.primary || '#0f766e') : t.border}`,
+                    borderRadius: 8,
+                    padding: 4,
+                    background: active ? `${t.primary || '#0f766e'}14` : (t.bg || '#fff'),
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 3,
+                    minHeight: 52,
+                  }}
+                >
+                  <span style={{
+                    width: 36, height: 24, borderRadius: 4, border: `1px solid ${t.border}`,
+                    background: thumb ? `center / cover no-repeat url(${thumb})` : colorVal,
+                    display: 'block',
+                  }} />
+                  <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.text, lineHeight: 1.1, textAlign: 'center' }}>
+                    {tex.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
       ) : null}
     </div>
   )
@@ -11058,15 +11174,15 @@ function PropiedadesPanel({
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
+      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
         Propiedades · {entityTypeLabel(obj.type)}
         {solid ? ' + sólido' : ''}
       </div>
       {solid ? (
-        <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>
+        <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.text }}>
           V = {formatVolumeM3(solidVolumeM3(solid))}
           {solid.extrudeParams?.cotaSuperior != null && solid.extrudeParams?.cotaInferior != null ? (
-            <div style={{ fontSize: 11, fontWeight: 600, color: ui?.muted || t.textMuted, marginTop: 2 }}>
+            <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 600, color: ui?.muted || t.textMuted, marginTop: 2 }}>
               Cotas {Number(solid.extrudeParams.cotaSuperior).toFixed(2)} → {Number(solid.extrudeParams.cotaInferior).toFixed(2)} m
             </div>
           ) : null}
@@ -11076,7 +11192,7 @@ function PropiedadesPanel({
         <SelectModeRadios t={t} value={selectMode} onChange={onSelectMode} compact />
       ) : null}
       {scaleLocked ? (
-        <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
           Escala real bloqueada · solo mover o girar
           {(obj.ancho_m != null || obj.alto_m != null) ? (
             <div style={{ marginTop: 4, fontWeight: 700, color: t.text }}>
@@ -11119,7 +11235,7 @@ function PropiedadesPanel({
         <PropField t={t} label="Alto" value={String(measureH ?? '')} onChange={onMeasureH} onCommit={onApplyDims} />
       ) : null}
       {obj.type === 'bloque' ? (
-        <div style={{ fontSize: 11, color: t.textMuted }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
           Bloque cohesionado · {(obj.children || []).length} parte{(obj.children || []).length === 1 ? '' : 's'}
         </div>
       ) : null}
@@ -11142,7 +11258,7 @@ function PropiedadesPanel({
         />
       ) : null}
       {obj.type === 'nodo' ? (
-        <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
           N° {obj.nodeNum || '—'}
           {obj.norte != null && obj.este != null ? (
             <div>N {obj.norte} · E {obj.este}</div>
@@ -11150,10 +11266,10 @@ function PropiedadesPanel({
         </div>
       ) : null}
       {pathLen ? (
-        <div style={{ fontSize: 11, color: t.textMuted }}>Longitud total: <b style={{ color: t.text }}>{pathLen}</b></div>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>Longitud total: <b style={{ color: t.text }}>{pathLen}</b></div>
       ) : null}
       {obj.color != null || isShape || PATH_TYPES.has(obj.type) || obj.type === 'tabla' || obj.type === 'texto' ? (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 600 }}>
           Color
           <input
             type="color"
@@ -11163,7 +11279,7 @@ function PropiedadesPanel({
         </label>
       ) : null}
       {WIDTH_TYPES.has(obj.type) ? (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 600 }}>
           Grosor
           <input
             type="range"
@@ -11178,12 +11294,12 @@ function PropiedadesPanel({
         </label>
       ) : null}
       {LINE_STYLE_TYPES.has(obj.type) ? (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 600 }}>
           Línea
           <select
             value={normalizeLineStyle(obj.lineStyle)}
             onChange={(e) => onLineStyle?.(e.target.value)}
-            style={{ flex: 1, fontSize: 11, padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, color: t.text, background: t.bgCard }}
+            style={{ flex: 1, fontSize: 'var(--cc-caption)', padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, color: t.text, background: t.bgCard }}
           >
             {LINE_STYLE_OPTIONS.map((o) => (
               <option key={o.id} value={o.id}>{o.label}</option>
@@ -11775,7 +11891,7 @@ function coordSheetStyles(t) {
     th: {
       textAlign: 'left',
       padding: '5px 6px',
-      fontSize: 11,
+      fontSize: 'var(--cc-caption)',
       fontWeight: 800,
       color: headerColor,
       textTransform: 'uppercase',
@@ -11799,7 +11915,7 @@ function coordSheetStyles(t) {
       outline: 'none',
       background: 'transparent',
       color: text,
-      fontSize: 12,
+      fontSize: 'var(--cc-caption)',
       padding: '4px 6px',
       height: 26,
     },
@@ -11809,7 +11925,7 @@ function coordSheetStyles(t) {
       border: 'none',
       background: inputBg,
       color: text,
-      fontSize: 12,
+      fontSize: 'var(--cc-caption)',
       padding: '4px 6px',
       height: 26,
       fontFamily: 'ui-monospace, Consolas, monospace',
@@ -11886,7 +12002,7 @@ function CoordsPanel({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <strong style={{ fontSize: 12, color: t.text }}>Coordenadas</strong>
+        <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Coordenadas</strong>
         <button type="button" style={iconAction} title="Cerrar" aria-label="Cerrar" onClick={onClose}>
           <IconCerrarPanel />
         </button>
@@ -12079,7 +12195,7 @@ function DibujoTipoCompactPanel({ t, tipo, referenciasCount = 0, onTipoChange, o
       {Number(referenciasCount) > 0 ? (
         <span
           style={{
-            fontSize: 10,
+            fontSize: 'var(--cc-caption)',
             fontWeight: 800,
             color: t.textMuted,
             borderLeft: `1px solid ${t.border}`,
@@ -12157,7 +12273,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
     ...ghost(t),
     padding: '2px 6px',
     minWidth: 26,
-    fontSize: 12,
+    fontSize: 'var(--cc-caption)',
     lineHeight: 1,
   }
 
@@ -12191,7 +12307,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 6 }}>
-        <strong style={{ fontSize: 12, color: t.text }}>Secuencia de unión</strong>
+        <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Secuencia de unión</strong>
         <div style={{ display: 'flex', gap: 4 }}>
           <button
             type="button"
@@ -12243,7 +12359,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
             borderRadius: 8,
             border: `1px solid ${error ? '#dc2626' : t.border}`,
             padding: '0 10px',
-            fontSize: 13,
+            fontSize: 'var(--cc-sm)',
             fontWeight: 700,
             color: t.text,
             background: t.bg || '#fff',
@@ -12257,7 +12373,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
             height: 32,
             padding: '0 10px',
             fontWeight: 800,
-            fontSize: 12,
+            fontSize: 'var(--cc-caption)',
             background: t.primary,
             color: '#fff',
             border: 'none',
@@ -12275,7 +12391,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
           data-testid="esquema-join-seq-error"
           style={{
             marginBottom: 8,
-            fontSize: 11,
+            fontSize: 'var(--cc-caption)',
             fontWeight: 700,
             color: '#b91c1c',
             lineHeight: 1.35,
@@ -12284,7 +12400,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
           {error}
         </div>
       ) : (
-        <div style={{ marginBottom: 8, fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
+        <div style={{ marginBottom: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
           Digite el número y pulse Enter, o toque nodos en el plano.
         </div>
       )}
@@ -12295,7 +12411,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum, embedded = fals
           flexWrap: 'wrap',
           gap: 4,
           marginBottom: 8,
-          fontSize: 11,
+          fontSize: 'var(--cc-caption)',
           fontWeight: 800,
           color: t.text,
           fontVariantNumeric: 'tabular-nums',
@@ -12430,7 +12546,7 @@ function BibliotecaPanel({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <strong style={{ fontSize: 12, color: t.text }}>Biblioteca del contrato</strong>
+        <strong style={{ fontSize: 'var(--cc-caption)', color: t.text }}>Biblioteca del contrato</strong>
         <div style={{ display: 'flex', gap: 4 }}>
           <button
             type="button"
@@ -12448,12 +12564,12 @@ function BibliotecaPanel({
         </div>
       </div>
       {notice ? (
-        <div style={{ fontSize: 11, color: t.danger || '#b91c1c', marginBottom: 8 }}>{notice}</div>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.danger || '#b91c1c', marginBottom: 8 }}>{notice}</div>
       ) : null}
       {!contratoId ? (
-        <div style={{ fontSize: 11, color: t.textMuted }}>No hay contrato activo. Inicie sesión en un contrato para guardar bloques reutilizables.</div>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>No hay contrato activo. Inicie sesión en un contrato para guardar bloques reutilizables.</div>
       ) : !(items || []).length ? (
-        <div style={{ fontSize: 11, color: t.textMuted }}>Vacía. Seleccione entidades y pulse el icono de guardar para crear un bloque.</div>
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>Vacía. Seleccione entidades y pulse el icono de guardar para crear un bloque.</div>
       ) : (
         <div style={sheet.wrap}>
           <table style={sheet.table}>
@@ -12485,7 +12601,7 @@ function BibliotecaPanel({
                     </td>
                     <td style={sheet.td}>
                       <div style={{ ...sheet.inp, fontWeight: 700 }}>{it.nombre}</div>
-                      <div style={{ ...sheet.inp, color: t.textMuted, fontSize: 10 }}>
+                      <div style={{ ...sheet.inp, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
                         {label || `${(it.objects || it.children || []).length} parte${(it.objects || it.children || []).length === 1 ? '' : 's'}`}
                       </div>
                     </td>
@@ -12564,7 +12680,7 @@ function TablaOverlay({ obj, ui, pan, zoom = 1, canvasEl, onCellChange }) {
                     style={{
                       width: '100%', height: '100%', boxSizing: 'border-box',
                       border: 'none', background: palette.cellBg,
-                      fontSize: 12, padding: '2px 4px', color: esquemaEntityInk(obj.color, palette),
+                      fontSize: 'var(--cc-caption)', padding: '2px 4px', color: esquemaEntityInk(obj.color, palette),
                       outline: `1px solid ${palette.primary}`,
                     }}
                   />
@@ -12683,18 +12799,11 @@ function ToolDivider({ t }) {
   )
 }
 function iconBtn(t, active) {
-  return {
-    width: 34, height: 34, padding: 0,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    borderRadius: 8, cursor: 'pointer',
-    border: `1px solid ${active ? t.primary : t.border}`,
-    background: active ? `${t.primary}18` : 'transparent',
-    color: active ? t.primary : t.text,
-  }
+  return esquemaIconBtnStyle(t, active)
 }
 
 function iconProps() {
-  return { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+  return esquemaIconSvgProps()
 }
 function IconSeleccion() {
   return (
@@ -13118,6 +13227,16 @@ function IconTuberia3d() {
       <path d="M3 12h18" />
       <path d="M7 7v4" />
       <path d="M17 13v4" />
+    </svg>
+  )
+}
+function IconVistaRealista3d() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M4 12h16" />
+      <path d="M12 4c2.5 2.2 4 5 4 8s-1.5 5.8-4 8" />
+      <path d="M12 4c-2.5 2.2-4 5-4 8s1.5 5.8 4 8" />
     </svg>
   )
 }

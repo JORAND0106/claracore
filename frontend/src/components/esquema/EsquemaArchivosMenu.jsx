@@ -143,13 +143,13 @@ export default function EsquemaArchivosMenu({
             padding: 8,
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: 12, color: '#0f172a', marginBottom: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: '#0f172a', marginBottom: 6 }}>
             Archivos del esquema
           </div>
-          {busy && <div style={{ fontSize: 12, color: '#64748b' }}>Cargando…</div>}
-          {err && <div style={{ fontSize: 12, color: '#b91c1c', marginBottom: 6 }}>{err}</div>}
+          {busy && <div style={{ fontSize: 'var(--cc-caption)', color: '#64748b' }}>Cargando…</div>}
+          {err && <div style={{ fontSize: 'var(--cc-caption)', color: '#b91c1c', marginBottom: 6 }}>{err}</div>}
           {!busy && !files.length && (
-            <div style={{ fontSize: 12, color: '#64748b' }}>Sin archivos aún.</div>
+            <div style={{ fontSize: 'var(--cc-caption)', color: '#64748b' }}>Sin archivos aún.</div>
           )}
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {files.map((f) => (
@@ -162,7 +162,7 @@ export default function EsquemaArchivosMenu({
                   gap: 8,
                   padding: '6px 4px',
                   borderTop: '1px solid #f1f5f9',
-                  fontSize: 12,
+                  fontSize: 'var(--cc-caption)',
                 }}
               >
                 <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -180,7 +180,7 @@ export default function EsquemaArchivosMenu({
                     padding: '4px 8px',
                     cursor: 'pointer',
                     fontWeight: 600,
-                    fontSize: 11,
+                    fontSize: 'var(--cc-caption)',
                     flexShrink: 0,
                   }}
                 >
@@ -200,7 +200,7 @@ export default function EsquemaArchivosMenu({
               borderRadius: 6,
               padding: '4px 8px',
               cursor: 'pointer',
-              fontSize: 11,
+              fontSize: 'var(--cc-caption)',
             }}
           >
             Cerrar

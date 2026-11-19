@@ -21,7 +21,7 @@ function chipStyle(t, active) {
       ? `color-mix(in srgb, ${t.primary || '#0f766e'} 16%, #fff)`
       : (t.bgCard || '#fff'),
     color: t.text,
-    fontSize: 10,
+    fontSize: 'var(--cc-caption)',
     fontWeight: 700,
     lineHeight: 1.1,
     cursor: 'pointer',
@@ -163,7 +163,7 @@ export function EsquemaPhoneToolbar({
         >
           <span style={{
             fontWeight: 800,
-            fontSize: 12,
+            fontSize: 'var(--cc-caption)',
             color: t.text,
             whiteSpace: 'nowrap',
             flexShrink: 0,
@@ -183,7 +183,7 @@ export function EsquemaPhoneToolbar({
               onClick={() => setOpenId((cur) => (cur === cat.id ? null : cat.id))}
               style={chipStyle(t, openId === cat.id)}
             >
-              <span aria-hidden style={{ fontSize: 14 }}>▦</span>
+              <span aria-hidden style={{ fontSize: 'var(--cc-sm)' }}>▦</span>
               <span>{cat.label}</span>
             </button>
           ))}

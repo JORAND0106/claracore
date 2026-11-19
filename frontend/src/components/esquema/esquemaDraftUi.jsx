@@ -35,10 +35,10 @@ export function EsquemaDraftNoticePopup({
           padding: 16,
         }}
       >
-        <div style={{ fontWeight: 800, fontSize: 15, color: t.text, marginBottom: 8 }}>
+        <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)', color: t.text, marginBottom: 8 }}>
           {title}
         </div>
-        <div style={{ fontSize: 13, color: t.textMuted || '#64748b', marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted || '#64748b', marginBottom: 14, lineHeight: 1.45 }}>
           {message}
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -86,10 +86,10 @@ export function EsquemaCloseConfirmPopup({
           padding: 16,
         }}
       >
-        <div style={{ fontWeight: 800, fontSize: 15, color: t.text, marginBottom: 8 }}>
+        <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)', color: t.text, marginBottom: 8 }}>
           ¿Guardar cambios?
         </div>
-        <div style={{ fontSize: 13, color: t.textMuted || '#64748b', marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted || '#64748b', marginBottom: 14, lineHeight: 1.45 }}>
           Hay cambios en el esquema. Guárdelos en el registro, descártelos o cancele para seguir editando.
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
