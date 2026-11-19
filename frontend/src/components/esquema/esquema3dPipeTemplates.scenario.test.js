@@ -43,7 +43,7 @@ describe('caso · tubería y accesorios plantillas', () => {
     assert.match(md, /C-3D-17/)
     assert.match(md, /Tubería y accesorios/)
     assert.match(md, /cota lomo/i)
-    assert.match(md, /caso 54|54\./)
+    assert.match(md, /caso 55|55\./)
     const pkg = JSON.parse(readFileSync(join(srcRoot, '../package.json'), 'utf8'))
     assert.match(pkg.scripts['test:esquema'], /esquema3dPipeTemplates\.test\.js/)
     assert.match(pkg.scripts['test:esquema'], /esquema3dPipeTemplates\.scenario\.test\.js/)

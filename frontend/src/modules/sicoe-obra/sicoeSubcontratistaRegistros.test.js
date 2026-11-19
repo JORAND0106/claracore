@@ -20,7 +20,7 @@ describe('sicoeSubcontratistaRegistros', () => {
     assert.equal(sicoeEsObjetoPagoSub({ nivel2_objeto_pago_sub: null }), false)
   })
 
-  it('visible: pertenece + objeto pago; fallback cabecera', () => {
+  it('visible: pertenece al sub; objeto de pago no filtra; fallback cabecera', () => {
     assert.equal(
       sicoeRegistroVisibleParaSub(
         { subcontratista_id: '5', nivel2_objeto_pago_sub: true },
@@ -41,11 +41,18 @@ describe('sicoeSubcontratistaRegistros', () => {
         { subcontratista_id: 5, nivel2_objeto_pago_sub: false },
         5,
       ),
+      true,
+    )
+    assert.equal(
+      sicoeRegistroVisibleParaSub(
+        { subcontratista_id: 9, nivel2_objeto_pago_sub: true },
+        5,
+      ),
       false,
     )
   })
 
-  it('filtra mezcla', () => {
+  it('filtra mezcla por empresa, no por objeto de pago', () => {
     const out = sicoeFiltrarRegistrosParaSub(
       [
         { id: 1, subcontratista_id: 5, nivel2_objeto_pago_sub: true },
@@ -54,6 +61,6 @@ describe('sicoeSubcontratistaRegistros', () => {
       ],
       5,
     )
-    assert.deepEqual(out.map((r) => r.id), [1])
+    assert.deepEqual(out.map((r) => r.id), [1, 2])
   })
 })

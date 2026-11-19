@@ -1,8 +1,8 @@
 """
-Visibilidad de registros SicoeObra para cargo subcontratista + precios propios.
+Visibilidad de registros SicoeObra para empresa subcontratista + precios propios.
 
 - Solo líneas de su subcontratista_id (con fallback a cabecera del reporte).
-- Solo líneas con nivel2_objeto_pago_sub verdadero (no ve «no objeto de pago»).
+- Incluye cualquier estado de validación y con/sin objeto de pago (el flag se ve, no filtra).
 - Economía: anula VU/costo del contrato y aplica precios pactados del sub.
 """
 from __future__ import annotations
@@ -57,10 +57,8 @@ def registro_visible_para_sub(
     sub_id: Any,
     reporte: Optional[dict] = None,
 ) -> bool:
-    """Pertenece al sub y es objeto de pago (pendientes de validar incluidos)."""
-    if not registro_pertenece_a_sub(registro, sub_id, reporte):
-        return False
-    return _truthy_objeto_pago((registro or {}).get("nivel2_objeto_pago_sub"))
+    """Pertenece al sub (cualquier validación / objeto de pago)."""
+    return registro_pertenece_a_sub(registro, sub_id, reporte)
 
 
 def filtrar_registros_para_sub(
