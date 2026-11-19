@@ -2250,6 +2250,13 @@ export default function EsquemaEditorModal({
   }, [])
 
   const openPipeLibrary = useCallback(() => {
+    // Transversal: el botón vive en la barra principal; al usarlo entra a 3D.
+    if (!mode3dRef.current) {
+      setMode3d(true)
+      mode3dRef.current = true
+      setView3d('top')
+      view3dRef.current = 'top'
+    }
     const id = selectedSolidIdsRef.current?.[0]
     const solid = (solids3dRef.current || []).find((s) => s.id === id)
     if (isPipeTemplateSolid(solid) && (selectedSolidIdsRef.current || []).length === 1) {
@@ -2258,6 +2265,7 @@ export default function EsquemaEditorModal({
     }
     setPipeLibraryOpen(true)
     setToolHint('Elija una plantilla de tubería o accesorio.')
+    redraw()
   }, [openPipeParamsForEdit])
 
   const confirmPipeTemplate = useCallback((values, setError) => {
@@ -8069,6 +8077,37 @@ export default function EsquemaEditorModal({
           >
             <IconModo3d />
           </button>
+          {/* C-3D-17: visible en la barra principal (iPad/portátil) en todos los módulos;
+              al oprimir entra a 3D y abre la biblioteca. No en celular. */}
+          {!isPhoneLayout ? (
+            <button
+              type="button"
+              title="Tubería y accesorios: plantillas paramétricas (todos los módulos)"
+              data-cc-tooltip="Tubería y accesorios: plantillas paramétricas"
+              data-cc-tooltip-variant="short"
+              aria-label="Tubería y accesorios"
+              onClick={openPipeLibrary}
+              style={{
+                ...iconBtn(t, !!pipeLibraryOpen || !!pipeParams),
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+                fontSize: 9,
+                fontWeight: 700,
+                minWidth: 64,
+                maxWidth: 76,
+                padding: '4px 6px',
+                lineHeight: 1.05,
+                whiteSpace: 'normal',
+                textAlign: 'center',
+              }}
+              data-testid="esquema-3d-tuberia"
+            >
+              <IconTuberia3d />
+              <span>Tubería y accesorios</span>
+            </button>
+          ) : null}
           {mode3d ? (
             <>
               <ToolDivider t={t} />
@@ -8127,32 +8166,6 @@ export default function EsquemaEditorModal({
                 <IconSolevar3d />
                 <span>Solevar</span>
               </button>
-              {!isPhoneLayout ? (
-                <button
-                  type="button"
-                  title="Tubería y accesorios: plantillas paramétricas"
-                  data-cc-tooltip="Tubería y accesorios: plantillas paramétricas"
-                  data-cc-tooltip-variant="short"
-                  aria-label="Tubería y accesorios"
-                  onClick={openPipeLibrary}
-                  style={{
-                    ...iconBtn(t, !!pipeLibraryOpen || !!pipeParams),
-                    display: 'inline-flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 2,
-                    fontSize: 9,
-                    fontWeight: 700,
-                    minWidth: 58,
-                    padding: '4px 6px',
-                    lineHeight: 1.05,
-                  }}
-                  data-testid="esquema-3d-tuberia"
-                >
-                  <IconTuberia3d />
-                  <span>Tubería y accesorios</span>
-                </button>
-              ) : null}
               <button
                 type="button"
                 title="Unir dos o más sólidos seleccionados"
