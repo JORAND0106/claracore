@@ -23,6 +23,7 @@ import {
   viewProfileMeta,
   worldZToCota,
 } from './esquema3dViews.js'
+import { resolveSolidTextureFillStyle } from './esquema3dTextures.js'
 import {
   CIRCLE_SEGMENTS,
   buildEllipseProfileDraw,
@@ -2242,6 +2243,15 @@ export function solidFaceFillRgba(color, faceTone, alpha) {
   return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`
 }
 
+export function solidFaceFillStyle(ctx, solid, faceTone, alpha, opts = {}) {
+  const color = solid?.color || opts.baseColor || '#0f766e'
+  if (opts.texturesEnabled !== false && solid?.textureId && ctx) {
+    const pat = resolveSolidTextureFillStyle(ctx, solid, faceTone, opts)
+    if (pat) return pat
+  }
+  return solidFaceFillRgba(color, faceTone, alpha)
+}
+
 /** Arista visible: tono oscuro del color del sólido. */
 export function solidEdgeStrokeColor(color, selected = false) {
   if (selected) return '#38bdf8'
@@ -2329,7 +2339,10 @@ function drawEllipseTubeSolid(ctx, solid, opts) {
       } else if (f.toneCurved) {
         tone = faceToneFactorFromNormal(f.nx || 0, 0, f.nz || 0)
       }
-      ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
+      ctx.fillStyle = solidFaceFillStyle(ctx, solid, tone, fillAlpha, {
+        baseColor: base,
+        texturesEnabled: opts.texturesEnabled,
+      })
       pathRing(ctx, f.pts)
       ctx.fill()
     }
@@ -2461,6 +2474,7 @@ export function drawSolid3d(ctx, solid, {
   solids = null,
   nested = null,
   pass = 'all', // 'fills' | 'edges' | 'edges-visible' | 'edges-hidden' | 'all'
+  texturesEnabled = true,
 } = {}) {
   if (!ctx || !solid?.cells?.length) return
   const base = solid.color || '#0f766e'
@@ -2509,6 +2523,7 @@ export function drawSolid3d(ctx, solid, {
       cotaRefM,
       selected,
       base,
+      texturesEnabled,
       fillAlpha,
       strokeVis,
       strokeHid,
@@ -2532,7 +2547,7 @@ export function drawSolid3d(ctx, solid, {
   // Vista superior/inferior ortográfica: un solo plano → tono de esa cara.
   if (flatTop || flatBottom) {
     const planeTone = flatTop ? FACE_TONE_FACTOR.top : FACE_TONE_FACTOR.bottom
-    const fill = solidFaceFillRgba(base, planeTone, fillAlpha)
+    const fill = solidFaceFillStyle(ctx, solid, planeTone, fillAlpha, { baseColor: base, texturesEnabled })
     // Solevado: dibujar solo anillos base y tapa (no bandas internas).
     const loftFlat = solid.loftDraw
     const ringsToDraw = loftFlat?.ringBase?.length
@@ -2691,7 +2706,7 @@ export function drawSolid3d(ctx, solid, {
       const facesToPaint = flatElev ? allFaces.filter((f) => f.front) : allFaces
       for (const f of facesToPaint) {
         const tone = flatElev ? elevTone : (f.tone ?? 1)
-        ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
+        ctx.fillStyle = solidFaceFillStyle(ctx, solid, tone, fillAlpha, { baseColor: base, texturesEnabled })
         pathRing(ctx, f.pts)
         ctx.fill()
       }
@@ -2952,7 +2967,7 @@ export function drawSolid3d(ctx, solid, {
     const facesToPaint = flatElev ? allFaces.filter((f) => f.front) : allFaces
     for (const f of facesToPaint) {
       const tone = flatElev ? elevTone : (f.tone ?? 1)
-      ctx.fillStyle = solidFaceFillRgba(base, tone, fillAlpha)
+      ctx.fillStyle = solidFaceFillStyle(ctx, solid, tone, fillAlpha, { baseColor: base, texturesEnabled })
       if (f.kind === 'holes') {
         // Preferir contorno circular/elíptico exacto si hay curveHoles.
         const holes = smoothHoleRings.length ? smoothHoleRings : f.holes

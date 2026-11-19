@@ -215,7 +215,7 @@ export function Esquema3dCalcPanel({
           background: `color-mix(in srgb, ${t.primary || '#0f766e'} 12%, ${t.bgCard || '#fff'})`,
         }}
         >
-          <div style={{ fontWeight: 800, color: t.primary || '#0f766e', fontSize: 14, flex: 1 }}>
+          <div style={{ fontWeight: 800, color: t.primary || '#0f766e', fontSize: 'var(--cc-sm)', flex: 1 }}>
             Cálculo de volúmenes
           </div>
           <button type="button" title="Cerrar panel" onClick={onClose} style={btnGhost(t)}>✕</button>
@@ -256,7 +256,7 @@ export function Esquema3dCalcPanel({
             ))}
           </select>
         ) : (
-          <div style={{ fontSize: 12, color: ui?.muted || '#64748b' }}>
+          <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b' }}>
             Cree un cálculo (p. ej. Excavación, Concreto).
           </div>
         )}
@@ -287,7 +287,7 @@ export function Esquema3dCalcPanel({
             >
               + Sólidos seleccionados
             </button>
-            <span style={{ fontSize: 11, color: ui?.muted || '#64748b', alignSelf: 'center' }}>
+            <span style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b', alignSelf: 'center' }}>
               {selectedSolidIds?.length || 0} seleccionado(s)
             </span>
           </div>
@@ -341,7 +341,7 @@ export function Esquema3dCalcPanel({
                     cursor: 'pointer',
                     color: t.text,
                     fontWeight: 700,
-                    fontSize: 13,
+                    fontSize: 'var(--cc-sm)',
                   }}
                 >
                   <span
@@ -366,7 +366,7 @@ export function Esquema3dCalcPanel({
                       e.stopPropagation()
                       onRemoveLine?.(active.id, line.id)
                     }}
-                    style={{ ...btnGhost(t), padding: '2px 6px', fontSize: 12 }}
+                    style={{ ...btnGhost(t), padding: '2px 6px', fontSize: 'var(--cc-caption)' }}
                   >
                     ×
                   </button>
@@ -374,7 +374,7 @@ export function Esquema3dCalcPanel({
               )
             })}
             {!(active.lines || []).length ? (
-              <div style={{ fontSize: 12, color: ui?.muted || '#64748b', padding: 10 }}>
+              <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b', padding: 10 }}>
                 Seleccione sólidos y pulse «Sólidos seleccionados»
               </div>
             ) : null}
@@ -392,8 +392,8 @@ export function Esquema3dCalcPanel({
               flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: 12, fontWeight: 800, color: t.textMuted || '#64748b' }}>Total</span>
-            <span data-testid="esquema-calc-total" style={{ fontSize: 16, fontWeight: 800, color: t.primary || '#0f766e', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted || '#64748b' }}>Total</span>
+            <span data-testid="esquema-calc-total" style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: t.primary || '#0f766e', fontVariantNumeric: 'tabular-nums' }}>
               {formatVolumeM3(total)}
             </span>
           </div>
@@ -473,7 +473,7 @@ function CalcDataPopup({
           borderBottom: `1px solid ${border}`,
           fontWeight: 800,
           color: headerBg,
-          fontSize: 15,
+          fontSize: 'var(--cc-body)',
         }}
         >
           {mode === 'add' ? 'Agregar sólidos al cálculo' : 'Editar sólido del cálculo'}
@@ -481,7 +481,7 @@ function CalcDataPopup({
         <div style={{ flex: 1, overflow: 'auto', padding: 10 }}>
           <table
             data-testid="esquema-calc-popup-table"
-            style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 12 }}
+            style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 'var(--cc-caption)' }}
           >
             <thead>
               <tr style={{ background: headerBg, color: '#fff' }}>
@@ -561,7 +561,7 @@ function CalcDataPopup({
                       <select
                         value={d.discountFromSolidId || ''}
                         onChange={(e) => onPatch(d.key, { discountFromSolidId: e.target.value || null })}
-                        style={{ ...inputStyle(t), padding: '4px 6px', borderRadius: 0, fontSize: 11 }}
+                        style={{ ...inputStyle(t), padding: '4px 6px', borderRadius: 0, fontSize: 'var(--cc-caption)' }}
                       >
                         <option value="">— Elegir —</option>
                         {lineOptions.filter((o) => o.solidId !== d.solidId).map((o) => (
@@ -591,7 +591,7 @@ function CalcDataPopup({
             </tbody>
           </table>
           {hasUnnamed ? (
-            <div data-testid="esquema-calc-popup-unnamed-hint" style={{ marginTop: 8, fontSize: 12, color: '#b45309', fontWeight: 700 }}>
+            <div data-testid="esquema-calc-popup-unnamed-hint" style={{ marginTop: 8, fontSize: 'var(--cc-caption)', color: '#b45309', fontWeight: 700 }}>
               Escriba el nombre de cada sólido antes de confirmar.
             </div>
           ) : null}
@@ -632,7 +632,7 @@ function th(border, bg) {
     background: bg,
     color: '#fff',
     fontWeight: 700,
-    fontSize: 11,
+    fontSize: 'var(--cc-caption)',
     textAlign: 'left',
   }
 }
@@ -652,7 +652,7 @@ function inputStyle(t) {
     border: `1px solid ${t.border}`,
     background: t.inputBg || '#fff',
     color: t.text,
-    fontSize: 13,
+    fontSize: 'var(--cc-sm)',
   }
 }
 function btnGhost(t) {
@@ -693,7 +693,7 @@ function opIconBtn(t, active, isSubtract) {
     background: active ? accent : (t.bg || '#fff'),
     color: active ? '#fff' : (t.textMuted || '#64748b'),
     fontWeight: 800,
-    fontSize: 14,
+    fontSize: 'var(--cc-sm)',
     lineHeight: 1,
     cursor: 'pointer',
   }

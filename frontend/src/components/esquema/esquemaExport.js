@@ -601,6 +601,8 @@ export async function composeEsquemaExport({
       orbit: cam,
       labels: exportLabels,
       labelScale: textScale,
+      // C-3D-18 / C-OUT: PNG y PDF siempre en vista realista (con texturas).
+      texturesEnabled: true,
     })
     void drawSolid
   }

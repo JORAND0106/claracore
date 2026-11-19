@@ -96,7 +96,7 @@ export function EsquemaPipeLibraryPopup({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}
         >
-          <strong style={{ color: ui.text, fontSize: 15 }}>Tubería y accesorios</strong>
+          <strong style={{ color: ui.text, fontSize: 'var(--cc-body)' }}>Tubería y accesorios</strong>
           <button
             type="button"
             onClick={onClose}
@@ -133,7 +133,7 @@ export function EsquemaPipeLibraryPopup({
                 gap: 6,
                 color: ui.text,
                 fontWeight: 700,
-                fontSize: 12,
+                fontSize: 'var(--cc-caption)',
               }}
             >
               <Thumb kind={item.kind} angleDeg={item.angleDeg} />
@@ -223,11 +223,11 @@ export function EsquemaPipeParamsPopup({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
         }}
         >
-          <strong style={{ color: ui.text, fontSize: 15 }}>
+          <strong style={{ color: ui.text, fontSize: 'var(--cc-body)' }}>
             {template?.label || 'Plantilla'} · medidas (m)
           </strong>
           {dePreview ? (
-            <span style={{ color: ui.primary, fontWeight: 800, fontSize: 13 }}>{dePreview}</span>
+            <span style={{ color: ui.primary, fontWeight: 800, fontSize: 'var(--cc-sm)' }}>{dePreview}</span>
           ) : null}
         </div>
         <div style={{ padding: 12, overflowX: 'auto' }}>
@@ -239,7 +239,7 @@ export function EsquemaPipeParamsPopup({
                     key={f.key}
                     style={{
                       textAlign: 'left',
-                      fontSize: 11,
+                      fontSize: 'var(--cc-caption)',
                       fontWeight: 800,
                       color: ui.muted,
                       padding: '6px 8px',
@@ -271,7 +271,7 @@ export function EsquemaPipeParamsPopup({
                         border: `1px solid ${ui.border}`,
                         background: ui.inputBg,
                         color: ui.text,
-                        fontSize: 13,
+                        fontSize: 'var(--cc-sm)',
                         fontWeight: 600,
                       }}
                       className="esquema-pipe-input"
@@ -283,7 +283,7 @@ export function EsquemaPipeParamsPopup({
           </table>
           <style>{`.esquema-pipe-input::placeholder{color:${ui.muted};opacity:1;font-weight:500}`}</style>
           {err ? (
-            <div role="alert" style={{ marginTop: 10, color: '#991b1b', fontWeight: 700, fontSize: 13 }}>
+            <div role="alert" style={{ marginTop: 10, color: '#991b1b', fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
               {err}
             </div>
           ) : null}

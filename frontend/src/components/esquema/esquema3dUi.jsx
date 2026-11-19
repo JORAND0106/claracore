@@ -50,7 +50,7 @@ export function Esquema3dViewToolbar({
               flexDirection: 'column',
               alignItems: 'center',
               gap: 2,
-              fontSize: 9,
+              fontSize: 'var(--cc-caption)',
               fontWeight: 700,
               minWidth: 44,
               padding: '4px 6px',
@@ -81,7 +81,7 @@ export function Esquema3dViewToolbar({
             onClick={() => onView(v.id)}
             style={{
               ...iconBtn(t, current === v.id),
-              fontSize: 10,
+              fontSize: 'var(--cc-caption)',
               fontWeight: 700,
               minWidth: 36,
               padding: '6px 8px',
@@ -92,7 +92,7 @@ export function Esquema3dViewToolbar({
         )
       })}
       {!isEsquema3dDrawView(current) ? (
-        <span style={{ ...ghost(t), fontSize: 11, opacity: 0.85 }}>
+        <span style={{ ...ghost(t), fontSize: 'var(--cc-caption)', opacity: 0.85 }}>
           Vista isométrica: solo inspección
         </span>
       ) : null}
@@ -328,7 +328,7 @@ export function Esquema3dExtrudePopup({
             </label>
           )}
           {error ? (
-            <div style={{ marginTop: 10, color: '#b91c1c', fontSize: 13, fontWeight: 600 }}>{error}</div>
+            <div style={{ marginTop: 10, color: '#b91c1c', fontSize: 'var(--cc-sm)', fontWeight: 600 }}>{error}</div>
           ) : null}
         </div>
         <div style={{
@@ -431,7 +431,7 @@ export function Esquema3dSolevarPanel({
 
   const th = {
     padding: '6px 5px',
-    fontSize: 10,
+    fontSize: 'var(--cc-caption)',
     fontWeight: 800,
     textAlign: 'left',
     color: '#fff',
@@ -441,7 +441,7 @@ export function Esquema3dSolevarPanel({
   }
   const td = {
     padding: '7px 5px',
-    fontSize: 11,
+    fontSize: 'var(--cc-caption)',
     color: t.text,
     borderBottom: `1px solid ${t.border}`,
     verticalAlign: 'middle',
@@ -449,7 +449,7 @@ export function Esquema3dSolevarPanel({
 
   return (
     <div data-testid="esquema-solevar-panel" style={{ display: 'grid', gap: 10 }}>
-      <div style={{ fontSize: 12, color: ui?.muted || '#64748b', lineHeight: 1.35 }}>
+      <div style={{ fontSize: 'var(--cc-caption)', color: ui?.muted || '#64748b', lineHeight: 1.35 }}>
         {mode === 'apex'
           ? 'Marque base, cotas y oprima Solevar'
           : 'Marque Base y Tapa, cotas y oprima Solevar'}
@@ -555,18 +555,18 @@ export function Esquema3dSolevarPanel({
           borderRadius: 8,
           border: `1px solid ${t.border}`,
           background: t.bgHover || 'rgba(15,118,110,0.08)',
-          fontSize: 12,
+          fontSize: 'var(--cc-caption)',
           color: t.text,
         }}
       >
         <span style={{ fontWeight: 700, color: ui?.muted || '#64748b' }}>Altura calculada</span>
-        <div style={{ fontWeight: 800, fontSize: 16, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ fontWeight: 800, fontSize: 'var(--cc-body)', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
           {alturaM != null ? `${alturaM.toFixed(2)} m` : '—'}
         </div>
       </div>
 
       {error ? (
-        <div style={{ color: '#b91c1c', fontSize: 12, fontWeight: 600 }}>{error}</div>
+        <div style={{ color: '#b91c1c', fontSize: 'var(--cc-caption)', fontWeight: 600 }}>{error}</div>
       ) : null}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" onClick={onCancel} style={btnGhost(t)} data-testid="esquema-solevar-cancel">
@@ -584,7 +584,7 @@ export function Esquema3dVolumeHint({ t, volumeM3 }) {
   if (volumeM3 == null || !Number.isFinite(volumeM3)) return null
   return (
     <span style={{
-      fontSize: 12,
+      fontSize: 'var(--cc-caption)',
       fontWeight: 700,
       color: t.text,
       padding: '4px 8px',
@@ -598,7 +598,7 @@ export function Esquema3dVolumeHint({ t, volumeM3 }) {
 }
 
 function labelStyle(t) {
-  return { display: 'grid', gap: 4, fontSize: 12, fontWeight: 700, color: t.text }
+  return { display: 'grid', gap: 4, fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.text }
 }
 function inputStyle(t) {
   return {
@@ -609,7 +609,7 @@ function inputStyle(t) {
     border: `1px solid ${t.border}`,
     background: t.inputBg || '#fff',
     color: t.text,
-    fontSize: 14,
+    fontSize: 'var(--cc-sm)',
   }
 }
 function btnGhost(t) {

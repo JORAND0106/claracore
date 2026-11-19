@@ -5,6 +5,7 @@
  */
 import { drawSolids3dLayered } from './esquema3dSolids.js'
 import { fmtMemoria } from './esquema3dCalc.js'
+import { drawSolidTextureSwatch } from './esquema3dTextures.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
 import { ESQUEMA_DOC_TYPE_SCALE, esquemaDocFontHierarchy } from './esquemaDocLegibility.js'
 import {
@@ -186,6 +187,7 @@ export function renderCalcIsoCanvas(solids, {
       orbit: bb.orbit,
       labels: labels || null,
       labelScale: labelScale * ts,
+      texturesEnabled: true,
     })
     ctx.restore()
   } else {
@@ -439,13 +441,15 @@ export function renderMemoriaColorTableCanvas(snapshot, {
     ctx.fillText(numTxt, x0 + (cols[0].w - ctx.measureText(numTxt).width) / 2, y0 + rowH / 2 + 4)
 
     const color = row.color || d.color || '#0f766e'
+    const textureId = row.textureId || d.textureId || null
     const sw = Math.round(20 * fs)
     const sh = Math.round(15 * fs)
     const cx0 = x0 + cols[0].w
-    ctx.fillStyle = color
-    ctx.fillRect(cx0 + (cols[1].w - sw) / 2, y0 + (rowH - sh) / 2, sw, sh)
+    const sx = cx0 + (cols[1].w - sw) / 2
+    const sy = y0 + (rowH - sh) / 2
+    drawSolidTextureSwatch(ctx, sx, sy, sw, sh, textureId, color)
     ctx.strokeStyle = C.border
-    ctx.strokeRect(cx0 + (cols[1].w - sw) / 2 + 0.5, y0 + (rowH - sh) / 2 + 0.5, sw - 1, sh - 1)
+    ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1)
 
     let cx = cx0 + cols[1].w
     const keys = ['nombre', 'op', 'from', 'dims', 'formula', 'vol']

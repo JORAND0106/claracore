@@ -139,8 +139,8 @@ export function EsquemaPhoneBottomSheet({
           gap: 8,
         }}
         >
-          <strong style={{ fontSize: 13, color: t.text, letterSpacing: '0.02em' }}>{title}</strong>
-          <span style={{ fontSize: 11, fontWeight: 700, color: t.textMuted || '#64748b' }}>
+          <strong style={{ fontSize: 'var(--cc-sm)', color: t.text, letterSpacing: '0.02em' }}>{title}</strong>
+          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted || '#64748b' }}>
             {ESQUEMA_PHONE_SHEET_ORDER.map((id) => (id === snap ? '●' : '○')).join(' ')}
           </span>
         </div>

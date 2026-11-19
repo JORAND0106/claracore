@@ -126,7 +126,7 @@ export function EsquemaContextSidebar({
           background: `color-mix(in srgb, ${t.primary || '#0077B6'} 8%, ${t.bgCard || '#fff'})`,
         }}
       >
-        <strong style={{ fontSize: 11, color: t.text, letterSpacing: '0.04em' }}>PANELES</strong>
+        <strong style={{ fontSize: 'var(--cc-caption)', color: t.text, letterSpacing: '0.04em' }}>PANELES</strong>
         {typeof onToggleCollapsed === 'function' ? (
           <button
             type="button"
@@ -216,17 +216,17 @@ export function EsquemaSidebarSection({
           background: `color-mix(in srgb, ${t.primary || '#0077B6'} 10%, ${t.bgCard || '#fff'})`,
           color: t.primary || '#0f766e',
           fontWeight: 800,
-          fontSize: 12,
+          fontSize: 'var(--cc-caption)',
           cursor: 'pointer',
           textAlign: 'left',
           boxSizing: 'border-box',
         }}
       >
-        <span aria-hidden style={{ width: 14, fontSize: 10 }}>{expanded ? '▼' : '▶'}</span>
+        <span aria-hidden style={{ width: 14, fontSize: 'var(--cc-caption)' }}>{expanded ? '▼' : '▶'}</span>
         <span style={{ flex: 1 }}>{title}</span>
         {badge != null ? (
           <span style={{
-            fontSize: 10,
+            fontSize: 'var(--cc-caption)',
             fontWeight: 700,
             padding: '1px 6px',
             borderRadius: 999,
