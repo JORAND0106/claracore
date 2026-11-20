@@ -28164,15 +28164,51 @@ def crear_reporte_offline(
 
 @app.get("/sicoe-obra/{contrato_id}/plantillas")
 def listar_plantillas(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
+    """Solo plantillas creadas por el usuario autenticado (personales)."""
+    from sicoe_plantillas_personales import usuario_id_desde_token
+
+    uid = usuario_id_desde_token(current_user)
+    if uid is None:
+        return []
+
     def _q():
-        q = supabase.table("so_plantillas").select("*, so_plantilla_items(*)").eq("contrato_id", contrato_id)
+        q = (
+            supabase.table("so_plantillas")
+            .select("*, so_plantilla_items(*)")
+            .eq("contrato_id", contrato_id)
+            .eq("creado_por", uid)
+        )
         if capitulo:
             q = q.eq("capitulo", capitulo)
         return q.order("nombre").execute().data
-    rows = supabase_execute(_q)
+
+    rows = supabase_execute(_q) or []
     for r in rows:
         r["items"] = r.pop("so_plantilla_items", [])
     return rows
+
+
+@app.get("/sicoe-obra/{contrato_id}/plantillas-huerfanas")
+def listar_plantillas_huerfanas(contrato_id: int, current_user=Depends(get_current_user)):
+    """Diagnóstico: plantillas sin creador identificable (no se eliminan ni reasignan)."""
+    from sicoe_plantillas_personales import resumir_plantillas_sin_creador
+
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo desarrollador")
+    _require_contract_access(current_user, contrato_id)
+
+    def _q():
+        return (
+            supabase.table("so_plantillas")
+            .select("id, contrato_id, capitulo, nombre, creado_por")
+            .eq("contrato_id", contrato_id)
+            .order("id")
+            .execute()
+            .data
+        )
+
+    return resumir_plantillas_sin_creador(supabase_execute(_q) or [])
+
 
 class PlantillaItem(BaseModel):
     nombre: str
@@ -28186,12 +28222,18 @@ class PlantillaCreate(BaseModel):
 
 @app.post("/sicoe-obra/{contrato_id}/plantillas")
 def crear_plantilla(contrato_id: int, body: PlantillaCreate, current_user=Depends(get_current_user)):
+    from sicoe_plantillas_personales import usuario_id_desde_token
+
+    uid = usuario_id_desde_token(current_user)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+
     def _ins():
         return supabase.table("so_plantillas").insert({
             "contrato_id": contrato_id,
             "nombre": body.nombre,
             "capitulo": body.capitulo,
-            "creado_por": int(current_user.get("sub", 0) or current_user.get("id", 0))
+            "creado_por": uid,
         }).execute().data
     plantilla = supabase_execute(_ins)
     if not plantilla:
@@ -28205,6 +28247,57 @@ def crear_plantilla(contrato_id: int, body: PlantillaCreate, current_user=Depend
             ]).execute().data
         supabase_execute(_items)
     return plantilla[0]
+
+
+@app.delete("/sicoe-obra/{contrato_id}/plantillas/{plantilla_id}")
+def eliminar_plantilla(contrato_id: int, plantilla_id: int, current_user=Depends(get_current_user)):
+    """Elimina una plantilla propia. No afecta reportes ya creados con ella."""
+    from sicoe_plantillas_personales import plantilla_es_del_usuario, usuario_id_desde_token
+
+    uid = usuario_id_desde_token(current_user)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+
+    def _get():
+        return (
+            supabase.table("so_plantillas")
+            .select("id, contrato_id, creado_por")
+            .eq("id", plantilla_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_get) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+    if not plantilla_es_del_usuario(rows[0], uid):
+        raise HTTPException(status_code=403, detail="Solo puede eliminar sus propias plantillas")
+
+    def _del_items():
+        return (
+            supabase.table("so_plantilla_items")
+            .delete()
+            .eq("plantilla_id", plantilla_id)
+            .execute()
+            .data
+        )
+
+    def _del_plantilla():
+        return (
+            supabase.table("so_plantillas")
+            .delete()
+            .eq("id", plantilla_id)
+            .eq("contrato_id", contrato_id)
+            .eq("creado_por", uid)
+            .execute()
+            .data
+        )
+
+    supabase_execute(_del_items)
+    supabase_execute(_del_plantilla)
+    return {"ok": True, "id": plantilla_id}
 
 
 def _sicoe_normalizar_numero_rpc(raw: Any, etiqueta: str = "consecutivo") -> int:

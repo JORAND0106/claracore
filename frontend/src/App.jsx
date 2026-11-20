@@ -41,7 +41,7 @@ import InformePeriodicoModal from './components/InformePeriodicoModal'
 import MatrizValidacionSicoePanel from './components/MatrizValidacionSicoePanel'
 import { useInformePeriodicoReminder } from './hooks/useInformePeriodicoReminder'
 import { useWebPushSubscription } from './hooks/useWebPushSubscription'
-import { BookOpen, Menu, X } from 'lucide-react'
+import { BookOpen, Menu, Trash2, X } from 'lucide-react'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
@@ -214,6 +214,7 @@ import {
   fetchSicoePkIdsCached,
   fetchSicoePlantillasCached,
   invalidateSicoeCatalogoCache,
+  invalidateSicoePlantillasCache,
 } from './modules/sicoe-obra/sicoeCatalogoCache'
 import {
   invalidateSicoeVistaCache,
@@ -16857,12 +16858,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const modalPkHandlersRef = useRef({})
   const [planoGeojsonContrato, setPlanoGeojsonContrato] = useState(null)
 
-  // Datos TAB 2 - Plantillas
+  // Datos TAB 2 - Plantillas (personales del usuario)
   const [plantillas, setPlantillas] = useState([])
   const [plantillaSel, setPlantillaSel] = useState(null)
   const [modalCrearPlantilla, setModalCrearPlantilla] = useState(false)
   const [nuevaPlantillaNombre, setNuevaPlantillaNombre] = useState('')
   const [nuevaPlantillaItems, setNuevaPlantillaItems] = useState([{nombre:'', descripcion:''}])
+  const [plantillaAEliminar, setPlantillaAEliminar] = useState(null)
+  const [eliminandoPlantilla, setEliminandoPlantilla] = useState(false)
 
   // Datos TAB 3 - Registros
   const [registros, setRegistros] = useState([])
@@ -17296,11 +17299,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     fetchSicoeNodosCached(API_URL, contrato_id, capituloSel, getToken())
       .then((d) => { if (!cancelled) setNodos(d) })
       .catch(() => { if (!cancelled) setNodos([]) })
-    fetchSicoePlantillasCached(API_URL, contrato_id, capituloSel, getToken())
+    fetchSicoePlantillasCached(API_URL, contrato_id, capituloSel, getToken(), userIdDraft)
       .then((d) => { if (!cancelled) setPlantillas(d) })
       .catch(() => { if (!cancelled) setPlantillas([]) })
     return () => { cancelled = true }
-  }, [capituloSel, contrato_id, API_URL])
+  }, [capituloSel, contrato_id, API_URL, userIdDraft])
 
   const selPkId = (pk) => {
     setPkSeleccionado(pk)
@@ -18201,7 +18204,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   </div>
                   {plantillas.length === 0 ? (
                     <div style={{ padding:'30px', textAlign:'center', color:t.textMuted, background:t.bg, borderRadius:'8px' }}>
-                      No hay plantillas para este capítulo. Puedes continuar sin plantilla o crear una.
+                      No hay plantillas propias para este capítulo. Puedes continuar sin plantilla o crear una.
                     </div>
                   ) : (
                     <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
@@ -18209,14 +18212,34 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         <div key={p.id} onClick={() => aplicarPlantilla(p)}
                           style={{ padding:'14px', borderRadius:'10px', cursor:'pointer',
                             border: `2px solid ${plantillaSel?.id === p.id ? t.primary : t.border}`,
-                            background: plantillaSel?.id === p.id ? t.primary+'11' : t.bg }}>
-                          <div style={{ fontWeight:'700', color:t.text, marginBottom:'6px' }}>{p.nombre}</div>
-                          <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
-                            {(p.items||[]).map((item, i) => (
-                              <span key={i} style={{ background:t.border, color:t.textMuted,
-                                borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)' }}>{item.nombre}</span>
-                            ))}
+                            background: plantillaSel?.id === p.id ? t.primary+'11' : t.bg,
+                            display:'flex', gap:'10px', alignItems:'flex-start' }}>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontWeight:'700', color:t.text, marginBottom:'6px' }}>{p.nombre}</div>
+                            <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+                              {(p.items||[]).map((item, i) => (
+                                <span key={i} style={{ background:t.border, color:t.textMuted,
+                                  borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)' }}>{item.nombre}</span>
+                              ))}
+                            </div>
                           </div>
+                          <button
+                            type="button"
+                            title="Eliminar plantilla"
+                            aria-label={`Eliminar plantilla ${p.nombre}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setPlantillaAEliminar(p)
+                            }}
+                            style={{
+                              flexShrink:0, width:32, height:32, borderRadius:8, cursor:'pointer',
+                              background:'transparent', border:`1px solid ${t.border}`,
+                              color:'#DC2626', display:'inline-flex', alignItems:'center',
+                              justifyContent:'center',
+                            }}
+                          >
+                            <Trash2 size={16} aria-hidden />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -19136,6 +19159,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   })
                   if (r.ok) {
                     const nueva = await r.json()
+                    invalidateSicoePlantillasCache(contrato_id, userIdDraft)
                     setPlantillas(prev => [...prev, {...nueva, items}])
                     setNuevaPlantillaNombre('')
                     setNuevaPlantillaItems([{nombre:'', descripcion:''}])
@@ -19149,6 +19173,45 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             </div>
           </div>
         </div>
+      )}
+
+      {plantillaAEliminar && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={2100}
+          tipo="danger"
+          titulo="Eliminar plantilla"
+          confirmar="Eliminar"
+          cancelar="Cancelar"
+          procesando={eliminandoPlantilla}
+          onCancel={() => { if (!eliminandoPlantilla) setPlantillaAEliminar(null) }}
+          onConfirm={async () => {
+            if (!plantillaAEliminar?.id || eliminandoPlantilla) return
+            setEliminandoPlantilla(true)
+            try {
+              const r = await fetch(
+                `${API_URL}/sicoe-obra/${contrato_id}/plantillas/${plantillaAEliminar.id}`,
+                { method: 'DELETE', headers: hdrs },
+              )
+              if (!r.ok) {
+                const err = await r.json().catch(() => ({}))
+                throw new Error(err?.detail || 'No se pudo eliminar')
+              }
+              invalidateSicoePlantillasCache(contrato_id, userIdDraft)
+              setPlantillas((prev) => prev.filter((x) => x.id !== plantillaAEliminar.id))
+              if (plantillaSel?.id === plantillaAEliminar.id) setPlantillaSel(null)
+              setPlantillaAEliminar(null)
+            } catch (e) {
+              alert(e?.message || 'Error eliminando plantilla')
+            } finally {
+              setEliminandoPlantilla(false)
+            }
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+            ¿Eliminar la plantilla «{plantillaAEliminar.nombre}»? Los reportes ya creados no se modifican.
+          </p>
+        </CcConfirmModal>
       )}
 
       {/* ── Modal Mapa PK_ID (solo si el contrato tiene GeoJSON de plano) ── */}
