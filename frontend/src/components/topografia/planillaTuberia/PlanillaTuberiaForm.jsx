@@ -88,7 +88,7 @@ import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { planillaParamsPatchFromSeed } from '../../esquema/esquemaTopoCoordsSync'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
 import { notifyPlanillaTopoGrillaChanged } from '../../../modules/sicoe-obra/sicoeGrillaReportesIndicadores'
-import { planillaBannerStyle } from './planillaTuberiaTheme'
+import { planillaBannerStyle, planillaSurfaceFromUi } from './planillaTuberiaTheme'
 
 
 const CARTERA_MIN_WIDTH = 720
@@ -1079,9 +1079,23 @@ export default function PlanillaTuberiaForm({
   }
 
   // Cartera: 70% de altura de fila del sheet base (32 → 22)
-  // Encabezado cartera un tono más oscuro que el sheet base (#D9D9D9 → #B0B0B0)
-  const thCartera = { ...thBase, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT, background: '#B0B0B0', color: '#1e293b' }
-  const thCarteraCalc = { ...thCalc, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT, background: '#A3A3A3', color: '#1e293b' }
+  // Encabezados con superficie del tema (sin gris fijo claro/oscuro).
+  const thCartera = {
+    ...thBase,
+    padding: '3px 4px',
+    lineHeight: 1.1,
+    height: CARTERA_ROW_HEIGHT,
+    background: calcCellBg,
+    color: ui.text,
+  }
+  const thCarteraCalc = {
+    ...thCalc,
+    padding: '3px 4px',
+    lineHeight: 1.1,
+    height: CARTERA_ROW_HEIGHT,
+    background: ui.t?.border || calcCellBg,
+    color: ui.text,
+  }
   const tdCartera = { ...sheet.td, height: CARTERA_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.1 }
   const tdCarteraEdit = { ...tdEdit, height: CARTERA_ROW_HEIGHT }
   const tdCarteraCalc = { ...tdCalc, height: CARTERA_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.1 }
@@ -1095,14 +1109,35 @@ export default function PlanillaTuberiaForm({
   const tdResumenCalc = { ...tdCalc, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.05, fontSize: 'var(--cc-xs)' }
   const thResumenItem = { ...thResumen, whiteSpace: 'nowrap', minWidth: 148, width: '38%', textAlign: 'left' }
 
-  const layoutMain = { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }
+  const surf = planillaSurfaceFromUi(ui)
+  const layoutMain = { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0, width: '100%' }
   const layoutCharts = isCompact
-    ? { display: 'flex', flexDirection: 'column', gap: 12 }
-    : { display: 'grid', gridTemplateColumns: 'minmax(240px, 1fr) minmax(280px, 1.2fr)', gap: 12 }
-  const layoutTables = isCompact
-    ? { display: 'flex', flexDirection: 'column', gap: 12 }
-    : { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }
-
+    ? { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0, width: '100%' }
+    : {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.2fr)',
+      gap: 12,
+      minWidth: 0,
+      width: '100%',
+    }
+  /** Descuentos baja debajo del Resumen si no caben lado a lado; cada panel hace scroll interno. */
+  const layoutTables = {
+    display: 'grid',
+    gridTemplateColumns: isCompact
+      ? 'minmax(0, 1fr)'
+      : 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
+    gap: 12,
+    minWidth: 0,
+    width: '100%',
+    alignItems: 'start',
+  }
+  const panelTabla = {
+    ...(isCompact ? { ...ui.card, padding: 12 } : ui.card),
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    boxSizing: 'border-box',
+  }
 
   const cardPad = isCompact ? { ...ui.card, padding: 12 } : ui.card
   const tipoSelectStyle = {
@@ -1183,8 +1218,8 @@ export default function PlanillaTuberiaForm({
     ...sheet.th,
     textAlign: 'left',
     padding: '6px 8px',
-    background: '#B0B0B0',
-    color: '#1e293b',
+    background: calcCellBg,
+    color: ui.text,
     whiteSpace: 'nowrap',
   }
   const tdLista = {
@@ -1324,11 +1359,9 @@ export default function PlanillaTuberiaForm({
                 <span
                   data-reporte-sicoe-bloqueado
                   style={{
+                    ...planillaBannerStyle('success', ui),
                     fontSize: 'var(--cc-xs)',
                     fontWeight: 700,
-                    color: '#166534',
-                    background: '#dcfce7',
-                    border: '1px solid #bbf7d0',
                     borderRadius: 999,
                     padding: '4px 8px',
                     whiteSpace: 'nowrap',
@@ -1468,8 +1501,8 @@ export default function PlanillaTuberiaForm({
                   justifyContent: 'center',
                   borderRadius: 8,
                   border: `1px solid ${ui.t?.border || '#cbd5e1'}`,
-                  background: '#fff',
-                  color: puedeMapaTramo ? '#0f172a' : '#94a3b8',
+                  background: ui.t?.bgCard || '#fff',
+                  color: puedeMapaTramo ? (ui.text || '#0f172a') : (ui.textMuted || '#94a3b8'),
                   cursor: (!puedeMapaTramo || busy) ? 'not-allowed' : 'pointer',
                   opacity: (!puedeMapaTramo || busy) ? 0.5 : 1,
                 }}
@@ -1774,8 +1807,8 @@ export default function PlanillaTuberiaForm({
     <PlanillaTuberiaPerfil perfil={calculoVista?.perfil} ui={ui} />
   </div>
 
-  <div style={layoutTables}>
-    <div style={cardPad}>
+  <div style={layoutTables} data-planilla-tablas-layout>
+    <div style={panelTabla} data-planilla-panel-resumen>
       <div style={sheet.sectionTitle}>
         <span>Resumen de Cantidades</span>
       </div>
@@ -1789,7 +1822,7 @@ export default function PlanillaTuberiaForm({
           <strong>ancho de excavación</strong> en la cabecera para ver el Resumen de Cantidades en vivo.
         </div>
       )}
-      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
+      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
             <tr>
@@ -1798,7 +1831,7 @@ export default function PlanillaTuberiaForm({
                   key={h}
                   style={{
                     ...(i === 0 ? thResumenItem : thResumenCalc),
-                    background: '#4472C4',
+                    background: surf.accent,
                     color: '#fff',
                     ...(i === 0 || h === 'Ítem cobro' ? { textAlign: 'left' } : null),
                     ...(h === 'Ítem cobro' ? { minWidth: 150 } : null),
@@ -1816,19 +1849,21 @@ export default function PlanillaTuberiaForm({
               const abierto = grupoResumenAbierto(grupo.id)
               const tdGrupo = {
                 ...tdResumenItem,
-                background: '#E8EEF7',
+                background: surf.grupoRowBg,
+                color: surf.grupoRowFg,
                 fontWeight: 700,
               }
               const tdGrupoCalc = {
                 ...tdResumenCalc,
-                background: '#E8EEF7',
+                background: surf.grupoRowBg,
+                color: surf.grupoRowFg,
                 fontWeight: 700,
               }
               return (
                 <Fragment key={grupo.id}>
-                  <tr>
+                  <tr data-resumen-grupo-franja>
                     <td style={tdGrupo}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
                         <button
                           type="button"
                           onClick={() => toggleGrupoResumen(grupo.id)}
@@ -1840,13 +1875,14 @@ export default function PlanillaTuberiaForm({
                             padding: '0 2px',
                             fontWeight: 700,
                             fontSize: 11,
-                            color: '#1e3a8a',
+                            color: surf.grupoRowFg,
                             lineHeight: 1,
+                            flexShrink: 0,
                           }}
                         >
                           {abierto ? '▼' : '▶'}
                         </button>
-                        <span style={{ flex: 1 }}>{grupo.titulo}</span>
+                        <span style={{ flex: 1, minWidth: 0 }}>{grupo.titulo}</span>
                         {editable && (
                           <button
                             type="button"
@@ -1864,6 +1900,7 @@ export default function PlanillaTuberiaForm({
                               fontSize: 12,
                               fontWeight: 700,
                               lineHeight: 1,
+                              flexShrink: 0,
                             }}
                           >
                             +
@@ -2036,9 +2073,9 @@ export default function PlanillaTuberiaForm({
         || (calculoVista?.descuentos_volumen && Object.keys(calculoVista.descuentos_volumen).length > 0)
         || (calculoVista?.descuentos_altura && Object.keys(calculoVista.descuentos_altura).length > 0)) && (
         <div style={{
-          marginTop: 8, padding: '8px 10px', borderRadius: 8,
-          background: '#fff7ed', border: '1px solid #fed7aa',
-          fontSize: 'var(--cc-xs)', color: '#9a3412',
+          ...planillaBannerStyle('warn', ui),
+          marginTop: 8, padding: '8px 10px',
+          fontSize: 'var(--cc-xs)',
         }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>Notas de descuento de volumen</div>
           {(calculoVista?.notas_descuento_volumen || calculoVista?.notas_descuento_altura || []).length > 0 ? (
@@ -2059,14 +2096,15 @@ export default function PlanillaTuberiaForm({
         </div>
       )}
     </div>
-    <div style={cardPad}>
-      <div style={{ ...sheet.sectionTitle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <span>Descuentos Específicos</span>
+    <div style={panelTabla} data-planilla-panel-descuentos>
+      <div style={{ ...sheet.sectionTitle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+        <span style={{ minWidth: 0 }}>Descuentos Específicos</span>
         {editable && (
           <button
             type="button"
             className="cc-topo-touch-btn"
-            style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }}
+            data-descuentos-otros-btn
+            style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)', flexShrink: 0 }}
             onClick={agregarLineaDescOtros}
             title="Agregar otra línea Otros"
           >
@@ -2074,7 +2112,7 @@ export default function PlanillaTuberiaForm({
           </button>
         )}
       </div>
-      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
+      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
           <thead>
             <tr>
@@ -2083,7 +2121,7 @@ export default function PlanillaTuberiaForm({
                   key={h}
                   style={{
                     ...(i === 0 ? thResumenItem : thResumenCalc),
-                    background: '#EA4296',
+                    background: ui.warn || '#b45309',
                     color: '#fff',
                     ...(i === 0 || h === 'Ítem cobro' ? { textAlign: 'left' } : null),
                     ...(h === 'Ítem cobro' ? { minWidth: 150 } : null),
@@ -2469,6 +2507,7 @@ export default function PlanillaTuberiaForm({
             style={{
               width: '100%',
               maxWidth: isCompact ? '100%' : 'min(98vw, 1400px)',
+              minWidth: 0,
               minHeight: isCompact ? '100%' : undefined,
               maxHeight: isCompact ? '100dvh' : undefined,
               margin: isCompact ? 0 : '24px auto',
@@ -2482,6 +2521,7 @@ export default function PlanillaTuberiaForm({
               display: 'flex',
               flexDirection: 'column',
               gap: 12,
+              overflowX: 'hidden',
               overflowY: isCompact ? 'auto' : undefined,
               WebkitOverflowScrolling: isCompact ? 'touch' : undefined,
             }}

@@ -28,11 +28,29 @@ export default function PlanillaTuberiaSeccionSvg({ seccionTipica, ui }) {
       <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, marginBottom: 4, color: surf.textMuted }}>
         {titulo} — {tipo}
       </div>
-      <img
-        src={png}
-        alt={titulo}
-        style={{ width: '100%', maxHeight: SECCION_MAX_HEIGHT, objectFit: 'contain', display: 'block', margin: '0 auto' }}
-      />
+      <div
+        data-seccion-tipica-img-wrap
+        style={{
+          background: surf.cardBg,
+          borderRadius: 6,
+          overflow: 'hidden',
+        }}
+      >
+        <img
+          src={png}
+          alt={titulo}
+          data-seccion-tipica-img
+          style={{
+            width: '100%',
+            maxHeight: SECCION_MAX_HEIGHT,
+            objectFit: 'contain',
+            display: 'block',
+            margin: '0 auto',
+            background: 'transparent',
+            filter: surf.seccionImgFilter,
+          }}
+        />
+      </div>
       <div style={{ fontSize: 11, color: surf.textMuted, textAlign: 'center', marginTop: 6 }}>
         {`B=${B.toFixed(2)} m · Øext=${D.toFixed(3)} m · h_exc=${hExc.toFixed(2)} m`}
         {esFiltro
