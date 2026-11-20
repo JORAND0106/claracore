@@ -34,10 +34,11 @@ describe('sicoeZIndex — herramientas delante de la carpeta', () => {
     assert.match(app, /zIndex:\s*15000/)
   })
 
-  it('EsquemaEditorModal usa SICOE_HERRAMIENTA_Z', () => {
+  it('EsquemaEditorModal usa SICOE_HERRAMIENTA_Z vía overlay stack', () => {
     const src = read('components/esquema/EsquemaEditorModal.jsx')
     assert.match(src, /SICOE_HERRAMIENTA_Z/)
-    assert.match(src, /zIndex:\s*SICOE_HERRAMIENTA_Z/)
+    assert.match(src, /useStackedOverlayZ/)
+    assert.match(src, /zIndex:\s*overlayZ/)
   })
 
   it('lista de esquemas y avisos usan capa sobre carpeta', () => {

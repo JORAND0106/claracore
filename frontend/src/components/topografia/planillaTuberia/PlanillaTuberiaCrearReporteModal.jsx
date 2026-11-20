@@ -3,10 +3,12 @@
  * Solo pide lo no derivado: Subcontratista, Inspector, Capítulo, Abscisas y Nodos (editables).
  * Exige esquema del tramo (EsquemaEditorModal) antes de confirmar.
  * z-index > editor de planilla (100030) y selector PK (100050).
+ * El editor de Esquemas usa OverlayStackProvider para quedar delante (no z fijo 17000).
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { API_BASE } from '../../../apiBase'
+import { OverlayStackProvider } from '../../overlayStack'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
 import {
   coordRowsFromSeedTramo,
@@ -836,10 +838,10 @@ export default function PlanillaTuberiaCrearReporteModal({
     </div>
   )
 
-  return (
-    <>
-      {createPortal(overlay, document.body)}
-      {avisoCapitulo && createPortal(
+  return createPortal(
+    <OverlayStackProvider zIndex={CREAR_REPORTE_Z_INDEX}>
+      {overlay}
+      {avisoCapitulo && (
         <TopoConfirmModal
           theme={ui?.t}
           titulo="Capítulo del ítem"
@@ -852,60 +854,58 @@ export default function PlanillaTuberiaCrearReporteModal({
         >
           <p style={{ margin: '0 0 10px' }}>{avisoCapitulo}</p>
           <p style={{ margin: 0, fontWeight: 700 }}>¿Desea continuar?</p>
-        </TopoConfirmModal>,
-        document.body,
+        </TopoConfirmModal>
       )}
-      {esquemaOpen && createPortal(
-        <div style={{ position: 'fixed', inset: 0, zIndex: CREAR_REPORTE_ESQUEMA_Z_INDEX }}>
-          <EsquemaEditorModal
-            t={ui?.t || {
-              bg: ui?.cardBg || '#fff',
-              text: ui?.text || '#0f172a',
-              textMuted: ui?.textMuted || '#64748b',
-              border: ui?.border || '#e2e8f0',
-              primary: ui?.accent || '#2563eb',
-            }}
-            title="Esquema del tramo — planilla de tubería"
-            contratoId={contratoId}
-            mapLocation={mapLocation}
-            seedTramo={seedTramo}
-            initialCoordRows={initialCoordRows}
-            autoActivateMap
-            iaDoc={{
-              ambito: 'topo_tuberia',
-              docKey: `topo-tuberia-${planilla?.id || 'planilla'}-crear`,
-            }}
-            draftModule="topo_tuberia"
-            draftEntityId={`${planilla?.id || 'planilla'}-crear`}
-            onClose={() => setEsquemaOpen(false)}
-            onSave={async (dataUrl, extras) => {
-              if (!dataUrl) {
-                setErr('El esquema no devolvió imagen. Guarde de nuevo.')
-                return { keepDraft: true }
-              }
-              setEsquemaDataUri(dataUrl)
-              setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
-              const sync = seedTramoFromCoordRows(extras?.coordRows)
-              if (sync && typeof onTramoCoordsChange === 'function') {
-                try { onTramoCoordsChange(sync) } catch { /* planilla opcional */ }
-              }
-              setEsquemaOpen(false)
-              setErr('')
-              try {
-                const { presentEsquemaExportPopup } = await import('../../esquema/esquemaExportHost.js')
-                await presentEsquemaExportPopup({
-                  t: ui?.t,
-                  title: extras?.title || 'Esquema del tramo',
-                  pdf: extras?.exports?.pdf || null,
-                  dxf: extras?.exports?.dxf || null,
-                })
-              } catch { /* popup opcional */ }
-              return { keepDraft: false }
-            }}
-          />
-        </div>,
-        document.body,
+      {esquemaOpen && (
+        <EsquemaEditorModal
+          t={ui?.t || {
+            bg: ui?.cardBg || '#fff',
+            text: ui?.text || '#0f172a',
+            textMuted: ui?.textMuted || '#64748b',
+            border: ui?.border || '#e2e8f0',
+            primary: ui?.accent || '#2563eb',
+          }}
+          title="Esquema del tramo — planilla de tubería"
+          contratoId={contratoId}
+          mapLocation={mapLocation}
+          seedTramo={seedTramo}
+          initialCoordRows={initialCoordRows}
+          autoActivateMap
+          zIndex={CREAR_REPORTE_ESQUEMA_Z_INDEX}
+          iaDoc={{
+            ambito: 'topo_tuberia',
+            docKey: `topo-tuberia-${planilla?.id || 'planilla'}-crear`,
+          }}
+          draftModule="topo_tuberia"
+          draftEntityId={`${planilla?.id || 'planilla'}-crear`}
+          onClose={() => setEsquemaOpen(false)}
+          onSave={async (dataUrl, extras) => {
+            if (!dataUrl) {
+              setErr('El esquema no devolvió imagen. Guarde de nuevo.')
+              return { keepDraft: true }
+            }
+            setEsquemaDataUri(dataUrl)
+            setEsquemaCalcAdjuntos(Array.isArray(extras?.adjuntos) ? extras.adjuntos : [])
+            const sync = seedTramoFromCoordRows(extras?.coordRows)
+            if (sync && typeof onTramoCoordsChange === 'function') {
+              try { onTramoCoordsChange(sync) } catch { /* planilla opcional */ }
+            }
+            setEsquemaOpen(false)
+            setErr('')
+            try {
+              const { presentEsquemaExportPopup } = await import('../../esquema/esquemaExportHost.js')
+              await presentEsquemaExportPopup({
+                t: ui?.t,
+                title: extras?.title || 'Esquema del tramo',
+                pdf: extras?.exports?.pdf || null,
+                dxf: extras?.exports?.dxf || null,
+              })
+            } catch { /* popup opcional */ }
+            return { keepDraft: false }
+          }}
+        />
       )}
-    </>
+    </OverlayStackProvider>,
+    document.body,
   )
 }

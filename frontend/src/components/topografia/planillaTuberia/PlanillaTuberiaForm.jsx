@@ -19,6 +19,7 @@ import PlanillaTuberiaAsociarReporteModal from './PlanillaTuberiaAsociarReporteM
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import PlanillaTuberiaItemCobro from './PlanillaTuberiaItemCobro'
 import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
+import { OverlayStackProvider } from '../../overlayStack'
 import TopoTrazabilidadButton, { ENTIDAD_PLANILLA_TUBERIA } from '../TopoTrazabilidadButton'
 import {
   calcularPlanillaLocal,
@@ -2484,6 +2485,7 @@ export default function PlanillaTuberiaForm({
         </div>
       </div>
 
+      <OverlayStackProvider zIndex={editorOpen ? 100030 : 0}>
       {editorOpen && (
         <div
           style={{
@@ -2871,6 +2873,7 @@ export default function PlanillaTuberiaForm({
         }}
       />
 
+      </OverlayStackProvider>
     </div>
   )
 }
