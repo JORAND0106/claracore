@@ -397,7 +397,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
               <tr>
                 <td style={{
                   width: 72, border: cellBorder, padding: 6, textAlign: 'center',
-                  background: '#f8fafc',
+                  background: ui?.inputBg || ui?.cardBg || '#f8fafc',
                 }}
                 >
                   {logoSrc ? (
@@ -454,12 +454,12 @@ export default function PlanillaTuberiaAsociarReporteModal({
             style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}
           >
           <div style={{
-            background: '#eff6ff',
-            border: '1px solid #bfdbfe',
+            background: ui?.accentSoft || 'rgba(37, 99, 235, 0.12)',
+            border: `1px solid ${ui?.accent || '#2563eb'}55`,
             borderRadius: 8,
             padding: '10px 12px',
             fontSize: 'var(--cc-xs)',
-            color: '#1e3a8a',
+            color: ui?.text || '#0f172a',
             lineHeight: 1.45,
           }}
           >
@@ -581,12 +581,12 @@ export default function PlanillaTuberiaAsociarReporteModal({
             <div
               data-asociar-reporte-seleccionado
               style={{
-                background: '#f0fdf4',
-                border: '1px solid #bbf7d0',
+                background: 'rgba(4, 120, 87, 0.12)',
+                border: '1px solid rgba(4, 120, 87, 0.35)',
                 borderRadius: 8,
                 padding: '8px 10px',
                 fontSize: 'var(--cc-xs)',
-                color: '#166534',
+                color: 'var(--cc-color-success)',
                 lineHeight: 1.4,
               }}
             >
@@ -606,9 +606,11 @@ export default function PlanillaTuberiaAsociarReporteModal({
               style={{
                 padding: '8px 12px',
                 borderRadius: 8,
-                border: `1px solid ${esquemaListo ? '#86efac' : (ui?.border || '#cbd5e1')}`,
-                background: esquemaListo ? '#dcfce7' : (ui?.accentSoft || '#eff6ff'),
-                color: esquemaListo ? '#166534' : (ui?.accent || '#2563eb'),
+                border: `1px solid ${esquemaListo ? 'var(--cc-color-success)' : (ui?.border || '#cbd5e1')}`,
+                background: esquemaListo
+                  ? 'rgba(4, 120, 87, 0.12)'
+                  : (ui?.accentSoft || 'rgba(37, 99, 235, 0.12)'),
+                color: esquemaListo ? 'var(--cc-color-success)' : (ui?.accent || '#2563eb'),
                 fontWeight: 700,
                 cursor: 'pointer',
               }}
@@ -655,7 +657,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
                 }}
                 >
                   <thead>
-                    <tr style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                    <tr style={{ background: ui?.inputBg || ui?.cardBg || '#f8fafc', position: 'sticky', top: 0 }}>
                       <th style={{
                         width: 36, padding: '6px 8px', textAlign: 'center',
                         borderBottom: `1px solid ${ui?.border || '#e2e8f0'}`,
@@ -694,7 +696,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
                         <tr
                           key={key}
                           data-asociar-linea-origen={key}
-                          style={{ background: checked ? '#eff6ff' : 'transparent' }}
+                          style={{ background: checked ? (ui?.accentSoft || 'rgba(37, 99, 235, 0.12)') : 'transparent' }}
                         >
                           <td style={{
                             padding: '5px 8px', textAlign: 'center',
@@ -818,7 +820,10 @@ export default function PlanillaTuberiaAsociarReporteModal({
             )}
             {selected && errRegs && (
               <div data-asociar-comparacion-error style={{
-                color: '#b91c1c', background: '#fef2f2', borderRadius: 8,
+                color: 'var(--cc-color-danger)',
+                background: 'rgba(220, 38, 38, 0.12)',
+                border: '1px solid rgba(220, 38, 38, 0.35)',
+                borderRadius: 8,
                 padding: 8, fontSize: 'var(--cc-xs)',
               }}
               >
@@ -921,7 +926,10 @@ export default function PlanillaTuberiaAsociarReporteModal({
         >
           {err && (
             <div style={{
-              color: '#b91c1c', background: '#fef2f2', borderRadius: 8,
+              color: 'var(--cc-color-danger)',
+              background: 'rgba(220, 38, 38, 0.12)',
+              border: '1px solid rgba(220, 38, 38, 0.35)',
+              borderRadius: 8,
               padding: 8, fontSize: 'var(--cc-sm)',
             }}
             >
@@ -937,7 +945,9 @@ export default function PlanillaTuberiaAsociarReporteModal({
               style={{
                 padding: '8px 14px', borderRadius: 8,
                 border: `1px solid ${ui?.border || '#cbd5e1'}`,
-                background: '#fff', cursor: 'pointer', fontWeight: 600,
+                background: ui?.cardBg || '#fff',
+                color: ui?.text || '#0f172a',
+                cursor: 'pointer', fontWeight: 600,
               }}
             >
               Cancelar

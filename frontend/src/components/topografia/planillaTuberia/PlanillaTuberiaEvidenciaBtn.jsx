@@ -172,9 +172,21 @@ export default function PlanillaTuberiaEvidenciaBtn({
     }
   }
 
-  const bg = ok ? '#dcfce7' : need ? '#fef2f2' : '#f1f5f9'
-  const fg = ok ? '#166534' : need ? '#b91c1c' : '#64748b'
-  const border = ok ? '#86efac' : need ? '#fecaca' : '#cbd5e1'
+  const bg = ok
+    ? 'rgba(4, 120, 87, 0.14)'
+    : need
+      ? 'rgba(220, 38, 38, 0.12)'
+      : (theme?.inputBg || theme?.bgCard || '#f1f5f9')
+  const fg = ok
+    ? 'var(--cc-color-success)'
+    : need
+      ? 'var(--cc-color-danger)'
+      : (theme?.textMuted || '#64748b')
+  const border = ok
+    ? 'rgba(4, 120, 87, 0.4)'
+    : need
+      ? 'rgba(220, 38, 38, 0.4)'
+      : (theme?.border || '#cbd5e1')
   const title = ok
     ? `${label || codigo}: ${n} foto(s). Clic para agregar (cámara / archivo / galería).`
     : need

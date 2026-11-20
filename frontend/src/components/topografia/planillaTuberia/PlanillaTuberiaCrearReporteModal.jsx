@@ -484,7 +484,7 @@ export default function PlanillaTuberiaCrearReporteModal({
               <tr>
                 <td style={{
                   width: 72, border: cellBorder, padding: 6, textAlign: 'center', verticalAlign: 'middle',
-                  background: '#f8fafc',
+                  background: ui?.inputBg || ui?.cardBg || '#f8fafc',
                 }}
                 >
                   {logoSrc ? (
@@ -691,10 +691,12 @@ export default function PlanillaTuberiaCrearReporteModal({
             <div
               data-esquema-tramo-obligatorio
               style={{
-                border: `1px solid ${esquemaListo ? '#86efac' : (ui?.border || '#e2e8f0')}`,
+                border: `1px solid ${esquemaListo ? 'var(--cc-color-success)' : (ui?.border || '#e2e8f0')}`,
                 borderRadius: 8,
                 padding: 10,
-                background: esquemaListo ? '#f0fdf4' : (ui?.inputBg || '#f8fafc'),
+                background: esquemaListo
+                  ? 'rgba(4, 120, 87, 0.12)'
+                  : (ui?.inputBg || '#f8fafc'),
               }}
             >
               <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
@@ -721,7 +723,7 @@ export default function PlanillaTuberiaCrearReporteModal({
                 <span style={{
                   fontSize: 'var(--cc-xs)',
                   fontWeight: 700,
-                  color: esquemaListo ? '#166534' : '#b45309',
+                  color: esquemaListo ? 'var(--cc-color-success)' : '#b45309',
                 }}
                 >
                   {esquemaListo ? 'Esquema guardado' : 'Pendiente de generar'}
@@ -739,7 +741,7 @@ export default function PlanillaTuberiaCrearReporteModal({
                     objectFit: 'contain',
                     borderRadius: 6,
                     border: `1px solid ${ui?.border || '#e2e8f0'}`,
-                    background: '#fff',
+                    background: ui?.cardBg || '#fff',
                   }}
                 />
               )}
@@ -781,7 +783,15 @@ export default function PlanillaTuberiaCrearReporteModal({
           </div>
 
           {err && (
-            <div style={{ color: '#b91c1c', background: '#fef2f2', borderRadius: 8, padding: 8, fontSize: 'var(--cc-sm)' }}>
+            <div style={{
+              color: 'var(--cc-color-danger)',
+              background: 'rgba(220, 38, 38, 0.12)',
+              border: '1px solid rgba(220, 38, 38, 0.35)',
+              borderRadius: 8,
+              padding: 8,
+              fontSize: 'var(--cc-sm)',
+            }}
+            >
               {err}
             </div>
           )}
@@ -793,7 +803,9 @@ export default function PlanillaTuberiaCrearReporteModal({
               onClick={onClose}
               style={{
                 padding: '8px 14px', borderRadius: 8, border: `1px solid ${ui?.border || '#cbd5e1'}`,
-                background: '#fff', cursor: 'pointer', fontWeight: 600,
+                background: ui?.cardBg || '#fff',
+                color: ui?.text || '#0f172a',
+                cursor: 'pointer', fontWeight: 600,
               }}
             >
               Cancelar

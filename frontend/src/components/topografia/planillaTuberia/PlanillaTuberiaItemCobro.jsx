@@ -5,7 +5,9 @@
  */
 import { useEffect, useId, useRef, useState } from 'react'
 import { API_BASE } from '../../../apiBase'
+import CcAnchoredListbox from '../../CcAnchoredListbox'
 import { etiquetaItem } from './planillaTuberiaItemSicoe'
+import { planillaSurfaceFromUi } from './planillaTuberiaTheme'
 
 export default function PlanillaTuberiaItemCobro({
   contratoId,
@@ -15,6 +17,8 @@ export default function PlanillaTuberiaItemCobro({
   disabled = false,
   heredado = false,
   tituloPermiso = '',
+  ui = null,
+  t = null,
 }) {
   const reactId = useId().replace(/:/g, '')
   const [q, setQ] = useState('')
@@ -22,16 +26,23 @@ export default function PlanillaTuberiaItemCobro({
   const [lista, setLista] = useState([])
   const [buscando, setBuscando] = useState(false)
   const wrapRef = useRef(null)
+  const inputRef = useRef(null)
   const etiqueta = etiquetaItem(item)
+  const surf = planillaSurfaceFromUi(ui || { t: t || {} })
+  const themeT = t || surf.t || {}
 
   useEffect(() => {
     if (!open) return undefined
     const onDoc = (ev) => {
-      if (wrapRef.current && !wrapRef.current.contains(ev.target)) setOpen(false)
+      if (wrapRef.current && !wrapRef.current.contains(ev.target)) {
+        const tip = document.getElementById(`cc-anchored-item-cobro-${reactId}`)
+        if (tip && tip.contains(ev.target)) return
+        setOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
-  }, [open])
+  }, [open, reactId])
 
   useEffect(() => {
     if (!open || disabled || !contratoId) return undefined
@@ -41,7 +52,7 @@ export default function PlanillaTuberiaItemCobro({
       return undefined
     }
     let cancel = false
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       setBuscando(true)
       try {
         const p = new URLSearchParams({ q: texto })
@@ -59,7 +70,7 @@ export default function PlanillaTuberiaItemCobro({
     }, 280)
     return () => {
       cancel = true
-      clearTimeout(t)
+      clearTimeout(timer)
     }
   }, [q, open, disabled, contratoId, token])
 
@@ -71,7 +82,7 @@ export default function PlanillaTuberiaItemCobro({
           display: 'block',
           fontSize: 'var(--cc-xxs)',
           lineHeight: 1.2,
-          color: etiqueta ? 'inherit' : '#94a3b8',
+          color: etiqueta ? 'inherit' : surf.textMuted,
           maxWidth: 180,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -86,6 +97,7 @@ export default function PlanillaTuberiaItemCobro({
   return (
     <div ref={wrapRef} style={{ position: 'relative', minWidth: 120 }}>
       <input
+        ref={inputRef}
         id={`item-cobro-${reactId}`}
         disabled={disabled}
         value={open ? q : etiqueta}
@@ -104,73 +116,64 @@ export default function PlanillaTuberiaItemCobro({
           width: '100%',
           boxSizing: 'border-box',
           height: 22,
-          border: '1px solid #cbd5e1',
+          border: `1px solid ${surf.border}`,
           borderRadius: 4,
           padding: '0 4px',
           fontSize: 'var(--cc-xxs)',
-          background: disabled ? '#f8fafc' : '#fff',
+          background: disabled ? surf.inputBg : surf.cardBg,
+          color: surf.text,
         }}
       />
-      {open && !disabled && (
-        <ul
-          role="listbox"
-          style={{
-            position: 'absolute',
-            zIndex: 20,
-            left: 0,
-            right: 0,
-            top: '100%',
-            margin: 0,
-            padding: 0,
-            listStyle: 'none',
-            maxHeight: 180,
-            overflow: 'auto',
-            background: '#fff',
-            border: '1px solid #cbd5e1',
-            borderRadius: 6,
-            boxShadow: '0 8px 20px rgba(15,23,42,0.12)',
-          }}
-        >
-          {buscando && <li style={{ padding: 6, fontSize: 11, color: '#64748b' }}>Buscando…</li>}
-          {!buscando && lista.length === 0 && (
-            <li style={{ padding: 6, fontSize: 11, color: '#64748b' }}>Sin coincidencias</li>
-          )}
-          {lista.map((it) => (
-            <li key={it.id || it.item_numero}>
-              <button
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  onSelect?.({
-                    item_listado_id: it.id,
-                    item_numero: it.item_numero,
-                    descripcion: it.descripcion,
-                    unidad: it.unidad,
-                    precio_unitario: it.precio_unitario,
-                    capitulo: it.capitulo,
-                  })
-                  setOpen(false)
-                  setQ('')
-                }}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  border: 'none',
-                  background: 'transparent',
-                  padding: '4px 6px',
-                  cursor: 'pointer',
-                  fontSize: 11,
-                }}
-              >
-                <strong>{it.item_numero}</strong>
-                {it.descripcion ? ` · ${it.descripcion}` : ''}
-                {it.capitulo ? <span style={{ color: '#64748b' }}> · {it.capitulo}</span> : ''}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <CcAnchoredListbox
+        open={open && !disabled}
+        anchorRef={inputRef}
+        t={themeT}
+        maxHeight={180}
+        id={`cc-anchored-item-cobro-${reactId}`}
+        data-testid="planilla-item-cobro-listbox"
+      >
+        {buscando && (
+          <div style={{ padding: 6, fontSize: 11, color: surf.textMuted }}>Buscando…</div>
+        )}
+        {!buscando && lista.length === 0 && (
+          <div style={{ padding: 6, fontSize: 11, color: surf.textMuted }}>Sin coincidencias</div>
+        )}
+        {lista.map((it) => (
+          <button
+            key={it.id || it.item_numero}
+            type="button"
+            role="option"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              onSelect?.({
+                item_listado_id: it.id,
+                item_numero: it.item_numero,
+                descripcion: it.descripcion,
+                unidad: it.unidad,
+                precio_unitario: it.precio_unitario,
+                capitulo: it.capitulo,
+              })
+              setOpen(false)
+              setQ('')
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              border: 'none',
+              background: 'transparent',
+              padding: '4px 6px',
+              cursor: 'pointer',
+              fontSize: 11,
+              color: surf.text,
+            }}
+          >
+            <strong>{it.item_numero}</strong>
+            {it.descripcion ? ` · ${it.descripcion}` : ''}
+            {it.capitulo ? <span style={{ color: surf.textMuted }}> · {it.capitulo}</span> : ''}
+          </button>
+        ))}
+      </CcAnchoredListbox>
     </div>
   )
 }

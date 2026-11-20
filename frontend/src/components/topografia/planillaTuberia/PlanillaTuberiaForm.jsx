@@ -5,6 +5,7 @@ import { topoSheetStyles } from '../topoSheetStyles'
 import {
   esDesarrolladorTopo,
   puede,
+  themeColorScheme,
   useTopoTheme,
   useTopoViewport,
   useTopografiaApi,
@@ -37,7 +38,6 @@ import {
   usuarioPuedeEditarRegistrosSicoe,
 } from '../../../utils/permisosContrato'
 import {
-  CALC_CELL_BG,
   RELACIONES_ATRAQUE,
   TIPOS_PLANILLA,
   confirmarGuardadoCartera,
@@ -88,12 +88,19 @@ import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { planillaParamsPatchFromSeed } from '../../esquema/esquemaTopoCoordsSync'
 import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
 import { notifyPlanillaTopoGrillaChanged } from '../../../modules/sicoe-obra/sicoeGrillaReportesIndicadores'
+import { planillaBannerStyle } from './planillaTuberiaTheme'
 
 
 const CARTERA_MIN_WIDTH = 720
 
-/** Botón de acción compacto (icono + tooltip nativo). */
+/** Botón de acción compacto (tooltip institucional vía `title` → CcTitleTooltips). */
 function AccionIcono({ title, onClick, disabled, danger, primary, children }) {
+  const ui = useTopoTheme()
+  const t = ui?.t || {}
+  const border = t.border || '#cbd5e1'
+  const bgCard = t.bgCard || '#fff'
+  const text = ui?.text || t.text || '#0f172a'
+  const accent = ui?.accent || t.primary || '#2563eb'
   return (
     <button
       type="button"
@@ -112,12 +119,12 @@ function AccionIcono({ title, onClick, disabled, danger, primary, children }) {
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 10,
-        border: `1px solid ${danger ? '#fca5a5' : (primary ? 'transparent' : '#cbd5e1')}`,
-        background: danger ? '#fff' : (primary ? '#2563eb' : '#fff'),
-        color: danger ? '#b91c1c' : (primary ? '#fff' : '#0f172a'),
+        border: `1px solid ${danger ? 'var(--cc-color-danger)' : (primary ? 'transparent' : border)}`,
+        background: danger ? bgCard : (primary ? accent : bgCard),
+        color: danger ? 'var(--cc-color-danger)' : (primary ? '#fff' : text),
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.45 : 1,
-        boxShadow: '0 1px 2px rgba(15,23,42,0.06)',
+        boxShadow: t.shadow || '0 1px 2px rgba(15,23,42,0.06)',
       }}
     >
       {children}
@@ -1057,11 +1064,12 @@ export default function PlanillaTuberiaForm({
   )
 
   const thBase = { ...sheet.th, textAlign: 'center' }
-  const thCalc = { ...thBase, background: CALC_CELL_BG }
+  const calcCellBg = ui.t?.inputBg || sheet.bgCard || '#F2F2F2'
+  const thCalc = { ...thBase, background: calcCellBg }
   const tdEdit = { ...sheet.td, padding: 0, minWidth: 88 }
   const tdCalc = {
     ...sheet.td,
-    background: CALC_CELL_BG,
+    background: calcCellBg,
     textAlign: 'right',
     fontFamily: 'ui-monospace, Consolas, monospace',
     fontVariantNumeric: 'tabular-nums',
@@ -1615,12 +1623,9 @@ export default function PlanillaTuberiaForm({
       <div
         data-comentario-interventoria
         style={{
+          ...planillaBannerStyle('warn', ui),
           marginBottom: 10,
           padding: '10px 12px',
-          borderRadius: 8,
-          border: '1px solid #fde68a',
-          background: '#fffbeb',
-          color: '#92400e',
           fontSize: 'var(--cc-sm)',
         }}
         title="Observación de interventoría asociada a la validación"
@@ -1661,7 +1666,7 @@ export default function PlanillaTuberiaForm({
       </div>
     ) : null}
     <div
-      style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
+      style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%', colorScheme: themeColorScheme(ui.t) }}
       className="cc-topo-table-scroll"
     >
       <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: CARTERA_MIN_WIDTH }}>
@@ -1704,7 +1709,7 @@ export default function PlanillaTuberiaForm({
                       onPaste={(e) => onPasteCartera(idx, k, e)}
                       style={{
                         ...inpCartera,
-                        background: editable ? 'transparent' : CALC_CELL_BG,
+                        background: editable ? 'transparent' : calcCellBg,
                       }}
                     />
                   </td>
@@ -1724,7 +1729,7 @@ export default function PlanillaTuberiaForm({
                   ...tdCartera,
                   textAlign: 'left',
                   fontWeight: 800,
-                  background: CALC_CELL_BG,
+                  background: calcCellBg,
                   paddingLeft: 8,
                 }}
               >
@@ -1776,15 +1781,15 @@ export default function PlanillaTuberiaForm({
       </div>
       {previewParcial && (
         <div style={{
-          marginBottom: 8, padding: '8px 10px', borderRadius: 8,
-          background: '#eff6ff', border: '1px solid #bfdbfe',
-          fontSize: 'var(--cc-xs)', color: '#1e3a8a',
+          ...planillaBannerStyle('info', ui),
+          marginBottom: 8, padding: '8px 10px',
+          fontSize: 'var(--cc-xs)',
         }}>
           El perfil se actualiza con la cartera. Complete <strong>diámetro</strong> y{' '}
           <strong>ancho de excavación</strong> en la cabecera para ver el Resumen de Cantidades en vivo.
         </div>
       )}
-      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
+      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
             <tr>
@@ -1941,6 +1946,8 @@ export default function PlanillaTuberiaForm({
                           <PlanillaTuberiaItemCobro
                             contratoId={contratoId}
                             token={token}
+                            ui={ui}
+                            t={ui.t}
                             item={itemsPorLinea[`cantidades:${String(n.codigo || '').toUpperCase()}`]}
                             disabled={!editable || !puedeAsignarItem}
                             tituloPermiso={
@@ -1987,7 +1994,7 @@ export default function PlanillaTuberiaForm({
                                 padding: '0 2px',
                                 fontSize: 'var(--cc-xxs)',
                                 width: '100%',
-                                background: editable ? 'transparent' : CALC_CELL_BG,
+                                background: editable ? 'transparent' : calcCellBg,
                               }}
                             >
                               <option value="">—</option>
@@ -2067,7 +2074,7 @@ export default function PlanillaTuberiaForm({
           </button>
         )}
       </div>
-      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
+      <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
           <thead>
             <tr>
@@ -2150,6 +2157,8 @@ export default function PlanillaTuberiaForm({
                   <td style={{ ...tdResumenItem, minWidth: 150 }}>
                     <PlanillaTuberiaItemCobro
                       heredado
+                      ui={ui}
+                      t={ui.t}
                       item={itemsPorLinea[padreDeDescuento(d.codigo, d.item_cant_codigo)] || null}
                     />
                   </td>
@@ -2244,7 +2253,7 @@ export default function PlanillaTuberiaForm({
             {' · solo lectura'}
           </span>
         </div>
-        {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
+        {err && <div style={planillaBannerStyle('error', ui)}>{err}</div>}
         {editorContent || (
           <div style={{ ...cardPad, color: ui.textMuted }}>Cargando planilla de origen…</div>
         )}
@@ -2300,8 +2309,8 @@ export default function PlanillaTuberiaForm({
         </button>
       </div>
 
-      {!editorOpen && err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
-      {!editorOpen && msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
+      {!editorOpen && err && <div style={planillaBannerStyle('error', ui)}>{err}</div>}
+      {!editorOpen && msg && <div style={planillaBannerStyle('success', ui)}>{msg}</div>}
 
       <div style={{ ...cardPad, minWidth: 0 }}>
         <div
@@ -2356,7 +2365,10 @@ export default function PlanillaTuberiaForm({
             <tbody>
               {listaFiltrada.map((p, idx) => {
                 const sinReporteVigente = planillaListaSinReporteVigente(p)
-                const tdFila = sinReporteVigente ? { ...tdLista, background: '#fffbeb' } : tdLista
+                const warnRow = sinReporteVigente ? planillaBannerStyle('warn', ui) : null
+                const tdFila = sinReporteVigente
+                  ? { ...tdLista, background: warnRow.background, color: warnRow.color }
+                  : tdLista
                 return (
                 <tr
                   key={p.id}
@@ -2376,7 +2388,7 @@ export default function PlanillaTuberiaForm({
                   }
                   style={{
                     cursor: busy ? 'wait' : 'pointer',
-                    ...(sinReporteVigente ? { background: '#fffbeb' } : null),
+                    ...(sinReporteVigente ? { background: warnRow.background } : null),
                   }}
                 >
                   <td style={{ ...tdFila, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
@@ -2509,8 +2521,8 @@ export default function PlanillaTuberiaForm({
               )}
             </div>
 
-            {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
-            {msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
+            {err && <div style={planillaBannerStyle('error', ui)}>{err}</div>}
+            {msg && <div style={planillaBannerStyle('success', ui)}>{msg}</div>}
             {planilla && (
               <PoligonalValidacionPanel
                 poligonal={planilla}
@@ -2537,7 +2549,7 @@ export default function PlanillaTuberiaForm({
             )}
             {linksSicoe.length > 0 && (
               <div style={{
-                padding: 8, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a',
+                ...planillaBannerStyle('info', ui),
                 fontSize: 'var(--cc-sm)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
               }}>
                 <span style={{ fontWeight: 700 }}>Reportes SICOE:</span>
@@ -2547,8 +2559,13 @@ export default function PlanillaTuberiaForm({
                     type="button"
                     onClick={() => onAbrirReporteSicoe?.(l.reporte_id, l.numero_reporte)}
                     style={{
-                      border: '1px solid #93c5fd', background: '#fff', borderRadius: 6,
-                      padding: '2px 8px', cursor: 'pointer', fontWeight: 700, color: '#1d4ed8',
+                      border: `1px solid ${ui.t?.border || '#93c5fd'}`,
+                      background: ui.t?.bgCard || '#fff',
+                      borderRadius: 6,
+                      padding: '2px 8px',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                      color: ui.accent,
                     }}
                     title="Abrir carpeta del reporte"
                   >
@@ -2561,19 +2578,13 @@ export default function PlanillaTuberiaForm({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {alertasTabla.map((g) => {
                   const isErr = g.prioridad === 'error'
-                  const bg = isErr ? '#fef2f2' : '#fffbeb'
-                  const fg = isErr ? '#991b1b' : '#92400e'
-                  const border = isErr ? '#fecaca' : '#fde68a'
+                  const banner = planillaBannerStyle(isErr ? 'error' : 'warn', ui)
                   const conDif = g.filas.some((r) => r.diferencia != null || r.abscisa != null)
                   return (
                     <div
                       key={g.key}
                       style={{
-                        color: fg,
-                        background: bg,
-                        border: `1px solid ${border}`,
-                        borderRadius: 8,
-                        padding: 8,
+                        ...banner,
                         fontSize: 'var(--cc-sm)',
                       }}
                     >
