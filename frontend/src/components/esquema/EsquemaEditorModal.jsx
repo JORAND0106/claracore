@@ -863,6 +863,8 @@ export default function EsquemaEditorModal({
   const orbitFreeRef = useRef(false)
   const orbitAnglesRef = useRef(orbitAnglesForView('top'))
   const orbitDragRef = useRef(null)
+  /** C-3D-19: un solo redibujo por frame durante órbita/paneo/pellizco. */
+  const viewRafRef = useRef(0)
   const [orbitTick, setOrbitTick] = useState(0)
   const draftHydratedRef = useRef(false)
   const resolvedDraftKey = useMemo(() => {
@@ -1303,11 +1305,28 @@ export default function EsquemaEditorModal({
       ctx.restore()
     }
     drawNorthIndicator(ctx, w, h, null, uiNow)
-  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick, orbitTick, mode3d, view3d, solids3d, solevarHoverId])
+  // orbitTick no entra: los ángulos se leen de orbitAnglesRef (C-3D-19).
+  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick, mode3d, view3d, solids3d, solevarHoverId])
 
   redrawRef.current = redraw
   // Cuando la máscara del hatch termina de cargar, redibujar (no pintar sobre ctx viejo).
   drawHatchRegion._onMaskReady = () => { redrawRef.current?.() }
+
+  const scheduleViewRedraw = useCallback(() => {
+    if (viewRafRef.current) return
+    viewRafRef.current = requestAnimationFrame(() => {
+      viewRafRef.current = 0
+      redrawRef.current?.()
+    })
+  }, [])
+
+  const flushViewRedraw = useCallback(() => {
+    if (viewRafRef.current) {
+      cancelAnimationFrame(viewRafRef.current)
+      viewRafRef.current = 0
+    }
+    redrawRef.current?.()
+  }, [])
 
   const setupCanvas = useCallback(() => {
     const c = canvasRef.current
@@ -5025,7 +5044,7 @@ export default function EsquemaEditorModal({
         zoomRef.current = z1
         // Etiqueta de zoom al soltar (evita re-render en cada frame del pellizco).
         pinch._zoomPct = Math.round(z1 * 100)
-        redrawRef.current?.()
+        scheduleViewRedraw()
       }
       return
     }
@@ -5044,9 +5063,8 @@ export default function EsquemaEditorModal({
       let pitch = d.pitch0 + dy * 0.01
       pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch))
       orbitAnglesRef.current = { yaw, pitch }
-      // Redibujo directo (sin setState): giro continuo y a resolución completa.
-      // setOrbitTick en cada move provocaba re-render + barra reacomodándose + pixelado.
-      redrawRef.current?.()
+      // Sin setState por move (C-3D-19): un paint por frame a resolución completa.
+      scheduleViewRedraw()
       return
     }
 
@@ -5134,7 +5152,7 @@ export default function EsquemaEditorModal({
         x: d.originX + (src.clientX - d.startX),
         y: d.originY + (src.clientY - d.startY),
       }
-      redrawRef.current?.()
+      scheduleViewRedraw()
       return
     }
 
@@ -5424,6 +5442,7 @@ export default function EsquemaEditorModal({
         pinchRef.current = null
         drawing.current = false
         draftRef.current = null
+        flushViewRedraw()
         setPanTick((n) => n + 1)
       }
       return
@@ -5444,6 +5463,7 @@ export default function EsquemaEditorModal({
 
     if (mode3dRef.current && orbitFreeRef.current && orbitDragRef.current) {
       orbitDragRef.current = null
+      flushViewRedraw()
       setOrbitTick((n) => n + 1)
       return
     }
@@ -5460,6 +5480,7 @@ export default function EsquemaEditorModal({
 
     if (panDragRef.current) {
       panDragRef.current = null
+      flushViewRedraw()
       setPanTick((n) => n + 1)
       return
     }

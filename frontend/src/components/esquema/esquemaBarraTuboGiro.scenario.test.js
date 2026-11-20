@@ -71,20 +71,21 @@ describe('caso · barra estable + tubo hueco + giro fluido', () => {
 
     const modal = read('EsquemaEditorModal.jsx')
     // Órbita / paneo: redraw directo en move (sin setState por frame).
+    assert.match(modal, /scheduleViewRedraw/)
+    assert.match(modal, /requestAnimationFrame/)
     assert.match(
       modal,
-      /orbitAnglesRef\.current = \{ yaw, pitch \}[\s\S]{0,280}?redrawRef\.current\?\.\(\)/,
+      /orbitAnglesRef\.current = \{ yaw, pitch \}[\s\S]{0,280}?scheduleViewRedraw\(\)/,
     )
     const orbitChunk = modal.slice(
       modal.indexOf('orbitAnglesRef.current = { yaw, pitch }'),
       modal.indexOf('orbitAnglesRef.current = { yaw, pitch }') + 320,
     )
-    assert.match(orbitChunk, /redrawRef\.current\?\.\(\)/)
     assert.doesNotMatch(orbitChunk, /setOrbitTick\(\(n\) => n \+ 1\)/)
 
     assert.match(
       modal,
-      /d\.originX \+ \(src\.clientX - d\.startX\)[\s\S]{0,200}?redrawRef\.current\?\.\(\)/,
+      /d\.originX \+ \(src\.clientX - d\.startX\)[\s\S]{0,220}?scheduleViewRedraw\(\)/,
     )
   })
 
