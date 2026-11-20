@@ -152,10 +152,11 @@ export function fetchSicoeListadoPreciosCached(apiBase, contratoId, capitulo, q,
   })
 }
 
-export function fetchSicoePlantillasCached(apiBase, contratoId, capitulo, token) {
+export function fetchSicoePlantillasCached(apiBase, contratoId, capitulo, token, usuarioId = null) {
   const cap = String(capitulo || '').trim()
   if (!apiBase || !contratoId || !cap) return Promise.resolve([])
-  const key = cacheKey(['plantillas', contratoId, cap])
+  // Clave por usuario: las plantillas son personales.
+  const key = cacheKey(['plantillas', contratoId, cap, usuarioId ?? ''])
   return cachedFetch(key, async () => {
     const d = await fetchJsonOk(
       `${apiBase}/sicoe-obra/${contratoId}/plantillas?capitulo=${encodeURIComponent(cap)}`,
@@ -163,4 +164,22 @@ export function fetchSicoePlantillasCached(apiBase, contratoId, capitulo, token)
     )
     return Array.isArray(d) ? d : []
   })
+}
+
+/** Invalida solo entradas de plantillas (tras crear/eliminar). */
+export function invalidateSicoePlantillasCache(contratoId = null, usuarioId = null) {
+  const idStr = contratoId == null ? null : String(contratoId)
+  const uidStr = usuarioId == null ? null : String(usuarioId)
+  const dropKey = (k) => {
+    if (!String(k).startsWith('plantillas\x1e')) return false
+    if (idStr != null && !k.includes(`\x1e${idStr}\x1e`)) return false
+    if (uidStr != null && !k.endsWith(`\x1e${uidStr}`)) return false
+    return true
+  }
+  for (const k of [...cache.keys()]) {
+    if (dropKey(k)) cache.delete(k)
+  }
+  for (const k of [...inflight.keys()]) {
+    if (dropKey(k)) inflight.delete(k)
+  }
 }
