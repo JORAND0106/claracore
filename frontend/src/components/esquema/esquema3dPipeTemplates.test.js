@@ -7,6 +7,7 @@ import {
   buildTeeSolid,
   buildTuberiaSolid,
   isPipeTemplateSolid,
+  solidHasPipeBore,
   PIPE_TEMPLATE_CATALOG,
   pipeAxisCotaFromLomo,
   pipeExteriorVolumeCylinderM3,
@@ -62,6 +63,7 @@ describe('esquema3dPipeTemplates · construcción', () => {
     assert.equal(r.ok, true)
     assert.equal(isPipeTemplateSolid(r.solid), true)
     assert.equal(Math.round(solidVolumeM3(r.solid) * 1000) / 1000, 0.272)
+    assert.equal(solidHasPipeBore(r.solid), true)
     assert.equal(r.solid.formMeta?.kind, 'cylinder')
     assert.equal(r.solid.templateMeta?.ends?.length, 2)
     assert.equal(r.ejeCota, 1499.83)

@@ -5023,8 +5023,9 @@ export default function EsquemaEditorModal({
           y: mid.y - wy * z1,
         }
         zoomRef.current = z1
-        setZoomPct(Math.round(z1 * 100))
-        setPanTick((n) => n + 1)
+        // Etiqueta de zoom al soltar (evita re-render en cada frame del pellizco).
+        pinch._zoomPct = Math.round(z1 * 100)
+        redrawRef.current?.()
       }
       return
     }
@@ -5043,7 +5044,9 @@ export default function EsquemaEditorModal({
       let pitch = d.pitch0 + dy * 0.01
       pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch))
       orbitAnglesRef.current = { yaw, pitch }
-      setOrbitTick((n) => n + 1)
+      // Redibujo directo (sin setState): giro continuo y a resolución completa.
+      // setOrbitTick en cada move provocaba re-render + barra reacomodándose + pixelado.
+      redrawRef.current?.()
       return
     }
 
@@ -5131,7 +5134,7 @@ export default function EsquemaEditorModal({
         x: d.originX + (src.clientX - d.startX),
         y: d.originY + (src.clientY - d.startY),
       }
-      setPanTick((n) => n + 1)
+      redrawRef.current?.()
       return
     }
 
@@ -5416,9 +5419,12 @@ export default function EsquemaEditorModal({
     if (pinchRef.current) {
       e.preventDefault()
       if (pointersRef.current.size < 2) {
+        const zp = pinchRef.current._zoomPct
+        if (Number.isFinite(zp)) setZoomPct(zp)
         pinchRef.current = null
         drawing.current = false
         draftRef.current = null
+        setPanTick((n) => n + 1)
       }
       return
     }
@@ -5438,6 +5444,7 @@ export default function EsquemaEditorModal({
 
     if (mode3dRef.current && orbitFreeRef.current && orbitDragRef.current) {
       orbitDragRef.current = null
+      setOrbitTick((n) => n + 1)
       return
     }
 
@@ -5453,6 +5460,7 @@ export default function EsquemaEditorModal({
 
     if (panDragRef.current) {
       panDragRef.current = null
+      setPanTick((n) => n + 1)
       return
     }
 
@@ -7733,14 +7741,28 @@ export default function EsquemaEditorModal({
           ref={toolbarRootRef}
           data-testid="esquema-toolbar"
           style={{
-            display: isPhoneLayout ? 'none' : 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
-            padding: '10px 14px', borderBottom: `1px solid ${t.border}`,
+            display: isPhoneLayout ? 'none' : 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            padding: '8px 14px',
+            borderBottom: `1px solid ${t.border}`,
             // Panel de herramientas siempre visible (iPad/portátil).
             flexShrink: 0,
             flexGrow: 0,
           }}
         >
-          <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4 }}>{title}</div>
+        <div
+          data-testid="esquema-toolbar-primary"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            alignItems: 'center',
+            // Solo se reacomoda al cambiar ancho/fuente: grupos enteros a la fila siguiente.
+            rowGap: 6,
+          }}
+        >
+          <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4, whiteSpace: 'nowrap' }}>{title}</div>
           <span
             data-testid="esquema-draft-status"
             data-status={draftSaveStatus}
@@ -7793,7 +7815,17 @@ export default function EsquemaEditorModal({
             <IconRedo />
           </button>
           {TOOL_GROUPS.map((group) => (
-            <span key={group.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span
+              key={group.id}
+              data-toolbar-group={group.id}
+              style={{
+                display: 'inline-flex',
+                flexWrap: 'nowrap',
+                alignItems: 'center',
+                gap: 6,
+                flex: '0 0 auto',
+              }}
+            >
               <ToolDivider t={t} />
                   {group.tools.map((tb) => {
                 const Icon = tb.Icon
@@ -7879,6 +7911,16 @@ export default function EsquemaEditorModal({
               ) : null}
             </span>
           ))}
+        </div>
+        <div
+          data-testid="esquema-toolbar-contextual"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            alignItems: 'center',
+          }}
+        >
           {tool === 'seleccion' ? (
             <SelectModeRadios
               t={t}
@@ -8064,6 +8106,25 @@ export default function EsquemaEditorModal({
               </button>
             </>
           )}
+          {selectedSolidIds.length === 1 ? (
+            <Esquema3dVolumeHint
+              t={t}
+              volumeM3={solidVolumeM3(solids3d.find((s) => s.id === selectedSolidIds[0]))}
+            />
+          ) : selectedSolidIds.length > 1 ? (
+            <Esquema3dVolumeHint
+              t={t}
+              volumeM3={selectedSolidIds.reduce((sum, id) => {
+                const s = solids3d.find((x) => x.id === id)
+                return sum + solidVolumeM3(s)
+              }, 0)}
+            />
+          ) : null}
+        </div>
+        <div
+          data-testid="esquema-toolbar-primary-tail"
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}
+        >
           <button
             type="button"
             title="Copiar selección (Ctrl/⌘+C)"
@@ -8097,6 +8158,10 @@ export default function EsquemaEditorModal({
           >
             <IconInsertarMapa />
           </button>
+          <span
+            data-toolbar-group="3d-calc"
+            style={{ display: 'inline-flex', flexWrap: 'nowrap', alignItems: 'center', gap: 6, flex: '0 0 auto' }}
+          >
           <button
             type="button"
             title={mode3d ? 'Salir del modo 3D (restaura el dibujo 2D y el mapa)' : 'Modo 3D: sólidos por cotas, unir, sustraer y cortar'}
@@ -8117,25 +8182,10 @@ export default function EsquemaEditorModal({
               data-cc-tooltip-variant="short"
               aria-label="Tubería y accesorios"
               onClick={openPipeLibrary}
-              style={{
-                ...iconBtn(t, !!pipeLibraryOpen || !!pipeParams),
-                display: 'inline-flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 2,
-                fontSize: 'var(--cc-caption)',
-                fontWeight: 700,
-                minWidth: 64,
-                maxWidth: 76,
-                padding: '4px 6px',
-                lineHeight: 1.05,
-                whiteSpace: 'normal',
-                textAlign: 'center',
-              }}
+              style={iconBtn(t, !!pipeLibraryOpen || !!pipeParams)}
               data-testid="esquema-3d-tuberia"
             >
               <IconTuberia3d />
-              <span>Tubería y accesorios</span>
             </button>
           ) : null}
           {!isPhoneLayout ? (
@@ -8155,25 +8205,10 @@ export default function EsquemaEditorModal({
                 })
                 setPanTick((n) => n + 1)
               }}
-              style={{
-                ...iconBtn(t, realisticView),
-                display: 'inline-flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 2,
-                fontSize: 'var(--cc-caption)',
-                fontWeight: 700,
-                minWidth: 64,
-                maxWidth: 76,
-                padding: '4px 6px',
-                lineHeight: 1.05,
-                whiteSpace: 'normal',
-                textAlign: 'center',
-              }}
+              style={iconBtn(t, realisticView)}
               data-testid="esquema-vista-realista"
             >
               <IconVistaRealista3d />
-              <span>{realisticView ? 'Vista realista' : 'Vista técnica'}</span>
             </button>
           ) : null}
           {mode3d ? (
@@ -8217,22 +8252,10 @@ export default function EsquemaEditorModal({
                 data-cc-tooltip-variant="short"
                 aria-label="Solevar"
                 onClick={beginSolevar3d}
-                style={{
-                  ...iconBtn(t, !!solevarPrompt),
-                  display: 'inline-flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: 2,
-                  fontSize: 'var(--cc-caption)',
-                  fontWeight: 700,
-                  minWidth: 44,
-                  padding: '4px 6px',
-                  lineHeight: 1.1,
-                }}
+                style={iconBtn(t, !!solevarPrompt)}
                 data-testid="esquema-3d-solevar"
               >
                 <IconSolevar3d />
-                <span>Solevar</span>
               </button>
               <button
                 type="button"
@@ -8270,20 +8293,6 @@ export default function EsquemaEditorModal({
               >
                 <IconCortar3d />
               </button>
-              {selectedSolidIds.length === 1 ? (
-                <Esquema3dVolumeHint
-                  t={t}
-                  volumeM3={solidVolumeM3(solids3d.find((s) => s.id === selectedSolidIds[0]))}
-                />
-              ) : selectedSolidIds.length > 1 ? (
-                <Esquema3dVolumeHint
-                  t={t}
-                  volumeM3={selectedSolidIds.reduce((sum, id) => {
-                    const s = solids3d.find((x) => x.id === id)
-                    return sum + solidVolumeM3(s)
-                  }, 0)}
-                />
-              ) : null}
               <button
                 type="button"
                 title="Panel de cálculo de volúmenes (memoria PNG: isométrico + cuadro)"
@@ -8325,24 +8334,12 @@ export default function EsquemaEditorModal({
               }
               setToolHint('Cree un cuadro y agregue posiciones')
             }}
-            style={{
-              ...iconBtn(t, despiecePanelOpen),
-              display: 'inline-flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 2,
-              fontSize: 'var(--cc-caption)',
-              fontWeight: 700,
-              minWidth: 52,
-              padding: '4px 4px',
-              lineHeight: 1.05,
-              height: 'auto',
-            }}
+            style={iconBtn(t, despiecePanelOpen)}
             data-testid="esquema-despiece-btn"
           >
             <IconDespieceAcero />
-            <span>Cuadro de<br />despiece</span>
           </button>
+          </span>
           <button
             type="button"
             title="Limpiar lienzo"
@@ -8419,6 +8416,7 @@ export default function EsquemaEditorModal({
               <IconGuardar />
             </button>
           </div>
+        </div>
         </div>
 
         <div

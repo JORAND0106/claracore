@@ -147,15 +147,19 @@ function hollowizeKeepingExteriorVolume(outerSolid, diM, lengthM, viewId = 'left
   const exteriorV = solidVolumeM3(outerSolid)
   const od = Number(deM) || Number(outerSolid.formMeta?.diameterM) || (rInt * 2)
   const pd = outerSolid.profileDraw
+  const prevHoles = Array.isArray(outerSolid.curveHoles) ? outerSolid.curveHoles : []
+  let hole = null
   if (pd?.kind === 'ellipse_tube') {
     const scale = od > 0 ? (Number(diM) / od) : 1
-    outerSolid.curveHoles = [{
+    hole = {
       ...pd,
       rx: Number(pd.rx) * scale,
       rzM: rInt,
       circular: true,
       _fromHole: true,
-    }]
+      _outerRx: Number(pd.rx),
+      _outerRzM: Number(pd.rzM),
+    }
   } else {
     const faceDepthWorld = outerSolid.extrudeParams?.faceDepthWorld ?? 0
     const inner = extrudeClosedEntity(circleEntity(rInt, 'inner'), {
@@ -164,15 +168,24 @@ function hollowizeKeepingExteriorVolume(outerSolid, diM, lengthM, viewId = 'left
       faceDepthWorld,
     })
     if (inner.ok && inner.solid.profileDraw) {
-      outerSolid.curveHoles = [{
+      hole = {
         ...inner.solid.profileDraw,
         circular: true,
         _fromHole: true,
-      }]
+        _outerRx: Number(outerSolid.profileDraw?.rx) || Number(inner.solid.profileDraw.rx) * (od / (Number(diM) || od)),
+        _outerRzM: Number(outerSolid.formMeta?.rxM) || (od / 2),
+      }
     }
   }
+  if (hole) outerSolid.curveHoles = [...prevHoles, hole]
   lockSolidVolume(outerSolid, exteriorV)
   return outerSolid
+}
+
+/** True si el sólido tiene al menos un hueco visual de tubería. */
+export function solidHasPipeBore(solid) {
+  return Array.isArray(solid?.curveHoles)
+    && solid.curveHoles.some((h) => h && (h.kind === 'ellipse_tube' || h.kind === 'ellipse_xy' || h._fromHole))
 }
 
 /** Coloca un cilindro extruido (vista left = +X, front = +Y) con extremo A en origin. */
@@ -386,8 +399,10 @@ function buildTuberiaSolidSloped({
       faceDepthWorld: 0,
     })
     if (!built.ok) continue
+    let s = hollowizeKeepingExteriorVolume(
+      built.solid, diM, segLen * 1.05, alongX ? 'left' : 'front', deM,
+    )
     const half = (segLen * 1.05) / 2
-    let s = built.solid
     if (alongX) {
       s = translateSolid3d(s, {
         dx: metersToWorld(px - half * Math.sign(dir.x || 1)),
@@ -487,8 +502,10 @@ export function buildCodoSolid(templateId, values, {
       faceDepthWorld: 0,
     })
     if (!built.ok) continue
+    let s = hollowizeKeepingExteriorVolume(
+      built.solid, diM, segLen * 1.15, alongX ? 'left' : 'front', deM,
+    )
     const half = (segLen * 1.15) / 2
-    let s = built.solid
     if (alongX) {
       s = translateSolid3d(s, {
         dx: metersToWorld(px - half * Math.sign(tx || 1)),
@@ -582,7 +599,8 @@ export function buildTeeSolid(values, {
     color,
   })
   if (!mainBuilt.ok) return mainBuilt
-  let mainS = placeExtrudedRun(mainBuilt.solid, {
+  let mainS = hollowizeKeepingExteriorVolume(mainBuilt.solid, diM, lengthM, 'left', deM)
+  mainS = placeExtrudedRun(mainS, {
     axis: 'x', originM: { x: ox, y: oy }, lengthM, ejeCota: eje,
   })
   const brBuilt = extrudeClosedEntity(circleEntity(rBr, 'tee_br'), {
@@ -591,14 +609,17 @@ export function buildTeeSolid(values, {
     faceDepthWorld: 0,
   })
   if (!brBuilt.ok) return brBuilt
-  let brS = translateSolid3d(brBuilt.solid, {
+  let brS = hollowizeKeepingExteriorVolume(
+    brBuilt.solid, diBranchM, branchLengthM, 'front', deBranchM,
+  )
+  brS = translateSolid3d(brS, {
     dx: metersToWorld(cx),
     dy: metersToWorld(cy),
     dzCota: eje,
   })
   // Si el TEE está girado en planta, desplazar el ramal según perp (yaw≈0 ⇒ +Y).
   if (Math.abs(yaw) > 1e-6) {
-    brS = translateSolid3d(brBuilt.solid, {
+    brS = translateSolid3d(brS, {
       dx: metersToWorld(cx + perp.x * 0),
       dy: metersToWorld(cy + perp.y * 0),
       dzCota: eje,
@@ -684,7 +705,9 @@ export function buildReduccionSolid(values, {
     color,
   })
   if (!built.ok) return built
-  let solid = placeExtrudedRun(built.solid, {
+  // Hueco visual: DI mayor en el cuerpo (extremos muestran bore; volumen = exterior).
+  let solid = hollowizeKeepingExteriorVolume(built.solid, diMajorM, lengthM, 'left', deMajorM)
+  solid = placeExtrudedRun(solid, {
     axis: 'x', originM: { x: ox, y: oy }, lengthM, ejeCota: eje,
   })
   const vol = pipeExteriorVolumeReducerM3(deMajorM, deMinorM, lengthM)

@@ -1687,6 +1687,9 @@ export function uniteSolids(solids) {
   const exact = overlap > VOL_EPS ? solidGeomVolumeM3(solid) : sumVol
   lockSolidVolume(solid, exact)
   if (!solid.color) solid.color = list.map((s) => s.color).find((c) => !!c) || '#0f766e'
+  // Conservar huecos visuales de tubería/accesorios (C-3D-17).
+  const holes = list.flatMap((s) => (Array.isArray(s.curveHoles) ? s.curveHoles : []))
+  if (holes.length) solid.curveHoles = holes
   return { ok: true, solid }
 }
 
@@ -2328,6 +2331,11 @@ function drawEllipseTubeSolid(ctx, solid, opts) {
     doFills, doEdgesVis, doEdgesHid, flatElev, elevTone,
   } = opts
   const mesh = ellipseTubeMesh(pd, { viewId, cotaRefM, orbit })
+  // C-3D-17 / hueco visual: curveHoles (DI) → tapa anular + pared interior.
+  const holePd = (solid.curveHoles || []).find((h) => h?.kind === 'ellipse_tube') || null
+  const holeMesh = holePd ? ellipseTubeMesh(holePd, { viewId, cotaRefM, orbit }) : null
+  const holeCapA = holeMesh?.faces?.find((f) => f.kind === 'cap' && f.tone === 'capA') || null
+  const holeCapB = holeMesh?.faces?.find((f) => f.kind === 'cap' && f.tone === 'capB') || null
   if (doFills) {
     const faces = [...mesh.faces].sort((a, b) => a.depth - b.depth)
     const paint = flatElev ? faces.filter((f) => f.front) : faces
@@ -2343,21 +2351,51 @@ function drawEllipseTubeSolid(ctx, solid, opts) {
         baseColor: base,
         texturesEnabled: opts.texturesEnabled,
       })
+      if (f.kind === 'cap' && holeMesh) {
+        const holeCap = f.tone === 'capA' ? holeCapA : holeCapB
+        if (holeCap?.pts?.length) {
+          pathRingWithHoles(ctx, f.pts, [holeCap.pts])
+          ctx.fill('evenodd')
+          continue
+        }
+      }
       pathRing(ctx, f.pts)
       ctx.fill()
     }
+    // Pared interior del tubo (visible al mirar el hueco / extremos).
+    if (holeMesh) {
+      const innerSides = holeMesh.faces
+        .filter((f) => f.kind === 'side')
+        .sort((a, b) => a.depth - b.depth)
+      const paintInner = flatElev ? innerSides.filter((f) => f.front) : innerSides
+      for (const f of paintInner) {
+        const tone = flatElev
+          ? elevTone
+          : faceToneFactorFromNormal(-(f.nx || 0), 0, -(f.nz || 0))
+        ctx.fillStyle = solidFaceFillStyle(ctx, solid, tone * 0.85, fillAlpha, {
+          baseColor: base,
+          texturesEnabled: opts.texturesEnabled,
+        })
+        pathRing(ctx, f.pts)
+        ctx.fill()
+      }
+    }
   }
   const edgeVotes = new Map()
-  for (const e of mesh.edges) {
-    const k = edgeKey(e.a, e.b)
-    let slot = edgeVotes.get(k)
-    if (!slot) {
-      slot = { a: e.a, b: e.b, frontVotes: 0, backVotes: 0 }
-      edgeVotes.set(k, slot)
+  const addVotes = (edges) => {
+    for (const e of edges || []) {
+      const k = edgeKey(e.a, e.b)
+      let slot = edgeVotes.get(k)
+      if (!slot) {
+        slot = { a: e.a, b: e.b, frontVotes: 0, backVotes: 0 }
+        edgeVotes.set(k, slot)
+      }
+      if (e.front) slot.frontVotes += 1
+      else slot.backVotes += 1
     }
-    if (e.front) slot.frontVotes += 1
-    else slot.backVotes += 1
   }
+  addVotes(mesh.edges)
+  if (holeMesh) addVotes(holeMesh.edges)
   if (doEdgesVis) {
     for (const e of edgeVotes.values()) {
       const hidden = e.frontVotes === 0 && e.backVotes > 0
@@ -3020,6 +3058,49 @@ export function drawSolid3d(ctx, solid, {
       ctx.moveTo(e.a.x, e.a.y)
       ctx.lineTo(e.b.x, e.b.y)
       ctx.stroke()
+    }
+  }
+  // Tubería unida (codo/TEE): pintar paredes interiores de cada curveHole.
+  if (doFills) {
+    for (const h of solid.curveHoles || []) {
+      if (h?.kind !== 'ellipse_tube') continue
+      const hm = ellipseTubeMesh(h, { viewId, cotaRefM, orbit })
+      const sides = (hm.faces || [])
+        .filter((f) => f.kind === 'side')
+        .sort((a, b) => a.depth - b.depth)
+      const paintInner = flatElev ? sides.filter((f) => f.front) : sides
+      for (const f of paintInner) {
+        const tone = flatElev
+          ? elevTone
+          : faceToneFactorFromNormal(-(f.nx || 0), 0, -(f.nz || 0))
+        ctx.fillStyle = solidFaceFillStyle(ctx, solid, tone * 0.85, fillAlpha, {
+          baseColor: base,
+          texturesEnabled,
+        })
+        pathRing(ctx, f.pts)
+        ctx.fill()
+      }
+      // Tapas anulares en extremos del hueco (DE/DI desde metadatos del hole).
+      const innerRx = Math.max(Number(h.rx) || 0, 1e-6)
+      const outerRx = Number(h._outerRx) || (innerRx * 1.15)
+      const scale = outerRx / innerRx
+      for (const cap of (hm.faces || []).filter((f) => f.kind === 'cap')) {
+        if (flatElev && !cap.front) continue
+        const tone = flatElev ? elevTone : FACE_TONE_FACTOR.front
+        const cx = cap.pts.reduce((s, q) => s + q.x, 0) / cap.pts.length
+        const cy = cap.pts.reduce((s, q) => s + q.y, 0) / cap.pts.length
+        const outer = (cap.pts || []).map((p) => ({
+          x: cx + (p.x - cx) * scale,
+          y: cy + (p.y - cy) * scale,
+          depth: p.depth,
+        }))
+        ctx.fillStyle = solidFaceFillStyle(ctx, solid, tone, fillAlpha, {
+          baseColor: base,
+          texturesEnabled,
+        })
+        pathRingWithHoles(ctx, outer, [cap.pts])
+        ctx.fill('evenodd')
+      }
     }
   }
   strokeCurveHoles(ctx, solid, {
