@@ -4,6 +4,7 @@
  * FILTRO: TN + Terminado Filtro + CFE.
  */
 import { fmtNDash } from './planillaTuberiaUtils'
+import { planillaSurfaceFromUi } from './planillaTuberiaTheme'
 
 function niceStep(span, targetTicks = 5) {
   if (!(span > 0)) return 1
@@ -31,6 +32,7 @@ function ticks(min, max, target = 5) {
 }
 
 export default function PlanillaTuberiaPerfil({ perfil, ui }) {
+  const surf = planillaSurfaceFromUi(ui)
   const p = perfil || {}
   const abs = p.abscisas || []
   const tn = p.terreno_natural || []
@@ -46,7 +48,7 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
   const absN = abs.filter((v) => v != null && !Number.isNaN(Number(v))).map(Number)
   if (absN.length < 2 || nums.length < 2) {
     return (
-      <div style={{ padding: 12, color: ui?.textMuted || '#64748b', fontSize: 'var(--cc-sm)' }}>
+      <div style={{ padding: 12, color: surf.textMuted, fontSize: 'var(--cc-sm)' }}>
         Perfil longitudinal: capture al menos dos abscisas con cotas.
       </div>
     )
@@ -66,6 +68,9 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
 
   const xTicks = ticks(minA, maxA, 6)
   const yTicks = ticks(minY, maxY, 5)
+  const grid = surf.gridStroke
+  const axis = surf.axisStroke
+  const labelFill = surf.grafico?.labelFill || surf.textMuted
 
   function poly(vals, color) {
     const chunks = []
@@ -94,11 +99,17 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
   ]
 
   return (
-    <div style={{ border: `1px solid ${ui?.border || '#cbd5e1'}`, borderRadius: 8, padding: 8, background: ui?.cardBg || '#fff' }}>
-      <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, marginBottom: 4, color: ui?.textMuted || '#64748b' }}>
+    <div style={{ border: `1px solid ${surf.border}`, borderRadius: 8, padding: 8, background: surf.cardBg, color: surf.text }}>
+      <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, marginBottom: 4, color: surf.textMuted }}>
         Perfil longitudinal
       </div>
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Perfil longitudinal">
+      <svg
+        width="100%"
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label="Perfil longitudinal"
+        style={{ background: surf.grafico?.background || surf.inputBg, borderRadius: 6 }}
+      >
         {xTicks.map((a, i) => (
           <line
             key={`gx-${i}`}
@@ -106,7 +117,8 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
             y1={pad.t}
             x2={xOf(a)}
             y2={yBase}
-            stroke="#e2e8f0"
+            stroke={grid}
+            strokeOpacity="0.35"
             strokeWidth="1"
           />
         ))}
@@ -117,12 +129,13 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
             y1={yOf(v)}
             x2={W - pad.r}
             y2={yOf(v)}
-            stroke="#e2e8f0"
+            stroke={grid}
+            strokeOpacity="0.35"
             strokeWidth="1"
           />
         ))}
-        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={yBase} stroke="#94a3b8" />
-        <line x1={pad.l} y1={yBase} x2={W - pad.r} y2={yBase} stroke="#94a3b8" />
+        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={yBase} stroke={axis} strokeOpacity="0.7" />
+        <line x1={pad.l} y1={yBase} x2={W - pad.r} y2={yBase} stroke={axis} strokeOpacity="0.7" />
         {poly(tn, '#166534')}
         {tieneSub ? poly(sub, '#7c3aed') : null}
         {poly(nv, '#1d4ed8')}
@@ -135,12 +148,12 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
           )
         })}
         {yTicks.map((v, i) => (
-          <text key={`yl-${i}`} x={pad.l - 4} y={yOf(v) + 3} fontSize="8" fill="#94a3b8" textAnchor="end">
+          <text key={`yl-${i}`} x={pad.l - 4} y={yOf(v) + 3} fontSize="8" fill={labelFill} textAnchor="end">
             {fmtNDash(v, 2)}
           </text>
         ))}
         {xTicks.map((a, i) => (
-          <text key={`xl-${i}`} x={xOf(a)} y={H - 10} fontSize="8" fill="#94a3b8" textAnchor="middle">
+          <text key={`xl-${i}`} x={xOf(a)} y={H - 10} fontSize="8" fill={labelFill} textAnchor="middle">
             {fmtNDash(a, 1)}
           </text>
         ))}

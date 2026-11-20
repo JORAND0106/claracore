@@ -60,7 +60,7 @@ describe('alerta del ícono de Topografía', () => {
       '#64',
     )
     assert.match(formSrc, /planillaListaSinReporteVigente/)
-    assert.match(formSrc, /#fffbeb/)
+    assert.match(formSrc, /planillaBannerStyle\('warn'/)
     assert.match(formSrc, /Sin reporte vigente en SICOE Obra/)
   })
 

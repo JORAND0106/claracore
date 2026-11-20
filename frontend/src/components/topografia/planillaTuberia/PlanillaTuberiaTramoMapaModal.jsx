@@ -420,7 +420,8 @@ export default function PlanillaTuberiaTramoMapaModal({
               minHeight: 44,
               borderRadius: 10,
               border: `1px solid ${t.border || '#cbd5e1'}`,
-              background: '#fff',
+              background: t.bgCard || '#fff',
+              color: t.text || '#0f172a',
               fontWeight: 700,
               cursor: 'pointer',
             }}
