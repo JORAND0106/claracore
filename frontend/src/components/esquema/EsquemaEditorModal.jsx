@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useStackedOverlayZ } from '../overlayStack'
 import {
   SICOE_HERRAMIENTA_POPUP_Z,
   SICOE_HERRAMIENTA_Z,
@@ -579,9 +580,17 @@ export default function EsquemaEditorModal({
    * El host (p. ej. SicoeObra con deferExportPopup) puede mostrar Exportar / Archivos.
    */
   onExportsReady = null,
+  /**
+   * Z-index preferido del overlay (portal a body). Si hay OverlayStackProvider
+   * padre (popup que abrió el esquema), queda automáticamente por encima.
+   */
+  zIndex: zIndexProp = null,
   onSave,
   onClose,
 }) {
+  const overlayZ = useStackedOverlayZ(
+    zIndexProp != null ? zIndexProp : SICOE_HERRAMIENTA_Z,
+  )
   const mapCtx = useMemo(() => normalizeMapContext(mapLocation), [mapLocation])
   /**
    * Tipo de dibujo por coordenadas (nodo | linea | poligono).
@@ -7363,8 +7372,8 @@ export default function EsquemaEditorModal({
         e.stopPropagation()
       }}
       style={{
-        // Por encima de CarpetaReporte (15000): portal a body.
-        position: 'fixed', inset: 0, zIndex: SICOE_HERRAMIENTA_Z,
+        // Por encima de CarpetaReporte (15000) o del overlay padre (stack).
+        position: 'fixed', inset: 0, zIndex: overlayZ,
         background: t.overlay || ui.overlay,
         display: 'flex',
         alignItems: isPhoneLayout ? 'stretch' : 'center',
