@@ -18,9 +18,9 @@ def test_enrich_mapa_rows_with_ejecutado():
     rows = [{"pk_id": "120367", "estado_programacion": "completa"}]
     ej = {
         "120367": {
-            "presupuesto_costo": 1000,
-            "ejecutado_costo": 400,
-            "porcentaje_ejecutado": 40.0,
+            "presupuesto_directo": 1000,
+            "ejecutado": 400,
+            "ejecutado_pct": 40.0,
         }
     }
     out = enrich_mapa_rows_with_ejecutado(rows, ej)
@@ -32,7 +32,7 @@ def test_enrich_mapa_rows_with_ejecutado():
 @patch("prog_obra_ejecutado.resolve_ppto_vigente_version_id", return_value="vid")
 @patch("prog_obra_ejecutado._aggregate_presupuesto_por_pk", return_value={"120367": 1000.0})
 @patch("prog_obra_ejecutado._aggregate_ejecutado_por_pk", return_value={"120367": 250.0})
-def test_refresh_prog_pk_ejecutado_upsert(_ej, _ppto, _vid):
+def test_refresh_prog_pk_ejecutado_upsert_columnas_reales(_ej, _ppto, _vid):
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
         {"pk_id": "120367"},
@@ -45,4 +45,9 @@ def test_refresh_prog_pk_ejecutado_upsert(_ej, _ppto, _vid):
     sb.table.return_value.upsert.assert_called_once()
     row = sb.table.return_value.upsert.call_args[0][0][0]
     assert row["pk_id"] == "120367"
-    assert row["porcentaje_ejecutado"] == 25.0
+    # Columnas reales de alter_prog_pk_ejecutado.sql (no presupuesto_costo)
+    assert row["presupuesto_directo"] == 1000.0
+    assert row["ejecutado"] == 250.0
+    assert row["ejecutado_pct"] == 25.0
+    assert "presupuesto_costo" not in row
+    assert "ejecutado_costo" not in row

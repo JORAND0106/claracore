@@ -1164,11 +1164,28 @@ export default function ModuloProgramacionObra({
       if (tramo) params.set('tramos', tramo)
       if (pkSet?.size) params.set('pk_ids', [...pkSet].join(','))
       const qs = params.toString()
-      const res = await fetch(`${API}/prog-obra/${cid}/ejecucion/resumen${qs ? `?${qs}` : ''}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) return null
-      return res.json()
+      try {
+        const res = await fetch(`${API}/prog-obra/${cid}/ejecucion/resumen${qs ? `?${qs}` : ''}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        })
+        if (!res.ok) return null
+        const data = await res.json()
+        if (!data || typeof data !== 'object') return null
+        return {
+          presupuesto_total: Number(data.presupuesto_total) || 0,
+          ejecutado_total: Number(data.ejecutado_total) || 0,
+          ejecutado_pct: Number(data.ejecutado_pct ?? data.porcentaje) || 0,
+          porcentaje: Number(data.porcentaje ?? data.ejecutado_pct) || 0,
+          criterio: data.criterio || 'item_asignado_no_rechazado',
+          regla: data.regla || '',
+          mensual: data.mensual || {},
+          por_capitulo: data.por_capitulo || [],
+          error: data.error || null,
+        }
+      } catch {
+        return null
+      }
     },
     [cid, token, API],
   )
@@ -1381,7 +1398,16 @@ export default function ModuloProgramacionObra({
 
   const refreshEjecucionResumen = useCallback(async () => {
     const data = await fetchEjecucionResumen(tramoFilter, tramoPkSet)
-    if (data) setEjecucionResumen(data)
+    // Siempre actualizar estado: evita quedar en «Sin datos» si hubo un fallo previo.
+    setEjecucionResumen(
+      data || {
+        presupuesto_total: 0,
+        ejecutado_total: 0,
+        ejecutado_pct: 0,
+        porcentaje: 0,
+        criterio: 'item_asignado_no_rechazado',
+      },
+    )
     return data
   }, [fetchEjecucionResumen, tramoFilter, tramoPkSet])
 
@@ -1393,6 +1419,7 @@ export default function ModuloProgramacionObra({
         const res = await fetch(`${API}/prog-obra/${cid}/ejecucion/refresh`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
         })
         if (res.ok) {
           const body = await res.json()
@@ -1401,7 +1428,7 @@ export default function ModuloProgramacionObra({
         await refreshEjecucionResumen()
         if (reloadMapa) await refreshMapaYVersiones()
       } catch {
-        /* ignore */
+        await refreshEjecucionResumen()
       } finally {
         setEjecucionBusy(false)
       }
@@ -3600,18 +3627,18 @@ export default function ModuloProgramacionObra({
               style={{ fontWeight: 700, color: '#15803d', fontSize: 12 }}
               data-cc-tooltip={
                 tramoFilter
-                  ? `Ejecución SicoeObra · ${tramoFilter}`
-                  : 'Ejecución SicoeObra (ítem asignado, excl. rechazados)'
+                  ? `Ejecutado SicoeObra · ${tramoFilter} · ítem asignado, excl. rechazados`
+                  : 'Ejecutado SicoeObra: ítem asignado en cualquier validación; excluye rechazados y sin ítem'
               }
               data-cc-tooltip-variant="help"
             >
-              Ejecución
+              Ejecutado
             </div>
             <button
               type="button"
-              data-cc-tooltip="Recalcular"
+              data-cc-tooltip="Actualizar"
               data-cc-tooltip-variant="short"
-              aria-label="Recalcular"
+              aria-label="Actualizar"
               disabled={ejecucionBusy}
               onClick={() => void refreshEjecucionCache()}
               style={{
@@ -3632,28 +3659,37 @@ export default function ModuloProgramacionObra({
               {ejecucionBusy ? '…' : '↻'}
             </button>
           </div>
-          {ejecucionResumen ? (
+          {ejecucionBusy && !ejecucionResumen ? (
+            <div style={{ color: t.textMuted, fontSize: 11 }}>…</div>
+          ) : (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 10px', marginBottom: 2 }}>
                 <span style={{ color: t.textMuted }}>Presupuesto</span>
-                <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatCOP(ejecucionResumen.presupuesto_total)}</span>
+                <span style={{ textAlign: 'right', fontWeight: 600 }}>
+                  {formatCOP(ejecucionResumen?.presupuesto_total ?? 0)}
+                </span>
                 <span style={{ color: t.textMuted }}>Ejecutado</span>
-                <span style={{ textAlign: 'right', fontWeight: 600, color: '#15803d' }}>{formatCOP(ejecucionResumen.ejecutado_total)}</span>
+                <span style={{ textAlign: 'right', fontWeight: 600, color: '#15803d' }}>
+                  {formatCOP(ejecucionResumen?.ejecutado_total ?? 0)}
+                </span>
               </div>
               <div
                 style={{ fontSize: 18, fontWeight: 800, color: '#15803d', lineHeight: 1.2 }}
                 data-cc-tooltip={
-                  ejecucionActualizadoEn
-                    ? `Actualizado ${new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bogota' })}`
-                    : 'Porcentaje ejecutado'
+                  [
+                    ejecucionResumen?.regla || 'ROUND0(ROUND(Σcant,2)×VU listado)',
+                    ejecucionActualizadoEn
+                      ? `Actualizado ${new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bogota' })}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
                 }
-                data-cc-tooltip-variant="short"
+                data-cc-tooltip-variant="help"
               >
-                {Number(ejecucionResumen.ejecutado_pct || ejecucionResumen.porcentaje || 0).toFixed(1)}%
+                {Number(ejecucionResumen?.ejecutado_pct ?? ejecucionResumen?.porcentaje ?? 0).toFixed(1)}%
               </div>
             </>
-          ) : (
-            <div style={{ color: t.textMuted, fontSize: 11 }}>{ejecucionBusy ? '…' : 'Sin datos'}</div>
           )}
         </div>
         <div
