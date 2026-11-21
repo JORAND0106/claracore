@@ -315,7 +315,6 @@ import { esVistaSubcontratista, usuarioAisladoPorEmpresaSub } from './utils/empr
 import { SICOE_ALERTA_SYNC_EVENT } from './components/topografia/planillaTuberia/planillaTuberiaUtils'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
-import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
 import AlmacenMain from './almacen/AlmacenMain'
 import ModuloSeguimiento from './modules/seguimiento/ModuloSeguimiento'
@@ -21513,8 +21512,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
   const [showContabilidad, setShowContabilidad] = useState(false)
-  const [progRibbon, setProgRibbon] = useState(null)
-
   useEffect(() => {
     const onOpenAdmin = () => setShowAdmin(true)
     window.addEventListener('cc-open-admin', onOpenAdmin)
@@ -23448,8 +23445,6 @@ const [navReporteId, setNavReporteId] = useState(null)
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
     )
-  const progRibbonEnHeader = moduloActivo === 'programacion' && tienePermisoProgramacionObra && !esContador
-
   const informePeriodico = useInformePeriodicoReminder({
     usuario,
     contratoId: contratoIdDash,
@@ -23459,10 +23454,6 @@ const [navReporteId, setNavReporteId] = useState(null)
     showAdmin,
     showContabilidad,
   })
-
-  useEffect(() => {
-    if (!progRibbonEnHeader) setProgRibbon(null)
-  }, [progRibbonEnHeader])
 
   useEffect(() => {
     if (esContador && moduloActivo !== 'inicio' && moduloActivo !== 'mapa_navegacion') {
@@ -23684,7 +23675,6 @@ const [navReporteId, setNavReporteId] = useState(null)
             <>
               <div style={{ width: 1, height: 28, background: t.border, flexShrink: 0 }} aria-hidden />
               {selectorContratoHeader}
-              {progRibbonEnHeader && progRibbon && <ProgObraHeaderRibbon t={t} {...progRibbon} />}
             </>
           )}
         </div>
@@ -27115,7 +27105,6 @@ const [navReporteId, setNavReporteId] = useState(null)
               puedeEliminar={puedeEliminarProgramacionObra}
               puedeValidar={puedeValidarProgramacionObra}
               puedeExportar={puedeExportarProgramacionObra}
-              onRibbonChange={setProgRibbon}
             />
           ) : (
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>

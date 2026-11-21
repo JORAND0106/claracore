@@ -26,20 +26,22 @@ export default function ProgPresupuestoSelector({
   const selected = versiones.find((v) => String(v.id) === String(value))
   const numSel = selected?.numero_version ?? '?'
   const esOficial = Boolean(selected?.es_vigente_aprobada)
-  const esBorradorActivo = Boolean(selected?.es_vigente) && !esOficial
 
   return (
     <div style={{ marginTop: '0.35rem' }}>
       <label
+        data-cc-tooltip="Versión de presupuesto para costos, Curva S y exportes. No mueve fechas."
+        data-cc-tooltip-variant="help"
         style={{
-          display: 'block',
+          display: 'inline-block',
           fontSize: 'var(--cc-caption)',
           fontWeight: 700,
           color: t.textMuted,
           marginBottom: '0.25rem',
+          cursor: 'help',
         }}
       >
-        Presupuesto base
+        Presupuesto
       </label>
       <select
         value={value || ''}
@@ -68,7 +70,9 @@ export default function ProgPresupuestoSelector({
           data-cc-tooltip={`Presupuesto v${numSel} no aprobado — solo análisis de costos. No afecta fechas ni el envío a validación.`}
           data-cc-tooltip-variant="help"
           style={{
-            display: 'inline-block',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
             marginTop: '0.35rem',
             padding: '0.15rem 0.4rem',
             borderRadius: 6,

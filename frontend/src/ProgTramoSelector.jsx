@@ -14,15 +14,18 @@ export default function ProgTramoSelector({
   return (
     <div style={{ marginTop: '0.35rem' }}>
       <label
+        data-cc-tooltip="Filtrar el mapa y el listado por tramo del presupuesto"
+        data-cc-tooltip-variant="help"
         style={{
-          display: 'block',
+          display: 'inline-block',
           fontSize: 'var(--cc-caption)',
           fontWeight: 700,
           color: t.textMuted,
           marginBottom: '0.25rem',
+          cursor: 'help',
         }}
       >
-        Filtrar por tramo
+        Tramo
       </label>
       <select
         value={value || ''}
