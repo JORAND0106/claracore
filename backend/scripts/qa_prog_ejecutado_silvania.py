@@ -169,3 +169,5 @@ def json_dumps(obj: Any) -> str:
 
 if __name__ == "__main__":
     main()
+
+# trigger QA on push
