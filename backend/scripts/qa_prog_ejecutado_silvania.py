@@ -175,3 +175,5 @@ if __name__ == "__main__":
 # azure-only QA trigger
 
 # deps fastapi
+
+# full requirements
