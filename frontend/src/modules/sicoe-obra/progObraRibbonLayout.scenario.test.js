@@ -36,4 +36,10 @@ describe('prog-obra ribbon layout', () => {
     assert.match(modSrc, /tip: 'Programación'/)
     assert.match(modSrc, /tip: 'Ejecutado'/)
   })
+
+  it('recuadro de ejecución no usa etiqueta N1 ni «Sin datos de ejecución»', () => {
+    assert.doesNotMatch(modSrc, /Ejecución SICOE \(N1\)/)
+    assert.doesNotMatch(modSrc, /Sin datos de ejecución/)
+    assert.match(modSrc, />\s*Ejecutado\s*</)
+  })
 })

@@ -16,4 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_prog_pk_ejecutado_contrato
   ON public.prog_pk_ejecutado (contrato_id);
 
 COMMENT ON TABLE public.prog_pk_ejecutado IS
-  'Ejecutado real por PK (SICOE N1 aprobado vs presupuesto directo vigente). Refresco por lote; lectura rápida en /mapa.';
+  'Ejecutado real por PK (SicoeObra: ítem asignado, excl. rechazados; VU listado) vs presupuesto directo. Refresco por lote; lectura rápida en /mapa.';
+
+-- Alias históricos (si existieran columnas viejas en algún entorno, no las usamos en código).
+-- Columnas canónicas: presupuesto_directo, ejecutado, ejecutado_pct.

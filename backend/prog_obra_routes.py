@@ -428,12 +428,26 @@ def prog_ejecucion_resumen(
     _require_contract_access(current_user, contrato_id)
     tramo_list = parse_tramos_param(tramos)
     pk_set = parse_pk_ids_param(pk_ids)
-    return build_ejecucion_resumen(
-        supabase,
-        contrato_id,
-        pk_ids=pk_set,
-        tramos=tramo_list,
-    )
+    try:
+        return build_ejecucion_resumen(
+            supabase,
+            contrato_id,
+            pk_ids=pk_set,
+            tramos=tramo_list,
+        )
+    except Exception as exc:
+        _logger.exception("ejecucion resumen contrato %s", contrato_id)
+        # Nunca dejar el panel en «Sin datos» por un fallo parcial: devolver ceros.
+        return {
+            "presupuesto_total": 0.0,
+            "ejecutado_total": 0.0,
+            "porcentaje": 0.0,
+            "ejecutado_pct": 0.0,
+            "mensual": {},
+            "por_capitulo": [],
+            "criterio": "item_asignado_no_rechazado",
+            "error": str(exc)[:240],
+        }
 
 
 @router.post("/{contrato_id}/ejecucion/refresh")

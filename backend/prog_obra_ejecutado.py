@@ -10,7 +10,7 @@ Regla de negocio (coherente con SicoeObra reportado):
 """
 from __future__ import annotations
 
-import re
+import logging
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -24,11 +24,17 @@ from sicoe_valor_canonico import (
     cap_item_key,
     load_listado_vu_by_cap_item,
     round_cant,
+    sum_valor_canonico,
     valor_cant_vu,
-    vu_listado_para_registro,
 )
 
 _PAGE = 1000
+_logger = logging.getLogger("claracore.prog_obra_ejecutado")
+
+# Columnas reales de public.prog_pk_ejecutado (alter_prog_pk_ejecutado.sql)
+_COL_PPTO = "presupuesto_directo"
+_COL_EJ = "ejecutado"
+_COL_PCT = "ejecutado_pct"
 
 
 def _parse_d(val: Any) -> Optional[date]:
@@ -96,35 +102,67 @@ def _pk_from_registro(row: dict) -> str:
             pk = str(first.get("pk_id") or "").strip()
             if pk:
                 return pk
-    return str(row.get("pk_id") or "").strip()
+    for key in ("pk_id", "pk"):
+        pk = str(row.get(key) or "").strip()
+        if pk:
+            return pk
+    return ""
 
 
 def _fetch_so_registros_ejecucion(sb, contrato_id: int) -> List[dict]:
-    cols = (
+    """Lee so_registros del contrato. Intenta join pk_ids; si falla, plano."""
+    cols_nested = (
         "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
         "fecha,estado,"
         "nivel1_estado,nivel2_estado,nivel3_estado,nivel4_estado,nivel5_estado,nivel6_estado,"
         "pk_ids(pk_id)"
     )
-    rows: List[dict] = []
-    off = 0
-    while True:
-        batch = (
-            sb.table("so_registros")
-            .select(cols)
-            .eq("contrato_id", int(contrato_id))
-            .range(off, off + _PAGE - 1)
-            .execute()
-            .data
-            or []
+    cols_flat = (
+        "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
+        "fecha,estado,"
+        "nivel1_estado,nivel2_estado,nivel3_estado,nivel4_estado,nivel5_estado,nivel6_estado,"
+        "pk_id"
+    )
+
+    def _paged(cols: str) -> List[dict]:
+        rows: List[dict] = []
+        off = 0
+        while True:
+            batch = (
+                sb.table("so_registros")
+                .select(cols)
+                .eq("contrato_id", int(contrato_id))
+                .range(off, off + _PAGE - 1)
+                .execute()
+                .data
+                or []
+            )
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < _PAGE:
+                break
+            off += _PAGE
+        return rows
+
+    try:
+        return _paged(cols_nested)
+    except Exception as exc:
+        _logger.warning(
+            "so_registros nested pk_ids falló (contrato=%s): %s — reintento plano",
+            contrato_id,
+            exc,
         )
-        if not batch:
-            break
-        rows.extend(batch)
-        if len(batch) < _PAGE:
-            break
-        off += _PAGE
-    return rows
+        try:
+            return _paged(cols_flat)
+        except Exception:
+            # Último recurso: sin pk_id (totales de contrato siguen válidos)
+            cols_min = (
+                "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
+                "fecha,estado,"
+                "nivel1_estado,nivel2_estado,nivel3_estado,nivel4_estado,nivel5_estado,nivel6_estado"
+            )
+            return _paged(cols_min)
 
 
 def _registros_ejecutables(rows: List[dict]) -> List[dict]:
@@ -138,16 +176,17 @@ def _registros_ejecutables(rows: List[dict]) -> List[dict]:
     return out
 
 
+def _include_ejecutable(reg: dict) -> bool:
+    return _tiene_item_cobro(reg) and not _registro_rechazado(reg)
+
+
 def fetch_ejecutado_nivel1_mensual(
     sb,
     contrato_id: int,
     *,
     pk_ids: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, float], float]:
-    """
-    Compat API: ejecutado mensual con la regla nueva (ítem asignado, no rechazado).
-    Nombre histórico conservado para no romper imports.
-    """
+    """Compat API: nombre histórico; misma regla item_asignado_no_rechazado."""
     return fetch_ejecutado_mensual(sb, contrato_id, pk_ids=pk_ids)
 
 
@@ -157,16 +196,19 @@ def fetch_ejecutado_mensual(
     *,
     pk_ids: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, float], float]:
-    """Costo ejecutado por mes (fecha de reporte), regla listado."""
+    """Costo ejecutado por mes (fecha de reporte) + total canónico."""
     pk_filter = {str(p).strip() for p in (pk_ids or set()) if str(p).strip()} or None
     listado_idx = load_listado_vu_by_cap_item(sb, int(contrato_id))
+    regs = _registros_ejecutables(_fetch_so_registros_ejecucion(sb, contrato_id))
+    if pk_filter is not None:
+        regs = [r for r in regs if _pk_from_registro(r) in pk_filter]
 
-    # Acumular cantidades por (mes, cap, item)
+    # Total = misma función que SicoeObra reportado
+    total = float(sum_valor_canonico(regs, listado_idx))
+
+    # Mensual: acumular cant por (mes, cap, item) y valorar una vez
     qty: Dict[Tuple[str, str, str], float] = defaultdict(float)
-    for r in _registros_ejecutables(_fetch_so_registros_ejecucion(sb, contrato_id)):
-        pk = _pk_from_registro(r)
-        if pk_filter is not None and pk not in pk_filter:
-            continue
+    for r in regs:
         fd = _fecha_reporte(r)
         if not fd:
             continue
@@ -186,32 +228,21 @@ def fetch_ejecutado_mensual(
         vu = float(meta.get("vlr_unitario") or meta.get("precio_unitario") or 0)
         monthly[mk] += float(valor_cant_vu(round_cant(cant_raw), vu))
 
-    total = float(sum(monthly.values()))
     return dict(monthly), total
 
 
 def _aggregate_ejecutado_por_pk(sb, contrato_id: int) -> Dict[str, float]:
     listado_idx = load_listado_vu_by_cap_item(sb, int(contrato_id))
-    qty: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    by_pk_regs: Dict[str, List[dict]] = defaultdict(list)
     for r in _registros_ejecutables(_fetch_so_registros_ejecucion(sb, contrato_id)):
         pk = _pk_from_registro(r)
         if not pk:
             continue
-        k = cap_item_key(r.get("capitulo"), r.get("item_numero"))
-        if not k[0] or not k[1]:
-            continue
-        try:
-            cant = float(r.get("cantidad_total") or 0)
-        except (TypeError, ValueError):
-            cant = 0.0
-        qty[(pk, k[0], k[1])] += cant
-
-    out: Dict[str, float] = defaultdict(float)
-    for (pk, cap, it), cant_raw in qty.items():
-        meta = listado_idx.get((cap, it)) or {}
-        vu = float(meta.get("vlr_unitario") or meta.get("precio_unitario") or 0)
-        out[pk] += float(valor_cant_vu(round_cant(cant_raw), vu))
-    return dict(out)
+        by_pk_regs[pk].append(r)
+    out: Dict[str, float] = {}
+    for pk, regs in by_pk_regs.items():
+        out[pk] = float(sum_valor_canonico(regs, listado_idx))
+    return out
 
 
 def _aggregate_ejecutado_por_capitulo(
@@ -222,31 +253,22 @@ def _aggregate_ejecutado_por_capitulo(
 ) -> Dict[str, float]:
     pk_filter = {str(p).strip() for p in (pk_ids or set()) if str(p).strip()} or None
     listado_idx = load_listado_vu_by_cap_item(sb, int(contrato_id))
-    qty: Dict[Tuple[str, str], float] = defaultdict(float)
+    by_cap_regs: Dict[str, List[dict]] = defaultdict(list)
     for r in _registros_ejecutables(_fetch_so_registros_ejecucion(sb, contrato_id)):
         pk = _pk_from_registro(r)
         if pk_filter is not None and pk not in pk_filter:
             continue
         k = cap_item_key(r.get("capitulo"), r.get("item_numero"))
-        if not k[0] or not k[1]:
+        if not k[0]:
             continue
-        try:
-            cant = float(r.get("cantidad_total") or 0)
-        except (TypeError, ValueError):
-            cant = 0.0
-        qty[k] += cant
-
-    by_cap: Dict[str, float] = defaultdict(float)
-    for (cap, it), cant_raw in qty.items():
-        meta = listado_idx.get((cap, it)) or {}
-        vu = float(meta.get("vlr_unitario") or meta.get("precio_unitario") or 0)
-        by_cap[cap] += float(valor_cant_vu(round_cant(cant_raw), vu))
-    return dict(by_cap)
+        by_cap_regs[k[0]].append(r)
+    out: Dict[str, float] = {}
+    for cap, regs in by_cap_regs.items():
+        out[cap] = float(sum_valor_canonico(regs, listado_idx))
+    return out
 
 
 def _aggregate_presupuesto_por_pk(sb, contrato_id: int, version_ppto_id: str) -> Dict[str, float]:
-    from sicoe_valor_canonico import valor_cant_vu, round_cant, cap_item_key
-
     rows = fetch_ppto_items_version(sb, contrato_id, version_ppto_id)
     vu_map = _load_listado_vu_map(sb, contrato_id)
     qty: Dict[Tuple[str, str, str], float] = defaultdict(float)
@@ -286,17 +308,20 @@ def enrich_mapa_rows_with_ejecutado(rows: List[dict], ej_map: Dict[str, dict]) -
         pk = str(row.get("pk_id") or "").strip()
         meta = ej_map.get(pk) or {}
         ppto = float(
-            meta.get("presupuesto_costo")
-            or meta.get("presupuesto_directo")
+            meta.get(_COL_PPTO)
+            or meta.get("presupuesto_costo")
             or meta.get("presupuesto")
             or 0
         )
         ej = float(
-            meta.get("ejecutado_costo")
+            meta.get(_COL_EJ)
+            or meta.get("ejecutado_costo")
             or meta.get("ejecutado")
             or 0
         )
-        pct = meta.get("porcentaje_ejecutado")
+        pct = meta.get(_COL_PCT)
+        if pct is None:
+            pct = meta.get("porcentaje_ejecutado")
         if pct is None:
             pct = meta.get("ejecutado_pct")
         if pct is None:
@@ -308,6 +333,42 @@ def enrich_mapa_rows_with_ejecutado(rows: List[dict], ej_map: Dict[str, dict]) -
     return out
 
 
+def fetch_ejecutado_resumen(
+    sb,
+    contrato_id: int,
+    *,
+    version_ppto_id: Optional[str] = None,
+    pk_ids: Optional[Set[str]] = None,
+    tramos: Optional[List[str]] = None,
+) -> dict:
+    from prog_obra_costos_presupuesto import ppto_scope_direct_total
+
+    vid = resolve_ppto_vigente_version_id(sb, contrato_id, version_ppto_id, force_vigente=False)
+    monthly, ejecutado_total = fetch_ejecutado_mensual(sb, contrato_id, pk_ids=pk_ids)
+    presupuesto_total = 0.0
+    if vid:
+        tramo_one = tramos[0] if tramos and len(tramos) == 1 else None
+        presupuesto_total = float(
+            ppto_scope_direct_total(
+                sb, contrato_id, vid, tramo=tramo_one, tramos=tramos, pk_ids=pk_ids,
+            )
+            or 0
+        )
+    ej_by_cap = _aggregate_ejecutado_por_capitulo(sb, contrato_id, pk_ids=pk_ids)
+    pct = round((ejecutado_total / presupuesto_total * 100), 2) if presupuesto_total > 0 else 0.0
+    return {
+        "presupuesto_total": presupuesto_total,
+        "ejecutado_total": ejecutado_total,
+        "porcentaje": pct,
+        "ejecutado_pct": pct,
+        "mensual": monthly,
+        "por_capitulo": ej_by_cap,
+        "criterio": "item_asignado_no_rechazado",
+        "regla": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem); excl. rechazados y sin ítem",
+        "n_registros": None,
+    }
+
+
 def build_ejecucion_resumen(
     sb,
     contrato_id: int,
@@ -316,20 +377,24 @@ def build_ejecucion_resumen(
     pk_ids: Optional[Set[str]] = None,
     tramos: Optional[List[str]] = None,
 ) -> dict:
-    """Compat: alias de fetch_ejecutado_resumen + forma esperada por UI antigua."""
+    """Forma esperada por UI: totales + por_capitulo lista."""
     base = fetch_ejecutado_resumen(
         sb, contrato_id, version_ppto_id=version_ppto_id, pk_ids=pk_ids, tramos=tramos,
     )
     por_cap = base.get("por_capitulo") or {}
-    cap_list = []
     ppto_total = float(base.get("presupuesto_total") or 0)
-    for cap, ej in sorted(por_cap.items(), key=lambda x: x[0]):
-        ej_f = float(ej or 0)
-        cap_list.append({
-            "capitulo": cap,
-            "ejecutado": ej_f,
-            "ejecutado_pct": round((ej_f / ppto_total * 100), 2) if ppto_total > 0 else 0.0,
-        })
+    cap_list = []
+    if isinstance(por_cap, dict):
+        for cap, ej in sorted(por_cap.items(), key=lambda x: x[0]):
+            ej_f = float(ej or 0)
+            cap_list.append({
+                "capitulo": cap,
+                "ejecutado": ej_f,
+                "presupuesto": 0.0,
+                "ejecutado_pct": round((ej_f / ppto_total * 100), 2) if ppto_total > 0 else 0.0,
+            })
+    elif isinstance(por_cap, list):
+        cap_list = por_cap
     return {
         **base,
         "ejecutado_pct": base.get("porcentaje"),
@@ -350,6 +415,7 @@ def fetch_prog_pk_ejecutado_map(sb, contrato_id: int) -> Dict[str, dict]:
 
 
 def refresh_prog_pk_ejecutado(sb, contrato_id: int) -> dict:
+    """Recalcula cache por PK con columnas reales de prog_pk_ejecutado."""
     vid = resolve_ppto_vigente_version_id(sb, contrato_id, None, force_vigente=True)
     ppto_by_pk: Dict[str, float] = _aggregate_presupuesto_por_pk(sb, contrato_id, vid) if vid else {}
     ej_by_pk = _aggregate_ejecutado_por_pk(sb, contrato_id)
@@ -372,13 +438,13 @@ def refresh_prog_pk_ejecutado(sb, contrato_id: int) -> dict:
             continue
         ppto = float(ppto_by_pk.get(pk) or 0)
         ej = float(ej_by_pk.get(pk) or 0)
-        pct = round((ej / ppto * 100), 2) if ppto > 0 else None
+        pct = _ejecutado_pct(ppto, ej)
         payload.append({
             "contrato_id": int(contrato_id),
             "pk_id": pk,
-            "presupuesto_costo": ppto,
-            "ejecutado_costo": ej,
-            "porcentaje_ejecutado": pct,
+            _COL_PPTO: ppto,
+            _COL_EJ: ej,
+            _COL_PCT: pct,
             "actualizado_en": now,
         })
     if payload:
@@ -386,36 +452,7 @@ def refresh_prog_pk_ejecutado(sb, contrato_id: int) -> dict:
             payload,
             on_conflict="contrato_id,pk_id",
         ).execute()
-    return {"ok": True, "pks": len(payload), "actualizado_en": now}
-
-
-def fetch_ejecutado_resumen(
-    sb,
-    contrato_id: int,
-    *,
-    version_ppto_id: Optional[str] = None,
-    pk_ids: Optional[Set[str]] = None,
-    tramos: Optional[List[str]] = None,
-) -> dict:
-    from prog_obra_costos_presupuesto import ppto_scope_direct_total
-
-    vid = resolve_ppto_vigente_version_id(sb, contrato_id, version_ppto_id, force_vigente=False)
-    monthly, ejecutado_total = fetch_ejecutado_mensual(sb, contrato_id, pk_ids=pk_ids)
-    presupuesto_total = 0.0
-    if vid:
-        tramo_one = tramos[0] if tramos and len(tramos) == 1 else None
-        presupuesto_total = ppto_scope_direct_total(
-            sb, contrato_id, vid, tramo=tramo_one, tramos=tramos, pk_ids=pk_ids,
-        )
-    ej_by_cap = _aggregate_ejecutado_por_capitulo(sb, contrato_id, pk_ids=pk_ids)
-    return {
-        "presupuesto_total": presupuesto_total,
-        "ejecutado_total": ejecutado_total,
-        "porcentaje": round((ejecutado_total / presupuesto_total * 100), 2) if presupuesto_total > 0 else 0.0,
-        "mensual": monthly,
-        "por_capitulo": ej_by_cap,
-        "criterio": "item_asignado_no_rechazado",
-    }
+    return {"ok": True, "pks": len(payload), "actualizado_en": now, "criterio": "item_asignado_no_rechazado"}
 
 
 def fetch_ejecutado_detalle_por_pk_item(
