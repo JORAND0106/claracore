@@ -1499,6 +1499,26 @@ def apply_actividades_batch_tramo(
             ag_e = a.get("agrupador_id")
             if cap_e and pk_e and ag_e is not None:
                 skip_scheduled.add((cap_e, int(ag_e), pk_e))
+        # Segregaciones por PK: el consolidado no las sobrescribe
+        try:
+            partes_rows = (
+                sb.table("prog_partes")
+                .select("pk_id,capitulo,agrupador_id")
+                .eq("version_id", version_id)
+                .eq("contrato_id", contrato_id)
+                .in_("pk_id", pk_ids)
+                .execute()
+                .data
+                or []
+            )
+            for p in partes_rows:
+                cap_e = (p.get("capitulo") or "").strip()
+                pk_e = str(p.get("pk_id") or "").strip()
+                ag_e = p.get("agrupador_id")
+                if cap_e and pk_e and ag_e is not None:
+                    skip_scheduled.add((cap_e, int(ag_e), pk_e))
+        except Exception:
+            pass
 
     bulk_cleared = 0
     pks_from_clear: List[str] = []
@@ -3054,6 +3074,14 @@ def create_version(
         ensure_prog_pk_estado_all(sb, vid, contrato_id)
     else:
         clone_stats = clone_version_data(sb, origen_id, vid, contrato_id, usuario_id)
+        try:
+            from prog_obra_partes import clonar_partes_version
+
+            n_partes = clonar_partes_version(sb, origen_id, vid, contrato_id)
+            clone_stats = dict(clone_stats or {})
+            clone_stats["partes_clonadas"] = n_partes
+        except Exception:
+            pass
         ins[0]["clone_stats"] = clone_stats
 
     if tipo != "baseline" and origen_id:
@@ -3211,18 +3239,12 @@ def submit_to_validation(sb, version_id: str, contrato_id: int) -> List[dict]:
     assert_version_editable(sb, version_id)
     from prog_obra_presupuesto_bridge import presupuesto_aprobacion_estado
 
+    from prog_obra_presupuesto_bridge import MENSAJE_VALIDACION_PPTO_INCOMPLETO
+
     ppto_est = presupuesto_aprobacion_estado(sb, contrato_id)
-    pend = int(ppto_est.get("items_pendientes") or 0)
-    if pend > 0:
-        raise BusinessRuleError(
-            f"No se puede enviar a validación. El presupuesto del contrato tiene "
-            f"{pend} ítems pendientes de aprobación por interventoría. "
-            f"Aprueba el presupuesto completo antes de enviar la programación a validación."
-        )
-    if int(ppto_est.get("items_total") or 0) <= 0:
-        raise BusinessRuleError(
-            "No se puede enviar a validación: el contrato no tiene ítems de presupuesto poligonal activos."
-        )
+    if not ppto_est.get("puede_enviar_validacion"):
+        msg = (ppto_est.get("mensaje") or "").strip() or MENSAJE_VALIDACION_PPTO_INCOMPLETO
+        raise BusinessRuleError(msg)
     niveles = _niveles_prog_desde_contrato(sb, contrato_id)
     if not niveles:
         raise BusinessRuleError("El contrato no tiene niveles de validacion >= 2 configurados")
@@ -3349,9 +3371,10 @@ def seal_version(sb, version_id: str, contrato_id: int, usuario_id: int) -> None
         )
         existing = meta_rows[0].get("metadata") if meta_rows else {}
         merged = {**(existing if isinstance(existing, dict) else {}), **ppto_meta}
-        sb.table("prog_versiones").update({"metadata": merged, "actualizado_en": now}).eq(
-            "id", version_id
-        ).execute()
+        patch_ver = {"metadata": merged, "actualizado_en": now}
+        if ppto_sellado_id:
+            patch_ver["version_ppto_sellada_id"] = str(ppto_sellado_id)
+        sb.table("prog_versiones").update(patch_ver).eq("id", version_id).execute()
 
 
 def process_validation_decision(
@@ -4381,12 +4404,11 @@ def _fetch_prog_actividades_agrupador_cpm(sb, version_id: str) -> list:
 
 def _cpm_liberar_agrupadores_para_calculo(sb, version_id: str) -> None:
     """
-    Agrupadores WBS: el CPM calcula fechas vía dependencias + días hábiles.
-    Quita anclas de guardado batch previo (override_manual) que bloqueaban el forward pass.
+    NO-OP (SNET): las fechas manuales (override_manual) son restricciones
+    «no empezar antes de» y deben conservarse entre recálculos CPM.
+    Se mantiene la función por compatibilidad con imports/tests antiguos.
     """
-    sb.table("prog_actividades").update({
-        "override_manual": False,
-    }).eq("version_id", version_id).not_.is_("agrupador_id", "null").execute()
+    return None
 
 
 def _cpm_limpiar_actividades_no_manuales(sb, version_id: str) -> None:
@@ -4989,16 +5011,64 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         key = (pk, cap, ag_id)
         ag_rows_by_key.setdefault(key, []).append(dict(r))
 
+    # Segregaciones: (pk, cap, ag_id) → lista de partes
+    partes_by_ag: Dict[tuple, list] = {}
+    try:
+        partes_rows = (
+            sb.table("prog_partes")
+            .select("*")
+            .eq("version_id", version_id)
+            .execute()
+            .data
+            or []
+        )
+        for p in partes_rows:
+            pk_p = str(p.get("pk_id") or "").strip()
+            cap_p = str(p.get("capitulo") or "").strip()
+            ag_p = str(p.get("agrupador_id") or "").strip()
+            if pk_p and cap_p and ag_p:
+                partes_by_ag.setdefault((pk_p, cap_p, ag_p), []).append(p)
+    except Exception:
+        partes_by_ag = {}
+
     for key, rows in ag_rows_by_key.items():
         pk, cap, ag_id = key
-        r = _consolidar_fila_agrupador_cpm_entrada(rows)
-        r["pk_id"] = pk
-        r["capitulo"] = cap
-        r["agrupador_id"] = ag_id
         try:
             ag_int = int(ag_id)
         except (TypeError, ValueError):
             ag_int = 0
+        partes = partes_by_ag.get(key) or []
+        if partes:
+            for p in partes:
+                if p.get("es_pendiente") and not p.get("fecha_inicio") and not p.get("duracion_dias_habiles"):
+                    # Pendiente sin programar: no entra al grafo hasta que tenga fecha/duración
+                    if not p.get("override_manual"):
+                        continue
+                r = {
+                    "pk_id": pk,
+                    "capitulo": cap,
+                    "agrupador_id": ag_id,
+                    "fecha_inicio": p.get("fecha_inicio"),
+                    "duracion_dias_habiles": p.get("duracion_dias_habiles"),
+                    "override_manual": bool(p.get("override_manual")),
+                    "fecha_fin_calculada": None,
+                }
+                dur_res = max(1, int(p.get("duracion_dias_habiles") or 1))
+                nodo = _nodo_cpm_desde_agrupador(
+                    r, fecha_inicio_ver, contrato_id, cache, _add_dh, duracion_resuelta=dur_res,
+                )
+                if not nodo:
+                    continue
+                nodo.parte_id = str(p.get("id") or "").strip()
+                nodos.append(nodo)
+                seen_ag.add(key)
+                caps_con_agrupador.add((pk, cap))
+            continue
+
+        r = _consolidar_fila_agrupador_cpm_entrada(rows)
+        r["pk_id"] = pk
+        r["capitulo"] = cap
+        r["agrupador_id"] = ag_id
         dur_res = _resolve_duracion_cpm_nodo(
             r, raw_ags, cap, ag_int, pk, contrato_id, cache, for_cpm=True,
         )
@@ -5136,12 +5206,16 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
             "es_ruta_critica": n.es_ruta_critica,
             "tiene_sucesores": n.tiene_sucesores,
             "es_actividad_final_tramo": n.es_actividad_final_tramo,
+            "desplazada_por_dependencia": bool(getattr(n, "desplazada_por_dependencia", False)),
         }
         if n.agrupador_id:
             try:
                 row["agrupador_id"] = int(n.agrupador_id)
             except (TypeError, ValueError):
                 row["agrupador_id"] = n.agrupador_id
+        parte_s = str(getattr(n, "parte_id", "") or "").strip()
+        if parte_s:
+            row["parte_id"] = parte_s
         payload.append(row)
     sb.rpc("prog_upsert_cpm_resultados", {
         "p_version_id": version_id,
@@ -5276,7 +5350,7 @@ def _apply_cpm_writeback_unified(
     seen_sig: set = set()
 
     for n in nodos:
-        if not n.agrupador_id or n.es_ancla:
+        if not n.agrupador_id:
             continue
         if not n.fecha_inicio_temprana or not n.fecha_fin_temprana:
             continue
@@ -5286,7 +5360,8 @@ def _apply_cpm_writeback_unified(
             ag_id = int(str(n.agrupador_id).strip())
         except (TypeError, ValueError):
             continue
-        sig = (pk, cap, ag_id)
+        parte_s = str(getattr(n, "parte_id", "") or "").strip()
+        sig = (pk, cap, ag_id, parte_s)
         if sig in seen_sig:
             continue
         seen_sig.add(sig)
@@ -5294,24 +5369,38 @@ def _apply_cpm_writeback_unified(
         dur = max(1, int(n.duracion or 1))
         fi_iso = n.fecha_inicio_temprana.isoformat()
         ff_iso = n.fecha_fin_temprana.isoformat()
-        header_patch = {
-            "fecha_inicio_temprana": fi_iso,
-            "fecha_fin_temprana": ff_iso,
-            "fecha_inicio": fi_iso,
-            "fecha_fin_calculada": ff_iso,
-            "duracion_dias_habiles": dur,
-            "override_manual": False,
-            "actualizado_en": now,
-        }
+        desplazada = bool(getattr(n, "desplazada_por_dependencia", False))
+        # SNET: si hay fecha manual, NO se pisa fecha_inicio ni override_manual.
+        if n.es_ancla:
+            header_patch = {
+                "fecha_inicio_temprana": fi_iso,
+                "fecha_fin_temprana": ff_iso,
+                "fecha_fin_calculada": ff_iso,
+                "duracion_dias_habiles": dur,
+                "desplazada_por_dependencia": desplazada,
+                "actualizado_en": now,
+            }
+        else:
+            header_patch = {
+                "fecha_inicio_temprana": fi_iso,
+                "fecha_fin_temprana": ff_iso,
+                "fecha_inicio": fi_iso,
+                "fecha_fin_calculada": ff_iso,
+                "duracion_dias_habiles": dur,
+                "override_manual": False,
+                "desplazada_por_dependencia": desplazada,
+                "actualizado_en": now,
+            }
 
-        row_ids = ids_by_key.get(sig) or []
+        lookup = (pk, cap, ag_id)
+        row_ids = ids_by_key.get(lookup) or []
         if row_ids:
             for rid in row_ids:
                 patch_by_id[rid] = {**header_patch, "id": rid}
-        else:
-            header_fallback_sigs.append((pk, cap, ag_id, fi_iso, ff_iso, dur))
+        elif not n.es_ancla:
+            header_fallback_sigs.append((pk, cap, ag_id, fi_iso, ff_iso, dur, desplazada))
 
-        ag_rows = rows_by_key.get(sig) or []
+        ag_rows = rows_by_key.get(lookup) or []
         codigo_wbs = ""
         for r in ag_rows:
             if _is_agrupador_header_row(r):
@@ -5324,31 +5413,34 @@ def _apply_cpm_writeback_unified(
                     codigo_wbs = cw
                     break
 
-        ppto_keys = ppto_keys_by_pk.get(pk) or set()
-        for p_cap, it in _hijos_ppto_agrupador_en_memoria(
-            pk, cap, ag_id, ppto_keys, ag_by_item, listado_items,
-        ):
-            row = items_index.get((pk, p_cap, it))
-            if not row or row.get("override_manual"):
-                continue
-            rid = str(row["id"])
-            patch_by_id[rid] = {
-                "id": rid,
-                "fecha_inicio_temprana": fi_iso,
-                "fecha_fin_temprana": ff_iso,
-                "fecha_inicio": fi_iso,
-                "fecha_fin_calculada": ff_iso,
-                "duracion_dias_habiles": dur,
-                "heredado_de_capitulo": True,
-                "override_manual": False,
-                "agrupador_id": ag_id,
-                "codigo_wbs": codigo_wbs or None,
-                "actualizado_en": now,
-            }
+        # Hijos: no pisar override_manual; SNET conserva fechas tipadas.
+        if not n.es_ancla:
+            ppto_keys = ppto_keys_by_pk.get(pk) or set()
+            for p_cap, it in _hijos_ppto_agrupador_en_memoria(
+                pk, cap, ag_id, ppto_keys, ag_by_item, listado_items,
+            ):
+                row = items_index.get((pk, p_cap, it))
+                if not row or row.get("override_manual"):
+                    continue
+                rid = str(row["id"])
+                patch_by_id[rid] = {
+                    "id": rid,
+                    "fecha_inicio_temprana": fi_iso,
+                    "fecha_fin_temprana": ff_iso,
+                    "fecha_inicio": fi_iso,
+                    "fecha_fin_calculada": ff_iso,
+                    "duracion_dias_habiles": dur,
+                    "heredado_de_capitulo": True,
+                    "override_manual": False,
+                    "desplazada_por_dependencia": desplazada,
+                    "agrupador_id": ag_id,
+                    "codigo_wbs": codigo_wbs or None,
+                    "actualizado_en": now,
+                }
 
     _bulk_patch_prog_actividades_by_id(sb, list(patch_by_id.values()))
 
-    for pk, cap, ag_id, fi_iso, ff_iso, dur in header_fallback_sigs:
+    for pk, cap, ag_id, fi_iso, ff_iso, dur, desplazada in header_fallback_sigs:
         sb.table("prog_actividades").update({
             "fecha_inicio_temprana": fi_iso,
             "fecha_fin_temprana": ff_iso,
@@ -5356,6 +5448,7 @@ def _apply_cpm_writeback_unified(
             "fecha_fin_calculada": ff_iso,
             "duracion_dias_habiles": dur,
             "override_manual": False,
+            "desplazada_por_dependencia": desplazada,
             "actualizado_en": now,
         }).eq("version_id", version_id).eq("pk_id", pk).eq("capitulo", cap).eq(
             "agrupador_id", ag_id

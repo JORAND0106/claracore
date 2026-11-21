@@ -81,7 +81,8 @@ def test_build_curva_s_nonzero_totals(
     assert data["meses"][0]["vigente_mes"] == 250_000.0
     assert data["version_ppto_id"] == "ppto-vigente-id"
     mock_ppto.assert_called_once()
-    assert mock_ppto.call_args.kwargs.get("force_vigente") is True
+    # Con selector de presupuesto explícito no se fuerza la vigente del Versionador
+    assert mock_ppto.call_args.kwargs.get("force_vigente") is False
     assert mock_scale.call_count == 1
 
 

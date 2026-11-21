@@ -39,7 +39,8 @@ from prog_obra_calendar import (
 
 _log = logging.getLogger(__name__)
 
-NodeKey = Tuple[str, str, str]  # (pk_id, capitulo, agrupador_id or "")
+# (pk_id, capitulo, agrupador_id or "", parte_id or "")
+NodeKey = Tuple[str, str, str, str]
 _INF = 10 ** 9
 
 
@@ -53,8 +54,19 @@ def cpm_agrupador_key(ag: Any) -> str:
         return str(ag).strip()
 
 
-def cpm_node_key(pk: str, cap: str, ag: Any = "") -> NodeKey:
-    return (str(pk or "").strip(), str(cap or "").strip(), cpm_agrupador_key(ag))
+def cpm_parte_key(parte_id: Any) -> str:
+    if parte_id in (None, ""):
+        return ""
+    return str(parte_id).strip()
+
+
+def cpm_node_key(pk: str, cap: str, ag: Any = "", parte_id: Any = "") -> NodeKey:
+    return (
+        str(pk or "").strip(),
+        str(cap or "").strip(),
+        cpm_agrupador_key(ag),
+        cpm_parte_key(parte_id),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,7 +81,8 @@ class NodoCPM:
     fecha_inicio_base: date
     fecha_fin_base: date
     agrupador_id: str = ""   # vacío = nodo capítulo completo
-    es_ancla: bool = False   # fecha manual fija (override_manual)
+    parte_id: str = ""       # vacío = agrupador completo (sin segregación)
+    es_ancla: bool = False   # SNET: no empezar antes de fecha_inicio_base
     # Resultados — se rellenan por calcular_cpm()
     fecha_inicio_temprana: Optional[date] = None
     fecha_fin_temprana: Optional[date] = None
@@ -80,10 +93,11 @@ class NodoCPM:
     es_ruta_critica: bool = False
     tiene_sucesores: bool = False
     es_actividad_final_tramo: bool = False
+    desplazada_por_dependencia: bool = False
 
     @property
     def key(self) -> NodeKey:
-        return cpm_node_key(self.pk_id, self.capitulo, self.agrupador_id)
+        return cpm_node_key(self.pk_id, self.capitulo, self.agrupador_id, self.parte_id)
 
 
 @dataclass
@@ -96,17 +110,21 @@ class DependenciaCPM:
     lag_dias: int = 0
     agrupador_id_origen: str = ""
     agrupador_id_destino: str = ""
+    parte_id_origen: str = ""
+    parte_id_destino: str = ""
 
     @property
     def origen(self) -> NodeKey:
         return cpm_node_key(
-            self.pk_id_origen, self.capitulo_origen, self.agrupador_id_origen,
+            self.pk_id_origen, self.capitulo_origen,
+            self.agrupador_id_origen, self.parte_id_origen,
         )
 
     @property
     def destino(self) -> NodeKey:
         return cpm_node_key(
-            self.pk_id_destino, self.capitulo_destino, self.agrupador_id_destino,
+            self.pk_id_destino, self.capitulo_destino,
+            self.agrupador_id_destino, self.parte_id_destino,
         )
 
 
@@ -255,6 +273,9 @@ def calcular_cpm(
     dur: dict[NodeKey, int] = {}
     ancla: dict[NodeKey, bool] = {}
 
+    # SNET floor index (fecha manual): ES nunca baja de este valor.
+    snet_floor: dict[NodeKey, int] = {}
+
     for n in nodos:
         key = n.key
         d_i = max(1, int(n.duracion or 1))
@@ -262,42 +283,36 @@ def calcular_cpm(
         ancla[key] = bool(n.es_ancla)
 
         if ancla[key]:
-            es_i = to_idx(n.fecha_inicio_base)
-            ES[key] = es_i
-            EF[key] = es_i + d_i - 1
+            # Restricción "no empezar antes de": piso = fecha manual del usuario.
+            floor_i = to_idx(n.fecha_inicio_base)
+            snet_floor[key] = floor_i
+            ES[key] = max(project_start_idx, floor_i)
+            EF[key] = ES[key] + d_i - 1
         else:
-            # Sin ancla manual: ES inicial = inicio versión (también con predecesores).
-            # El forward pass mueve ES según dependencias; no leer prog_actividades.
+            # Sin fecha manual: ES inicial = inicio de versión; deps pueden empujar.
             ES[key] = project_start_idx
             EF[key] = project_start_idx + d_i - 1
 
-    def _reapply_anchor(key: NodeKey) -> None:
-        if not ancla.get(key):
-            return
-        n = node_map[key]
-        es_i = to_idx(n.fecha_inicio_base)
-        d_i = dur[key]
-        ES[key] = es_i
-        EF[key] = es_i + d_i - 1
-
-    # ── 5. Forward pass ───────────────────────────────────────────────────
+    # ── 5. Forward pass (SNET: deps pueden retrasar anclas, nunca adelantarlas) ──
     watch: set = debug_watch or set()
     labels: Dict[NodeKey, str] = dict(debug_labels or {})
 
     def _node_label(key: NodeKey) -> str:
-        return labels.get(key, f"{key[0]}/{key[1]}/{key[2] or '-'}")
+        return labels.get(key, f"{key[0]}/{key[1]}/{key[2] or '-'}/{key[3] or '-'}")
 
     for key in topo_order:
-        if not ancla[key]:
-            EF[key] = ES[key] + dur[key] - 1
+        EF[key] = ES[key] + dur[key] - 1
         for _, succ_key, edge_data in G.out_edges(key, data=True):
-            if ancla.get(succ_key):
-                continue
             tipo: str = str(edge_data.get("tipo") or "FS").upper()
             lag: int = int(edge_data.get("lag") or 0)
             es_antes = ES[succ_key]
             cota = _forward_es_bound(ES, EF, dur, key, succ_key, tipo, lag)
             _apply_forward(ES, EF, dur, key, succ_key, tipo, lag)
+            # Respetar piso SNET tras empujón por dependencia.
+            floor = snet_floor.get(succ_key)
+            if floor is not None and ES[succ_key] < floor:
+                ES[succ_key] = floor
+                EF[succ_key] = floor + dur[succ_key] - 1
             if succ_key in watch:
                 gano = ES[succ_key] > es_antes
                 _log.info(
@@ -352,11 +367,7 @@ def calcular_cpm(
                 to_date(bc),
             )
 
-    for key in node_map:
-        if ancla.get(key):
-            _reapply_anchor(key)
-
-    # ── 6. Backward pass ──────────────────────────────────────────────────
+    # ── 6. Backward pass (SNET no fija LF=EF; la holgura refleja el grafo real) ──
     if fecha_fin_proyecto:
         project_ef = to_idx(fecha_fin_proyecto)
     else:
@@ -366,10 +377,7 @@ def calcular_cpm(
     LS: dict[NodeKey, int] = {}
 
     for key in node_map:
-        if ancla.get(key):
-            LF[key] = EF[key]
-        else:
-            LF[key] = project_ef
+        LF[key] = project_ef
 
     for key in reversed(topo_order):
         for pred_key, _, edge_data in G.in_edges(key, data=True):
@@ -421,12 +429,16 @@ def calcular_cpm(
                 libre = min(libre, EF[succ_key] - ES[key] - lag)
         n.holgura_libre = max(0, libre if libre < _INF else n.holgura_total)
 
-    # ── 8. Convertir índices a fechas ─────────────────────────────────────
+    # ── 8. Convertir índices a fechas + marcar empujón por dependencia ────
     for key, n in node_map.items():
         n.fecha_inicio_temprana = to_date(ES[key])
         n.fecha_fin_temprana    = to_date(EF[key])
         n.fecha_inicio_tardia   = to_date(LS[key])
         n.fecha_fin_tardia      = to_date(LF[key])
+        floor = snet_floor.get(key)
+        n.desplazada_por_dependencia = bool(
+            floor is not None and ES.get(key, floor) > floor
+        )
 
     return ResultadoCPM(
         ok=True,
@@ -466,10 +478,10 @@ def _apply_forward(
     Actualiza ES[dest] (y EF[dest] para FF/SF) según la dependencia.
     Índices de días hábiles enteros.
 
-    Reglas de calendario:
-      - Entrada de nodos sin ancla manual: solo inicio de versión + duracion_dias_habiles.
-      - Forward pass: ES inicial = inicio versión; las dependencias mueven ES/EF.
-      - prog_actividades.fecha_* solo aplica a nodos con ancla manual explícita.
+    Reglas de calendario (SNET):
+      - Sin fecha manual: ES inicial = inicio de versión; deps pueden empujar.
+      - Con fecha manual: ES inicial = max(inicio versión, fecha manual);
+        deps pueden retrasar, nunca adelantar por debajo del piso SNET.
       FS: dest.ES >= orig.EF + lag + 1
       SS: dest.ES >= orig.ES + lag
       FF: dest.EF >= orig.EF + lag  → dest.ES = dest.EF - dur + 1

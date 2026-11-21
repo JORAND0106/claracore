@@ -63,27 +63,24 @@ export default function ProgPresupuestoSelector({
           </option>
         ))}
       </select>
-      {selected && (
-        <div style={{ marginTop: '0.35rem', fontSize: 'var(--cc-caption)', lineHeight: 1.4, color: t.textMuted }}>
-          WBS y costos usan siempre el presupuesto en edición (es_vigente). Este selector aplica a Curva S y exportaciones.
-        </div>
-      )}
       {selected && !esOficial && (
-        <div
+        <span
+          data-cc-tooltip={`Presupuesto v${numSel} no aprobado — solo análisis de costos. No afecta fechas ni el envío a validación.`}
+          data-cc-tooltip-variant="help"
           style={{
+            display: 'inline-block',
             marginTop: '0.35rem',
-            padding: '0.4rem 0.5rem',
+            padding: '0.15rem 0.4rem',
             borderRadius: 6,
             background: '#fef3c7',
             border: '1px solid #f59e0b',
             fontSize: 'var(--cc-caption)',
-            lineHeight: 1.4,
             color: '#92400e',
+            cursor: 'help',
           }}
         >
-          ⚠ Presupuesto v{numSel} no aprobado — solo para análisis
-          {esBorradorActivo ? ' (borrador activo)' : ''}
-        </div>
+          ⚠ Análisis
+        </span>
       )}
     </div>
   )

@@ -30,14 +30,16 @@ import {
   countDiasHabilesEnRango,
 } from './progObraFormat'
 import { clearTramoProgramacion, fetchEstructuraTramo } from './progObraApi'
+import ProgObraSegregarModal from './ProgObraSegregarModal'
 
-const PROG_Z = 200000
+const PROG_Z = 210000
 
 function ProgModalIconBtn({ title, onClick, disabled, children, color, borderColor }) {
   return (
     <button
       type="button"
-      title={title}
+      data-cc-tooltip={title}
+      data-cc-tooltip-variant="short"
       aria-label={title}
       disabled={disabled}
       onClick={onClick}
@@ -1281,6 +1283,7 @@ function ProgItemRow({
   cpmClasif = null,
   cpmNode = null,
   cpmAplicado = false,
+  onSegregar = null,
 }) {
   const ex = act || {}
   const hasManualFechaAncla = Boolean(ex.override_manual && fmtDateIso(ex.fecha_inicio))
@@ -1293,11 +1296,21 @@ function ProgItemRow({
   const parentDates = parentAct || {}
   const [fechaIni, setFechaIni] = useState(() => fmtDateIso(ex.fecha_inicio))
   const [duracion, setDuracion] = useState(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
+  const [segChoiceOpen, setSegChoiceOpen] = useState(false)
+  const [segMode, setSegMode] = useState(null) // null | 'completo' | 'segregar'
+  const fechaInputRef = useRef(null)
   const debDur = useDebounced(duracion, 320)
   const debFecha = useDebounced(fechaIni, 320)
   const [finCalc, setFinCalc] = useState(() => fmtDateIso(ex.fecha_fin_calculada))
   const dirtyRef = useRef(false)
   const actSyncKey = `${fmtDateIso(ex.fecha_inicio)}|${ex.duracion_dias_habiles ?? ''}|${fmtDateIso(ex.fecha_fin_calculada)}`
+  const needsSegChoice =
+    rowKind === 'agrupador' &&
+    Array.isArray(itemDef.items) &&
+    itemDef.items.length > 1 &&
+    !itemDef.tiene_segregacion &&
+    !hasManualFechaAncla &&
+    Boolean(onSegregar)
 
   useEffect(() => {
     if (dirtyRef.current) return
@@ -1484,18 +1497,88 @@ function ProgItemRow({
         <td style={{ ...cell, minWidth: SCROLL_COL_W.und, width: SCROLL_COL_W.und }}>{itemDef.und || '—'}</td>
         <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.cant, width: SCROLL_COL_W.cant }}>{fmtCant(itemDef.cant_total)}</td>
         <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.costo, width: SCROLL_COL_W.costo, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
-        <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaIni, width: SCROLL_COL_W.fechaIni }}>
+        <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaIni, width: SCROLL_COL_W.fechaIni, position: 'relative' }}>
           {effectiveEditable ? (
-            <input
-              type="date"
-              value={effectiveIni}
-              onChange={(e) => {
-                dirtyRef.current = true
-                setFechaIni(e.target.value)
-              }}
-              onBlur={onBlurField}
-              style={{ width: '100%', fontSize: 'var(--cc-input)', padding: '4px 6px', boxSizing: 'border-box', border: `1px solid ${t.border}`, borderRadius: 4, background: t.bg }}
-            />
+            <>
+              <input
+                ref={fechaInputRef}
+                type="date"
+                value={effectiveIni}
+                onFocus={() => {
+                  if (needsSegChoice && segMode == null) setSegChoiceOpen(true)
+                }}
+                onChange={(e) => {
+                  dirtyRef.current = true
+                  setFechaIni(e.target.value)
+                }}
+                onBlur={onBlurField}
+                style={{ width: '100%', fontSize: 'var(--cc-input)', padding: '4px 6px', boxSizing: 'border-box', border: `1px solid ${t.border}`, borderRadius: 4, background: t.bg }}
+              />
+              {segChoiceOpen && (
+                <div
+                  role="dialog"
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: '100%',
+                    zIndex: 30,
+                    display: 'flex',
+                    gap: 6,
+                    padding: 6,
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bgCard || t.bg,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <button
+                    type="button"
+                    data-cc-tooltip="Programar todas las líneas del agrupador en este PK"
+                    data-cc-tooltip-variant="help"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setSegMode('completo')
+                      setSegChoiceOpen(false)
+                      requestAnimationFrame(() => fechaInputRef.current?.focus())
+                    }}
+                    style={{
+                      border: `1px solid ${t.border}`,
+                      borderRadius: 6,
+                      padding: '4px 10px',
+                      background: t.bg,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Completo
+                  </button>
+                  <button
+                    type="button"
+                    data-cc-tooltip="Elegir solo algunas líneas y dejar el resto en Pendiente"
+                    data-cc-tooltip-variant="help"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setSegMode('segregar')
+                      setSegChoiceOpen(false)
+                      onSegregar?.(itemDef)
+                    }}
+                    style={{
+                      border: `1px solid ${t.border}`,
+                      borderRadius: 6,
+                      padding: '4px 10px',
+                      background: t.bg,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Segregar
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             displayIni
           )}
@@ -1519,14 +1602,37 @@ function ProgItemRow({
         </td>
         <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaFin, width: SCROLL_COL_W.fechaFin, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
         <td style={{ ...cell, width: SCROLL_COL_W.save, minWidth: SCROLL_COL_W.save, textAlign: 'center' }}>
+          {(cpmNode?.desplazada_por_dependencia || ex?.desplazada_por_dependencia) && (
+            <span
+              data-cc-tooltip="Dependencia: el CPM corrió el inicio por encima de la fecha manual (no empezar antes de)"
+              data-cc-tooltip-variant="help"
+              style={{ color: '#7c3aed', fontWeight: 700, fontSize: 11, marginRight: 2 }}
+            >
+              ↗
+            </span>
+          )}
+          {Array.isArray(itemDef.items) && itemDef.items.length > 1 && onSegregar && effectiveEditable && (
+            <button
+              type="button"
+              data-cc-tooltip="Segregar: programar solo algunas líneas de este agrupador"
+              data-cc-tooltip-variant="help"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSegregar?.(itemDef)
+              }}
+              style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, padding: 0, marginRight: 2 }}
+            >
+              ✂
+            </button>
+          )}
           {cpmClasif?.tipo === 'critica' && (
-            <span title="Ruta crítica" style={{ color: '#dc2626', fontWeight: 700, fontSize: 10 }}>RC</span>
+            <span data-cc-tooltip="Ruta crítica" data-cc-tooltip-variant="short" style={{ color: '#dc2626', fontWeight: 700, fontSize: 10 }}>⚠</span>
           )}
           {cpmClasif?.tipo === 'holgura_negativa' && (
-            <span title="Fuera de plazo (holgura negativa)" style={{ color: '#b45309', fontWeight: 700, fontSize: 10 }}>⚠ FP</span>
+            <span data-cc-tooltip="Fuera de plazo (holgura negativa)" data-cc-tooltip-variant="short" style={{ color: '#b45309', fontWeight: 700, fontSize: 10 }}>⚠</span>
           )}
           {cpmClasif?.tipo === 'final_tramo' && (
-            <span title="Actividad final del tramo" style={{ color: '#1d4ed8', fontWeight: 700, fontSize: 10 }}>FIN</span>
+            <span data-cc-tooltip="Actividad final del tramo" data-cc-tooltip-variant="short" style={{ color: '#1d4ed8', fontWeight: 700, fontSize: 10 }}>🏁</span>
           )}
           {!cpmClasif?.tipo || (cpmClasif.tipo !== 'critica' && cpmClasif.tipo !== 'final_tramo') ? saveIcon : null}
         </td>
@@ -1621,6 +1727,7 @@ function ProgCapituloSection({
   cpmAplicado = false,
   versionFinIso = null,
   noHabilesSet = null,
+  onSegregar = null,
 }) {
   const pal = capColor(capIdx)
   const useWbs = Boolean(estructuraCap?.agrupadores?.length || estructuraCap?.sin_agrupador?.length)
@@ -1631,6 +1738,7 @@ function ProgCapituloSection({
     const actItem = agrupadorActItem(ag)
     const cant = Number(ag.cant_total) || 0
     const costo = Number(ag.costo_directo) || 0
+    const items = Array.isArray(ag.items) ? ag.items : []
     return {
       es_agrupador: true,
       agrupador_id: ag.agrupador_id,
@@ -1643,6 +1751,8 @@ function ProgCapituloSection({
       und: ag.items?.[0]?.und || ag.und || '?',
       vlr_unitario: cant > 0 ? costo / cant : costo,
       costo_directo: costo,
+      items,
+      tiene_segregacion: Boolean(ag.tiene_segregacion || ag.partes?.length),
     }
   }
 
@@ -1744,6 +1854,7 @@ function ProgCapituloSection({
               cpmClasif={cpmClasif}
               cpmNode={cpmNode}
               cpmAplicado={cpmAplicado}
+              onSegregar={onSegregar}
             />
             {expanded && (ag.items || []).map((hijo) => (
               <ProgItemRow
@@ -1843,6 +1954,9 @@ export default function ProgObraProgramacionModal({
   historicalReadOnly = false,
   tramoContext = null,
   modalMode = 'pk',
+  versionPptoId = null,
+  puedeEditar = true,
+  puedeEliminar = false,
 }) {
   const tramoConsolidado = modalMode === 'tramo'
   const ganttLayoutScope = tramoConsolidado ? 'tramo' : (activePk || '')
@@ -1850,6 +1964,7 @@ export default function ProgObraProgramacionModal({
   const [expandedAgs, setExpandedAgs] = useState({})
   const [noHabilesSet, setNoHabilesSet] = useState(new Set())
   const [finOverrides, setFinOverrides] = useState({})
+  const [segregarTarget, setSegregarTarget] = useState(null)
   const [localSaving, setLocalSaving] = useState(false)
   const [resettingPk, setResettingPk] = useState(false)
   const resettingPkRef = useRef(false)
@@ -2732,7 +2847,8 @@ export default function ProgObraProgramacionModal({
         fecha_inicio: row.clearSchedule || row.duracionOnly ? null : row.fecha_inicio,
         duracion: row.clearSchedule ? null : row.duracion,
         fecha_fin_calculada: row.clearSchedule ? null : undefined,
-        override_manual: false,
+        // SNET: fecha tipada en consolidado por tramo también es restricción manual.
+        override_manual: !(row.clearSchedule || row.duracionOnly) && Boolean(row.fecha_inicio),
         heredado_de_capitulo: false,
         itemDef: row.itemDef,
         rk: row.rk,
@@ -2822,7 +2938,7 @@ export default function ProgObraProgramacionModal({
         fecha_inicio: row.clearSchedule || row.duracionOnly ? null : row.fecha_inicio,
         duracion: row.clearSchedule ? null : (row.duracion > 0 ? row.duracion : null),
         fecha_fin_calculada: row.clearSchedule ? null : undefined,
-        override_manual: false,
+        override_manual: !(row.clearSchedule || row.duracionOnly) && Boolean(row.fecha_inicio),
         heredado_de_capitulo: false,
         itemDef: row.itemDef,
         rk: row.rk,
@@ -3566,6 +3682,19 @@ export default function ProgObraProgramacionModal({
                           cpmAplicado={cpmAplicado}
                           versionFinIso={versionFf || null}
                           noHabilesSet={noHabilesSet}
+                          onSegregar={
+                            tramoConsolidado || !editable
+                              ? null
+                              : (itemDef) => {
+                                  if (!itemDef?.agrupador_id || !activePk) return
+                                  setSegregarTarget({
+                                    pkId: activePk,
+                                    capitulo: itemDef.capitulo,
+                                    agrupadorId: itemDef.agrupador_id,
+                                    tieneSegregacion: Boolean(itemDef.tiene_segregacion),
+                                  })
+                                }
+                          }
                         />
                       )
                     })}
@@ -3766,6 +3895,36 @@ export default function ProgObraProgramacionModal({
             </p>
           )}
         </CcConfirmModal>
+      )}
+      {segregarTarget && (
+        <ProgObraSegregarModal
+          open={Boolean(segregarTarget)}
+          onClose={() => setSegregarTarget(null)}
+          onConfirm={async () => {
+            setSegregarTarget(null)
+            await onReloadActividades?.()
+            await loadAct?.()
+            showToast?.('Agrupador segregado', 'ok')
+          }}
+          onDeshacer={async () => {
+            setSegregarTarget(null)
+            await onReloadActividades?.()
+            await loadAct?.()
+            showToast?.('Segregación deshecha', 'ok')
+          }}
+          t={t}
+          API={API}
+          cid={cid}
+          token={token}
+          versionId={workingVersion?.id}
+          pkId={segregarTarget.pkId}
+          capitulo={segregarTarget.capitulo}
+          agrupadorId={segregarTarget.agrupadorId}
+          versionPptoId={versionPptoId}
+          puedeEditar={puedeEditar && editable}
+          puedeEliminar={puedeEliminar}
+          tieneSegregacion={segregarTarget.tieneSegregacion}
+        />
       )}
     </div>,
     document.body,

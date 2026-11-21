@@ -139,7 +139,7 @@ export default function ProgObraSuspensionWizard({
   const overlay = {
     position: 'fixed',
     inset: 0,
-    zIndex: 10060,
+    zIndex: 210000,
     background: 'rgba(15,23,42,0.55)',
     display: 'flex',
     alignItems: 'center',

@@ -22,19 +22,58 @@ PAGE = 1000
 
 
 def _round_money(v: float) -> float:
+    """Compat: redondeo a 2 dp (no usar para totales canónicos; ver valor_cant_vu)."""
     return round(float(v), 2)
 
 
-def _line_costo(row: dict) -> float:
+def _line_costo(row: dict, vu_listado: Optional[float] = None) -> float:
+    """
+    Regla única plataforma: ROUND0(ROUND(cant, 2) × VU_listado).
+    Nunca usa costo_directo almacenado ni VU congelado del presupuesto si hay listado.
+    """
+    from sicoe_valor_canonico import valor_cant_vu
+
     try:
-        cd = float(row.get("costo_directo") or 0)
-        if cd > 0:
-            return cd
-        cant = float(row.get("cant_total") or 0)
-        vlr = float(row.get("vlr_unitario") or 0)
-        return cant * vlr
+        cant = float(row.get("cant_total") or row.get("cantidad") or 0)
     except (TypeError, ValueError):
-        return 0.0
+        cant = 0.0
+    vu = None
+    if vu_listado is not None:
+        try:
+            vu = float(vu_listado)
+        except (TypeError, ValueError):
+            vu = None
+    if vu is None or vu <= 0:
+        try:
+            vu = float(row.get("precio_unitario") or row.get("vlr_unitario") or 0)
+        except (TypeError, ValueError):
+            vu = 0.0
+    return float(valor_cant_vu(cant, vu))
+
+
+def _load_listado_vu_map(sb, contrato_id: int) -> Dict[Tuple[str, str], float]:
+    """(capitulo_norm, item_norm) → precio_unitario del Listado de Precios."""
+    from sicoe_valor_canonico import load_listado_vu_by_cap_item, cap_item_key
+
+    idx = load_listado_vu_by_cap_item(sb, int(contrato_id))
+    out: Dict[Tuple[str, str], float] = {}
+    for k, meta in (idx or {}).items():
+        try:
+            vu = float(meta.get("vlr_unitario") or meta.get("precio_unitario") or 0)
+        except (TypeError, ValueError):
+            vu = 0.0
+        if vu > 0:
+            out[k] = vu
+    return out
+
+
+def _vu_for_row(row: dict, vu_map: Optional[Dict[Tuple[str, str], float]]) -> Optional[float]:
+    if not vu_map:
+        return None
+    from sicoe_valor_canonico import cap_item_key
+
+    k = cap_item_key(row.get("capitulo"), row.get("item") or row.get("item_numero"))
+    return vu_map.get(k)
 
 
 def fetch_ppto_borrador_version_id(sb, contrato_id: int) -> Optional[str]:
@@ -227,6 +266,7 @@ def _aggregate_items_por_agrupador(
     ppto_rows: List[dict],
     ag_by_item: Dict[Tuple[str, str], Optional[int]],
     desc_lp: Dict[Tuple[str, str], str],
+    vu_map: Optional[Dict[Tuple[str, str], float]] = None,
 ) -> Tuple[
     Dict[Tuple[str, str, int], dict],
     Dict[Tuple[str, str, str], dict],
@@ -234,39 +274,56 @@ def _aggregate_items_por_agrupador(
 ]:
     """
     Agrupa ítems por (pk, cap, agrupador_id).
-    Devuelve también mapa item suelto (pk, cap, item) y lista sin_agrupador.
+    Regla: sumar cantidades del mismo (pk,cap,item), luego ROUND0(ROUND(cant,2)×VU_listado).
     """
-    ag_buckets: Dict[Tuple[str, str, int], dict] = {}
-    item_map: Dict[Tuple[str, str, str], dict] = {}
-    sin_ag: List[dict] = []
+    from sicoe_valor_canonico import valor_cant_vu, round_cant
 
+    # 1) Acumular cantidades por línea
+    qty: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    meta_line: Dict[Tuple[str, str, str], dict] = {}
     for r in ppto_rows:
         pk = str(r.get("pk_id") or "").strip()
         cap = (r.get("capitulo") or "").strip()
         it = (r.get("item") or "").strip()
         if not pk or not cap or not it:
             continue
-        cant = float(r.get("cant_total") or 0)
-        vlr = float(r.get("vlr_unitario") or 0)
-        subtotal = _line_costo(r)
-        desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp, cap, it)
+        try:
+            cant = float(r.get("cant_total") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        key = (pk, cap, it)
+        qty[key] += cant
+        if key not in meta_line:
+            desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp, cap, it)
+            vu = _vu_for_row({"capitulo": cap, "item": it}, vu_map)
+            if vu is None or vu <= 0:
+                try:
+                    vu = float(r.get("vlr_unitario") or 0)
+                except (TypeError, ValueError):
+                    vu = 0.0
+            meta_line[key] = {"descripcion": desc, "precio_unitario": float(vu or 0)}
+
+    ag_buckets: Dict[Tuple[str, str, int], dict] = {}
+    item_map: Dict[Tuple[str, str, str], dict] = {}
+    sin_ag: List[dict] = []
+
+    for (pk, cap, it), cant_raw in qty.items():
+        cant = round_cant(cant_raw)
+        vu = float((meta_line.get((pk, cap, it)) or {}).get("precio_unitario") or 0)
+        subtotal = float(valor_cant_vu(cant, vu))
+        desc = (meta_line.get((pk, cap, it)) or {}).get("descripcion") or ""
         item_obj = {
             "item": it,
             "descripcion": desc,
-            "cantidad": round(cant, 4),
-            "precio_unitario": round(vlr, 2),
-            "subtotal": round(subtotal, 2),
+            "cantidad": cant,
+            "precio_unitario": round(vu, 2),
+            "subtotal": subtotal,
         }
-        item_key = (pk, cap, it)
-        if item_key not in item_map:
-            item_map[item_key] = {**item_obj, "cantidad": 0.0, "subtotal": 0.0}
-        cur = item_map[item_key]
-        cur["cantidad"] = round(cur["cantidad"] + cant, 4)
-        cur["subtotal"] = round(cur["subtotal"] + subtotal, 2)
+        item_map[(pk, cap, it)] = dict(item_obj)
 
         ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
         if ag_id is None:
-            sin_ag.append({**item_obj, "capitulo": cap})
+            sin_ag.append({**item_obj, "capitulo": cap, "pk_id": pk})
             continue
         ag_id_int = int(ag_id)
         ag_key = (pk, cap, ag_id_int)
@@ -276,14 +333,16 @@ def _aggregate_items_por_agrupador(
                 "capitulo": cap,
                 "pk_id": pk,
                 "costo_directo": 0.0,
+                "cant_total": 0.0,
                 "items": [],
             }
         bucket = ag_buckets[ag_key]
         bucket["items"].append(item_obj)
-        bucket["costo_directo"] += subtotal
+        bucket["cant_total"] = round_cant(float(bucket.get("cant_total") or 0) + cant)
 
+    # Costo del agrupador = Σ valor_cant_vu de sus líneas (ya redondeadas una vez por ítem)
     for bucket in ag_buckets.values():
-        bucket["costo_directo"] = _round_money(bucket["costo_directo"])
+        bucket["costo_directo"] = float(sum(float(it["subtotal"]) for it in bucket["items"]))
         bucket["items"].sort(key=lambda x: x["item"])
 
     sin_ag.sort(key=lambda x: (x.get("item") or ""))
@@ -301,9 +360,9 @@ def compute_costos_por_version(
     tramos: Optional[List[str]] = None,
     solo_programados: bool = False,
     *,
-    force_vigente: bool = True,
+    force_vigente: bool = False,
 ) -> dict:
-    """Costos por agrupador WBS según versión de presupuesto (vigente por defecto)."""
+    """Costos por agrupador WBS según la versión de presupuesto indicada (selector)."""
     vid = resolve_ppto_vigente_version_id(
         sb, contrato_id, version_ppto_id, force_vigente=force_vigente,
     )
@@ -324,7 +383,8 @@ def compute_costos_por_version(
     )
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
     ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
-    ag_buckets, _, sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp)
+    vu_map = _load_listado_vu_map(sb, contrato_id)
+    ag_buckets, _, sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp, vu_map)
     programados = agrupadores_programados_set(
         sb, version_prog_id, contrato_id, pk_id=pk_id, pk_ids=scope_pks
     )
@@ -389,7 +449,8 @@ def build_cost_overlay_maps(
         pk_ids=pk_ids,
     )
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
-    ag_buckets, item_map, _ = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp)
+    vu_map = _load_listado_vu_map(sb, contrato_id)
+    ag_buckets, item_map, _ = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp, vu_map)
     ag_costs = {k: float(v["costo_directo"] or 0) for k, v in ag_buckets.items()}
     item_costs = {k: float(v["subtotal"] or 0) for k, v in item_map.items()}
     return ag_costs, item_costs
@@ -403,7 +464,9 @@ def ppto_scope_direct_total(
     tramos: Optional[List[str]] = None,
     pk_ids: Optional[Set[str]] = None,
 ) -> float:
-    """Costo directo total del alcance (misma fuente que comparación de presupuesto)."""
+    """Costo directo total del alcance — regla listado (Σ valor_cant_vu por ítem)."""
+    from sicoe_valor_canonico import valor_cant_vu, round_cant, cap_item_key
+
     rows = fetch_ppto_items_version(
         sb,
         contrato_id,
@@ -412,7 +475,21 @@ def ppto_scope_direct_total(
         tramos=tramos,
         pk_ids=pk_ids,
     )
-    return _round_money(sum(_line_costo(r) for r in rows))
+    vu_map = _load_listado_vu_map(sb, contrato_id)
+    qty: Dict[Tuple[str, str], float] = defaultdict(float)
+    for r in rows:
+        k = cap_item_key(r.get("capitulo"), r.get("item"))
+        if not k[0] or not k[1]:
+            continue
+        try:
+            qty[k] += float(r.get("cant_total") or 0)
+        except (TypeError, ValueError):
+            pass
+    total = 0.0
+    for k, cant_raw in qty.items():
+        vu = float(vu_map.get(k) or 0)
+        total += float(valor_cant_vu(round_cant(cant_raw), vu))
+    return float(total)
 
 
 def _lookup_item_cost(
@@ -600,10 +677,13 @@ def build_brecha_presupuesto_programacion(
         tramos=tramos,
         pk_ids=pk_ids,
     )
-    presupuesto_total = _round_money(sum(_line_costo(r) for r in ppto_rows))
+    vu_map = _load_listado_vu_map(sb, contrato_id)
+    presupuesto_total = float(sum(
+        _line_costo(r, _vu_for_row(r, vu_map)) for r in ppto_rows
+    ))
 
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
-    ag_buckets, item_map, _sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp)
+    ag_buckets, item_map, _sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp, vu_map)
     ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
 
     act_rows = (

@@ -16,7 +16,13 @@ def test_ejecutado_pct():
 
 def test_enrich_mapa_rows_with_ejecutado():
     rows = [{"pk_id": "120367", "estado_programacion": "completa"}]
-    ej = {"120367": {"presupuesto_directo": 1000, "ejecutado": 400, "ejecutado_pct": 40.0}}
+    ej = {
+        "120367": {
+            "presupuesto_costo": 1000,
+            "ejecutado_costo": 400,
+            "porcentaje_ejecutado": 40.0,
+        }
+    }
     out = enrich_mapa_rows_with_ejecutado(rows, ej)
     assert out[0]["ejecutado"] == 400.0
     assert out[0]["ejecutado_pct"] == 40.0
@@ -35,8 +41,8 @@ def test_refresh_prog_pk_ejecutado_upsert(_ej, _ppto, _vid):
 
     out = refresh_prog_pk_ejecutado(sb, 3)
     assert out["ok"] is True
-    assert out["pk_count"] == 1
+    assert out["pks"] == 1
     sb.table.return_value.upsert.assert_called_once()
     row = sb.table.return_value.upsert.call_args[0][0][0]
     assert row["pk_id"] == "120367"
-    assert row["ejecutado_pct"] == 25.0
+    assert row["porcentaje_ejecutado"] == 25.0

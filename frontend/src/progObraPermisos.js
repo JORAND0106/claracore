@@ -16,15 +16,17 @@ export function permisosProgramacionObra(usuario, contratoId) {
   const ver = permisoProgramacionObra(usuario, 'ver', cid)
   const crear = permisoProgramacionObra(usuario, 'crear', cid)
   const editar = permisoProgramacionObra(usuario, 'editar', cid)
+  const eliminar = permisoProgramacionObra(usuario, 'eliminar', cid)
   const validar = permisoProgramacionObra(usuario, 'validar', cid)
   const exportar = permisoProgramacionObra(usuario, 'exportar', cid)
   return {
     ver,
     crear,
     editar,
+    eliminar,
     validar,
     exportar,
-    /** Modificar fechas, dependencias y CPM: editar o crear. */
+    /** @deprecated Preferir editar/crear por separado. */
     escribir: editar || crear,
   }
 }

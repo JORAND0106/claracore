@@ -96,7 +96,7 @@ export default function ProgObraAlcanceExportModal({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 12000,
+        zIndex: 210000,
         background: 'rgba(15,23,42,0.45)',
         display: 'flex',
         alignItems: 'center',

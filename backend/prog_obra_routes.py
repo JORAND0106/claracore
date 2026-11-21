@@ -1649,6 +1649,7 @@ def prog_costos_por_version_presupuesto(
         version_ppto_id.strip(),
         pk_id=(pk_id or "").strip() or None,
         solo_programados=False,
+        force_vigente=False,
     )
 
 
@@ -1939,3 +1940,107 @@ def prog_auto_schedule_aplicar(
         {"contrato_id": contrato_id, "actividades": result.get("actividades_aplicadas")},
     )
     return result
+
+
+# ── Segregación de agrupadores ───────────────────────────────────────────────
+
+class SegregarBody(BaseModel):
+    pk_id: str
+    capitulo: str
+    agrupador_id: int
+    nombre_parte: str
+    items: List[str] = Field(..., min_length=1)
+    fecha_inicio: Optional[str] = None
+    duracion_dias_habiles: Optional[int] = None
+    version_ppto_id: Optional[str] = None
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/partes")
+def prog_listar_partes(
+    contrato_id: int,
+    version_id: str,
+    pk_id: str = Query(...),
+    capitulo: str = Query(...),
+    agrupador_id: int = Query(...),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_partes import listar_partes_agrupador
+
+    return listar_partes_agrupador(
+        supabase, version_id, contrato_id, pk_id.strip(), capitulo.strip(), int(agrupador_id),
+    )
+
+
+@router.get("/{contrato_id}/segregar/preview")
+def prog_segregar_preview(
+    contrato_id: int,
+    pk_id: str = Query(...),
+    capitulo: str = Query(...),
+    agrupador_id: int = Query(...),
+    version_ppto_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_partes import preview_lineas_segregar
+
+    return preview_lineas_segregar(
+        supabase,
+        contrato_id,
+        pk_id.strip(),
+        capitulo.strip(),
+        int(agrupador_id),
+        version_ppto_id=(version_ppto_id or "").strip() or None,
+    )
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/segregar")
+def prog_segregar(
+    contrato_id: int,
+    version_id: str,
+    body: SegregarBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_partes import crear_segregacion
+
+    try:
+        return crear_segregacion(
+            supabase,
+            version_id,
+            contrato_id,
+            body.pk_id.strip(),
+            body.capitulo.strip(),
+            int(body.agrupador_id),
+            body.nombre_parte,
+            body.items,
+            body.fecha_inicio,
+            body.duracion_dias_habiles,
+            version_ppto_id=(body.version_ppto_id or "").strip() or None,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.delete("/{contrato_id}/versiones/{version_id}/segregar")
+def prog_deshacer_segregar(
+    contrato_id: int,
+    version_id: str,
+    pk_id: str = Query(...),
+    capitulo: str = Query(...),
+    agrupador_id: int = Query(...),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "eliminar")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_partes import deshacer_segregacion
+
+    try:
+        return deshacer_segregacion(
+            supabase, version_id, contrato_id, pk_id.strip(), capitulo.strip(), int(agrupador_id),
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)

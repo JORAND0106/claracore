@@ -151,7 +151,7 @@ def test_cpm_agrupador_key_normaliza_enteros():
 
     assert cpm_agrupador_key(401) == "401"
     assert cpm_agrupador_key("401") == "401"
-    assert cpm_node_key("PK1", "4. CAP", 402) == ("PK1", "4. CAP", "402")
+    assert cpm_node_key("PK1", "4. CAP", 402) == ("PK1", "4. CAP", "402", "")
 
 
 def test_segundo_calculo_usa_duracion_actual_no_fechas_previas():

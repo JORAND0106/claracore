@@ -274,8 +274,9 @@ def build_curva_s(
     if not tid and not bid:
         raise ValueError("No hay versión de programación para la curva S")
 
+    # Selector conectado: si el usuario elige versión, se respeta; si no, es_vigente.
     ppto_vigente_id = resolve_ppto_vigente_version_id(
-        sb, contrato_id, version_ppto_id, force_vigente=True,
+        sb, contrato_id, version_ppto_id, force_vigente=not bool((version_ppto_id or "").strip()),
     )
     ppto_baseline_id = fetch_ppto_baseline_version_id(sb, contrato_id) or ppto_vigente_id
 
@@ -626,6 +627,7 @@ def _pdf_page_header_html(
     *,
     subtitle: str = "",
     prog_meta: Optional[dict] = None,
+    ppto_meta: Optional[dict] = None,
     fecha_gen: str = "",
     pag: str = "",
 ) -> str:
@@ -634,6 +636,7 @@ def _pdf_page_header_html(
     c = PDF_CLR
     logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.85cm")
     prog_lbl = _prog_version_label(prog_meta)
+    ppto_lbl = _ppto_version_label(ppto_meta)
     pag_html = f' &nbsp;|&nbsp; <span style="color:{c["muted"]};">{_h(pag)}</span>' if pag else ""
     sub_html = (
         f'<div style="font-size:7pt;color:{c["muted"]};margin-top:2px;">{_h(subtitle)}</div>'
@@ -644,13 +647,17 @@ def _pdf_page_header_html(
 <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-bottom:4px;">
   <tr>
     <td style="width:14%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:1px;">{logo_html}</td>
-    <td style="width:62%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px 5px;">
+    <td style="width:48%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px 5px;">
       <div style="font-size:10pt;font-weight:bold;color:{c['text']};text-transform:uppercase;line-height:1.15;">{_h(title)}</div>
       {sub_html}
     </td>
-    <td style="width:24%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px;">
-      <div style="font-size:5.5pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Versión programación</div>
+    <td style="width:19%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px;">
+      <div style="font-size:5.5pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Programación</div>
       <div style="font-size:8pt;font-weight:bold;color:{c['accent']};margin-top:1px;">{_h(prog_lbl)}</div>
+    </td>
+    <td style="width:19%;vertical-align:middle;text-align:center;border:0.25px solid {c['border']};padding:3px;">
+      <div style="font-size:5.5pt;color:{c['muted']};text-transform:uppercase;font-weight:bold;">Presupuesto</div>
+      <div style="font-size:8pt;font-weight:bold;color:{c['accent']};margin-top:1px;">{_h(ppto_lbl)}</div>
     </td>
   </tr>
 </table>
@@ -1057,6 +1064,7 @@ def _render_cpm_pk_pdf_page(
     resultados_chunk: List[dict],
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
     *,
     page_num: int,
     total_pages: int,
@@ -1122,6 +1130,7 @@ def _render_dependencias_pdf_pages(
     dependencias: List[dict],
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
     *,
     start_page: int,
 ) -> Tuple[str, int]:
@@ -1157,6 +1166,7 @@ def _render_dependencias_pdf_pages(
             "Dependencias CPM",
             subtitle="Listado general",
             prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
             fecha_gen=fecha_gen,
             pag=f"{pag} ({i} de {total})" if total > 1 else pag,
         )
@@ -1186,6 +1196,7 @@ def _render_cpm_export_pdf_html(
     cpm_export: Optional[dict],
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
 ) -> str:
     export = cpm_export or {}
     resultados = export.get("resultados") or []
@@ -1576,6 +1587,7 @@ def _render_resumen_ejecutivo_pdf_html(
     resumen: dict,
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
 ) -> str:
     c = PDF_CLR
     td = _pdf_td
@@ -1642,6 +1654,7 @@ def _render_resumen_ejecutivo_pdf_html(
         "Estado de la versión",
         subtitle="Programación de obra",
         prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
         fecha_gen=fecha_gen,
     )
 
@@ -1750,6 +1763,7 @@ def _render_cronograma_pk_pdf_pages(
     cpm_export: Optional[dict],
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
 ) -> str:
     holgura_map = _cpm_holgura_by_agrupador(cpm_export)
     page_specs: List[Tuple[dict, List[dict], int, int]] = []
@@ -1913,7 +1927,7 @@ def _render_curva_s_pdf_header_block(
       Presupuesto total: <strong style="color:{c['accent']};">${float(ind.get('presupuesto_total') or 0):,.0f}</strong>
       &nbsp;&nbsp;&nbsp;Programado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('programado_a_fecha') or 0):,.0f} ({ind.get('programado_pct')}%)</strong>
       &nbsp;&nbsp;&nbsp;Ejecutado a la fecha: <strong style="color:{c['accent']};">${float(ind.get('ejecutado_a_fecha') or 0):,.0f} ({ind.get('ejecutado_pct')}%)</strong>
-      <span style="font-size:6pt;color:{c['muted']};"> · {_h(ind.get('ejecutado_regla') or 'Nivel 1 aprobado')}</span>
+      <span style="font-size:6pt;color:{c['muted']};"> · {_h(ind.get('ejecutado_regla') or 'SicoeObra con ítem (excl. rechazados)')}</span>
       &nbsp;&nbsp;&nbsp;Desviación: <strong style="color:{desv_color};">${desv_val:,.0f} ({ind.get('desviacion_pct')}%)</strong>
     </td>
   </tr>
@@ -1955,6 +1969,7 @@ def _render_curva_s_meses_pdf_page(
     total_pages: int,
     fecha_gen: str,
     prog_meta: Optional[dict],
+    ppto_meta: Optional[dict] = None,
 ) -> str:
     c = PDF_CLR
     th = _pdf_th_style
@@ -1970,6 +1985,7 @@ def _render_curva_s_meses_pdf_page(
         contrato,
         "Curva S — Distribución mensual de inversión",
         prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
         fecha_gen=fecha_gen,
         pag=pag,
     )
@@ -2020,6 +2036,7 @@ def _render_detalle_pk_pdf_pages(
     *,
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
 ) -> str:
     det = data.get("detalle_pk") or {}
     baseline_rows = det.get("baseline") or []
@@ -2053,6 +2070,7 @@ def _render_detalle_pk_pdf_pages(
             "Detalle por PK",
             subtitle="Distribución mensual",
             prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
             fecha_gen=fecha_gen,
         )
         return f"""
@@ -2132,12 +2150,14 @@ def _render_curva_s_intro_pdf_page(
     prog_meta: Optional[dict],
     page_num: int,
     total_pages: int,
+    ppto_meta: Optional[dict] = None,
 ) -> str:
     pag = f"Página {page_num} de {total_pages}" if total_pages > 1 else ""
     header = _pdf_page_header_html(
         contrato,
         "Curva S — Inversión acumulada",
         prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
         fecha_gen=fecha_gen,
         pag=pag,
     )
@@ -2180,6 +2200,7 @@ def build_curva_s_pdf_html(
         chart_block,
         fecha_gen=fecha_gen,
         prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
         page_num=1,
         total_pages=total_curva_pages,
     )
@@ -2191,10 +2212,12 @@ def build_curva_s_pdf_html(
             total_pages=total_curva_pages,
             fecha_gen=fecha_gen,
             prog_meta=prog_meta,
+        ppto_meta=ppto_meta,
         )
 
     detalle_pk_html = _render_detalle_pk_pdf_pages(
-        contrato, data, meses, prog_meta=prog_meta, fecha_gen=fecha_gen
+        contrato, data, meses, prog_meta=prog_meta,
+        ppto_meta=ppto_meta, fecha_gen=fecha_gen
     )
 
     crono_pages_html = _render_cronograma_pk_pdf_pages(
@@ -2212,7 +2235,7 @@ def build_curva_s_pdf_html(
     return f"""<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8"/>
 <style>
-@page {{ size: A4 landscape; margin: 0.9cm; }}
+@page {{ size: letter landscape; margin: 12mm 10mm; }}
 body {{ font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: {c['text']}; margin: 0; padding: 0; }}
 .page-cronograma {{ page-break-after: always; }}
 .page-cronograma:last-child {{ page-break-after: auto; }}
@@ -2392,6 +2415,7 @@ def _write_gantt_sheet(
     numero: str,
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
 ) -> Optional[dict]:
     """Escribe pestaña Gantt. Retorna metadatos para enlazar fórmulas en Curva S."""
     from openpyxl.styles import Alignment, Font
@@ -2703,6 +2727,7 @@ def _write_detalle_pk_excel_sheet(
     numero: str,
     prog_meta: Optional[dict],
     fecha_gen: str,
+    ppto_meta: Optional[dict] = None,
 ) -> Optional[dict]:
     from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
