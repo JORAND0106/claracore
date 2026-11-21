@@ -11,6 +11,7 @@ import { addMapboxGeolocateControl } from "./mapboxSafe";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import CcModalBrandHeader from "./components/CcModalBrandHeader";
 import CcTipChrome from "./components/CcTipChrome";
+import { CC_TOOLTIP_HELP_CHARS } from "./components/ccTooltipTheme";
 import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
 import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
 import { RefreshCw, Trash2 } from "lucide-react";
@@ -3299,74 +3300,287 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
 const MODAL_AGRUPADOR_ANCHO_CREAR = 1196; // 920px + 30%
 const LISTADO_PRECIOS_PAGE = 100;
 
-/** Fila del modal agrupador: tooltip con descripción completa si el texto está truncado. */
-function FilaTooltipDescripcionTruncada({ descripcion, rowStyle, theme, children }) {
+/** Un solo tip de descripción activo en el modal agrupador (evita duplicados / tips pegados en iPad). */
+let _agrupadorDescTipCloser = null;
+
+function cerrarAgrupadorDescTipActivo() {
+  if (typeof _agrupadorDescTipCloser === "function") {
+    try { _agrupadorDescTipCloser(); } catch { /* ignore */ }
+  }
+  _agrupadorDescTipCloser = null;
+  // Oculta también el tip global por si quedó un title residual encima.
+  const globalTip = typeof document !== "undefined" ? document.getElementById("cc-title-tooltip") : null;
+  if (globalTip) {
+    globalTip.style.display = "none";
+    globalTip.innerHTML = "";
+    globalTip.setAttribute("aria-hidden", "true");
+  }
+}
+
+/** Preferir costado de la fila para no tapar la lista del agrupador. */
+function placeAgrupadorDescTip(anchorRect, tipSize, viewport) {
+  const gap = 10;
+  const pad = 10;
+  const vw = viewport.width;
+  const vh = viewport.height;
+  const tw = tipSize.width;
+  const th = tipSize.height;
+  let left = anchorRect.right + gap;
+  let top = Math.min(Math.max(pad, anchorRect.top), Math.max(pad, vh - pad - th));
+  if (left + tw > vw - pad) {
+    left = anchorRect.left - tw - gap;
+  }
+  if (left < pad) {
+    // Viewport estrecho: arriba o abajo, sin centrar sobre la fila.
+    left = Math.min(Math.max(pad, anchorRect.left), Math.max(pad, vw - pad - tw));
+    top = anchorRect.top - th - gap;
+    if (top < pad) top = anchorRect.bottom + gap;
+  }
+  left = Math.min(Math.max(pad, left), Math.max(pad, vw - pad - tw));
+  top = Math.min(Math.max(pad, top), Math.max(pad, vh - pad - th));
+  return { left, top };
+}
+
+function agrupadorPointerEsFino() {
+  try {
+    return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Fila del modal agrupador: tip único con descripción si el texto está truncado (hasta 2 líneas).
+ * - Escritorio: hover / mouseleave.
+ * - Táctil: long-press en la descripción; se cierra al tocar fuera, scroll, seleccionar o repetir.
+ * - El primer toque corto en la fila no abre tip (permite seleccionar).
+ */
+function FilaTooltipDescripcionTruncada({
+  descripcion,
+  rowStyle,
+  theme,
+  children,
+  onActivate,
+  tipId,
+}) {
   const rowRef = useRef(null);
   const descRef = useRef(null);
+  const tipMeasureRef = useRef(null);
   const timerRef = useRef(null);
+  const longPressRef = useRef(null);
+  const tipOpenRef = useRef(false);
   const [tip, setTip] = useState(null);
   void theme;
 
-  const limpiarTimer = useCallback(() => {
+  const tipKey = tipId != null ? String(tipId) : "row";
+
+  const limpiarTimers = useCallback(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
   }, []);
 
-  useEffect(() => () => limpiarTimer(), [limpiarTimer]);
+  const ocultarTipPropio = useCallback(() => {
+    limpiarTimers();
+    const estabaAbierto = tipOpenRef.current;
+    tipOpenRef.current = false;
+    setTip(null);
+    if (estabaAbierto) _agrupadorDescTipCloser = null;
+  }, [limpiarTimers]);
+
+  useEffect(() => () => {
+    limpiarTimers();
+    if (tipOpenRef.current) {
+      tipOpenRef.current = false;
+      _agrupadorDescTipCloser = null;
+    }
+  }, [limpiarTimers]);
 
   const estaTruncada = useCallback(() => {
     const el = descRef.current;
-    return el ? el.scrollWidth > el.clientWidth + 1 : false;
+    if (!el) return false;
+    return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
+  }, []);
+
+  const colocarTip = useCallback((txt) => {
+    const anchor = descRef.current || rowRef.current;
+    if (!anchor || !txt) return;
+    const probe = tipMeasureRef.current;
+    let tw = Math.min(360, window.innerWidth - 24);
+    let th = 72;
+    if (probe) {
+      const r = probe.getBoundingClientRect();
+      if (r.width > 0) tw = r.width;
+      if (r.height > 0) th = r.height;
+    }
+    const pos = placeAgrupadorDescTip(
+      anchor.getBoundingClientRect(),
+      { width: tw, height: th },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    const variant = txt.length > CC_TOOLTIP_HELP_CHARS || txt.includes("\n") ? "help" : "short";
+    setTip({ text: txt, left: pos.left, top: pos.top, variant });
   }, []);
 
   const mostrarTooltip = useCallback(() => {
     const txt = (descripcion || "").trim();
-    if (!txt || !estaTruncada() || !rowRef.current) return;
-    const rect = rowRef.current.getBoundingClientRect();
-    const gap = 6;
-    const espacioAbajo = window.innerHeight - rect.bottom;
-    const espacioArriba = rect.top;
-    const abajo = espacioAbajo >= 72 || espacioAbajo >= espacioArriba;
-    setTip({
-      text: txt,
-      left: Math.min(Math.max(rect.left + rect.width / 2, 120), window.innerWidth - 120),
-      top: abajo ? rect.bottom + gap : rect.top - gap,
-      abajo,
-    });
+    if (!txt || !estaTruncada()) return;
+    cerrarAgrupadorDescTipActivo();
+    tipOpenRef.current = true;
+    _agrupadorDescTipCloser = () => {
+      tipOpenRef.current = false;
+      setTip(null);
+    };
+    const variant = txt.length > CC_TOOLTIP_HELP_CHARS || txt.includes("\n") ? "help" : "short";
+    setTip({ text: txt, left: -9999, top: -9999, variant, measuring: true });
   }, [descripcion, estaTruncada]);
 
+  useEffect(() => {
+    if (!tip?.measuring || !tip.text) return undefined;
+    const txt = tip.text;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!tipOpenRef.current) return;
+        colocarTip(txt);
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [tip?.measuring, tip?.text, colocarTip]);
+
   const onMouseEnter = () => {
-    limpiarTimer();
-    timerRef.current = setTimeout(mostrarTooltip, 300);
+    if (!agrupadorPointerEsFino()) return;
+    limpiarTimers();
+    timerRef.current = setTimeout(mostrarTooltip, 280);
   };
 
   const onMouseLeave = () => {
-    limpiarTimer();
-    setTip(null);
+    if (!agrupadorPointerEsFino()) return;
+    ocultarTipPropio();
   };
 
-  const tipEl = tip ? (
-    <CcTipChrome
-      variant="help"
+  const onDescPointerDown = (e) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    limpiarTimers();
+    const pointerId = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    longPressRef.current = setTimeout(() => {
+      longPressRef.current = null;
+      mostrarTooltip();
+    }, 420);
+    const cancelLongPress = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      if (longPressRef.current) {
+        const dx = Math.abs(ev.clientX - startX);
+        const dy = Math.abs(ev.clientY - startY);
+        if (dx > 10 || dy > 10) {
+          clearTimeout(longPressRef.current);
+          longPressRef.current = null;
+        }
+      }
+    };
+    const endLongPress = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      if (longPressRef.current) {
+        clearTimeout(longPressRef.current);
+        longPressRef.current = null;
+      }
+      window.removeEventListener("pointermove", cancelLongPress);
+      window.removeEventListener("pointerup", endLongPress);
+      window.removeEventListener("pointercancel", endLongPress);
+    };
+    window.addEventListener("pointermove", cancelLongPress);
+    window.addEventListener("pointerup", endLongPress);
+    window.addEventListener("pointercancel", endLongPress);
+  };
+
+  const onDescClick = (e) => {
+    // Toggle tip en táctil si ya estaba abierto (mismo ítem otra vez).
+    if (agrupadorPointerEsFino()) return;
+    if (tipOpenRef.current && tip) {
+      e.preventDefault();
+      e.stopPropagation();
+      ocultarTipPropio();
+      _agrupadorDescTipCloser = null;
+    }
+  };
+
+  useEffect(() => {
+    if (!tip || tip.measuring) return undefined;
+    const onPointerDownDoc = (e) => {
+      const row = rowRef.current;
+      if (row && (row === e.target || row.contains(e.target))) return;
+      ocultarTipPropio();
+      _agrupadorDescTipCloser = null;
+    };
+    const onScroll = () => {
+      ocultarTipPropio();
+      _agrupadorDescTipCloser = null;
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        ocultarTipPropio();
+        _agrupadorDescTipCloser = null;
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDownDoc, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDownDoc, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [tip, ocultarTipPropio]);
+
+  const handleActivate = (e) => {
+    if (!onActivate) return;
+    // No activar si el click fue en un control accionable.
+    if (e?.target?.closest?.("button, a, input, select, [data-cc-tip-action]")) return;
+    cerrarAgrupadorDescTipActivo();
+    onActivate(e);
+  };
+
+  const tipEl = tip && String(tip.text || "").trim() ? (
+    <div
+      ref={tipMeasureRef}
+      data-cc-agrupador-desc-tip={tipKey}
       style={{
         position: "fixed",
         left: tip.left,
         top: tip.top,
-        transform: tip.abajo ? "translate(-50%, 0)" : "translate(-50%, -100%)",
-        maxWidth: Math.min(440, window.innerWidth - 24),
+        zIndex: 2147483001,
+        maxWidth: Math.min(360, window.innerWidth - 24),
         pointerEvents: "none",
+        visibility: tip.measuring ? "hidden" : "visible",
       }}
     >
-      {tip.text}
-    </CcTipChrome>
+      <CcTipChrome variant={tip.variant === "help" ? "help" : "short"}>
+        {tip.text}
+      </CcTipChrome>
+    </div>
   ) : null;
 
   return (
     <>
-      <div ref={rowRef} style={rowStyle} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
-        {typeof children === "function" ? children(descRef) : children}
+      <div
+        ref={rowRef}
+        style={rowStyle}
+        data-cc-agrupador-item-row={tipKey}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+        onClick={handleActivate}
+      >
+        {typeof children === "function"
+          ? children(descRef, { onDescPointerDown, onDescClick })
+          : children}
       </div>
       {tipEl && createPortal(tipEl, document.body)}
     </>
@@ -3625,6 +3839,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   );
 
   const intentarAgregarItemAgrupador = (item) => {
+    cerrarAgrupadorDescTipActivo();
     if (!item || agrupadorItemsSelSet.has(String(item.id))) return;
     const ag = item.agrupador_id ? agrupadorById[item.agrupador_id] : null;
     const editAgId = showAgrupador?.mode === "edit" ? showAgrupador.id : null;
@@ -3636,6 +3851,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   };
 
   const quitarItemAgrupador = (itemId) => {
+    cerrarAgrupadorDescTipActivo();
     setAgrupadorItemsSel(prev => prev.filter(id => String(id) !== String(itemId)));
   };
 
@@ -3652,6 +3868,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   );
 
   const cerrarAgrupadorModal = () => {
+    cerrarAgrupadorDescTipActivo();
     setShowAgrupador(null);
     setAgrupadorItemsSel([]);
     setAgrupadorForm({ capitulo: "", nombre: "" });
@@ -4344,9 +4561,20 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     modalSub: { fontSize: "var(--cc-caption)", color: col.textSecondary, marginTop: 2 },
     panelTitle: { fontSize: "var(--cc-sm)", fontWeight: 700, color: tTok.primary, marginBottom: 8 },
     itemNum: { fontSize: "var(--cc-sm)", fontWeight: 700, color: col.textSecondary },
-    itemDesc: { fontSize: "var(--cc-sm)", color: col.textTable, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-    itemUnit: { fontSize: "var(--cc-caption)", color: col.textMuted, textAlign: "center" },
-    itemPrice: { fontSize: "var(--cc-sm)", color: "#22c55e", fontWeight: 600, textAlign: "right" },
+    itemDesc: {
+      fontSize: "var(--cc-sm)",
+      color: col.textTable,
+      overflow: "hidden",
+      display: "-webkit-box",
+      WebkitBoxOrient: "vertical",
+      WebkitLineClamp: 2,
+      lineHeight: 1.35,
+      wordBreak: "break-word",
+      overflowWrap: "anywhere",
+      minWidth: 0,
+    },
+    itemUnit: { fontSize: "var(--cc-caption)", color: col.textMuted, textAlign: "center", alignSelf: "center" },
+    itemPrice: { fontSize: "var(--cc-sm)", color: "#22c55e", fontWeight: 600, textAlign: "right", alignSelf: "center" },
     badge: {
       fontSize: "var(--cc-caption)", fontWeight: 700, whiteSpace: "nowrap",
       padding: "2px 8px", borderRadius: 999, color: tTok.primary,
@@ -5342,7 +5570,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                       placeholder="Buscar... 🔍"
                     />
                   </div>
-                  <div style={{ flex:1, overflowY:"auto", maxHeight:320, fontSize:"var(--cc-sm)" }}>
+                  <div
+                    style={{ flex:1, overflowY:"auto", maxHeight:320, fontSize:"var(--cc-sm)" }}
+                    onScroll={() => cerrarAgrupadorDescTipActivo()}
+                  >
                     {!busquedaAgrupadorActiva && !agrupadorForm.capitulo ? (
                       <div style={{ ...agTypo.empty, padding:16 }}>
                         {showAgrupador.mode === "edit"
@@ -5364,16 +5595,19 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                         return (
                           <FilaTooltipDescripcionTruncada
                             key={item.id}
+                            tipId={`izq-${item.id}`}
                             descripcion={item.descripcion}
                             theme={theme}
+                            onActivate={!seleccionado ? () => intentarAgregarItemAgrupador(item) : undefined}
                             rowStyle={{
                               display:"grid",
                               gridTemplateColumns:"28px 64px 1fr 44px 88px auto",
                               gap:8,
-                              alignItems:"center",
+                              alignItems:"start",
                               padding:"8px 10px",
                               borderBottom: idx < listaPanelIzquierdo.length - 1 ? `1px solid ${tTok.border}` : "none",
                               opacity: otroAgrupador ? 0.55 : 1,
+                              cursor: !seleccionado ? "pointer" : "default",
                               background: seleccionado
                                 ? (isDarkMode(theme) ? "rgba(34,197,94,0.1)" : "rgba(34,197,94,0.08)")
                                 : otroAgrupador
@@ -5381,30 +5615,41 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                                   : "transparent",
                             }}
                           >
-                            {(descRef) => (
+                            {(descRef, tipHandlers = {}) => (
                               <>
                                 {seleccionado ? (
-                                  <span style={agTypo.check} title="Asignado">✓</span>
+                                  <span style={{ ...agTypo.check, alignSelf:"center" }} title="Asignado" data-cc-tooltip-variant="short">✓</span>
                                 ) : (
                                   <button
                                     type="button"
-                                    style={{ ...S.btn("ghost", true), padding:"1px 6px", color:tTok.primary, fontWeight:700 }}
+                                    style={{ ...S.btn("ghost", true), padding:"1px 6px", color:tTok.primary, fontWeight:700, alignSelf:"center" }}
                                     onClick={(e) => { e.stopPropagation(); intentarAgregarItemAgrupador(item); }}
                                     title="Agregar al agrupador"
+                                    data-cc-tooltip-variant="short"
                                   >+</button>
                                 )}
-                                <span style={agTypo.itemNum}>{item.item_numero || "—"}</span>
-                                <span ref={descRef} style={agTypo.itemDesc}>{item.descripcion || "—"}</span>
+                                <span style={{ ...agTypo.itemNum, alignSelf:"center" }}>{item.item_numero || "—"}</span>
+                                <span
+                                  ref={descRef}
+                                  style={agTypo.itemDesc}
+                                  onPointerDown={tipHandlers.onDescPointerDown}
+                                  onClick={tipHandlers.onDescClick}
+                                >
+                                  {item.descripcion || "—"}
+                                </span>
                                 <span style={agTypo.itemUnit}>{item.unidad || "—"}</span>
                                 <span style={agTypo.itemPrice}>
                                   {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
                                 </span>
                                 {otroAgrupador ? (
-                                  <span title={ag.nombre} style={agTypo.badge}>
+                                  <span
+                                    aria-label={ag.nombre}
+                                    style={{ ...agTypo.badge, alignSelf:"center" }}
+                                  >
                                     {ag.codigo_wbs || ag.nombre}
                                   </span>
                                 ) : busquedaAgrupadorActiva && item.capitulo ? (
-                                  <span style={{ ...agTypo.meta, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:72 }}>
+                                  <span style={{ ...agTypo.meta, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:72, alignSelf:"center" }}>
                                     {(item.capitulo || "").split(".")[0] || item.capitulo}
                                   </span>
                                 ) : (
@@ -5433,7 +5678,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                       ? `Asignados (${itemsSeleccionadosAgrupador.length})`
                       : `Seleccionados (${itemsSeleccionadosAgrupador.length})`}
                   </div>
-                  <div style={{ flex:1, overflowY:"auto", maxHeight:280, fontSize:"var(--cc-sm)" }}>
+                  <div
+                    style={{ flex:1, overflowY:"auto", maxHeight:280, fontSize:"var(--cc-sm)" }}
+                    onScroll={() => cerrarAgrupadorDescTipActivo()}
+                  >
                     {itemsSeleccionadosAgrupador.length === 0 ? (
                       <div style={{ ...agTypo.empty, padding:16, textAlign:"center" }}>
                         Agregue ítems con el botón + del panel izquierdo.
@@ -5442,30 +5690,39 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                       itemsSeleccionadosAgrupador.map((item, idx) => (
                         <FilaTooltipDescripcionTruncada
                           key={item.id}
+                          tipId={`sel-${item.id}`}
                           descripcion={item.descripcion}
                           theme={theme}
                           rowStyle={{
                             display:"grid",
                             gridTemplateColumns:"64px 1fr 44px 88px 28px",
                             gap:8,
-                            alignItems:"center",
+                            alignItems:"start",
                             padding:"8px 10px",
                             borderBottom: idx < itemsSeleccionadosAgrupador.length - 1 ? `1px solid ${tTok.border}` : "none",
                           }}
                         >
-                          {(descRef) => (
+                          {(descRef, tipHandlers = {}) => (
                             <>
-                              <span style={agTypo.itemNum}>{item.item_numero || "—"}</span>
-                              <span ref={descRef} style={agTypo.itemDesc}>{item.descripcion || "—"}</span>
+                              <span style={{ ...agTypo.itemNum, alignSelf:"center" }}>{item.item_numero || "—"}</span>
+                              <span
+                                ref={descRef}
+                                style={agTypo.itemDesc}
+                                onPointerDown={tipHandlers.onDescPointerDown}
+                                onClick={tipHandlers.onDescClick}
+                              >
+                                {item.descripcion || "—"}
+                              </span>
                               <span style={agTypo.itemUnit}>{item.unidad || "—"}</span>
                               <span style={agTypo.itemPrice}>
                                 {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
                               </span>
                               <button
                                 type="button"
-                                style={{ ...S.btn("ghost", true), padding:"1px 5px", color:"#ef4444" }}
+                                style={{ ...S.btn("ghost", true), padding:"1px 5px", color:"#ef4444", alignSelf:"center" }}
                                 onClick={(e) => { e.stopPropagation(); quitarItemAgrupador(item.id); }}
                                 title="Quitar ítem"
+                                data-cc-tooltip-variant="short"
                               >✕</button>
                             </>
                           )}
