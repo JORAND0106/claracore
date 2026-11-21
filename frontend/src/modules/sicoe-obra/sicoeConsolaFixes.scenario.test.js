@@ -30,7 +30,7 @@ describe('consola: icono / offline clone / planilla / pizarra', () => {
 
   it('SW clona index.html sync antes de caches.open', () => {
     const sw = readFileSync(join(pub, 'sw.js'), 'utf8')
-    assert.match(sw, /claracore-shell-v11/)
+    assert.match(sw, /claracore-shell-v12/)
     const idx = sw.indexOf("pathname === '/index.html' && url.searchParams.has('_')")
     assert.ok(idx > 0)
     const slice = sw.slice(idx, idx + 900)
