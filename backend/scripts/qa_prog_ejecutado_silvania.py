@@ -171,3 +171,5 @@ if __name__ == "__main__":
     main()
 
 # trigger QA on push
+
+# azure-only QA trigger
