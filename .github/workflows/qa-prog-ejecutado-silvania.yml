@@ -1,0 +1,107 @@
+# Verificación puntual: ejecutado Programación = SicoeObra (Silvania / contrato 3).
+# Manual: Actions → «QA prog ejecutado Silvania» → Run workflow
+name: QA prog ejecutado Silvania
+
+on:
+  workflow_dispatch:
+    inputs:
+      contrato_id:
+        description: "contrato_id (default Silvania=3)"
+        required: false
+        default: "3"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        working-directory: ./backend
+        run: python -m pip install -q 'psycopg[binary]>=3.1.0' 'supabase>=2.0.0'
+
+      - name: Healthz producción
+        run: |
+          curl -sS "https://claracore-backend.azurewebsites.net/healthz" | tee /tmp/healthz.json
+          grep -q '"ok"' /tmp/healthz.json
+          echo
+          python3 -c "import json; d=json.load(open('/tmp/healthz.json')); print('git_sha', d.get('git_sha'))"
+
+      - name: Calcular ejecutado canónico (DB) + simular build_ejecucion_resumen
+        working-directory: ./backend
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          QA_CONTRATO_ID: ${{ github.event.inputs.contrato_id || '3' }}
+        run: |
+          set -e
+          if [ -z "${SUPABASE_DB_URL}" ]; then
+            echo "SUPABASE_DB_URL ausente" >&2
+            exit 1
+          fi
+          PYTHONPATH=. python3 scripts/qa_prog_ejecutado_silvania.py | tee /tmp/qa_ejecutado.json
+
+          # Si hay AZURE_CREDENTIALS, leer SUPABASE_KEY del App Service y
+          # ejecutar build_ejecucion_resumen (misma función que el endpoint).
+          if [ -z "${AZURE_CREDENTIALS}" ]; then
+            echo "AZURE_CREDENTIALS ausente — omito simulación API"
+            exit 0
+          fi
+          python -m pip install -q azure-identity azure-mgmt-web
+          PYTHONPATH=. python3 << 'PY'
+          import json, os, sys
+          from azure.identity import ClientSecretCredential
+          from azure.mgmt.web import WebSiteManagementClient
+
+          creds = json.loads(os.environ["AZURE_CREDENTIALS"])
+          credential = ClientSecretCredential(
+              creds["tenantId"], creds["clientId"], creds["clientSecret"]
+          )
+          client = WebSiteManagementClient(credential, creds["subscriptionId"])
+          app_name = "claracore-backend"
+          rg = None
+          for site in client.web_apps.list():
+              if site.name == app_name:
+                  parts = site.id.split("/")
+                  rg = parts[parts.index("resourceGroups") + 1]
+                  break
+          if not rg:
+              print("app no encontrada")
+              sys.exit(0)
+          settings = client.web_apps.list_application_settings(rg, app_name)
+          props = dict(settings.properties or {})
+          url = (props.get("SUPABASE_URL") or "").rstrip("/")
+          key = props.get("SUPABASE_KEY") or props.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+          print("azure_settings", bool(url), bool(key), "rg=", rg)
+          if not (url and key):
+              sys.exit(0)
+          from supabase import create_client
+          from prog_obra_ejecutado import build_ejecucion_resumen, clear_ejecutado_fetch_cache
+          clear_ejecutado_fetch_cache()
+          sb = create_client(url, key)
+          cid = int(os.environ.get("QA_CONTRATO_ID") or "3")
+          out = build_ejecucion_resumen(sb, cid)
+          print(json.dumps({
+              "programacion_api_sim_ejecutado_total": out.get("ejecutado_total"),
+              "presupuesto_total": out.get("presupuesto_total"),
+              "porcentaje": out.get("porcentaje"),
+              "n_ejecutables": out.get("n_ejecutables"),
+              "n_registros": out.get("n_registros"),
+              "n_rechazados": out.get("n_rechazados"),
+              "criterio": out.get("criterio"),
+          }, ensure_ascii=False, indent=2))
+          floor = 676_262_994
+          ej = float(out.get("ejecutado_total") or 0)
+          if ej < floor:
+              raise SystemExit(f"FAIL API sim {ej} < {floor}")
+          db = json.load(open("/tmp/qa_ejecutado.json"))
+          db_ej = float(db.get("programacion_ejecutado_canonico") or 0)
+          if abs(ej - db_ej) > 1:
+              raise SystemExit(f"FAIL mismatch API {ej} vs DB {db_ej}")
+          print("MATCH_OK programacion==sicoe", ej)
+          PY
