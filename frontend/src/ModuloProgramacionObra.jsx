@@ -49,6 +49,7 @@ import {
   saveActividadesBatchTramo,
 } from './progObraApi'
 import { buildProgObraRibbonItems } from './progObraRibbonItems'
+import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import {
   defaultPptoVersionAnalisisId,
   mergeEstructuraConCostosPpto,
@@ -369,7 +370,7 @@ function ProgPanelActionBtn({
   )
   if (off && disabledTitle) {
     return (
-      <span title={disabledTitle} style={{ display: 'block', width: '100%' }}>
+      <span data-cc-tooltip={disabledTitle} data-cc-tooltip-variant="help" style={{ display: 'block', width: '100%' }}>
         {btn}
       </span>
     )
@@ -466,7 +467,15 @@ function ProgPkListado({ rows, selPk, t, onSelectPk, listTitle }) {
                   {blocks}
                 </span>
                 <span style={{ gridColumn: 3, textAlign: 'right', fontWeight: 600, fontSize: 'var(--cc-caption)' }}>
-                  {sinAg > 0 ? <span style={{ color: '#b45309', marginRight: 3 }} title={`${sinAg} ítems sin agrupador`}>⚠</span> : null}
+                  {sinAg > 0 ? (
+                    <span
+                      style={{ color: '#b45309', marginRight: 3 }}
+                      data-cc-tooltip={`${sinAg} ítems sin agrupador`}
+                      data-cc-tooltip-variant="short"
+                    >
+                      ⚠
+                    </span>
+                  ) : null}
                   {pctLabel}
                 </span>
               </button>
@@ -664,13 +673,19 @@ function basemapStyleUrl(mode, isDarkTheme) {
   return streetsStyleUrl(isDarkTheme)
 }
 
-function basemapLabel(mode) {
+function basemapIcon(mode) {
+  if (mode === 'topo') return '⛰'
+  if (mode === 'satellite') return '🛰'
+  return '🗺'
+}
+
+function basemapTip(mode) {
   if (mode === 'topo') return 'Topo'
   if (mode === 'satellite') return 'Satélite'
   return 'Plano'
 }
 
-/** Control top-right: menú Plano / Topo / Satélite. */
+/** Control top-right: menú de base cartográfica (solo icono + tooltip). */
 function createBasemapStyleControl({ getMode, t, onSelect }) {
   let container
   let menu
@@ -678,10 +693,21 @@ function createBasemapStyleControl({ getMode, t, onSelect }) {
   const closeMenu = () => {
     if (menu) menu.style.display = 'none'
   }
-  const mkOpt = (value, label) => {
+  const syncMain = () => {
+    if (!mainBtn) return
+    const mode = getMode()
+    mainBtn.textContent = basemapIcon(mode)
+    mainBtn.setAttribute('data-cc-tooltip', basemapTip(mode))
+    mainBtn.setAttribute('data-cc-tooltip-variant', 'short')
+    mainBtn.setAttribute('aria-label', basemapTip(mode))
+  }
+  const mkOpt = (value, label, tip) => {
     const b = document.createElement('button')
     b.type = 'button'
-    b.textContent = label
+    b.textContent = `${basemapIcon(value)} ${label}`
+    b.setAttribute('data-cc-tooltip', tip)
+    b.setAttribute('data-cc-tooltip-variant', 'short')
+    b.setAttribute('aria-label', tip)
     const styleBase = [
       'display:block',
       'width:100%',
@@ -714,16 +740,16 @@ function createBasemapStyleControl({ getMode, t, onSelect }) {
       ev.stopPropagation()
       onSelect(value)
       closeMenu()
-      if (mainBtn) mainBtn.textContent = basemapLabel(value)
+      syncMain()
     }
     return b
   }
   const rebuildMenu = () => {
     if (!menu) return
     menu.innerHTML = ''
-    menu.appendChild(mkOpt('plano', 'Plano'))
-    menu.appendChild(mkOpt('topo', 'Topo'))
-    menu.appendChild(mkOpt('satellite', 'Satélite'))
+    menu.appendChild(mkOpt('plano', 'Plano', 'Callejero'))
+    menu.appendChild(mkOpt('topo', 'Topo', 'Relieve'))
+    menu.appendChild(mkOpt('satellite', 'Satélite', 'Satélite'))
   }
   return {
     onAdd() {
@@ -734,25 +760,26 @@ function createBasemapStyleControl({ getMode, t, onSelect }) {
       mainBtn = document.createElement('button')
       mainBtn.type = 'button'
       mainBtn.setAttribute('data-prog-basemap-btn', '1')
-      mainBtn.textContent = basemapLabel(getMode())
-      mainBtn.title = 'Vista del mapa'
+      syncMain()
       mainBtn.style.cssText = [
-        'font-size:11px',
+        'font-size:16px',
         'font-weight:700',
-        'padding:6px 10px',
-        'min-width:76px',
+        'padding:0',
+        'width:34px',
+        'height:34px',
+        'line-height:34px',
         'cursor:pointer',
         'color:#fff',
         'background:' + (t.primary || '#2563eb'),
         'border:none',
-        'border-radius:4px',
+        'border-radius:8px',
       ].join(';')
       mainBtn.onmousedown = (e) => e.preventDefault()
       mainBtn.onclick = (e) => {
         e.stopPropagation()
         if (!menu) return
         rebuildMenu()
-        mainBtn.textContent = basemapLabel(getMode())
+        syncMain()
         menu.style.display = menu.style.display === 'none' ? 'block' : 'none'
       }
 
@@ -769,7 +796,7 @@ function createBasemapStyleControl({ getMode, t, onSelect }) {
         'box-shadow:0 4px 16px rgba(0,0,0,0.18)',
         'background:' + (t.bgCard || '#fff'),
         'border:1px solid ' + (t.border || '#e5e7eb'),
-        'z-index:20',
+        'z-index:30',
       ].join(';')
       rebuildMenu()
 
@@ -937,6 +964,14 @@ function useDebounced(value, ms) {
   return d
 }
 
+function esUsuarioDesarrolladorLocal(usuario) {
+  if (!usuario) return false
+  if (usuario.es_desarrollador === true || usuario.acceso_total === true) return true
+  const cargo = String(usuario.cargo_nombre || usuario.cargo || '').trim().toLowerCase()
+  const rol = String(usuario.rol_nombre || usuario.rol || '').trim().toLowerCase()
+  return cargo === 'desarrollador' || rol === 'desarrollador'
+}
+
 export default function ModuloProgramacionObra({
   t,
   usuario,
@@ -946,9 +981,9 @@ export default function ModuloProgramacionObra({
   puedeEliminar = false,
   puedeValidar = false,
   puedeExportar = false,
-  onRibbonChange,
 }) {
   const puedeEscribir = puedeEditar
+  const esDev = esUsuarioDesarrolladorLocal(usuario)
   const cid = usuario?.contrato_id
   const uid = usuario?.id
   const API = API_BASE
@@ -1638,7 +1673,11 @@ export default function ModuloProgramacionObra({
       enrichedGeojsonRef.current = enriched
       applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk), mapViewModeRef.current)
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
-      if (lab) lab.textContent = basemapLabel(mapBaseModeRef.current)
+      if (lab) {
+        lab.textContent = basemapIcon(mapBaseModeRef.current)
+        lab.setAttribute('data-cc-tooltip', basemapTip(mapBaseModeRef.current))
+        lab.setAttribute('aria-label', basemapTip(mapBaseModeRef.current))
+      }
       const b = boundsLngLatFromFeatureCollection(enriched)
       if (b) {
         const runFit = () => {
@@ -1723,7 +1762,11 @@ export default function ModuloProgramacionObra({
     map.once('style.load', () => {
       applyProgMapAfterStyle(map, modeAtSwitch, enrichedGeojsonRef.current, (pk) => onMapPkClickRef.current(pk), mapViewModeRef.current)
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
-      if (lab) lab.textContent = basemapLabel(modeAtSwitch)
+      if (lab) {
+        lab.textContent = basemapIcon(modeAtSwitch)
+        lab.setAttribute('data-cc-tooltip', basemapTip(modeAtSwitch))
+        lab.setAttribute('aria-label', basemapTip(modeAtSwitch))
+      }
     })
   }, [mapBaseMode, t.bg])
 
@@ -2821,10 +2864,9 @@ export default function ModuloProgramacionObra({
     setCurvaPkIds(null)
   }, [])
 
-  useEffect(() => {
-    if (!onRibbonChange) return
-    onRibbonChange({
-      items: buildProgObraRibbonItems({
+  const ribbonItems = useMemo(
+    () =>
+      buildProgObraRibbonItems({
         esBorradorEditable,
         puedeEditar,
         puedeEliminar,
@@ -2838,20 +2880,16 @@ export default function ModuloProgramacionObra({
         onExport: () => setAlcanceModal('export'),
         onEliminar: () => setShowEliminarProgramacion(true),
       }),
-      busy: panelBusy,
-    })
-    return () => onRibbonChange(null)
-  }, [
-    onRibbonChange,
-    panelBusy,
-    esBorradorEditable,
-    puedeEditar,
-    puedeEliminar,
-    puedeExportar,
-    workingVersionId,
-    versionIdForWork,
-    versionBaselineId,
-  ])
+    [
+      esBorradorEditable,
+      puedeEditar,
+      puedeEliminar,
+      puedeExportar,
+      workingVersionId,
+      versionIdForWork,
+      versionBaselineId,
+    ],
+  )
 
   const handleGuardarCapitulo = async (capitulo, fechaIso, durInt) => {
     if (!puedeEscribir || !cid || !workingVersionId || !pkForData) return
@@ -3538,35 +3576,17 @@ export default function ModuloProgramacionObra({
             {err}
           </div>
         )}
-        {borradorMeta && (
-          <div
-            style={{
-              position: 'absolute',
-              top: 10,
-              right: 10,
-              zIndex: 2,
-              background: t.bgCard,
-              border: `1px solid ${t.border}`,
-              color: t.primary,
-              padding: '8px 12px',
-              borderRadius: 8,
-              fontSize: 'var(--cc-sm)',
-              fontWeight: 600,
-            }}
-          >
-            Borrador nº{borradorMeta.numero_version} — el mapa refleja el avance de este borrador
-          </div>
-        )}
         {!MAPBOX_TOKEN && <div style={{ padding: 24, color: t.textMuted }}>Falta VITE_MAPBOX_TOKEN para el mapa.</div>}
         <div ref={mapRef} style={{ width: '100%', height: '100%', borderRadius: 12 }} />
+        {/* Capa de overlays del mapa: z-index ordenado, sin solaparse entre sí */}
         <div
           style={{
             position: 'absolute',
-            top: borradorMeta ? 52 : 10,
+            top: 10,
             left: 10,
-            zIndex: 4,
-            maxWidth: 300,
-            padding: '10px 12px',
+            zIndex: 5,
+            maxWidth: 280,
+            padding: '8px 10px',
             borderRadius: 10,
             background: `${t.bgCard}f2`,
             border: `1px solid ${t.border}`,
@@ -3575,14 +3595,23 @@ export default function ModuloProgramacionObra({
             color: t.text,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, color: '#15803d', fontSize: 12 }}>
-              Ejecución SICOE (N1)
-              {tramoFilter ? ` · ${tramoFilter}` : ''}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+            <div
+              style={{ fontWeight: 700, color: '#15803d', fontSize: 12 }}
+              data-cc-tooltip={
+                tramoFilter
+                  ? `Ejecución SicoeObra · ${tramoFilter}`
+                  : 'Ejecución SicoeObra (ítem asignado, excl. rechazados)'
+              }
+              data-cc-tooltip-variant="help"
+            >
+              Ejecución
             </div>
             <button
               type="button"
-              title="Recalcular ejecutado desde SICOE"
+              data-cc-tooltip="Recalcular"
+              data-cc-tooltip-variant="short"
+              aria-label="Recalcular"
               disabled={ejecucionBusy}
               onClick={() => void refreshEjecucionCache()}
               style={{
@@ -3590,9 +3619,14 @@ export default function ModuloProgramacionObra({
                 background: t.bg,
                 color: ejecucionBusy ? t.textMuted : t.text,
                 borderRadius: 6,
-                padding: '2px 8px',
-                fontSize: 10,
+                width: 26,
+                height: 26,
+                padding: 0,
+                fontSize: 12,
                 cursor: ejecucionBusy ? 'wait' : 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
               {ejecucionBusy ? '…' : '↻'}
@@ -3600,94 +3634,140 @@ export default function ModuloProgramacionObra({
           </div>
           {ejecucionResumen ? (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 10px', marginBottom: 4 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 10px', marginBottom: 2 }}>
                 <span style={{ color: t.textMuted }}>Presupuesto</span>
                 <span style={{ textAlign: 'right', fontWeight: 600 }}>{formatCOP(ejecucionResumen.presupuesto_total)}</span>
                 <span style={{ color: t.textMuted }}>Ejecutado</span>
                 <span style={{ textAlign: 'right', fontWeight: 600, color: '#15803d' }}>{formatCOP(ejecucionResumen.ejecutado_total)}</span>
               </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: '#15803d', lineHeight: 1.2 }}>
-                {Number(ejecucionResumen.ejecutado_pct || 0).toFixed(1)}%
+              <div
+                style={{ fontSize: 18, fontWeight: 800, color: '#15803d', lineHeight: 1.2 }}
+                data-cc-tooltip={
+                  ejecucionActualizadoEn
+                    ? `Actualizado ${new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bogota' })}`
+                    : 'Porcentaje ejecutado'
+                }
+                data-cc-tooltip-variant="short"
+              >
+                {Number(ejecucionResumen.ejecutado_pct || ejecucionResumen.porcentaje || 0).toFixed(1)}%
               </div>
-              {ejecucionActualizadoEn && (
-                <div style={{ marginTop: 4, fontSize: 10, color: t.textMuted }}>
-                  Cache mapa: {new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bogota' })}
-                </div>
-              )}
             </>
           ) : (
-            <div style={{ color: t.textMuted, fontSize: 11 }}>{ejecucionBusy ? 'Calculando…' : 'Sin datos de ejecución'}</div>
+            <div style={{ color: t.textMuted, fontSize: 11 }}>{ejecucionBusy ? '…' : 'Sin datos'}</div>
           )}
         </div>
         <div
           style={{
             position: 'absolute',
-            top: borradorMeta ? 52 : 10,
+            top: 10,
             right: 52,
-            zIndex: 4,
+            zIndex: 5,
             display: 'flex',
-            borderRadius: 8,
-            overflow: 'hidden',
-            border: `1px solid ${t.border}`,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-            background: t.bgCard,
+            alignItems: 'center',
+            gap: 6,
           }}
         >
-          {[
-            { id: 'programacion', label: 'Programación' },
-            { id: 'ejecutado', label: 'Ejecutado' },
-          ].map((opt) => {
-            const active = mapViewMode === opt.id
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setMapViewMode(opt.id)}
-                style={{
-                  border: 'none',
-                  borderRight: opt.id === 'programacion' ? `1px solid ${t.border}` : 'none',
-                  background: active ? (opt.id === 'ejecutado' ? '#dcfce7' : `${t.primary}14`) : t.bgCard,
-                  color: active ? (opt.id === 'ejecutado' ? '#15803d' : t.primary) : t.textMuted,
-                  fontWeight: active ? 700 : 500,
-                  fontSize: 11,
-                  padding: '7px 12px',
-                  cursor: 'pointer',
-                }}
-              >
-                {opt.label}
-              </button>
-            )
-          })}
+          {borradorMeta && (
+            <span
+              data-cc-tooltip="El mapa refleja el avance de este borrador"
+              data-cc-tooltip-variant="help"
+              style={{
+                background: t.bgCard,
+                border: `1px solid ${t.border}`,
+                color: t.primary,
+                padding: '6px 10px',
+                borderRadius: 8,
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                cursor: 'help',
+              }}
+            >
+              Borrador nº{borradorMeta.numero_version}
+            </span>
+          )}
+          <div
+            style={{
+              display: 'flex',
+              borderRadius: 8,
+              overflow: 'hidden',
+              border: `1px solid ${t.border}`,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              background: t.bgCard,
+            }}
+          >
+            {[
+              { id: 'programacion', icon: '📅', tip: 'Programación' },
+              { id: 'ejecutado', icon: '✓', tip: 'Ejecutado' },
+            ].map((opt) => {
+              const active = mapViewMode === opt.id
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-cc-tooltip={opt.tip}
+                  data-cc-tooltip-variant="short"
+                  aria-label={opt.tip}
+                  onClick={() => setMapViewMode(opt.id)}
+                  style={{
+                    border: 'none',
+                    borderRight: opt.id === 'programacion' ? `1px solid ${t.border}` : 'none',
+                    background: active ? (opt.id === 'ejecutado' ? '#dcfce7' : `${t.primary}14`) : t.bgCard,
+                    color: active ? (opt.id === 'ejecutado' ? '#15803d' : t.primary) : t.textMuted,
+                    fontWeight: 700,
+                    fontSize: 14,
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {opt.icon}
+                </button>
+              )
+            })}
+          </div>
         </div>
         <div
           style={{
             position: 'absolute',
             left: 10,
             bottom: 10,
-            zIndex: 4,
-            maxWidth: 280,
-            padding: '10px 12px',
+            zIndex: 5,
+            maxWidth: 220,
+            padding: '8px 10px',
             borderRadius: 10,
             background: `${t.bgCard}ee`,
             border: `1px solid ${t.border}`,
             boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
             fontSize: 'var(--cc-sm)',
             color: t.text,
-            pointerEvents: 'none',
           }}
         >
-          <div style={{ fontWeight: 700, color: mapViewMode === 'ejecutado' ? '#0891b2' : t.primary, marginBottom: 8, fontSize: 12 }}>
-            {mapViewMode === 'ejecutado' ? 'Ejecutado en mapa (costo N1)' : 'Estado de programación'}
+          <div
+            style={{ fontWeight: 700, color: mapViewMode === 'ejecutado' ? '#0891b2' : t.primary, marginBottom: 6, fontSize: 12 }}
+            data-cc-tooltip={mapViewMode === 'ejecutado' ? 'Colores por % ejecutado vs programado' : 'Colores por estado de programación'}
+            data-cc-tooltip-variant="help"
+          >
+            {mapViewMode === 'ejecutado' ? 'Ejecutado' : 'Estado'}
           </div>
           {(mapViewMode === 'ejecutado' ? MAPA_LEYENDA_EJECUTADO : MAPA_LEYENDA_ESTADOS).map((it) => (
-            <div key={it.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+            <div
+              key={it.key}
+              data-cc-tooltip={it.desc}
+              data-cc-tooltip-variant="help"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, cursor: 'help' }}
+            >
               <span
                 aria-hidden
                 style={{
                   width: 14,
                   height: 14,
                   borderRadius: it.lineOnly ? 0 : 3,
-                  marginTop: 2,
                   flexShrink: 0,
                   background: it.lineOnly ? 'transparent' : it.fill,
                   opacity: it.lineOnly ? 1 : Math.max(it.op, 0.15),
@@ -3695,28 +3775,34 @@ export default function ModuloProgramacionObra({
                   boxSizing: 'border-box',
                 }}
               />
-              <span>
-                <strong style={{ color: t.text }}>{it.label}</strong>
-                <span style={{ color: t.textMuted, display: 'block', lineHeight: 1.35 }}>{it.desc}</span>
-              </span>
+              <strong style={{ color: t.text, fontSize: 11, lineHeight: 1.2 }}>{it.label}</strong>
             </div>
           ))}
         </div>
-        {mapaResp?.tiempo_ms != null && (
+        {esDev && mapaResp?.tiempo_ms != null && (
           <div
+            data-cc-tooltip={`/mapa ${mapaResp.tiempo_ms} ms`}
+            data-cc-tooltip-variant="short"
             style={{
               position: 'absolute',
               bottom: 10,
               right: 10,
-              zIndex: 3,
-              fontSize: 'var(--cc-sm)',
+              zIndex: 5,
+              fontSize: 11,
               color: t.textMuted,
               background: `${t.bgCard}cc`,
-              padding: '4px 8px',
+              width: 28,
+              height: 28,
               borderRadius: 6,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'help',
+              border: `1px solid ${t.border}`,
             }}
+            aria-label={`/mapa ${mapaResp.tiempo_ms} ms`}
           >
-            /mapa {mapaResp.tiempo_ms} ms
+            ⏱
           </div>
         )}
       </div>
@@ -3743,32 +3829,35 @@ export default function ModuloProgramacionObra({
             gap: '0.5rem',
           }}
         >
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-          <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-md)', lineHeight: 1.2, minWidth: 0 }}>
-            Programación de obra
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-md)', lineHeight: 1.2, minWidth: 0 }}>
+              Programación
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              {esBorradorEditable && puedeEscribir && workingVersionId && (
+                <ProgPanelIconBtn
+                  t={t}
+                  title="Enviar"
+                  disabled={panelBusy}
+                  onClick={() => void handleIniciarEnviarValidacion()}
+                >
+                  <Upload size={14} strokeWidth={2.25} />
+                </ProgPanelIconBtn>
+              )}
+              {puedeCrearNuevaVersion && (
+                <ProgPanelIconBtn
+                  t={t}
+                  title={sinVersiones ? 'Crear' : 'Nueva'}
+                  disabled={panelBusy}
+                  onClick={() => void handleClickNuevaVersion()}
+                >
+                  <Plus size={14} strokeWidth={2.25} />
+                </ProgPanelIconBtn>
+              )}
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            {esBorradorEditable && puedeEscribir && workingVersionId && (
-              <ProgPanelIconBtn
-                t={t}
-                title="Enviar a validación"
-                disabled={panelBusy}
-                onClick={() => void handleIniciarEnviarValidacion()}
-              >
-                <Upload size={14} strokeWidth={2.25} />
-              </ProgPanelIconBtn>
-            )}
-            {puedeCrearNuevaVersion && (
-              <ProgPanelIconBtn
-                t={t}
-                title={sinVersiones ? 'Crear programación inicial' : 'Nueva versión'}
-                disabled={panelBusy}
-                onClick={() => void handleClickNuevaVersion()}
-              >
-                <Plus size={14} strokeWidth={2.25} />
-              </ProgPanelIconBtn>
-            )}
-          </div>
+          <ProgObraHeaderRibbon t={t} items={ribbonItems} busy={panelBusy} compact />
         </div>
 
         <ProgPanelDivider t={t} />
@@ -3825,6 +3914,8 @@ export default function ModuloProgramacionObra({
               listStylePosition: 'inside',
               lineHeight: 1.4,
             }}
+            data-cc-tooltip="Avance de la versión activa"
+            data-cc-tooltip-variant="help"
           >
             Estado
           </summary>
@@ -3833,8 +3924,9 @@ export default function ModuloProgramacionObra({
           <div
             style={{
               display: 'flex',
-              flexDirection: 'column',
-              gap: '0.5rem',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
               padding: '0.5rem 0.65rem',
               borderRadius: 6,
               background: `${t.primary}12`,
@@ -3843,31 +3935,38 @@ export default function ModuloProgramacionObra({
               lineHeight: 1.35,
             }}
           >
-            <span style={{ color: t.text }}>
-              Borrador en progreso —{' '}
-              <strong style={{ color: t.primary }}>{borradorProgResumen.pct.toFixed(0)}% programado</strong>
+            <span
+              style={{ color: t.text, minWidth: 0 }}
+              data-cc-tooltip="Borrador en progreso: porcentaje de agrupadores con fecha"
+              data-cc-tooltip-variant="help"
+            >
+              Borrador{' '}
+              <strong style={{ color: t.primary }}>{borradorProgResumen.pct.toFixed(0)}%</strong>
             </span>
             {puedeEscribir && (
-            <>
-            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
-              Actualiza cantidades y costos de actividades ya programadas según el presupuesto vigente. No crea ítems nuevos en el cronograma.
-            </div>
-            <ProgPanelActionBtn
-              t={t}
-              label="🔄 Sincronizar con presupuesto"
-              variant="primary"
-              busy={panelBusy}
-              disabled={!workingVersionId}
-              onClick={() => void handleSincronizarPresupuesto()}
-            />
-            </>
+              <ProgPanelIconBtn
+                t={t}
+                title="Sincronizar"
+                disabled={panelBusy || !workingVersionId}
+                onClick={() => void handleSincronizarPresupuesto()}
+              >
+                🔄
+              </ProgPanelIconBtn>
             )}
           </div>
         ) : (
-          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4, padding: '0.25rem 0' }}>
+          <div
+            style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4, padding: '0.25rem 0' }}
+            data-cc-tooltip={
+              workingVersion
+                ? `Versión nº${workingVersion.numero_version} · ${workingVersion.estado || '—'}`
+                : 'Sin versión de programación activa'
+            }
+            data-cc-tooltip-variant="help"
+          >
             {workingVersion
-              ? `Versión nº${workingVersion.numero_version} · ${workingVersion.estado || '—'}`
-              : 'Sin versión de programación activa.'}
+              ? `nº${workingVersion.numero_version} · ${workingVersion.estado || '—'}`
+              : 'Sin versión'}
           </div>
         )}
 
@@ -3887,23 +3986,37 @@ export default function ModuloProgramacionObra({
               lineHeight: 1.35,
             }}
           >
-            <span>⚠ Desviación vs baseline: {desviacionContrato.label_fechas || '—'}</span>
+            <span
+              data-cc-tooltip={`Desviación vs baseline: ${desviacionContrato.label_fechas || '—'}`}
+              data-cc-tooltip-variant="help"
+              style={{ cursor: 'help', fontWeight: 700 }}
+            >
+              ⚠ Desviación
+            </span>
             <button
               type="button"
+              data-cc-tooltip="Detalle"
+              data-cc-tooltip-variant="short"
+              aria-label="Detalle"
               onClick={handleVerDetalleDesviacion}
               style={{
                 flexShrink: 0,
-                padding: '0.15rem 0.5rem',
-                fontSize: 'var(--cc-caption)',
-                fontWeight: 600,
-                borderRadius: 4,
+                width: 28,
+                height: 28,
+                padding: 0,
+                fontSize: 14,
+                fontWeight: 700,
+                borderRadius: 6,
                 border: '1px solid #D97706',
                 background: '#FFFBEB',
                 color: '#92400E',
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              Ver detalle
+              🔍
             </button>
           </div>
         )}
@@ -4031,15 +4144,22 @@ export default function ModuloProgramacionObra({
             )}
             {sinAgCountSel > 0 && (
               <div
-                style={{ marginTop: 4, fontSize: 'var(--cc-caption)', color: '#b45309', lineHeight: 1.3 }}
-                title={`${sinAgCountSel} ítem${sinAgCountSel === 1 ? '' : 's'} sin agrupador WBS — ve al Listado de Precios para asignarlos`}
+                style={{ marginTop: 4, fontSize: 'var(--cc-caption)', color: '#b45309', lineHeight: 1.3, cursor: 'help' }}
+                data-cc-tooltip={`${sinAgCountSel} ítem${sinAgCountSel === 1 ? '' : 's'} sin agrupador WBS — ve al Listado de Precios`}
+                data-cc-tooltip-variant="help"
               >
-                ⚠ {sinAgCountSel} ítem{sinAgCountSel === 1 ? '' : 's'} sin agrupador
+                ⚠ Sin agrupador
               </div>
             )}
           </div>
         ) : (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Haz clic en un polígono del plano.</div>
+          <div
+            style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'help' }}
+            data-cc-tooltip="Seleccione un polígono del plano para ver su programación"
+            data-cc-tooltip-variant="help"
+          >
+            Seleccione un PK
+          </div>
         )}
 
         <ProgPkListado
