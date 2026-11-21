@@ -27,6 +27,6 @@ def test_ruta_critica_solo_nodos_con_sucesores():
     assert by_cap["03"].es_ruta_critica is False
     assert by_cap["03"].es_actividad_final_tramo is True
     assert by_cap["03"].tiene_sucesores is False
-    assert ("PK1", "01", "") in res.ruta_critica
-    assert ("PK1", "02", "") in res.ruta_critica
-    assert ("PK1", "03", "") not in res.ruta_critica
+    assert ("PK1", "01", "", "") in res.ruta_critica
+    assert ("PK1", "02", "", "") in res.ruta_critica
+    assert ("PK1", "03", "", "") not in res.ruta_critica

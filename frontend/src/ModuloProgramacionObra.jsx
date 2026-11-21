@@ -297,7 +297,8 @@ function ProgPanelIconBtn({ title, onClick, disabled, children, t }) {
   return (
     <button
       type="button"
-      title={title}
+      data-cc-tooltip={title}
+      data-cc-tooltip-variant="short"
       aria-label={title}
       disabled={disabled}
       onClick={onClick}
@@ -942,11 +943,12 @@ export default function ModuloProgramacionObra({
   token,
   puedeEditar = false,
   puedeCrear = false,
+  puedeEliminar = false,
   puedeValidar = false,
   puedeExportar = false,
   onRibbonChange,
 }) {
-  const puedeEscribir = puedeEditar || puedeCrear
+  const puedeEscribir = puedeEditar
   const cid = usuario?.contrato_id
   const uid = usuario?.id
   const API = API_BASE
@@ -1020,10 +1022,11 @@ export default function ModuloProgramacionObra({
 
   mapViewModeRef.current = mapViewMode
 
-  const pptoVersionVigenteId = useMemo(
-    () => defaultPptoVersionAnalisisId(pptoVersiones),
-    [pptoVersiones],
-  )
+  /** Versión del selector (conectada a Curva S, WBS y exportes). Por defecto es_vigente. */
+  const pptoVersionVigenteId = useMemo(() => {
+    if (pptoVersionAnalisisId) return String(pptoVersionAnalisisId)
+    return defaultPptoVersionAnalisisId(pptoVersiones)
+  }, [pptoVersionAnalisisId, pptoVersiones])
 
   /** 'plano' = callejero claro/oscuro; 'topo' = outdoors; 'satellite' = satélite + relieve 3D. */
   const [mapBaseMode, setMapBaseMode] = useState('plano')
@@ -2313,7 +2316,7 @@ export default function ModuloProgramacionObra({
   }, [refreshMapaYVersiones, showToast])
 
   const handleEliminarProgramacion = useCallback(async () => {
-    if (!puedeEscribir || !cid || !workingVersionId || !token) return
+    if (!puedeEliminar || !cid || !workingVersionId || !token) return
     setPanelBusy(true)
     try {
       invalidateInFlightSaves()
@@ -2331,7 +2334,7 @@ export default function ModuloProgramacionObra({
     } finally {
       setPanelBusy(false)
     }
-  }, [puedeEscribir, cid, workingVersionId, token, API, refreshMapaImmediate, showToast, invalidateInFlightSaves, handleProgramacionResetStart, mapaResp])
+  }, [puedeEliminar, cid, workingVersionId, token, API, refreshMapaImmediate, showToast, invalidateInFlightSaves, handleProgramacionResetStart, mapaResp])
 
   const progTipoLabel = (tipo) => {
     const t0 = (tipo || '').toLowerCase()
@@ -2637,32 +2640,23 @@ export default function ModuloProgramacionObra({
   }, [presupuestoContratoAll, fetchActividadesByPk])
 
   const handleIniciarEnviarValidacion = async () => {
-    if (!puedeEscribir || !cid || !workingVersionId) return
+    if (!puedeEditar || !cid || !workingVersionId) return
     setPanelBusy(true)
     try {
-      const selectedPpto = pptoVersiones.find((v) => String(v.id) === String(pptoVersionAnalisisId))
-      const oficialPpto = pptoVigenteAprobada(pptoVersiones)
-      if (selectedPpto && !selectedPpto.es_vigente_aprobada) {
-        const pptoRes = await fetch(`${API}/prog-obra/${cid}/presupuesto-aprobacion-estado`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        const pptoEst = pptoRes.ok ? await pptoRes.json() : {}
-        setPresupuestoBloqueoValidacion({
-          motivo: 'selector',
-          selected_numero: selectedPpto.numero_version,
-          oficial_numero: oficialPpto?.numero_version ?? null,
-          items_pendientes: Number(pptoEst?.items_pendientes || 0),
-        })
-        return
-      }
+      // Criterio único (igual que el servidor): versión vigente del Versionador
+      // con todos los ítems aprobados. El selector de análisis no influye.
       const pptoRes = await fetch(`${API}/prog-obra/${cid}/presupuesto-aprobacion-estado`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (!pptoRes.ok) throw new Error(await parseApiError(pptoRes))
       const pptoEst = await pptoRes.json()
-      const pend = Number(pptoEst?.items_pendientes || 0)
-      if (pend > 0) {
-        setPresupuestoBloqueoValidacion({ motivo: 'aprobacion', ...pptoEst })
+      if (!pptoEst?.puede_enviar_validacion) {
+        setPresupuestoBloqueoValidacion({
+          motivo: 'aprobacion',
+          mensaje: pptoEst?.mensaje
+            || 'No se puede enviar a validación: la versión vigente del presupuesto tiene ítems sin aprobación de interventoría.',
+          ...pptoEst,
+        })
         return
       }
       const resumen = await buildValidacionResumen()
@@ -2832,7 +2826,8 @@ export default function ModuloProgramacionObra({
     onRibbonChange({
       items: buildProgObraRibbonItems({
         esBorradorEditable,
-        puedeEditar: puedeEscribir,
+        puedeEditar,
+        puedeEliminar,
         puedeExportar,
         workingVersionId,
         versionIdForWork,
@@ -2850,7 +2845,8 @@ export default function ModuloProgramacionObra({
     onRibbonChange,
     panelBusy,
     esBorradorEditable,
-    puedeEscribir,
+    puedeEditar,
+    puedeEliminar,
     puedeExportar,
     workingVersionId,
     versionIdForWork,
@@ -3281,6 +3277,9 @@ export default function ModuloProgramacionObra({
         compareTargetId={modalCompareTargetId ?? desviacionContrato?.target_id ?? versionIdForModal}
         puedeEditarListadoPrecios={puedeEditarListadoPrecios}
         onIrListadoPrecios={handleIrListadoPreciosWbs}
+        versionPptoId={pptoVersionVigenteId}
+        puedeEditar={puedeEditar}
+        puedeEliminar={puedeEliminar}
       />
 
       {presupuestoDelta && (
@@ -3612,7 +3611,7 @@ export default function ModuloProgramacionObra({
               </div>
               {ejecucionActualizadoEn && (
                 <div style={{ marginTop: 4, fontSize: 10, color: t.textMuted }}>
-                  Cache mapa: {new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })}
+                  Cache mapa: {new Date(ejecucionActualizadoEn).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bogota' })}
                 </div>
               )}
             </>
@@ -3801,14 +3800,14 @@ export default function ModuloProgramacionObra({
           programableCountByTramo={programableCountByTramo}
         />
         {tramoFilter && pkRowsVisibles.length > 0 && (
-          <ProgPanelActionBtn
-            label={`📋 Programar ${tramoFilter} (${pkRowsVisibles.length} PK${pkRowsVisibles.length === 1 ? '' : 's'})`}
-            onClick={() => openProgramacionModalTramo()}
-            disabled={panelBusy}
+          <ProgPanelIconBtn
             t={t}
-            variant="primary"
-            busy={panelBusy}
-          />
+            title={`Programar ${tramoFilter} (${pkRowsVisibles.length} PK${pkRowsVisibles.length === 1 ? '' : 's'})`}
+            disabled={panelBusy}
+            onClick={() => openProgramacionModalTramo()}
+          >
+            📋
+          </ProgPanelIconBtn>
         )}
 
         <ProgPanelDivider t={t} />

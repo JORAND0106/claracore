@@ -25,7 +25,8 @@ export default function ProgObraHeaderRibbon({ t, items = [], busy = false }) {
           <button
             key={item.key}
             type="button"
-            title={item.title}
+            data-cc-tooltip={item.title}
+            data-cc-tooltip-variant="short"
             aria-label={item.title}
             disabled={off}
             onClick={item.onClick}

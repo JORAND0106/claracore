@@ -2,6 +2,7 @@
 export function buildProgObraRibbonItems({
   esBorradorEditable,
   puedeEditar,
+  puedeEliminar = false,
   puedeExportar = false,
   workingVersionId,
   versionIdForWork,
@@ -45,13 +46,14 @@ export function buildProgObraRibbonItems({
       key: 'delete',
       icon: '🗑',
       title: 'Eliminar toda la programación del borrador',
-      disabled: !(esBorradorEditable && puedeEditar && workingVersionId),
+      disabled: !(esBorradorEditable && puedeEliminar && workingVersionId),
       onClick: onEliminar,
     },
   ]
   return items.filter((it) => {
     if (it.key === 'export') return puedeExportar
-    if (it.key === 'auto' || it.key === 'delete') return puedeEditar
+    if (it.key === 'auto') return puedeEditar
+    if (it.key === 'delete') return puedeEliminar
     return true
   })
 }

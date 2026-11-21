@@ -361,17 +361,59 @@ def compute_programacion_costos(
     return _round_money(anterior), _round_money(actual)
 
 
+MENSAJE_VALIDACION_PPTO_INCOMPLETO = (
+    "No se puede enviar a validación: la versión vigente del presupuesto "
+    "tiene ítems sin aprobación de interventoría."
+)
+
+
 def presupuesto_aprobacion_estado(sb, contrato_id: int) -> dict:
-    _, aprobado_map = aggregate_presupuesto_vivo(sb, contrato_id)
-    items_total = len(aprobado_map)
-    items_pendientes = sum(1 for ok in aprobado_map.values() if not ok)
-    items_aprobados = items_total - items_pendientes
+    """
+    Criterio único (pantalla = servidor):
+    la versión vigente del Versionador (es_vigente) debe tener todos sus
+    ítems con revisado = Aprobado.
+    """
+    from prog_obra_costos_presupuesto import fetch_ppto_borrador_version_id, fetch_ppto_items_version
+
+    vig_id = fetch_ppto_borrador_version_id(sb, int(contrato_id))
+    if not vig_id:
+        # Fallback: presupuesto vivo poligonal
+        _, aprobado_map = aggregate_presupuesto_vivo(sb, contrato_id)
+        items_total = len(aprobado_map)
+        items_pendientes = sum(1 for ok in aprobado_map.values() if not ok)
+        items_aprobados = items_total - items_pendientes
+        ok = items_pendientes == 0 and items_total > 0
+        return {
+            "aprobado_completo": ok,
+            "items_total": items_total,
+            "items_aprobados": items_aprobados,
+            "items_pendientes": items_pendientes,
+            "puede_enviar_validacion": ok,
+            "version_ppto_id": None,
+            "mensaje": None if ok else MENSAJE_VALIDACION_PPTO_INCOMPLETO,
+            "criterio": "versionador_vigente_todos_aprobados",
+        }
+
+    rows = fetch_ppto_items_version(sb, int(contrato_id), vig_id)
+    items_total = 0
+    items_aprobados = 0
+    for r in rows:
+        if bool(r.get("dado_de_baja")):
+            continue
+        items_total += 1
+        if _norm_revisado(r.get("revisado")) == "Aprobado":
+            items_aprobados += 1
+    items_pendientes = items_total - items_aprobados
+    ok = items_pendientes == 0 and items_total > 0
     return {
-        "aprobado_completo": items_pendientes == 0 and items_total > 0,
+        "aprobado_completo": ok,
         "items_total": items_total,
         "items_aprobados": items_aprobados,
         "items_pendientes": items_pendientes,
-        "puede_enviar_validacion": items_pendientes == 0 and items_total > 0,
+        "puede_enviar_validacion": ok,
+        "version_ppto_id": str(vig_id),
+        "mensaje": None if ok else MENSAJE_VALIDACION_PPTO_INCOMPLETO,
+        "criterio": "versionador_vigente_todos_aprobados",
     }
 
 

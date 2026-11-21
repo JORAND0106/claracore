@@ -47,24 +47,44 @@ def check_auto_schedule_prereqs(sb, contrato_id: int, version_id: str) -> dict:
 
 
 def _pk_costos(sb, contrato_id: int) -> Dict[str, float]:
-    rows = (
-        sb.table("presupuesto")
-        .select("pk_id,cant_total,vlr_unitario")
-        .eq("contrato_id", contrato_id)
-        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
-        .eq("dado_de_baja", False)
-        .execute()
-        .data
-        or []
+    """Costo por PK con regla única listado (Σ valor_cant_vu)."""
+    from collections import defaultdict as _dd
+    from prog_obra_costos_presupuesto import (
+        _load_listado_vu_map,
+        fetch_ppto_borrador_version_id,
+        fetch_ppto_items_version,
     )
-    out: Dict[str, float] = defaultdict(float)
+    from sicoe_valor_canonico import cap_item_key, round_cant, valor_cant_vu
+
+    vid = fetch_ppto_borrador_version_id(sb, contrato_id)
+    if vid:
+        rows = fetch_ppto_items_version(sb, contrato_id, vid)
+    else:
+        rows = (
+            sb.table("presupuesto")
+            .select("pk_id,capitulo,item,cant_total,vlr_unitario")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+            .eq("dado_de_baja", False)
+            .execute()
+            .data
+            or []
+        )
+    vu_map = _load_listado_vu_map(sb, contrato_id)
+    qty: Dict[tuple, float] = _dd(float)
     for r in rows:
         pk = str(r.get("pk_id") or "").strip()
-        if not pk:
+        k = cap_item_key(r.get("capitulo"), r.get("item"))
+        if not pk or not k[0] or not k[1]:
             continue
-        cant = float(r.get("cant_total") or 0)
-        vlr = float(r.get("vlr_unitario") or 0)
-        out[pk] += cant * vlr
+        try:
+            qty[(pk, k[0], k[1])] += float(r.get("cant_total") or 0)
+        except (TypeError, ValueError):
+            pass
+    out: Dict[str, float] = defaultdict(float)
+    for (pk, cap, it), cant_raw in qty.items():
+        vu = float(vu_map.get((cap, it)) or 0)
+        out[pk] += float(valor_cant_vu(round_cant(cant_raw), vu))
     return dict(out)
 
 

@@ -11,8 +11,9 @@ from prog_obra_costos_presupuesto import (
 )
 
 
-def test_line_costo_desde_campo():
-    assert _line_costo({"costo_directo": 1000, "cant_total": 10, "vlr_unitario": 50}) == 1000.0
+def test_line_costo_ignora_costo_directo_guardado():
+    """Regla única: nunca usa costo_directo almacenado; siempre cant × VU."""
+    assert _line_costo({"costo_directo": 1000, "cant_total": 10, "vlr_unitario": 50}) == 500.0
 
 
 def test_line_costo_desde_cantidad():
@@ -149,15 +150,21 @@ def test_build_brecha_presupuesto_sin_programacion():
     ag_meta = {10: {"id": 10, "codigo_wbs": "2.A", "nombre": "Subbase"}}
     nodes = {}
 
+    # VU listado: 500_000 y 50_000 → total 550_000 (regla única, no costo_directo guardado)
+    vu_map = {("02", "2.1"): 500_000.0, ("02", "2.9"): 50_000.0}
+    mock_sb = MagicMock()
+    mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
     with patch("prog_obra_costos_presupuesto.fetch_ppto_items_version", return_value=ppto_rows), patch(
         "prog_obra_costos_presupuesto._listado_agrupador_por_item", return_value=(ag_by, {})
     ), patch("prog_obra_costos_presupuesto._fetch_agrupadores_meta", return_value=ag_meta), patch(
+        "prog_obra_costos_presupuesto._load_listado_vu_map", return_value=vu_map
+    ), patch(
         "prog_obra_compare.fetch_compare_nodes", return_value=nodes
     ), patch(
         "prog_obra_costos_presupuesto.build_cost_overlay_maps",
         return_value=({("PK1", "02", 10): 500_000.0}, {("PK1", "02", "2.9"): 50_000.0}),
     ):
-        out = build_brecha_presupuesto_programacion(MagicMock(), 1, "prog-v", "ppto-v")
+        out = build_brecha_presupuesto_programacion(mock_sb, 1, "prog-v", "ppto-v")
 
     assert out["presupuesto_total"] == 550_000.0
     assert out["programado_total"] == 0.0
