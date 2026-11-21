@@ -1,5 +1,6 @@
-# Verificación puntual: ejecutado Programación = SicoeObra (Silvania / contrato 3).
-# Manual: Actions → «QA prog ejecutado Silvania» → Run workflow
+# Verificación: ejecutado Programación = SicoeObra (Silvania / contrato 3).
+# Corre en push a main (paths) o workflow_dispatch.
+# Usa AZURE_CREDENTIALS → App Settings SUPABASE_* del backend (no requiere SUPABASE_DB_URL).
 name: QA prog ejecutado Silvania
 
 on:
@@ -14,6 +15,7 @@ on:
     paths:
       - "backend/scripts/qa_prog_ejecutado_silvania.py"
       - ".github/workflows/qa-prog-ejecutado-silvania.yml"
+      - "backend/prog_obra_ejecutado.py"
 
 jobs:
   verify:
@@ -26,42 +28,33 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install deps
-        working-directory: ./backend
-        run: python -m pip install -q 'psycopg[binary]>=3.1.0' 'supabase>=2.0.0'
-
       - name: Healthz producción
         run: |
           curl -sS "https://claracore-backend.azurewebsites.net/healthz" | tee /tmp/healthz.json
-          grep -q '"ok"' /tmp/healthz.json
-          echo
           python3 -c "import json; d=json.load(open('/tmp/healthz.json')); print('git_sha', d.get('git_sha'))"
 
-      - name: Calcular ejecutado canónico (DB) + simular build_ejecucion_resumen
-        working-directory: ./backend
+      - name: Install deps
+        run: |
+          python -m pip install -q azure-identity azure-mgmt-web 'supabase>=2.0.0'
+
+      - name: Calcular Programación vs SicoeObra (service role Azure)
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           QA_CONTRATO_ID: ${{ github.event.inputs.contrato_id || '3' }}
+        working-directory: ./backend
         run: |
           set -e
-          if [ -z "${SUPABASE_DB_URL}" ]; then
-            echo "SUPABASE_DB_URL ausente" >&2
+          if [ -z "${AZURE_CREDENTIALS}" ]; then
+            echo "AZURE_CREDENTIALS ausente" >&2
             exit 1
           fi
-          PYTHONPATH=. python3 scripts/qa_prog_ejecutado_silvania.py | tee /tmp/qa_ejecutado.json
-
-          # Si hay AZURE_CREDENTIALS, leer SUPABASE_KEY del App Service y
-          # ejecutar build_ejecucion_resumen (misma función que el endpoint).
-          if [ -z "${AZURE_CREDENTIALS}" ]; then
-            echo "AZURE_CREDENTIALS ausente — omito simulación API"
-            exit 0
-          fi
-          python -m pip install -q azure-identity azure-mgmt-web
           PYTHONPATH=. python3 << 'PY'
           import json, os, sys
           from azure.identity import ClientSecretCredential
           from azure.mgmt.web import WebSiteManagementClient
+
+          FLOOR = 676_262_994
+          cid = int(os.environ.get("QA_CONTRATO_ID") or "3")
 
           creds = json.loads(os.environ["AZURE_CREDENTIALS"])
           credential = ClientSecretCredential(
@@ -76,37 +69,100 @@ jobs:
                   rg = parts[parts.index("resourceGroups") + 1]
                   break
           if not rg:
-              print("app no encontrada")
-              sys.exit(0)
+              raise SystemExit("claracore-backend no encontrado en la suscripción")
           settings = client.web_apps.list_application_settings(rg, app_name)
           props = dict(settings.properties or {})
           url = (props.get("SUPABASE_URL") or "").rstrip("/")
           key = props.get("SUPABASE_KEY") or props.get("SUPABASE_SERVICE_ROLE_KEY") or ""
-          print("azure_settings", bool(url), bool(key), "rg=", rg)
+          print("azure_rg", rg, "supabase_url_ok", bool(url), "key_ok", bool(key))
           if not (url and key):
-              sys.exit(0)
+              raise SystemExit("App Settings sin SUPABASE_URL/KEY")
+
           from supabase import create_client
-          from prog_obra_ejecutado import build_ejecucion_resumen, clear_ejecutado_fetch_cache
-          clear_ejecutado_fetch_cache()
+          from prog_obra_ejecutado import (
+              build_ejecucion_resumen,
+              clear_ejecutado_fetch_cache,
+              _fetch_so_registros_ejecucion,
+              _registros_ejecutables,
+              _tiene_item_cobro,
+              _registro_rechazado,
+          )
+          from sicoe_valor_canonico import load_listado_vu_by_cap_item, sum_valor_canonico
+
           sb = create_client(url, key)
-          cid = int(os.environ.get("QA_CONTRATO_ID") or "3")
-          out = build_ejecucion_resumen(sb, cid)
-          print(json.dumps({
-              "programacion_api_sim_ejecutado_total": out.get("ejecutado_total"),
-              "presupuesto_total": out.get("presupuesto_total"),
-              "porcentaje": out.get("porcentaje"),
-              "n_ejecutables": out.get("n_ejecutables"),
-              "n_registros": out.get("n_registros"),
-              "n_rechazados": out.get("n_rechazados"),
-              "criterio": out.get("criterio"),
-          }, ensure_ascii=False, indent=2))
-          floor = 676_262_994
-          ej = float(out.get("ejecutado_total") or 0)
-          if ej < floor:
-              raise SystemExit(f"FAIL API sim {ej} < {floor}")
-          db = json.load(open("/tmp/qa_ejecutado.json"))
-          db_ej = float(db.get("programacion_ejecutado_canonico") or 0)
-          if abs(ej - db_ej) > 1:
-              raise SystemExit(f"FAIL mismatch API {ej} vs DB {db_ej}")
-          print("MATCH_OK programacion==sicoe", ej)
+          clear_ejecutado_fetch_cache()
+
+          prog = build_ejecucion_resumen(sb, cid)
+          ej_prog = float(prog.get("ejecutado_total") or 0)
+
+          clear_ejecutado_fetch_cache()
+          all_rows = _fetch_so_registros_ejecucion(sb, cid)
+          ejecutables = _registros_ejecutables(all_rows)
+          listado = load_listado_vu_by_cap_item(sb, cid)
+          ej_sicoe = float(sum_valor_canonico(ejecutables, listado))
+
+          n1 = [
+              r for r in ejecutables
+              if str(r.get("nivel1_estado") or "").lower().startswith("aprob")
+          ]
+          ej_n1 = float(sum_valor_canonico(n1, listado))
+
+          try:
+              crows = (
+                  sb.table("contratos")
+                  .select("id,numero,contratista")
+                  .eq("id", cid)
+                  .limit(1)
+                  .execute()
+                  .data
+                  or []
+              )
+              crow = crows[0] if crows else {}
+          except Exception:
+              crow = {}
+          try:
+              pk_rows = (
+                  sb.table("pk_ids")
+                  .select("pk_id")
+                  .eq("contrato_id", cid)
+                  .execute()
+                  .data
+                  or []
+              )
+              n_pk = len(pk_rows)
+          except Exception:
+              n_pk = None
+
+          out = {
+              "contrato_id": cid,
+              "numero": crow.get("numero"),
+              "contratista": crow.get("contratista"),
+              "n_pk": n_pk,
+              "n_registros": len(all_rows),
+              "n_ejecutables": len(ejecutables),
+              "n_rechazados": sum(
+                  1 for r in all_rows if _tiene_item_cobro(r) and _registro_rechazado(r)
+              ),
+              "n_sin_item": sum(1 for r in all_rows if not _tiene_item_cobro(r)),
+              "n_listado": len(listado),
+              "programacion_ejecutado": round(ej_prog),
+              "sicoeobra_reportado": round(ej_sicoe),
+              "canonico_solo_n1": round(ej_n1),
+              "piso_legacy_n1_ui": FLOOR,
+              "cumple_piso": ej_prog >= FLOOR,
+              "coinciden": abs(ej_prog - ej_sicoe) <= 1,
+              "presupuesto_total": prog.get("presupuesto_total"),
+              "porcentaje": prog.get("porcentaje"),
+              "criterio": prog.get("criterio"),
+              "backend_git_sha": json.load(open("/tmp/healthz.json")).get("git_sha"),
+          }
+          print(json.dumps(out, ensure_ascii=False, indent=2))
+          if not out["cumple_piso"]:
+              raise SystemExit(f"FAIL piso: {out['programacion_ejecutado']} < {FLOOR}")
+          if not out["coinciden"]:
+              raise SystemExit(
+                  f"FAIL mismatch Programación {out['programacion_ejecutado']} "
+                  f"vs SicoeObra {out['sicoeobra_reportado']}"
+              )
+          print("MATCH_OK", out["programacion_ejecutado"])
           PY
