@@ -5,12 +5,14 @@ Regla de negocio (coherente con SicoeObra reportado):
   - Cuenta todo registro con ítem de cobro asignado (item_numero no vacío).
   - Independiente del estado de validación, salvo rechazados (no cuentan).
   - Sin ítem → no cuenta.
-  - Mes = mes de la fecha del reporte (fecha / fecha_reporte).
+  - Mes = mes de la fecha del reporte (so_reportes.created_at / nivel1_fecha /
+    created_at del registro). so_registros NO tiene columna ``fecha``.
   - Dinero = regla única listado: ROUND0(ROUND(Σcant,2)×VU_listado) por (cap, ítem[, pk]).
 """
 from __future__ import annotations
 
 import logging
+import threading
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -35,6 +37,10 @@ _logger = logging.getLogger("claracore.prog_obra_ejecutado")
 _COL_PPTO = "presupuesto_directo"
 _COL_EJ = "ejecutado"
 _COL_PCT = "ejecutado_pct"
+
+# Cache por request: evita 3× full-scan (mensual + por_cap + por_pk).
+_fetch_lock = threading.Lock()
+_fetch_cache: Dict[Tuple[int, int], List[dict]] = {}
 
 
 def _parse_d(val: Any) -> Optional[date]:
@@ -83,7 +89,30 @@ def _tiene_item_cobro(row: dict) -> bool:
 
 
 def _fecha_reporte(row: dict) -> Optional[date]:
-    for key in ("fecha", "fecha_reporte", "fecha_obra", "created_at"):
+    """Fecha del reporte: embed so_reportes → nivel*_fecha → created_at.
+
+    No usar columna ``fecha`` en so_registros (no existe en PostgREST).
+    """
+    emb = row.get("so_reportes")
+    if isinstance(emb, dict):
+        d = _parse_d(emb.get("created_at") or emb.get("fecha") or emb.get("fecha_reporte"))
+        if d:
+            return d
+    if isinstance(emb, list) and emb and isinstance(emb[0], dict):
+        d = _parse_d(
+            emb[0].get("created_at") or emb[0].get("fecha") or emb[0].get("fecha_reporte")
+        )
+        if d:
+            return d
+    for key in (
+        "fecha",  # tolerado si llega ya hidratado en memoria/tests
+        "fecha_reporte",
+        "fecha_obra",
+        "nivel1_fecha",
+        "nivel2_fecha",
+        "created_at",
+        "updated_at",
+    ):
         d = _parse_d(row.get(key))
         if d:
             return d
@@ -109,60 +138,110 @@ def _pk_from_registro(row: dict) -> str:
     return ""
 
 
-def _fetch_so_registros_ejecucion(sb, contrato_id: int) -> List[dict]:
-    """Lee so_registros del contrato. Intenta join pk_ids; si falla, plano."""
-    cols_nested = (
-        "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
-        "fecha,estado,"
-        "nivel1_estado,nivel2_estado,nivel3_estado,nivel4_estado,nivel5_estado,nivel6_estado,"
-        "pk_ids(pk_id)"
-    )
-    cols_flat = (
-        "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
-        "fecha,estado,"
-        "nivel1_estado,nivel2_estado,nivel3_estado,nivel4_estado,nivel5_estado,nivel6_estado,"
-        "pk_id"
-    )
-
-    def _paged(cols: str) -> List[dict]:
-        rows: List[dict] = []
-        off = 0
-        while True:
-            batch = (
-                sb.table("so_registros")
-                .select(cols)
-                .eq("contrato_id", int(contrato_id))
-                .range(off, off + _PAGE - 1)
-                .execute()
-                .data
-                or []
-            )
-            if not batch:
-                break
-            rows.extend(batch)
-            if len(batch) < _PAGE:
-                break
-            off += _PAGE
-        return rows
-
-    try:
-        return _paged(cols_nested)
-    except Exception as exc:
-        _logger.warning(
-            "so_registros nested pk_ids falló (contrato=%s): %s — reintento plano",
-            contrato_id,
-            exc,
+def _paged_select(sb, contrato_id: int, cols: str) -> List[dict]:
+    rows: List[dict] = []
+    off = 0
+    while True:
+        batch = (
+            sb.table("so_registros")
+            .select(cols)
+            .eq("contrato_id", int(contrato_id))
+            .range(off, off + _PAGE - 1)
+            .execute()
+            .data
+            or []
         )
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < _PAGE:
+            break
+        off += _PAGE
+    return rows
+
+
+def _fetch_so_registros_ejecucion(sb, contrato_id: int) -> List[dict]:
+    """Lee so_registros del contrato.
+
+    Columnas reales únicamente (sin ``fecha``). Intenta embed
+    ``so_reportes(created_at)`` + ``pk_ids(pk_id)``; cae a planos si falla.
+    """
+    cid = int(contrato_id)
+    cache_key = (id(sb), cid)
+    with _fetch_lock:
+        cached = _fetch_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    # Variantes en orden: más ricas → más seguras.
+    # NUNCA incluir ``fecha`` en so_registros (PGRST204 / 400).
+    # so_registros NO tiene ``fecha`` ni ``estado`` (PGRST204). Solo niveles.
+    variants = (
+        (
+            "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
+            "nivel1_estado,nivel2_estado,nivel3_estado,"
+            "nivel4_estado,nivel5_estado,nivel6_estado,"
+            "nivel1_fecha,reporte_id,created_at,"
+            "pk_ids(pk_id),so_reportes(created_at)"
+        ),
+        (
+            "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
+            "nivel1_estado,nivel2_estado,nivel3_estado,"
+            "nivel4_estado,nivel5_estado,nivel6_estado,"
+            "nivel1_fecha,reporte_id,created_at,"
+            "pk_ids(pk_id)"
+        ),
+        (
+            "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
+            "nivel1_estado,nivel2_estado,nivel3_estado,"
+            "nivel4_estado,nivel5_estado,nivel6_estado,"
+            "nivel1_fecha,created_at,pk_id"
+        ),
+        (
+            "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
+            "nivel1_estado,nivel2_estado,nivel3_estado,"
+            "nivel4_estado,nivel5_estado,nivel6_estado,created_at"
+        ),
+    )
+
+    last_exc: Optional[BaseException] = None
+    rows: List[dict] = []
+    for cols in variants:
         try:
-            return _paged(cols_flat)
-        except Exception:
-            # Último recurso: sin pk_id (totales de contrato siguen válidos)
-            cols_min = (
-                "id,capitulo,item_numero,cantidad_total,vlr_unitario,costo_directo,"
-                "fecha,estado,"
-                "nivel1_estado,nivel2_estado,nivel3_estado,nivel4_estado,nivel5_estado,nivel6_estado"
+            rows = _paged_select(sb, cid, cols)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            _logger.warning(
+                "so_registros select falló (contrato=%s cols≈%s…): %s",
+                cid,
+                cols[:48],
+                exc,
             )
-            return _paged(cols_min)
+            continue
+
+    if last_exc is not None and not rows:
+        _logger.error(
+            "so_registros: no se pudo leer ejecutado contrato=%s: %s",
+            cid,
+            last_exc,
+        )
+        raise last_exc
+
+    with _fetch_lock:
+        _fetch_cache[cache_key] = rows
+        # Evitar crecimiento indefinido en procesos largos
+        if len(_fetch_cache) > 32:
+            # Drop oldest-ish: clear all; next calls refill
+            _fetch_cache.clear()
+            _fetch_cache[cache_key] = rows
+    return rows
+
+
+def clear_ejecutado_fetch_cache() -> None:
+    with _fetch_lock:
+        _fetch_cache.clear()
 
 
 def _registros_ejecutables(rows: List[dict]) -> List[dict]:
@@ -343,6 +422,14 @@ def fetch_ejecutado_resumen(
 ) -> dict:
     from prog_obra_costos_presupuesto import ppto_scope_direct_total
 
+    clear_ejecutado_fetch_cache()
+    all_rows = _fetch_so_registros_ejecucion(sb, int(contrato_id))
+    n_sin_item = sum(1 for r in all_rows if not _tiene_item_cobro(r))
+    n_rechazados = sum(
+        1 for r in all_rows if _tiene_item_cobro(r) and _registro_rechazado(r)
+    )
+    n_ejecutables = sum(1 for r in all_rows if _include_ejecutable(r))
+
     vid = resolve_ppto_vigente_version_id(sb, contrato_id, version_ppto_id, force_vigente=False)
     monthly, ejecutado_total = fetch_ejecutado_mensual(sb, contrato_id, pk_ids=pk_ids)
     presupuesto_total = 0.0
@@ -365,7 +452,10 @@ def fetch_ejecutado_resumen(
         "por_capitulo": ej_by_cap,
         "criterio": "item_asignado_no_rechazado",
         "regla": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem); excl. rechazados y sin ítem",
-        "n_registros": None,
+        "n_registros": len(all_rows),
+        "n_ejecutables": n_ejecutables,
+        "n_rechazados": n_rechazados,
+        "n_sin_item": n_sin_item,
     }
 
 
@@ -416,9 +506,11 @@ def fetch_prog_pk_ejecutado_map(sb, contrato_id: int) -> Dict[str, dict]:
 
 def refresh_prog_pk_ejecutado(sb, contrato_id: int) -> dict:
     """Recalcula cache por PK con columnas reales de prog_pk_ejecutado."""
+    clear_ejecutado_fetch_cache()
     vid = resolve_ppto_vigente_version_id(sb, contrato_id, None, force_vigente=True)
     ppto_by_pk: Dict[str, float] = _aggregate_presupuesto_por_pk(sb, contrato_id, vid) if vid else {}
     ej_by_pk = _aggregate_ejecutado_por_pk(sb, contrato_id)
+    _, ejecutado_total = fetch_ejecutado_mensual(sb, contrato_id)
 
     existing = (
         sb.table("prog_pk_ejecutado")
@@ -452,7 +544,13 @@ def refresh_prog_pk_ejecutado(sb, contrato_id: int) -> dict:
             payload,
             on_conflict="contrato_id,pk_id",
         ).execute()
-    return {"ok": True, "pks": len(payload), "actualizado_en": now, "criterio": "item_asignado_no_rechazado"}
+    return {
+        "ok": True,
+        "pks": len(payload),
+        "actualizado_en": now,
+        "criterio": "item_asignado_no_rechazado",
+        "ejecutado_total": ejecutado_total,
+    }
 
 
 def fetch_ejecutado_detalle_por_pk_item(
@@ -464,6 +562,7 @@ def fetch_ejecutado_detalle_por_pk_item(
     """Presupuesto vs ejecutado por PK + capítulo + ítem (conector PK)."""
     from prog_obra_costos_presupuesto import fetch_ppto_borrador_version_id
 
+    clear_ejecutado_fetch_cache()
     pk_filter = {str(p).strip() for p in (pk_ids or set()) if str(p).strip()} or None
     vid = fetch_ppto_borrador_version_id(sb, contrato_id)
     vu_map = _load_listado_vu_map(sb, contrato_id)
