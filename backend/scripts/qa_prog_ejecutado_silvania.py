@@ -173,3 +173,5 @@ if __name__ == "__main__":
 # trigger QA on push
 
 # azure-only QA trigger
+
+# deps fastapi

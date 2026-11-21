@@ -35,7 +35,7 @@ jobs:
 
       - name: Install deps
         run: |
-          python -m pip install -q azure-identity azure-mgmt-web 'supabase>=2.0.0'
+          python -m pip install -q azure-identity azure-mgmt-web 'supabase>=2.0.0' fastapi pydantic httpx python-multipart
 
       - name: Calcular Programación vs SicoeObra (service role Azure)
         env:
