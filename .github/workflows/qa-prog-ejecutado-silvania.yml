@@ -9,6 +9,11 @@ on:
         description: "contrato_id (default Silvania=3)"
         required: false
         default: "3"
+  push:
+    branches: [main]
+    paths:
+      - "backend/scripts/qa_prog_ejecutado_silvania.py"
+      - ".github/workflows/qa-prog-ejecutado-silvania.yml"
 
 jobs:
   verify:
