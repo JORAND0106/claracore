@@ -1849,6 +1849,9 @@ export default function ModuloProgramacionObra({
         capitulo: cap,
         agrupadores: (c.agrupadores || []).map((ag) => ({
           ...ag,
+          es_multi_agrupador: Boolean(ag.es_multi_agrupador),
+          lineas_sin_asignar: Number(ag.lineas_sin_asignar) || (ag.alerta_pks_lineas || []).length || 0,
+          alerta_pks_lineas: ag.alerta_pks_lineas || [],
           items: (ag.items || []).map((it) => ({
             item: it.item,
             descripcion: it.descripcion || '',
@@ -2068,7 +2071,7 @@ export default function ModuloProgramacionObra({
       return
     }
     let cancel = false
-    const eKey = progObraEstructuraCacheKey(cid, pkForData, pptoVersionVigenteId || '')
+    const eKey = progObraEstructuraCacheKey(cid, pkForData, pptoVersionVigenteId || '', versionIdForData || '')
     const cached = getProgObraVistaCache(eKey)
     if (cached) setProgEstructura(cached)
     setLoadEstructura(!cached)
@@ -2076,6 +2079,7 @@ export default function ModuloProgramacionObra({
     setProgEstructura({ capitulos: [] })
     const q = new URLSearchParams({ pk_id: pkForData })
     if (pptoVersionVigenteId) q.set('version_ppto_id', String(pptoVersionVigenteId))
+    if (versionIdForData) q.set('version_id', String(versionIdForData))
     fetch(`${API}/prog-obra/${cid}/programacion-estructura?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [] }))
       .then((d) => {
@@ -2092,7 +2096,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, pkForData, API, pptoVersionVigenteId, presupuestoDataKey])
+  }, [cid, token, pkForData, API, pptoVersionVigenteId, presupuestoDataKey, versionIdForData])
 
   useEffect(() => {
     if (!cid || !token) {

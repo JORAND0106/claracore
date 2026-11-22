@@ -69,6 +69,9 @@ export function mergeEstructuraConCostosPpto(estructuraPorCapitulo, pptoCostos) 
         costo_directo: Number(overlay.costo_directo) || Number(ag.costo_directo) || 0,
         cant_total: cantTotal || Number(ag.cant_total) || 0,
         items,
+        es_multi_agrupador: Boolean(ag.es_multi_agrupador),
+        sin_lineas_disponibles: Boolean(ag.sin_lineas_disponibles),
+        lineas_sin_asignar: Number(ag.lineas_sin_asignar) || 0,
       })
     }
 

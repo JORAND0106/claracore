@@ -207,7 +207,10 @@ def fetch_ppto_items_version(
         version_ppto_id,
         tramo=tramo,
         tramos=tramos,
-        select="pk_id,capitulo,item,descripcion,und,cant_total,vlr_unitario,costo_directo,tramo",
+        select=(
+            "id,presupuesto_item_id_origen,pk_id,capitulo,item,descripcion,und,"
+            "cant_total,vlr_unitario,costo_directo,tramo,abs_inicio,abs_final"
+        ),
     )
     pk = (pk_id or "").strip()
     if pk:
@@ -267,19 +270,44 @@ def _aggregate_items_por_agrupador(
     ag_by_item: Dict[Tuple[str, str], Optional[int]],
     desc_lp: Dict[Tuple[str, str], str],
     vu_map: Optional[Dict[Tuple[str, str], float]] = None,
+    *,
+    multi_map: Optional[Dict[Tuple[str, str], List[int]]] = None,
+    linea_asig: Optional[Dict[str, int]] = None,
 ) -> Tuple[
     Dict[Tuple[str, str, int], dict],
     Dict[Tuple[str, str, str], dict],
     List[dict],
 ]:
     """
-    Agrupa ítems por (pk, cap, agrupador_id).
-    Regla: sumar cantidades del mismo (pk,cap,item), luego ROUND0(ROUND(cant,2)×VU_listado).
+    Agrupa por (pk, cap, agrupador_id).
+
+    - Ítem con un solo agrupador: suma cantidades del (pk,cap,item) → ese AG
+      (comportamiento histórico).
+    - Ítem multi-agrupador: cada fila física se asigna vía linea_asig;
+      se suma cant primero por (pk,cap,item,ag) y luego ROUND0(ROUND(cant,2)×VU).
     """
     from sicoe_valor_canonico import valor_cant_vu, round_cant
 
-    # 1) Acumular cantidades por línea
-    qty: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    multi_map = multi_map or {}
+    linea_asig = linea_asig or {}
+
+    def _resolve_ag_for_row(r: dict, cap: str, it: str) -> Optional[int]:
+        ags = multi_map.get((cap, it))
+        if ags is not None and len(ags) > 1:
+            try:
+                from prog_obra_lineas_agrupador import linea_key_from_row
+                lk = linea_key_from_row(r)
+            except Exception:
+                lk = None
+            if lk and lk in linea_asig:
+                return int(linea_asig[lk])
+            return None  # multi sin asignar
+        if ags is not None and len(ags) == 1:
+            return int(ags[0])
+        return _resolve_listado_agrupador_id(ag_by_item, cap, it)
+
+    # Acumular cantidades por (pk,cap,item,ag|None)
+    qty: Dict[Tuple[str, str, str, Optional[int]], float] = defaultdict(float)
     meta_line: Dict[Tuple[str, str, str], dict] = {}
     for r in ppto_rows:
         pk = str(r.get("pk_id") or "").strip()
@@ -291,9 +319,9 @@ def _aggregate_items_por_agrupador(
             cant = float(r.get("cant_total") or 0)
         except (TypeError, ValueError):
             cant = 0.0
-        key = (pk, cap, it)
-        qty[key] += cant
-        if key not in meta_line:
+        ag_eff = _resolve_ag_for_row(r, cap, it)
+        qty[(pk, cap, it, ag_eff)] += cant
+        if (pk, cap, it) not in meta_line:
             desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp, cap, it)
             vu = _vu_for_row({"capitulo": cap, "item": it}, vu_map)
             if vu is None or vu <= 0:
@@ -301,13 +329,30 @@ def _aggregate_items_por_agrupador(
                     vu = float(r.get("vlr_unitario") or 0)
                 except (TypeError, ValueError):
                     vu = 0.0
-            meta_line[key] = {"descripcion": desc, "precio_unitario": float(vu or 0)}
+            meta_line[(pk, cap, it)] = {"descripcion": desc, "precio_unitario": float(vu or 0)}
 
     ag_buckets: Dict[Tuple[str, str, int], dict] = {}
     item_map: Dict[Tuple[str, str, str], dict] = {}
     sin_ag: List[dict] = []
+    # Para item_map (compat): sumar todas las cant del ítem sin importar AG
+    qty_item: Dict[Tuple[str, str, str], float] = defaultdict(float)
+    for (pk, cap, it, _ag), cant_raw in qty.items():
+        qty_item[(pk, cap, it)] += cant_raw
 
-    for (pk, cap, it), cant_raw in qty.items():
+    for (pk, cap, it), cant_raw in qty_item.items():
+        cant = round_cant(cant_raw)
+        vu = float((meta_line.get((pk, cap, it)) or {}).get("precio_unitario") or 0)
+        subtotal = float(valor_cant_vu(cant, vu))
+        desc = (meta_line.get((pk, cap, it)) or {}).get("descripcion") or ""
+        item_map[(pk, cap, it)] = {
+            "item": it,
+            "descripcion": desc,
+            "cantidad": cant,
+            "precio_unitario": round(vu, 2),
+            "subtotal": subtotal,
+        }
+
+    for (pk, cap, it, ag_eff), cant_raw in qty.items():
         cant = round_cant(cant_raw)
         vu = float((meta_line.get((pk, cap, it)) or {}).get("precio_unitario") or 0)
         subtotal = float(valor_cant_vu(cant, vu))
@@ -319,13 +364,10 @@ def _aggregate_items_por_agrupador(
             "precio_unitario": round(vu, 2),
             "subtotal": subtotal,
         }
-        item_map[(pk, cap, it)] = dict(item_obj)
-
-        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
-        if ag_id is None:
+        if ag_eff is None:
             sin_ag.append({**item_obj, "capitulo": cap, "pk_id": pk})
             continue
-        ag_id_int = int(ag_id)
+        ag_id_int = int(ag_eff)
         ag_key = (pk, cap, ag_id_int)
         if ag_key not in ag_buckets:
             ag_buckets[ag_key] = {
@@ -337,10 +379,16 @@ def _aggregate_items_por_agrupador(
                 "items": [],
             }
         bucket = ag_buckets[ag_key]
-        bucket["items"].append(item_obj)
+        # Fusionar mismo item dentro del bucket
+        existing = next((x for x in bucket["items"] if x["item"] == it), None)
+        if existing:
+            merged_cant = round_cant(float(existing["cantidad"]) + cant)
+            existing["cantidad"] = merged_cant
+            existing["subtotal"] = float(valor_cant_vu(merged_cant, vu))
+        else:
+            bucket["items"].append(item_obj)
         bucket["cant_total"] = round_cant(float(bucket.get("cant_total") or 0) + cant)
 
-    # Costo del agrupador = Σ valor_cant_vu de sus líneas (ya redondeadas una vez por ítem)
     for bucket in ag_buckets.values():
         bucket["costo_directo"] = float(sum(float(it["subtotal"]) for it in bucket["items"]))
         bucket["items"].sort(key=lambda x: x["item"])
@@ -384,7 +432,20 @@ def compute_costos_por_version(
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
     ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
     vu_map = _load_listado_vu_map(sb, contrato_id)
-    ag_buckets, _, sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp, vu_map)
+    multi_map = {}
+    linea_asig = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        from prog_obra_lineas_agrupador import map_linea_a_agrupador
+
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+        linea_asig = map_linea_a_agrupador(sb, str(version_prog_id))
+    except Exception:
+        pass
+    ag_buckets, _, sin_ag = _aggregate_items_por_agrupador(
+        ppto_rows, ag_by_item, desc_lp, vu_map,
+        multi_map=multi_map, linea_asig=linea_asig,
+    )
     programados = agrupadores_programados_set(
         sb, version_prog_id, contrato_id, pk_id=pk_id, pk_ids=scope_pks
     )
@@ -450,7 +511,16 @@ def build_cost_overlay_maps(
     )
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
     vu_map = _load_listado_vu_map(sb, contrato_id)
-    ag_buckets, item_map, _ = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp, vu_map)
+    multi_map = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+    except Exception:
+        pass
+    # Sin version_prog: multi sin asignación no entra a ningún AG (queda en sin_ag).
+    ag_buckets, item_map, _ = _aggregate_items_por_agrupador(
+        ppto_rows, ag_by_item, desc_lp, vu_map, multi_map=multi_map, linea_asig={},
+    )
     ag_costs = {k: float(v["costo_directo"] or 0) for k, v in ag_buckets.items()}
     item_costs = {k: float(v["subtotal"] or 0) for k, v in item_map.items()}
     return ag_costs, item_costs
@@ -683,7 +753,19 @@ def build_brecha_presupuesto_programacion(
     ))
 
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
-    ag_buckets, item_map, _sin_ag = _aggregate_items_por_agrupador(ppto_rows, ag_by_item, desc_lp, vu_map)
+    multi_map = {}
+    linea_asig = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        from prog_obra_lineas_agrupador import map_linea_a_agrupador
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+        linea_asig = map_linea_a_agrupador(sb, str(version_prog_id))
+    except Exception:
+        pass
+    ag_buckets, item_map, _sin_ag = _aggregate_items_por_agrupador(
+        ppto_rows, ag_by_item, desc_lp, vu_map,
+        multi_map=multi_map, linea_asig=linea_asig,
+    )
     ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
 
     act_rows = (
