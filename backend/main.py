@@ -10799,8 +10799,14 @@ def _agrupador_lookup_maps(contrato_id: int) -> Tuple[dict, dict]:
     return by_nombre, by_codigo
 
 
+# Sentinel de capítulo para agrupadores transversales (vista WBS / programación).
+CAPITULO_TRANSVERSALES = "Transversales"
+
+
 def _capitulo_prefijo_wbs(capitulo: str) -> str:
     cap = (capitulo or "").strip()
+    if cap == CAPITULO_TRANSVERSALES or cap.upper() == "T":
+        return "T"
     m = re.match(r"^(\d+)", cap)
     if m:
         return m.group(1)
@@ -10809,7 +10815,36 @@ def _capitulo_prefijo_wbs(capitulo: str) -> str:
     return cap[:1] if cap else "0"
 
 
-def _next_codigo_wbs(contrato_id: int, capitulo: str) -> str:
+def _next_codigo_wbs(contrato_id: int, capitulo: str, *, es_transversal: bool = False) -> str:
+    """Siguiente código libre: 1.A / 2.B… o T.A / T.B… si es_transversal."""
+    if es_transversal or (capitulo or "").strip() == CAPITULO_TRANSVERSALES:
+        prefix = "T"
+        existing = (
+            supabase.table("listado_precios_agrupadores")
+            .select("codigo_wbs,es_transversal,capitulo")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+            or []
+        )
+        used: Set[str] = set()
+        for r in existing:
+            cod = (r.get("codigo_wbs") or "").strip().upper()
+            if not cod.startswith("T."):
+                continue
+            if not (r.get("es_transversal") or (r.get("capitulo") or "").strip() == CAPITULO_TRANSVERSALES):
+                # Solo códigos T.* de transversales
+                if not cod.startswith("T."):
+                    continue
+            suffix = cod.split(".")[-1]
+            if len(suffix) == 1 and suffix.isalpha():
+                used.add(suffix)
+        for i in range(26):
+            letter = chr(ord("A") + i)
+            if letter not in used:
+                return f"T.{letter}"
+        raise HTTPException(status_code=400, detail="Límite de agrupadores transversales alcanzado (T.Z).")
+
     prefix = _capitulo_prefijo_wbs(capitulo)
     existing = (
         supabase.table("listado_precios_agrupadores")
@@ -10820,7 +10855,7 @@ def _next_codigo_wbs(contrato_id: int, capitulo: str) -> str:
         .data
         or []
     )
-    used: Set[str] = set()
+    used = set()
     for r in existing:
         cod = (r.get("codigo_wbs") or "").strip().upper()
         if not cod:
@@ -10835,7 +10870,8 @@ def _next_codigo_wbs(contrato_id: int, capitulo: str) -> str:
     raise HTTPException(status_code=400, detail="Límite de agrupadores por capítulo alcanzado (Z).")
 
 
-def _capitulo_desde_items(contrato_id: int, item_ids: List[int]) -> str:
+def _capitulos_desde_items(contrato_id: int, item_ids: List[int]) -> List[str]:
+    """Lista ordenada de capítulos distintos de los ítems (1+)."""
     rows = (
         supabase.table("listado_precios")
         .select("id, capitulo")
@@ -10847,11 +10883,28 @@ def _capitulo_desde_items(contrato_id: int, item_ids: List[int]) -> str:
     )
     if len(rows) != len(set(item_ids)):
         raise HTTPException(status_code=400, detail="Uno o más ítems no existen en este contrato.")
-    caps = {(r.get("capitulo") or "").strip() for r in rows}
-    caps.discard("")
+    caps = sorted({(r.get("capitulo") or "").strip() for r in rows if (r.get("capitulo") or "").strip()})
+    if not caps:
+        raise HTTPException(status_code=400, detail="Los ítems no tienen capítulo válido.")
+    return caps
+
+
+def _capitulo_desde_items(contrato_id: int, item_ids: List[int]) -> str:
+    caps = _capitulos_desde_items(contrato_id, item_ids)
     if len(caps) != 1:
         raise HTTPException(status_code=400, detail="Todos los ítems deben pertenecer al mismo capítulo.")
-    return caps.pop()
+    return caps[0]
+
+
+def _clasificar_agrupador_desde_items(contrato_id: int, item_ids: List[int]) -> dict:
+    """
+    Decide si el set de ítems forma un AG de capítulo o transversal.
+    Retorna {es_transversal, capitulo, caps}.
+    """
+    caps = _capitulos_desde_items(contrato_id, item_ids)
+    if len(caps) == 1:
+        return {"es_transversal": False, "capitulo": caps[0], "caps": caps}
+    return {"es_transversal": True, "capitulo": CAPITULO_TRANSVERSALES, "caps": caps}
 
 
 def _asignar_items_agrupador(
@@ -10862,6 +10915,7 @@ def _asignar_items_agrupador(
     *,
     permitir_reasignar: bool = True,
     reemplazar: bool = False,
+    permitir_multi_capitulo: bool = False,
 ) -> int:
     """
     Asigna ítems al agrupador.
@@ -10879,6 +10933,7 @@ def _asignar_items_agrupador(
         capitulo,
         item_ids,
         reemplazar=reemplazar,
+        permitir_multi_capitulo=permitir_multi_capitulo,
     )
 
 
@@ -10980,11 +11035,13 @@ def crear_listado_precio_agrupador(
     item_ids = list(dict.fromkeys(body.item_ids or []))
     if not item_ids:
         raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para el agrupador.")
-    cap_items = _capitulo_desde_items(contrato_id, item_ids)
+    clasif = _clasificar_agrupador_desde_items(contrato_id, item_ids)
+    es_tx = bool(clasif["es_transversal"])
+    cap = clasif["capitulo"]
+    # Hint de capítulo solo aplica a AG de capítulo (no transversal)
     cap_hint = (body.capitulo or "").strip()
-    if cap_hint and cap_hint != cap_items:
+    if not es_tx and cap_hint and cap_hint != cap and cap_hint != CAPITULO_TRANSVERSALES:
         raise HTTPException(status_code=400, detail="Los ítems no pertenecen al capítulo indicado.")
-    cap = cap_items
     uid = None
     try:
         uid = int(current_user.get("sub"))
@@ -10999,30 +11056,49 @@ def crear_listado_precio_agrupador(
         .data
         or []
     )
+    codigo = _next_codigo_wbs(contrato_id, cap, es_transversal=es_tx)
     row = {
         "contrato_id": contrato_id,
         "capitulo": cap,
         "nombre": nombre,
-        "codigo_wbs": _next_codigo_wbs(contrato_id, cap),
+        "codigo_wbs": codigo,
         "descripcion": body.descripcion,
         "orden": len(existentes),
         "creado_por": uid,
+        "es_transversal": es_tx,
     }
     try:
         ins = supabase.table("listado_precios_agrupadores").insert(row).execute()
     except Exception as e:
         msg = str(e)
-        if "unique" in msg.lower() or "duplicate" in msg.lower():
+        if "es_transversal" in msg.lower() or "column" in msg.lower():
+            # Columna aún no migrada: crear sin el flag (fallback)
+            row.pop("es_transversal", None)
+            try:
+                ins = supabase.table("listado_precios_agrupadores").insert(row).execute()
+            except Exception as e2:
+                msg2 = str(e2)
+                if "unique" in msg2.lower() or "duplicate" in msg2.lower():
+                    raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
+                raise
+        elif "unique" in msg.lower() or "duplicate" in msg.lower():
             raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
-        raise
+        else:
+            raise
     created = (ins.data or [{}])[0]
     ag_id = created.get("id")
     if not ag_id:
         raise HTTPException(status_code=500, detail="No se pudo crear el agrupador.")
-    asignados = _asignar_items_agrupador(contrato_id, int(ag_id), cap, item_ids)
+    asignados = _asignar_items_agrupador(
+        contrato_id, int(ag_id), cap, item_ids,
+        permitir_multi_capitulo=es_tx,
+    )
     registrar_log(current_user, "CREAR", "PRECIOS", "listado_precios_agrupadores", str(ag_id),
-                  {"capitulo": cap, "nombre": nombre, "codigo_wbs": row["codigo_wbs"], "items": asignados})
+                  {"capitulo": cap, "nombre": nombre, "codigo_wbs": codigo,
+                   "es_transversal": es_tx, "items": asignados})
     created["items_asignados"] = asignados
+    created["es_transversal"] = es_tx
+    created["codigo_wbs"] = created.get("codigo_wbs") or codigo
     return created
 
 
@@ -11034,44 +11110,93 @@ def actualizar_listado_precio_agrupador(
 ):
     ex = (
         supabase.table("listado_precios_agrupadores")
-        .select("contrato_id, capitulo")
+        .select("contrato_id, capitulo, codigo_wbs, es_transversal")
         .eq("id", agrupador_id)
         .limit(1)
         .execute()
         .data
     )
     if not ex:
+        # Fallback si la columna es_transversal aún no existe
+        ex = (
+            supabase.table("listado_precios_agrupadores")
+            .select("contrato_id, capitulo, codigo_wbs")
+            .eq("id", agrupador_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    if not ex:
         raise HTTPException(status_code=404, detail="Agrupador no encontrado")
     contrato_id = ex[0]["contrato_id"]
     _require_contract_access(current_user, contrato_id)
-    cap = (body.capitulo or ex[0].get("capitulo") or "").strip()
+    era_tx = bool(ex[0].get("es_transversal")) or (
+        (ex[0].get("capitulo") or "").strip() == CAPITULO_TRANSVERSALES
+    )
+    codigo_actual = (ex[0].get("codigo_wbs") or "").strip()
+
     patch = {
         "nombre": body.nombre.strip(),
         "descripcion": body.descripcion,
         "actualizado_en": datetime.utcnow().isoformat(),
     }
-    if body.capitulo:
-        patch["capitulo"] = body.capitulo.strip()
-    try:
-        supabase.table("listado_precios_agrupadores").update(patch).eq("id", agrupador_id).execute()
-    except Exception as e:
-        msg = str(e)
-        if "unique" in msg.lower() or "duplicate" in msg.lower():
-            raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
-        raise
     asignados = None
+    es_tx = era_tx
+    cap = (ex[0].get("capitulo") or "").strip()
+
     if body.item_ids is not None:
         item_ids = list(dict.fromkeys(body.item_ids))
         if not item_ids:
             raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para el agrupador.")
-        # N:N: reemplaza solo el membership de ESTE agrupador; no borra otros.
+        clasif = _clasificar_agrupador_desde_items(contrato_id, item_ids)
+        es_tx = bool(clasif["es_transversal"])
+        cap = clasif["capitulo"]
+        patch["capitulo"] = cap
+        patch["es_transversal"] = es_tx
+        # Cambio de tipo → nuevo código WBS (no toca versiones selladas)
+        if es_tx and not era_tx:
+            patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, CAPITULO_TRANSVERSALES, es_transversal=True)
+        elif (not es_tx) and era_tx:
+            patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, cap, es_transversal=False)
+        elif es_tx and era_tx and not codigo_actual.upper().startswith("T."):
+            patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, CAPITULO_TRANSVERSALES, es_transversal=True)
         asignados = _asignar_items_agrupador(
             contrato_id, agrupador_id, cap, item_ids,
             permitir_reasignar=True, reemplazar=True,
+            permitir_multi_capitulo=es_tx,
         )
         patch["item_ids"] = item_ids
+    elif body.capitulo and not era_tx:
+        patch["capitulo"] = body.capitulo.strip()
+
+    try:
+        supabase.table("listado_precios_agrupadores").update(
+            {k: v for k, v in patch.items() if k != "item_ids"}
+        ).eq("id", agrupador_id).execute()
+    except Exception as e:
+        msg = str(e)
+        if "es_transversal" in msg.lower():
+            # Migración pendiente: omitir flag
+            soft = {k: v for k, v in patch.items() if k not in ("item_ids", "es_transversal")}
+            try:
+                supabase.table("listado_precios_agrupadores").update(soft).eq("id", agrupador_id).execute()
+            except Exception as e2:
+                msg2 = str(e2)
+                if "unique" in msg2.lower() or "duplicate" in msg2.lower():
+                    raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
+                raise
+        elif "unique" in msg.lower() or "duplicate" in msg.lower():
+            raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
+        else:
+            raise
     registrar_log(current_user, "EDITAR", "PRECIOS", "listado_precios_agrupadores", str(agrupador_id), patch)
-    return {"ok": True, "items_asignados": asignados}
+    return {
+        "ok": True,
+        "items_asignados": asignados,
+        "es_transversal": es_tx,
+        "capitulo": cap,
+        "codigo_wbs": patch.get("codigo_wbs") or codigo_actual,
+    }
 
 
 @app.get("/listado-precios/agrupadores/{agrupador_id}/eliminar-preview")

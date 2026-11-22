@@ -299,19 +299,47 @@ def fetch_estructura_programacion_pk(
         except Exception:
             linea_asig = {}
 
-    agr_rows = (
-        sb.table("listado_precios_agrupadores")
-        .select("id,capitulo,codigo_wbs,nombre,orden")
-        .eq("contrato_id", contrato_id)
-        .execute()
-        .data
-        or []
-    )
-    agr_meta: Dict[int, dict] = {}
-    for a in agr_rows:
-        aid = a.get("id")
-        if aid is not None:
-            agr_meta[int(aid)] = a
+    CAP_TX = "Transversales"
+
+    def _load_agr_meta() -> Dict[int, dict]:
+        try:
+            rows = (
+                sb.table("listado_precios_agrupadores")
+                .select("id,capitulo,codigo_wbs,nombre,orden,es_transversal")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            rows = (
+                sb.table("listado_precios_agrupadores")
+                .select("id,capitulo,codigo_wbs,nombre,orden")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+                or []
+            )
+        out: Dict[int, dict] = {}
+        for a in rows:
+            aid = a.get("id")
+            if aid is None:
+                continue
+            a = dict(a)
+            a["es_transversal"] = bool(a.get("es_transversal")) or (
+                (a.get("capitulo") or "").strip() == CAP_TX
+            )
+            out[int(aid)] = a
+        return out
+
+    agr_meta = _load_agr_meta()
+
+    def _ag_es_tx(aid: int) -> bool:
+        am = agr_meta.get(int(aid)) or {}
+        return bool(am.get("es_transversal"))
+
+    def _bucket_cap_for_ag(item_cap: str, aid: int) -> str:
+        return CAP_TX if _ag_es_tx(aid) else item_cap
 
     def _ags_for_item(cap: str, it: str) -> List[int]:
         ags = multi_map.get((cap, it))
@@ -322,14 +350,14 @@ def fetch_estructura_programacion_pk(
             return [int(ag_id)]
         return []
 
-    # Acumular por (cap, item, ag|None) con resolución multi/mono
+    # Acumular por (item_cap, item, ag|None) con resolución multi/mono
     from sicoe_valor_canonico import valor_cant_vu, round_cant
 
     qty_by_ag: Dict[Tuple[str, str, Optional[int]], Decimal] = {}
     meta_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
     lineas_sin_asig: Dict[Tuple[str, str], int] = {}
-    lineas_por_ag: Dict[Tuple[str, int], int] = {}
-    lineas_disponibles_por_ag: Dict[Tuple[str, int], int] = {}
+    lineas_por_ag: Dict[int, int] = {}
+    lineas_disponibles_por_ag: Dict[int, int] = {}
     multi_items: set = set()
 
     for r in ppto_rows:
@@ -363,16 +391,14 @@ def fetch_estructura_programacion_pk(
             if ag_eff is None:
                 lineas_sin_asig[key] = lineas_sin_asig.get(key, 0) + 1
                 for aid in ags:
-                    lineas_disponibles_por_ag[(cap, aid)] = (
-                        lineas_disponibles_por_ag.get((cap, aid), 0) + 1
-                    )
+                    lineas_disponibles_por_ag[aid] = lineas_disponibles_por_ag.get(aid, 0) + 1
             else:
                 qty_by_ag[(cap, it, ag_eff)] = qty_by_ag.get((cap, it, ag_eff), Decimal(0)) + ct
-                lineas_por_ag[(cap, ag_eff)] = lineas_por_ag.get((cap, ag_eff), 0) + 1
+                lineas_por_ag[ag_eff] = lineas_por_ag.get(ag_eff, 0) + 1
         elif ags:
             aid = ags[0]
             qty_by_ag[(cap, it, aid)] = qty_by_ag.get((cap, it, aid), Decimal(0)) + ct
-            lineas_por_ag[(cap, aid)] = lineas_por_ag.get((cap, aid), 0) + 1
+            lineas_por_ag[aid] = lineas_por_ag.get(aid, 0) + 1
         else:
             qty_by_ag[(cap, it, None)] = qty_by_ag.get((cap, it, None), Decimal(0)) + ct
 
@@ -383,8 +409,6 @@ def fetch_estructura_programacion_pk(
 
     cap_map: Dict[str, Dict[str, Any]] = {}
     for (cap, it, ag_eff), cant_raw in sorted(qty_by_ag.items(), key=lambda x: (x[0][0], x[0][1], x[0][2] or 0)):
-        if cap not in cap_map:
-            cap_map[cap] = {"agrupadores": {}, "sin_agrupador": []}
         meta = meta_item.get((cap, it)) or {}
         cant = float(round_cant(float(cant_raw)))
         vu = float(meta.get("vlr") or 0)
@@ -397,10 +421,14 @@ def fetch_estructura_programacion_pk(
             "costo_directo": float(valor_cant_vu(cant, vu)),
             "es_multi_agrupador": (cap, it) in multi_items,
             "lineas_sin_asignar": int(lineas_sin_asig.get((cap, it), 0)),
+            "capitulo_item": cap,
         }
         if ag_eff is not None and int(ag_eff) in agr_meta:
             ag_id_int = int(ag_eff)
-            ag_bucket = cap_map[cap]["agrupadores"]
+            bucket_cap = _bucket_cap_for_ag(cap, ag_id_int)
+            if bucket_cap not in cap_map:
+                cap_map[bucket_cap] = {"agrupadores": {}, "sin_agrupador": []}
+            ag_bucket = cap_map[bucket_cap]["agrupadores"]
             if ag_id_int not in ag_bucket:
                 am = agr_meta[ag_id_int]
                 ag_bucket[ag_id_int] = {
@@ -412,12 +440,12 @@ def fetch_estructura_programacion_pk(
                     "cant_total": 0.0,
                     "costo_directo": 0.0,
                     "es_multi_agrupador": False,
+                    "es_transversal": _ag_es_tx(ag_id_int),
                     "sin_lineas_disponibles": False,
                     "lineas_sin_asignar": 0,
                 }
             ag = ag_bucket[ag_id_int]
-            # Evitar duplicar el mismo ítem si ya está
-            if not any(x.get("item") == it for x in ag["items"]):
+            if not any(x.get("item") == it and x.get("capitulo_item") == cap for x in ag["items"]):
                 ag["items"].append(item_obj)
             if (cap, it) in multi_items:
                 ag["es_multi_agrupador"] = True
@@ -428,32 +456,40 @@ def fetch_estructura_programacion_pk(
             ag["cant_total"] += item_obj["cant_total"]
             ag["costo_directo"] += item_obj["costo_directo"]
         else:
+            if cap not in cap_map:
+                cap_map[cap] = {"agrupadores": {}, "sin_agrupador": []}
             if not any(x.get("item") == it for x in cap_map[cap]["sin_agrupador"]):
                 cap_map[cap]["sin_agrupador"].append(item_obj)
 
     # Flags sin líneas disponibles (multi sin asignaciones propias ni libres)
-    for cap, block in cap_map.items():
+    for block in cap_map.values():
         for ag in block["agrupadores"].values():
             aid = int(ag["agrupador_id"])
             if not ag.get("es_multi_agrupador"):
                 continue
-            propias = int(lineas_por_ag.get((cap, aid), 0))
-            libres = int(lineas_disponibles_por_ag.get((cap, aid), 0))
+            propias = int(lineas_por_ag.get(aid, 0))
+            libres = int(lineas_disponibles_por_ag.get(aid, 0))
             ag["sin_lineas_disponibles"] = propias == 0 and libres == 0
 
+    def _cap_sort_key(c: str):
+        if c == CAP_TX:
+            return (1, c)
+        return (0, c)
+
     capitulos: List[dict] = []
-    for cap in sorted(cap_map.keys()):
+    for cap in sorted(cap_map.keys(), key=_cap_sort_key):
         block = cap_map[cap]
         agrupadores = sorted(
             block["agrupadores"].values(),
             key=lambda a: (a.get("orden") or 0, a.get("codigo_wbs") or "", a.get("agrupador_nombre") or ""),
         )
         for ag in agrupadores:
-            ag["items"].sort(key=lambda x: x.get("item") or "")
+            ag["items"].sort(key=lambda x: (x.get("capitulo_item") or "", x.get("item") or ""))
             ag["costo_directo"] = float(round(float(ag.get("costo_directo") or 0), 0))
         sin = sorted(block["sin_agrupador"], key=lambda x: x.get("item") or "")
         capitulos.append({
             "capitulo": cap,
+            "es_transversal": cap == CAP_TX,
             "agrupadores": agrupadores,
             "sin_agrupador": sin,
         })

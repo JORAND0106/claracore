@@ -150,11 +150,13 @@ def asignar_items_a_agrupador(
     item_ids: List[int],
     *,
     reemplazar: bool = False,
+    permitir_multi_capitulo: bool = False,
 ) -> int:
     """
     Añade item_ids al agrupador (sin quitarlos de otros).
     Si reemplazar=True, el set del agrupador queda exactamente item_ids
     (quita del bridge los que salen de este agrupador, sin tocar otros AGs).
+    Si permitir_multi_capitulo=True (agrupador transversal), no exige mismo capítulo.
     """
     if not item_ids and not reemplazar:
         return 0
@@ -171,9 +173,13 @@ def asignar_items_a_agrupador(
     ) if ids else []
     if ids and len(rows) != len(set(ids)):
         raise HTTPException(status_code=400, detail="Uno o más ítems no existen en este contrato.")
-    for row in rows:
-        if (row.get("capitulo") or "").strip() != cap:
-            raise HTTPException(status_code=400, detail="Todos los ítems deben pertenecer al mismo capítulo.")
+    if not permitir_multi_capitulo:
+        for row in rows:
+            if (row.get("capitulo") or "").strip() != cap:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Todos los ítems deben pertenecer al mismo capítulo.",
+                )
 
     if membership_disponible(sb):
         actuales = items_ids_de_agrupador(sb, agrupador_id)

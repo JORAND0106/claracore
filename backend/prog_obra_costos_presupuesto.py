@@ -254,15 +254,34 @@ def agrupadores_programados_set(
 
 
 def _fetch_agrupadores_meta(sb, contrato_id: int) -> Dict[int, dict]:
-    rows = (
-        sb.table("listado_precios_agrupadores")
-        .select("id,capitulo,codigo_wbs,nombre,orden")
-        .eq("contrato_id", int(contrato_id))
-        .execute()
-        .data
-        or []
-    )
-    return {int(r["id"]): r for r in rows if r.get("id") is not None}
+    try:
+        rows = (
+            sb.table("listado_precios_agrupadores")
+            .select("id,capitulo,codigo_wbs,nombre,orden,es_transversal")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        rows = (
+            sb.table("listado_precios_agrupadores")
+            .select("id,capitulo,codigo_wbs,nombre,orden")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    out: Dict[int, dict] = {}
+    for r in rows:
+        if r.get("id") is None:
+            continue
+        row = dict(r)
+        row["es_transversal"] = bool(row.get("es_transversal")) or (
+            (row.get("capitulo") or "").strip() == "Transversales"
+        )
+        out[int(row["id"])] = row
+    return out
 
 
 def _aggregate_items_por_agrupador(
@@ -273,23 +292,33 @@ def _aggregate_items_por_agrupador(
     *,
     multi_map: Optional[Dict[Tuple[str, str], List[int]]] = None,
     linea_asig: Optional[Dict[str, int]] = None,
+    agr_meta: Optional[Dict[int, dict]] = None,
 ) -> Tuple[
     Dict[Tuple[str, str, int], dict],
     Dict[Tuple[str, str, str], dict],
     List[dict],
 ]:
     """
-    Agrupa por (pk, cap, agrupador_id).
+    Agrupa por (pk, cap_display, agrupador_id).
 
     - Ítem con un solo agrupador: suma cantidades del (pk,cap,item) → ese AG
       (comportamiento histórico).
     - Ítem multi-agrupador: cada fila física se asigna vía linea_asig;
       se suma cant primero por (pk,cap,item,ag) y luego ROUND0(ROUND(cant,2)×VU).
+    - Agrupador transversal: cap_display = 'Transversales' (bloque propio).
     """
     from sicoe_valor_canonico import valor_cant_vu, round_cant
 
+    CAP_TX = "Transversales"
     multi_map = multi_map or {}
     linea_asig = linea_asig or {}
+    agr_meta = agr_meta or {}
+
+    def _ag_es_tx(aid: int) -> bool:
+        am = agr_meta.get(int(aid)) or {}
+        return bool(am.get("es_transversal")) or (
+            (am.get("capitulo") or "").strip() == CAP_TX
+        )
 
     def _resolve_ag_for_row(r: dict, cap: str, it: str) -> Optional[int]:
         ags = multi_map.get((cap, it))
@@ -363,24 +392,30 @@ def _aggregate_items_por_agrupador(
             "cantidad": cant,
             "precio_unitario": round(vu, 2),
             "subtotal": subtotal,
+            "capitulo_item": cap,
         }
         if ag_eff is None:
             sin_ag.append({**item_obj, "capitulo": cap, "pk_id": pk})
             continue
         ag_id_int = int(ag_eff)
-        ag_key = (pk, cap, ag_id_int)
+        cap_display = CAP_TX if _ag_es_tx(ag_id_int) else cap
+        ag_key = (pk, cap_display, ag_id_int)
         if ag_key not in ag_buckets:
             ag_buckets[ag_key] = {
                 "agrupador_id": ag_id_int,
-                "capitulo": cap,
+                "capitulo": cap_display,
                 "pk_id": pk,
+                "es_transversal": _ag_es_tx(ag_id_int),
                 "costo_directo": 0.0,
                 "cant_total": 0.0,
                 "items": [],
             }
         bucket = ag_buckets[ag_key]
         # Fusionar mismo item dentro del bucket
-        existing = next((x for x in bucket["items"] if x["item"] == it), None)
+        existing = next(
+            (x for x in bucket["items"] if x["item"] == it and x.get("capitulo_item") == cap),
+            None,
+        )
         if existing:
             merged_cant = round_cant(float(existing["cantidad"]) + cant)
             existing["cantidad"] = merged_cant
@@ -391,7 +426,7 @@ def _aggregate_items_por_agrupador(
 
     for bucket in ag_buckets.values():
         bucket["costo_directo"] = float(sum(float(it["subtotal"]) for it in bucket["items"]))
-        bucket["items"].sort(key=lambda x: x["item"])
+        bucket["items"].sort(key=lambda x: (x.get("capitulo_item") or "", x["item"]))
 
     sin_ag.sort(key=lambda x: (x.get("item") or ""))
     return ag_buckets, item_map, sin_ag
@@ -444,7 +479,7 @@ def compute_costos_por_version(
         pass
     ag_buckets, _, sin_ag = _aggregate_items_por_agrupador(
         ppto_rows, ag_by_item, desc_lp, vu_map,
-        multi_map=multi_map, linea_asig=linea_asig,
+        multi_map=multi_map, linea_asig=linea_asig, agr_meta=ag_meta,
     )
     programados = agrupadores_programados_set(
         sb, version_prog_id, contrato_id, pk_id=pk_id, pk_ids=scope_pks
@@ -517,9 +552,11 @@ def build_cost_overlay_maps(
         multi_map = agrupadores_por_item_map(sb, contrato_id)
     except Exception:
         pass
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
     # Sin version_prog: multi sin asignación no entra a ningún AG (queda en sin_ag).
     ag_buckets, item_map, _ = _aggregate_items_por_agrupador(
-        ppto_rows, ag_by_item, desc_lp, vu_map, multi_map=multi_map, linea_asig={},
+        ppto_rows, ag_by_item, desc_lp, vu_map,
+        multi_map=multi_map, linea_asig={}, agr_meta=ag_meta,
     )
     ag_costs = {k: float(v["costo_directo"] or 0) for k, v in ag_buckets.items()}
     item_costs = {k: float(v["subtotal"] or 0) for k, v in item_map.items()}
@@ -762,11 +799,11 @@ def build_brecha_presupuesto_programacion(
         linea_asig = map_linea_a_agrupador(sb, str(version_prog_id))
     except Exception:
         pass
+    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
     ag_buckets, item_map, _sin_ag = _aggregate_items_por_agrupador(
         ppto_rows, ag_by_item, desc_lp, vu_map,
-        multi_map=multi_map, linea_asig=linea_asig,
+        multi_map=multi_map, linea_asig=linea_asig, agr_meta=ag_meta,
     )
-    ag_meta = _fetch_agrupadores_meta(sb, contrato_id)
 
     act_rows = (
         sb.table("prog_actividades")

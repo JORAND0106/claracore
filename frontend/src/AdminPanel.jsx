@@ -3730,9 +3730,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const agrupadoresPorCapitulo = useMemo(() => {
     const map = {};
     for (const ag of agrupadores) {
-      const cap = ag.capitulo || "";
+      const esTx = Boolean(ag.es_transversal) || String(ag.codigo_wbs || "").toUpperCase().startsWith("T.");
+      const cap = esTx ? "Transversales" : (ag.capitulo || "");
       if (!map[cap]) map[cap] = [];
-      map[cap].push(ag);
+      map[cap].push({ ...ag, es_transversal: esTx, capitulo: cap });
     }
     Object.values(map).forEach(list =>
       list.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0) || cmpNatural(a.nombre, b.nombre))
@@ -3755,7 +3756,12 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       ...itemsFiltrados.map(i => i.capitulo || ""),
       ...agrupadores.map(a => a.capitulo || ""),
     ]);
-    return [...caps].filter(Boolean).sort(cmpNatural);
+    const list = [...caps].filter(Boolean);
+    const normales = list.filter(c => c !== "Transversales").sort(cmpNatural);
+    if (list.includes("Transversales") || agrupadores.some(a => a.es_transversal)) {
+      if (!normales.includes("Transversales")) normales.push("Transversales");
+    }
+    return normales;
   }, [itemsFiltrados, agrupadores]);
 
   const capitulosVistaLista = useMemo(() =>
@@ -3873,11 +3879,11 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     setAgrupadorItemsSel(prev => prev.filter(id => String(id) !== String(itemId)));
   };
 
+  const seraTransversal = capituloDesdeSeleccion === "__mixto__";
   const puedeCrearAgrupador = Boolean(
     agrupadorForm.nombre?.trim() &&
     agrupadorItemsSel.length > 0 &&
-    capituloDesdeSeleccion &&
-    capituloDesdeSeleccion !== "__mixto__"
+    capituloDesdeSeleccion
   );
 
   const puedeGuardarAgrupadorEdit = Boolean(
@@ -3930,11 +3936,15 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
             if (it && !it.agrupador_id) sinDelta -= 1;
           }
         }
+        const esTx = Boolean(res.es_transversal) || String(res.codigo_wbs || "").toUpperCase().startsWith("T.");
         setAgrupadores(prev => prev.map(a => (
           String(a.id) === String(agId)
             ? {
               ...a,
               nombre: agrupadorForm.nombre.trim(),
+              capitulo: res.capitulo || (esTx ? "Transversales" : a.capitulo),
+              codigo_wbs: res.codigo_wbs || a.codigo_wbs,
+              es_transversal: esTx,
               items_total: res.items_asignados ?? idsSel.size,
               items_count: res.items_asignados ?? idsSel.size,
               item_ids: agrupadorItemsSel.map(Number),
@@ -3958,20 +3968,21 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       return;
     }
     if (!puedeCrearAgrupador) return;
-    if (capituloDesdeSeleccion === "__mixto__") {
-      setMsg({ type: "error", text: "Todos los ítems seleccionados deben pertenecer al mismo capítulo." });
-      return;
-    }
     setAgrupadorSaving(true);
     try {
+      const capPayload = seraTransversal ? "Transversales" : capituloDesdeSeleccion;
       const res = await call("POST", `/listado-precios/${contratoId}/agrupadores`, {
-        capitulo: capituloDesdeSeleccion,
+        capitulo: capPayload,
         nombre: agrupadorForm.nombre.trim(),
         item_ids: agrupadorItemsSel,
       });
+      const cod = res.codigo_wbs || "WBS";
+      const esTx = Boolean(res.es_transversal) || String(cod).toUpperCase().startsWith("T.");
       setMsg({
         type: "success",
-        text: `✅ Agrupador "${agrupadorForm.nombre.trim()}" creado como ${res.codigo_wbs || "WBS"} con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`,
+        text: esTx
+          ? `✅ Agrupador transversal "${agrupadorForm.nombre.trim()}" creado como ${cod} con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`
+          : `✅ Agrupador "${agrupadorForm.nombre.trim()}" creado como ${cod} con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`,
       });
       const agId = res.id;
       const idsSel = new Set(agrupadorItemsSel.map(id => String(id)));
@@ -3983,7 +3994,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         setAgrupadores(prev => {
           const nuevo = {
             ...res,
-            capitulo: capituloDesdeSeleccion,
+            capitulo: esTx ? "Transversales" : capituloDesdeSeleccion,
+            es_transversal: esTx,
             nombre: agrupadorForm.nombre.trim(),
             items_total: res.items_asignados ?? idsSel.size,
             items_count: res.items_asignados ?? idsSel.size,
@@ -4882,8 +4894,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                   <Fragment key={`cap-block-${cap}`}>
                     <tr key={`cap-${cap}`} style={{ background: isDarkMode(theme) ? "rgba(0,175,197,0.08)" : "rgba(0,175,197,0.06)" }}>
                       <td colSpan={numColsTabla} style={{ ...tdStyle, fontWeight:700, color: tTok.primary, fontSize:13, padding:"10px 12px" }}>
-                        📁 {cap}
-                        {perms?.crear && (
+                        {cap === "Transversales" ? "⊞ Transversales" : `📁 ${cap}`}
+                        {perms?.crear && cap !== "Transversales" && (
                           <button style={{ ...S.btn("ghost",true), marginLeft:10, fontSize:11, padding:"2px 8px" }}
                             onClick={(e) => { e.stopPropagation(); abrirAgrupadorModal("create", { capitulo: cap }); }}>
                             + Agrupador
@@ -5544,8 +5556,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                 </div>
                 <div style={agTypo.modalSub}>
                   {showAgrupador.mode === "create"
-                    ? "El código WBS se asigna automáticamente (A, B, C…) y el valor es la suma de los ítems seleccionados"
-                    : "Modifique el nombre y los ítems asignados. El código WBS no se puede cambiar."}
+                    ? "El código WBS se asigna automáticamente. Ítems de un capítulo → 1.A…; de varios → transversal T.A…"
+                    : "Modifique el nombre y los ítems. Si mezcla capítulos, pasa a transversal (nuevo código T.*)."}
                 </div>
               </div>
               <button type="button" style={S.closeBtn(theme)} onClick={cerrarAgrupadorModal}>✕</button>
@@ -5569,13 +5581,20 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                   autoFocus={showAgrupador.mode === "create"} />
               </div>
 
-              {showAgrupador.mode === "create" && capituloDesdeSeleccion === "__mixto__" && (
+              {seraTransversal && (
                 <div style={{
-                  ...agTypo.warnBox, marginBottom:12,
-                  padding:"10px 12px", borderRadius:8,
-                  background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)",
+                  marginBottom:12, padding:"8px 12px", borderRadius:8,
+                  background: isDarkMode(theme) ? "rgba(0,175,197,0.1)" : "rgba(0,119,182,0.08)",
+                  border: `1px solid ${tTok.border}`,
+                  display:"flex", alignItems:"center", gap:8, fontSize:"var(--cc-sm)", color:tTok.text,
                 }}>
-                  Todos los ítems seleccionados deben pertenecer al mismo capítulo.
+                  <span
+                    data-cc-tooltip="Ítems de varios capítulos: se creará/actualizará como agrupador transversal (código T.A, T.B…)"
+                    data-cc-tooltip-variant="help"
+                    style={{ fontWeight:800, color:tTok.primary, cursor:"help" }}
+                    aria-label="Transversal"
+                  >⊞</span>
+                  <span><strong>Transversal</strong> — código propio fuera de los capítulos</span>
                 </div>
               )}
 
@@ -5733,7 +5752,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                         Agregue ítems con el botón + del panel izquierdo.
                       </div>
                     ) : (
-                      itemsSeleccionadosAgrupador.map((item, idx) => (
+                      itemsSeleccionadosAgrupador.map((item, idx) => {
+                        const capFull = (item.capitulo || "").trim();
+                        const capShort = (capFull.match(/^(\d+)/) || [])[1] || capFull.split(".")[0] || capFull || "—";
+                        return (
                         <FilaTooltipDescripcionTruncada
                           key={item.id}
                           tipId={`sel-${item.id}`}
@@ -5741,7 +5763,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                           theme={theme}
                           rowStyle={{
                             display:"grid",
-                            gridTemplateColumns:"64px 1fr 44px 88px 28px",
+                            gridTemplateColumns:"36px 64px 1fr 44px 88px 28px",
                             gap:8,
                             alignItems:"start",
                             padding:"8px 10px",
@@ -5750,6 +5772,14 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                         >
                           {(descRef, tipHandlers = {}) => (
                             <>
+                              <span
+                                style={{ ...agTypo.badge, alignSelf:"center", fontWeight:700 }}
+                                data-cc-tooltip={capFull || "Capítulo"}
+                                data-cc-tooltip-variant="help"
+                                title={capFull || "Capítulo"}
+                              >
+                                {capShort}
+                              </span>
                               <span style={{ ...agTypo.itemNum, alignSelf:"center" }}>{item.item_numero || "—"}</span>
                               <span
                                 ref={descRef}
@@ -5773,7 +5803,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                             </>
                           )}
                         </FilaTooltipDescripcionTruncada>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                   <div style={{
