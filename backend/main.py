@@ -1150,6 +1150,12 @@ class ListadoPrecioAgrupadorBody(BaseModel):
     descripcion: Optional[str] = None
     orden: Optional[int] = 0
     item_ids: Optional[List[int]] = None
+    # Si True, al quitar ítems libera líneas programadas en versiones borrador.
+    liberar_lineas_borrador: Optional[bool] = False
+
+
+class ListadoPrecioAgrupadorPreviewQuitarBody(BaseModel):
+    item_ids: List[int]
 
 class PresupuestoRow(BaseModel):
     pk_id: Optional[str] = None
@@ -11121,6 +11127,34 @@ def crear_listado_precio_agrupador(
     return created
 
 
+@app.post("/listado-precios/agrupadores/{agrupador_id}/preview-quitar-items")
+def preview_quitar_items_agrupador(
+    agrupador_id: int,
+    body: ListadoPrecioAgrupadorPreviewQuitarBody,
+    current_user=Depends(get_current_user),
+):
+    """Cuenta líneas programadas en borrador que se liberarían al quitar ítems."""
+    ex = (
+        supabase.table("listado_precios_agrupadores")
+        .select("contrato_id")
+        .eq("id", agrupador_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not ex:
+        raise HTTPException(status_code=404, detail="Agrupador no encontrado")
+    contrato_id = ex[0]["contrato_id"]
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_lineas_agrupador import preview_lineas_a_liberar_por_items
+    return preview_lineas_a_liberar_por_items(
+        supabase,
+        contrato_id=int(contrato_id),
+        agrupador_id=int(agrupador_id),
+        item_ids_quitar=list(body.item_ids or []),
+    )
+
+
 @app.put("/listado-precios/agrupadores/{agrupador_id}")
 def actualizar_listado_precio_agrupador(
     agrupador_id: int,
@@ -11162,11 +11196,18 @@ def actualizar_listado_precio_agrupador(
     asignados = None
     es_tx = era_tx
     cap = (ex[0].get("capitulo") or "").strip()
+    lineas_liberadas = 0
 
     if body.item_ids is not None:
         item_ids = list(dict.fromkeys(body.item_ids))
         if not item_ids:
             raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para el agrupador.")
+        # Ítems actuales del AG (para detectar quites)
+        from listado_agrupador_membership import items_ids_de_agrupador
+        actuales = items_ids_de_agrupador(supabase, agrupador_id)
+        nuevos = set(int(x) for x in item_ids)
+        quitar = sorted(actuales - nuevos)
+
         clasif = _clasificar_agrupador_desde_items(contrato_id, item_ids)
         es_tx = bool(clasif["es_transversal"])
         cap = clasif["capitulo"]
@@ -11179,6 +11220,17 @@ def actualizar_listado_precio_agrupador(
             patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, cap, es_transversal=False)
         elif es_tx and era_tx and not codigo_actual.upper().startswith("T."):
             patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, CAPITULO_TRANSVERSALES, es_transversal=True)
+
+        if quitar and body.liberar_lineas_borrador:
+            from prog_obra_lineas_agrupador import liberar_lineas_items_quitados_borrador
+            lib = liberar_lineas_items_quitados_borrador(
+                supabase,
+                contrato_id=int(contrato_id),
+                agrupador_id=int(agrupador_id),
+                item_ids_quitar=quitar,
+            )
+            lineas_liberadas = int(lib.get("liberadas") or 0)
+
         asignados = _asignar_items_agrupador(
             contrato_id, agrupador_id, cap, item_ids,
             permitir_reasignar=True, reemplazar=True,
@@ -11215,6 +11267,7 @@ def actualizar_listado_precio_agrupador(
         "es_transversal": es_tx,
         "capitulo": cap,
         "codigo_wbs": patch.get("codigo_wbs") or codigo_actual,
+        "lineas_liberadas": lineas_liberadas,
     }
 
 
