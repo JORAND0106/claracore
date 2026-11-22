@@ -1737,9 +1737,9 @@ function ProgCapituloSection({
             {collapsed ? '▸' : '▾'}
           </button>
         </td>
-        <td style={{ ...capCell, ...stickyDescCell(pal.bg), fontWeight: 700, color: t.text }} title={`Capítulo ${cap}`}>
+        <td style={{ ...capCell, ...stickyDescCell(pal.bg), fontWeight: 700, color: t.text }} title={cap === 'Transversales' ? 'Transversales' : `Capítulo ${cap}`}>
           <span style={{ ...ellipsisTextStyle(), display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
-            <span style={ellipsisTextStyle()}>Capítulo {cap}</span>
+            <span style={ellipsisTextStyle()}>{cap === 'Transversales' ? '⊞ Transversales' : `Capítulo ${cap}`}</span>
             {sinAgrupador.length > 0 && (
               <ProgSinAgrupadorCapIcon
                 count={sinAgrupador.length}

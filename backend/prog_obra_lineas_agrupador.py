@@ -140,31 +140,53 @@ def preview_lineas_agrupador(
     cap = _norm(capitulo)
     ag_id = int(agrupador_id)
     multi_map = agrupadores_por_item_map(sb, contrato_id)
-    # Ítems membership de este AG (vía multi o legacy)
+    # Detectar transversal (capítulo sentinel o flag)
+    es_tx = cap == "Transversales"
+    try:
+        ag_row = (
+            sb.table("listado_precios_agrupadores")
+            .select("es_transversal,capitulo")
+            .eq("id", ag_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ag_row:
+            es_tx = bool(ag_row[0].get("es_transversal")) or (
+                _norm(ag_row[0].get("capitulo")) == "Transversales"
+            )
+    except Exception:
+        pass
+
+    # Ítems membership de este AG (vía multi o legacy).
+    # Transversal: no filtrar por capítulo del AG (ítems de varios caps).
     item_keys: Set[Tuple[str, str]] = set()
     for (c, it), ags in multi_map.items():
-        if c == cap and ag_id in ags:
+        if ag_id in ags and (es_tx or c == cap):
             item_keys.add((c, it))
     if not item_keys:
         # Fallback: items with legacy agrupador_id
         legacy_ag, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
         for (c, it), ag in legacy_ag.items():
-            if c == cap and ag is not None and int(ag) == ag_id:
+            if ag is not None and int(ag) == ag_id and (es_tx or c == cap):
                 item_keys.add((c, it))
     else:
         _, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
 
     vu_map = _load_listado_vu_map(sb, contrato_id)
     lineas_ppto = fetch_ppto_lineas_pk(sb, contrato_id, pk_id, version_ppto_id)
-    asign = _asignaciones_version_pk(sb, version_id, pk_id, cap)
+    # Transversal: asignaciones de cualquier capítulo del PK
+    asign = _asignaciones_version_pk(
+        sb, version_id, pk_id, None if es_tx else cap,
+    )
     by_key = {_norm(a.get("linea_key")): a for a in asign}
 
-    # Meta de agrupadores para tooltips
+    # Meta de agrupadores para tooltips (todo el contrato: multi + transversales)
     ag_meta_rows = (
         sb.table("listado_precios_agrupadores")
-        .select("id,nombre,codigo_wbs")
+        .select("id,nombre,codigo_wbs,capitulo")
         .eq("contrato_id", int(contrato_id))
-        .eq("capitulo", cap)
         .execute()
         .data
         or []
@@ -245,6 +267,7 @@ def _linea_payload(
         "linea_key": linea_key_from_row(r),
         "presupuesto_item_id": r.get("presupuesto_item_id_origen") or r.get("id"),
         "item": item,
+        "capitulo": cap,
         "descripcion": (_norm(r.get("descripcion"))
                         or _resolve_listado_descripcion(desc_lp, cap, item)),
         "abs_inicio": r.get("abs_inicio"),
@@ -313,7 +336,8 @@ def asignar_lineas(
             "version_id": str(version_id),
             "contrato_id": int(contrato_id),
             "pk_id": _norm(pk_id),
-            "capitulo": _norm(capitulo),
+            # Capítulo del ítem (presupuesto), no el sentinel «Transversales»
+            "capitulo": _norm(src.get("capitulo") or capitulo),
             "item": src["item"],
             "linea_key": k,
             "presupuesto_item_id": src.get("presupuesto_item_id"),
