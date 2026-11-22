@@ -1,34 +1,70 @@
 """
 Membership N:N entre ítems del Listado de Precios y agrupadores WBS.
 
-- Un ítem puede pertenecer a varios agrupadores del mismo capítulo.
+- Un ítem puede pertenecer a varios agrupadores (capítulo o transversales).
 - `listado_precios.agrupador_id` se mantiene como denormalización: primer
-  membership (o NULL si no tiene ninguno) para compatibilidad con lecturas legacy.
+  membership de capítulo (no transversal), o NULL. Los transversales viven
+  solo en el bridge N:N para no romper el trigger de coherencia de capítulo.
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
+
+_log = logging.getLogger("claracore.listado_agrupador_membership")
+
+CAPITULO_TRANSVERSALES = "Transversales"
+
+_MEMBERSHIP_CACHE: Optional[bool] = None
 
 
 def _table_exists(sb, name: str) -> bool:
     try:
         sb.table(name).select("*").limit(1).execute()
         return True
-    except Exception:
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "pgrst205" in msg or "does not exist" in msg or "not find the table" in msg:
+            return False
+        # Otros errores (auth, red): no asumir que existe
+        _log.warning("table_exists(%s) error: %s", name, exc)
         return False
 
 
+def invalidate_membership_cache() -> None:
+    global _MEMBERSHIP_CACHE
+    _MEMBERSHIP_CACHE = None
+
+
 def membership_disponible(sb) -> bool:
-    return _table_exists(sb, "listado_precios_agrupador_items")
+    global _MEMBERSHIP_CACHE
+    if _MEMBERSHIP_CACHE is not None:
+        return _MEMBERSHIP_CACHE
+    _MEMBERSHIP_CACHE = _table_exists(sb, "listado_precios_agrupador_items")
+    return _MEMBERSHIP_CACHE
+
+
+def require_membership(sb) -> None:
+    """Obliga la tabla N:N: sin ella multi-AG y transversales no pueden persistir ítems."""
+    invalidate_membership_cache()
+    if membership_disponible(sb):
+        return
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Falta la tabla listado_precios_agrupador_items (membership N:N). "
+            "Ejecute la migración 20261122180000_listado_multi_agrupador_transversales.sql "
+            "y reintente. Sin ella los agrupadores quedan vacíos."
+        ),
+    )
 
 
 def fetch_membership_rows(sb, contrato_id: int) -> List[dict]:
     """Filas bridge + datos mínimos del ítem (capitulo, item_numero)."""
     if not membership_disponible(sb):
         return []
-    # Traer bridge y enriquecer desde listado.
     bridge = (
         sb.table("listado_precios_agrupador_items")
         .select("agrupador_id,item_id")
@@ -39,7 +75,6 @@ def fetch_membership_rows(sb, contrato_id: int) -> List[dict]:
     if not bridge:
         return []
     item_ids = list({int(r["item_id"]) for r in bridge if r.get("item_id") is not None})
-    # Filtrar por contrato vía listado
     items = (
         sb.table("listado_precios")
         .select("id,capitulo,item_numero,agrupador_id")
@@ -77,7 +112,6 @@ def agrupadores_por_item_map(
             if r["agrupador_id"] not in out[key]:
                 out[key].append(r["agrupador_id"])
         return out
-    # Fallback legacy: listado_precios.agrupador_id
     legacy = (
         sb.table("listado_precios")
         .select("capitulo,item_numero,agrupador_id")
@@ -119,8 +153,27 @@ def items_ids_de_agrupador(sb, agrupador_id: int) -> Set[int]:
     return {int(r["id"]) for r in rows if r.get("id") is not None}
 
 
+def _agrupadores_transversales_ids(sb, ag_ids: Iterable[int]) -> Set[int]:
+    ids = [int(x) for x in ag_ids]
+    if not ids:
+        return set()
+    rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,es_transversal,capitulo")
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    out: Set[int] = set()
+    for r in rows:
+        if r.get("es_transversal") or (r.get("capitulo") or "").strip() == CAPITULO_TRANSVERSALES:
+            out.add(int(r["id"]))
+    return out
+
+
 def sync_legacy_agrupador_id(sb, item_ids: Iterable[int]) -> None:
-    """Actualiza listado_precios.agrupador_id = min(membership) o NULL."""
+    """Actualiza listado_precios.agrupador_id = primer AG de capítulo (no transversal)."""
     ids = [int(x) for x in item_ids]
     if not ids:
         return
@@ -135,11 +188,21 @@ def sync_legacy_agrupador_id(sb, item_ids: Iterable[int]) -> None:
         or []
     )
     by_item: Dict[int, List[int]] = {i: [] for i in ids}
+    all_ags: Set[int] = set()
     for b in bridge:
-        by_item.setdefault(int(b["item_id"]), []).append(int(b["agrupador_id"]))
+        iid = int(b["item_id"])
+        aid = int(b["agrupador_id"])
+        by_item.setdefault(iid, []).append(aid)
+        all_ags.add(aid)
+    tx_ids = _agrupadores_transversales_ids(sb, all_ags)
     for iid, ags in by_item.items():
-        primary = min(ags) if ags else None
-        sb.table("listado_precios").update({"agrupador_id": primary}).eq("id", iid).execute()
+        chapter_ags = sorted(a for a in ags if a not in tx_ids)
+        primary = chapter_ags[0] if chapter_ags else None
+        try:
+            sb.table("listado_precios").update({"agrupador_id": primary}).eq("id", iid).execute()
+        except Exception as exc:
+            # No tumbar la asignación N:N si el legacy falla
+            _log.warning("sync_legacy_agrupador_id item=%s falló: %s", iid, exc)
 
 
 def asignar_items_a_agrupador(
@@ -151,13 +214,16 @@ def asignar_items_a_agrupador(
     *,
     reemplazar: bool = False,
     permitir_multi_capitulo: bool = False,
+    exigir_membership: bool = True,
 ) -> int:
     """
     Añade item_ids al agrupador (sin quitarlos de otros).
-    Si reemplazar=True, el set del agrupador queda exactamente item_ids
-    (quita del bridge los que salen de este agrupador, sin tocar otros AGs).
+    Si reemplazar=True, el set del agrupador queda exactamente item_ids.
     Si permitir_multi_capitulo=True (agrupador transversal), no exige mismo capítulo.
     """
+    if exigir_membership:
+        require_membership(sb)
+
     if not item_ids and not reemplazar:
         return 0
     cap = capitulo.strip()
@@ -199,13 +265,29 @@ def asignar_items_a_agrupador(
             for iid in (nuevos - actuales)
         ]
         if to_insert:
-            sb.table("listado_precios_agrupador_items").upsert(
-                to_insert, on_conflict="agrupador_id,item_id",
-            ).execute()
+            try:
+                sb.table("listado_precios_agrupador_items").upsert(
+                    to_insert, on_conflict="agrupador_id,item_id",
+                ).execute()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"No se pudieron guardar los ítems del agrupador: {exc}",
+                ) from exc
         sync_legacy_agrupador_id(sb, afectados if reemplazar else nuevos)
+        # Verificar persistencia
+        guardados = items_ids_de_agrupador(sb, agrupador_id)
+        if nuevos - guardados:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Los ítems no quedaron asociados al agrupador. "
+                    "Verifique que exista listado_precios_agrupador_items."
+                ),
+            )
         return len(nuevos)
 
-    # Legacy: asignación exclusiva
+    # Legacy exclusivo (solo si no se exigió membership)
     if reemplazar:
         actuales = (
             sb.table("listado_precios")
@@ -222,9 +304,15 @@ def asignar_items_a_agrupador(
                 "id", list(quitar),
             ).execute()
     if ids:
-        sb.table("listado_precios").update(
-            {"agrupador_id": int(agrupador_id)},
-        ).in_("id", ids).execute()
+        try:
+            sb.table("listado_precios").update(
+                {"agrupador_id": int(agrupador_id)},
+            ).in_("id", ids).execute()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudieron asignar ítems (legado): {exc}",
+            ) from exc
     return len(ids)
 
 
@@ -235,7 +323,6 @@ def quitar_item_de_agrupador(sb, agrupador_id: int, item_id: int) -> None:
         ).eq("item_id", int(item_id)).execute()
         sync_legacy_agrupador_id(sb, [int(item_id)])
         return
-    # Legacy: solo limpia si coincide
     row = (
         sb.table("listado_precios")
         .select("agrupador_id")
@@ -301,11 +388,9 @@ def enrich_agrupadores_con_items(sb, contrato_id: int, agrupadores: List[dict]) 
         by_ag: Dict[int, List[int]] = {aid: [] for aid in ag_ids}
         for b in bridge:
             by_ag.setdefault(int(b["agrupador_id"]), []).append(int(b["item_id"]))
-        # También mapa inverso para tooltip multi
         item_ids = list({int(b["item_id"]) for b in bridge})
         otros: Dict[int, List[dict]] = {}
         if item_ids:
-            # nombres de todos los AGs del contrato
             ag_meta = {int(a["id"]): a for a in agrupadores}
             for b in bridge:
                 iid = int(b["item_id"])
@@ -328,7 +413,6 @@ def enrich_agrupadores_con_items(sb, contrato_id: int, agrupadores: List[dict]) 
             }
         return agrupadores
 
-    # Legacy
     for a in agrupadores:
         aid = int(a["id"])
         rows = (
@@ -344,3 +428,104 @@ def enrich_agrupadores_con_items(sb, contrato_id: int, agrupadores: List[dict]) 
         a["items_count"] = len(ids)
         a["items_otros_agrupadores"] = {}
     return agrupadores
+
+
+def listar_agrupadores_vacios(sb, contrato_id: int) -> List[dict]:
+    """Agrupadores del contrato sin ningún ítem en membership/legado."""
+    rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,capitulo,nombre,codigo_wbs,es_transversal,creado_en")
+        .eq("contrato_id", int(contrato_id))
+        .order("id")
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return []
+    enriched = enrich_agrupadores_con_items(sb, contrato_id, list(rows))
+    return [
+        {
+            "id": a["id"],
+            "capitulo": a.get("capitulo"),
+            "nombre": a.get("nombre"),
+            "codigo_wbs": a.get("codigo_wbs"),
+            "es_transversal": bool(a.get("es_transversal")),
+            "creado_en": a.get("creado_en"),
+            "items_count": int(a.get("items_count") or 0),
+        }
+        for a in enriched
+        if int(a.get("items_count") or 0) == 0
+    ]
+
+
+def intentar_restaurar_desde_logs(sb, contrato_id: int, vacios: List[dict]) -> dict:
+    """
+    Busca en logs CREAR/EDITAR de agrupadores el payload con item_ids / items
+    y reasigna si es recuperable.
+    """
+    restaurados = []
+    no_recuperables = []
+    for ag in vacios:
+        ag_id = int(ag["id"])
+        detalle = None
+        try:
+            logs = (
+                sb.table("logs")
+                .select("*")
+                .eq("tabla", "listado_precios_agrupadores")
+                .eq("entidad_id", str(ag_id))
+                .order("id", desc=True)
+                .limit(10)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            try:
+                logs = (
+                    sb.table("logs")
+                    .select("*")
+                    .eq("entidad_id", str(ag_id))
+                    .order("id", desc=True)
+                    .limit(20)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception:
+                logs = []
+        for row in logs:
+            d = row.get("detalle") or row.get("datos") or row.get("payload") or row.get("cambio")
+            if isinstance(d, str):
+                import json
+                try:
+                    d = json.loads(d)
+                except Exception:
+                    d = None
+            if not isinstance(d, dict):
+                continue
+            ids = d.get("item_ids")
+            if not ids and isinstance(d.get("items"), list) and d["items"] and isinstance(d["items"][0], (int, float)):
+                ids = d["items"]
+            if ids:
+                detalle = [int(x) for x in ids]
+                break
+        if not detalle:
+            no_recuperables.append(ag)
+            continue
+        try:
+            n = asignar_items_a_agrupador(
+                sb,
+                contrato_id,
+                ag_id,
+                (ag.get("capitulo") or "").strip() or CAPITULO_TRANSVERSALES,
+                detalle,
+                reemplazar=True,
+                permitir_multi_capitulo=bool(ag.get("es_transversal"))
+                or (ag.get("capitulo") or "").strip() == CAPITULO_TRANSVERSALES,
+            )
+            restaurados.append({**ag, "items_restaurados": n, "item_ids": detalle})
+        except Exception as exc:
+            no_recuperables.append({**ag, "error": str(exc)[:200]})
+    return {"restaurados": restaurados, "no_recuperables": no_recuperables}
