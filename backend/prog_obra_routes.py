@@ -235,6 +235,7 @@ class ActividadBatchItemBody(BaseModel):
     heredado_de_capitulo: bool = False
     agrupador_id: Optional[int] = None
     codigo_wbs: Optional[str] = None
+    subsector_id: Optional[str] = None
 
 
 class ActividadesBatchBody(BaseModel):
@@ -941,6 +942,8 @@ def prog_actividades_batch(
             row["agrupador_id"] = int(it.agrupador_id)
         if it.codigo_wbs:
             row["codigo_wbs"] = it.codigo_wbs.strip()[:50]
+        if getattr(it, "subsector_id", None):
+            row["subsector_id"] = str(it.subsector_id).strip()
         actividades.append(row)
 
     try:
@@ -954,6 +957,19 @@ def prog_actividades_batch(
                 "p_actividades": actividades,
             },
         ).execute()
+        # Vincular subsector_id (columna nueva; el RPC legacy no la escribe)
+        for row in actividades:
+            sid = row.get("subsector_id")
+            if not sid:
+                continue
+            try:
+                supabase.table("prog_actividades").update({"subsector_id": sid}).eq(
+                    "version_id", version_id
+                ).eq("pk_id", pk_id).eq("capitulo", row["capitulo"]).eq(
+                    "item", row["item"]
+                ).eq("segmento", row.get("segmento") or 1).execute()
+            except Exception:
+                pass
     except Exception:
         _trace = _tb.format_exc()
         _logger.error("ERROR RPC prog_batch_upsert_actividades: %s", _trace)
@@ -1954,6 +1970,224 @@ def prog_auto_schedule_aplicar(
         "prog_version",
         version_id,
         {"contrato_id": contrato_id, "actividades": result.get("actividades_aplicadas")},
+    )
+    return result
+
+
+# ── Subsectores PK (subdivisión por abscisa) ─────────────────────────────────
+
+class SubsectorPreviewBody(BaseModel):
+    version_id: str
+    pk_id: str
+    abs_inicio: str
+    abs_final: str
+    modo: str = "automatico"
+    manual: Optional[dict] = None
+    plano_geojson: Optional[dict] = None
+    pk_geojson: Optional[dict] = None
+    version_ppto_id: Optional[str] = None
+    exclude_id: Optional[str] = None
+
+
+class SubsectorCreateBody(BaseModel):
+    version_id: str
+    pk_id: str
+    abs_inicio: str
+    abs_final: str
+    modo: str = "automatico"
+    manual: Optional[dict] = None
+    geojson: Optional[dict] = None
+    plano_geojson: Optional[dict] = None
+    pk_geojson: Optional[dict] = None
+    version_ppto_id: Optional[str] = None
+
+
+class SubsectorUpdateBody(BaseModel):
+    abs_inicio: Optional[str] = None
+    abs_final: Optional[str] = None
+    modo: Optional[str] = None
+    manual: Optional[dict] = None
+    geojson: Optional[dict] = None
+    plano_geojson: Optional[dict] = None
+    pk_geojson: Optional[dict] = None
+    version_ppto_id: Optional[str] = None
+
+
+@router.get("/{contrato_id}/subsectores/precheck")
+def prog_subsectores_precheck(
+    contrato_id: int,
+    pk_id: str = Query(...),
+    version_ppto_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_subsectores_service import precheck_subdividir
+
+    return precheck_subdividir(supabase, contrato_id, pk_id.strip(), version_ppto_id)
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/pk/{pk_id}/subsectores")
+def prog_list_subsectores_pk(
+    contrato_id: int,
+    version_id: str,
+    pk_id: str,
+    version_ppto_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_subsectores_service import list_subsectores_pk_enriched
+
+    return list_subsectores_pk_enriched(
+        supabase, contrato_id, version_id, pk_id.strip(), version_ppto_id
+    )
+
+
+@router.post("/{contrato_id}/subsectores/preview")
+def prog_subsector_preview(contrato_id: int, body: SubsectorPreviewBody, current_user=Depends(get_current_user)):
+    require_permiso_programacion_obra(current_user, "crear")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_subsectores import SubsectorError
+    from prog_obra_subsectores_service import preview_subsector
+
+    try:
+        return preview_subsector(
+            supabase,
+            contrato_id,
+            body.version_id,
+            body.pk_id.strip(),
+            abs_inicio=body.abs_inicio,
+            abs_final=body.abs_final,
+            modo=body.modo,
+            manual=body.manual,
+            plano_fc=body.plano_geojson,
+            pk_geom=body.pk_geojson,
+            version_ppto_id=body.version_ppto_id,
+            exclude_id=body.exclude_id,
+        )
+    except SubsectorError as e:
+        raise HTTPException(status_code=400, detail={"message": e.message, "code": e.code})
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.post("/{contrato_id}/subsectores")
+def prog_subsector_create(contrato_id: int, body: SubsectorCreateBody, current_user=Depends(get_current_user)):
+    require_permiso_programacion_obra(current_user, "crear")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_subsectores import SubsectorError
+    from prog_obra_subsectores_service import audit_detalle_subsector, crear_subsector
+
+    try:
+        sub = crear_subsector(
+            supabase,
+            contrato_id,
+            body.version_id,
+            body.pk_id.strip(),
+            _uid(current_user),
+            abs_inicio=body.abs_inicio,
+            abs_final=body.abs_final,
+            modo=body.modo,
+            manual=body.manual,
+            geojson=body.geojson,
+            plano_fc=body.plano_geojson,
+            pk_geom=body.pk_geojson,
+            version_ppto_id=body.version_ppto_id,
+        )
+    except SubsectorError as e:
+        raise HTTPException(status_code=400, detail={"message": e.message, "code": e.code})
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "CREAR",
+        "prog_pk_subsector",
+        sub.get("id"),
+        audit_detalle_subsector("CREAR", sub, lineas_despues=sub.get("lineas"), modo=body.modo),
+    )
+    return sub
+
+
+@router.patch("/{contrato_id}/versiones/{version_id}/subsectores/{subsector_id}")
+def prog_subsector_update(
+    contrato_id: int,
+    version_id: str,
+    subsector_id: str,
+    body: SubsectorUpdateBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_subsectores import SubsectorError
+    from prog_obra_subsectores_service import (
+        audit_detalle_subsector,
+        actualizar_subsector,
+        get_subsector_detail,
+    )
+
+    antes = get_subsector_detail(supabase, subsector_id)
+    lineas_antes = list(antes.get("lineas") or [])
+    try:
+        sub = actualizar_subsector(
+            supabase,
+            contrato_id,
+            version_id,
+            subsector_id,
+            _uid(current_user),
+            abs_inicio=body.abs_inicio,
+            abs_final=body.abs_final,
+            modo=body.modo,
+            manual=body.manual,
+            geojson=body.geojson,
+            plano_fc=body.plano_geojson,
+            pk_geom=body.pk_geojson,
+            version_ppto_id=body.version_ppto_id,
+        )
+    except SubsectorError as e:
+        raise HTTPException(status_code=400, detail={"message": e.message, "code": e.code})
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "EDITAR",
+        "prog_pk_subsector",
+        subsector_id,
+        audit_detalle_subsector(
+            "EDITAR", sub, lineas_antes=lineas_antes, lineas_despues=sub.get("lineas"), modo=body.modo
+        ),
+    )
+    return sub
+
+
+@router.delete("/{contrato_id}/versiones/{version_id}/subsectores/{subsector_id}")
+def prog_subsector_delete(
+    contrato_id: int,
+    version_id: str,
+    subsector_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "eliminar")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_subsectores_service import audit_detalle_subsector, eliminar_subsector, get_subsector_detail
+
+    antes = get_subsector_detail(supabase, subsector_id)
+    try:
+        result = eliminar_subsector(supabase, contrato_id, version_id, subsector_id)
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "ELIMINAR",
+        "prog_pk_subsector",
+        subsector_id,
+        audit_detalle_subsector(
+            "ELIMINAR",
+            antes,
+            lineas_antes=antes.get("lineas"),
+            lineas_despues=[],
+            modo=antes.get("modo_reparto"),
+        ),
     )
     return result
 
