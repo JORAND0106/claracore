@@ -7,6 +7,8 @@ import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { RefreshCw, RotateCcw, Save } from 'lucide-react'
 import CcConfirmModal from './components/CcConfirmModal'
+import { ProgObraSubdividirIconBtn } from './ProgObraSubdividirModal'
+import { displayLabelSubsector } from './progObraSubsectores'
 import ProgObraDependencias, { normalizeDep } from './ProgObraDependencias'
 import ProgObraComparacionTable from './ProgObraComparacionTable'
 import {
@@ -1906,6 +1908,9 @@ export default function ProgObraProgramacionModal({
   versionPptoId = null,
   puedeEditar = true,
   puedeEliminar = false,
+  puedeCrear = false,
+  onRequestSubdividir = null,
+  subsectorContext = null,
 }) {
   const tramoConsolidado = modalMode === 'tramo'
   const ganttLayoutScope = tramoConsolidado ? 'tramo' : (activePk || '')
@@ -2830,6 +2835,7 @@ export default function ProgObraProgramacionModal({
         heredado_de_capitulo: false,
         itemDef: row.itemDef,
         rk: row.rk,
+        subsector_id: subsectorContext?.subsectorId || subsectorContext?.id || null,
       }))
       console.debug('[ProgObra] POST actividades-batch', { count: batchPayload.length, pk: activePk })
       const batchResult = await onGuardarBatch(batchPayload, activePk)
@@ -3139,8 +3145,23 @@ export default function ProgObraProgramacionModal({
         <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, gap: 12 }}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary }}>
-              Programación de obra{versionTitle ? ` — ${versionTitle}` : ''}
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>
+                Programación de obra{versionTitle ? ` — ${versionTitle}` : ''}
+                {subsectorContext?.label
+                  ? ` · ${subsectorContext.label}`
+                  : (subsectorContext?.abs_inicio_m != null
+                    ? ` · ${displayLabelSubsector(activePk, subsectorContext.abs_inicio_m, subsectorContext.abs_final_m)}`
+                    : '')}
+              </span>
+              {!tramoConsolidado && !historicalReadOnly && (puedeCrear || puedeEditar) && (
+                <ProgObraSubdividirIconBtn
+                  t={t}
+                  visible={Boolean(onRequestSubdividir && activePk && editable)}
+                  disabled={!editable || !activePk}
+                  onClick={() => onRequestSubdividir?.(activePk)}
+                />
+              )}
             </div>
             {tramoCriteriosLabel && (
               <div

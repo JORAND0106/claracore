@@ -23,6 +23,9 @@ import {
 } from './cache/progObraVistaCache'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import ProgObraProgramacionModal from './ProgObraProgramacionModal'
+import ProgObraSubdividirModal from './ProgObraSubdividirModal'
+import { displayLabelSubsector } from './progObraSubsectores'
+import { fetchSubsectoresPk } from './progObraApi'
 import { openAdminListadoPrecios, permisoEditarListadoPrecios } from './openAdminListadoPrecios'
 import ProgHistorialVersiones from './ProgHistorialVersiones'
 import { parseVersionesResponse } from './progObraVersiones'
@@ -219,50 +222,79 @@ function colorForEjecutadoPct(pct) {
   return { fill: '#22c55e', line: '#15803d', op: 0.82, bucket: '90+' }
 }
 
-function buildEnrichedPlano(planoFc, metaMap, tramoPkSet = null, mapViewMode = 'programacion') {
+function buildEnrichedPlano(planoFc, metaMap, tramoPkSet = null, mapViewMode = 'programacion', subsectorFeatures = []) {
   if (!planoFc?.features) return { type: 'FeatureCollection', features: [] }
   const modoEjecutado = mapViewMode === 'ejecutado'
+  const pksConSub = new Set(
+    (subsectorFeatures || [])
+      .map((f) => String(f?.properties?.pk_id || '').trim())
+      .filter(Boolean),
+  )
+  const base = (planoFc.features || []).map((f) => {
+    const pkid = featurePkId(f)
+    const row = metaMap[pkid] || {}
+    const est = row.estado_programacion || 'sin_iniciar'
+    const progC = colorForEstado(est)
+    const desviacion = Boolean(row.tiene_desviacion) && !modoEjecutado
+    const atenuado = tramoPkSet != null && tramoPkSet.size > 0 && !tramoPkSet.has(pkid)
+    const hasSubs = pksConSub.has(pkid)
+    let fill = progC.fill
+    let line = progC.line
+    // PK con subsectores: fondo atenuado; el color de estado vive en los polígonos hijo
+    let op = atenuado ? Math.max(progC.op * 0.18, 0.08) : (hasSubs ? Math.max(progC.op * 0.22, 0.1) : progC.op)
+    let lineOp = atenuado ? 0.25 : (hasSubs ? 0.45 : 0.9)
+    let progBgOp = null
+    if (modoEjecutado) {
+      const ejC = colorForEjecutadoPct(row.ejecutado_pct)
+      progBgOp = atenuado ? Math.max(progC.op * 0.1, 0.06) : Math.max(progC.op * 0.14, 0.08)
+      fill = ejC.fill
+      line = ejC.line
+      op = atenuado ? Math.max(ejC.op * 0.35, 0.1) : ejC.op
+      lineOp = atenuado ? 0.3 : 0.85
+    }
+    return {
+      ...f,
+      properties: {
+        ...f.properties,
+        pk_id: pkid,
+        prog_estado: est,
+        prog_fill: fill,
+        prog_line: line,
+        prog_op: op,
+        prog_line_op: lineOp,
+        prog_fill_prog: progC.fill,
+        prog_op_prog: progBgOp,
+        prog_desviacion: desviacion ? 1 : 0,
+        prog_desviacion_tipo: row.desviacion_tipo || '',
+        ejecutado_pct: Number(row.ejecutado_pct) || 0,
+        ejecutado: Number(row.ejecutado) || 0,
+        prog_tiene_subsectores: hasSubs ? 1 : 0,
+      },
+    }
+  })
+  const overlays = (subsectorFeatures || []).map((f) => {
+    const pkid = String(f?.properties?.pk_id || '').trim()
+    const est = f?.properties?.prog_estado || metaMap[pkid]?.estado_programacion || 'sin_iniciar'
+    const progC = colorForEstado(est)
+    const critico = Boolean(f?.properties?.prog_ruta_critica)
+    return {
+      ...f,
+      properties: {
+        ...f.properties,
+        pk_id: pkid,
+        prog_estado: est,
+        prog_fill: progC.fill,
+        prog_line: critico ? '#dc2626' : progC.line,
+        prog_op: Math.min(progC.op + 0.08, 0.85),
+        prog_line_op: critico ? 1 : 0.95,
+        prog_subsector: 1,
+        prog_desviacion: 0,
+      },
+    }
+  })
   return {
     ...planoFc,
-    features: (planoFc.features || []).map((f) => {
-      const pkid = featurePkId(f)
-      const row = metaMap[pkid] || {}
-      const est = row.estado_programacion || 'sin_iniciar'
-      const progC = colorForEstado(est)
-      const desviacion = Boolean(row.tiene_desviacion) && !modoEjecutado
-      const atenuado = tramoPkSet != null && tramoPkSet.size > 0 && !tramoPkSet.has(pkid)
-      let fill = progC.fill
-      let line = progC.line
-      let op = atenuado ? Math.max(progC.op * 0.18, 0.08) : progC.op
-      let lineOp = atenuado ? 0.25 : 0.9
-      let progBgOp = null
-      if (modoEjecutado) {
-        const ejC = colorForEjecutadoPct(row.ejecutado_pct)
-        progBgOp = atenuado ? Math.max(progC.op * 0.1, 0.06) : Math.max(progC.op * 0.14, 0.08)
-        fill = ejC.fill
-        line = ejC.line
-        op = atenuado ? Math.max(ejC.op * 0.35, 0.1) : ejC.op
-        lineOp = atenuado ? 0.3 : 0.85
-      }
-      return {
-        ...f,
-        properties: {
-          ...f.properties,
-          pk_id: pkid,
-          prog_estado: est,
-          prog_fill: fill,
-          prog_line: line,
-          prog_op: op,
-          prog_line_op: lineOp,
-          prog_fill_prog: progC.fill,
-          prog_op_prog: progBgOp,
-          prog_desviacion: desviacion ? 1 : 0,
-          prog_desviacion_tipo: row.desviacion_tipo || '',
-          ejecutado_pct: Number(row.ejecutado_pct) || 0,
-          ejecutado: Number(row.ejecutado) || 0,
-        },
-      }
-    }),
+    features: [...base, ...overlays],
   }
 }
 
@@ -653,7 +685,18 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick, mapViewMo
   const onClick = (e) => {
     const f = e.features && e.features[0]
     const pkid = featurePkId(f)
-    if (pkid) onPkClick(pkid)
+    if (!pkid) return
+    const props = f?.properties || {}
+    if (props.prog_subsector && props.prog_subsector_id) {
+      onPkClick(pkid, {
+        subsectorId: String(props.prog_subsector_id),
+        abs_inicio_m: props.abs_inicio_m,
+        abs_final_m: props.abs_final_m,
+        label: props.prog_subsector_label || displayLabelSubsector(pkid, props.abs_inicio_m, props.abs_final_m),
+      })
+      return
+    }
+    onPkClick(pkid)
   }
   const onEnter = () => {
     map.getCanvas().style.cursor = 'pointer'
@@ -1039,6 +1082,10 @@ export default function ModuloProgramacionObra({
   const [loadPptoCostos, setLoadPptoCostos] = useState(false)
   const [validarModal, setValidarModal] = useState(null)
   const [progModalOpen, setProgModalOpen] = useState(false)
+  const [subdividirOpen, setSubdividirOpen] = useState(false)
+  const [subdividirPk, setSubdividirPk] = useState(null)
+  const [subsectorMapFeatures, setSubsectorMapFeatures] = useState([])
+  const [activeSubsectorContext, setActiveSubsectorContext] = useState(null)
   const [modalOpenCompareTab, setModalOpenCompareTab] = useState(false)
   const [modalPkTabs, setModalPkTabs] = useState([])
   const [activeModalPk, setActiveModalPk] = useState(null)
@@ -1510,12 +1557,74 @@ export default function ModuloProgramacionObra({
       setSelPk(pkid)
       setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
       setActiveModalPk(pkid)
+      setActiveSubsectorContext(options.subsector || null)
       setModalOpenCompareTab(!!options.compare)
       setModalSessionId((n) => n + 1)
       setProgModalOpen(true)
     },
     [workingVersionId, versiones, borradorMeta?.id, pkTieneCantidad, showToast],
   )
+
+  const openSubdividir = useCallback(
+    (pkid) => {
+      if (!pkid || !puedeCrear) return
+      setProgModalOpen(false)
+      setSubdividirPk(pkid)
+      setSubdividirOpen(true)
+    },
+    [puedeCrear],
+  )
+
+  const closeSubdividir = useCallback(() => {
+    const pk = subdividirPk
+    setSubdividirOpen(false)
+    setSubdividirPk(null)
+    if (pk) openProgramacionModal(pk, { keepModalVersion: true })
+  }, [subdividirPk, openProgramacionModal])
+
+  const refreshSubsectorMapOverlays = useCallback(async () => {
+    const vid = workingVersionId || borradorMeta?.id
+    if (!cid || !token || !vid || !plano?.features?.length) {
+      setSubsectorMapFeatures([])
+      return
+    }
+    const pkSet = new Set(
+      (mapaResp?.pk || [])
+        .map((r) => String(r.pk_id || '').trim())
+        .filter(Boolean),
+    )
+    const feats = []
+    const pkList = [...pkSet].slice(0, 80)
+    await Promise.all(
+      pkList.map(async (pk) => {
+        try {
+          const d = await fetchSubsectoresPk(API, cid, token, vid, pk, pptoVersionVigenteId)
+          for (const s of d.subsectores || []) {
+            if (!s.geojson) continue
+            const geom = s.geojson.type === 'Feature' ? s.geojson.geometry : s.geojson
+            if (!geom) continue
+            feats.push({
+              type: 'Feature',
+              geometry: geom,
+              properties: {
+                pk_id: pk,
+                PK_ID: pk,
+                prog_subsector_id: s.id,
+                abs_inicio_m: s.abs_inicio_m,
+                abs_final_m: s.abs_final_m,
+                prog_subsector_label: s.label || displayLabelSubsector(pk, s.abs_inicio_m, s.abs_final_m),
+                etiqueta: `${s.abs_inicio_label || ''}`.trim(),
+                prog_estado: 'en_progreso',
+              },
+            })
+          }
+        } catch {
+          /* tabla ausente o sin permiso */
+        }
+      }),
+    )
+    setSubsectorMapFeatures(feats)
+  }, [cid, token, API, workingVersionId, borradorMeta?.id, plano, mapaResp, pptoVersionVigenteId])
 
   const openProgramacionModalTramo = useCallback(() => {
     if (!tramoFilter) return
@@ -1560,6 +1669,7 @@ export default function ModuloProgramacionObra({
     setModalMode('pk')
     setModalPkTabs([])
     setActiveModalPk(null)
+    setActiveSubsectorContext(null)
     setModalTramoContext(null)
     setTramoEstructuraData(null)
     setLoadTramoEstructura(false)
@@ -1634,7 +1744,7 @@ export default function ModuloProgramacionObra({
   }, [selPk, pkRowsProgramables, openProgramacionModal, showToast])
 
   const onMapPkClick = useCallback(
-    (pkid) => {
+    (pkid, subsector = null) => {
       if (!pkid) return
       if (!pkTieneCantidad(pkid)) {
         showToast?.('Este PK no tiene cantidades en presupuesto.', 'info')
@@ -1645,8 +1755,9 @@ export default function ModuloProgramacionObra({
       if (progModalOpen) {
         setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
         setActiveModalPk(pkid)
+        setActiveSubsectorContext(subsector || null)
       } else {
-        openProgramacionModal(pkid)
+        openProgramacionModal(pkid, subsector ? { subsector } : {})
       }
     },
     [progModalOpen, openProgramacionModal, pkTieneCantidad, showToast],
@@ -1696,9 +1807,9 @@ export default function ModuloProgramacionObra({
     )
 
     map.on('load', () => {
-      const enriched = buildEnrichedPlano(plano, pkMeta(), new Set(), mapViewModeRef.current)
+      const enriched = buildEnrichedPlano(plano, pkMeta(), new Set(), mapViewModeRef.current, subsectorMapFeatures)
       enrichedGeojsonRef.current = enriched
-      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk), mapViewModeRef.current)
+      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk, sub) => onMapPkClickRef.current(pk, sub), mapViewModeRef.current)
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
       if (lab) {
         lab.textContent = basemapIcon(mapBaseModeRef.current)
@@ -1740,13 +1851,17 @@ export default function ModuloProgramacionObra({
   useEffect(() => {
     const map = mapInst.current
     if (!map || !MAPBOX_TOKEN || !plano?.features?.length || !mapaResp) return
-    const enriched = buildEnrichedPlano(plano, pkMeta(), tramoPkSet, mapViewMode)
+    const enriched = buildEnrichedPlano(plano, pkMeta(), tramoPkSet, mapViewMode, subsectorMapFeatures)
     enrichedGeojsonRef.current = enriched
     const apply = () =>
-      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk), mapViewMode)
+      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk, sub) => onMapPkClickRef.current(pk, sub), mapViewMode)
     if (map.isStyleLoaded()) apply()
     else map.once('load', apply)
-  }, [mapaResp, pkMeta, plano, tramoPkSet, mapViewMode])
+  }, [mapaResp, pkMeta, plano, tramoPkSet, mapViewMode, subsectorMapFeatures])
+
+  useEffect(() => {
+    void refreshSubsectorMapOverlays()
+  }, [refreshSubsectorMapOverlays])
 
   useEffect(() => {
     const map = mapInst.current
@@ -2507,6 +2622,7 @@ export default function ModuloProgramacionObra({
           ...(def.es_agrupador && def.agrupador_id
             ? { agrupador_id: def.agrupador_id, codigo_wbs: def.codigo_wbs || def.item }
             : {}),
+          ...(row.subsector_id ? { subsector_id: String(row.subsector_id) } : {}),
         }
       })
       try {
@@ -2693,11 +2809,12 @@ export default function ModuloProgramacionObra({
           const id = String(r.pk_id || '').trim()
           if (id) metaMap[id] = r
         }
-        const enriched = buildEnrichedPlano(plano, metaMap, tramoPkSet, mapViewMode)
+        const enriched = buildEnrichedPlano(plano, metaMap, tramoPkSet, mapViewMode, subsectorMapFeatures)
         map.getSource('prog-pol').setData(enriched)
       }
+      void refreshSubsectorMapOverlays()
     },
-    [refreshMapaImmediate, plano, tramoPkSet, mapViewMode, cancelScheduledMapRefresh],
+    [refreshMapaImmediate, plano, tramoPkSet, mapViewMode, cancelScheduledMapRefresh, subsectorMapFeatures, refreshSubsectorMapOverlays],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -3349,6 +3466,30 @@ export default function ModuloProgramacionObra({
         versionPptoId={pptoVersionVigenteId}
         puedeEditar={puedeEditar}
         puedeEliminar={puedeEliminar}
+        puedeCrear={puedeCrear}
+        onRequestSubdividir={openSubdividir}
+        subsectorContext={activeSubsectorContext}
+      />
+
+      <ProgObraSubdividirModal
+        open={subdividirOpen}
+        onClose={closeSubdividir}
+        onChanged={() => {
+          void refreshSubsectorMapOverlays()
+          void refreshMapaImmediate?.()
+        }}
+        t={t}
+        API={API}
+        cid={cid}
+        token={token}
+        versionId={workingVersionId || borradorMeta?.id}
+        pkId={subdividirPk}
+        versionPptoId={pptoVersionVigenteId}
+        planoFc={plano}
+        puedeCrear={puedeCrear}
+        puedeEditar={puedeEditar}
+        puedeEliminar={puedeEliminar}
+        showToast={showToast}
       />
 
       {presupuestoDelta && (

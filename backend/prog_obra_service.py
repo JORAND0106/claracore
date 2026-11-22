@@ -2683,6 +2683,49 @@ def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> 
     items_cf = _count_items_con_fecha(sb, version_id, pk, contrato_id)       # query 2
     items_sin_ag = _count_items_sin_agrupador(sb, contrato_id, pk)           # query 3
     estado = _compute_estado_pk(items_total, items_cf, items_sin_ag)
+    # Con subsectores: el PK solo queda azul (completa) si no hay cantidad pendiente
+    # y todas las actividades ligadas a subsectores tienen fecha.
+    try:
+        subs = (
+            sb.table("prog_pk_subsectores")
+            .select("id")
+            .eq("version_id", version_id)
+            .eq("pk_id", pk)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if subs:
+            from prog_obra_subsectores_service import list_subsectores_pk_enriched
+
+            enriched = list_subsectores_pk_enriched(sb, contrato_id, version_id, pk)
+            pend = enriched.get("pendiente") or []
+            hay_pend = any(float(p.get("cantidad_pendiente") or 0) > 0.009 for p in pend)
+            acts = (
+                sb.table("prog_actividades")
+                .select("fecha_inicio,cantidad_programada")
+                .eq("version_id", version_id)
+                .eq("pk_id", pk)
+                .not_.is_("subsector_id", "null")
+                .execute()
+                .data
+                or []
+            )
+            sin_fecha = any(
+                float(a.get("cantidad_programada") or 0) > 0 and not a.get("fecha_inicio")
+                for a in acts
+            )
+            if hay_pend or sin_fecha or not acts:
+                if estado == "completa":
+                    estado = "en_progreso"
+                elif estado == "sin_iniciar" and acts:
+                    estado = "en_progreso"
+            elif not hay_pend and acts and not sin_fecha and items_total > 0:
+                estado = "completa"
+                items_cf = items_total
+    except Exception:
+        pass
     sb.table("prog_pk_estado").upsert(                          # query 3 (antes: 4)
         {
             "version_id": version_id,

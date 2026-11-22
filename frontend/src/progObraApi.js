@@ -4,6 +4,11 @@ async function parseErr(res) {
   const err = await res.json().catch(() => ({}))
   const detail = err?.detail
   if (typeof detail === 'string') throw new Error(detail)
+  if (detail && typeof detail === 'object' && !Array.isArray(detail) && detail.message) {
+    const e = new Error(String(detail.message))
+    e.detail = detail
+    throw e
+  }
   if (Array.isArray(detail)) {
     const msg = detail
       .map((d) => {
@@ -231,6 +236,74 @@ export async function clearVersionProgramacion(API, cid, token, versionId) {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+/** Subsectores PK (subdivisión por abscisa) */
+export async function fetchSubsectoresPrecheck(API, cid, token, pkId, versionPptoId) {
+  const q = new URLSearchParams({ pk_id: pkId })
+  if (versionPptoId) q.set('version_ppto_id', String(versionPptoId))
+  const res = await fetch(`${API}/prog-obra/${cid}/subsectores/precheck?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function fetchSubsectoresPk(API, cid, token, versionId, pkId, versionPptoId) {
+  const q = new URLSearchParams()
+  if (versionPptoId) q.set('version_ppto_id', String(versionPptoId))
+  const qs = q.toString()
+  const res = await fetch(
+    `${API}/prog-obra/${cid}/versiones/${versionId}/pk/${encodeURIComponent(pkId)}/subsectores${qs ? `?${qs}` : ''}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function previewSubsector(API, cid, token, body) {
+  const res = await fetch(`${API}/prog-obra/${cid}/subsectores/preview`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function createSubsector(API, cid, token, body) {
+  const res = await fetch(`${API}/prog-obra/${cid}/subsectores`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function updateSubsector(API, cid, token, versionId, subsectorId, body) {
+  const res = await fetch(
+    `${API}/prog-obra/${cid}/versiones/${versionId}/subsectores/${subsectorId}`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}
+
+export async function deleteSubsector(API, cid, token, versionId, subsectorId) {
+  const res = await fetch(
+    `${API}/prog-obra/${cid}/versiones/${versionId}/subsectores/${subsectorId}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  )
   if (!res.ok) await parseErr(res)
   return res.json()
 }
