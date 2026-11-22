@@ -177,7 +177,11 @@ def _register_listado_item_key(
 
 
 def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, str], Optional[int]], Dict[Tuple[str, str], str]]:
-    """Mapa (capitulo, item_numero) -> agrupador_id y descripcion desde listado_precios."""
+    """
+    Mapa (capitulo, item_numero) -> agrupador_id (primario) y descripcion.
+    Con membership N:N el primario es el menor id de los AG del ítem (compat legacy).
+    Un ítem con al menos un membership deja de contar como «sin agrupador».
+    """
     rows = (
         sb.table("listado_precios")
         .select("capitulo,item_numero,agrupador_id,descripcion")
@@ -196,6 +200,15 @@ def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, s
         _register_listado_item_key(ag_map, cap, it, r.get("agrupador_id"))
         if r.get("descripcion"):
             _register_listado_item_key(desc_map, cap, it, str(r["descripcion"]).strip())
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+
+        multi = agrupadores_por_item_map(sb, contrato_id)
+        for key, ags in multi.items():
+            if ags:
+                ag_map[key] = int(min(ags))
+    except Exception:
+        pass
     return ag_map, desc_map
 
 
@@ -256,10 +269,12 @@ def fetch_estructura_programacion_pk(
     contrato_id: int,
     pk_id: str,
     version_ppto_id: Optional[str] = None,
+    version_prog_id: Optional[str] = None,
 ) -> dict:
     """
-    items de presupuesto del PK agrupados por capitulo y agrupador WBS.
-    JOIN logico con listado_precios -> listado_precios_agrupadores.
+    Ítems de presupuesto del PK agrupados por capítulo y agrupador WBS.
+    Un ítem multi-agrupador aparece bajo TODOS sus agrupadores; los totales
+    por AG usan solo las líneas asignadas cuando hay version_prog_id.
     """
     pk = (pk_id or "").strip()
     ppto_rows = _fetch_ppto_rows_para_estructura(
@@ -268,33 +283,22 @@ def fetch_estructura_programacion_pk(
         pk_id=pk,
         version_ppto_id=version_ppto_id,
     )
-    item_agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for r in ppto_rows:
-        cap = (r.get("capitulo") or "").strip()
-        it = (r.get("item") or "").strip()
-        if not cap or not it:
-            continue
-        key = (cap, it)
-        ct = Decimal(str(r.get("cant_total") or 0))
-        cd = Decimal(str(r.get("costo_directo") or 0))
-        vlr = Decimal(str(r.get("vlr_unitario") or 0))
-        line_cd = cd if cd > 0 else ct * vlr
-        desc = (r.get("descripcion") or "").strip()
-        if key not in item_agg:
-            item_agg[key] = {
-                "cant": Decimal(0),
-                "costo": Decimal(0),
-                "und": (r.get("und") or "")[:20],
-                "vlr": vlr,
-                "descripcion": desc,
-            }
-        cur = item_agg[key]
-        cur["cant"] += ct
-        cur["costo"] += line_cd
-        if not cur["descripcion"] and desc:
-            cur["descripcion"] = desc
-
     ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
+    multi_map: Dict[Tuple[str, str], List[int]] = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+    except Exception:
+        multi_map = {}
+
+    linea_asig: Dict[str, int] = {}
+    if version_prog_id:
+        try:
+            from prog_obra_lineas_agrupador import map_linea_a_agrupador
+            linea_asig = map_linea_a_agrupador(sb, str(version_prog_id), pk)
+        except Exception:
+            linea_asig = {}
+
     agr_rows = (
         sb.table("listado_precios_agrupadores")
         .select("id,capitulo,codigo_wbs,nombre,orden")
@@ -309,39 +313,133 @@ def fetch_estructura_programacion_pk(
         if aid is not None:
             agr_meta[int(aid)] = a
 
+    def _ags_for_item(cap: str, it: str) -> List[int]:
+        ags = multi_map.get((cap, it))
+        if ags:
+            return [int(x) for x in ags if int(x) in agr_meta]
+        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
+        if ag_id is not None and int(ag_id) in agr_meta:
+            return [int(ag_id)]
+        return []
+
+    # Acumular por (cap, item, ag|None) con resolución multi/mono
+    from sicoe_valor_canonico import valor_cant_vu, round_cant
+
+    qty_by_ag: Dict[Tuple[str, str, Optional[int]], Decimal] = {}
+    meta_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    lineas_sin_asig: Dict[Tuple[str, str], int] = {}
+    lineas_por_ag: Dict[Tuple[str, int], int] = {}
+    lineas_disponibles_por_ag: Dict[Tuple[str, int], int] = {}
+    multi_items: set = set()
+
+    for r in ppto_rows:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not cap or not it:
+            continue
+        key = (cap, it)
+        ct = Decimal(str(r.get("cant_total") or 0))
+        vlr = Decimal(str(r.get("vlr_unitario") or 0))
+        desc = (r.get("descripcion") or "").strip()
+        und = (r.get("und") or "")[:20]
+        if key not in meta_item:
+            meta_item[key] = {"und": und or "?", "vlr": vlr, "descripcion": desc}
+        else:
+            if not meta_item[key]["descripcion"] and desc:
+                meta_item[key]["descripcion"] = desc
+            if meta_item[key]["und"] in ("?", "") and und:
+                meta_item[key]["und"] = und
+
+        ags = _ags_for_item(cap, it)
+        es_multi = len(ags) > 1
+        if es_multi:
+            multi_items.add(key)
+            try:
+                from prog_obra_lineas_agrupador import linea_key_from_row
+                lk = linea_key_from_row(r)
+            except Exception:
+                lk = None
+            ag_eff = int(linea_asig[lk]) if lk and lk in linea_asig else None
+            if ag_eff is None:
+                lineas_sin_asig[key] = lineas_sin_asig.get(key, 0) + 1
+                for aid in ags:
+                    lineas_disponibles_por_ag[(cap, aid)] = (
+                        lineas_disponibles_por_ag.get((cap, aid), 0) + 1
+                    )
+            else:
+                qty_by_ag[(cap, it, ag_eff)] = qty_by_ag.get((cap, it, ag_eff), Decimal(0)) + ct
+                lineas_por_ag[(cap, ag_eff)] = lineas_por_ag.get((cap, ag_eff), 0) + 1
+        elif ags:
+            aid = ags[0]
+            qty_by_ag[(cap, it, aid)] = qty_by_ag.get((cap, it, aid), Decimal(0)) + ct
+            lineas_por_ag[(cap, aid)] = lineas_por_ag.get((cap, aid), 0) + 1
+        else:
+            qty_by_ag[(cap, it, None)] = qty_by_ag.get((cap, it, None), Decimal(0)) + ct
+
+    # Asegurar que ítems multi aparezcan bajo todos sus AGs (aunque cant=0)
+    for (cap, it) in multi_items:
+        for aid in _ags_for_item(cap, it):
+            qty_by_ag.setdefault((cap, it, aid), Decimal(0))
+
     cap_map: Dict[str, Dict[str, Any]] = {}
-    for (cap, it), v in sorted(item_agg.items(), key=lambda x: (x[0][0], x[0][1])):
+    for (cap, it, ag_eff), cant_raw in sorted(qty_by_ag.items(), key=lambda x: (x[0][0], x[0][1], x[0][2] or 0)):
         if cap not in cap_map:
             cap_map[cap] = {"agrupadores": {}, "sin_agrupador": []}
-        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
+        meta = meta_item.get((cap, it)) or {}
+        cant = float(round_cant(float(cant_raw)))
+        vu = float(meta.get("vlr") or 0)
         item_obj = {
             "item": it,
-            "descripcion": v["descripcion"] or _resolve_listado_descripcion(desc_lp, cap, it),
-            "cant_total": float(v["cant"]),
-            "und": v["und"] or "?",
-            "vlr_unitario": float(v["vlr"]),
-            "costo_directo": float(v["costo"]),
+            "descripcion": meta.get("descripcion") or _resolve_listado_descripcion(desc_lp, cap, it),
+            "cant_total": cant,
+            "und": meta.get("und") or "?",
+            "vlr_unitario": vu,
+            "costo_directo": float(valor_cant_vu(cant, vu)),
+            "es_multi_agrupador": (cap, it) in multi_items,
+            "lineas_sin_asignar": int(lineas_sin_asig.get((cap, it), 0)),
         }
-        if ag_id is not None and int(ag_id) in agr_meta:
-            ag_id_int = int(ag_id)
+        if ag_eff is not None and int(ag_eff) in agr_meta:
+            ag_id_int = int(ag_eff)
             ag_bucket = cap_map[cap]["agrupadores"]
             if ag_id_int not in ag_bucket:
-                meta = agr_meta[ag_id_int]
+                am = agr_meta[ag_id_int]
                 ag_bucket[ag_id_int] = {
                     "agrupador_id": ag_id_int,
-                    "agrupador_nombre": (meta.get("nombre") or "").strip(),
-                    "codigo_wbs": (meta.get("codigo_wbs") or "").strip(),
-                    "orden": int(meta.get("orden") or 0),
+                    "agrupador_nombre": (am.get("nombre") or "").strip(),
+                    "codigo_wbs": (am.get("codigo_wbs") or "").strip(),
+                    "orden": int(am.get("orden") or 0),
                     "items": [],
                     "cant_total": 0.0,
                     "costo_directo": 0.0,
+                    "es_multi_agrupador": False,
+                    "sin_lineas_disponibles": False,
+                    "lineas_sin_asignar": 0,
                 }
             ag = ag_bucket[ag_id_int]
-            ag["items"].append(item_obj)
+            # Evitar duplicar el mismo ítem si ya está
+            if not any(x.get("item") == it for x in ag["items"]):
+                ag["items"].append(item_obj)
+            if (cap, it) in multi_items:
+                ag["es_multi_agrupador"] = True
+                ag["lineas_sin_asignar"] = max(
+                    int(ag.get("lineas_sin_asignar") or 0),
+                    int(lineas_sin_asig.get((cap, it), 0)),
+                )
             ag["cant_total"] += item_obj["cant_total"]
             ag["costo_directo"] += item_obj["costo_directo"]
         else:
-            cap_map[cap]["sin_agrupador"].append(item_obj)
+            if not any(x.get("item") == it for x in cap_map[cap]["sin_agrupador"]):
+                cap_map[cap]["sin_agrupador"].append(item_obj)
+
+    # Flags sin líneas disponibles (multi sin asignaciones propias ni libres)
+    for cap, block in cap_map.items():
+        for ag in block["agrupadores"].values():
+            aid = int(ag["agrupador_id"])
+            if not ag.get("es_multi_agrupador"):
+                continue
+            propias = int(lineas_por_ag.get((cap, aid), 0))
+            libres = int(lineas_disponibles_por_ag.get((cap, aid), 0))
+            ag["sin_lineas_disponibles"] = propias == 0 and libres == 0
 
     capitulos: List[dict] = []
     for cap in sorted(cap_map.keys()):
@@ -352,6 +450,7 @@ def fetch_estructura_programacion_pk(
         )
         for ag in agrupadores:
             ag["items"].sort(key=lambda x: x.get("item") or "")
+            ag["costo_directo"] = float(round(float(ag.get("costo_directo") or 0), 0))
         sin = sorted(block["sin_agrupador"], key=lambda x: x.get("item") or "")
         capitulos.append({
             "capitulo": cap,
@@ -367,28 +466,22 @@ def _aggregate_ppto_rows_tramo(
     ag_by_item: Dict[Tuple[str, str], Optional[int]],
     agr_meta: Dict[int, dict],
     desc_lp: Optional[Dict[Tuple[str, str], str]] = None,
+    *,
+    multi_map: Optional[Dict[Tuple[str, str], List[int]]] = None,
+    linea_asig: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Dict[int, dict]]:
     """
     Agrega filas presupuesto multi-PK por (capitulo, agrupador_id) e ítems hijos.
-    Excluye ítems sin agrupador WBS válido.
+    Mono: todo el ítem al AG. Multi: solo líneas asignadas (linea_asig).
     """
+    from sicoe_valor_canonico import valor_cant_vu, round_cant
+
+    multi_map = multi_map or {}
+    linea_asig = linea_asig or {}
+    pks_alerta: set = set()
     cap_map: Dict[str, Dict[int, dict]] = {}
-    for r in ppto_rows or []:
-        cap = (r.get("capitulo") or "").strip()
-        it = (r.get("item") or "").strip()
-        pk = str(r.get("pk_id") or "").strip()
-        if not cap or not it or not pk:
-            continue
-        ag_id = _resolve_listado_agrupador_id(ag_by_item, cap, it)
-        if ag_id is None or int(ag_id) not in agr_meta:
-            continue
-        ag_id_int = int(ag_id)
-        ct = Decimal(str(r.get("cant_total") or 0))
-        cd = Decimal(str(r.get("costo_directo") or 0))
-        vlr = Decimal(str(r.get("vlr_unitario") or 0))
-        line_cd = cd if cd > 0 else ct * vlr
-        und = (r.get("und") or "?")[:20]
-        desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp or {}, cap, it)
+
+    def _ensure_ag(cap: str, ag_id_int: int, und: str) -> dict:
         if cap not in cap_map:
             cap_map[cap] = {}
         ag_bucket = cap_map[cap]
@@ -404,9 +497,50 @@ def _aggregate_ppto_rows_tramo(
                 "und": und,
                 "pk_ids": set(),
                 "items": {},
+                "es_multi_agrupador": False,
+                "pks_lineas_sin_asignar": set(),
             }
-        ag = ag_bucket[ag_id_int]
-        ag["cant_total"] += ct
+        return ag_bucket[ag_id_int]
+
+    for r in ppto_rows or []:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        pk = str(r.get("pk_id") or "").strip()
+        if not cap or not it or not pk:
+            continue
+        ags = multi_map.get((cap, it))
+        if ags and len(ags) > 1:
+            try:
+                from prog_obra_lineas_agrupador import linea_key_from_row
+                lk = linea_key_from_row(r)
+            except Exception:
+                lk = None
+            ag_eff = int(linea_asig[lk]) if lk and lk in linea_asig else None
+            if ag_eff is None or ag_eff not in agr_meta:
+                pks_alerta.add(pk)
+                for aid in ags:
+                    if int(aid) in agr_meta:
+                        ag = _ensure_ag(cap, int(aid), (r.get("und") or "?")[:20])
+                        ag["es_multi_agrupador"] = True
+                        ag["pks_lineas_sin_asignar"].add(pk)
+                continue
+            ag_id_int = ag_eff
+        else:
+            ag_id = ags[0] if ags and len(ags) == 1 else _resolve_listado_agrupador_id(ag_by_item, cap, it)
+            if ag_id is None or int(ag_id) not in agr_meta:
+                continue
+            ag_id_int = int(ag_id)
+
+        ct = Decimal(str(r.get("cant_total") or 0))
+        vlr = Decimal(str(r.get("vlr_unitario") or 0))
+        cant_r = float(round_cant(float(ct)))
+        line_cd = Decimal(str(valor_cant_vu(cant_r, float(vlr))))
+        und = (r.get("und") or "?")[:20]
+        desc = (r.get("descripcion") or "").strip() or _resolve_listado_descripcion(desc_lp or {}, cap, it)
+        ag = _ensure_ag(cap, ag_id_int, und)
+        if ags and len(ags) > 1:
+            ag["es_multi_agrupador"] = True
+        ag["cant_total"] += Decimal(str(cant_r))
         ag["costo_directo"] += line_cd
         ag["pk_ids"].add(pk)
         if und and und != "?" and ag.get("und") in ("?", "", None):
@@ -422,12 +556,19 @@ def _aggregate_ppto_rows_tramo(
                 "vlr_unitario": vlr,
             }
         item_row = item_bucket[it]
-        item_row["cant_total"] += ct
+        item_row["cant_total"] += Decimal(str(cant_r))
         item_row["costo_directo"] += line_cd
         if not item_row.get("descripcion") and desc:
             item_row["descripcion"] = desc
         if und and und != "?" and item_row.get("und") in ("?", "", None):
             item_row["und"] = und
+
+    # Adjuntar set de alerta a nivel respuesta vía atributo en primer AG (consumido abajo)
+    for block in cap_map.values():
+        for ag in block.values():
+            if ag.get("pks_lineas_sin_asignar"):
+                ag["alerta_pks_lineas"] = sorted(ag["pks_lineas_sin_asignar"])
+            ag.pop("pks_lineas_sin_asignar", None)
     return cap_map
 
 
@@ -836,7 +977,20 @@ def fetch_estructura_tramo(
         if aid is not None:
             agr_meta[int(aid)] = a
 
-    cap_map = _aggregate_ppto_rows_tramo(ppto_rows, ag_by_item, agr_meta, desc_lp)
+    multi_map: Dict[Tuple[str, str], List[int]] = {}
+    linea_asig: Dict[str, int] = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        from prog_obra_lineas_agrupador import map_linea_a_agrupador
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+        linea_asig = map_linea_a_agrupador(sb, vid)
+    except Exception:
+        pass
+
+    cap_map = _aggregate_ppto_rows_tramo(
+        ppto_rows, ag_by_item, agr_meta, desc_lp,
+        multi_map=multi_map, linea_asig=linea_asig,
+    )
 
     actividades = (
         sb.table("prog_actividades")
@@ -850,7 +1004,17 @@ def fetch_estructura_tramo(
         or []
     )
 
-    return build_estructura_tramo_response(tramo_s, pk_ids, cap_map, actividades, contrato_id, cache)
+    resp = build_estructura_tramo_response(tramo_s, pk_ids, cap_map, actividades, contrato_id, cache)
+    # Propagar flags multi / alerta a la respuesta
+    for cap in resp.get("capitulos") or []:
+        src = cap_map.get(cap.get("capitulo") or "") or {}
+        for ag in cap.get("agrupadores") or []:
+            src_ag = src.get(int(ag["agrupador_id"])) or {}
+            ag["es_multi_agrupador"] = bool(src_ag.get("es_multi_agrupador"))
+            alerta = src_ag.get("alerta_pks_lineas") or []
+            ag["alerta_pks_lineas"] = list(alerta)
+            ag["lineas_sin_asignar"] = len(alerta)
+    return resp
 
 
 def _build_agrupador_pk_metrics(
@@ -1927,7 +2091,9 @@ def _actividad_tiene_fecha_programacion(row: dict) -> bool:
 def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) -> int:
     """
     Ítems de presupuesto del PK con programación efectiva.
-    Cuenta fecha directa en el ítem o herencia vía agrupador WBS con fecha (prog_actividades.agrupador_id).
+    Mono-agrupador: fecha directa o herencia vía AG (comportamiento histórico).
+    Multi-agrupador: solo cuenta si TODAS las líneas físicas están asignadas
+    y cada agrupador destino tiene fecha en el PK.
     """
     pk = (pk_id or "").strip()
     _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
@@ -1935,6 +2101,20 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
         return 0
     ppto_keys = {(cap, it) for cap, it, _, _, _ in ppto_items}
     ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    multi_map: Dict[Tuple[str, str], List[int]] = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+    except Exception:
+        multi_map = {}
+    linea_asig: Dict[str, int] = {}
+    try:
+        from prog_obra_lineas_agrupador import map_linea_a_agrupador, linea_key_from_row
+        linea_asig = map_linea_a_agrupador(sb, str(version_id), pk)
+    except Exception:
+        linea_key_from_row = None  # type: ignore
+        linea_asig = {}
+
     rows = (
         sb.table("prog_actividades")
         .select("capitulo,item,fecha_inicio,fecha_inicio_temprana,agrupador_id")
@@ -1960,8 +2140,40 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
         if cap and it and (cap, it) in ppto_keys:
             direct_with_fecha.add((cap, it))
 
+    # Líneas físicas por ítem multi (para exigir asignación completa)
+    multi_line_ok: Dict[Tuple[str, str], bool] = {}
+    if any(len(multi_map.get(k) or []) > 1 for k in ppto_keys) and linea_key_from_row:
+        from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+        ppto_rows = fetch_ppto_rows_programacion(
+            sb, contrato_id, pk_id=pk, force_vigente=True,
+        )
+        by_item_lines: Dict[Tuple[str, str], List[dict]] = {}
+        for r in ppto_rows:
+            cap = (r.get("capitulo") or "").strip()
+            it = (r.get("item") or "").strip()
+            if (cap, it) not in ppto_keys:
+                continue
+            if len(multi_map.get((cap, it)) or []) <= 1:
+                continue
+            by_item_lines.setdefault((cap, it), []).append(r)
+        for key, lines in by_item_lines.items():
+            cap, it = key
+            ok = True
+            for r in lines:
+                lk = linea_key_from_row(r)
+                ag_eff = linea_asig.get(lk) if lk else None
+                if ag_eff is None or (cap, int(ag_eff)) not in agrupadores_con_fecha:
+                    ok = False
+                    break
+            multi_line_ok[key] = ok
+
     seen: set = set()
     for cap, it in ppto_keys:
+        ags = multi_map.get((cap, it)) or []
+        if len(ags) > 1:
+            if multi_line_ok.get((cap, it)):
+                seen.add((cap, it))
+            continue
         if (cap, it) in direct_with_fecha:
             seen.add((cap, it))
             continue
@@ -2291,7 +2503,7 @@ def _count_items_con_fecha_bulk(
     ppto_keys_by_pk: Optional[Dict[str, set]] = None,
     ag_by_item: Optional[Dict[Tuple[str, str], Optional[int]]] = None,
 ) -> Dict[str, int]:
-    """Ítems con programación efectiva por PK (2 consultas + memoria)."""
+    """Ítems con programación efectiva por PK (bulk; multi exige líneas asignadas)."""
     pks = sorted({str(p).strip() for p in (pk_ids or []) if str(p).strip()})
     if not pks:
         return {}
@@ -2299,6 +2511,21 @@ def _count_items_con_fecha_bulk(
         ppto_keys_by_pk = _ppto_keys_por_pks(sb, contrato_id, pks)
     if ag_by_item is None:
         ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+
+    multi_map: Dict[Tuple[str, str], List[int]] = {}
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+    except Exception:
+        multi_map = {}
+    linea_asig_all: Dict[str, int] = {}
+    linea_key_from_row = None
+    try:
+        from prog_obra_lineas_agrupador import map_linea_a_agrupador, linea_key_from_row as _lk
+        linea_key_from_row = _lk
+        linea_asig_all = map_linea_a_agrupador(sb, str(version_id))
+    except Exception:
+        pass
 
     rows = (
         sb.table("prog_actividades")
@@ -2329,11 +2556,44 @@ def _count_items_con_fecha_bulk(
         if cap and it and (cap, it) in ppto_keys:
             direct_by_pk[pk].add((cap, it))
 
+    # Preload líneas físicas solo si hay multi
+    has_multi = any(
+        len(multi_map.get(k) or []) > 1
+        for pk in pks
+        for k in (ppto_keys_by_pk.get(pk) or set())
+    )
+    lines_by_pk_item: Dict[Tuple[str, str, str], List[dict]] = {}
+    if has_multi and linea_key_from_row:
+        from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+        ppto_rows = fetch_ppto_rows_programacion(
+            sb, contrato_id, pk_ids=set(pks), force_vigente=True,
+        )
+        for r in ppto_rows:
+            pk = str(r.get("pk_id") or "").strip()
+            cap = (r.get("capitulo") or "").strip()
+            it = (r.get("item") or "").strip()
+            if not pk or (cap, it) not in (ppto_keys_by_pk.get(pk) or set()):
+                continue
+            if len(multi_map.get((cap, it)) or []) <= 1:
+                continue
+            lines_by_pk_item.setdefault((pk, cap, it), []).append(r)
+
     counts: Dict[str, int] = {}
     for pk in pks:
         ppto_keys = ppto_keys_by_pk.get(pk) or set()
         seen: set = set()
         for cap, it in ppto_keys:
+            ags = multi_map.get((cap, it)) or []
+            if len(ags) > 1:
+                lines = lines_by_pk_item.get((pk, cap, it)) or []
+                if lines and all(
+                    (linea_asig_all.get(linea_key_from_row(r)) is not None
+                     and (cap, int(linea_asig_all[linea_key_from_row(r)])) in agr_fecha_by_pk.get(pk, set()))
+                    for r in lines
+                    if linea_key_from_row
+                ):
+                    seen.add((cap, it))
+                continue
             if (cap, it) in direct_by_pk.get(pk, set()):
                 seen.add((cap, it))
                 continue
@@ -3075,11 +3335,11 @@ def create_version(
     else:
         clone_stats = clone_version_data(sb, origen_id, vid, contrato_id, usuario_id)
         try:
-            from prog_obra_partes import clonar_partes_version
+            from prog_obra_lineas_agrupador import clonar_lineas_version
 
-            n_partes = clonar_partes_version(sb, origen_id, vid, contrato_id)
+            n_lineas = clonar_lineas_version(sb, origen_id, vid, contrato_id)
             clone_stats = dict(clone_stats or {})
-            clone_stats["partes_clonadas"] = n_partes
+            clone_stats["lineas_agrupador_clonadas"] = n_lineas
         except Exception:
             pass
         ins[0]["clone_stats"] = clone_stats

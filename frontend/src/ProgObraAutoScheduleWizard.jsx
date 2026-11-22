@@ -192,6 +192,17 @@ export default function ProgObraAutoScheduleWizard({
           <div style={{ padding: '8px 10px', marginBottom: 12, borderRadius: 6, background: '#fee2e2', color: '#991b1b', fontSize: 12 }}>{error}</div>
         )}
 
+        {prereqs?.pks_lineas_sin_asignar?.length > 0 && (
+          <div style={{ padding: '8px 10px', marginBottom: 12, borderRadius: 6, background: '#fef3c7', color: '#92400e', fontSize: 12 }}>
+            ⚠ Hay líneas de ítems compartidos sin asignar. Solo se programarán las ya asignadas.
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              {prereqs.pks_lineas_sin_asignar.slice(0, 8).map((x) => (
+                <li key={x.pk_id}>{x.pk_id}: {x.count} línea(s)</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {step === 1 && (
           <>
             <label style={{ fontSize: 11, color: t.textMuted }}>Fecha inicio del contrato</label>

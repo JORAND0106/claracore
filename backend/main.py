@@ -10772,6 +10772,15 @@ def _fetch_agrupadores_contrato(contrato_id: int) -> List[dict]:
             "items_total": int(s.get("items_total") or 0),
             "precio_unitario_suma_hijos": float(s.get("precio_unitario_suma_hijos") or 0),
         })
+    try:
+        from listado_agrupador_membership import enrich_agrupadores_con_items
+        out = enrich_agrupadores_con_items(supabase, contrato_id, out)
+        # Preferir conteo N:N cuando exista
+        for a in out:
+            if "items_count" in a:
+                a["items_total"] = int(a.get("items_count") or a.get("items_total") or 0)
+    except Exception:
+        pass
     return out
 
 
@@ -10852,29 +10861,25 @@ def _asignar_items_agrupador(
     item_ids: List[int],
     *,
     permitir_reasignar: bool = True,
+    reemplazar: bool = False,
 ) -> int:
-    if not item_ids:
-        return 0
-    cap = capitulo.strip()
-    rows = (
-        supabase.table("listado_precios")
-        .select("id, capitulo, agrupador_id")
-        .eq("contrato_id", contrato_id)
-        .in_("id", item_ids)
-        .execute()
-        .data
-        or []
+    """
+    Asigna ítems al agrupador.
+    Con membership N:N un ítem puede pertenecer a varios agrupadores;
+    permitir_reasignar se ignora (ya no bloquea).
+    Si reemplazar=True, el set del agrupador queda exactamente item_ids.
+    """
+    void = permitir_reasignar  # compat call-sites
+    del void
+    from listado_agrupador_membership import asignar_items_a_agrupador
+    return asignar_items_a_agrupador(
+        supabase,
+        contrato_id,
+        agrupador_id,
+        capitulo,
+        item_ids,
+        reemplazar=reemplazar,
     )
-    if len(rows) != len(set(item_ids)):
-        raise HTTPException(status_code=400, detail="Uno o más ítems no existen en este contrato.")
-    for row in rows:
-        if (row.get("capitulo") or "").strip() != cap:
-            raise HTTPException(status_code=400, detail="Todos los ítems deben pertenecer al mismo capítulo.")
-        prev = row.get("agrupador_id")
-        if prev is not None and prev != agrupador_id and not permitir_reasignar:
-            raise HTTPException(status_code=400, detail="Uno o más ítems ya tienen agrupador asignado.")
-    supabase.table("listado_precios").update({"agrupador_id": agrupador_id}).in_("id", item_ids).execute()
-    return len(item_ids)
 
 
 def _resolve_agrupador_id(contrato_id: int, capitulo: str, item: ListadoPrecioItem) -> Optional[int]:
@@ -10939,14 +10944,8 @@ def get_listado_precios_agrupadores(contrato_id: int, current_user=Depends(get_c
 def get_listado_precios_sin_agrupar(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _deny_listado_precios_contrato_si_subcontratista(current_user)
-    rows = (
-        supabase.table("listado_precios")
-        .select("id", count="exact")
-        .eq("contrato_id", contrato_id)
-        .is_("agrupador_id", "null")
-        .execute()
-    )
-    return {"count": rows.count or 0}
+    from listado_agrupador_membership import count_sin_agrupar
+    return {"count": count_sin_agrupar(supabase, contrato_id)}
 
 
 @app.get("/listado-precios/{contrato_id}/sin-agrupar/count")
@@ -11065,20 +11064,11 @@ def actualizar_listado_precio_agrupador(
         item_ids = list(dict.fromkeys(body.item_ids))
         if not item_ids:
             raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para el agrupador.")
-        actuales = (
-            supabase.table("listado_precios")
-            .select("id")
-            .eq("agrupador_id", agrupador_id)
-            .execute()
-            .data
-            or []
+        # N:N: reemplaza solo el membership de ESTE agrupador; no borra otros.
+        asignados = _asignar_items_agrupador(
+            contrato_id, agrupador_id, cap, item_ids,
+            permitir_reasignar=True, reemplazar=True,
         )
-        actuales_ids = {int(r["id"]) for r in actuales}
-        nuevos_ids = set(item_ids)
-        quitar = actuales_ids - nuevos_ids
-        if quitar:
-            supabase.table("listado_precios").update({"agrupador_id": None}).in_("id", list(quitar)).execute()
-        asignados = _asignar_items_agrupador(contrato_id, agrupador_id, cap, item_ids, permitir_reasignar=True)
         patch["item_ids"] = item_ids
     registrar_log(current_user, "EDITAR", "PRECIOS", "listado_precios_agrupadores", str(agrupador_id), patch)
     return {"ok": True, "items_asignados": asignados}

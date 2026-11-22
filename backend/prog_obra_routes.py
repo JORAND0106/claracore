@@ -304,6 +304,7 @@ def prog_programacion_estructura(
     contrato_id: int,
     pk_id: str = Query(...),
     version_ppto_id: Optional[str] = Query(None),
+    version_id: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     require_permiso_programacion_obra(current_user, "ver")
@@ -316,6 +317,7 @@ def prog_programacion_estructura(
         contrato_id,
         pk,
         version_ppto_id=(version_ppto_id or "").strip() or None,
+        version_prog_id=(version_id or "").strip() or None,
     )
 
 
@@ -1969,8 +1971,10 @@ class SegregarBody(BaseModel):
     version_ppto_id: Optional[str] = None
 
 
+# ── Segregación por partes: retirada. Endpoints responden 410. ─────────────
+
 @router.get("/{contrato_id}/versiones/{version_id}/partes")
-def prog_listar_partes(
+def prog_listar_partes_retirado(
     contrato_id: int,
     version_id: str,
     pk_id: str = Query(...),
@@ -1980,15 +1984,14 @@ def prog_listar_partes(
 ):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
-    from prog_obra_partes import listar_partes_agrupador
-
-    return listar_partes_agrupador(
-        supabase, version_id, contrato_id, pk_id.strip(), capitulo.strip(), int(agrupador_id),
+    raise HTTPException(
+        status_code=410,
+        detail="La segregación por partes fue retirada. Use la asignación de líneas multi-agrupador.",
     )
 
 
 @router.get("/{contrato_id}/segregar/preview")
-def prog_segregar_preview(
+def prog_segregar_preview_retirado(
     contrato_id: int,
     pk_id: str = Query(...),
     capitulo: str = Query(...),
@@ -1998,20 +2001,14 @@ def prog_segregar_preview(
 ):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
-    from prog_obra_partes import preview_lineas_segregar
-
-    return preview_lineas_segregar(
-        supabase,
-        contrato_id,
-        pk_id.strip(),
-        capitulo.strip(),
-        int(agrupador_id),
-        version_ppto_id=(version_ppto_id or "").strip() or None,
+    raise HTTPException(
+        status_code=410,
+        detail="La segregación por partes fue retirada. Use /lineas-agrupador/preview.",
     )
 
 
 @router.post("/{contrato_id}/versiones/{version_id}/segregar")
-def prog_segregar(
+def prog_segregar_retirado(
     contrato_id: int,
     version_id: str,
     body: SegregarBody,
@@ -2019,28 +2016,14 @@ def prog_segregar(
 ):
     require_permiso_programacion_obra(current_user, "editar")
     _require_contract_access(current_user, contrato_id)
-    from prog_obra_partes import crear_segregacion
-
-    try:
-        return crear_segregacion(
-            supabase,
-            version_id,
-            contrato_id,
-            body.pk_id.strip(),
-            body.capitulo.strip(),
-            int(body.agrupador_id),
-            body.nombre_parte,
-            body.items,
-            body.fecha_inicio,
-            body.duracion_dias_habiles,
-            version_ppto_id=(body.version_ppto_id or "").strip() or None,
-        )
-    except BusinessRuleError as e:
-        raise HTTPException(status_code=400, detail=e.message)
+    raise HTTPException(
+        status_code=410,
+        detail="La segregación por partes fue retirada. Use /lineas-agrupador/asignar.",
+    )
 
 
 @router.delete("/{contrato_id}/versiones/{version_id}/segregar")
-def prog_deshacer_segregar(
+def prog_deshacer_segregar_retirado(
     contrato_id: int,
     version_id: str,
     pk_id: str = Query(...),
@@ -2050,11 +2033,97 @@ def prog_deshacer_segregar(
 ):
     require_permiso_programacion_obra(current_user, "eliminar")
     _require_contract_access(current_user, contrato_id)
-    from prog_obra_partes import deshacer_segregacion
+    raise HTTPException(
+        status_code=410,
+        detail="La segregación por partes fue retirada.",
+    )
+
+
+# ── Asignación de líneas multi-agrupador ───────────────────────────────────
+
+class LineasAgrupadorAsignarBody(BaseModel):
+    pk_id: str
+    capitulo: str
+    agrupador_id: int
+    linea_keys: List[str] = Field(..., min_length=1)
+    version_ppto_id: Optional[str] = None
+    mover_desde_otros: bool = False
+
+
+class LineasAgrupadorLiberarBody(BaseModel):
+    linea_keys: List[str] = Field(..., min_length=1)
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/lineas-agrupador/preview")
+def prog_lineas_agrupador_preview(
+    contrato_id: int,
+    version_id: str,
+    pk_id: str = Query(...),
+    capitulo: str = Query(...),
+    agrupador_id: int = Query(...),
+    version_ppto_id: Optional[str] = Query(None),
+    incluir_otros: bool = Query(False),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_lineas_agrupador import preview_lineas_agrupador
+
+    return preview_lineas_agrupador(
+        supabase,
+        version_id=version_id,
+        contrato_id=contrato_id,
+        pk_id=pk_id.strip(),
+        capitulo=capitulo.strip(),
+        agrupador_id=int(agrupador_id),
+        version_ppto_id=(version_ppto_id or "").strip() or None,
+        incluir_asignadas_otros=bool(incluir_otros),
+    )
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/lineas-agrupador/asignar")
+def prog_lineas_agrupador_asignar(
+    contrato_id: int,
+    version_id: str,
+    body: LineasAgrupadorAsignarBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_lineas_agrupador import asignar_lineas
 
     try:
-        return deshacer_segregacion(
-            supabase, version_id, contrato_id, pk_id.strip(), capitulo.strip(), int(agrupador_id),
+        return asignar_lineas(
+            supabase,
+            version_id=version_id,
+            contrato_id=contrato_id,
+            pk_id=body.pk_id.strip(),
+            capitulo=body.capitulo.strip(),
+            agrupador_id=int(body.agrupador_id),
+            linea_keys=body.linea_keys,
+            version_ppto_id=(body.version_ppto_id or "").strip() or None,
+            mover_desde_otros=bool(body.mover_desde_otros),
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/lineas-agrupador/liberar")
+def prog_lineas_agrupador_liberar(
+    contrato_id: int,
+    version_id: str,
+    body: LineasAgrupadorLiberarBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_lineas_agrupador import liberar_lineas
+
+    try:
+        return liberar_lineas(
+            supabase,
+            version_id=version_id,
+            linea_keys=body.linea_keys,
         )
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)

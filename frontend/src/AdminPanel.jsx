@@ -3764,9 +3764,15 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const abrirAgrupadorModal = (mode, data = null) => {
     if (mode === "edit" && data) {
-      const assignedIds = items
-        .filter(i => i.agrupador_id != null && String(i.agrupador_id) === String(data.id))
-        .map(i => i.id);
+      const knownIds = new Set(items.map(i => Number(i.id)));
+      const fromBridge = Array.isArray(data.item_ids)
+        ? data.item_ids.map(Number).filter(id => knownIds.has(Number(id)))
+        : null;
+      const assignedIds = fromBridge?.length
+        ? fromBridge
+        : items
+            .filter(i => i.agrupador_id != null && String(i.agrupador_id) === String(data.id))
+            .map(i => i.id);
       setAgrupadorForm({
         capitulo: data.capitulo || "",
         nombre: data.nombre || "",
@@ -3841,13 +3847,25 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const intentarAgregarItemAgrupador = (item) => {
     cerrarAgrupadorDescTipActivo();
     if (!item || agrupadorItemsSelSet.has(String(item.id))) return;
-    const ag = item.agrupador_id ? agrupadorById[item.agrupador_id] : null;
-    const editAgId = showAgrupador?.mode === "edit" ? showAgrupador.id : null;
-    if (ag && String(ag.id) !== String(editAgId)) {
-      const etiqueta = ag.codigo_wbs ? `[${ag.codigo_wbs}] ${ag.nombre}` : ag.nombre;
-      if (!window.confirm(`Este ítem pertenece a ${etiqueta}. ¿Reasignar?`)) return;
-    }
+    // N:N: un ítem puede pertenecer a varios agrupadores; se agrega sin reasignar.
     setAgrupadorItemsSel(prev => [...prev, item.id]);
+  };
+
+  /** Otros agrupadores del ítem (mismo capítulo), excluyendo el que se edita. */
+  const otrosAgrupadoresDeItem = (item) => {
+    if (!item) return [];
+    const editAgId = showAgrupador?.mode === "edit" ? showAgrupador.id : null;
+    const out = [];
+    for (const ag of agrupadores) {
+      if ((ag.capitulo || "") !== (item.capitulo || "")) continue;
+      if (editAgId != null && String(ag.id) === String(editAgId)) continue;
+      const ids = Array.isArray(ag.item_ids) ? ag.item_ids.map(String) : null;
+      const pertenece = ids
+        ? ids.includes(String(item.id))
+        : item.agrupador_id != null && String(item.agrupador_id) === String(ag.id);
+      if (pertenece) out.push(ag);
+    }
+    return out;
   };
 
   const quitarItemAgrupador = (itemId) => {
@@ -3918,14 +3936,16 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
               ...a,
               nombre: agrupadorForm.nombre.trim(),
               items_total: res.items_asignados ?? idsSel.size,
+              items_count: res.items_asignados ?? idsSel.size,
+              item_ids: agrupadorItemsSel.map(Number),
               precio_unitario_suma_hijos: sumaPrecios,
             }
             : a
         )));
+        // N:N: marcar primario solo si el ítem no tenía agrupador; no quitar de otros.
         setItems(prev => prev.map(i => {
           const sid = String(i.id);
-          if (idsSel.has(sid)) return { ...i, agrupador_id: agId };
-          if (String(i.agrupador_id) === String(agId)) return { ...i, agrupador_id: null };
+          if (idsSel.has(sid) && !i.agrupador_id) return { ...i, agrupador_id: agId };
           return i;
         }));
         if (sinDelta !== 0) setSinAgruparCount(prev => Math.max(0, prev + sinDelta));
@@ -3966,14 +3986,21 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
             capitulo: capituloDesdeSeleccion,
             nombre: agrupadorForm.nombre.trim(),
             items_total: res.items_asignados ?? idsSel.size,
+            items_count: res.items_asignados ?? idsSel.size,
+            item_ids: agrupadorItemsSel.map(Number),
             precio_unitario_suma_hijos: sumaPrecios,
           };
           return prev.some(a => String(a.id) === agIdStr)
             ? prev.map(a => (String(a.id) === agIdStr ? { ...a, ...nuevo } : a))
             : [...prev, nuevo];
         });
-        setItems(prev => prev.map(i => (idsSel.has(String(i.id)) ? { ...i, agrupador_id: agId } : i)));
-        setSinAgruparCount(prev => Math.max(0, prev - idsSel.size));
+        setItems(prev => prev.map(i => (
+          idsSel.has(String(i.id)) && !i.agrupador_id ? { ...i, agrupador_id: agId } : i
+        )));
+        setSinAgruparCount(prev => Math.max(0, prev - [...idsSel].filter(id => {
+          const it = items.find(x => String(x.id) === id);
+          return it && !it.agrupador_id;
+        }).length));
       }
       onModoVistaChange?.("wbs");
       cerrarAgrupadorModal();
@@ -3988,25 +4015,43 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const normAgId = (v) => (v == null || v === "" ? null : Number(v));
 
-  const itemsDeAgrupador = (agId) => itemsFiltrados.filter(i => normAgId(i.agrupador_id) === normAgId(agId))
-    .sort((a, b) => {
-      const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
-      if (ck !== 0) return ck;
-      return cmpItemNumero(a.item_numero, b.item_numero);
-    });
+  const itemsDeAgrupador = (agId) => {
+    const ag = agrupadorById[agId] || agrupadorById[Number(agId)];
+    const bridgeIds = Array.isArray(ag?.item_ids)
+      ? new Set(ag.item_ids.map(String))
+      : null;
+    return itemsFiltrados
+      .filter(i => bridgeIds
+        ? bridgeIds.has(String(i.id))
+        : normAgId(i.agrupador_id) === normAgId(agId))
+      .sort((a, b) => {
+        const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
+        if (ck !== 0) return ck;
+        return cmpItemNumero(a.item_numero, b.item_numero);
+      });
+  };
 
-  const itemsSinAgruparCap = (cap) => itemsFiltrados.filter(i => {
-    if ((i.capitulo || "") !== cap) return false;
-    const agId = normAgId(i.agrupador_id);
-    if (!agId) return true;
-    const ag = agrupadorById[agId] || agrupadorById[i.agrupador_id];
-    return !ag || (ag.capitulo || "") !== cap;
-  })
-    .sort((a, b) => {
-      const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
-      if (ck !== 0) return ck;
-      return cmpItemNumero(a.item_numero, b.item_numero);
-    });
+  const itemsSinAgruparCap = (cap) => {
+    const idsEnAlgúnAg = new Set();
+    for (const ag of (agrupadoresPorCapitulo[cap] || [])) {
+      if (Array.isArray(ag.item_ids)) {
+        for (const id of ag.item_ids) idsEnAlgúnAg.add(String(id));
+      }
+    }
+    return itemsFiltrados.filter(i => {
+      if ((i.capitulo || "") !== cap) return false;
+      if (idsEnAlgúnAg.size > 0) return !idsEnAlgúnAg.has(String(i.id));
+      const agId = normAgId(i.agrupador_id);
+      if (!agId) return true;
+      const ag = agrupadorById[agId] || agrupadorById[i.agrupador_id];
+      return !ag || (ag.capitulo || "") !== cap;
+    })
+      .sort((a, b) => {
+        const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
+        if (ck !== 0) return ck;
+        return cmpItemNumero(a.item_numero, b.item_numero);
+      });
+  };
 
   const hayContenidoCapitulo = (cap) => {
     const ags = agrupadoresDelCapitulo(cap);
@@ -5589,9 +5634,11 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                     ) : (
                       listaPanelIzquierdo.map((item, idx) => {
                         const seleccionado = agrupadorItemsSelSet.has(String(item.id));
-                        const ag = item.agrupador_id ? agrupadorById[item.agrupador_id] : null;
-                        const editAgId = showAgrupador.mode === "edit" ? showAgrupador.id : null;
-                        const otroAgrupador = Boolean(ag) && !seleccionado && String(ag.id) !== String(editAgId);
+                        const otros = otrosAgrupadoresDeItem(item);
+                        const tipOtros = otros
+                          .map(ag => (ag.codigo_wbs ? `[${ag.codigo_wbs}] ${ag.nombre}` : ag.nombre))
+                          .filter(Boolean)
+                          .join(" · ");
                         return (
                           <FilaTooltipDescripcionTruncada
                             key={item.id}
@@ -5606,13 +5653,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                               alignItems:"start",
                               padding:"8px 10px",
                               borderBottom: idx < listaPanelIzquierdo.length - 1 ? `1px solid ${tTok.border}` : "none",
-                              opacity: otroAgrupador ? 0.55 : 1,
                               cursor: !seleccionado ? "pointer" : "default",
                               background: seleccionado
                                 ? (isDarkMode(theme) ? "rgba(34,197,94,0.1)" : "rgba(34,197,94,0.08)")
-                                : otroAgrupador
-                                  ? (isDarkMode(theme) ? "rgba(100,116,139,0.06)" : "rgba(148,163,184,0.06)")
-                                  : "transparent",
+                                : "transparent",
                             }}
                           >
                             {(descRef, tipHandlers = {}) => (
@@ -5641,12 +5685,14 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                                 <span style={agTypo.itemPrice}>
                                   {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
                                 </span>
-                                {otroAgrupador ? (
+                                {otros.length > 0 ? (
                                   <span
-                                    aria-label={ag.nombre}
-                                    style={{ ...agTypo.badge, alignSelf:"center" }}
+                                    data-cc-tooltip={tipOtros || "En otro agrupador"}
+                                    data-cc-tooltip-variant="help"
+                                    aria-label={tipOtros || "En otro agrupador"}
+                                    style={{ ...agTypo.badge, alignSelf:"center", cursor:"help" }}
                                   >
-                                    {ag.codigo_wbs || ag.nombre}
+                                    ⊞
                                   </span>
                                 ) : busquedaAgrupadorActiva && item.capitulo ? (
                                   <span style={{ ...agTypo.meta, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:72, alignSelf:"center" }}>

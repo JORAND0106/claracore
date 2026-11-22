@@ -35,12 +35,41 @@ def check_auto_schedule_prereqs(sb, contrato_id: int, version_id: str) -> dict:
     )
     deps_ok = len(deps) > 0
 
+    # Alertas informativas: líneas de ítems multi sin asignar (no bloquean)
+    pks_lineas_sin: List[dict] = []
+    try:
+        from listado_agrupador_membership import agrupadores_por_item_map
+        from prog_obra_lineas_agrupador import map_linea_a_agrupador, linea_key_from_row
+        from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
+
+        multi_map = agrupadores_por_item_map(sb, contrato_id)
+        multi_keys = {k for k, ags in multi_map.items() if len(ags) > 1}
+        if multi_keys:
+            linea_asig = map_linea_a_agrupador(sb, str(version_id))
+            rows = fetch_ppto_rows_programacion(sb, contrato_id, force_vigente=True)
+            by_pk: Dict[str, int] = defaultdict(int)
+            for r in rows:
+                cap = (r.get("capitulo") or "").strip()
+                it = (r.get("item") or "").strip()
+                if (cap, it) not in multi_keys:
+                    continue
+                lk = linea_key_from_row(r)
+                if lk and lk not in linea_asig:
+                    pk = str(r.get("pk_id") or "").strip()
+                    if pk:
+                        by_pk[pk] += 1
+            pks_lineas_sin = [{"pk_id": pk, "count": n} for pk, n in sorted(by_pk.items()) if n > 0]
+    except Exception:
+        pks_lineas_sin = []
+
     return {
         "ok": len(pks_sin) == 0 and deps_ok,
         "pks_sin_agrupador": pks_sin,
+        "pks_lineas_sin_asignar": pks_lineas_sin,
         "dependencias_globales_ok": deps_ok,
         "mensajes": [
             *( [f"PK {x['pk_id']}: {x['count']} ítems sin agrupador WBS"] for x in pks_sin ),
+            *( [f"PK {x['pk_id']}: {x['count']} línea(s) de ítems compartidos sin asignar"] for x in pks_lineas_sin ),
             *([] if deps_ok else ["Defina dependencias globales antes de programar automáticamente"]),
         ],
     }
@@ -164,7 +193,31 @@ def preview_auto_schedule(
 
         group_start = cursor
         for pk in group:
-            ags = _agrupadores_por_pk(sb, contrato_id, pk)
+            # Estructura con version_prog para respetar solo líneas ya asignadas
+            from prog_obra_service import fetch_estructura_programacion_pk
+            est = fetch_estructura_programacion_pk(
+                sb, contrato_id, pk, version_prog_id=str(version_id),
+            )
+            ags = []
+            for cap in est.get("capitulos") or []:
+                cap_name = cap.get("capitulo") or ""
+                for ag in cap.get("agrupadores") or []:
+                    # Multi sin líneas asignadas: no se programa; queda alerta
+                    if ag.get("es_multi_agrupador") and float(ag.get("cant_total") or 0) <= 0:
+                        continue
+                    ags.append(
+                        {
+                            "pk_id": pk,
+                            "capitulo": cap_name,
+                            "agrupador_id": ag.get("agrupador_id"),
+                            "codigo_wbs": ag.get("codigo_wbs"),
+                            "nombre": ag.get("agrupador_nombre"),
+                            "costo": float(ag.get("costo_directo") or 0),
+                            "cantidad": float(ag.get("cant_total") or 0),
+                            "unidad": (ag.get("items") or [{}])[0].get("und") or "?",
+                            "alerta_lineas": int(ag.get("lineas_sin_asignar") or 0) > 0,
+                        }
+                    )
             if not ags:
                 continue
             ag_cost_total = sum(a["costo"] for a in ags) or 1.0
@@ -193,6 +246,7 @@ def preview_auto_schedule(
                         "cantidad": ag["cantidad"],
                         "unidad": ag["unidad"],
                         "costo_unitario": ag["costo"] / max(ag["cantidad"], 1),
+                        "alerta_lineas_sin_asignar": bool(ag.get("alerta_lineas")),
                     }
                 )
                 ag_cursor = (ag_fin + timedelta(days=1)) if ag_fin else ag_cursor + timedelta(days=dur)
