@@ -383,6 +383,112 @@ def liberar_lineas(
     return {"ok": True, "liberadas": len(keys)}
 
 
+def preview_lineas_a_liberar_por_items(
+    sb,
+    *,
+    contrato_id: int,
+    agrupador_id: int,
+    item_ids_quitar: List[int],
+) -> dict:
+    """
+    Cuenta líneas en prog_linea_agrupador de versiones en borrador
+    que quedarían libres al quitar esos ítems del agrupador.
+    No toca validación/selladas/archivadas.
+    """
+    ids = [int(x) for x in (item_ids_quitar or []) if x is not None]
+    if not ids or not _table_ok(sb):
+        return {"lineas": 0, "versiones_borrador": 0, "por_version": []}
+
+    # Resolver (capitulo, item_numero) de los ítems a quitar
+    items = (
+        sb.table("listado_precios")
+        .select("id,capitulo,item_numero")
+        .eq("contrato_id", int(contrato_id))
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    keys = {
+        (_norm(r.get("capitulo")), _norm(r.get("item_numero")))
+        for r in items
+        if _norm(r.get("capitulo")) and _norm(r.get("item_numero"))
+    }
+    if not keys:
+        return {"lineas": 0, "versiones_borrador": 0, "por_version": []}
+
+    versiones = (
+        sb.table("prog_versiones")
+        .select("id,numero_version,estado")
+        .eq("contrato_id", int(contrato_id))
+        .eq("estado", "borrador")
+        .execute()
+        .data
+        or []
+    )
+    por_version: List[dict] = []
+    total = 0
+    for v in versiones:
+        vid = str(v.get("id") or "")
+        if not vid:
+            continue
+        rows = (
+            sb.table("prog_linea_agrupador")
+            .select("id,capitulo,item,linea_key")
+            .eq("version_id", vid)
+            .eq("agrupador_id", int(agrupador_id))
+            .execute()
+            .data
+            or []
+        )
+        match = [
+            r for r in rows
+            if (_norm(r.get("capitulo")), _norm(r.get("item"))) in keys
+        ]
+        n = len(match)
+        if n:
+            total += n
+            por_version.append({
+                "version_id": vid,
+                "numero_version": v.get("numero_version"),
+                "lineas": n,
+                "linea_keys": [_norm(r.get("linea_key")) for r in match if _norm(r.get("linea_key"))],
+            })
+    return {
+        "lineas": total,
+        "versiones_borrador": len(por_version),
+        "por_version": por_version,
+    }
+
+
+def liberar_lineas_items_quitados_borrador(
+    sb,
+    *,
+    contrato_id: int,
+    agrupador_id: int,
+    item_ids_quitar: List[int],
+) -> dict:
+    """Libera líneas de versiones en borrador al quitar ítems del agrupador."""
+    prev = preview_lineas_a_liberar_por_items(
+        sb,
+        contrato_id=contrato_id,
+        agrupador_id=agrupador_id,
+        item_ids_quitar=item_ids_quitar,
+    )
+    liberadas = 0
+    for block in prev.get("por_version") or []:
+        keys = block.get("linea_keys") or []
+        if not keys:
+            continue
+        r = liberar_lineas(sb, version_id=block["version_id"], linea_keys=keys)
+        liberadas += int(r.get("liberadas") or 0)
+    return {
+        "ok": True,
+        "liberadas": liberadas,
+        "versiones_borrador": int(prev.get("versiones_borrador") or 0),
+    }
+
+
 def clonar_lineas_version(sb, version_origen: str, version_destino: str, contrato_id: int) -> int:
     if not _table_ok(sb):
         return 0

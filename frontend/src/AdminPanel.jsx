@@ -3736,7 +3736,11 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       map[cap].push({ ...ag, es_transversal: esTx, capitulo: cap });
     }
     Object.values(map).forEach(list =>
-      list.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0) || cmpNatural(a.nombre, b.nombre))
+      list.sort((a, b) =>
+        cmpNatural(a.codigo_wbs || "", b.codigo_wbs || "")
+        || (a.orden ?? 0) - (b.orden ?? 0)
+        || cmpNatural(a.nombre, b.nombre),
+      ),
     );
     return map;
   }, [agrupadores]);
@@ -3752,17 +3756,20 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   }, [agrupadores]);
 
   const treeCapitulos = useMemo(() => {
-    const caps = new Set([
-      ...itemsFiltrados.map(i => i.capitulo || ""),
-      ...agrupadores.map(a => a.capitulo || ""),
-    ]);
-    const list = [...caps].filter(Boolean);
-    const normales = list.filter(c => c !== "Transversales").sort(cmpNatural);
-    if (list.includes("Transversales") || agrupadores.some(a => a.es_transversal)) {
-      if (!normales.includes("Transversales")) normales.push("Transversales");
-    }
-    return normales;
-  }, [itemsFiltrados, agrupadores]);
+    // Solo capítulos con agrupadores (orden natural); Transversales al final.
+    const capsCapitulo = [
+      ...new Set(
+        agrupadores
+          .filter(a => !(a.es_transversal || String(a.codigo_wbs || "").toUpperCase().startsWith("T.")))
+          .map(a => a.capitulo || "")
+          .filter(Boolean),
+      ),
+    ].sort(cmpNatural);
+    const hayTx = agrupadores.some(
+      a => a.es_transversal || String(a.codigo_wbs || "").toUpperCase().startsWith("T.") || a.capitulo === "Transversales",
+    );
+    return hayTx ? [...capsCapitulo, "Transversales"] : capsCapitulo;
+  }, [agrupadores]);
 
   const capitulosVistaLista = useMemo(() =>
     [...new Set(itemsFiltrados.map(i => i.capitulo || "").filter(Boolean))].sort(cmpNatural),
@@ -3780,13 +3787,26 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
           .filter(i => i.agrupador_id != null && String(i.agrupador_id) === String(data.id))
           .map(i => i.id);
       }
+      const esTx = Boolean(data.es_transversal)
+        || String(data.codigo_wbs || "").toUpperCase().startsWith("T.")
+        || data.capitulo === "Transversales";
+      // Capítulos reales para el selector (no el sentinel Transversales)
+      const capBrowse = esTx
+        ? (capitulosUnicos[0] || "")
+        : (data.capitulo || "");
       setAgrupadorForm({
-        capitulo: data.capitulo || "",
+        capitulo: capBrowse,
         nombre: data.nombre || "",
       });
       setAgrupadorItemsSel(assignedIds);
       setAgrupadorBusqueda("");
-      setShowAgrupador({ mode: "edit", id: data.id, codigo_wbs: data.codigo_wbs || "" });
+      setShowAgrupador({
+        mode: "edit",
+        id: data.id,
+        codigo_wbs: data.codigo_wbs || "",
+        es_transversal: esTx,
+        item_ids_iniciales: assignedIds.map(Number),
+      });
     } else {
       setAgrupadorForm({
         capitulo: data?.capitulo || filtroCapitulo || capitulosUnicos[0] || "",
@@ -3851,8 +3871,9 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
           return cmpItemNumero(a.item_numero, b.item_numero);
         });
     }
+    // Capítulos reales del listado (no el sentinel «Transversales»)
     const cap = agrupadorForm.capitulo || "";
-    if (!cap) return [];
+    if (!cap || cap === "Transversales") return [];
     return items
       .filter(i => (i.capitulo || "") === cap)
       .sort((a, b) => cmpItemNumero(a.item_numero, b.item_numero));
@@ -3870,13 +3891,12 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     setAgrupadorItemsSel(prev => [...prev, item.id]);
   };
 
-  /** Otros agrupadores del ítem (mismo capítulo), excluyendo el que se edita. */
+  /** Otros agrupadores del ítem (capítulo o transversal), excluyendo el que se edita. */
   const otrosAgrupadoresDeItem = (item) => {
     if (!item) return [];
     const editAgId = showAgrupador?.mode === "edit" ? showAgrupador.id : null;
     const out = [];
     for (const ag of agrupadores) {
-      if ((ag.capitulo || "") !== (item.capitulo || "")) continue;
       if (editAgId != null && String(ag.id) === String(editAgId)) continue;
       const ids = Array.isArray(ag.item_ids) ? ag.item_ids.map(String) : null;
       const pertenece = ids
@@ -3886,6 +3906,34 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     }
     return out;
   };
+
+  /** Ítems del listado que no pertenecen a ningún agrupador (bridge N:N). */
+  const idsEnAlgunAgrupador = useMemo(() => {
+    const s = new Set();
+    for (const ag of agrupadores) {
+      if (Array.isArray(ag.item_ids)) {
+        for (const id of ag.item_ids) s.add(String(id));
+      }
+    }
+    return s;
+  }, [agrupadores]);
+
+  const itemsSinAgrupadorTodos = useMemo(() => {
+    const hasBridge = agrupadores.some(a => Array.isArray(a.item_ids));
+    return itemsFiltrados
+      .filter(i => {
+        if (hasBridge || idsEnAlgunAgrupador.size > 0) {
+          return !idsEnAlgunAgrupador.has(String(i.id));
+        }
+        const agId = i.agrupador_id;
+        return agId == null || agId === "";
+      })
+      .sort((a, b) => {
+        const cc = cmpNatural(a.capitulo, b.capitulo);
+        if (cc !== 0) return cc;
+        return cmpItemNumero(a.item_numero, b.item_numero);
+      });
+  }, [itemsFiltrados, idsEnAlgunAgrupador, agrupadores]);
 
   const quitarItemAgrupador = (itemId) => {
     cerrarAgrupadorDescTipActivo();
@@ -3920,34 +3968,64 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         setMsg({ type: "error", text: "Indique nombre y al menos un ítem asignado." });
         return;
       }
+      const agId = showAgrupador.id;
+      const idsSel = new Set(agrupadorItemsSel.map(id => String(id)));
+      const prevIdsArr = Array.isArray(showAgrupador.item_ids_iniciales)
+        ? showAgrupador.item_ids_iniciales.map(Number)
+        : (agrupadores.find(a => String(a.id) === String(agId))?.item_ids || []).map(Number);
+      const quitarIds = prevIdsArr.filter(id => !idsSel.has(String(id)));
+      let liberarLineas = false;
+      if (quitarIds.length > 0) {
+        try {
+          const prev = await call(
+            "POST",
+            `/listado-precios/agrupadores/${agId}/preview-quitar-items`,
+            { item_ids: quitarIds },
+          );
+          const nLineas = Number(prev?.lineas) || 0;
+          if (nLineas > 0) {
+            const ok = window.confirm(
+              `Al quitar ${quitarIds.length} ítem(s) se liberarán ${nLineas} línea(s) programada(s) en versiones en borrador. ¿Continuar?`,
+            );
+            if (!ok) return;
+            liberarLineas = true;
+          }
+        } catch {
+          /* si falla el preview, igual permite guardar sin liberar */
+        }
+      }
       setAgrupadorSaving(true);
       try {
-        const agId = showAgrupador.id;
         const res = await call("PUT", `/listado-precios/agrupadores/${agId}`, {
-          capitulo: agrupadorForm.capitulo,
           nombre: agrupadorForm.nombre.trim(),
           item_ids: agrupadorItemsSel,
+          liberar_lineas_borrador: liberarLineas,
         });
+        const nLib = Number(res.lineas_liberadas) || 0;
         setMsg({
           type: "success",
-          text: `✅ Agrupador "${agrupadorForm.nombre.trim()}" actualizado con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`,
+          text: nLib > 0
+            ? `✅ Agrupador actualizado (${res.items_asignados ?? agrupadorItemsSel.length} ítem(s); ${nLib} línea(s) liberada(s) en borrador).`
+            : `✅ Agrupador "${agrupadorForm.nombre.trim()}" actualizado con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`,
         });
-        const idsSel = new Set(agrupadorItemsSel.map(id => String(id)));
         const sumaPrecios = items
           .filter(i => idsSel.has(String(i.id)))
           .reduce((s, i) => s + (Number(i.precio_unitario) || 0), 0);
-        const prevIds = new Set(
-          items.filter(i => String(i.agrupador_id) === String(agId)).map(i => String(i.id)),
-        );
+        const prevIds = new Set(prevIdsArr.map(String));
         let sinDelta = 0;
         for (const id of prevIds) {
-          if (!idsSel.has(id)) sinDelta += 1;
+          if (!idsSel.has(id)) {
+            // Solo cuenta como «sin agrupador» si no queda en ningún otro AG
+            const quedaEnOtro = agrupadores.some(a =>
+              String(a.id) !== String(agId)
+              && Array.isArray(a.item_ids)
+              && a.item_ids.map(String).includes(id),
+            );
+            if (!quedaEnOtro) sinDelta += 1;
+          }
         }
         for (const id of idsSel) {
-          if (!prevIds.has(id)) {
-            const it = items.find(i => String(i.id) === id);
-            if (it && !it.agrupador_id) sinDelta -= 1;
-          }
+          if (!prevIds.has(id) && !idsEnAlgunAgrupador.has(id)) sinDelta -= 1;
         }
         const esTx = Boolean(res.es_transversal) || String(res.codigo_wbs || "").toUpperCase().startsWith("T.");
         setAgrupadores(prev => prev.map(a => (
@@ -3965,10 +4043,13 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
             }
             : a
         )));
-        // N:N: marcar primario solo si el ítem no tenía agrupador; no quitar de otros.
+        // N:N: marcar primario solo si el ítem no tenía agrupador; limpiar primario si se quitó y era este AG.
         setItems(prev => prev.map(i => {
           const sid = String(i.id);
           if (idsSel.has(sid) && !i.agrupador_id) return { ...i, agrupador_id: agId };
+          if (!idsSel.has(sid) && String(i.agrupador_id) === String(agId)) {
+            return { ...i, agrupador_id: null };
+          }
           return i;
         }));
         if (sinDelta !== 0) setSinAgruparCount(prev => Math.max(0, prev + sinDelta));
@@ -4056,32 +4137,20 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       });
   };
 
-  const itemsSinAgruparCap = (cap) => {
-    const idsEnAlgúnAg = new Set();
-    for (const ag of (agrupadoresPorCapitulo[cap] || [])) {
-      if (Array.isArray(ag.item_ids)) {
-        for (const id of ag.item_ids) idsEnAlgúnAg.add(String(id));
-      }
-    }
-    return itemsFiltrados.filter(i => {
-      if ((i.capitulo || "") !== cap) return false;
-      if (idsEnAlgúnAg.size > 0) return !idsEnAlgúnAg.has(String(i.id));
-      const agId = normAgId(i.agrupador_id);
-      if (!agId) return true;
-      const ag = agrupadorById[agId] || agrupadorById[i.agrupador_id];
-      return !ag || (ag.capitulo || "") !== cap;
-    })
-      .sort((a, b) => {
-        const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
-        if (ck !== 0) return ck;
-        return cmpItemNumero(a.item_numero, b.item_numero);
-      });
-  };
+  const itemsSinAgruparCap = (cap) =>
+    itemsSinAgrupadorTodos.filter(i => (i.capitulo || "") === cap);
 
   const hayContenidoCapitulo = (cap) => {
+    // «Sin agrupador» ya no vive dentro de cada capítulo; solo AGs del bloque.
+    if (cap === "Transversales") {
+      const ags = agrupadoresDelCapitulo(cap);
+      return ags.length > 0;
+    }
     const ags = agrupadoresDelCapitulo(cap);
-    if (ags.some(ag => itemsDeAgrupador(ag.id).length > 0)) return true;
-    if (itemsSinAgruparCap(cap).length > 0) return true;
+    if (ags.some(ag => {
+      const n = Array.isArray(ag.item_ids) ? ag.item_ids.length : itemsDeAgrupador(ag.id).length;
+      return n > 0 || (!filtroTexto && !filtroEstado);
+    })) return true;
     if (!filtroTexto && !filtroEstado && ags.length > 0) return true;
     return false;
   };
@@ -4840,9 +4909,13 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
           <button style={S.btn("ghost",true)} onClick={exportarXLSX}>⬇ Exportar XLSX</button>
         )}
         <button style={S.btn("ghost",true)} onClick={descargarPlantilla} title="Descarga un CSV de ejemplo con todos los campos">📋 Plantilla</button>
-        {sinAgruparCount > 0 && (
-          <span style={{ fontSize:12,color:"#f59e0b",fontWeight:600,display:"inline-flex",alignItems:"center",gap:4 }}>
-            ⚠ {sinAgruparCount.toLocaleString("es-CO")} ítem{sinAgruparCount !== 1 ? "s" : ""} sin agrupar
+        {(itemsSinAgrupadorTodos.length > 0 || sinAgruparCount > 0) && (
+          <span
+            style={{ fontSize:12,color:"#f59e0b",fontWeight:600,display:"inline-flex",alignItems:"center",gap:4 }}
+            data-cc-tooltip="Ítems del Listado que no pertenecen a ningún agrupador WBS"
+            data-cc-tooltip-variant="help"
+          >
+            ⚠ {(itemsSinAgrupadorTodos.length || sinAgruparCount).toLocaleString("es-CO")} ítem{(itemsSinAgrupadorTodos.length || sinAgruparCount) !== 1 ? "s" : ""} sin agrupar
           </span>
         )}
         {(totalPreciosCount != null || items.length > 0) && (
@@ -4932,7 +5005,9 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                                 <button
                                   type="button"
                                   style={{ ...S.btn("ghost", true), marginLeft: 8, fontSize: 10, padding: "1px 6px" }}
-                                  title="Editar agrupador"
+                                  data-cc-tooltip="Editar: agregar o quitar ítems del agrupador"
+                                  data-cc-tooltip-variant="help"
+                                  aria-label="Editar agrupador"
                                   onClick={(e) => { e.stopPropagation(); abrirAgrupadorModal("edit", ag); }}
                                 >
                                   ✎
@@ -4942,7 +5017,9 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                                 <button
                                   type="button"
                                   style={{ ...S.btn("ghost", true), marginLeft: 4, fontSize: 11, padding: "1px 6px", color: "#ef4444" }}
-                                  title="Eliminar agrupador"
+                                  data-cc-tooltip="Eliminar agrupador"
+                                  data-cc-tooltip-variant="short"
+                                  aria-label="Eliminar agrupador"
                                   onClick={(e) => { e.stopPropagation(); solicitarEliminarAgrupador(ag); }}
                                 >
                                   🗑
@@ -4971,21 +5048,41 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                         </Fragment>
                       );
                     })}
-                    {itemsSinAgruparCap(cap).length > 0 && (
-                      <Fragment key={`sin-block-${cap}`}>
-                        <tr key={`sin-${cap}`} style={{ background: isDarkMode(theme) ? "rgba(245,158,11,0.06)" : "rgba(245,158,11,0.08)" }}>
-                          <td colSpan={numColsTabla} style={{ ...tdStyle, paddingLeft:28, fontSize:12, color:"#f59e0b", fontWeight:600 }}>
-                            ⚠ Sin agrupador ({itemsSinAgruparCap(cap).length})
-                          </td>
-                        </tr>
-                        {itemsSinAgruparCap(cap).map(item => filaItemPrecio(item, {
-                          paddingLeft: 48,
-                          hoverBg: "rgba(245,158,11,0.06)",
-                        }))}
-                      </Fragment>
-                    )}
                   </Fragment>
-                ))
+                )).concat(
+                  itemsSinAgrupadorTodos.length > 0 ? [
+                    <Fragment key="sin-agrupador-global">
+                      <tr style={{ background: isDarkMode(theme) ? "rgba(245,158,11,0.08)" : "rgba(245,158,11,0.1)" }}>
+                        <td
+                          colSpan={numColsTabla}
+                          style={{ ...tdStyle, fontWeight:700, color:"#b45309", fontSize:13, padding:"10px 12px" }}
+                          data-cc-tooltip={`Ítems del Listado sin ningún agrupador WBS (${itemsSinAgrupadorTodos.length})`}
+                          data-cc-tooltip-variant="help"
+                        >
+                          ⚠ Sin agrupador ({itemsSinAgrupadorTodos.length})
+                        </td>
+                      </tr>
+                      {[...new Set(itemsSinAgrupadorTodos.map(i => i.capitulo || "").filter(Boolean))]
+                        .sort(cmpNatural)
+                        .map(capSin => (
+                          <Fragment key={`sin-cap-${capSin}`}>
+                            <tr style={{ background: isDarkMode(theme) ? "rgba(245,158,11,0.04)" : "rgba(245,158,11,0.05)" }}>
+                              <td colSpan={numColsTabla} style={{ ...tdStyle, paddingLeft:28, fontSize:12, color:"#b45309", fontWeight:600 }}>
+                                📁 {capSin}
+                                <span style={{ fontSize:11, color:col.textMuted, marginLeft:8, fontWeight:500 }}>
+                                  ({itemsSinAgruparCap(capSin).length})
+                                </span>
+                              </td>
+                            </tr>
+                            {itemsSinAgruparCap(capSin).map(item => filaItemPrecio(item, {
+                              paddingLeft: 48,
+                              hoverBg: "rgba(245,158,11,0.06)",
+                            }))}
+                          </Fragment>
+                        ))}
+                    </Fragment>,
+                  ] : [],
+                )
               ) : (
                 capitulosVistaLista.map(cap => {
                   const capsItems = itemsFiltrados.filter(i => (i.capitulo || "") === cap);
@@ -5628,19 +5725,19 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                     <div style={agTypo.panelTitle}>
                       {busquedaAgrupadorActiva ? "Resultados de búsqueda" : "Ítems del capítulo"}
                     </div>
-                    {showAgrupador.mode === "create" && !busquedaAgrupadorActiva && (
+                    {!busquedaAgrupadorActiva && (
                       <select
                         style={{ ...selectStyle, marginBottom:8 }}
-                        value={agrupadorForm.capitulo}
+                        value={agrupadorForm.capitulo === "Transversales" ? "" : agrupadorForm.capitulo}
                         onChange={e => setAgrupadorForm(p => ({ ...p, capitulo: e.target.value }))}
                       >
                         <option value="">-- Capítulo --</option>
                         {capitulosUnicos.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     )}
-                    {showAgrupador.mode === "edit" && !busquedaAgrupadorActiva && agrupadorForm.capitulo && (
+                    {showAgrupador.mode === "edit" && (
                       <div style={{ ...agTypo.meta, marginBottom:8 }}>
-                        Capítulo {agrupadorForm.capitulo}
+                        Puede cambiar de capítulo para agregar ítems; los ya seleccionados se conservan.
                       </div>
                     )}
                     <input
@@ -5654,11 +5751,9 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                     style={{ flex:1, overflowY:"auto", maxHeight:320, fontSize:"var(--cc-sm)" }}
                     onScroll={() => cerrarAgrupadorDescTipActivo()}
                   >
-                    {!busquedaAgrupadorActiva && !agrupadorForm.capitulo ? (
+                    {!busquedaAgrupadorActiva && (!agrupadorForm.capitulo || agrupadorForm.capitulo === "Transversales") ? (
                       <div style={{ ...agTypo.empty, padding:16 }}>
-                        {showAgrupador.mode === "edit"
-                          ? "Este agrupador no tiene capítulo definido."
-                          : "Seleccione un capítulo para ver sus ítems."}
+                        Seleccione un capítulo para ver sus ítems, o use la búsqueda.
                       </div>
                     ) : listaPanelIzquierdo.length === 0 ? (
                       <div style={{ ...agTypo.empty, padding:16 }}>
@@ -5836,14 +5931,14 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                         {fmt(totalSeleccionadosAgrupador)}
                       </span>
                     </div>
-                    {showAgrupador.mode === "create" && capituloDesdeSeleccion && capituloDesdeSeleccion !== "__mixto__" && (
+                    {capituloDesdeSeleccion && capituloDesdeSeleccion !== "__mixto__" && (
                       <div style={{ ...agTypo.meta, marginTop:6 }}>
                         Capítulo: {capituloDesdeSeleccion}
                       </div>
                     )}
-                    {showAgrupador.mode === "edit" && agrupadorForm.capitulo && (
-                      <div style={{ ...agTypo.meta, marginTop:6 }}>
-                        Capítulo: {agrupadorForm.capitulo}
+                    {seraTransversal && (
+                      <div style={{ ...agTypo.meta, marginTop:6, color: tTok.primary }}>
+                        Quedará como transversal (T.*)
                       </div>
                     )}
                   </div>
