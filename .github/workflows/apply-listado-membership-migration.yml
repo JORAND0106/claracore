@@ -1,0 +1,65 @@
+name: Apply listado membership migration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "backend/migrations/20261122180000_listado_multi_agrupador_transversales.sql"
+      - ".github/workflows/apply-listado-membership-migration.yml"
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Aplicar migración (DB URL o App Settings)
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          set -e
+          python -m pip install -q 'psycopg[binary]>=3.1.0' azure-identity azure-mgmt-web
+          python3 << 'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          sql_path = Path("backend/migrations/20261122180000_listado_multi_agrupador_transversales.sql")
+          sql = sql_path.read_text(encoding="utf-8")
+          db = (os.environ.get("SUPABASE_DB_URL") or "").strip()
+
+          if not db and os.environ.get("AZURE_CREDENTIALS"):
+              from azure.identity import ClientSecretCredential
+              from azure.mgmt.web import WebSiteManagementClient
+              creds = json.loads(os.environ["AZURE_CREDENTIALS"])
+              credential = ClientSecretCredential(creds["tenantId"], creds["clientId"], creds["clientSecret"])
+              client = WebSiteManagementClient(credential, creds["subscriptionId"])
+              rg = None
+              for site in client.web_apps.list():
+                  if site.name == "claracore-backend":
+                      parts = site.id.split("/")
+                      rg = parts[parts.index("resourceGroups") + 1]
+                      break
+              if rg:
+                  props = dict(client.web_apps.list_application_settings(rg, "claracore-backend").properties or {})
+                  for k in ("SUPABASE_DB_URL", "DATABASE_URL", "POSTGRES_URL", "DB_URL"):
+                      if props.get(k):
+                          db = props[k].strip()
+                          print("db_from_app_setting", k, "len", len(db))
+                          break
+                  print("app_setting_keys_dbish", sorted([k for k in props if "DB" in k.upper() or "POSTGRES" in k.upper() or "DATABASE" in k.upper()]))
+
+          if not db:
+              print("NO_DB_URL — ejecute el SQL manualmente en Supabase")
+              print("FILE", sql_path)
+              sys.exit(0)
+
+          import psycopg
+          with psycopg.connect(db) as conn:
+              conn.execute(sql)
+              conn.commit()
+          print("MIGRATION_OK")
+          PY

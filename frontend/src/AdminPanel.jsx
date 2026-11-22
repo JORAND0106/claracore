@@ -3770,15 +3770,16 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const abrirAgrupadorModal = (mode, data = null) => {
     if (mode === "edit" && data) {
-      const knownIds = new Set(items.map(i => Number(i.id)));
-      const fromBridge = Array.isArray(data.item_ids)
-        ? data.item_ids.map(Number).filter(id => knownIds.has(Number(id)))
-        : null;
-      const assignedIds = fromBridge?.length
-        ? fromBridge
-        : items
-            .filter(i => i.agrupador_id != null && String(i.agrupador_id) === String(data.id))
-            .map(i => i.id);
+      // Fuente de verdad: item_ids del bridge N:N (aunque el ítem aún no esté
+      // en la página cargada). Fallback legado solo si no viene item_ids.
+      let assignedIds;
+      if (Array.isArray(data.item_ids)) {
+        assignedIds = data.item_ids.map(Number).filter(id => Number.isFinite(id));
+      } else {
+        assignedIds = items
+          .filter(i => i.agrupador_id != null && String(i.agrupador_id) === String(data.id))
+          .map(i => i.id);
+      }
       setAgrupadorForm({
         capitulo: data.capitulo || "",
         nombre: data.nombre || "",
@@ -3808,10 +3809,22 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
   const itemsSeleccionadosAgrupador = useMemo(() =>
     agrupadorItemsSel
-      .map(id => itemsById[id] || itemsById[String(id)])
-      .filter(Boolean)
+      .map(id => {
+        const known = itemsById[id] || itemsById[String(id)];
+        if (known) return known;
+        // Ítem en el bridge pero aún no paginado en `items`: stub para no vaciar el modal.
+        return {
+          id,
+          item_numero: String(id),
+          descripcion: "Ítem pendiente de cargar en la vista",
+          unidad: "—",
+          precio_unitario: null,
+          capitulo: agrupadorForm.capitulo || "",
+          _stub: true,
+        };
+      })
       .sort((a, b) => cmpItemNumero(a.item_numero, b.item_numero)),
-  [agrupadorItemsSel, itemsById]);
+  [agrupadorItemsSel, itemsById, agrupadorForm.capitulo]);
 
   const totalSeleccionadosAgrupador = useMemo(() =>
     itemsSeleccionadosAgrupador.reduce((s, i) => s + (Number(i.precio_unitario) || 0), 0),
@@ -4905,13 +4918,16 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                     </tr>
                     {agrupadoresDelCapitulo(cap).map(ag => {
                       const hijos = itemsDeAgrupador(ag.id);
-                      if (hijos.length === 0 && (filtroTexto || filtroEstado)) return null;
+                      const nHijosBridge = Array.isArray(ag.item_ids)
+                        ? ag.item_ids.length
+                        : (ag.items_count ?? ag.items_total ?? hijos.length);
+                      if (nHijosBridge === 0 && hijos.length === 0 && (filtroTexto || filtroEstado)) return null;
                       return (
                         <Fragment key={`ag-block-${ag.id}`}>
                           <tr key={`ag-${ag.id}`} style={{ background: isDarkMode(theme) ? "rgba(0,175,197,0.04)" : "rgba(0,175,197,0.03)" }}>
                             <td style={{ ...tdStyle, paddingLeft:28, fontWeight:600, color: col.textPrimary }}>
                               <span style={{ color: tTok.primary }}>└──</span> {ag.codigo_wbs ? `${ag.codigo_wbs} · ` : ""}{ag.nombre}
-                              <span style={{ fontSize:11, color:col.textMuted, marginLeft:8 }}>({hijos.length} ítem{hijos.length !== 1 ? "s" : ""})</span>
+                              <span style={{ fontSize:11, color:col.textMuted, marginLeft:8 }}>({nHijosBridge} ítem{nHijosBridge !== 1 ? "s" : ""}{hijos.length < nHijosBridge ? " · cargando…" : ""})</span>
                               {perms?.editar && (
                                 <button
                                   type="button"

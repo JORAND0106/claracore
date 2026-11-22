@@ -10934,6 +10934,7 @@ def _asignar_items_agrupador(
         item_ids,
         reemplazar=reemplazar,
         permitir_multi_capitulo=permitir_multi_capitulo,
+        exigir_membership=True,
     )
 
 
@@ -11089,14 +11090,32 @@ def crear_listado_precio_agrupador(
     ag_id = created.get("id")
     if not ag_id:
         raise HTTPException(status_code=500, detail="No se pudo crear el agrupador.")
-    asignados = _asignar_items_agrupador(
-        contrato_id, int(ag_id), cap, item_ids,
-        permitir_multi_capitulo=es_tx,
-    )
+    try:
+        asignados = _asignar_items_agrupador(
+            contrato_id, int(ag_id), cap, item_ids,
+            permitir_multi_capitulo=es_tx,
+        )
+    except Exception:
+        # No dejar agrupadores huérfanos vacíos si falló la membership / trigger.
+        try:
+            supabase.table("listado_precios_agrupadores").delete().eq("id", int(ag_id)).execute()
+        except Exception:
+            pass
+        raise
+    if not asignados:
+        try:
+            supabase.table("listado_precios_agrupadores").delete().eq("id", int(ag_id)).execute()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail="El agrupador no guardó ítems; se revirtió la creación. Verifique la migración N:N.",
+        )
     registrar_log(current_user, "CREAR", "PRECIOS", "listado_precios_agrupadores", str(ag_id),
                   {"capitulo": cap, "nombre": nombre, "codigo_wbs": codigo,
-                   "es_transversal": es_tx, "items": asignados})
+                   "es_transversal": es_tx, "items": asignados, "item_ids": item_ids})
     created["items_asignados"] = asignados
+    created["item_ids"] = item_ids
     created["es_transversal"] = es_tx
     created["codigo_wbs"] = created.get("codigo_wbs") or codigo
     return created
@@ -11212,12 +11231,8 @@ def preview_eliminar_listado_precio_agrupador(agrupador_id: int, current_user=De
     if not ex:
         raise HTTPException(status_code=404, detail="Agrupador no encontrado")
     _require_contract_access(current_user, ex[0]["contrato_id"])
-    hijos = (
-        supabase.table("listado_precios")
-        .select("id", count="exact")
-        .eq("agrupador_id", agrupador_id)
-        .execute()
-    )
+    from listado_agrupador_membership import items_ids_de_agrupador
+    n_items = len(items_ids_de_agrupador(supabase, int(agrupador_id)))
     acts = (
         supabase.table("prog_actividades")
         .select("id", count="exact")
@@ -11227,9 +11242,36 @@ def preview_eliminar_listado_precio_agrupador(agrupador_id: int, current_user=De
     return {
         "agrupador_id": agrupador_id,
         "nombre": ex[0].get("nombre"),
-        "items_asignados": int(hijos.count or 0),
+        "items_asignados": n_items,
         "actividades_programadas": int(acts.count or 0),
     }
+
+
+@app.get("/listado-precios/{contrato_id}/agrupadores/vacios")
+def listar_agrupadores_vacios_contrato(contrato_id: int, current_user=Depends(get_current_user)):
+    """Lista agrupadores sin ítems (p. ej. creados antes de la membership N:N)."""
+    _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
+    from listado_agrupador_membership import listar_agrupadores_vacios
+    vacios = listar_agrupadores_vacios(supabase, contrato_id)
+    return {"contrato_id": contrato_id, "n": len(vacios), "agrupadores": vacios}
+
+
+@app.post("/listado-precios/{contrato_id}/agrupadores/restaurar-vacios")
+def restaurar_agrupadores_vacios(contrato_id: int, current_user=Depends(get_current_user)):
+    """Intenta recuperar ítems de logs; si no hay rastro, lista no recuperables."""
+    _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
+    from listado_agrupador_membership import (
+        intentar_restaurar_desde_logs,
+        listar_agrupadores_vacios,
+        invalidate_membership_cache,
+    )
+    invalidate_membership_cache()
+    vacios = listar_agrupadores_vacios(supabase, contrato_id)
+    out = intentar_restaurar_desde_logs(supabase, contrato_id, vacios)
+    out["vacios_iniciales"] = len(vacios)
+    return out
 
 
 @app.delete("/listado-precios/agrupadores/{agrupador_id}")

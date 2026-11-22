@@ -54,6 +54,8 @@ CRITICAL_MIGRATIONS = (
     "20261103140000_usuarios_empresa_tipo.sql",
     "20261103150000_subcontratista_por_servicios.sql",
     "20261108120000_almacen_modo_retroactivo.sql",
+    # Membership N:N + transversales (sin esta tabla los AG quedan vacíos al crear).
+    "20261122180000_listado_multi_agrupador_transversales.sql",
 )
 
 _ENSURE_TABLE_SQL = """
