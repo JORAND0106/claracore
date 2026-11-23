@@ -33,6 +33,10 @@ import { formatFechaLogBogota } from "./utils/fechaColombia";
 import SeccionLogs from "./admin/SeccionLogs";
 import ListadoPrecioEliminarDialogs from "./admin/ListadoPrecioEliminarUi";
 import ListadoAgrupadorMultiPicker from "./admin/ListadoAgrupadorMultiPicker";
+import {
+  filasHojaListadoPrecios,
+  filasHojaProgramacionWbs,
+} from "./admin/listadoPreciosExcelExport";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -4721,29 +4725,34 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   };
 
   // ── XLSX export ────────────────────────────────────────────────────────────
-  const exportarXLSX = () => {
+  const exportarXLSX = async () => {
     if (!items.length) return;
-    const data = itemsOrdenados.map(i => ({
-      "Capítulo":               i.capitulo                || "",
-      "Agrupador":              agrupadorById[i.agrupador_id]?.nombre || "",
-      "Código WBS":             agrupadorById[i.agrupador_id]?.codigo_wbs || "",
-      "Competencia":            i.competencia             || "",
-      "Ítem":                   i.item_numero             || "",
-      "Descripción":            i.descripcion             || "",
-      "Unidad":                 i.unidad                  || "",
-      "Valor Unitario":         i.precio_unitario         || 0,
-      "Estado":                 i.estado_precio           || "",
-      "Tipo de Precio":         i.tipo_precio             || "",
-      "Especificación Técnica": i.especificacion_tecnica  || "",
-      "Acta de Fijación":       i.acta_fijacion           || "",
-      "Acta Modificatoria":     i.acta_modificatoria      || "",
-      "Observaciones":          i.observaciones           || "",
-      "Tipo de Cálculo":        i.tipo_calculo            || "",
-    }));
+    // Leer membership vigente al momento de descargar (creaciones/ediciones/asignaciones).
+    let agsExport = agrupadores;
+    try {
+      const fresh = await call("GET", `/listado-precios/${contratoId}/agrupadores`);
+      if (Array.isArray(fresh)) {
+        agsExport = fresh;
+        setAgrupadores(fresh);
+      }
+    } catch {
+      /* usa estado local */
+    }
+    const data = filasHojaListadoPrecios(items, agsExport);
     const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = [{wch:24},{wch:22},{wch:12},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30},{wch:14}];
+    // Agrupador más ancho: puede listar varios códigos+nombres N:N
+    ws["!cols"] = [{wch:24},{wch:42},{wch:18},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30},{wch:14}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Listado de Precios");
+    const wbsRows = filasHojaProgramacionWbs(items, agsExport);
+    if (wbsRows.length) {
+      const wsWbs = XLSX.utils.json_to_sheet(wbsRows);
+      wsWbs["!cols"] = [
+        { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 28 }, { wch: 20 },
+        { wch: 12 }, { wch: 48 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+      ];
+      XLSX.utils.book_append_sheet(wb, wsWbs, "Programación WBS");
+    }
     XLSX.writeFile(wb, `listado_precios_${contratoId}.xlsx`);
     call("POST", `/listado-precios/${contratoId}/log-exportar`).catch(() => {});
   };
