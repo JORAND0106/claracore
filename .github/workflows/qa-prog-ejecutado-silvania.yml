@@ -173,7 +173,8 @@ jobs:
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           QA_CONTRATO_ID: ${{ github.event.inputs.contrato_id || '3' }}
-          QA_HTTP: "1"
+          # Lógica del commit vs DB. HTTP post-deploy vive en deploy-backend-on-push.
+          QA_HTTP: "0"
         working-directory: ./backend
         run: |
           set -e

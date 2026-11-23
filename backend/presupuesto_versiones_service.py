@@ -360,6 +360,20 @@ def _orden_capitulo_version(c: Optional[str]) -> tuple:
     return (1, 0, c)
 
 
+def _sanitize_select_for_tabla(select: str, tabla: str) -> str:
+    """
+    `presupuesto_item_id_origen` solo existe en presupuesto_version_items.
+    La tabla viva `presupuesto` no la tiene: pedirla provoca 42703 y tumba
+    /prog-obra/*/mapa y /ejecucion/resumen (Presupuesto $0 en UI).
+    """
+    cols = [c.strip() for c in (select or "").split(",") if c.strip()]
+    if tabla == "presupuesto":
+        cols = [c for c in cols if c != "presupuesto_item_id_origen"]
+        if not cols:
+            cols = ["capitulo", "costo_directo", "cant_total"]
+    return ",".join(cols)
+
+
 def _fetch_version_items_rows(
     sb,
     contrato_id: int,
@@ -376,12 +390,13 @@ def _fetch_version_items_rows(
     row = assert_version_del_contrato(sb, contrato_id, version_id)
     es_vigente = bool(row.get("es_vigente"))
     tabla = "presupuesto_version_items" if forzar_biblioteca or not es_vigente else "presupuesto"
+    select_safe = _sanitize_select_for_tabla(select, tabla)
     rows: List[dict] = []
     offset = 0
     while True:
         q = (
             sb.table(tabla)
-            .select(select)
+            .select(select_safe)
             .eq("contrato_id", contrato_id)
             .eq("dado_de_baja", False)
         )
@@ -399,6 +414,11 @@ def _fetch_version_items_rows(
         elif len(tramo_filter) > 1:
             q = q.in_("tramo", tramo_filter)
         batch = q.range(offset, offset + 999).execute().data or []
+        # En tabla viva el id ES el origen; normalizar para claves de línea multi-AG.
+        if tabla == "presupuesto":
+            for r in batch:
+                if r.get("presupuesto_item_id_origen") is None and r.get("id") is not None:
+                    r["presupuesto_item_id_origen"] = r["id"]
         rows.extend(batch)
         if len(batch) < 1000:
             break

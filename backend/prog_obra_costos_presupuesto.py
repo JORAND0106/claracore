@@ -189,6 +189,8 @@ def version_ppto_es_aprobada(row: dict) -> bool:
     return bool(row.get("es_vigente_aprobada")) or bool(row.get("sellado"))
 
 
+# Nota: presupuesto_item_id_origen se pide siempre; _fetch_version_items_rows lo
+# elimina automáticamente al leer la tabla viva `presupuesto` (no existe ahí).
 _PPTO_SELECT_FULL = (
     "id,presupuesto_item_id_origen,pk_id,capitulo,item,descripcion,und,"
     "cant_total,vlr_unitario,costo_directo,tramo,abs_inicio,abs_final"
@@ -220,7 +222,7 @@ def fetch_ppto_items_version(
             select=_PPTO_SELECT_FULL,
         )
     except Exception:
-        # Columnas opcionales ausentes en snapshot antiguo → no tumbar presupuesto/mapa.
+        # Columnas opcionales (abs_*) ausentes en snapshot antiguo.
         rows = _fetch_version_items_rows(
             sb,
             contrato_id,

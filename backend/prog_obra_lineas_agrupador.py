@@ -87,6 +87,7 @@ def fetch_ppto_lineas_pk(
         return []
     from presupuesto_versiones_service import _fetch_version_items_rows
 
+    # presupuesto_item_id_origen se sanitiza si la versión vigente lee tabla viva.
     rows = _fetch_version_items_rows(
         sb,
         contrato_id,
