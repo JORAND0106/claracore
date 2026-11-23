@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from listado_agrupador_membership import (
+    agrupadores_ids_de_item,
     asignar_items_a_agrupador,
     invalidate_membership_cache,
     membership_disponible,
@@ -68,6 +69,9 @@ class _Q:
                 if "agrupador_id" in self._filters:
                     aid = int(self._filters["agrupador_id"])
                     rows = [r for r in rows if int(r["agrupador_id"]) == aid]
+                if "item_id" in self._filters:
+                    iid = int(self._filters["item_id"])
+                    rows = [r for r in rows if int(r["item_id"]) == iid]
                 if "item_id" in self._in:
                     wanted = {int(x) for x in self._in["item_id"]}
                     rows = [r for r in rows if int(r["item_id"]) in wanted]
@@ -179,3 +183,16 @@ def test_asignar_sin_membership_exige_tabla():
     with pytest.raises(HTTPException) as ei:
         asignar_items_a_agrupador(sb, 3, 10, "1. CAP A", [1])
     assert ei.value.status_code == 503
+
+
+def test_agrupadores_ids_de_item_desde_bridge():
+    invalidate_membership_cache()
+    sb = _Sb(membership=True)
+    sb.bridge = [
+        {"agrupador_id": 10, "item_id": 1},
+        {"agrupador_id": 20, "item_id": 1},
+        {"agrupador_id": 10, "item_id": 2},
+    ]
+    assert agrupadores_ids_de_item(sb, 1) == {10, 20}
+    assert agrupadores_ids_de_item(sb, 2) == {10}
+    assert agrupadores_ids_de_item(sb, 3) == set()

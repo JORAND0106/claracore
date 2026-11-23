@@ -153,6 +153,32 @@ def items_ids_de_agrupador(sb, agrupador_id: int) -> Set[int]:
     return {int(r["id"]) for r in rows if r.get("id") is not None}
 
 
+def agrupadores_ids_de_item(sb, item_id: int) -> Set[int]:
+    """Agrupadores a los que pertenece el ítem (bridge N:N o legado)."""
+    if membership_disponible(sb):
+        rows = (
+            sb.table("listado_precios_agrupador_items")
+            .select("agrupador_id")
+            .eq("item_id", int(item_id))
+            .execute()
+            .data
+            or []
+        )
+        return {int(r["agrupador_id"]) for r in rows if r.get("agrupador_id") is not None}
+    row = (
+        sb.table("listado_precios")
+        .select("agrupador_id")
+        .eq("id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if row and row[0].get("agrupador_id") is not None:
+        return {int(row[0]["agrupador_id"])}
+    return set()
+
+
 def _agrupadores_transversales_ids(sb, ag_ids: Iterable[int]) -> Set[int]:
     ids = [int(x) for x in ag_ids]
     if not ids:
