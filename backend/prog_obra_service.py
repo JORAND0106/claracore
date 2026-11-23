@@ -2983,7 +2983,12 @@ def _ppto_distinct_item_counts_by_pk(sb, contrato_id: int) -> Dict[str, int]:
     """Cuenta items distintos (capitulo+item) por PK desde presupuesto vigente."""
     from prog_obra_costos_presupuesto import fetch_ppto_rows_programacion
 
-    rows = fetch_ppto_rows_programacion(sb, contrato_id, force_vigente=True)
+    rows: List[dict] = []
+    try:
+        rows = fetch_ppto_rows_programacion(sb, contrato_id, force_vigente=True) or []
+    except Exception:
+        _logger.exception("ppto_distinct_item_counts: fetch_ppto_rows_programacion cid=%s", contrato_id)
+        rows = []
     if not rows:
         rows = (
             sb.table("presupuesto")

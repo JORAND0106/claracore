@@ -37,6 +37,23 @@ jobs:
           python -m pip install -q -r requirements.txt
           PYTHONPATH=. python -c "import main; assert hasattr(main, 'app'); print('import ok')"
 
+      # Gate obligatorio: bloquea el despliegue si Programación Silvania
+      # (contrato 3) no carga presupuesto/ejecutado/PK/tramos con el código nuevo.
+      - name: Gate Programación Silvania (bloquea despliegue)
+        working-directory: ./backend
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          QA_CONTRATO_ID: "3"
+          QA_HTTP: "0"
+        run: |
+          set -e
+          if [ -z "${AZURE_CREDENTIALS}" ]; then
+            echo "AZURE_CREDENTIALS ausente: no se puede validar Programación antes del deploy" >&2
+            exit 1
+          fi
+          python -m pip install -q azure-identity azure-mgmt-web PyJWT
+          PYTHONPATH=. python3 scripts/qa_prog_obra_smoke_silvania.py
+
       # DDL vía Postgres directo (PostgREST no puede ALTER). Requiere secreto
       # SUPABASE_DB_URL. Si falta, se omite: fallback JSON del toggle RRHH y
       # autocierre degradado a automatico_dia si el CHECK aún es antiguo.
@@ -95,3 +112,14 @@ jobs:
           echo "healthz no respondió 200 tras el deploy" >&2
           cat /tmp/healthz_body.txt >&2 || true
           exit 1
+
+      - name: Verify Programación Silvania post-deploy (HTTP)
+        working-directory: ./backend
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          QA_CONTRATO_ID: "3"
+          QA_HTTP: "1"
+        run: |
+          set -e
+          python -m pip install -q azure-identity azure-mgmt-web PyJWT
+          PYTHONPATH=. python3 scripts/qa_prog_obra_smoke_silvania.py

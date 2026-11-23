@@ -1150,10 +1150,14 @@ export default function ModuloProgramacionObra({
         ),
       ])
       if (seq !== mapaFetchSeqRef.current) return m
-      const mapa = m && typeof m === 'object' ? m : { pk: [], meta: {} }
-      setMapaResp(mapa)
+      if (m && typeof m === 'object' && Array.isArray(m.pk) && m.pk.length > 0) {
+        setMapaResp(m)
+        setProgObraVistaCache(progObraMapaCacheKey(cid), m)
+      } else if (m && typeof m === 'object') {
+        setMapaResp(m)
+        // No cachear mapa vacío (p. ej. 5xx parcial o timeout).
+      }
       applyVersionesPayload(v, ensureVersionRow)
-      setProgObraVistaCache(progObraMapaCacheKey(cid), mapa)
       if (v) setProgObraVistaCache(progObraVersionesCacheKey(cid), v)
       return m
     },
@@ -1273,25 +1277,22 @@ export default function ModuloProgramacionObra({
     const seq = ++mapaFetchSeqRef.current
     const mapaCached = getProgObraVistaCache(progObraMapaCacheKey(cid))
     const versionesCached = getProgObraVistaCache(progObraVersionesCacheKey(cid))
-    if (mapaCached) setMapaResp(mapaCached)
+    // Solo reutilizar cache con PKs reales. Un mapa vacío cacheado tras un 5xx
+    // dejaba el módulo sin tramos/PKs/polígonos hasta recargar con cache limpia.
+    const mapaCacheUsable =
+      mapaCached &&
+      typeof mapaCached === 'object' &&
+      Array.isArray(mapaCached.pk) &&
+      mapaCached.pk.length > 0
+    if (mapaCacheUsable) setMapaResp(mapaCached)
     if (versionesCached) applyVersionesPayload(versionesCached)
-    if (mapaCached && versionesCached) {
-      setPlano((prev) => (prev === undefined ? { type: 'FeatureCollection', features: [] } : prev))
-      getContratoPlanoGeojson(API, cid, token)
-        .then((d) => {
-          if (cancel || seq !== mapaFetchSeqRef.current) return
-          const raw = d?.plano_geojson ?? null
-          setPlano(normalizePlanoGeojson(raw))
-        })
-        .catch((e) => {
-          if (!cancel) setErr(e?.message || 'Error de red')
-        })
-      return () => { cancel = true }
-    }
-      setPlano(undefined)
+    setPlano((prev) => (mapaCacheUsable && prev !== undefined ? prev : undefined))
+    if (!mapaCacheUsable) {
       setErr('')
       setVersionVigenteId(null)
       setVersionBaselineId(null)
+    }
+    // Siempre refrescar en red (stale-while-revalidate) aunque haya cache usable.
     Promise.all([
       getContratoPlanoGeojson(API, cid, token).then((d) =>
         d && typeof d === 'object' ? { plano_geojson: d.plano_geojson } : null,
@@ -1307,10 +1308,15 @@ export default function ModuloProgramacionObra({
         if (cancel || seq !== mapaFetchSeqRef.current) return
         const raw = c?.plano_geojson ?? null
         setPlano(normalizePlanoGeojson(raw))
-        const mapa = m && typeof m === 'object' ? m : { pk: [], meta: {} }
-        setMapaResp(mapa)
+        if (m && typeof m === 'object' && Array.isArray(m.pk) && m.pk.length > 0) {
+          setMapaResp(m)
+          setProgObraVistaCache(progObraMapaCacheKey(cid), m)
+        } else if (!mapaCacheUsable) {
+          const mapa = m && typeof m === 'object' ? m : { pk: [], meta: {} }
+          setMapaResp(mapa)
+          // No cachear mapa vacío: evita regresión permanente en la sesión.
+        }
         applyVersionesPayload(v)
-        setProgObraVistaCache(progObraMapaCacheKey(cid), mapa)
         if (v) setProgObraVistaCache(progObraVersionesCacheKey(cid), v)
       })
       .catch((e) => {
@@ -1352,6 +1358,14 @@ export default function ModuloProgramacionObra({
   useEffect(() => {
     if (borradorMeta?.id) setWorkingVersionId((prev) => prev || String(borradorMeta.id))
   }, [borradorMeta?.id])
+
+  // Si el mapa falló (sin borradorMeta) pero hay versiones, fijar el borrador
+  // para Dependencias globales / acciones que usan workingVersionId.
+  useEffect(() => {
+    if (workingVersionId) return
+    const vb = versiones.find((v) => (v.estado || '') === 'borrador')
+    if (vb?.id != null) setWorkingVersionId(String(vb.id))
+  }, [versiones, workingVersionId])
 
   const tieneSellada = useMemo(
     () => versiones.some((v) => (v.estado || '') === 'sellada'),
@@ -1583,7 +1597,7 @@ export default function ModuloProgramacionObra({
   }, [subdividirPk, openProgramacionModal])
 
   const refreshSubsectorMapOverlays = useCallback(async () => {
-    const vid = workingVersionId || borradorMeta?.id
+    const vid = workingVersionId || borradorMeta?.id || versionIdForWork
     if (!cid || !token || !vid || !plano?.features?.length) {
       setSubsectorMapFeatures([])
       return
@@ -1594,37 +1608,43 @@ export default function ModuloProgramacionObra({
         .filter(Boolean),
     )
     const feats = []
+    // Limitar paralelismo: 44+ requests simultáneos saturaban App Service y
+    // hacían fallar /mapa y /ejecucion/resumen en contratos grandes (Silvania).
     const pkList = [...pkSet].slice(0, 80)
-    await Promise.all(
-      pkList.map(async (pk) => {
-        try {
-          const d = await fetchSubsectoresPk(API, cid, token, vid, pk, pptoVersionVigenteId)
-          for (const s of d.subsectores || []) {
-            if (!s.geojson) continue
-            const geom = s.geojson.type === 'Feature' ? s.geojson.geometry : s.geojson
-            if (!geom) continue
-            feats.push({
-              type: 'Feature',
-              geometry: geom,
-              properties: {
-                pk_id: pk,
-                PK_ID: pk,
-                prog_subsector_id: s.id,
-                abs_inicio_m: s.abs_inicio_m,
-                abs_final_m: s.abs_final_m,
-                prog_subsector_label: s.label || displayLabelSubsector(pk, s.abs_inicio_m, s.abs_final_m),
-                etiqueta: `${s.abs_inicio_label || ''}`.trim(),
-                prog_estado: 'en_progreso',
-              },
-            })
+    const CONCURRENCY = 4
+    for (let i = 0; i < pkList.length; i += CONCURRENCY) {
+      const batch = pkList.slice(i, i + CONCURRENCY)
+      await Promise.all(
+        batch.map(async (pk) => {
+          try {
+            const d = await fetchSubsectoresPk(API, cid, token, vid, pk, pptoVersionVigenteId)
+            for (const s of d.subsectores || []) {
+              if (!s.geojson) continue
+              const geom = s.geojson.type === 'Feature' ? s.geojson.geometry : s.geojson
+              if (!geom) continue
+              feats.push({
+                type: 'Feature',
+                geometry: geom,
+                properties: {
+                  pk_id: pk,
+                  PK_ID: pk,
+                  prog_subsector_id: s.id,
+                  abs_inicio_m: s.abs_inicio_m,
+                  abs_final_m: s.abs_final_m,
+                  prog_subsector_label: s.label || displayLabelSubsector(pk, s.abs_inicio_m, s.abs_final_m),
+                  etiqueta: `${s.abs_inicio_label || ''}`.trim(),
+                  prog_estado: 'en_progreso',
+                },
+              })
+            }
+          } catch {
+            /* tabla ausente o sin permiso */
           }
-        } catch {
-          /* tabla ausente o sin permiso */
-        }
-      }),
-    )
+        }),
+      )
+    }
     setSubsectorMapFeatures(feats)
-  }, [cid, token, API, workingVersionId, borradorMeta?.id, plano, mapaResp, pptoVersionVigenteId])
+  }, [cid, token, API, workingVersionId, borradorMeta?.id, versionIdForWork, plano, mapaResp, pptoVersionVigenteId])
 
   const openProgramacionModalTramo = useCallback(() => {
     if (!tramoFilter) return
@@ -2355,7 +2375,9 @@ export default function ModuloProgramacionObra({
   }, [cid, closeProgModal])
 
   const borradorProgResumen = useMemo(() => {
-    if (!borradorMeta || !esBorradorEditable) return null
+    // Preferir meta del mapa; si mapa falló, igual mostrar % si la versión activa es borrador.
+    if (!esBorradorEditable) return null
+    if (!borradorMeta && !(workingVersion && (workingVersion.estado || '') === 'borrador')) return null
     const rows = mapaResp?.pk || []
     let sum = 0
     let n = 0
@@ -2368,7 +2390,7 @@ export default function ModuloProgramacionObra({
       }
     }
     return { pct: n > 0 ? sum / n : 0 }
-  }, [mapaResp, borradorMeta, esBorradorEditable])
+  }, [mapaResp, borradorMeta, esBorradorEditable, workingVersion])
 
   const selectPkAndZoom = useCallback(
     (pkid) => {
@@ -4263,7 +4285,7 @@ export default function ModuloProgramacionObra({
 
         <ProgPanelDivider t={t} />
 
-        {workingVersionId && (
+        {versionIdForWork && (
           <details
             style={{ padding: '0.5rem 0.65rem', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
           >
@@ -4276,7 +4298,7 @@ export default function ModuloProgramacionObra({
                 token={token}
                 API={API}
                 t={t}
-                versionId={workingVersionId}
+                versionId={versionIdForWork}
                 editable={!!(esBorradorEditable && puedeEscribir)}
                 showToast={showToast}
               />
