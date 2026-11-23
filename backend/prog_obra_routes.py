@@ -367,60 +367,66 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
     """
     Estados de PK para pintar el mapa y listar PKs.
 
-    Resiliencia: los enriquecimientos (sin_agrupador, ejecutado, desviación, CPM)
-    no deben tumbar la respuesta base. Si fallan, el cliente igual recibe los PK
-    y el borrador — de lo contrario el panel queda en Presupuesto $0 / sin tramos.
+    Resiliencia: NUNCA devolver 500 por enriquecimientos o selects opcionales.
+    Un 500 deja el panel en Presupuesto $0 / sin tramos / sin PKs.
     """
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
     t0 = time.perf_counter()
-    borrador = fetch_borrador_activo(supabase, contrato_id)
-    vid, num = fetch_vigente_meta(supabase, contrato_id)
-    version_mapa_id = str(borrador["id"]) if borrador and borrador.get("id") else (str(vid) if vid else None)
-    # Borrador activo: colores del mapa desde prog_pk_estado de esa versión (no la vigente sellada).
-    try:
-        if borrador and borrador.get("id"):
-            rows = fetch_mapa_rows_for_version(supabase, contrato_id, str(borrador["id"]))
-        else:
-            rows = fetch_mapa_rows_rpc(supabase, contrato_id)
-            if not rows:
-                rows = fetch_mapa_rows_for_version(supabase, contrato_id, vid) if vid else []
-    except Exception:
-        _logger.exception("mapa rows contrato %s", contrato_id)
-        rows = []
-    try:
-        critico_pks = fetch_pks_con_ruta_critica(supabase, version_mapa_id)
-        rows = enrich_mapa_rows_with_ruta_critica(rows, critico_pks)
-    except Exception:
-        _logger.exception("mapa ruta crítica contrato %s", contrato_id)
-    try:
-        sin_ag_by_pk = fetch_sin_agrupador_count_by_pk(supabase, contrato_id)
-        rows = enrich_mapa_rows_sin_agrupador(rows, sin_ag_by_pk)
-    except Exception:
-        _logger.exception("mapa sin_agrupador contrato %s", contrato_id)
-    try:
-        ej_map = fetch_prog_pk_ejecutado_map(supabase, contrato_id)
-    except Exception:
-        ej_map = {}
-    rows = enrich_mapa_rows_with_ejecutado(rows, ej_map)
+    borrador = None
+    vid, num = None, None
+    rows: list = []
     desviacion_meta = None
     try:
-        desv = compute_desviaciones(
-            supabase,
-            contrato_id,
-            target_id=version_mapa_id,
-        )
-        rows = enrich_mapa_rows_with_desviacion(rows, desv.get("pks") or [])
-        desviacion_meta = {
-            "alerta": bool(desv.get("contrato", {}).get("alerta")),
-            "label_fechas": desv.get("contrato", {}).get("label_fechas"),
-            "baseline_id": desv.get("baseline_id"),
-            "target_id": desv.get("target_id"),
-            "contrato": desv.get("contrato"),
-        }
+        borrador = fetch_borrador_activo(supabase, contrato_id)
+        vid, num = fetch_vigente_meta(supabase, contrato_id)
+        version_mapa_id = str(borrador["id"]) if borrador and borrador.get("id") else (str(vid) if vid else None)
+        # Borrador activo: colores del mapa desde prog_pk_estado de esa versión.
+        try:
+            if borrador and borrador.get("id"):
+                rows = fetch_mapa_rows_for_version(supabase, contrato_id, str(borrador["id"]))
+            else:
+                rows = fetch_mapa_rows_rpc(supabase, contrato_id)
+                if not rows:
+                    rows = fetch_mapa_rows_for_version(supabase, contrato_id, vid) if vid else []
+        except Exception:
+            _logger.exception("mapa rows contrato %s", contrato_id)
+            rows = []
+        try:
+            critico_pks = fetch_pks_con_ruta_critica(supabase, version_mapa_id)
+            rows = enrich_mapa_rows_with_ruta_critica(rows, critico_pks)
+        except Exception:
+            _logger.exception("mapa ruta crítica contrato %s", contrato_id)
+        try:
+            sin_ag_by_pk = fetch_sin_agrupador_count_by_pk(supabase, contrato_id)
+            rows = enrich_mapa_rows_sin_agrupador(rows, sin_ag_by_pk)
+        except Exception:
+            _logger.exception("mapa sin_agrupador contrato %s", contrato_id)
+        try:
+            ej_map = fetch_prog_pk_ejecutado_map(supabase, contrato_id)
+        except Exception:
+            ej_map = {}
+        rows = enrich_mapa_rows_with_ejecutado(rows, ej_map)
+        try:
+            desv = compute_desviaciones(
+                supabase,
+                contrato_id,
+                target_id=version_mapa_id,
+            )
+            rows = enrich_mapa_rows_with_desviacion(rows, desv.get("pks") or [])
+            desviacion_meta = {
+                "alerta": bool(desv.get("contrato", {}).get("alerta")),
+                "label_fechas": desv.get("contrato", {}).get("label_fechas"),
+                "baseline_id": desv.get("baseline_id"),
+                "target_id": desv.get("target_id"),
+                "contrato": desv.get("contrato"),
+            }
+        except Exception:
+            _logger.exception("mapa desviaciones contrato %s", contrato_id)
+            desviacion_meta = None
     except Exception:
-        _logger.exception("mapa desviaciones contrato %s", contrato_id)
-        desviacion_meta = None
+        _logger.exception("mapa fatal contrato %s", contrato_id)
+        rows = rows or []
     ms = round((time.perf_counter() - t0) * 1000, 2)
     meta_out = {
         "version_vigente_id": vid,
