@@ -61,38 +61,93 @@ def require_membership(sb) -> None:
     )
 
 
+_IN_CHUNK = 200
+
+
+def _chunked(ids: List[int], size: int = _IN_CHUNK) -> List[List[int]]:
+    if not ids:
+        return []
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+def _agrupador_ids_contrato(sb, contrato_id: int) -> List[int]:
+    rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    out: List[int] = []
+    for r in rows:
+        if r.get("id") is None:
+            continue
+        try:
+            out.append(int(r["id"]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def fetch_membership_rows(sb, contrato_id: int) -> List[dict]:
-    """Filas bridge + datos mínimos del ítem (capitulo, item_numero)."""
+    """
+    Filas bridge del contrato + datos mínimos del ítem (capitulo, item_numero).
+
+    Critico: NUNCA leer el bridge global sin filtro. Eso hincha PostgREST,
+    puede tumbar /prog-obra/{id}/mapa (vía sin_agrupador) y dejar el módulo
+    en Presupuesto $0 / sin PKs en el cliente.
+    """
     if not membership_disponible(sb):
         return []
-    bridge = (
-        sb.table("listado_precios_agrupador_items")
-        .select("agrupador_id,item_id")
-        .execute()
-        .data
-        or []
-    )
+    ag_ids = _agrupador_ids_contrato(sb, contrato_id)
+    if not ag_ids:
+        return []
+
+    bridge: List[dict] = []
+    for chunk in _chunked(ag_ids):
+        batch = (
+            sb.table("listado_precios_agrupador_items")
+            .select("agrupador_id,item_id")
+            .in_("agrupador_id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        bridge.extend(batch)
     if not bridge:
         return []
-    item_ids = list({int(r["item_id"]) for r in bridge if r.get("item_id") is not None})
-    items = (
-        sb.table("listado_precios")
-        .select("id,capitulo,item_numero,agrupador_id")
-        .eq("contrato_id", int(contrato_id))
-        .in_("id", item_ids)
-        .execute()
-        .data
-        or []
-    )
-    by_id = {int(r["id"]): r for r in items if r.get("id") is not None}
-    out = []
+
+    item_ids = sorted({int(r["item_id"]) for r in bridge if r.get("item_id") is not None})
+    by_id: Dict[int, dict] = {}
+    for chunk in _chunked(item_ids):
+        items = (
+            sb.table("listado_precios")
+            .select("id,capitulo,item_numero,agrupador_id")
+            .eq("contrato_id", int(contrato_id))
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        )
+        for r in items:
+            if r.get("id") is None:
+                continue
+            by_id[int(r["id"])] = r
+
+    out: List[dict] = []
     for b in bridge:
-        it = by_id.get(int(b["item_id"]))
+        try:
+            iid = int(b["item_id"])
+            aid = int(b["agrupador_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        it = by_id.get(iid)
         if not it:
             continue
         out.append({
-            "agrupador_id": int(b["agrupador_id"]),
-            "item_id": int(b["item_id"]),
+            "agrupador_id": aid,
+            "item_id": iid,
             "capitulo": (it.get("capitulo") or "").strip(),
             "item_numero": (it.get("item_numero") or "").strip(),
         })
@@ -102,16 +157,18 @@ def fetch_membership_rows(sb, contrato_id: int) -> List[dict]:
 def agrupadores_por_item_map(
     sb, contrato_id: int,
 ) -> Dict[Tuple[str, str], List[int]]:
-    """(capitulo, item_numero) → [agrupador_id, ...] ordenados."""
-    rows = fetch_membership_rows(sb, contrato_id)
+    """(capitulo, item_numero) → [agrupador_id, ...] ordenados.
+
+    Combina membership N:N + legado `listado_precios.agrupador_id` para no
+    perder ítems de un solo agrupador cuando el bridge está parcial.
+    """
     out: Dict[Tuple[str, str], List[int]] = {}
-    if rows:
-        for r in rows:
-            key = (r["capitulo"], r["item_numero"])
-            out.setdefault(key, [])
-            if r["agrupador_id"] not in out[key]:
-                out[key].append(r["agrupador_id"])
-        return out
+
+    def _add(key: Tuple[str, str], ag: int) -> None:
+        bucket = out.setdefault(key, [])
+        if ag not in bucket:
+            bucket.append(ag)
+
     legacy = (
         sb.table("listado_precios")
         .select("capitulo,item_numero,agrupador_id")
@@ -127,7 +184,19 @@ def agrupadores_por_item_map(
         ag = r.get("agrupador_id")
         if not cap or not it or ag is None:
             continue
-        out.setdefault((cap, it), []).append(int(ag))
+        try:
+            _add((cap, it), int(ag))
+        except (TypeError, ValueError):
+            continue
+
+    for r in fetch_membership_rows(sb, contrato_id):
+        key = (r["capitulo"], r["item_numero"])
+        if not key[0] or not key[1]:
+            continue
+        _add(key, int(r["agrupador_id"]))
+
+    for key in out:
+        out[key] = sorted(out[key])
     return out
 
 

@@ -189,6 +189,15 @@ def version_ppto_es_aprobada(row: dict) -> bool:
     return bool(row.get("es_vigente_aprobada")) or bool(row.get("sellado"))
 
 
+_PPTO_SELECT_FULL = (
+    "id,presupuesto_item_id_origen,pk_id,capitulo,item,descripcion,und,"
+    "cant_total,vlr_unitario,costo_directo,tramo,abs_inicio,abs_final"
+)
+_PPTO_SELECT_MIN = (
+    "id,pk_id,capitulo,item,descripcion,und,cant_total,vlr_unitario,costo_directo,tramo"
+)
+
+
 def fetch_ppto_items_version(
     sb,
     contrato_id: int,
@@ -201,17 +210,25 @@ def fetch_ppto_items_version(
     """Ítems de una versión de presupuesto (misma fuente que el módulo Presupuesto)."""
     from presupuesto_versiones_service import _fetch_version_items_rows
 
-    rows = _fetch_version_items_rows(
-        sb,
-        contrato_id,
-        version_ppto_id,
-        tramo=tramo,
-        tramos=tramos,
-        select=(
-            "id,presupuesto_item_id_origen,pk_id,capitulo,item,descripcion,und,"
-            "cant_total,vlr_unitario,costo_directo,tramo,abs_inicio,abs_final"
-        ),
-    )
+    try:
+        rows = _fetch_version_items_rows(
+            sb,
+            contrato_id,
+            version_ppto_id,
+            tramo=tramo,
+            tramos=tramos,
+            select=_PPTO_SELECT_FULL,
+        )
+    except Exception:
+        # Columnas opcionales ausentes en snapshot antiguo → no tumbar presupuesto/mapa.
+        rows = _fetch_version_items_rows(
+            sb,
+            contrato_id,
+            version_ppto_id,
+            tramo=tramo,
+            tramos=tramos,
+            select=_PPTO_SELECT_MIN,
+        )
     pk = (pk_id or "").strip()
     if pk:
         rows = [r for r in rows if str(r.get("pk_id") or "").strip() == pk]

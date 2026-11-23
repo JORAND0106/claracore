@@ -6,7 +6,9 @@ from fastapi import HTTPException
 
 from listado_agrupador_membership import (
     agrupadores_ids_de_item,
+    agrupadores_por_item_map,
     asignar_items_a_agrupador,
+    fetch_membership_rows,
     invalidate_membership_cache,
     membership_disponible,
     require_membership,
@@ -62,6 +64,16 @@ class _Q:
     def order(self, *_a, **_k):
         return self
 
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, col, val):
+        # .not_.is_("agrupador_id", "null") → exigir no-nulo
+        if val == "null":
+            self._filters[f"{col}__not_null"] = True
+        return self
+
     def execute(self):
         if self.name == "listado_precios_agrupador_items":
             if self._op == "select":
@@ -69,6 +81,9 @@ class _Q:
                 if "agrupador_id" in self._filters:
                     aid = int(self._filters["agrupador_id"])
                     rows = [r for r in rows if int(r["agrupador_id"]) == aid]
+                if "agrupador_id" in self._in:
+                    wanted = {int(x) for x in self._in["agrupador_id"]}
+                    rows = [r for r in rows if int(r["agrupador_id"]) in wanted]
                 if "item_id" in self._filters:
                     iid = int(self._filters["item_id"])
                     rows = [r for r in rows if int(r["item_id"]) == iid]
@@ -95,6 +110,8 @@ class _Q:
                 rows = list(self.sb.items)
                 if "contrato_id" in self._filters:
                     rows = [r for r in rows if int(r["contrato_id"]) == int(self._filters["contrato_id"])]
+                if self._filters.get("agrupador_id__not_null"):
+                    rows = [r for r in rows if r.get("agrupador_id") is not None]
                 if "id" in self._in:
                     wanted = {int(x) for x in self._in["id"]}
                     rows = [r for r in rows if int(r["id"]) in wanted]
@@ -108,6 +125,8 @@ class _Q:
                 return _Resp([])
         if self.name == "listado_precios_agrupadores":
             rows = list(self.sb.ags)
+            if "contrato_id" in self._filters:
+                rows = [r for r in rows if int(r.get("contrato_id") or 0) == int(self._filters["contrato_id"])]
             if "id" in self._in:
                 wanted = {int(x) for x in self._in["id"]}
                 rows = [r for r in rows if int(r["id"]) in wanted]
@@ -122,13 +141,15 @@ class _Sb:
         self.upserts = []
         self.updates = []
         self.items = [
-            {"id": 1, "contrato_id": 3, "capitulo": "1. CAP A", "item_numero": "1.1"},
+            {"id": 1, "contrato_id": 3, "capitulo": "1. CAP A", "item_numero": "1.1", "agrupador_id": 10},
             {"id": 2, "contrato_id": 3, "capitulo": "1. CAP A", "item_numero": "1.2"},
             {"id": 3, "contrato_id": 3, "capitulo": "2. CAP B", "item_numero": "2.1"},
+            {"id": 99, "contrato_id": 9, "capitulo": "X", "item_numero": "9.9"},
         ]
         self.ags = [
-            {"id": 10, "es_transversal": False, "capitulo": "1. CAP A"},
-            {"id": 20, "es_transversal": True, "capitulo": "Transversales"},
+            {"id": 10, "contrato_id": 3, "es_transversal": False, "capitulo": "1. CAP A"},
+            {"id": 20, "contrato_id": 3, "es_transversal": True, "capitulo": "Transversales"},
+            {"id": 90, "contrato_id": 9, "es_transversal": False, "capitulo": "X"},
         ]
 
     def table(self, name):
@@ -196,3 +217,26 @@ def test_agrupadores_ids_de_item_desde_bridge():
     assert agrupadores_ids_de_item(sb, 1) == {10, 20}
     assert agrupadores_ids_de_item(sb, 2) == {10}
     assert agrupadores_ids_de_item(sb, 3) == set()
+
+
+def test_fetch_membership_rows_solo_contrato():
+    """No debe devolver filas de otros contratos aunque estén en el bridge global."""
+    invalidate_membership_cache()
+    sb = _Sb(membership=True)
+    sb.bridge = [
+        {"agrupador_id": 10, "item_id": 1},
+        {"agrupador_id": 90, "item_id": 99},  # otro contrato
+    ]
+    rows = fetch_membership_rows(sb, 3)
+    assert {(r["agrupador_id"], r["item_id"]) for r in rows} == {(10, 1)}
+    assert all(r["capitulo"] for r in rows)
+
+
+def test_agrupadores_por_item_map_mezcla_legacy_y_membership():
+    invalidate_membership_cache()
+    sb = _Sb(membership=True)
+    sb.bridge = [
+        {"agrupador_id": 20, "item_id": 1},  # multi: 10 (legacy) + 20 (bridge)
+    ]
+    m = agrupadores_por_item_map(sb, 3)
+    assert m[("1. CAP A", "1.1")] == [10, 20]
