@@ -144,10 +144,10 @@ def main() -> int:
         failures.append("ejecucion_resumen")
         resumen = {}
 
-    # Contrato presupuesto (fuente de verdad)
+    # Metadatos del contrato (columnas mínimas reales)
     crow = (
         sb.table("contratos")
-        .select("id,numero,contratista,valor_contrato,presupuesto")
+        .select("id,numero,contratista")
         .eq("id", cid)
         .limit(1)
         .execute()
@@ -155,14 +155,13 @@ def main() -> int:
         or []
     )
     contrato = crow[0] if crow else {}
-    # Algunas instalaciones usan valor_contrato; otras no — comparar con ppto del resumen vs versión vigente
     ppto_mod = float((resumen or {}).get("presupuesto_total") or 0)
     ej_mod = float((resumen or {}).get("ejecutado_total") or 0)
 
-    # Presupuesto del contrato vía versión vigente de presupuesto (misma fuente del módulo)
+    # Presupuesto del contrato = misma fuente del módulo (versión vigente / alcance)
     from prog_obra_costos_presupuesto import resolve_ppto_vigente_version_id, ppto_scope_direct_total
 
-    ppto_vid = resolve_ppto_vigente_version_id(sb, cid, None, force_vigente=False)
+    ppto_vid = resolve_ppto_vigente_version_id(sb, cid, None, force_vigente=True)
     ppto_contrato = float(ppto_scope_direct_total(sb, cid, ppto_vid) or 0) if ppto_vid else 0.0
 
     print("contrato", {k: contrato.get(k) for k in ("id", "numero", "contratista")})
@@ -199,45 +198,56 @@ def main() -> int:
     if rows and not any((r.get("estado_programacion") or "").strip() for r in rows):
         failures.append("mapa_sin_estados")
 
-    # HTTP live (opcional): /prog-obra/{cid}/mapa con JWT de servicio
+    # HTTP live: valida el backend YA desplegado (post-deploy). En PRs puede
+    # fallar con código antiguo; no bloquea el gate de lógica (QA_HTTP=0).
     if secret and os.environ.get("QA_HTTP", "1") == "1":
         try:
             import jwt
+            import urllib.error
             import urllib.request
+            from datetime import datetime, timedelta
 
-            # Buscar un usuario admin del contrato
             users = (
                 sb.table("usuarios")
-                .select("id,email,rol")
-                .limit(20)
+                .select("id,email,cargo_id")
+                .order("id")
+                .limit(50)
                 .execute()
                 .data
                 or []
             )
+            # Preferir usuario con cargo_id bajo (suele ser admin/dev) o el primero
             uid = None
             for u in users:
-                if str(u.get("rol") or "").lower() in ("desarrollador", "admin", "administrador"):
-                    uid = u.get("id")
+                if u.get("id") is not None:
+                    uid = int(u["id"])
                     break
-            if uid is None and users:
-                uid = users[0].get("id")
             if uid is not None:
                 token = jwt.encode(
-                    {"sub": str(uid), "usuario_id": int(uid), "rol": "desarrollador"},
+                    {
+                        "sub": str(uid),
+                        "exp": datetime.utcnow() + timedelta(hours=1),
+                        "rol_nombre": "Desarrollador",
+                        "cargo_nombre": "Desarrollador",
+                    },
                     secret,
                     algorithm=algo,
                 )
                 if isinstance(token, bytes):
                     token = token.decode()
                 api = "https://claracore-backend.azurewebsites.net"
-                for path in (f"/prog-obra/{cid}/mapa", f"/prog-obra/{cid}/tramos", f"/prog-obra/{cid}/ejecucion/resumen"):
+                for path in (
+                    f"/prog-obra/{cid}/mapa",
+                    f"/prog-obra/{cid}/tramos",
+                    f"/prog-obra/{cid}/ejecucion/resumen",
+                ):
                     t0 = time.perf_counter()
                     req = urllib.request.Request(
                         f"{api}{path}",
                         headers={"Authorization": f"Bearer {token}"},
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=90) as resp:
+                        with urllib.request.urlopen(req, timeout=120) as resp:
                             body = json.loads(resp.read().decode())
                             ms = round((time.perf_counter() - t0) * 1000, 1)
                             if path.endswith("/mapa"):
@@ -253,16 +263,24 @@ def main() -> int:
                             else:
                                 print(
                                     f"HTTP {path} status=200 ppto={body.get('presupuesto_total')} "
-                                    f"ej={body.get('ejecutado_total')} {ms}ms"
+                                    f"ej={body.get('ejecutado_total')} err={body.get('error')} {ms}ms"
                                 )
                                 if float(body.get("presupuesto_total") or 0) <= 0:
                                     failures.append("http_presupuesto_zero")
+                    except urllib.error.HTTPError as hexc:
+                        ms = round((time.perf_counter() - t0) * 1000, 1)
+                        detail = hexc.read().decode()[:300] if hexc.fp else ""
+                        print(f"HTTP {path} FAIL {hexc.code} {ms}ms {detail}")
+                        failures.append(f"http_{path}_{hexc.code}")
                     except Exception as hexc:
                         ms = round((time.perf_counter() - t0) * 1000, 1)
                         print(f"HTTP {path} FAIL {ms}ms {hexc}")
                         failures.append(f"http_{path}")
+            else:
+                print("HTTP probe skipped: sin usuarios")
         except Exception as hexc:
             print("HTTP probe skipped/failed:", hexc)
+            traceback.print_exc()
 
     if failures:
         print("SMOKE_FAIL", failures)
