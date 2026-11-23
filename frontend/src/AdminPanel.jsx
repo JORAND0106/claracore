@@ -32,6 +32,7 @@ import SeccionSubcontratistas from "./modules/subcontratistas";
 import { formatFechaLogBogota } from "./utils/fechaColombia";
 import SeccionLogs from "./admin/SeccionLogs";
 import ListadoPrecioEliminarDialogs from "./admin/ListadoPrecioEliminarUi";
+import ListadoAgrupadorMultiPicker from "./admin/ListadoAgrupadorMultiPicker";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -3602,6 +3603,9 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const [msg,              setMsg]              = useState(null);
   const [popup,            setPopup]            = useState(null);
   const [popupOriginal,    setPopupOriginal]    = useState(null);
+  const [popupAgrupadorIds, setPopupAgrupadorIds] = useState([]);
+  const [popupAgrupadorIdsIniciales, setPopupAgrupadorIdsIniciales] = useState([]);
+  const [showAgrupadorPicker, setShowAgrupadorPicker] = useState(false);
   const [stats,            setStats]            = useState(null);
   const [statsLoading,     setStatsLoading]     = useState(false);
   const [saving,           setSaving]           = useState(false);
@@ -4408,10 +4412,27 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     }
   };
 
+  const agrupadoresIdsDeItemLocal = (item) => {
+    if (!item) return [];
+    const fromBridge = agrupadores
+      .filter((ag) => Array.isArray(ag.item_ids) && ag.item_ids.map(String).includes(String(item.id)))
+      .map((ag) => Number(ag.id))
+      .filter((id) => Number.isFinite(id));
+    if (fromBridge.length) return [...new Set(fromBridge)];
+    if (item.agrupador_id != null && item.agrupador_id !== "") {
+      return [Number(item.agrupador_id)];
+    }
+    return [];
+  };
+
   // ── Popup detalle ──────────────────────────────────────────────────────────
   const abrirDetalle = async (item) => {
     const snap = { ...item };
+    const agIds = agrupadoresIdsDeItemLocal(item);
     setPopup(snap);
+    setPopupAgrupadorIds(agIds);
+    setPopupAgrupadorIdsIniciales(agIds);
+    setShowAgrupadorPicker(false);
     setPopupOriginal({
       item_numero: snap.item_numero || "",
       descripcion: snap.descripcion || "",
@@ -4438,26 +4459,115 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     if (!popup) return;
     setSaving(true);
     try {
+      const idsSel = [...new Set((popupAgrupadorIds || []).map(Number).filter((n) => Number.isFinite(n)))];
+      const idsIni = new Set((popupAgrupadorIdsIniciales || []).map(String));
+      const idsSelSet = new Set(idsSel.map(String));
+      const quitarAgIds = [...idsIni].filter((id) => !idsSelSet.has(String(id))).map(Number);
+      let liberarLineas = false;
+      if (quitarAgIds.length > 0) {
+        try {
+          const prev = await call(
+            "POST",
+            `/listado-precios/item/${popup.id}/preview-quitar-agrupadores`,
+            { agrupador_ids: quitarAgIds },
+          );
+          const nLineas = Number(prev?.lineas) || 0;
+          if (nLineas > 0) {
+            const ok = window.confirm(
+              `Al quitar el ítem de ${quitarAgIds.length} agrupador(es) se liberarán ${nLineas} línea(s) programada(s) en versiones en borrador. ¿Continuar?`,
+            );
+            if (!ok) {
+              setSaving(false);
+              return;
+            }
+            liberarLineas = true;
+          }
+        } catch {
+          /* preview opcional: permite guardar sin liberar */
+        }
+      }
+
       const payload = { ...popup };
-      if (payload.agrupador_id === "" || payload.agrupador_id === undefined) payload.agrupador_id = null;
+      // Membership N:N: el set completo se sincroniza en backend.
+      payload.agrupador_ids = idsSel;
+      payload.liberar_lineas_borrador = liberarLineas;
+      delete payload.agrupador_id;
       // El backend recalcula estado_precio; no forzar el valor stale del formulario.
       delete payload.estado_precio;
       const qs = confirmMeta ? "?confirm_meta=true" : "";
       const saved = await call("PUT", `/listado-precios/item/${popup.id}${qs}`, payload);
-      setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
+      const nLib = Number(saved?.lineas_liberadas) || 0;
+      setMsg({
+        type: "success",
+        text: nLib > 0
+          ? `✅ Precio actualizado (${nLib} línea(s) liberada(s) en borrador).`
+          : "✅ Precio actualizado correctamente.",
+      });
       const [freshStats, freshCant] = await Promise.all([
         call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
         call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
       ]);
       const fromServer = saved && typeof saved === "object" && saved.id ? saved : {};
-      const mergedBase = { ...popup, ...payload, ...fromServer };
+      const finalAgIds = Array.isArray(fromServer.agrupador_ids)
+        ? fromServer.agrupador_ids.map(Number)
+        : idsSel;
+      const mergedBase = { ...popup, ...payload, ...fromServer, agrupador_id: fromServer.agrupador_id ?? (finalAgIds[0] ?? null) };
       if (mergedBase.tipo_precio === "Precio Contractual") {
         mergedBase.acta_fijacion = "Contractual";
         mergedBase.acta_modificatoria = "";
       }
       mergedBase.estado_precio = fromServer.estado_precio || resolverEstadoPrecioGuardado(mergedBase);
-      const { ok: _okIgnored, propagados: _p, campos_meta_cambiados: _c, ...merged } = mergedBase;
+      const {
+        ok: _okIgnored,
+        propagados: _p,
+        campos_meta_cambiados: _c,
+        agrupadores_actualizados: agUpdates,
+        lineas_liberadas: _lib,
+        agrupador_ids: _aids,
+        liberar_lineas_borrador: _llb,
+        ...merged
+      } = mergedBase;
       setItems((prev) => prev.map((i) => (i.id === popup.id ? { ...i, ...merged } : i)));
+      // Actualizar membership local en agrupadores (ítem entra/sale; reclasificación si vino del server).
+      const itemIdNum = Number(popup.id);
+      const updById = {};
+      if (Array.isArray(agUpdates) || Array.isArray(fromServer.agrupadores_actualizados)) {
+        for (const u of (agUpdates || fromServer.agrupadores_actualizados || [])) {
+          if (u?.id != null) updById[String(u.id)] = u;
+        }
+      }
+      setAgrupadores((prev) => prev.map((ag) => {
+        const sid = String(ag.id);
+        const inSel = idsSelSet.has(sid);
+        const had = Array.isArray(ag.item_ids) && ag.item_ids.map(String).includes(String(itemIdNum));
+        let itemIds = Array.isArray(ag.item_ids) ? [...ag.item_ids] : (had ? [itemIdNum] : []);
+        if (inSel && !itemIds.map(String).includes(String(itemIdNum))) itemIds.push(itemIdNum);
+        if (!inSel) itemIds = itemIds.filter((id) => String(id) !== String(itemIdNum));
+        const u = updById[sid];
+        const next = {
+          ...ag,
+          item_ids: itemIds,
+          items_count: itemIds.length,
+          items_total: itemIds.length,
+        };
+        if (u) {
+          if (u.capitulo != null) next.capitulo = u.capitulo;
+          if (u.codigo_wbs != null) next.codigo_wbs = u.codigo_wbs;
+          if (u.es_transversal != null) next.es_transversal = u.es_transversal;
+        }
+        if (had !== inSel) {
+          const delta = Number(merged.precio_unitario) || 0;
+          const prevSuma = Number(ag.precio_unitario_suma_hijos) || 0;
+          next.precio_unitario_suma_hijos = Math.max(0, prevSuma + (inSel ? delta : -delta));
+        }
+        return next;
+      }));
+      const teniaAg = (popupAgrupadorIdsIniciales || []).length > 0;
+      const tieneAg = finalAgIds.length > 0;
+      if (teniaAg && !tieneAg) setSinAgruparCount((c) => c + 1);
+      else if (!teniaAg && tieneAg) setSinAgruparCount((c) => Math.max(0, c - 1));
+      setPopupAgrupadorIds(finalAgIds);
+      setPopupAgrupadorIdsIniciales(finalAgIds);
       if (freshCant?.length) setCantidades(freshCant);
       setPopup({ ...merged });
       setPopupOriginal({
@@ -5104,9 +5214,31 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         </div>
       )}
 
+      {/* ══════════════ SELECTOR AGRUPADORES (independiente; no apila sobre detalle) ══════════════ */}
+      {popup && showAgrupadorPicker && (
+        <ListadoAgrupadorMultiPicker
+          theme={theme}
+          tTok={tTok}
+          overlayStyle={overlayStyle}
+          modalStyle={modalStyle}
+          labelStyle={labelStyle}
+          inputStyle={inputStyle}
+          S={S}
+          item={popup}
+          agrupadores={agrupadores}
+          selectedIds={popupAgrupadorIds}
+          fmt={fmt}
+          onCancel={() => setShowAgrupadorPicker(false)}
+          onConfirm={(ids) => {
+            setPopupAgrupadorIds(ids);
+            setShowAgrupadorPicker(false);
+          }}
+        />
+      )}
+
       {/* ══════════════ POPUP DETALLE ══════════════ */}
-      {popup && (
-        <div style={overlayStyle} onClick={e => e.target===e.currentTarget && setPopup(null)}>
+      {popup && !showAgrupadorPicker && (
+        <div style={overlayStyle} onClick={e => e.target===e.currentTarget && (setPopup(null), setShowAgrupadorPicker(false))}>
           <div style={modalStyle(1100)}>
             <CcModalBrandHeader theme={theme} />
 <div style={modalHead}>
@@ -5120,7 +5252,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
                 <span style={{ ...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:12,padding:"5px 14px" }}>
                   {popupEsAprobado?"✓ Aprobado":"⏳ Pendiente"}
                 </span>
-                <button style={S.closeBtn(theme)} onClick={() => setPopup(null)}>✕</button>
+                <button style={S.closeBtn(theme)} onClick={() => { setPopup(null); setShowAgrupadorPicker(false); }}>✕</button>
               </div>
             </div>
 
@@ -5169,26 +5301,72 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
                 <div style={{marginBottom:10}}>
                   <div style={labelStyle}>Agrupador WBS</div>
-                  {perms?.editar ? (
-                    <select style={selectStyle} value={popup.agrupador_id || ""}
-                      onChange={e => setPopupField("agrupador_id", e.target.value ? parseInt(e.target.value, 10) : null)}>
-                      <option value="">— Sin agrupador —</option>
-                      {(agrupadoresPorCapitulo[popup.capitulo || ""] || []).map(ag => (
-                        <option key={ag.id} value={ag.id}>
-                          {ag.codigo_wbs ? `${ag.codigo_wbs} · ` : ""}{ag.nombre}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input style={{...inputStyle,opacity:0.55}} value={
-                      agrupadorById[popup.agrupador_id]?.nombre
-                        ? `${agrupadorById[popup.agrupador_id]?.codigo_wbs ? agrupadorById[popup.agrupador_id].codigo_wbs + " · " : ""}${agrupadorById[popup.agrupador_id].nombre}`
-                        : "Sin agrupador"
-                    } disabled />
-                  )}
-                  {!popup.agrupador_id && (
-                    <div style={{ fontSize:11, color:"#f59e0b", marginTop:4 }}>⚠ Este ítem no tiene agrupador asignado</div>
-                  )}
+                  {(() => {
+                    const assigned = (popupAgrupadorIds || [])
+                      .map((id) => agrupadorById[id] || agrupadorById[String(id)])
+                      .filter(Boolean);
+                    const codesLabel = assigned
+                      .map((ag) => ag.codigo_wbs || ag.nombre)
+                      .filter(Boolean)
+                      .join(" · ");
+                    const namesTip = assigned
+                      .map((ag) => (ag.codigo_wbs ? `${ag.codigo_wbs} · ${ag.nombre}` : ag.nombre))
+                      .join(" · ");
+                    if (!perms?.editar) {
+                      return (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 38 }}>
+                          {assigned.length ? (
+                            <span
+                              style={{ ...inputStyle, opacity: 0.55, display: "block", flex: 1 }}
+                              data-cc-tooltip={namesTip}
+                              data-cc-tooltip-variant="help"
+                            >
+                              {codesLabel}
+                            </span>
+                          ) : (
+                            <span
+                              style={{ color: "#f59e0b", fontSize: 16, lineHeight: 1 }}
+                              data-cc-tooltip="Sin agrupador asignado"
+                              data-cc-tooltip-variant="help"
+                              aria-label="Sin agrupador"
+                            >⚠</span>
+                          )}
+                        </div>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        style={{
+                          ...selectStyle,
+                          width: "100%",
+                          textAlign: "left",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          minHeight: 38,
+                        }}
+                        onClick={() => setShowAgrupadorPicker(true)}
+                        data-cc-tooltip={assigned.length ? namesTip : "Asignar agrupadores WBS"}
+                        data-cc-tooltip-variant="help"
+                        aria-label="Agrupador WBS"
+                      >
+                        {assigned.length ? (
+                          <span style={{ fontWeight: 600, color: tTok.primary }}>{codesLabel}</span>
+                        ) : (
+                          <span
+                            style={{ color: "#f59e0b", fontSize: 16, lineHeight: 1 }}
+                            data-cc-tooltip="Sin agrupador — toque para asignar"
+                            data-cc-tooltip-variant="help"
+                            aria-label="Sin agrupador"
+                          >⚠</span>
+                        )}
+                        <span style={{ color: col.textMuted, fontSize: 12 }}>▾</span>
+                      </button>
+                    );
+                  })()}
                 </div>
 
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -5381,7 +5559,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
             </div>
 
             <div style={modalFoot}>
-              <button style={S.btn("ghost")} onClick={() => { setPopup(null); setPopupOriginal(null); setMetaImpacto(null); }}>Cerrar</button>
+              <button style={S.btn("ghost")} onClick={() => { setPopup(null); setPopupOriginal(null); setMetaImpacto(null); setShowAgrupadorPicker(false); }}>Cerrar</button>
               {perms?.editar && (
                 <button style={S.btn("primary")} onClick={guardarEdicion} disabled={saving || metaImpactoLoading}>
                   {metaImpactoLoading ? "Calculando impacto..." : saving ? "Guardando..." : "💾 Guardar cambios"}

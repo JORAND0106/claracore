@@ -1137,6 +1137,9 @@ class ListadoPrecioItem(BaseModel):
     agrupador_id: Optional[int] = None
     agrupador_nombre: Optional[str] = None
     agrupador_codigo_wbs: Optional[str] = None
+    # Membership N:N desde el detalle del ítem (None = no sincronizar).
+    agrupador_ids: Optional[List[int]] = None
+    liberar_lineas_borrador: Optional[bool] = False
 
 
 class ListadoPrecioAgrupadorAsignarBody(BaseModel):
@@ -1156,6 +1159,10 @@ class ListadoPrecioAgrupadorBody(BaseModel):
 
 class ListadoPrecioAgrupadorPreviewQuitarBody(BaseModel):
     item_ids: List[int]
+
+
+class ListadoPrecioItemPreviewQuitarAgrupadoresBody(BaseModel):
+    agrupador_ids: List[int]
 
 class PresupuestoRow(BaseModel):
     pk_id: Optional[str] = None
@@ -10962,12 +10969,204 @@ def _resolve_agrupador_id(contrato_id: int, capitulo: str, item: ListadoPrecioIt
     return None
 
 
+def _patch_clasificacion_agrupador(
+    contrato_id: int,
+    agrupador_id: int,
+    *,
+    era_tx: bool,
+    codigo_actual: str,
+    item_ids: List[int],
+) -> dict:
+    """Recalcula capítulo / transversal / código WBS según los ítems actuales."""
+    if not item_ids:
+        return {
+            "capitulo": CAPITULO_TRANSVERSALES if era_tx else None,
+            "es_transversal": era_tx,
+            "codigo_wbs": codigo_actual,
+            "changed": False,
+        }
+    clasif = _clasificar_agrupador_desde_items(contrato_id, item_ids)
+    es_tx = bool(clasif["es_transversal"])
+    cap = clasif["capitulo"]
+    patch: dict = {"capitulo": cap, "es_transversal": es_tx}
+    if es_tx and not era_tx:
+        patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, CAPITULO_TRANSVERSALES, es_transversal=True)
+    elif (not es_tx) and era_tx:
+        patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, cap, es_transversal=False)
+    elif es_tx and era_tx and not (codigo_actual or "").upper().startswith("T."):
+        patch["codigo_wbs"] = _next_codigo_wbs(contrato_id, CAPITULO_TRANSVERSALES, es_transversal=True)
+    try:
+        supabase.table("listado_precios_agrupadores").update(patch).eq("id", int(agrupador_id)).execute()
+    except Exception as e:
+        msg = str(e).lower()
+        if "es_transversal" in msg:
+            soft = {k: v for k, v in patch.items() if k != "es_transversal"}
+            supabase.table("listado_precios_agrupadores").update(soft).eq("id", int(agrupador_id)).execute()
+        else:
+            raise
+    return {
+        "capitulo": cap,
+        "es_transversal": es_tx,
+        "codigo_wbs": patch.get("codigo_wbs") or codigo_actual,
+        "changed": True,
+    }
+
+
+def _sincronizar_agrupadores_de_item(
+    contrato_id: int,
+    item_id: int,
+    *,
+    agrupador_ids: List[int],
+    liberar_lineas_borrador: bool = False,
+) -> dict:
+    """
+    Deja al ítem exactamente en los agrupadores indicados (membership N:N).
+    Reclasifica AGs afectados (capítulo ↔ transversal). Libera líneas borrador
+    solo si liberar_lineas_borrador=True al quitar membresías.
+    """
+    from listado_agrupador_membership import (
+        agrupadores_ids_de_item,
+        asignar_items_a_agrupador,
+        items_ids_de_agrupador,
+        quitar_item_de_agrupador,
+        require_membership,
+        sync_legacy_agrupador_id,
+    )
+    require_membership(supabase)
+    deseados = list(dict.fromkeys(int(x) for x in (agrupador_ids or []) if x is not None))
+    deseados_set = set(deseados)
+    actuales = agrupadores_ids_de_item(supabase, int(item_id))
+    agregar = sorted(deseados_set - actuales)
+    quitar = sorted(actuales - deseados_set)
+
+    if deseados:
+        ags = (
+            supabase.table("listado_precios_agrupadores")
+            .select("id,contrato_id,capitulo,codigo_wbs,es_transversal,nombre")
+            .in_("id", deseados)
+            .execute()
+            .data
+            or []
+        )
+        if len(ags) != len(deseados_set):
+            raise HTTPException(status_code=404, detail="Uno o más agrupadores no existen.")
+        for ag in ags:
+            if int(ag["contrato_id"]) != int(contrato_id):
+                raise HTTPException(status_code=400, detail="El agrupador no pertenece a este contrato.")
+
+    lineas_liberadas = 0
+    actualizados: List[dict] = []
+
+    if quitar and liberar_lineas_borrador:
+        from prog_obra_lineas_agrupador import liberar_lineas_items_quitados_borrador
+        for ag_id in quitar:
+            lib = liberar_lineas_items_quitados_borrador(
+                supabase,
+                contrato_id=int(contrato_id),
+                agrupador_id=int(ag_id),
+                item_ids_quitar=[int(item_id)],
+            )
+            lineas_liberadas += int(lib.get("liberadas") or 0)
+
+    for ag_id in quitar:
+        quitar_item_de_agrupador(supabase, int(ag_id), int(item_id))
+        ag_rows = (
+            supabase.table("listado_precios_agrupadores")
+            .select("id,capitulo,codigo_wbs,es_transversal,nombre")
+            .eq("id", int(ag_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not ag_rows:
+            continue
+        ag = ag_rows[0]
+        era_tx = bool(ag.get("es_transversal")) or (
+            (ag.get("capitulo") or "").strip() == CAPITULO_TRANSVERSALES
+        )
+        restantes = sorted(items_ids_de_agrupador(supabase, int(ag_id)))
+        meta = _patch_clasificacion_agrupador(
+            contrato_id,
+            int(ag_id),
+            era_tx=era_tx,
+            codigo_actual=(ag.get("codigo_wbs") or "").strip(),
+            item_ids=restantes,
+        )
+        actualizados.append({
+            "id": int(ag_id),
+            "nombre": ag.get("nombre"),
+            "accion": "quitar",
+            "items_count": len(restantes),
+            **{k: meta[k] for k in ("capitulo", "es_transversal", "codigo_wbs") if meta.get(k) is not None},
+        })
+
+    for ag_id in agregar:
+        ag_rows = (
+            supabase.table("listado_precios_agrupadores")
+            .select("id,capitulo,codigo_wbs,es_transversal,nombre")
+            .eq("id", int(ag_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not ag_rows:
+            raise HTTPException(status_code=404, detail=f"Agrupador {ag_id} no encontrado")
+        ag = ag_rows[0]
+        era_tx = bool(ag.get("es_transversal")) or (
+            (ag.get("capitulo") or "").strip() == CAPITULO_TRANSVERSALES
+        )
+        # Simular membresía final para clasificar (capítulo ↔ transversal)
+        futuros = sorted(items_ids_de_agrupador(supabase, int(ag_id)) | {int(item_id)})
+        clasif = _clasificar_agrupador_desde_items(contrato_id, futuros)
+        es_tx = bool(clasif["es_transversal"])
+        cap = clasif["capitulo"]
+        # Persistir membresía (permite multi-capítulo si quedará transversal)
+        asignar_items_a_agrupador(
+            supabase,
+            int(contrato_id),
+            int(ag_id),
+            cap,
+            [int(item_id)],
+            reemplazar=False,
+            permitir_multi_capitulo=es_tx or era_tx,
+            exigir_membership=True,
+        )
+        meta = _patch_clasificacion_agrupador(
+            contrato_id,
+            int(ag_id),
+            era_tx=era_tx,
+            codigo_actual=(ag.get("codigo_wbs") or "").strip(),
+            item_ids=futuros,
+        )
+        actualizados.append({
+            "id": int(ag_id),
+            "nombre": ag.get("nombre"),
+            "accion": "agregar",
+            "items_count": len(futuros),
+            **{k: meta[k] for k in ("capitulo", "es_transversal", "codigo_wbs") if meta.get(k) is not None},
+        })
+
+    sync_legacy_agrupador_id(supabase, [int(item_id)])
+    finales = sorted(agrupadores_ids_de_item(supabase, int(item_id)))
+    return {
+        "agrupador_ids": finales,
+        "agrupador_id": finales[0] if finales else None,
+        "lineas_liberadas": lineas_liberadas,
+        "agrupadores_actualizados": actualizados,
+        "agregados": len(agregar),
+        "quitados": len(quitar),
+    }
+
+
 def _listado_precio_row(contrato_id: int, item: ListadoPrecioItem) -> dict:
     cap = (item.capitulo or "").strip()
     row = {
         "contrato_id": contrato_id,
         **{k: v for k, v in item.dict().items() if v is not None and k not in (
             "agrupador_nombre", "agrupador_codigo_wbs",
+            "agrupador_ids", "liberar_lineas_borrador",
         )},
     }
     ag_id = _resolve_agrupador_id(contrato_id, cap, item)
@@ -11468,6 +11667,42 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
                   {"cantidad": len(items)})
     return {"mensaje": f"{len(items)} items cargados"}
 
+@app.post("/listado-precios/item/{item_id}/preview-quitar-agrupadores")
+def preview_quitar_agrupadores_de_item(
+    item_id: int,
+    body: ListadoPrecioItemPreviewQuitarAgrupadoresBody,
+    current_user=Depends(get_current_user),
+):
+    """Cuenta líneas en borrador que se liberarían al quitar el ítem de esos agrupadores."""
+    row = (
+        supabase.table("listado_precios")
+        .select("id,contrato_id")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    contrato_id = int(row[0]["contrato_id"])
+    _require_contract_access(current_user, contrato_id)
+    from prog_obra_lineas_agrupador import preview_lineas_a_liberar_por_items
+    total = 0
+    por_ag = []
+    for ag_id in list(dict.fromkeys(int(x) for x in (body.agrupador_ids or []) if x is not None)):
+        prev = preview_lineas_a_liberar_por_items(
+            supabase,
+            contrato_id=contrato_id,
+            agrupador_id=int(ag_id),
+            item_ids_quitar=[int(item_id)],
+        )
+        n = int(prev.get("lineas") or 0)
+        total += n
+        if n:
+            por_ag.append({"agrupador_id": int(ag_id), "lineas": n, **{k: prev[k] for k in ("versiones_borrador",) if k in prev}})
+    return {"lineas": total, "por_agrupador": por_ag}
+
+
 @app.put("/listado-precios/item/{item_id}")
 def update_precio(
     item_id: int,
@@ -11479,7 +11714,12 @@ def update_precio(
     current_user=Depends(get_current_user),
 ):
     raw = body.dict()
-    data = {k: v for k, v in raw.items() if v is not None and k not in ("agrupador_nombre", "agrupador_codigo_wbs")}
+    raw_set = body.dict(exclude_unset=True)
+    _virtual = (
+        "agrupador_nombre", "agrupador_codigo_wbs",
+        "agrupador_ids", "liberar_lineas_borrador",
+    )
+    data = {k: v for k, v in raw.items() if v is not None and k not in _virtual}
     prev_rows = (
         supabase.table("listado_precios")
         .select("id, contrato_id, capitulo, competencia, item_numero, descripcion, unidad")
@@ -11494,7 +11734,14 @@ def update_precio(
     _require_contract_access(current_user, int(prev["contrato_id"]))
     _deny_listado_precios_contrato_si_subcontratista(current_user)
 
-    if "agrupador_id" in raw:
+    sync_agrupador_ids = None
+    liberar_lineas = False
+    if "agrupador_ids" in raw_set:
+        sync_agrupador_ids = list(raw_set.get("agrupador_ids") or [])
+        liberar_lineas = bool(raw_set.get("liberar_lineas_borrador"))
+        # El sync N:N define el legado; no escribir agrupador_id crudo del form.
+        data.pop("agrupador_id", None)
+    elif "agrupador_id" in raw:
         data["agrupador_id"] = raw["agrupador_id"]
     elif body.agrupador_nombre or body.agrupador_codigo_wbs:
         cap = (body.capitulo or "").strip()
@@ -11548,7 +11795,17 @@ def update_precio(
     new_cap = data.get("capitulo", old_cap) or ""
     contrato_id = int(prev["contrato_id"])
 
-    supabase.table("listado_precios").update(data).eq("id", item_id).execute()
+    if data:
+        supabase.table("listado_precios").update(data).eq("id", item_id).execute()
+
+    sync_res = None
+    if sync_agrupador_ids is not None:
+        sync_res = _sincronizar_agrupadores_de_item(
+            contrato_id,
+            int(item_id),
+            agrupador_ids=sync_agrupador_ids,
+            liberar_lineas_borrador=liberar_lineas,
+        )
 
     propagados = {"presupuesto": 0, "sicoe_registros": 0}
     if "item_numero" in cambios_meta and old_item and new_item and old_item != new_item:
@@ -11571,6 +11828,8 @@ def update_precio(
             "estado_precio": data.get("estado_precio"),
             "campos_meta": cambios_meta,
             "propagados": propagados,
+            "agrupador_ids": (sync_res or {}).get("agrupador_ids"),
+            "lineas_liberadas": (sync_res or {}).get("lineas_liberadas"),
         },
     )
     # Devolver fila actualizada para que el front no reutilice estado_precio stale del formulario.
@@ -11586,6 +11845,14 @@ def update_precio(
         out = dict(refreshed[0])
         out["propagados"] = propagados
         out["campos_meta_cambiados"] = cambios_meta
+        if sync_res is not None:
+            out["agrupador_ids"] = sync_res.get("agrupador_ids") or []
+            out["lineas_liberadas"] = sync_res.get("lineas_liberadas") or 0
+            out["agrupadores_actualizados"] = sync_res.get("agrupadores_actualizados") or []
+            if sync_res.get("agrupador_id") is not None:
+                out["agrupador_id"] = sync_res["agrupador_id"]
+            elif not (sync_res.get("agrupador_ids") or []):
+                out["agrupador_id"] = None
         return out
     return {
         "ok": True,
