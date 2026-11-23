@@ -167,3 +167,15 @@ jobs:
               )
           print("MATCH_OK", out["programacion_ejecutado"])
           PY
+
+      - name: Smoke carga Programación (mapa/tramos/presupuesto)
+        if: always()
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          QA_CONTRATO_ID: ${{ github.event.inputs.contrato_id || '3' }}
+          QA_HTTP: "1"
+        working-directory: ./backend
+        run: |
+          set -e
+          python -m pip install -q azure-identity azure-mgmt-web PyJWT
+          PYTHONPATH=. python3 scripts/qa_prog_obra_smoke_silvania.py
