@@ -148,19 +148,30 @@ def _semilla():
     sb.table("contratos").insert({
         "id": 2, "numero": "OTRO-9", "contratista": "Otra SAS", "nit": "800000000-1",
     }).execute()
-    sb.table("roles").insert({"id": 8, "nombre": "Administrador"}).execute()
+    sb.table("roles").insert({"id": 8, "nombre": "Contratista Gerencial"}).execute()
     sb.table("roles").insert({"id": 2, "nombre": "Administrativo"}).execute()
+    sb.table("roles").insert({"id": 12, "nombre": "Administrador"}).execute()
+    sb.table("cargos").insert({"id": 10, "nombre": "Administrador"}).execute()
+    sb.table("cargos").insert({"id": 11, "nombre": "Residente"}).execute()
     sb.table("usuarios").insert({
-        "id": 3, "nombre": "Luis Pérez", "email": "luis@obra.co", "rol_id": None, "contrato_id": 1,
+        "id": 3, "nombre": "Luis Pérez", "email": "luis@obra.co",
+        "rol_id": None, "cargo_id": 11, "contrato_id": 1,
     }).execute()
     sb.table("usuarios").insert({
-        "id": 4, "nombre": "Marta Gerencia", "email": "marta@obra.co", "rol_id": 8, "contrato_id": 1,
+        "id": 4, "nombre": "Marta Gerencia", "email": "marta@obra.co",
+        "rol_id": 8, "cargo_id": 10, "contrato_id": 1,
     }).execute()
     sb.table("usuarios").insert({
-        "id": 5, "nombre": "Rol Administrativo", "email": "adm@obra.co", "rol_id": 2, "contrato_id": 1,
+        "id": 5, "nombre": "Rol Administrativo", "email": "adm@obra.co",
+        "rol_id": 2, "cargo_id": 11, "contrato_id": 1,
     }).execute()
     sb.table("usuarios").insert({
-        "id": 6, "nombre": "Ajeno", "email": "ajeno@otra.co", "rol_id": 8, "contrato_id": 2,
+        "id": 6, "nombre": "Ajeno", "email": "ajeno@otra.co",
+        "rol_id": 8, "cargo_id": 11, "contrato_id": 2,
+    }).execute()
+    sb.table("usuarios").insert({
+        "id": 12, "nombre": "Rol Sin Cargo", "email": "roladmin@obra.co",
+        "rol_id": 12, "cargo_id": 11, "contrato_id": 1,
     }).execute()
     return sb
 
@@ -200,8 +211,10 @@ def test_indicadores_sin_dividir_por_cero_y_rechazo():
     assert ind["gasto_actual"] == 80
     assert calc.alcanza_80(100_000, 80_000, False) is True
     assert calc.alcanza_80(100_000, 80_000, True) is False
-    assert calc.es_rol_administrador_gerencia("ADMINISTRADOR") is True
-    assert calc.es_rol_administrador_gerencia("Administrativo") is False
+    assert calc.es_cargo_administrador("ADMINISTRADOR") is True
+    assert calc.es_cargo_administrador(" Administradór ") is True
+    assert calc.es_cargo_administrador("Administrativo") is False
+    assert calc.es_cargo_administrador("Residente Administrativo") is False
     assert calc.fmt_pct(None) == "—"
 
 
@@ -210,7 +223,18 @@ def test_desarrollador_no_depende_de_la_matriz():
         {"sub": "1", "cargo_nombre": "Desarrollador"}, "eliminar", 9,
     ) is True
     assert perm.acceso_caja_menor({"rol_nombre": "desarrollador"}, 3)["validar"] is True
-    assert perm.tiene_permiso_caja_menor({"rol_nombre": "Administrador"}, "ver", 3) is True
+    gerencia = {
+        "cargo_nombre": " Administradór ",
+        "rol_nombre": "Contratista Gerencial",
+    }
+    assert perm.tiene_permiso_caja_menor(gerencia, "ver", 3) is True
+    assert perm.tiene_permiso_caja_menor(gerencia, "validar", 3) is True
+    assert perm.tiene_permiso_caja_menor(gerencia, "exportar", 3) is True
+    assert perm.tiene_permiso_caja_menor(gerencia, "eliminar", 3) is False
+    assert perm.tiene_permiso_caja_menor(
+        {"rol_nombre": "Administrador", "cargo_nombre": "Residente"}, "ver", 3,
+    ) is False
+    assert perm.tiene_permiso_caja_menor({"cargo_nombre": "Administrativo"}, "validar", 3) is False
     assert perm.tiene_permiso_caja_menor({"sub": "4", "rol_id": 1}, "crear", 3) is True
     assert perm.acceso_caja_menor({"es_desarrollador": True}, 3)["eliminar"] is True
 
@@ -557,6 +581,10 @@ def test_not_found_pide_permisos_del_api():
         assert "GRANT SELECT, INSERT, UPDATE, DELETE" in sql
         assert "service_role" in sql
         assert "NOTIFY pgrst, 'reload schema'" in sql
+    cargo_sql = (raiz / "migrations/20261124140000_caja_menor_cargo_administrador.sql").read_text(encoding="utf-8")
+    assert "validar = true" in cargo_sql
+    assert "'administrador'" in cargo_sql
+    assert "validar = true" in (raiz / "sql/caja_menor_modulo.sql").read_text(encoding="utf-8")
 
 
 def test_cada_responsable_solo_ve_su_caja(monkeypatch):
@@ -579,14 +607,66 @@ def test_cada_responsable_solo_ve_su_caja(monkeypatch):
     except ValueError:
         pass
     assert [p["id"] for p in svc.listar_responsables(sb, luis, 1)] == [3]
-    admin = {"sub": "4"}
+    admin = {"sub": "4", "rol_nombre": "Contratista Gerencial"}
     assert {c["responsable_id"] for c in svc.listar_cajas(sb, admin, 1)["cajas"]} == {3, 4}
+    por_nombre = {
+        "sub": "90",
+        "cargo_nombre": "ADMINISTRADOR",
+        "rol_nombre": "Contratista Gerencial",
+    }
+    assert {c["responsable_id"] for c in svc.listar_cajas(sb, por_nombre, 1)["cajas"]} == {3, 4}
+    solo_rol = {"sub": "12", "rol_nombre": "Administrador", "cargo_nombre": "Residente"}
+    try:
+        svc.obtener_caja(sb, solo_rol, 1, de_luis["caja"]["id"])
+        raise AssertionError("el rol Administrador vio una caja ajena")
+    except ValueError as exc:
+        assert "no encontrada" in str(exc).lower()
     assert len(svc.listar_cajas(sb, DEV, 1)["cajas"]) == 2
     try:
         svc.crear_caja(sb, luis, 1, 4)
         raise AssertionError("abrió caja ajena")
     except ValueError as exc:
         assert "propia" in str(exc).lower()
+
+
+def test_cargo_administrador_valida_y_legaliza():
+    sb = _semilla()
+    mem = Memoria()
+    det = svc.crear_caja(sb, DEV, 1, 3)
+    caja_id = det["caja"]["id"]
+    svc.crear_ingreso(
+        sb, DEV, 1, caja_id, calc.hoy_colombia().isoformat(), 200000,
+        (_png(), "image/jpeg", "consig.jpg"), storage=mem,
+    )
+    det = svc.crear_gasto(
+        sb, DEV, 1, caja_id, _gasto(documento_no="RC-1", iva=0),
+        (_png(), "image/png", "r.png"), storage=mem,
+    )
+    det = svc.solicitar_cierre(sb, DEV, 1, caja_id)
+    gerencia = {
+        "sub": "4",
+        "cargo_nombre": "Administrador",
+        "rol_nombre": "Contratista Gerencial",
+    }
+    try:
+        svc.validar_gasto(sb, gerencia, 1, caja_id, det["gastos"][0]["id"], "rechazado", "")
+        raise AssertionError("rechazó sin observación")
+    except ValueError as exc:
+        assert "observación" in str(exc).lower()
+    det = svc.validar_gasto(
+        sb, gerencia, 1, caja_id, det["gastos"][0]["id"], "rechazado", "Falta el soporte",
+    )
+    assert det["caja"]["estado"] == "legalizada"
+    data, mime, _nombre = svc.leer_soporte(
+        sb, gerencia, 1, caja_id, "gastos", det["gastos"][0]["id"], storage=mem,
+    )
+    assert data and mime == "image/png"
+    residente = {"cargo_nombre": "Residente", "rol_nombre": "Contratista Gerencial"}
+    try:
+        svc.validar_gasto(sb, residente, 1, caja_id, det["gastos"][0]["id"], "aprobado", "")
+        raise AssertionError("un residente validó")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 403 or "permiso" in str(exc).lower()
 
 
 def test_descripcion_se_formatea_al_guardar():

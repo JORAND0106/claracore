@@ -16,7 +16,7 @@ from caja_menor_calc import (
     buscar_duplicado,
     dinero,
     documento_valido,
-    es_rol_administrador_gerencia,
+    es_cargo_administrador,
     fecha_no_futura,
     gastos_que_cuentan,
     hoy_colombia,
@@ -162,7 +162,7 @@ def _contrato(sb, contrato_id: int) -> dict:
 def _usuarios_contrato(sb, contrato_id: int) -> list:
     direct = _rows(
         sb.table("usuarios")
-        .select("id, nombre, email, rol_id, contrato_id")
+        .select("id, nombre, email, rol_id, cargo_id, contrato_id")
         .eq("contrato_id", int(contrato_id))
         .execute()
     )
@@ -185,18 +185,24 @@ def _usuarios_contrato(sb, contrato_id: int) -> list:
     if faltan:
         extra = _rows(
             sb.table("usuarios")
-            .select("id, nombre, email, rol_id, contrato_id")
+            .select("id, nombre, email, rol_id, cargo_id, contrato_id")
             .in_("id", faltan)
             .execute()
         )
-    rol_ids = sorted({int(p["rol_id"]) for p in (direct + extra) if p.get("rol_id") is not None})
+    personas = direct + extra
+    rol_ids = sorted({int(p["rol_id"]) for p in personas if p.get("rol_id") is not None})
     roles = {}
     if rol_ids:
         for r in _rows(sb.table("roles").select("id, nombre").in_("id", rol_ids).execute()):
             roles[int(r["id"])] = r.get("nombre") or ""
+    cargo_ids = sorted({int(p["cargo_id"]) for p in personas if p.get("cargo_id") is not None})
+    cargos = {}
+    if cargo_ids:
+        for c in _rows(sb.table("cargos").select("id, nombre").in_("id", cargo_ids).execute()):
+            cargos[int(c["id"])] = c.get("nombre") or ""
     out = []
     vistos = set()
-    for p in direct + extra:
+    for p in personas:
         if p.get("id") is None:
             continue
         pid = int(p["id"])
@@ -208,6 +214,7 @@ def _usuarios_contrato(sb, contrato_id: int) -> list:
             "nombre": str(p.get("nombre") or "").strip() or "Sin nombre",
             "email": str(p.get("email") or "").strip(),
             "rol": roles.get(int(p["rol_id"])) if p.get("rol_id") is not None else "",
+            "cargo": cargos.get(int(p["cargo_id"])) if p.get("cargo_id") is not None else "",
         })
     out.sort(key=lambda x: x["nombre"].lower())
     return out
@@ -260,32 +267,54 @@ def _es_desarrollador_token(user, rol: str, cargo: str) -> bool:
         return False
 
 
-def _rol_amplio_en_bd(sb, user) -> bool:
+def _cargo_en_bd(sb, user) -> str:
+    uid = _uid_seguro(user)
+    if uid is None:
+        return ""
+    persona = _first(
+        sb.table("usuarios").select("cargo_id").eq("id", int(uid)).limit(1).execute()
+    )
+    if not persona or persona.get("cargo_id") is None:
+        return ""
+    cargo = _first(
+        sb.table("cargos").select("nombre").eq("id", int(persona["cargo_id"])).limit(1).execute()
+    )
+    return str((cargo or {}).get("nombre") or "")
+
+
+def _es_desarrollador_en_bd(sb, user) -> bool:
     from caja_menor_permissions import _norm
 
     uid = _uid_seguro(user)
     if uid is None:
         return False
     persona = _first(
-        sb.table("usuarios").select("rol_id").eq("id", int(uid)).limit(1).execute()
+        sb.table("usuarios").select("rol_id, cargo_id").eq("id", int(uid)).limit(1).execute()
     )
-    if not persona or persona.get("rol_id") is None:
+    if not persona:
+        return False
+    if persona.get("cargo_id") is not None and _norm(_cargo_en_bd(sb, user)) == "desarrollador":
+        return True
+    if persona.get("rol_id") is None:
         return False
     role = _first(
         sb.table("roles").select("nombre").eq("id", int(persona["rol_id"])).limit(1).execute()
     )
-    nombre = str((role or {}).get("nombre") or "")
-    return es_rol_administrador_gerencia(nombre) or _norm(nombre) == "desarrollador"
+    return _norm((role or {}).get("nombre")) == "desarrollador"
 
 
 def _ve_todas_las_cajas(sb, user) -> bool:
-    """Administrador y Desarrollador ven las cajas del contrato. Los demás, solo la suya."""
+    """El cargo Administrador y el desarrollador ven las cajas del contrato.
+
+    El rol (Contratista Gerencial, Administrativo o un rol llamado Administrador)
+    no abre las cajas de los demás. Quien no tiene ese cargo ve solo la suya.
+    """
     user = user or {}
     rol = str(user.get("rol_nombre") or user.get("rol") or "")
     cargo = str(user.get("cargo_nombre") or user.get("cargo") or "")
-    if es_rol_administrador_gerencia(rol) or _es_desarrollador_token(user, rol, cargo):
+    if _es_desarrollador_token(user, rol, cargo) or _es_desarrollador_en_bd(sb, user):
         return True
-    if _rol_amplio_en_bd(sb, user):
+    if es_cargo_administrador(cargo) or es_cargo_administrador(_cargo_en_bd(sb, user)):
         return True
     if not rol and not cargo:
         return es_desarrollador_usuario(user)
@@ -1030,7 +1059,7 @@ def _revisar_80(sb, user, contrato_id, caja_id, *, mailer=None) -> None:
     if not alcanza_80(ind["fondo_establecido"], gastados, bool(caja.get("alerta_80_enviada"))):
         return
     personas = _usuarios_contrato(sb, contrato_id)
-    admins = [p for p in personas if es_rol_administrador_gerencia(p.get("rol"))]
+    admins = [p for p in personas if es_cargo_administrador(p.get("cargo"))]
     responsable = _nombre(personas, caja["responsable_id"])
     enviar = mailer or enviar_alerta_80
     try:

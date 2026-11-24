@@ -18,9 +18,9 @@ function norm(txt) {
     .replace(/\s+/g, ' ')
 }
 
-function esRolAdministrador(usuario) {
-  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
-  return rol === 'administrador'
+function esCargoAdministrador(usuario) {
+  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
+  return cargo === 'administrador'
 }
 
 /** Misma puerta que el menú: cargo, rol, rol_id 1 o bandera de acceso total. */
@@ -38,12 +38,12 @@ export function accesoCajaMenor(usuario, contratoId) {
   const p = permisoFuncionContrato(usuario, 'caja menor', contratoId)
     || permisoFuncionContrato(usuario, 'Caja Menor', contratoId)
   const flags = {
-    ver: !!p?.ver || esRolAdministrador(usuario),
+    ver: !!p?.ver || esCargoAdministrador(usuario),
     crear: !!p?.crear,
     editar: !!p?.editar,
     eliminar: !!p?.eliminar,
-    validar: !!p?.validar,
-    exportar: !!p?.exportar,
+    validar: !!p?.validar || esCargoAdministrador(usuario),
+    exportar: !!p?.exportar || esCargoAdministrador(usuario),
   }
   return { ...flags, puedeEntrar: flags.ver }
 }
