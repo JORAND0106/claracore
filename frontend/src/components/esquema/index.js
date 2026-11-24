@@ -26,6 +26,7 @@ export {
 export { offsetEntity } from './esquemaOffset'
 export { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 export {
+  applyHatchToEntity,
   createHatchRegionFromClick,
   detectClosedRegionFromClick,
   drawHatchRegion,
@@ -34,6 +35,9 @@ export {
   dilateVisitedIntoBarriers,
   hatchBoundsPad,
   polylineClosedForHatch,
+  entityCanReceiveHatch,
+  entityHatchIsClosed,
+  resolveHatchTarget,
   hatchMaskEntryReady,
   hatchMaskEntryBroken,
 } from './esquemaHatch'

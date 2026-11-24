@@ -1,12 +1,16 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  applyHatchToEntity,
   dilateVisitedIntoBarriers,
+  entityCanReceiveHatch,
+  entityHatchIsClosed,
   hatchBoundsPad,
   hatchMaskEntryBroken,
   hatchMaskEntryReady,
   hatchRasterScale,
   polylineClosedForHatch,
+  resolveHatchTarget,
 } from './esquemaHatch.js'
 import { floodPixelsToM2, PX_PER_METER } from './esquemaGeometry.js'
 
@@ -59,18 +63,25 @@ describe('esquemaHatch dilate + area', () => {
     assert.ok(frac < 0.85, `frac=${frac} aún ≥ 0.85 con pad=${pad}`)
   })
 
-  it('polylineClosedForHatch respeta closed=true y anillo casi cerrado', () => {
+  it('polylineClosedForHatch respeta closed=true y anillo casi cerrado (OSNAP)', () => {
     const open = {
       type: 'polilinea',
-      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
     }
     assert.equal(polylineClosedForHatch(open), false)
     assert.equal(polylineClosedForHatch({ ...open, closed: true }), true)
     const ring = {
       type: 'polilinea',
-      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0.5, y: 0.2 }],
+      points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }, { x: 0.5, y: 0.2 }],
     }
     assert.equal(polylineClosedForHatch(ring), true)
+    // Gap dentro del umbral OSNAP (≤8) → cerrada para achurar
+    const near = {
+      type: 'polilinea',
+      width: 3,
+      points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 80 }, { x: 0, y: 80 }, { x: 4, y: 1 }],
+    }
+    assert.equal(polylineClosedForHatch(near), true)
   })
 
   it('hatchMaskEntryReady/Broken detectan máscara usable vs rota', () => {
@@ -81,4 +92,61 @@ describe('esquemaHatch dilate + area', () => {
     assert.equal(hatchMaskEntryReady({ complete: false, naturalWidth: 0 }), false)
     assert.equal(hatchMaskEntryBroken({ complete: false, naturalWidth: 0 }), false)
   })
+
+  it('resolveHatchTarget exige selección o hit cerrado; avisa si abierto', () => {
+    const rect = { id: 'r1', type: 'rect', x1: 0, y1: 0, x2: 40, y2: 30 }
+    const open = {
+      id: 'p1',
+      type: 'polilinea',
+      points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 40 }, { x: 0, y: 40 }],
+    }
+    const closed = { ...open, id: 'p2', closed: true }
+    assert.equal(entityCanReceiveHatch(rect), true)
+    assert.equal(entityHatchIsClosed(rect), true)
+    assert.equal(entityHatchIsClosed(open), false)
+
+    const noSel = resolveHatchTarget({ objects: [rect], selectedIds: [], hitId: null })
+    assert.equal(noSel.ok, false)
+    assert.equal(noSel.error, 'Seleccione un contorno')
+
+    const bySel = resolveHatchTarget({ objects: [rect], selectedIds: ['r1'], hitId: null })
+    assert.equal(bySel.ok, true)
+    assert.equal(bySel.entity.id, 'r1')
+
+    const byHit = resolveHatchTarget({ objects: [closed], selectedIds: [], hitId: 'p2' })
+    assert.equal(byHit.ok, true)
+
+    const openSel = resolveHatchTarget({ objects: [open], selectedIds: ['p1'], hitId: null })
+    assert.equal(openSel.ok, false)
+    assert.equal(openSel.error, 'El contorno no está cerrado')
+  })
+
+  it('applyHatchToEntity fija hatch y cierra poli casi cerrada; se conserva al “mover”', () => {
+    const elipse = { id: 'e1', type: 'elipse', x1: 0, y1: 0, x2: 20, y2: 10 }
+    const hatched = applyHatchToEntity(elipse, 2)
+    assert.equal(hatched.hatch, 2)
+    // Mover / rotar / escalar: la propiedad hatch viaja con la entidad
+    const moved = { ...hatched, x1: 10, y1: 10, x2: 30, y2: 20, rotation: Math.PI / 6 }
+    assert.equal(moved.hatch, 2)
+
+    const near = {
+      id: 'p3',
+      type: 'polilinea',
+      points: [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }, { x: 2, y: 1 }],
+    }
+    const polyH = applyHatchToEntity(near, 0)
+    assert.ok(polyH)
+    assert.equal(polyH.closed, true)
+    assert.equal(polyH.hatch, 0)
+
+    assert.equal(applyHatchToEntity(openLine(), 0), null)
+  })
 })
+
+function openLine() {
+  return {
+    id: 'open',
+    type: 'polilinea',
+    points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 }],
+  }
+}
