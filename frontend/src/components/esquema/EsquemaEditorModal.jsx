@@ -6,10 +6,13 @@ import {
   SICOE_HERRAMIENTA_Z,
 } from '../../modules/sicoe-obra/sicoeZIndex'
 import {
+  applyHatchToEntity,
   createHatchRegionFromClick,
   drawHatchRegion,
   makeHatchPattern,
+  polylineClosedForHatch,
   preloadHatchRegions,
+  resolveHatchTarget,
 } from './esquemaHatch'
 import {
   BOX_TOOLS,
@@ -4890,26 +4893,33 @@ export default function EsquemaEditorModal({
     }
 
     if (currentTool === 'hatch') {
-      // Flood-fill de la subregión cerrada bajo el clic (líneas/figuras = fronteras)
-      const region = createHatchRegionFromClick(
-        objectsRef.current,
-        p.x,
-        p.y,
-        hatchRef.current,
-        colorRef.current,
-      )
-      if (region) {
-        pushHistory()
-        const withId = { ...region, id: uid() }
-        objectsRef.current = [...objectsRef.current, withId]
-        selectOne(withId.id)
-        setDirty(true)
-        // Redibujar cuando la máscara esté lista
-        const img = new Image()
-        img.onload = () => redraw()
-        img.src = withId.maskDataUri
-        redraw()
+      // C-2D-05: achurado ligado a la figura cerrada seleccionada (o bajo el clic).
+      // No flood-fill silencioso: siempre avisa si falta selección o el contorno está abierto.
+      const hit = hitTest(p)
+      const resolved = resolveHatchTarget({
+        objects: objectsRef.current,
+        selectedIds: [...(selectedIdsRef.current || [])],
+        hitId: hit?.id ?? null,
+      })
+      if (!resolved.ok) {
+        setToolHint(resolved.error || 'Seleccione un contorno')
+        drawing.current = false
+        return
       }
+      const patched = applyHatchToEntity(resolved.entity, hatchRef.current)
+      if (!patched) {
+        setToolHint('El contorno no está cerrado')
+        drawing.current = false
+        return
+      }
+      pushHistory()
+      objectsRef.current = objectsRef.current.map((o) => (
+        o.id === patched.id ? { ...patched, color: patched.color || colorRef.current } : o
+      ))
+      selectOne(patched.id)
+      setToolHint('')
+      setDirty(true)
+      redraw()
       drawing.current = false
       return
     }
@@ -11444,7 +11454,8 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.strokeStyle = ink
     const pts = obj.points || []
     // closed=true (huella / secuencia de unión): dibujar el cierre visual = validación.
-    const ring = (obj.closed && pts.length >= 3)
+    const closedForFill = polylineClosedForHatch(obj)
+    const ring = (closedForFill && pts.length >= 3)
       ? [...pts, pts[0]]
       : pts
     if (ring.length >= 2) {
@@ -11454,6 +11465,9 @@ function drawObject(ctx, obj, selected, opts = {}) {
         for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i].x, ring[i].y)
         ctx.stroke()
       } else {
+        if (obj.hatch != null && closedForFill) {
+          fillHatch(ctx, obj, ui)
+        }
         if (huella) {
           ctx.save()
           ctx.strokeStyle = ui.canvas || '#ffffff'
@@ -11649,7 +11663,16 @@ function fillHatch(ctx, obj, ui) {
   const pattern = makeHatchPattern(ctx, obj.hatch, esquemaEntityInk(obj.color, ui))
   if (!pattern) return
   ctx.save()
-  pathForClosed(ctx, obj)
+  if (obj.type === 'polilinea' || obj.type === 'stroke') {
+    const pts = obj.points || []
+    if (pts.length < 3) { ctx.restore(); return }
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+    ctx.closePath()
+  } else {
+    pathForClosed(ctx, obj)
+  }
   ctx.fillStyle = pattern
   ctx.fill()
   ctx.restore()

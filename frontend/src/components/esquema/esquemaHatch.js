@@ -67,9 +67,13 @@ function strokeObjectEdges(ctx, obj) {
   ctx.restore()
 }
 
+/** Tipos que admiten achurado geométrico ligado a la entidad (C-2D-05). */
+export const HATCHABLE_ENTITY_TYPES = new Set(['rect', 'elipse', 'triangulo', 'polilinea', 'stroke'])
+
 /**
  * Una polilínea actúa como frontera cerrada del hatch si está marcada `closed`
  * o si el último vértice coincide (≈) con el primero.
+ * Tolera OSNAP al primer punto (umbral ≥ trazo × 2, mínimo 8 u.mundo).
  */
 export function polylineClosedForHatch(obj) {
   if (!obj || (obj.type !== 'polilinea' && obj.type !== 'stroke')) return false
@@ -79,7 +83,68 @@ export function polylineClosedForHatch(obj) {
   const a = pts[0]
   const b = pts[pts.length - 1]
   if (!a || !b) return false
-  return Math.hypot((a.x || 0) - (b.x || 0), (a.y || 0) - (b.y || 0)) <= 1.5
+  const dist = Math.hypot((a.x || 0) - (b.x || 0), (a.y || 0) - (b.y || 0))
+  const stroke = Math.max(1, Number(obj.width) || 3)
+  const tol = Math.max(8, stroke * 2)
+  return dist <= tol
+}
+
+/** ¿La entidad puede recibir achurado? (rect, círculo/elipse, triángulo, poli/stroke). */
+export function entityCanReceiveHatch(obj) {
+  return !!(obj && HATCHABLE_ENTITY_TYPES.has(obj.type))
+}
+
+/** ¿El contorno está cerrado para achurar? Rect/elipse/triángulo siempre; poli vía anillo. */
+export function entityHatchIsClosed(obj) {
+  if (!entityCanReceiveHatch(obj)) return false
+  if (obj.type === 'rect' || obj.type === 'elipse' || obj.type === 'triangulo') {
+    const w = Math.abs((Number(obj.x2) || 0) - (Number(obj.x1) || 0))
+    const h = Math.abs((Number(obj.y2) || 0) - (Number(obj.y1) || 0))
+    return w > 0.5 && h > 0.5
+  }
+  return polylineClosedForHatch(obj)
+}
+
+/**
+ * Resuelve la figura a achurar: selección actual (una) o hit bajo el clic.
+ * Nunca falla en silencio: devuelve error «Seleccione un contorno» o
+ * «El contorno no está cerrado».
+ */
+export function resolveHatchTarget({ objects = [], selectedIds = [], hitId = null } = {}) {
+  const byId = new Map((objects || []).filter((o) => o?.id != null).map((o) => [String(o.id), o]))
+  const sel = [...(selectedIds || [])].map(String).filter((id) => byId.has(id))
+  let target = null
+  if (sel.length === 1) {
+    target = byId.get(sel[0])
+  } else if (sel.length > 1) {
+    const hit = hitId != null ? String(hitId) : null
+    if (hit && sel.includes(hit)) target = byId.get(hit)
+    else return { ok: false, error: 'Seleccione un contorno', entity: null }
+  } else if (hitId != null && byId.has(String(hitId))) {
+    target = byId.get(String(hitId))
+  }
+  if (!target || !entityCanReceiveHatch(target)) {
+    return { ok: false, error: 'Seleccione un contorno', entity: null }
+  }
+  if (!entityHatchIsClosed(target)) {
+    return { ok: false, error: 'El contorno no está cerrado', entity: target }
+  }
+  return { ok: true, error: null, entity: target }
+}
+
+/**
+ * Aplica el patrón de achurado a la entidad (propiedad `hatch`).
+ * El relleno se pinta con el contorno geométrico y se mueve/gira/escala con ella.
+ * Si la polilínea está casi cerrada (OSNAP), marca `closed: true`.
+ */
+export function applyHatchToEntity(obj, hatchKind) {
+  if (!obj || !entityCanReceiveHatch(obj)) return null
+  if (!entityHatchIsClosed(obj)) return null
+  const next = { ...obj, hatch: Number(hatchKind) || 0 }
+  if ((obj.type === 'polilinea' || obj.type === 'stroke') && !obj.closed) {
+    next.closed = true
+  }
+  return next
 }
 
 function objectCenterApprox(obj) {
