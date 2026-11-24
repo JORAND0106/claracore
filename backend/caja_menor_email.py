@@ -1,4 +1,4 @@
-"""Correo del 80 % de la caja menor a usuarios con rol Administrador del contrato."""
+"""Correo del 80 % de la caja menor a usuarios con cargo Administrador del contrato."""
 from __future__ import annotations
 
 import logging

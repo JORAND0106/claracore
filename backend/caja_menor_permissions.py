@@ -100,17 +100,26 @@ def _permisos_matriz(cargo_id: int, contrato_id: Optional[int]):
     ) or []
 
 
+# El cargo Administrador ve, valida y exporta cualquier caja del contrato.
+# Crear, editar y eliminar siguen en la matriz de Gestión de Cargos.
+_ACCIONES_CARGO_ADMINISTRADOR = ("ver", "validar", "exportar")
+
+
+def _cargo_administrador(current_user, nombre_bd: str = "") -> bool:
+    from caja_menor_calc import es_cargo_administrador
+
+    user = current_user or {}
+    cargo = user.get("cargo_nombre") or user.get("cargo") or ""
+    return es_cargo_administrador(cargo) or es_cargo_administrador(nombre_bd)
+
+
 def tiene_permiso_caja_menor(current_user, accion: CajaAccion, contrato_id: Optional[int] = None) -> bool:
     if es_desarrollador_usuario(current_user):
         return True
-    # Gerencia (rol Administrador) abre la caja del aviso del 80 %.
-    # El resto de acciones sigue en Gestión de Cargos. No incluye el rol Administrativo.
-    if accion == "ver":
-        from caja_menor_calc import es_rol_administrador_gerencia
-
-        rol = (current_user or {}).get("rol_nombre") or (current_user or {}).get("rol") or ""
-        if es_rol_administrador_gerencia(rol):
-            return True
+    # Gerencia es el cargo Administrador, aunque su rol sea Contratista Gerencial.
+    # No incluye el rol Administrativo ni un rol llamado Administrador.
+    if accion in _ACCIONES_CARGO_ADMINISTRADOR and _cargo_administrador(current_user):
+        return True
     try:
         uid = int(current_user.get("sub"))
     except (TypeError, ValueError, AttributeError):
@@ -122,6 +131,18 @@ def tiene_permiso_caja_menor(current_user, accion: CajaAccion, contrato_id: Opti
         u = urows[0] if urows else None
         if not u or u.get("cargo_id") is None:
             return False
+        if accion in _ACCIONES_CARGO_ADMINISTRADOR:
+            crows = (
+                supabase.table("cargos")
+                .select("nombre")
+                .eq("id", int(u["cargo_id"]))
+                .limit(1)
+                .execute()
+                .data
+            )
+            nombre = (crows[0].get("nombre") if crows else "") or ""
+            if _cargo_administrador(None, nombre):
+                return True
         perms = _permisos_matriz(int(u["cargo_id"]), contrato_id)
         flagged = [p for p in perms if p.get(accion)]
         if not flagged:

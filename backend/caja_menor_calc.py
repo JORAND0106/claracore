@@ -37,8 +37,12 @@ def _norm(txt: str) -> str:
     return " ".join(s.lower().split())
 
 
-def es_rol_administrador_gerencia(nombre: str) -> bool:
-    """Rol Administrador (gerencia). No es el rol Administrativo."""
+def es_cargo_administrador(nombre: str) -> bool:
+    """Cargo Administrador: gerencia del contrato.
+
+    Coincide sin importar mayúsculas, tildes ni espacios de más.
+    No incluye Administrativo ni Residente Administrativo.
+    """
     return _norm(nombre) == "administrador"
 
 

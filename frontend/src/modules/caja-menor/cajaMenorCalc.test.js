@@ -45,10 +45,18 @@ describe('caja menor', () => {
     assert.equal(otro.crear, false)
     assert.equal(otro.validar, true)
     assert.equal(otro.puedeEntrar, true)
-    const gerencia = accesoCajaMenor({ rol_nombre: 'Administrador' }, 4)
+    const gerencia = accesoCajaMenor({
+      cargo_nombre: ' Administradór ',
+      rol_nombre: 'Contratista Gerencial',
+    }, 4)
     assert.equal(gerencia.ver, true)
+    assert.equal(gerencia.validar, true)
+    assert.equal(gerencia.exportar, true)
     assert.equal(gerencia.crear, false)
-    const administrativo = accesoCajaMenor({ rol_nombre: 'Administrativo' }, 4)
+    const soloRol = accesoCajaMenor({ rol_nombre: 'Administrador', cargo_nombre: 'Residente' }, 4)
+    assert.equal(soloRol.puedeEntrar, false)
+    assert.equal(soloRol.validar, false)
+    const administrativo = accesoCajaMenor({ rol_nombre: 'Administrativo', cargo_nombre: 'Administrativo' }, 4)
     assert.equal(administrativo.puedeEntrar, false)
   })
 
