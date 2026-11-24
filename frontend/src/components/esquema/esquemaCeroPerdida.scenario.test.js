@@ -41,14 +41,15 @@ describe('esquemaCeroPerdida · modal y host', () => {
     assert.match(modal, /beforeunload/)
     assert.match(modal, /pagehide/)
     assert.match(modal, /visibilitychange/)
-    assert.match(modal, /esquema-draft-status/)
+    assert.match(modal, /esquema-draft-status|esquema-guardar-borrador/)
     assert.doesNotMatch(modal, /idleTimeout|setTimeout\(\s*onClose\s*\)/)
     assert.doesNotMatch(modal, /cerrar.*por inactividad|inactivity.?close/i)
   })
 
   it('C-OUT-14: indicador Guardando→Guardado / Sin guardar + keepDraft', () => {
-    assert.match(modal, /Guardando…/)
-    assert.match(modal, /Guardado/)
+    // Estado en ícono (color/tooltip), no texto junto al título.
+    assert.match(modal, /draftSaveIconTooltip|Guardando — Guardar borrador/)
+    assert.match(modal, /Guardado — Guardar borrador|draftSaveIconColor/)
     assert.match(modal, /Sin guardar/)
     assert.match(modal, /'unsaved'/)
     assert.match(modal, /keepDraft/)

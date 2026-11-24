@@ -7749,34 +7749,7 @@ export default function EsquemaEditorModal({
             flexGrow: 0,
           }}
         >
-          <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4 }}>{title}</div>
-          <span
-            data-testid="esquema-draft-status"
-            data-status={draftSaveStatus}
-            title={
-              draftSaveStatus === 'saving' ? 'Guardando borrador…'
-                : draftSaveStatus === 'saved' ? 'Borrador guardado en la nube'
-                  : draftSaveStatus === 'offline' ? 'Sin conexión: borrador en este dispositivo'
-                    : draftSaveStatus === 'unsaved' ? 'Sin guardar — se reintenta solo'
-                      : 'Autosave silencioso activo'
-            }
-            style={{
-              fontSize: 'var(--cc-caption)',
-              fontWeight: 600,
-              color: draftSaveStatus === 'saving' ? (t.primary || '#0f766e')
-                : draftSaveStatus === 'offline' || draftSaveStatus === 'unsaved' ? '#b45309'
-                  : (t.textMuted || '#64748b'),
-              marginRight: 8,
-              whiteSpace: 'nowrap',
-              minWidth: 72,
-            }}
-          >
-            {draftSaveStatus === 'saving' ? 'Guardando…'
-              : draftSaveStatus === 'saved' ? 'Guardado'
-                : draftSaveStatus === 'offline' ? 'En dispositivo'
-                  : draftSaveStatus === 'unsaved' ? 'Sin guardar'
-                    : (dirty ? '…' : 'Guardado')}
-          </span>
+          <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-lg)', marginRight: 4, whiteSpace: 'nowrap' }}>{title}</div>
           <button
             type="button"
             title="Deshacer"
@@ -8385,17 +8358,22 @@ export default function EsquemaEditorModal({
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <button
               type="button"
-              title="Guardar borrador (2D y 3D). Podrá continuar más adelante desde este mismo lugar."
-              aria-label="Guardar borrador"
+              title={draftSaveIconTooltip(draftSaveStatus, dirty)}
+              data-cc-tooltip={draftSaveIconTooltip(draftSaveStatus, dirty)}
+              data-cc-tooltip-variant="short"
+              aria-label={draftSaveIconTooltip(draftSaveStatus, dirty)}
               data-testid="esquema-guardar-borrador"
+              data-status={normalizeDraftSaveStatus(draftSaveStatus, dirty)}
               disabled={busy || !resolvedDraftKey}
               onClick={() => { void saveEsquemaDraft({ silent: false }) }}
               style={{
                 ...iconBtn(t, false),
+                color: draftSaveIconColor(t, draftSaveStatus, dirty),
                 opacity: (busy || !resolvedDraftKey) ? 0.4 : 1,
               }}
             >
-              <IconGuardarBorrador />
+              {/* C-OUT-14: estado solo por color del ícono (sin texto que mueva la barra). */}
+              <IconGuardarBorrador data-testid="esquema-draft-status" />
             </button>
             <button
               type="button"
@@ -13297,9 +13275,34 @@ function IconDespieceAcero() {
     </svg>
   )
 }
-function IconGuardarBorrador() {
+/** Estado efectivo del autosave para color / tooltip / data-status. */
+function normalizeDraftSaveStatus(status, dirty) {
+  if (status === 'saving' || status === 'saved' || status === 'offline' || status === 'unsaved') {
+    return status
+  }
+  return dirty ? 'unsaved' : 'saved'
+}
+
+/** Tooltip del ícono de guardar borrador: estado + función (C-OUT-14). */
+function draftSaveIconTooltip(status, dirty) {
+  const st = normalizeDraftSaveStatus(status, dirty)
+  if (st === 'saving') return 'Guardando — Guardar borrador (2D y 3D)'
+  if (st === 'unsaved') return 'Sin guardar — Guardar borrador (2D y 3D)'
+  if (st === 'offline') return 'Sin guardar — Sin conexión; borrador en este dispositivo'
+  return 'Guardado — Guardar borrador (2D y 3D)'
+}
+
+/** Color del ícono: normal / ámbar (guardando) / rojo (sin guardar o sin conexión). */
+function draftSaveIconColor(t, status, dirty) {
+  const st = normalizeDraftSaveStatus(status, dirty)
+  if (st === 'saving') return '#d97706'
+  if (st === 'unsaved' || st === 'offline') return '#dc2626'
+  return t.text || 'currentColor'
+}
+
+function IconGuardarBorrador(props = {}) {
   return (
-    <svg {...iconProps()}>
+    <svg {...iconProps()} {...props}>
       <path d="M5 3h11l3 3v15H5Z" />
       <path d="M8 3v5h7" />
       <path d="M8 21v-6h8v6" />
