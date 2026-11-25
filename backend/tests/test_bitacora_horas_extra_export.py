@@ -255,51 +255,45 @@ def test_html_pdf_sin_margenes_y_firmas_con_total():
     assert "margin: 2mm" in html
     assert "margin: 12mm" not in html
     assert 'class="firmas"' in html
-    assert 'class="firmas-row"' not in html  # firmas fuera de la grilla
+    assert 'class="firmas-row"' not in html
     assert "firma-line" in html
-    assert "firma-sp" in html  # espacio compacto para firma a mano
+    assert "firma-sp" in html
     assert 'class="closing"' in html
-    assert "-pdf-keep-with-next:true" in html
-    assert "page-break-after:avoid" in html
-    assert "page-break-before:avoid" in html
     assert 'class="subtotal' in html
     assert 'class="total"' in html
-    assert "page-break-before:always" not in html  # informe corto: una hoja
+    assert "page-break-before:always" not in html
     assert "Gustavo Español Alba" in html
     assert "EspaÑOl" not in html
-    # Firmas después del total, fuera de la tabla grid
     assert html.index("Total general") < html.index('class="firmas"')
-    assert html.index("</table>", html.index("Total general")) < html.index('class="firmas"')
     assert "Aprobó" in html
 
 
-def test_html_multipagina_encabezado_unido_y_cierre_final():
-    """Con muchas filas: keep-with-next en hdr/meta + cierre en hoja final."""
-    from bitacora_horas_extra_export import _html_informe, generar_pdf_horas_extra
+def test_html_multipagina_empaque_sin_salto_forzado():
+    """Muchas filas: empaque por altura; sin page-break-before:always; cierre con firmas."""
+    from bitacora_horas_extra_export import _html_hojas_horas_extra, generar_pdf_horas_extra
 
     detalle = []
-    for i in range(20):
-        detalle.append({
-            "nombre": f"Colab {i:02d}",
-            "documento": str(1000 + i),
-            "fecha": "2026-11-10",
-            "hora_inicio": "07:30",
-            "hora_fin": "19:30",
-            "tiempo_extra": 2.0,
-            "observacion": "Extra",
-        })
+    for i in range(40):
+        for d in range(2):
+            detalle.append({
+                "nombre": f"Colab {i:02d}",
+                "documento": str(1000 + i),
+                "fecha": f"2026-11-{d + 1:02d}",
+                "hora_inicio": "07:30",
+                "hora_fin": "19:30",
+                "tiempo_extra": 2.0,
+                "observacion": "Extra",
+            })
     vista = filas_informe_agrupadas(detalle)
-    html = _html_informe(_payload_vista(vista))
-    assert 'class="hdr" style="-pdf-keep-with-next:true' in html
-    assert 'class="meta" style="-pdf-keep-with-next:true' in html
-    assert "page-break-before:always" in html
-    assert html.index('class="hdr"') < html.index('class="grid"')
-    closing = html[html.index("page-break-before:always"):]
-    assert "Total general" in closing and "Elaboró" in closing
-    # Firmas fuera de la grilla: no thead pegado solo a firmas
-    assert 'class="firmas"' in closing
-    firmas_pos = closing.index('class="firmas"')
-    assert closing.rfind("Total general", 0, firmas_pos) >= 0
+    hojas = _html_hojas_horas_extra(_payload_vista(vista))
+    assert len(hojas) >= 1
+    assert all("page-break-before:always" not in h for h in hojas)
+    assert 'class="hdr"' in hojas[0]
+    assert 'class="grid"' in hojas[0]
+    last_html = hojas[-1]
+    assert "Total general" in last_html and "Elaboró" in last_html
+    assert 'class="firmas"' in last_html
+    assert last_html.index("Total general") < last_html.index('class="firmas"')
 
     pdf = generar_pdf_horas_extra(_payload_vista(vista))
     assert pdf[:4] == b"%PDF"
@@ -307,14 +301,42 @@ def test_html_multipagina_encabezado_unido_y_cierre_final():
     import io
     reader = PdfReader(io.BytesIO(pdf))
     assert len(reader.pages) >= 2
+    # Cada página del PDF fusionado es una parte de 1 hoja (sin huérfanos de firmas)
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if "Elaboró" in text:
+            assert "Total general" in text
     p1 = reader.pages[0].extract_text() or ""
-    # Encabezado NO solo: debe traer contrato/tabla en la 1ª hoja
     assert "INFORME" in p1
     assert ("Contrato" in p1) or ("Nombre colaborador" in p1)
     last = reader.pages[-1].extract_text() or ""
     assert "Total general" in last and "Elaboró" in last
-    # No hoja con solo thead + firmas (debe haber datos o total junto a firmas)
-    assert ("Subtotal" in last) or ("Colab" in last) or ("Total general" in last)
+
+
+def test_pdf_no_huerfano_cuando_cierre_cabe():
+    """Regresión: bloque que cabe no debe ir solo a la hoja siguiente."""
+    from bitacora_horas_extra_export import generar_pdf_horas_extra
+    from pypdf import PdfReader
+    import io
+
+    # 10 colab × 2 días = 30 filas de cuerpo: antes forzaba page-break-always.
+    detalle = []
+    for i in range(10):
+        for d in range(2):
+            detalle.append({
+                "nombre": f"Colab {i:02d}",
+                "documento": str(1000 + i),
+                "fecha": f"2026-11-{10 + d:02d}",
+                "hora_inicio": "07:30",
+                "hora_fin": "19:30",
+                "tiempo_extra": 2.0,
+                "observacion": "Extra",
+            })
+    pdf = generar_pdf_horas_extra(_payload_vista(filas_informe_agrupadas(detalle)))
+    reader = PdfReader(io.BytesIO(pdf))
+    assert len(reader.pages) == 1
+    text = reader.pages[0].extract_text() or ""
+    assert "Total general" in text and "Elaboró" in text and "Colab 09" in text
 
 
 def test_pdf_generacion_rapida_informe_largo():
