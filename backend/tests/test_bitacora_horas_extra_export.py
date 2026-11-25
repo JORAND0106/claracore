@@ -133,6 +133,58 @@ def test_filas_informe_agrupadas_subtotales_y_total():
     assert vista[0]["documento"] == vista[1]["documento"] == "222"
 
 
+def test_html_pdf_sin_margenes_y_firmas_con_total():
+    from bitacora_horas_extra_export import _html_informe
+
+    detalle = [
+        {
+            "nombre": "Ana Perez",
+            "documento": "222",
+            "fecha": "2026-11-11",
+            "hora_inicio": "07:00",
+            "hora_fin": "19:00",
+            "tiempo_extra": 1.5,
+            "observacion": "Cierre",
+        },
+        {
+            "nombre": "Zeta Lopez",
+            "documento": "111",
+            "fecha": "2026-11-12",
+            "hora_inicio": "07:30",
+            "hora_fin": "19:30",
+            "tiempo_extra": 2.5,
+            "observacion": "Noche",
+        },
+    ]
+    vista = filas_informe_agrupadas(detalle)
+    html = _html_informe({
+        "contrato": {"numero": "CTO-1", "objeto": "Obra", "contratista": "X"},
+        "empresa": "Empresa A",
+        "fecha_desde": "2026-11-01",
+        "fecha_hasta": "2026-11-30",
+        "responsable": {"nombre": "R"},
+        "elaboro": {"nombre": "E", "cargo": "Aux"},
+        "aprobo": {"nombre": "A", "cargo": "Dir"},
+        "filas": vista,
+        "formato": {
+            "codigo": CODIGO_FORMATO_HORAS_EXTRA,
+            "version": "1.0",
+            "titulo": "INFORME DE HORAS EXTRAS DEL PERSONAL",
+        },
+    })
+    assert "margin: 2mm" in html
+    assert "margin: 12mm" not in html
+    assert 'class="firmas-row"' in html
+    assert 'class="closing"' in html
+    assert "page-break-after:avoid" in html
+    assert "page-break-before:avoid" in html
+    assert 'class="subtotal' in html
+    assert 'class="total"' in html
+    closing = html[html.index('class="closing"'):]
+    assert closing.index("Total general") < closing.index("Elaboró")
+    assert "Aprobó" in closing
+
+
 def test_empresas_con_personal_reportado():
     diarios = [
         {
