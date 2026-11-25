@@ -153,6 +153,15 @@ def _payload_vista(vista, **extra):
     return base
 
 
+def test_nombre_persona_corrige_espanol():
+    from bitacora_horas_extra_export import _nombre_persona_informe
+
+    assert _nombre_persona_informe("Gustavo EspaÑOl Alba") == "Gustavo Español Alba"
+    assert _nombre_persona_informe("JOSÉ MARÍA NÚÑEZ") == "José María Núñez"
+    assert _nombre_persona_informe("Luis Lopez") == "Luis Lopez"
+    assert _nombre_persona_informe("Director De Obra") == "Director de Obra"
+
+
 def test_html_pdf_sin_margenes_y_firmas_con_total():
     from bitacora_horas_extra_export import _html_informe
 
@@ -177,10 +186,16 @@ def test_html_pdf_sin_margenes_y_firmas_con_total():
         },
     ]
     vista = filas_informe_agrupadas(detalle)
-    html = _html_informe(_payload_vista(vista))
+    html = _html_informe(_payload_vista(
+        vista,
+        aprobo={"nombre": "Gustavo EspaÑOl Alba", "cargo": "Director de Obra"},
+    ))
     assert "margin: 2mm" in html
     assert "margin: 12mm" not in html
-    assert 'class="firmas-row"' in html
+    assert 'class="firmas"' in html
+    assert 'class="firmas-row"' not in html  # firmas fuera de la grilla
+    assert "firma-line" in html
+    assert "firma-sp" in html  # espacio compacto para firma a mano
     assert 'class="closing"' in html
     assert "-pdf-keep-with-next:true" in html
     assert "page-break-after:avoid" in html
@@ -188,9 +203,12 @@ def test_html_pdf_sin_margenes_y_firmas_con_total():
     assert 'class="subtotal' in html
     assert 'class="total"' in html
     assert "page-break-before:always" not in html  # informe corto: una hoja
-    closing = html[html.index('class="closing"'):]
-    assert closing.index("Total general") < closing.index("Elaboró")
-    assert "Aprobó" in closing
+    assert "Gustavo Español Alba" in html
+    assert "EspaÑOl" not in html
+    # Firmas después del total, fuera de la tabla grid
+    assert html.index("Total general") < html.index('class="firmas"')
+    assert html.index("</table>", html.index("Total general")) < html.index('class="firmas"')
+    assert "Aprobó" in html
 
 
 def test_html_multipagina_encabezado_unido_y_cierre_final():
@@ -216,6 +234,10 @@ def test_html_multipagina_encabezado_unido_y_cierre_final():
     assert html.index('class="hdr"') < html.index('class="grid"')
     closing = html[html.index("page-break-before:always"):]
     assert "Total general" in closing and "Elaboró" in closing
+    # Firmas fuera de la grilla: no thead pegado solo a firmas
+    assert 'class="firmas"' in closing
+    firmas_pos = closing.index('class="firmas"')
+    assert closing.rfind("Total general", 0, firmas_pos) >= 0
 
     pdf = generar_pdf_horas_extra(_payload_vista(vista))
     assert pdf[:4] == b"%PDF"
@@ -229,6 +251,8 @@ def test_html_multipagina_encabezado_unido_y_cierre_final():
     assert ("Contrato" in p1) or ("Nombre colaborador" in p1)
     last = reader.pages[-1].extract_text() or ""
     assert "Total general" in last and "Elaboró" in last
+    # No hoja con solo thead + firmas (debe haber datos o total junto a firmas)
+    assert ("Subtotal" in last) or ("Colab" in last) or ("Total general" in last)
 
 
 def test_pdf_generacion_rapida_informe_largo():
