@@ -453,14 +453,18 @@ def _html_informe(payload: dict) -> str:
             f'{_esc(contrato.get("contratista") or "ClaraCore")}</div>'
         )
 
-    body_rows = []
+    # Agrupar HTML por colaborador (detalle+subtotal) para no partir grupos cerrados.
+    group_bodies: List[str] = []
+    cur_rows: List[str] = []
+    total_row_html = ""
     det_i = 0
     for r in filas:
         tipo = str(r.get("tipo") or "detalle")
         if tipo == "subtotal":
             bg = t2.get("bg") or "#E5F4FA"
-            body_rows.append(
-                "<tr style=\"background:%s;font-weight:bold;page-break-inside:avoid;\">"
+            # page-break-before:avoid → el subtotal no se separa de las filas del colaborador.
+            cur_rows.append(
+                "<tr class=\"subtotal\" style=\"background:%s;font-weight:bold;page-break-before:avoid;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Subtotal · %s</td>"
                 "<td style=\"text-align:center;\">%s</td>"
@@ -471,12 +475,15 @@ def _html_informe(payload: dict) -> str:
                     _esc(_fmt_extra(r.get("tiempo_extra"))),
                 )
             )
+            group_bodies.append("".join(cur_rows))
+            cur_rows = []
             continue
         if tipo == "total":
             bg = t1.get("bg") or "#0077B6"
             fg = t1.get("text") or "#FFFFFF"
-            body_rows.append(
-                "<tr style=\"background:%s;color:%s;font-weight:bold;page-break-inside:avoid;\">"
+            total_row_html = (
+                "<tr class=\"total\" style=\"background:%s;color:%s;font-weight:bold;"
+                "page-break-after:avoid;-pdf-keep-with-next:true;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Total general</td>"
                 "<td style=\"text-align:center;\">%s</td>"
@@ -490,7 +497,7 @@ def _html_informe(payload: dict) -> str:
             continue
         det_i += 1
         bg = "#FFFFFF" if det_i % 2 else "#F8FAFC"
-        body_rows.append(
+        cur_rows.append(
             "<tr style=\"background:%s;\">"
             "<td style=\"text-align:center;\">%s</td>"
             "<td>%s</td>"
@@ -512,24 +519,90 @@ def _html_informe(payload: dict) -> str:
                 _esc(r.get("observacion")),
             )
         )
+    if cur_rows:
+        group_bodies.append("".join(cur_rows))
 
     elaboro = payload.get("elaboro") or {}
     aprobo = payload.get("aprobo") or {}
     responsable = payload.get("responsable") or {}
+
+    # Total + firmas (filas planas). Si el último colaborador es pequeño, viaja
+    # con el cierre para que las firmas no queden solas en otra hoja.
+    firmas_row = f"""
+<tr class="firmas-row">
+  <td colspan="4" style="vertical-align:top;padding:6pt 10pt;">
+    <div class="lbl">Elaboró</div>
+    <div class="line"></div>
+    <div class="nom">{_esc(elaboro.get("nombre") or "—")}</div>
+    <div class="cargo">{_esc(elaboro.get("cargo") or "")}</div>
+  </td>
+  <td colspan="4" style="vertical-align:top;padding:6pt 10pt;">
+    <div class="lbl">Aprobó</div>
+    <div class="line"></div>
+    <div class="nom">{_esc(aprobo.get("nombre") or "—")}</div>
+    <div class="cargo">{_esc(aprobo.get("cargo") or "")}</div>
+  </td>
+</tr>"""
+
+    trailing = ""
+    if group_bodies and group_bodies[-1].count("<tr") <= 6:
+        trailing = group_bodies.pop()
+        trailing = trailing.replace(
+            "page-break-before:avoid;",
+            "page-break-before:avoid;-pdf-keep-with-next:true;",
+            1,
+        )
+
+    tbodies = [f"<tbody>{b}</tbody>" for b in group_bodies]
+    # Con muchos grupos xhtml2pdf parte el keep-together: emitir el cierre en
+    # una tabla propia en hoja nueva (con thead repetido) para garantizar
+    # total+firmas (+ último colaborador) juntos.
+    force_last_page = len(tbodies) >= 10
+    closing_body = f"{trailing}{total_row_html}{firmas_row}"
+    thead_html = """
+<thead>
+<tr>
+  <th style="width:5%;">No</th>
+  <th style="width:20%;">Nombre colaborador</th>
+  <th style="width:11%;">No. Documento</th>
+  <th style="width:9%;">Fecha</th>
+  <th style="width:11%;">Hora de inicio de jornada</th>
+  <th style="width:11%;">Hora fin de jornada</th>
+  <th style="width:9%;">Tiempo extra</th>
+  <th style="width:24%;">Observación</th>
+</tr>
+</thead>"""
+    if force_last_page:
+        closing_tbody = ""
+        closing_extra = (
+            f'<div style="page-break-before:always;">'
+            f'<table class="grid">{thead_html}'
+            f'<tbody class="closing" style="page-break-inside:avoid;">'
+            f"{closing_body}</tbody></table></div>"
+        )
+    else:
+        closing_tbody = (
+            f'<tbody class="closing" style="page-break-inside:avoid;'
+            f'page-break-before:avoid;">{closing_body}</tbody>'
+        )
+        closing_extra = ""
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
   @page {{
     size: letter landscape;
-    margin: 12mm 10mm 14mm 10mm;
-    @frame header_frame {{
-      -pdf-frame-content: page_header;
-      top: 4mm; left: 10mm; right: 10mm; height: 0mm;
-    }}
+    /* Mínimo para que bordes/texto no se corten al imprimir. */
+    margin: 2mm;
   }}
-  body {{ font-family: Helvetica, Arial, sans-serif; font-size: 8.5pt; color: #0F2942; }}
-  .hdr {{ width: 100%; border-collapse: collapse; margin-bottom: 8pt; }}
+  html, body {{
+    margin: 0;
+    padding: 0;
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 8.5pt;
+    color: #0F2942;
+  }}
+  .hdr {{ width: 100%; border-collapse: collapse; margin: 0 0 4pt 0; }}
   .hdr td {{
     border: 1pt solid {t1["bg"]};
     background: {t1["bg"]};
@@ -540,10 +613,10 @@ def _html_informe(payload: dict) -> str:
   .hdr .logo {{ width: 18%; text-align: center; background: #FFFFFF; }}
   .hdr .title {{ width: 52%; text-align: center; font-size: 12pt; font-weight: bold; }}
   .hdr .calidad {{ width: 30%; text-align: center; font-size: 8pt; white-space: pre-line; }}
-  .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 8pt; font-size: 8pt; }}
+  .meta {{ width: 100%; border-collapse: collapse; margin: 0 0 4pt 0; font-size: 8pt; }}
   .meta td {{ border: 0.6pt solid #94A3B8; padding: 4pt 6pt; }}
   .meta .lbl {{ font-weight: bold; background: {t2["bg"]}; color: {t2["text"]}; width: 18%; }}
-  table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7pt; }}
+  table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7pt; margin: 0; }}
   table.grid th, table.grid td {{
     border: 0.6pt solid #64748B;
     padding: 1.5pt 3pt;
@@ -559,22 +632,15 @@ def _html_informe(payload: dict) -> str:
   }}
   table.grid thead {{ display: table-header-group; }}
   table.grid tbody {{ display: table-row-group; }}
-  .firmas {{
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 18pt;
-    page-break-inside: avoid;
-  }}
-  .firmas td {{
-    width: 50%;
-    vertical-align: top;
-    padding: 6pt 10pt;
+  table.grid tr.firmas-row td {{
     border: 0.6pt solid #94A3B8;
+    background: #FFFFFF;
+    color: #0F2942;
   }}
-  .firmas .lbl {{ font-size: 8pt; font-weight: bold; color: {t2["text"]}; margin-bottom: 10pt; }}
-  .firmas .line {{ border-bottom: 0.8pt solid #64748B; height: 36pt; margin-bottom: 6pt; }}
-  .firmas .nom {{ font-size: 8.5pt; font-weight: bold; }}
-  .firmas .cargo {{ font-size: 7.5pt; color: #475569; }}
+  .lbl {{ font-size: 8pt; font-weight: bold; color: {t2["text"]}; margin-bottom: 10pt; }}
+  .line {{ border-bottom: 0.8pt solid #64748B; height: 36pt; margin-bottom: 6pt; }}
+  .nom {{ font-size: 8.5pt; font-weight: bold; }}
+  .cargo {{ font-size: 7.5pt; color: #475569; }}
 </style></head><body>
 <table class="hdr"><tr>
   <td class="logo">{logo_html}</td>
@@ -602,39 +668,11 @@ Versión {_esc(fmt.get("version") or VERSION_FORMATO_HORAS_EXTRA)}
 </table>
 
 <table class="grid">
-<thead>
-<tr>
-  <th style="width:5%;">No</th>
-  <th style="width:20%;">Nombre colaborador</th>
-  <th style="width:11%;">No. Documento</th>
-  <th style="width:9%;">Fecha</th>
-  <th style="width:11%;">Hora de inicio de jornada</th>
-  <th style="width:11%;">Hora fin de jornada</th>
-  <th style="width:9%;">Tiempo extra</th>
-  <th style="width:24%;">Observación</th>
-</tr>
-</thead>
-<tbody>
-{''.join(body_rows)}
-</tbody>
+{thead_html}
+{''.join(tbodies)}
+{closing_tbody}
 </table>
-
-<table class="firmas">
-<tr>
-  <td>
-    <div class="lbl">Elaboró</div>
-    <div class="line"></div>
-    <div class="nom">{_esc(elaboro.get("nombre") or "—")}</div>
-    <div class="cargo">{_esc(elaboro.get("cargo") or "")}</div>
-  </td>
-  <td>
-    <div class="lbl">Aprobó</div>
-    <div class="line"></div>
-    <div class="nom">{_esc(aprobo.get("nombre") or "—")}</div>
-    <div class="cargo">{_esc(aprobo.get("cargo") or "")}</div>
-  </td>
-</tr>
-</table>
+{closing_extra}
 </body></html>"""
 
 
