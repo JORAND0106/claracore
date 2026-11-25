@@ -606,21 +606,8 @@ def construir_informe_horas_extra(
     }
 
 
-# Filas de cuerpo (detalle+subtotal) a partir de las cuales una sola hoja carta
-# landscape ya no alcanza con encabezado+meta+firmas → cierre en hoja final.
-_PDF_FORCE_CLOSING_BODY_ROWS = 29
-
-
-def _html_informe(payload: dict) -> str:
-    """
-    HTML del PDF. Prioridades de paginación (xhtml2pdf):
-    1) Encabezado 3 paneles + datos generales unidos al inicio de la tabla.
-    2) Firmas en la misma hoja que el final de la tabla (total + filas finales).
-    Nunca hojas con solo encabezado o solo firmas.
-    """
-    import time as _time
-
-    t0 = _time.perf_counter()
+def _piezas_html_horas_extra(payload: dict) -> dict:
+    """Arma logo, estilos, filas de cuerpo, total y firmas (sin paginar)."""
     contrato = payload.get("contrato") or {}
     pal = _palette(contrato)
     t1 = pal.get("titulo_1") or {"bg": "#0077B6", "text": "#FFFFFF"}
@@ -628,8 +615,6 @@ def _html_informe(payload: dict) -> str:
     fmt = payload.get("formato") or {}
     filas = payload.get("filas") or []
 
-    # Solo el logo que se pinta (no los 3). Bitmap ya acotado; width/height fijos
-    # porque xhtml2pdf ignora max-height/max-width CSS.
     logo_uri = ""
     try:
         from pdf_institucional import prepare_image_for_pdf
@@ -651,7 +636,6 @@ def _html_informe(payload: dict) -> str:
             f'<div style="font-size:9pt;font-weight:bold;color:{t1["text"]};">'
             f'{_esc(contrato.get("contratista") or "ClaraCore")}</div>'
         )
-    t_logo = _time.perf_counter()
 
     def _cols_extra(r: dict) -> str:
         return "".join(
@@ -670,8 +654,7 @@ def _html_informe(payload: dict) -> str:
         if tipo == "subtotal":
             bg = t2.get("bg") or "#E5F4FA"
             body_rows.append(
-                "<tr class=\"subtotal\" style=\"background:%s;font-weight:bold;"
-                "page-break-before:avoid;\">"
+                "<tr class=\"subtotal\" style=\"background:%s;font-weight:bold;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Subtotal · %s</td>"
                 "%s"
@@ -687,8 +670,7 @@ def _html_informe(payload: dict) -> str:
             bg = t1.get("bg") or "#0077B6"
             fg = t1.get("text") or "#FFFFFF"
             total_row_html = (
-                "<tr class=\"total\" style=\"background:%s;color:%s;font-weight:bold;"
-                "page-break-after:avoid;-pdf-keep-with-next:true;\">"
+                "<tr class=\"total\" style=\"background:%s;color:%s;font-weight:bold;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Total general</td>"
                 "%s"
@@ -734,11 +716,9 @@ def _html_informe(payload: dict) -> str:
     aprobo_cargo = _nombre_persona_informe(aprobo.get("cargo") or "") if aprobo.get("cargo") else ""
     responsable_nom = _nombre_persona_informe(responsable.get("nombre") or "—")
 
-    # Firmas FUERA de la grilla (si van dentro, xhtml2pdf repite thead sin filas).
-    # Espaciador con &nbsp; (xhtml2pdf ignora height en divs vacíos) — solo lo
-    # justo para firma a mano. Tabla compacta: no dejar que se estire al final.
+    # Firmas compactas: en la misma hoja HTML que el total (sin page-break CSS).
     firmas_html = f"""
-<table class="firmas" style="page-break-before:avoid;page-break-inside:avoid;">
+<table class="firmas">
 <tr>
   <td class="firma-cell" style="vertical-align:top;">
     <div class="firma-lbl">Elaboró</div>
@@ -755,8 +735,7 @@ def _html_informe(payload: dict) -> str:
     <div class="firma-cargo">{_esc(aprobo_cargo)}</div>
   </td>
 </tr>
-</table>
-<div style="font-size:1pt;line-height:1pt;">&nbsp;</div>"""
+</table>"""
 
     thead_html = """
 <thead>
@@ -776,61 +755,17 @@ def _html_informe(payload: dict) -> str:
 </tr>
 </thead>"""
 
-    # Multi-página: últimos grupos + total en hoja final; firmas debajo (sin thead).
-    force_closing_page = len(body_rows) >= _PDF_FORCE_CLOSING_BODY_ROWS
-    main_rows = list(body_rows)
-    trail_rows: List[str] = []
-    if force_closing_page and main_rows:
-        sub_idx = [i for i, tr in enumerate(main_rows) if 'class="subtotal"' in tr]
-        if len(sub_idx) >= 2:
-            start = sub_idx[-2] + 1
-        elif len(sub_idx) == 1:
-            start = max(0, sub_idx[0] - 3)
-        else:
-            start = max(0, len(main_rows) - 6)
-        trail_rows = main_rows[start:]
-        main_rows = main_rows[:start]
-
-    main_html = "".join(main_rows)
-    if force_closing_page:
-        trail_html = "".join(trail_rows)
-        grid_html = (
-            f'<table class="grid">{thead_html}<tbody>{main_html}</tbody></table>'
-            f'<div style="page-break-before:always;">'
-            f'<table class="grid">{thead_html}'
-            f'<tbody class="closing" style="page-break-inside:avoid;">'
-            f"{trail_html}{total_row_html}</tbody></table>"
-            f"{firmas_html}</div>"
-        )
-    else:
-        grid_html = (
-            f'<table class="grid">{thead_html}'
-            f'<tbody class="closing">{main_html}{total_row_html}</tbody></table>'
-            f"{firmas_html}"
-        )
-
-    # -pdf-keep-with-next en hdr/meta: une encabezado al inicio de la grilla.
-    html_doc = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-  @page {{
-    size: letter landscape;
-    margin: 2mm;
-  }}
+    css = f"""
+  @page {{ size: letter landscape; margin: 2mm; }}
   html, body {{
-    margin: 0;
-    padding: 0;
+    margin: 0; padding: 0;
     font-family: Helvetica, Arial, sans-serif;
-    font-size: 7pt;
-    color: #0F2942;
+    font-size: 7pt; color: #0F2942;
   }}
   .hdr {{ width: 100%; margin: 0 0 4pt 0; }}
   .hdr td {{
-    border: 1pt solid {t1["bg"]};
-    background: {t1["bg"]};
-    color: {t1["text"]};
-    padding: 8pt;
-    vertical-align: middle;
+    border: 1pt solid {t1["bg"]}; background: {t1["bg"]}; color: {t1["text"]};
+    padding: 8pt; vertical-align: middle;
   }}
   .hdr .logo {{ width: 18%; text-align: center; background: #FFFFFF; }}
   .hdr .title {{ width: 52%; text-align: center; font-size: 12pt; font-weight: bold; }}
@@ -840,62 +775,39 @@ def _html_informe(payload: dict) -> str:
   .meta .lbl {{ font-weight: bold; background: {t2["bg"]}; color: {t2["text"]}; width: 18%; }}
   table.grid {{ width: 100%; font-size: 6pt; margin: 0; }}
   table.grid th, table.grid td {{
-    border: 0.6pt solid #64748B;
-    padding: 1pt 2pt;
-    word-wrap: break-word;
-    vertical-align: middle;
-    line-height: 1.1;
+    border: 0.6pt solid #64748B; padding: 1pt 2pt;
+    word-wrap: break-word; vertical-align: middle; line-height: 1.1;
   }}
   table.grid th {{
-    background: {t2["bg"]};
-    color: {t2["text"]};
-    font-size: 5.5pt;
-    font-weight: bold;
+    background: {t2["bg"]}; color: {t2["text"]};
+    font-size: 5.5pt; font-weight: bold;
   }}
-  table.grid thead {{ display: table-header-group; }}
-  table.grid tbody {{ display: table-row-group; }}
-  table.firmas {{
-    width: 100%;
-    margin: 3pt 0 0 0;
-  }}
+  table.firmas {{ width: 100%; margin: 3pt 0 0 0; }}
   table.firmas td.firma-cell {{
-    width: 50%;
-    vertical-align: top;
-    padding: 2pt 8pt 3pt 8pt;
-    border: 0.6pt solid #94A3B8;
-    background: #FFFFFF;
+    width: 50%; vertical-align: top; padding: 2pt 8pt 3pt 8pt;
+    border: 0.6pt solid #94A3B8; background: #FFFFFF;
   }}
   .firma-lbl {{
-    font-size: 7.5pt;
-    font-weight: bold;
-    color: {t2["text"]};
-    margin: 0;
-    line-height: 1.1;
+    font-size: 7.5pt; font-weight: bold; color: {t2["text"]};
+    margin: 0; line-height: 1.1;
   }}
-  .firma-sp {{
-    font-size: 11pt;
-    line-height: 12pt;
-    color: #FFFFFF;
-    margin: 0;
-  }}
+  .firma-sp {{ font-size: 11pt; line-height: 12pt; color: #FFFFFF; margin: 0; }}
   .firma-line {{
-    border-bottom: 0.8pt solid #64748B;
-    font-size: 2pt;
-    line-height: 2pt;
-    margin: 0 0 1pt 0;
+    border-bottom: 0.8pt solid #64748B; font-size: 2pt; line-height: 2pt; margin: 0 0 1pt 0;
   }}
   .firma-nom {{ font-size: 8pt; font-weight: bold; line-height: 1.1; margin: 0; }}
   .firma-cargo {{ font-size: 7pt; color: #475569; line-height: 1.1; margin: 0; }}
-</style></head><body>
-<table class="hdr" style="-pdf-keep-with-next:true;page-break-after:avoid;"><tr>
+"""
+
+    hdr_meta = f"""
+<table class="hdr"><tr>
   <td class="logo">{logo_html}</td>
   <td class="title">{_esc(fmt.get("titulo") or TITULO_FORMATO_HORAS_EXTRA)}</td>
   <td class="calidad">{_esc(fmt.get("codigo") or CODIGO_FORMATO_HORAS_EXTRA)}
 Versión {_esc(fmt.get("version") or VERSION_FORMATO_HORAS_EXTRA)}
 {_esc(_fmt_fecha_es(payload.get("fecha_hasta")))}</td>
 </tr></table>
-
-<table class="meta" style="-pdf-keep-with-next:true;page-break-after:avoid;">
+<table class="meta">
 <tr>
   <td class="lbl">Contrato</td>
   <td>{_esc(contrato.get("numero") or "—")}</td>
@@ -911,29 +823,112 @@ Versión {_esc(fmt.get("version") or VERSION_FORMATO_HORAS_EXTRA)}
   <td>{_esc(_fmt_fecha_es(payload.get("fecha_desde")))} – {_esc(_fmt_fecha_es(payload.get("fecha_hasta")))}</td>
 </tr>
 </table>
+"""
+    return {
+        "css": css,
+        "hdr_meta": hdr_meta,
+        "thead": thead_html,
+        "body_rows": body_rows,
+        "total_row": total_row_html,
+        "firmas": firmas_html,
+        "n_filas_payload": len(filas),
+    }
 
-{grid_html}
+
+def _html_hoja_horas_extra(
+    piezas: dict,
+    *,
+    filas_slice: List[str],
+    con_encabezado: bool,
+    con_cierre: bool,
+) -> str:
+    """Una hoja HTML completa: sin page-break CSS (xhtml2pdf no pagina dentro)."""
+    cuerpo = "".join(filas_slice)
+    cierre = ""
+    if con_cierre:
+        cierre = f'{piezas["total_row"]}{piezas["firmas"]}'
+    hdr = piezas["hdr_meta"] if con_encabezado else ""
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><style>{piezas["css"]}</style></head><body>
+{hdr}
+<table class="grid">{piezas["thead"]}<tbody class="closing">{cuerpo}{cierre}</tbody></table>
 </body></html>"""
-    _log.info(
-        "horas_extra html filas=%s body_rows=%s force_closing=%s logo_ms=%.0f html_ms=%.0f",
-        len(filas),
-        len(body_rows),
-        force_closing_page,
-        (t_logo - t0) * 1000,
-        (_time.perf_counter() - t0) * 1000,
+
+
+def _html_hojas_horas_extra(payload: dict) -> List[str]:
+    """HTML por hoja según empaque (sin render). Útil en tests de estructura."""
+    from pdf_paginar_hojas import (
+        HE_CLOSING_PT,
+        HE_HDR_META_PT,
+        HE_ROW_PT,
+        HE_THEAD_PT,
+        empacar_filas,
     )
-    return html_doc
+
+    piezas = _piezas_html_horas_extra(payload)
+    body_rows: List[str] = list(piezas["body_rows"])
+    hojas = empacar_filas(
+        len(body_rows),
+        overhead_primera_pt=HE_HDR_META_PT + HE_THEAD_PT,
+        overhead_cont_pt=HE_THEAD_PT,
+        fila_pt=HE_ROW_PT,
+        cierre_pt=HE_CLOSING_PT,
+    )
+    return [
+        _html_hoja_horas_extra(
+            piezas,
+            filas_slice=body_rows[h.inicio : h.fin],
+            con_encabezado=h.con_encabezado,
+            con_cierre=h.con_cierre,
+        )
+        for h in hojas
+    ]
+
+
+def _html_informe(payload: dict) -> str:
+    """HTML de la 1ª hoja (o única). Para asserts de estructura / firma."""
+    hojas = _html_hojas_horas_extra(payload)
+    return hojas[0] if len(hojas) == 1 else "\n".join(hojas)
 
 
 def generar_pdf_horas_extra(payload: dict) -> bytes:
     import time as _time
 
+    from pdf_paginar_hojas import (
+        HE_CLOSING_PT,
+        HE_HDR_META_PT,
+        HE_ROW_PT,
+        HE_THEAD_PT,
+        merge_pdf_bytes,
+        render_hojas_sin_desborde,
+    )
+
     t0 = _time.perf_counter()
-    html_doc = _html_informe(payload)
+    piezas = _piezas_html_horas_extra(payload)
+    body_rows: List[str] = list(piezas["body_rows"])
+
+    def _armar(inicio: int, fin: int, con_encabezado: bool, con_cierre: bool) -> str:
+        return _html_hoja_horas_extra(
+            piezas,
+            filas_slice=body_rows[inicio:fin],
+            con_encabezado=con_encabezado,
+            con_cierre=con_cierre,
+        )
+
     t1 = _time.perf_counter()
-    pdf = to_pdf_bytes(html_doc, landscape=True)
+    partes = render_hojas_sin_desborde(
+        _armar,
+        len(body_rows),
+        render_pdf=lambda html: to_pdf_bytes(html, landscape=True),
+        overhead_primera_pt=HE_HDR_META_PT + HE_THEAD_PT,
+        overhead_cont_pt=HE_THEAD_PT,
+        fila_pt=HE_ROW_PT,
+        cierre_pt=HE_CLOSING_PT,
+    )
+    pdf = merge_pdf_bytes(partes)
     _log.info(
-        "horas_extra pdf html_ms=%.0f pisa_ms=%.0f bytes=%s",
+        "horas_extra pdf hojas=%s html_ms=%.0f pisa_ms=%.0f bytes=%s",
+        len(partes),
         (t1 - t0) * 1000,
         (_time.perf_counter() - t1) * 1000,
         len(pdf or b""),

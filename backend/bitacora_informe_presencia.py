@@ -576,7 +576,7 @@ def _logo_html(contrato: dict, t1: dict) -> str:
     )
 
 
-def _html_informe(payload: dict) -> str:
+def _piezas_presencia(payload: dict) -> dict:
     contrato = payload.get("contrato") or {}
     pal = _palette(contrato)
     t1 = pal.get("titulo_1") or {"bg": "#0077B6", "text": "#FFFFFF"}
@@ -585,15 +585,14 @@ def _html_informe(payload: dict) -> str:
     dias: List[dict] = payload.get("dias") or []
     filas: List[dict] = payload.get("filas") or []
     tipo = str(payload.get("tipo") or "personal")
-    fest_bg = "#FED7AA"  # naranja suave (calendario festivo)
+    fest_bg = "#FED7AA"
 
     fijas_personal = tipo == "personal"
     logo_html = _logo_html(contrato, t1)
 
     bloques = _bloques(dias)
-    sections: List[str] = []
+    sections: List[dict] = []
     for bi, bloque in enumerate(bloques):
-        # Header day cols
         th_dias = ""
         for md in bloque:
             bg = fest_bg if md.get("especial") else (t2.get("bg") or "#E5F4FA")
@@ -624,14 +623,12 @@ def _html_informe(payload: dict) -> str:
                 "</tr></thead>"
             )
 
-        # Slice marcas for this block
         start = bi * DIAS_POR_BLOQUE
         end = start + len(bloque)
         body_rows = []
         for ri, r in enumerate(filas):
             marcas = list(r.get("marcas") or [])
             slice_m = marcas[start:end]
-            # pad
             while len(slice_m) < len(bloque):
                 slice_m.append("")
             bg = "#FFFFFF" if ri % 2 == 0 else "#F8FAFC"
@@ -665,7 +662,6 @@ def _html_informe(payload: dict) -> str:
                     f"</tr>"
                 )
 
-        break_style = "page-break-before:always;" if bi > 0 else ""
         bloque_lbl = ""
         if len(bloques) > 1:
             bloque_lbl = (
@@ -673,17 +669,14 @@ def _html_informe(payload: dict) -> str:
                 f'Días {_esc(bloque[0].get("iso"))} – {_esc(bloque[-1].get("iso"))}'
                 f' (bloque {bi + 1}/{len(bloques)})</div>'
             )
-        sections.append(
-            f'<div style="{break_style}">'
-            f"{bloque_lbl}"
-            f'<table class="grid">{thead}<tbody>{"".join(body_rows)}</tbody></table>'
-            f"</div>"
-        )
+        sections.append({
+            "bloque_lbl": bloque_lbl,
+            "thead": thead,
+            "body_rows": body_rows,
+        })
 
     emp_lbl = "Empresa" if tipo == "personal" else "Empresa (operador)"
-    html_doc = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
+    css = f"""
   @page {{ size: letter landscape; margin: 2mm; }}
   html, body {{
     margin: 0; padding: 0;
@@ -711,16 +704,16 @@ def _html_informe(payload: dict) -> str:
     font-size: 5pt; font-weight: bold; text-align: center;
   }}
   table.grid th.d, table.grid td.d {{ text-align: center; }}
-  table.grid thead {{ display: table-header-group; }}
-</style></head><body>
-<table class="hdr" style="-pdf-keep-with-next:true;page-break-after:avoid;"><tr>
+"""
+    hdr_meta = f"""
+<table class="hdr"><tr>
   <td class="logo">{logo_html}</td>
   <td class="title">{_esc(fmt.get("titulo"))}</td>
   <td class="calidad">{_esc(fmt.get("codigo"))}
 Versión {_esc(fmt.get("version"))}
 {_esc(_fmt_fecha_es(payload.get("fecha_hasta")))}</td>
 </tr></table>
-<table class="meta" style="-pdf-keep-with-next:true;page-break-after:avoid;">
+<table class="meta">
 <tr>
   <td class="lbl">Contrato</td>
   <td>{_esc(contrato.get("numero") or "—")}</td>
@@ -734,13 +727,116 @@ Versión {_esc(fmt.get("version"))}
   <td colspan="3">{_esc(_fmt_fecha_es(payload.get("fecha_desde")))} – {_esc(_fmt_fecha_es(payload.get("fecha_hasta")))}</td>
 </tr>
 </table>
-{"".join(sections)}
+"""
+    return {"css": css, "hdr_meta": hdr_meta, "sections": sections}
+
+
+def _html_hoja_presencia(
+    piezas: dict,
+    sec: dict,
+    *,
+    filas_slice: List[str],
+    con_encabezado: bool,
+) -> str:
+    hdr = piezas["hdr_meta"] if con_encabezado else ""
+    lbl = sec.get("bloque_lbl") or ""
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><style>{piezas["css"]}</style></head><body>
+{hdr}{lbl}
+<table class="grid">{sec["thead"]}<tbody>{"".join(filas_slice)}</tbody></table>
 </body></html>"""
-    return html_doc
+
+
+def _html_hojas_presencia(payload: dict) -> List[str]:
+    """Empaque vertical por hoja; cada bloque de días abre sección nueva."""
+    from pdf_paginar_hojas import (
+        PRES_BLOQUE_LBL_PT,
+        PRES_HDR_META_PT,
+        PRES_ROW_PT,
+        PRES_THEAD_PT,
+        empacar_filas,
+    )
+
+    piezas = _piezas_presencia(payload)
+    hojas: List[str] = []
+    for sec in piezas["sections"]:
+        rows: List[str] = list(sec["body_rows"])
+        lbl_pt = PRES_BLOQUE_LBL_PT if sec.get("bloque_lbl") else 0.0
+        primera_doc = len(hojas) == 0
+        empaque = empacar_filas(
+            len(rows),
+            overhead_primera_pt=(
+                (PRES_HDR_META_PT if primera_doc else 0.0) + lbl_pt + PRES_THEAD_PT
+            ),
+            overhead_cont_pt=lbl_pt + PRES_THEAD_PT,
+            fila_pt=PRES_ROW_PT,
+            cierre_pt=0.0,
+        )
+        for hi, h in enumerate(empaque):
+            hojas.append(
+                _html_hoja_presencia(
+                    piezas,
+                    sec,
+                    filas_slice=rows[h.inicio : h.fin],
+                    con_encabezado=(primera_doc and hi == 0),
+                )
+            )
+    if not hojas:
+        return [
+            f"""<!DOCTYPE html><html><head><meta charset="utf-8"/><style>{piezas["css"]}</style></head>
+<body>{piezas["hdr_meta"]}<p>Sin datos</p></body></html>"""
+        ]
+    return hojas
+
+
+def _html_informe(payload: dict) -> str:
+    """Compat: HTML de la primera hoja (asserts / depuración)."""
+    return _html_hojas_presencia(payload)[0]
 
 
 def generar_pdf_presencia(payload: dict) -> bytes:
-    return to_pdf_bytes(_html_informe(payload))
+    from pdf_paginar_hojas import (
+        PRES_BLOQUE_LBL_PT,
+        PRES_HDR_META_PT,
+        PRES_ROW_PT,
+        PRES_THEAD_PT,
+        merge_pdf_bytes,
+        render_hojas_sin_desborde,
+    )
+
+    piezas = _piezas_presencia(payload)
+    partes_all: List[bytes] = []
+    for sec in piezas["sections"]:
+        rows: List[str] = list(sec["body_rows"])
+        lbl_pt = PRES_BLOQUE_LBL_PT if sec.get("bloque_lbl") else 0.0
+        primera_doc = len(partes_all) == 0
+
+        def _armar(inicio, fin, con_encabezado, con_cierre, _sec=sec, _rows=rows, _pd=primera_doc):
+            # con_encabezado del empaque solo aplica en la 1ª hoja del doc
+            return _html_hoja_presencia(
+                piezas,
+                _sec,
+                filas_slice=_rows[inicio:fin],
+                con_encabezado=(_pd and con_encabezado),
+            )
+
+        partes_all.extend(
+            render_hojas_sin_desborde(
+                _armar,
+                len(rows),
+                render_pdf=lambda html: to_pdf_bytes(html, landscape=True),
+                overhead_primera_pt=(
+                    (PRES_HDR_META_PT if primera_doc else 0.0) + lbl_pt + PRES_THEAD_PT
+                ),
+                overhead_cont_pt=lbl_pt + PRES_THEAD_PT,
+                fila_pt=PRES_ROW_PT,
+                cierre_pt=0.0,
+            )
+        )
+    if not partes_all:
+        html = _html_informe(payload)
+        return to_pdf_bytes(html, landscape=True)
+    return merge_pdf_bytes(partes_all)
 
 
 def generar_docx_presencia(payload: dict) -> bytes:
