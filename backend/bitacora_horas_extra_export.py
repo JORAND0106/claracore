@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from bitacora_export_rango import list_diarios_rango
 from bitacora_he_clasificacion import clasificar_tiempo_extra
+from bitacora_horas_extra_exclusiones import fecha_excluida_informe_he
 from bitacora_horario import calcular_horas_extra, get_horario_contrato, normalize_horario
 from bitacora_pdf import _palette
 from bitacora_service import contrato_meta_bitacora
@@ -187,6 +188,7 @@ def construir_filas_horas_extra(
     *,
     empresa_key: Optional[str] = None,
     horario_contrato=None,
+    contrato_id: Optional[int] = None,
 ) -> List[dict]:
     """Filas con tiempo extra > 0, orden fecha → nombre."""
     emp_filtro = _key_empresa(empresa_key) if empresa_key else None
@@ -201,6 +203,9 @@ def construir_filas_horas_extra(
             continue
         fecha = str(d.get("fecha") or "").strip()[:10]
         if not fecha:
+            continue
+        cid = contrato_id if contrato_id is not None else d.get("contrato_id")
+        if fecha_excluida_informe_he(cid, fecha):
             continue
         try:
             if d.get("horario_aplicado"):
@@ -409,6 +414,7 @@ def opciones_informe_horas_extra(
             diarios,
             empresa_key=emp,
             horario_contrato=horario_contrato,
+            contrato_id=int(contrato_id),
         )
         filas = filas_informe_agrupadas(detalle)
     return {
@@ -526,6 +532,7 @@ def construir_informe_horas_extra(
         diarios,
         empresa_key=empresa_key,
         horario_contrato=horario_contrato,
+        contrato_id=int(contrato_id),
     )
     if not detalle:
         raise ValueError(

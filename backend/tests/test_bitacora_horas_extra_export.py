@@ -13,6 +13,68 @@ def test_key_empresa_normaliza():
     assert _key_empresa("") == "__sin_empresa__"
 
 
+def test_excluye_3110_2026_solo_contrato_3():
+    """CTO 3 · 31/10/2026 no entra al informe; 14/11 y otros contratos sí."""
+    from bitacora_horario import horario_default
+
+    h = horario_default()
+    # Sábado 31/10: sin jornada → calc daría 9h; debe excluirse solo en cto 3.
+    dia_3110 = {
+        "tipo": "diario",
+        "fecha": "2026-10-31",
+        "contrato_id": 3,
+        "horario_aplicado": h,
+        "asistencia_colaboradores": [{
+            "nombre": "Ana Perez",
+            "documento_numero": "222",
+            "subcontratista_nombre": "Empresa A",
+            "hora_ingreso": "07:30",
+            "hora_salida": "16:30",
+            "horas_extra": 0,
+            "justificacion_horas_extra": "",
+        }],
+    }
+    dia_1411 = {
+        "tipo": "diario",
+        "fecha": "2026-11-14",
+        "contrato_id": 3,
+        "horario_aplicado": h,
+        "asistencia_colaboradores": [{
+            "nombre": "Ana Perez",
+            "documento_numero": "222",
+            "subcontratista_nombre": "Empresa A",
+            "hora_ingreso": "07:30",
+            "hora_salida": "19:30",
+            "horas_extra": 3.0,
+            "justificacion_horas_extra": "Cierre",
+        }],
+    }
+    # Sin contrato_id explícito: se toma del diario → excluido
+    filas_cto3 = construir_filas_horas_extra(
+        [dia_3110, dia_1411],
+        empresa_key="Empresa A",
+        contrato_id=3,
+    )
+    assert len(filas_cto3) == 1
+    assert filas_cto3[0]["fecha"] == "2026-11-14"
+    assert filas_cto3[0]["tiempo_extra"] == 3.0
+    vista = filas_informe_agrupadas(filas_cto3)
+    assert vista[-1]["tipo"] == "total"
+    assert vista[-1]["tiempo_extra"] == 3.0
+    assert all(r.get("fecha") != "2026-10-31" for r in vista if r.get("tipo") == "detalle")
+
+    # Otro contrato el mismo día: sí aparece (9h extra por sábado no laborable)
+    dia_otro = {**dia_3110, "contrato_id": 99}
+    filas_otro = construir_filas_horas_extra(
+        [dia_otro],
+        empresa_key="Empresa A",
+        contrato_id=99,
+    )
+    assert len(filas_otro) == 1
+    assert filas_otro[0]["fecha"] == "2026-10-31"
+    assert filas_otro[0]["tiempo_extra"] == 9.0
+
+
 def test_construir_filas_solo_con_extra_ordenado_por_colaborador():
     diarios = [
         {
