@@ -8,7 +8,7 @@
  *
  * No modifica el modo offline de SicoeObra (solo tiles MapTiler cache-first).
  */
-const CACHE_NAME = 'claracore-shell-v15'
+const CACHE_NAME = 'claracore-shell-v16'
 const TILES_CACHE_NAME = 'claracore-tiles-v1'
 const PRECACHE_MSG = 'CLARACORE_PRECACHE_URLS'
 

@@ -93,9 +93,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
     () => (token && cid != null ? createSeguimientoApi(cid, token) : null),
     [cid, token],
   )
-  const canExportHorasExtra = Boolean(
-    permisosBitacora?.exportar || permisosBitacora?.ver,
-  )
+  const canExportHorasExtra = Boolean(permisosBitacora?.exportar)
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)

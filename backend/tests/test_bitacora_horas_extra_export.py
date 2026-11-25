@@ -4,6 +4,7 @@ from bitacora_horas_extra_export import (
     _key_empresa,
     construir_filas_horas_extra,
     empresas_con_personal_reportado,
+    filas_informe_agrupadas,
 )
 
 
@@ -12,7 +13,7 @@ def test_key_empresa_normaliza():
     assert _key_empresa("") == "__sin_empresa__"
 
 
-def test_construir_filas_solo_con_extra_ordenado():
+def test_construir_filas_solo_con_extra_ordenado_por_colaborador():
     diarios = [
         {
             "tipo": "diario",
@@ -71,11 +72,10 @@ def test_construir_filas_solo_con_extra_ordenado():
     ]
     filas = construir_filas_horas_extra(diarios, empresa_key="Empresa A")
     assert len(filas) == 2
-    assert filas[0]["fecha"] == "2026-11-11"
+    # Orden: colaborador (Ana) luego Zeta; fechas cronológicas dentro del grupo
     assert filas[0]["nombre"] == "Ana Perez"
-    assert filas[0]["documento"] == "222"
+    assert filas[0]["fecha"] == "2026-11-11"
     assert filas[0]["tiempo_extra"] == 1.5
-    assert filas[0]["observacion"] == "Cierre de tramo"
     assert filas[1]["nombre"] == "Zeta Lopez"
     assert filas[1]["documento"] == "111"
 
@@ -85,6 +85,52 @@ def test_construir_filas_solo_con_extra_ordenado():
 
     vacio = construir_filas_horas_extra(diarios, empresa_key="No Existe")
     assert vacio == []
+
+
+def test_filas_informe_agrupadas_subtotales_y_total():
+    detalle = [
+        {
+            "nombre": "Ana Perez",
+            "documento": "222",
+            "fecha": "2026-11-11",
+            "hora_inicio": "07:00",
+            "hora_fin": "19:00",
+            "tiempo_extra": 1.5,
+            "observacion": "Cierre",
+        },
+        {
+            "nombre": "Ana Perez",
+            "documento": "222",
+            "fecha": "2026-11-12",
+            "hora_inicio": "07:00",
+            "hora_fin": "18:00",
+            "tiempo_extra": 0.5,
+            "observacion": "Extra",
+        },
+        {
+            "nombre": "Zeta Lopez",
+            "documento": "111",
+            "fecha": "2026-11-12",
+            "hora_inicio": "07:30",
+            "hora_fin": "19:30",
+            "tiempo_extra": 2.5,
+            "observacion": "Noche",
+        },
+    ]
+    vista = filas_informe_agrupadas(detalle)
+    tipos = [r["tipo"] for r in vista]
+    assert tipos == ["detalle", "detalle", "subtotal", "detalle", "subtotal", "total"]
+    # No cuenta colaboradores
+    assert vista[0]["no"] == 1 and vista[1]["no"] == 1
+    assert vista[3]["no"] == 2
+    assert vista[2]["tiempo_extra"] == 2.0  # Ana 1.5+0.5
+    assert vista[2]["observacion"] == "Subtotal"
+    assert vista[4]["tiempo_extra"] == 2.5
+    assert vista[5]["tiempo_extra"] == 4.5
+    assert vista[5]["observacion"] == "Total general"
+    # Nombre/doc en cada detalle del grupo
+    assert vista[0]["nombre"] == vista[1]["nombre"] == "Ana Perez"
+    assert vista[0]["documento"] == vista[1]["documento"] == "222"
 
 
 def test_empresas_con_personal_reportado():
