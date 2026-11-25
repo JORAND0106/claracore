@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 const barSrc = readFileSync(join(dir, 'BitacoraExportRangoBar.jsx'), 'utf8')
+const editorSrc = readFileSync(join(dir, 'BitacoraEntradaEditor.jsx'), 'utf8')
 const modalSrc = readFileSync(join(dir, 'BitacoraHorasExtraExportModal.jsx'), 'utf8')
 const apiSrc = readFileSync(join(dir, 'seguimientoApi.js'), 'utf8')
 
@@ -19,6 +20,13 @@ describe('bitacoraHorasExtraExport', () => {
     assert.match(barSrc, /<Clock\b/)
     assert.match(barSrc, /Informe de horas extras del personal/)
     assert.match(barSrc, /bitacora-horas-extra-btn/)
+  })
+
+  it('editor del diario muestra el ícono junto a PDF/PNG con los mismos permisos', () => {
+    assert.match(editorSrc, /BitacoraHorasExtraExportModal/)
+    assert.match(editorSrc, /<Clock\b/)
+    assert.match(editorSrc, /bitacora-horas-extra-btn/)
+    assert.match(editorSrc, /permisos\?\.ver \|\| permisos\?\.exportar/)
   })
 
   it('modal pide rango, empresa, responsable, elaborador, aprobador y formato PDF/Word', () => {

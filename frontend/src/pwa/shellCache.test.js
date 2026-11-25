@@ -12,7 +12,7 @@ const root = join(__dirname, '../..')
 describe('PWA shell offline', () => {
   it('service worker precachea shell en install (v12 + cache-first)', () => {
     const sw = readFileSync(join(publicDir, 'sw.js'), 'utf8')
-    assert.match(sw, /claracore-shell-v13/)
+    assert.match(sw, /claracore-shell-v14/)
     assert.match(sw, /SHELL_PRECACHE|__CLARACORE_PRECACHE__/)
     assert.match(sw, /\/index\.html/)
     assert.match(sw, /\/manifest\.webmanifest/)

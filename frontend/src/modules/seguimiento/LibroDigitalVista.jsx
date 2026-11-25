@@ -913,7 +913,8 @@ export default function LibroDigitalVista({
           </button>
         </div>
       </div>
-      {modo === 'bitacora' && canViewBitacora && permisosBitacora.exportar ? (
+      {modo === 'bitacora' && canViewBitacora
+        && (permisosBitacora.exportar || permisosBitacora.ver) ? (
         <BitacoraExportRangoBar
           t={t}
           api={api}
